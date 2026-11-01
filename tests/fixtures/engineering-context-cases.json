@@ -5,6 +5,8 @@
     {
       "id": "bulk-file-scope",
       "category": "mutation",
+      "expectedDomains": ["01", "03", "14", "15"],
+      "sourceReview": "Constitution section 6 and Charters 01/03 define selection versus intended scope; Charter 14 section 6 owns correction, preview, and mutation authorization; Charter 15 covers verification.",
       "task": "Implement Contextual Command for selecting one file and requesting that all files in its parent folder be moved to a destination. Handle the correction 'only the highlighted file', preview bulk effects, and obtain approval before filesystem mutation.",
       "paths": [
         "src/interaction/selection.ts",
@@ -26,6 +28,8 @@
     {
       "id": "cinematic-performance",
       "category": "visual",
+      "expectedDomains": ["02", "13", "15"],
+      "sourceReview": "Constitution sections 5 and 17, Charter 02 motion and accessibility sections, Charter 13 graphics resource budgets, and Charter 15 visual/performance acceptance govern the effect.",
       "task": "Implement Atmospheric Motion particle effects with the Motion Coordinator; render GPU particles efficiently and automatically reduce graphic load during gaming without losing usability or reduced-motion accessibility.",
       "paths": [
         "src/motion/particles.ts",
@@ -46,6 +50,8 @@
     {
       "id": "connected-branches-access",
       "category": "privacy",
+      "expectedDomains": ["04", "08", "14", "15"],
+      "sourceReview": "Constitution section 8 and Charter 04 connected-branch sections require separate histories and sourced sharing; Charter 08 governs retrieval; Charter 14 constrains private data access.",
       "task": "Implement Connected Branches so sibling chats can find new post-fork findings, preserve provenance and selectively adopt knowledge, without leaking private project data or permissions.",
       "paths": [
         "src/conversations/branch-sharing.ts",
@@ -67,6 +73,8 @@
     {
       "id": "memory-compaction",
       "category": "context",
+      "expectedDomains": ["08", "14", "15"],
+      "sourceReview": "Constitution section 10 and Charter 08 compaction sections require recoverable source history and protected constraints; Charter 14 limits access; Charter 15 requires meaningful evaluation.",
       "task": "Implement CIE adaptive compaction of long chat histories, preserving canonical messages, important user decisions and blockers, and checking protected constraints before continuing. Benchmark the quality and token tradeoff.",
       "paths": [
         "src/context/compaction.ts"
@@ -88,6 +96,8 @@
     {
       "id": "quick-capture",
       "category": "knowledge",
+      "expectedDomains": ["07", "01", "08", "14", "15"],
+      "sourceReview": "Constitution section 9 and Charter 07 quick-capture sections require immediate durable capture; Charter 01 owns the interaction; Charter 08 owns later retrieval and Charter 14 privacy.",
       "task": "Implement Quick Capture notes so a user can jot down an idea immediately without choosing a project or waiting for an AI response; classify the note asynchronously after saving it.",
       "paths": [
         "src/notes/quick-capture.ts",
@@ -109,6 +119,8 @@
     {
       "id": "parallel-agent-evidence",
       "category": "agent",
+      "expectedDomains": ["05", "14", "15"],
+      "sourceReview": "Constitution section 11 and Charter 05 task/agent sections distinguish execution from completion; Charter 14 limits delegated authority; Charter 15 requires outcome evidence.",
       "task": "Implement orchestration of specialized parallel agents working in isolated Git worktrees with task dependencies, safe delegation and evidence-based completion; never mark an unfinished task completed from a chat message.",
       "paths": [
         "src/agents/dispatcher.ts",
@@ -130,6 +142,8 @@
     {
       "id": "truthful-intelligence-stream",
       "category": "observability",
+      "expectedDomains": ["09", "02", "14", "15"],
+      "sourceReview": "Constitution section 13 and Charter 09 evidence-class sections define observed, reported, and inferred activity; Charter 02 owns meaningful motion and Charter 14 prevents false privileged/audit claims.",
       "task": "Implement a live Intelligence Stream with actual tool execution events and reasoning summaries. Show observed versus reported versus inferred evidence and never fabricate private internal thoughts.",
       "paths": [
         "src/observability/stream.ts",
@@ -150,6 +164,8 @@
     {
       "id": "token-telemetry",
       "category": "measurement",
+      "expectedDomains": ["10", "08", "15"],
+      "sourceReview": "Constitution section 14 and Charter 10 accounting sections distinguish measured and estimated usage; Charter 08 governs context optimization and Charter 15 verification.",
       "task": "Implement per-chat detailed token usage profiling for input output cached reasoning tokens, ensure accurate accounting and do not claim unmeasured savings from context compaction.",
       "paths": [
         "src/profiler/token-usage.ts",
@@ -166,6 +182,76 @@
         "AW-AEP-045",
         "AW-AEP-057"
       ]
+    },
+    {
+      "id": "resource-identity-across-views",
+      "category": "identity",
+      "task": "Keep one item pinned on two canvases; closing one tile must leave the original and its history intact.",
+      "paths": ["src/workspaces/resource-links.ts"],
+      "expectedDomains": ["03", "14"],
+      "sourceReview": "Charter 03 sections 1, 2 and 4 distinguish canonical resource, block instance, membership, and deletion; Charter 14 section 3 rejects display-name identity.",
+      "essential": ["AW-PWR-005", "AW-PWR-006", "AW-PWR-013", "AW-PWR-034", "AW-TRUST-026"],
+      "critical": ["AW-PWR-006", "AW-PWR-013"]
+    },
+    {
+      "id": "cross-provider-handoff",
+      "category": "handoff",
+      "task": "Resume an agent assignment with another model provider after the first worker disconnects, carrying verified evidence and unresolved decisions without claiming identical hidden context.",
+      "paths": ["src/agents/handoff.ts", "src/integrations/provider-transfer.ts"],
+      "expectedDomains": ["05", "12", "14"],
+      "sourceReview": "Charter 05 section on handoffs requires durable sourced checkpoints; Charter 12 sections on backend contracts and recovery prohibit false equivalence; Charter 14 bounds transferred authority.",
+      "essential": ["AW-ATW-091", "AW-ATW-094", "AW-CEX-008", "AW-CEX-030", "AW-TRUST-055"],
+      "critical": ["AW-ATW-094", "AW-CEX-008", "AW-TRUST-055"]
+    },
+    {
+      "id": "native-codex-approval",
+      "category": "approval",
+      "task": "Forward a provider-initiated approval request for a terminal command, then reconcile a cancelled or disconnected response before any retry.",
+      "paths": ["src/codex/approvals.ts"],
+      "expectedDomains": ["12", "14"],
+      "sourceReview": "Charter 12 approval protocol and retry sections require request identity and confirmed decision delivery; Charter 14 requires action-bound authorization and honest execution states.",
+      "essential": ["AW-CEX-053", "AW-CEX-054", "AW-CEX-055", "AW-CEX-037", "AW-TRUST-018", "AW-TRUST-030"],
+      "critical": ["AW-CEX-054", "AW-TRUST-030"]
+    },
+    {
+      "id": "vela-resource-command",
+      "category": "assistant",
+      "task": "Vela opens the item the user called 'this' from the active selection and changes its workspace membership while keeping source ownership and permissions clear.",
+      "paths": ["src/vela/commands.ts", "src/workspaces/membership.ts"],
+      "expectedDomains": ["06", "03", "14"],
+      "sourceReview": "Charter 06 requires a structured context envelope and grounded referents; Charter 03 owns resource identity and membership; Charter 14 controls authorization.",
+      "essential": ["AW-VELA-022", "AW-VELA-026", "AW-VELA-045", "AW-PWR-042", "AW-TRUST-021"],
+      "critical": ["AW-VELA-026", "AW-PWR-042"]
+    },
+    {
+      "id": "persistent-workspace-state",
+      "category": "storage",
+      "task": "Save a workspace layout and resource membership across restart and schema migration while two windows may edit the same object.",
+      "paths": ["src/workspaces/storage.ts"],
+      "expectedDomains": ["03", "14"],
+      "sourceReview": "Charter 03 persistence and recovery section requires durable identity, migration and concurrent update handling; Charter 14 governs protected data lifecycle.",
+      "essential": ["AW-PWR-083", "AW-PWR-084", "AW-PWR-086", "AW-PWR-087", "AW-TRUST-098"],
+      "critical": ["AW-PWR-086", "AW-PWR-087"]
+    },
+    {
+      "id": "event-provenance-under-pressure",
+      "category": "observability",
+      "task": "Ingest a noisy stream from a worker, preserve real source and ordering, and keep approval failures visible even when storage or rendering falls behind.",
+      "paths": ["src/observability/ingest.ts"],
+      "expectedDomains": ["09", "14"],
+      "sourceReview": "Charter 09 event identity, pipeline, backpressure and storage sections require traceable source and critical-event priority; Charter 14 controls audit integrity.",
+      "essential": ["AW-OBS-007", "AW-OBS-008", "AW-OBS-050", "AW-OBS-058", "AW-OBS-060", "AW-TRUST-109"],
+      "critical": ["AW-OBS-008", "AW-OBS-060"]
+    },
+    {
+      "id": "visual-stateful-motion",
+      "category": "visual",
+      "task": "Animate a resource moving into a detached window after its layout is saved; the object must remain the same and keyboard users must still operate it with reduced motion.",
+      "paths": ["src/motion/transition.ts", "src/workspaces/layout.ts"],
+      "expectedDomains": ["02", "03", "13", "14"],
+      "sourceReview": "Charter 02 owns motion and reduced-motion behavior; Charter 03 owns persistent identity and layout recovery; Charter 13 owns display performance; Charter 14 includes accessible authorization where action scope changes.",
+      "essential": ["AW-PWR-025", "AW-PWR-073", "AW-PWR-093", "AW-LIQ-045", "AW-TRUST-128"],
+      "critical": ["AW-PWR-073", "AW-PWR-093"]
     }
   ]
 }

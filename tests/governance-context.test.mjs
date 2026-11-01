@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 import { parseRegistry } from "../scripts/governance-router.mjs";
 import { buildGovernanceIndex, buildContext, formatContext } from "../scripts/governance-context.mjs";
 
@@ -12,6 +13,70 @@ const registry=parseRegistry(readFileSync(resolve(root,"governance/README.md"),"
 const index=buildGovernanceIndex(config,registry);
 const context=options=>buildContext({config,registry,index,...options});
 const ids=result=>[...new Set(result.selected.map(s=>s.id))];
+const cli=(args,cwd=root)=>spawnSync(process.execPath,[resolve(root,"scripts/governance-context.mjs"),...args],{cwd,encoding:"utf8",maxBuffer:10*1024*1024});
+
+test("CLI and library return the same source package from repository and unrelated working directories",()=>{
+ const args=["--task","Implement workspace resource identity","--path","src/workspaces/link.ts","--requirement","AW-PWR-005","--max-sections","2","--json"];
+ const expected=context({task:args[1],paths:[args[3]],requiredIds:[args[5]],maxSections:2});
+ for(const cwd of [root,dirname(root)]) {
+  const result=cli(args,cwd);
+  assert.equal(result.status,0,result.stderr);
+  const parsed=JSON.parse(result.stdout);
+  assert.deepEqual(parsed,expected);
+  assert.equal(parsed.coverage.incompleteContext,false);
+ }
+});
+test("CLI index and full retrieval are separate from the library index argument",()=>{
+ const indexed=cli(["--index"],dirname(root));
+ assert.equal(indexed.status,0,indexed.stderr);
+ assert.equal(JSON.parse(indexed.stdout).documents.length,17);
+ const full=cli(["--task","Codex approval handling","--full","--json"]);
+ assert.equal(full.status,0,full.stderr);
+ assert.ok(JSON.parse(full.stdout).selected.every(s=>s.mode==="full"));
+ const narrow=cli(["--requirement","AW-CIE-008","--json"]);
+ assert.equal(narrow.status,0,narrow.stderr);
+ assert.deepEqual(JSON.parse(narrow.stdout).coverage.missingRequired,[]);
+});
+test("CLI rejects malformed optional arguments with actionable diagnostics",()=>{
+ for(const [args,message] of [
+  [["--task"],"--task requires a value"],
+  [["--task","x","--max-sections","0"],"--max-sections must be a positive integer"],
+  [["--task","x","--budget-tokens","9007199254740992"],"--budget-tokens must be a safe integer"],
+  [["--requirement","AW-FAKE-999"],"Unknown or unindexed requirement ID"],
+  [["--mystery"],"Unknown argument"],
+ ]) {
+  const result=cli(args);
+  assert.equal(result.status,2,args.join(" "));
+  assert.match(result.stderr,new RegExp(message));
+  assert.doesNotMatch(result.stderr,/Cannot read properties of undefined/);
+ }
+});
+test("library rejects malformed optional inputs and incomplete registries before routing",()=>{
+ for(const [bad,message] of [
+  [{task:null},"task must be a string"],
+  [{paths:null},"paths must be an array"],
+  [{paths:[null]},"paths must be an array"],
+  [{requiredIds:null},"requiredIds must be an array"],
+  [{maxSections:0},"maxSections must be"],
+  [{budgetTokens:Infinity},"budgetTokens must be"],
+  [{policies:{schemaVersion:2}},"Invalid governance coverage policy"],
+ ])assert.throws(()=>context({task:"test",...bad}),new RegExp(message));
+ assert.throws(()=>buildContext(),/options object/);
+ assert.throws(()=>buildContext({config,registry,index:false,task:"test"}),/governance index/);
+ assert.throws(()=>buildContext({config,registry:new Map(),index,task:"test"}),/Missing registry row/);
+ assert.throws(()=>buildContext({config:{...config,signals:{...config.signals,"03":{terms:[]}}},registry,index,task:"test"}),/Invalid signals for 03/);
+ assert.throws(()=>buildContext({config,registry,index:{...index,documents:[null]},task:"test"}),/malformed document/);
+ assert.throws(()=>buildGovernanceIndex(config,new Map()),/Missing registry row/);
+ assert.throws(()=>buildGovernanceIndex(config,null),/registry must be a Map/);
+});
+test("context source identities, hashes and authority are stable across repeated runs",()=>{
+ const a=context({task:"Native Codex approval handling",paths:["src/codex/approvals.ts"]});
+ const b=context({task:"Native Codex approval handling",paths:["src/codex/approvals.ts"]});
+ assert.deepEqual(a,b);
+ assert.ok(a.selected.every(s=>s.reason.length && s.sha256 && s.range));
+ assert.ok(a.selected.filter(s=>s.id!=="00").every(s=>s.authority==="advisory"));
+ assert.equal(a.coverage.incompleteContext,false);
+});
 
 test("indexes all 17 published charters, stable normative IDs and verifiable ranges",()=>{
  assert.equal(index.documents.length,17);
@@ -154,6 +219,11 @@ test("unrecognized future requests cannot silently claim sufficient charter scop
  const r=context({task:"Find out whether the thing from that discussion is still relevant"});
  assert.equal(r.scopeNeedsReview,true);
  assert.ok(r.warnings.some(x=>x.includes("No primary subsystem")));
+ assert.equal(r.coverage.incompleteContext,true);
+ const riskOnly=context({task:"Write something mysterious"});
+ assert.equal(riskOnly.scopeNeedsReview,true);
+ const trust=context({task:"Review security policy",paths:["src/security/check.ts"]});
+ assert.equal(trust.scopeNeedsReview,false);
 });
 test("source-linked requirement envelope is preserved in text as well as JSON",()=>{
  const r=context({task:"Make shader animation smooth",paths:["src/motion/shader.ts"]});
