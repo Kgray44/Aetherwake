@@ -2,6 +2,16 @@
 
 This file is a routing and collaboration guide, not a substitute for project governance. **Aetherwake** is the development initiative; **Aerynth** is the planned desktop application; **Vela** is its intelligent assistant. These are working product names.
 
+## Deterministic governance routing
+
+Before substantive work, use the repository's deterministic router instead of loading all 17 charter documents:
+
+```bash
+node scripts/governance-router.mjs --task "Implement contextual command selection" --path src/interaction/selection.ts
+```
+
+Add further `--path` arguments as scope becomes known; use `--json` for structured output. The router always selects Constitution 00 and routes relevant domains by task phrases and paths. Its statuses come from `governance/README.md`: **binding** charters are authoritative, **advisory** published drafts are reference-only, and **planned/unavailable** charters must not be treated as existing or approved. Rerun when scope changes and include any cross-domain dependencies not detected automatically. Consult [the implementation guide](docs/engineering/GOVERNANCE-ROUTER.md). Validate with `node scripts/governance-router.mjs --validate` and `node --test tests/governance-router.test.mjs`.
+
 ## Authority and reading discipline
 
 1. Begin with [the governance index](governance/README.md) to determine the **current** charter registry and approval status. Read [the Constitution](governance/00-AETHERWAKE-CONSTITUTION.md) before substantive design or implementation.
