@@ -1,5 +1,14 @@
 {
-  "name":"aerynth-constellation", "version":"0.1.0", "private":true, "type":"module",
-  "scripts":{"test":"node --experimental-strip-types --test tests/*.test.mjs","demo":"node --experimental-strip-types demo/server.mts","benchmark":"node --experimental-strip-types tests/benchmark.mjs"},
-  "engines":{"node":">=22.18"}
+  "name": "aerynth-constellation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "demo": "node --experimental-strip-types demo/server.mts",
+    "benchmark": "node --experimental-strip-types tests/benchmark.mjs"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
 }

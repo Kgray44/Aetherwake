@@ -1,1 +1,118 @@
-html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#090811;color:#eeeaf9;font-family:system-ui,sans-serif}#environment{position:absolute;inset:0;overflow:hidden;background:radial-gradient(ellipse at 55% 18%,#42305666,transparent 58%),radial-gradient(ellipse at 30% 75%,#392d4d55,transparent 50%),linear-gradient(#100e1a,#080910)}.architecture{position:absolute;left:18%;top:3%;width:68%;height:120%;border:2px solid #ccb6ed33;border-radius:50%;transform:rotate(-25deg) rotateX(65deg);box-shadow:0 0 90px #a18bbb22,inset 0 0 80px #a18bbb11}.architecture:after{content:'';position:absolute;inset:45px;border:1px solid #d9d0ed22;border-radius:50%}#workspace,#navigation{position:absolute;inset:0}#navigation{pointer-events:none}#workspace[hidden]{display:none}.glass-panel{position:absolute;box-sizing:border-box;padding:18px;border:1px solid #e8d5ff52;border-radius:18px;background:linear-gradient(135deg,#5a496a55,#171321dd);box-shadow:0 15px 50px #0007,inset 0 1px 0 #ffffff38;backdrop-filter:blur(14px);overflow:hidden}.glass-panel h2{font-size:16px;font-weight:500;margin:0 0 12px}.glass-panel textarea{display:block;width:100%;height:100px;resize:none;box-sizing:border-box;background:#100e1988;color:#f4eefe;border:1px solid #bfa2df55;padding:9px;font:13px/1.5 system-ui}.glass-panel button{margin:8px 6px 0 0;border:1px solid #c5aad866;color:#f4eefe;background:#2a2037;border-radius:6px;padding:5px 8px}.shape-rectangle{border-radius:3px}.shape-circle{border-radius:45%;padding:28px 40px}.shape-circle h2{font-size:13px}.shape-circle textarea{height:80px}.shape-circle button{font-size:10px}#fixture-label{position:absolute;bottom:8px;left:24px;font-size:10px;letter-spacing:.14em;color:#c2b7d4;pointer-events:none}button:focus-visible,textarea:focus-visible{outline:3px solid #e4d2ff;outline-offset:3px}
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #090811;
+  color: #eeeaf9;
+  font-family: system-ui, sans-serif;
+}
+#environment {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background:
+    radial-gradient(ellipse at 55% 18%, #42305666, transparent 58%),
+    radial-gradient(ellipse at 30% 75%, #392d4d55, transparent 50%),
+    linear-gradient(#100e1a, #080910);
+}
+.architecture {
+  position: absolute;
+  left: 18%;
+  top: 3%;
+  width: 68%;
+  height: 120%;
+  border: 2px solid #ccb6ed33;
+  border-radius: 50%;
+  transform: rotate(-25deg) rotateX(65deg);
+  box-shadow:
+    0 0 90px #a18bbb22,
+    inset 0 0 80px #a18bbb11;
+}
+.architecture:after {
+  content: "";
+  position: absolute;
+  inset: 45px;
+  border: 1px solid #d9d0ed22;
+  border-radius: 50%;
+}
+#workspace,
+#navigation {
+  position: absolute;
+  inset: 0;
+}
+#navigation {
+  pointer-events: none;
+}
+#workspace[hidden] {
+  display: none;
+}
+.glass-panel {
+  position: absolute;
+  box-sizing: border-box;
+  padding: 18px;
+  border: 1px solid #e8d5ff52;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #5a496a55, #171321dd);
+  box-shadow:
+    0 15px 50px #0007,
+    inset 0 1px 0 #ffffff38;
+  backdrop-filter: blur(14px);
+  overflow: hidden;
+}
+.glass-panel h2 {
+  font-size: 16px;
+  font-weight: 500;
+  margin: 0 0 12px;
+}
+.glass-panel textarea {
+  display: block;
+  width: 100%;
+  height: 100px;
+  resize: none;
+  box-sizing: border-box;
+  background: #100e1988;
+  color: #f4eefe;
+  border: 1px solid #bfa2df55;
+  padding: 9px;
+  font: 13px/1.5 system-ui;
+}
+.glass-panel button {
+  margin: 8px 6px 0 0;
+  border: 1px solid #c5aad866;
+  color: #f4eefe;
+  background: #2a2037;
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+.shape-rectangle {
+  border-radius: 3px;
+}
+.shape-circle {
+  border-radius: 45%;
+  padding: 28px 40px;
+}
+.shape-circle h2 {
+  font-size: 13px;
+}
+.shape-circle textarea {
+  height: 80px;
+}
+.shape-circle button {
+  font-size: 10px;
+}
+#fixture-label {
+  position: absolute;
+  bottom: 8px;
+  left: 24px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: #c2b7d4;
+  pointer-events: none;
+}
+button:focus-visible,
+textarea:focus-visible {
+  outline: 3px solid #e4d2ff;
+  outline-offset: 3px;
+}
