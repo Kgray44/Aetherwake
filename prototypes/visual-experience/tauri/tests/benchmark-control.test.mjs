@@ -6,7 +6,8 @@ test('script trace preserves dispatch, commit, and next callback as distinct clo
   const priorWindow = globalThis.window;
   const priorRaf = globalThis.requestAnimationFrame;
   globalThis.window = { setTimeout };
-  globalThis.requestAnimationFrame = callback => setImmediate(() => callback(performance.now()));
+  // A real rAF frame timestamp can precede a state change made during that frame.
+  globalThis.requestAnimationFrame = callback => setImmediate(() => callback(1));
   try {
     const ledger = new BenchmarkLedger('main');
     await ledger.step('S6-select', () => {}, 120);
@@ -18,6 +19,7 @@ test('script trace preserves dispatch, commit, and next callback as distinct clo
     assert.ok(record.dispatchMs <= record.handlerStartMs);
     assert.ok(record.handlerStartMs <= record.stateCommitMs);
     assert.ok(record.stateCommitMs <= record.nextFrameMs);
+    assert.notEqual(record.nextFrameMs, 1);
     assert.match(ledger.snapshot().limits.join(' '), /not an OS display present/);
   } finally {
     globalThis.window = priorWindow;

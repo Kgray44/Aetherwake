@@ -58,7 +58,8 @@ export class BenchmarkLedger {
         const timeout = window.setTimeout(() => {
           if (record.nextFrameMs === null) record.frameGapReason = 'No requestAnimationFrame callback within 1500 ms';
         }, 1500);
-        requestAnimationFrame(now => { record.nextFrameMs = now; record.frameGapReason = null; clearTimeout(timeout); });
+        // The rAF argument is the frame's timestamp and can predate this commit.
+        requestAnimationFrame(() => { record.nextFrameMs = performance.now(); record.frameGapReason = null; clearTimeout(timeout); });
       },
       fail: (error: unknown) => { record.status = 'failed'; record.note = String(error); },
     };
