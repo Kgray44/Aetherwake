@@ -1,10 +1,12 @@
 # Project Aetherwake
 
+<p align="center"><a href="assets/brand/aerynth-mark-master.png"><img src="assets/brand/aerynth-mark-master.png" alt="Official Aerynth mark: a fluid glass-like sculptural A in indigo and violet" width="240" /></a></p>
+
 **Aerynth** is the planned intelligent, spatial desktop environment for working with AI; **Vela** is its persistent, context-aware assistant. Both are working names.
 
 The goal is not to wrap Codex in a prettier chat window. Aerynth should combine first-class Codex conversations with spatial workspaces, project knowledge, notes, specialist agents, orchestration, universal contextual commands, observability, and adaptive context efficiency.
 
-The owner-selected **Aerynth mark** is documented in [Aerynth Brand Identity](docs/design/AERYNTH-BRAND-IDENTITY.md). Its exact raster master is approved, while the binary repository upload and app integration are still pending.
+The [official Aerynth mark](assets/brand/aerynth-mark-master.png) is committed and verified, with its design identity and usage guidance documented in [Aerynth Brand Identity](docs/design/AERYNTH-BRAND-IDENTITY.md). Future application integration and alternate icon/animation variants are still pending.
 
 **Visual experience is a product requirement:** the *Liquid Intelligence* design language calls for cinematic fluid motion, layered glass materials, meaningful particles, precise micro-interactions, and adaptive graphics that remain responsive under system load.
 
