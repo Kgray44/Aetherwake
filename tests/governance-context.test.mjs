@@ -149,3 +149,18 @@ test("wording-agnostic scope closure selects cross-cutting safety charters by do
   for(const id of c.needed)assert.ok(chosen.has(id),c.task+": "+id);
  }
 });
+
+test("unrecognized future requests cannot silently claim sufficient charter scope",()=>{
+ const r=context({task:"Find out whether the thing from that discussion is still relevant"});
+ assert.equal(r.scopeNeedsReview,true);
+ assert.ok(r.warnings.some(x=>x.includes("No primary subsystem")));
+});
+test("source-linked requirement envelope is preserved in text as well as JSON",()=>{
+ const r=context({task:"Make shader animation smooth",paths:["src/motion/shader.ts"]});
+ const text=formatContext(r);
+ assert.ok(r.normative.length>0);
+ const first=r.normative[0];
+ assert.ok(text.includes(first.id));
+ assert.ok(text.includes(first.path+":"+first.line));
+ assert.ok(text.includes(first.text));
+});
