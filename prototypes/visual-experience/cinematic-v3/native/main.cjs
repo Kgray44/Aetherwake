@@ -7,27 +7,68 @@ const {
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
+const { createHash } = require("node:crypto");
+const { readFileSync } = require("node:fs");
+const { execFileSync } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const root = path.resolve(__dirname, "..");
+const sourceHashesAtLaunch = Object.fromEntries(
+  [
+    "native/main.cjs",
+    "native/recording.cjs",
+    "src/main.ts",
+    "src/renderer.ts",
+    "src/orbital-architecture.ts",
+    "src/scene-transition.ts",
+    "src/motion.ts",
+    "src/style.css",
+    "src/workloads.ts",
+    "src/conversation.ts",
+    "src/store.ts",
+    "src/policy.ts",
+    "package-lock.json",
+  ].map((name) => [
+    name,
+    createHash("sha256")
+      .update(readFileSync(path.join(root, name)))
+      .digest("hex"),
+  ]),
+);
+let sourceRevisionAtLaunch = null;
+try {
+  sourceRevisionAtLaunch = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: root,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 5000,
+  }).trim();
+} catch {
+  /* Source hashes still identify a local export without Git. */
+}
 const runtime = path.join(root, ".runtime");
 const verifyMode = process.argv.includes("--verify");
 const recordMode = process.argv.includes("--record");
 const previewMode = process.argv.includes("--preview");
-const renderWhileVisible = verifyMode || recordMode || previewMode;
+const soakMode = process.argv.includes("--soak");
+const recordingTitle = `Aerynth · V3.5 capture · ${Date.now()}`;
+const renderWhileVisible = verifyMode || recordMode || previewMode || soakMode;
 app.setPath(
   "userData",
   path.join(
     runtime,
-    recordMode
-      ? "recording-profile"
-      : verifyMode
-        ? "verification-profile"
-        : previewMode
-          ? "ambient-review-profile"
-          : "profile",
+    "v3-5",
+    soakMode
+      ? `soak-profile-${Date.now()}`
+      : recordMode
+        ? "recording-profile"
+        : verifyMode
+          ? "verification-profile"
+          : previewMode
+            ? "ambient-review-profile"
+            : "profile",
   ),
 );
-app.setAppUserModelId("org.aetherwake.cinematic-v3");
+app.setAppUserModelId("org.aetherwake.cinematic-v3-5");
 let win;
 const errors = [];
 const moduleStarted = Date.now();
@@ -58,7 +99,7 @@ app
       (_details, callback) => callback({ cancel: true }),
     );
     win = new BrowserWindow({
-      show: !verifyMode,
+      show: !verifyMode && !soakMode,
       width: 1600,
       height: 1000,
       minWidth: 700,
@@ -66,11 +107,15 @@ app
       backgroundColor: "#05060c",
       titleBarStyle: "hidden",
       titleBarOverlay: { color: "#080910", symbolColor: "#d8cee9", height: 42 },
-      title: verifyMode
-        ? "Aerynth · Automated native checks"
-        : previewMode
-          ? "Aerynth · Cinematic V3 · Expressive ambient"
-          : "Aerynth · Cinematic V3",
+      title: recordMode
+        ? recordingTitle
+        : soakMode
+          ? "Aerynth · V3.5 fresh-process memory probe"
+          : verifyMode
+            ? "Aerynth · Automated native checks"
+            : previewMode
+              ? "Aerynth · Cinematic V3.5 · Celestial observatory"
+              : "Aerynth · Cinematic V3.5",
       autoHideMenuBar: true,
       webPreferences: {
         preload: path.join(__dirname, "preload.cjs"),
@@ -85,7 +130,11 @@ app
       },
     });
     win.on("page-title-updated", (event) => event.preventDefault());
-    if (verifyMode) {
+    if (
+      verifyMode ||
+      soakMode ||
+      (recordMode && process.argv.includes("--ambient-study"))
+    ) {
       win.setIgnoreMouseEvents(true);
       win.showInactive();
     }
@@ -132,21 +181,41 @@ app
       );
     if (previewMode)
       await win.webContents.executeJavaScript(
-        "window.__aerynth.setStudy('living')",
+        "window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring')",
         true,
       );
+    if (soakMode) {
+      try {
+        await memoryProbe();
+      } catch (error) {
+        console.error(error);
+        app.exit(1);
+      } finally {
+        app.quit();
+      }
+      return;
+    }
     if (recordMode) {
       try {
         const { recordNative } = require("./recording.cjs");
-        const file = path.join(runtime, `aerynth-v3-native-${Date.now()}.webm`);
+        const file = path.join(
+          runtime,
+          `aerynth-v3-5-${process.argv.includes("--ambient-study") ? "ambient" : "native"}-${Date.now()}.webm`,
+        );
         const result = await recordNative(
           win,
           session.defaultSession,
           localURL,
           file,
         );
+        Object.assign(result, { sourceRevisionAtLaunch, sourceHashesAtLaunch });
         await fs.writeFile(
-          path.join(runtime, "recording-latest.json"),
+          file.replace(/\.webm$/, ".json"),
+          JSON.stringify(result, null, 2),
+          { flag: "wx" },
+        );
+        await fs.writeFile(
+          path.join(runtime, `recording-v3-5-${Date.now()}.json`),
           JSON.stringify(result, null, 2),
         );
         console.log(JSON.stringify(result, null, 2));
@@ -169,7 +238,7 @@ app
         console.error(error);
         await fs.mkdir(runtime, { recursive: true });
         await fs.writeFile(
-          path.join(runtime, "verification-failure.json"),
+          path.join(runtime, `verification-failure-${Date.now()}.json`),
           JSON.stringify(
             {
               at: new Date().toISOString(),
@@ -195,13 +264,232 @@ app.on("window-all-closed", () => app.quit());
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const evaluate = (code) => win.webContents.executeJavaScript(code, true);
+function admitStorage(estimatedCBytes) {
+  const guard = path.join(
+    process.env.LOCALAPPDATA,
+    "AeroStorageWatch",
+    "ReserveGuard.ps1",
+  );
+  const shell = path.join(
+    process.env.SystemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  const output = execFileSync(
+    shell,
+    [
+      "-NoProfile",
+      "-File",
+      guard,
+      "-EstimatedCBytes",
+      String(estimatedCBytes),
+      "-EstimatedDBytes",
+      "0",
+    ],
+    { encoding: "utf8", windowsHide: true, timeout: 15000 },
+  );
+  const receipt = JSON.parse(output.trim());
+  if (!receipt.allowed)
+    throw new Error(
+      `Storage reserve declined native writer: ${receipt.reason}`,
+    );
+  return receipt;
+}
+async function memoryProbe() {
+  const reserve = admitStorage(256 * 1024 * 1024);
+  const durationMs = process.argv.includes("--soak-seconds=90") ? 90000 : 60000;
+  const startedAt = Date.now();
+  const deadline = startedAt + durationMs;
+  const phaseDuration = (durationMs - 3000) / 7;
+  const phases = [
+    {
+      name: "architecture-visible-ambient",
+      setup:
+        "window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring');window.__aerynth.setQuality('balanced');window.__aerynth.setVela('idle')",
+    },
+    {
+      name: "living-visible-ambient",
+      setup: "window.__aerynth.setStudy('living')",
+    },
+    {
+      name: "resource-expand-return",
+      setup: "window.__aerynth.home()",
+      toggle: "expand",
+    },
+    {
+      name: "focused-long-conversation",
+      setup:
+        "window.__aerynth.home();window.__aerynth.expand('conversation-tidal')",
+    },
+    {
+      name: "environment-retarget",
+      setup: "window.__aerynth.home()",
+      toggle: "scene",
+    },
+    {
+      name: "quiet-static",
+      setup:
+        "document.querySelector('#quiet').checked=true;document.querySelector('#quiet').dispatchEvent(new Event('change'))",
+    },
+    {
+      name: "native-minimized",
+      setup:
+        "document.querySelector('#quiet').checked=false;document.querySelector('#quiet').dispatchEvent(new Event('change'))",
+      minimized: true,
+    },
+  ];
+  await evaluate("window.__aerynth.setActive(true)");
+  await delay(3000);
+  const samples = [],
+    phaseReports = [];
+  app.getAppMetrics();
+  for (const phase of phases) {
+    await evaluate(phase.setup);
+    if (phase.minimized) win.minimize();
+    await evaluate("window.__aerynth.resetMetrics()");
+    const phaseStartedAt = Date.now(),
+      phaseEnd = Math.min(deadline, phaseStartedAt + phaseDuration);
+    const phaseSamples = [];
+    let iteration = 0;
+    while (Date.now() < phaseEnd) {
+      if (phase.toggle === "expand")
+        await evaluate("window.__aerynth.expand('conversation-tidal')");
+      if (phase.toggle === "scene")
+        await evaluate(
+          `window.__aerynth.setStudy('${iteration % 2 ? "architecture" : "living"}')`,
+        );
+      await delay(Math.min(1000, Math.max(1, phaseEnd - Date.now())));
+      const metrics = app.getAppMetrics();
+      const sample = {
+        phase: phase.name,
+        elapsedMs: Date.now() - startedAt,
+        cpuReportedSum: metrics.reduce(
+          (sum, item) => sum + item.cpu.percentCPUUsage,
+          0,
+        ),
+        workingSetKiBSum: metrics.reduce(
+          (sum, item) => sum + item.memory.workingSetSize,
+          0,
+        ),
+        processCount: metrics.length,
+      };
+      samples.push(sample);
+      phaseSamples.push(sample);
+      iteration++;
+    }
+    const state = await evaluate("window.__aerynth.snapshot()");
+    phaseReports.push({
+      name: phase.name,
+      durationMs: Date.now() - phaseStartedAt,
+      drawSamples: state.metrics.draws,
+      callbacks: state.metrics.callbacks,
+      policy: state.metrics.policy,
+      firstWorkingSetKiBSum: phaseSamples[0]?.workingSetKiBSum ?? null,
+      lastWorkingSetKiBSum: phaseSamples.at(-1)?.workingSetKiBSum ?? null,
+      deltaWorkingSetKiBSum: phaseSamples.length
+        ? phaseSamples.at(-1).workingSetKiBSum -
+          phaseSamples[0].workingSetKiBSum
+        : null,
+    });
+    if (Date.now() >= deadline) break;
+  }
+  const report = {
+    kind: "Fresh-process native memory probe with no screenshots, videos or forced GC",
+    sourceRevisionAtLaunch,
+    sourceHashesAtLaunch,
+    capturedAtUTC: new Date().toISOString(),
+    requestedDurationMs: durationMs,
+    durationMs: Date.now() - startedAt,
+    versions: {
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+    },
+    conditions: {
+      tier: "balanced",
+      contentBounds: {
+        width: win.getContentBounds().width,
+        height: win.getContentBounds().height,
+      },
+      newDedicatedProfile: true,
+      renderWhileVisible: true,
+      screenshotCount: 0,
+      recording: false,
+    },
+    phases: phaseReports,
+    samples,
+    reserve,
+    errors,
+    limitations: [
+      "Summed working sets include shared pages and are not unique resident memory or VRAM.",
+      "A 60–90 second exploratory probe cannot establish long-term leak freedom, thermal stability or production memory acceptance.",
+      "A fresh dedicated profile removes prior capture allocations; desktop load and Chromium allocation/cache changes remain uncontrolled.",
+      "Callback and submission observations are not presented-frame timing.",
+    ],
+  };
+  const output = path.join(runtime, `memory-v3-5-${Date.now()}.json`);
+  const json = JSON.stringify(report, null, 2);
+  if (Buffer.byteLength(json) > 8 * 1024 * 1024)
+    throw new Error("Memory receipt exceeded its 8 MiB bound");
+  await fs.writeFile(output, json, { flag: "wx" });
+  console.log(
+    JSON.stringify(
+      {
+        outputPath: output,
+        durationMs: report.durationMs,
+        phases: phaseReports,
+        errors,
+      },
+      null,
+      2,
+    ),
+  );
+  if (errors.length) app.exit(1);
+}
 async function verify() {
-  const evidence = path.join(root, "evidence");
+  const storageReceipts = [admitStorage(256 * 1024 * 1024)];
+  let lastStorageCheck = Date.now();
+  const evidence = process.env.AERYNTH_EVIDENCE_DIR
+    ? path.resolve(process.env.AERYNTH_EVIDENCE_DIR)
+    : path.join(root, "evidence-v3-5", `run-${Date.now()}-${process.pid}`);
+  try {
+    await fs.access(path.join(evidence, "verification.json"));
+    throw new Error(
+      "Verification evidence already exists; choose a new evidence directory to preserve earlier results",
+    );
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
   const raw = path.join(evidence, "raw");
   await fs.mkdir(raw, { recursive: true });
   const checks = [];
   const scenarios = [];
   const motionFrames = [];
+  const captures = [];
+  let captureBytes = 0;
+  const maxCaptureBytes = 190 * 1024 * 1024;
+  const writeCapture = async (destination, image) => {
+    if (Date.now() - lastStorageCheck >= 240000) {
+      storageReceipts.push(
+        admitStorage(maxCaptureBytes - captureBytes + 66 * 1024 * 1024),
+      );
+      lastStorageCheck = Date.now();
+    }
+    const png = image.toPNG();
+    if (captureBytes + png.length > maxCaptureBytes)
+      throw new Error(
+        "Native screenshots exceeded the admitted 190 MiB evidence budget",
+      );
+    await fs.writeFile(destination, png, { flag: "wx" });
+    captureBytes += png.length;
+    return {
+      byteCount: png.length,
+      sha256: createHash("sha256").update(png).digest("hex"),
+      pixels: image.getSize(),
+    };
+  };
   const check = (name, passed, detail) => {
     checks.push({ name, passed: !!passed, detail });
     if (!passed)
@@ -222,15 +510,37 @@ async function verify() {
     }
   };
   const shot = async (name) => {
+    const state = await snap();
     const image = await capture();
-    await fs.writeFile(path.join(evidence, `${name}.png`), image.toPNG());
+    const file = `${name}.png`;
+    const artifact = await writeCapture(path.join(evidence, file), image);
+    captures.push({
+      file,
+      atUTC: new Date().toISOString(),
+      ...artifact,
+      conditions: {
+        study: state.study,
+        architectureConcept: state.architectureConcept ?? null,
+        quality: state.quality,
+        selected: state.selected,
+        expanded: state.expanded,
+        vela: state.vela,
+        reduced: state.reduced,
+        visualClock: state.visualClock,
+        contentBounds: {
+          width: win.getContentBounds().width,
+          height: win.getContentBounds().height,
+        },
+        zoomFactor: win.webContents.getZoomFactor(),
+      },
+    });
   };
   const frames = async (name, action, count = 14) => {
     await evaluate(action);
     for (let i = 0; i < count; i++) {
       const image = await capture();
       const file = `${name}-${String(i).padStart(2, "0")}.png`;
-      await fs.writeFile(path.join(raw, file), image.toPNG());
+      await writeCapture(path.join(raw, file), image);
       motionFrames.push({
         sequence: name,
         index: i,
@@ -246,13 +556,59 @@ async function verify() {
   await delay(500);
   for (const study of ["architecture", "living", "observatory"]) {
     await evaluate(`window.__aerynth.setStudy('${study}')`);
-    await delay(400);
+    await delay(900);
     await shot(`study-${study}`);
   }
+  const conceptSnapshots = [];
+  for (const concept of ["ring", "aperture", "observatory"]) {
+    await evaluate(
+      `window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('${concept}')`,
+    );
+    await delay(900);
+    await shot(`architecture-${concept}`);
+    const state = await snap();
+    conceptSnapshots.push({
+      concept,
+      actual: state.architectureConcept,
+      gpu: state.gpu,
+    });
+  }
+  check(
+    "three architectural compositions remain selectable without resource replacement",
+    conceptSnapshots.every((state) => state.actual === state.concept) &&
+      (await snap()).resources.length === 3,
+    conceptSnapshots,
+  );
+  await evaluate("window.__aerynth.setArchitectureConcept('ring')");
   await evaluate("window.__aerynth.setStudy('architecture')");
   await delay(350);
   await shot("environment-idle");
   let s = await snap();
+  if (process.argv.includes("--visual-only")) {
+    await fs.writeFile(
+      path.join(evidence, "exploration.json"),
+      JSON.stringify(
+        {
+          capturedAt: new Date().toISOString(),
+          kind: "Actual native composition exploration; not the full verifier or a performance result",
+          sourceHashesAtLaunch,
+          captures,
+          checks,
+          gpu: s.gpu,
+          errors,
+        },
+        null,
+        2,
+      ),
+      { flag: "wx" },
+    );
+    if (s.graphicsFailed || errors.length)
+      throw new Error("Native exploration encountered graphics errors");
+    console.log(
+      JSON.stringify({ exploration: true, captures: captures.length, errors }),
+    );
+    return;
+  }
   check("GPU constructed", !s.graphicsFailed, s.gpu);
   check(
     "isolated renderer",
@@ -290,6 +646,14 @@ async function verify() {
   await shot("resource-selected");
   await frames("expansion", `window.__aerynth.expand('${first}')`, 18);
   await shot("resource-expanded");
+  check(
+    "focused environment navigation stays visible and reachable",
+    await evaluate(`Array.from(document.querySelectorAll('.scene-navigation button')).every(button => {
+    const r = button.getBoundingClientRect();
+    for(let p = button; p; p = p.parentElement) { const s = getComputedStyle(p); if(s.display==='none' || s.visibility==='hidden' || Number(s.opacity)<.01) return false; }
+    return r.width>0 && r.height>0 && r.left>=0 && r.right<=innerWidth && document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.closest('button')===button;
+  })`),
+  );
   const presenceClearance = await evaluate(
     `(()=>{const v=document.querySelector('#vela').getBoundingClientRect(),r=document.querySelector('.expanded').getBoundingClientRect();return {left:v.left,right:v.right,resourceRight:r.right,width:innerWidth};})()`,
   );
@@ -466,6 +830,134 @@ async function verify() {
       )),
   );
   await shot("local-message-retained");
+  const continuityBefore = await evaluate(`(()=>{
+    const article=document.querySelector('[data-resource="conversation-tidal"]');
+    const history=article.querySelector('.message-stream');
+    window.__sceneArticle=article;window.__sceneEditor=article.querySelector('textarea');
+    history.scrollTop=Math.min(100,history.scrollHeight-history.clientHeight);
+    const range=document.createRange();range.selectNodeContents(history.querySelector('.message p'));
+    const selection=getSelection();selection.removeAllRanges();selection.addRange(range);
+    return {order:window.__aerynth.snapshot().order,scroll:history.scrollTop,text:selection.toString(),resources:window.__aerynth.snapshot().resources};
+  })()`);
+  await evaluate("window.__aerynth.setStudy('living')");
+  await delay(130);
+  await shot("scene-transition");
+  await evaluate("window.__aerynth.setStudy('architecture')");
+  await delay(90);
+  await evaluate("window.__aerynth.setStudy('living')");
+  await delay(1000);
+  const continuityAfter = await evaluate(`(()=>{
+    const article=document.querySelector('[data-resource="conversation-tidal"]'),history=article.querySelector('.message-stream');
+    return {sameArticle:article===window.__sceneArticle,sameEditor:article.querySelector('textarea')===window.__sceneEditor,
+      order:window.__aerynth.snapshot().order,scroll:history.scrollTop,text:getSelection().toString(),
+      resources:window.__aerynth.snapshot().resources,expanded:window.__aerynth.snapshot().expanded};
+  })()`);
+  check(
+    "interruptible environment changes preserve resources, reading position and selected text",
+    continuityAfter.sameArticle &&
+      continuityAfter.sameEditor &&
+      continuityAfter.expanded === "conversation-tidal" &&
+      continuityAfter.scroll === continuityBefore.scroll &&
+      continuityAfter.text === continuityBefore.text &&
+      JSON.stringify(continuityAfter.order) ===
+        JSON.stringify(continuityBefore.order) &&
+      JSON.stringify(continuityAfter.resources) ===
+        JSON.stringify(continuityBefore.resources),
+    { before: continuityBefore, after: continuityAfter },
+  );
+  await evaluate(`(()=>{getSelection().removeAllRanges();const editor=window.__sceneEditor;window.__sceneDraft=editor.value;
+    editor.value='Synthetic scene continuity: retain this local draft and caret.';
+    editor.dispatchEvent(new Event('input',{bubbles:true}));editor.focus();editor.setSelectionRange(10,31);
+    window.__aerynth.setStudy('architecture');})()`);
+  await delay(1000);
+  check(
+    "scene changes preserve the focused editor, draft and caret range",
+    await evaluate(
+      "document.activeElement===window.__sceneEditor&&window.__sceneEditor.selectionStart===10&&window.__sceneEditor.selectionEnd===31&&window.__sceneEditor.value==='Synthetic scene continuity: retain this local draft and caret.'",
+    ),
+  );
+  await shot("architecture-focused-conversation");
+  await evaluate("window.__aerynth.setStudy('living')");
+  await delay(900);
+  await shot("living-focused-conversation");
+  await evaluate(
+    "window.__sceneEditor.value=window.__sceneDraft;window.__sceneEditor.dispatchEvent(new Event('input',{bubbles:true}));window.__sceneEditor.blur();window.__aerynth.home()",
+  );
+  for (const study of ["architecture", "living"]) {
+    await evaluate(`window.__aerynth.setStudy('${study}')`);
+    await delay(900);
+    await frames(
+      `${study}-resource-transform`,
+      "window.__aerynth.expand('research-material')",
+      8,
+    );
+    check(
+      `${study} resource transformation retains canonical lens and returns to the workspace`,
+      (await snap()).expanded === "research-material" &&
+        (await snap()).resources.length === 3,
+    );
+    await evaluate("window.__aerynth.home()");
+    await delay(800);
+    await frames(
+      `${study}-resource-field`,
+      "window.__aerynth.move('conversation-tidal',2)",
+      8,
+    );
+    await shot(`${study}-resource-interaction`);
+    await evaluate("document.querySelector('#undo').click()");
+    await delay(800);
+  }
+  const expressionStates = [
+    "idle",
+    "receiving",
+    "working",
+    "coordinating",
+    "attention",
+    "reported",
+    "verified",
+    "unavailable",
+  ];
+  const expressionResults = [];
+  for (const state of expressionStates) {
+    await evaluate(`window.__aerynth.setVela('${state}')`);
+    await delay(600);
+    const actual = await snap();
+    expressionResults.push({
+      requested: state,
+      actual: actual.vela,
+      graphicsFailed: actual.graphicsFailed,
+    });
+    await shot(`vela-${state}`);
+  }
+  check(
+    "all eight Vela presentation states retain GPU availability and explicit state",
+    expressionResults.every(
+      (result) => result.requested === result.actual && !result.graphicsFailed,
+    ),
+    expressionResults,
+  );
+  await evaluate(
+    "window.__aerynth.setVela('idle');window.__aerynth.setStudy('architecture')",
+  );
+  await evaluate(
+    "window.__aerynth.home();window.__aerynth.setQuality('efficient')",
+  );
+  await delay(700);
+  await shot("efficient-materials");
+  check(
+    "Efficient preserves opaque resource readability fallback",
+    await evaluate(
+      "document.querySelector('#world').dataset.materials === 'opaque'",
+    ),
+  );
+  await evaluate("window.__aerynth.setQuality('balanced')");
+  await delay(700);
+  check(
+    "Balanced restores confirmed physical resource faces",
+    await evaluate(
+      "document.querySelector('#world').dataset.materials === 'physical'",
+    ),
+  );
   await evaluate(
     "window.__aerynth.home();window.__aerynth.expand('research-material')",
   );
@@ -578,6 +1070,20 @@ async function verify() {
           cpu.length % 2 ? 1600 : 1280,
           cpu.length % 2 ? 1000 : 800,
         );
+      else if (toggle === "scene")
+        await evaluate(
+          `window.__aerynth.setStudy('${cpu.length % 2 ? "architecture" : "living"}')`,
+        );
+      else if (toggle === "selection")
+        await evaluate(
+          `window.__aerynth.select(window.__aerynth.snapshot().order[${cpu.length % 3}])`,
+        );
+      else if (toggle === "rearrange")
+        await evaluate(`window.__aerynth.move('${first}',${cpu.length % 3})`);
+      else if (toggle === "vela")
+        await evaluate(
+          `window.__aerynth.setVela('${["receiving", "working", "coordinating", "attention"][cpu.length % 4]}')`,
+        );
       else if (toggle) await evaluate(`window.__aerynth.expand('${first}')`);
       await delay(500);
       const m = app.getAppMetrics();
@@ -602,9 +1108,17 @@ async function verify() {
           ? "Focused resource with native content size alternating 1280x800 / 1600x1000 every approximately 500ms"
           : name === "integrated-focus-stream"
             ? "Synthetic sequence, visible event stream, field response and repeated conversation focus/reversal"
-            : toggle
-              ? "Scripted resource expansion/reversal every approximately 500ms"
-              : "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+            : toggle === "scene"
+              ? "Living Intelligence / Luminous Architecture retarget every approximately 500ms around the same resources"
+              : toggle === "selection"
+                ? "Canonical resource selection changes every approximately 500ms"
+                : toggle === "rearrange"
+                  ? "Resource reorder and reactive field motion every approximately 500ms"
+                  : toggle === "vela"
+                    ? "Explicitly synthetic presentation state changes every approximately 500ms"
+                    : toggle
+                      ? "Scripted resource expansion/reversal every approximately 500ms"
+                      : "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
       callbackSamples: sorted.length,
       callbackMs: {
         p50: percentile(sorted, 0.5),
@@ -621,6 +1135,20 @@ async function verify() {
       cpuReportedSumMean: cpu.reduce((a, b) => a + b, 0) / cpu.length,
       workingSetKiBSumMean:
         workingSets.reduce((a, b) => a + b, 0) / workingSets.length,
+      workingSetKiBSum: {
+        first: workingSets[0],
+        last: workingSets.at(-1),
+        min: Math.min(...workingSets),
+        max: Math.max(...workingSets),
+        delta: workingSets.at(-1) - workingSets[0],
+      },
+      state: {
+        study: state.study,
+        architectureConcept: state.architectureConcept ?? null,
+        quality: state.quality,
+        expanded: state.expanded,
+        vela: state.vela,
+      },
       policy: state.metrics.policy,
       gpu: state.gpu,
     });
@@ -628,22 +1156,71 @@ async function verify() {
   for (let repeat = 1; repeat <= 2; repeat++) {
     await sample(
       `balanced-active-${repeat}`,
-      "window.__aerynth.home();window.__aerynth.setQuality('balanced');window.__aerynth.setVela('working')",
+      "window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring');window.__aerynth.setQuality('balanced');window.__aerynth.setVela('working')",
     );
     await sample(
       `cinematic-transition-${repeat}`,
-      "window.__aerynth.home();window.__aerynth.setVela('working');window.__aerynth.setQuality('cinematic')",
+      "window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring');window.__aerynth.setVela('working');window.__aerynth.setQuality('cinematic')",
       4500,
       true,
     );
     await sample(
       `efficient-${repeat}`,
-      "window.__aerynth.home();window.__aerynth.setQuality('efficient');window.__aerynth.setVela('working')",
+      "window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring');window.__aerynth.setQuality('efficient');window.__aerynth.setVela('working')",
     );
   }
   await sample(
     "cinematic-active",
-    "window.__aerynth.home();window.__aerynth.setQuality('cinematic');window.__aerynth.setVela('working')",
+    "window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring');window.__aerynth.setQuality('cinematic');window.__aerynth.setVela('working')",
+  );
+  for (let repeat = 1; repeat <= 2; repeat++) {
+    for (const concept of ["ring", "aperture", "observatory"])
+      await sample(
+        `architecture-${concept}-ambient-${repeat}`,
+        `window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('${concept}');window.__aerynth.setQuality('balanced');window.__aerynth.setVela('idle')`,
+        3000,
+      );
+    await sample(
+      `living-ambient-${repeat}`,
+      "window.__aerynth.home();window.__aerynth.setStudy('living');window.__aerynth.setQuality('balanced');window.__aerynth.setVela('idle')",
+      3000,
+    );
+  }
+  await sample(
+    "resource-selection",
+    "window.__aerynth.home();window.__aerynth.setStudy('living')",
+    3000,
+    "selection",
+  );
+  const orderBeforePerformanceMove = (await snap()).order;
+  await sample(
+    "resource-rearrangement",
+    "window.__aerynth.home()",
+    4500,
+    "rearrange",
+  );
+  await evaluate(
+    `(${JSON.stringify(orderBeforePerformanceMove)}).forEach((id,index)=>window.__aerynth.move(id,index));window.__aerynth.home()`,
+  );
+  await sample(
+    "focused-long-conversation",
+    "window.__aerynth.expand('conversation-tidal');window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring')",
+  );
+  await sample(
+    "focused-research-notebook",
+    "window.__aerynth.home();window.__aerynth.expand('research-material')",
+  );
+  await sample(
+    "scene-transitions",
+    "window.__aerynth.home();window.__aerynth.setVela('idle')",
+    4500,
+    "scene",
+  );
+  await sample(
+    "vela-state-changes",
+    "window.__aerynth.home();window.__aerynth.setStudy('architecture')",
+    4500,
+    "vela",
   );
   await sample(
     "integrated-focus-stream",
@@ -687,6 +1264,17 @@ async function verify() {
     s.metrics.draws === 0,
     s.metrics.draws,
   );
+  await sample(
+    "reduced-motion-static",
+    "document.querySelector('#quiet').checked=false;document.querySelector('#quiet').dispatchEvent(new Event('change'));window.__aerynth.setReduced(true);window.__aerynth.home()",
+    2500,
+  );
+  check(
+    "reduced motion stops autonomous rendering after reconciliation",
+    (await snap()).metrics.draws === 0,
+    (await snap()).metrics.draws,
+  );
+  await evaluate("window.__aerynth.setReduced(false)");
   await evaluate(
     "document.querySelector('#quiet').checked=false;document.querySelector('#quiet').dispatchEvent(new Event('change'))",
   );
@@ -764,7 +1352,21 @@ async function verify() {
   const report = {
     capturedAt: new Date().toISOString(),
     kind: "actual Electron native renderer; synthetic content",
+    sourceRevisionAtLaunch,
+    sourceHashesAtLaunch,
     buildAssets: (await fs.readdir(path.join(root, "dist/assets"))).sort(),
+    buildAssetHashes: Object.fromEntries(
+      await Promise.all(
+        (await fs.readdir(path.join(root, "dist/assets")))
+          .sort()
+          .map(async (name) => [
+            name,
+            createHash("sha256")
+              .update(await fs.readFile(path.join(root, "dist/assets", name)))
+              .digest("hex"),
+          ]),
+      ),
+    ),
     versions: {
       electron: process.versions.electron,
       chrome: process.versions.chrome,
@@ -788,6 +1390,15 @@ async function verify() {
     scenarios,
     inputFeedback,
     motionFrames,
+    captures,
+    storage: {
+      receipts: storageReceipts,
+      captureBytes,
+      maxCaptureBytes,
+      coverage:
+        "Bounded local native writer only; not an OS quota, and cannot stop unrelated applications, cloud tasks or processes that did not load this rule.",
+    },
+    graphicsFeatureStatus: app.getGPUFeatureStatus(),
     errors,
     unavailable: [
       "presented-frame timing",

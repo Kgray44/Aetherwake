@@ -2,12 +2,44 @@ const { app, BrowserWindow, session } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { execFileSync } = require("node:child_process");
 const root = path.resolve(__dirname, "..");
 const runtime = path.join(root, ".runtime");
-app.setPath("userData", path.join(runtime, "video-inspection-profile"));
+app.setPath("userData", path.join(runtime, "v3-5", "video-inspection-profile"));
 app
   .whenReady()
   .then(async () => {
+    const shell = path.join(
+      process.env.SystemRoot,
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    const guard = path.join(
+      process.env.LOCALAPPDATA,
+      "AeroStorageWatch",
+      "ReserveGuard.ps1",
+    );
+    const reserve = JSON.parse(
+      execFileSync(
+        shell,
+        [
+          "-NoProfile",
+          "-File",
+          guard,
+          "-EstimatedCBytes",
+          "33554432",
+          "-EstimatedDBytes",
+          "0",
+        ],
+        { encoding: "utf8", windowsHide: true, timeout: 15000 },
+      ).trim(),
+    );
+    if (!reserve.allowed)
+      throw new Error("Storage reserve declined bounded video inspection");
+    const output = path.join(runtime, "v3-5", `video-review-${Date.now()}`);
+    await fs.mkdir(output, { recursive: true });
     const input = path.resolve(process.argv[2]);
     if (
       !input.startsWith(runtime + path.sep) ||
@@ -21,7 +53,7 @@ app
       { urls: ["http://*/*", "https://*/*"] },
       (_d, cb) => cb({ cancel: true }),
     );
-    const html = path.join(runtime, "video-inspection.html");
+    const html = path.join(output, "video-inspection.html");
     await fs.writeFile(
       html,
       '<!doctype html><meta charset="utf-8"><video id="v" muted></video><canvas id="c"></canvas>',
@@ -46,16 +78,25 @@ app
   })()`,
       true,
     );
-    for (const frame of result.frames)
+    let pngBytes = 0;
+    for (const frame of result.frames) {
+      const png = Buffer.from(frame.data.split(",")[1], "base64");
+      pngBytes += png.length;
+      if (pngBytes > 32 * 1024 * 1024)
+        throw new Error("Video inspection exceeded its 32 MiB output bound");
       await fs.writeFile(
-        path.join(runtime, `video-frame-${frame.time}.png`),
-        Buffer.from(frame.data.split(",")[1], "base64"),
+        path.join(output, `video-frame-${frame.time}.png`),
+        png,
+        { flag: "wx" },
       );
+    }
     console.log(
       JSON.stringify({
         width: result.width,
         height: result.height,
         duration: result.duration,
+        outputPath: output,
+        pngBytes,
         frames: result.frames.map((f) => f.time),
       }),
     );

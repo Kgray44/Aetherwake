@@ -1,6 +1,7 @@
 const { desktopCapturer } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
+const { randomBytes } = require("node:crypto");
 
 const MAX_BYTES = 32 * 1024 * 1024;
 const MAX_RECORDING_MS = 35000;
@@ -60,6 +61,12 @@ async function recordNative(win, session, localURL, outputPath) {
   }
 
   const sourceId = win.getMediaSourceId();
+  const captureTitle = win.getTitle();
+  const nativeHandle = win.getNativeWindowHandle();
+  const nativeWindowNumber =
+    nativeHandle.length >= 8
+      ? nativeHandle.readBigUInt64LE().toString()
+      : nativeHandle.readUInt32LE().toString();
   if (!sourceId.startsWith("window:")) {
     throw new Error(
       "Supplied native window did not expose a window capture source",
@@ -112,7 +119,12 @@ async function recordNative(win, session, localURL, outputPath) {
           thumbnailSize: { width: 0, height: 0 },
           fetchWindowIcons: false,
         });
-        const matches = sources.filter((source) => source.id === sourceId);
+        const matches = sources.filter(
+          (source) =>
+            source.id === sourceId &&
+            source.name === captureTitle &&
+            source.id.split(":")[1] === nativeWindowNumber,
+        );
         if (
           matches.length !== 1 ||
           !isExactFrame(request.frame) ||
@@ -139,6 +151,11 @@ async function recordNative(win, session, localURL, outputPath) {
       maxRecordingMs: MAX_RECORDING_MS,
       frameRate: FPS_REQUESTED,
       videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
+      ambientStudy: process.argv.includes("--ambient-study"),
+      verificationColors: Array.from(
+        randomBytes(12),
+        (byte) => 64 + (byte % 128),
+      ),
     };
     const execution = win.webContents.executeJavaScript(
       `(${recordJourney.toString()})(${JSON.stringify(configuration)})`,
@@ -203,6 +220,12 @@ async function recordNative(win, session, localURL, outputPath) {
       recorderVideoBitsPerSecond: result.recorderVideoBitsPerSecond,
       videoTrackSettings: result.videoTrackSettings,
       source: "Exact application BrowserWindow only",
+      captureBinding: {
+        uniqueWindowTitleMatched: true,
+        nativeWindowHandleMatched: true,
+        exactFrameMatched: true,
+        livePixelPatternMatched: result.livePixelPatternMatched,
+      },
       audio: false,
       journey: result.journey,
       finalState: result.finalState,
@@ -285,6 +308,8 @@ async function recordJourney(configuration) {
   let stopping = false;
   let acquisitionCancelled = false;
   let fatal = null;
+  let marker = null,
+    probeVideo = null;
   let bytes = 0;
   const chunks = [];
   const journey = [];
@@ -317,7 +342,8 @@ async function recordJourney(configuration) {
   try {
     api.stopDemo();
     api.home();
-    api.setStudy("living");
+    api.setStudy("architecture");
+    api.setArchitectureConcept("ring");
     api.setQuality("cinematic");
     api.setReduced(false);
     api.setVela("idle");
@@ -330,6 +356,20 @@ async function recordJourney(configuration) {
       const control = document.querySelector(selector);
       if (control?.getClientRects().length) control.click();
     }
+    // Verify actual media pixels before starting the recorder, in addition to
+    // the exact frame, native handle and unique window title checks.
+    marker = document.createElement("div");
+    marker.style.cssText =
+      "position:fixed;left:16px;top:64px;width:64px;height:16px;display:flex;z-index:2147483647;pointer-events:none";
+    for (let i = 0; i < 4; i++) {
+      const block = document.createElement("span");
+      block.style.cssText = `width:16px;height:16px;background:rgb(${configuration.verificationColors.slice(i * 3, i * 3 + 3).join(",")})`;
+      marker.append(block);
+    }
+    document.body.append(marker);
+    await new Promise((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(resolve)),
+    );
     const acquisition = navigator.mediaDevices
       .getDisplayMedia({
         video: { frameRate: configuration.frameRate },
@@ -358,6 +398,49 @@ async function recordJourney(configuration) {
         "Capture must contain exactly one video track and no audio",
       );
     }
+    probeVideo = document.createElement("video");
+    probeVideo.muted = true;
+    probeVideo.srcObject = stream;
+    await probeVideo.play();
+    const probe = document.createElement("canvas");
+    const context = probe.getContext("2d", { willReadFrequently: true });
+    let patternMatched = false;
+    for (let attempt = 0; attempt < 12 && !patternMatched; attempt++) {
+      await sleep(100);
+      if (!probeVideo.videoWidth || !probeVideo.videoHeight) continue;
+      probe.width = probeVideo.videoWidth;
+      probe.height = probeVideo.videoHeight;
+      context.drawImage(probeVideo, 0, 0);
+      const sx = probe.width / innerWidth,
+        sy = probe.height / innerHeight;
+      for (let dy = -8; dy <= 8 && !patternMatched; dy += 2)
+        for (let dx = -8; dx <= 8 && !patternMatched; dx += 2) {
+          patternMatched = [0, 1, 2, 3].every((i) => {
+            const pixel = context.getImageData(
+              Math.round((24 + i * 16) * sx + dx),
+              Math.round(72 * sy + dy),
+              1,
+              1,
+            ).data;
+            return [0, 1, 2].every(
+              (c) =>
+                Math.abs(
+                  pixel[c] - configuration.verificationColors[i * 3 + c],
+                ) < 32,
+            );
+          });
+        }
+    }
+    marker.remove();
+    marker = null;
+    probeVideo.pause();
+    probeVideo.srcObject = null;
+    probeVideo = null;
+    if (!patternMatched)
+      throw new Error(
+        "Capture pixel verification failed; no recording was started or saved",
+      );
+    await sleep(150);
     const track = stream.getVideoTracks()[0];
     const settings = track.getSettings();
     const videoTrackSettings = {
@@ -428,83 +511,117 @@ async function recordJourney(configuration) {
     // Normal application visibility policy is unchanged.
     activityKeeper = setInterval(() => api.setActive(true), 250);
 
-    mark("Initial dimensional environment / Vela idle");
-    await sleep(4000);
-    api.select("conversation-tidal");
-    mark("Resource selection");
-    await sleep(500);
-    api.expand("conversation-tidal");
-    await sleep(120);
-    api.home();
-    mark("Interrupted expansion reverses continuously");
-    await sleep(450);
-    api.expand("conversation-tidal");
-    mark("Conversation unfolds into working plane");
-    await sleep(1400);
-    const reading = document.querySelector(".message-stream");
-    reading.scrollTop = 80;
-    click(".conversation-actions button:last-child");
-    mark("Vela receives local typed input");
-    await sleep(400);
-    const input = document.querySelector("#vela-input");
-    input.value = "Explore the material study.";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    click("#vela-send");
-    await sleep(400);
-    click("#vela-close");
-    await sleep(150);
-    click("#demo");
-    mark("Explicit synthetic activity / Intelligence Stream");
-    await sleep(11250);
-    const afterDemo = api.snapshot();
-    if (
-      afterDemo.vela !== "idle" ||
-      !afterDemo.events.some(
-        (event) =>
-          event.kind === "fixture.check.passed" &&
-          event.evidence === "local-observed",
-      )
-    ) {
-      throw new Error(
-        "Synthetic sequence did not reach its recorded fixture check and idle state",
+    if (configuration.ambientStudy) {
+      mark(
+        "Large celestial arc / natural rotating light and spatial veil / autonomous Vela / no input",
       );
+      await sleep(30000);
+    } else {
+      mark(
+        "Luminous Architecture / monumental arc / autonomous Vela without input",
+      );
+      await sleep(3300);
+      api.setStudy("living");
+      mark("Living Intelligence appears around the same persistent resources");
+      await sleep(1200);
+      api.select("conversation-tidal");
+      mark("Resource selection");
+      await sleep(500);
+      api.expand("conversation-tidal");
+      await sleep(120);
+      api.home();
+      mark("Interrupted expansion reverses continuously");
+      await sleep(350);
+      api.expand("conversation-tidal");
+      mark("Conversation unfolds into working plane");
+      await sleep(1400);
+      const reading = document.querySelector(".message-stream");
+      reading.scrollTop = 80;
+      const passage = reading.querySelector(".message p");
+      const range = document.createRange();
+      range.selectNodeContents(passage);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      mark("Real DOM reading, scrolling and text selection");
+      api.setStudy("architecture");
+      mark("Focused work stays intact as the environment transforms");
+      await sleep(800);
+      getSelection().removeAllRanges();
+      click(".conversation-actions button:last-child");
+      mark("Vela receives local typed input");
+      await sleep(250);
+      const input = document.querySelector("#vela-input");
+      input.value = "Explore the material study.";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      click("#vela-send");
+      await sleep(250);
+      click("#vela-close");
+      await sleep(150);
+      click("#demo");
+      mark("Explicit synthetic activity / Intelligence Stream");
+      await sleep(11250);
+      const afterDemo = api.snapshot();
+      if (
+        afterDemo.vela !== "idle" ||
+        !afterDemo.events.some(
+          (event) =>
+            event.kind === "fixture.check.passed" &&
+            event.evidence === "local-observed",
+        )
+      ) {
+        throw new Error(
+          "Synthetic sequence did not reach its recorded fixture check and idle state",
+        );
+      }
+      click("#stream-close");
+      api.home();
+      mark("Same resource returns to its workspace arrangement");
+      await sleep(600);
+      api.setStudy("living");
+      api.move("conversation-tidal", 2);
+      mark("Workspace rearranges / field follows");
+      await sleep(700);
+      click("#undo");
+      mark("Arrangement restored by undo");
+      await sleep(700);
+      if (api.snapshot().order.join("|") !== originalOrder)
+        throw new Error(
+          "Journey undo did not restore the original arrangement",
+        );
+      api.select("research-material");
+      mark("Material lens selected");
+      await sleep(400);
+      api.expand("research-material");
+      mark("Lens transforms into readable research plane");
+      await sleep(900);
+      api.home();
+      await sleep(450);
+      api.select("note-field");
+      await sleep(200);
+      api.expand("note-field");
+      await sleep(800);
+      const editor = document.querySelector(
+        '[data-resource="note-field"] textarea',
+      );
+      if (!editor) throw new Error("Focused notebook editor is unavailable");
+      const originalNote = editor.value;
+      editor.focus();
+      editor.value +=
+        "\n\nSynthetic capture observation: the reading plane stays calm while the surrounding architecture retains depth.";
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+      editor.setSelectionRange(editor.value.length, editor.value.length);
+      editor.scrollTop = editor.scrollHeight;
+      mark("Focused local editing / environment yields");
+      await sleep(1000);
+      editor.value = originalNote;
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+      editor.blur();
+      api.home();
+      api.setVela("idle");
+      api.setStudy("architecture");
+      mark("Return to calm workspace");
+      await sleep(1700);
     }
-    click("#stream-close");
-    api.home();
-    mark("Same resource returns to its workspace arrangement");
-    await sleep(800);
-    api.move("conversation-tidal", 2);
-    mark("Workspace rearranges / field follows");
-    await sleep(800);
-    click("#undo");
-    mark("Arrangement restored by undo");
-    await sleep(800);
-    if (api.snapshot().order.join("|") !== originalOrder)
-      throw new Error("Journey undo did not restore the original arrangement");
-    api.select("research-material");
-    mark("Material lens selected");
-    await sleep(400);
-    api.expand("research-material");
-    mark("Lens transforms into readable research plane");
-    await sleep(1100);
-    api.home();
-    await sleep(600);
-    api.select("note-field");
-    await sleep(300);
-    api.expand("note-field");
-    await sleep(800);
-    const editor = document.querySelector(
-      '[data-resource="note-field"] textarea',
-    );
-    if (!editor) throw new Error("Focused notebook editor is unavailable");
-    editor.focus();
-    mark("Focused writing surface / environment yields");
-    await sleep(1400);
-    editor.blur();
-    api.home();
-    api.setVela("idle");
-    mark("Return to calm workspace");
-    await sleep(2200);
     const final = api.snapshot();
     stop();
     await Promise.race([
@@ -537,6 +654,7 @@ async function recordJourney(configuration) {
       reader.readAsDataURL(blob);
     });
     return {
+      livePixelPatternMatched: true,
       dataURL,
       mimeType,
       byteCount: blob.size,
@@ -549,9 +667,16 @@ async function recordJourney(configuration) {
         vela: final.vela,
         resourceCount: final.resources.length,
         eventCount: final.events.length,
+        study: final.study,
+        architectureConcept: final.architectureConcept,
       },
     };
   } finally {
+    marker?.remove();
+    if (probeVideo) {
+      probeVideo.pause();
+      probeVideo.srcObject = null;
+    }
     acquisitionCancelled = true;
     clearTimeout(acquisitionDeadline);
     clearTimeout(deadline);

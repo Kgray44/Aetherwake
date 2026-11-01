@@ -1,5 +1,10 @@
 import * as THREE from "three";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+import {
+  OrbitalArchitecture,
+  type ArchitectureConcept,
+} from "./orbital-architecture.ts";
+import type { SceneWeights } from "./scene-transition";
 
 export type Study = "architecture" | "living" | "observatory";
 export type Quality = "cinematic" | "balanced" | "efficient";
@@ -45,6 +50,8 @@ export interface EnvironmentFrame {
   interaction?: number;
   vela: VelaState;
   study: Study;
+  sceneWeights?: SceneWeights;
+  architectureConcept?: ArchitectureConcept;
   quality: Quality;
   reduced: boolean;
   ambientStrength?: number;
@@ -87,9 +94,9 @@ interface FolioVisual {
 const ribbonVertex = /* glsl */ `
   uniform float uTime, uEnergy, uAmbient;
   uniform vec4 uExpression;
-  varying vec3 vNormal, vView;
+  varying vec3 vNormal, vView, vTangent;
   varying float vAcross, vAlong;
-  vec3 surface(float t, float v) {
+  vec3 surface(float t, float section) {
     // Ambient expression has its own gain; idle semantic energy never gates it.
     float ambient = sin(uTime * .56);
     // One continuous asymmetrical double-loop. Its central crossing is separated in Z.
@@ -98,7 +105,15 @@ const ribbonVertex = /* glsl */ `
     center.x *= 1. + uExpression.x * .065;
     center.y *= 1. + uExpression.y * .035;
     center *= 1. + uExpression.w * .025;
-    vec3 tangent = normalize(vec3(2.26 * cos(2. * t) * (.88 + .12 * cos(t)) - .1356 * sin(2. * t) * sin(t), -1.18 * sin(t) + .36 * cos(3. * t), .5 * cos(t)));
+    // Differentiate the deformed centerline, rather than the undeformed seed.
+    // Its transported frame therefore stays tangent during breathing and expression.
+    vec3 derivative = vec3(2.26 * cos(2. * t) * (.88 + .12 * cos(t)) - .1356 * sin(2. * t) * sin(t), -1.18 * sin(t) + .36 * cos(3. * t), .5 * cos(t));
+    derivative *= 1. + ambient * .03 * uAmbient;
+    derivative.x *= 1. + uExpression.x * .065;
+    derivative.y *= 1. + uExpression.y * .035;
+    derivative *= 1. + uExpression.w * .025;
+    derivative.z += .036 * cos(t * 3.) + .195 * cos(t * 3. + uTime * .62) * uAmbient;
+    vec3 tangent = normalize(derivative);
     vec3 normal = normalize(cross(tangent, vec3(0., 0., 1.)));
     vec3 binormal = normalize(cross(tangent, normal));
     float directed = sin(t * 2. - uTime * 1.1) * uExpression.z;
@@ -108,19 +123,27 @@ const ribbonVertex = /* glsl */ `
     float width = (.235 + .095 * cos(t * 2. - .6)) * (1. + sin(uTime * .64 + t * 2.) * .1 * uAmbient);
     width *= 1. - uExpression.y * .045 + uExpression.x * .025 + uExpression.w * .04;
     center.z += sin(t * 3.) * .012 + sin(t * 3. + uTime * .62) * .065 * uAmbient;
-    return center + across * v * width + binormal * v * v * .055;
+    // A closed, thin elliptical skin supplies real edge thickness while keeping
+    // the broad folded-ribbon silhouette. Both seams are periodic.
+    float v = cos(section);
+    vec3 skinNormal = normalize(cross(tangent, across));
+    return center + across * v * width + binormal * v * v * .055
+      + skinNormal * sin(section) * .014;
   }
   void main() {
     float t = position.x;
-    float v = position.y;
-    vec3 p = surface(t, v);
-    vec3 dt = surface(t + .001, v) - p;
-    vec3 dv = surface(t, v + .001) - p;
-    vec3 n = normalize(cross(dt, dv));
+    float section = position.y;
+    vec3 p = surface(t, section);
+    // Symmetric differences avoid a directional normal bias at the closed join
+    // and remain valid on both faces and the small rounded sidewalls.
+    vec3 dt = surface(t + .002, section) - surface(t - .002, section);
+    vec3 dv = surface(t, section + .004) - surface(t, section - .004);
+    vec3 n = normalize(cross(dv, dt));
     vec4 view = modelViewMatrix * vec4(p, 1.);
     vNormal = normalize(normalMatrix * n);
     vView = -view.xyz;
-    vAcross = v;
+    vTangent = normalize(normalMatrix * dt);
+    vAcross = cos(section);
     vAlong = t;
     gl_Position = projectionMatrix * view;
   }
@@ -129,23 +152,35 @@ const ribbonVertex = /* glsl */ `
 const ribbonFragment = /* glsl */ `
   uniform float uEnergy, uTime, uUnavailable;
   uniform vec3 uTint, uSceneLight;
-  varying vec3 vNormal, vView;
+  varying vec3 vNormal, vView, vTangent;
   varying float vAcross, vAlong;
   void main() {
-    vec3 n = normalize(vNormal) * (gl_FrontFacing ? 1. : -1.);
+    vec3 n = normalize(vNormal);
     vec3 view = normalize(vView);
-    float fresnel = pow(1. - abs(dot(n, view)), 2.5);
+    float facing = clamp(abs(dot(n, view)), 0., 1.);
+    float fresnel = .055 + .945 * pow(1. - facing, 5.);
     vec3 light = normalize(mix(normalize(vec3(-.7, 1.2, 1.)), uSceneLight, .32));
     float diffuse = max(0., dot(n, light));
-    float spec = pow(max(0., dot(n, normalize(light + view))), 86.);
+    vec3 halfVector = normalize(light + view);
+    // The closed skin can be subpixel at a grazing fold. Broaden and reduce
+    // the sharp lobe when the normal changes rapidly across a pixel, instead
+    // of letting individual sidewall facets sparkle as the ribbon moves.
+    vec3 normalDx = dFdx(n), normalDy = dFdy(n);
+    float normalVariance = max(dot(normalDx, normalDx), dot(normalDy, normalDy));
+    float specularPower = clamp(96. / (1. + normalVariance * 80.), 12., 96.);
+    float spec = pow(max(0., dot(n, halfVector)), specularPower) * (specularPower / 96.);
     float broad = pow(max(0., dot(n, normalize(vec3(.8, .5, .5) + view))), 18.);
-    float silk = pow(max(0., dot(n, normalize(light + view + vec3(vAcross * .12, .02, 0.)))), 64.);
-    float edge = smoothstep(.84, 1., abs(vAcross));
+    // Directional pearl lobe follows the ribbon instead of a screen-space stripe.
+    float grain = 1. - pow(abs(dot(normalize(vTangent), halfVector)), 2.);
+    float silk = pow(max(0., dot(n, halfVector)), 26.) * grain;
+    float edge = smoothstep(.94, 1., abs(vAcross));
     float rim = pow(max(0., dot(n, normalize(vec3(-.9, -.1, .5)))), 16.);
-    vec3 body = mix(vec3(.012, .009, .044), uTint * .36, diffuse * .42 + broad * .28);
-    body *= .82 + .18 * abs(vAcross);
+    vec3 body = mix(vec3(.015, .011, .041), uTint * .32, diffuse * .48 + broad * .21);
+    body *= .88 + .12 * abs(vAcross);
     vec3 pearl = vec3(.74, .72, 1.);
-    vec3 color = body + pearl * (spec * 1.18 + broad * .3 + silk * .1 + fresnel * .23 + edge * .09 + rim * .27);
+    vec3 optical = mix(vec3(.35,.28,.55), vec3(.39,.48,.59), pow(1. - facing, 2.));
+    vec3 color = body + pearl * (spec * .86 + broad * .27 + silk * .15 + fresnel * .19 + rim * .24);
+    color += optical * fresnel * .13 + pearl * edge * diffuse * .045;
     color += uTint * uEnergy * (.035 + .045 * sin(vAlong * 2. - uTime * .5));
     color = mix(color, vec3(dot(color, vec3(.2126,.7152,.0722))) * .43, uUnavailable);
     gl_FragColor = vec4(color, 1.);
@@ -156,18 +191,19 @@ const ribbonFragment = /* glsl */ `
 
 const fieldVertex = /* glsl */ `
   uniform float uTime, uFocus, uEnergy, uSelectionStrength, uInteraction;
-  uniform vec2 uPointer, uSelection;
+  uniform vec2 uPointer, uSelection, uSelectionSize, uFlow;
   attribute float aLayer;
   varying float vLayer, vDistance, vSignal;
   void main() {
     vec3 p = position;
     float wave = sin(p.x * .22 + aLayer * .24 + uTime * .35);
     float influence = exp(-pow((p.x - uPointer.x * 7.) * .3, 2.));
-    vec2 local = (p.xz - uSelection) / vec2(3.8, 4.5);
+    vec2 local = (p.xz - uSelection) / uSelectionSize;
     float selection = exp(-dot(local,local)) * uSelectionStrength;
     p.y += wave * .055 * (1. - uFocus * .8) + influence * .09 * uEnergy;
     p.z += influence * uPointer.y * .16;
     p.y += selection * (.065 + uInteraction * .055) * (1. - uFocus * .6);
+    p.xz += uFlow * selection * .035 * (1. - uFocus * .8);
     vLayer = aLayer;
     vSignal = max(influence, selection);
     vec4 view = modelViewMatrix * vec4(p, 1.);
@@ -177,14 +213,14 @@ const fieldVertex = /* glsl */ `
 `;
 
 const fieldFragment = /* glsl */ `
-  uniform float uFocus, uEnergy, uDetail;
+  uniform float uFocus, uEnergy, uDetail, uEnvironmentWeight;
   varying float vLayer, vDistance, vSignal;
   void main() {
     if(vLayer > uDetail) discard;
     float fog = exp(-vDistance * .055);
     float alpha = (.065 + vSignal * .06 * uEnergy) * fog * (1. - uFocus * .82);
     vec3 c = mix(vec3(.22,.21,.45), vec3(.47,.51,.77), vSignal * .65);
-    gl_FragColor = vec4(c, alpha);
+    gl_FragColor = vec4(c, alpha * uEnvironmentWeight);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
   }
@@ -192,18 +228,25 @@ const fieldFragment = /* glsl */ `
 
 const livingVertex = /* glsl */ `
   uniform float uTime, uFocus, uEnergy, uSelectionStrength, uInteraction;
-  uniform vec2 uPointer, uSelection;
-  varying vec3 vPos;
+  uniform vec2 uPointer, uSelection, uSelectionSize, uFlow;
+  varying vec3 vPos, vWorld;
   varying float vRise, vSelection;
   void main() {
     vec3 p = position;
+    // Related low-frequency waves share a timebase; interaction bends this same
+    // surface instead of switching it to a separate ripple animation.
     float wave = sin(p.x * .28 + uTime * .27) * cos(p.z * .2 - uTime * .16);
+    wave += sin(p.x * .17 - p.z * .13 + uTime * .11) * .18;
     float influence = exp(-length(p.xz - uPointer * 6.) * .22);
-    vec2 local = ((modelMatrix * vec4(p,1.)).xz - uSelection) / vec2(3.8,4.5);
+    vec2 local = ((modelMatrix * vec4(p,1.)).xz - uSelection) / uSelectionSize;
     float selection = exp(-dot(local,local)) * uSelectionStrength;
-    p.y = wave * 1.15 + influence * (.3 + uEnergy * .25) - uFocus * .4;
-    p.y += selection * (.12 + uInteraction * .08) * (1. - uFocus * .6);
+    p.y = wave * 1.08 + influence * (.3 + uEnergy * .25) - uFocus * .4;
+    float pressure = .15 + uInteraction * .14;
+    float wake = dot(local, uFlow) * .045 * uInteraction;
+    p.y += selection * (pressure + wake) * (1. - uFocus * .7);
+    p.xz += uFlow * selection * .055 * (1. - uFocus * .8);
     vPos = p;
+    vWorld = (modelMatrix * vec4(p,1.)).xyz;
     vRise = wave;
     vSelection = selection;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.);
@@ -212,17 +255,29 @@ const livingVertex = /* glsl */ `
 
 const livingFragment = /* glsl */ `
   uniform float uFocus;
-  varying vec3 vPos;
+  uniform vec3 uSceneLight, uSceneTint;
+  varying vec3 vPos, vWorld;
   varying float vRise, vSelection;
   void main() {
-    vec3 dx = dFdx(vPos), dy = dFdy(vPos);
+    vec3 dx = dFdx(vWorld), dy = dFdy(vWorld);
     vec3 n = normalize(cross(dx, dy));
-    float light = pow(abs(dot(n, normalize(vec3(.2,1.,.6)))), 6.);
-    float contour = pow(.5 + .5 * sin(vPos.y * 17. + vPos.z * .2), 16.);
+    if (n.y < 0.) n = -n;
+    vec3 lightDirection = normalize(uSceneLight);
+    float light = pow(max(0., dot(n, lightDirection)), 3.);
+    // Broad ceramic reflection reveals curvature. Fine contours remain dim
+    // and derivative filtered so their frequency does not dominate the field.
+    vec3 view = normalize(cameraPosition - vWorld);
+    vec3 halfVector = normalize(lightDirection + view);
+    float reflection = pow(max(0., dot(n, halfVector)), 32.);
+    float fresnel = pow(1. - max(0., dot(n, view)), 3.);
+    float phase = vPos.y * 13. + vPos.z * .18;
+    float filterWidth = max(fwidth(phase), .001);
+    float contour = pow(.5 + .5 * sin(phase), 18.) / (1. + filterWidth * 1.5);
     float fade = exp(-length(vPos.xz) * .065) * (1. - uFocus * .7);
-    vec3 c = vec3(.025,.017,.07) + vec3(.13,.08,.3) * light + vec3(.26,.22,.47) * contour * .13;
-    c += vec3(.023,.016,.048) * vSelection;
-    gl_FragColor = vec4(c, fade * .65);
+    vec3 c = vec3(.022,.014,.061) + vec3(.105,.066,.25) * light;
+    c += vec3(.29,.25,.45) * (reflection * .21 + fresnel * .055 + contour * .12);
+    c += uSceneTint * vSelection * .035;
+    gl_FragColor = vec4(c, fade * .69);
     #include <tonemapping_fragment>
     #include <colorspace_fragment>
   }
@@ -281,6 +336,7 @@ const contactVertex = /* glsl */ `
 const contactFragment = /* glsl */ `
   uniform vec2 uSize, uRect;
   uniform float uLift, uSelected, uEnergy, uOpacity, uRound;
+  uniform vec3 uSceneTint;
   varying vec2 vUv;
   void main() {
     vec2 p = (vUv - .5) * uSize;
@@ -292,7 +348,7 @@ const contactFragment = /* glsl */ `
     float shadow = exp(-max(distance,0.) / softness) * (.28 - min(uLift,60.) * .0012);
     float ground = exp(-pow((p.y + uRect.y * .46 + 9.) / (18. + uLift * .18),2.)) * exp(-pow(p.x / (uRect.x * .65),2.));
     float light = ground * (.12 + uSelected * .13 + uEnergy * .045);
-    vec3 color = vec3(.13,.075,.27) * light;
+    vec3 color = uSceneTint * .27 * light;
     float alpha = max(shadow, light * .7) * uOpacity;
     gl_FragColor = vec4(color, alpha);
     #include <tonemapping_fragment>
@@ -314,8 +370,15 @@ export class Environment {
     THREE.ShaderMaterial
   >[] = [];
   private readonly ribbonLevels: THREE.BufferGeometry[] = [];
-  private readonly apertureMaterials: THREE.MeshPhysicalMaterial[] = [];
-  private readonly secondaryArchitecture: THREE.Object3D[] = [];
+  private readonly orbital = new OrbitalArchitecture();
+  private readonly sceneFades = new Map<
+    Study,
+    {
+      uniform: { value: number };
+      materials: { material: THREE.Material; depthWrite: boolean }[];
+      lights: { light: THREE.Light; intensity: number }[];
+    }
+  >();
   private readonly folios: FolioVisual[] = [];
   private readonly folioById = new Map<string, FolioVisual>();
   private readonly surfaceProjection = new THREE.Matrix4();
@@ -323,9 +386,9 @@ export class Environment {
   private readonly surfaceWorld = new THREE.Matrix4();
   private readonly contactScale = new THREE.Vector3();
   private readonly folioColors = {
-    conversation: new THREE.Color(0x171424),
-    research: new THREE.Color(0x141729),
-    note: new THREE.Color(0x2a211c),
+    conversation: new THREE.Color(0x211d30),
+    research: new THREE.Color(0x22243a),
+    note: new THREE.Color(0x30261f),
   };
   private readonly neutralPolish = new THREE.Color(0xa392b8);
   private readonly warmPolish = new THREE.Color(0xa68d75);
@@ -348,15 +411,24 @@ export class Environment {
     0.7,
     0.6,
   ).normalize();
+  private readonly fieldLightDirection = new THREE.Vector3(
+    -0.42,
+    0.82,
+    0.48,
+  ).normalize();
+  private readonly sceneMaterialTint = new THREE.Color(0x8c7cdb);
   private readonly fieldUniforms = {
     uTime: { value: 0 },
     uFocus: { value: 0 },
     uEnergy: { value: 0.3 },
     uPointer: { value: new THREE.Vector2() },
     uSelection: { value: new THREE.Vector2() },
+    uSelectionSize: { value: new THREE.Vector2(3.8, 4.5) },
+    uFlow: { value: new THREE.Vector2() },
     uSelectionStrength: { value: 0 },
     uInteraction: { value: 0 },
     uDetail: { value: 30 },
+    uEnvironmentWeight: { value: 1 },
   };
   private readonly livingUniforms = {
     uTime: this.fieldUniforms.uTime,
@@ -364,8 +436,12 @@ export class Environment {
     uEnergy: this.fieldUniforms.uEnergy,
     uPointer: this.fieldUniforms.uPointer,
     uSelection: this.fieldUniforms.uSelection,
+    uSelectionSize: this.fieldUniforms.uSelectionSize,
+    uFlow: this.fieldUniforms.uFlow,
     uSelectionStrength: this.fieldUniforms.uSelectionStrength,
     uInteraction: this.fieldUniforms.uInteraction,
+    uSceneLight: { value: this.fieldLightDirection },
+    uSceneTint: { value: this.sceneMaterialTint },
   };
   private readonly environmentMap: THREE.WebGLRenderTarget;
   private readonly fill: THREE.PointLight;
@@ -406,7 +482,7 @@ export class Environment {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.12;
     this.renderer.setClearColor(0x05060d, 1);
-    this.scene.fog = new THREE.FogExp2(0x05060d, 0.035);
+    this.scene.fog = new THREE.FogExp2(0x05060d, 0.024);
     this.camera.position.set(0, 1.8, 12);
     this.camera.lookAt(0, 0.35, 0);
 
@@ -440,79 +516,89 @@ export class Environment {
     this.buildVela();
     this.buildField();
     this.buildFolios();
+    this.prepareSceneFades();
     canvas.addEventListener("webglcontextlost", this.onContextLost);
     canvas.addEventListener("webglcontextrestored", this.onContextRestored);
   }
 
-  private buildArchitecture() {
-    const aperture = new THREE.Group();
-    aperture.position.set(-8, 0.7, -11.5);
-    aperture.rotation.set(0.18, 0.49, -0.23);
-    for (let band = 0; band < 3; band++) {
-      const material = new THREE.MeshPhysicalMaterial({
-        color: band === 0 ? 0x695c79 : 0x30273e,
-        metalness: 0.77,
-        roughness: 0.23 + band * 0.055,
-        clearcoat: 0.7,
-        clearcoatRoughness: 0.21,
-        envMapIntensity: 0.66,
-        side: THREE.FrontSide,
-        emissive: 0x30233f,
-        emissiveIntensity: band === 0 ? 0.23 : 0.11,
+  private prepareSceneFades() {
+    for (const [name, group] of [
+      ["architecture", this.architecture],
+      ["living", this.living],
+      ["observatory", this.observatory],
+    ] as const) {
+      const uniform = { value: name === "architecture" ? 1 : 0 };
+      const materials = new Map<THREE.Material, boolean>();
+      const lights: { light: THREE.Light; intensity: number }[] = [];
+      group.traverse((object) => {
+        if (object instanceof THREE.Light)
+          lights.push({ light: object, intensity: object.intensity });
+        const item = object as THREE.Mesh;
+        if (!item.material) return;
+        for (const material of Array.isArray(item.material)
+          ? item.material
+          : [item.material]) {
+          if (materials.has(material)) continue;
+          materials.set(material, material.depthWrite);
+          material.transparent = true;
+          if (material instanceof THREE.ShaderMaterial) {
+            material.uniforms.uEnvironmentWeight = uniform;
+            material.fragmentShader =
+              "uniform float uEnvironmentWeight;\n" +
+              material.fragmentShader.replace(
+                "#include <tonemapping_fragment>",
+                "gl_FragColor.a *= uEnvironmentWeight;\n#include <tonemapping_fragment>",
+              );
+          } else {
+            const originalCompile = material.onBeforeCompile;
+            const originalKey = material.customProgramCacheKey();
+            material.onBeforeCompile = (shader, renderer) => {
+              originalCompile.call(material, shader, renderer);
+              shader.uniforms.uEnvironmentWeight = uniform;
+              shader.fragmentShader =
+                "uniform float uEnvironmentWeight;\n" +
+                shader.fragmentShader.replace(
+                  "#include <tonemapping_fragment>",
+                  "gl_FragColor.a *= uEnvironmentWeight;\n#include <tonemapping_fragment>",
+                );
+            };
+            material.customProgramCacheKey = () =>
+              `${originalKey}:aerynth-scene-fade-v1`;
+          }
+        }
       });
-      this.apertureMaterials.push(material);
-      const radius = 8.45 + band * 0.48;
-      const breadth = 0.43 - band * 0.065;
-      const start = -0.98,
-        end = Math.PI * 1.53;
-      const section = new THREE.Shape();
-      section.absarc(0, 0, radius + breadth * 0.5, start, end, false);
-      section.absarc(0, 0, radius - breadth * 0.5, end, start, true);
-      section.closePath();
-      // Solid section and bevels reveal thickness under grazing light.
-      const geometry = new THREE.ExtrudeGeometry(section, {
-        depth: 0.21,
-        bevelEnabled: true,
-        bevelSize: 0.045,
-        bevelThickness: 0.045,
-        bevelSegments: 3,
-        curveSegments: 128,
-        steps: 1,
+      this.sceneFades.set(name, {
+        uniform,
+        lights,
+        materials: [...materials].map(([material, depthWrite]) => ({
+          material,
+          depthWrite,
+        })),
       });
-      const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.z = -band * 0.55;
-      aperture.add(mesh);
-      const edgePoints = Array.from({ length: 145 }, (_, i) => {
-        const a = start + (i / 144) * (end - start);
-        return new THREE.Vector3(
-          Math.cos(a) * (radius - breadth * 0.5),
-          Math.sin(a) * (radius - breadth * 0.5),
-          0.255,
-        );
-      });
-      const edge = new THREE.Mesh(
-        new THREE.TubeGeometry(
-          new THREE.CatmullRomCurve3(edgePoints),
-          160,
-          band === 0 ? 0.016 : 0.009,
-          5,
-          false,
-        ),
-        new THREE.MeshStandardMaterial({
-          color: band === 0 ? 0xc6badb : 0x766384,
-          metalness: 0.85,
-          roughness: 0.22,
-          envMapIntensity: 0.85,
-          emissive: 0x8b70a1,
-          emissiveIntensity: band === 0 ? 0.3 : 0.075,
-        }),
-      );
-      edge.position.z = -band * 0.55;
-      aperture.add(edge);
-      if (band > 0) this.secondaryArchitecture.push(mesh, edge);
     }
-    this.architecture.add(aperture);
-    const graze = new THREE.SpotLight(0xc2aedb, 360, 40, 0.4, 0.85, 2);
+  }
+
+  private updateSceneFades(frame: EnvironmentFrame) {
+    for (const [name, group] of [
+      ["architecture", this.architecture],
+      ["living", this.living],
+      ["observatory", this.observatory],
+    ] as const) {
+      const weight =
+        frame.sceneWeights?.[name] ?? (frame.study === name ? 1 : 0);
+      const fade = this.sceneFades.get(name)!;
+      fade.uniform.value = weight;
+      group.visible = weight > 0.001;
+      for (const item of fade.materials)
+        item.material.depthWrite = item.depthWrite && weight > 0.999;
+      for (const item of fade.lights)
+        item.light.intensity = item.intensity * weight;
+    }
+  }
+
+  private buildArchitecture() {
+    this.architecture.add(this.orbital.root);
+    const graze = new THREE.SpotLight(0xc2aedb, 850, 40, 0.4, 0.85, 2);
     graze.position.set(5, 5, -1);
     graze.target.position.set(-2.8, 2.4, -12);
     this.architecture.add(graze, graze.target);
@@ -646,22 +732,31 @@ export class Environment {
 
   private buildVela() {
     for (const [along, across] of [
-      [224, 12],
-      [144, 8],
-      [80, 5],
+      [320, 20],
+      [256, 16],
+      [128, 12],
     ]) {
       const geometry = new THREE.PlaneGeometry(1, 1, along, across);
       const position = geometry.getAttribute("position");
       for (let j = 0; j < position.count; j++) {
         const t = (position.getX(j) + 0.5) * Math.PI * 2;
-        position.setXYZ(j, t, position.getY(j) * 2, 0);
+        const section = (position.getY(j) + 0.5) * Math.PI * 2;
+        position.setXYZ(j, t, section, 0);
+      }
+      const indices = geometry.getIndex()!;
+      // The closed cross-section uses the opposite outward winding to a plane.
+      for (let j = 0; j < indices.count; j += 3) {
+        const first = indices.getX(j);
+        indices.setX(j, indices.getX(j + 2));
+        indices.setX(j + 2, first);
       }
       // Bounds are procedural rather than the parameter-space geometry bounds.
       geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 2.3);
       this.ribbonLevels.push(geometry);
     }
-    // One continuous broad surface keeps the two-loop identity without the
-    // near-contact companion's wirelike slivers at the folded joins.
+    // One closed broad ribbon keeps the two-loop identity. Its very thin
+    // sidewalls replace a zero-thickness double-sided plane, without a second
+    // independently moving companion surface or wirelike folded joins.
     {
       const material = new THREE.ShaderMaterial({
         uniforms: {
@@ -675,7 +770,7 @@ export class Environment {
         },
         vertexShader: ribbonVertex,
         fragmentShader: ribbonFragment,
-        side: THREE.DoubleSide,
+        side: THREE.FrontSide,
       });
       const ribbon = new THREE.Mesh(this.ribbonLevels[1], material);
       this.ribbons.push(ribbon);
@@ -756,6 +851,7 @@ export class Environment {
         metalness: 0.47,
         clearcoat: 0.75,
         clearcoatRoughness: 0.24,
+        specularIntensity: 0.72,
         envMapIntensity: 0.43,
         emissive: 0x110c21,
         emissiveIntensity: 0.12,
@@ -763,10 +859,10 @@ export class Environment {
       });
       const edge = new THREE.MeshPhysicalMaterial({
         color: 0x60536f,
-        roughness: 0.25,
+        roughness: 0.29,
         metalness: 0.78,
-        clearcoat: 0.8,
-        clearcoatRoughness: 0.18,
+        clearcoat: 0.68,
+        clearcoatRoughness: 0.23,
         envMapIntensity: 0.72,
         emissive: 0x332345,
         emissiveIntensity: 0.12,
@@ -774,10 +870,10 @@ export class Environment {
       });
       const polish = new THREE.MeshPhysicalMaterial({
         color: 0xa392b8,
-        roughness: 0.18,
+        roughness: 0.24,
         metalness: 0.86,
-        clearcoat: 1,
-        clearcoatRoughness: 0.16,
+        clearcoat: 0.78,
+        clearcoatRoughness: 0.22,
         envMapIntensity: 0.85,
         emissive: 0x6b478c,
         emissiveIntensity: 0.12,
@@ -799,6 +895,7 @@ export class Environment {
             uLift: { value: 0 },
             uSelected: { value: 0 },
             uEnergy: this.fieldUniforms.uEnergy,
+            uSceneTint: { value: this.sceneMaterialTint },
             uOpacity: { value: 1 },
             uRound: { value: 0 },
           },
@@ -831,10 +928,10 @@ export class Environment {
     }
   }
 
-  /** Four bevel rings use 32 fixed perimeter samples; only their small attribute buffer changes. */
+  /** Three front rings reveal shallow optical curvature above a fixed bevel/backing. */
   private folioGeometry(rimOnly: boolean) {
     const n = 32,
-      rings = rimOnly ? 2 : 4;
+      rings = rimOnly ? 2 : 6;
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array((n * rings + (rimOnly ? 0 : 2)) * 3);
     const normals = new Float32Array(positions.length);
@@ -843,16 +940,16 @@ export class Environment {
         const angle = (Math.floor(j / 8) + (j % 8) / 8) * Math.PI * 0.5;
         const radial = rimOnly
           ? 0
-          : ring === 0
-            ? 0.25
-            : ring === 1
+          : ring < 3
+            ? 0
+            : ring === 3
               ? 0.78
-              : ring === 2
+              : ring === 4
                 ? 0.98
                 : 0.62;
         const z = rimOnly
           ? 1
-          : Math.sqrt(1 - radial * radial) * (ring === 3 ? -1 : 1);
+          : Math.sqrt(1 - radial * radial) * (ring === 5 ? -1 : 1);
         const at = (ring * n + j) * 3;
         normals[at] = Math.cos(angle) * radial;
         normals[at + 1] = Math.sin(angle) * radial;
@@ -863,17 +960,29 @@ export class Environment {
     if (!rimOnly) {
       normals[n * rings * 3 + 2] = 1;
       normals[(n * rings + 1) * 3 + 2] = -1;
-      for (let j = 0; j < n; j++) indices.push(n * rings, j, (j + 1) % n);
+      for (let j = 0; j < n; j++)
+        indices.push(n * rings, n * 2 + j, n * 2 + ((j + 1) % n));
+      for (let ring = 0; ring < 2; ring++) {
+        for (let j = 0; j < n; j++) {
+          const next = (j + 1) % n,
+            a = ring * n + j,
+            b = ring * n + next,
+            c = (ring + 1) * n + j,
+            d = (ring + 1) * n + next;
+          indices.push(a, b, c, b, d, c);
+        }
+      }
       geometry.addGroup(0, indices.length, 0);
     }
     const sideStart = indices.length;
-    for (let ring = 0; ring < rings - 1; ring++) {
+    const sideRings = rimOnly ? [0, 1] : [0, 3, 4, 5];
+    for (let ring = 0; ring < sideRings.length - 1; ring++) {
       for (let j = 0; j < n; j++) {
         const next = (j + 1) % n,
-          a = ring * n + j,
-          b = ring * n + next,
-          c = (ring + 1) * n + j,
-          d = (ring + 1) * n + next;
+          a = sideRings[ring] * n + j,
+          b = sideRings[ring] * n + next,
+          c = sideRings[ring + 1] * n + j,
+          d = sideRings[ring + 1] * n + next;
         if (rimOnly) indices.push(a, b, c, b, d, c);
         else indices.push(a, c, b, b, c, d);
       }
@@ -892,7 +1001,10 @@ export class Environment {
       "position",
       new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage),
     );
-    geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+    geometry.setAttribute(
+      "normal",
+      new THREE.BufferAttribute(normals, 3).setUsage(THREE.DynamicDrawUsage),
+    );
     return geometry;
   }
 
@@ -905,29 +1017,38 @@ export class Environment {
     unfold: number,
   ) {
     const n = 32,
-      rings = rimOnly ? 2 : 4;
+      rings = rimOnly ? 2 : 6;
     const position = geometry.getAttribute("position") as THREE.BufferAttribute;
+    const normal = geometry.getAttribute("normal") as THREE.BufferAttribute;
+    const dome =
+      kind === "research"
+        ? 8.5 * (1 - unfold) ** 2
+        : kind === "conversation"
+          ? 1.5 * (1 - unfold)
+          : 0;
     for (let ring = 0; ring < rings; ring++) {
       const inset = rimOnly
         ? ring === 0
           ? 1.8
           : 2.65
-        : ring === 0
+        : ring < 3
           ? 1.8
-          : ring === 3
+          : ring === 5
             ? 2.5
             : 0;
       const halfW = width * 0.5 + 5 - inset,
         halfH = height * 0.5 + 5 - inset;
       const z = rimOnly
         ? 0.22
-        : ring === 0
-          ? 0
-          : ring === 1
+        : ring < 3
+          ? dome * (1 - (ring === 0 ? 1 : ring === 1 ? 0.66 : 0.33) ** 2)
+          : ring === 3
             ? -1.4
-            : ring === 2
+            : ring === 4
               ? -6.5
               : -8;
+      const faceScale =
+        !rimOnly && ring < 3 ? (ring === 0 ? 1 : ring === 1 ? 0.66 : 0.33) : 1;
       for (let j = 0; j < n; j++) {
         const corner = Math.floor(j / 8);
         const angle = (corner + (j % 8) / 8) * Math.PI * 0.5;
@@ -939,19 +1060,28 @@ export class Environment {
         const centerX =
           (corner === 0 || corner === 3 ? 1 : -1) * (halfW - radiusX);
         const centerY = (corner < 2 ? 1 : -1) * (halfH - radiusY);
-        position.setXYZ(
-          ring * n + j,
-          centerX + Math.cos(angle) * radiusX,
-          centerY + Math.sin(angle) * radiusY,
-          z,
-        );
+        const x = (centerX + Math.cos(angle) * radiusX) * faceScale;
+        const y = (centerY + Math.sin(angle) * radiusY) * faceScale;
+        position.setXYZ(ring * n + j, x, y, z);
+        if (!rimOnly && ring < 3) {
+          const nx = (2 * dome * x) / (halfW * halfW);
+          const ny = (2 * dome * y) / (halfH * halfH);
+          const reciprocal = 1 / Math.sqrt(nx * nx + ny * ny + 1);
+          normal.setXYZ(
+            ring * n + j,
+            nx * reciprocal,
+            ny * reciprocal,
+            reciprocal,
+          );
+        }
       }
     }
     if (!rimOnly) {
-      position.setXYZ(n * rings, 0, 0, 0);
+      position.setXYZ(n * rings, 0, 0, dome);
       position.setXYZ(n * rings + 1, 0, 0, -8);
     }
     position.needsUpdate = true;
+    normal.needsUpdate = true;
   }
 
   /** Match CSS perspective(1500px) around each folio's own center, including yaw and lift. */
@@ -1005,7 +1135,11 @@ export class Environment {
       visual.root.visible = false;
       visual.contact.visible = false;
     }
-    if (!surfaces) return;
+    if (!surfaces) {
+      if (this.canvas.dataset.materials !== "opaque")
+        this.canvas.dataset.materials = "opaque";
+      return;
+    }
     for (let i = 0; i < Math.min(3, surfaces.length); i++) {
       const pose = surfaces[i];
       if (
@@ -1058,25 +1192,48 @@ export class Environment {
       visual.root.matrixWorldNeedsUpdate = true;
       visual.face.opacity = opacity;
       visual.edge.opacity = opacity;
-      visual.polish.opacity = opacity * (pose.selected ? 0.92 : 0.24);
-      visual.edge.envMapIntensity = pose.selected ? 0.72 - unfold * 0.12 : 0.38;
+      visual.polish.opacity =
+        opacity * (pose.selected ? 0.46 - unfold * 0.18 : 0.12);
+      visual.edge.envMapIntensity = pose.selected ? 0.54 - unfold * 0.12 : 0.26;
+      visual.edge.color.setHex(
+        kind === "note" ? 0x45372f : kind === "research" ? 0x544c66 : 0x4b435b,
+      );
       visual.face.color.copy(this.folioColors[kind]);
       visual.face.roughness =
         kind === "note"
-          ? 0.64 + unfold * 0.04
+          ? 0.79 + unfold * 0.02
           : kind === "research"
-            ? 0.31 + unfold * 0.16
-            : 0.4 + unfold * 0.08;
-      visual.face.metalness = kind === "note" ? 0.22 : 0.47 - unfold * 0.08;
-      visual.face.clearcoat = kind === "note" ? 0.28 : 0.75;
+            ? 0.21 + unfold * 0.27
+            : 0.34 + unfold * 0.15;
+      visual.face.metalness =
+        kind === "note" ? 0.08 : kind === "research" ? 0.18 : 0.28;
+      visual.face.specularIntensity =
+        kind === "note" ? 0.28 : kind === "research" ? 0.88 : 0.65;
+      visual.face.clearcoat =
+        kind === "note"
+          ? 0.1
+          : (kind === "research" ? 0.92 : 0.64) * (1 - unfold * 0.5);
+      visual.face.clearcoatRoughness =
+        (kind === "research" ? 0.18 : 0.29) + unfold * 0.17;
+      visual.edge.roughness = (kind === "note" ? 0.46 : 0.3) + unfold * 0.08;
+      visual.polish.roughness = 0.3 + unfold * 0.12;
       visual.polish.color.copy(
         kind === "note" ? this.warmPolish : this.neutralPolish,
       );
       visual.face.envMapIntensity =
-        quality === "efficient" ? 0.22 : 0.43 * (1 - unfold * 0.28);
+        (quality === "efficient"
+          ? 0.22
+          : kind === "note"
+            ? 0.18
+            : kind === "research"
+              ? 0.82
+              : 0.65) *
+        (1 - unfold * 0.38);
       visual.edge.emissiveIntensity =
-        0.09 + (pose.selected ? 0.15 : 0) + Math.max(0, pose.lift) * 0.0012;
-      visual.polish.emissiveIntensity = pose.selected ? 0.2 : 0.09;
+        0.045 + (pose.selected ? 0.07 : 0) + Math.max(0, pose.lift) * 0.0006;
+      visual.polish.emissiveIntensity = pose.selected
+        ? 0.085 - unfold * 0.035
+        : 0.035;
       visual.rimMesh.visible = quality !== "efficient";
       const spread = 46 + Math.max(0, pose.lift) * 0.6;
       const contactW = pose.w + spread * 2,
@@ -1101,6 +1258,16 @@ export class Environment {
       visual.contact.matrix.scale(this.contactScale);
       visual.contact.matrixWorldNeedsUpdate = true;
     }
+    // CSS exposes these opaque GPU faces only after they are available. The
+    // default DOM backing remains complete for initialization, Efficient and
+    // graphics loss, so translucency never requires the moving scene for text.
+    const materialMode =
+      quality !== "efficient" &&
+      this.folios.every((folio) => folio.root.visible)
+        ? "physical"
+        : "opaque";
+    if (this.canvas.dataset.materials !== materialMode)
+      this.canvas.dataset.materials = materialMode;
   }
 
   private updatePresenceBounds() {
@@ -1188,6 +1355,18 @@ export class Environment {
       (targetStrength - this.fieldUniforms.uSelectionStrength.value) * settle;
     this.fieldUniforms.uInteraction.value +=
       (interaction - this.fieldUniforms.uInteraction.value) * settle;
+    const footprint = this.fieldUniforms.uSelectionSize.value;
+    if (illuminated) {
+      const radial = illuminated.kind === "research";
+      const breadth = illuminated.kind === "note" ? 2.5 : radial ? 3.35 : 4.1;
+      const size = THREE.MathUtils.clamp(illuminated.w / 340, 0.78, 1.28);
+      const targetX = breadth * size;
+      const targetY = radial ? targetX : Math.max(2.8, breadth * 1.16);
+      footprint.x += (targetX - footprint.x) * settle;
+      footprint.y += (targetY - footprint.y) * settle;
+    } else {
+      this.fieldUniforms.uFlow.value.multiplyScalar(1 - settle);
+    }
     this.lightTarget.set(this.vela.position.x + inputX * 0.4, 1.5, 2);
     if (illuminated) {
       const cx = illuminated.x + illuminated.w * 0.5;
@@ -1220,6 +1399,25 @@ export class Environment {
           : 15 / this.selectionRay.length();
       this.selectionRay.multiplyScalar(distance).add(this.camera.position);
       const anchor = this.fieldUniforms.uSelection.value;
+      const flow = this.fieldUniforms.uFlow.value;
+      // Short, bounded transport follows observed resource motion. It decays
+      // as the footprint catches up; no unbounded trail/history is allocated.
+      const flowX = frame.reduced
+        ? 0
+        : THREE.MathUtils.clamp(
+            (this.selectionRay.x - anchor.x) * 2,
+            -1.5,
+            1.5,
+          );
+      const flowY = frame.reduced
+        ? 0
+        : THREE.MathUtils.clamp(
+            (this.selectionRay.z - anchor.y) * 2,
+            -1.5,
+            1.5,
+          );
+      flow.x += (flowX - flow.x) * settle;
+      flow.y += (flowY - flow.y) * settle;
       anchor.x += (this.selectionRay.x - anchor.x) * settle;
       anchor.y += (this.selectionRay.z - anchor.y) * settle;
       if (frame.vela !== "unavailable") {
@@ -1237,6 +1435,7 @@ export class Environment {
     }
     this.fill.position.lerp(this.lightTarget, settle);
     this.fill.color.copy(this.semanticTint);
+    this.sceneMaterialTint.copy(this.semanticTint);
     this.fill.intensity *=
       1 + this.fieldUniforms.uSelectionStrength.value * 0.1;
     this.ribbonLightDirection
@@ -1277,11 +1476,7 @@ export class Environment {
     }
     this.quality = frame.quality;
     this.study = frame.study;
-    this.architecture.visible = frame.study === "architecture";
-    this.living.visible = frame.study === "living";
-    this.observatory.visible = frame.study === "observatory";
-    for (const object of this.secondaryArchitecture)
-      object.visible = frame.quality !== "efficient";
+    this.updateSceneFades(frame);
     const time = frame.reduced ? 0 : frame.time * 0.001;
     const focus = THREE.MathUtils.clamp(frame.focus, 0, 1);
     const energyByState: Record<VelaState, number> = {
@@ -1329,7 +1524,13 @@ export class Environment {
         Math.min(28, this.fieldUniforms.uDetail.value + 1) * 120 * 2,
       );
     }
-    this.detail.visible = frame.study !== "living";
+    const detailWeight = frame.sceneWeights
+      ? 1 - frame.sceneWeights.living
+      : frame.study === "living"
+        ? 0
+        : 1;
+    this.detail.visible = detailWeight > 0.001;
+    this.fieldUniforms.uEnvironmentWeight.value = detailWeight;
 
     // Same form across semantic states. Small expressive deformation is explicitly presentation.
     const palette =
@@ -1404,8 +1605,14 @@ export class Environment {
       (12 + energy * 15) *
       (1 - focus * 0.72) *
       (1 + Math.sin(presenceTime * 0.58) * 0.025 * ambientGain);
-    for (const material of this.apertureMaterials)
-      material.envMapIntensity = 0.66 * (1 - focus * 0.5);
+    this.orbital.update({
+      concept: frame.architectureConcept ?? "ring",
+      quality: frame.quality,
+      focus,
+      time,
+      ambientStrength: frame.ambientStrength ?? 0,
+      energy,
+    });
     this.camera.position.x = pointerX * 0.035 * (1 - focus);
     this.camera.position.y = 1.8 + pointerY * 0.025 * (1 - focus);
     this.camera.lookAt(0, 0.35, 0);
@@ -1479,6 +1686,13 @@ export class Environment {
       quality: this.quality,
       study: this.study,
       contextLost: this.lost,
+      architecture: {
+        ...this.orbital.diagnostics(),
+        environmentVisible: this.architecture.visible,
+        environmentWeight: this.sceneFades.get("architecture")?.uniform.value,
+        meaning:
+          "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above.",
+      },
       surfaceCapacity: 3,
       surfacesRendered: this.folios.filter((folio) => folio.root.visible)
         .length,

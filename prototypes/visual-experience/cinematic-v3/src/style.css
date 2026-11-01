@@ -125,7 +125,7 @@ button[hidden],
   color: #afabc5;
 }
 .topbar > button {
-  margin-left: auto;
+  margin-left: 0;
   font-size: 12px;
   color: #c7c3d7;
   border: 1px solid #343044;
@@ -151,6 +151,26 @@ button[hidden],
   margin-top: 9px;
   font-size: 11px;
   color: #8e8a9f;
+}
+.scene-navigation {
+  display: flex;
+  gap: 18px;
+  margin-left: auto;
+  pointer-events: auto;
+  letter-spacing: 0.04em;
+}
+.scene-navigation button {
+  padding: 6px 0;
+  font-size: 11px;
+  color: #a19ab3;
+  border-bottom: 1px solid transparent;
+}
+.scene-navigation button[aria-pressed="true"] {
+  color: #e0d5f5;
+  border-color: #9d8dbb;
+}
+body.focused .scene-navigation {
+  opacity: 0.7;
 }
 .provenance {
   position: absolute;
@@ -570,6 +590,8 @@ body.writing #vela .vela-label > span {
   top: 95px;
   right: 40px;
   width: 300px;
+  max-height: calc(100vh - 180px);
+  overflow-y: auto;
 }
 .stream {
   position: absolute;
@@ -1123,6 +1145,58 @@ body:not(.focused):has(#stream:not([hidden])) #vela .vela-label {
     #10131e 85%,
     #201c2b
   );
+}
+/* Compact DOM content is a quiet veil over an opaque physical resource face.
+   Reading surfaces become fully opaque through the existing unfold coordinate.
+   Without confirmed physical faces (including Efficient/graphics fallback),
+   the original opaque CSS material remains the complete legibility fallback. */
+body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+  .folio:not(.receded) {
+  background: linear-gradient(
+    135deg,
+    rgba(38, 35, 50, calc(0.28 + 0.72 * var(--unfold, 0))),
+    rgba(20, 21, 32, calc(0.38 + 0.62 * var(--unfold, 0))) 35%,
+    rgba(16, 19, 30, calc(0.55 + 0.45 * var(--unfold, 0))) 85%,
+    rgba(32, 28, 43, calc(0.34 + 0.66 * var(--unfold, 0)))
+  );
+  border-color: rgba(192, 180, 237, 0.12);
+  box-shadow: 0 calc(18px + var(--lift) * 0.7px)
+    calc(28px + var(--lift) * 0.8px) #0007;
+}
+body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+  .folio.research:not(.receded) {
+  background: radial-gradient(
+    ellipse at 36% 22%,
+    rgba(38, 41, 61, calc(0.14 + 0.86 * var(--unfold, 0))),
+    rgba(18, 22, 38, calc(0.32 + 0.68 * var(--unfold, 0))) 52%,
+    rgba(9, 13, 25, calc(0.62 + 0.38 * var(--unfold, 0)))
+  );
+}
+body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+  .folio.note:not(.receded) {
+  background: linear-gradient(
+    125deg,
+    rgba(47, 39, 36, calc(0.4 + 0.6 * var(--unfold, 0))),
+    rgba(23, 22, 29, calc(0.54 + 0.46 * var(--unfold, 0))) 65%,
+    rgba(37, 29, 31, calc(0.44 + 0.56 * var(--unfold, 0)))
+  );
+}
+body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+  .folio:not(.receded)::before {
+  opacity: calc(0.16 + 0.12 * var(--unfold, 0));
+}
+body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+  .folio:not(.receded)::after {
+  opacity: calc(0.12 + var(--lift) * 0.004);
+}
+body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+  .folio:not(.receded)
+  .folio-edge {
+  opacity: 0.2;
+}
+body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+  .folio.selected:not(.receded) {
+  border-color: rgba(185, 162, 229, 0.45);
 }
 .expanded .folio-inner {
   padding: 22px 30px;

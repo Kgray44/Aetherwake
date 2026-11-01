@@ -1,3 +1,4 @@
+import { researchNotebook, longDocument } from "./workloads.ts";
 export type Resource = {
   id: string;
   type: "conversation" | "research" | "note";
@@ -28,15 +29,15 @@ export const seed: Resource[] = [
     id: "research-material",
     type: "research",
     title: "Light, held in a surface",
-    subtitle: "Material study · 03 observations",
-    text: "01  A thin silver rim reveals thickness.\n02  Violet light belongs to the environment.\n03  Dense text needs an opaque working plane.\n\nExperiment: compare the same surface in the three study environments. This is a synthetic design notebook.",
+    subtitle: "Research notebook · synthetic review",
+    text: researchNotebook,
   },
   {
     id: "note-field",
     type: "note",
     title: "Leave room for thought",
-    subtitle: "Local notebook · editable",
-    text: "The most sophisticated moment may be when almost nothing moves.\n\nWrite something here. Your draft stays on this device.",
+    subtitle: "Working document · local edits",
+    text: longDocument,
   },
 ];
 export function validateSaved(

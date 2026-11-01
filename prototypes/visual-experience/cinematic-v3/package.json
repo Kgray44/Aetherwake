@@ -1,6 +1,6 @@
 {
-  "name": "aerynth-cinematic-v3",
-  "version": "0.3.0",
+  "name": "aerynth-cinematic-v3-5",
+  "version": "0.3.5",
   "private": true,
   "type": "module",
   "main": "native/main.cjs",
@@ -10,6 +10,7 @@
     "start": "npm run build && electron .",
     "verify": "npm run build && electron . --verify",
     "record": "npm run build && electron . --record",
+    "soak": "npm run build && electron . --soak --soak-seconds=90",
     "preview": "npm run build && electron . --preview",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "dev": "vite --host 127.0.0.1",

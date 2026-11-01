@@ -1,6 +1,8 @@
 import "./style.css";
 import { motionPolicy } from "./policy";
 import { deriveSceneState } from "./scene-state";
+import { registerScene, retargetScene, sceneWeights } from "./scene-transition";
+import type { ArchitectureConcept } from "./orbital-architecture";
 import { installConversation } from "./conversation";
 import {
   Environment,
@@ -32,11 +34,12 @@ app.innerHTML = `
   <div class="scene-vignette" aria-hidden="true"></div>
   <div class="window-drag" aria-hidden="true"><span>AERYNTH <i>·</i> THE QUIET ATELIER</span></div>
   <header class="topbar">
-    <div class="brand"><img src="./aerynth-mark-master.png" alt="Approved Aerynth mark"><span>AERYNTH<small>LIQUID INTELLIGENCE / STUDY 03</small></span></div>
+    <div class="brand"><img src="./aerynth-mark-master.png" alt="Approved Aerynth mark"><span>AERYNTH<small>LIQUID INTELLIGENCE / V3.5</small></span></div>
     <div class="place"><span class="tiny">WORKSPACE</span><span>The quiet atelier</span></div>
+    <nav class="scene-navigation" aria-label="Environment"><button data-scene="architecture" aria-pressed="true">Architecture</button><button data-scene="living" aria-pressed="false">Living field</button></nav>
     <button id="settings-button" aria-expanded="false" aria-controls="settings">Scene controls <span>⌘</span></button>
   </header>
-  <div class="study-caption"><span id="study-index">01 / LUMINOUS ARCHITECTURE</span><small>Interactive cinematic experiment</small></div>
+  <div class="study-caption"><span id="study-index">01 / LUMINOUS ARCHITECTURE</span><small>Celestial architecture · cinematic V3.5</small></div>
   <div class="provenance">SYNTHETIC CONTENT <span>·</span> No AI backend connected</div>
   <main id="stage" aria-label="Spatial workspace"></main>
   <svg id="relationships" aria-hidden="true"><defs><linearGradient id="link-light"><stop stop-color="#a68dcc" stop-opacity="0"/><stop offset=".6" stop-color="#cbb3eb"/><stop offset="1" stop-color="#e1cff4" stop-opacity=".2"/></linearGradient></defs><path fill="none" stroke="url(#link-light)" stroke-width="1" stroke-dasharray="2 6"/></svg>
@@ -52,6 +55,7 @@ app.innerHTML = `
   <aside id="settings" class="floating-dialog settings" aria-label="Scene controls" hidden>
     <div class="dialog-top"><span class="tiny">EXPERIMENT CONTROLS</span><button id="settings-close" aria-label="Close scene controls">×</button></div>
     <label for="study">Spatial study</label><select id="study"><option value="architecture">01 · Luminous Architecture</option><option value="living">02 · Living Intelligence</option><option value="observatory">03 · Aetheric Observatory</option></select>
+    <label for="architecture-concept">Orbital composition study</label><select id="architecture-concept"><option value="ring">A · Monumental arc</option><option value="aperture">B · Celestial aperture</option><option value="observatory">C · Suspended observatory</option></select>
     <label for="quality">Graphics</label><select id="quality"><option value="cinematic">Cinematic</option><option value="balanced" selected>Balanced</option><option value="efficient">Efficient</option></select>
     <label class="check"><input id="ambient" type="checkbox" checked> Ambient motion</label>
     <label for="ambient-strength">Vela's ambient presence</label><select id="ambient-strength"><option value="1" selected>Expressive</option><option value="0.4">Subtle</option></select>
@@ -78,6 +82,7 @@ const resources = new Map(
   seed.map((r) => [r.id, { ...r, text: saved?.drafts[r.id] ?? r.text }]),
 );
 const motion = new MotionCoordinator();
+registerScene(motion, "architecture");
 const elements = new Map<string, HTMLElement>();
 const poseStyleCache = new Map<string, string>();
 let selected: string | null = null,
@@ -86,6 +91,7 @@ let selected: string | null = null,
 let study: Study = "architecture",
   quality: Quality = "balanced",
   vela: VelaState = "idle";
+let architectureConcept: ArchitectureConcept = "ring";
 let pointer = { x: 0, y: 0 },
   focus = 0,
   attention = 0,
@@ -626,12 +632,33 @@ $("#undo").addEventListener("click", () => {
 });
 $("#study").addEventListener("change", (e) => {
   study = (e.target as HTMLSelectElement).value as Study;
+  retargetScene(motion, study);
   $("#study-index").textContent = {
     architecture: "01 / LUMINOUS ARCHITECTURE",
     living: "02 / LIVING INTELLIGENCE",
     observatory: "03 / AETHERIC OBSERVATORY",
   }[study];
   document.body.dataset.study = study;
+  document
+    .querySelectorAll<HTMLButtonElement>("[data-scene]")
+    .forEach((button) =>
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.scene === study),
+      ),
+    );
+  wake();
+});
+document
+  .querySelectorAll<HTMLButtonElement>("[data-scene]")
+  .forEach((button) => {
+    button.addEventListener("click", () =>
+      window.__aerynth.setStudy(button.dataset.scene as Study),
+    );
+  });
+$("#architecture-concept").addEventListener("change", (e) => {
+  architectureConcept = (e.target as HTMLSelectElement)
+    .value as ArchitectureConcept;
   wake();
 });
 $("#quality").addEventListener("change", (e) => {
@@ -947,6 +974,8 @@ function tick(now: number) {
         interaction: scene.interaction,
         vela,
         study,
+        sceneWeights: sceneWeights(motion),
+        architectureConcept,
         quality: activeQuality,
         reduced: motion.reduced,
         width: innerWidth,
@@ -1007,6 +1036,8 @@ function controller() {
       selected,
       expanded,
       study,
+      architectureConcept,
+      sceneWeights: sceneWeights(motion),
       quality,
       vela,
       ambient,
@@ -1036,8 +1067,14 @@ function controller() {
       $("#ambient").dispatchEvent(new Event("change"));
     },
     setStudy: (s: Study) => {
+      if (!["architecture", "living", "observatory"].includes(s)) return;
       $<HTMLSelectElement>("#study").value = s;
       $("#study").dispatchEvent(new Event("change"));
+    },
+    setArchitectureConcept: (concept: ArchitectureConcept) => {
+      if (!["ring", "aperture", "observatory"].includes(concept)) return;
+      $<HTMLSelectElement>("#architecture-concept").value = concept;
+      $("#architecture-concept").dispatchEvent(new Event("change"));
     },
     setQuality: (q: Quality) => {
       quality = q;

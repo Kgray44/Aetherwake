@@ -1,3 +1,4 @@
+import { reviewConversation } from "./workloads.ts";
 export type LocalMessage = { id: string; text: string; at: string };
 const key = "aerynth-cinematic-v3-local-messages-v1";
 export function validateMessages(value: unknown): LocalMessage[] | null {
@@ -49,16 +50,7 @@ export function installConversation(
     message.append(heading, body);
     history.append(message);
   };
-  append(
-    "example-brief",
-    "DESIGNER · SCRIPTED EXAMPLE",
-    "Can a working environment make room for concentration without losing its sense of place?",
-  );
-  append(
-    "example-response",
-    "VELA · SCRIPTED EXAMPLE",
-    "Let the resource itself become the place for work. Its title, content, and position should remain connected as its surface opens. Nearby resources can make room while their identities stay within reach.\n\nLight should follow attention. As the reading surface becomes clearer, the surrounding violet field can soften. The environment remains present, but the words become the center.\n\nThe material lens holds three observations. Open it from the peripheral anchors to compare the surfaces, then return here: your draft and reading position stay with this conversation.",
-  );
+  for (const [id, author, text] of reviewConversation) append(id, author, text);
   let messages: LocalMessage[] = [];
   let historyWritable = true;
   try {
