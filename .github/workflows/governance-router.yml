@@ -6,6 +6,10 @@ on:
       - 'AGENTS.md'
       - 'config/governance-routes.json'
       - 'scripts/governance-router.mjs'
+      - 'scripts/verify-governance.mjs'
+      - 'docs/engineering/GOVERNANCE-ROUTER.md'
+      - 'docs/vision/**'
+      - 'README.md'
       - 'tests/governance-router.test.mjs'
       - 'governance/**'
       - '.github/workflows/governance-router.yml'
@@ -14,6 +18,10 @@ on:
       - 'AGENTS.md'
       - 'config/governance-routes.json'
       - 'scripts/governance-router.mjs'
+      - 'scripts/verify-governance.mjs'
+      - 'docs/engineering/GOVERNANCE-ROUTER.md'
+      - 'docs/vision/**'
+      - 'README.md'
       - 'tests/governance-router.test.mjs'
       - 'governance/**'
       - '.github/workflows/governance-router.yml'
@@ -31,3 +39,5 @@ jobs:
         run: node scripts/governance-router.mjs --validate
       - name: Test deterministic routing behavior
         run: node --test tests/governance-router.test.mjs
+      - name: Validate cross-document links and normative ownership
+        run: node scripts/verify-governance.mjs
