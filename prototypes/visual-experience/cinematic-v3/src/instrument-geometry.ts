@@ -70,50 +70,6 @@ const FRAME_PROFILES: Readonly<Record<InstrumentStudy, Profile>> = {
     [2.3, -0.2],
   ],
 };
-const RESEARCH_PROFILES: Readonly<Record<InstrumentStudy, Profile>> = {
-  optical: [
-    [-3, -0.4],
-    [-1.6, 0.6],
-    [1.5, 2.6],
-    [5.7, 3.8],
-    [10.8, 0.6],
-    [14.8, -1.6],
-    [15.2, -4],
-    [13, -7.2],
-    [6, -8],
-    [-1.8, -7.2],
-    [-3, -5.6],
-    [-3, -2.4],
-  ],
-  engineered: [
-    [-3, -0.6],
-    [-1.4, 0.5],
-    [2, 2.9],
-    [6.2, 4.1],
-    [12, 0.4],
-    [16.4, -1.7],
-    [16.8, -4.3],
-    [14, -7.4],
-    [6, -8],
-    [-1.8, -7.4],
-    [-3, -5.7],
-    [-3, -2.6],
-  ],
-  composite: [
-    [-3, -0.25],
-    [-1.7, 0.9],
-    [1.8, 2.8],
-    [5.8, 3.95],
-    [11, 0.75],
-    [15.4, -1.1],
-    [15.8, -3.6],
-    [13.3, -6.5],
-    [6, -7.2],
-    [-1.8, -6.6],
-    [-3, -5],
-    [-3, -2],
-  ],
-};
 const BACK_PROFILE: Profile = [
   [6.6, -4.5],
   [7, -4.4],
@@ -446,18 +402,12 @@ export class InstrumentStructure {
         (frame.kind === "note" ? 0.72 : 1) * (1 - unfold * 0.17);
       this.shapeBand(
         this.front,
-        frame.kind === "research"
-          ? RESEARCH_PROFILES[frame.study]
-          : FRAME_PROFILES[frame.study],
+        FRAME_PROFILES[frame.study],
         frame.width,
         frame.height,
         frame.kind,
         unfold,
         depthScale,
-        0,
-        0,
-        FRAME_PROFILES[frame.study],
-        frame.kind === "research" ? unfold : 0,
       );
       const backDepth =
         depthScale *
@@ -474,12 +424,10 @@ export class InstrumentStructure {
         frame.kind,
         unfold,
         backDepth,
-        frame.kind === "research" ? 4.2 * (1 - unfold) : 0,
       );
-      const seatShift =
-        frame.kind === "research" ? -10.8 * (1 - unfold) + 0.4 * unfold : 0.4;
+      const seatShift = 0.4;
       const seatZ =
-        frame.kind === "research" ? 2.35 * (1 - unfold) + 0.15 * unfold : 0.15;
+        frame.kind === "research" ? 0.55 * (1 - unfold) + 0.15 * unfold : 0.15;
       this.shapeBand(
         this.seat,
         OPTIC_PROFILE,
@@ -496,12 +444,10 @@ export class InstrumentStructure {
         RETAINER_PHASES[frame.kind],
         frame,
         unfold,
-        frame.kind === "research" ? 8.4 * (1 - unfold) + 5.2 * unfold : 5.2,
-        frame.kind === "research" ? 3.0 * (1 - unfold) + 0.8 * unfold : 0.8,
-        (frame.kind === "research" ? 1.3 : 0.82) * (1 - unfold * 0.25),
-        frame.kind === "research"
-          ? 2.2 * (1 - unfold) + 0.75 * unfold
-          : 1 - unfold * 0.25,
+        5.2,
+        0.8,
+        0.82 * (1 - unfold * 0.25),
+        1 - unfold * 0.25,
       );
       this.placeParts(
         this.inlays,
@@ -527,8 +473,7 @@ export class InstrumentStructure {
     }
     const efficient = frame.quality === "efficient";
     this.frameMesh.visible = true;
-    this.backMesh.visible =
-      frame.study !== "optical" || frame.kind === "research";
+    this.backMesh.visible = frame.study !== "optical";
     this.seatMesh.visible =
       frame.kind === "research" ||
       (!efficient && frame.kind !== "note" && frame.study !== "engineered");

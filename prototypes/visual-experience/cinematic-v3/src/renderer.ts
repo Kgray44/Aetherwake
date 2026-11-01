@@ -1054,13 +1054,11 @@ export class Environment {
           : ring === 5
             ? 2.5
             : 0;
-      // The research face sits inside the physical housing. Keeping the old
-      // full-radius opaque slab would conceal its real recessed optical seat,
-      // even if the DOM veil outside the text was completely clear.
-      const opticalInset =
-        !rimOnly && kind === "research" ? 14.3 * (1 - unfold) : 0;
-      const halfW = width * 0.5 + 5 - inset - opticalInset,
-        halfH = height * 0.5 + 5 - inset - opticalInset;
+      // The circular resource shares the same quiet glass perimeter as the
+      // folio/slate. Its opaque curved substrate fills the canonical footprint;
+      // no special annular cavity or clearing is reserved around the content.
+      const halfW = width * 0.5 + 5 - inset,
+        halfH = height * 0.5 + 5 - inset;
       const z = rimOnly
         ? 0.22
         : ring < 3

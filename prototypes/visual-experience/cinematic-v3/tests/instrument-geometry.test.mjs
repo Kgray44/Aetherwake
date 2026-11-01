@@ -179,58 +179,60 @@ test("the same research lens progressively becomes a rectangular working instrum
   release(owned);
 });
 
-test("compact lens housing is visibly broad and its recessed seat clears the opaque backing", () => {
+test("circular research resources use the same bounded thin perimeter as their resource family", () => {
   const owned = materials(),
     instrument = new InstrumentStructure(owned);
-  const width = 300,
-    height = 300;
-  instrument.update({
-    ...base,
-    kind: "research",
-    width,
-    height,
-    study: "optical",
-  });
-  instrument.root.updateMatrixWorld(true);
-  const frame = instrument.root.getObjectByName("machined-chamfer-frame"),
-    position = frame.geometry.getAttribute("position");
-  let maxRadius = 0;
-  for (let i = 0; i < position.count; i++)
-    maxRadius = Math.max(
-      maxRadius,
-      Math.hypot(position.getX(i), position.getY(i)),
+  for (const study of ["optical", "engineered", "composite"]) {
+    const extents = [];
+    for (const kind of ["conversation", "note", "research"]) {
+      instrument.update({
+        ...base,
+        kind,
+        width: 300,
+        height: 300,
+        unfold: 0,
+        study,
+      });
+      const position = instrument.root
+        .getObjectByName("machined-chamfer-frame")
+        .geometry.getAttribute("position");
+      let outer = -Infinity,
+        inner = Infinity;
+      for (let i = 0; i < position.count; i++) {
+        const radius =
+          kind === "research"
+            ? Math.hypot(position.getX(i), position.getY(i))
+            : position.getX(i);
+        outer = Math.max(outer, radius);
+        if (kind === "research") inner = Math.min(inner, radius);
+      }
+      extents.push(outer - 150);
+      if (kind === "research" && study === "optical") {
+        assert(
+          outer - inner > 1.65 && outer - inner < 1.8,
+          "Optical retains a thin 1.72px glass laminate, not a wide annular housing",
+        );
+        for (const mesh of instrument.root.children) {
+          if (!mesh.visible || mesh instanceof THREE.InstancedMesh) continue;
+          const p = mesh.geometry.getAttribute("position");
+          let visibleRadius = 0;
+          for (let i = 0; i < p.count; i++)
+            visibleRadius = Math.max(
+              visibleRadius,
+              Math.hypot(p.getX(i), p.getY(i)),
+            );
+          assert(
+            visibleRadius - 150 < 4.1,
+            "no oversized rear race or optical ring may dominate the circular card",
+          );
+        }
+      }
+    }
+    assert(
+      Math.max(...extents) - Math.min(...extents) < 0.001,
+      "all resource shapes must share the same visual perimeter weight within each study",
     );
-  assert(
-    maxRadius - width / 2 > 14,
-    "the actual housing must occupy a visible annulus rather than a one-pixel outline",
-  );
-  const ray = new THREE.Raycaster(
-    new THREE.Vector3(width / 2 - 10, 0, 20),
-    new THREE.Vector3(0, 0, -1),
-  );
-  const hits = ray.intersectObjects(instrument.root.children, true);
-  const seatHit = hits.find(
-    (hit) => hit.object.name === "optical-retaining-seat",
-  );
-  assert(
-    seatHit && seatHit.point.z > 2.4,
-    "inner seat must physically clear the old opaque domed backing",
-  );
-  instrument.update({
-    ...base,
-    kind: "research",
-    width,
-    height,
-    unfold: 1,
-    study: "optical",
-  });
-  let maxX = 0;
-  for (let i = 0; i < position.count; i++)
-    maxX = Math.max(maxX, position.getX(i));
-  assert(
-    maxX - width / 2 < 8,
-    "expanded reading work eases back to a thin precision frame",
-  );
+  }
   instrument.dispose();
   release(owned);
 });

@@ -1149,13 +1149,7 @@ body:has(#world[data-materials="physical"]):not(.graphics-fallback)
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio.research:not(.receded) {
-  background: rgba(7, 13, 23, var(--material-clarity));
-}
-body:has(#world[data-materials="physical"]):not(.graphics-fallback)
-  .folio.research:not(.receded)::before {
-  inset: calc(12px * (1 - var(--unfold, 0)));
-  background: rgba(7, 13, 23, 0.06);
-  opacity: calc(1 - var(--material-overlap, 0));
+  background: rgba(7, 13, 23, calc(0.12 + 0.88 * var(--material-clarity)));
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio.note:not(.receded) {
