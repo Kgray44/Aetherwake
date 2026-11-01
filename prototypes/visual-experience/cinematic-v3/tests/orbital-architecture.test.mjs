@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import * as THREE from "three";
-import { OrbitalArchitecture } from "../src/orbital-architecture.ts";
+import {
+  OrbitalArchitecture,
+  ORBITAL_RING_RADIUS,
+} from "../src/orbital-architecture.ts";
 
 const frame = {
   concept: "ring",
@@ -105,11 +108,24 @@ test("all architectural concepts retain structural identity in Efficient and reu
 
 test("optical motion freezes without resetting and resumes without a wall-clock jump", () => {
   const architecture = new OrbitalArchitecture();
+  const main = architecture.root.getObjectByName("monumental-open-span");
+  const initialAngle = main.rotation.z;
   for (let i = 1; i <= 250; i++)
     architecture.update({ ...frame, time: i * 0.02 });
   const running = architecture.diagnostics();
   assert(Math.abs(running.opticalClockSeconds - 5) < 0.000001);
-  const main = architecture.root.getObjectByName("monumental-open-span");
+  const advance = main.rotation.z - initialAngle;
+  assert(
+    advance > 0.0119 && advance < 0.0121,
+    "five seconds should produce noticeable but slow physical angular advance",
+  );
+  assert(
+    Math.abs(advance / 5 - running.angularRateRadiansPerSecond) < 0.000001,
+    "reported angular rate must agree with the actual geometry transform",
+  );
+  assert(
+    Math.abs(advance - running.naturalLongitudinalRotationRadians) < 0.000001,
+  );
   const orientation = main.rotation.toArray();
   architecture.update({ ...frame, time: 900, ambientStrength: 0 });
   assert.equal(
@@ -183,7 +199,7 @@ test("structural shell panels are curved around the same centerline and remain o
     angles.push(Math.atan2(positions.getY(i), positions.getX(i)));
   }
   assert(
-    Math.min(...radii) > 21,
+    Math.min(...radii) > ORBITAL_RING_RADIUS - 0.2,
     "tiles use the orbital centerline rather than flat rectangles translated onto it",
   );
   assert(
@@ -236,8 +252,8 @@ test("service bays genuinely open through the shell while curved load spines sta
     );
     return ray.intersectObjects(local.children, true);
   };
-  const closed = hits(2, 22.05);
-  const open = hits(3, 22.05);
+  const closed = hits(2, ORBITAL_RING_RADIUS + 0.55);
+  const open = hits(3, ORBITAL_RING_RADIUS + 0.55);
   assert(
     closed.some((hit) => hit.distance < 2.3),
     "a covered bay has a real opaque shell",
@@ -248,11 +264,11 @@ test("service bays genuinely open through the shell while curved load spines sta
     "the service opening must not be filled by a hidden solid backing strip",
   );
   assert(
-    hits(3, 20.35).length > 0,
+    hits(3, ORBITAL_RING_RADIUS - 1.15).length > 0,
     "inner load spine remains continuous through an open service bay",
   );
   assert(
-    hits(3, 23).length > 0,
+    hits(3, ORBITAL_RING_RADIUS + 1.5).length > 0,
     "outer load spine remains continuous through an open service bay",
   );
   architecture.update({ ...frame, quality: "balanced" });

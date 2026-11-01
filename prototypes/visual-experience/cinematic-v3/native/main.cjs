@@ -847,6 +847,63 @@ async function verify() {
       "typeof window.require === 'undefined' && typeof process === 'undefined'",
     ),
   );
+  await evaluate(
+    "window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring');window.__aerynth.setAmbient(true);window.__aerynth.setReduced(false);window.__aerynth.setEnvironmentPhase(null);window.__aerynth.setVela('idle');window.__naturalArticle=document.querySelector('[data-resource=\"conversation-tidal\"]');window.__naturalEditor=window.__naturalArticle.querySelector('textarea')",
+  );
+  await delay(700);
+  const naturalBefore = await snap();
+  const naturalWallStart = Date.now();
+  await delay(5000);
+  const naturalAfter = await snap();
+  const naturalWallMs = Date.now() - naturalWallStart;
+  const beforeArchitecture = naturalBefore.gpu?.architecture ?? {};
+  const afterArchitecture = naturalAfter.gpu?.architecture ?? {};
+  const opticalAdvance =
+    afterArchitecture.opticalClockSeconds -
+    beforeArchitecture.opticalClockSeconds;
+  const angleAdvance =
+    afterArchitecture.naturalLongitudinalRotationRadians -
+    beforeArchitecture.naturalLongitudinalRotationRadians;
+  const angularRate = afterArchitecture.angularRateRadiansPerSecond;
+  const naturalIdentity = await evaluate(
+    "window.__naturalArticle===document.querySelector('[data-resource=\"conversation-tidal\"]')&&window.__naturalEditor===window.__naturalArticle.querySelector('textarea')",
+  );
+  check(
+    "five seconds without input advances the real orbital clock and geometry angle",
+    naturalBefore.environmentPhase === null &&
+      naturalAfter.environmentPhase === null &&
+      beforeArchitecture.scriptedPhaseSeconds === null &&
+      afterArchitecture.scriptedPhaseSeconds === null &&
+      Number.isFinite(opticalAdvance) &&
+      opticalAdvance > 0 &&
+      opticalAdvance <= (naturalWallMs / 1000) * 1.2 &&
+      Number.isFinite(angleAdvance) &&
+      angleAdvance >= 0.005 &&
+      angleAdvance <= 0.05 &&
+      Number.isFinite(angularRate) &&
+      Math.abs(angleAdvance - opticalAdvance * angularRate) < 1e-6 &&
+      Math.abs(
+        afterArchitecture.longitudinalRotationRadians -
+          afterArchitecture.naturalLongitudinalRotationRadians,
+      ) < 1e-9 &&
+      naturalIdentity,
+    {
+      wallElapsedMs: naturalWallMs,
+      visualClockBeforeMs: naturalBefore.visualClock,
+      visualClockAfterMs: naturalAfter.visualClock,
+      opticalClockBeforeSeconds: beforeArchitecture.opticalClockSeconds,
+      opticalClockAfterSeconds: afterArchitecture.opticalClockSeconds,
+      opticalAdvanceSeconds: opticalAdvance,
+      angleBeforeRadians: beforeArchitecture.naturalLongitudinalRotationRadians,
+      angleAfterRadians: afterArchitecture.naturalLongitudinalRotationRadians,
+      angleAdvanceRadians: angleAdvance,
+      angularRateRadiansPerSecond: angularRate,
+      phaseOverride: null,
+      sameArticleAndEditor: naturalIdentity,
+      method:
+        "Actual visible native runtime with no input or accelerated presentation phase for a five-second wall-clock wait. Geometry diagnostics establish motion state, not beauty or presented FPS.",
+    },
+  );
   const first = s.order[0];
   const labelClearances = [];
   for (let slot = 0; slot < 3; slot++) {
@@ -1529,6 +1586,8 @@ async function verify() {
     s.metrics.draws === 0,
     s.metrics.draws,
   );
+  const quietOpticalBefore = (await snap()).gpu?.architecture
+    ?.opticalClockSeconds;
   await sample(
     "quiet-static",
     "window.__aerynth.setAmbient(true);document.querySelector('#quiet').checked=true;document.querySelector('#quiet').dispatchEvent(new Event('change'))",
@@ -1537,8 +1596,15 @@ async function verify() {
   s = await snap();
   check(
     "quiet mode stills the environment",
-    s.metrics.draws === 0,
-    s.metrics.draws,
+    s.metrics.draws === 0 &&
+      Number.isFinite(quietOpticalBefore) &&
+      Math.abs(s.gpu?.architecture?.opticalClockSeconds - quietOpticalBefore) <
+        1e-9,
+    {
+      draws: s.metrics.draws,
+      opticalClockBeforeSeconds: quietOpticalBefore,
+      opticalClockAfterSeconds: s.gpu?.architecture?.opticalClockSeconds,
+    },
   );
   await sample(
     "reduced-motion-static",

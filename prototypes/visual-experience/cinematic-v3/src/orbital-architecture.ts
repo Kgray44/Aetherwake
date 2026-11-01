@@ -2,6 +2,8 @@ import * as THREE from "three";
 
 export type ArchitectureConcept = "ring" | "aperture" | "observatory";
 export type CelestialStudy = "starlit" | "shadow" | "deep";
+export const ORBITAL_RING_RADIUS = 30;
+export const ORBITAL_ANGULAR_RATE = 0.0024;
 export interface ArchitectureFrame {
   concept: ArchitectureConcept;
   quality: "cinematic" | "balanced" | "efficient";
@@ -649,14 +651,14 @@ export class OrbitalArchitecture {
     // visible. The complete structure continues beyond BOTH vertical edges.
     // The structure occupies a deeper middle distance. An oblique section
     // exposes the axial framework and satin side walls behind the front shell.
-    const frame = this.assembly(new THREE.Group(), 21.5);
-    frame.position.set(-17.8, 1.4, -20);
+    const frame = this.assembly(new THREE.Group(), ORBITAL_RING_RADIUS);
+    frame.position.set(-24, 1.4, -20);
     frame.rotation.set(0.24, 0.72, -0.14);
     frame.name = "monumental-open-span";
     this.trackRotation(frame);
     this.concepts.ring.add(frame);
-    const distant = this.assembly(new THREE.Group(), 23.5);
-    distant.position.set(-19.4, 2.6, -28);
+    const distant = this.assembly(new THREE.Group(), ORBITAL_RING_RADIUS + 2);
+    distant.position.set(-25.6, 2.6, -28);
     distant.rotation.set(0.17, 0.72, -0.14);
     distant.userData.architectureTier = "cinematic";
     distant.userData.celestialSupport = true;
@@ -801,7 +803,8 @@ export class OrbitalArchitecture {
         base.x + Math.sin(this.renderedPhase * 0.037) * 0.018 * gain;
       group.rotation.y =
         base.y + Math.sin(this.renderedPhase * 0.029) * 0.025 * gain;
-      group.rotation.z = base.z + this.renderedPhase * 0.001 * gain;
+      group.rotation.z =
+        base.z + this.renderedPhase * ORBITAL_ANGULAR_RATE * gain;
     }
   }
 
@@ -829,8 +832,11 @@ export class OrbitalArchitecture {
       drawObjects,
       triangles,
       opticalClockSeconds: this.opticalClock,
-      longitudinalRotationRadians: this.renderedPhase * 0.001,
-      primaryRingRadiusWorldUnits: 21.5,
+      angularRateRadiansPerSecond: ORBITAL_ANGULAR_RATE,
+      naturalLongitudinalRotationRadians:
+        this.opticalClock * ORBITAL_ANGULAR_RATE,
+      longitudinalRotationRadians: this.renderedPhase * ORBITAL_ANGULAR_RATE,
+      primaryRingRadiusWorldUnits: ORBITAL_RING_RADIUS,
       primaryShellServiceBays: this.root.getObjectByName("monumental-open-span")
         ?.userData.openServiceBays,
       structuralDesign:
