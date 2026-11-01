@@ -46,7 +46,7 @@ export interface NativePage<T extends Wire = Wire> {
 }
 
 export interface NativeEnvironmentSnapshot {
-  config: { status: "discovered" | "unavailable"; model: string | null; modelProvider: string | null; reasoningEffort: string | null; sandboxMode: string | null; approvalPolicy: string | Wire | null; profile: string | null };
+  config: { status: "discovered" | "unavailable"; model: string | null; modelProvider: string | null; reasoningEffort: string | null; sandboxMode: string | null; approvalPolicy: string | Wire | null; profile: string | null; memoriesFeature: boolean | null; useMemories: boolean | null };
   skills: { status: "discovered" | "unavailable"; count: number | null; errorCount: number | null };
   mcp: { status: "discovered" | "unavailable"; count: number | null; nextCursor: string | null };
 }
@@ -183,7 +183,7 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
   }
   async inspectEnvironment(cwd: string): Promise<NativeEnvironmentSnapshot> {
     // Do not return config/read wholesale: it can contain private instructions and MCP settings.
-    const config: NativeEnvironmentSnapshot["config"] = { status: "unavailable", model: null, modelProvider: null, reasoningEffort: null, sandboxMode: null, approvalPolicy: null, profile: null };
+    const config: NativeEnvironmentSnapshot["config"] = { status: "unavailable", model: null, modelProvider: null, reasoningEffort: null, sandboxMode: null, approvalPolicy: null, profile: null, memoriesFeature: null, useMemories: null };
     const skills: NativeEnvironmentSnapshot["skills"] = { status: "unavailable", count: null, errorCount: null };
     const mcp: NativeEnvironmentSnapshot["mcp"] = { status: "unavailable", count: null, nextCursor: null };
     try {
@@ -197,6 +197,10 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
         config.sandboxMode = typeof value.sandbox_mode === "string" ? value.sandbox_mode : null;
         config.approvalPolicy = typeof value.approval_policy === "string" || (value.approval_policy && typeof value.approval_policy === "object" && !Array.isArray(value.approval_policy)) ? value.approval_policy as string | Wire : null;
         config.profile = typeof value.profile === "string" ? value.profile : null;
+        const features = value.features as Wire | undefined;
+        const memories = value.memories as Wire | undefined;
+        config.memoriesFeature = typeof features?.memories === "boolean" ? features.memories : null;
+        config.useMemories = typeof memories?.use_memories === "boolean" ? memories.use_memories : null;
       }
     } catch { /* Unknown or unsupported is not an enabled capability. */ }
     try {

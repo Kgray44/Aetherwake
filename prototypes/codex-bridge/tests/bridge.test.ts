@@ -58,9 +58,10 @@ test("missing executable and crash reject without restart", async () => {
 });
 
 test("default refusal and explicit cancellation answer server requests", async () => {
-  for (const mode of ["approval", "file-approval", "cancel"]) {
+  for (const mode of ["approval", "explicit-denial", "file-approval", "cancel"]) {
     const adapter = make(mode);
     if (mode === "cancel") adapter.setServerRequestHandler(() => ({ decision: "cancel" }));
+    if (mode === "explicit-denial") adapter.setServerRequestHandler(() => ({ decision: "decline" }));
     try {
       await adapter.connect();
       const turnId = await adapter.beginTurn({ threadId: "fixture-thread", input });
@@ -175,6 +176,22 @@ test("environment projection excludes private configuration contents", async () 
     assert.equal(snapshot.config.model, "fixture-model");
     assert.equal(snapshot.skills.count, 1);
     assert.equal(snapshot.mcp.count, 1);
+    assert.equal(snapshot.config.memoriesFeature, true);
     assert.equal(JSON.stringify(snapshot).includes("PRIVATE_FIXTURE_INSTRUCTION"), false);
   } finally { adapter.close(); }
+});
+
+test("unavailable local memory and native history are explicit states", async () => {
+  const noMemory = make("no-memory");
+  try {
+    await noMemory.connect();
+    const snapshot = await noMemory.inspectEnvironment("C:\\fixture");
+    assert.equal(snapshot.config.memoriesFeature, false);
+    assert.equal(snapshot.config.useMemories, false);
+  } finally { noMemory.close(); }
+  const noHistory = make("missing-history");
+  try {
+    await noHistory.connect();
+    await assert.rejects(noHistory.readThread("unavailable-thread"), (error: unknown) => error instanceof BridgeError && error.kind === "unavailable-history");
+  } finally { noHistory.close(); }
 });

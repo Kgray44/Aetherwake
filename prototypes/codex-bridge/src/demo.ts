@@ -13,7 +13,9 @@ try {
   console.log(JSON.stringify({ connected: true, platformFamily: initialized.platformFamily ?? null, platformOs: initialized.platformOs ?? null }));
   const capabilities = await adapter.capabilities();
   console.log(JSON.stringify(capabilities));
-  if (mode === "inspect") {
+  if (mode === "environment") {
+    console.log(JSON.stringify({ environment: await adapter.inspectEnvironment(process.cwd()) }));
+  } else if (mode === "inspect") {
     const threadId = process.argv[3];
     const turnId = process.argv[4];
     if (!threadId || !turnId) throw new Error("Usage: npm run demo -- inspect THREAD_ID TURN_ID");
@@ -106,7 +108,7 @@ try {
     const exactReply = assistantText.trim() === "BRIDGE_OK";
     console.log(JSON.stringify({ outcome: terminal.terminalStatus, threadId, turnId, observed: true, exactReply, droppedEvents: adapter.droppedEventCount() }));
     if (terminal.terminalStatus !== "completed" || !exactReply) process.exitCode = 2;
-  } else if (mode !== "capabilities") throw new Error("Usage: npm run demo -- [capabilities|instructions|audit|parity|live|inspect]");
+  } else if (mode !== "capabilities") throw new Error("Usage: npm run demo -- [capabilities|environment|instructions|audit|parity|live|inspect]");
 } catch (error) {
   const safe = error instanceof BridgeError ? { kind: error.kind, code: error.code ?? null } : { kind: "unexpected" };
   console.error(JSON.stringify({ error: safe }));
