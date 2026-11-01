@@ -17,7 +17,7 @@ export class BridgeError extends Error {
 export class JsonlTransport extends EventEmitter {
   private child?: ChildProcessWithoutNullStreams;
   private nextId = 1;
-  private pending = new Map<number, { resolve: (value: Wire) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
+  private pending = new Map<number, { method: string; resolve: (value: Wire) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }>();
   private closed = true;
   private queuedBytes = 0;
   private readonly maxPending = 32;
@@ -64,7 +64,7 @@ export class JsonlTransport extends EventEmitter {
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { this.pending.delete(id); reject(new BridgeError("timeout", `${method} timed out`)); }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { method, resolve, reject, timer });
       try { this.send({ id, method, params }); }
       catch (error) { clearTimeout(timer); this.pending.delete(id); reject(error); }
     });
@@ -90,7 +90,8 @@ export class JsonlTransport extends EventEmitter {
         const error = message.error as Wire;
         const code = typeof error.code === "number" ? error.code : undefined;
         const detail = String(error.message ?? "RPC error");
-        const kind = code === 429 || code === -32001 || /rate limit|too many requests|overloaded/i.test(detail) ? "rate-limit" :
+        const kind = pending.method.startsWith("thread/") && /(?:thread|session|rollout|history).*(?:not found|unavailable|missing)/i.test(detail) ? "unavailable-history" :
+          code === 429 || code === -32001 || /rate limit|too many requests|overloaded/i.test(detail) ? "rate-limit" :
           /model.*(unavailable|not available|not found|unsupported)/i.test(detail) ? "unavailable-model" :
           /auth(entication|orization).*required|not logged in/i.test(detail) ? "auth-required" :
           code === -32601 ? "unsupported" : "rpc";

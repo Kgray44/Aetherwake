@@ -16,12 +16,20 @@ npm run typecheck
 npm run build
 npm test
 npm run demo -- capabilities
+npm run demo -- environment
 npm run demo -- live
+npm run demo -- audit
+npm run demo -- instructions
+npm run demo -- parity
 ```
 
 `capabilities` reads `account/read` and all `model/list` pages. Account output is limited to auth presence and account type. Catalog entries are **not** proof that a model is entitled or usable. `live` starts one thread with `read-only` sandbox and `never` approvals, sends one harmless fixed prompt, prints event metadata without message contents, and requires a provider `completed` event plus the exact answer. It makes one model request. Use `npm run demo -- inspect THREAD_ID TURN_ID` to read stored items without a new model request.
 
 The adapter API covers thread start/resume/fork/read, turn start/interrupt, model/account discovery, and explicit reconnect/resume. It never automatically restarts the process. A caller can supply a server-request handler for decisions; without one, command/file approvals are declined. Other server requests fail closed as unsupported. A real application must expose each approval to the user with the proposed action and route the user's choice back through the handler. The fixture tests show decline and cancel; they do not prove safe acceptance of arbitrary commands.
+
+The fidelity extension adds `startThread`, `resumeThreadSession`, and `forkThreadSession`, which return native thread configuration and instruction-source metadata instead of only IDs. `listThreads`, `listTurns`, and `listItems` preserve native IDs and pagination cursors; listing explicitly includes App Server source threads. `inspectEnvironment` returns a narrow, nonsecret projection of effective config plus skill/MCP counts. Its `adapterMethods` list means wrappers implemented in this prototype, not methods verified on every server. See [NATIVE-CODEX-FIDELITY-REPORT.md](NATIVE-CODEX-FIDELITY-REPORT.md) and the machine-readable [capability fixture](fixtures/native-capabilities.json).
+
+`environment` prints a nonsecret configuration projection without a model request. `audit` makes one harmless read-only model request, then checks native history, resume, fork, and metadata. `instructions` starts disposable ephemeral threads in a synthetic Git-root fixture and checks global, parent, and nested source discovery without a model request. `parity` runs one ephemeral CLI turn and one ephemeral bridge turn with the same model, cwd, read-only sandbox, approval policy, and fixed input; it makes two model requests. These commands print summarized evidence and no private thread content.
 
 The normalized `EventEnvelope` preserves provider method/payload, native thread/turn IDs, local receive time, provider turn timestamps when present, evidence class, sequence, and terminal status. It does not claim private reasoning or precise token usage. The in-memory event ring holds 512 events and reports its dropped count; it is not durable history. Persist full events behind an appropriate privacy/retention policy before using this in a product. `fixtures/example-events.jsonl` is entirely **synthetic**, with invented IDs and timestamps, and is safe to publish.
 
