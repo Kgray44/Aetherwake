@@ -873,7 +873,12 @@ function renderDOM() {
       1,
     );
     const dockWidth = innerWidth >= 1100 ? 176 : 56;
-    const dock = clamp((rest.w - p.w) / Math.max(1, rest.w - dockWidth), 0, 1);
+    // Width can lag its new resting value during an ordinary window resize.
+    // Only an actual focused-work transition may reveal peripheral anchors.
+    const dock = Math.min(
+      clamp((rest.w - p.w) / Math.max(1, rest.w - dockWidth), 0, 1),
+      clamp((focus - 0.13) / 0.87, 0, 1),
+    );
     const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateY(${p.yaw}deg);z-index:${expanded === id ? 20 : drag?.id === id ? 16 : selected === id ? 8 : 3};`;
     if (poseStyleCache.get(id) !== style) {
       el.style.cssText = style;

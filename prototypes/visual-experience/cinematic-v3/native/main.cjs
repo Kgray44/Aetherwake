@@ -1468,6 +1468,94 @@ async function verify() {
   );
   await shot("reduced-motion");
   await evaluate("window.__aerynth.home();window.__aerynth.setReduced(false)");
+  await delay(750);
+  const resizeOriginalSize = win.getContentSize();
+  await evaluate(
+    "window.__workspaceResizeArticles=Array.from(document.querySelectorAll('.folio'));window.__workspaceResizeEditors=window.__workspaceResizeArticles.map(el=>el.querySelector('textarea'))",
+  );
+  const sampleWorkspaceAnchors = async function () {
+    const samples = [];
+    const startedAt = performance.now();
+    for (let index = 0; index < 18; index++) {
+      const frameDelivered = await new Promise((resolve) => {
+        const frame = requestAnimationFrame(() => {
+          clearTimeout(timeout);
+          resolve(true);
+        });
+        const timeout = setTimeout(() => {
+          cancelAnimationFrame(frame);
+          resolve(false);
+        }, 120);
+      });
+      const state = window.__aerynth.snapshot();
+      samples.push({
+        frameDelivered,
+        elapsedMs: performance.now() - startedAt,
+        viewport: { width: innerWidth, height: innerHeight },
+        selected: state.selected,
+        expanded: state.expanded,
+        anchors: Array.from(document.querySelectorAll(".resource-anchor")).map(
+          (el) => ({
+            resource: el.closest(".folio").dataset.resource,
+            opacity: Number.parseFloat(getComputedStyle(el).opacity),
+          }),
+        ),
+        identityRetained: window.__workspaceResizeArticles.every(
+          (el, item) =>
+            el ===
+              document.querySelector(
+                '[data-resource="' + el.dataset.resource + '"]',
+              ) &&
+            window.__workspaceResizeEditors[item] ===
+              el.querySelector("textarea"),
+        ),
+      });
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return samples;
+  };
+  const workspaceResizeSamples = [];
+  for (const selectedID of [null, first]) {
+    await evaluate("window.__aerynth.home()");
+    if (selectedID) await evaluate(`window.__aerynth.select('${selectedID}')`);
+    await delay(750);
+    for (const [width, height] of [[1100, 720], resizeOriginalSize]) {
+      win.setContentSize(width, height);
+      workspaceResizeSamples.push({
+        selected: selectedID,
+        requestedContentSize: { width, height },
+        samples: await evaluate(`(${sampleWorkspaceAnchors.toString()})()`),
+      });
+    }
+  }
+  await evaluate("window.__aerynth.home()");
+  win.setContentSize(...resizeOriginalSize);
+  await delay(650);
+  check(
+    "ordinary native workspace resize keeps peripheral labels hidden and original editors intact",
+    workspaceResizeSamples.length === 4 &&
+      workspaceResizeSamples.every(
+        (transition) =>
+          transition.samples.length === 18 &&
+          transition.samples.every(
+            (frame) =>
+              frame.frameDelivered &&
+              frame.expanded === null &&
+              frame.selected === transition.selected &&
+              frame.identityRetained &&
+              frame.anchors.length === 3 &&
+              frame.anchors.every(
+                (anchor) =>
+                  Number.isFinite(anchor.opacity) && anchor.opacity <= 0.01,
+              ),
+          ),
+      ),
+    {
+      method:
+        "Actual owned BrowserWindow content resize narrower and restored, first unselected then selected without expansion; 18 animation-frame samples approximately 25ms apart per transition. Computed anchor opacity is measured, not inferred from controller state.",
+      transitions: workspaceResizeSamples,
+    },
+  );
   for (const [width, height] of [
     [900, 850],
     [1280, 800],
