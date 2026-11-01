@@ -36,7 +36,7 @@ The repository owner retains final decision authority. Amendments must be explic
 | 13 | [Platform, Performance, and Displays](13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 | 14 | [Trust, Privacy, and Autonomy](14-TRUST-PRIVACY-AND-AUTONOMY.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 | 15 | [Quality, Verification, and Acceptance](15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md) | **Published — pending owner acceptance, v1.0.0-draft** |
-| 16 | Engineering and Delivery | Planned |
+| 16 | [Engineering and Delivery](16-ENGINEERING-AND-DELIVERY.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 
 See Section 20 of the Constitution for domain boundaries.
 
