@@ -22,7 +22,8 @@ test("constitution is always binding, drafts are advisory, missing planned chart
  assert.ok(r.advisory.some(x=>x.id==="03"));
  assert.ok(r.advisory.some(x=>x.id==="14"));
  assert.ok(r.advisory.some(x=>x.id==="15"));
- assert.ok(r.unavailable.some(x=>x.id==="01"));
+ assert.ok(r.advisory.some(x=>x.id==="01"));
+ assert.ok(!r.unavailable.some(x=>x.id==="01"));
  assert.ok(!ids(r).includes("04"));
 });
 test("motion work selects motion, platform and verification without chat charter",()=>{
@@ -59,4 +60,39 @@ test("duplicate or unknown authority fails validation",()=>{
 test("missing published charter causes setup validation error",()=>{
  const check=validateRouter(config,registry,p=>p!=="governance/03-PROJECTS-WORKSPACES-AND-RESOURCES.md"&&exists(p));
  assert.ok(check.errors.some(e=>e.includes("03-PROJECTS")));
+});
+
+// Regression guards: publication does not imply ratification, and governance-file edits
+// must never fall through to "constitution only" because the task text is generic.
+test("published charters stay advisory until explicitly accepted",()=>{
+ for(const id of ["01","02","03","04","06","07","08","09","10","11","12","13","14","15","16"]){
+  const r=routeGovernance(config,registry,"", [config.charters[id]],exists);
+  assert.ok(r.advisory.some(x=>x.id===id),id);
+  assert.ok(!r.binding.some(x=>x.id===id),id);
+ }
+});
+test("direct edits to charter paths route the edited charter even without matching keywords",()=>{
+ const r=routeGovernance(config,registry,"Correct a typo",["governance/02-LIQUID-INTELLIGENCE-AND-MOTION.md"],exists);
+ assert.ok(ids(r).includes("02"));
+ assert.deepEqual(r.binding.map(x=>x.id),["00"]);
+});
+test("planned agent charter remains unavailable, never fabricated",()=>{
+ const r=routeGovernance(config,registry,"Agent orchestration workflow",["src/agents/dispatcher.ts"],exists);
+ assert.ok(r.unavailable.some(x=>x.id==="05"));
+ assert.ok(!r.advisory.some(x=>x.id==="05"));
+});
+test("path-only edits to the missing charter expose the governance gap",()=>{
+ const r=routeGovernance(config,registry,"",["governance/05-AGENTS-TASKS-AND-WORKFLOWS.md"],exists);
+ assert.ok(r.unavailable.some(x=>x.id==="05"));
+});
+test("incomplete routing coverage and malformed signals fail validation",()=>{
+ const partial={...config,signals:{...config.signals}};
+ delete partial.signals["14"];
+ assert.ok(validateRouter(partial,registry,exists).errors.some(x=>x.includes("Missing routing signals for 14")));
+ const malformed={...config,signals:{...config.signals,"01":{terms:[""],path_prefixes:["src/ui"]}}};
+ assert.ok(validateRouter(malformed,registry,exists).errors.some(x=>x.includes("Malformed routing terms")));
+});
+test("a published charter without a registry link fails validation",()=>{
+ const r=new Map(registry);r.set("01",{status:"advisory",label:"Published, pending owner acceptance",link:null});
+ assert.ok(validateRouter(config,r,exists).errors.some(x=>x.includes("lacks a registry link")));
 });
