@@ -20,7 +20,7 @@ const digest=value=>createHash("sha256").update(value).digest("hex");
 const STOP=new Set(["with","that","this","from","into","what","when","where","have","will","would","should","could","about","than","then","your","their","which","does","only","using","some","most","there","they","while","also","need","make","work","task","tasks","implement","build","update","create","change","file","files","source","project"]);
 const terms=text=>[...new Set(normalize(text).split(" ").filter(x=>x.length>2&&!STOP.has(x)))];
 const estimate=characters=>Math.ceil(characters/4); // Explicit character-based proxy, NOT tokenizer metering.
-const sourceLine=(lines,at)=>lines.slice(0,at).join("\n").length; // utility for diagnostic tooling
+const DEFAULT_POLICIES=JSON.parse(read("config/governance-context-policies.json"));
 
 export function buildGovernanceIndex(config,registry,readFile=read,exists=p=>existsSync(resolve(ROOT,p))) {
   const check=validateRouter(config,registry,exists);
@@ -82,7 +82,7 @@ function unique(arr) {return [...new Set(arr)];}
  * Direct citation of another requirement in an extracted normative line
  * produces a bounded 1-hop dependency. No requirement is silently deleted.
  */
-export function buildContext({config,registry,index,task="",paths=[],requiredIds=[],maxSections=2,budgetTokens=null,forceFull=false}) {
+export function buildContext({config,registry,index,task="",paths=[],requiredIds=[],maxSections=2,budgetTokens=null,forceFull=false,policies=DEFAULT_POLICIES}) {
   if(!task.trim()&&!paths.length&&!requiredIds.length)throw new Error("Provide --task, --path, or --requirement");
   const exists=path=>index.documents.some(x=>x.path===path&&x.available);
   // Validate manual IDs before routing; avoid a partial "successful" package.
@@ -100,7 +100,31 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
     chosen.set("14",{document:byDoc.get("14"),reason:["cross-cutting trust/authorization risk"]});
   }
   if(!chosen.has("00"))chosen.set("00",{document:byDoc.get("00"),reason:["constitutional baseline"]});
-  const selected=[], dependencies=[], warnings=[...route.warnings], missing=[...route.unavailable];
+  // Conservative task-class policies catch cross-domain invariants missed by
+  // pure lexical top-N section ranking. They do NOT reference evaluation gold
+  // requirements, and the original charters retain their authority.
+  if(policies.schemaVersion!==1 || !Array.isArray(policies.facets))throw new Error("Invalid governance coverage policies");
+  const forcedSections=new Map(),matchedFacets=[],warningsBeforeSelection=[];
+  const normalizedQuery=" "+normalize(task)+" ";
+  for(const facet of policies.facets) {
+    if(!Array.isArray(facet.any) || !facet.sections || typeof facet.id!=="string")throw new Error("Malformed coverage facet");
+    const matched=facet.any.some(phrase=>normalizedQuery.includes(" "+normalize(phrase)+" "));
+    if(!matched)continue;
+    matchedFacets.push(facet.id);
+    for(const [docId,fragments] of Object.entries(facet.sections)) {
+      const doc=byDoc.get(docId);
+      if(!doc?.available) {warningsBeforeSelection.push("Risk facet "+facet.id+" references unavailable charter "+docId);continue;}
+      if(!chosen.has(docId))chosen.set(docId,{document:doc,reason:["coverage facet "+facet.id]});
+      else chosen.get(docId).reason.push("coverage facet "+facet.id);
+      if(!forcedSections.has(docId))forcedSections.set(docId,new Set());
+      for(const fragment of fragments) {
+        const matches=doc.sections.filter(s=>normalize(s.title).includes(normalize(fragment)));
+        if(matches.length!==1)throw new Error("Coverage facet "+facet.id+" unresolved/ambiguous heading "+docId+":"+fragment);
+        forcedSections.get(docId).add(matches[0].ordinal);
+      }
+    }
+  }
+  const selected=[], dependencies=[], warnings=[...route.warnings,...warningsBeforeSelection], missing=[...route.unavailable];
   for(const [id,entry] of [...chosen].sort((a,b)=>a[0].localeCompare(b[0]))) {
     const doc=entry.document;
     if(!doc?.available){missing.push({id,path:doc?.path,reason:["source unavailable"]});continue;}
@@ -108,7 +132,7 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
       selected.push({id,path:doc.path,authority:doc.authority,reason:entry.reason,mode:"full",sections:doc.sections.map(x=>x.ordinal),range:[1,doc.fullText.split(/\r?\n/).length],sha256:doc.sha256,text:doc.fullText});
       continue;
     }
-    const pinned=new Set(requiredIds.filter(rid=>index.requirements.get(rid)?.charter===id).map(rid=>index.requirements.get(rid).section));
+    const pinned=new Set([...(forcedSections.get(id)??[]),...requiredIds.filter(rid=>index.requirements.get(rid)?.charter===id).map(rid=>index.requirements.get(rid).section)]);
     // Source paths select the charter; only task language ranks its sections.
     // Path category names otherwise create spurious low-confidence matches.
     const scored=doc.sections.map(s=>({section:s,score:relevance(s,task)}))
@@ -156,7 +180,7 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
   if(budgetExceeded)warnings.push("Estimated context exceeds soft budget; no authoritative requirement silently discarded.");
   return {
     schemaVersion:2,task,paths,source:"versioned repository Markdown",
-    indexFingerprint:digest(index.documents.map(d=>d.id+":"+d.sha256+":"+d.authority).join("|")),
+    indexFingerprint:digest(index.documents.map(d=>d.id+":"+d.sha256+":"+d.authority).join("|")),coveragePolicyFingerprint:digest(JSON.stringify(policies)),matchedFacets,
     constitutionalBaseline:"complete",authorityPolicy:"binding constitution, advisory unratified charters",
     route,selected,dependencies,missing,warnings,
     metrics:{selectedCharacters:chars,estimatedTokens:estimate(chars),estimateMethod:"ceil(characters/4), NOT real tokenizer output",fullRoutedCharacters:baselineChars,characterReductionPercent:baselineChars?Math.round(10000*(1-chars/baselineChars))/100:0,budgetTokens,budgetExceeded},
