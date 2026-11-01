@@ -8,6 +8,8 @@ on:
       - 'scripts/governance-router.mjs'
       - 'scripts/governance-context.mjs'
       - 'scripts/benchmark-governance-context.mjs'
+      - 'scripts/evaluate-governance-engineering.mjs'
+      - 'tests/fixtures/engineering-context-cases.json'
       - 'scripts/verify-governance.mjs'
       - 'docs/engineering/GOVERNANCE-ROUTER.md'
       - 'docs/engineering/GOVERNANCE-CONTEXT-ROUTER-V2.md'
@@ -24,6 +26,8 @@ on:
       - 'scripts/governance-router.mjs'
       - 'scripts/governance-context.mjs'
       - 'scripts/benchmark-governance-context.mjs'
+      - 'scripts/evaluate-governance-engineering.mjs'
+      - 'tests/fixtures/engineering-context-cases.json'
       - 'scripts/verify-governance.mjs'
       - 'docs/engineering/GOVERNANCE-ROUTER.md'
       - 'docs/engineering/GOVERNANCE-CONTEXT-ROUTER-V2.md'
@@ -51,3 +55,5 @@ jobs:
         run: node scripts/verify-governance.mjs
       - name: Benchmark section-level governance retrieval and ID coverage
         run: node scripts/benchmark-governance-context.mjs
+      - name: Audit engineering-context sufficiency against independent required rules
+        run: node scripts/evaluate-governance-engineering.mjs --strict
