@@ -61,6 +61,7 @@ export interface Options {
 }
 export interface CommandMap {
   desktop: { input: DesktopCommand; output: DesktopSnapshot };
+  viewState: { input: { state?: unknown }; output: unknown };
   openWorkspace: { input: { workspaceId: string }; output: { workspace: Record<string, unknown>; layout: Record<string, unknown>; blocks: Array<Record<string, unknown>> } };
   selectProvider: { input: { resourceId: string; providerId: string; expectedRevision: number }; output: ConversationView };
   applyOrdinary: { input: { handoffId: string; prompt: string; commandId: string }; output: Message & { resourceId: string; classification: 'simulated' } };

@@ -31,7 +31,7 @@ export class Backend {
     await this.ready;
     if (this.dead) throw new ServiceError('backend_disconnected');
     if (this.pending.size >= 64) throw new ServiceError('backpressure');
-    if (Buffer.byteLength(JSON.stringify(input)) > 256 * 1024) throw new ServiceError('command_too_large');
+    if (Buffer.byteLength(JSON.stringify(input)) > (command === 'viewState' ? 2 * 1024 * 1024 + 1024 : 256 * 1024)) throw new ServiceError('command_too_large');
     const id = ++this.next;
     return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ id, contract: CONTRACT, command, input }); });
   }

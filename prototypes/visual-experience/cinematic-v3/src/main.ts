@@ -89,7 +89,10 @@ try {
 } catch {}
 let order = desktopMode ? [] : saved?.order || seed.map((r) => r.id);
 const resources = new Map<string, Resource>(
-  (desktopMode ? [] : seed).map((r) => [r.id, { ...r, text: saved?.drafts[r.id] ?? r.text }]),
+  (desktopMode ? [] : seed).map((r) => [
+    r.id,
+    { ...r, text: saved?.drafts[r.id] ?? r.text },
+  ]),
 );
 const motion = new MotionCoordinator();
 registerScene(motion, "architecture");
@@ -239,7 +242,18 @@ function base(id: string) {
 }
 function restAt(id: string, slot: number) {
   const block = application?.block(id);
-  if (block) { const offset = application!.offset(); return { x: block.x + offset.x, y: block.y + offset.y, w: block.width, h: block.height, lift: 0, yaw: 0, opacity: 1 }; }
+  if (block) {
+    const offset = application!.offset();
+    return {
+      x: block.x + offset.x,
+      y: block.y + offset.y,
+      w: block.width,
+      h: block.height,
+      lift: 0,
+      yaw: 0,
+      opacity: 1,
+    };
+  }
   const pose = slotPose(slot, innerWidth, innerHeight);
   if (innerWidth >= 1000) {
     const scale = clamp(innerWidth / 1500, 0.7, 1.5);
@@ -400,7 +414,16 @@ function home() {
 }
 function move(id: string, to: number) {
   const block = application?.block(id);
-  if (block) { void application!.run({ type: "geometry", blockId: id, expectedVersion: block.version, placement: { ...block, z: to }, shape: block.shape }); return; }
+  if (block) {
+    void application!.run({
+      type: "geometry",
+      blockId: id,
+      expectedVersion: block.version,
+      placement: { ...block, z: to },
+      shape: block.shape,
+    });
+    return;
+  }
   undoStack.push([...order]);
   if (undoStack.length > 32) undoStack.shift();
   order = reorder(order, id, to);
@@ -446,7 +469,13 @@ function mountResource(id: string, r: Resource) {
     const oversized = editor.value.length > 100000;
     editor.value = editor.value.slice(0, 100000);
     r.text = editor.value;
-    if (application) { application.saveContent(r.canonicalId!, r.text, article); article.querySelector(".folio-preview")!.textContent = r.text.split("\n\n")[0]; interaction(); return; }
+    if (application) {
+      application.saveContent(r.canonicalId!, r.text, article);
+      article.querySelector(".folio-preview")!.textContent =
+        r.text.split("\n\n")[0];
+      interaction();
+      return;
+    }
     const ok = persist();
     article.querySelector(".saved")!.textContent = ok
       ? "Saved locally on this device"
@@ -500,7 +529,14 @@ function mountResource(id: string, r: Resource) {
       ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)
     ) {
       e.preventDefault();
-      if (application) { void application.move(id, e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0, e.key === "ArrowUp" ? -24 : e.key === "ArrowDown" ? 24 : 0); return; }
+      if (application) {
+        void application.move(
+          id,
+          e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0,
+          e.key === "ArrowUp" ? -24 : e.key === "ArrowDown" ? 24 : 0,
+        );
+        return;
+      }
       move(
         id,
         order.indexOf(id) + (["ArrowLeft", "ArrowUp"].includes(e.key) ? -1 : 1),
@@ -524,7 +560,10 @@ function mountResource(id: string, r: Resource) {
       moved: false,
     };
     grip.setPointerCapture(e.pointerId);
-    if (application) { layout("drag pickup"); return; }
+    if (application) {
+      layout("drag pickup");
+      return;
+    }
     $("#destinations").innerHTML = order
       .map((_, i) => {
         const s = slotPose(i, innerWidth, innerHeight);
@@ -539,7 +578,10 @@ function mountResource(id: string, r: Resource) {
     drag.y = e.clientY;
     drag.moved ||=
       Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 6;
-    if (application) { layout("free drag"); return; }
+    if (application) {
+      layout("free drag");
+      return;
+    }
     const distances = order.map((_, i) => {
       const p = slotPose(i, innerWidth, innerHeight);
       return Math.hypot(e.clientX - p.x - p.w / 2, e.clientY - p.y - p.h / 2);
@@ -555,7 +597,12 @@ function mountResource(id: string, r: Resource) {
     const d = drag;
     drag = null;
     $("#destinations").replaceChildren();
-    if (d.moved && application) void application.move(id, Math.round(d.x - d.startX), Math.round(d.y - d.startY));
+    if (d.moved && application)
+      void application.move(
+        id,
+        Math.round(d.x - d.startX),
+        Math.round(d.y - d.startY),
+      );
     else if (d.moved) move(id, d.slot);
     else {
       select(id);
@@ -571,17 +618,48 @@ function mountResource(id: string, r: Resource) {
 for (const [id, r] of resources) mountResource(id, r);
 
 function replaceWorkspace(state: DesktopSnapshot) {
-  const alive = new Set(state.blocks.map(b => b.id));
+  const alive = new Set(state.blocks.map((b) => b.id));
   if (expanded && !alive.has(expanded)) expanded = null;
   if (selected && !alive.has(selected)) selected = null;
-  for (const [id, article] of elements) if (!alive.has(id)) { article.remove(); elements.delete(id); resources.delete(id); motion.bodies.delete(id); poseStyleCache.delete(id); }
-  order = state.blocks.map(b => b.id);
+  for (const [id, article] of elements)
+    if (!alive.has(id)) {
+      article.remove();
+      elements.delete(id);
+      resources.delete(id);
+      motion.bodies.delete(id);
+      poseStyleCache.delete(id);
+    }
+  order = state.blocks.map((b) => b.id);
   for (const block of state.blocks) {
-    const resource = state.resources.find(r => r.id === block.resource_id)!;
-    const displayType: Resource["type"] = block.shape === "circle" ? "research" : resource.kind === "conversation" ? "conversation" : "note";
+    const resource = state.resources.find((r) => r.id === block.resource_id)!;
+    const displayType: Resource["type"] =
+      block.shape === "circle"
+        ? "research"
+        : resource.kind === "conversation"
+          ? "conversation"
+          : "note";
     let r = resources.get(block.id);
-    const data = { id: block.id, canonicalId: resource.id, type: displayType, title: resource.title, subtitle: `${resource.kind} · ${resource.id.slice(0,8)}`, text: resource.content };
-    if (!r) { r = data; resources.set(block.id, r); mountResource(block.id, r); } else { Object.assign(r, data); const article = elements.get(block.id)!; article.classList.remove("conversation", "research", "note"); article.classList.add(displayType); article.querySelector("h2")!.textContent = resource.title; article.querySelector(".folio-preview")!.textContent = resource.content.split("\n\n")[0]; }
+    const data = {
+      id: block.id,
+      canonicalId: resource.id,
+      type: displayType,
+      title: resource.title,
+      subtitle: `${resource.kind} · ${resource.id.slice(0, 8)}`,
+      text: resource.content,
+    };
+    if (!r) {
+      r = data;
+      resources.set(block.id, r);
+      mountResource(block.id, r);
+    } else {
+      Object.assign(r, data);
+      const article = elements.get(block.id)!;
+      article.classList.remove("conversation", "research", "note");
+      article.classList.add(displayType);
+      article.querySelector("h2")!.textContent = resource.title;
+      article.querySelector(".folio-preview")!.textContent =
+        resource.content.split("\n\n")[0];
+    }
   }
 }
 
@@ -597,7 +675,8 @@ function setVela(state: VelaState) {
     verified: "Fixture sequence check passed",
     unavailable: "Unavailable",
   };
-  $("#vela-state").textContent = `${labels[state]} · ${desktopMode ? "application activity" : "synthetic"}`;
+  $("#vela-state").textContent =
+    `${labels[state]} · ${desktopMode ? "application activity" : "synthetic"}`;
   $("#vela").setAttribute(
     "aria-label",
     `Address Vela. ${labels[state]}, synthetic presence`,
@@ -660,7 +739,10 @@ $("#stream-close").addEventListener("click", () => {
 });
 $("#home").addEventListener("click", home);
 $("#undo").addEventListener("click", () => {
-  if (application) { void application.run({ type: "undo" }); return; }
+  if (application) {
+    void application.run({ type: "undo" });
+    return;
+  }
   const previous = undoStack.pop();
   if (previous) {
     order = previous;
@@ -915,8 +997,12 @@ function renderDOM() {
       clamp((rest.w - p.w) / Math.max(1, rest.w - dockWidth), 0, 1),
       clamp((focus - 0.13) / 0.87, 0, 1),
     );
-    el.hidden = p.x + p.w < 0 || p.y + p.h < 120 || p.x > innerWidth || p.y > innerHeight - 100;
-    const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateY(${p.yaw}deg);z-index:${expanded === id ? 200000 : drag?.id === id ? 150000 : selected === id ? 100000 : 3 + (application?.block(id)?.z ?? 0)};`;
+    el.hidden =
+      p.x + p.w < 0 ||
+      p.y + p.h < 120 ||
+      p.x > innerWidth ||
+      p.y > innerHeight - 100;
+    const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateY(${p.yaw}deg);z-index:${expanded === id ? 200000 : drag?.id === id ? 150000 : selected === id ? 100000 : desktopMode ? 20000 + (application?.block(id)?.z ?? 0) : 3};`;
     if (poseStyleCache.get(id) !== style) {
       el.style.cssText = style;
       poseStyleCache.set(id, style);
@@ -950,6 +1036,13 @@ function tick(now: number) {
   metrics.callbacks++;
   if (metrics.intervals.length < 18000) metrics.intervals.push(interval);
   const moving = motion.step(dt);
+  application?.frame(now, {
+    tier: quality,
+    reduced: motion.reduced,
+    quiet,
+    hidden: !nativeActive || document.hidden,
+    graphicsAvailable: !graphicsFailed,
+  });
   const targetFocus = expanded ? 1 : selected ? 0.13 : 0;
   focus = motion.reduced
     ? targetFocus
@@ -989,25 +1082,31 @@ function tick(now: number) {
     (pointerDirty && now - lastDraw >= pointerCadence - 0.25);
   if (shouldDraw) {
     if (environment && !graphicsFailed) {
-      const surfaces = order.filter(id => !elements.get(id)?.hidden && application?.snapshot()?.navigation.kind !== "constellation").map((id) => {
-        const p = motion.pose(id),
-          rest = base(id);
-        return {
-          id,
-          kind:
-            innerWidth < 1000 && resources.get(id)!.type === "research"
-              ? "conversation"
-              : resources.get(id)!.type,
-          ...p,
-          selected: id === selected,
-          unfold: clamp(
-            (p.h - rest.h) /
-              Math.max(1, Math.max(250, innerHeight - 310) - rest.h),
-            0,
-            1,
-          ),
-        };
-      });
+      const surfaces = order
+        .filter(
+          (id) =>
+            !elements.get(id)?.hidden &&
+            application?.snapshot()?.navigation.kind !== "constellation",
+        )
+        .map((id) => {
+          const p = motion.pose(id),
+            rest = base(id);
+          return {
+            id,
+            kind:
+              innerWidth < 1000 && resources.get(id)!.type === "research"
+                ? "conversation"
+                : resources.get(id)!.type,
+            ...p,
+            selected: id === selected,
+            unfold: clamp(
+              (p.h - rest.h) /
+                Math.max(1, Math.max(250, innerHeight - 310) - rest.h),
+              0,
+              1,
+            ),
+          };
+        });
       const scene = deriveSceneState({
         selected,
         expanded,
@@ -1128,6 +1227,7 @@ function controller() {
       gpu: environment?.stats(),
     }),
     application: () => application?.snapshot(),
+    flush: () => application?.flush(),
     select,
     expand,
     home,
@@ -1194,7 +1294,24 @@ function controller() {
   };
 }
 window.__aerynth = controller();
-if (desktopMode) application = installApplication({ replace: replaceWorkspace, status, layout: () => layout("application state"), home, focus: expand, vela: setVela });
+if (desktopMode)
+  application = installApplication({
+    motion,
+    wake,
+    replace: replaceWorkspace,
+    status,
+    layout: () => layout("application state"),
+    home,
+    focus: (id) => {
+      if (expanded !== id) expand(id);
+      else
+        elements
+          .get(id)
+          ?.querySelector<HTMLTextAreaElement>("textarea")
+          ?.focus();
+    },
+    vela: setVela,
+  });
 try {
   environment = new Environment($<HTMLCanvasElement>("#world"));
 } catch (error) {

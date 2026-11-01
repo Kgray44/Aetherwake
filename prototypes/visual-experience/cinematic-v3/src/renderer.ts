@@ -1166,9 +1166,14 @@ export class Environment {
         this.canvas.dataset.materials = "opaque";
       return;
     }
-    const live = new Set(surfaces.map(pose => pose.id));
-    for (const visual of this.folios) if (visual.id && !live.has(visual.id)) { this.folioById.delete(visual.id); visual.id = null; }
-    if (surfaces.length > this.folios.length) this.buildFolios(surfaces.length - this.folios.length);
+    const live = new Set(surfaces.map((pose) => pose.id));
+    for (const visual of this.folios)
+      if (visual.id && !live.has(visual.id)) {
+        this.folioById.delete(visual.id);
+        visual.id = null;
+      }
+    if (surfaces.length > this.folios.length)
+      this.buildFolios(surfaces.length - this.folios.length);
     for (let i = 0; i < surfaces.length; i++) {
       const pose = surfaces[i];
       if (
@@ -1770,7 +1775,7 @@ export class Environment {
         meaning:
           "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above.",
       },
-      surfaceCapacity: 3,
+      surfaceCapacity: this.folios.length,
       surfacesRendered: this.folios.filter((folio) => folio.root.visible)
         .length,
       // Submission counters are not presented FPS, GPU utilization, or VRAM usage.

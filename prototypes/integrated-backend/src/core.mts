@@ -285,8 +285,9 @@ export class BackendCore {
     const a: any = input;
     // Reads and interruption remain available during execution. Local mutation
     // is rejected rather than racing source approval and streamed commits.
-    if (!['snapshot','replay','interrupt','execute','desktop'].includes(name)) ensure(!this.active, 'execution_busy');
+    if (!['snapshot','replay','interrupt','execute','desktop','viewState'].includes(name)) ensure(!this.active, 'execution_busy');
     switch (name) {
+      case 'viewState': return this.desktop.viewState(a) as any;
       case 'desktop': {
         if (a.type !== 'snapshot') {
           this.atomic(() => this.desktop.apply(a, (title, codex) => this.create(title, codex ? this.port.id : 'mock-ordinary').resourceId));
