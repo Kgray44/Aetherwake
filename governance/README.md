@@ -4,7 +4,7 @@
 
 Start with **[00 — The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md)**. It defines the governing intent, principles, invariants, authority hierarchy, and acceptance obligations for Project Aetherwake, Aerynth, Vela, and all related subsystems.
 
-> **Current baseline:** Constitution v1.0.0, effective 2026-11-01. Charter 03 has been **published for owner acceptance**; other listed charters remain planned. A published charter is not automatically owner-ratified.
+> **Current baseline:** The Constitution v1.0.0 is established (2026-11-01). Specialized charter publication and owner-acceptance statuses are tracked in the registry below; publication alone does not constitute ratification.
 
 ## Document authority
 
@@ -24,7 +24,7 @@ The repository owner retains final decision authority. Amendments must be explic
 | 01 | Experience and Interaction | Planned |
 | 02 | Liquid Intelligence and Motion | Planned |
 | 03 | [Projects, Workspaces, and Resources](03-PROJECTS-WORKSPACES-AND-RESOURCES.md) | **Published — pending owner acceptance, v1.0.0** |
-| 04 | Conversations and Connected Branches | Planned |
+| 04 | [Conversations and Connected Branches](04-CONVERSATIONS-AND-CONNECTED-BRANCHES.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 | 05 | Agents, Tasks, and Workflows | Planned |
 | 06 | Vela Intelligence and Adaptation | Planned |
 | 07 | Notes, Knowledge, and Thought Stream | Planned |
@@ -49,7 +49,7 @@ See Section 20 of the Constitution for domain boundaries.
 - Give normative requirements unique stable IDs and maintain one authoritative home per rule.
 - Avoid copying confidential notes, credentials, personal conversations, private telemetry, or other sensitive material into this public repository.
 - For changes that conflict with governance, record a proposed amendment rather than treating a task prompt as an override.
-- Update this registry only when a new governing document is actually created and accepted.
+- Update this registry when a governing document is published, accepted, amended, or withdrawn; distinguish published drafts from ratified charters.
 
 ## Planned companion documentation
 
