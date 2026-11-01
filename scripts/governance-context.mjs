@@ -109,7 +109,9 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
       continue;
     }
     const pinned=new Set(requiredIds.filter(rid=>index.requirements.get(rid)?.charter===id).map(rid=>index.requirements.get(rid).section));
-    const scored=doc.sections.map(s=>({section:s,score:relevance(s,task+" "+paths.join(" "))}))
+    // Source paths select the charter; only task language ranks its sections.
+    // Path category names otherwise create spurious low-confidence matches.
+    const scored=doc.sections.map(s=>({section:s,score:relevance(s,task)}))
       .sort((a,b)=>b.score-a.score||a.section.ordinal-b.section.ordinal);
     const positive=scored.filter(x=>x.score>0);
     // Fallback to full charter if no section can be responsibly selected.
