@@ -21,7 +21,7 @@ The goal is not to wrap Codex in a prettier chat window. Aerynth should combine 
 
 ## Governance
 
-The governing foundation lives in [`governance/`](governance/README.md), beginning with **[the Aetherwake Master Constitution](governance/00-AETHERWAKE-CONSTITUTION.md)**. It establishes the project's binding principles, the Liquid Intelligence experience, user-control requirements, agent and context integrity, observability, and the reserved specialized charters. The Constitution is established; the other charters remain planned.
+The governing foundation lives in [`governance/`](governance/README.md), beginning with **[the Aetherwake Master Constitution](governance/00-AETHERWAKE-CONSTITUTION.md)**. It establishes the project's binding principles, the Liquid Intelligence experience, user-control requirements, agent and context integrity, observability, and the reserved specialized charters. The Constitution is established; [Charter 03 (Projects, Workspaces, and Resources)](governance/03-PROJECTS-WORKSPACES-AND-RESOURCES.md) has been published for owner acceptance; the remaining charters are planned.
 
 ## Development direction
 
