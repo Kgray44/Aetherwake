@@ -164,3 +164,17 @@ test("source-linked requirement envelope is preserved in text as well as JSON",(
  assert.ok(text.includes(first.path+":"+first.line));
  assert.ok(text.includes(first.text));
 });
+
+test("property check: every charter retains all owned requirements under unrecognized wording",()=>{
+ for(const doc of index.documents.filter(d=>d.available&&d.id!=="00")){
+  const r=context({task:"Amend a technical detail with unusual wording",paths:[doc.path],maxSections:1});
+  const available=new Set([
+   ...r.selected.flatMap(entry=>entry.mode==="section"?entry.requirements??[]:index.documents.find(d=>d.id===entry.id)?.sections.flatMap(x=>x.requirementIds)??[]),
+   ...r.normative.map(x=>x.id),...r.dependencies.map(x=>x.id)
+  ]);
+  const all=[...index.requirements.values()].filter(x=>x.charter===doc.id);
+  assert.ok(r.selected.some(x=>x.id===doc.id),"missing charter "+doc.id);
+  for(const requirement of all)assert.ok(available.has(requirement.id),doc.id+" missing "+requirement.id);
+  assert.ok(r.selected.filter(x=>x.id===doc.id).every(x=>x.authority===doc.authority));
+ }
+});
