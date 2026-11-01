@@ -67,7 +67,7 @@ function renderMain() {
       <section class="section lab-section" id="lab"><div class="section-heading"><div><span class="section-kicker">PERFORMANCE / 05</span><h2>Material, with a budget.</h2></div><p>Quality changes atmosphere density and frame pacing. Reduced motion preserves readable state and controls.</p></div><div class="lab-controls"><div><label for="quality-select">VISUAL QUALITY</label><select id="quality-select"><option value="cinematic">Cinematic · 200 particles</option><option value="balanced">Balanced · 100 particles</option><option value="efficient">Efficient · 36 particles</option></select></div><label class="check-label"><input type="checkbox" id="reduced-toggle" /> Reduced motion</label><button id="benchmark-button" class="button-primary">Run bounded benchmark ↗</button><button id="export-button" class="button-text">Export measurements ↓</button></div><pre class="benchmark-output" id="benchmark-output">Waiting for local frame samples. No process or GPU data is inferred from browser timings.</pre></section>
       <footer class="footer"><span>AERYNTH / PROJECT AETHERWAKE</span><span>LOCAL VISUAL CANDIDATE · NO LIVE CODEX CONNECTION</span><span>© LAB 02</span></footer>
     </div></main><div id="focus-layer" class="focus-layer" hidden></div><div id="toast" class="toast" role="status" aria-live="polite"></div></div>`;
-  $('#lab')!.insertAdjacentHTML('beforeend', `<details class="bench-control"><summary>COMPARISON CONTROL / LOCAL SCRIPT</summary><p>Scripted renderer actions provide software timing proxies. They are not physical input or display-present measurements.</p><div class="bench-buttons"><button data-bench="prepare">Prepare fixed cinematic</button><button data-bench="S2">S2 idle</button><button data-bench="S3">S3 working</button><button data-bench="S4">S4 scroll</button><button data-bench="S6">S6 workspace</button><button data-bench="S7">S7 Vela</button><button data-bench="S8">S8 windows</button><button data-bench="S10-efficient">S10 efficient</button><button data-bench="S10-reduced">S10 reduced</button><button data-bench="capture-start">Start frame capture</button><button data-bench="capture-stop">Stop frame capture</button><button data-bench="export">Export local trace</button></div><output id="bench-status" role="status">Ready · seed ${FIXTURE_SEED}</output></details>`);
+  $('#lab')!.insertAdjacentHTML('beforeend', `<details class="bench-control"><summary>COMPARISON CONTROL / LOCAL SCRIPT</summary><p>Scripted renderer actions provide software timing proxies. They are not physical input or display-present measurements.</p><div class="bench-buttons"><button data-bench="prepare">Prepare fixed cinematic · 60 Hz atmosphere</button><button data-bench="native-cadence">Restore native atmosphere cadence</button><button data-bench="S2">S2 idle</button><button data-bench="S3">S3 working</button><button data-bench="S4">S4 scroll</button><button data-bench="S6">S6 workspace</button><button data-bench="S7">S7 Vela</button><button data-bench="S8">S8 windows</button><button data-bench="S10-efficient">S10 efficient</button><button data-bench="S10-reduced">S10 reduced</button><button data-bench="capture-start">Start frame capture</button><button data-bench="capture-stop">Stop frame capture</button><button data-bench="export">Export local trace</button></div><output id="bench-status" role="status">Ready · seed ${FIXTURE_SEED}</output></details>`);
   motion.attach($('#atmosphere') as HTMLCanvasElement);
   motion.setQuality(layout.quality); motion.setReduced(layout.reduced);
   ($('#quality-select') as HTMLSelectElement).value = layout.quality;
@@ -311,7 +311,7 @@ function prepareFixedCinematic() {
   ($('#quality-select') as HTMLSelectElement).value = 'cinematic';
   ($('#reduced-toggle') as HTMLInputElement).checked = false;
   updateSelection(); updateVela('idle');
-  motion.setQuality('cinematic'); motion.setReduced(false); motion.setPaused(false);
+  motion.setQuality('cinematic'); motion.setCadence('fixed-60'); motion.setReduced(false); motion.setPaused(false);
   $<HTMLElement>('#page-scroll')!.scrollTop = 0;
   ledger.clear(); lastFrameCapture = null;
   benchmarkStatus('Fixed cinematic ready · no adaptive quality control is active');
@@ -332,22 +332,31 @@ async function runScriptedScenario(name: string) {
     else if (name === 'S4') {
       const list = $<HTMLElement>('#message-list')!;
       messages.splice(FIXTURE_COUNTS.messages); messageVirtual?.refresh();
-      for (const [index, offset] of [[0, 0], [500, 300], [1000, 600], [1500, 900], [1999, 1200]]) {
-        await step(offset, `S4-scroll-${index}`, () => { list.scrollTop = index * 84; list.dispatchEvent(new Event('scroll')); });
-      }
       const appended = createMessages(FIXTURE_COUNTS.messages + 60).slice(FIXTURE_COUNTS.messages);
+      const actions: Promise<void>[] = [];
+      for (let item = 0; item < 20; item++) {
+        const index = Math.round(item * 1999 / 19), offset = item * 1500;
+        actions.push(step(offset, `S4-scroll-${String(item + 1).padStart(2, '0')}-${index}`, () => { list.scrollTop = index * 84; list.dispatchEvent(new Event('scroll')); }));
+      }
       for (let index = 0; index < appended.length; index++) {
-        await step(1500 + index * 100, `S4-append-${String(index + 1).padStart(2, '0')}`, () => {
+        actions.push(step(index * 100, `S4-append-${String(index + 1).padStart(2, '0')}`, () => {
           messages.push(appended[index]); messageVirtual?.refresh(); messageVirtual?.jumpTo(messages.length - 1);
           $('#message-status')!.textContent = `${messages.length.toLocaleString()} messages · synthetic append`;
-        });
+        }));
       }
+      await Promise.all(actions);
     }
     else if (name === 'S6') {
       const first = blocks[0].id, second = blocks[1].id;
-      await step(0, 'S6-reset-layout', () => { $('#reset-layout')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-      await step(120, 'S6-select', () => selectBlock(first));
-      await step(240, 'S6-drag-drop', () => {
+      await step(0, 'S6-select', () => { const card = $<HTMLElement>(`.resource-card[data-id="${first}"]`)!; card.focus(); selectBlock(first); });
+      await step(5000, 'S6-expand', () => focusBlock(first));
+      await step(10000, 'S6-interrupt-collapse', () => { closeFocus(); focusBlock(first); closeFocus(); });
+      await step(15000, 'S6-keyboard-reorder', () => {
+        const card = $<HTMLElement>(`.resource-card[data-id="${first}"]`)!;
+        card.focus(); card.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'ArrowRight', altKey: true }));
+      });
+      await step(20000, 'S6-resize', () => cardAction(first, 'resize'));
+      await step(25000, 'S6-drag-drop', () => {
         const source = $<HTMLElement>(`.resource-card[data-id="${first}"]`)!, target = $<HTMLElement>(`.resource-card[data-id="${second}"]`)!;
         const dataTransfer = new DataTransfer();
         source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer }));
@@ -355,30 +364,19 @@ async function runScriptedScenario(name: string) {
         target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }));
         source.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer }));
       });
-      await step(360, 'S6-keyboard-reorder', () => {
-        const card = $<HTMLElement>(`.resource-card[data-id="${first}"]`)!;
-        card.focus(); card.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'ArrowLeft', altKey: true }));
-      });
-      await step(480, 'S6-widen', () => cardAction(first, 'resize'));
-      await step(600, 'S6-collapse', () => cardAction(first, 'collapse'));
-      await step(720, 'S6-expand', () => cardAction(first, 'collapse'));
-      await step(840, 'S6-focus', () => focusBlock(first));
-      await step(860, 'S6-interrupt-return', closeFocus);
     }
     else if (name === 'S7') {
-      for (const [state, offset] of [['idle', 0], ['working', 300], ['attention', 600], ['unavailable', 900]] as const) {
+      for (const [state, offset] of [['idle', 0], ['working', 5000], ['attention', 10000], ['unavailable', 15000], ['working', 20000], ['idle', 25000]] as const) {
         await step(offset, `S7-vela-${state}`, () => updateVela(state));
       }
     }
     else if (name === 'S8') {
       if (!(window as any).__TAURI_INTERNALS__) throw new Error('S8 requires the native Tauri host');
       const id = blocks[1].id;
-      await step(0, 'S8-activity-open', async () => { const existing = await WebviewWindow.getByLabel('activity'); await existing?.close(); await openStream(); });
-      await step(250, 'S8-block-detach', () => detachBlock(id));
-      await step(500, 'S8-block-focus', async () => { const win = await WebviewWindow.getByLabel(`block-${id}`); await win?.setFocus(); });
-      await step(750, 'S8-block-close', async () => { const win = await WebviewWindow.getByLabel(`block-${id}`); await win?.close(); });
-      await step(1000, 'S8-activity-close', async () => { const win = await WebviewWindow.getByLabel('activity'); await win?.close(); });
-      await step(1250, 'S8-activity-reopen', openStream);
+      await step(0, 'S8-activity-open', openStream);
+      await step(8000, 'S8-block-detach', () => detachBlock(id));
+      await step(16000, 'S8-activity-close', async () => { const win = await WebviewWindow.getByLabel('activity'); await win?.close(); });
+      await step(24000, 'S8-activity-reopen', openStream);
     }
     else if (name === 'S10-efficient') await step(0, 'S10-efficient', () => { layout.quality = 'efficient'; save(); motion.setQuality('efficient'); ($('#quality-select') as HTMLSelectElement).value = 'efficient'; });
     else if (name === 'S10-reduced') await step(0, 'S10-reduced', () => { layout.reduced = true; save(); motion.setReduced(true); ($('#reduced-toggle') as HTMLInputElement).checked = true; });
@@ -388,8 +386,9 @@ async function runScriptedScenario(name: string) {
 }
 async function benchmarkCommand(command: string) {
   if (command === 'prepare') prepareFixedCinematic();
+  else if (command === 'native-cadence') { motion.setCadence('native'); benchmarkStatus('Native atmosphere cadence restored'); }
   else if (command === 'capture-start') { motion.beginFrameCapture(); benchmarkStatus('Frame callback capture started · max 12,000 samples'); }
-  else if (command === 'capture-stop') { lastFrameCapture = motion.endFrameCapture(); benchmarkStatus(`Frame callback capture stopped · ${lastFrameCapture.samples.length} samples`); }
+  else if (command === 'capture-stop') { lastFrameCapture = motion.endFrameCapture(); benchmarkStatus(`Capture stopped · ${lastFrameCapture.samples.length} callbacks, ${lastFrameCapture.stats.canvasDrawCount} canvas draws`); }
   else if (command === 'export') { downloadTrace(); benchmarkStatus('Local JSON export requested; keep raw traces outside the public repository'); }
   else await runScriptedScenario(command);
 }
@@ -440,6 +439,7 @@ Object.assign(window, { __AERYNTH_BENCH__: {
   },
   runScenario: (name: string) => !surface ? runScriptedScenario(name) : surface === 'stream' && name === 'S5' ? runEventBurst() : Promise.reject(new Error('Scenario unavailable on this surface')),
   startFrameCapture: () => motion.beginFrameCapture(),
+  setCadence: (cadence: 'native' | 'fixed-60') => motion.setCadence(cadence),
   stopFrameCapture: () => { lastFrameCapture = motion.endFrameCapture(); return lastFrameCapture; },
   snapshot: benchmarkSnapshot,
   clear: () => { ledger.clear(); lastFrameCapture = null; },

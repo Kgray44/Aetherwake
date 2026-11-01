@@ -17,7 +17,7 @@ const frames = bench.stopFrameCapture();
 const evidence = bench.snapshot();
 ```
 
-`prepareFixedCinematic()` restores the 12-block layout, the 2,000-message base, idle Vela, top-of-page position, 200-particle Cinematic tier, and full motion. The stream-window version restores its 1,000-event base and clears its trace. No adaptive tier controller is active in this candidate; Efficient and reduced motion are explicit separate settings. In a controlled comparison, perform the same setup on both hosts and keep the quality tier fixed for each trial.
+`prepareFixedCinematic()` restores the 12-block layout, the 2,000-message base, idle Vela, top-of-page position, 200-particle Cinematic tier, full motion, and a comparison-only 60 Hz **atmosphere canvas draw target**. The renderer still receives native `requestAnimationFrame` callbacks at display cadence and draws on scheduled 60 Hz deadlines; late draws are counted rather than silently replaced. The default native atmosphere cadence is restored by **Restore native atmosphere cadence** or `bench.setCadence('native')`. The stream-window version restores its 1,000-event base and clears its trace. No adaptive tier controller is active in this candidate; Efficient and reduced motion are explicit separate settings. CSS Vela animations remain browser-driven and are a separate cadence asymmetry to report. In a controlled comparison, perform the same setup on both hosts and keep the quality tier fixed for each trial.
 
 ## Scripted action schedule
 
@@ -27,20 +27,20 @@ All offsets below are milliseconds relative to that renderer's scenario start. E
 | --- | --- |
 | S2 | Vela idle at 0; leave the main home scene visible for external steady-state timing. |
 | S3 | Vela working at 0; leave atmosphere and Vela active for external timing. |
-| S4 | Scroll message indices 0, 500, 1000, 1500, 1999 at 0/300/600/900/1200; append 60 deterministic synthetic messages from 1500 through 7400 at 100 ms intervals. |
+| S4 | Scroll 20 evenly spaced indices from 0 through 1999 at 1,500 ms intervals (0 through 28,500 ms); concurrently append 60 deterministic synthetic messages at 100 ms intervals (0 through 5,900 ms). |
 | S5 | In the separate stream renderer, append 60 deterministic synthetic events at 0 through 5900 in 100 ms steps. Each run restores the 1,000-event base first. |
-| S6 | Reset layout 0; select 120; synthetic DOM drag/drop 240; synthetic Alt+Left keydown 360; Widen 480; Collapse 600; Expand 720; Focus 840; Return 860 (interrupting the focus transition). |
-| S7 | Idle 0; Working 300; Attention required 600; Unavailable 900. |
-| S8 | In native Tauri: close/reopen activity 0; detach a block 250; focus detached window 500; close it 750; close activity 1000; reopen activity 1250. Async native operations can overrun intended offsets, which the trace exposes. |
+| S6 | Select resource at 0; focus-expand at 5,000; close, reopen, and immediately close to interrupt at 10,000; synthetic Alt+Right keydown at 15,000; Widen/Compact at 20,000; synthetic DOM drag/drop at 25,000. The keyboard and drag actions are dispatched DOM events, not hardware inputs. |
+| S7 | Idle 0; Working 5,000; Attention required 10,000; Unavailable 15,000; Working 20,000; Idle 25,000. |
+| S8 | In native Tauri: open activity at 0; detach a block at 8,000; close activity at 16,000; reopen activity at 24,000. Async native operations can overrun intended offsets, which the trace exposes. Detached block remains open for external trial cleanup. |
 | S10 | Efficient and reduced motion are separate explicit controls. |
 
-S1 startup, S9 visibility/minimize/restore, S11 soak, and S12 Synthetic Gaming Load require external coordination. Do not substitute in-app script durations for the protocol's measured durations. This candidate has **Widen/Compact**, not a freeform pixel resize handle; report that as a functional asymmetry. The 60 appended rows are deterministic local fixture extensions, not network streaming. The base fixture counts remain unchanged before each run.
+S1 startup, S9 visibility/minimize/restore, S11 soak, and S12 Synthetic Gaming Load require external coordination. S2/S3/S5 finish scripted actions before the 30-second external window closes; the harness must hold the scene. Do not substitute in-app script durations for the protocol's measured durations. This candidate has **Widen/Compact**, not a freeform pixel resize handle; report that as a functional asymmetry. The 60 appended rows are deterministic local fixture extensions, not network streaming. The base fixture counts remain unchanged before each run.
 
 ## Renderer trace interpretation
 
 Each action record includes UTC, `performance.timeOrigin`, monotonic `dispatchMs`, `handlerStartMs`, `stateCommitMs`, `nextFrameMs`, status, and any missing-frame reason. Dispatch means the in-app script invoked the action; it is **not physical input timing**. State commit is when the synchronous DOM change or awaited native call returns. The next `requestAnimationFrame` callback is a **software response proxy**, not a display present or photon timing. Cross-window values need external clock correlation before comparison. Hidden windows may have no callback; a missing callback is a gap, not zero latency.
 
-`startFrameCapture()` and `stopFrameCapture()` record up to 12,000 `[callbackTimeMs, intervalMs]` pairs in the main renderer. Exports include count, median, p95, p99, max, intervals over 50 ms, nominal-target missed-refresh estimate, and overflow flag. These are callback intervals, not presented frames. A capture spanning more than the cap is explicitly marked and must not be treated as a complete distribution. The stream renderer has no atmosphere loop, so its action trace is useful but its canvas frame capture is empty.
+`startFrameCapture()` and `stopFrameCapture()` record up to 12,000 `[callbackTimeMs, intervalMs]` pairs and 12,000 separate `[canvasDrawTimeMs, intervalMs]` pairs in the main renderer. Exports include callback and draw counts, median/p95/p99/max intervals, nominal-target missed-refresh estimate, and overflow flags. `targetCanvasDraws` and `canvasDrawShortfallEstimate` are estimates against elapsed time at 60 Hz while the scene is visible and active; neither is a display-present count. Captures across visibility, quality, or motion changes should be split into separate windows. Both interval sets are renderer observations, not presented frames. A capture spanning a cap is explicitly marked and must not be treated as a complete distribution. The stream renderer has no atmosphere loop, so its action trace is useful but its canvas frame capture is empty.
 
 The UI export downloads JSON locally. Keep it, process traces, PresentMon CSV, WPR ETL, run commands, and hashes in the comparison's **local** evidence directory outside this public repository. Do not commit raw system traces, user activity, or process command lines.
 
