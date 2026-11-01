@@ -21,8 +21,8 @@ The repository owner retains final decision authority. Amendments must be explic
 | ID | Document | Status |
 |---|---|---|
 | 00 | [Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) | **Established — v1.0.0** |
-| 01 | Experience and Interaction | Planned |
-| 02 | Liquid Intelligence and Motion | Planned |
+| 01 | [Experience and Interaction](01-EXPERIENCE-AND-INTERACTION.md) | **Published — pending owner acceptance, v1.0.0-draft** |
+| 02 | [Liquid Intelligence and Motion](02-LIQUID-INTELLIGENCE-AND-MOTION.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 | 03 | [Projects, Workspaces, and Resources](03-PROJECTS-WORKSPACES-AND-RESOURCES.md) | **Published — pending owner acceptance, v1.0.0** |
 | 04 | [Conversations and Connected Branches](04-CONVERSATIONS-AND-CONNECTED-BRANCHES.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 | 05 | Agents, Tasks, and Workflows | Planned |
