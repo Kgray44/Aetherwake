@@ -15,6 +15,7 @@
 | `codex app-server generate-ts --out prototypes/codex-bridge/protocol-generated` | Generated 706 TypeScript files, 408,884 bytes. |
 | `npm ci` | Dependency install is reproducible from the lockfile; initial `npm install --no-audit --no-fund` succeeded. |
 | `npm run typecheck` | Passed after generated bindings were configured with TypeScript bundler resolution. |
+| `npm run build` | TypeScript emitted runnable JavaScript into ignored `dist/`. |
 | `npm test` | Seven fixture tests passed: handshake/catalog/lifecycle, auth absence/invalid RPC, rate limit/model unavailable, missing executable/crash, command and file approval refusal/cancellation, interrupt/reconnect, interrupted stream. |
 | `npm run demo -- capabilities` | Connected to installed App Server on Windows. Existing ChatGPT authentication reported available. Eight model catalog entries returned, all marked entitlement unverified. |
 | `npm run demo -- live` | One genuine read-only thread and turn ran. Observed `turn/started`, item start/completion, three `item/agentMessage/delta` notifications, and `turn/completed` with `status: completed`. No tool execution was observed in the printed stream. |
@@ -25,7 +26,7 @@ The first live demo's intentional shutdown was initially labeled `bridge/transpo
 ## Coverage boundaries
 
 - **Implemented:** stdio process/JSONL transport, handshake, request correlation, notifications and server requests, bounded buffers, versioned event normalization, capability reporting, thread/turn operations, explicit reconnect, fail-closed approvals, CLI.
-- **Compiled:** all adapter/demo/tests with TypeScript strict checking.
+- **Compiled:** adapter and CLI emitted as JavaScript by `npm run build`; all adapter/demo/tests passed strict TypeScript checking.
 - **Fixture-tested:** all seven scenarios above. Approval and cancellation decisions are synthetic; no dangerous command was run.
 - **Live-tested:** installed CLI connection, existing auth, model catalog discovery, one new thread/turn, streamed event delivery, provider terminal completion, persisted assistant response inspection.
 - **Unverified live:** native fork/resume/interrupt, real approval round trip, actual crash recovery, unavailable-model/rate-limit handling, and model entitlement beyond the one default-model turn. Long histories, sustained throughput, Windows/macOS/Linux parity, full event schema compatibility, and production security/privacy are not established.

@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "build": "tsc -p tsconfig.build.json",
     "test": "node --experimental-strip-types --test tests/*.test.ts",
     "demo": "node --experimental-strip-types src/demo.ts"
   },
