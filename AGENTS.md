@@ -10,7 +10,16 @@ Before substantive work, use the repository's deterministic router instead of lo
 node scripts/governance-router.mjs --task "Implement contextual command selection" --path src/interaction/selection.ts
 ```
 
-Add further `--path` arguments as scope becomes known; use `--json` for structured output. The router always selects Constitution 00 and routes relevant domains by task phrases and paths. Its statuses come from `governance/README.md`: **binding** charters are authoritative, **advisory** published drafts are reference-only, and **planned/unavailable** charters must not be treated as existing or approved. Rerun when scope changes and include any cross-domain dependencies not detected automatically. Consult [the implementation guide](docs/engineering/GOVERNANCE-ROUTER.md). Validate with `node scripts/governance-router.mjs --validate` and `node --test tests/governance-router.test.mjs`.
+Add further `--path` arguments as scope becomes known; use `--json` for structured output. The router always selects Constitution 00 and routes relevant domains by task phrases and paths.
+
+For ordinary coding/engineering work, **prefer V2's section-level retrieval** after confirming the applicable charter domains:
+
+```bash
+node scripts/governance-context.mjs --task "Optimize particle rendering" --path src/rendering/particles.ts
+node scripts/governance-context.mjs --requirement AW-CIE-008 --json
+```
+
+V2 emits the **full Constitution**, selected **complete specialist charter sections**, exact requirement citations, source hashes, and authority status. When it cannot reliably choose relevant sections, it falls back to the full routed charter. Its budget is soft; its token figure is a character-derived estimate, **not measured model tokens**. Use `--full` whenever scope is broad, ambiguous, or demands comprehensive charter review. Re-run after task scope or charter source changes; read additional sections or full charters for implicit cross-domain dependencies. See [Governance Context Router V2](docs/engineering/GOVERNANCE-CONTEXT-ROUTER-V2.md). Its statuses come from `governance/README.md`: **binding** charters are authoritative, **advisory** published drafts are reference-only, and **planned/unavailable** charters must not be treated as existing or approved. Rerun when scope changes and include any cross-domain dependencies not detected automatically. Consult [the implementation guide](docs/engineering/GOVERNANCE-ROUTER.md). Validate with `node scripts/governance-router.mjs --validate`, `node --test tests/governance-router.test.mjs tests/governance-context.test.mjs`, and `node scripts/benchmark-governance-context.mjs`.
 
 ## Authority and reading discipline
 
