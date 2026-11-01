@@ -1,0 +1,11 @@
+{
+  "name": "aetherwake-workspace-engine",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mts",
+    "demo": "node demo/server.mts",
+    "benchmark": "node benchmark.mts"
+  },
+  "engines": { "node": ">=24.0.0" }
+}
