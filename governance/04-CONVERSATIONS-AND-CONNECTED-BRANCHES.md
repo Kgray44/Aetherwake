@@ -591,6 +591,50 @@ For owner acceptance, review whether:
 - Privacy boundaries, deletion semantics, and provider limitations remain explicit.
 - All normative requirements have traceable acceptance coverage.
 
+## 22. Dual-mode conversation families: Chat and Codex
+
+The product MUST support both **conversational Chat mode** (discussion, ideation, explanation, research, and planning without requiring an agentic coding harness) and **Codex mode** (tool-capable software engineering and authorized execution), with Connected Branches spanning both. "Mode" is a user-facing intent and capability profile, **not** a promise of a particular vendor account entitlement, free API access, or shared hidden model state. Actual provider choice, authentication, capability negotiation, execution permission, and billing terms are owned by [Charter 12](12-CODEX-EXECUTION-AND-INTEGRATIONS.md); usage accounting is owned by [Charter 10](10-AI-EXECUTION-PROFILER.md).
+
+**AW-CHAT-124 — Two first-class modes.** Aerynth MUST offer ordinary non-agentic conversational Chat mode and Codex agentic mode as visibly distinct, independently usable experiences. Neither mode MUST require Vela delegation, a formal project, task, or agent profile. Chat mode MUST NOT quietly run code or mutate user resources merely because the conversation mentions engineering.
+
+**AW-CHAT-125 — One canonical branch graph across modes.** The Aerynth conversation/branch-family identity, ancestry graph, messages, citations, knowledge contributions, and user organization MUST remain backend-independent. A parent and child MAY use different modes, providers, models, accounts, or billing arrangements without losing their relationship.
+
+**AW-CHAT-126 — Bidirectional mode branching.** The user MUST be able to fork **Chat → Codex**, **Codex → Chat**, **Chat → Chat**, and **Codex → Codex** where appropriate backend capabilities exist. Aerynth MUST support linked, explicitly degraded or export-based handoffs when native cross-provider continuation is unavailable; it MUST NOT falsely call reconstructed provider context a native or lossless fork.
+
+**AW-CHAT-127 — Source-preserving handoff.** A cross-mode branch MUST preserve the application-level source conversation, exact fork boundary where available, source-message references, attached approved artifacts, user goals, relevant decisions, unresolved questions, and relevant constraints. Handoff material MUST be bounded by CIE, reviewable, sourced, and independently retained; it MUST NOT silently replay entire histories or invent private model state.
+
+**AW-CHAT-128 — Intertwined but independent futures.** Chat and Codex descendants MUST continue independently after forking. Connected Branches MUST let the conversational branch selectively learn about code edits, tests, risks, and decisions made by a Codex descendant, and let the Codex descendant retrieve relevant new user decisions from its conversational relatives. Neither direction grants automatic write access, transcript edits, or hidden-context synchronization.
+
+**AW-CHAT-129 — User-visible conversion and return.** Chat controls SHOULD include clearly labeled actions such as **Branch into Codex**, **Branch into Chat**, **Send selected finding to…**, **Inspect shared context**, and **Return findings**. Starting a coding run from ordinary chat SHOULD create an attributable linked execution or branch by default rather than silently changing the conversation's capabilities or spend profile.
+
+**AW-CHAT-130 — Explicit effective-mode metadata.** Each turn or execution MUST retain its user-facing mode, actual provider/backend binding, model when known, capability snapshot, authorization context, and evidence/source mapping. A conversation MAY host multiple provider-bound segments only when the system can maintain accurate chronology and clearly render the transition.
+
+**AW-CHAT-131 — Truthful cost and quota signals.** The UI MUST expose whether the selected route uses an included plan allowance, a limited subscription quota, metered API billing, third-party metering, local computation, or an unknown/unverified billing state, to the extent supported by real evidence. It MUST NOT label all ChatGPT-style chats "free" or all Codex turns "paid"; those are not stable statements about service integration.
+
+**AW-CHAT-132 — No surprise paid escalation.** A branch, message, Vela recommendation, retry, default-route change, or automatic fallback MUST NOT silently cross into an additional billable route without applicable prior user authorization and effective spend safeguards. Subscription-quota consumption SHOULD be visible even when no per-message charge is assessed.
+
+**AW-CHAT-133 — History-access honesty.** External ChatGPT account histories and consumer conversation IDs MUST NOT be treated as automatically live-synchronized or programmatically writable. Imports, user-provided exports, share links, and independently supported integrations MUST be labeled with their actual synchronization direction, freshness, and access limitations.
+
+**AW-CHAT-134 — Shared-context privacy and permission gates.** Cross-mode retrieval, attachments, project knowledge, files, executable commands, and account credentials MUST be rechecked at the destination's authorization boundary. Moving from Chat to Codex MUST NOT elevate privileges or transfer private source contents implicitly.
+
+**AW-CHAT-135 — Failure and offline survivability.** If a provider disconnects, quota expires, authentication changes, or cross-mode resume is unsupported, the source and destination conversations, source links, accepted knowledge, and pending user draft MUST remain available where locally retained; unsupported functions MUST be marked degraded instead of disappearing silently.
+
+### 22.1 Minimum user journeys and acceptance coverage
+
+| ID | Scenario | Required evidence |
+|---|---|---|
+| CHAT-T27 | Chat → Codex fork | Original Chat stays readable; Codex receives a bounded, provenance-bearing handoff and the same branch-family ancestry |
+| CHAT-T28 | Codex → Chat return | A conversational child can examine code changes, test outcomes, limitations, and cited artifacts without automatically executing tools |
+| CHAT-T29 | Bidirectional post-fork learning | A new decision in Chat and a new verified finding in Codex are independently retrievable and selectively adoptable across the family |
+| CHAT-T30 | No false native state | A different provider with no thread-import API uses a labeled reconstructed handoff; provider-native history is never fabricated |
+| CHAT-T31 | Billing guard | A proposed subscription-to-metered-API route shows the actual economic class and requires applicable approval before launch |
+| CHAT-T32 | Entitlement changes | Expired auth, exhausted limits, and unavailable modes preserve local history, branch relationships, and draft text |
+| CHAT-T33 | Permissions | The conversational parent cannot grant filesystem/network/credential access to the Codex child through context alone |
+| CHAT-T34 | Account-history limits | Import/export and external account linkage correctly distinguish snapshots from actual two-way synchronization |
+| CHAT-T35 | Mixed-provider timeline | Mode/backend changes display truthful authorship, usage provenance, and source boundaries without double counting |
+
+These are **requirements and acceptance scenarios**, not proof of a currently implemented runtime. The first implementation milestone MUST verify an actual supported Chat backend and a real Codex backend before claiming end-to-end dual-mode continuity.
+
 ---
 
 ## Charter completion statement
