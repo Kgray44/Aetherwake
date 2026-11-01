@@ -96,3 +96,9 @@ test("a published charter without a registry link fails validation",()=>{
  const r=new Map(registry);r.set("01",{status:"advisory",label:"Published, pending owner acceptance",link:null});
  assert.ok(validateRouter(config,r,exists).errors.some(x=>x.includes("lacks a registry link")));
 });
+
+test("plural everyday task descriptions route to the intended domains",()=>{
+ for(const [task,id] of [["Organize chats into folders","04"],["Arrange workspaces and blocks","03"],["Delegate several agents to tasks","05"],["Collect notes","07"],["Display token counts","10"]]){
+  assert.ok(ids(routeGovernance(config,registry,task,[],exists)).includes(id),task);
+ }
+});
