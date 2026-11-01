@@ -90,6 +90,7 @@ for ($tick = 0; $tick -lt $ticks; $tick++) {
     $processes = @(Get-Process -Id $targetIds.ToArray() -ErrorAction SilentlyContinue)
     $processRows = New-Object System.Collections.Generic.List[object]
     $treeCpuOneCore = 0.0
+    $cpuDeltaCount = 0
     $treeWorkingSet = [long]0
     $treePrivate = [long]0
     foreach ($process in $processes) {
@@ -99,13 +100,15 @@ for ($tick = 0; $tick -lt $ticks; $tick++) {
         if ($process.ProcessName -eq 'msedgewebview2') { $role = 'webview2-unspecified' }
         $roles[$id] = $role
       }
-      $cpuSeconds = [double]$process.CPU
+      $cpuSeconds = $null
+      try { if ($null -ne $process.CPU) { $cpuSeconds = [double]$process.CPU } }
+      catch { $gaps.Add([pscustomobject]@{ utc=$sampleAt.ToString('o'); kind='cpu-time-unavailable'; pid=$id }) }
       $cpuOneCore = $null
-      if ($previousCpu.ContainsKey($id)) {
+      if ($null -ne $cpuSeconds -and $previousCpu.ContainsKey($id)) {
         $elapsed = ($sampleAt - $previousAt[$id]).TotalSeconds
-        if ($elapsed -gt 0) { $cpuOneCore = [Math]::Round(100 * ($cpuSeconds - $previousCpu[$id]) / $elapsed, 3); $treeCpuOneCore += $cpuOneCore }
+        if ($elapsed -gt 0) { $cpuOneCore = [Math]::Round(100 * ($cpuSeconds - $previousCpu[$id]) / $elapsed, 3); $treeCpuOneCore += $cpuOneCore; $cpuDeltaCount++ }
       }
-      $previousCpu[$id] = $cpuSeconds; $previousAt[$id] = $sampleAt
+      if ($null -ne $cpuSeconds) { $previousCpu[$id] = $cpuSeconds; $previousAt[$id] = $sampleAt }
       $treeWorkingSet += [long]$process.WorkingSet64
       $treePrivate += [long]$process.PrivateMemorySize64
       $processRows.Add([pscustomobject]@{ pid=$id; role=$roles[$id]; name=$process.ProcessName; cpuSeconds=$cpuSeconds; cpuOneCorePercent=$cpuOneCore; workingSetBytes=[long]$process.WorkingSet64; privateBytes=[long]$process.PrivateMemorySize64 })
@@ -124,12 +127,14 @@ for ($tick = 0; $tick -lt $ticks; $tick++) {
           Where-Object { $_.Name -match '^pid_(\d+)_' -and $targetIds.Contains([int]$Matches[1]) } |
           ForEach-Object { [pscustomobject]@{ pid=[int]([regex]::Match($_.Name,'^pid_(\d+)_').Groups[1].Value); dedicatedBytes=[long]$_.DedicatedUsage; sharedBytes=[long]$_.SharedUsage } })
       } catch { $gpuStatus = 'partial'; $gaps.Add([pscustomobject]@{ utc=$sampleAt.ToString('o'); kind='gpu-memory-counter-unavailable'; detail=$_.Exception.Message }) }
+      if ($gpuStatus -eq 'sampled' -and $gpuEngines.Count -eq 0 -and $gpuMemory.Count -eq 0) { $gpuStatus = 'no-target-instance' }
     }
 
     $samples.Add([pscustomobject]@{
       tick=$tick; scheduledOffsetMs=$scheduledMs; actualOffsetMs=$sampleOffsetMs; utc=$sampleAt.ToString('o');
-      processCount=$processRows.Count; processes=$processRows; treeCpuOneCorePercent=[Math]::Round($treeCpuOneCore,3);
-      treeCpuMachineCapacityPercent=[Math]::Round($treeCpuOneCore / $logicalProcessors,3);
+      processCount=$processRows.Count; processes=$processRows; cpuDeltaProcessCount=$cpuDeltaCount;
+      treeCpuOneCorePercent=$(if ($cpuDeltaCount -gt 0) { [Math]::Round($treeCpuOneCore,3) } else { $null });
+      treeCpuMachineCapacityPercent=$(if ($cpuDeltaCount -gt 0) { [Math]::Round($treeCpuOneCore / $logicalProcessors,3) } else { $null });
       sumWorkingSetBytes=$treeWorkingSet; sumPrivateBytes=$treePrivate;
       gpuStatus=$gpuStatus; gpuEngines=$gpuEngines; gpuMemory=$gpuMemory; samplerElapsedMs=[Math]::Round($sampleStart.Elapsed.TotalMilliseconds,2)
     })

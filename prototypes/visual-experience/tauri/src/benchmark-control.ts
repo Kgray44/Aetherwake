@@ -4,6 +4,8 @@ export type ActionTrace = {
   surface: string;
   source: 'scripted-renderer' | 'ui-event';
   intendedOffsetMs: number | null;
+  actualOffsetMs: number | null;
+  scheduleSlipMs: number | null;
   wallUtc: string;
   timeOriginMs: number;
   dispatchMs: number;
@@ -34,12 +36,15 @@ export class BenchmarkLedger {
     };
   }
 
-  begin(id: string, source: ActionTrace['source'] = 'scripted-renderer', intendedOffsetMs: number | null = null, event?: Event) {
+  begin(id: string, source: ActionTrace['source'] = 'scripted-renderer', intendedOffsetMs: number | null = null, scheduledOriginMs: number | null = null, event?: Event) {
+    const dispatchMs = event?.timeStamp ?? performance.now();
     const handlerStartMs = performance.now();
+    const actualOffsetMs = scheduledOriginMs === null ? null : dispatchMs - scheduledOriginMs;
     const record: ActionTrace = {
       id, surface: this.surface, source, intendedOffsetMs,
+      actualOffsetMs, scheduleSlipMs: actualOffsetMs === null || intendedOffsetMs === null ? null : actualOffsetMs - intendedOffsetMs,
       wallUtc: new Date().toISOString(), timeOriginMs: performance.timeOrigin,
-      dispatchMs: event?.timeStamp ?? handlerStartMs, handlerStartMs,
+      dispatchMs, handlerStartMs,
       stateCommitMs: null, nextFrameMs: null, frameGapReason: null,
       status: 'started', note: null,
     };
@@ -59,8 +64,8 @@ export class BenchmarkLedger {
     };
   }
 
-  async step(id: string, operation: () => void | Promise<void>, intendedOffsetMs: number | null = null) {
-    const trace = this.begin(id, 'scripted-renderer', intendedOffsetMs);
+  async step(id: string, operation: () => void | Promise<void>, intendedOffsetMs: number | null = null, scheduledOriginMs: number | null = null) {
+    const trace = this.begin(id, 'scripted-renderer', intendedOffsetMs, scheduledOriginMs);
     try { await operation(); trace.commit(); }
     catch (error) { trace.fail(error); throw error; }
   }
