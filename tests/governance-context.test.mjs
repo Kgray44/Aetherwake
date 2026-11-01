@@ -53,7 +53,7 @@ test("focused retrieval reduces exact source characters against complete routed 
  assert.match(r.metrics.estimateMethod,/NOT real tokenizer/);
 });
 test("explicit requirement selectors never silently drop their requested requirement",()=>{
- for(const id of ["AW-CON-008","AW-LIQ-017","AW-AGT-001","AW-CIE-008","AW-TRUST-001"]){
+ for(const id of ["AW-CON-008","AW-LIQ-017","AW-ATW-001","AW-CIE-008","AW-TRUST-001"]){
   assert.ok(index.requirements.has(id),"missing fixture requirement "+id);
   const r=context({requiredIds:[id],maxSections:1});
   assert.deepEqual(r.coverage.missingRequired,[],id);
@@ -90,7 +90,7 @@ test("normative references can expand into one-hop traceable requirements",()=>{
  const base=copy.requirements.get("AW-LIQ-001");
  assert.ok(base);
  copy.requirements.set("AW-LIQ-001",{...base,text:base.text+" See AW-CIE-008 for integrity."});
- const r=buildContext({config,registry,index:copy,requiredIds:["AW-LIQ-001"],maxSections:1});
+ const r=buildContext({config,registry,index:copy,task:"Animate shaders",requiredIds:["AW-LIQ-001"],maxSections:1});
  assert.ok(r.dependencies.some(x=>x.id==="AW-CIE-008"));
  const d=r.dependencies.find(x=>x.id==="AW-CIE-008");
  assert.ok(d.line>0&&d.text.includes("AW-CIE-008"));
