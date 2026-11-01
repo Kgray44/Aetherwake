@@ -76,6 +76,8 @@ export interface CapabilityReport {
   models: Array<{ id: string; displayName: string; hidden: boolean; entitlement: "unverified" }>;
   /** Implemented RPC wrappers; individual method support is verified per call. */
   adapterMethods: string[];
+  /** @deprecated Compatibility alias for adapterMethods; not a server capability probe. */
+  methods: string[];
   catalogOnly: true;
 }
 
@@ -143,7 +145,7 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
       cursor = typeof result.nextCursor === "string" ? result.nextCursor : null;
       if (!cursor) break;
     }
-    return { provider: "codex-app-server", authentication: accountValue ? "available" : account.requiresOpenaiAuth === true ? "required" : "unavailable", accountType: accountValue && typeof accountValue.type === "string" ? accountValue.type : null, models, adapterMethods: methods, catalogOnly: true };
+    return { provider: "codex-app-server", authentication: accountValue ? "available" : account.requiresOpenaiAuth === true ? "required" : "unavailable", accountType: accountValue && typeof accountValue.type === "string" ? accountValue.type : null, models, adapterMethods: methods, methods, catalogOnly: true };
   }
 
   async newThread(params: ThreadStartParams): Promise<string> {

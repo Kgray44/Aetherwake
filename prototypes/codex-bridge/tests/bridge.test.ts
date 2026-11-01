@@ -15,6 +15,7 @@ test("handshake, catalog labels, native lifecycle, and terminal provenance", asy
     const report = await adapter.capabilities();
     assert.equal(report.authentication, "available");
     assert.equal(report.models[0]?.entitlement, "unverified");
+    assert.deepEqual(report.methods, report.adapterMethods);
     const threadId = await adapter.newThread({});
     assert.equal(await adapter.resumeThread({ threadId }), threadId);
     assert.equal(await adapter.forkThread({ threadId }), "fixture-fork");
