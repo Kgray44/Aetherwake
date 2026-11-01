@@ -19,6 +19,10 @@ The goal is not to wrap Codex in a prettier chat window. Aerynth should combine 
 9. **Make consequential actions inspectable, permissioned, and reversible where possible.**
 10. **Design the UI and motion architecture first, with an early real Codex connection.**
 
+## Governance
+
+The governing foundation lives in [`governance/`](governance/README.md), beginning with **[the Aetherwake Master Constitution](governance/00-AETHERWAKE-CONSTITUTION.md)**. It establishes the project's binding principles, the Liquid Intelligence experience, user-control requirements, agent and context integrity, observability, and the reserved specialized charters. The Constitution is established; the other charters remain planned.
+
 ## Development direction
 
 - **AI execution:** Codex App Server through a well-defined backend adapter (validate protocol and authentication in a spike).
