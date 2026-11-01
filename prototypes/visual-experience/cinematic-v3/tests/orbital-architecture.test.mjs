@@ -144,3 +144,121 @@ test("optical motion freezes without resetting and resumes without a wall-clock 
   );
   architecture.dispose();
 });
+
+test("scripted orientation inspection cannot overwrite the paused natural phase", () => {
+  const architecture = new OrbitalArchitecture();
+  architecture.update({ ...frame, time: 0.02 });
+  const main = architecture.root.getObjectByName("monumental-open-span");
+  const natural = main.rotation.toArray();
+  const naturalClock = architecture.diagnostics().opticalClockSeconds;
+  architecture.update({
+    ...frame,
+    time: 900,
+    ambientStrength: 0,
+    phaseOverride: 120,
+  });
+  assert.equal(architecture.diagnostics().scriptedPhaseSeconds, 120);
+  assert.equal(architecture.diagnostics().opticalClockSeconds, naturalClock);
+  assert.notDeepEqual(main.rotation.toArray(), natural);
+  architecture.update({
+    ...frame,
+    time: 900,
+    ambientStrength: 0,
+    phaseOverride: null,
+  });
+  assert.equal(architecture.diagnostics().scriptedPhaseSeconds, null);
+  assert.deepEqual(main.rotation.toArray(), natural);
+  architecture.dispose();
+});
+
+test("structural shell panels are curved around the same centerline and remain opaque", () => {
+  const architecture = new OrbitalArchitecture();
+  const main = architecture.root.getObjectByName("monumental-open-span");
+  const panels = main.getObjectByName("inset-rough-panels");
+  const positions = panels.geometry.getAttribute("position");
+  const radii = [];
+  const angles = [];
+  for (let i = 0; i < positions.count; i++) {
+    radii.push(Math.hypot(positions.getX(i), positions.getY(i)));
+    angles.push(Math.atan2(positions.getY(i), positions.getX(i)));
+  }
+  assert(
+    Math.min(...radii) > 21,
+    "tiles use the orbital centerline rather than flat rectangles translated onto it",
+  );
+  assert(
+    Math.max(...radii) - Math.min(...radii) > 1,
+    "the shell has substantial radial breadth",
+  );
+  assert(
+    Math.max(...angles) - Math.min(...angles) > 0.04,
+    "each tile follows a finite curved arc",
+  );
+  main.traverse((object) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    for (const material of Array.isArray(object.material)
+      ? object.material
+      : [object.material]) {
+      assert.equal(material.opacity, 1);
+      assert.equal(
+        material.transparent,
+        false,
+        "opaque architecture must occlude stars behind it",
+      );
+      assert.equal(material.depthWrite, true);
+    }
+  });
+  architecture.update({ ...frame, celestialStudy: "deep" });
+  const deep = architecture.diagnostics();
+  architecture.update({ ...frame, celestialStudy: "starlit" });
+  assert(
+    deep.drawObjects > architecture.diagnostics().drawObjects,
+    "Deep adds a real, depth-separated supporting structure",
+  );
+  architecture.dispose();
+});
+
+test("service bays genuinely open through the shell while curved load spines stay continuous", () => {
+  const architecture = new OrbitalArchitecture();
+  const main = architecture.root.getObjectByName("monumental-open-span");
+  const local = main.clone(true);
+  local.position.set(0, 0, 0);
+  local.rotation.set(0, 0, 0);
+  local.updateMatrixWorld(true);
+  const count = main.userData.structuralBayCount;
+  const ray = new THREE.Raycaster();
+  const direction = new THREE.Vector3(0, 0, -1);
+  const hits = (index, radius) => {
+    const angle = -1.15 + ((index + 0.5) * Math.PI * 2) / count;
+    ray.set(
+      new THREE.Vector3(Math.cos(angle) * radius, Math.sin(angle) * radius, 2),
+      direction,
+    );
+    return ray.intersectObjects(local.children, true);
+  };
+  const closed = hits(2, 22.05);
+  const open = hits(3, 22.05);
+  assert(
+    closed.some((hit) => hit.distance < 2.3),
+    "a covered bay has a real opaque shell",
+  );
+  assert.equal(
+    open.length,
+    0,
+    "the service opening must not be filled by a hidden solid backing strip",
+  );
+  assert(
+    hits(3, 20.35).length > 0,
+    "inner load spine remains continuous through an open service bay",
+  );
+  assert(
+    hits(3, 23).length > 0,
+    "outer load spine remains continuous through an open service bay",
+  );
+  architecture.update({ ...frame, quality: "balanced" });
+  assert(
+    architecture.diagnostics().drawObjects < 30,
+    "macro detail must remain batched at the primary Balanced budget",
+  );
+  architecture.dispose();
+});

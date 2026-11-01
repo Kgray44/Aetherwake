@@ -1,7 +1,7 @@
 const { desktopCapturer } = require("electron");
 const fs = require("node:fs/promises");
 const path = require("node:path");
-const { randomBytes } = require("node:crypto");
+const { randomBytes, createHash } = require("node:crypto");
 
 const MAX_BYTES = 32 * 1024 * 1024;
 const MAX_RECORDING_MS = 35000;
@@ -145,6 +145,19 @@ async function recordNative(win, session, localURL, outputPath) {
   );
 
   try {
+    const celestialArgument = process.argv.find((argument) =>
+      argument.startsWith("--celestial-study="),
+    );
+    const celestialStudy = celestialArgument
+      ? celestialArgument.slice("--celestial-study=".length)
+      : null;
+    if (
+      celestialStudy !== null &&
+      !["starlit", "shadow", "deep"].includes(celestialStudy)
+    )
+      throw new Error(
+        "Recording celestial study must be starlit, shadow or deep",
+      );
     const configuration = {
       localURL,
       maxBytes: MAX_BYTES,
@@ -152,6 +165,7 @@ async function recordNative(win, session, localURL, outputPath) {
       frameRate: FPS_REQUESTED,
       videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
       ambientStudy: process.argv.includes("--ambient-study"),
+      celestialStudy,
       verificationColors: Array.from(
         randomBytes(12),
         (byte) => 64 + (byte % 128),
@@ -214,7 +228,10 @@ async function recordNative(win, session, localURL, outputPath) {
       format: "WebM",
       mimeType: result.mimeType,
       byteCount: bytes.length,
+      sha256: createHash("sha256").update(bytes).digest("hex"),
       durationMs: result.durationMs,
+      durationMeaning:
+        "Recorder start-event to stop request on the renderer wall clock. Encoded packet/frame PTS and missing container duration require independent inspection of this exact video file.",
       requestedFrameRate: FPS_REQUESTED,
       requestedVideoBitsPerSecond: VIDEO_BITS_PER_SECOND,
       recorderVideoBitsPerSecond: result.recorderVideoBitsPerSecond,
@@ -234,6 +251,8 @@ async function recordNative(win, session, localURL, outputPath) {
         "30 fps is a capture request, not a measurement of presented frames or application FPS.",
         "MediaRecorder encoding and native window capture add overhead; this run is motion evidence, not a performance benchmark.",
         "Agent and Vela activity shown in the application remains explicitly synthetic.",
+        "Scripted pointer events demonstrate rendered parallax, not physical mouse input latency or monitor presentation.",
+        "Journey offsets use the renderer wall clock and must not be silently substituted for encoded video PTS.",
       ],
     };
   } catch (error) {
@@ -319,8 +338,18 @@ async function recordJourney(configuration) {
     if (stopping)
       throw new Error("Recording stopped before the journey completed");
   };
-  const mark = (scene) =>
-    journey.push({ scene, offsetMs: performance.now() - startAt });
+  const mark = (scene) => {
+    const state = api.snapshot();
+    journey.push({
+      scene,
+      offsetMs: performance.now() - startAt,
+      visualClockMs: state.visualClock,
+      celestialStudy: state.celestialStudy,
+      environmentPhaseOverrideSeconds: state.environmentPhase,
+      architecture: state.gpu?.architecture ?? null,
+      cosmos: state.gpu?.cosmos ?? null,
+    });
+  };
   const click = (selector) => {
     const element = document.querySelector(selector);
     if (!element || element.disabled || !element.getClientRects().length) {
@@ -344,6 +373,9 @@ async function recordJourney(configuration) {
     api.home();
     api.setStudy("architecture");
     api.setArchitectureConcept("ring");
+    if (configuration.celestialStudy)
+      api.setCelestialStudy(configuration.celestialStudy);
+    api.setEnvironmentPhase(null);
     api.setQuality("cinematic");
     api.setReduced(false);
     api.setVela("idle");
@@ -513,14 +545,47 @@ async function recordJourney(configuration) {
 
     if (configuration.ambientStudy) {
       mark(
-        "Large celestial arc / natural rotating light and spatial veil / autonomous Vela / no input",
+        "Celestial sky / fixed-light ring rotation and physical specular response / autonomous Vela / no pointer input or phase override",
       );
-      await sleep(30000);
+      await sleep(10000);
+      mark(
+        "Ambient +10 seconds / actual environment clock, unchanged study and light rig",
+      );
+      await sleep(10000);
+      mark(
+        "Ambient +20 seconds / actual environment clock, unchanged study and light rig",
+      );
+      await sleep(10000);
+      mark("Ambient end / actual environment clock");
     } else {
       mark(
         "Luminous Architecture / monumental arc / autonomous Vela without input",
       );
-      await sleep(3300);
+      await sleep(1000);
+      mark(
+        "Scripted pointer-event parallax / rendered response, not physical mouse latency",
+      );
+      for (let step = 0; step < 20; step++) {
+        const angle = (step / 19) * Math.PI * 2;
+        document.dispatchEvent(
+          new PointerEvent("pointermove", {
+            clientX: innerWidth * (0.5 + Math.sin(angle) * 0.18),
+            clientY: innerHeight * (0.5 + Math.cos(angle) * 0.08),
+            pointerType: "mouse",
+            bubbles: true,
+          }),
+        );
+        await sleep(40);
+      }
+      document.dispatchEvent(
+        new PointerEvent("pointermove", {
+          clientX: innerWidth * 0.5,
+          clientY: innerHeight * 0.5,
+          pointerType: "mouse",
+          bubbles: true,
+        }),
+      );
+      await sleep(1500);
       api.setStudy("living");
       mark("Living Intelligence appears around the same persistent resources");
       await sleep(1200);
@@ -669,6 +734,8 @@ async function recordJourney(configuration) {
         eventCount: final.events.length,
         study: final.study,
         architectureConcept: final.architectureConcept,
+        celestialStudy: final.celestialStudy,
+        environmentPhaseOverrideSeconds: final.environmentPhase,
       },
     };
   } finally {

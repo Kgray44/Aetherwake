@@ -7,8 +7,8 @@ const {
 } = require("electron");
 const path = require("node:path");
 const fs = require("node:fs/promises");
-const { createHash } = require("node:crypto");
-const { readFileSync } = require("node:fs");
+const { createHash, randomBytes } = require("node:crypto");
+const { readFileSync, readdirSync } = require("node:fs");
 const { execFileSync } = require("node:child_process");
 const { pathToFileURL } = require("node:url");
 const root = path.resolve(__dirname, "..");
@@ -16,23 +16,25 @@ const sourceHashesAtLaunch = Object.fromEntries(
   [
     "native/main.cjs",
     "native/recording.cjs",
-    "src/main.ts",
-    "src/renderer.ts",
-    "src/orbital-architecture.ts",
-    "src/scene-transition.ts",
-    "src/material-occlusion.ts",
-    "src/motion.ts",
-    "src/style.css",
-    "src/workloads.ts",
-    "src/conversation.ts",
-    "src/store.ts",
-    "src/policy.ts",
+    ...readdirSync(path.join(root, "src"))
+      .filter((name) => /\.(ts|css)$/.test(name))
+      .sort()
+      .map((name) => `src/${name}`),
     "package-lock.json",
     "index.html",
   ].map((name) => [
     name,
     createHash("sha256")
       .update(readFileSync(path.join(root, name)))
+      .digest("hex"),
+  ]),
+);
+const buildAssetsAtLaunch = readdirSync(path.join(root, "dist/assets")).sort();
+const buildAssetHashesAtLaunch = Object.fromEntries(
+  buildAssetsAtLaunch.map((name) => [
+    name,
+    createHash("sha256")
+      .update(readFileSync(path.join(root, "dist/assets", name)))
       .digest("hex"),
   ]),
 );
@@ -58,7 +60,7 @@ app.setPath(
   "userData",
   path.join(
     runtime,
-    "v3-5",
+    "v3-5-celestial",
     soakMode
       ? `soak-profile-${Date.now()}`
       : recordMode
@@ -183,7 +185,7 @@ app
       );
     if (previewMode)
       await win.webContents.executeJavaScript(
-        "window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring')",
+        "window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring');window.__aerynth.setEnvironmentPhase(null)",
         true,
       );
     if (soakMode) {
@@ -202,7 +204,7 @@ app
         const { recordNative } = require("./recording.cjs");
         const file = path.join(
           runtime,
-          `aerynth-v3-5-${process.argv.includes("--ambient-study") ? "ambient" : "native"}-${Date.now()}.webm`,
+          `aerynth-v3-5-celestial-${process.argv.includes("--ambient-study") ? "ambient" : "native"}-${Date.now()}.webm`,
         );
         const result = await recordNative(
           win,
@@ -210,7 +212,12 @@ app
           localURL,
           file,
         );
-        Object.assign(result, { sourceRevisionAtLaunch, sourceHashesAtLaunch });
+        Object.assign(result, {
+          sourceRevisionAtLaunch,
+          sourceHashesAtLaunch,
+          buildAssetsAtLaunch,
+          buildAssetHashesAtLaunch,
+        });
         await fs.writeFile(
           file.replace(/\.webm$/, ".json"),
           JSON.stringify(result, null, 2),
@@ -219,6 +226,7 @@ app
         await fs.writeFile(
           path.join(runtime, `recording-v3-5-${Date.now()}.json`),
           JSON.stringify(result, null, 2),
+          { flag: "wx" },
         );
         console.log(JSON.stringify(result, null, 2));
       } catch (error) {
@@ -342,7 +350,9 @@ async function memoryProbe() {
       minimized: true,
     },
   ];
-  await evaluate("window.__aerynth.setActive(true)");
+  await evaluate(
+    "window.__aerynth.setEnvironmentPhase(null);window.__aerynth.setActive(true)",
+  );
   await delay(3000);
   const samples = [],
     phaseReports = [];
@@ -388,6 +398,9 @@ async function memoryProbe() {
       drawSamples: state.metrics.draws,
       callbacks: state.metrics.callbacks,
       policy: state.metrics.policy,
+      celestialStudy: state.celestialStudy ?? null,
+      environmentPhaseOverrideSeconds: state.environmentPhase ?? null,
+      gpu: state.gpu,
       firstWorkingSetKiBSum: phaseSamples[0]?.workingSetKiBSum ?? null,
       lastWorkingSetKiBSum: phaseSamples.at(-1)?.workingSetKiBSum ?? null,
       deltaWorkingSetKiBSum: phaseSamples.length
@@ -401,6 +414,8 @@ async function memoryProbe() {
     kind: "Fresh-process native memory probe with no screenshots, videos or forced GC",
     sourceRevisionAtLaunch,
     sourceHashesAtLaunch,
+    buildAssets: buildAssetsAtLaunch,
+    buildAssetHashes: buildAssetHashesAtLaunch,
     capturedAtUTC: new Date().toISOString(),
     requestedDurationMs: durationMs,
     durationMs: Date.now() - startedAt,
@@ -455,7 +470,11 @@ async function verify() {
   let lastStorageCheck = Date.now();
   const evidence = process.env.AERYNTH_EVIDENCE_DIR
     ? path.resolve(process.env.AERYNTH_EVIDENCE_DIR)
-    : path.join(root, "evidence-v3-5", `run-${Date.now()}-${process.pid}`);
+    : path.join(
+        root,
+        "evidence-celestial",
+        `run-${Date.now()}-${randomBytes(4).toString("hex")}`,
+      );
   try {
     await fs.access(path.join(evidence, "verification.json"));
     throw new Error(
@@ -470,6 +489,29 @@ async function verify() {
   const scenarios = [];
   const motionFrames = [];
   const captures = [];
+  const manualReviews = [];
+  const baselineArtifact =
+    "evidence-v3-5/review-occlusion-final/verification.json";
+  let comparisonBaseline = {
+    artifact: baselineArtifact,
+    status: "unavailable",
+  };
+  try {
+    const bytes = await fs.readFile(path.join(root, baselineArtifact));
+    const baseline = JSON.parse(bytes);
+    comparisonBaseline = {
+      artifact: baselineArtifact,
+      status: "historical-reference",
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      sourceRevision: baseline.sourceRevisionAtLaunch ?? null,
+      capturedAt: baseline.capturedAt,
+      scenarioCount: baseline.scenarios.length,
+      limitation:
+        "This preceding candidate lacks the expanded celestial environment. Same-named scenarios are workload references, not isolated effect-cost experiments.",
+    };
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
   let captureBytes = 0;
   const maxCaptureBytes = 190 * 1024 * 1024;
   const writeCapture = async (destination, image) => {
@@ -516,38 +558,84 @@ async function verify() {
     const image = await capture();
     const file = `${name}.png`;
     const artifact = await writeCapture(path.join(evidence, file), image);
-    captures.push({
+    const record = {
       file,
       atUTC: new Date().toISOString(),
       ...artifact,
       conditions: {
         study: state.study,
         architectureConcept: state.architectureConcept ?? null,
+        celestialStudy: state.celestialStudy ?? null,
+        environmentPhaseOverrideSeconds: state.environmentPhase ?? null,
         quality: state.quality,
         selected: state.selected,
         expanded: state.expanded,
         vela: state.vela,
         reduced: state.reduced,
         visualClock: state.visualClock,
+        resourceOrder: state.order,
+        resourcePoses: state.poses,
         contentBounds: {
           width: win.getContentBounds().width,
           height: win.getContentBounds().height,
         },
         zoomFactor: win.webContents.getZoomFactor(),
       },
+      diagnostics: state.gpu,
+    };
+    captures.push(record);
+    return { image, record };
+  };
+  const cropShot = async (name, source, region) => {
+    const size = source.image.getSize();
+    const rect = {
+      x: Math.floor(size.width * region.x),
+      y: Math.floor(size.height * region.y),
+      width: Math.max(1, Math.floor(size.width * region.width)),
+      height: Math.max(1, Math.floor(size.height * region.height)),
+    };
+    rect.width = Math.min(rect.width, size.width - rect.x);
+    rect.height = Math.min(rect.height, size.height - rect.y);
+    const image = source.image.crop(rect);
+    const file = `${name}.png`;
+    captures.push({
+      file,
+      atUTC: new Date().toISOString(),
+      ...(await writeCapture(path.join(evidence, file), image)),
+      kind: "actual-native-content-crop",
+      source: {
+        file: source.record.file,
+        sha256: source.record.sha256,
+        pixels: size,
+      },
+      cropRectPixels: rect,
+      processing:
+        "A crop of the recorded native PNG pixels, with no enlargement or offline scene rendering.",
+      conditions: source.record.conditions,
     });
   };
   const frames = async (name, action, count = 14) => {
     await evaluate(action);
     for (let i = 0; i < count; i++) {
       const image = await capture();
+      const sourcePixels = image.getSize();
+      const retained =
+        sourcePixels.width > 1280
+          ? image.resize({ width: 1280, quality: "good" })
+          : image;
       const file = `${name}-${String(i).padStart(2, "0")}.png`;
-      await writeCapture(path.join(raw, file), image);
+      const artifact = await writeCapture(path.join(raw, file), retained);
       motionFrames.push({
         sequence: name,
         index: i,
         at: Date.now(),
         file: `raw/${file}`,
+        sourcePixels,
+        pixels: artifact.pixels,
+        processing:
+          sourcePixels.width > 1280
+            ? "Actual native frame downscaled to a 1280-pixel width for bounded motion evidence"
+            : "Actual native frame, original dimensions",
       });
       await delay(45);
     }
@@ -556,6 +644,9 @@ async function verify() {
   win.showInactive();
   await evaluate("window.__aerynth.setActive(true)");
   await delay(500);
+  await evaluate(
+    "window.__aerynth.setEnvironmentPhase(null);window.__aerynth.setCelestialStudy('starlit')",
+  );
   for (const study of ["architecture", "living", "observatory"]) {
     await evaluate(`window.__aerynth.setStudy('${study}')`);
     await delay(900);
@@ -583,6 +674,139 @@ async function verify() {
   );
   await evaluate("window.__aerynth.setArchitectureConcept('ring')");
   await evaluate("window.__aerynth.setStudy('architecture')");
+  const celestialStudies = [
+    { id: "starlit", label: "A-starlit-ring" },
+    { id: "shadow", label: "B-shadow-reveal" },
+    { id: "deep", label: "C-deep-observatory" },
+  ];
+  const celestialSnapshots = [];
+  const celestialResourceIDs = (await snap()).resources
+    .map((resource) => resource.id)
+    .sort();
+  for (const variant of celestialStudies) {
+    await evaluate(
+      `window.__aerynth.home();window.__aerynth.setQuality('balanced');window.__aerynth.setVela('idle');window.__aerynth.setCelestialStudy('${variant.id}');window.__aerynth.setEnvironmentPhase(0)`,
+    );
+    await delay(900);
+    const source = await shot(`celestial-${variant.label}`);
+    const state = await snap();
+    celestialSnapshots.push({
+      requested: variant.id,
+      actual: state.celestialStudy,
+      resourceIDs: state.resources.map((resource) => resource.id).sort(),
+      cosmos: state.gpu?.cosmos ?? null,
+      architecture: state.gpu?.architecture ?? null,
+    });
+    if (variant.id === "starlit")
+      await cropShot("celestial-starlit-structure-native-crop", source, {
+        x: 0.28,
+        y: 0.16,
+        width: 0.26,
+        height: 0.64,
+      });
+    manualReviews.push({
+      artifact: source.record.file,
+      status: "requires-human-review",
+      questions: [
+        "Does the backdrop read as distant space with restrained stellar brightness, color and density?",
+        "Does the opaque architectural shell correctly obscure stars behind it?",
+        "Do the ring curvature, thickness and restrained structural details communicate monumental scale?",
+        "Do Vela and usable foreground resources retain the visual hierarchy?",
+      ],
+    });
+  }
+  check(
+    "three celestial studies preserve canonical resource identities and expose diagnostics",
+    celestialSnapshots.every(
+      (state) =>
+        state.actual === state.requested &&
+        state.cosmos !== null &&
+        JSON.stringify(state.resourceIDs) ===
+          JSON.stringify(celestialResourceIDs),
+    ),
+    celestialSnapshots,
+  );
+  const phaseSnapshots = [];
+  await evaluate("window.__aerynth.setCelestialStudy('shadow')");
+  for (const phase of [0, 30, 60]) {
+    await evaluate(`window.__aerynth.setEnvironmentPhase(${phase})`);
+    await delay(550);
+    const source = await shot(`celestial-shadow-held-phase-${phase}s`);
+    const state = await snap();
+    phaseSnapshots.push({
+      requested: phase,
+      controller: state.environmentPhase,
+      rendered: state.gpu?.architecture?.scriptedPhaseSeconds ?? null,
+    });
+    if (phase === 30)
+      await cropShot(
+        "celestial-shadow-phase-30-structure-native-crop",
+        source,
+        { x: 0.28, y: 0.16, width: 0.26, height: 0.64 },
+      );
+  }
+  check(
+    "held environment phases are labelled in controller and geometry diagnostics",
+    phaseSnapshots.every(
+      (state) =>
+        state.controller === state.requested &&
+        state.rendered === state.requested,
+    ),
+    phaseSnapshots,
+  );
+  manualReviews.push({
+    artifacts: [0, 30, 60].map(
+      (phase) => `celestial-shadow-held-phase-${phase}s.png`,
+    ),
+    status: "requires-human-review",
+    method:
+      "Scripted presentation phases under the selected study's fixed lighting; camera, viewport and resource layout are unchanged. Vela's separate animation clock is not phase-locked. These stills do not prove real-time pacing.",
+    questions: [
+      "Do fixed lights reveal different physically oriented shell/rib surfaces without a whole-object opacity pulse?",
+      "Are the deep backdrop and ring occlusion coherent at each held phase?",
+    ],
+  });
+  await evaluate("window.__aerynth.setEnvironmentPhase(null)");
+  await evaluate(
+    "window.__celestialArticle=document.querySelector('[data-resource=\"conversation-tidal\"]');window.__celestialEditor=window.__celestialArticle.querySelector('textarea')",
+  );
+  const celestialFocusStates = [];
+  for (const variant of celestialStudies) {
+    await evaluate(
+      `window.__aerynth.setCelestialStudy('${variant.id}');window.__aerynth.expand('conversation-tidal')`,
+    );
+    await delay(900);
+    await shot(`celestial-${variant.label}-focused-work`);
+    celestialFocusStates.push(
+      await evaluate(
+        "({expanded:window.__aerynth.snapshot().expanded,phase:window.__aerynth.snapshot().environmentPhase,sameArticle:window.__celestialArticle===document.querySelector('[data-resource=\"conversation-tidal\"]'),sameEditor:window.__celestialEditor===window.__celestialArticle.querySelector('textarea')})",
+      ),
+    );
+    manualReviews.push({
+      artifact: `celestial-${variant.label}-focused-work.png`,
+      status: "requires-human-review",
+      questions: [
+        "Do stars and architecture recede enough for sustained reading?",
+        "Are bright details absent from important text regions, and is Vela reachable?",
+      ],
+    });
+    await evaluate("window.__aerynth.home()");
+    await delay(700);
+  }
+  check(
+    "all celestial focus studies keep the same conversation article and editor",
+    celestialFocusStates.every(
+      (state) =>
+        state.expanded === "conversation-tidal" &&
+        state.phase === null &&
+        state.sameArticle &&
+        state.sameEditor,
+    ),
+    celestialFocusStates,
+  );
+  await evaluate(
+    "window.__aerynth.setEnvironmentPhase(null);window.__aerynth.setCelestialStudy('starlit')",
+  );
   await delay(350);
   await shot("environment-idle");
   let s = await snap();
@@ -594,8 +818,13 @@ async function verify() {
           capturedAt: new Date().toISOString(),
           kind: "Actual native composition exploration; not the full verifier or a performance result",
           sourceHashesAtLaunch,
+          sourceRevisionAtLaunch,
+          buildAssets: buildAssetsAtLaunch,
+          buildAssetHashes: buildAssetHashesAtLaunch,
           captures,
           checks,
+          manualReviews,
+          comparisonBaseline,
           gpu: s.gpu,
           errors,
         },
@@ -1105,6 +1334,10 @@ async function verify() {
         await evaluate(
           `window.__aerynth.setVela('${["receiving", "working", "coordinating", "attention"][cpu.length % 4]}')`,
         );
+      else if (toggle === "celestial")
+        await evaluate(
+          `window.__aerynth.setCelestialStudy('${["starlit", "shadow", "deep"][cpu.length % 3]}')`,
+        );
       else if (toggle) await evaluate(`window.__aerynth.expand('${first}')`);
       await delay(500);
       const m = app.getAppMetrics();
@@ -1137,9 +1370,11 @@ async function verify() {
                   ? "Resource reorder and reactive field motion every approximately 500ms"
                   : toggle === "vela"
                     ? "Explicitly synthetic presentation state changes every approximately 500ms"
-                    : toggle
-                      ? "Scripted resource expansion/reversal every approximately 500ms"
-                      : "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+                    : toggle === "celestial"
+                      ? "Celestial study lighting/composition changes every approximately 500ms around the same resources"
+                      : toggle
+                        ? "Scripted resource expansion/reversal every approximately 500ms"
+                        : "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
       callbackSamples: sorted.length,
       callbackMs: {
         p50: percentile(sorted, 0.5),
@@ -1166,6 +1401,8 @@ async function verify() {
       state: {
         study: state.study,
         architectureConcept: state.architectureConcept ?? null,
+        celestialStudy: state.celestialStudy ?? null,
+        environmentPhaseOverrideSeconds: state.environmentPhase ?? null,
         quality: state.quality,
         expanded: state.expanded,
         vela: state.vela,
@@ -1174,6 +1411,9 @@ async function verify() {
       gpu: state.gpu,
     });
   };
+  await evaluate(
+    "window.__aerynth.setEnvironmentPhase(null);window.__aerynth.setCelestialStudy('starlit')",
+  );
   for (let repeat = 1; repeat <= 2; repeat++) {
     await sample(
       `balanced-active-${repeat}`,
@@ -1194,6 +1434,21 @@ async function verify() {
     "cinematic-active",
     "window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring');window.__aerynth.setQuality('cinematic');window.__aerynth.setVela('working')",
   );
+  for (let repeat = 1; repeat <= 2; repeat++) {
+    for (const variant of ["starlit", "shadow", "deep"])
+      await sample(
+        `celestial-${variant}-ambient-${repeat}`,
+        `window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring');window.__aerynth.setCelestialStudy('${variant}');window.__aerynth.setQuality('balanced');window.__aerynth.setVela('idle')`,
+        3000,
+      );
+    await sample(
+      `celestial-study-switching-${repeat}`,
+      "window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setQuality('balanced')",
+      3000,
+      "celestial",
+    );
+  }
+  await evaluate("window.__aerynth.setCelestialStudy('starlit')");
   for (let repeat = 1; repeat <= 2; repeat++) {
     for (const concept of ["ring", "aperture", "observatory"])
       await sample(
@@ -1324,6 +1579,10 @@ async function verify() {
     { renderer: s.metrics.errors, host: errors },
   );
   await evaluate(
+    "window.__aerynth.setCelestialStudy('deep');window.__aerynth.setEnvironmentPhase(null)",
+  );
+  await delay(600);
+  await evaluate(
     "document.querySelector('#vela-input').value='Unsent local verification input';window.__aerynth.simulateContextLoss()",
   );
   await delay(600);
@@ -1348,6 +1607,18 @@ async function verify() {
     await evaluate(
       "document.querySelector('#vela-input').value==='Unsent local verification input'",
     ),
+  );
+  check(
+    "celestial study and phase permission survive actual graphics restoration",
+    s.celestialStudy === "deep" &&
+      s.environmentPhase === null &&
+      s.gpu?.cosmos != null &&
+      !s.graphicsFailed,
+    {
+      celestialStudy: s.celestialStudy,
+      environmentPhase: s.environmentPhase,
+      cosmos: s.gpu?.cosmos ?? null,
+    },
   );
   await evaluate("document.querySelector('#vela-input').value=''");
   await shot("graphics-restored");
@@ -1375,19 +1646,8 @@ async function verify() {
     kind: "actual Electron native renderer; synthetic content",
     sourceRevisionAtLaunch,
     sourceHashesAtLaunch,
-    buildAssets: (await fs.readdir(path.join(root, "dist/assets"))).sort(),
-    buildAssetHashes: Object.fromEntries(
-      await Promise.all(
-        (await fs.readdir(path.join(root, "dist/assets")))
-          .sort()
-          .map(async (name) => [
-            name,
-            createHash("sha256")
-              .update(await fs.readFile(path.join(root, "dist/assets", name)))
-              .digest("hex"),
-          ]),
-      ),
-    ),
+    buildAssets: buildAssetsAtLaunch,
+    buildAssetHashes: buildAssetHashesAtLaunch,
     versions: {
       electron: process.versions.electron,
       chrome: process.versions.chrome,
@@ -1412,6 +1672,14 @@ async function verify() {
     inputFeedback,
     motionFrames,
     captures,
+    manualReviews,
+    comparisonBaseline,
+    referenceBudgets: {
+      hz60FrameMs: 1000 / 60,
+      hz120FrameMs: 1000 / 120,
+      meaning:
+        "Reference display intervals only. Callback and renderer submission observations do not establish presented-frame acceptance.",
+    },
     storage: {
       receipts: storageReceipts,
       captureBytes,

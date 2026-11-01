@@ -1,6 +1,7 @@
 import * as THREE from "three";
 
 export type ArchitectureConcept = "ring" | "aperture" | "observatory";
+export type CelestialStudy = "starlit" | "shadow" | "deep";
 export interface ArchitectureFrame {
   concept: ArchitectureConcept;
   quality: "cinematic" | "balanced" | "efficient";
@@ -9,6 +10,9 @@ export interface ArchitectureFrame {
   time: number;
   ambientStrength: number;
   energy: number;
+  celestialStudy?: CelestialStudy;
+  /** Explicit capture-only orientation sample; never advances natural time. */
+  phaseOverride?: number | null;
 }
 
 type Tier = "essential" | "balanced" | "cinematic";
@@ -32,9 +36,14 @@ function structuralArc(
 ) {
   const bevel = Math.min(breadth * 0.15, depth * 0.18, 0.065);
   const half = breadth / 2;
+  const frontHalf = half - bevel;
+  const crown = Math.min(breadth * 0.13, depth * 0.2, 0.14);
+  const front: [number, number][] = Array.from({ length: 5 }, (_, i) => {
+    const x = -frontHalf + (i * frontHalf) / 2;
+    return [x, crown * Math.cos(((x / frontHalf) * Math.PI) / 2)];
+  });
   const section: readonly [number, number][] = [
-    [-half + bevel, 0],
-    [half - bevel, 0],
+    ...front,
     [half, -bevel],
     [half, -depth + bevel],
     [half - bevel, -depth],
@@ -62,7 +71,17 @@ function structuralArc(
           (radius + point[0]) * s,
           point[1],
         );
-        normals.push(radialNormal * c, radialNormal * s, axialNormal);
+        if (face < 4) {
+          const slope =
+            ((-crown * Math.PI) / (2 * frontHalf)) *
+            Math.sin(((point[0] / frontHalf) * Math.PI) / 2);
+          const inverseLength = 1 / Math.hypot(slope, 1);
+          normals.push(
+            -slope * inverseLength * c,
+            -slope * inverseLength * s,
+            inverseLength,
+          );
+        } else normals.push(radialNormal * c, radialNormal * s, axialNormal);
       }
       if (i < steps) {
         const k = base + i * 2;
@@ -120,22 +139,21 @@ export class OrbitalArchitecture {
   private disposed = false;
   private previousTime: number | null = null;
   private opticalClock = 0;
-  private readonly veilUniforms = {
-    uAWVeilTime: { value: 0 },
-    uAWVeilFocus: { value: 0 },
-  };
+  private renderedPhase = 0;
+  private scriptedPhase: number | null = null;
+  private celestialStudy: CelestialStudy = "starlit";
   private readonly rotationTracks: {
     group: THREE.Group;
     base: THREE.Euler;
     gain: number;
   }[] = [];
-  private readonly shell = this.material(0x9b8ba9, 0.53, 0.34, 0.8);
-  private readonly titanium = this.material(0xc0b7cb, 0.7, 0.28, 0.85);
-  private readonly recess = this.material(0x100f1b, 0.6, 0.5, 0.28);
-  private readonly rib = this.material(0x61556f, 0.64, 0.42, 0.52);
-  private readonly porcelain = this.material(0x8e8caa, 0.6, 0.32, 0.6);
-  private readonly panel = this.material(0x62566e, 0.4, 0.53, 0.48);
-  private readonly inlay = this.material(0x9687a9, 0.78, 0.22, 0.9);
+  private readonly shell = this.material(0x353a42, 0.88, 0.38, 0.09);
+  private readonly titanium = this.material(0x626972, 0.93, 0.25, 0.13);
+  private readonly recess = this.material(0x0d1117, 0.68, 0.6, 0.025);
+  private readonly rib = this.material(0x30363f, 0.9, 0.42, 0.06);
+  private readonly porcelain = this.material(0x666573, 0.1, 0.48, 0.06);
+  private readonly panel = this.material(0x262c35, 0.86, 0.48, 0.055);
+  private readonly inlay = this.material(0x4d555f, 0.93, 0.28, 0.11);
   private readonly light = this.material(
     0x9c92b5,
     0.68,
@@ -154,7 +172,6 @@ export class OrbitalArchitecture {
     this.buildRing();
     this.buildAperture();
     this.buildObservatory();
-    this.buildDistantField();
     this.update({
       concept: "ring",
       quality: "balanced",
@@ -170,8 +187,8 @@ export class OrbitalArchitecture {
     metalness: number,
     roughness: number,
     reflection: number,
-    emissive = 0x171125,
-    emission = 0.06,
+    emissive = 0x000000,
+    emission = 0,
   ) {
     const material = new THREE.MeshStandardMaterial({
       color,
@@ -181,15 +198,13 @@ export class OrbitalArchitecture {
       emissive,
       emissiveIntensity: emission,
     });
-    // A spatial optical veil, separate from scene switching and semantic state.
-    // Large moving regions quietly hide/reveal the same real geometry; this is
-    // a bounded atmosphere approximation, not volumetric light transport.
+    // Static, object-bound machined roughness only. Visibility/highlights come
+    // from real normals, geometry, occlusion and scene lights as it rotates.
     material.onBeforeCompile = (shader) => {
-      Object.assign(shader.uniforms, this.veilUniforms);
       shader.vertexShader = shader.vertexShader
         .replace(
           "#include <common>",
-          `#include <common>\nvarying vec3 vAWArchitectureWorld;`,
+          `#include <common>\nvarying vec3 vAWMachiningPosition;`,
         )
         .replace(
           "#include <worldpos_vertex>",
@@ -198,29 +213,29 @@ export class OrbitalArchitecture {
           #ifdef USE_INSTANCING
             awArchitecturePosition = instanceMatrix * awArchitecturePosition;
           #endif
-          vAWArchitectureWorld = (modelMatrix * awArchitecturePosition).xyz;
+          vAWMachiningPosition = awArchitecturePosition.xyz;
         `,
         );
       shader.fragmentShader = shader.fragmentShader
         .replace(
           "#include <common>",
           `#include <common>
-          varying vec3 vAWArchitectureWorld;
-          uniform float uAWVeilTime, uAWVeilFocus;
+          varying vec3 vAWMachiningPosition;
         `,
         )
         .replace(
-          "#include <opaque_fragment>",
+          "#include <roughnessmap_fragment>",
           `
-          float awVeilBroad = sin(vAWArchitectureWorld.y * .15 + vAWArchitectureWorld.x * .065 + vAWArchitectureWorld.z * .04 - uAWVeilTime * .045);
-          float awVeilDrift = sin(vAWArchitectureWorld.y * .07 - vAWArchitectureWorld.z * .06 + uAWVeilTime * .026);
-          float awReveal = smoothstep(-.45, .65, awVeilBroad * .72 + awVeilDrift * .28);
-          outgoingLight *= mix(.10, 1., awReveal) * (1. - uAWVeilFocus * .22);
-          #include <opaque_fragment>
+          #include <roughnessmap_fragment>
+          float awMachiningCoordinate = length(vAWMachiningPosition.xy) * 64. + vAWMachiningPosition.z * 27.;
+          float awMachiningFootprint = fwidth(awMachiningCoordinate);
+          float awMachining = sin(awMachiningCoordinate) * exp(-awMachiningFootprint * awMachiningFootprint);
+          float awSatin = sin(length(vAWMachiningPosition.xy) * 4.2 + vAWMachiningPosition.z * 2.);
+          roughnessFactor = clamp(roughnessFactor + awMachining * .032 + awSatin * .018, .14, .94);
         `,
         );
     };
-    material.customProgramCacheKey = () => "aw-orbital-veil-v1";
+    material.customProgramCacheKey = () => "aw-orbital-machined-v2";
     this.optical.push({ material, reflection, emission });
     return material;
   }
@@ -232,6 +247,8 @@ export class OrbitalArchitecture {
     tier: Tier = "essential",
   ) {
     const mesh = new THREE.Mesh(geometry, material);
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
     mesh.userData.architectureTier = tier;
     parent.add(mesh);
     return mesh;
@@ -277,6 +294,8 @@ export class OrbitalArchitecture {
       count,
     );
     mesh.userData.architectureTier = tier;
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
     const matrix = new THREE.Matrix4(),
       rotation = new THREE.Quaternion();
     const scale = new THREE.Vector3(1, 1, 1),
@@ -294,186 +313,331 @@ export class OrbitalArchitecture {
   }
 
   private assembly(parent: THREE.Group, radius: number, extent = Math.PI * 2) {
-    // Keep the structural section at human-readable scale as orbital radius
-    // grows. Only repeated bay count follows circumference; thickness does not.
-    const circumferenceGain = radius / 10.8;
-    const bayCount = Math.max(36, Math.round(52 * circumferenceGain));
-    // The dark spine carries the broad front shell; a separated rear race and
-    // radial webs produce real occlusion, readable thickness and shadow gaps.
-    this.arc(
+    // Four separated load spines form a genuinely open torsion cage. There is
+    // deliberately no solid backing sheet hiding the axial core or framework.
+    const bayCount = Math.max(24, Math.round((radius * 1.67) / 4) * 4);
+    const innerFront = this.arc(
       parent,
-      radius,
-      1.8,
-      1.4,
-      -0.12,
-      this.recess,
-      "essential",
-      -1.15,
-      extent,
-    );
-    this.arc(
-      parent,
-      radius + 0.28,
-      1.0,
-      0.52,
-      0.06,
-      this.shell,
-      "essential",
-      -1.15,
-      extent,
-    );
-    this.arc(
-      parent,
-      radius - 0.72,
-      0.28,
+      radius - 1.15,
+      0.4,
       0.65,
-      0.12,
+      0.1,
       this.titanium,
       "essential",
       -1.15,
       extent,
     );
-    this.arc(
+    const outerFront = this.arc(
       parent,
-      radius + 0.94,
-      0.18,
-      0.55,
-      -0.05,
-      this.titanium,
-      "essential",
-      -1.15,
-      extent,
-    );
-    this.arc(
-      parent,
-      radius + 1.2,
-      0.42,
-      0.72,
-      -1.45,
+      radius + 1.5,
+      0.45,
+      0.8,
+      -0.15,
       this.shell,
       "essential",
       -1.15,
       extent,
     );
-    this.radialMembers(
+    const innerRear = this.arc(
       parent,
-      radius + 0.47,
-      bayCount,
-      1.7,
-      1.32,
-      -0.98,
+      radius - 0.95,
+      0.32,
+      0.65,
+      -2.8,
+      this.rib,
       "essential",
       -1.15,
       extent,
     );
-    this.arc(
+    const outerRear = this.arc(
       parent,
-      radius - 0.43,
-      0.18,
-      0.1,
-      -0.055,
-      this.recess,
-      "balanced",
+      radius + 1.48,
+      0.6,
+      0.85,
+      -3,
+      this.inlay,
+      "essential",
       -1.15,
       extent,
     );
-    this.arc(
+    innerFront.name = "inner-front-load-spine";
+    outerFront.name = "outer-front-load-spine";
+    innerRear.name = "inner-rear-load-spine";
+    outerRear.name = "outer-rear-load-spine";
+    const bulkheads = this.radialMembers(
       parent,
-      radius + 0.72,
-      0.045,
-      0.03,
-      0.1,
-      this.porcelain,
-      "balanced",
-      -1.15,
-      extent,
-    );
-    // Short, recessed illuminated galleries. Their separation suggests scale
-    // without outlining the entire structure as a luminous tube.
-    for (let i = 0; i < 9; i++) {
-      const start = -1.05 + i * (extent / 9);
-      const gallery = this.arc(
-        parent,
-        radius - 0.43,
-        0.055,
-        0.038,
-        -0.035,
-        this.light,
-        "balanced",
-        start,
-        0.145 / Math.max(1, circumferenceGain),
-      );
-      gallery.name = "recessed-gallery";
-    }
-    this.radialMembers(
-      parent,
-      radius + 0.28,
+      radius + 0.15,
       bayCount,
-      0.96,
-      0.018,
-      0.071,
-      "balanced",
-      -1.15,
+      2.95,
+      2.85,
+      -1.43,
+      "essential",
+      -1.15 - (extent / bayCount) * 0.5,
       extent,
-      this.recess,
-      0.025,
+      this.rib,
+      0.13,
     );
-    this.insetPanels(parent, radius + 0.28, bayCount, extent);
-    this.radialMembers(
+    bulkheads.name = "radial-bulkhead-frames";
+    this.loadBearingTruss(parent, radius, bayCount, extent);
+    // Non-emissive conduits occupy the cavity, over a world unit behind the
+    // shell. Their depth is visible through the long slot and service bays.
+    for (const [offset, z] of [
+      [-0.32, -1.2],
+      [0.02, -1.42],
+    ] as const) {
+      const conduit = this.arc(
+        parent,
+        radius + offset,
+        0.105,
+        0.14,
+        z,
+        this.inlay,
+        "balanced",
+        -1.15,
+        extent,
+      );
+      conduit.name = "recessed-core-conduit";
+    }
+    this.arc(
       parent,
-      radius + 0.28,
-      bayCount * 2,
-      0.95,
-      0.032,
-      0.11,
+      radius + 0.36,
+      0.08,
+      0.12,
+      -1.63,
+      this.porcelain,
       "cinematic",
       -1.15,
       extent,
+    ).name = "ceramic-core-insulator";
+    this.curvedShellModules(
+      parent,
+      radius + 0.55,
+      1.45,
+      0.24,
+      0.14,
+      bayCount,
+      extent,
+      this.shell,
+      "inset-rough-panels",
+      "essential",
+      true,
     );
+    this.curvedShellModules(
+      parent,
+      radius - 0.75,
+      0.55,
+      0.17,
+      0.15,
+      bayCount,
+      extent,
+      this.panel,
+      "inner-shell-modules",
+      "essential",
+      true,
+    );
+    this.curvedShellModules(
+      parent,
+      radius - 1.45,
+      0.36,
+      0.82,
+      -0.38,
+      bayCount,
+      extent,
+      this.rib,
+      "segmented-inner-flange",
+      "essential",
+      false,
+    );
+    this.inspectionLamps(parent, radius - 0.42, extent);
+    this.fastenerGroups(parent, radius, bayCount, extent);
+    const innerRiblets = this.radialMembers(
+      parent,
+      radius - 0.75,
+      bayCount * 2,
+      0.49,
+      0.04,
+      0.205,
+      "cinematic",
+      -1.15,
+      extent,
+      this.inlay,
+      0.035,
+    );
+    innerRiblets.name = "inner-flange-riblets";
+    parent.userData.openServiceBays = Math.floor(bayCount / 4);
+    parent.userData.structuralBayCount = bayCount;
+    parent.userData.radialBreadthWorldUnits = 3.36;
+    parent.userData.axialDepthWorldUnits = 4.1;
     return parent;
   }
 
-  private insetPanels(
+  private curvedShellModules(
+    parent: THREE.Group,
+    radius: number,
+    breadth: number,
+    depth: number,
+    z: number,
+    count: number,
+    extent: number,
+    material: THREE.Material,
+    name: string,
+    tier: Tier,
+    serviceGaps: boolean,
+  ) {
+    const pitch = extent / count;
+    const indices = Array.from({ length: count }, (_, i) => i).filter(
+      (i) => !serviceGaps || i % 4 !== 3,
+    );
+    const geometry = structuralArc(
+      radius,
+      breadth,
+      depth,
+      -pitch * 0.465,
+      pitch * 0.93,
+      8,
+    );
+    const modules = new THREE.InstancedMesh(geometry, material, indices.length);
+    modules.name = name;
+    modules.userData.architectureTier = tier;
+    modules.userData.serviceGapCount = serviceGaps ? count - indices.length : 0;
+    modules.castShadow = true;
+    modules.receiveShadow = true;
+    const matrix = new THREE.Matrix4(),
+      q = new THREE.Quaternion();
+    const axis = new THREE.Vector3(0, 0, 1),
+      position = new THREE.Vector3(0, 0, z),
+      scale = new THREE.Vector3(1, 1, 1);
+    for (let j = 0; j < indices.length; j++) {
+      const angle = -1.15 + (indices[j] + 0.5) * pitch;
+      q.setFromAxisAngle(axis, angle);
+      matrix.compose(position, q, scale);
+      modules.setMatrixAt(j, matrix);
+    }
+    modules.computeBoundingSphere();
+    parent.add(modules);
+  }
+
+  private fastenerGroups(
     parent: THREE.Group,
     radius: number,
     count: number,
     extent: number,
   ) {
-    const pitch = (radius * extent) / count;
-    const geometry = new THREE.BoxGeometry(pitch * 0.58, 0.56, 0.024);
-    const polishedCount = Math.ceil(count / 7);
-    const rough = new THREE.InstancedMesh(
-      geometry,
-      this.panel,
-      count - polishedCount,
+    const closed = Array.from({ length: count }, (_, i) => i).filter(
+      (i) => i % 4 !== 3,
     );
-    const polished = new THREE.InstancedMesh(
+    const geometry = new THREE.CylinderGeometry(0.035, 0.035, 0.025, 6);
+    geometry.rotateX(Math.PI / 2);
+    const fasteners = new THREE.InstancedMesh(
       geometry,
-      this.inlay,
-      polishedCount,
+      this.titanium,
+      closed.length * 4,
     );
-    rough.name = "inset-rough-panels";
-    polished.name = "selective-polished-inlays";
-    for (const mesh of [rough, polished])
-      mesh.userData.architectureTier = "balanced";
+    fasteners.name = "paired-shell-attachment-groups";
+    fasteners.userData.architectureTier = "balanced";
+    fasteners.receiveShadow = true;
     const matrix = new THREE.Matrix4(),
-      rotation = new THREE.Quaternion(),
+      q = new THREE.Quaternion(),
       position = new THREE.Vector3();
     const axis = new THREE.Vector3(0, 0, 1),
       scale = new THREE.Vector3(1, 1, 1);
-    let roughIndex = 0,
-      polishedIndex = 0;
+    let index = 0;
+    for (const i of closed) {
+      for (const side of [-1, 1]) {
+        const angle = -1.15 + ((i + 0.5 + side * 0.36) * extent) / count;
+        for (const offset of [0.02, 1.1]) {
+          position.set(
+            Math.cos(angle) * (radius + offset),
+            Math.sin(angle) * (radius + offset),
+            0.168,
+          );
+          q.setFromAxisAngle(axis, angle);
+          matrix.compose(position, q, scale);
+          fasteners.setMatrixAt(index++, matrix);
+        }
+      }
+    }
+    fasteners.computeBoundingSphere();
+    parent.add(fasteners);
+  }
+
+  private loadBearingTruss(
+    parent: THREE.Group,
+    radius: number,
+    count: number,
+    extent: number,
+  ) {
+    const truss = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.11, 1, 0.11),
+      this.rib,
+      count * 4,
+    );
+    truss.name = "triangulated-axial-load-framework";
+    truss.userData.architectureTier = "essential";
+    truss.castShadow = true;
+    truss.receiveShadow = true;
+    const matrix = new THREE.Matrix4(),
+      q = new THREE.Quaternion();
+    const a = new THREE.Vector3(),
+      b = new THREE.Vector3(),
+      center = new THREE.Vector3(),
+      direction = new THREE.Vector3();
+    const axis = new THREE.Vector3(0, 1, 0),
+      scale = new THREE.Vector3();
     for (let i = 0; i < count; i++) {
       const angle = -1.15 + ((i + 0.5) * extent) / count;
-      position.set(Math.cos(angle) * radius, Math.sin(angle) * radius, 0.078);
-      rotation.setFromAxisAngle(axis, angle - Math.PI / 2);
-      matrix.compose(position, rotation, scale);
-      if (i % 7 === 0) polished.setMatrixAt(polishedIndex++, matrix);
-      else rough.setMatrixAt(roughIndex++, matrix);
+      const halfBay = (extent / count) * 0.45;
+      for (let wall = 0; wall < 2; wall++) {
+        for (let side = 0; side < 2; side++) {
+          const sign = side ? -1 : 1;
+          const frontRadius = radius + (wall ? 1.5 : -1.15);
+          const rearRadius = radius + (wall ? 1.48 : -0.95);
+          a.set(
+            Math.cos(angle - halfBay * sign) * frontRadius,
+            Math.sin(angle - halfBay * sign) * frontRadius,
+            wall ? -0.45 : -0.2,
+          );
+          b.set(
+            Math.cos(angle + halfBay * sign) * rearRadius,
+            Math.sin(angle + halfBay * sign) * rearRadius,
+            wall ? -3.2 : -2.95,
+          );
+          direction.subVectors(b, a);
+          scale.set(1, direction.length(), 1);
+          q.setFromUnitVectors(axis, direction.normalize());
+          center.addVectors(a, b).multiplyScalar(0.5);
+          matrix.compose(center, q, scale);
+          truss.setMatrixAt(i * 4 + wall * 2 + side, matrix);
+        }
+      }
     }
-    rough.computeBoundingSphere();
-    polished.computeBoundingSphere();
-    parent.add(rough, polished);
+    truss.computeBoundingSphere();
+    parent.add(truss);
+  }
+
+  private inspectionLamps(parent: THREE.Group, radius: number, extent: number) {
+    const count = 12;
+    const lamps = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.055, 0.08, 0.028),
+      this.light,
+      count,
+    );
+    lamps.name = "recessed-inspection-points";
+    lamps.userData.architectureTier = "balanced";
+    const matrix = new THREE.Matrix4(),
+      q = new THREE.Quaternion(),
+      position = new THREE.Vector3();
+    const axis = new THREE.Vector3(0, 0, 1),
+      scale = new THREE.Vector3(1, 1, 1);
+    for (let i = 0; i < count; i++) {
+      const angle = -1.07 + ((i + 0.5) * extent) / count;
+      position.set(Math.cos(angle) * radius, Math.sin(angle) * radius, -0.025);
+      q.setFromAxisAngle(axis, angle);
+      matrix.compose(position, q, scale);
+      lamps.setMatrixAt(i, matrix);
+    }
+    lamps.computeBoundingSphere();
+    parent.add(lamps);
   }
 
   private trackRotation(group: THREE.Group, gain = 1) {
@@ -483,18 +647,19 @@ export class OrbitalArchitecture {
   private buildRing() {
     // Owner-directed composition: only a gentle segment of an immense ring is
     // visible. The complete structure continues beyond BOTH vertical edges.
-    // Forward center placement compensates for the deeper Y-rotated far rim,
-    // retaining its previous visible depth instead of losing it to more fog.
+    // The structure occupies a deeper middle distance. An oblique section
+    // exposes the axial framework and satin side walls behind the front shell.
     const frame = this.assembly(new THREE.Group(), 21.5);
-    frame.position.set(-19.8, 1.4, -11.5);
-    frame.rotation.set(0.19, 0.53, -0.1);
+    frame.position.set(-17.8, 1.4, -20);
+    frame.rotation.set(0.24, 0.72, -0.14);
     frame.name = "monumental-open-span";
     this.trackRotation(frame);
     this.concepts.ring.add(frame);
     const distant = this.assembly(new THREE.Group(), 23.5);
-    distant.position.set(-21.4, 2.6, -19);
-    distant.rotation.set(0.12, 0.53, -0.1);
+    distant.position.set(-19.4, 2.6, -28);
+    distant.rotation.set(0.17, 0.72, -0.14);
     distant.userData.architectureTier = "cinematic";
+    distant.userData.celestialSupport = true;
     this.trackRotation(distant, 0.62);
     this.concepts.ring.add(distant);
   }
@@ -585,39 +750,11 @@ export class OrbitalArchitecture {
     cap.position.set(0.2, 3.9, -33);
   }
 
-  private buildDistantField() {
-    const positions: number[] = [];
-    // Deterministic, sparse depth markers; no rotating galaxy or random texture.
-    for (let i = 0; i < 38; i++) {
-      const x = (((i * 0.61803398875) % 1) - 0.5) * 62;
-      const y = (((i * 0.41421356237) % 1) - 0.5) * 30 + 4;
-      positions.push(x, y, -38 - (i % 5) * 5);
-    }
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute(
-      "position",
-      new THREE.Float32BufferAttribute(positions, 3),
-    );
-    const points = new THREE.Points(
-      geometry,
-      new THREE.PointsMaterial({
-        color: 0x7f7c9c,
-        size: 0.025,
-        transparent: true,
-        opacity: 0.42,
-        depthWrite: false,
-        sizeAttenuation: true,
-      }),
-    );
-    points.name = "distant-observation-field";
-    points.userData.architectureTier = "balanced";
-    this.root.add(points);
-  }
-
   update(frame: ArchitectureFrame) {
     if (this.disposed) return;
     this.concept = frame.concept;
     this.quality = frame.quality;
+    this.celestialStudy = frame.celestialStudy ?? "starlit";
     for (const [name, group] of Object.entries(this.concepts))
       group.visible = name === frame.concept;
     this.root.traverse((object) => {
@@ -628,6 +765,9 @@ export class OrbitalArchitecture {
           (tier === "balanced"
             ? frame.quality !== "efficient"
             : frame.quality === "cinematic");
+      if (object.userData.celestialSupport)
+        object.visible =
+          this.celestialStudy === "deep" && frame.quality !== "efficient";
     });
     const focus = THREE.MathUtils.clamp(frame.focus, 0, 1);
     const delta =
@@ -639,8 +779,12 @@ export class OrbitalArchitecture {
       delta *
       THREE.MathUtils.clamp(frame.ambientStrength, 0, 1) *
       (1 - focus * 0.8);
-    this.veilUniforms.uAWVeilTime.value = this.opticalClock;
-    this.veilUniforms.uAWVeilFocus.value = focus;
+    this.scriptedPhase =
+      typeof frame.phaseOverride === "number" &&
+      Number.isFinite(frame.phaseOverride)
+        ? THREE.MathUtils.clamp(frame.phaseOverride, 0, 3600)
+        : null;
+    this.renderedPhase = this.scriptedPhase ?? this.opticalClock;
     for (const { material, reflection, emission } of this.optical) {
       material.envMapIntensity = reflection * (1 - focus * 0.56);
       material.emissiveIntensity =
@@ -654,10 +798,10 @@ export class OrbitalArchitecture {
     // turning ambience off never teleports a partially rotated structure.
     for (const { group, base, gain } of this.rotationTracks) {
       group.rotation.x =
-        base.x + Math.sin(this.opticalClock * 0.037) * 0.009 * gain;
+        base.x + Math.sin(this.renderedPhase * 0.037) * 0.018 * gain;
       group.rotation.y =
-        base.y + Math.sin(this.opticalClock * 0.029) * 0.012 * gain;
-      group.rotation.z = base.z + this.opticalClock * 0.0007 * gain;
+        base.y + Math.sin(this.renderedPhase * 0.029) * 0.025 * gain;
+      group.rotation.z = base.z + this.renderedPhase * 0.001 * gain;
     }
   }
 
@@ -685,10 +829,16 @@ export class OrbitalArchitecture {
       drawObjects,
       triangles,
       opticalClockSeconds: this.opticalClock,
-      longitudinalRotationRadians: this.opticalClock * 0.0007,
+      longitudinalRotationRadians: this.renderedPhase * 0.001,
       primaryRingRadiusWorldUnits: 21.5,
-      revealAttenuationRange: [0.1, 1],
-      revealKind: "spatial-procedural-light-attenuation",
+      primaryShellServiceBays: this.root.getObjectByName("monumental-open-span")
+        ?.userData.openServiceBays,
+      structuralDesign:
+        "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+      scriptedPhaseSeconds: this.scriptedPhase,
+      celestialStudy: this.celestialStudy,
+      revealKind: "orientation-driven-PBR-lighting-and-geometric-occlusion",
+      proceduralSurfaceDetail: "static-derivative-filtered-machined-roughness",
       originalProceduralGeometry: true,
     };
   }

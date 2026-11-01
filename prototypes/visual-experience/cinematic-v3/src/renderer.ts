@@ -5,6 +5,10 @@ import {
   type ArchitectureConcept,
 } from "./orbital-architecture.ts";
 import type { SceneWeights } from "./scene-transition";
+import {
+  CelestialEnvironment,
+  type CelestialStudy,
+} from "./celestial-environment.ts";
 
 export type Study = "architecture" | "living" | "observatory";
 export type Quality = "cinematic" | "balanced" | "efficient";
@@ -52,6 +56,8 @@ export interface EnvironmentFrame {
   study: Study;
   sceneWeights?: SceneWeights;
   architectureConcept?: ArchitectureConcept;
+  celestialStudy?: CelestialStudy;
+  architecturePhase?: number | null;
   quality: Quality;
   reduced: boolean;
   ambientStrength?: number;
@@ -283,49 +289,6 @@ const livingFragment = /* glsl */ `
   }
 `;
 
-const groundVertex = /* glsl */ `
-  varying vec3 vWorld;
-  void main() {
-    vec4 world = modelMatrix * vec4(position, 1.);
-    vWorld = world.xyz;
-    gl_Position = projectionMatrix * viewMatrix * world;
-  }
-`;
-
-const groundFragment = /* glsl */ `
-  uniform float uFocus, uEnergy;
-  varying vec3 vWorld;
-  void main() {
-    vec2 local = (vWorld.xz - vec2(1.4, .2)) / vec2(3.5, 4.4);
-    float presence = exp(-dot(local, local)) * (.4 + uEnergy * .25);
-    vec2 foot = (vWorld.xz - vec2(2.2, -12.)) / vec2(2.8, 3.5);
-    float architectural = exp(-dot(foot, foot));
-    float horizon = exp(-abs(vWorld.z + 16.) * .12);
-    vec3 color = vec3(.003,.0035,.01) + vec3(.021,.012,.051) * presence;
-    color += vec3(.021,.016,.039) * architectural + vec3(.005,.004,.013) * horizon;
-    color *= 1. - uFocus * .65;
-    float distanceFade = smoothstep(-58., -26., vWorld.z);
-    gl_FragColor = vec4(color, distanceFade * .9);
-    #include <tonemapping_fragment>
-    #include <colorspace_fragment>
-  }
-`;
-
-const atmosphereFragment = /* glsl */ `
-  uniform float uFocus;
-  varying vec3 vWorld;
-  void main() {
-    vec2 p = vWorld.xy;
-    float distant = exp(-dot((p - vec2(-3.,-1.)) / vec2(11.,4.5), (p - vec2(-3.,-1.)) / vec2(11.,4.5)));
-    float near = exp(-dot((p - vec2(4.,-1.2)) / vec2(5.,3.), (p - vec2(4.,-1.2)) / vec2(5.,3.)));
-    float shaft = exp(-pow((p.x + p.y * .38 + 3.) / 2.6, 2.)) * exp(-pow((p.y - 2.) / 8., 2.));
-    vec3 c = vec3(.008,.005,.025) * distant + vec3(.005,.003,.017) * near + vec3(.008,.006,.018) * shaft;
-    gl_FragColor = vec4(c * (1. - uFocus * .65), 1.);
-    #include <tonemapping_fragment>
-    #include <colorspace_fragment>
-  }
-`;
-
 const contactVertex = /* glsl */ `
   varying vec2 vUv;
   void main() {
@@ -360,6 +323,10 @@ const contactFragment = /* glsl */ `
 export class Environment {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
+  // The middle depth region has its own fixed lights. Foreground studio lights
+  // continue serving Vela/resources without washing out architectural shadows.
+  private readonly architecturalScene = new THREE.Scene();
+  private readonly cosmos = new CelestialEnvironment();
   private readonly camera = new THREE.PerspectiveCamera(39, 1, 0.1, 100);
   private readonly architecture = new THREE.Group();
   private readonly living = new THREE.Group();
@@ -371,6 +338,22 @@ export class Environment {
   >[] = [];
   private readonly ribbonLevels: THREE.BufferGeometry[] = [];
   private readonly orbital = new OrbitalArchitecture();
+  private readonly stellarKey = new THREE.DirectionalLight(0xdce8ff, 4.6);
+  private readonly stellarAmbient = new THREE.HemisphereLight(
+    0xa9b8d3,
+    0x070812,
+    0.18,
+  );
+  private readonly architecturalGraze = new THREE.SpotLight(
+    0xb9b4d0,
+    250,
+    48,
+    0.4,
+    0.85,
+    2,
+  );
+  private shadowResolution = 0;
+  private celestialStudy: CelestialStudy = "starlit";
   private readonly sceneFades = new Map<
     Study,
     {
@@ -481,6 +464,9 @@ export class Environment {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.12;
+    this.renderer.autoClear = false;
+    this.renderer.info.autoReset = false;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.setClearColor(0x05060d, 1);
     this.scene.fog = new THREE.FogExp2(0x05060d, 0.024);
     this.camera.position.set(0, 1.8, 12);
@@ -491,6 +477,8 @@ export class Environment {
     const studio = new RoomEnvironment();
     this.environmentMap = pmrem.fromScene(studio, 0.055);
     this.scene.environment = this.environmentMap.texture;
+    this.architecturalScene.environment = this.environmentMap.texture;
+    this.architecturalScene.fog = new THREE.FogExp2(0x050711, 0.009);
     studio.dispose();
     pmrem.dispose();
     this.scene.add(new THREE.HemisphereLight(0xa7b7ff, 0x020207, 1.6));
@@ -503,13 +491,8 @@ export class Environment {
     this.fill = new THREE.PointLight(0x8d7bff, 22, 18, 2);
     this.fill.position.set(1.3, 1.5, 2);
     this.scene.add(this.fill);
-    this.scene.add(
-      this.architecture,
-      this.living,
-      this.observatory,
-      this.vela,
-      this.detail,
-    );
+    this.scene.add(this.living, this.observatory, this.vela, this.detail);
+    this.architecturalScene.add(this.architecture);
     this.buildArchitecture();
     this.buildLiving();
     this.buildObservatory();
@@ -598,52 +581,70 @@ export class Environment {
 
   private buildArchitecture() {
     this.architecture.add(this.orbital.root);
-    const graze = new THREE.SpotLight(0xc2aedb, 850, 40, 0.4, 0.85, 2);
-    graze.position.set(5, 5, -1);
-    graze.target.position.set(-2.8, 2.4, -12);
+    const graze = this.architecturalGraze;
+    graze.position.set(5, 5, -10);
+    graze.target.position.set(-2.8, 2.4, -28);
     this.architecture.add(graze, graze.target);
-    const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(90, 80),
-      new THREE.ShaderMaterial({
-        uniforms: {
-          uFocus: this.fieldUniforms.uFocus,
-          uEnergy: this.fieldUniforms.uEnergy,
-        },
-        vertexShader: groundVertex,
-        fragmentShader: groundFragment,
-        transparent: true,
-        depthWrite: false,
-      }),
+    this.stellarKey.position.set(9, 8, 2);
+    this.stellarKey.target.position.set(-3, 0, -25);
+    this.stellarKey.castShadow = true;
+    Object.assign(this.stellarKey.shadow.camera, {
+      left: -15,
+      right: 15,
+      top: 20,
+      bottom: -20,
+      near: 0.5,
+      far: 85,
+    });
+    this.stellarKey.shadow.camera.updateProjectionMatrix();
+    this.stellarKey.shadow.bias = -0.00008;
+    this.stellarKey.shadow.normalBias = 0.025;
+    this.architecturalScene.add(
+      this.stellarKey,
+      this.stellarKey.target,
+      this.stellarAmbient,
     );
-    floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, -2.6, -18);
-    this.architecture.add(floor);
-    const atmosphere = new THREE.Mesh(
-      new THREE.PlaneGeometry(65, 38),
-      new THREE.ShaderMaterial({
-        uniforms: { uFocus: this.fieldUniforms.uFocus },
-        vertexShader: groundVertex,
-        fragmentShader: atmosphereFragment,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-        depthTest: false,
-      }),
-    );
-    atmosphere.position.set(0, 1, -26);
-    this.architecture.add(atmosphere);
-    const horizon = this.curveLine(
-      160,
-      (t) =>
-        new THREE.Vector3(
-          (t - 0.5) * 70,
-          -1.91 + Math.sin(t * Math.PI) * 0.15,
-          -18 - Math.cos(t * Math.PI) * 3,
-        ),
-      0x4d467b,
-      0.13,
-    );
-    this.architecture.add(horizon);
+  }
+
+  private updateCelestialLighting(frame: EnvironmentFrame, focus: number) {
+    const study = frame.celestialStudy ?? "starlit";
+    this.celestialStudy = study;
+    const weight =
+      frame.sceneWeights?.architecture ??
+      (frame.study === "architecture" ? 1 : 0);
+    const recession = 1 - focus * 0.66;
+    // Each study uses fixed world-space sources. Only real geometry rotates;
+    // no light scans, highlight masks or autonomous opacity modulation.
+    if (study === "shadow") {
+      this.stellarKey.position.set(-13, 10, -18);
+      this.stellarKey.intensity = 3.8 * weight * recession;
+      this.stellarAmbient.intensity = 0.06 * weight * recession;
+      this.architecturalGraze.intensity = 480 * weight * recession;
+    } else if (study === "deep") {
+      this.stellarKey.position.set(-7, 12, -10);
+      this.stellarKey.intensity = 3.2 * weight * recession;
+      this.stellarAmbient.intensity = 0.25 * weight * recession;
+      this.architecturalGraze.intensity = 240 * weight * recession;
+    } else {
+      this.stellarKey.position.set(-9, 10, -12);
+      this.stellarKey.intensity = 3.6 * weight * recession;
+      this.stellarAmbient.intensity = 0.18 * weight * recession;
+      this.architecturalGraze.intensity = 320 * weight * recession;
+    }
+    const resolution =
+      frame.quality === "cinematic"
+        ? 2048
+        : frame.quality === "balanced"
+          ? 1024
+          : 0;
+    this.renderer.shadowMap.enabled = resolution > 0 && weight > 0.001;
+    if (resolution > 0 && resolution !== this.shadowResolution) {
+      this.stellarKey.shadow.map?.dispose();
+      this.stellarKey.shadow.map = null;
+      this.stellarKey.shadow.mapSize.set(resolution, resolution);
+      this.shadowResolution = resolution;
+      this.stellarKey.shadow.needsUpdate = true;
+    }
   }
 
   private buildLiving() {
@@ -1524,11 +1525,9 @@ export class Environment {
         Math.min(28, this.fieldUniforms.uDetail.value + 1) * 120 * 2,
       );
     }
-    const detailWeight = frame.sceneWeights
-      ? 1 - frame.sceneWeights.living
-      : frame.study === "living"
-        ? 0
-        : 1;
+    const detailWeight =
+      frame.sceneWeights?.observatory ??
+      (frame.study === "observatory" ? 1 : 0);
     this.detail.visible = detailWeight > 0.001;
     this.fieldUniforms.uEnvironmentWeight.value = detailWeight;
 
@@ -1612,6 +1611,8 @@ export class Environment {
       time,
       ambientStrength: frame.ambientStrength ?? 0,
       energy,
+      celestialStudy: frame.celestialStudy ?? "starlit",
+      phaseOverride: frame.architecturePhase ?? null,
     });
     this.camera.position.x = pointerX * 0.035 * (1 - focus);
     this.camera.position.y = 1.8 + pointerY * 0.025 * (1 - focus);
@@ -1669,6 +1670,20 @@ export class Environment {
       this.updatePresenceBounds();
     }
     this.updateFolios(frame.surfaces, frame.quality);
+    this.updateCelestialLighting(frame, focus);
+    this.renderer.info.reset();
+    this.renderer.clear();
+    this.cosmos.render(this.renderer, this.camera, {
+      study: frame.celestialStudy ?? "starlit",
+      quality: frame.quality,
+      focus,
+      weight:
+        frame.sceneWeights?.architecture ??
+        (frame.study === "architecture" ? 1 : 0),
+    });
+    this.renderer.clearDepth();
+    if (this.architecture.visible)
+      this.renderer.render(this.architecturalScene, this.camera);
     this.renderer.render(this.scene, this.camera);
     this.frames++;
   }
@@ -1686,6 +1701,14 @@ export class Environment {
       quality: this.quality,
       study: this.study,
       contextLost: this.lost,
+      cosmos: this.cosmos.diagnostics(),
+      celestialStudy: this.celestialStudy,
+      shadows: {
+        enabled: this.renderer.shadowMap.enabled,
+        mapSize: this.shadowResolution,
+        meaning:
+          "One fixed architectural directional source; Efficient disables its shadow map.",
+      },
       architecture: {
         ...this.orbital.diagnostics(),
         environmentVisible: this.architecture.visible,
@@ -1727,19 +1750,23 @@ export class Environment {
     );
     const geometries = new Set<THREE.BufferGeometry>(),
       materials = new Set<THREE.Material>();
-    this.scene.traverse((object) => {
+    const collect = (object: THREE.Object3D) => {
       const mesh = object as THREE.Mesh;
       if (mesh.geometry) geometries.add(mesh.geometry);
       if (Array.isArray(mesh.material))
         mesh.material.forEach((material) => materials.add(material));
       else if (mesh.material) materials.add(mesh.material);
-    });
+    };
+    this.scene.traverse(collect);
+    this.architecturalScene.traverse(collect);
     geometries.forEach((geometry) => geometry.dispose());
     this.ribbonLevels
       .filter((geometry) => !geometries.has(geometry))
       .forEach((geometry) => geometry.dispose());
     materials.forEach((material) => material.dispose());
     this.environmentMap.dispose();
+    this.stellarKey.shadow.dispose();
+    this.cosmos.dispose();
     this.renderer.dispose();
   }
 }

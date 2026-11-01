@@ -75,6 +75,15 @@ button[hidden],
     radial-gradient(ellipse at center, transparent 30%, rgba(2, 3, 9, 0.22));
   z-index: -2;
 }
+body[data-study="architecture"] .scene-vignette {
+  background: linear-gradient(
+    180deg,
+    rgba(3, 4, 9, 0.2),
+    transparent 22%,
+    transparent 82%,
+    rgba(3, 4, 9, 0.35)
+  );
+}
 .topbar {
   position: absolute;
   inset: 0 0 auto;
