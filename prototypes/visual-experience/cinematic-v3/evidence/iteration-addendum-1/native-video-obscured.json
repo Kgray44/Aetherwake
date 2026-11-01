@@ -1,0 +1,97 @@
+{
+  "format": "WebM",
+  "mimeType": "video/webm;codecs=vp9",
+  "byteCount": 18178616,
+  "durationMs": 27968.399999976158,
+  "requestedFrameRate": 30,
+  "requestedVideoBitsPerSecond": 6000000,
+  "recorderVideoBitsPerSecond": 6000000,
+  "videoTrackSettings": {
+    "width": 2560,
+    "height": 1600,
+    "frameRate": 30,
+    "displaySurface": "window"
+  },
+  "source": "Exact application BrowserWindow only",
+  "audio": false,
+  "journey": [
+    {
+      "scene": "Initial dimensional environment / Vela idle",
+      "offsetMs": 0
+    },
+    {
+      "scene": "Resource selection",
+      "offsetMs": 4003.5
+    },
+    {
+      "scene": "Interrupted expansion reverses continuously",
+      "offsetMs": 4635.5
+    },
+    {
+      "scene": "Conversation unfolds into working plane",
+      "offsetMs": 5088.699999988079
+    },
+    {
+      "scene": "Vela receives local typed input",
+      "offsetMs": 6499.299999982119
+    },
+    {
+      "scene": "Explicit synthetic activity / Intelligence Stream",
+      "offsetMs": 7459.299999982119
+    },
+    {
+      "scene": "Same resource returns to its workspace arrangement",
+      "offsetMs": 18715.69999998808
+    },
+    {
+      "scene": "Workspace rearranges / field follows",
+      "offsetMs": 19520.399999976158
+    },
+    {
+      "scene": "Arrangement restored by undo",
+      "offsetMs": 20321.09999999404
+    },
+    {
+      "scene": "Material lens selected",
+      "offsetMs": 21126
+    },
+    {
+      "scene": "Lens transforms into readable research plane",
+      "offsetMs": 21534.899999976158
+    },
+    {
+      "scene": "Focused writing surface / environment yields",
+      "offsetMs": 24348.09999999404
+    },
+    {
+      "scene": "Return to calm workspace",
+      "offsetMs": 25762.5
+    }
+  ],
+  "finalState": {
+    "expanded": null,
+    "vela": "idle",
+    "resourceCount": 3,
+    "eventCount": 14
+  },
+  "capturedAtUTC": "2026-11-01T18:32:35.055Z",
+  "limitations": [
+    "30 fps is a capture request, not a measurement of presented frames or application FPS.",
+    "MediaRecorder encoding and native window capture add overhead; this run is motion evidence, not a performance benchmark.",
+    "Agent and Vela activity shown in the application remains explicitly synthetic."
+  ],
+  "localArtifact": ".runtime/aerynth-v3-native-1793557924222.webm",
+  "sha256": "3f85e1a27f9329dced31cc6783e7a91baa2876b4f5b2739fe82af8e4a0c6a24d",
+  "decoded": {
+    "width": 2000,
+    "height": 1252,
+    "durationSeconds": null,
+    "limitation": "Container metadata did not expose a finite playback duration; durationMs is observed recorder start-to-stop time."
+  },
+  "buildAssetsAtRecording": [
+    "graphics-BmPJwi0n.js",
+    "index-B8ld0Vep.js",
+    "index-CWulf_a-.css"
+  ],
+  "reviewFinding": "Whole-window native dark controls visible. The tall activity stream occluded Vela; retained as a pre-correction recording, not the final review video."
+}

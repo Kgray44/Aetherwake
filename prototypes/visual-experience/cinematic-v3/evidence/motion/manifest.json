@@ -1,0 +1,48 @@
+{
+  "source": "actual Electron native contents; synthetic application data",
+  "method": "Measured sequential capture intervals; final 600ms hold; 960px maximum width; global 128-color GIF palette. Lossless full-resolution source PNGs remain local. Not presented FPS or real-time video.",
+  "sequences": [
+    {
+      "sequence": "selection",
+      "frames": 10,
+      "captureSpanMs": 2564,
+      "playbackMs": 3164,
+      "bytes": 378583
+    },
+    {
+      "sequence": "expansion",
+      "frames": 18,
+      "captureSpanMs": 5942,
+      "playbackMs": 6542,
+      "bytes": 408046
+    },
+    {
+      "sequence": "rearrangement",
+      "frames": 16,
+      "captureSpanMs": 3766,
+      "playbackMs": 4366,
+      "bytes": 506952
+    },
+    {
+      "sequence": "vela-working",
+      "frames": 14,
+      "captureSpanMs": 3304,
+      "playbackMs": 3904,
+      "bytes": 426984
+    },
+    {
+      "sequence": "return-to-calm",
+      "frames": 14,
+      "captureSpanMs": 3615,
+      "playbackMs": 4215,
+      "bytes": 463608
+    },
+    {
+      "sequence": "lens-unfold",
+      "frames": 18,
+      "captureSpanMs": 4978,
+      "playbackMs": 5578,
+      "bytes": 379996
+    }
+  ]
+}

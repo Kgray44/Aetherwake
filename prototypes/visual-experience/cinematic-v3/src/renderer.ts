@@ -1,0 +1,1531 @@
+import * as THREE from "three";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
+
+export type Study = "architecture" | "living" | "observatory";
+export type Quality = "cinematic" | "balanced" | "efficient";
+export type VelaState =
+  | "idle"
+  | "receiving"
+  | "working"
+  | "coordinating"
+  | "attention"
+  | "reported"
+  | "verified"
+  | "unavailable";
+
+export interface SurfacePose {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  lift: number;
+  yaw: number;
+  selected: boolean;
+  unfold: number;
+  opacity?: number;
+  kind?: "conversation" | "research" | "note";
+}
+
+export interface PresenceBounds {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export interface EnvironmentFrame {
+  time: number;
+  focus: number;
+  attention: number;
+  pointer: { x: number; y: number };
+  /** Real input, separate from the shared resource/semantic anchor in pointer. */
+  inputPointer?: { x: number; y: number };
+  /** Local interaction salience, e.g. dragging=1 or selected=.25. */
+  interaction?: number;
+  vela: VelaState;
+  study: Study;
+  quality: Quality;
+  reduced: boolean;
+  ambientStrength?: number;
+  width: number;
+  height: number;
+  surfaces?: readonly SurfacePose[];
+}
+
+// Openness, structural tension, directed flow. These are expression studies,
+// never measurements of cognition, progress, or unrecorded agent relationships.
+const EXPRESSIONS: Readonly<
+  Record<VelaState, readonly [number, number, number]>
+> = {
+  idle: [0, 0, 0],
+  receiving: [1, -0.2, 0],
+  working: [0.12, 1, 1],
+  coordinating: [0.65, 0.35, 0.65],
+  attention: [0.2, 0.75, 0],
+  reported: [-0.15, 0.3, 0],
+  verified: [0.25, 0, 0],
+  unavailable: [0, 0, 0],
+};
+
+interface FolioVisual {
+  id: string | null;
+  root: THREE.Group;
+  slab: THREE.BufferGeometry;
+  rim: THREE.BufferGeometry;
+  rimMesh: THREE.Mesh;
+  face: THREE.MeshPhysicalMaterial;
+  edge: THREE.MeshPhysicalMaterial;
+  polish: THREE.MeshPhysicalMaterial;
+  contact: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  width: number;
+  height: number;
+  unfold: number;
+  kind: NonNullable<SurfacePose["kind"]>;
+}
+
+const ribbonVertex = /* glsl */ `
+  uniform float uTime, uEnergy, uAmbient;
+  uniform vec4 uExpression;
+  varying vec3 vNormal, vView;
+  varying float vAcross, vAlong;
+  vec3 surface(float t, float v) {
+    // Ambient expression has its own gain; idle semantic energy never gates it.
+    float ambient = sin(uTime * .56);
+    // One continuous asymmetrical double-loop. Its central crossing is separated in Z.
+    vec3 center = vec3(1.13 * sin(2. * t) * (.88 + .12 * cos(t)), 1.18 * cos(t) + .12 * sin(3. * t), .5 * sin(t));
+    center *= 1. + ambient * .03 * uAmbient;
+    center.x *= 1. + uExpression.x * .065;
+    center.y *= 1. + uExpression.y * .035;
+    center *= 1. + uExpression.w * .025;
+    vec3 tangent = normalize(vec3(2.26 * cos(2. * t) * (.88 + .12 * cos(t)) - .1356 * sin(2. * t) * sin(t), -1.18 * sin(t) + .36 * cos(3. * t), .5 * cos(t)));
+    vec3 normal = normalize(cross(tangent, vec3(0., 0., 1.)));
+    vec3 binormal = normalize(cross(tangent, normal));
+    float directed = sin(t * 2. - uTime * 1.1) * uExpression.z;
+    float twist = t + .31 * sin(t * 2.) + .12 * sin(t * 3.) + sin(t * 2. + uTime * .62) * .1 * uAmbient;
+    twist += uExpression.y * sin(t * 2.) * .045 + directed * .045;
+    vec3 across = normal * cos(twist) + binormal * sin(twist);
+    float width = (.235 + .095 * cos(t * 2. - .6)) * (1. + sin(uTime * .64 + t * 2.) * .1 * uAmbient);
+    width *= 1. - uExpression.y * .045 + uExpression.x * .025 + uExpression.w * .04;
+    center.z += sin(t * 3.) * .012 + sin(t * 3. + uTime * .62) * .065 * uAmbient;
+    return center + across * v * width + binormal * v * v * .055;
+  }
+  void main() {
+    float t = position.x;
+    float v = position.y;
+    vec3 p = surface(t, v);
+    vec3 dt = surface(t + .001, v) - p;
+    vec3 dv = surface(t, v + .001) - p;
+    vec3 n = normalize(cross(dt, dv));
+    vec4 view = modelViewMatrix * vec4(p, 1.);
+    vNormal = normalize(normalMatrix * n);
+    vView = -view.xyz;
+    vAcross = v;
+    vAlong = t;
+    gl_Position = projectionMatrix * view;
+  }
+`;
+
+const ribbonFragment = /* glsl */ `
+  uniform float uEnergy, uTime, uUnavailable;
+  uniform vec3 uTint, uSceneLight;
+  varying vec3 vNormal, vView;
+  varying float vAcross, vAlong;
+  void main() {
+    vec3 n = normalize(vNormal) * (gl_FrontFacing ? 1. : -1.);
+    vec3 view = normalize(vView);
+    float fresnel = pow(1. - abs(dot(n, view)), 2.5);
+    vec3 light = normalize(mix(normalize(vec3(-.7, 1.2, 1.)), uSceneLight, .32));
+    float diffuse = max(0., dot(n, light));
+    float spec = pow(max(0., dot(n, normalize(light + view))), 86.);
+    float broad = pow(max(0., dot(n, normalize(vec3(.8, .5, .5) + view))), 18.);
+    float silk = pow(max(0., dot(n, normalize(light + view + vec3(vAcross * .12, .02, 0.)))), 64.);
+    float edge = smoothstep(.84, 1., abs(vAcross));
+    float rim = pow(max(0., dot(n, normalize(vec3(-.9, -.1, .5)))), 16.);
+    vec3 body = mix(vec3(.012, .009, .044), uTint * .36, diffuse * .42 + broad * .28);
+    body *= .82 + .18 * abs(vAcross);
+    vec3 pearl = vec3(.74, .72, 1.);
+    vec3 color = body + pearl * (spec * 1.18 + broad * .3 + silk * .1 + fresnel * .23 + edge * .09 + rim * .27);
+    color += uTint * uEnergy * (.035 + .045 * sin(vAlong * 2. - uTime * .5));
+    color = mix(color, vec3(dot(color, vec3(.2126,.7152,.0722))) * .43, uUnavailable);
+    gl_FragColor = vec4(color, 1.);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+const fieldVertex = /* glsl */ `
+  uniform float uTime, uFocus, uEnergy, uSelectionStrength, uInteraction;
+  uniform vec2 uPointer, uSelection;
+  attribute float aLayer;
+  varying float vLayer, vDistance, vSignal;
+  void main() {
+    vec3 p = position;
+    float wave = sin(p.x * .22 + aLayer * .24 + uTime * .35);
+    float influence = exp(-pow((p.x - uPointer.x * 7.) * .3, 2.));
+    vec2 local = (p.xz - uSelection) / vec2(3.8, 4.5);
+    float selection = exp(-dot(local,local)) * uSelectionStrength;
+    p.y += wave * .055 * (1. - uFocus * .8) + influence * .09 * uEnergy;
+    p.z += influence * uPointer.y * .16;
+    p.y += selection * (.065 + uInteraction * .055) * (1. - uFocus * .6);
+    vLayer = aLayer;
+    vSignal = max(influence, selection);
+    vec4 view = modelViewMatrix * vec4(p, 1.);
+    vDistance = -view.z;
+    gl_Position = projectionMatrix * view;
+  }
+`;
+
+const fieldFragment = /* glsl */ `
+  uniform float uFocus, uEnergy, uDetail;
+  varying float vLayer, vDistance, vSignal;
+  void main() {
+    if(vLayer > uDetail) discard;
+    float fog = exp(-vDistance * .055);
+    float alpha = (.065 + vSignal * .06 * uEnergy) * fog * (1. - uFocus * .82);
+    vec3 c = mix(vec3(.22,.21,.45), vec3(.47,.51,.77), vSignal * .65);
+    gl_FragColor = vec4(c, alpha);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+const livingVertex = /* glsl */ `
+  uniform float uTime, uFocus, uEnergy, uSelectionStrength, uInteraction;
+  uniform vec2 uPointer, uSelection;
+  varying vec3 vPos;
+  varying float vRise, vSelection;
+  void main() {
+    vec3 p = position;
+    float wave = sin(p.x * .28 + uTime * .27) * cos(p.z * .2 - uTime * .16);
+    float influence = exp(-length(p.xz - uPointer * 6.) * .22);
+    vec2 local = ((modelMatrix * vec4(p,1.)).xz - uSelection) / vec2(3.8,4.5);
+    float selection = exp(-dot(local,local)) * uSelectionStrength;
+    p.y = wave * 1.15 + influence * (.3 + uEnergy * .25) - uFocus * .4;
+    p.y += selection * (.12 + uInteraction * .08) * (1. - uFocus * .6);
+    vPos = p;
+    vRise = wave;
+    vSelection = selection;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.);
+  }
+`;
+
+const livingFragment = /* glsl */ `
+  uniform float uFocus;
+  varying vec3 vPos;
+  varying float vRise, vSelection;
+  void main() {
+    vec3 dx = dFdx(vPos), dy = dFdy(vPos);
+    vec3 n = normalize(cross(dx, dy));
+    float light = pow(abs(dot(n, normalize(vec3(.2,1.,.6)))), 6.);
+    float contour = pow(.5 + .5 * sin(vPos.y * 17. + vPos.z * .2), 16.);
+    float fade = exp(-length(vPos.xz) * .065) * (1. - uFocus * .7);
+    vec3 c = vec3(.025,.017,.07) + vec3(.13,.08,.3) * light + vec3(.26,.22,.47) * contour * .13;
+    c += vec3(.023,.016,.048) * vSelection;
+    gl_FragColor = vec4(c, fade * .65);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+const groundVertex = /* glsl */ `
+  varying vec3 vWorld;
+  void main() {
+    vec4 world = modelMatrix * vec4(position, 1.);
+    vWorld = world.xyz;
+    gl_Position = projectionMatrix * viewMatrix * world;
+  }
+`;
+
+const groundFragment = /* glsl */ `
+  uniform float uFocus, uEnergy;
+  varying vec3 vWorld;
+  void main() {
+    vec2 local = (vWorld.xz - vec2(1.4, .2)) / vec2(3.5, 4.4);
+    float presence = exp(-dot(local, local)) * (.4 + uEnergy * .25);
+    vec2 foot = (vWorld.xz - vec2(2.2, -12.)) / vec2(2.8, 3.5);
+    float architectural = exp(-dot(foot, foot));
+    float horizon = exp(-abs(vWorld.z + 16.) * .12);
+    vec3 color = vec3(.003,.0035,.01) + vec3(.021,.012,.051) * presence;
+    color += vec3(.021,.016,.039) * architectural + vec3(.005,.004,.013) * horizon;
+    color *= 1. - uFocus * .65;
+    float distanceFade = smoothstep(-58., -26., vWorld.z);
+    gl_FragColor = vec4(color, distanceFade * .9);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+const atmosphereFragment = /* glsl */ `
+  uniform float uFocus;
+  varying vec3 vWorld;
+  void main() {
+    vec2 p = vWorld.xy;
+    float distant = exp(-dot((p - vec2(-3.,-1.)) / vec2(11.,4.5), (p - vec2(-3.,-1.)) / vec2(11.,4.5)));
+    float near = exp(-dot((p - vec2(4.,-1.2)) / vec2(5.,3.), (p - vec2(4.,-1.2)) / vec2(5.,3.)));
+    float shaft = exp(-pow((p.x + p.y * .38 + 3.) / 2.6, 2.)) * exp(-pow((p.y - 2.) / 8., 2.));
+    vec3 c = vec3(.008,.005,.025) * distant + vec3(.005,.003,.017) * near + vec3(.008,.006,.018) * shaft;
+    gl_FragColor = vec4(c * (1. - uFocus * .65), 1.);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+const contactVertex = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.);
+  }
+`;
+const contactFragment = /* glsl */ `
+  uniform vec2 uSize, uRect;
+  uniform float uLift, uSelected, uEnergy, uOpacity, uRound;
+  varying vec2 vUv;
+  void main() {
+    vec2 p = (vUv - .5) * uSize;
+    vec2 q = abs(p) - uRect * .5 + vec2(12.);
+    float rectangle = length(max(q, 0.)) + min(max(q.x,q.y),0.) - 12.;
+    float ellipse = (length(p / (uRect * .5)) - 1.) * min(uRect.x,uRect.y) * .5;
+    float distance = mix(rectangle, ellipse, uRound);
+    float softness = 14. + uLift * .35;
+    float shadow = exp(-max(distance,0.) / softness) * (.28 - min(uLift,60.) * .0012);
+    float ground = exp(-pow((p.y + uRect.y * .46 + 9.) / (18. + uLift * .18),2.)) * exp(-pow(p.x / (uRect.x * .65),2.));
+    float light = ground * (.12 + uSelected * .13 + uEnergy * .045);
+    vec3 color = vec3(.13,.075,.27) * light;
+    float alpha = max(shadow, light * .7) * uOpacity;
+    gl_FragColor = vec4(color, alpha);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+  }
+`;
+
+/** A procedural GPU stage. Scheduling and semantic truth remain in the caller. */
+export class Environment {
+  private readonly renderer: THREE.WebGLRenderer;
+  private readonly scene = new THREE.Scene();
+  private readonly camera = new THREE.PerspectiveCamera(39, 1, 0.1, 100);
+  private readonly architecture = new THREE.Group();
+  private readonly living = new THREE.Group();
+  private readonly observatory = new THREE.Group();
+  private readonly vela = new THREE.Group();
+  private readonly ribbons: THREE.Mesh<
+    THREE.BufferGeometry,
+    THREE.ShaderMaterial
+  >[] = [];
+  private readonly ribbonLevels: THREE.BufferGeometry[] = [];
+  private readonly apertureMaterials: THREE.MeshPhysicalMaterial[] = [];
+  private readonly secondaryArchitecture: THREE.Object3D[] = [];
+  private readonly folios: FolioVisual[] = [];
+  private readonly folioById = new Map<string, FolioVisual>();
+  private readonly surfaceProjection = new THREE.Matrix4();
+  private readonly surfaceRotation = new THREE.Matrix4();
+  private readonly surfaceWorld = new THREE.Matrix4();
+  private readonly contactScale = new THREE.Vector3();
+  private readonly folioColors = {
+    conversation: new THREE.Color(0x171424),
+    research: new THREE.Color(0x141729),
+    note: new THREE.Color(0x2a211c),
+  };
+  private readonly neutralPolish = new THREE.Color(0xa392b8);
+  private readonly warmPolish = new THREE.Color(0xa68d75);
+  private readonly projectedPresence: PresenceBounds = {
+    x: 0,
+    y: 0,
+    w: 0,
+    h: 0,
+  };
+  private readonly presencePoint = new THREE.Vector3();
+  private presenceEnvelopeGain = 0;
+  private readonly expression = new THREE.Vector4();
+  private expressionState: VelaState = "idle";
+  private expressionEnteredAt = 0;
+  private readonly selectionRay = new THREE.Vector3();
+  private readonly selectedWorld = new THREE.Vector3();
+  private readonly lightTarget = new THREE.Vector3();
+  private readonly ribbonLightDirection = new THREE.Vector3(
+    -0.4,
+    0.7,
+    0.6,
+  ).normalize();
+  private readonly fieldUniforms = {
+    uTime: { value: 0 },
+    uFocus: { value: 0 },
+    uEnergy: { value: 0.3 },
+    uPointer: { value: new THREE.Vector2() },
+    uSelection: { value: new THREE.Vector2() },
+    uSelectionStrength: { value: 0 },
+    uInteraction: { value: 0 },
+    uDetail: { value: 30 },
+  };
+  private readonly livingUniforms = {
+    uTime: this.fieldUniforms.uTime,
+    uFocus: this.fieldUniforms.uFocus,
+    uEnergy: this.fieldUniforms.uEnergy,
+    uPointer: this.fieldUniforms.uPointer,
+    uSelection: this.fieldUniforms.uSelection,
+    uSelectionStrength: this.fieldUniforms.uSelectionStrength,
+    uInteraction: this.fieldUniforms.uInteraction,
+  };
+  private readonly environmentMap: THREE.WebGLRenderTarget;
+  private readonly fill: THREE.PointLight;
+  private readonly detail: THREE.Group = new THREE.Group();
+  private quality: Quality = "balanced";
+  private study: Study = "architecture";
+  private width = 0;
+  private height = 0;
+  private pixelRatio = 0;
+  private frames = 0;
+  private previousTime = 0;
+  private semanticEnergy = 0.22;
+  private readonly semanticTint = new THREE.Color(0x8c7cdb);
+  private readonly targetTint = new THREE.Color(0x8c7cdb);
+  private lost = false;
+  private disposed = false;
+  private readonly onContextLost = () => {
+    this.lost = true;
+  };
+  private readonly onContextRestored = () => {
+    this.lost = false;
+  };
+
+  constructor(private readonly canvas: HTMLCanvasElement) {
+    try {
+      this.renderer = new THREE.WebGLRenderer({
+        canvas,
+        antialias: true,
+        alpha: false,
+        powerPreference: "low-power",
+      });
+    } catch (error) {
+      throw new Error(
+        `Aerynth GPU environment could not initialize WebGL2: ${String(error)}`,
+      );
+    }
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.12;
+    this.renderer.setClearColor(0x05060d, 1);
+    this.scene.fog = new THREE.FogExp2(0x05060d, 0.035);
+    this.camera.position.set(0, 1.8, 12);
+    this.camera.lookAt(0, 0.35, 0);
+
+    // Procedural studio reflection: no downloaded imagery or asynchronous asset dependency.
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const studio = new RoomEnvironment();
+    this.environmentMap = pmrem.fromScene(studio, 0.055);
+    this.scene.environment = this.environmentMap.texture;
+    studio.dispose();
+    pmrem.dispose();
+    this.scene.add(new THREE.HemisphereLight(0xa7b7ff, 0x020207, 1.6));
+    const key = new THREE.DirectionalLight(0xd9d6ff, 3.5);
+    key.position.set(-5, 8, 6);
+    this.scene.add(key);
+    const violet = new THREE.DirectionalLight(0x7561eb, 2.3);
+    violet.position.set(7, 1, -3);
+    this.scene.add(violet);
+    this.fill = new THREE.PointLight(0x8d7bff, 22, 18, 2);
+    this.fill.position.set(1.3, 1.5, 2);
+    this.scene.add(this.fill);
+    this.scene.add(
+      this.architecture,
+      this.living,
+      this.observatory,
+      this.vela,
+      this.detail,
+    );
+    this.buildArchitecture();
+    this.buildLiving();
+    this.buildObservatory();
+    this.buildVela();
+    this.buildField();
+    this.buildFolios();
+    canvas.addEventListener("webglcontextlost", this.onContextLost);
+    canvas.addEventListener("webglcontextrestored", this.onContextRestored);
+  }
+
+  private buildArchitecture() {
+    const aperture = new THREE.Group();
+    aperture.position.set(-8, 0.7, -11.5);
+    aperture.rotation.set(0.18, 0.49, -0.23);
+    for (let band = 0; band < 3; band++) {
+      const material = new THREE.MeshPhysicalMaterial({
+        color: band === 0 ? 0x695c79 : 0x30273e,
+        metalness: 0.77,
+        roughness: 0.23 + band * 0.055,
+        clearcoat: 0.7,
+        clearcoatRoughness: 0.21,
+        envMapIntensity: 0.66,
+        side: THREE.FrontSide,
+        emissive: 0x30233f,
+        emissiveIntensity: band === 0 ? 0.23 : 0.11,
+      });
+      this.apertureMaterials.push(material);
+      const radius = 8.45 + band * 0.48;
+      const breadth = 0.43 - band * 0.065;
+      const start = -0.98,
+        end = Math.PI * 1.53;
+      const section = new THREE.Shape();
+      section.absarc(0, 0, radius + breadth * 0.5, start, end, false);
+      section.absarc(0, 0, radius - breadth * 0.5, end, start, true);
+      section.closePath();
+      // Solid section and bevels reveal thickness under grazing light.
+      const geometry = new THREE.ExtrudeGeometry(section, {
+        depth: 0.21,
+        bevelEnabled: true,
+        bevelSize: 0.045,
+        bevelThickness: 0.045,
+        bevelSegments: 3,
+        curveSegments: 128,
+        steps: 1,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.position.z = -band * 0.55;
+      aperture.add(mesh);
+      const edgePoints = Array.from({ length: 145 }, (_, i) => {
+        const a = start + (i / 144) * (end - start);
+        return new THREE.Vector3(
+          Math.cos(a) * (radius - breadth * 0.5),
+          Math.sin(a) * (radius - breadth * 0.5),
+          0.255,
+        );
+      });
+      const edge = new THREE.Mesh(
+        new THREE.TubeGeometry(
+          new THREE.CatmullRomCurve3(edgePoints),
+          160,
+          band === 0 ? 0.016 : 0.009,
+          5,
+          false,
+        ),
+        new THREE.MeshStandardMaterial({
+          color: band === 0 ? 0xc6badb : 0x766384,
+          metalness: 0.85,
+          roughness: 0.22,
+          envMapIntensity: 0.85,
+          emissive: 0x8b70a1,
+          emissiveIntensity: band === 0 ? 0.3 : 0.075,
+        }),
+      );
+      edge.position.z = -band * 0.55;
+      aperture.add(edge);
+      if (band > 0) this.secondaryArchitecture.push(mesh, edge);
+    }
+    this.architecture.add(aperture);
+    const graze = new THREE.SpotLight(0xc2aedb, 360, 40, 0.4, 0.85, 2);
+    graze.position.set(5, 5, -1);
+    graze.target.position.set(-2.8, 2.4, -12);
+    this.architecture.add(graze, graze.target);
+    const floor = new THREE.Mesh(
+      new THREE.PlaneGeometry(90, 80),
+      new THREE.ShaderMaterial({
+        uniforms: {
+          uFocus: this.fieldUniforms.uFocus,
+          uEnergy: this.fieldUniforms.uEnergy,
+        },
+        vertexShader: groundVertex,
+        fragmentShader: groundFragment,
+        transparent: true,
+        depthWrite: false,
+      }),
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.set(0, -2.6, -18);
+    this.architecture.add(floor);
+    const atmosphere = new THREE.Mesh(
+      new THREE.PlaneGeometry(65, 38),
+      new THREE.ShaderMaterial({
+        uniforms: { uFocus: this.fieldUniforms.uFocus },
+        vertexShader: groundVertex,
+        fragmentShader: atmosphereFragment,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        depthTest: false,
+      }),
+    );
+    atmosphere.position.set(0, 1, -26);
+    this.architecture.add(atmosphere);
+    const horizon = this.curveLine(
+      160,
+      (t) =>
+        new THREE.Vector3(
+          (t - 0.5) * 70,
+          -1.91 + Math.sin(t * Math.PI) * 0.15,
+          -18 - Math.cos(t * Math.PI) * 3,
+        ),
+      0x4d467b,
+      0.13,
+    );
+    this.architecture.add(horizon);
+  }
+
+  private buildLiving() {
+    const geometry = new THREE.PlaneGeometry(42, 30, 112, 80);
+    geometry.rotateX(-Math.PI / 2);
+    const sheet = new THREE.Mesh(
+      geometry,
+      new THREE.ShaderMaterial({
+        uniforms: this.livingUniforms,
+        vertexShader: livingVertex,
+        fragmentShader: livingFragment,
+        side: THREE.DoubleSide,
+        transparent: true,
+        depthWrite: false,
+      }),
+    );
+    sheet.position.set(0, -2.8, -8);
+    this.living.add(sheet);
+    // A second, recessed contour layer gives the field material thickness.
+    const under = sheet.clone();
+    under.position.y -= 0.37;
+    under.rotation.y = 0.12;
+    this.living.add(under);
+  }
+
+  private buildObservatory() {
+    const frame = new THREE.Group();
+    frame.position.set(0.7, -0.75, -5);
+    frame.rotation.set(1.08, -0.23, 0.12);
+    for (let i = 0; i < 5; i++) {
+      const radius = 3.9 + i * 0.56;
+      const ring = this.curveLine(
+        220,
+        (t) =>
+          new THREE.Vector3(
+            Math.cos(t * Math.PI * 2) * radius,
+            Math.sin(t * Math.PI * 2) * radius,
+            0,
+          ),
+        0x827ca8,
+        i === 0 ? 0.43 : 0.16,
+      );
+      frame.add(ring);
+    }
+    const ticks: number[] = [];
+    for (let i = 0; i < 72; i++) {
+      const a = (i / 72) * Math.PI * 2;
+      const r = i % 6 === 0 ? 6.3 : 6.45;
+      ticks.push(
+        Math.cos(a) * r,
+        Math.sin(a) * r,
+        0,
+        Math.cos(a) * 6.55,
+        Math.sin(a) * 6.55,
+        0,
+      );
+    }
+    const tickGeometry = new THREE.BufferGeometry();
+    tickGeometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(ticks, 3),
+    );
+    frame.add(
+      new THREE.LineSegments(
+        tickGeometry,
+        new THREE.LineBasicMaterial({
+          color: 0x8d89ac,
+          transparent: true,
+          opacity: 0.38,
+        }),
+      ),
+    );
+    this.observatory.add(frame);
+    const meridian = new THREE.Mesh(
+      new THREE.TorusGeometry(6.7, 0.045, 8, 160, Math.PI * 1.67),
+      new THREE.MeshStandardMaterial({
+        color: 0x3b3856,
+        metalness: 0.7,
+        roughness: 0.3,
+      }),
+    );
+    meridian.position.set(0, 0.8, -10);
+    meridian.rotation.set(0.2, -0.65, -0.35);
+    this.observatory.add(meridian);
+  }
+
+  private buildVela() {
+    for (const [along, across] of [
+      [224, 12],
+      [144, 8],
+      [80, 5],
+    ]) {
+      const geometry = new THREE.PlaneGeometry(1, 1, along, across);
+      const position = geometry.getAttribute("position");
+      for (let j = 0; j < position.count; j++) {
+        const t = (position.getX(j) + 0.5) * Math.PI * 2;
+        position.setXYZ(j, t, position.getY(j) * 2, 0);
+      }
+      // Bounds are procedural rather than the parameter-space geometry bounds.
+      geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 2.3);
+      this.ribbonLevels.push(geometry);
+    }
+    // One continuous broad surface keeps the two-loop identity without the
+    // near-contact companion's wirelike slivers at the folded joins.
+    {
+      const material = new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 },
+          uEnergy: { value: 0.3 },
+          uAmbient: { value: 1 },
+          uExpression: { value: this.expression },
+          uSceneLight: { value: this.ribbonLightDirection },
+          uTint: { value: new THREE.Color(0x7067dc) },
+          uUnavailable: { value: 0 },
+        },
+        vertexShader: ribbonVertex,
+        fragmentShader: ribbonFragment,
+        side: THREE.DoubleSide,
+      });
+      const ribbon = new THREE.Mesh(this.ribbonLevels[1], material);
+      this.ribbons.push(ribbon);
+      this.vela.add(ribbon);
+    }
+    this.vela.position.set(1.35, 1.7, 0.1);
+    this.vela.rotation.set(-0.18, -0.35, -0.13);
+  }
+
+  private buildField() {
+    const positions: number[] = [],
+      layers: number[] = [];
+    for (let line = 0; line < 28; line++) {
+      for (let i = 0; i < 120; i++) {
+        for (let end = 0; end < 2; end++) {
+          const t = (i + end) / 120;
+          const a = -0.28 + t * Math.PI * 0.68;
+          const radius = 7 + line * 0.58;
+          const x = -5.2 + Math.cos(a) * radius;
+          const z = -9 + Math.sin(a) * radius * 0.73;
+          const y = -2.36 + Math.sin(t * Math.PI * 1.4 + line * 0.15) * 0.055;
+          positions.push(x, y, z);
+          layers.push(line);
+        }
+      }
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute(
+      "position",
+      new THREE.Float32BufferAttribute(positions, 3),
+    );
+    geometry.setAttribute(
+      "aLayer",
+      new THREE.Float32BufferAttribute(layers, 1),
+    );
+    const material = new THREE.ShaderMaterial({
+      uniforms: this.fieldUniforms,
+      vertexShader: fieldVertex,
+      fragmentShader: fieldFragment,
+      transparent: true,
+      depthWrite: false,
+    });
+    this.detail.add(new THREE.LineSegments(geometry, material));
+  }
+
+  private curveLine(
+    segments: number,
+    point: (t: number) => THREE.Vector3,
+    color: number,
+    opacity: number,
+  ) {
+    const vertices = Array.from({ length: segments + 1 }, (_, i) =>
+      point(i / segments),
+    );
+    return new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(vertices),
+      new THREE.LineBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+        depthWrite: false,
+      }),
+    );
+  }
+
+  private buildFolios() {
+    // Exactly three persistent resources are supported by this isolated study.
+    // Fixed buffers, materials, and identities survive every move/unfold/quality transition.
+    for (let i = 0; i < 3; i++) {
+      const root = new THREE.Group();
+      root.matrixAutoUpdate = false;
+      root.visible = false;
+      const slab = this.folioGeometry(false);
+      const rim = this.folioGeometry(true);
+      const face = new THREE.MeshPhysicalMaterial({
+        color: 0x171424,
+        roughness: 0.37,
+        metalness: 0.47,
+        clearcoat: 0.75,
+        clearcoatRoughness: 0.24,
+        envMapIntensity: 0.43,
+        emissive: 0x110c21,
+        emissiveIntensity: 0.12,
+        transparent: true,
+      });
+      const edge = new THREE.MeshPhysicalMaterial({
+        color: 0x60536f,
+        roughness: 0.25,
+        metalness: 0.78,
+        clearcoat: 0.8,
+        clearcoatRoughness: 0.18,
+        envMapIntensity: 0.72,
+        emissive: 0x332345,
+        emissiveIntensity: 0.12,
+        transparent: true,
+      });
+      const polish = new THREE.MeshPhysicalMaterial({
+        color: 0xa392b8,
+        roughness: 0.18,
+        metalness: 0.86,
+        clearcoat: 1,
+        clearcoatRoughness: 0.16,
+        envMapIntensity: 0.85,
+        emissive: 0x6b478c,
+        emissiveIntensity: 0.12,
+        transparent: true,
+      });
+      const slabMesh = new THREE.Mesh(slab, [face, edge]);
+      slabMesh.frustumCulled = false;
+      slabMesh.renderOrder = 3;
+      const rimMesh = new THREE.Mesh(rim, polish);
+      rimMesh.frustumCulled = false;
+      rimMesh.renderOrder = 4;
+      root.add(slabMesh, rimMesh);
+      const contact = new THREE.Mesh(
+        new THREE.PlaneGeometry(1, 1),
+        new THREE.ShaderMaterial({
+          uniforms: {
+            uSize: { value: new THREE.Vector2() },
+            uRect: { value: new THREE.Vector2() },
+            uLift: { value: 0 },
+            uSelected: { value: 0 },
+            uEnergy: this.fieldUniforms.uEnergy,
+            uOpacity: { value: 1 },
+            uRound: { value: 0 },
+          },
+          vertexShader: contactVertex,
+          fragmentShader: contactFragment,
+          transparent: true,
+          depthWrite: false,
+        }),
+      );
+      contact.matrixAutoUpdate = false;
+      contact.frustumCulled = false;
+      contact.renderOrder = 2;
+      contact.visible = false;
+      this.scene.add(root, contact);
+      this.folios.push({
+        id: null,
+        root,
+        slab,
+        rim,
+        rimMesh,
+        face,
+        edge,
+        polish,
+        contact,
+        width: 0,
+        height: 0,
+        unfold: -1,
+        kind: "conversation",
+      });
+    }
+  }
+
+  /** Four bevel rings use 32 fixed perimeter samples; only their small attribute buffer changes. */
+  private folioGeometry(rimOnly: boolean) {
+    const n = 32,
+      rings = rimOnly ? 2 : 4;
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array((n * rings + (rimOnly ? 0 : 2)) * 3);
+    const normals = new Float32Array(positions.length);
+    for (let ring = 0; ring < rings; ring++) {
+      for (let j = 0; j < n; j++) {
+        const angle = (Math.floor(j / 8) + (j % 8) / 8) * Math.PI * 0.5;
+        const radial = rimOnly
+          ? 0
+          : ring === 0
+            ? 0.25
+            : ring === 1
+              ? 0.78
+              : ring === 2
+                ? 0.98
+                : 0.62;
+        const z = rimOnly
+          ? 1
+          : Math.sqrt(1 - radial * radial) * (ring === 3 ? -1 : 1);
+        const at = (ring * n + j) * 3;
+        normals[at] = Math.cos(angle) * radial;
+        normals[at + 1] = Math.sin(angle) * radial;
+        normals[at + 2] = z;
+      }
+    }
+    const indices: number[] = [];
+    if (!rimOnly) {
+      normals[n * rings * 3 + 2] = 1;
+      normals[(n * rings + 1) * 3 + 2] = -1;
+      for (let j = 0; j < n; j++) indices.push(n * rings, j, (j + 1) % n);
+      geometry.addGroup(0, indices.length, 0);
+    }
+    const sideStart = indices.length;
+    for (let ring = 0; ring < rings - 1; ring++) {
+      for (let j = 0; j < n; j++) {
+        const next = (j + 1) % n,
+          a = ring * n + j,
+          b = ring * n + next,
+          c = (ring + 1) * n + j,
+          d = (ring + 1) * n + next;
+        if (rimOnly) indices.push(a, b, c, b, d, c);
+        else indices.push(a, c, b, b, c, d);
+      }
+    }
+    if (!rimOnly) {
+      for (let j = 0; j < n; j++)
+        indices.push(
+          n * rings + 1,
+          (rings - 1) * n + ((j + 1) % n),
+          (rings - 1) * n + j,
+        );
+      geometry.addGroup(sideStart, indices.length - sideStart, 1);
+    }
+    geometry.setIndex(indices);
+    geometry.setAttribute(
+      "position",
+      new THREE.BufferAttribute(positions, 3).setUsage(THREE.DynamicDrawUsage),
+    );
+    geometry.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+    return geometry;
+  }
+
+  private shapeFolio(
+    geometry: THREE.BufferGeometry,
+    width: number,
+    height: number,
+    rimOnly: boolean,
+    kind: NonNullable<SurfacePose["kind"]>,
+    unfold: number,
+  ) {
+    const n = 32,
+      rings = rimOnly ? 2 : 4;
+    const position = geometry.getAttribute("position") as THREE.BufferAttribute;
+    for (let ring = 0; ring < rings; ring++) {
+      const inset = rimOnly
+        ? ring === 0
+          ? 1.8
+          : 2.65
+        : ring === 0
+          ? 1.8
+          : ring === 3
+            ? 2.5
+            : 0;
+      const halfW = width * 0.5 + 5 - inset,
+        halfH = height * 0.5 + 5 - inset;
+      const z = rimOnly
+        ? 0.22
+        : ring === 0
+          ? 0
+          : ring === 1
+            ? -1.4
+            : ring === 2
+              ? -6.5
+              : -8;
+      for (let j = 0; j < n; j++) {
+        const corner = Math.floor(j / 8);
+        const angle = (corner + (j % 8) / 8) * Math.PI * 0.5;
+        const baseCorner = kind === "research" ? 7 : corner === 0 ? 22 : 7;
+        const radius = Math.max(2, baseCorner + 4 - inset);
+        const round = kind === "research" ? 1 - unfold : 0;
+        const radiusX = halfW * round + radius * (1 - round);
+        const radiusY = halfH * round + radius * (1 - round);
+        const centerX =
+          (corner === 0 || corner === 3 ? 1 : -1) * (halfW - radiusX);
+        const centerY = (corner < 2 ? 1 : -1) * (halfH - radiusY);
+        position.setXYZ(
+          ring * n + j,
+          centerX + Math.cos(angle) * radiusX,
+          centerY + Math.sin(angle) * radiusY,
+          z,
+        );
+      }
+    }
+    if (!rimOnly) {
+      position.setXYZ(n * rings, 0, 0, 0);
+      position.setXYZ(n * rings + 1, 0, 0, -8);
+    }
+    position.needsUpdate = true;
+  }
+
+  /** Match CSS perspective(1500px) around each folio's own center, including yaw and lift. */
+  private surfaceMatrix(
+    cx: number,
+    cy: number,
+    lift: number,
+    yaw: number,
+    baselineDepth: number,
+  ) {
+    const worldPerPixel =
+      (2 *
+        baselineDepth *
+        Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5))) /
+      this.height;
+    const x = cx - this.width * 0.5,
+      y = this.height * 0.5 - cy;
+    const zScale = baselineDepth / 1500;
+    const perspective = 1 - lift / 1500;
+    // The Z shear keeps perspective-origin at the local resource center, exactly as CSS does.
+    this.surfaceProjection.set(
+      worldPerPixel,
+      0,
+      (-x * worldPerPixel) / 1500,
+      x * worldPerPixel * perspective,
+      0,
+      worldPerPixel,
+      (-y * worldPerPixel) / 1500,
+      y * worldPerPixel * perspective,
+      0,
+      0,
+      zScale,
+      -baselineDepth * perspective,
+      0,
+      0,
+      0,
+      1,
+    );
+    this.surfaceRotation.makeRotationY(THREE.MathUtils.degToRad(yaw));
+    this.surfaceWorld
+      .multiplyMatrices(this.camera.matrixWorld, this.surfaceProjection)
+      .multiply(this.surfaceRotation);
+    return this.surfaceWorld;
+  }
+
+  private updateFolios(
+    surfaces: readonly SurfacePose[] | undefined,
+    quality: Quality,
+  ) {
+    for (const visual of this.folios) {
+      visual.root.visible = false;
+      visual.contact.visible = false;
+    }
+    if (!surfaces) return;
+    for (let i = 0; i < Math.min(3, surfaces.length); i++) {
+      const pose = surfaces[i];
+      if (
+        !Number.isFinite(pose.x) ||
+        !Number.isFinite(pose.y) ||
+        !Number.isFinite(pose.w) ||
+        !Number.isFinite(pose.h) ||
+        !Number.isFinite(pose.lift) ||
+        !Number.isFinite(pose.yaw) ||
+        pose.w <= 0 ||
+        pose.h <= 0
+      )
+        continue;
+      let visual = this.folioById.get(pose.id);
+      if (!visual) {
+        visual = this.folios.find((folio) => folio.id === null);
+        if (!visual) continue;
+        visual.id = pose.id;
+        this.folioById.set(pose.id, visual);
+      }
+      visual.root.visible = true;
+      visual.contact.visible = true;
+      const opacity = THREE.MathUtils.clamp(pose.opacity ?? 1, 0, 1);
+      const kind = pose.kind ?? "conversation";
+      const unfold = Number.isFinite(pose.unfold)
+        ? THREE.MathUtils.clamp(pose.unfold, 0, 1)
+        : 0;
+      if (
+        visual.width !== pose.w ||
+        visual.height !== pose.h ||
+        visual.unfold !== unfold ||
+        visual.kind !== kind
+      ) {
+        this.shapeFolio(visual.slab, pose.w, pose.h, false, kind, unfold);
+        this.shapeFolio(visual.rim, pose.w, pose.h, true, kind, unfold);
+        visual.width = pose.w;
+        visual.height = pose.h;
+        visual.unfold = unfold;
+        visual.kind = kind;
+      }
+      visual.root.matrix.copy(
+        this.surfaceMatrix(
+          pose.x + pose.w * 0.5,
+          pose.y + pose.h * 0.5,
+          pose.lift,
+          pose.yaw,
+          7,
+        ),
+      );
+      visual.root.matrixWorldNeedsUpdate = true;
+      visual.face.opacity = opacity;
+      visual.edge.opacity = opacity;
+      visual.polish.opacity = opacity * (pose.selected ? 0.92 : 0.24);
+      visual.edge.envMapIntensity = pose.selected ? 0.72 - unfold * 0.12 : 0.38;
+      visual.face.color.copy(this.folioColors[kind]);
+      visual.face.roughness =
+        kind === "note"
+          ? 0.64 + unfold * 0.04
+          : kind === "research"
+            ? 0.31 + unfold * 0.16
+            : 0.4 + unfold * 0.08;
+      visual.face.metalness = kind === "note" ? 0.22 : 0.47 - unfold * 0.08;
+      visual.face.clearcoat = kind === "note" ? 0.28 : 0.75;
+      visual.polish.color.copy(
+        kind === "note" ? this.warmPolish : this.neutralPolish,
+      );
+      visual.face.envMapIntensity =
+        quality === "efficient" ? 0.22 : 0.43 * (1 - unfold * 0.28);
+      visual.edge.emissiveIntensity =
+        0.09 + (pose.selected ? 0.15 : 0) + Math.max(0, pose.lift) * 0.0012;
+      visual.polish.emissiveIntensity = pose.selected ? 0.2 : 0.09;
+      visual.rimMesh.visible = quality !== "efficient";
+      const spread = 46 + Math.max(0, pose.lift) * 0.6;
+      const contactW = pose.w + spread * 2,
+        contactH = pose.h + spread * 2;
+      visual.contact.material.uniforms.uSize.value.set(contactW, contactH);
+      visual.contact.material.uniforms.uRect.value.set(pose.w + 6, pose.h + 6);
+      visual.contact.material.uniforms.uLift.value = Math.max(0, pose.lift);
+      visual.contact.material.uniforms.uSelected.value = pose.selected ? 1 : 0;
+      visual.contact.material.uniforms.uOpacity.value = opacity;
+      visual.contact.material.uniforms.uRound.value =
+        kind === "research" ? 1 - unfold : 0;
+      visual.contact.matrix.copy(
+        this.surfaceMatrix(
+          pose.x + pose.w * 0.5,
+          pose.y + pose.h * 0.5 + 12 + Math.max(0, pose.lift) * 0.3,
+          0,
+          pose.yaw,
+          7.8,
+        ),
+      );
+      this.contactScale.set(contactW, contactH, 1);
+      visual.contact.matrix.scale(this.contactScale);
+      visual.contact.matrixWorldNeedsUpdate = true;
+    }
+  }
+
+  private updatePresenceBounds() {
+    // The shader's actual surface is bounded by this known local envelope.
+    // BufferGeometry positions contain (t, v) parameters, so Box3 would be wrong.
+    let minX = Infinity,
+      minY = Infinity,
+      maxX = -Infinity,
+      maxY = -Infinity;
+    this.vela.updateMatrixWorld(true);
+    const envelopeScale =
+      1 +
+      this.presenceEnvelopeGain * 0.05 +
+      Math.max(0, this.expression.x) * 0.045 +
+      Math.abs(this.expression.y) * 0.025 +
+      Math.abs(this.expression.w) * 0.02;
+    for (let corner = 0; corner < 8; corner++) {
+      this.presencePoint
+        .set(
+          (corner & 1 ? 1.35 : -1.35) * envelopeScale,
+          (corner & 2 ? 1.5 : -1.5) * envelopeScale,
+          (corner & 4 ? 1 : -1) * (0.85 + this.presenceEnvelopeGain * 0.08),
+        )
+        .applyMatrix4(this.vela.matrixWorld)
+        .project(this.camera);
+      const x = (this.presencePoint.x * 0.5 + 0.5) * this.width;
+      const y = (0.5 - this.presencePoint.y * 0.5) * this.height;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x);
+      maxY = Math.max(maxY, y);
+    }
+    this.projectedPresence.x = minX;
+    this.projectedPresence.y = minY;
+    this.projectedPresence.w = maxX - minX;
+    this.projectedPresence.h = maxY - minY;
+  }
+
+  private updateSceneLighting(
+    frame: EnvironmentFrame,
+    focus: number,
+    settle: number,
+    inputX: number,
+  ) {
+    let selected: SurfacePose | undefined;
+    if (frame.surfaces) {
+      for (const surface of frame.surfaces) {
+        if (surface.selected) {
+          selected = surface;
+          break;
+        }
+      }
+    }
+    // Attributed activity can illuminate its shared anchor without selecting it.
+    let illuminated = selected;
+    if (frame.attention > 0 && frame.surfaces) {
+      let nearest = 0.0025;
+      for (const surface of frame.surfaces) {
+        const x = ((surface.x + surface.w * 0.5) / this.width) * 2 - 1;
+        const y = 1 - ((surface.y + surface.h * 0.5) / this.height) * 2;
+        const distance =
+          (x - frame.pointer.x) ** 2 + (y - frame.pointer.y) ** 2;
+        if (distance < nearest) {
+          nearest = distance;
+          illuminated = surface;
+        }
+      }
+    }
+    const requestedInteraction = frame.interaction ?? (selected ? 0.25 : 0);
+    const interaction = Number.isFinite(requestedInteraction)
+      ? THREE.MathUtils.clamp(requestedInteraction, 0, 1)
+      : 0;
+    const targetStrength = illuminated
+      ? illuminated !== selected
+        ? 0.25 + THREE.MathUtils.clamp(frame.attention, 0, 1) * 0.25
+        : THREE.MathUtils.clamp(
+            0.35 +
+              Math.max(0, illuminated.lift) / 110 +
+              illuminated.unfold * 0.15,
+            0,
+            1,
+          )
+      : 0;
+    this.fieldUniforms.uSelectionStrength.value +=
+      (targetStrength - this.fieldUniforms.uSelectionStrength.value) * settle;
+    this.fieldUniforms.uInteraction.value +=
+      (interaction - this.fieldUniforms.uInteraction.value) * settle;
+    this.lightTarget.set(this.vela.position.x + inputX * 0.4, 1.5, 2);
+    if (illuminated) {
+      const cx = illuminated.x + illuminated.w * 0.5;
+      const cy = illuminated.y + illuminated.h * 0.5;
+      // Project the same resource pose into the shared scene, then find its
+      // floor footprint. This is an optical approximation, not a shadow map.
+      this.selectedWorld
+        .set(0, 0, 0)
+        .applyMatrix4(
+          this.surfaceMatrix(cx, cy, illuminated.lift, illuminated.yaw, 7),
+        );
+      this.lightTarget.lerp(
+        this.selectedWorld,
+        this.fieldUniforms.uSelectionStrength.value * 0.25,
+      );
+      const floorY = Math.max(
+        illuminated.y + illuminated.h * 0.8,
+        this.height * 0.55,
+      );
+      this.selectionRay
+        .set((cx / this.width) * 2 - 1, 1 - (floorY / this.height) * 2, 0.5)
+        .unproject(this.camera)
+        .sub(this.camera.position);
+      const distance =
+        this.selectionRay.y < -0.0001
+          ? Math.min(
+              (-2.4 - this.camera.position.y) / this.selectionRay.y,
+              30 / this.selectionRay.length(),
+            )
+          : 15 / this.selectionRay.length();
+      this.selectionRay.multiplyScalar(distance).add(this.camera.position);
+      const anchor = this.fieldUniforms.uSelection.value;
+      anchor.x += (this.selectionRay.x - anchor.x) * settle;
+      anchor.y += (this.selectionRay.z - anchor.y) * settle;
+      if (frame.vela !== "unavailable") {
+        const acknowledgment =
+          this.fieldUniforms.uSelectionStrength.value * (1 - focus * 0.35);
+        this.vela.rotation.y +=
+          THREE.MathUtils.clamp(frame.pointer.x - 0.2, -1, 1) *
+          0.085 *
+          acknowledgment;
+        this.vela.rotation.x -=
+          THREE.MathUtils.clamp(frame.pointer.y + 0.2, -1, 1) *
+          0.045 *
+          acknowledgment;
+      }
+    }
+    this.fill.position.lerp(this.lightTarget, settle);
+    this.fill.color.copy(this.semanticTint);
+    this.fill.intensity *=
+      1 + this.fieldUniforms.uSelectionStrength.value * 0.1;
+    this.ribbonLightDirection
+      .copy(this.fill.position)
+      .sub(this.vela.position)
+      .transformDirection(this.camera.matrixWorldInverse);
+  }
+
+  /** Cached conservative CSS-pixel bounds; callers must not mutate the returned object. */
+  presenceBounds(): Readonly<PresenceBounds> {
+    return this.projectedPresence;
+  }
+
+  render(frame: EnvironmentFrame) {
+    if (this.disposed || this.lost) return;
+    const width = Math.max(1, frame.width),
+      height = Math.max(1, frame.height);
+    const dpr = Math.min(
+      window.devicePixelRatio || 1,
+      frame.quality === "cinematic"
+        ? 1.75
+        : frame.quality === "balanced"
+          ? 1.25
+          : 0.8,
+    );
+    if (
+      width !== this.width ||
+      height !== this.height ||
+      dpr !== this.pixelRatio
+    ) {
+      this.width = width;
+      this.height = height;
+      this.pixelRatio = dpr;
+      this.renderer.setPixelRatio(dpr);
+      this.renderer.setSize(width, height, false);
+      this.camera.aspect = width / height;
+      this.camera.updateProjectionMatrix();
+    }
+    this.quality = frame.quality;
+    this.study = frame.study;
+    this.architecture.visible = frame.study === "architecture";
+    this.living.visible = frame.study === "living";
+    this.observatory.visible = frame.study === "observatory";
+    for (const object of this.secondaryArchitecture)
+      object.visible = frame.quality !== "efficient";
+    const time = frame.reduced ? 0 : frame.time * 0.001;
+    const focus = THREE.MathUtils.clamp(frame.focus, 0, 1);
+    const energyByState: Record<VelaState, number> = {
+      idle: 0.22,
+      receiving: 0.55,
+      working: 0.78,
+      coordinating: 1,
+      attention: 0.65,
+      reported: 0.38,
+      verified: 0.48,
+      unavailable: 0,
+    };
+    const elapsed = Math.min(
+      0.1,
+      Math.max(0, (frame.time - this.previousTime) * 0.001),
+    );
+    this.previousTime = frame.time;
+    const settle =
+      frame.reduced || frame.vela === "unavailable"
+        ? 1
+        : 1 - Math.exp(-elapsed * 9);
+    this.semanticEnergy +=
+      (energyByState[frame.vela] - this.semanticEnergy) * settle;
+    const energy = this.semanticEnergy;
+    const input = frame.inputPointer ?? frame.pointer;
+    const pointerX = frame.reduced ? 0 : input.x;
+    const pointerY = frame.reduced ? 0 : input.y;
+    this.fieldUniforms.uTime.value = time;
+    this.fieldUniforms.uFocus.value = focus;
+    this.fieldUniforms.uEnergy.value = energy + frame.attention * 0.15;
+    this.fieldUniforms.uPointer.value.set(
+      frame.reduced ? 0 : frame.pointer.x,
+      frame.reduced ? 0 : frame.pointer.y,
+    );
+    this.fieldUniforms.uDetail.value =
+      frame.quality === "cinematic"
+        ? 28
+        : frame.quality === "balanced"
+          ? 16
+          : 5;
+    for (const object of this.detail.children) {
+      const lines = object as THREE.LineSegments;
+      lines.geometry.setDrawRange(
+        0,
+        Math.min(28, this.fieldUniforms.uDetail.value + 1) * 120 * 2,
+      );
+    }
+    this.detail.visible = frame.study !== "living";
+
+    // Same form across semantic states. Small expressive deformation is explicitly presentation.
+    const palette =
+      frame.vela === "attention"
+        ? 0xcfaa78
+        : frame.vela === "verified"
+          ? 0xa6c9c7
+          : 0x8c7cdb;
+    this.targetTint.setHex(palette);
+    this.semanticTint.lerp(this.targetTint, settle);
+    const presenceTime = frame.vela === "unavailable" ? 0 : time;
+    if (this.expressionState !== frame.vela) {
+      this.expressionState = frame.vela;
+      this.expressionEnteredAt = time;
+    }
+    const expressionTarget = EXPRESSIONS[frame.vela];
+    const expressionAge = Math.max(0, time - this.expressionEnteredAt);
+    const release =
+      frame.vela === "verified"
+        ? Math.sin(Math.min(1, expressionAge / 1.6) * Math.PI) *
+          Math.exp(-expressionAge * 0.5)
+        : frame.vela === "reported"
+          ? -0.25
+          : 0;
+    this.expression.x += (expressionTarget[0] - this.expression.x) * settle;
+    this.expression.y += (expressionTarget[1] - this.expression.y) * settle;
+    this.expression.z += (expressionTarget[2] - this.expression.z) * settle;
+    this.expression.w += (release - this.expression.w) * settle;
+    const ambientGain =
+      frame.reduced || frame.vela === "unavailable"
+        ? 0
+        : THREE.MathUtils.clamp(frame.ambientStrength ?? 1, 0, 1.5);
+    this.presenceEnvelopeGain = ambientGain;
+    for (let i = 0; i < this.ribbons.length; i++) {
+      const ribbon = this.ribbons[i];
+      ribbon.material.uniforms.uTime.value = presenceTime;
+      ribbon.material.uniforms.uEnergy.value = energy;
+      ribbon.material.uniforms.uAmbient.value = ambientGain;
+      ribbon.material.uniforms.uUnavailable.value =
+        frame.vela === "unavailable" ? 1 : 0;
+      ribbon.material.uniforms.uTint.value.copy(this.semanticTint);
+      // Preallocated LOD preserves the entire silhouette at every tier.
+      ribbon.geometry =
+        this.ribbonLevels[
+          frame.quality === "cinematic"
+            ? 0
+            : frame.quality === "balanced"
+              ? 1
+              : 2
+        ];
+    }
+    const compact = width / height < 1.25;
+    const baseX = compact ? 0.75 : 1.35;
+    this.vela.position.set(
+      baseX + focus * (compact ? 1.15 : 2.8),
+      1.68 + focus * 0.65 + Math.sin(presenceTime * 0.58) * 0.025 * ambientGain,
+      0.1 - focus * 1.2,
+    );
+    const scale = (compact ? 0.78 : 0.91) * (1 - focus * 0.4);
+    this.vela.scale.setScalar(scale);
+    this.vela.rotation.y =
+      -0.35 +
+      Math.sin(presenceTime * 0.58) * 0.18 * ambientGain +
+      (frame.vela === "unavailable" ? 0 : pointerX * 0.045);
+    this.vela.rotation.x =
+      -0.18 +
+      Math.sin(presenceTime * 0.49) * 0.08 * ambientGain +
+      (frame.vela === "unavailable" ? 0 : pointerY * 0.025);
+    this.vela.rotation.z =
+      -0.13 + Math.sin(presenceTime * 0.67) * 0.05 * ambientGain;
+    this.fill.intensity =
+      (12 + energy * 15) *
+      (1 - focus * 0.72) *
+      (1 + Math.sin(presenceTime * 0.58) * 0.025 * ambientGain);
+    for (const material of this.apertureMaterials)
+      material.envMapIntensity = 0.66 * (1 - focus * 0.5);
+    this.camera.position.x = pointerX * 0.035 * (1 - focus);
+    this.camera.position.y = 1.8 + pointerY * 0.025 * (1 - focus);
+    this.camera.lookAt(0, 0.35, 0);
+    this.camera.updateMatrixWorld();
+    let maxFocusedWidth = Infinity;
+    if (compact || focus > 0) {
+      // Keep the workspace composition, then project smoothly into the actual
+      // right-hand working corridor instead of letting the document occlude Vela.
+      this.presencePoint.copy(this.vela.position).project(this.camera);
+      const currentX = compact
+        ? width * 0.8
+        : (this.presencePoint.x * 0.5 + 0.5) * width;
+      let corridorLeft = width - (width < 1100 ? 48 : 300);
+      for (const surface of frame.surfaces ?? []) {
+        if (surface.selected && surface.unfold > 0.01) {
+          const yaw = THREE.MathUtils.degToRad(surface.yaw);
+          const localX = surface.w * 0.5;
+          const right =
+            surface.x +
+            localX +
+            (localX * Math.cos(yaw) * 1500) /
+              (1500 - surface.lift + localX * Math.sin(yaw));
+          corridorLeft = Math.min(width - 20, right + 8);
+          break;
+        }
+      }
+      const preferredX = width - THREE.MathUtils.clamp(width * 0.08, 90, 150);
+      const focusedX =
+        width - corridorLeft < 220 ? (corridorLeft + width) * 0.5 : preferredX;
+      maxFocusedWidth = Math.max(
+        16,
+        Math.min(focusedX - corridorLeft - 4, width - focusedX - 4) * 2,
+      );
+      const targetX = THREE.MathUtils.lerp(currentX, focusedX, focus);
+      this.presencePoint
+        .copy(this.vela.position)
+        .applyMatrix4(this.camera.matrixWorldInverse);
+      const ndcX = (targetX / width) * 2 - 1;
+      this.presencePoint.x =
+        ndcX *
+        -this.presencePoint.z *
+        Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5)) *
+        this.camera.aspect;
+      this.presencePoint.applyMatrix4(this.camera.matrixWorld);
+      this.vela.position.copy(this.presencePoint);
+      if (compact)
+        this.vela.scale.setScalar(THREE.MathUtils.lerp(0.78, 0.2, focus));
+    }
+    this.updateSceneLighting(frame, focus, settle, pointerX);
+    this.updatePresenceBounds();
+    if (focus > 0 && this.projectedPresence.w > maxFocusedWidth) {
+      const fit = maxFocusedWidth / this.projectedPresence.w;
+      this.vela.scale.multiplyScalar(THREE.MathUtils.lerp(1, fit, focus));
+      this.updatePresenceBounds();
+    }
+    this.updateFolios(frame.surfaces, frame.quality);
+    this.renderer.render(this.scene, this.camera);
+    this.frames++;
+  }
+
+  stats() {
+    return {
+      backend: "Three.js WebGL2",
+      framesRendered: this.frames,
+      drawCalls: this.renderer.info.render.calls,
+      triangles: this.renderer.info.render.triangles,
+      lines: this.renderer.info.render.lines,
+      geometries: this.renderer.info.memory.geometries,
+      textures: this.renderer.info.memory.textures,
+      pixelRatio: this.pixelRatio,
+      quality: this.quality,
+      study: this.study,
+      contextLost: this.lost,
+      surfaceCapacity: 3,
+      surfacesRendered: this.folios.filter((folio) => folio.root.visible)
+        .length,
+      // Submission counters are not presented FPS, GPU utilization, or VRAM usage.
+    };
+  }
+
+  /** Native verification only: exercises the driver's loss path, not a synthetic DOM event. */
+  loseContextForTest() {
+    if (this.disposed)
+      throw new Error("Cannot lose a disposed environment context");
+    if (!this.renderer.getContext().getExtension("WEBGL_lose_context")) {
+      throw new Error("WEBGL_lose_context is unavailable in this runtime");
+    }
+    this.renderer.forceContextLoss();
+  }
+
+  /** Restore the context previously lost by the native verification hook. */
+  restoreContextForTest() {
+    if (this.disposed)
+      throw new Error("Cannot restore a disposed environment context");
+    this.renderer.forceContextRestore();
+  }
+
+  dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.canvas.removeEventListener("webglcontextlost", this.onContextLost);
+    this.canvas.removeEventListener(
+      "webglcontextrestored",
+      this.onContextRestored,
+    );
+    const geometries = new Set<THREE.BufferGeometry>(),
+      materials = new Set<THREE.Material>();
+    this.scene.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (mesh.geometry) geometries.add(mesh.geometry);
+      if (Array.isArray(mesh.material))
+        mesh.material.forEach((material) => materials.add(material));
+      else if (mesh.material) materials.add(mesh.material);
+    });
+    geometries.forEach((geometry) => geometry.dispose());
+    this.ribbonLevels
+      .filter((geometry) => !geometries.has(geometry))
+      .forEach((geometry) => geometry.dispose());
+    materials.forEach((material) => material.dispose());
+    this.environmentMap.dispose();
+    this.renderer.dispose();
+  }
+}

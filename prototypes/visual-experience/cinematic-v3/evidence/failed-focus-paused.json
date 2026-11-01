@@ -1,0 +1,1386 @@
+{
+  "capturedAt": "2026-11-01T17:58:50.560Z",
+  "kind": "actual Electron native renderer; synthetic content",
+  "buildAssets": [
+    "graphics-DMx96d2p.js",
+    "index-B-Sa9cxR.js",
+    "index-X2cwRKo8.css"
+  ],
+  "versions": {
+    "electron": "45.2.1",
+    "chrome": "156.0.8078.75",
+    "node": "24.22.1"
+  },
+  "display": {
+    "size": {
+      "width": 2048,
+      "height": 1280
+    },
+    "scaleFactor": 1.25,
+    "refreshRate": 165
+  },
+  "window": {
+    "width": 1600,
+    "height": 1000
+  },
+  "startup": {
+    "moduleToRendererLoadMs": 726,
+    "meaning": "Native module evaluation to local page load, not OS cold-process startup"
+  },
+  "checks": [
+    {
+      "name": "GPU constructed",
+      "passed": true,
+      "detail": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 9,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "isolated renderer",
+      "passed": true
+    },
+    {
+      "name": "focused resource spines stay separate and reachable",
+      "passed": true,
+      "detail": [
+        {
+          "x": 20.912466049194336,
+          "y": 191.1803741455078,
+          "w": 42.17506408691406,
+          "h": 142.63926696777344,
+          "visible": true
+        },
+        {
+          "x": 20.912466049194336,
+          "y": 356.1803894042969,
+          "w": 42.17506408691406,
+          "h": 142.63926696777344,
+          "visible": true
+        }
+      ]
+    },
+    {
+      "name": "reversal reconciles to collapsed",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "name": "single persistent resource DOM",
+      "passed": true
+    },
+    {
+      "name": "draft survives interruption",
+      "passed": true
+    },
+    {
+      "name": "same article and editor instances survive",
+      "passed": true
+    },
+    {
+      "name": "undo restores ID order",
+      "passed": true,
+      "detail": [
+        "conversation-tidal",
+        "research-material",
+        "note-field"
+      ]
+    },
+    {
+      "name": "synthetic provenance explicit",
+      "passed": true,
+      "detail": [
+        "input.received",
+        "execution.started",
+        "relationship.assigned",
+        "review.requested",
+        "result.reported",
+        "execution.settled"
+      ]
+    },
+    {
+      "name": "fixture validation has actual local evidence",
+      "passed": true,
+      "detail": [
+        {
+          "id": "event-12",
+          "sequence": 12,
+          "run": "synthetic-mvy4tqln",
+          "source": "Local demo validator",
+          "resource": "research-material",
+          "kind": "fixture.check.passed",
+          "evidence": "local-observed",
+          "time": "2026-11-01T17:57:06.935Z",
+          "detail": "Only the synthetic event sequence was checked locally; no design or agent work was verified."
+        }
+      ]
+    },
+    {
+      "name": "lens unfolds with its original DOM identity",
+      "passed": true
+    },
+    {
+      "name": "reduced snaps with draft preserved",
+      "passed": true,
+      "detail": {
+        "x": 142.73999999999998,
+        "y": 112,
+        "w": 1000,
+        "h": 690,
+        "lift": 35,
+        "yaw": 0,
+        "opacity": 1
+      }
+    },
+    {
+      "name": "resize 900x850",
+      "passed": false,
+      "detail": {
+        "conversation-tidal": {
+          "x": 103.09,
+          "y": 355.2,
+          "w": 454.6533333333333,
+          "h": 237.89999999999998,
+          "lift": 16,
+          "yaw": -5,
+          "opacity": 1
+        },
+        "research-material": {
+          "x": 1007.1099999999999,
+          "y": 520.0933333333334,
+          "w": 274.90666666666664,
+          "h": 274.90666666666664,
+          "lift": 0,
+          "yaw": 7,
+          "opacity": 1
+        },
+        "note-field": {
+          "x": 539.24,
+          "y": 624.9666666666667,
+          "w": 359.4933333333333,
+          "h": 142.73999999999998,
+          "lift": 0,
+          "yaw": -2,
+          "opacity": 1
+        }
+      }
+    },
+    {
+      "name": "resize 1280x800",
+      "passed": true,
+      "detail": {
+        "conversation-tidal": {
+          "x": 32,
+          "y": 155,
+          "w": 560,
+          "h": 175,
+          "lift": 12,
+          "yaw": 0,
+          "opacity": 1
+        },
+        "research-material": {
+          "x": 50,
+          "y": 344,
+          "w": 560,
+          "h": 175,
+          "lift": 0,
+          "yaw": 0,
+          "opacity": 1
+        },
+        "note-field": {
+          "x": 32,
+          "y": 533,
+          "w": 560,
+          "h": 175,
+          "lift": 0,
+          "yaw": 0,
+          "opacity": 1
+        }
+      }
+    },
+    {
+      "name": "resize 1920x1080",
+      "passed": true,
+      "detail": {
+        "conversation-tidal": {
+          "x": 83.2,
+          "y": 296,
+          "w": 366.93333333333334,
+          "h": 192,
+          "lift": 16,
+          "yaw": -5,
+          "opacity": 1
+        },
+        "research-material": {
+          "x": 812.8,
+          "y": 413.1333333333333,
+          "w": 221.86666666666667,
+          "h": 221.86666666666667,
+          "lift": 0,
+          "yaw": 7,
+          "opacity": 1
+        },
+        "note-field": {
+          "x": 435.20000000000005,
+          "y": 500.66666666666663,
+          "w": 290.1333333333333,
+          "h": 115.2,
+          "lift": 0,
+          "yaw": -2,
+          "opacity": 1
+        }
+      }
+    },
+    {
+      "name": "content zoom 0.8",
+      "passed": true,
+      "detail": {
+        "viewport": {
+          "width": 1600,
+          "height": 1000
+        },
+        "poses": {
+          "conversation-tidal": {
+            "x": 124.80000000000001,
+            "y": 399.6,
+            "w": 550.4,
+            "h": 288,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1219.2,
+            "y": 582.2,
+            "w": 332.8,
+            "h": 332.8,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 652.8000000000001,
+            "y": 706,
+            "w": 435.2,
+            "h": 172.8,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "content zoom 1.25",
+      "passed": true,
+      "detail": {
+        "viewport": {
+          "width": 1600,
+          "height": 1000
+        },
+        "poses": {
+          "conversation-tidal": {
+            "x": 124.80000000000001,
+            "y": 399.6,
+            "w": 550.4,
+            "h": 288,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1219.2,
+            "y": 582.2,
+            "w": 332.8,
+            "h": 332.8,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 652.8000000000001,
+            "y": 706,
+            "w": 435.2,
+            "h": 172.8,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "content zoom 1.5",
+      "passed": true,
+      "detail": {
+        "viewport": {
+          "width": 1600,
+          "height": 1000
+        },
+        "poses": {
+          "conversation-tidal": {
+            "x": 124.80000000000001,
+            "y": 399.6,
+            "w": 550.4,
+            "h": 288,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1219.2,
+            "y": 582.2,
+            "w": 332.8,
+            "h": 332.8,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 652.8000000000001,
+            "y": 706,
+            "w": 435.2,
+            "h": 172.8,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "idle Vela keeps ambient motion without pointer input",
+      "passed": false,
+      "detail": {
+        "draws": 0,
+        "policy": "balanced / active"
+      }
+    },
+    {
+      "name": "ambient off stops autonomous rendering",
+      "passed": true,
+      "detail": 0
+    },
+    {
+      "name": "quiet mode stills the environment",
+      "passed": true,
+      "detail": 0
+    },
+    {
+      "name": "native minimized stops rendering",
+      "passed": true,
+      "detail": {
+        "draws": 0,
+        "active": false
+      }
+    },
+    {
+      "name": "no renderer errors",
+      "passed": true,
+      "detail": {
+        "renderer": [],
+        "host": []
+      }
+    },
+    {
+      "name": "forced graphics loss retains resources",
+      "passed": true,
+      "detail": 3
+    },
+    {
+      "name": "graphics restoration retains DOM and drafts",
+      "passed": true,
+      "detail": false
+    },
+    {
+      "name": "unsent Vela input survives graphics restoration",
+      "passed": true
+    },
+    {
+      "name": "input feedback sampled",
+      "passed": false,
+      "detail": {
+        "kind": "programmatic DOM click dispatch to next coordinator callback; not optical input-to-display",
+        "samples": 0
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "balanced-active-1",
+      "durationMs": 4559,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.07261736760223364,
+      "workingSetKiBSumMean": 595845.3333333334,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 167,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "cinematic-transition-1",
+      "durationMs": 4640,
+      "warmupMs": 1200,
+      "workload": "Scripted resource expansion/reversal every approximately 500ms",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.03379823649755236,
+      "workingSetKiBSumMean": 590372,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 167,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "efficient-1",
+      "durationMs": 4561,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.01912661084109142,
+      "workingSetKiBSumMean": 590410.2222222222,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 167,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "balanced-active-2",
+      "durationMs": 4569,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.01587857175962756,
+      "workingSetKiBSumMean": 589868.4444444445,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 167,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "cinematic-transition-2",
+      "durationMs": 4577,
+      "warmupMs": 1200,
+      "workload": "Scripted resource expansion/reversal every approximately 500ms",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.024476474280062492,
+      "workingSetKiBSumMean": 589985.3333333334,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 167,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "efficient-2",
+      "durationMs": 4601,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.01997951044710213,
+      "workingSetKiBSumMean": 590133.7777777778,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 167,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "cinematic-active",
+      "durationMs": 4607,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.01710838232596065,
+      "workingSetKiBSumMean": 590240.4444444445,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 167,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "ambient-idle",
+      "durationMs": 4056,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.016531696644156983,
+      "workingSetKiBSumMean": 589419.5,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 167,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "ambient-off",
+      "durationMs": 2574,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.08811061195323269,
+      "workingSetKiBSumMean": 614735.2,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 167,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "quiet-static",
+      "durationMs": 2557,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.019513112231736757,
+      "workingSetKiBSumMean": 589580,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 167,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "native-minimized",
+      "durationMs": 4074,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.01630060906249958,
+      "workingSetKiBSumMean": 578544.5,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 167,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    }
+  ],
+  "inputFeedback": {
+    "kind": "programmatic DOM click dispatch to next coordinator callback; not optical input-to-display",
+    "samples": 0
+  },
+  "motionFrames": [
+    {
+      "sequence": "selection",
+      "index": 0,
+      "at": 1793555799089,
+      "file": "raw/selection-00.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 1,
+      "at": 1793555799375,
+      "file": "raw/selection-01.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 2,
+      "at": 1793555799654,
+      "file": "raw/selection-02.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 3,
+      "at": 1793555799937,
+      "file": "raw/selection-03.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 4,
+      "at": 1793555800215,
+      "file": "raw/selection-04.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 5,
+      "at": 1793555800501,
+      "file": "raw/selection-05.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 6,
+      "at": 1793555800774,
+      "file": "raw/selection-06.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 7,
+      "at": 1793555801063,
+      "file": "raw/selection-07.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 8,
+      "at": 1793555801337,
+      "file": "raw/selection-08.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 9,
+      "at": 1793555801611,
+      "file": "raw/selection-09.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 0,
+      "at": 1793555802105,
+      "file": "raw/expansion-00.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 1,
+      "at": 1793555802374,
+      "file": "raw/expansion-01.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 2,
+      "at": 1793555802648,
+      "file": "raw/expansion-02.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 3,
+      "at": 1793555803057,
+      "file": "raw/expansion-03.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 4,
+      "at": 1793555803445,
+      "file": "raw/expansion-04.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 5,
+      "at": 1793555803843,
+      "file": "raw/expansion-05.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 6,
+      "at": 1793555804243,
+      "file": "raw/expansion-06.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 7,
+      "at": 1793555804610,
+      "file": "raw/expansion-07.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 8,
+      "at": 1793555804979,
+      "file": "raw/expansion-08.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 9,
+      "at": 1793555805351,
+      "file": "raw/expansion-09.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 10,
+      "at": 1793555805725,
+      "file": "raw/expansion-10.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 11,
+      "at": 1793555806118,
+      "file": "raw/expansion-11.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 12,
+      "at": 1793555806494,
+      "file": "raw/expansion-12.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 13,
+      "at": 1793555806880,
+      "file": "raw/expansion-13.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 14,
+      "at": 1793555807249,
+      "file": "raw/expansion-14.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 15,
+      "at": 1793555807623,
+      "file": "raw/expansion-15.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 16,
+      "at": 1793555807991,
+      "file": "raw/expansion-16.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 17,
+      "at": 1793555808371,
+      "file": "raw/expansion-17.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 0,
+      "at": 1793555810278,
+      "file": "raw/rearrangement-00.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 1,
+      "at": 1793555810680,
+      "file": "raw/rearrangement-01.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 2,
+      "at": 1793555810921,
+      "file": "raw/rearrangement-02.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 3,
+      "at": 1793555811156,
+      "file": "raw/rearrangement-03.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 4,
+      "at": 1793555811382,
+      "file": "raw/rearrangement-04.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 5,
+      "at": 1793555811617,
+      "file": "raw/rearrangement-05.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 6,
+      "at": 1793555811844,
+      "file": "raw/rearrangement-06.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 7,
+      "at": 1793555812070,
+      "file": "raw/rearrangement-07.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 8,
+      "at": 1793555812295,
+      "file": "raw/rearrangement-08.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 9,
+      "at": 1793555812523,
+      "file": "raw/rearrangement-09.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 10,
+      "at": 1793555812755,
+      "file": "raw/rearrangement-10.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 11,
+      "at": 1793555812980,
+      "file": "raw/rearrangement-11.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 12,
+      "at": 1793555813229,
+      "file": "raw/rearrangement-12.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 13,
+      "at": 1793555813461,
+      "file": "raw/rearrangement-13.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 14,
+      "at": 1793555813696,
+      "file": "raw/rearrangement-14.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 15,
+      "at": 1793555813930,
+      "file": "raw/rearrangement-15.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 0,
+      "at": 1793555815055,
+      "file": "raw/vela-working-00.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 1,
+      "at": 1793555815298,
+      "file": "raw/vela-working-01.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 2,
+      "at": 1793555815542,
+      "file": "raw/vela-working-02.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 3,
+      "at": 1793555815784,
+      "file": "raw/vela-working-03.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 4,
+      "at": 1793555816027,
+      "file": "raw/vela-working-04.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 5,
+      "at": 1793555816269,
+      "file": "raw/vela-working-05.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 6,
+      "at": 1793555816504,
+      "file": "raw/vela-working-06.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 7,
+      "at": 1793555816749,
+      "file": "raw/vela-working-07.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 8,
+      "at": 1793555817011,
+      "file": "raw/vela-working-08.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 9,
+      "at": 1793555817259,
+      "file": "raw/vela-working-09.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 10,
+      "at": 1793555817499,
+      "file": "raw/vela-working-10.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 11,
+      "at": 1793555817737,
+      "file": "raw/vela-working-11.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 12,
+      "at": 1793555817982,
+      "file": "raw/vela-working-12.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 13,
+      "at": 1793555818232,
+      "file": "raw/vela-working-13.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 0,
+      "at": 1793555830810,
+      "file": "raw/return-to-calm-00.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 1,
+      "at": 1793555831077,
+      "file": "raw/return-to-calm-01.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 2,
+      "at": 1793555831350,
+      "file": "raw/return-to-calm-02.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 3,
+      "at": 1793555831630,
+      "file": "raw/return-to-calm-03.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 4,
+      "at": 1793555831896,
+      "file": "raw/return-to-calm-04.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 5,
+      "at": 1793555832176,
+      "file": "raw/return-to-calm-05.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 6,
+      "at": 1793555832456,
+      "file": "raw/return-to-calm-06.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 7,
+      "at": 1793555832724,
+      "file": "raw/return-to-calm-07.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 8,
+      "at": 1793555832993,
+      "file": "raw/return-to-calm-08.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 9,
+      "at": 1793555833267,
+      "file": "raw/return-to-calm-09.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 10,
+      "at": 1793555833546,
+      "file": "raw/return-to-calm-10.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 11,
+      "at": 1793555833816,
+      "file": "raw/return-to-calm-11.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 12,
+      "at": 1793555834082,
+      "file": "raw/return-to-calm-12.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 13,
+      "at": 1793555834348,
+      "file": "raw/return-to-calm-13.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 0,
+      "at": 1793555834621,
+      "file": "raw/lens-unfold-00.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 1,
+      "at": 1793555834897,
+      "file": "raw/lens-unfold-01.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 2,
+      "at": 1793555835277,
+      "file": "raw/lens-unfold-02.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 3,
+      "at": 1793555835660,
+      "file": "raw/lens-unfold-03.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 4,
+      "at": 1793555836047,
+      "file": "raw/lens-unfold-04.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 5,
+      "at": 1793555836418,
+      "file": "raw/lens-unfold-05.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 6,
+      "at": 1793555836781,
+      "file": "raw/lens-unfold-06.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 7,
+      "at": 1793555837160,
+      "file": "raw/lens-unfold-07.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 8,
+      "at": 1793555837520,
+      "file": "raw/lens-unfold-08.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 9,
+      "at": 1793555837874,
+      "file": "raw/lens-unfold-09.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 10,
+      "at": 1793555838233,
+      "file": "raw/lens-unfold-10.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 11,
+      "at": 1793555838610,
+      "file": "raw/lens-unfold-11.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 12,
+      "at": 1793555839036,
+      "file": "raw/lens-unfold-12.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 13,
+      "at": 1793555839489,
+      "file": "raw/lens-unfold-13.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 14,
+      "at": 1793555839930,
+      "file": "raw/lens-unfold-14.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 15,
+      "at": 1793555840364,
+      "file": "raw/lens-unfold-15.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 16,
+      "at": 1793555840806,
+      "file": "raw/lens-unfold-16.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 17,
+      "at": 1793555841239,
+      "file": "raw/lens-unfold-17.png"
+    }
+  ],
+  "errors": [],
+  "unavailable": [
+    "presented-frame timing",
+    "GPU utilization attributable to application",
+    "dedicated VRAM attributable to application",
+    "optical input-to-display latency",
+    "power",
+    "multi-display acceptance",
+    "physical 60Hz display mode test",
+    "external game automatic detection"
+  ],
+  "method": "Callback and draw intervals are scheduler observations, not presented FPS. CPU is Electron app-metrics sum, working-set KiB sums can double-count shared pages. Short repeated exploratory runs."
+}

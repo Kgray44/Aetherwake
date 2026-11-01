@@ -1,0 +1,1394 @@
+{
+  "capturedAt": "2026-11-01T18:18:26.282Z",
+  "kind": "actual Electron native renderer; synthetic content",
+  "buildAssets": [
+    "graphics-DMx96d2p.js",
+    "index-X2cwRKo8.css",
+    "index-fwQZVO1T.js"
+  ],
+  "versions": {
+    "electron": "45.2.1",
+    "chrome": "156.0.8078.75",
+    "node": "24.22.1"
+  },
+  "display": {
+    "size": {
+      "width": 2048,
+      "height": 1280
+    },
+    "scaleFactor": 1.25,
+    "refreshRate": 165
+  },
+  "window": {
+    "width": 1600,
+    "height": 1000
+  },
+  "startup": {
+    "moduleToRendererLoadMs": 858,
+    "meaning": "Native module evaluation to local page load, not OS cold-process startup"
+  },
+  "checks": [
+    {
+      "name": "GPU constructed",
+      "passed": true,
+      "detail": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 187,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "isolated renderer",
+      "passed": true
+    },
+    {
+      "name": "focused resource spines stay separate and reachable",
+      "passed": true,
+      "detail": [
+        {
+          "x": 20.912466049194336,
+          "y": 191.1803741455078,
+          "w": 42.17506408691406,
+          "h": 142.63926696777344,
+          "visible": true
+        },
+        {
+          "x": 20.912466049194336,
+          "y": 356.1803894042969,
+          "w": 42.17506408691406,
+          "h": 142.63926696777344,
+          "visible": true
+        }
+      ]
+    },
+    {
+      "name": "reversal reconciles to collapsed",
+      "passed": true,
+      "detail": null
+    },
+    {
+      "name": "single persistent resource DOM",
+      "passed": true
+    },
+    {
+      "name": "draft survives interruption",
+      "passed": true
+    },
+    {
+      "name": "same article and editor instances survive",
+      "passed": true
+    },
+    {
+      "name": "undo restores ID order",
+      "passed": true,
+      "detail": [
+        "conversation-tidal",
+        "research-material",
+        "note-field"
+      ]
+    },
+    {
+      "name": "synthetic provenance explicit",
+      "passed": true,
+      "detail": [
+        "input.received",
+        "execution.started",
+        "relationship.assigned",
+        "review.requested",
+        "result.reported",
+        "execution.settled"
+      ]
+    },
+    {
+      "name": "fixture validation has actual local evidence",
+      "passed": true,
+      "detail": [
+        {
+          "id": "event-12",
+          "sequence": 12,
+          "run": "synthetic-mvy5iwsp",
+          "source": "Local demo validator",
+          "resource": "research-material",
+          "kind": "fixture.check.passed",
+          "evidence": "local-observed",
+          "time": "2026-11-01T18:16:40.907Z",
+          "detail": "Only the synthetic event sequence was checked locally; no design or agent work was verified."
+        }
+      ]
+    },
+    {
+      "name": "lens unfolds with its original DOM identity",
+      "passed": true
+    },
+    {
+      "name": "reduced snaps with draft preserved",
+      "passed": true,
+      "detail": {
+        "x": 142.73999999999998,
+        "y": 112,
+        "w": 1000,
+        "h": 690,
+        "lift": 35,
+        "yaw": 0,
+        "opacity": 1
+      }
+    },
+    {
+      "name": "resize 900x850",
+      "passed": true,
+      "detail": {
+        "conversation-tidal": {
+          "x": 32.00723237922657,
+          "y": 155.0203674542293,
+          "w": 559.989282500442,
+          "h": 175.0063991651899,
+          "lift": 12,
+          "yaw": 0,
+          "opacity": 1
+        },
+        "research-material": {
+          "x": 50.09737209848843,
+          "y": 344.0179149495841,
+          "w": 559.9709958770343,
+          "h": 175.0101640582444,
+          "lift": 0,
+          "yaw": 0,
+          "opacity": 1
+        },
+        "note-field": {
+          "x": 32.05160433308321,
+          "y": 533.0093562780918,
+          "w": 559.9796013468733,
+          "h": 175,
+          "lift": 0,
+          "yaw": 0,
+          "opacity": 1
+        }
+      }
+    },
+    {
+      "name": "resize 1280x800",
+      "passed": true,
+      "detail": {
+        "conversation-tidal": {
+          "x": 83.19440976562653,
+          "y": 295.9846050186198,
+          "w": 366.95441317545004,
+          "h": 192,
+          "lift": 16,
+          "yaw": -5,
+          "opacity": 1
+        },
+        "research-material": {
+          "x": 812.7167143262725,
+          "y": 413.1257850611389,
+          "w": 221.90358550617486,
+          "h": 221.86154956410869,
+          "lift": 0,
+          "yaw": 7,
+          "opacity": 1
+        },
+        "note-field": {
+          "x": 435.15597690430894,
+          "y": 500.66666666666663,
+          "w": 290.1627985270102,
+          "h": 115.2065292190534,
+          "lift": 0,
+          "yaw": -2,
+          "opacity": 1
+        }
+      }
+    },
+    {
+      "name": "resize 1920x1080",
+      "passed": true,
+      "detail": {
+        "conversation-tidal": {
+          "x": 124.80000000000001,
+          "y": 399.590214844952,
+          "w": 550.3826713341748,
+          "h": 287.9909326748589,
+          "lift": 16,
+          "yaw": -5,
+          "opacity": 1
+        },
+        "research-material": {
+          "x": 1219.161614892748,
+          "y": 582.1840314329461,
+          "w": 332.78952220205935,
+          "h": 332.78952220205935,
+          "lift": 0,
+          "yaw": 7,
+          "opacity": 1
+        },
+        "note-field": {
+          "x": 652.7794473963472,
+          "y": 705.9806059990041,
+          "w": 435.18629826423125,
+          "h": 172.79455960491538,
+          "lift": 0,
+          "yaw": -2,
+          "opacity": 1
+        }
+      }
+    },
+    {
+      "name": "content zoom 0.8",
+      "passed": true,
+      "detail": {
+        "viewport": {
+          "width": 2000,
+          "height": 1250
+        },
+        "poses": {
+          "conversation-tidal": {
+            "x": 130,
+            "y": 462.5,
+            "w": 573.3333333333333,
+            "h": 300,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 1269.9925360207112,
+            "y": 699.9958160947955,
+            "w": 346.66666666666663,
+            "h": 346.66666666666663,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 680,
+            "y": 866.6606897730165,
+            "w": 453.3333333333333,
+            "h": 180,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "content zoom 1.25",
+      "passed": true,
+      "detail": {
+        "viewport": {
+          "width": 1280,
+          "height": 800
+        },
+        "poses": {
+          "conversation-tidal": {
+            "x": 83.2,
+            "y": 296.0045525202492,
+            "w": 366.9389768178943,
+            "h": 192,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 812.8125009486843,
+            "y": 413.14117697482754,
+            "w": 221.86666666666667,
+            "h": 221.86666666666667,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 435.2066934351771,
+            "y": 500.6766739877866,
+            "w": 290.1377956234514,
+            "h": 115.2,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "content zoom 1.5",
+      "passed": true,
+      "detail": {
+        "viewport": {
+          "width": 1066,
+          "height": 666
+        },
+        "poses": {
+          "conversation-tidal": {
+            "x": 69.29,
+            "y": 246.42,
+            "w": 305.58666666666664,
+            "h": 159.9,
+            "lift": 16,
+            "yaw": -5,
+            "opacity": 1
+          },
+          "research-material": {
+            "x": 676.9100000000001,
+            "y": 316.2266666666667,
+            "w": 184.77333333333334,
+            "h": 184.77333333333334,
+            "lift": 0,
+            "yaw": 7,
+            "opacity": 1
+          },
+          "note-field": {
+            "x": 362.44,
+            "y": 391.6333333333333,
+            "w": 241.62666666666667,
+            "h": 95.94,
+            "lift": 0,
+            "yaw": -2,
+            "opacity": 1
+          }
+        }
+      }
+    },
+    {
+      "name": "idle Vela keeps ambient motion without pointer input",
+      "passed": true,
+      "detail": {
+        "draws": 122,
+        "policy": "balanced / ambient idle"
+      }
+    },
+    {
+      "name": "ambient off stops autonomous rendering",
+      "passed": true,
+      "detail": 0
+    },
+    {
+      "name": "quiet mode stills the environment",
+      "passed": true,
+      "detail": 0
+    },
+    {
+      "name": "native minimized stops rendering",
+      "passed": true,
+      "detail": {
+        "draws": 0,
+        "active": false,
+        "nativeMinimized": true,
+        "nativeVisible": false
+      }
+    },
+    {
+      "name": "no renderer errors",
+      "passed": true,
+      "detail": {
+        "renderer": [],
+        "host": []
+      }
+    },
+    {
+      "name": "forced graphics loss retains resources",
+      "passed": true,
+      "detail": 3
+    },
+    {
+      "name": "graphics restoration retains DOM and drafts",
+      "passed": true,
+      "detail": false
+    },
+    {
+      "name": "unsent Vela input survives graphics restoration",
+      "passed": true
+    },
+    {
+      "name": "input feedback sampled",
+      "passed": true,
+      "detail": {
+        "kind": "programmatic DOM click dispatch to next coordinator callback; not optical input-to-display",
+        "samples": 16,
+        "p50": 3.0000000119325705,
+        "p95": 5.40000001192675,
+        "max": 5.40000001192675
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "name": "balanced-active-1",
+      "durationMs": 4582,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 756,
+      "callbackMs": {
+        "p50": 6.099999999991269,
+        "p95": 6.19999999999709,
+        "p99": 6.200000000004366,
+        "max": 6.2000000000116415
+      },
+      "drawSamples": 275,
+      "drawMs": {
+        "p50": 18.19999999999709,
+        "p95": 18.30000000000291,
+        "p99": 18.30000000000291
+      },
+      "cpuReportedSumMean": 1.8960991978329815,
+      "workingSetKiBSumMean": 797156.8888888889,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 4010,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 28,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "cinematic-transition-1",
+      "durationMs": 4627,
+      "warmupMs": 1200,
+      "workload": "Scripted resource expansion/reversal every approximately 500ms",
+      "callbackSamples": 651,
+      "callbackMs": {
+        "p50": 6.099999999991269,
+        "p95": 12.19999999999709,
+        "p99": 12.299999999988358,
+        "max": 30.39999999999418
+      },
+      "drawSamples": 651,
+      "drawMs": {
+        "p50": 6.099999999991269,
+        "p95": 12.19999999999709,
+        "p99": 12.299999999988358
+      },
+      "cpuReportedSumMean": 11.582232127557884,
+      "workingSetKiBSumMean": 885585.7777777778,
+      "policy": "cinematic / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 4862,
+        "drawCalls": 23,
+        "triangles": 35806,
+        "lines": 3520,
+        "geometries": 29,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "cinematic",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "efficient-1",
+      "durationMs": 4577,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 77,
+      "callbackMs": {
+        "p50": 60.69999999999709,
+        "p95": 78.80000000000291,
+        "p99": 78.89999999999418,
+        "max": 78.89999999999418
+      },
+      "drawSamples": 69,
+      "drawMs": {
+        "p50": 66.60000000000582,
+        "p95": 78.80000000000291,
+        "p99": 78.89999999999418
+      },
+      "cpuReportedSumMean": 0.5413013382848002,
+      "workingSetKiBSumMean": 862079.1111111111,
+      "policy": "efficient / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 4949,
+        "drawCalls": 16,
+        "triangles": 11398,
+        "lines": 880,
+        "geometries": 30,
+        "textures": 1,
+        "pixelRatio": 0.8,
+        "quality": "efficient",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "balanced-active-2",
+      "durationMs": 4577,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 756,
+      "callbackMs": {
+        "p50": 6.099999999991269,
+        "p95": 6.19999999999709,
+        "p99": 6.2000000000116415,
+        "max": 6.2000000000116415
+      },
+      "drawSamples": 275,
+      "drawMs": {
+        "p50": 18.19999999999709,
+        "p95": 18.29999999998836,
+        "p99": 18.30000000000291
+      },
+      "cpuReportedSumMean": 1.7322441722974822,
+      "workingSetKiBSumMean": 798053.7777777778,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 5297,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 30,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "cinematic-transition-2",
+      "durationMs": 4624,
+      "warmupMs": 1200,
+      "workload": "Scripted resource expansion/reversal every approximately 500ms",
+      "callbackSamples": 653,
+      "callbackMs": {
+        "p50": 6.099999999991269,
+        "p95": 12.19999999999709,
+        "p99": 12.200000000011642,
+        "max": 18.19999999999709
+      },
+      "drawSamples": 653,
+      "drawMs": {
+        "p50": 6.099999999991269,
+        "p95": 12.19999999999709,
+        "p99": 12.200000000011642
+      },
+      "cpuReportedSumMean": 11.49741414192865,
+      "workingSetKiBSumMean": 883267.5555555555,
+      "policy": "cinematic / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 6150,
+        "drawCalls": 23,
+        "triangles": 35806,
+        "lines": 3520,
+        "geometries": 30,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "cinematic",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "efficient-2",
+      "durationMs": 4576,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 75,
+      "callbackMs": {
+        "p50": 60.69999999999709,
+        "p95": 78.80000000000291,
+        "p99": 78.89999999999418,
+        "max": 78.89999999999418
+      },
+      "drawSamples": 69,
+      "drawMs": {
+        "p50": 66.59999999999127,
+        "p95": 78.80000000000291,
+        "p99": 78.89999999999418
+      },
+      "cpuReportedSumMean": 0.5822419025915901,
+      "workingSetKiBSumMean": 848164.8888888889,
+      "policy": "efficient / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 6238,
+        "drawCalls": 16,
+        "triangles": 11398,
+        "lines": 880,
+        "geometries": 30,
+        "textures": 1,
+        "pixelRatio": 0.8,
+        "quality": "efficient",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "cinematic-active",
+      "durationMs": 4605,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 760,
+      "callbackMs": {
+        "p50": 6.099999999991269,
+        "p95": 6.19999999999709,
+        "p99": 6.2000000000116415,
+        "max": 6.2000000000116415
+      },
+      "drawSamples": 760,
+      "drawMs": {
+        "p50": 6.099999999991269,
+        "p95": 6.19999999999709,
+        "p99": 6.2000000000116415
+      },
+      "cpuReportedSumMean": 3.957608276668184,
+      "workingSetKiBSumMean": 799396,
+      "policy": "cinematic / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 7199,
+        "drawCalls": 23,
+        "triangles": 35806,
+        "lines": 3520,
+        "geometries": 30,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "cinematic",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "ambient-idle",
+      "durationMs": 4065,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 240,
+      "callbackMs": {
+        "p50": 22.5,
+        "p95": 30.39999999999418,
+        "p99": 30.40000000000873,
+        "max": 30.70000000001164
+      },
+      "drawSamples": 122,
+      "drawMs": {
+        "p50": 36.19999999999709,
+        "p95": 37.89999999999418,
+        "p99": 38.19999999999709
+      },
+      "cpuReportedSumMean": 1.0093389507195774,
+      "workingSetKiBSumMean": 811705,
+      "policy": "balanced / ambient idle",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 8123,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 30,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "ambient-off",
+      "durationMs": 2536,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.06252771411450544,
+      "workingSetKiBSumMean": 770189.6,
+      "policy": "balanced / ambient off",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 8124,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 30,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "quiet-static",
+      "durationMs": 2560,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.02476494078789896,
+      "workingSetKiBSumMean": 766795.2,
+      "policy": "efficient / quiet",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 8125,
+        "drawCalls": 16,
+        "triangles": 11398,
+        "lines": 880,
+        "geometries": 30,
+        "textures": 1,
+        "pixelRatio": 0.8,
+        "quality": "efficient",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    },
+    {
+      "name": "native-minimized",
+      "durationMs": 4050,
+      "warmupMs": 1200,
+      "workload": "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+      "callbackSamples": 0,
+      "callbackMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null,
+        "max": null
+      },
+      "drawSamples": 0,
+      "drawMs": {
+        "p50": null,
+        "p95": null,
+        "p99": null
+      },
+      "cpuReportedSumMean": 0.023500231713677773,
+      "workingSetKiBSumMean": 762674.5,
+      "policy": "balanced / active",
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 8126,
+        "drawCalls": 23,
+        "triangles": 32734,
+        "lines": 2200,
+        "geometries": 30,
+        "textures": 1,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      }
+    }
+  ],
+  "inputFeedback": {
+    "kind": "programmatic DOM click dispatch to next coordinator callback; not optical input-to-display",
+    "samples": 16,
+    "p50": 3.0000000119325705,
+    "p95": 5.40000001192675,
+    "max": 5.40000001192675
+  },
+  "motionFrames": [
+    {
+      "sequence": "selection",
+      "index": 0,
+      "at": 1793556970620,
+      "file": "raw/selection-00.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 1,
+      "at": 1793556970934,
+      "file": "raw/selection-01.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 2,
+      "at": 1793556971241,
+      "file": "raw/selection-02.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 3,
+      "at": 1793556971556,
+      "file": "raw/selection-03.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 4,
+      "at": 1793556971866,
+      "file": "raw/selection-04.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 5,
+      "at": 1793556972184,
+      "file": "raw/selection-05.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 6,
+      "at": 1793556972487,
+      "file": "raw/selection-06.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 7,
+      "at": 1793556972815,
+      "file": "raw/selection-07.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 8,
+      "at": 1793556973129,
+      "file": "raw/selection-08.png"
+    },
+    {
+      "sequence": "selection",
+      "index": 9,
+      "at": 1793556973430,
+      "file": "raw/selection-09.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 0,
+      "at": 1793556973989,
+      "file": "raw/expansion-00.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 1,
+      "at": 1793556974330,
+      "file": "raw/expansion-01.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 2,
+      "at": 1793556974795,
+      "file": "raw/expansion-02.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 3,
+      "at": 1793556975255,
+      "file": "raw/expansion-03.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 4,
+      "at": 1793556975698,
+      "file": "raw/expansion-04.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 5,
+      "at": 1793556976137,
+      "file": "raw/expansion-05.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 6,
+      "at": 1793556976572,
+      "file": "raw/expansion-06.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 7,
+      "at": 1793556977001,
+      "file": "raw/expansion-07.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 8,
+      "at": 1793556977442,
+      "file": "raw/expansion-08.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 9,
+      "at": 1793556977879,
+      "file": "raw/expansion-09.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 10,
+      "at": 1793556978318,
+      "file": "raw/expansion-10.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 11,
+      "at": 1793556978770,
+      "file": "raw/expansion-11.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 12,
+      "at": 1793556979203,
+      "file": "raw/expansion-12.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 13,
+      "at": 1793556979636,
+      "file": "raw/expansion-13.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 14,
+      "at": 1793556980066,
+      "file": "raw/expansion-14.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 15,
+      "at": 1793556980495,
+      "file": "raw/expansion-15.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 16,
+      "at": 1793556980932,
+      "file": "raw/expansion-16.png"
+    },
+    {
+      "sequence": "expansion",
+      "index": 17,
+      "at": 1793556981373,
+      "file": "raw/expansion-17.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 0,
+      "at": 1793556983248,
+      "file": "raw/rearrangement-00.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 1,
+      "at": 1793556983537,
+      "file": "raw/rearrangement-01.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 2,
+      "at": 1793556983837,
+      "file": "raw/rearrangement-02.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 3,
+      "at": 1793556984131,
+      "file": "raw/rearrangement-03.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 4,
+      "at": 1793556984418,
+      "file": "raw/rearrangement-04.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 5,
+      "at": 1793556984696,
+      "file": "raw/rearrangement-05.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 6,
+      "at": 1793556984983,
+      "file": "raw/rearrangement-06.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 7,
+      "at": 1793556985271,
+      "file": "raw/rearrangement-07.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 8,
+      "at": 1793556985548,
+      "file": "raw/rearrangement-08.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 9,
+      "at": 1793556985834,
+      "file": "raw/rearrangement-09.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 10,
+      "at": 1793556986118,
+      "file": "raw/rearrangement-10.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 11,
+      "at": 1793556986396,
+      "file": "raw/rearrangement-11.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 12,
+      "at": 1793556986698,
+      "file": "raw/rearrangement-12.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 13,
+      "at": 1793556986984,
+      "file": "raw/rearrangement-13.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 14,
+      "at": 1793556987263,
+      "file": "raw/rearrangement-14.png"
+    },
+    {
+      "sequence": "rearrangement",
+      "index": 15,
+      "at": 1793556987546,
+      "file": "raw/rearrangement-15.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 0,
+      "at": 1793556988769,
+      "file": "raw/vela-working-00.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 1,
+      "at": 1793556989073,
+      "file": "raw/vela-working-01.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 2,
+      "at": 1793556989360,
+      "file": "raw/vela-working-02.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 3,
+      "at": 1793556989659,
+      "file": "raw/vela-working-03.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 4,
+      "at": 1793556989950,
+      "file": "raw/vela-working-04.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 5,
+      "at": 1793556990250,
+      "file": "raw/vela-working-05.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 6,
+      "at": 1793556990542,
+      "file": "raw/vela-working-06.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 7,
+      "at": 1793556990839,
+      "file": "raw/vela-working-07.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 8,
+      "at": 1793556991157,
+      "file": "raw/vela-working-08.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 9,
+      "at": 1793556991440,
+      "file": "raw/vela-working-09.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 10,
+      "at": 1793556991729,
+      "file": "raw/vela-working-10.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 11,
+      "at": 1793556992022,
+      "file": "raw/vela-working-11.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 12,
+      "at": 1793556992320,
+      "file": "raw/vela-working-12.png"
+    },
+    {
+      "sequence": "vela-working",
+      "index": 13,
+      "at": 1793556992612,
+      "file": "raw/vela-working-13.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 0,
+      "at": 1793557005295,
+      "file": "raw/return-to-calm-00.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 1,
+      "at": 1793557005605,
+      "file": "raw/return-to-calm-01.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 2,
+      "at": 1793557005910,
+      "file": "raw/return-to-calm-02.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 3,
+      "at": 1793557006211,
+      "file": "raw/return-to-calm-03.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 4,
+      "at": 1793557006532,
+      "file": "raw/return-to-calm-04.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 5,
+      "at": 1793557006828,
+      "file": "raw/return-to-calm-05.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 6,
+      "at": 1793557007129,
+      "file": "raw/return-to-calm-06.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 7,
+      "at": 1793557007421,
+      "file": "raw/return-to-calm-07.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 8,
+      "at": 1793557007715,
+      "file": "raw/return-to-calm-08.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 9,
+      "at": 1793557008012,
+      "file": "raw/return-to-calm-09.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 10,
+      "at": 1793557008314,
+      "file": "raw/return-to-calm-10.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 11,
+      "at": 1793557008619,
+      "file": "raw/return-to-calm-11.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 12,
+      "at": 1793557008920,
+      "file": "raw/return-to-calm-12.png"
+    },
+    {
+      "sequence": "return-to-calm",
+      "index": 13,
+      "at": 1793557009226,
+      "file": "raw/return-to-calm-13.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 0,
+      "at": 1793557009533,
+      "file": "raw/lens-unfold-00.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 1,
+      "at": 1793557009990,
+      "file": "raw/lens-unfold-01.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 2,
+      "at": 1793557010446,
+      "file": "raw/lens-unfold-02.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 3,
+      "at": 1793557010884,
+      "file": "raw/lens-unfold-03.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 4,
+      "at": 1793557011322,
+      "file": "raw/lens-unfold-04.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 5,
+      "at": 1793557011754,
+      "file": "raw/lens-unfold-05.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 6,
+      "at": 1793557012193,
+      "file": "raw/lens-unfold-06.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 7,
+      "at": 1793557012636,
+      "file": "raw/lens-unfold-07.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 8,
+      "at": 1793557013064,
+      "file": "raw/lens-unfold-08.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 9,
+      "at": 1793557013504,
+      "file": "raw/lens-unfold-09.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 10,
+      "at": 1793557013929,
+      "file": "raw/lens-unfold-10.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 11,
+      "at": 1793557014353,
+      "file": "raw/lens-unfold-11.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 12,
+      "at": 1793557014799,
+      "file": "raw/lens-unfold-12.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 13,
+      "at": 1793557015237,
+      "file": "raw/lens-unfold-13.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 14,
+      "at": 1793557015692,
+      "file": "raw/lens-unfold-14.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 15,
+      "at": 1793557016124,
+      "file": "raw/lens-unfold-15.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 16,
+      "at": 1793557016563,
+      "file": "raw/lens-unfold-16.png"
+    },
+    {
+      "sequence": "lens-unfold",
+      "index": 17,
+      "at": 1793557016999,
+      "file": "raw/lens-unfold-17.png"
+    }
+  ],
+  "errors": [],
+  "unavailable": [
+    "presented-frame timing",
+    "GPU utilization attributable to application",
+    "dedicated VRAM attributable to application",
+    "optical input-to-display latency",
+    "power",
+    "multi-display acceptance",
+    "physical 60Hz display mode test",
+    "external game automatic detection"
+  ],
+  "method": "Callback and draw intervals are scheduler observations, not presented FPS. CPU is Electron app-metrics sum, working-set KiB sums can double-count shared pages. Short repeated exploratory runs."
+}

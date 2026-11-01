@@ -1,0 +1,32 @@
+{
+  "capturedAtUTC": "2026-11-01T18:43:14.637514+00:00",
+  "kind": "Native Windows UI input against the unique Aerynth preview window",
+  "observations": [
+    {
+      "action": "Activate native Maximize control",
+      "result": "Window expanded; accessibility exposed Restore instead of Maximize."
+    },
+    {
+      "action": "Activate native Restore control",
+      "result": "Window returned to its prior size; accessibility exposed Maximize again."
+    },
+    {
+      "action": "Drag the dark caption region",
+      "result": "Native drag input completed and application refreshed without error; no numeric desktop-position assertion."
+    },
+    {
+      "action": "Alt+Space keyboard window menu",
+      "result": "Intercepted by a global desktop shortcut; overlay dismissed with Escape. Standard menu behavior is not qualified."
+    }
+  ],
+  "limitations": [
+    "Short functional smoke, not optical latency or full assistive-technology acceptance.",
+    "Mixed-DPI, display removal, snap layouts and prolonged multi-monitor behavior remain unqualified."
+  ],
+  "sourceBuildAtInput": [
+    "graphics-BmPJwi0n.js",
+    "index-CTNT-EDa.css",
+    "index-OZDkU-XE.js"
+  ],
+  "laterChange": "Workspace Vela label moved above the presence after this smoke; native frame implementation unchanged."
+}
