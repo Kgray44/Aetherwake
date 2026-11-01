@@ -87,7 +87,7 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
   const exists=path=>index.documents.some(x=>x.path===path&&x.available);
   // Validate manual IDs before routing; avoid a partial "successful" package.
   for(const id of requiredIds)if(!index.requirements.has(id))throw new Error("Unknown or unindexed requirement ID: "+id);
-  const route=routeGovernance(config,registry,task||"Explicit requirement retrieval",paths,exists);
+  const route=routeGovernance(config,registry,task||requiredIds.join(" "),paths,exists);
   const byDoc=new Map(index.documents.map(d=>[d.id,d]));
   const chosen=new Map();
   for(const item of [...route.binding,...route.advisory])chosen.set(item.id,{document:byDoc.get(item.id),reason:item.reason});
