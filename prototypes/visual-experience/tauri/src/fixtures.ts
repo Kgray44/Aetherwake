@@ -39,9 +39,9 @@ const thoughts = [
 ];
 
 export type Message = { id: string; index: number; author: 'You' | 'Vela · fixture'; subject: string; text: string; time: string };
-export function createMessages(): Message[] {
+export function createMessages(count: number = FIXTURE_COUNTS.messages): Message[] {
   const random = randomSequence();
-  return Array.from({ length: FIXTURE_COUNTS.messages }, (_, index) => ({
+  return Array.from({ length: count }, (_, index) => ({
     id: `msg-orion-${String(index + 1).padStart(4, '0')}`,
     index,
     author: index % 3 === 0 ? 'You' : 'Vela · fixture',
@@ -53,9 +53,9 @@ export function createMessages(): Message[] {
 
 const eventKinds = ['Observation', 'Selection', 'Transition', 'Attention', 'Recovery'] as const;
 export type StreamEvent = { id: string; index: number; kind: typeof eventKinds[number]; title: string; detail: string; time: string };
-export function createEvents(): StreamEvent[] {
+export function createEvents(count: number = FIXTURE_COUNTS.events): StreamEvent[] {
   const random = randomSequence(FIXTURE_SEED + 11);
-  return Array.from({ length: FIXTURE_COUNTS.events }, (_, index) => {
+  return Array.from({ length: count }, (_, index) => {
     const kind = eventKinds[Math.floor(random() * eventKinds.length)];
     return { id: `evt-lab-${String(index + 1).padStart(4, '0')}`, index, kind,
       title: `${kind} / ${subjects[Math.floor(random() * subjects.length)]}`,

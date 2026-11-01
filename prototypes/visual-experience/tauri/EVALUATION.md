@@ -1,5 +1,7 @@
 # Tauri Liquid Intelligence pilot · evaluation
 
+> This evaluation describes the initial `7bfaec1` pilot. Later comparison controls and the 60-item append fix are documented in [BENCHMARK-CONTROL.md](BENCHMARK-CONTROL.md); no controlled Tauri/Electron result is claimed here.
+
 ## Outcome
 
 A Windows release executable launched and displayed the Aerynth scene. It opened two actual native windows with different dimensions. The home, Vela controls, workspace, conversation, stream, detachable card, and performance lab were exercised in the native app. This is a credible visual candidate for further testing, not a host selection or release recommendation.

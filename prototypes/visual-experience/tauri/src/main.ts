@@ -7,6 +7,8 @@ import { BenchmarkLedger, atOffset } from './benchmark-control';
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const messages = createMessages();
 const events = createEvents();
+let messageVirtual: ReturnType<typeof mountVirtualList> | null = null;
+let eventVirtual: ReturnType<typeof mountVirtualList> | null = null;
 let selectedMessageId: string | null = null;
 let selectedEventId: string | null = null;
 const params = new URLSearchParams(location.search);
@@ -70,7 +72,7 @@ function renderMain() {
   motion.setQuality(layout.quality); motion.setReduced(layout.reduced);
   ($('#quality-select') as HTMLSelectElement).value = layout.quality;
   ($('#reduced-toggle') as HTMLInputElement).checked = layout.reduced;
-  bindMain(); mountVirtualList('#message-list', messages, 84, messageRow);
+  bindMain(); messageVirtual = mountVirtualList('#message-list', messages, 84, messageRow);
   updateSelection(); updateVela('idle');
   setInterval(() => { const s = motion.stats(); const el = $('#inline-frame-stats'); if (el) el.textContent = s.medianMs === null ? 'No animated samples' : `${s.medianMs} ms median / ${s.p95Ms} ms p95`; }, 2500);
 }
@@ -98,7 +100,8 @@ function mountVirtualList<T>(selector: string, items: T[], rowHeight: number, ro
   list.addEventListener('scroll', update, { passive: true });
   window.addEventListener('resize', update);
   update();
-  return { update, jumpTo: (index: number) => { list.scrollTop = index * rowHeight; previous = -1; update(); } };
+  return { update, refresh: () => { spacer.style.height = `${items.length * rowHeight}px`; previous = -1; update(); },
+    jumpTo: (index: number) => { list.scrollTop = index * rowHeight; previous = -1; update(); } };
 }
 
 let focusId: string | null = null;
@@ -289,6 +292,7 @@ function exportMeasurements() {
 function benchmarkStatus(message: string) { const output = $('#bench-status'); if (output) output.textContent = message; }
 function benchmarkSnapshot() {
   return { source: 'local-renderer-control', seed: FIXTURE_SEED, sourceCounts: FIXTURE_COUNTS,
+    displayedCounts: { messages: messages.length, events: events.length, blocks: blocks.length },
     quality: motion.quality, reducedMotion: motion.reduced, vela: motion.vela,
     wallUtc: new Date().toISOString(), rendererTimeOriginMs: performance.timeOrigin,
     actionTrace: ledger.snapshot(), currentFrames: motion.stats(), frameCapture: lastFrameCapture };
@@ -299,6 +303,8 @@ function downloadTrace() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function prepareFixedCinematic() {
+  messages.splice(FIXTURE_COUNTS.messages); messageVirtual?.refresh();
+  $('#message-status')!.textContent = '2,000 messages';
   layout = { ...structuredClone(defaults), quality: 'cinematic', reduced: false };
   save();
   $('#workspace-grid')!.innerHTML = layout.order.map(id => card(byId.get(id)!)).join('');
@@ -306,6 +312,7 @@ function prepareFixedCinematic() {
   ($('#reduced-toggle') as HTMLInputElement).checked = false;
   updateSelection(); updateVela('idle');
   motion.setQuality('cinematic'); motion.setReduced(false); motion.setPaused(false);
+  $<HTMLElement>('#page-scroll')!.scrollTop = 0;
   ledger.clear(); lastFrameCapture = null;
   benchmarkStatus('Fixed cinematic ready · no adaptive quality control is active');
 }
@@ -315,7 +322,7 @@ async function runScriptedScenario(name: string) {
   scenarioRunning = true;
   const start = performance.now();
   const step = async (offset: number, id: string, operation: () => void | Promise<void>) => {
-    await atOffset(start, offset); await ledger.step(id, operation, offset);
+    await atOffset(start, offset); await ledger.step(id, operation, offset, start);
   };
   const cardAction = (id: string, action: string) => $<HTMLButtonElement>(`.resource-card[data-id="${id}"] [data-action="${action}"]`)?.click();
   try {
@@ -324,8 +331,16 @@ async function runScriptedScenario(name: string) {
     else if (name === 'S3') await step(0, 'S3-vela-working', () => updateVela('working'));
     else if (name === 'S4') {
       const list = $<HTMLElement>('#message-list')!;
+      messages.splice(FIXTURE_COUNTS.messages); messageVirtual?.refresh();
       for (const [index, offset] of [[0, 0], [500, 300], [1000, 600], [1500, 900], [1999, 1200]]) {
         await step(offset, `S4-scroll-${index}`, () => { list.scrollTop = index * 84; list.dispatchEvent(new Event('scroll')); });
+      }
+      const appended = createMessages(FIXTURE_COUNTS.messages + 60).slice(FIXTURE_COUNTS.messages);
+      for (let index = 0; index < appended.length; index++) {
+        await step(1500 + index * 100, `S4-append-${String(index + 1).padStart(2, '0')}`, () => {
+          messages.push(appended[index]); messageVirtual?.refresh(); messageVirtual?.jumpTo(messages.length - 1);
+          $('#message-status')!.textContent = `${messages.length.toLocaleString()} messages · synthetic append`;
+        });
       }
     }
     else if (name === 'S6') {
@@ -340,7 +355,10 @@ async function runScriptedScenario(name: string) {
         target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }));
         source.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer }));
       });
-      await step(360, 'S6-keyboard-reorder-equivalent', () => moveCard(first, -1));
+      await step(360, 'S6-keyboard-reorder', () => {
+        const card = $<HTMLElement>(`.resource-card[data-id="${first}"]`)!;
+        card.focus(); card.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'ArrowLeft', altKey: true }));
+      });
       await step(480, 'S6-widen', () => cardAction(first, 'resize'));
       await step(600, 'S6-collapse', () => cardAction(first, 'collapse'));
       await step(720, 'S6-expand', () => cardAction(first, 'collapse'));
@@ -355,7 +373,7 @@ async function runScriptedScenario(name: string) {
     else if (name === 'S8') {
       if (!(window as any).__TAURI_INTERNALS__) throw new Error('S8 requires the native Tauri host');
       const id = blocks[1].id;
-      await step(0, 'S8-activity-open', openStream);
+      await step(0, 'S8-activity-open', async () => { const existing = await WebviewWindow.getByLabel('activity'); await existing?.close(); await openStream(); });
       await step(250, 'S8-block-detach', () => detachBlock(id));
       await step(500, 'S8-block-focus', async () => { const win = await WebviewWindow.getByLabel(`block-${id}`); await win?.setFocus(); });
       await step(750, 'S8-block-close', async () => { const win = await WebviewWindow.getByLabel(`block-${id}`); await win?.close(); });
@@ -378,13 +396,32 @@ async function benchmarkCommand(command: string) {
 
 function renderStream() {
   app.innerHTML = `<div class="stream-window"><header><span class="brand-diamond">✧</span><div><small>AERYNTH / SECONDARY SURFACE</small><strong>Intelligence Stream</strong></div><span class="fixture-pill">SYNTHETIC</span></header><div class="stream-intro"><span class="section-kicker">OBSERVABLE ACTIVITY / FIXTURE</span><h1>A current of events.</h1><p>1,000 deterministic events. No live Codex connection, agent run, or private reasoning is represented.</p><div class="stream-controls"><button id="burst-button">Play reproducible burst ↗</button><span id="burst-status">SEED ${FIXTURE_SEED}</span></div></div><div class="stream-list virtual-list" id="event-list" tabindex="0" aria-label="Synthetic activity events"><div class="virtual-spacer"></div><div class="virtual-items"></div></div><footer><span id="event-status">1,000 synthetic events</span><span>LOCAL / NO EGRESS</span></footer></div>`;
-  const virtual = mountVirtualList('#event-list', events, 90, eventRow);
+  eventVirtual = mountVirtualList('#event-list', events, 90, eventRow);
+  $('.stream-window footer')!.insertAdjacentHTML('beforeend', '<button id="stream-export">Export local trace ↓</button>');
   $('#event-list')!.addEventListener('click', event => { const row = (event.target as HTMLElement).closest<HTMLElement>('[data-event]'); if (!row) return; selectedEventId = row.dataset.event!; $$('.event-row.selected').forEach(el => { el.classList.remove('selected'); el.setAttribute('aria-pressed', 'false'); }); row.classList.add('selected'); row.setAttribute('aria-pressed', 'true'); $('#event-status')!.textContent = `Selected · ${selectedEventId} · synthetic`; });
-  $('#burst-button')!.addEventListener('click', async () => {
-    const button = $<HTMLButtonElement>('#burst-button')!; button.disabled = true;
-    for (let batch = 0; batch < 12; batch++) { virtual.jumpTo(Math.min(events.length - 1, batch * 73)); $('#burst-status')!.textContent = `SIMULATED BURST · ${String((batch + 1) * 73).padStart(3, '0')} / 1000`; await new Promise(resolve => setTimeout(resolve, 95)); }
-    $('#burst-status')!.textContent = 'BURST COMPLETE · SYNTHETIC'; button.disabled = false;
-  });
+  $('#burst-button')!.addEventListener('click', runEventBurst);
+  $('#stream-export')!.addEventListener('click', downloadTrace);
+}
+let eventBurstRunning = false;
+async function runEventBurst() {
+  if (eventBurstRunning) throw new Error('Event burst already running');
+  eventBurstRunning = true;
+  const button = $<HTMLButtonElement>('#burst-button')!; button.disabled = true;
+  events.splice(FIXTURE_COUNTS.events); eventVirtual?.refresh();
+  const appended = createEvents(FIXTURE_COUNTS.events + 60).slice(FIXTURE_COUNTS.events);
+  const start = performance.now();
+  try {
+    for (let index = 0; index < appended.length; index++) {
+      const offset = index * 100;
+      await atOffset(start, offset);
+      await ledger.step(`S5-append-${String(index + 1).padStart(2, '0')}`, () => {
+        events.push(appended[index]); eventVirtual?.refresh(); eventVirtual?.jumpTo(events.length - 1);
+        $('#burst-status')!.textContent = `SIMULATED +${index + 1} / 60`;
+        $('#event-status')!.textContent = `${events.length.toLocaleString()} synthetic events`;
+      }, offset, start);
+    }
+    $('#burst-status')!.textContent = 'BURST COMPLETE · 60 SYNTHETIC EVENTS';
+  } finally { button.disabled = false; eventBurstRunning = false; }
 }
 function renderDetached(id: string) {
   const block = byId.get(id);
@@ -397,8 +434,11 @@ if (surface === 'stream') renderStream(); else if (surface === 'block' && detach
 
 Object.assign(window, { __AERYNTH_BENCH__: {
   schema: 'aerynth-local-benchmark-control-v1',
-  prepareFixedCinematic: () => { if (!surface) prepareFixedCinematic(); },
-  runScenario: (name: string) => !surface ? runScriptedScenario(name) : Promise.reject(new Error('Main-window scenario only')),
+  prepareFixedCinematic: () => {
+    if (!surface) prepareFixedCinematic();
+    else if (surface === 'stream') { events.splice(FIXTURE_COUNTS.events); eventVirtual?.refresh(); ledger.clear(); $('#event-status')!.textContent = '1,000 synthetic events'; $('#burst-status')!.textContent = `SEED ${FIXTURE_SEED}`; }
+  },
+  runScenario: (name: string) => !surface ? runScriptedScenario(name) : surface === 'stream' && name === 'S5' ? runEventBurst() : Promise.reject(new Error('Scenario unavailable on this surface')),
   startFrameCapture: () => motion.beginFrameCapture(),
   stopFrameCapture: () => { lastFrameCapture = motion.endFrameCapture(); return lastFrameCapture; },
   snapshot: benchmarkSnapshot,

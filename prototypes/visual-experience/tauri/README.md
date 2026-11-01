@@ -39,3 +39,5 @@ The sampler is limited to 1–60 seconds and 250–2,000 ms intervals. Its CPU p
 ## Review notes
 
 Read [EVALUATION.md](EVALUATION.md) for native screenshots, test results, hardware context, measured values, limits, and recommended next work. This prototype stays inside its owned directory; it does not alter shared Aetherwake source or governance.
+
+For the later controlled host comparison, use [BENCHMARK-CONTROL.md](BENCHMARK-CONTROL.md). The original short pilot measurements are a baseline record, not comparative results.

@@ -21,3 +21,13 @@ test('all simulated activity is labeled at source', () => {
   assert.ok(createMessages().every(message => message.author === 'You' || message.author.includes('fixture')));
   assert.ok(blocks.every(block => block.detail.includes('synthetic') || block.detail.includes('simulated') || block.detail.includes('measurement')));
 });
+
+test('60-item append extends the same deterministic fixture history', () => {
+  const messages = createMessages(), extendedMessages = createMessages(FIXTURE_COUNTS.messages + 60);
+  const events = createEvents(), extendedEvents = createEvents(FIXTURE_COUNTS.events + 60);
+  assert.deepEqual(extendedMessages.slice(0, messages.length), messages);
+  assert.deepEqual(extendedEvents.slice(0, events.length), events);
+  assert.equal(new Set(extendedMessages.map(message => message.id)).size, 2060);
+  assert.equal(new Set(extendedEvents.map(event => event.id)).size, 1060);
+  assert.ok(extendedEvents.slice(1000).every(event => event.detail.includes('Synthetic event')));
+});
