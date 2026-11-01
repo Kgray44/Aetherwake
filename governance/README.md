@@ -31,7 +31,7 @@ The repository owner retains final decision authority. Amendments must be explic
 | 08 | [Context Intelligence and Memory](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 | 09 | [Intelligence Streams and Observability](09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 | 10 | [AI Execution Profiler](10-AI-EXECUTION-PROFILER.md) | **Published — pending owner acceptance, v1.0.0-draft** |
-| 11 | Timelines and Replay | Planned |
+| 11 | [Timelines and Replay](11-TIMELINES-AND-REPLAY.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 | 12 | Codex Execution and Integrations | Planned |
 | 13 | Platform, Performance, and Displays | Planned |
 | 14 | Trust, Privacy, and Autonomy | Planned |
