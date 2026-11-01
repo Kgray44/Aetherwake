@@ -32,7 +32,10 @@
         "latency",
         "usage analytics",
         "context occupancy",
-        "token budget"
+        "token budget",
+        "tokens",
+        "token counts",
+        "execution profiler"
       ],
       "path_prefixes": [
         "src/profiler/",
@@ -47,7 +50,10 @@
         "historical playback",
         "gantt",
         "schedule estimate",
-        "milestone"
+        "milestone",
+        "timelines",
+        "replays",
+        "forecasts"
       ],
       "path_prefixes": [
         "src/timelines/",
@@ -65,7 +71,11 @@
         "plugin",
         "git integration",
         "model provider",
-        "terminal"
+        "terminal",
+        "integrations",
+        "plugins",
+        "tools",
+        "providers"
       ],
       "path_prefixes": [
         "src/integrations/",
@@ -86,7 +96,11 @@
         "battery",
         "electron",
         "tauri",
-        "desktop shell"
+        "desktop shell",
+        "displays",
+        "monitors",
+        "frames",
+        "graphics"
       ],
       "path_prefixes": [
         "src/rendering/",
@@ -108,7 +122,10 @@
         "move files",
         "filesystem mutation",
         "sensitive data",
-        "autonomy"
+        "autonomy",
+        "permissions",
+        "approvals",
+        "privacy policy"
       ],
       "path_prefixes": [
         "src/security/",
@@ -131,7 +148,11 @@
         "benchmark",
         "optimize",
         "code review",
-        "change"
+        "change",
+        "tests",
+        "testing",
+        "verification",
+        "quality"
       ],
       "path_prefixes": [
         "src/",
@@ -150,7 +171,10 @@
         "build pipeline",
         "contribution",
         "pull request",
-        "milestone planning"
+        "milestone planning",
+        "pull requests",
+        "pipelines",
+        "documentation governance"
       ],
       "path_prefixes": [
         ".github/workflows/",
@@ -170,7 +194,12 @@
         "command palette",
         "focus mode",
         "universal search",
-        "welcome back"
+        "welcome back",
+        "interactions",
+        "interfaces",
+        "commands",
+        "selections",
+        "search interface"
       ],
       "path_prefixes": [
         "src/ui/",
@@ -189,7 +218,11 @@
         "glass",
         "rendering",
         "cinematic",
-        "motion coordinator"
+        "motion coordinator",
+        "animations",
+        "particles",
+        "motions",
+        "shaders"
       ],
       "path_prefixes": [
         "src/motion/",
@@ -211,7 +244,15 @@
         "layout",
         "contextual command",
         "selection",
-        "dashboard"
+        "dashboard",
+        "workspaces",
+        "projects",
+        "blocks",
+        "resources",
+        "collections",
+        "folders",
+        "layouts",
+        "dashboards"
       ],
       "path_prefixes": [
         "src/workspaces/",
@@ -228,7 +269,12 @@
         "fork",
         "thread history",
         "message",
-        "branch sharing"
+        "branch sharing",
+        "chats",
+        "conversations",
+        "branches",
+        "messages",
+        "forks"
       ],
       "path_prefixes": [
         "src/chat/",
@@ -246,7 +292,12 @@
         "task planning",
         "task assignment",
         "handoff",
-        "multi agent"
+        "multi agent",
+        "agents",
+        "tasks",
+        "workflows",
+        "delegated tasks",
+        "agent groups"
       ],
       "path_prefixes": [
         "src/agents/",
@@ -265,7 +316,11 @@
         "notification",
         "proactive",
         "habit",
-        "learned preference"
+        "learned preference",
+        "assistants",
+        "notifications",
+        "preferences",
+        "habits"
       ],
       "path_prefixes": [
         "src/assistant/",
@@ -281,7 +336,10 @@
         "thought stream",
         "project knowledge",
         "knowledge document",
-        "annotation"
+        "annotation",
+        "notes",
+        "annotations",
+        "knowledge pages"
       ],
       "path_prefixes": [
         "src/notes/",
@@ -299,7 +357,11 @@
         "memory decay",
         "persistent task memory",
         "token efficiency",
-        "semantic retrieval"
+        "semantic retrieval",
+        "memories",
+        "retrieval",
+        "compress context",
+        "compacting"
       ],
       "path_prefixes": [
         "src/context/",
@@ -315,7 +377,11 @@
         "observability",
         "trace",
         "tool event",
-        "agent activity"
+        "agent activity",
+        "streams",
+        "events",
+        "traces",
+        "agent logs"
       ],
       "path_prefixes": [
         "src/observability/",
