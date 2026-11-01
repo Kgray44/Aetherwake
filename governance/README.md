@@ -4,7 +4,7 @@
 
 Start with **[00 — The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md)**. It defines the governing intent, principles, invariants, authority hierarchy, and acceptance obligations for Project Aetherwake, Aerynth, Vela, and all related subsystems.
 
-> **Current baseline:** Constitution v1.0.0, effective 2026-11-01. The specialized charters listed below are **planned**, not published or approved. Do not cite a planned charter as an established requirement.
+> **Current baseline:** Constitution v1.0.0, effective 2026-11-01. Charter 03 has been **published for owner acceptance**; other listed charters remain planned. A published charter is not automatically owner-ratified.
 
 ## Document authority
 
@@ -23,7 +23,7 @@ The repository owner retains final decision authority. Amendments must be explic
 | 00 | [Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) | **Established — v1.0.0** |
 | 01 | Experience and Interaction | Planned |
 | 02 | Liquid Intelligence and Motion | Planned |
-| 03 | Projects, Workspaces, and Resources | Planned |
+| 03 | [Projects, Workspaces, and Resources](03-PROJECTS-WORKSPACES-AND-RESOURCES.md) | **Published — pending owner acceptance, v1.0.0** |
 | 04 | Conversations and Connected Branches | Planned |
 | 05 | Agents, Tasks, and Workflows | Planned |
 | 06 | Vela Intelligence and Adaptation | Planned |
