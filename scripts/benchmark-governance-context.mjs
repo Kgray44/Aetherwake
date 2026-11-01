@@ -30,7 +30,7 @@ for(const f of fixtures){
  assert.deepEqual(missing,[],"Routing coverage for "+f.task);
  assert.deepEqual(r.coverage.missingRequired,[],"Explicit requirements for "+f.task);
  assert.ok(!r.metrics.budgetExceeded);
- data.push({task:f.task,expectedDomains:f.expected,selectedDomains:[...actual],requiredIds:f.requiredIds,fullRoutedCharacters:r.metrics.fullRoutedCharacters,selectedCharacters:r.metrics.selectedCharacters,estimatedTokenProxy:r.metrics.estimatedTokens,reductionPercent:r.metrics.characterReductionPercent,missingDomains:missing});
+ data.push({task:f.task,expectedDomains:f.expected,selectedDomains:[...actual],selectedSections:r.selected.filter(x=>x.mode==="section").map(x=>({charter:x.id,title:x.title,lines:x.range})),fullFallbacks:r.selected.filter(x=>x.mode==="full-fallback").map(x=>x.id),requiredIds:f.requiredIds,fullRoutedCharacters:r.metrics.fullRoutedCharacters,selectedCharacters:r.metrics.selectedCharacters,estimatedTokenProxy:r.metrics.estimatedTokens,reductionPercent:r.metrics.characterReductionPercent,missingDomains:missing});
 }
 const summary={
  benchmark:"source-character context selection, not model token usage or task quality",
