@@ -73,7 +73,8 @@ export function bindBlock(o: BindingOptions): () => void {
     const d = drag; if (!d) return; drag = null;
     o.element.ownerDocument.documentElement.style.userSelect = d.selection;
     if (d.capture.hasPointerCapture(d.pointerId)) d.capture.releasePointerCapture(d.pointerId);
-    if (commit) void send(d.gesture.command(crypto.randomUUID())); else reconcile();
+    const changed = Object.entries(d.gesture.current).some(([key, value]) => value !== d.gesture.block[key as keyof BlockProjection]);
+    if (commit && changed) void send(d.gesture.command(crypto.randomUUID())); else reconcile();
   };
   const bind = (el: HTMLElement, handle: Handle | 'move') => {
     const oldTouch = el.style.touchAction; el.style.touchAction = 'none';

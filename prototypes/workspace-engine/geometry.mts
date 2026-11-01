@@ -41,7 +41,7 @@ export function resize(p: Presentation, width: number, height: number, aspectRat
 /** Window changes affect only the reachable view. Canonical manual positions never reflow. */
 export function reachable<T extends Geometry>(p: T, width: number, height: number): T {
   ensure(finite(width) && finite(height) && width > 0 && height > 0);
-  return { ...p, x: clamp(p.x, 0, Math.max(0, width - Math.min(p.width, 64))), y: clamp(p.y, 0, Math.max(0, height - 48)) };
+  return { ...p, x: clamp(p.x, 0, Math.max(0, width - p.width)), y: clamp(p.y, 0, Math.max(0, height - p.height)) };
 }
 export function presetGeometry(preset: Preset, blocks: Presentation[], width: number, height: number): Presentation[] {
   ensure(['freeform', 'focus', 'columns', 'research', 'development'].includes(preset));

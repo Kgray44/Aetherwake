@@ -9,7 +9,7 @@ import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { WorkspaceEngine } from '../engine.mts';
 import type { Command, WorkspaceProjection } from '../contracts.mts';
 import { defaults, hitTest, presentation, reachable, resizeFromHandle } from '../geometry.mts';
-import { LayoutGesture, BlockMotionBridge } from '../interaction.mts';
+import { LayoutGesture, BlockMotionBridge, bindBlock } from '../interaction.mts';
 import { MotionCoordinator } from '../../visual-experience/cinematic-v3/src/motion.ts';
 
 const code = (wanted: string) => (e: any) => e.code === wanted;
@@ -156,7 +156,7 @@ test('migrate existing kernel and extension schema 1 without changing content or
   const { engine: e, state, kernel: k, path } = fixture(t, true);
   let s = add(e, state); const b = s.blocks[0];
   // Separate fixture starts at the real published v1 extension schema.
-  const oldPath = join(t.name ? String(path).replace(/[^\\/]+$/, '') : '.', 'v1.sqlite');
+  const oldPath = join(String(path).replace(/[^\\/]+$/, ''), 'v1.sqlite');
   const old = WorkspaceKernel.open(oldPath); const w = old.createWorkspace('Legacy'), n = old.createNote('Legacy synthetic', 'kept');
   const placed = old.attachBlock(w.id, n.id, { x: -20, y: 7, width: 80, height: 80, z: 9 });
   old.withTransaction(db => {
@@ -196,6 +196,7 @@ test('viewport resize projection preserves manual canonical coordinates and reso
   const { engine: e, state } = fixture(t); const s = add(e, state, { x: 2500, y: 1800 });
   const b = s.blocks[0], projected = reachable(b, 500, 300);
   assert.ok(projected.x < 500 && projected.y < 300);
+  assert.ok(projected.x + projected.width <= 500 && projected.y + projected.height <= 300);
   assert.equal(projected.resourceId, b.resourceId);
   assert.equal(e.project(s.workspaceId).blocks[0].x, 2500);
 });
@@ -238,4 +239,49 @@ test('presets act on real blocks, keep locked placements and allow subsequent cu
   const movable = s.blocks.find(b => b.blockId !== id)!;
   s = run(e, s, { type: 'moveBlock', blockId: movable.blockId, x: 117, y: 119, snap: 16 });
   assert.equal(s.blocks.find(b => b.blockId === movable.blockId)!.x, 112);
+});
+
+test('failed extension migration is atomic and retains the previous schema for recovery', t => {
+  const { kernel: k } = fixture(t);
+  k.withTransaction(db => {
+    db.exec(`DROP TABLE workspace_engine_receipts; DROP TABLE workspace_engine_checkpoints;
+      DROP TABLE workspace_engine_session; ALTER TABLE workspace_engine_layouts DROP COLUMN history_json;
+      UPDATE workspace_engine_schema SET version=1;
+      CREATE TRIGGER reject_fixture_upgrade BEFORE UPDATE ON workspace_engine_schema
+      BEGIN SELECT RAISE(ABORT,'Synthetic migration interruption'); END;`);
+  });
+  assert.throws(() => new WorkspaceEngine(k), /Synthetic migration interruption/);
+  k.withTransaction(db => {
+    assert.equal(db.prepare('SELECT version FROM workspace_engine_schema').get()!.version, 1);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM pragma_table_info('workspace_engine_layouts') WHERE name='history_json'").get()!.n, 0);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='workspace_engine_receipts'").get()!.n, 0);
+    db.exec('DROP TRIGGER reject_fixture_upgrade');
+  });
+  assert.ok(new WorkspaceEngine(k).listWorkspaces().length);
+});
+
+test('DOM binding cancels safely, suppresses selection only during drag and skips no-op clicks', async t => {
+  const { engine: e, state } = fixture(t); let s = add(e, state); const id = s.blocks[0].blockId;
+  const doc = Object.assign(new EventTarget(), { documentElement: { style: { userSelect: 'text' } } });
+  class Target extends EventTarget {
+    style = { touchAction: '' }; ownerDocument = doc; captured = new Set<number>();
+    setPointerCapture(id: number) { this.captured.add(id); }
+    hasPointerCapture(id: number) { return this.captured.has(id); }
+    releasePointerCapture(id: number) { this.captured.delete(id); this.dispatchEvent(new Event('lostpointercapture')); }
+  }
+  const element = new Target(), grip = new Target(), handle = new Target();
+  const m = new MotionCoordinator(), bridge = new BlockMotionBridge(m); bridge.sync(s.blocks);
+  let commits = 0;
+  const dispose = bindBlock({ element: element as any, grip: grip as any, handles: { se: handle as any }, blockId: id,
+    state: () => s, port: { project: async wid => e.project(wid), execute: async c => { commits++; return e.execute(c); } }, motion: bridge,
+    changed: next => { s = next; }, failed: error => { throw error; } });
+  const fire = (target: Target | typeof doc, type: string, extra: object = {}) => target.dispatchEvent(Object.assign(new Event(type, { cancelable: true }), { button: 0, pointerId: 1, clientX: 0, clientY: 0, shiftKey: false, ...extra }));
+  fire(grip, 'pointerdown'); assert.equal(doc.documentElement.style.userSelect, 'none');
+  fire(grip, 'pointerup'); assert.equal(commits, 0); assert.equal(doc.documentElement.style.userSelect, 'text');
+  fire(handle, 'pointerdown'); fire(handle, 'pointermove', { clientX: 100, clientY: 80 });
+  fire(doc, 'keydown', { key: 'Escape' }); assert.equal(commits, 0); assert.equal(doc.documentElement.style.userSelect, 'text');
+  fire(handle, 'pointerdown'); fire(handle, 'pointermove', { clientX: 100, clientY: 80 }); fire(handle, 'pointercancel'); assert.equal(commits, 0);
+  fire(handle, 'pointerdown'); fire(handle, 'pointermove', { clientX: 100, clientY: 80 }); fire(handle, 'pointerup');
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(commits, 1); assert.equal(s.blocks[0].width, 420);
+  dispose(); assert.equal(grip.style.touchAction, ''); fire(grip, 'pointerdown'); assert.equal(doc.documentElement.style.userSelect, 'text');
 });
