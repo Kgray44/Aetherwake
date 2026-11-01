@@ -1,10 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { parseRegistry,validateRouter,routeGovernance } from "../scripts/governance-router.mjs";
 
-const root=resolve(import.meta.dirname??new URL("..",import.meta.url).pathname,"..");
+const root=resolve(dirname(fileURLToPath(import.meta.url)),"..");
 const config=JSON.parse(readFileSync(resolve(root,"config/governance-routes.json"),"utf8"));
 const registry=parseRegistry(readFileSync(resolve(root,"governance/README.md"),"utf8"));
 const exists=p=>existsSync(resolve(root,p));
