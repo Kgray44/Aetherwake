@@ -6,7 +6,7 @@
 
 The original deterministic Governance Router selects relevant charters by task phrases and repository paths, with registry-derived authority labels. It does not ingest their content.
 
-**Governance Context Router V2** builds a current, content-addressed index of every published charter and selects *complete Markdown sections* within the applicable charters, always including the **complete binding Constitution**. An explicit requirement ID pins the section containing that requirement. Output includes provenance, authority, exact source ranges, and a character-based size estimate. Canonical Markdown stays the source of truth.
+**Governance Context Router V2** builds a current, content-addressed index of every published charter and selects *complete Markdown sections* within the applicable charters, always including the **complete binding Constitution** **and every normative requirement line from every selected charter**. An explicit requirement ID pins the section containing that requirement. Output includes provenance, authority, exact source ranges, and a character-based size estimate. Canonical Markdown stays the source of truth.
 
 This is a selective context assembly component that could later serve CIE. It is not a semantic embedding engine, a provider-native compaction service, or an authorization engine.
 
@@ -42,17 +42,22 @@ node scripts/governance-context.mjs --index
 # Reproducible tests and source-character benchmark
 node --test tests/governance-router.test.mjs tests/governance-context.test.mjs
 node scripts/benchmark-governance-context.mjs
+node scripts/evaluate-governance-engineering.mjs --strict
 ~~~
 
-## Two-stage algorithm
+## General-purpose retrieval architecture
 
-1. **Authority first:** parse the current \`governance/README.md\` registry. An advisory charter stays advisory even if published; a planned/unavailable charter is never invented. A selected file is not silently ratified.
-2. **Deterministic domain routing:** call existing \`routeGovernance()\` using task phrases and paths. Explicit normative IDs add their source charters. Mutating/permission-related work includes Trust when present.
-3. **Fresh index:** read the original Markdown files every invocation. Split on level-2 section headings, retain full section text and exact line ranges. Parse requirement definitions with the canonical \`**AW-... —\` format and reject duplicate IDs.
-4. **Scoped selection:** include the **complete Constitution**. Rank specialized charter sections by query-token overlap with section headings and body; pin explicitly requested requirement sections. Limit automatically selected sections using \`--max-sections\`.
-5. **Conservative fallback:** if a selected charter has no positive section match, include the **entire charter**. Never silently drop it just to make context smaller.
-6. **Referenced requirements:** include up to 24 additional one-hop normative cross-references with source lines, or warn if expansion is incomplete. This is not semantic dependency closure.
-7. **Manifest and soft budget:** report selected text, authority, source path/line range, SHA-256, inclusion reasons, incomplete coverage and estimated size. A budget overrun emits a warning, **not** silent truncation.
+The router is designed for **future tasks whose wording has never appeared in its tests**. A match against the task's exact text is not a sufficient safety guarantee. The governing policy in `config/governance-context-policies.json` therefore uses *domain-to-domain dependency edges*, not lists of phrases copied from benchmark prompts.
+
+1. **Authority:** Read the current registry. Document existence never implies ratification; Charter 00 remains the binding baseline unless the registry expressly changes.
+2. **Scope:** Select primary charters from task language and affected paths using the original router. If no primary subsystem is recognized, set `scopeNeedsReview` and warn instead of falsely claiming sufficient coverage.
+3. **Dependency closure:** Apply one-hop, auditable, domain-level relationships to include trust, quality, integration, and other relevant neighboring charters. This does not depend on the particular words in test cases.
+4. **Normative envelope:** Include **every original requirement line** from **every selected charter**, including lines in sections not chosen for full expansion, each with its own exact file path, source line, ID and SHA-256. This protects requirements that a lexical ranker would otherwise omit.
+5. **Focused explanatory context:** Include the full Constitution. Rank fuller Markdown sections of other charters by relevance. Explicit requirement IDs pin their full section. When no section can be matched responsibly, load the full charter rather than pretending it was unnecessary.
+6. **References and limits:** Expand available one-hop normative references with provenance. Warn about unresolved or overflow dependencies, budget overruns, and missing sources. Never silently truncate a mandatory requirement to meet a soft context budget.
+7. **Freshness:** Read canonical Markdown for each invocation. Hash the source index and policy, so a context package can be traced to the underlying governance snapshot.
+
+This is deliberately more conservative than the earlier prototype. The goal is **fewer bytes without omitting applicable requirements**, rather than winning a single benchmark at the expense of future tasks.
 
 ## Safeguards
 
@@ -62,7 +67,8 @@ node scripts/benchmark-governance-context.mjs
 - This source index contains public governance only. It is not a permission system for private projects, files, chat history, or user information. Private-resource retrieval will need policy checks before ranking and model attachment.
 - Requirement IDs are authoritative references only where the source registry says they have authority.
 - Source text hashing provides content identity for a retrieval run; it is **not** a guarantee that a subsequent file edit cannot make an excerpt stale. Refresh before applying governed work.
-- Keyword matching can miss indirect requirements. Agents MUST inspect scope and broaden retrieval for implicit cross-domain dependencies. The V2 result is **scoped guidance**, not proof of complete semantic coverage.
+- Domain routing can still miss an entirely relevant charter. The normative-envelope guarantee applies **only to charters that were selected**; it is not proof that all applicable domains were found. Unknown scope is explicitly flagged for review.
+- Text extracted from normative requirement definitions may rely on surrounding tables, examples, or architectural explanations. Expand full sections or entire charters when the task requires them. The router never treats small context as proof of engineering correctness.
 - The optional budget is a **soft estimated context planning limit**, not an API/model context or billing cap.
 
 ## Benchmarking and quality
@@ -77,7 +83,11 @@ Seven representative engineering prompts assert charter selection and known rele
 - A rough proxy \`ceil(characters/4)\` marked explicitly as **not a tokenizer result**.
 - Whether every predeclared domain and requirement-ID fixture was retained.
 
-This measures **selection volume and defined fixture recall**, not agent accuracy. It cannot establish real prompt token costs, cache usage, reasoning quality, downstream task success, or latency. Those require a future end-to-end controlled Codex experiment comparing full and scoped governance under equivalent models, tools, and task suites. False negatives must be measured before enabling any aggressive retrieval mode by default.
+The independent sufficiency evaluator (`node scripts/evaluate-governance-engineering.mjs --strict`) also checks eight synthetic engineering scenarios with **45 separately curated requirement labels**, which are withheld from the retrieval call. Tests additionally vary task phrasing while asserting that every normative rule of every selected charter survives.
+
+**Important change in measured performance:** the earlier phrase-dependent section strategy reduced source characters by about 70%, but initially recovered only 33/45 independently labeled essential requirements. The conservative domain-dependency + full-normative-envelope strategy now retrieves 45/45 labeled requirements, and the seven-fixture benchmark measures roughly **35.6% source-character reduction** (the precise value is emitted by CI). This is a fidelity/efficiency tradeoff, not a token or cost guarantee.
+
+This measures **selection volume, domain coverage, and defined fixture recall**, not agent accuracy. It cannot establish real prompt token costs, cache usage, reasoning quality, downstream task success, or latency. Those require a future end-to-end controlled Codex experiment comparing full and scoped governance under equivalent models, tools, and task suites. False negatives must be measured before enabling any aggressive retrieval mode by default.
 
 ## Future CIE integration
 
