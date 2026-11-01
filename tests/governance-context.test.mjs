@@ -65,8 +65,9 @@ test("unknown requirement IDs fail closed",()=>{
  assert.throws(()=>context({requiredIds:["AW-FAKE-999"]}),/Unknown or unindexed/);
 });
 test("low-confidence section matches fall back to full charter instead of pretending completeness",()=>{
- const r=context({task:"Organize several chats involving a bizarre unrelated term 'zymurgy'",maxSections:1});
+ const r=context({task:"blorp zymurgy",paths:["src/conversations/unmatched.ts"],maxSections:1});
  assert.ok(ids(r).includes("04"));
+ assert.ok(r.selected.some(s=>s.id==="04"&&s.mode==="full-fallback"));
  assert.ok(r.selected.some(s=>s.id==="00"&&s.mode==="full"));
 });
 test("soft budgets warn, retain original rules, and never claim a hard token cap",()=>{
@@ -100,4 +101,17 @@ test("indexing never changes canonical files or status registry",()=>{
  const second=buildGovernanceIndex(config,registry);
  assert.equal(second.requirements.size,index.requirements.size);
  assert.equal(readFileSync(resolve(root,"governance/README.md"),"utf8"),before);
+});
+
+test("unpinned section selection recognizes motion, branch, and CIE concepts",()=>{
+ const cases=[
+  {task:"Atmospheric Motion particles filaments fields and depth",path:"src/motion/particles.ts",id:"02",heading:"Atmospheric Motion: particles"},
+  {task:"Connected Branches independent history connected knowledge",path:"src/conversations/sharing.ts",id:"04",heading:"Connected Branches: independent history"},
+  {task:"Adaptive temporal decay and importance protection",path:"src/context/decay.ts",id:"08",heading:"Adaptive temporal decay"}
+ ];
+ for(const c of cases){
+  const r=context({task:c.task,paths:[c.path],maxSections:2});
+  const matched=r.selected.some(s=>s.id===c.id&&s.mode==="section"&&s.title.includes(c.heading));
+  assert.ok(matched,c.task+" selected "+JSON.stringify(r.selected.filter(s=>s.id===c.id).map(s=>s.title)));
+ }
 });
