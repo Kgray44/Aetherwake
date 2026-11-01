@@ -35,7 +35,16 @@
         "token budget",
         "tokens",
         "token counts",
-        "execution profiler"
+        "execution profiler",
+        "chatgpt subscription",
+        "codex usage limits",
+        "api billing",
+        "metered api",
+        "chat cost",
+        "quota pool",
+        "plan allowance",
+        "usage allowance",
+        "paid fallback"
       ],
       "path_prefixes": [
         "src/profiler/",
@@ -75,7 +84,17 @@
         "integrations",
         "plugins",
         "tools",
-        "providers"
+        "providers",
+        "chatgpt integration",
+        "chatgpt provider",
+        "chatgpt account",
+        "chatgpt sign in",
+        "chat provider",
+        "dual mode provider",
+        "chat codex routing",
+        "cross mode handoff",
+        "provider entitlement",
+        "chatgpt api access"
       ],
       "path_prefixes": [
         "src/integrations/",
@@ -274,7 +293,17 @@
         "conversations",
         "branches",
         "messages",
-        "forks"
+        "forks",
+        "chat mode",
+        "codex mode",
+        "dual mode chat",
+        "cross mode branch",
+        "chat to codex",
+        "codex to chat",
+        "mode switching",
+        "branch into codex",
+        "branch into chat",
+        "conversation handoff"
       ],
       "path_prefixes": [
         "src/chat/",
