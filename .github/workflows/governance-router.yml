@@ -1,0 +1,33 @@
+name: Governance Router
+
+on:
+  push:
+    paths:
+      - 'AGENTS.md'
+      - 'config/governance-routes.json'
+      - 'scripts/governance-router.mjs'
+      - 'tests/governance-router.test.mjs'
+      - 'governance/**'
+      - '.github/workflows/governance-router.yml'
+  pull_request:
+    paths:
+      - 'AGENTS.md'
+      - 'config/governance-routes.json'
+      - 'scripts/governance-router.mjs'
+      - 'tests/governance-router.test.mjs'
+      - 'governance/**'
+      - '.github/workflows/governance-router.yml'
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Validate governance registry and charter statuses
+        run: node scripts/governance-router.mjs --validate
+      - name: Test deterministic routing behavior
+        run: node --test tests/governance-router.test.mjs
