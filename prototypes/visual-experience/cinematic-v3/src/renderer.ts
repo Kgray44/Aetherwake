@@ -9,6 +9,14 @@ import {
   CelestialEnvironment,
   type CelestialStudy,
 } from "./celestial-environment.ts";
+import { InstrumentStructure } from "./instrument-geometry.ts";
+import {
+  createInstrumentMaterials,
+  updateInstrumentMaterials,
+  mirrorDirectionalKey,
+  type InstrumentMaterialSet,
+  type InstrumentStudy,
+} from "./instrument-materials.ts";
 
 export type Study = "architecture" | "living" | "observatory";
 export type Quality = "cinematic" | "balanced" | "efficient";
@@ -57,6 +65,7 @@ export interface EnvironmentFrame {
   sceneWeights?: SceneWeights;
   architectureConcept?: ArchitectureConcept;
   celestialStudy?: CelestialStudy;
+  instrumentStudy?: InstrumentStudy;
   architecturePhase?: number | null;
   quality: Quality;
   reduced: boolean;
@@ -90,6 +99,8 @@ interface FolioVisual {
   face: THREE.MeshPhysicalMaterial;
   edge: THREE.MeshPhysicalMaterial;
   polish: THREE.MeshPhysicalMaterial;
+  materials: InstrumentMaterialSet;
+  structure: InstrumentStructure;
   contact: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   width: number;
   height: number;
@@ -368,13 +379,15 @@ export class Environment {
   private readonly surfaceRotation = new THREE.Matrix4();
   private readonly surfaceWorld = new THREE.Matrix4();
   private readonly contactScale = new THREE.Vector3();
-  private readonly folioColors = {
-    conversation: new THREE.Color(0x211d30),
-    research: new THREE.Color(0x22243a),
-    note: new THREE.Color(0x30261f),
-  };
-  private readonly neutralPolish = new THREE.Color(0xa392b8);
-  private readonly warmPolish = new THREE.Color(0xa68d75);
+  private readonly foregroundAmbient = new THREE.HemisphereLight(
+    0xa7b7ff,
+    0x020207,
+    1.6,
+  );
+  private readonly foregroundKey = new THREE.DirectionalLight(0xd9d6ff, 3.5);
+  private readonly foregroundViolet = new THREE.DirectionalLight(0x7561eb, 2.3);
+  private readonly instrumentKey = new THREE.DirectionalLight(0xdce8ff, 0);
+  private instrumentStudy: InstrumentStudy = "optical";
   private readonly projectedPresence: PresenceBounds = {
     x: 0,
     y: 0,
@@ -481,13 +494,15 @@ export class Environment {
     this.architecturalScene.fog = new THREE.FogExp2(0x050711, 0.009);
     studio.dispose();
     pmrem.dispose();
-    this.scene.add(new THREE.HemisphereLight(0xa7b7ff, 0x020207, 1.6));
-    const key = new THREE.DirectionalLight(0xd9d6ff, 3.5);
-    key.position.set(-5, 8, 6);
-    this.scene.add(key);
-    const violet = new THREE.DirectionalLight(0x7561eb, 2.3);
-    violet.position.set(7, 1, -3);
-    this.scene.add(violet);
+    this.foregroundKey.position.set(-5, 8, 6);
+    this.foregroundViolet.position.set(7, 1, -3);
+    this.scene.add(
+      this.foregroundAmbient,
+      this.foregroundKey,
+      this.foregroundViolet,
+      this.instrumentKey,
+      this.instrumentKey.target,
+    );
     this.fill = new THREE.PointLight(0x8d7bff, 22, 18, 2);
     this.fill.position.set(1.3, 1.5, 2);
     this.scene.add(this.fill);
@@ -645,6 +660,23 @@ export class Environment {
       this.shadowResolution = resolution;
       this.stellarKey.shadow.needsUpdate = true;
     }
+  }
+
+  private updateInstrumentLighting(frame: EnvironmentFrame) {
+    const architectureWeight = THREE.MathUtils.clamp(
+      frame.sceneWeights?.architecture ??
+        (frame.study === "architecture" ? 1 : 0),
+      0,
+      1,
+    );
+    // Keep the approved background lights completely independent. Materials in
+    // the foreground receive the same world-space source direction and color,
+    // with lower irradiance appropriate to small near-field instruments.
+    mirrorDirectionalKey(this.stellarKey, this.instrumentKey, 0.55);
+    this.foregroundAmbient.intensity = 1.6 * (1 - architectureWeight * 0.87);
+    this.foregroundKey.intensity = 3.5 * (1 - architectureWeight * 0.92);
+    this.foregroundViolet.intensity = 2.3 * (1 - architectureWeight * 0.96);
+    this.fill.intensity *= 1 - architectureWeight * 0.95;
   }
 
   private buildLiving() {
@@ -846,47 +878,30 @@ export class Environment {
       root.visible = false;
       const slab = this.folioGeometry(false);
       const rim = this.folioGeometry(true);
-      const face = new THREE.MeshPhysicalMaterial({
-        color: 0x171424,
-        roughness: 0.37,
-        metalness: 0.47,
-        clearcoat: 0.75,
-        clearcoatRoughness: 0.24,
-        specularIntensity: 0.72,
-        envMapIntensity: 0.43,
-        emissive: 0x110c21,
-        emissiveIntensity: 0.12,
-        transparent: true,
-      });
-      const edge = new THREE.MeshPhysicalMaterial({
-        color: 0x60536f,
-        roughness: 0.29,
-        metalness: 0.78,
-        clearcoat: 0.68,
-        clearcoatRoughness: 0.23,
-        envMapIntensity: 0.72,
-        emissive: 0x332345,
-        emissiveIntensity: 0.12,
-        transparent: true,
-      });
-      const polish = new THREE.MeshPhysicalMaterial({
-        color: 0xa392b8,
-        roughness: 0.24,
-        metalness: 0.86,
-        clearcoat: 0.78,
-        clearcoatRoughness: 0.22,
-        envMapIntensity: 0.85,
-        emissive: 0x6b478c,
-        emissiveIntensity: 0.12,
-        transparent: true,
-      });
+      const materials = createInstrumentMaterials();
+      const { face, edge, polish } = materials;
+      const structure = new InstrumentStructure(materials);
       const slabMesh = new THREE.Mesh(slab, [face, edge]);
       slabMesh.frustumCulled = false;
-      slabMesh.renderOrder = 3;
+      slabMesh.renderOrder = 4;
       const rimMesh = new THREE.Mesh(rim, polish);
       rimMesh.frustumCulled = false;
       rimMesh.renderOrder = 4;
-      root.add(slabMesh, rimMesh);
+      root.add(slabMesh, rimMesh, structure.root);
+      // Opaque dark backing precedes translucent glass laminate; central text
+      // still sits over the fully opaque face. Explicit ordering is necessary
+      // because these small perimeter meshes share the same object origin.
+      structure.root.traverse((object) => {
+        if (!(object instanceof THREE.Mesh)) return;
+        object.renderOrder =
+          object.material === materials.recess
+            ? 3
+            : object.material === materials.optics
+              ? 6
+              : object.material === materials.accent
+                ? 7
+                : 5;
+      });
       const contact = new THREE.Mesh(
         new THREE.PlaneGeometry(1, 1),
         new THREE.ShaderMaterial({
@@ -920,6 +935,8 @@ export class Environment {
         face,
         edge,
         polish,
+        materials,
+        structure,
         contact,
         width: 0,
         height: 0,
@@ -1023,9 +1040,9 @@ export class Environment {
     const normal = geometry.getAttribute("normal") as THREE.BufferAttribute;
     const dome =
       kind === "research"
-        ? 8.5 * (1 - unfold) ** 2
+        ? 12 * (1 - unfold) ** 2
         : kind === "conversation"
-          ? 1.5 * (1 - unfold)
+          ? 3.4 * (1 - unfold)
           : 0;
     for (let ring = 0; ring < rings; ring++) {
       const inset = rimOnly
@@ -1037,8 +1054,13 @@ export class Environment {
           : ring === 5
             ? 2.5
             : 0;
-      const halfW = width * 0.5 + 5 - inset,
-        halfH = height * 0.5 + 5 - inset;
+      // The research face sits inside the physical housing. Keeping the old
+      // full-radius opaque slab would conceal its real recessed optical seat,
+      // even if the DOM veil outside the text was completely clear.
+      const opticalInset =
+        !rimOnly && kind === "research" ? 14.3 * (1 - unfold) : 0;
+      const halfW = width * 0.5 + 5 - inset - opticalInset,
+        halfH = height * 0.5 + 5 - inset - opticalInset;
       const z = rimOnly
         ? 0.22
         : ring < 3
@@ -1128,10 +1150,16 @@ export class Environment {
     return this.surfaceWorld;
   }
 
-  private updateFolios(
-    surfaces: readonly SurfacePose[] | undefined,
-    quality: Quality,
-  ) {
+  private updateFolios(frame: EnvironmentFrame) {
+    const surfaces = frame.surfaces;
+    const quality = frame.quality;
+    const study = frame.instrumentStudy ?? "optical";
+    const architectureWeight =
+      frame.sceneWeights?.architecture ??
+      (frame.study === "architecture" ? 1 : 0);
+    const livingWeight =
+      frame.sceneWeights?.living ?? (frame.study === "living" ? 1 : 0);
+    this.instrumentStudy = study;
     for (const visual of this.folios) {
       visual.root.visible = false;
       visual.contact.visible = false;
@@ -1162,7 +1190,7 @@ export class Environment {
         this.folioById.set(pose.id, visual);
       }
       visual.root.visible = true;
-      visual.contact.visible = true;
+      visual.contact.visible = livingWeight > 0.001;
       const opacity = THREE.MathUtils.clamp(pose.opacity ?? 1, 0, 1);
       const kind = pose.kind ?? "conversation";
       const unfold = Number.isFinite(pose.unfold)
@@ -1191,51 +1219,28 @@ export class Environment {
         ),
       );
       visual.root.matrixWorldNeedsUpdate = true;
-      visual.face.opacity = opacity;
-      visual.edge.opacity = opacity;
-      visual.polish.opacity =
-        opacity * (pose.selected ? 0.46 - unfold * 0.18 : 0.12);
-      visual.edge.envMapIntensity = pose.selected ? 0.54 - unfold * 0.12 : 0.26;
-      visual.edge.color.setHex(
-        kind === "note" ? 0x45372f : kind === "research" ? 0x544c66 : 0x4b435b,
-      );
-      visual.face.color.copy(this.folioColors[kind]);
-      visual.face.roughness =
-        kind === "note"
-          ? 0.79 + unfold * 0.02
-          : kind === "research"
-            ? 0.21 + unfold * 0.27
-            : 0.34 + unfold * 0.15;
-      visual.face.metalness =
-        kind === "note" ? 0.08 : kind === "research" ? 0.18 : 0.28;
-      visual.face.specularIntensity =
-        kind === "note" ? 0.28 : kind === "research" ? 0.88 : 0.65;
-      visual.face.clearcoat =
-        kind === "note"
-          ? 0.1
-          : (kind === "research" ? 0.92 : 0.64) * (1 - unfold * 0.5);
-      visual.face.clearcoatRoughness =
-        (kind === "research" ? 0.18 : 0.29) + unfold * 0.17;
-      visual.edge.roughness = (kind === "note" ? 0.46 : 0.3) + unfold * 0.08;
-      visual.polish.roughness = 0.3 + unfold * 0.12;
-      visual.polish.color.copy(
-        kind === "note" ? this.warmPolish : this.neutralPolish,
-      );
-      visual.face.envMapIntensity =
-        (quality === "efficient"
-          ? 0.22
-          : kind === "note"
-            ? 0.18
-            : kind === "research"
-              ? 0.82
-              : 0.65) *
-        (1 - unfold * 0.38);
-      visual.edge.emissiveIntensity =
-        0.045 + (pose.selected ? 0.07 : 0) + Math.max(0, pose.lift) * 0.0006;
-      visual.polish.emissiveIntensity = pose.selected
-        ? 0.085 - unfold * 0.035
-        : 0.035;
-      visual.rimMesh.visible = quality !== "efficient";
+      updateInstrumentMaterials(visual.materials, {
+        study,
+        kind,
+        unfold,
+        selected: pose.selected,
+        quality,
+        architectureWeight,
+      });
+      for (const material of Object.values(visual.materials))
+        material.opacity *= opacity;
+      visual.root.visible = opacity > 0.01;
+      visual.structure.update({
+        kind,
+        width: pose.w,
+        height: pose.h,
+        unfold,
+        quality,
+        study,
+      });
+      // Preserve the old buffer for baseline custody, but let the real housing
+      // own reflections instead of drawing a second continuous bright outline.
+      visual.rimMesh.visible = false;
       const spread = 46 + Math.max(0, pose.lift) * 0.6;
       const contactW = pose.w + spread * 2,
         contactH = pose.h + spread * 2;
@@ -1243,7 +1248,7 @@ export class Environment {
       visual.contact.material.uniforms.uRect.value.set(pose.w + 6, pose.h + 6);
       visual.contact.material.uniforms.uLift.value = Math.max(0, pose.lift);
       visual.contact.material.uniforms.uSelected.value = pose.selected ? 1 : 0;
-      visual.contact.material.uniforms.uOpacity.value = opacity;
+      visual.contact.material.uniforms.uOpacity.value = opacity * livingWeight;
       visual.contact.material.uniforms.uRound.value =
         kind === "research" ? 1 - unfold : 0;
       visual.contact.matrix.copy(
@@ -1669,8 +1674,9 @@ export class Environment {
       this.vela.scale.multiplyScalar(THREE.MathUtils.lerp(1, fit, focus));
       this.updatePresenceBounds();
     }
-    this.updateFolios(frame.surfaces, frame.quality);
     this.updateCelestialLighting(frame, focus);
+    this.updateInstrumentLighting(frame);
+    this.updateFolios(frame);
     this.renderer.info.reset();
     this.renderer.clear();
     this.cosmos.render(this.renderer, this.camera, {
@@ -1689,6 +1695,11 @@ export class Environment {
   }
 
   stats() {
+    const instrumentResources = this.disposed ? [] : this.folios;
+    const structures = instrumentResources.map((folio) => ({
+      id: folio.id,
+      ...folio.structure.diagnostics(),
+    }));
     return {
       backend: "Three.js WebGL2",
       framesRendered: this.frames,
@@ -1703,6 +1714,49 @@ export class Environment {
       contextLost: this.lost,
       cosmos: this.cosmos.diagnostics(),
       celestialStudy: this.celestialStudy,
+      instruments: {
+        study: this.instrumentStudy,
+        resourceCount: instrumentResources.length,
+        boundResourceCount: instrumentResources.filter(
+          (folio) => folio.id !== null,
+        ).length,
+        typeCounts: {
+          conversation: instrumentResources.filter(
+            (folio) => folio.kind === "conversation",
+          ).length,
+          research: instrumentResources.filter(
+            (folio) => folio.kind === "research",
+          ).length,
+          note: instrumentResources.filter((folio) => folio.kind === "note")
+            .length,
+        },
+        geometryAllocations: instrumentResources.reduce(
+          (sum, folio) =>
+            sum + 3 + folio.structure.diagnostics().geometryAllocations,
+          0,
+        ),
+        materialAllocations: instrumentResources.reduce(
+          (sum, folio) => sum + Object.values(folio.materials).length + 1,
+          0,
+        ),
+        meshAllocations: instrumentResources.reduce(
+          (sum, folio) => sum + 3 + folio.structure.diagnostics().meshCount,
+          0,
+        ),
+        contactCuesRendered: instrumentResources.filter(
+          (folio) => folio.contact.visible && folio.root.visible,
+        ).length,
+        sharedKey: {
+          direction: this.instrumentKey.position.clone().normalize().toArray(),
+          color: this.instrumentKey.color.getHex(),
+          intensity: this.instrumentKey.intensity,
+          meaning:
+            "Mirrors the existing architectural directional source; its background light is unchanged.",
+        },
+        structures,
+        allocationMeaning:
+          "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately.",
+      },
       shadows: {
         enabled: this.renderer.shadowMap.enabled,
         mapSize: this.shadowResolution,
@@ -1750,6 +1804,13 @@ export class Environment {
     );
     const geometries = new Set<THREE.BufferGeometry>(),
       materials = new Set<THREE.Material>();
+    for (const folio of this.folios) {
+      for (const material of Object.values(folio.materials))
+        materials.add(material);
+      // InstrumentStructure owns its geometries and clears its root. Its
+      // caller-owned materials join the same exactly-once disposal set.
+      folio.structure.dispose();
+    }
     const collect = (object: THREE.Object3D) => {
       const mesh = object as THREE.Mesh;
       if (mesh.geometry) geometries.add(mesh.geometry);

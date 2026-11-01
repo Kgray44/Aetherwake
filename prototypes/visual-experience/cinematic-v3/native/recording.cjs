@@ -158,6 +158,19 @@ async function recordNative(win, session, localURL, outputPath) {
       throw new Error(
         "Recording celestial study must be starlit, shadow or deep",
       );
+    const instrumentArgument = process.argv.find((argument) =>
+      argument.startsWith("--instrument-study="),
+    );
+    const instrumentStudy = instrumentArgument
+      ? instrumentArgument.slice("--instrument-study=".length)
+      : null;
+    if (
+      instrumentStudy !== null &&
+      !["optical", "engineered", "composite"].includes(instrumentStudy)
+    )
+      throw new Error(
+        "Recording instrument study must be optical, engineered or composite",
+      );
     const configuration = {
       localURL,
       maxBytes: MAX_BYTES,
@@ -166,6 +179,7 @@ async function recordNative(win, session, localURL, outputPath) {
       videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
       ambientStudy: process.argv.includes("--ambient-study"),
       celestialStudy,
+      instrumentStudy,
       verificationColors: Array.from(
         randomBytes(12),
         (byte) => 64 + (byte % 128),
@@ -345,9 +359,11 @@ async function recordJourney(configuration) {
       offsetMs: performance.now() - startAt,
       visualClockMs: state.visualClock,
       celestialStudy: state.celestialStudy,
+      instrumentStudy: state.instrumentStudy,
       environmentPhaseOverrideSeconds: state.environmentPhase,
       architecture: state.gpu?.architecture ?? null,
       cosmos: state.gpu?.cosmos ?? null,
+      instruments: state.gpu?.instruments ?? null,
     });
   };
   const click = (selector) => {
@@ -375,6 +391,8 @@ async function recordJourney(configuration) {
     api.setArchitectureConcept("ring");
     if (configuration.celestialStudy)
       api.setCelestialStudy(configuration.celestialStudy);
+    if (configuration.instrumentStudy)
+      api.setInstrumentStudy(configuration.instrumentStudy);
     api.setEnvironmentPhase(null);
     api.setQuality("cinematic");
     api.setReduced(false);
@@ -590,7 +608,9 @@ async function recordJourney(configuration) {
       mark("Living Intelligence appears around the same persistent resources");
       await sleep(1200);
       api.select("conversation-tidal");
-      mark("Resource selection");
+      mark(
+        "Instrument selection / shared-light material response and type-specific structure",
+      );
       await sleep(500);
       api.expand("conversation-tidal");
       await sleep(120);
@@ -598,7 +618,9 @@ async function recordJourney(configuration) {
       mark("Interrupted expansion reverses continuously");
       await sleep(350);
       api.expand("conversation-tidal");
-      mark("Conversation unfolds into working plane");
+      mark(
+        "Conversation instrument unfolds / actual coordinator lift, yaw and material response",
+      );
       await sleep(1400);
       const reading = document.querySelector(".message-stream");
       reading.scrollTop = 80;
@@ -644,7 +666,9 @@ async function recordJourney(configuration) {
       await sleep(600);
       api.setStudy("living");
       api.move("conversation-tidal", 2);
-      mark("Workspace rearranges / field follows");
+      mark(
+        "Instrument rearranges / actual coordinator elevation, yaw and shared-light material response",
+      );
       await sleep(700);
       click("#undo");
       mark("Arrangement restored by undo");
@@ -735,6 +759,7 @@ async function recordJourney(configuration) {
         study: final.study,
         architectureConcept: final.architectureConcept,
         celestialStudy: final.celestialStudy,
+        instrumentStudy: final.instrumentStudy,
         environmentPhaseOverrideSeconds: final.environmentPhase,
       },
     };

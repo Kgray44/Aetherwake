@@ -5,6 +5,7 @@ import { registerScene, retargetScene, sceneWeights } from "./scene-transition";
 import { overlappingSurfaceIds } from "./material-occlusion";
 import type { ArchitectureConcept } from "./orbital-architecture";
 import type { CelestialStudy } from "./celestial-environment";
+import type { InstrumentStudy } from "./instrument-materials";
 import { installConversation } from "./conversation";
 import {
   Environment,
@@ -59,6 +60,7 @@ app.innerHTML = `
     <label for="study">Spatial study</label><select id="study"><option value="architecture">01 · Luminous Architecture</option><option value="living">02 · Living Intelligence</option><option value="observatory">03 · Aetheric Observatory</option></select>
     <label for="architecture-concept">Orbital composition study</label><select id="architecture-concept"><option value="ring">A · Monumental arc</option><option value="aperture">B · Celestial aperture</option><option value="observatory">C · Suspended observatory</option></select>
     <label for="celestial-study">Celestial lighting study</label><select id="celestial-study"><option value="starlit">A · Starlit Ring</option><option value="shadow">B · Shadow Reveal</option><option value="deep">C · Deep Observatory</option></select>
+    <label for="instrument-study">Instrument material study</label><select id="instrument-study"><option value="optical">A · Optical Glass</option><option value="engineered">B · Engineered Instrument</option><option value="composite">C · Luminous Composite</option></select>
     <label for="quality">Graphics</label><select id="quality"><option value="cinematic">Cinematic</option><option value="balanced" selected>Balanced</option><option value="efficient">Efficient</option></select>
     <label class="check"><input id="ambient" type="checkbox" checked> Ambient motion</label>
     <label for="ambient-strength">Vela's ambient presence</label><select id="ambient-strength"><option value="1" selected>Expressive</option><option value="0.4">Subtle</option></select>
@@ -97,6 +99,8 @@ let study: Study = "architecture",
 let architectureConcept: ArchitectureConcept = "ring";
 document.body.dataset.study = study;
 let celestialStudy: CelestialStudy = "starlit";
+let instrumentStudy: InstrumentStudy = "optical";
+document.body.dataset.instrumentStudy = instrumentStudy;
 // Explicit native evidence hook. Null means the ordinary autonomous clock.
 let environmentPhase: number | null = null;
 let pointer = { x: 0, y: 0 },
@@ -676,6 +680,11 @@ $("#celestial-study").addEventListener("change", (e) => {
   celestialStudy = (e.target as HTMLSelectElement).value as CelestialStudy;
   wake();
 });
+$("#instrument-study").addEventListener("change", (e) => {
+  instrumentStudy = (e.target as HTMLSelectElement).value as InstrumentStudy;
+  document.body.dataset.instrumentStudy = instrumentStudy;
+  wake();
+});
 $("#ambient").addEventListener("change", (e) => {
   ambient = (e.target as HTMLInputElement).checked;
   wake();
@@ -870,10 +879,6 @@ function renderDOM() {
       el.style.cssText = style;
       poseStyleCache.set(id, style);
     }
-    el.style.setProperty(
-      "--light-x",
-      `${clamp(((((pointer.x + 1) * innerWidth) / 2 - p.x) / p.w) * 100, 0, 100)}%`,
-    );
   }
   const target = document.body.dataset.related;
   const visible =
@@ -994,6 +999,7 @@ function tick(now: number) {
         sceneWeights: sceneWeights(motion),
         architectureConcept,
         celestialStudy,
+        instrumentStudy,
         architecturePhase: environmentPhase,
         quality: activeQuality,
         reduced: motion.reduced,
@@ -1057,6 +1063,7 @@ function controller() {
       study,
       architectureConcept,
       celestialStudy,
+      instrumentStudy,
       environmentPhase,
       sceneWeights: sceneWeights(motion),
       quality,
@@ -1110,6 +1117,11 @@ function controller() {
         return;
       environmentPhase = seconds;
       wake();
+    },
+    setInstrumentStudy: (value: InstrumentStudy) => {
+      if (!["optical", "engineered", "composite"].includes(value)) return;
+      $<HTMLSelectElement>("#instrument-study").value = value;
+      $("#instrument-study").dispatchEvent(new Event("change"));
     },
     setQuality: (q: Quality) => {
       quality = q;

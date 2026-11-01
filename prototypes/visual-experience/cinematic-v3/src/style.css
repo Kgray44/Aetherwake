@@ -210,20 +210,12 @@ body.focused .scene-navigation {
   opacity: var(--opacity);
   text-align: left;
   transform-origin: 50% 50%;
-  background: linear-gradient(
-    140deg,
-    rgba(61, 55, 82, 0.94),
-    rgba(21, 23, 37, 0.97) 24%,
-    rgba(13, 17, 29, 0.97) 74%,
-    rgba(39, 34, 59, 0.96)
-  );
-  border: 1px solid rgba(192, 180, 237, 0.25);
+  background: #0e141e;
+  border: 1px solid rgba(154, 172, 192, 0.24);
   border-radius: 7px 22px 7px 7px;
   box-shadow:
-    0 6px 1px #03050d,
-    0 7px 0 #4f465b66,
-    0 calc(20px + var(--lift) * 0.8px) calc(35px + var(--lift) * 1px) #0008,
-    inset 0 1px 0 #ddd0ff33;
+    0 3px 0 #05080e,
+    inset 0 1px 0 #d4e3f016;
   transition: none;
   overflow: visible;
 }
@@ -232,7 +224,7 @@ body.focused .scene-navigation {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(120deg, #e6d9ff0b, transparent 38%, #ad91ff07);
+  background: none;
   border-radius: inherit;
 }
 .folio::after {
@@ -242,7 +234,7 @@ body.focused .scene-navigation {
   right: 12%;
   top: -1px;
   height: 1px;
-  background: linear-gradient(90deg, transparent, #e5d4f9bb, transparent);
+  background: none;
   opacity: calc(0.25 + var(--lift) * 0.015);
   pointer-events: none;
 }
@@ -345,15 +337,13 @@ body.focused .scene-navigation {
   padding: 4px 8px;
 }
 .selected {
-  border-color: #b9a2e5aa;
+  border-color: #b5c6d579;
   box-shadow:
-    0 5px 1px #03050d,
-    0 7px 0 #80708b88,
-    0 35px 70px #0009,
-    inset 0 1px 0 #f6e7ff4d;
+    0 3px 0 #05080e,
+    inset 0 1px 0 #e5eef12b;
 }
 .note {
-  background: linear-gradient(120deg, #302b3df5, #191923f7 60%, #25212ff7);
+  background: #11151b;
   border-radius: 4px 18px 4px 4px;
 }
 .note .folio-preview {
@@ -736,13 +726,7 @@ body:not(.focused):has(#stream:not([hidden])) #vela .vela-label {
   font-weight: 400;
 }
 .folio::before {
-  background:
-    radial-gradient(
-      ellipse at var(--light-x, 25%) 0%,
-      #d4c3ee13,
-      transparent 70%
-    ),
-    linear-gradient(120deg, #e6d9ff08, transparent 38%, #ad91ff07);
+  background: none;
 }
 .folio {
   --base-size: 22px;
@@ -1141,19 +1125,11 @@ body:not(.focused):has(#stream:not([hidden])) #vela .vela-label {
   opacity: calc(0.75 + var(--unfold, 0) * 0.25);
 }
 .folio.expanded {
-  border-color: #d0bde43d;
+  border-color: #b9cad43d;
   box-shadow:
-    0 3px 1px #03050d,
-    0 4px 0 #4f465b44,
-    0 25px 60px #0008,
-    inset 0 1px 0 #ddd0ff20;
-  background: linear-gradient(
-    135deg,
-    #262332,
-    #141520 35%,
-    #10131e 85%,
-    #201c2b
-  );
+    0 3px 0 #04070c,
+    inset 0 1px 0 #d4e3f018;
+  background: #0e141e;
 }
 /* Compact DOM content is a quiet veil over an opaque physical resource face.
    Reading surfaces become fully opaque through the existing unfold coordinate.
@@ -1167,51 +1143,61 @@ body:not(.focused):has(#stream:not([hidden])) #vela .vela-label {
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio:not(.receded) {
   --material-clarity: max(var(--unfold, 0), var(--material-overlap, 0));
-  background: linear-gradient(
-    135deg,
-    rgba(38, 35, 50, calc(0.28 + 0.72 * var(--material-clarity))),
-    rgba(20, 21, 32, calc(0.38 + 0.62 * var(--material-clarity))) 35%,
-    rgba(16, 19, 30, calc(0.55 + 0.45 * var(--material-clarity))) 85%,
-    rgba(32, 28, 43, calc(0.34 + 0.66 * var(--material-clarity)))
-  );
-  border-color: rgba(192, 180, 237, 0.12);
-  box-shadow: 0 calc(18px + var(--lift) * 0.7px)
-    calc(28px + var(--lift) * 0.8px) #0007;
+  background: rgba(8, 13, 21, calc(0.12 + 0.88 * var(--material-clarity)));
+  border-color: transparent;
+  box-shadow: none;
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio.research:not(.receded) {
-  background: radial-gradient(
-    ellipse at 36% 22%,
-    rgba(38, 41, 61, calc(0.14 + 0.86 * var(--material-clarity))),
-    rgba(18, 22, 38, calc(0.32 + 0.68 * var(--material-clarity))) 52%,
-    rgba(9, 13, 25, calc(0.62 + 0.38 * var(--material-clarity)))
-  );
+  background: rgba(7, 13, 23, var(--material-clarity));
+}
+body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+  .folio.research:not(.receded)::before {
+  inset: calc(12px * (1 - var(--unfold, 0)));
+  background: rgba(7, 13, 23, 0.06);
+  opacity: calc(1 - var(--material-overlap, 0));
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio.note:not(.receded) {
-  background: linear-gradient(
-    125deg,
-    rgba(47, 39, 36, calc(0.4 + 0.6 * var(--material-clarity))),
-    rgba(23, 22, 29, calc(0.54 + 0.46 * var(--material-clarity))) 65%,
-    rgba(37, 29, 31, calc(0.44 + 0.56 * var(--material-clarity)))
-  );
+  background: rgba(13, 16, 21, calc(0.18 + 0.82 * var(--material-clarity)));
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio:not(.receded)::before {
-  opacity: calc(0.16 + 0.12 * var(--unfold, 0));
+  opacity: 0;
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio:not(.receded)::after {
-  opacity: calc(0.12 + var(--lift) * 0.004);
+  opacity: 0;
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio:not(.receded)
   .folio-edge {
-  opacity: 0.2;
+  opacity: 0;
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio.selected:not(.receded) {
-  border-color: rgba(185, 162, 229, 0.45);
+  border-color: transparent;
+}
+body[data-study="architecture"] .folio,
+body[data-study="architecture"] .folio.expanded {
+  box-shadow: none;
+}
+.folio .title-select h2 {
+  color: #d6e0eb;
+}
+.folio .folio-top,
+.folio .grip {
+  color: #a9b7c8;
+}
+.note .folio-top,
+.note .grip {
+  color: #b6aa99;
+}
+.folio .folio-subtitle {
+  color: #9eafc1;
+}
+.folio .folio-preview {
+  color: #b9c9d9;
 }
 .expanded .folio-inner {
   padding: 22px 30px;
@@ -1222,6 +1208,8 @@ body:has(#world[data-materials="physical"]):not(.graphics-fallback)
 .expanded .working-content {
   margin-top: 15px;
   overflow: auto;
+  scrollbar-color: #6c7d9070 transparent;
+  scrollbar-width: thin;
 }
 .expanded .folio-subtitle {
   font-size: 12px;
@@ -1246,7 +1234,8 @@ body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   min-height: 85px;
   flex: 1;
   overflow: auto;
-  scrollbar-color: #78628e55 transparent;
+  scrollbar-color: #6c7d9070 transparent;
+  scrollbar-width: thin;
   padding: 3px 18px 12px 0;
   overscroll-behavior: contain;
 }
@@ -1255,17 +1244,26 @@ body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   outline-offset: -1px;
 }
 .message-stream::-webkit-scrollbar,
-.conversation-content textarea::-webkit-scrollbar {
+.working-content::-webkit-scrollbar,
+.working-content textarea::-webkit-scrollbar {
   width: 5px;
+  height: 5px;
+  background: transparent;
 }
 .message-stream::-webkit-scrollbar-thumb,
-.conversation-content textarea::-webkit-scrollbar-thumb {
-  background: #a18bb24d;
+.working-content::-webkit-scrollbar-thumb,
+.working-content textarea::-webkit-scrollbar-thumb {
+  background: #6c7d9070;
   border-radius: 5px;
 }
 .message-stream::-webkit-scrollbar-button,
-.conversation-content textarea::-webkit-scrollbar-button {
+.working-content::-webkit-scrollbar-button,
+.working-content textarea::-webkit-scrollbar-button {
   display: none;
+}
+.working-content textarea {
+  scrollbar-color: #6c7d9070 transparent;
+  scrollbar-width: thin;
 }
 .message {
   max-width: 67ch;

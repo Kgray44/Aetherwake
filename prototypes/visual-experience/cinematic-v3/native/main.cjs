@@ -60,7 +60,7 @@ app.setPath(
   "userData",
   path.join(
     runtime,
-    "v3-5-celestial",
+    "v3-5-instruments",
     soakMode
       ? `soak-profile-${Date.now()}`
       : recordMode
@@ -204,7 +204,7 @@ app
         const { recordNative } = require("./recording.cjs");
         const file = path.join(
           runtime,
-          `aerynth-v3-5-celestial-${process.argv.includes("--ambient-study") ? "ambient" : "native"}-${Date.now()}.webm`,
+          `aerynth-v3-5-instruments-${process.argv.includes("--ambient-study") ? "ambient" : "native"}-${Date.now()}.webm`,
         );
         const result = await recordNative(
           win,
@@ -399,6 +399,7 @@ async function memoryProbe() {
       callbacks: state.metrics.callbacks,
       policy: state.metrics.policy,
       celestialStudy: state.celestialStudy ?? null,
+      instrumentStudy: state.instrumentStudy ?? null,
       environmentPhaseOverrideSeconds: state.environmentPhase ?? null,
       gpu: state.gpu,
       firstWorkingSetKiBSum: phaseSamples[0]?.workingSetKiBSum ?? null,
@@ -472,7 +473,7 @@ async function verify() {
     ? path.resolve(process.env.AERYNTH_EVIDENCE_DIR)
     : path.join(
         root,
-        "evidence-celestial",
+        "evidence-instruments",
         `run-${Date.now()}-${randomBytes(4).toString("hex")}`,
       );
   try {
@@ -491,7 +492,7 @@ async function verify() {
   const captures = [];
   const manualReviews = [];
   const baselineArtifact =
-    "evidence-v3-5/review-occlusion-final/verification.json";
+    "evidence-celestial/review-radius-motion/verification.json";
   let comparisonBaseline = {
     artifact: baselineArtifact,
     status: "unavailable",
@@ -507,7 +508,7 @@ async function verify() {
       capturedAt: baseline.capturedAt,
       scenarioCount: baseline.scenarios.length,
       limitation:
-        "This preceding candidate lacks the expanded celestial environment. Same-named scenarios are workload references, not isolated effect-cost experiments.",
+        "This is the qualified celestial candidate before the foreground integration addendum. Same-named workloads compare changed instrument materials/geometry, not an isolated shader cost.",
     };
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
@@ -566,6 +567,7 @@ async function verify() {
         study: state.study,
         architectureConcept: state.architectureConcept ?? null,
         celestialStudy: state.celestialStudy ?? null,
+        instrumentStudy: state.instrumentStudy ?? null,
         environmentPhaseOverrideSeconds: state.environmentPhase ?? null,
         quality: state.quality,
         selected: state.selected,
@@ -647,6 +649,11 @@ async function verify() {
   await evaluate(
     "window.__aerynth.setEnvironmentPhase(null);window.__aerynth.setCelestialStudy('starlit')",
   );
+  const originalInstrumentStudy = (await snap()).instrumentStudy;
+  if (!["optical", "engineered", "composite"].includes(originalInstrumentStudy))
+    throw new Error(
+      "The instrument-study controller and snapshot are unavailable in the selected build",
+    );
   for (const study of ["architecture", "living", "observatory"]) {
     await evaluate(`window.__aerynth.setStudy('${study}')`);
     await delay(900);
@@ -806,6 +813,162 @@ async function verify() {
   );
   await evaluate(
     "window.__aerynth.setEnvironmentPhase(null);window.__aerynth.setCelestialStudy('starlit')",
+  );
+  const instrumentStudies = [
+    { id: "optical", label: "A-optical-glass" },
+    { id: "engineered", label: "B-engineered-instrument" },
+    { id: "composite", label: "C-luminous-composite" },
+  ];
+  const instrumentResources = [
+    { id: "conversation-tidal", kind: "conversation" },
+    { id: "research-material", kind: "research-lens" },
+    { id: "note-field", kind: "memory-slate" },
+  ];
+  await evaluate(
+    "window.__instrumentArticles=Array.from(document.querySelectorAll('.folio'));window.__instrumentEditors=window.__instrumentArticles.map(el=>el.querySelector('textarea'));window.__instrumentNote=document.querySelector('[data-resource=\"note-field\"] textarea');window.__instrumentOriginalNote=window.__instrumentNote.value;window.__instrumentNote.value+='\\n\\nSynthetic instrument continuity checkpoint.';window.__instrumentNote.dispatchEvent(new Event('input',{bubbles:true}))",
+  );
+  const instrumentContentHash = createHash("sha256")
+    .update(JSON.stringify((await snap()).resources))
+    .digest("hex");
+  const instrumentSnapshots = [];
+  for (const variant of instrumentStudies) {
+    await evaluate(
+      `window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring');window.__aerynth.setCelestialStudy('starlit');window.__aerynth.setQuality('balanced');window.__aerynth.setInstrumentStudy('${variant.id}');window.__aerynth.setEnvironmentPhase(0)`,
+    );
+    await delay(900);
+    const source = await shot(`instruments-${variant.label}-workspace`);
+    const boxes = await evaluate(
+      "({width:innerWidth,height:innerHeight,resources:Array.from(document.querySelectorAll('.folio')).map(el=>{const r=el.getBoundingClientRect();return {id:el.dataset.resource,x:r.x,y:r.y,right:r.right,bottom:r.bottom}})})",
+    );
+    for (const resource of instrumentResources) {
+      const box = boxes.resources.find((item) => item.id === resource.id);
+      const left = Math.max(0, box.x - 10),
+        top = Math.max(0, box.y - 10);
+      const right = Math.min(boxes.width, box.right + 10),
+        bottom = Math.min(boxes.height, box.bottom + 10);
+      await cropShot(
+        `instruments-${variant.label}-${resource.kind}-native-crop`,
+        source,
+        {
+          x: left / boxes.width,
+          y: top / boxes.height,
+          width: (right - left) / boxes.width,
+          height: (bottom - top) / boxes.height,
+        },
+      );
+    }
+    await evaluate("window.__aerynth.select('conversation-tidal')");
+    await delay(550);
+    await shot(`instruments-${variant.label}-conversation-selected`);
+    await evaluate("window.__aerynth.expand('conversation-tidal')");
+    await delay(130);
+    await shot(`instruments-${variant.label}-conversation-transforming`);
+    await frames(`instruments-${variant.id}-unfold`, "void 0", 6);
+    await delay(600);
+    await shot(`instruments-${variant.label}-conversation-focused`);
+    await evaluate(
+      "window.__aerynth.home();window.__aerynth.expand('research-material')",
+    );
+    await delay(850);
+    await shot(`instruments-${variant.label}-research-focused`);
+    await evaluate(
+      "window.__aerynth.home();window.__aerynth.expand('note-field')",
+    );
+    await delay(850);
+    await shot(`instruments-${variant.label}-memory-slate-focused`);
+    await evaluate(
+      "window.__aerynth.home();window.__aerynth.setStudy('living')",
+    );
+    await delay(1000);
+    await shot(`instruments-${variant.label}-living-workspace`);
+    const state = await snap();
+    instrumentSnapshots.push({
+      requested: variant.id,
+      actual: state.instrumentStudy,
+      contentHash: createHash("sha256")
+        .update(JSON.stringify(state.resources))
+        .digest("hex"),
+      identityRetained: await evaluate(
+        "window.__instrumentArticles.every((el,index)=>el===document.querySelector('[data-resource=\"'+el.dataset.resource+'\"]')&&window.__instrumentEditors[index]===el.querySelector('textarea'))",
+      ),
+      instruments: state.gpu?.instruments ?? null,
+    });
+    manualReviews.push({
+      artifacts: [
+        `instruments-${variant.label}-workspace.png`,
+        `instruments-${variant.label}-conversation-selected.png`,
+        `instruments-${variant.label}-conversation-transforming.png`,
+        `instruments-${variant.label}-conversation-focused.png`,
+        `instruments-${variant.label}-living-workspace.png`,
+      ],
+      status: "requires-human-review",
+      questions: [
+        "Are the optical working plane, physical structure and type-specific resource details visible rather than hidden behind CSS?",
+        "Do foreground highlights respond coherently to shared scene lighting without generic glowing borders?",
+        "Are text regions opaque, crisp and calm when expanded and when resources overlap?",
+        "Does the same instrument identity survive selection, unfolding, research/slate focus and the Living Intelligence scene?",
+      ],
+    });
+  }
+  check(
+    "three instrument studies retain canonical resources, editable drafts and original DOM",
+    instrumentSnapshots.every(
+      (state) =>
+        state.requested === state.actual &&
+        state.contentHash === instrumentContentHash &&
+        state.identityRetained &&
+        state.instruments !== null,
+    ),
+    instrumentSnapshots,
+  );
+  await evaluate(
+    "window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setEnvironmentPhase(0)",
+  );
+  for (const variant of instrumentStudies) {
+    await evaluate(`window.__aerynth.setInstrumentStudy('${variant.id}')`);
+    await delay(250);
+  }
+  const allocationBefore = (await snap()).gpu;
+  const allocationSamples = [];
+  for (const variant of [...instrumentStudies, ...instrumentStudies]) {
+    await evaluate(`window.__aerynth.setInstrumentStudy('${variant.id}')`);
+    await delay(250);
+    const gpu = (await snap()).gpu;
+    allocationSamples.push({
+      study: variant.id,
+      residentGeometries: gpu?.geometries ?? null,
+      geometryAllocations: gpu?.instruments?.geometryAllocations ?? null,
+      materialAllocations: gpu?.instruments?.materialAllocations ?? null,
+    });
+  }
+  const allocationStart = {
+    residentGeometries: allocationBefore?.geometries ?? null,
+    geometryAllocations:
+      allocationBefore?.instruments?.geometryAllocations ?? null,
+    materialAllocations:
+      allocationBefore?.instruments?.materialAllocations ?? null,
+  };
+  check(
+    "warmed instrument switching does not grow live geometry or reported allocation counters",
+    Number.isFinite(allocationStart.residentGeometries) &&
+      allocationSamples.every(
+        (state) =>
+          state.residentGeometries === allocationStart.residentGeometries &&
+          (!Number.isFinite(allocationStart.geometryAllocations) ||
+            state.geometryAllocations ===
+              allocationStart.geometryAllocations) &&
+          (!Number.isFinite(allocationStart.materialAllocations) ||
+            state.materialAllocations === allocationStart.materialAllocations),
+      ),
+    {
+      before: allocationStart,
+      after: allocationSamples,
+      meaning:
+        "Live renderer geometry residency is measured; cumulative geometry/material allocation counters are checked only when actually exposed. Null counters remain unavailable, not a zero-allocation claim.",
+    },
+  );
+  await evaluate(
+    `window.__instrumentNote.value=window.__instrumentOriginalNote;window.__instrumentNote.dispatchEvent(new Event('input',{bubbles:true}));window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setInstrumentStudy('${originalInstrumentStudy}');window.__aerynth.setEnvironmentPhase(null)`,
   );
   await delay(350);
   await shot("environment-idle");
@@ -1364,6 +1527,12 @@ async function verify() {
   win.webContents.setZoomFactor(1);
   await delay(600);
   const sample = async (name, setup, duration = 4500, toggle = false) => {
+    if (Date.now() - lastStorageCheck >= 240000) {
+      storageReceipts.push(
+        admitStorage(maxCaptureBytes - captureBytes + 66 * 1024 * 1024),
+      );
+      lastStorageCheck = Date.now();
+    }
     await evaluate(setup);
     await delay(1200);
     await evaluate("window.__aerynth.resetMetrics()");
@@ -1394,6 +1563,10 @@ async function verify() {
       else if (toggle === "celestial")
         await evaluate(
           `window.__aerynth.setCelestialStudy('${["starlit", "shadow", "deep"][cpu.length % 3]}')`,
+        );
+      else if (toggle === "instrument")
+        await evaluate(
+          `window.__aerynth.setInstrumentStudy('${["optical", "engineered", "composite"][cpu.length % 3]}')`,
         );
       else if (toggle) await evaluate(`window.__aerynth.expand('${first}')`);
       await delay(500);
@@ -1429,9 +1602,11 @@ async function verify() {
                     ? "Explicitly synthetic presentation state changes every approximately 500ms"
                     : toggle === "celestial"
                       ? "Celestial study lighting/composition changes every approximately 500ms around the same resources"
-                      : toggle
-                        ? "Scripted resource expansion/reversal every approximately 500ms"
-                        : "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
+                      : toggle === "instrument"
+                        ? "Instrument material/structure study changes every approximately 500ms around the same canonical resources"
+                        : toggle
+                          ? "Scripted resource expansion/reversal every approximately 500ms"
+                          : "Same workspace and Vela working expression; no scripted movement (except explicit idle/minimized cases)",
       callbackSamples: sorted.length,
       callbackMs: {
         p50: percentile(sorted, 0.5),
@@ -1459,6 +1634,7 @@ async function verify() {
         study: state.study,
         architectureConcept: state.architectureConcept ?? null,
         celestialStudy: state.celestialStudy ?? null,
+        instrumentStudy: state.instrumentStudy ?? null,
         environmentPhaseOverrideSeconds: state.environmentPhase ?? null,
         quality: state.quality,
         expanded: state.expanded,
@@ -1506,6 +1682,23 @@ async function verify() {
     );
   }
   await evaluate("window.__aerynth.setCelestialStudy('starlit')");
+  for (let repeat = 1; repeat <= 2; repeat++) {
+    for (const variant of ["optical", "engineered", "composite"])
+      await sample(
+        `instrument-${variant}-ambient-${repeat}`,
+        `window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setArchitectureConcept('ring');window.__aerynth.setInstrumentStudy('${variant}');window.__aerynth.setQuality('balanced');window.__aerynth.setVela('idle')`,
+        3000,
+      );
+    await sample(
+      `instrument-study-switching-${repeat}`,
+      "window.__aerynth.home();window.__aerynth.setStudy('architecture');window.__aerynth.setQuality('balanced')",
+      3000,
+      "instrument",
+    );
+  }
+  await evaluate(
+    `window.__aerynth.setInstrumentStudy('${originalInstrumentStudy}')`,
+  );
   for (let repeat = 1; repeat <= 2; repeat++) {
     for (const concept of ["ring", "aperture", "observatory"])
       await sample(
@@ -1645,7 +1838,7 @@ async function verify() {
     { renderer: s.metrics.errors, host: errors },
   );
   await evaluate(
-    "window.__aerynth.setCelestialStudy('deep');window.__aerynth.setEnvironmentPhase(null)",
+    "window.__aerynth.setCelestialStudy('deep');window.__aerynth.setInstrumentStudy('composite');window.__aerynth.setEnvironmentPhase(null)",
   );
   await delay(600);
   await evaluate(
@@ -1684,6 +1877,18 @@ async function verify() {
       celestialStudy: s.celestialStudy,
       environmentPhase: s.environmentPhase,
       cosmos: s.gpu?.cosmos ?? null,
+    },
+  );
+  check(
+    "instrument study and original editors survive actual graphics restoration",
+    s.instrumentStudy === "composite" &&
+      s.gpu?.instruments != null &&
+      (await evaluate(
+        "window.__instrumentArticles.every((el,index)=>el===document.querySelector('[data-resource=\"'+el.dataset.resource+'\"]')&&window.__instrumentEditors[index]===el.querySelector('textarea'))",
+      )),
+    {
+      instrumentStudy: s.instrumentStudy,
+      instruments: s.gpu?.instruments ?? null,
     },
   );
   await evaluate("document.querySelector('#vela-input').value=''");
