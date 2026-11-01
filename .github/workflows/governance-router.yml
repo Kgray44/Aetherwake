@@ -5,6 +5,7 @@ on:
     paths:
       - 'AGENTS.md'
       - 'config/governance-routes.json'
+      - 'config/governance-context-policies.json'
       - 'scripts/governance-router.mjs'
       - 'scripts/governance-context.mjs'
       - 'scripts/benchmark-governance-context.mjs'
@@ -23,6 +24,7 @@ on:
     paths:
       - 'AGENTS.md'
       - 'config/governance-routes.json'
+      - 'config/governance-context-policies.json'
       - 'scripts/governance-router.mjs'
       - 'scripts/governance-context.mjs'
       - 'scripts/benchmark-governance-context.mjs'
