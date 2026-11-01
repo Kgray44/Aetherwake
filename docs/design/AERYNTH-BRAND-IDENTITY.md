@@ -8,12 +8,12 @@
 | Decision date | 2026-11-01 |
 | Authority | Owner-approved *design reference*, subordinate to project governance |
 | Implementation status | The design has been selected; application integration, small-size variants, animation, and final asset registration are **not implemented** |
-| Master asset destination | `assets/brand/aerynth-mark-master.png` |
+| Master asset | [`assets/brand/aerynth-mark-master.png`](../../assets/brand/aerynth-mark-master.png) |
 | Master image source | The owner-approved image from the Aerynth mark design conversation, **not** a substitute generated variation |
 | Source format | PNG, RGBA encoding, **1254 × 1254 pixels**, fully opaque near-black background |
 | Source size | **1,977,462 bytes** |
 | Source SHA-256 | `89bd614656667f1178603afa3a23debc5a4e96fe61ccfbb957d7ef27cbf76658` |
-| Repository asset state | **Pending binary upload**; the source PNG is not included with this documentation-only change |
+| Repository asset state | **Committed and verified**; Git blob SHA-1 `6b706d957ea463a837b7b64dad795a4be6862db6` exactly matches the approved local source |
 
 ## 1. What has been approved
 
@@ -46,7 +46,7 @@ These are owner-approved **design intentions**, not a new numbered governance ch
 
 ## 4. Asset handling and derivatives
 
-- Commit the **exact supplied master PNG** to `assets/brand/aerynth-mark-master.png`, keeping the source bytes unmodified. Confirm the SHA-256 above.
+- The **exact supplied master PNG** is committed at `assets/brand/aerynth-mark-master.png`, with source bytes unmodified. The recorded SHA-256 and matching Git blob identity establish the checked-in source.
 - The master has an **opaque background**; naming its file `*.png` does not imply transparency.
 - Any future `transparent`, `monochrome`, `icon-256`, `svg`, `animated`, or other variant must have a distinct filename and must identify its parent source.
 - Derived files should state how they were produced, intended use, scale limits, and whether they have been reviewed and approved.
@@ -61,7 +61,7 @@ There is no requirement to make this master image spin, ripple, or breathe conti
 
 ## 6. Verification before marking integration complete
 
-- [ ] The exact source PNG exists at the designated repository path and matches the recorded SHA-256.
+- [x] The exact source PNG exists at the designated repository path; its Git blob checksum matches the source bytes, whose SHA-256 is recorded above.
 - [ ] The artwork displays correctly on a dark surface without unexpected cropping or stretching.
 - [ ] A separately approved simplified icon is evaluated at 16, 24, 32, 64, and 256 px.
 - [ ] Light/dark surrounding UI, accessibility, reduced-motion, and performance behavior are tested for each actual application use.
