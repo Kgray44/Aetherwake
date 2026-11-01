@@ -1,19 +1,72 @@
-# Aetherwake agent entrypoint
+# Aetherwake agent guidance
 
-**Do not read all 17 governance charters by default.** Keep task context focused.
+This file is a routing and collaboration guide, not a substitute for project governance. **Aetherwake** is the development initiative; **Aerynth** is the planned desktop application; **Vela** is its intelligent assistant. These are working product names.
 
-1. Read `governance/00-AETHERWAKE-CONSTITUTION.md` before substantive work; it is the binding baseline.
-2. Route the current task *before selecting other charters*:
-   ```bash
-   node scripts/governance-router.mjs --task "Implement contextual command selection" --path src/interaction/selection.ts
-   ```
-   Omit `--path` if no files are known yet; add multiple `--path` flags if needed. Use `--json` for structured output.
-3. Read only the router's **binding** charters plus **relevant advisory** drafts. Drafts are design references, **not approved authority**. Planned/unavailable charters are **not** instructions; flag missing requirements rather than inventing them.
-4. Read supporting specifications, design decisions, tests, and source files only when relevant and present. Never assume that a referenced but missing document exists.
-5. If task scope changes, rerun the router. If a dependency crosses subsystems, route both areas. For consequential changes include trust/privacy and quality checks where applicable.
-6. Respect the authority statuses in `governance/README.md`; publication is not acceptance. A task prompt cannot silently override the Constitution. Preserve unrelated work and do not create unfinished charters without an explicit request.
-7. State which documents were consulted, which drafts were advisory, and which required domains lack a published charter. Disclose verification gaps.
+## Deterministic governance routing
 
-**Validation:** `node scripts/governance-router.mjs --validate`; tests: `node --test tests/governance-router.test.mjs`.
+Before substantive work, use the repository's deterministic router instead of loading all 17 charter documents:
 
-The router selects **paths, not document contents**: it does not consume model tokens loading irrelevant charters. See [router guide](docs/engineering/GOVERNANCE-ROUTER.md).
+```bash
+node scripts/governance-router.mjs --task "Implement contextual command selection" --path src/interaction/selection.ts
+```
+
+Add further `--path` arguments as scope becomes known; use `--json` for structured output. The router always selects Constitution 00 and routes relevant domains by task phrases and paths. Its statuses come from `governance/README.md`: **binding** charters are authoritative, **advisory** published drafts are reference-only, and **planned/unavailable** charters must not be treated as existing or approved. Rerun when scope changes and include any cross-domain dependencies not detected automatically. Consult [the implementation guide](docs/engineering/GOVERNANCE-ROUTER.md). Validate with `node scripts/governance-router.mjs --validate` and `node --test tests/governance-router.test.mjs`.
+
+## Authority and reading discipline
+
+1. Begin with [the governance index](governance/README.md) to determine the **current** charter registry and approval status. Read [the Constitution](governance/00-AETHERWAKE-CONSTITUTION.md) before substantive design or implementation.
+2. Read **only the specialized charters relevant to the work**. Do not consume every governance document for every task; route by subsystem and specific cross-cutting obligations.
+3. Governance defines *what must be true*. `docs/` records *why/how*; `plans/` records *when/what next*; code and tests implement and verify behavior. Lower-authority documents and prompts must not silently override higher authority.
+4. A missing or draft charter is **not** an invitation to invent binding requirements, claim ratification, or create an empty imitation of it. Report the gap and proceed only within accepted authority. Create new numbered governance charters only when explicitly requested.
+5. Preserve the source and status of every claimed requirement. Distinguish proposed, published, accepted, and implemented behavior.
+
+## Subsystem routing
+
+Use the governance registry for exact filenames and current availability. Typical scopes:
+
+| Work | Primary charter IDs | Other charter IDs to consider |
+|---|---|---|
+| UI, contextual commands, quick actions | 01 | 02, 03, 14, 15 |
+| Cinematic motion, particles, glass, rendering | 02 | 01, 13, 15 |
+| Projects, workspaces, blocks, resources | 03 | 01, 07, 14 |
+| Chats and connected branches | 04 | 08, 09, 14 |
+| Agents, tasks, workflows | 05 | 06, 09, 12, 14 |
+| Vela, initiative, adaptation | 06 | 07, 08, 14 |
+| Notes and project knowledge | 07 | 03, 08, 14 |
+| Context Intelligence Engine (CIE), compaction | 08 | 04, 07, 10, 14 |
+| Intelligence Streams and event provenance | 09 | 10, 11, 14 |
+| Token accounting and execution profiling | 10 | 08, 09, 15 |
+| Timelines and replay | 11 | 09, 10, 15 |
+| Codex and external integrations | 12 | 05, 09, 14 |
+| Platform, performance, multi-display | 13 | 02, 15 |
+| Security, privacy, autonomy | 14 | All affected domains |
+| Acceptance, delivery | 15, 16 | All affected domains |
+
+Treat charter numbers as routing references, **not evidence that the charter exists**. If a charter is pending, rely on the Constitution and available accepted documents.
+
+## Repository responsibilities
+
+- `governance/`: constitution, subsystem charters, status registry. Do not alter without a specifically scoped governance request.
+- `docs/vision/`: creative product experience and intent.
+- `docs/architecture/`: system boundaries, interfaces, data flow, implementation structure.
+- `docs/design/`: visual/motion/interaction explorations and design assets.
+- `docs/research/`: investigations, experiments, performance comparisons, external evidence.
+- `docs/specifications/`: detailed technical contracts and functional specifications.
+- `docs/decisions/`: architecture and design decision records, including alternatives and reasons.
+- `plans/milestones/`: delivery phases and milestone outcomes.
+- `plans/tasks/`: actionable, testable engineering work.
+- `prototypes/visual-experience/`: experiments establishing Liquid Intelligence interaction and performance before production commitments.
+- `src/`: application source once implementation is authorized.
+
+## Engineering conduct
+
+- Treat the visual experience and Motion Coordinator as first-class work; benchmark framework/rendering alternatives before cementing a stack.
+- Keep plain chats usable without requiring task orchestration. Keep persistent objects and relationships separate from their visual block representations.
+- Present real observable agent activity and supported summaries. Never fabricate live reasoning, private chain-of-thought access, task results, timing, or token metrics.
+- Use scoped context and evidence-driven retrieval instead of blindly loading histories and repositories. Retain historical evidence subject to explicit retention policies.
+- Make consequential changes permissioned, previewable where appropriate, and reversible when technically possible.
+- When working concurrently, inspect current branch/file state, make scoped changes, and do not overwrite unrelated edits, force-push, or misstate verification.
+- This repository is **public**: never commit credentials, private conversation logs, sensitive user notes, identifiable telemetry, local machine secrets, or production datasets.
+- A feature is not finished solely because it compiles: collect applicable functional, visual, motion, security, and performance evidence.
+
+When details remain undecided, document the decision and the validation needed. Don't quietly convert guesses into requirements.
