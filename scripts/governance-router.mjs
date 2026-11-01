@@ -36,15 +36,18 @@ function validateRouter(config, registry, exists) {
     if(!file || !/^governance\/[0-9]{2}-[A-Z0-9-]+\.md$/.test(file) || file.slice(11,13)!==id) errors.push(`Invalid mapping for charter ${id}`);
     if(!row) {errors.push(`Missing registry row for ${id}`);continue;}
     if(row.status==="unknown") errors.push(`Unknown governance authority status for ${id}: ${row.label}`);
+    if(row.status!=="planned" && !row.link) errors.push(`Published or binding charter ${id} lacks a registry link`);
     if(row.link && file && `governance/${row.link.replace(/^\.\//,"")}`!==file) errors.push(`Registry link conflicts with mapping for ${id}`);
     if(file && row.status!=="planned" && !exists(file)) errors.push(`Registered charter file is missing: ${file}`);
     if(file && row.status==="planned" && exists(file)) warnings.push(`Charter ${id} exists but registry still marks it Planned; not binding`);
   }
   for(const id of Object.keys(config.charters??{})) if(!expected.includes(id)) errors.push(`Unexpected charter ID ${id}`);
+  for(const id of expected.slice(1)) if(!Object.hasOwn(config.signals??{},id)) errors.push(`Missing routing signals for ${id}`);
   for(const id of Object.keys(config.signals??{})) {
-    if(!expected.includes(id) || id==="00") errors.push(`Unexpected signals ID ${id}`);
+    if(!expected.includes(id) || id==="00") {errors.push(`Unexpected signals ID ${id}`);continue;}
     const s=config.signals[id];
-    if(!Array.isArray(s.terms) || !Array.isArray(s.path_prefixes)) errors.push(`Invalid signals for ${id}`);
+    if(!s || !Array.isArray(s.terms) || !Array.isArray(s.path_prefixes)) {errors.push(`Invalid signals for ${id}`);continue;}
+    if(!s.terms.every(t=>typeof t==="string"&&t.trim()) || !s.path_prefixes.every(p=>typeof p==="string"&&p.trim()&&p.endsWith("/"))) errors.push(`Malformed routing terms or path prefixes for ${id}`);
   }
   return {errors,warnings};
 }
@@ -53,6 +56,10 @@ function routeGovernance(config, registry, task, paths, exists) {
   const selected=new Map([["00",["constitutional baseline"]]]);
   const normalizedTask=` ${normalize(task)} `;
   const normalizedPaths=(paths??[]).map(p=>String(p).replace(/\\/g,"/").replace(/^\.\//,""));
+  // Editing a charter directly must route to that charter even without task keywords.
+  for(const [id,file] of Object.entries(config.charters)) {
+    if(id!=="00" && normalizedPaths.includes(file)) selected.set(id,[`direct charter path ${file}`]);
+  }
   for(const [id, signals] of Object.entries(config.signals)) {
     const why=[];
     for(const term of signals.terms) {
@@ -62,7 +69,7 @@ function routeGovernance(config, registry, task, paths, exists) {
     for(const prefix of signals.path_prefixes) {
       if(normalizedPaths.some(p=>p===prefix.replace(/\/$/,"") || p.startsWith(prefix))) why.push(`affected path under ${prefix}`);
     }
-    if(why.length) selected.set(id,why.slice(0,4));
+    if(why.length) selected.set(id,[...(selected.get(id)??[]),...why].slice(0,4));
   }
   const binding=[], advisory=[], unavailable=[], warnings=[];
   for(const id of [...selected.keys()].sort()) {
