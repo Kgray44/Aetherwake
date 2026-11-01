@@ -533,6 +533,22 @@ Amendments MUST preserve stable identifiers where the original requirement remai
 
 **AW-AEP-128 — Owner acceptance.** Publication of this draft on the repository's default branch does not by itself mean owner ratification. Registry status MUST remain pending until explicitly accepted.
 
+### 17.1 Dual-mode economic accounting and cross-provider telemetry
+
+This extension applies when ordinary Chat-mode turns and Codex execution branches coexist in one Connected Branches family. It clarifies the existing cost/usage ownership of this charter and does not imply that any billing provider exposes a complete real-time balance.
+
+**AW-AEP-129 — Per-turn economic identity.** Every recorded model turn or agentic execution SHOULD retain its effective mode, provider/transport, account or billing-scope reference, source-backed plan/quota class, applicable metered price version if known, and provenance class of each usage datum. The frontend MUST NOT derive charge class solely from whether the user selected Chat or Codex.
+
+**AW-AEP-130 — Subscription-versus-API separation.** ChatGPT subscription allowances, eligible participating-app allowances, Codex limits/credits, API-billed tokens, local inference, and unknown external charges MUST remain separately identified even when a chat family or Vela task combines them.
+
+**AW-AEP-131 — Non-fabricated zero cost.** A purported "free Chat" path MUST NOT display an unqualified $0 or "unlimited free" claim without evidence of that exact route's applicable terms. For subscription-included work, label **covered by plan allowance** where verified and identify quota consumption separately from an incremental monetary charge.
+
+**AW-AEP-132 — Pre-execution impact preview.** Before authorization of a new metered backend or materially different quota pool, the UI SHOULD show the known charge class, available credible estimate or **unknown**, account scope, budget policy, and whether execution requires user approval. An estimate is neither a hard cap nor an invoice.
+
+**AW-AEP-133 — Branch-family attribution without double count.** The profiler MUST attribute usage to actual provider-bound turns/executions. Copying a finding into another branch, viewing it in multiple workspaces, or displaying a shared ancestor MUST NOT replicate original charges. A later inference that consumes that copied context MAY incur its own distinct provider usage.
+
+**AW-AEP-134 — Degradation and evaluation coverage.** Acceptance tests MUST include mixed Chat/Codex branches, unavailable subscription-quota data, API fallback refusal, variable provider tariffs, reconnection, and accurate aggregation by provider, account, and branch. Missing billing fields MUST remain unknown rather than inferred as free.
+
 ---
 
 ## Final governing statement
