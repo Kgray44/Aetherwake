@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-010 |
-| Version | 1.0.0-draft |
+| Version | 1.1.0-draft |
 | Status | **Published governing charter — awaiting repository-owner acceptance** |
 | Prepared | 2026-11-01 |
 | Authority | Specialized subsystem charter, subordinate to [00 — Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
