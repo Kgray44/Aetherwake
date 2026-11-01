@@ -21,7 +21,7 @@ The goal is not to wrap Codex in a prettier chat window. Aerynth should combine 
 
 ## Governance
 
-The governing foundation lives in [`governance/`](governance/README.md), beginning with **[the Aetherwake Master Constitution](governance/00-AETHERWAKE-CONSTITUTION.md)**. It establishes the project's binding principles, the Liquid Intelligence experience, user-control requirements, agent and context integrity, observability, and the reserved specialized charters. The Constitution is established; [Charter 03 (Projects, Workspaces, and Resources)](governance/03-PROJECTS-WORKSPACES-AND-RESOURCES.md) has been published for owner acceptance; the remaining charters are planned.
+The governing foundation lives in [`governance/`](governance/README.md), beginning with **[the Aetherwake Master Constitution](governance/00-AETHERWAKE-CONSTITUTION.md)**. It establishes the project's binding principles, the Liquid Intelligence experience, user-control requirements, agent and context integrity, observability, and the reserved specialized charters. **Publication and acceptance are separate statuses.** Consult the [live governance registry](governance/README.md) for which numbered charters exist, which are pending, and which have been accepted. Missing charters are authored separately; do not create placeholders for them.
 
 ## Development direction
 
@@ -29,6 +29,25 @@ The governing foundation lives in [`governance/`](governance/README.md), beginni
 - **Desktop/rendering stack:** research and benchmark alternatives before choosing Tauri versus Electron or graphics backends.
 - **First deliverable:** a striking, interactive *visual experience prototype* featuring Vela's presence, animated blocks, workspace transitions, contextual command, notes capture, and event-driven Intelligence Streams.
 - **Do not mistake simulated agent events for real Codex activity**; prototypes must label simulations clearly.
+
+## Repository map
+
+| Location | Role |
+|---|---|
+| [`AGENTS.md`](AGENTS.md) | Agent instructions, charter routing, and collaboration safeguards |
+| [`governance/`](governance/README.md) | Binding constitution, domain charters, and publication/acceptance registry |
+| `docs/vision/` | Intended experience and product narrative |
+| `docs/architecture/` | System design and technical architecture |
+| `docs/design/` | Interaction, materials, motion, and visual explorations |
+| `docs/research/` | Benchmarks, research, and alternatives |
+| `docs/specifications/` | Implementation-level contracts and details |
+| `docs/decisions/` | Architecture and design decisions |
+| `plans/milestones/` | Milestones, delivery phases, and goals |
+| `plans/tasks/` | Actionable scoped work |
+| `prototypes/visual-experience/` | Visual/motion proof-of-concept work |
+| `src/` | Application source |
+
+Git cannot track empty directories, so currently empty locations are reserved using `.gitkeep` placeholders. They are not substantive specifications or completed implementations.
 
 See the project design and architecture documents in `docs/` as they are developed.
 

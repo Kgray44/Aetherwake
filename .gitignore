@@ -1,0 +1,36 @@
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Dependency and build outputs
+node_modules/
+dist/
+build/
+out/
+target/
+coverage/
+.next/
+.turbo/
+.cache/
+
+# Logs, diagnostic traces, and transient runtime state
+*.log
+*.log.*
+*.trace
+*.pid
+.runtime/
+.local-data/
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
