@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-004 |
-| Version | 1.0.0-draft |
+| Version | 1.1.0-draft |
 | Status | **Proposed charter — awaiting repository-owner acceptance** |
 | Prepared | 2026-11-01 |
 | Scope | Chat identity, conversation experience, organization, connected branches, conversational provenance, history, and continuity |
