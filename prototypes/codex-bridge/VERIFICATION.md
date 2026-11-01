@@ -1,5 +1,7 @@
 # Verification — 2026-11-01
 
+> This records the original PR #6 bridge baseline. The later native-fidelity audit, expanded tests, and live resume/fork evidence are in [NATIVE-CODEX-FIDELITY-REPORT.md](NATIVE-CODEX-FIDELITY-REPORT.md).
+
 ## Environment and source
 
 - Windows host, PowerShell, Node `v24.18.0`, npm `11.9.0`, installed `codex-cli 0.153.3`.
