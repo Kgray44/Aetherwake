@@ -58,3 +58,19 @@ test('graphics recovery retains selection, navigation and camera; corrupt stored
 test('large datasets have bounded proxy counts and no content mounted in projection',async()=>{
   const s=empty();for(let p=0;p<50;p++){s.projects.push({id:`p${p}`,title:`P ${p}`});for(let w=0;w<10;w++){s.workspaces.push({id:`w${p}-${w}`,project_id:`p${p}`,title:`W ${w}`});for(let r=0;r<20;r++){const id=`r${p}-${w}-${r}`;s.resources.push({id,title:id,kind:'note'});s.blocks.push({id:`b${id}`,workspace_id:`w${p}-${w}`,resource_id:id,x:r*20,y:0,width:100,height:100,z:r});}}}const c=new ConstellationController({snapshot:s,motion:new MotionCoordinator(),navigate:async()=>{}});assert.equal(c.nodes.size,10550);for(const tier of ['cinematic','balanced','efficient']){c.setPolicy({tier});assert.ok(c.visible(1920,1080).length<=120);}assert.equal(JSON.stringify([...c.nodes.values()]).includes('content'),false);
 });
+
+test('external canonical direct navigation synchronizes the layer; stale bookmark cannot override it',async t=>{
+  const {service}=setup(t),{c}=create(service);const b=service.snapshot().workspaces.find(w=>w.title==='Engineering');service.navigate({kind:'workspace',workspaceId:b.id});c.update(service.snapshot());assert.deepEqual(c.location,{kind:'workspace',workspaceId:b.id});await c.persist();const saved=service.load();saved.location={kind:'project',projectId:b.project_id};service.save(saved);const restored=create(service);await restored.c.restore();assert.deepEqual(restored.c.location,{kind:'workspace',workspaceId:b.id});
+});
+
+test('overlapping async navigation is serialized and the latest destination wins in the canonical service',async t=>{
+  const {service}=setup(t),motion=new MotionCoordinator();let release;const gate=new Promise(r=>release=r);const seen=[];const c=new ConstellationController({snapshot:service.snapshot(),motion,navigate:async d=>{seen.push(d);if(seen.length===1)await gate;service.navigate(d);}});const ws=service.snapshot().workspaces;const one=c.go({kind:'workspace',workspaceId:ws[1].id});await Promise.resolve();const two=c.go({kind:'workspace',workspaceId:ws[2].id});release();await Promise.all([one,two]);assert.equal(service.snapshot().activeWorkspaceId,ws[2].id);assert.equal(c.location.workspaceId,ws[2].id);assert.equal(c.pending,false);
+});
+
+test('failed service navigation preserves location/history; unavailable editor never changes canonical navigation',async t=>{
+  const {service}=setup(t),motion=new MotionCoordinator();let calls=0;const c=new ConstellationController({snapshot:service.snapshot(),motion,navigate:async()=>{calls++;throw Error('Service unavailable');}});const before=structuredClone(c.state);await assert.rejects(c.zoomOut(),/Service unavailable/);assert.deepEqual(c.state.location,before.location);assert.deepEqual(c.state.history,[]);const block=service.snapshot().blocks[0];await assert.rejects(c.approach(`resource:${block.id}`),/editor is unavailable/);assert.equal(calls,1);
+});
+
+test('invalid camera and corrupt bookmark values are rejected; persistence failures remain visible',async t=>{
+  const {service}=setup(t),{c}=create(service);assert.throws(()=>c.move({x:0,y:0,zoom:NaN}),/Invalid camera/);assert.throws(()=>c.zoom(0),/Invalid zoom/);service.save({...c.state,bookmarks:{universe:{camera:{x:0,y:0,zoom:Infinity},selected:'hidden'}}});const restored=create(service);await restored.c.restore();assert.ok(Number.isFinite(restored.c.camera.zoom));const broken=new ConstellationController({snapshot:service.snapshot(),motion:new MotionCoordinator(),navigate:async()=>{},persistence:{load:async()=>null,save:async()=>{throw Error('disk full');}}});await broken.persist();assert.match(broken.error,/could not be saved/);
+});

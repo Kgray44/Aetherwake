@@ -41,12 +41,15 @@ export function mountConstellation(container:HTMLElement,options:ControllerOptio
   search.onkeydown=e=>{if(e.key==='Enter'){const n=controller.search(search.value,1)[0];if(n)void invoke(()=>controller.approach(n.key));}if(e.key==='Escape'){drawer.hidden=true;toggle.focus();}};
   const paintDetail=()=>{
     const n=controller.nodes.get(controller.selected??'');
-    const key=`${n?.key}:${controller.snapshot.relationships.length}:${n?.title}`;
+    const key=`${n?.key}:${controller.snapshot.relationships.length}:${n?.title}:${n?.point.x}:${n?.point.y}`;
     if(key===lastDetailKey)return;lastDetailKey=key;detail.replaceChildren();
     if(!n){detail.append(el('p','Select a destination. Enter or double-click to approach.'));return;}
     detail.append(el('strong',n.title),el('span',` ${n.kind} · ${n.available?'available':'unavailable'}`));
     const open=button('Open destination',()=>invoke(()=>controller.approach(n.key)));open.disabled=!n.available;detail.append(open);
-    if(n.kind!=='resource')detail.append(button('Pin here',()=>controller.pin(n.key,n.point)));
+    if(n.kind!=='resource'){
+      const x=el('input'),y=el('input');x.type=y.type='number';x.value=String(n.point.x);y.value=String(n.point.y);x.setAttribute('aria-label','Anchor X position');y.setAttribute('aria-label','Anchor Y position');x.className=y.className='aw-position';
+      detail.append(x,y,button('Save position',()=>invoke(()=>controller.pin(n.key,{x:Number(x.value),y:Number(y.value)}))));
+    }
     if(n.kind==='resource') {
       const allowed=new Set([...controller.nodes.values()].filter(x=>x.kind==='resource').map(x=>x.id));
       const edges=controller.snapshot.relationships.filter(e=>e.visible!==false&&allowed.has(e.source_id)&&allowed.has(e.target_id)&&(e.source_id===n.id||e.target_id===n.id)).slice(0,12);

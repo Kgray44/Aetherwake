@@ -6,6 +6,7 @@ const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b,n));
 const finite = (n: unknown): n is number => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) < 1e8;
 const validCamera = (c: unknown): c is Camera => !!c && typeof c === 'object' && finite((c as Camera).x) && finite((c as Camera).y) && finite((c as Camera).zoom) && (c as Camera).zoom >= .02 && (c as Camera).zoom <= 4;
 const pose = (c: Camera): Pose => ({x:c.x,y:c.y,w:c.zoom,h:1,lift:0,yaw:0,opacity:1});
+const canonicalLocation = (s:Snapshot):Location => s.navigation?.kind==='constellation' ? s.navigation.projectId ? {kind:'project',projectId:s.navigation.projectId} : {kind:'universe'} : s.activeWorkspaceId ? {kind:'workspace',workspaceId:s.activeWorkspaceId} : {kind:'universe'};
 export const defaultPolicy: Policy = {tier:'balanced', reduced:false, quiet:false, hidden:false, graphicsAvailable:true};
 let serial = 0;
 export type ControllerOptions = {
@@ -40,7 +41,7 @@ export class ConstellationController {
     this.snapshot = options.snapshot;
     this.motion = options.motion;
     this.policy = {...defaultPolicy,...options.policy};
-    this.state = {schema:'aerynth.constellation@1',anchors:{},bookmarks:{},history:[],location:options.snapshot.activeWorkspaceId ? {kind:'workspace',workspaceId:options.snapshot.activeWorkspaceId} : {kind:'universe'}};
+    this.state = {schema:'aerynth.constellation@1',anchors:{},bookmarks:{},history:[],location:canonicalLocation(options.snapshot)};
     this.update(options.snapshot, false);
     this.motion.add(this.motionId,pose(this.defaultCamera()));
   }
@@ -63,15 +64,15 @@ export class ConstellationController {
       if (!raw || typeof raw !== 'object' || (raw as ViewState).schema !== 'aerynth.constellation@1') return;
       const s=raw as ViewState;
       const anchors: Record<string,Point> = {};
-      for (const [key,p] of Object.entries(s.anchors ?? {}).slice(0,20000)) if (key.length<1024 && p && finite(p.x) && finite(p.y)) anchors[key]={x:p.x,y:p.y};
+      for (const [key,p] of Object.entries(s.anchors ?? {}).slice(0,20000)) if (/^(project|workspace):/.test(key) && key.length<1024 && p && finite(p.x) && finite(p.y)) anchors[key]={x:p.x,y:p.y};
       this.state.anchors=anchors;
       this.update(this.snapshot,false);
       const scopes=new Set(['universe',...[...this.nodes.values()].filter(n=>n.kind!=='resource').map(n=>n.key)]);
       this.state.bookmarks={};
       for (const [key,b] of Object.entries(s.bookmarks ?? {}).slice(0,20000)) if(scopes.has(key) && b && validCamera(b.camera)) this.state.bookmarks[key]={camera:{...b.camera},selected:typeof b.selected==='string' && this.nodes.has(b.selected) ? b.selected : null};
       // Canonical active workspace wins if it changed since this view was saved.
-      const initial=this.snapshot.activeWorkspaceId;
-      if(isLocation(s.location) && allowedLocation(s.location,this.nodes) && (s.location.kind!=='workspace' && s.location.kind!=='surface' || !initial || s.location.workspaceId===initial)) this.state.location=s.location;
+      const expected=canonicalLocation(this.snapshot);
+      if(isLocation(s.location) && allowedLocation(s.location,this.nodes) && (this.snapshot.navigation||this.snapshot.activeWorkspaceId ? scopeOf(s.location)===scopeOf(expected) : true)) this.state.location=s.location;
       this.state.history=Array.isArray(s.history) ? s.history.slice(-32).filter(h=>h && isLocation(h.location) && allowedLocation(h.location,this.nodes) && h.bookmark && validCamera(h.bookmark.camera)).map(h=>({location:h.location,bookmark:{camera:{...h.bookmark.camera},selected:this.nodes.has(h.bookmark.selected ?? '') ? h.bookmark.selected : null}})) : [];
       this.applyBookmark(this.state.bookmarks[scopeOf(this.location)]);
       this.motion.snap(this.motionId);
@@ -79,6 +80,7 @@ export class ConstellationController {
     } catch {this.error='Saved view could not be restored. Navigation remains available.';this.changed();}
   }
   update(snapshot: Snapshot, notify=true) {
+    const oldCanonical=canonicalLocation(this.snapshot);
     this.snapshot=snapshot;
     this.nodes=project(snapshot,this.state.anchors);
     const validKeys=new Set([...this.nodes.values()].filter(n=>n.kind!=='resource').map(n=>n.key));
@@ -86,6 +88,8 @@ export class ConstellationController {
     this.state.bookmarks=Object.fromEntries(Object.entries(this.state.bookmarks).filter(([k])=>k==='universe'||validKeys.has(k)).map(([k,b])=>[k,{...b,selected:this.nodes.has(b.selected ?? '')?b.selected:null}]));
     this.state.history=this.state.history.filter(h=>allowedLocation(h.location,this.nodes)).map(h=>({...h,bookmark:{...h.bookmark,selected:this.nodes.has(h.bookmark.selected??'')?h.bookmark.selected:null}}));
     if(!allowedLocation(this.location,this.nodes)) this.state.location={kind:'universe'};
+    const nextCanonical=canonicalLocation(snapshot);
+    if(notify&&!this.pending&&JSON.stringify(oldCanonical)!==JSON.stringify(nextCanonical)&&allowedLocation(nextCanonical,this.nodes)) {this.state.location=nextCanonical;this.applyBookmark(this.state.bookmarks[scopeOf(nextCanonical)]);}
     if(!this.nodes.has(this.selected ?? '')) this.selected=null;
     if(notify) {this.changed();void this.persist();}
   }
@@ -104,7 +108,7 @@ export class ConstellationController {
   fit(key=this.selected) {const n=this.nodes.get(key??'');if(n)this.move({...n.point,zoom:n.kind==='project'?.8:1.6},'fit selection');}
   select(key:string) {if(!this.nodes.has(key))throw new Error('Destination unavailable');this.selected=key;this.changed();}
   search(query:string,limit=40) {const q=query.trim().toLocaleLowerCase();return [...this.nodes.values()].filter(n=>n.title.toLocaleLowerCase().includes(q)).slice(0,clamp(limit,1,100));}
-  async locate(key:string) {const n=this.nodes.get(key);if(!n)throw new Error('Destination unavailable');const parent=n.kind==='project'?{kind:'universe'} as const:n.kind==='workspace'?(n.parent?{kind:'project',projectId:this.nodes.get(n.parent)!.id} as const:{kind:'universe'} as const):{kind:'project',projectId:this.snapshot.workspaces.find(w=>w.id===n.workspaceId)?.project_id??''} as const;await this.go(parent.kind==='project'&&!parent.projectId?{kind:'universe'}:parent);this.select(key);this.fit(key);}
+  async locate(key:string) {const n=this.nodes.get(key);if(!n)throw new Error('Destination unavailable');const projectId=this.snapshot.workspaces.find(w=>w.id===n.workspaceId)?.project_id;const parent:Location=n.kind==='project'?{kind:'universe'}:n.kind==='workspace'?(n.parent?{kind:'project',projectId:this.nodes.get(n.parent)!.id}:{kind:'universe'}):projectId?{kind:'project',projectId}:{kind:'workspace',workspaceId:n.workspaceId!};await this.go(parent);this.select(key);this.fit(key);}
   async approach(key=this.selected) {
     const n=this.nodes.get(key??'');if(!n||!n.available)throw new Error('Destination unavailable');
     return this.go(n.kind==='project'?{kind:'project',projectId:n.id}:n.kind==='workspace'?{kind:'workspace',workspaceId:n.id}:{kind:'surface',workspaceId:n.workspaceId!,resourceId:n.resourceId!,blockId:n.key.slice('resource:'.length)});
@@ -112,6 +116,7 @@ export class ConstellationController {
   async zoomOut() {const l=this.location;if(l.kind==='surface')return this.go({kind:'workspace',workspaceId:l.workspaceId});if(l.kind==='workspace'){const p=this.snapshot.workspaces.find(w=>w.id===l.workspaceId)?.project_id;return this.go(p?{kind:'project',projectId:p}:{kind:'universe'});}return this.go({kind:'universe'});}
   async go(location:Location, returning?: Bookmark) {
     if(!allowedLocation(location,this.nodes))throw new Error('Destination unavailable');
+    if(location.kind==='surface'&&!this.options.openResource)throw new Error('Resource editor is unavailable in this host');
     const generation=++this.generation;
     const from=this.location, origin=locationNode(location,this.nodes)?.point??this.camera;
     const old=this.bookmark();
@@ -123,16 +128,12 @@ export class ConstellationController {
       const navigation=this.navigationChain.catch(()=>{}).then(async()=>{
         if(generation!==this.generation||this.destroyed)return;
         await this.options.navigate(target);
+        if(generation===this.generation&&!this.destroyed&&location.kind==='surface')await this.options.openResource!(location);
       });
       this.navigationChain=navigation;
       await navigation;
       if(generation!==this.generation||this.destroyed)return;
       if(!allowedLocation(location,this.nodes))throw new Error('Destination unavailable');
-      if(location.kind==='surface') {
-        if(!this.options.openResource)throw new Error('Resource editor is unavailable in this host');
-        await this.options.openResource(location);
-        if(generation!==this.generation||this.destroyed)return;
-      }
       this.state.bookmarks[scopeOf(from)]=old;
       if(!returning && JSON.stringify(from)!==JSON.stringify(location))this.state.history=[...this.state.history,{location:from,bookmark:old}].slice(-32);
       this.state.location=location;

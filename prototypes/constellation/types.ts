@@ -7,6 +7,7 @@ export type Snapshot = {
   blocks: ({ id: string; workspace_id: string; resource_id: string; x: number; y: number; width: number; height: number; z: number } & Visibility)[];
   relationships: ({ id: string; source_id: string; target_id: string; kind: string; provenance: string } & Visibility)[];
   activeWorkspaceId: string | null;
+  navigation?: Destination;
 };
 export type Destination = { kind: 'workspace'; workspaceId: string } | { kind: 'constellation'; projectId: string | null };
 export type Location = { kind: 'universe' } | { kind: 'project'; projectId: string } | { kind: 'workspace'; workspaceId: string } | { kind: 'surface'; workspaceId: string; resourceId: string; blockId: string };
