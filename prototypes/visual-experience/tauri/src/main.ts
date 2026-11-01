@@ -2,6 +2,7 @@ import './style.css';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { blocks, createEvents, createMessages, FIXTURE_COUNTS, FIXTURE_SEED, type ResourceBlock } from './fixtures';
 import { motion, type Quality, type VelaState } from './motion';
+import { BenchmarkLedger, atOffset } from './benchmark-control';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const messages = createMessages();
@@ -11,6 +12,8 @@ let selectedEventId: string | null = null;
 const params = new URLSearchParams(location.search);
 const surface = params.get('surface');
 const detachedId = params.get('block');
+const ledger = new BenchmarkLedger(surface ?? 'main');
+let lastFrameCapture: ReturnType<typeof motion.endFrameCapture> | null = null;
 const byId = new Map(blocks.map(block => [block.id, block]));
 const STORAGE = 'aerynth-visual-lab-v1';
 type LayoutState = { order: string[]; wide: string[]; collapsed: string[]; quality: Quality; reduced: boolean; selected: string | null; detached: string[] };
@@ -62,6 +65,7 @@ function renderMain() {
       <section class="section lab-section" id="lab"><div class="section-heading"><div><span class="section-kicker">PERFORMANCE / 05</span><h2>Material, with a budget.</h2></div><p>Quality changes atmosphere density and frame pacing. Reduced motion preserves readable state and controls.</p></div><div class="lab-controls"><div><label for="quality-select">VISUAL QUALITY</label><select id="quality-select"><option value="cinematic">Cinematic · 200 particles</option><option value="balanced">Balanced · 100 particles</option><option value="efficient">Efficient · 36 particles</option></select></div><label class="check-label"><input type="checkbox" id="reduced-toggle" /> Reduced motion</label><button id="benchmark-button" class="button-primary">Run bounded benchmark ↗</button><button id="export-button" class="button-text">Export measurements ↓</button></div><pre class="benchmark-output" id="benchmark-output">Waiting for local frame samples. No process or GPU data is inferred from browser timings.</pre></section>
       <footer class="footer"><span>AERYNTH / PROJECT AETHERWAKE</span><span>LOCAL VISUAL CANDIDATE · NO LIVE CODEX CONNECTION</span><span>© LAB 02</span></footer>
     </div></main><div id="focus-layer" class="focus-layer" hidden></div><div id="toast" class="toast" role="status" aria-live="polite"></div></div>`;
+  $('#lab')!.insertAdjacentHTML('beforeend', `<details class="bench-control"><summary>COMPARISON CONTROL / LOCAL SCRIPT</summary><p>Scripted renderer actions provide software timing proxies. They are not physical input or display-present measurements.</p><div class="bench-buttons"><button data-bench="prepare">Prepare fixed cinematic</button><button data-bench="S2">S2 idle</button><button data-bench="S3">S3 working</button><button data-bench="S4">S4 scroll</button><button data-bench="S6">S6 workspace</button><button data-bench="S7">S7 Vela</button><button data-bench="S8">S8 windows</button><button data-bench="S10-efficient">S10 efficient</button><button data-bench="S10-reduced">S10 reduced</button><button data-bench="capture-start">Start frame capture</button><button data-bench="capture-stop">Stop frame capture</button><button data-bench="export">Export local trace</button></div><output id="bench-status" role="status">Ready · seed ${FIXTURE_SEED}</output></details>`);
   motion.attach($('#atmosphere') as HTMLCanvasElement);
   motion.setQuality(layout.quality); motion.setReduced(layout.reduced);
   ($('#quality-select') as HTMLSelectElement).value = layout.quality;
@@ -231,6 +235,14 @@ function bindMain() {
   $('#rail-settings')!.addEventListener('click', () => $('#lab')?.scrollIntoView({ behavior: layout.reduced ? 'instant' : 'smooth' }));
   $('#benchmark-button')!.addEventListener('click', runBenchmark);
   $('#export-button')!.addEventListener('click', exportMeasurements);
+  $('.bench-control')!.addEventListener('click', async event => {
+    const button = (event.target as HTMLElement).closest<HTMLButtonElement>('[data-bench]');
+    if (!button) return;
+    button.disabled = true;
+    try { await benchmarkCommand(button.dataset.bench!); }
+    catch (error) { benchmarkStatus(`Failed: ${String(error)}`); }
+    finally { button.disabled = false; }
+  });
 }
 async function openStream() {
   if (!(window as any).__TAURI_INTERNALS__) { $('#conversation')?.scrollIntoView(); toast('Secondary native window requires Tauri.'); return; }
@@ -274,6 +286,96 @@ function exportMeasurements() {
   const a = document.createElement('a'); a.href = url; a.download = 'aerynth-visual-lab-measurements.json'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+function benchmarkStatus(message: string) { const output = $('#bench-status'); if (output) output.textContent = message; }
+function benchmarkSnapshot() {
+  return { source: 'local-renderer-control', seed: FIXTURE_SEED, sourceCounts: FIXTURE_COUNTS,
+    quality: motion.quality, reducedMotion: motion.reduced, vela: motion.vela,
+    wallUtc: new Date().toISOString(), rendererTimeOriginMs: performance.timeOrigin,
+    actionTrace: ledger.snapshot(), currentFrames: motion.stats(), frameCapture: lastFrameCapture };
+}
+function downloadTrace() {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(benchmarkSnapshot(), null, 2)], { type: 'application/json' }));
+  const link = document.createElement('a'); link.href = url; link.download = `aerynth-${ledger.surface}-local-trace.json`; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function prepareFixedCinematic() {
+  layout = { ...structuredClone(defaults), quality: 'cinematic', reduced: false };
+  save();
+  $('#workspace-grid')!.innerHTML = layout.order.map(id => card(byId.get(id)!)).join('');
+  ($('#quality-select') as HTMLSelectElement).value = 'cinematic';
+  ($('#reduced-toggle') as HTMLInputElement).checked = false;
+  updateSelection(); updateVela('idle');
+  motion.setQuality('cinematic'); motion.setReduced(false); motion.setPaused(false);
+  ledger.clear(); lastFrameCapture = null;
+  benchmarkStatus('Fixed cinematic ready · no adaptive quality control is active');
+}
+let scenarioRunning = false;
+async function runScriptedScenario(name: string) {
+  if (scenarioRunning) throw new Error('Another scripted scenario is still running');
+  scenarioRunning = true;
+  const start = performance.now();
+  const step = async (offset: number, id: string, operation: () => void | Promise<void>) => {
+    await atOffset(start, offset); await ledger.step(id, operation, offset);
+  };
+  const cardAction = (id: string, action: string) => $<HTMLButtonElement>(`.resource-card[data-id="${id}"] [data-action="${action}"]`)?.click();
+  try {
+    benchmarkStatus(`${name} · scripted actions running`);
+    if (name === 'S2') await step(0, 'S2-vela-idle', () => updateVela('idle'));
+    else if (name === 'S3') await step(0, 'S3-vela-working', () => updateVela('working'));
+    else if (name === 'S4') {
+      const list = $<HTMLElement>('#message-list')!;
+      for (const [index, offset] of [[0, 0], [500, 300], [1000, 600], [1500, 900], [1999, 1200]]) {
+        await step(offset, `S4-scroll-${index}`, () => { list.scrollTop = index * 84; list.dispatchEvent(new Event('scroll')); });
+      }
+    }
+    else if (name === 'S6') {
+      const first = blocks[0].id, second = blocks[1].id;
+      await step(0, 'S6-reset-layout', () => { $('#reset-layout')!.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+      await step(120, 'S6-select', () => selectBlock(first));
+      await step(240, 'S6-drag-drop', () => {
+        const source = $<HTMLElement>(`.resource-card[data-id="${first}"]`)!, target = $<HTMLElement>(`.resource-card[data-id="${second}"]`)!;
+        const dataTransfer = new DataTransfer();
+        source.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer }));
+        target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer }));
+        target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer }));
+        source.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer }));
+      });
+      await step(360, 'S6-keyboard-reorder-equivalent', () => moveCard(first, -1));
+      await step(480, 'S6-widen', () => cardAction(first, 'resize'));
+      await step(600, 'S6-collapse', () => cardAction(first, 'collapse'));
+      await step(720, 'S6-expand', () => cardAction(first, 'collapse'));
+      await step(840, 'S6-focus', () => focusBlock(first));
+      await step(860, 'S6-interrupt-return', closeFocus);
+    }
+    else if (name === 'S7') {
+      for (const [state, offset] of [['idle', 0], ['working', 300], ['attention', 600], ['unavailable', 900]] as const) {
+        await step(offset, `S7-vela-${state}`, () => updateVela(state));
+      }
+    }
+    else if (name === 'S8') {
+      if (!(window as any).__TAURI_INTERNALS__) throw new Error('S8 requires the native Tauri host');
+      const id = blocks[1].id;
+      await step(0, 'S8-activity-open', openStream);
+      await step(250, 'S8-block-detach', () => detachBlock(id));
+      await step(500, 'S8-block-focus', async () => { const win = await WebviewWindow.getByLabel(`block-${id}`); await win?.setFocus(); });
+      await step(750, 'S8-block-close', async () => { const win = await WebviewWindow.getByLabel(`block-${id}`); await win?.close(); });
+      await step(1000, 'S8-activity-close', async () => { const win = await WebviewWindow.getByLabel('activity'); await win?.close(); });
+      await step(1250, 'S8-activity-reopen', openStream);
+    }
+    else if (name === 'S10-efficient') await step(0, 'S10-efficient', () => { layout.quality = 'efficient'; save(); motion.setQuality('efficient'); ($('#quality-select') as HTMLSelectElement).value = 'efficient'; });
+    else if (name === 'S10-reduced') await step(0, 'S10-reduced', () => { layout.reduced = true; save(); motion.setReduced(true); ($('#reduced-toggle') as HTMLInputElement).checked = true; });
+    else throw new Error(`Unknown scripted scenario: ${name}`);
+    benchmarkStatus(`${name} complete · ${ledger.snapshot().records.length} timestamped actions`);
+  } finally { scenarioRunning = false; }
+}
+async function benchmarkCommand(command: string) {
+  if (command === 'prepare') prepareFixedCinematic();
+  else if (command === 'capture-start') { motion.beginFrameCapture(); benchmarkStatus('Frame callback capture started · max 12,000 samples'); }
+  else if (command === 'capture-stop') { lastFrameCapture = motion.endFrameCapture(); benchmarkStatus(`Frame callback capture stopped · ${lastFrameCapture.samples.length} samples`); }
+  else if (command === 'export') { downloadTrace(); benchmarkStatus('Local JSON export requested; keep raw traces outside the public repository'); }
+  else await runScriptedScenario(command);
+}
+
 function renderStream() {
   app.innerHTML = `<div class="stream-window"><header><span class="brand-diamond">✧</span><div><small>AERYNTH / SECONDARY SURFACE</small><strong>Intelligence Stream</strong></div><span class="fixture-pill">SYNTHETIC</span></header><div class="stream-intro"><span class="section-kicker">OBSERVABLE ACTIVITY / FIXTURE</span><h1>A current of events.</h1><p>1,000 deterministic events. No live Codex connection, agent run, or private reasoning is represented.</p><div class="stream-controls"><button id="burst-button">Play reproducible burst ↗</button><span id="burst-status">SEED ${FIXTURE_SEED}</span></div></div><div class="stream-list virtual-list" id="event-list" tabindex="0" aria-label="Synthetic activity events"><div class="virtual-spacer"></div><div class="virtual-items"></div></div><footer><span id="event-status">1,000 synthetic events</span><span>LOCAL / NO EGRESS</span></footer></div>`;
   const virtual = mountVirtualList('#event-list', events, 90, eventRow);
@@ -292,3 +394,13 @@ function renderDetached(id: string) {
 }
 
 if (surface === 'stream') renderStream(); else if (surface === 'block' && detachedId) renderDetached(detachedId); else renderMain();
+
+Object.assign(window, { __AERYNTH_BENCH__: {
+  schema: 'aerynth-local-benchmark-control-v1',
+  prepareFixedCinematic: () => { if (!surface) prepareFixedCinematic(); },
+  runScenario: (name: string) => !surface ? runScriptedScenario(name) : Promise.reject(new Error('Main-window scenario only')),
+  startFrameCapture: () => motion.beginFrameCapture(),
+  stopFrameCapture: () => { lastFrameCapture = motion.endFrameCapture(); return lastFrameCapture; },
+  snapshot: benchmarkSnapshot,
+  clear: () => { ledger.clear(); lastFrameCapture = null; },
+} });

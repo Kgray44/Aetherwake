@@ -4,7 +4,7 @@ export type VelaState = 'idle' | 'working' | 'attention' | 'unavailable';
 export type Quality = 'cinematic' | 'balanced' | 'efficient';
 export type MotionDomain = 'spatial' | 'material' | 'atmospheric' | 'semantic' | 'interaction' | 'performance';
 export type MotionEvent = { domain: MotionDomain; name: string; at: number; resourceId?: string };
-export type FrameStats = { count: number; medianMs: number | null; p95Ms: number | null; p99Ms: number | null; missedFrames: number; targetIntervalMs: number; elapsedMs: number; visibility: DocumentVisibilityState };
+export type FrameStats = { count: number; medianMs: number | null; p95Ms: number | null; p99Ms: number | null; maxMs: number | null; over50Ms: number; missedFrames: number; targetIntervalMs: number; elapsedMs: number; visibility: DocumentVisibilityState; capped: boolean };
 
 /** High-frequency canvas work lives here, apart from ordinary DOM state. */
 export class MotionCoordinator {
@@ -22,6 +22,8 @@ export class MotionCoordinator {
   private timer = 0;
   private lastFrame = 0;
   private intervals: number[] = [];
+  private capture: Array<[number, number]> | null = null;
+  private captureOverflow = 0;
   private started = performance.now();
   private previousVisibility: DocumentVisibilityState = document.visibilityState;
 
@@ -76,14 +78,26 @@ export class MotionCoordinator {
 
   resetStats() { this.intervals = []; this.started = performance.now(); this.lastFrame = 0; }
 
+  beginFrameCapture() { this.capture = []; this.captureOverflow = 0; this.resetStats(); }
+
+  endFrameCapture() {
+    const stats = this.stats();
+    const samples = this.capture ? [...this.capture] : [];
+    const overflow = this.captureOverflow;
+    this.capture = null;
+    return { source: 'renderer-requestAnimationFrame-callback', timeOriginMs: performance.timeOrigin, stats, samples, overflow };
+  }
+
   stats(): FrameStats {
-    const sorted = [...this.intervals].sort((a, b) => a - b);
+    const values = this.capture ? this.capture.map(sample => sample[1]) : this.intervals;
+    const sorted = [...values].sort((a, b) => a - b);
     const at = (p: number) => sorted.length ? Number(sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)].toFixed(2)) : null;
     // Nominal tier target, not a measured display refresh rate.
     const budget = this.quality === 'cinematic' ? 1000 / 60 : this.quality === 'balanced' ? 1000 / 30 : 1000 / 12;
-    return { count: sorted.length, medianMs: at(.5), p95Ms: at(.95), p99Ms: at(.99),
+    return { count: sorted.length, medianMs: at(.5), p95Ms: at(.95), p99Ms: at(.99), maxMs: sorted.length ? Number(sorted[sorted.length - 1].toFixed(2)) : null,
+      over50Ms: sorted.filter(ms => ms > 50).length,
       missedFrames: sorted.reduce((sum, ms) => sum + Math.max(0, Math.round(ms / budget) - 1), 0), targetIntervalMs: Number(budget.toFixed(2)),
-      elapsedMs: Math.round(performance.now() - this.started), visibility: this.previousVisibility };
+      elapsedMs: Math.round(performance.now() - this.started), visibility: this.previousVisibility, capped: this.captureOverflow > 0 };
   }
 
   private restart() {
@@ -98,8 +112,13 @@ export class MotionCoordinator {
   private schedule() {
     const tick = () => { this.raf = requestAnimationFrame(now => {
       if (this.lastFrame) {
-        this.intervals.push(now - this.lastFrame);
+        const interval = now - this.lastFrame;
+        this.intervals.push(interval);
         if (this.intervals.length > 2400) this.intervals.shift();
+        if (this.capture) {
+          if (this.capture.length < 12000) this.capture.push([now, interval]);
+          else this.captureOverflow++;
+        }
       }
       this.lastFrame = now;
       this.draw(now, false);
