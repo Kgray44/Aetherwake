@@ -1,4 +1,8 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { dirname, relative, resolve, isAbsolute } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { DesktopState } from './desktop.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { ConversationGraph, type GraphData, type ProviderAdapter as GraphAdapter } from '../../connected-conversations/src/graph.ts';
@@ -35,8 +39,16 @@ export class BackendCore {
   private emit: (event: StreamEvent) => void;
   private maxEvents: number;
   private closed = false;
+  private desktop: DesktopState;
   constructor(options: Options, emit: (event: StreamEvent) => void = () => {}) {
-    ensure(options.contentPolicy === 'synthetic-only', 'protected_storage_unavailable');
+    if (options.contentPolicy !== 'synthetic-only') {
+      ensure(options.contentPolicy === 'local-private' && options.privateRoot && isAbsolute(options.path), 'protected_storage_unavailable');
+      const privateRoot = realpathSync(options.privateRoot!);
+      const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+      const rel = relative(sourceRoot, privateRoot);
+      ensure(rel.startsWith('..') || isAbsolute(rel), 'private_storage_inside_source');
+      ensure(realpathSync(dirname(options.path)) === privateRoot, 'private_storage_scope_mismatch');
+    }
     this.maxEvents = options.retention?.maxEvents ?? 10000;
     ensure(Number.isInteger(this.maxEvents) && this.maxEvents >= 4 && this.maxEvents <= 100000, 'invalid_retention');
     this.emit = emit;
@@ -77,6 +89,7 @@ export class BackendCore {
         this.save();
       });
       this.stopEvents = this.port.onEvent(e => this.ingest(e));
+      this.desktop = new DesktopState(this.kernel, this.db);
       this.record('stream/reopened', 'inferred');
     } catch (error) { this.kernel.close(); throw error; }
   }
@@ -174,8 +187,15 @@ export class BackendCore {
       if (this.active && e.method === 'item/agentMessage/delta' && typeof e.payload.delta === 'string') {
         ensure(Buffer.byteLength(this.assistantText) + Buffer.byteLength(e.payload.delta) <= 65536, 'provider_output_too_large');
         this.assistantText += e.payload.delta;
+        // Only assistant output is forwarded live. Durable stream records remain metadata-only.
+        // Private reasoning/tool payloads never cross this desktop boundary.
+        this.emit({ ...this.recordedEventForDelta(), payload: { redacted: true, delta: e.payload.delta } });
       }
     } catch { this.streamFailure = true; } // Never throw into transport callbacks; fail the execution closed.
+  }
+  private recordedEventForDelta(): StreamEvent {
+    const row = this.db.prepare('SELECT json FROM intelligence_events ORDER BY cursor DESC LIMIT 1').get();
+    return JSON.parse(String(row!.json));
   }
   private package(id: string) { const r = this.state.reviews[id]; ensure(r, 'handoff_not_found'); return r; }
   private validateReview(r: HandoffReview) {
@@ -265,8 +285,19 @@ export class BackendCore {
     const a: any = input;
     // Reads and interruption remain available during execution. Local mutation
     // is rejected rather than racing source approval and streamed commits.
-    if (!['snapshot','replay','interrupt','execute'].includes(name)) ensure(!this.active, 'execution_busy');
+    if (!['snapshot','replay','interrupt','execute','desktop'].includes(name)) ensure(!this.active, 'execution_busy');
     switch (name) {
+      case 'desktop': {
+        if (a.type !== 'snapshot') {
+          this.atomic(() => this.desktop.apply(a, (title, codex) => this.create(title, codex ? this.port.id : 'mock-ordinary').resourceId));
+          this.record('application/' + a.type, 'observed');
+        }
+        return this.desktop.snapshot(id => {
+          if (!this.state.resources[id]) return { provider: 'local', messages: [] };
+          const c = this.conv(id), graphId = this.gid(id);
+          return { provider: c.kind === 'codex' ? 'codex' : 'local', version: c.revision, messages: this.graph.snapshot().messages.filter(m => m.conversationId === graphId).slice(-200).map(m => ({ id: m.id, role: m.role, content: m.content })) };
+        }) as any;
+      }
       case 'createConversation': return this.atomic(() => this.once(a.commandId, { name, ...a }, () => this.create(a.title, a.providerId ?? 'mock-ordinary'))) as any;
       case 'addMessage': return this.atomic(() => {
         ensure(this.state.revisions[a.resourceId] === a.expectedRevision, 'stale_resource_version');

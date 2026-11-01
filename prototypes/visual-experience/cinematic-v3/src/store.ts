@@ -1,6 +1,7 @@
 import { researchNotebook, longDocument } from "./workloads.ts";
 export type Resource = {
   id: string;
+  canonicalId?: string;
   type: "conversation" | "research" | "note";
   title: string;
   subtitle: string;

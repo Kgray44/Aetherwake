@@ -1,3 +1,6 @@
+import { installApplication, type Application } from "./application";
+import type { DesktopSnapshot } from "../../../application-contract/contracts.ts";
+import type { Resource } from "./store";
 import "./style.css";
 import { motionPolicy } from "./policy";
 import { deriveSceneState } from "./scene-state";
@@ -77,14 +80,16 @@ app.innerHTML = `
   <div class="keys">TAB to explore <span>·</span> ENTER to activate <span>·</span> ESC to return</div>
 `;
 
+const desktopMode = !!window.aerynthHost?.command;
+let application: Application | null = null;
 const storageKey = "aerynth-cinematic-v3-v1";
 let saved: ReturnType<typeof validateSaved> = null;
 try {
   saved = validateSaved(JSON.parse(localStorage.getItem(storageKey) || "null"));
 } catch {}
-let order = saved?.order || seed.map((r) => r.id);
-const resources = new Map(
-  seed.map((r) => [r.id, { ...r, text: saved?.drafts[r.id] ?? r.text }]),
+let order = desktopMode ? [] : saved?.order || seed.map((r) => r.id);
+const resources = new Map<string, Resource>(
+  (desktopMode ? [] : seed).map((r) => [r.id, { ...r, text: saved?.drafts[r.id] ?? r.text }]),
 );
 const motion = new MotionCoordinator();
 registerScene(motion, "architecture");
@@ -156,6 +161,7 @@ function status(text: string) {
   $("#status").textContent = text;
 }
 function persist() {
+  if (desktopMode) return true;
   try {
     localStorage.setItem(
       storageKey,
@@ -232,6 +238,8 @@ function base(id: string) {
   return restAt(id, order.indexOf(id));
 }
 function restAt(id: string, slot: number) {
+  const block = application?.block(id);
+  if (block) { const offset = application!.offset(); return { x: block.x + offset.x, y: block.y + offset.y, w: block.width, h: block.height, lift: 0, yaw: 0, opacity: 1 }; }
   const pose = slotPose(slot, innerWidth, innerHeight);
   if (innerWidth >= 1000) {
     const scale = clamp(innerWidth / 1500, 0.7, 1.5);
@@ -293,7 +301,7 @@ function layout(cause: string) {
           lift: 55,
           yaw: 0,
         };
-      } else {
+      } else if (!application) {
         const next = reorder(drag.before, drag.id, drag.slot);
         p = {
           ...restAt(id, next.indexOf(id)),
@@ -391,6 +399,8 @@ function home() {
   status("Workspace restored.");
 }
 function move(id: string, to: number) {
+  const block = application?.block(id);
+  if (block) { void application!.run({ type: "geometry", blockId: id, expectedVersion: block.version, placement: { ...block, z: to }, shape: block.shape }); return; }
   undoStack.push([...order]);
   if (undoStack.length > 32) undoStack.shift();
   order = reorder(order, id, to);
@@ -414,12 +424,13 @@ function cancelDrag() {
   status("Move cancelled. Original arrangement retained.");
 }
 
-for (const [id, r] of resources) {
+function mountResource(id: string, r: Resource) {
   const article = document.createElement("article");
   article.className = `folio ${r.type}`;
-  article.dataset.resource = id;
+  article.dataset.resource = r.canonicalId ?? id;
+  article.dataset.block = id;
   article.setAttribute("aria-label", r.title);
-  article.innerHTML = `<button class="resource-anchor" aria-label="Open ${r.title}" title="${r.title}" tabindex="-1"><span class="anchor-glyph" aria-hidden="true">${r.type === "research" ? "◌" : r.type === "note" ? "⌁" : "≋"}</span><span class="anchor-label"><small>${r.type}</small><b></b></span></button><div class="folio-edge" aria-hidden="true"></div><div class="folio-inner"><div class="folio-top"><button class="grip" aria-label="Move ${r.type}. Alt plus arrow keys reorders; Escape cancels drag." title="Drag to move · Alt+←/→">⠿ <span>${r.type.toUpperCase()}</span></button><span class="folio-number">${String(order.indexOf(id) + 1).padStart(2, "0")}</span></div><button class="title-select"><h2></h2></button><div class="folio-subtitle"></div><div class="folio-preview"></div><div class="working-content"><p class="synthetic">SYNTHETIC EXAMPLE CONTENT · EDITS STAY LOCAL</p><label>Working draft<textarea spellcheck="false" aria-label="${r.title} working draft"></textarea></label><p class="saved">Saved locally on this device</p></div><div class="folio-actions"><button class="unfold" aria-expanded="false">Unfold ↗</button><div class="move-controls"><button class="earlier" aria-label="Move ${r.type} earlier">←</button><button class="later" aria-label="Move ${r.type} later">→</button></div></div></div>`;
+  article.innerHTML = `<button class="resource-anchor" aria-label="Open ${r.type}" title="${r.type}" tabindex="-1"><span class="anchor-glyph" aria-hidden="true">${r.type === "research" ? "◌" : r.type === "note" ? "⌁" : "≋"}</span><span class="anchor-label"><small>${r.type}</small><b></b></span></button><div class="folio-edge" aria-hidden="true"></div><div class="folio-inner"><div class="folio-top"><button class="grip" aria-label="Move ${r.type}. Alt plus arrow keys reorders; Escape cancels drag." title="Drag to move · Alt+←/→">⠿ <span>${r.type.toUpperCase()}</span></button><span class="folio-number">${String(order.indexOf(id) + 1).padStart(2, "0")}</span></div><button class="title-select"><h2></h2></button><div class="folio-subtitle"></div><div class="folio-preview"></div><div class="working-content"><p class="synthetic">SYNTHETIC EXAMPLE CONTENT · EDITS STAY LOCAL</p><label>Working draft<textarea spellcheck="false" aria-label="${r.type} working draft"></textarea></label><p class="saved">Saved locally on this device</p></div><div class="folio-actions"><button class="unfold" aria-expanded="false">Unfold ↗</button><div class="move-controls"><button class="earlier" aria-label="Move ${r.type} earlier">←</button><button class="later" aria-label="Move ${r.type} later">→</button></div></div></div>`;
   article.querySelector(".anchor-label b")!.textContent = r.title;
   article
     .querySelector(".resource-anchor")!
@@ -435,6 +446,7 @@ for (const [id, r] of resources) {
     const oversized = editor.value.length > 100000;
     editor.value = editor.value.slice(0, 100000);
     r.text = editor.value;
+    if (application) { application.saveContent(r.canonicalId!, r.text, article); article.querySelector(".folio-preview")!.textContent = r.text.split("\n\n")[0]; interaction(); return; }
     const ok = persist();
     article.querySelector(".saved")!.textContent = ok
       ? "Saved locally on this device"
@@ -455,7 +467,7 @@ for (const [id, r] of resources) {
     document.body.classList.remove("writing");
     wake();
   });
-  if (r.type === "conversation") {
+  if (r.type === "conversation" && !desktopMode) {
     installConversation(
       article.querySelector<HTMLElement>(".working-content")!,
       editor,
@@ -465,7 +477,7 @@ for (const [id, r] of resources) {
         showDialog("#vela-dialog", "#vela", true);
         setVela("receiving");
         $("#vela-answer").textContent =
-          `Context: ${r.title}. Input stays local; no model is connected.`;
+          `Context: ${r.type}. Input stays local; no model is connected.`;
         $("#vela-input").focus();
       },
       () => expand("research-material"),
@@ -488,6 +500,7 @@ for (const [id, r] of resources) {
       ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)
     ) {
       e.preventDefault();
+      if (application) { void application.move(id, e.key === "ArrowLeft" ? -24 : e.key === "ArrowRight" ? 24 : 0, e.key === "ArrowUp" ? -24 : e.key === "ArrowDown" ? 24 : 0); return; }
       move(
         id,
         order.indexOf(id) + (["ArrowLeft", "ArrowUp"].includes(e.key) ? -1 : 1),
@@ -511,6 +524,7 @@ for (const [id, r] of resources) {
       moved: false,
     };
     grip.setPointerCapture(e.pointerId);
+    if (application) { layout("drag pickup"); return; }
     $("#destinations").innerHTML = order
       .map((_, i) => {
         const s = slotPose(i, innerWidth, innerHeight);
@@ -525,6 +539,7 @@ for (const [id, r] of resources) {
     drag.y = e.clientY;
     drag.moved ||=
       Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 6;
+    if (application) { layout("free drag"); return; }
     const distances = order.map((_, i) => {
       const p = slotPose(i, innerWidth, innerHeight);
       return Math.hypot(e.clientX - p.x - p.w / 2, e.clientY - p.y - p.h / 2);
@@ -540,7 +555,8 @@ for (const [id, r] of resources) {
     const d = drag;
     drag = null;
     $("#destinations").replaceChildren();
-    if (d.moved) move(id, d.slot);
+    if (d.moved && application) void application.move(id, Math.round(d.x - d.startX), Math.round(d.y - d.startY));
+    else if (d.moved) move(id, d.slot);
     else {
       select(id);
     }
@@ -550,6 +566,23 @@ for (const [id, r] of resources) {
   $("#stage").append(article);
   elements.set(id, article);
   motion.add(id, base(id));
+}
+
+for (const [id, r] of resources) mountResource(id, r);
+
+function replaceWorkspace(state: DesktopSnapshot) {
+  const alive = new Set(state.blocks.map(b => b.id));
+  if (expanded && !alive.has(expanded)) expanded = null;
+  if (selected && !alive.has(selected)) selected = null;
+  for (const [id, article] of elements) if (!alive.has(id)) { article.remove(); elements.delete(id); resources.delete(id); motion.bodies.delete(id); poseStyleCache.delete(id); }
+  order = state.blocks.map(b => b.id);
+  for (const block of state.blocks) {
+    const resource = state.resources.find(r => r.id === block.resource_id)!;
+    const displayType: Resource["type"] = block.shape === "circle" ? "research" : resource.kind === "conversation" ? "conversation" : "note";
+    let r = resources.get(block.id);
+    const data = { id: block.id, canonicalId: resource.id, type: displayType, title: resource.title, subtitle: `${resource.kind} · ${resource.id.slice(0,8)}`, text: resource.content };
+    if (!r) { r = data; resources.set(block.id, r); mountResource(block.id, r); } else { Object.assign(r, data); const article = elements.get(block.id)!; article.classList.remove("conversation", "research", "note"); article.classList.add(displayType); article.querySelector("h2")!.textContent = resource.title; article.querySelector(".folio-preview")!.textContent = resource.content.split("\n\n")[0]; }
+  }
 }
 
 function setVela(state: VelaState) {
@@ -564,7 +597,7 @@ function setVela(state: VelaState) {
     verified: "Fixture sequence check passed",
     unavailable: "Unavailable",
   };
-  $("#vela-state").textContent = `${labels[state]} · synthetic`;
+  $("#vela-state").textContent = `${labels[state]} · ${desktopMode ? "application activity" : "synthetic"}`;
   $("#vela").setAttribute(
     "aria-label",
     `Address Vela. ${labels[state]}, synthetic presence`,
@@ -627,6 +660,7 @@ $("#stream-close").addEventListener("click", () => {
 });
 $("#home").addEventListener("click", home);
 $("#undo").addEventListener("click", () => {
+  if (application) { void application.run({ type: "undo" }); return; }
   const previous = undoStack.pop();
   if (previous) {
     order = previous;
@@ -850,6 +884,8 @@ declare global {
     aerynthHost?: {
       renderWhileVisible?: boolean;
       onActive: (listener: (active: boolean) => void) => void;
+      command?: (name: string, input: unknown) => Promise<unknown>;
+      onEvent?: (listener: (event: unknown) => void) => void;
     };
     __aerynth: ReturnType<typeof controller>;
   }
@@ -879,7 +915,8 @@ function renderDOM() {
       clamp((rest.w - p.w) / Math.max(1, rest.w - dockWidth), 0, 1),
       clamp((focus - 0.13) / 0.87, 0, 1),
     );
-    const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateY(${p.yaw}deg);z-index:${expanded === id ? 20 : drag?.id === id ? 16 : selected === id ? 8 : 3};`;
+    el.hidden = p.x + p.w < 0 || p.y + p.h < 120 || p.x > innerWidth || p.y > innerHeight - 100;
+    const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateY(${p.yaw}deg);z-index:${expanded === id ? 200000 : drag?.id === id ? 150000 : selected === id ? 100000 : 3 + (application?.block(id)?.z ?? 0)};`;
     if (poseStyleCache.get(id) !== style) {
       el.style.cssText = style;
       poseStyleCache.set(id, style);
@@ -952,7 +989,7 @@ function tick(now: number) {
     (pointerDirty && now - lastDraw >= pointerCadence - 0.25);
   if (shouldDraw) {
     if (environment && !graphicsFailed) {
-      const surfaces = order.map((id) => {
+      const surfaces = order.filter(id => !elements.get(id)?.hidden && application?.snapshot()?.navigation.kind !== "constellation").map((id) => {
         const p = motion.pose(id),
           rest = base(id);
         return {
@@ -1090,6 +1127,7 @@ function controller() {
       metrics: { ...metrics },
       gpu: environment?.stats(),
     }),
+    application: () => application?.snapshot(),
     select,
     expand,
     home,
@@ -1156,6 +1194,7 @@ function controller() {
   };
 }
 window.__aerynth = controller();
+if (desktopMode) application = installApplication({ replace: replaceWorkspace, status, layout: () => layout("application state"), home, focus: expand, vela: setVela });
 try {
   environment = new Environment($<HTMLCanvasElement>("#world"));
 } catch (error) {

@@ -1,21 +1,22 @@
 {
-  "name": "aerynth-cinematic-v3-5",
-  "version": "0.3.5",
+  "name": "aerynth-application-review",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
-  "main": "native/main.cjs",
+  "main": "native/desktop-main.cjs",
   "scripts": {
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "start": "npm run build && electron .",
-    "verify": "npm run build && electron . --verify",
+    "verify": "npm run build && electron native/main.cjs --verify",
     "record": "npm run build && electron . --record",
     "soak": "npm run build && electron . --soak --soak-seconds=90",
-    "preview": "npm run build && electron . --preview",
+    "preview": "npm run build && electron native/main.cjs --preview",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "dev": "vite --host 127.0.0.1",
     "format": "prettier --write src native tests vite.config.ts index.html package.json tsconfig.json",
-    "format:check": "prettier --check src native tests vite.config.ts index.html package.json tsconfig.json"
+    "format:check": "prettier --check src native tests vite.config.ts index.html package.json tsconfig.json",
+    "verify:application": "npm run build && electron . --integration-verify"
   },
   "dependencies": {
     "three": "0.180.0"

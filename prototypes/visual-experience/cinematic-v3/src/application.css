@@ -1,0 +1,48 @@
+.command-surface { color: #e6e0f2; background: linear-gradient(140deg,#191728f5,#0b1020fc); border: 1px solid #b9a4e24a; border-radius: 24px; padding: 28px; width: min(780px,90vw); max-height: 82vh; box-shadow: 0 30px 120px #000c; }
+.command-surface::backdrop { background: #02030b70; backdrop-filter: blur(8px); }
+.command-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.command-heading h2 { font-size: 24px; font-weight: 400; margin: 0 0 24px; }
+.command-surface button { border: 1px solid #c6b6e43c; border-radius: 10px; padding: 11px 15px; margin: 4px 0; text-align: left; background: #bab0ec09; }
+.command-surface button:hover { background: #c8b2ff20; }
+.command-surface button:disabled { opacity: .4; }
+.command-surface label { display: flex; flex-direction: column; gap: 8px; margin: 15px 0; font-size: 13px; }
+.command-surface input,.command-surface select { color: #ede6fc; background: #0c1022; border: 1px solid #a394c950; padding: 12px; border-radius: 9px; width: 100%; }
+.command-surface p { color: #b7aec9; line-height: 1.7; font-size: 13px; }
+.command-grid { display: grid; grid-template-columns: 1fr 1.5fr; gap: 30px; }
+.workspace-row { display: flex; gap: 8px; align-items: center; }
+.workspace-row > button:first-child { flex: 1; }
+.workspace-row small,.resource-result small { display: block; color: #b5a8cb; font-size: 10px; margin-top: 5px; }
+.resource-result { display: block; width: 100%; }
+.geometry-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 12px; }
+.layout-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+#command-error { color: #f6b8ba; }
+.block-tools { position: absolute; right: 9px; top: 8px; display: flex; gap: 3px; z-index: 3; }
+.block-tools > button { padding: 4px 7px; border-radius: 6px; color: #d0c3e5; }
+.block-tools .resize-handle { cursor: nwse-resize; touch-action: none; }
+.folio[data-shape="rounded"]:not(.expanded) { border-radius: 32px; }
+.folio[data-shape="circle"]:not(.expanded) { border-radius: 50%; }
+.folio[data-shape="circle"]:not(.expanded) .folio-inner { padding: 22% 17%; }
+.folio[data-shape="circle"]:not(.expanded) .folio-preview { display: none; }
+.folio[data-shape="circle"]:not(.expanded) .block-tools { right: 32%; top: 12px; }
+.canvas-tools { position: fixed; left: 25px; bottom: 118px; display: flex; gap: 8px; z-index: 30; }
+.canvas-tools button { background: #141727c9; border: 1px solid #b9a3dc33; border-radius: 10px; padding: 8px 11px; }
+.conversation-transcript { flex: 1; min-height: 50px; overflow-y: auto; font-size: 14px; line-height: 1.75; white-space: pre-wrap; user-select: text; }
+.conversation-transcript b { color: #c8afe8; font-size: 11px; }
+.conversation-compose { display: flex; flex-direction: column; gap: 8px; }
+.conversation-compose label { flex: initial !important; }
+.conversation-compose textarea { padding: 8px !important; min-height: 55px !important; max-height: 100px; font-size: 14px !important; }
+.conversation-compose button { border: 1px solid #c3afd446; border-radius: 8px; padding: 8px 16px; margin-right: 12px; }
+.provider-label,.execution-state { font-size: 11px; color: #b7a5c9; }
+.inline-events { overflow-y: auto; font-size: 12px; line-height: 1.8; }
+#constellation-view { position: fixed; inset: 140px 35px 160px; z-index: 22; overflow: auto; background: radial-gradient(ellipse at center,#141323da,#090c17b0); border: 1px solid #b2a4cf20; border-radius: 36px; padding: 32px; }
+.universe-heading h1 { font-weight: 300; font-size: 36px; margin: 14px 0; }
+.universe-heading p,.universe-foot { color: #b4aaca; font-size: 13px; }
+.workspace-stars { display: flex; flex-wrap: wrap; gap: 35px; justify-content: center; padding: 30px; }
+.workspace-star { width: 200px; height: 170px; border: 1px solid #b6a0dd50; background: radial-gradient(ellipse,#baa0ec20,#080d1c); border-radius: 45%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+.workspace-star span { font-size: 35px; color: #ceb5f5; }
+.workspace-star small { color: #a899bf; }
+.application-ready .dock { max-width: 96vw; gap: 7px; padding: 12px 16px; }
+.application-ready .dock button { padding: 8px; }
+.application-ready .provenance { max-width: 40vw; }
+@media(max-width:1100px) { .application-ready .dock button span { font-size: 9px; } .application-ready .scene-navigation { display:none; } .application-ready .dock { gap: 2px; } }
+@media(max-width:850px) { .command-grid { grid-template-columns:1fr; } .application-ready .dock button span { display:none; } }

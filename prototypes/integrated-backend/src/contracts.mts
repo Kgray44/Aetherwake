@@ -1,6 +1,7 @@
 import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
 import type { GraphData, Message, ContextPackage, Sensitivity } from '../../connected-conversations/src/graph.ts';
 import type { Resource } from '../../workspace-kernel/kernel.mts';
+import type { DesktopCommand, DesktopSnapshot } from '../../application-contract/contracts.ts';
 export const CONTRACT = 'aerynth.integration@0.1' as const;
 export type Classification = 'observed' | 'reported' | 'inferred' | 'simulated';
 export type ExecutionState = 'dispatching' | 'running' | 'provider_completed' | 'failed' | 'interrupted' | 'unknown';
@@ -40,7 +41,7 @@ export interface StreamEvent {
   correlationId: string | null; causationId: string | null;
   receivedAt: string; providerTime: number | null; providerTimeSource: string | null;
   type: string; classification: Classification;
-  status: string | null; payload: { redacted: true; textBytes?: number; itemType?: string };
+  status: string | null; payload: { redacted: true; textBytes?: number; itemType?: string; delta?: string };
 }
 export interface HandoffReview {
   id: string; resourceId: string; sourceResourceId: string; targetProviderId: string;
@@ -54,9 +55,12 @@ export interface Options {
   codexExecutable?: string; codexArgs?: string[]; cwd?: string;
   instanceId?: string; accountScope?: string;
   retention?: { maxEvents: number };
-  contentPolicy: 'synthetic-only';
+  contentPolicy: 'synthetic-only' | 'local-private';
+  /** Host-owned directory outside the source checkout; never accepted from the renderer. */
+  privateRoot?: string;
 }
 export interface CommandMap {
+  desktop: { input: DesktopCommand; output: DesktopSnapshot };
   openWorkspace: { input: { workspaceId: string }; output: { workspace: Record<string, unknown>; layout: Record<string, unknown>; blocks: Array<Record<string, unknown>> } };
   selectProvider: { input: { resourceId: string; providerId: string; expectedRevision: number }; output: ConversationView };
   applyOrdinary: { input: { handoffId: string; prompt: string; commandId: string }; output: Message & { resourceId: string; classification: 'simulated' } };

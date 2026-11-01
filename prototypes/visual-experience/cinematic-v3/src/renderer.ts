@@ -869,10 +869,9 @@ export class Environment {
     );
   }
 
-  private buildFolios() {
-    // Exactly three persistent resources are supported by this isolated study.
-    // Fixed buffers, materials, and identities survive every move/unfold/quality transition.
-    for (let i = 0; i < 3; i++) {
+  private buildFolios(count = 3) {
+    // Grow to visible demand. Reuse the pool across workspace/focus changes.
+    for (let i = 0; i < count; i++) {
       const root = new THREE.Group();
       root.matrixAutoUpdate = false;
       root.visible = false;
@@ -1167,7 +1166,10 @@ export class Environment {
         this.canvas.dataset.materials = "opaque";
       return;
     }
-    for (let i = 0; i < Math.min(3, surfaces.length); i++) {
+    const live = new Set(surfaces.map(pose => pose.id));
+    for (const visual of this.folios) if (visual.id && !live.has(visual.id)) { this.folioById.delete(visual.id); visual.id = null; }
+    if (surfaces.length > this.folios.length) this.buildFolios(surfaces.length - this.folios.length);
+    for (let i = 0; i < surfaces.length; i++) {
       const pose = surfaces[i];
       if (
         !Number.isFinite(pose.x) ||
@@ -1267,7 +1269,7 @@ export class Environment {
     // graphics loss, so translucency never requires the moving scene for text.
     const materialMode =
       quality !== "efficient" &&
-      this.folios.every((folio) => folio.root.visible)
+      surfaces.every((pose) => this.folioById.get(pose.id)?.root.visible)
         ? "physical"
         : "opaque";
     if (this.canvas.dataset.materials !== materialMode)
