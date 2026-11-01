@@ -40,6 +40,7 @@ export interface ContextItem {
   sourceTime: string; content: string; digest: string;
   role: Role; provenance: Provenance; referenceIds: string[];
   constraint: boolean;
+  sensitivity: Sensitivity;
 }
 export interface ContextPackage {
   id: string; targetConversationId: string; sourceConversationId: string;

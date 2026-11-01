@@ -67,17 +67,25 @@ export class WorkspaceKernel {
   close(): void { this.db.close(); }
 
   private tx<T>(operation: () => T): T {
+    try { return this.withTransaction(() => operation()); }
+    catch (error) { translate(error); }
+  }
+
+  /** Experimental integration seam. Synchronous callbacks only; the caller owns
+   * extension tables. Savepoints compose kernel writes with extension writes.
+   * Never expose this database handle to a renderer or provider adapter. */
+  withTransaction<T>(operation: (db: DatabaseSync) => T): T {
+    const savepoint = 'kernel_' + randomUUID().replaceAll('-', '');
+    this.db.exec(`SAVEPOINT ${savepoint}`);
     try {
-      this.db.exec('BEGIN IMMEDIATE');
-      try {
-        const result = operation();
-        this.db.exec('COMMIT');
-        return result;
-      } catch (error) {
-        this.db.exec('ROLLBACK');
-        throw error;
-      }
-    } catch (error) { translate(error); }
+      const result = operation(this.db);
+      if (result instanceof Promise) throw new KernelError('INVALID', 'Transaction callback must be synchronous');
+      this.db.exec(`RELEASE ${savepoint}`);
+      return result;
+    } catch (error) {
+      this.db.exec(`ROLLBACK TO ${savepoint}; RELEASE ${savepoint}`);
+      throw error;
+    }
   }
 
   schemaVersion(): number {
