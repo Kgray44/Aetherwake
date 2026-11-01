@@ -116,6 +116,12 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
     }
   }
   const selected=[], dependencies=[], warnings=[...route.warnings], missing=[...route.unavailable];
+  // A safe requirement envelope for the WRONG charter is not sufficient.
+  // Make unmatched primary scope an explicit review obligation.
+  const primaryDomains=[...chosen.keys()].filter(x=>!["00","14","15","16"].includes(x));
+  const scopeNeedsReview=primaryDomains.length===0;
+  if(scopeNeedsReview)warnings.push("No primary subsystem charter identified. Do not treat the selected context as sufficient without reviewing the task scope and applicable governance.");
+
   for(const [id,entry] of [...chosen].sort((a,b)=>a[0].localeCompare(b[0]))) {
     const doc=entry.document;
     if(!doc?.available){missing.push({id,path:doc?.path,reason:["source unavailable"]});continue;}
@@ -183,7 +189,7 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
   return {
     schemaVersion:2,task,paths,source:"versioned repository Markdown",
     indexFingerprint:digest(index.documents.map(d=>d.id+":"+d.sha256+":"+d.authority).join("|")),coveragePolicyFingerprint:digest(JSON.stringify(policies)),dependencyExpansions,
-    constitutionalBaseline:"complete",authorityPolicy:"binding constitution, advisory unratified charters",
+    constitutionalBaseline:"complete",authorityPolicy:"binding constitution, advisory unratified charters",scopeNeedsReview,coverageGuarantee:"every normative requirement in each selected charter; domain selection and explanatory completeness require review",
     route,selected,normative,dependencies,missing,warnings,
     metrics:{selectedCharacters:chars,estimatedTokens:estimate(chars),supplementalNormativeRequirements:normative.length,estimateMethod:"ceil(characters/4), NOT real tokenizer output",fullRoutedCharacters:baselineChars,characterReductionPercent:baselineChars?Math.round(10000*(1-chars/baselineChars))/100:0,budgetTokens,budgetExceeded},
     coverage:{requested:requiredIds,found:requiredIds.filter(id=>selectedReqIds.has(id)||dependencies.some(d=>d.id===id)),missingRequired:requiredIds.filter(id=>!selectedReqIds.has(id)&&!dependencies.some(d=>d.id===id))}
