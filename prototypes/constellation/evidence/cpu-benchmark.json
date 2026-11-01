@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "scenario": "Synthetic 50 projects, 500 workspaces, 10000 resources, 30000 relationships",
+  "iterations": 30,
+  "runtime": "v24.18.0",
+  "projection": {
+    "medianMs": 9.242099999999994,
+    "p95Ms": 15.370499999999993,
+    "p99Ms": 26.25460000000001
+  },
+  "search": {
+    "medianMs": 0.3008000000000095,
+    "p95Ms": 0.4292000000000087,
+    "p99Ms": 0.5013000000000005
+  },
+  "cameraAndCullingPerStep": {
+    "medianMs": 0.0857591666666669,
+    "p95Ms": 0.13141166666666682,
+    "p99Ms": 0.13201500000000005
+  },
+  "maxProxies": 12,
+  "method": "Node perf_hooks; CPU projection/search/camera+culling only. These are not presented frame times, GPU timings, power measurements or a host comparison."
+}

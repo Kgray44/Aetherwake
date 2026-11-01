@@ -92,13 +92,11 @@ const server = createServer(async (req, res) => {
         .writeHead(200, { "Content-Type": "application/json" })
         .end(JSON.stringify(result));
     } catch {
-      res
-        .writeHead(400, { "Content-Type": "application/json" })
-        .end(
-          JSON.stringify({
-            error: "Fixture command failed. Refresh and retry.",
-          }),
-        );
+      res.writeHead(400, { "Content-Type": "application/json" }).end(
+        JSON.stringify({
+          error: "Fixture command failed. Refresh and retry.",
+        }),
+      );
     }
     return;
   }
