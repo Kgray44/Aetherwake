@@ -1,0 +1,7 @@
+node_modules/
+dist/
+dist-electron/
+src/fixture.json
+evidence/*.json
+*.log
+.runtime/
