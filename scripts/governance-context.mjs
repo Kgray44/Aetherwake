@@ -100,31 +100,22 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
     chosen.set("14",{document:byDoc.get("14"),reason:["cross-cutting trust/authorization risk"]});
   }
   if(!chosen.has("00"))chosen.set("00",{document:byDoc.get("00"),reason:["constitutional baseline"]});
-  // Conservative task-class policies catch cross-domain invariants missed by
-  // pure lexical top-N section ranking. They do NOT reference evaluation gold
-  // requirements, and the original charters retain their authority.
-  if(policies.schemaVersion!==1 || !Array.isArray(policies.facets))throw new Error("Invalid governance coverage policies");
-  const forcedSections=new Map(),matchedFacets=[],warningsBeforeSelection=[];
-  const normalizedQuery=" "+normalize(task)+" ";
-  for(const facet of policies.facets) {
-    if(!Array.isArray(facet.any) || !facet.sections || typeof facet.id!=="string")throw new Error("Malformed coverage facet");
-    const matched=facet.any.some(phrase=>normalizedQuery.includes(" "+normalize(phrase)+" "));
-    if(!matched)continue;
-    matchedFacets.push(facet.id);
-    for(const [docId,fragments] of Object.entries(facet.sections)) {
-      const doc=byDoc.get(docId);
-      if(!doc?.available) {warningsBeforeSelection.push("Risk facet "+facet.id+" references unavailable charter "+docId);continue;}
-      if(!chosen.has(docId))chosen.set(docId,{document:doc,reason:["coverage facet "+facet.id]});
-      else chosen.get(docId).reason.push("coverage facet "+facet.id);
-      if(!forcedSections.has(docId))forcedSections.set(docId,new Set());
-      for(const fragment of fragments) {
-        const matches=doc.sections.filter(s=>normalize(s.title).includes(normalize(fragment)));
-        if(matches.length!==1)throw new Error("Coverage facet "+facet.id+" unresolved/ambiguous heading "+docId+":"+fragment);
-        forcedSections.get(docId).add(matches[0].ordinal);
-      }
+  // Resolve stable cross-domain obligations from the domain map, not the
+  // wording of individual benchmark prompts. One hop prevents runaway breadth.
+  if(policies.schemaVersion!==2 || !policies.dependencies)throw new Error("Invalid governance coverage policy");
+  const dependencyExpansions=[];
+  const initial=[...chosen.keys()];
+  for(const from of initial) {
+    const neighbors=policies.dependencies[from];
+    if(!Array.isArray(neighbors))throw new Error("Missing coverage dependencies for "+from);
+    for(const id of neighbors) {
+      const doc=byDoc.get(id);
+      if(!doc)throw new Error("Unknown dependency charter "+id+" from "+from);
+      if(!chosen.has(id))chosen.set(id,{document:doc,reason:["cross-domain dependency of "+from]});
+      dependencyExpansions.push({from,to:id});
     }
   }
-  const selected=[], dependencies=[], warnings=[...route.warnings,...warningsBeforeSelection], missing=[...route.unavailable];
+  const selected=[], dependencies=[], warnings=[...route.warnings], missing=[...route.unavailable];
   for(const [id,entry] of [...chosen].sort((a,b)=>a[0].localeCompare(b[0]))) {
     const doc=entry.document;
     if(!doc?.available){missing.push({id,path:doc?.path,reason:["source unavailable"]});continue;}
@@ -132,7 +123,7 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
       selected.push({id,path:doc.path,authority:doc.authority,reason:entry.reason,mode:"full",sections:doc.sections.map(x=>x.ordinal),range:[1,doc.fullText.split(/\r?\n/).length],sha256:doc.sha256,text:doc.fullText});
       continue;
     }
-    const pinned=new Set([...(forcedSections.get(id)??[]),...requiredIds.filter(rid=>index.requirements.get(rid)?.charter===id).map(rid=>index.requirements.get(rid).section)]);
+    const pinned=new Set(requiredIds.filter(rid=>index.requirements.get(rid)?.charter===id).map(rid=>index.requirements.get(rid).section));
     // Source paths select the charter; only task language ranks its sections.
     // Path category names otherwise create spurious low-confidence matches.
     const scored=doc.sections.map(s=>({section:s,score:relevance(s,task)}))
@@ -158,6 +149,17 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
   for(const x of selected)for(const req of index.requirements.values()) {
     if(req.charter===x.id&&(x.mode!=="section"||x.sections.includes(req.section)))selectedReqIds.add(req.id);
   }
+  // GENERAL COVERAGE INVARIANT: an applicable charter's normative rules do
+  // not disappear because their section ranked below the top-N. Attach their
+  // verbatim original lines in a lightweight source-linked index. Sections
+  // supply fuller explanations, examples, definitions, and context.
+  const normative=[];
+  for(const req of index.requirements.values()) {
+    if(chosen.has(req.charter) && !selectedReqIds.has(req.id)) {
+      normative.push({...req,sha256:digest(req.text)});
+      selectedReqIds.add(req.id);
+    }
+  }
   const referenced=new Set();
   for(const id of selectedReqIds) {
     const req=index.requirements.get(id);
@@ -174,16 +176,16 @@ export function buildContext({config,registry,index,task="",paths=[],requiredIds
     if(dependencies.length>=MAX_DEPENDENCIES){warnings.push("Dependency expansion limit reached: "+id+" not included");continue;}
     dependencies.push({id:req.id,path:req.path,authority:req.authority,line:req.line,reason:"referenced by selected normative requirement",text:req.text});
   }
-  const chars=selected.reduce((s,x)=>s+x.text.length,0)+dependencies.reduce((s,x)=>s+x.text.length,0);
+  const chars=selected.reduce((s,x)=>s+x.text.length,0)+normative.reduce((s,x)=>s+x.text.length,0)+dependencies.reduce((s,x)=>s+x.text.length,0);
   const baselineChars=unique(selected.map(x=>x.path)).reduce((s,path)=>s+(index.documents.find(d=>d.path===path)?.sourceChars||0),0);
   const budgetExceeded=budgetTokens!==null&&estimate(chars)>budgetTokens;
   if(budgetExceeded)warnings.push("Estimated context exceeds soft budget; no authoritative requirement silently discarded.");
   return {
     schemaVersion:2,task,paths,source:"versioned repository Markdown",
-    indexFingerprint:digest(index.documents.map(d=>d.id+":"+d.sha256+":"+d.authority).join("|")),coveragePolicyFingerprint:digest(JSON.stringify(policies)),matchedFacets,
+    indexFingerprint:digest(index.documents.map(d=>d.id+":"+d.sha256+":"+d.authority).join("|")),coveragePolicyFingerprint:digest(JSON.stringify(policies)),dependencyExpansions,
     constitutionalBaseline:"complete",authorityPolicy:"binding constitution, advisory unratified charters",
-    route,selected,dependencies,missing,warnings,
-    metrics:{selectedCharacters:chars,estimatedTokens:estimate(chars),estimateMethod:"ceil(characters/4), NOT real tokenizer output",fullRoutedCharacters:baselineChars,characterReductionPercent:baselineChars?Math.round(10000*(1-chars/baselineChars))/100:0,budgetTokens,budgetExceeded},
+    route,selected,normative,dependencies,missing,warnings,
+    metrics:{selectedCharacters:chars,estimatedTokens:estimate(chars),supplementalNormativeRequirements:normative.length,estimateMethod:"ceil(characters/4), NOT real tokenizer output",fullRoutedCharacters:baselineChars,characterReductionPercent:baselineChars?Math.round(10000*(1-chars/baselineChars))/100:0,budgetTokens,budgetExceeded},
     coverage:{requested:requiredIds,found:requiredIds.filter(id=>selectedReqIds.has(id)||dependencies.some(d=>d.id===id)),missingRequired:requiredIds.filter(id=>!selectedReqIds.has(id)&&!dependencies.some(d=>d.id===id))}
   };
 }
@@ -193,6 +195,11 @@ export function formatContext(result) {
   for(const s of result.selected){
     out.push("## SOURCE: "+s.path+" | "+s.mode+" | "+s.authority+" | lines "+s.range.join("-")+" | sha256 "+s.sha256);
     out.push("Reason: "+s.reason.join("; "),"",s.text,"");
+  }
+  if(result.normative?.length) {
+    out.push("## REMAINING NORMATIVE REQUIREMENTS FROM SELECTED CHARTERS");
+    out.push("Complete original requirement lines are included below even when their explanatory sections did not rank in the top-N.");
+    for(const req of result.normative)out.push("### "+req.id+" | "+req.path+":"+req.line+" | "+req.authority+" | sha256 "+req.sha256,req.text,"");
   }
   if(result.dependencies.length){
     out.push("## REFERENCED NORMATIVE DEPENDENCIES");
