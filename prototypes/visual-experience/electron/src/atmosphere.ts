@@ -20,6 +20,7 @@ export class Atmosphere {
   private active = true;
   private quality: Quality = "cinematic";
   private reduced = false;
+  private fixedHz: number | null = null;
   private width = 1;
   private height = 1;
   private ro: ResizeObserver;
@@ -48,15 +49,28 @@ export class Atmosphere {
     document.addEventListener("visibilitychange", this.listener);
     this.tick(performance.now());
   }
-  setMode(quality: Quality, reduced: boolean) {
+  setMode(quality: Quality, reduced: boolean, fixedHz: number | null = null) {
     cancelAnimationFrame(this.frame);
     clearTimeout(this.frame);
     this.quality = quality;
     this.reduced = reduced;
+    this.fixedHz = fixedHz;
+    this.last = 0;
     if (this.active) this.tick(performance.now());
   }
   getDrawCount() {
     return this.draws;
+  }
+  getRenderedSources() {
+    return {
+      particles:
+        this.quality === "efficient"
+          ? 48
+          : this.quality === "balanced"
+            ? 120
+            : 200,
+      filaments: this.quality === "efficient" ? 4 : 8,
+    };
   }
   private resize() {
     const rect = this.canvas.getBoundingClientRect(),
@@ -76,9 +90,14 @@ export class Atmosphere {
         ? 100
         : this.quality === "balanced"
           ? 33
-          : 16;
+          : this.fixedHz
+            ? 1000 / this.fixedHz
+            : 16;
     if (time - this.last >= cadence) {
-      this.last = time;
+      this.last =
+        this.fixedHz && !this.reduced && this.quality === "cinematic"
+          ? this.last + Math.floor((time - this.last) / cadence) * cadence
+          : time;
       this.draw(time);
     }
     this.frame =

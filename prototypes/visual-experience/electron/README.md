@@ -14,12 +14,14 @@ npm start
 
 `npm start` regenerates fixture data, builds the Vite renderer and TypeScript main/preload, then launches Electron. `npm test` checks deterministic fixture integrity; `npm run typecheck` checks both process boundaries. `npm run benchmark` launches a bounded native benchmark, saves a local JSON report under `evidence/benchmark-local.json`, captures native screenshots, and exits. The JSON is ignored by Git because it contains local process and device details; summarized, non-identifying results appear in `EVALUATION.md`.
 
+For the coordinated release-build comparison, use `npm run package:release` and [COMPARISON-CONTROL.md](COMPARISON-CONTROL.md). The opt-in mailbox records reproducible action and frame traces in a local ignored directory; it is distinct from the exploratory `--benchmark` mode.
+
 The app uses only local `file://` content. Its own window state and Chromium profile live in `.runtime/` inside this lab and are ignored by Git. No external service or Codex agent is connected.
 
 ## Interact
 
 - Drag a block header to rearrange; arrow controls provide a keyboard-operable alternative.
-- Expand/collapse a block with the diagonal-arrow control. The same DOM resource view moves between grid and focus positions, and a new gesture can cancel an active transition.
+- Expand/collapse a block with the diagonal-arrow control or Escape when expanded. The same DOM resource view moves between grid and focus positions, and a new gesture can cancel an active transition.
 - Detach a block with the overlapping-window control. The secondary window is a native, frameless transparent Electron window with a draggable title area.
 - Scroll/select conversation messages, run reproducible event bursts, edit a local note, select resources, and check tasks.
 - Choose Vela's four fixture states, graphics quality, and reduced motion. The benchmark control is available in the app, but saving a report is enabled only in `--benchmark` mode.

@@ -8,4 +8,6 @@ contextBridge.exposeInMainWorld("aerynthLab", {
   backgroundProbe: () => ipcRenderer.invoke("lab:background-probe"),
   benchmarkReport: (report: unknown) =>
     ipcRenderer.invoke("lab:benchmark-report", report),
+  comparisonReady: (marker: Record<string, unknown>) =>
+    ipcRenderer.invoke("lab:comparison-ready", marker),
 });

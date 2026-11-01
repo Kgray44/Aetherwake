@@ -3,16 +3,42 @@ import { writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
+import { ComparisonControl } from "./comparison-control";
+import type { BlockId } from "./comparison-contract";
 
 const ROOT = path.resolve(__dirname, "..");
-const RUNTIME = path.join(ROOT, ".runtime");
+const COMPARISON = process.argv.includes("--comparison-control");
+const BASE_RUNTIME = app.isPackaged
+  ? app.getPath("userData")
+  : path.join(ROOT, ".runtime");
+const RUNTIME = COMPARISON
+  ? path.join(BASE_RUNTIME, "comparison-profile")
+  : BASE_RUNTIME;
 const INDEX = path.join(ROOT, "dist", "index.html");
 const STATE = path.join(RUNTIME, "window-state.json");
 const BENCHMARK = process.argv.includes("--benchmark");
+const comparisonDirectoryArg = process.argv
+  .find((arg) => arg.startsWith("--comparison-dir="))
+  ?.slice("--comparison-dir=".length);
+const COMPARISON_DIR =
+  comparisonDirectoryArg && path.isAbsolute(comparisonDirectoryArg)
+    ? comparisonDirectoryArg
+    : path.join(RUNTIME, "comparison-control");
+const PROCESS_STARTED_AT_NS = process.hrtime.bigint().toString();
+const PROCESS_STARTED_WALL_UTC = new Date().toISOString();
 const blockId =
   /^(overview|conversation|activity|projects|notes|timeline|metrics|files|agents|tasks|signal|calendar)$/;
 let mainWindow: BrowserWindow | null = null;
 const detached = new Map<string, BrowserWindow>();
+let comparison: ComparisonControl | null = null;
+let buildManifest: unknown = { status: "missing build manifest" };
+try {
+  buildManifest = JSON.parse(
+    readFileSync(path.join(__dirname, "build-manifest.json"), "utf8"),
+  );
+} catch {
+  /* older development build */
+}
 
 mkdirSync(RUNTIME, { recursive: true });
 app.setPath("userData", RUNTIME);
@@ -65,13 +91,14 @@ function configureWindow(win: BrowserWindow) {
   win.loadFile(INDEX, {
     query: {
       benchmark: BENCHMARK ? "1" : "0",
+      comparison: COMPARISON ? "1" : "0",
       detached: win === mainWindow ? "" : "1",
     },
   });
 }
 function createMain() {
   mainWindow = new BrowserWindow({
-    ...savedBounds(),
+    ...(COMPARISON ? { width: 1440, height: 920 } : savedBounds()),
     minWidth: 900,
     minHeight: 600,
     show: false,
@@ -86,8 +113,19 @@ function createMain() {
     },
   });
   configureWindow(mainWindow);
+  comparison?.mark("native-window-created", {
+    windowId: mainWindow.id,
+    outerBounds: mainWindow.getBounds(),
+    contentBounds: mainWindow.getContentBounds(),
+  });
   mainWindow.once("ready-to-show", () => {
     mainWindow?.show();
+    comparison?.mark("first-native-window-shown", {
+      windowId: mainWindow?.id,
+      rendererPid: mainWindow?.webContents.getOSProcessId(),
+      outerBounds: mainWindow?.getBounds(),
+      contentBounds: mainWindow?.getContentBounds(),
+    });
     if (BENCHMARK)
       setTimeout(async () => {
         if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -116,17 +154,17 @@ function createMain() {
     detached.clear();
   });
 }
-function detach(id: string) {
-  if (!blockId.test(id)) return false;
+function ensureDetached(id: string): BrowserWindow | null {
+  if (!blockId.test(id)) return null;
   const existing = detached.get(id);
   if (existing && !existing.isDestroyed()) {
     existing.focus();
-    return true;
+    return existing;
   }
   const win = new BrowserWindow({
-    width: 780,
-    height: 620,
-    minWidth: 520,
+    width: COMPARISON ? 460 : 780,
+    height: COMPARISON ? 720 : 620,
+    minWidth: COMPARISON ? 380 : 520,
     minHeight: 380,
     show: false,
     frame: false,
@@ -143,9 +181,24 @@ function detach(id: string) {
     },
   });
   detached.set(id, win);
-  win.loadFile(INDEX, { query: { detached: id } });
+  win.loadFile(INDEX, {
+    query: { detached: id, comparison: COMPARISON ? "1" : "0" },
+  });
+  comparison?.mark("detached-window-created", {
+    block: id,
+    windowId: win.id,
+    outerBounds: win.getBounds(),
+    contentBounds: win.getContentBounds(),
+  });
   win.once("ready-to-show", () => {
     win.show();
+    comparison?.mark("detached-window-shown", {
+      block: id,
+      windowId: win.id,
+      rendererPid: win.webContents.getOSProcessId(),
+      outerBounds: win.getBounds(),
+      contentBounds: win.getContentBounds(),
+    });
     if (BENCHMARK)
       setTimeout(async () => {
         if (win.isDestroyed()) return;
@@ -160,19 +213,58 @@ function detach(id: string) {
       }, 500);
   });
   win.on("closed", () => detached.delete(id));
-  return true;
+  return win;
+}
+function detach(id: string) {
+  return ensureDetached(id) !== null;
 }
 app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler(
     (_contents, _permission, callback) => callback(false),
   );
   session.defaultSession.setPermissionCheckHandler(() => false);
+  if (COMPARISON) {
+    comparison = new ComparisonControl(
+      COMPARISON_DIR,
+      () => mainWindow,
+      (id) => detached.get(id),
+      (id) => {
+        const win = ensureDetached(id);
+        if (!win) throw new Error("Invalid detached block");
+        return win;
+      },
+      buildManifest,
+      PROCESS_STARTED_AT_NS,
+      PROCESS_STARTED_WALL_UTC,
+    );
+  }
   createMain();
+  comparison?.start();
   app.on("activate", () => {
     if (!mainWindow) createMain();
   });
 });
 app.on("window-all-closed", () => app.quit());
+app.on("before-quit", () => comparison?.stop());
+
+ipcMain.handle("lab:comparison-ready", (event, marker: unknown) => {
+  if (
+    !COMPARISON ||
+    !trusted(event.sender) ||
+    !marker ||
+    typeof marker !== "object"
+  )
+    return false;
+  try {
+    if (JSON.stringify(marker).length > 2048) return false;
+  } catch {
+    return false;
+  }
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (!win) return false;
+  comparison?.markRendererReady(win, marker as Record<string, unknown>);
+  return true;
+});
 
 ipcMain.handle(
   "lab:detach",

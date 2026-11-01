@@ -49,6 +49,16 @@ The five Electron processes at the end-of-run snapshot were Browser 141,872 KiB,
 
 ## Verification and captured evidence
 
+### Pre-comparison instrumentation check
+
+An opt-in production-package control, [COMPARISON-CONTROL.md](COMPARISON-CONTROL.md), now exposes bounded fixture actions, a machine-readable 30-second S2–S10 schedule, native-window receipts, renderer commit/next-callback proxies, raw rAF intervals, actual canvas draw counts, and build-file hashes. This is instrumentation for the coordinator's protocol; the five-trial matched comparison, soak, synthetic load, and foundation decision have **not** been run here. The existing one-run `--benchmark` table above remains exploratory baseline evidence and was not pooled with the new control.
+
+A short, separate control smoke on build `90de847f07b53c3f4a927c444dad12dc71e0b525ebaa4a99cf6669cdc51380f8` launched a packaged Windows x64 app with 12 blocks, 2,000 messages, 1,000 events, 200 rendered particles and eight filaments; Electron reported a 1440×920 outer main window, 1426×854 client window, one 1.25-scale 165 Hz display, closed DevTools, and four processes (browser, GPU, utility, renderer) at the sampled instant. Sixty message requests and sixty event requests yielded 2,060 and 1,060 fixture items. The local client scheduled 100 ms gaps, with observed dispatch ranges of 91–112 ms for messages and 72–127 ms for events. Those are actual Windows scheduling jitter, not exact 100 ms dispatches.
+
+One 21.86-second smoke capture recorded 3,604 renderer callback intervals and 1,312 canvas draws, approximately 165 callbacks/s and 60 draws/s. These are software observations, not displayed frames. A separate two-second PID-filtered PresentMon probe captured 329 displayed-frame rows from this launch's Electron GPU process. Its raw CSV, action receipts, and frame trace remain local outside the public repository. This probe validates that target presentation capture is feasible; it is not a protocol trial or a Tauri comparison. GPU PID must be rediscovered each launch.
+
+Native keyboard smoke found visible focus on a message and block controls; Enter selected message 3, moved Conversation later, and expanded/collapsed it. A detached Activity window received Tab focus on its close button; Enter closed it, and the native window reopened. Reduced-motion plus Vela attention showed explicit text including “A moment for you” and “attention required,” so that state cue was not color alone. Escape initially failed to collapse an expanded block. After the scoped fix on build `4feb8a35a2d05c0e803c28a7b28899b777df6f4927b8bf33b6bd97db189018d7`, a packaged retest showed Escape collapsed Conversation and restored a visible focus ring to its expansion button. A separate 117 ms expand/collapse control probe settled with no expanded block. Build `1d3ae8d2e00fe481136a8d64016a76669a771a4b684d50be4c094a9cfe764eb6` corrected callback timestamp ordering; a packaged action receipt showed dispatch 6160.8 ms, commit 6165.3 ms, and callback 6165.6 ms on that renderer clock. This is a bounded keyboard check, not a screen-reader or full accessibility audit. One active display prevented mixed-DPI/refresh movement testing.
+
 | Check | Result |
 |---|---|
 | `npm run typecheck` | Passed for renderer and main/preload |

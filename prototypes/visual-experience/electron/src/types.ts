@@ -1,3 +1,5 @@
+import type { RendererCommand } from "../src-electron/comparison-contract";
+
 export interface Message {
   id: string;
   author: string;
@@ -33,10 +35,17 @@ export interface LabBridge {
     visibleAfter: boolean;
   } | null>;
   benchmarkReport(report: unknown): Promise<boolean>;
+  comparisonReady(marker: Record<string, unknown>): Promise<boolean>;
 }
 declare global {
   interface Window {
     aerynthLab: LabBridge;
     __lab?: { runBenchmark: () => Promise<unknown> };
+    __labComparison?: {
+      dispatch: (
+        command: RendererCommand,
+        actionId: string,
+      ) => Promise<unknown>;
+    };
   }
 }

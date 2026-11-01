@@ -6,7 +6,8 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "fixtures": "node scripts/generate-fixtures.mjs",
-    "build": "npm run fixtures && vite build && tsc -p tsconfig.electron.json",
+    "build": "npm run fixtures && vite build && tsc -p tsconfig.electron.json && node scripts/write-build-manifest.mjs",
+    "package:release": "npm run build && node scripts/package-release.mjs",
     "start": "npm run build && electron .",
     "benchmark": "npm run build && electron . --benchmark",
     "test": "node --test tests/*.test.mjs",
@@ -19,6 +20,7 @@
     "react-dom": "19.2.0"
   },
   "devDependencies": {
+    "@electron/packager": "20.3.0",
     "@types/node": "24.9.1",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",

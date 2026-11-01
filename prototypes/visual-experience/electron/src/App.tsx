@@ -3,6 +3,8 @@ import fixtureJson from "./fixture.json";
 import { Atmosphere } from "./atmosphere";
 import { MotionCoordinator } from "./motion";
 import { sampleFrames } from "./benchmark";
+import { ComparisonFrameRecorder } from "./comparison-frame";
+import type { RendererCommand } from "../src-electron/comparison-contract";
 import type {
   ActivityEvent,
   Fixture,
@@ -104,6 +106,7 @@ const initialOrder = blocks.map((b) => b.id);
 const param = new URLSearchParams(location.search);
 const detached = param.get("detached");
 const benchmarkMode = param.get("benchmark") === "1";
+const comparisonMode = param.get("comparison") === "1";
 const formatTime = (value: string) =>
   new Date(value).toLocaleTimeString([], {
     hour: "2-digit",
@@ -117,11 +120,18 @@ const stored = <T,>(key: string, fallback: T): T => {
   }
 };
 
-function VirtualMessages({ messages }: { messages: Message[] }) {
+function VirtualMessages({
+  messages,
+  selected,
+  onSelect,
+}: {
+  messages: Message[];
+  selected: string;
+  onSelect: (id: string) => void;
+}) {
   const ref = useRef<HTMLDivElement>(null),
     [top, setTop] = useState(0),
-    [height, setHeight] = useState(390),
-    [selected, setSelected] = useState("");
+    [height, setHeight] = useState(390);
   useEffect(() => {
     if (!ref.current) return;
     const observer = new ResizeObserver(() =>
@@ -146,10 +156,10 @@ function VirtualMessages({ messages }: { messages: Message[] }) {
             className={"message " + (selected === m.id ? "selected" : "")}
             key={m.id}
             style={{ top: (start + i) * row, height: row - 4 }}
-            onClick={() => setSelected(m.id)}
+            onClick={() => onSelect(m.id)}
             tabIndex={0}
             onKeyDown={(e) => {
-              if (e.key === "Enter") setSelected(m.id);
+              if (e.key === "Enter") onSelect(m.id);
             }}
             aria-label={`${m.author} message ${start + i + 1}`}
           >
@@ -191,20 +201,35 @@ function EventList({ events }: { events: ActivityEvent[] }) {
 
 export default function App() {
   const [order, setOrder] = useState<BlockId[]>(() =>
-    benchmarkMode ? [...initialOrder] : stored("order", initialOrder),
+    benchmarkMode || comparisonMode
+      ? [...initialOrder]
+      : stored("order", initialOrder),
   );
   const [quality, setQuality] = useState<Quality>(() =>
-    stored("quality", "cinematic"),
+    comparisonMode ? "cinematic" : stored("quality", "cinematic"),
   );
-  const [reduced, setReduced] = useState(() => stored("reduced", false));
+  const [reduced, setReduced] = useState(() =>
+    comparisonMode ? false : stored("reduced", false),
+  );
+  const [atmosphereCadence, setAtmosphereCadence] = useState<
+    "fixed60" | "native"
+  >(() => (comparisonMode ? "fixed60" : "native"));
   const [vela, setVela] = useState<VelaState>("idle");
+  const [messages, setMessages] = useState<Message[]>(fixture.messages);
+  const [selectedMessageId, setSelectedMessageId] = useState("");
+  const streamCounter = useRef(0);
+  const comparisonEventCounter = useRef(0);
   const [events, setEvents] = useState<ActivityEvent[]>(fixture.events);
   const burstCounter = useRef(0);
   const [query, setQuery] = useState("");
   const [note, setNote] = useState(() =>
-    stored("note", "A place to gather the shape of a thought."),
+    comparisonMode
+      ? "A place to gather the shape of a thought."
+      : stored("note", "A place to gather the shape of a thought."),
   );
-  const [checked, setChecked] = useState<string[]>(() => stored("checked", []));
+  const [checked, setChecked] = useState<string[]>(() =>
+    comparisonMode ? [] : stored("checked", []),
+  );
   const [activeResource, setActiveResource] = useState("Orion workspace");
   const [selectedTimeline, setSelectedTimeline] = useState(
     "Motion review queued",
@@ -222,6 +247,18 @@ export default function App() {
     motion = useRef(new MotionCoordinator());
   const dragId = useRef<BlockId | null>(null);
   const previousRects = useRef<Map<string, DOMRect>>(new Map());
+  const frameRecorder = useRef(new ComparisonFrameRecorder());
+  const frameStartDraws = useRef<number | null>(null);
+  const [comparisonRevision, setComparisonRevision] = useState(0);
+  const comparisonPending = useRef<null | {
+    actionId: string;
+    op: string;
+    dispatchAtMs: number;
+    dispatchWallUtc: string;
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+  }>(null);
+  const comparisonReadySent = useRef(false);
   const filtered = useMemo(
     () =>
       order.filter((id) =>
@@ -243,32 +280,39 @@ export default function App() {
     }
   }, []);
   useEffect(() => {
-    atmosphere.current?.setMode(quality, reduced);
+    atmosphere.current?.setMode(
+      quality,
+      reduced,
+      comparisonMode && atmosphereCadence === "fixed60" ? 60 : null,
+    );
     motion.current.setPolicy(quality, reduced);
     motion.current.note("atmospheric", "field", "quality policy");
-  }, [quality, reduced]);
+  }, [quality, reduced, atmosphereCadence]);
   useEffect(() => {
     motion.current.note("semantic", "vela", vela);
   }, [vela]);
   useEffect(() => () => motion.current.dispose(), []);
   useEffect(() => {
-    localStorage.setItem("order", JSON.stringify(order));
+    if (!comparisonMode) localStorage.setItem("order", JSON.stringify(order));
   }, [order]);
   useEffect(() => {
-    localStorage.setItem("quality", JSON.stringify(quality));
+    if (!comparisonMode)
+      localStorage.setItem("quality", JSON.stringify(quality));
   }, [quality]);
   useEffect(() => {
-    localStorage.setItem("reduced", JSON.stringify(reduced));
+    if (!comparisonMode)
+      localStorage.setItem("reduced", JSON.stringify(reduced));
   }, [reduced]);
   useEffect(() => {
-    localStorage.setItem("note", JSON.stringify(note));
+    if (!comparisonMode) localStorage.setItem("note", JSON.stringify(note));
   }, [note]);
   useEffect(() => {
-    localStorage.setItem("checked", JSON.stringify(checked));
+    if (!comparisonMode)
+      localStorage.setItem("checked", JSON.stringify(checked));
   }, [checked]);
   useEffect(() => {
     const media = matchMedia("(prefers-reduced-motion: reduce)");
-    if (media.matches) setReduced(true);
+    if (media.matches && !comparisonMode) setReduced(true);
   }, []);
   useLayoutEffect(() => {
     for (const holder of document.querySelectorAll<HTMLElement>(
@@ -298,6 +342,55 @@ export default function App() {
     }
     previousRects.current.clear();
   }, [order]);
+  useLayoutEffect(() => {
+    const pending = comparisonPending.current;
+    if (!pending) return;
+    comparisonPending.current = null;
+    const stateCommittedAtMs = performance.now();
+    let settled = false;
+    const finish = (nextFrameAtMs: number | null, gap?: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      pending.resolve({
+        actionId: pending.actionId,
+        op: pending.op,
+        clock: "renderer-performance-time-origin",
+        timeOriginUnixMs: performance.timeOrigin,
+        dispatchWallUtc: pending.dispatchWallUtc,
+        dispatchAtMs: pending.dispatchAtMs,
+        stateCommittedAtMs,
+        nextFrameAtMs,
+        eventToCommitMs: stateCommittedAtMs - pending.dispatchAtMs,
+        eventToNextFrameMs:
+          nextFrameAtMs === null ? null : nextFrameAtMs - pending.dispatchAtMs,
+        ...(gap ? { gap } : {}),
+      });
+    };
+    const timeout = window.setTimeout(
+      () => finish(null, "next renderer frame unavailable within 3000 ms"),
+      3000,
+    );
+    requestAnimationFrame(() => finish(performance.now()));
+  }, [comparisonRevision]);
+  useEffect(() => {
+    if (!comparisonMode || comparisonReadySent.current) return;
+    const handle = requestAnimationFrame(() => {
+      if (comparisonReadySent.current) return;
+      comparisonReadySent.current = true;
+      void window.aerynthLab.comparisonReady({
+        clock: "renderer-performance-time-origin",
+        timeOriginUnixMs: performance.timeOrigin,
+        firstRendererFrameCallbackAtMs: performance.now(),
+        wallUtc: new Date().toISOString(),
+        innerWidth,
+        innerHeight,
+        devicePixelRatio,
+      });
+    });
+    return () => cancelAnimationFrame(handle);
+  }, []);
+  useEffect(() => () => frameRecorder.current.dispose(), []);
 
   function captureRects() {
     previousRects.current.clear();
@@ -414,6 +507,23 @@ export default function App() {
       setTimeout(() => animateBlock(id, true), reduced ? 0 : 200);
     } else animateBlock(id, current !== id);
   }
+  useEffect(() => {
+    if (!expanded) return;
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      toggleExpand(expanded);
+      requestAnimationFrame(() => {
+        document
+          .querySelector<HTMLButtonElement>(
+            `[data-block="${expanded}"] .block-tools button[title="Expand"]`,
+          )
+          ?.focus();
+      });
+    };
+    window.addEventListener("keydown", onEscape);
+    return () => window.removeEventListener("keydown", onEscape);
+  }, [expanded, reduced]);
   function eventBurst() {
     const next = ++burstCounter.current;
     motion.current.note("semantic", "activity", `synthetic burst ${next}`);
@@ -429,6 +539,230 @@ export default function App() {
     ]);
     setVela("working");
   }
+  function comparisonState() {
+    return {
+      fixtureSeed: fixture.seed,
+      synthetic: true,
+      blockIds: order,
+      blockCount: order.length,
+      messageCount: messages.length,
+      eventCount: events.length,
+      particleSources: 200,
+      filamentSources: 8,
+      quality,
+      reducedMotion: reduced,
+      adaptiveQuality: false,
+      atmosphereCadence,
+      renderedSources: atmosphere.current?.getRenderedSources() ?? null,
+      velaState: vela,
+      expandedBlock: expandedRef.current,
+      selectedMessageId,
+      chatScrollTop:
+        document.querySelector<HTMLElement>("[data-chat-scroll]")?.scrollTop ??
+        null,
+      documentVisibility: document.visibilityState,
+      canvasDraws: atmosphere.current?.getDrawCount() ?? null,
+      viewport: { innerWidth, innerHeight, devicePixelRatio },
+      frameCaptureScenario: frameRecorder.current.activeScenario,
+    };
+  }
+  async function dispatchComparison(
+    command: RendererCommand,
+    actionId: string,
+  ): Promise<unknown> {
+    if (!comparisonMode) throw new Error("Comparison control is disabled");
+    const dispatchAtMs = performance.now(),
+      dispatchWallUtc = new Date().toISOString();
+    const instant = (result: unknown) => ({
+      actionId,
+      op: command.op,
+      clock: "renderer-performance-time-origin",
+      timeOriginUnixMs: performance.timeOrigin,
+      dispatchWallUtc,
+      dispatchAtMs,
+      stateCommittedAtMs: performance.now(),
+      nextFrameAtMs: null,
+      result,
+    });
+    if (command.op === "state") return instant(comparisonState());
+    if (command.op === "frameStart") {
+      frameStartDraws.current = atmosphere.current?.getDrawCount() ?? null;
+      return instant(
+        frameRecorder.current.start(command.scenario, command.refreshHz),
+      );
+    }
+    if (command.op === "frameStop") {
+      const result = frameRecorder.current.stop();
+      return instant({
+        ...result,
+        canvasDrawsDuringCapture:
+          frameStartDraws.current === null
+            ? null
+            : (atmosphere.current?.getDrawCount() ?? 0) -
+              frameStartDraws.current,
+      });
+    }
+    if (comparisonPending.current)
+      throw new Error("Previous comparison action has not settled");
+    return new Promise((resolve, reject) => {
+      comparisonPending.current = {
+        actionId,
+        op: command.op,
+        dispatchAtMs,
+        dispatchWallUtc,
+        resolve,
+        reject,
+      };
+      try {
+        switch (command.op) {
+          case "reset": {
+            motion.current.dispose();
+            document
+              .querySelectorAll<HTMLElement>(".workspace-grid [data-block]")
+              .forEach((el) => {
+                el.style.position = "";
+                el.style.left = "";
+                el.style.top = "";
+                el.style.width = "";
+                el.style.height = "";
+                el.style.zIndex = "";
+              });
+            expandedRef.current = null;
+            setExpanded(null);
+            burstCounter.current = 0;
+            streamCounter.current = 0;
+            comparisonEventCounter.current = 0;
+            setOrder([...initialOrder]);
+            setMessages(fixture.messages);
+            setEvents(fixture.events);
+            setSelectedMessageId("");
+            setVela("idle");
+            setQuality("cinematic");
+            setReduced(false);
+            setAtmosphereCadence("fixed60");
+            const chat =
+              document.querySelector<HTMLElement>("[data-chat-scroll]");
+            if (chat) chat.scrollTop = 0;
+            const page = document.querySelector<HTMLElement>(".main-scroll");
+            if (page) page.scrollTop = 0;
+            break;
+          }
+          case "scrollChat": {
+            if (command.index >= messages.length)
+              throw new Error("Message index exceeds fixture");
+            const chat =
+              document.querySelector<HTMLElement>("[data-chat-scroll]");
+            if (!chat) throw new Error("Conversation view unavailable");
+            chat.scrollTop = command.index * 84;
+            break;
+          }
+          case "selectMessage": {
+            if (command.index >= messages.length)
+              throw new Error("Message index exceeds fixture");
+            setSelectedMessageId(messages[command.index].id);
+            const chat =
+              document.querySelector<HTMLElement>("[data-chat-scroll]");
+            if (chat) chat.scrollTop = command.index * 84;
+            break;
+          }
+          case "appendMessages": {
+            const first = streamCounter.current;
+            streamCounter.current += command.count;
+            const extra = Array.from({ length: command.count }, (_, i) => {
+              const n = first + i + 1;
+              return {
+                id: `stream-${String(n).padStart(5, "0")}`,
+                author: n % 2 ? "Vela · fixture" : "You",
+                topic: "Deterministic stream",
+                time: new Date(
+                  Date.UTC(2026, 10, 1, 19, 0, 0) + n * 100,
+                ).toISOString(),
+                text: `Synthetic streaming message ${n}; source fixture seed 20261101.`,
+              };
+            });
+            setMessages((old) => [...old, ...extra]);
+            break;
+          }
+          case "appendEvents": {
+            const first = comparisonEventCounter.current;
+            comparisonEventCounter.current += command.count;
+            const extra = Array.from({ length: command.count }, (_, i) => {
+              const n = first + i + 1;
+              return {
+                id: `comparison-event-${String(n).padStart(5, "0")}`,
+                kind: "Observed fixture",
+                time: new Date(
+                  Date.UTC(2026, 10, 1, 18, 0, 0) + n * 100,
+                ).toISOString(),
+                text: `Deterministic synthetic event ${n}; source fixture seed 20261101.`,
+              };
+            });
+            motion.current.note(
+              "semantic",
+              "activity",
+              `comparison append ${command.count}`,
+            );
+            setEvents((old) => [...old, ...extra]);
+            break;
+          }
+          case "burstEvents":
+            eventBurst();
+            break;
+          case "swapBlocks": {
+            captureRects();
+            motion.current.note(
+              "interaction",
+              command.first,
+              `comparison swap with ${command.second}`,
+            );
+            setOrder((old) => {
+              const next = [...old],
+                a = next.indexOf(command.first),
+                b = next.indexOf(command.second);
+              [next[a], next[b]] = [next[b], next[a]];
+              return next;
+            });
+            break;
+          }
+          case "nudgeBlock": {
+            const at = order.indexOf(command.block);
+            if (at + command.delta < 0 || at + command.delta >= order.length)
+              throw new Error("Nudge exceeds layout boundary");
+            nudge(command.block, command.delta);
+            break;
+          }
+          case "expandBlock":
+            if (expandedRef.current !== command.block)
+              toggleExpand(command.block);
+            break;
+          case "collapseBlock":
+            if (expandedRef.current === command.block)
+              toggleExpand(command.block);
+            break;
+          case "setVela":
+            setVela(command.state);
+            break;
+          case "setQuality":
+            setQuality(command.quality);
+            break;
+          case "setAtmosphereCadence":
+            setAtmosphereCadence(command.cadence);
+            break;
+          case "setReduced":
+            setReduced(command.reduced);
+            break;
+        }
+        setComparisonRevision((n) => n + 1);
+      } catch (error) {
+        comparisonPending.current = null;
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+  useLayoutEffect(() => {
+    if (comparisonMode)
+      window.__labComparison = { dispatch: dispatchComparison };
+  });
   const toggleTask = (id: string) =>
     setChecked((old) =>
       old.includes(id) ? old.filter((x) => x !== id) : [...old, id],
@@ -647,10 +981,16 @@ export default function App() {
         return (
           <>
             <div className="block-intro">
-              <span className="pill">2,000 selectable messages</span>
+              <span className="pill">
+                {messages.length.toLocaleString()} selectable messages
+              </span>
               <span>Orion · design dialogue</span>
             </div>
-            <VirtualMessages messages={fixture.messages} />
+            <VirtualMessages
+              messages={messages}
+              selected={selectedMessageId}
+              onSelect={setSelectedMessageId}
+            />
           </>
         );
       case "activity":

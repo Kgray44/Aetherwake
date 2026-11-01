@@ -5,3 +5,4 @@ src/fixture.json
 evidence/*.json
 *.log
 .runtime/
+.release/
