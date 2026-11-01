@@ -4,6 +4,8 @@
 
 The goal is not to wrap Codex in a prettier chat window. Aerynth should combine first-class Codex conversations with spatial workspaces, project knowledge, notes, specialist agents, orchestration, universal contextual commands, observability, and adaptive context efficiency.
 
+The owner-selected **Aerynth mark** is documented in [Aerynth Brand Identity](docs/design/AERYNTH-BRAND-IDENTITY.md). Its exact raster master is approved, while the binary repository upload and app integration are still pending.
+
 **Visual experience is a product requirement:** the *Liquid Intelligence* design language calls for cinematic fluid motion, layered glass materials, meaningful particles, precise micro-interactions, and adaptive graphics that remain responsive under system load.
 
 ## Foundational principles
@@ -37,6 +39,7 @@ The governing foundation lives in [`governance/`](governance/README.md), beginni
 | [`AGENTS.md`](AGENTS.md) | Agent instructions, charter routing, and collaboration safeguards |
 | [`governance/`](governance/README.md) | Binding constitution, domain charters, and publication/acceptance registry |
 | `docs/vision/` | Intended experience and product narrative |
+| [`assets/brand/`](assets/brand/README.md) | Approved product visual assets and derivative inventory |
 | `docs/architecture/` | System design and technical architecture |
 | `docs/design/` | Interaction, materials, motion, and visual explorations |
 | `docs/research/` | Benchmarks, research, and alternatives |
