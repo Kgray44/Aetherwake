@@ -27,7 +27,7 @@ for(const f of fixtures.cases){
  const context=buildContext({config,registry,index,task:f.task,paths:f.paths,maxSections:2});
  const covered=new Set(context.selected.flatMap(s=>
   s.mode==="section"?s.requirements:index.documents.find(d=>d.id===s.id)?.sections.flatMap(t=>t.requirementIds)??[]
- ).concat(context.dependencies.map(x=>x.id)));
+ ).concat(context.normative.map(x=>x.id),context.dependencies.map(x=>x.id)));
  const essential=[...new Set(f.essential)],critical=[...new Set(f.critical)];
  const misses=essential.filter(id=>!covered.has(id));
  const missedCritical=critical.filter(id=>!covered.has(id));
