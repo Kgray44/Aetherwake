@@ -317,6 +317,8 @@ The application opens into darkness, but not emptiness. A few fine points of lig
 
 A subtle illumination gathers. The Aerynth mark forms with precision rather than spectacle for its own sake. Vela's presence resolves nearby, distinctly visible yet not dominating the viewport.
 
+The mark's **owner-selected visual identity** is recorded in [Aerynth Brand Identity](../design/AERYNTH-BRAND-IDENTITY.md); the image master, its variants, and any actual launch animation have separate implementation and verification statuses.
+
 The first interactive surfaces emerge naturally from the environment. The user sees the essential path forward immediately: begin a conversation, open an existing project, capture a note, or explore the home environment.
 
 The interface does not require a lengthy configuration wizard before offering value. Setup is progressive, with capabilities disclosed honestly. If Codex authentication or an integration has not been configured, the application can still provide the organizational and local features that are available.
