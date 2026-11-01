@@ -1,0 +1,327 @@
+{
+  "schema_version": 1,
+  "always": [
+    "00"
+  ],
+  "charters": {
+    "10": "governance/10-AI-EXECUTION-PROFILER.md",
+    "11": "governance/11-TIMELINES-AND-REPLAY.md",
+    "12": "governance/12-CODEX-EXECUTION-AND-INTEGRATIONS.md",
+    "13": "governance/13-PLATFORM-PERFORMANCE-AND-DISPLAYS.md",
+    "14": "governance/14-TRUST-PRIVACY-AND-AUTONOMY.md",
+    "15": "governance/15-QUALITY-VERIFICATION-AND-ACCEPTANCE.md",
+    "16": "governance/16-ENGINEERING-AND-DELIVERY.md",
+    "00": "governance/00-AETHERWAKE-CONSTITUTION.md",
+    "01": "governance/01-EXPERIENCE-AND-INTERACTION.md",
+    "02": "governance/02-LIQUID-INTELLIGENCE-AND-MOTION.md",
+    "03": "governance/03-PROJECTS-WORKSPACES-AND-RESOURCES.md",
+    "04": "governance/04-CONVERSATIONS-AND-CONNECTED-BRANCHES.md",
+    "05": "governance/05-AGENTS-TASKS-AND-WORKFLOWS.md",
+    "06": "governance/06-VELA-INTELLIGENCE-AND-ADAPTATION.md",
+    "07": "governance/07-NOTES-KNOWLEDGE-AND-THOUGHT-STREAM.md",
+    "08": "governance/08-CONTEXT-INTELLIGENCE-AND-MEMORY.md",
+    "09": "governance/09-INTELLIGENCE-STREAMS-AND-OBSERVABILITY.md"
+  },
+  "signals": {
+    "10": {
+      "terms": [
+        "profiler",
+        "token usage",
+        "token telemetry",
+        "execution time",
+        "latency",
+        "usage analytics",
+        "context occupancy",
+        "token budget"
+      ],
+      "path_prefixes": [
+        "src/profiler/",
+        "src/telemetry/",
+        "packages/profiler/"
+      ]
+    },
+    "11": {
+      "terms": [
+        "timeline",
+        "replay",
+        "historical playback",
+        "gantt",
+        "schedule estimate",
+        "milestone"
+      ],
+      "path_prefixes": [
+        "src/timelines/",
+        "src/replay/",
+        "packages/timeline/"
+      ]
+    },
+    "12": {
+      "terms": [
+        "codex",
+        "app server",
+        "mcp",
+        "ssh",
+        "backend integration",
+        "plugin",
+        "git integration",
+        "model provider",
+        "terminal"
+      ],
+      "path_prefixes": [
+        "src/integrations/",
+        "src/codex/",
+        "src/backends/",
+        "packages/codex/"
+      ]
+    },
+    "13": {
+      "terms": [
+        "rendering",
+        "gpu",
+        "performance",
+        "particle",
+        "frame time",
+        "display",
+        "multi monitor",
+        "battery",
+        "electron",
+        "tauri",
+        "desktop shell"
+      ],
+      "path_prefixes": [
+        "src/rendering/",
+        "src/platform/",
+        "src/displays/",
+        "packages/platform/"
+      ]
+    },
+    "14": {
+      "terms": [
+        "contextual command",
+        "selection",
+        "permission",
+        "authorization",
+        "security",
+        "privacy",
+        "destructive",
+        "delete",
+        "move files",
+        "filesystem mutation",
+        "sensitive data",
+        "autonomy"
+      ],
+      "path_prefixes": [
+        "src/security/",
+        "src/permissions/",
+        "src/privacy/",
+        "packages/security/"
+      ]
+    },
+    "15": {
+      "terms": [
+        "implement",
+        "build",
+        "fix",
+        "test",
+        "verify",
+        "acceptance",
+        "refactor",
+        "deploy",
+        "release",
+        "benchmark",
+        "optimize",
+        "code review",
+        "change"
+      ],
+      "path_prefixes": [
+        "src/",
+        "apps/",
+        "packages/",
+        "scripts/",
+        "tests/"
+      ]
+    },
+    "16": {
+      "terms": [
+        "engineering",
+        "delivery",
+        "release",
+        "ci cd",
+        "build pipeline",
+        "contribution",
+        "pull request",
+        "milestone planning"
+      ],
+      "path_prefixes": [
+        ".github/workflows/",
+        "docs/engineering/",
+        "plans/"
+      ]
+    },
+    "01": {
+      "terms": [
+        "interaction",
+        "user interface",
+        "ui",
+        "ux",
+        "contextual command",
+        "selection",
+        "navigation",
+        "command palette",
+        "focus mode",
+        "universal search",
+        "welcome back"
+      ],
+      "path_prefixes": [
+        "src/ui/",
+        "src/interaction/",
+        "apps/desktop/ui/",
+        "packages/ui/"
+      ]
+    },
+    "02": {
+      "terms": [
+        "motion",
+        "particle",
+        "animation",
+        "liquid intelligence",
+        "shader",
+        "glass",
+        "rendering",
+        "cinematic",
+        "motion coordinator"
+      ],
+      "path_prefixes": [
+        "src/motion/",
+        "src/rendering/",
+        "src/graphics/",
+        "packages/motion/",
+        "packages/rendering/"
+      ]
+    },
+    "03": {
+      "terms": [
+        "workspace",
+        "block",
+        "project organization",
+        "resource",
+        "collection",
+        "folder",
+        "relationship",
+        "layout",
+        "contextual command",
+        "selection",
+        "dashboard"
+      ],
+      "path_prefixes": [
+        "src/workspaces/",
+        "src/resources/",
+        "src/projects/",
+        "packages/workspace/"
+      ]
+    },
+    "04": {
+      "terms": [
+        "chat",
+        "conversation",
+        "connected branch",
+        "fork",
+        "thread history",
+        "message",
+        "branch sharing"
+      ],
+      "path_prefixes": [
+        "src/chat/",
+        "src/conversations/",
+        "src/branches/",
+        "packages/conversations/"
+      ]
+    },
+    "05": {
+      "terms": [
+        "agent",
+        "delegation",
+        "orchestration",
+        "workflow",
+        "task planning",
+        "task assignment",
+        "handoff",
+        "multi agent"
+      ],
+      "path_prefixes": [
+        "src/agents/",
+        "src/tasks/",
+        "src/workflows/",
+        "packages/orchestration/"
+      ]
+    },
+    "06": {
+      "terms": [
+        "vela",
+        "initiative engine",
+        "assistant",
+        "adaptation",
+        "attention",
+        "notification",
+        "proactive",
+        "habit",
+        "learned preference"
+      ],
+      "path_prefixes": [
+        "src/assistant/",
+        "src/vela/",
+        "src/initiative/",
+        "packages/assistant/"
+      ]
+    },
+    "07": {
+      "terms": [
+        "note",
+        "quick capture",
+        "thought stream",
+        "project knowledge",
+        "knowledge document",
+        "annotation"
+      ],
+      "path_prefixes": [
+        "src/notes/",
+        "src/knowledge/",
+        "packages/knowledge/"
+      ]
+    },
+    "08": {
+      "terms": [
+        "context intelligence",
+        "cie",
+        "compaction",
+        "context retrieval",
+        "context window",
+        "memory decay",
+        "persistent task memory",
+        "token efficiency",
+        "semantic retrieval"
+      ],
+      "path_prefixes": [
+        "src/context/",
+        "src/memory/",
+        "packages/context/"
+      ]
+    },
+    "09": {
+      "terms": [
+        "intelligence stream",
+        "event bus",
+        "observable event",
+        "observability",
+        "trace",
+        "tool event",
+        "agent activity"
+      ],
+      "path_prefixes": [
+        "src/observability/",
+        "src/events/",
+        "packages/observability/"
+      ]
+    }
+  }
+}
