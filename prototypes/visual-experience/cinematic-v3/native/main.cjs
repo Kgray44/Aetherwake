@@ -310,6 +310,132 @@ function admitStorage(estimatedCBytes) {
 async function memoryProbe() {
   const reserve = admitStorage(256 * 1024 * 1024);
   const durationMs = process.argv.includes("--soak-seconds=90") ? 90000 : 60000;
+  const probeStartedAt = Date.now();
+  const observeRuntime = async () => ({
+    native: {
+      visible: win.isVisible(),
+      minimized: win.isMinimized(),
+      contentBounds: {
+        width: win.getContentBounds().width,
+        height: win.getContentBounds().height,
+      },
+    },
+    document: await evaluate(
+      "(()=>{const s=window.__aerynth.snapshot();return {hidden:document.hidden,visibilityState:document.visibilityState,active:s.active,visualClockMs:s.visualClock,framesRendered:s.gpu?.framesRendered??0,callbacks:s.metrics.callbacks,draws:s.metrics.draws,policy:s.metrics.policy};})()",
+    ),
+  });
+  const visibleRuntime = (observation) =>
+    observation.native.visible &&
+    !observation.native.minimized &&
+    observation.native.contentBounds.width > 0 &&
+    observation.native.contentBounds.height > 0 &&
+    !observation.document.hidden;
+  await evaluate(
+    "window.__aerynth.home();window.__aerynth.setEnvironmentPhase(null);window.__aerynth.setAmbient(true);window.__aerynth.setReduced(false);document.querySelector('#quiet').checked=false;document.querySelector('#quiet').dispatchEvent(new Event('change'))",
+  );
+  const preflight = {
+    passed: false,
+    activatedOwnedWindow: false,
+    observations: [],
+    interventions: [],
+  };
+  const initial = await observeRuntime();
+  preflight.observations.push({ elapsedMs: 0, ...initial });
+  while (Date.now() - probeStartedAt < 8000) {
+    const current = await observeRuntime();
+    if (current.native.minimized) {
+      win.restore();
+      preflight.interventions.push({
+        elapsedMs: Date.now() - probeStartedAt,
+        action: "restore owned probe window",
+      });
+    }
+    if (!current.native.visible || current.document.hidden) {
+      win.showInactive();
+      preflight.interventions.push({
+        elapsedMs: Date.now() - probeStartedAt,
+        action: "showInactive owned probe window",
+      });
+    }
+    if (
+      !preflight.activatedOwnedWindow &&
+      Date.now() - probeStartedAt >= 1500 &&
+      current.document.framesRendered <= initial.document.framesRendered
+    ) {
+      win.show();
+      win.focus();
+      preflight.activatedOwnedWindow = true;
+      preflight.interventions.push({
+        elapsedMs: Date.now() - probeStartedAt,
+        action:
+          "activate owned probe window once after observed non-rendering startup; measurement begins only after preflight and warm-up",
+      });
+    }
+    const visible = await observeRuntime();
+    if (
+      visibleRuntime(visible) &&
+      (!visible.document.active ||
+        visible.document.framesRendered <= initial.document.framesRendered)
+    ) {
+      // Only reconcile this explicit visible-window lab after observing native
+      // visibility, positive bounds and an unhidden document. Never override
+      // a hidden/minimized product visibility gate to manufacture activity.
+      await evaluate("window.__aerynth.setActive(true)");
+      preflight.interventions.push({
+        elapsedMs: Date.now() - probeStartedAt,
+        action:
+          "reassert controller active after observed visible/unhidden window",
+      });
+    }
+    await delay(250);
+    const observed = await observeRuntime();
+    preflight.observations.push({
+      elapsedMs: Date.now() - probeStartedAt,
+      ...observed,
+    });
+    if (
+      visibleRuntime(observed) &&
+      observed.document.active &&
+      observed.document.framesRendered > initial.document.framesRendered &&
+      observed.document.callbacks > initial.document.callbacks &&
+      observed.document.visualClockMs > initial.document.visualClockMs
+    ) {
+      preflight.passed = true;
+      break;
+    }
+  }
+  preflight.durationMs = Date.now() - probeStartedAt;
+  if (!preflight.passed) {
+    const failed = {
+      kind: "Failed fresh-process probe preflight; not active-runtime memory evidence",
+      status: "failed-preflight",
+      sourceRevisionAtLaunch,
+      sourceHashesAtLaunch,
+      buildAssets: buildAssetsAtLaunch,
+      buildAssetHashes: buildAssetHashesAtLaunch,
+      capturedAtUTC: new Date().toISOString(),
+      requestedDurationMs: durationMs,
+      durationMs: 0,
+      totalWallDurationMs: preflight.durationMs,
+      preflight,
+      phases: [],
+      samples: [],
+      reserve,
+      errors,
+      failure:
+        "Visible dimensions, unhidden/active document, advancing rendered frames, callbacks and visual clock were not all observed within eight seconds.",
+    };
+    const output = path.join(runtime, `memory-v3-5-${Date.now()}.json`);
+    await fs.writeFile(output, JSON.stringify(failed, null, 2), { flag: "wx" });
+    console.error(
+      JSON.stringify({ status: failed.status, outputPath: output, preflight }),
+    );
+    throw new Error(
+      "Memory probe preflight failed; failed receipt preserved, no active-runtime memory result claimed",
+    );
+  }
+  const initialVisibleBounds =
+    preflight.observations.at(-1).native.contentBounds;
   const startedAt = Date.now();
   const deadline = startedAt + durationMs;
   const phaseDuration = (durationMs - 3000) / 7;
@@ -350,17 +476,16 @@ async function memoryProbe() {
       minimized: true,
     },
   ];
-  await evaluate(
-    "window.__aerynth.setEnvironmentPhase(null);window.__aerynth.setActive(true)",
-  );
   await delay(3000);
   const samples = [],
-    phaseReports = [];
+    phaseReports = [],
+    validationFailures = [];
   app.getAppMetrics();
   for (const phase of phases) {
     await evaluate(phase.setup);
     if (phase.minimized) win.minimize();
     await evaluate("window.__aerynth.resetMetrics()");
+    const runtimeBefore = await observeRuntime();
     const phaseStartedAt = Date.now(),
       phaseEnd = Math.min(deadline, phaseStartedAt + phaseDuration);
     const phaseSamples = [];
@@ -386,12 +511,46 @@ async function memoryProbe() {
           0,
         ),
         processCount: metrics.length,
+        runtime: await observeRuntime(),
       };
       samples.push(sample);
       phaseSamples.push(sample);
       iteration++;
     }
     const state = await evaluate("window.__aerynth.snapshot()");
+    const runtimeAfter = await observeRuntime();
+    const intendedActive = !phase.minimized && phase.name !== "quiet-static";
+    const observedActivity = {
+      renderedFrames:
+        runtimeAfter.document.framesRendered -
+        runtimeBefore.document.framesRendered,
+      visualClockAdvanceMs:
+        runtimeAfter.document.visualClockMs -
+        runtimeBefore.document.visualClockMs,
+      draws: state.metrics.draws,
+      callbacks: state.metrics.callbacks,
+    };
+    const activityValid =
+      !intendedActive ||
+      (visibleRuntime(runtimeBefore) &&
+        visibleRuntime(runtimeAfter) &&
+        runtimeBefore.document.active &&
+        runtimeAfter.document.active &&
+        phaseSamples.length > 0 &&
+        phaseSamples.every(
+          (sample) =>
+            visibleRuntime(sample.runtime) && sample.runtime.document.active,
+        ) &&
+        observedActivity.renderedFrames > 0 &&
+        observedActivity.visualClockAdvanceMs > 0 &&
+        observedActivity.draws > 0 &&
+        observedActivity.callbacks > 0);
+    if (!activityValid)
+      validationFailures.push({
+        phase: phase.name,
+        reason:
+          "Intended active phase did not retain visible/unhidden/active state and advance actual rendered frames, submissions, callbacks and visual clock.",
+      });
     phaseReports.push({
       name: phase.name,
       durationMs: Date.now() - phaseStartedAt,
@@ -401,6 +560,11 @@ async function memoryProbe() {
       celestialStudy: state.celestialStudy ?? null,
       instrumentStudy: state.instrumentStudy ?? null,
       environmentPhaseOverrideSeconds: state.environmentPhase ?? null,
+      intendedActive,
+      activityValid,
+      observedActivity,
+      runtimeBefore,
+      runtimeAfter,
       gpu: state.gpu,
       firstWorkingSetKiBSum: phaseSamples[0]?.workingSetKiBSum ?? null,
       lastWorkingSetKiBSum: phaseSamples.at(-1)?.workingSetKiBSum ?? null,
@@ -409,10 +573,14 @@ async function memoryProbe() {
           phaseSamples[0].workingSetKiBSum
         : null,
     });
-    if (Date.now() >= deadline) break;
+    if (!activityValid || Date.now() >= deadline) break;
   }
   const report = {
     kind: "Fresh-process native memory probe with no screenshots, videos or forced GC",
+    status:
+      validationFailures.length || errors.length
+        ? "failed-active-runtime"
+        : "measured-active-runtime",
     sourceRevisionAtLaunch,
     sourceHashesAtLaunch,
     buildAssets: buildAssetsAtLaunch,
@@ -420,6 +588,9 @@ async function memoryProbe() {
     capturedAtUTC: new Date().toISOString(),
     requestedDurationMs: durationMs,
     durationMs: Date.now() - startedAt,
+    totalWallDurationMs: Date.now() - probeStartedAt,
+    preflight,
+    validationFailures,
     versions: {
       electron: process.versions.electron,
       chrome: process.versions.chrome,
@@ -427,10 +598,8 @@ async function memoryProbe() {
     },
     conditions: {
       tier: "balanced",
-      contentBounds: {
-        width: win.getContentBounds().width,
-        height: win.getContentBounds().height,
-      },
+      contentBounds: initialVisibleBounds,
+      finalNativeState: await observeRuntime(),
       newDedicatedProfile: true,
       renderWhileVisible: true,
       screenshotCount: 0,
@@ -464,7 +633,10 @@ async function memoryProbe() {
       2,
     ),
   );
-  if (errors.length) app.exit(1);
+  if (errors.length || validationFailures.length)
+    throw new Error(
+      "Memory probe failed active-runtime validation; failed receipt preserved",
+    );
 }
 async function verify() {
   const storageReceipts = [admitStorage(256 * 1024 * 1024)];
