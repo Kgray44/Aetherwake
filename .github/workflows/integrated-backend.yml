@@ -1,0 +1,30 @@
+name: Integrated backend prototype
+on:
+  pull_request:
+    paths:
+      - 'prototypes/integrated-backend/**'
+      - 'prototypes/workspace-kernel/**'
+      - 'prototypes/connected-conversations/**'
+      - 'prototypes/codex-bridge/**'
+      - '.github/workflows/integrated-backend.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+          cache: npm
+          cache-dependency-path: prototypes/integrated-backend/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+        working-directory: prototypes/integrated-backend
+      - run: npm run typecheck
+        working-directory: prototypes/integrated-backend
+      - run: npm test
+        working-directory: prototypes/integrated-backend
+      - run: node --test prototypes/workspace-kernel/tests/*.test.mts prototypes/connected-conversations/test/*.test.ts prototypes/codex-bridge/tests/*.test.ts
+      - run: node scripts/governance-router.mjs --validate

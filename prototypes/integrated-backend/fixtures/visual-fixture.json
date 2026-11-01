@@ -1,0 +1,245 @@
+{
+  "contract": "aerynth.integration@0.1",
+  "synthetic": true,
+  "label": "SIMULATED rendering fixture — no real provider execution",
+  "resource": {
+    "resourceId": "00000000-0000-4000-8000-000000000001",
+    "title": "Synthetic conversation",
+    "taskId": null
+  },
+  "blocks": [
+    {
+      "id": "synthetic-block-a",
+      "resource_id": "00000000-0000-4000-8000-000000000001",
+      "workspace_id": "synthetic-workspace-a"
+    },
+    {
+      "id": "synthetic-block-b",
+      "resource_id": "00000000-0000-4000-8000-000000000001",
+      "workspace_id": "synthetic-workspace-b"
+    }
+  ],
+  "capabilities": {
+    "providerId": "fixture-codex",
+    "mock": true,
+    "authentication": "available",
+    "models": [
+      "fixture-model"
+    ],
+    "catalogOnly": true,
+    "nativeFork": false,
+    "chatgptHistory": false
+  },
+  "execution": {
+    "id": "00000000-0000-4000-8000-000000000002",
+    "resourceId": "00000000-0000-4000-8000-000000000001",
+    "providerId": "fixture-codex",
+    "state": "provider_completed",
+    "binding": {
+      "providerId": "fixture-codex",
+      "instanceId": "fixture",
+      "accountScope": "synthetic",
+      "nativeThreadId": "synthetic-thread",
+      "nativeSessionId": null
+    },
+    "turnId": "synthetic-turn",
+    "commandId": "synthetic-command",
+    "startedAt": "2026-01-01T00:00:01.000Z",
+    "endedAt": "2026-01-01T00:00:04.000Z",
+    "taskVerified": false
+  },
+  "alternateStates": [
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "resourceId": "00000000-0000-4000-8000-000000000001",
+      "providerId": "fixture-codex",
+      "state": "dispatching",
+      "binding": {
+        "providerId": "fixture-codex",
+        "instanceId": "fixture",
+        "accountScope": "synthetic",
+        "nativeThreadId": "synthetic-thread",
+        "nativeSessionId": null
+      },
+      "turnId": "synthetic-turn",
+      "commandId": "synthetic-command",
+      "startedAt": "2026-01-01T00:00:01.000Z",
+      "endedAt": null,
+      "taskVerified": false
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "resourceId": "00000000-0000-4000-8000-000000000001",
+      "providerId": "fixture-codex",
+      "state": "running",
+      "binding": {
+        "providerId": "fixture-codex",
+        "instanceId": "fixture",
+        "accountScope": "synthetic",
+        "nativeThreadId": "synthetic-thread",
+        "nativeSessionId": null
+      },
+      "turnId": "synthetic-turn",
+      "commandId": "synthetic-command",
+      "startedAt": "2026-01-01T00:00:01.000Z",
+      "endedAt": null,
+      "taskVerified": false
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "resourceId": "00000000-0000-4000-8000-000000000001",
+      "providerId": "fixture-codex",
+      "state": "interrupted",
+      "binding": {
+        "providerId": "fixture-codex",
+        "instanceId": "fixture",
+        "accountScope": "synthetic",
+        "nativeThreadId": "synthetic-thread",
+        "nativeSessionId": null
+      },
+      "turnId": "synthetic-turn",
+      "commandId": "synthetic-command",
+      "startedAt": "2026-01-01T00:00:01.000Z",
+      "endedAt": null,
+      "taskVerified": false
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "resourceId": "00000000-0000-4000-8000-000000000001",
+      "providerId": "fixture-codex",
+      "state": "failed",
+      "binding": {
+        "providerId": "fixture-codex",
+        "instanceId": "fixture",
+        "accountScope": "synthetic",
+        "nativeThreadId": "synthetic-thread",
+        "nativeSessionId": null
+      },
+      "turnId": "synthetic-turn",
+      "commandId": "synthetic-command",
+      "startedAt": "2026-01-01T00:00:01.000Z",
+      "endedAt": null,
+      "taskVerified": false
+    },
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "resourceId": "00000000-0000-4000-8000-000000000001",
+      "providerId": "fixture-codex",
+      "state": "unknown",
+      "binding": {
+        "providerId": "fixture-codex",
+        "instanceId": "fixture",
+        "accountScope": "synthetic",
+        "nativeThreadId": "synthetic-thread",
+        "nativeSessionId": null
+      },
+      "turnId": "synthetic-turn",
+      "commandId": "synthetic-command",
+      "startedAt": "2026-01-01T00:00:01.000Z",
+      "endedAt": null,
+      "taskVerified": false
+    }
+  ],
+  "events": [
+    {
+      "schemaVersion": 1,
+      "eventId": "synthetic-event-1",
+      "cursor": 1,
+      "resourceId": "00000000-0000-4000-8000-000000000001",
+      "executionId": "00000000-0000-4000-8000-000000000002",
+      "providerId": "fixture-codex",
+      "providerInstanceId": "fixture",
+      "connectionId": "synthetic-connection",
+      "nativeEventId": null,
+      "nativeSequence": 1,
+      "threadId": "synthetic-thread",
+      "turnId": "synthetic-turn",
+      "correlationId": "synthetic-command",
+      "causationId": "00000000-0000-4000-8000-000000000002",
+      "receivedAt": "2026-01-01T00:00:01.000Z",
+      "providerTime": null,
+      "providerTimeSource": null,
+      "type": "turn/started",
+      "classification": "simulated",
+      "status": null,
+      "payload": {
+        "redacted": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventId": "synthetic-event-2",
+      "cursor": 2,
+      "resourceId": "00000000-0000-4000-8000-000000000001",
+      "executionId": "00000000-0000-4000-8000-000000000002",
+      "providerId": "fixture-codex",
+      "providerInstanceId": "fixture",
+      "connectionId": "synthetic-connection",
+      "nativeEventId": null,
+      "nativeSequence": 2,
+      "threadId": "synthetic-thread",
+      "turnId": "synthetic-turn",
+      "correlationId": "synthetic-command",
+      "causationId": "00000000-0000-4000-8000-000000000002",
+      "receivedAt": "2026-01-01T00:00:02.000Z",
+      "providerTime": null,
+      "providerTimeSource": null,
+      "type": "item/agentMessage/delta",
+      "classification": "simulated",
+      "status": null,
+      "payload": {
+        "redacted": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventId": "synthetic-event-3",
+      "cursor": 3,
+      "resourceId": "00000000-0000-4000-8000-000000000001",
+      "executionId": "00000000-0000-4000-8000-000000000002",
+      "providerId": "fixture-codex",
+      "providerInstanceId": "fixture",
+      "connectionId": "synthetic-connection",
+      "nativeEventId": null,
+      "nativeSequence": 3,
+      "threadId": "synthetic-thread",
+      "turnId": "synthetic-turn",
+      "correlationId": "synthetic-command",
+      "causationId": "00000000-0000-4000-8000-000000000002",
+      "receivedAt": "2026-01-01T00:00:03.000Z",
+      "providerTime": null,
+      "providerTimeSource": null,
+      "type": "stream/gap-or-reorder",
+      "classification": "inferred",
+      "status": null,
+      "payload": {
+        "redacted": true
+      }
+    },
+    {
+      "schemaVersion": 1,
+      "eventId": "synthetic-event-4",
+      "cursor": 4,
+      "resourceId": "00000000-0000-4000-8000-000000000001",
+      "executionId": "00000000-0000-4000-8000-000000000002",
+      "providerId": "fixture-codex",
+      "providerInstanceId": "fixture",
+      "connectionId": "synthetic-connection",
+      "nativeEventId": null,
+      "nativeSequence": 4,
+      "threadId": "synthetic-thread",
+      "turnId": "synthetic-turn",
+      "correlationId": "synthetic-command",
+      "causationId": "00000000-0000-4000-8000-000000000002",
+      "receivedAt": "2026-01-01T00:00:04.000Z",
+      "providerTime": null,
+      "providerTimeSource": null,
+      "type": "turn/completed",
+      "classification": "simulated",
+      "status": "completed",
+      "payload": {
+        "redacted": true
+      }
+    }
+  ]
+}
