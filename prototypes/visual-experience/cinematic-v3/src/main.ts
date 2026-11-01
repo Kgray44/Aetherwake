@@ -2,6 +2,7 @@ import "./style.css";
 import { motionPolicy } from "./policy";
 import { deriveSceneState } from "./scene-state";
 import { registerScene, retargetScene, sceneWeights } from "./scene-transition";
+import { overlappingSurfaceIds } from "./material-occlusion";
 import type { ArchitectureConcept } from "./orbital-architecture";
 import { installConversation } from "./conversation";
 import {
@@ -837,8 +838,14 @@ declare global {
 window.aerynthHost?.onActive(lifecycle);
 
 function renderDOM() {
-  for (const [id, el] of elements) {
-    const p = motion.pose(id);
+  const projected = order.map((id) => ({ id, ...motion.pose(id) }));
+  const overlaps = overlappingSurfaceIds(projected);
+  for (const p of projected) {
+    const id = p.id,
+      el = elements.get(id)!;
+    const materialOverlap = String(overlaps.has(id));
+    if (el.dataset.materialOverlap !== materialOverlap)
+      el.dataset.materialOverlap = materialOverlap;
     const rest = base(id);
     const openHeight = Math.max(250, innerHeight - 310);
     const unfold = clamp(

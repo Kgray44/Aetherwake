@@ -20,6 +20,7 @@ const sourceHashesAtLaunch = Object.fromEntries(
     "src/renderer.ts",
     "src/orbital-architecture.ts",
     "src/scene-transition.ts",
+    "src/material-occlusion.ts",
     "src/motion.ts",
     "src/style.css",
     "src/workloads.ts",
@@ -27,6 +28,7 @@ const sourceHashesAtLaunch = Object.fromEntries(
     "src/store.ts",
     "src/policy.ts",
     "package-lock.json",
+    "index.html",
   ].map((name) => [
     name,
     createHash("sha256")
@@ -639,6 +641,25 @@ async function verify() {
       (await snap()).order.join("|") === s.order.join("|"),
     labelClearances,
   );
+  await evaluate("window.__aerynth.move('conversation-tidal',2)");
+  await delay(900);
+  await shot("overlapping-materials");
+  const overlapReadability =
+    await evaluate(`Array.from(document.querySelectorAll('.folio[data-material-overlap="true"]')).map(el => ({
+    id: el.dataset.resource,
+    overlap: getComputedStyle(el).getPropertyValue('--material-overlap').trim(),
+    background: getComputedStyle(el).backgroundImage
+  }))`);
+  check(
+    "overlapping DOM resources retain opaque material backing",
+    overlapReadability.length >= 2 &&
+      overlapReadability.every(
+        (item) => item.overlap === "1" && !item.background.includes("rgba("),
+      ),
+    overlapReadability,
+  );
+  await evaluate("document.querySelector('#undo').click()");
+  await delay(700);
   await evaluate(
     `window.__verificationArticle=document.querySelector('[data-resource="${first}"]');window.__verificationEditor=window.__verificationArticle.querySelector('textarea');`,
   );
