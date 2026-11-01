@@ -7,10 +7,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$prototypeRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\..\..'))
 $output = [IO.Path]::GetFullPath($OutFile)
-if ($output.StartsWith($prototypeRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-  throw 'Raw process traces must be written outside the public prototype/repository.'
+if ($output.StartsWith($repositoryRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+  throw 'Raw process traces must be written outside the public repository.'
 }
 if (-not (Test-Path -LiteralPath (Split-Path -Parent $output) -PathType Container)) { throw 'Output directory does not exist.' }
 
