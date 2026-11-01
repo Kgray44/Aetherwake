@@ -1,181 +1,73 @@
 {
-  "schemaVersion": 1,
-  "description": "Conservative engineering risk facets. These are curated context-routing guardrails, not new normative requirements or a replacement for owner-approved charter authority. A matching facet selects complete source sections.",
-  "facets": [
-    {
-      "id": "resource-mutation",
-      "any": [
-        "move files",
-        "filesystem mutation",
-        "move everything",
-        "bulk movement",
-        "destination"
-      ],
-      "sections": {
-        "14": [
-          "Contextual Command"
-        ],
-        "15": [
-          "Interaction, contextual selection"
-        ],
-        "01": [
-          "Semantic Selection"
-        ],
-        "03": [
-          "Resource linking"
-        ]
-      }
-    },
-    {
-      "id": "visual-resource-pressure",
-      "any": [
-        "particle",
-        "rendering",
-        "gaming",
-        "gpu",
-        "graphics"
-      ],
-      "sections": {
-        "13": [
-          "Adaptive performance governor"
-        ],
-        "15": [
-          "Platform, performance, resource discipline"
-        ],
-        "02": [
-          "Atmospheric Motion",
-          "Performance Motion"
-        ]
-      }
-    },
-    {
-      "id": "connected-branch-security",
-      "any": [
-        "branch",
-        "post fork",
-        "fork",
-        "sibling",
-        "private project"
-      ],
-      "sections": {
-        "14": [
-          "Data classification, confidentiality"
-        ],
-        "15": [
-          "Projects, workspaces, blocks, chats"
-        ],
-        "04": [
-          "Connected Branches: independent history",
-          "Privacy, access boundaries"
-        ],
-        "08": [
-          "Connected Branches and shared knowledge"
-        ]
-      }
-    },
-    {
-      "id": "context-integrity",
-      "any": [
-        "compaction",
-        "context history",
-        "memory decay",
-        "context intelligence",
-        "memory preservation"
-      ],
-      "sections": {
-        "15": [
-          "Notes, knowledge, CIE, and memory fidelity"
-        ],
-        "08": [
-          "Nonnegotiable context integrity",
-          "Compaction and continuation"
-        ]
-      }
-    },
-    {
-      "id": "quick-note-capture",
-      "any": [
-        "quick capture",
-        "jot down",
-        "capture note",
-        "capture notes"
-      ],
-      "sections": {
-        "15": [
-          "Notes, knowledge, CIE, and memory fidelity"
-        ],
-        "07": [
-          "Purpose, authority",
-          "Quick Capture"
-        ],
-        "01": [
-          "Notes, capture, knowledge"
-        ]
-      }
-    },
-    {
-      "id": "delegated-execution",
-      "any": [
-        "agents",
-        "agent",
-        "delegation",
-        "orchestration",
-        "workflows",
-        "worktree",
-        "parallel"
-      ],
-      "sections": {
-        "14": [
-          "Delegation, agents, workflows"
-        ],
-        "15": [
-          "Vela, agents, tasks"
-        ],
-        "05": [
-          "Foundational invariants",
-          "Task lifecycle and independent outcome",
-          "Isolation, Git worktrees"
-        ]
-      }
-    },
-    {
-      "id": "observability-truth",
-      "any": [
-        "intelligence stream",
-        "reasoning summary",
-        "reasoning summaries",
-        "tool events",
-        "observability"
-      ],
-      "sections": {
-        "15": [
-          "Observability, profiler"
-        ],
-        "09": [
-          "Four evidence classes"
-        ],
-        "02": [
-          "Semantic Motion"
-        ]
-      }
-    },
-    {
-      "id": "token-accounting-truth",
-      "any": [
-        "token",
-        "usage profiler",
-        "cached reasoning",
-        "usage accounting"
-      ],
-      "sections": {
-        "10": [
-          "6. Token accounting",
-          "Context-window and compaction measurements"
-        ],
-        "15": [
-          "Notes, knowledge, CIE, and memory fidelity"
-        ]
-      }
-    }
-  ]
+  "schemaVersion": 2,
+  "description": "Conservative, task-phrasing-independent cross-domain dependencies from established Aetherwake subsystem boundaries. Each selected charter contributes every normative requirement (not just top-ranked sections); fuller prose sections remain ranked. This graph is not a claim of complete semantic understanding.",
+  "dependencies": {
+    "10": [
+      "08",
+      "15"
+    ],
+    "11": [
+      "09",
+      "15"
+    ],
+    "12": [
+      "14",
+      "15"
+    ],
+    "13": [
+      "15"
+    ],
+    "14": [
+      "15"
+    ],
+    "15": [],
+    "16": [
+      "15"
+    ],
+    "00": [],
+    "01": [
+      "03",
+      "14",
+      "15"
+    ],
+    "02": [
+      "13",
+      "15"
+    ],
+    "03": [
+      "14",
+      "15"
+    ],
+    "04": [
+      "08",
+      "14",
+      "15"
+    ],
+    "05": [
+      "14",
+      "15"
+    ],
+    "06": [
+      "08",
+      "14",
+      "15"
+    ],
+    "07": [
+      "01",
+      "08",
+      "14",
+      "15"
+    ],
+    "08": [
+      "14",
+      "15"
+    ],
+    "09": [
+      "14",
+      "15"
+    ]
+  },
+  "maxExpansionHops": 1,
+  "coverageMode": "full-normative-requirements-plus-ranked-sections",
+  "policyPrinciple": "Do not assume task text spells out applicable constraints. Select domains by router/path; expand neighboring domains structurally, retain every normative rule in every chosen charter, and disclose missing/uncertain scope."
 }
