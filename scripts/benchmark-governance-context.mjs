@@ -19,7 +19,7 @@ const fixtures=[
  {task:"Implement chat connected branch sharing",paths:["src/conversations/branches.ts"],expected:["00","04","15"],requiredIds:["AW-CIE-008"]},
  {task:"Implement CIE context compaction",paths:["src/context/compaction.ts"],expected:["00","08","15"],requiredIds:["AW-CIE-008"]},
  {task:"Implement quick capture notes",paths:["src/notes/quick.ts"],expected:["00","07","15"],requiredIds:["AW-CON-010"]},
- {task:"Implement agent orchestration",paths:["src/agents/dispatcher.ts"],expected:["00","05","15"],requiredIds:["AW-AGT-001"]},
+ {task:"Implement agent orchestration",paths:["src/agents/dispatcher.ts"],expected:["00","05","15"],requiredIds:["AW-ATW-001"]},
  {task:"Implement AI token usage profiler",paths:["src/profiler/usage.ts"],expected:["00","10","15"],requiredIds:["AW-CON-009"]}
 ];
 const data=[];
