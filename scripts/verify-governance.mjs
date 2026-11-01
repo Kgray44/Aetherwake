@@ -14,7 +14,7 @@ const governanceDir = join(root, "governance");
 const registry = parseRegistry(readFileSync(join(governanceDir, "README.md"), "utf8"));
 const owners = {
   "00":"CON", "01":"EXP", "02":"LIQ", "03":"PWR", "04":"CHAT",
-  "05":"AGT", "06":"VELA", "07":"NKT", "08":"CIE", "09":"OBS",
+  "05":"ATW", "06":"VELA", "07":"NKT", "08":"CIE", "09":"OBS",
   "10":"AEP", "11":"TIME", "12":"CEX", "13":"PLT",
   "14":"TRUST", "15":"QVA", "16":"ENG"
 };
