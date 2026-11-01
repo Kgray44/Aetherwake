@@ -28,7 +28,7 @@ The repository owner retains final decision authority. Amendments must be explic
 | 05 | Agents, Tasks, and Workflows | Planned |
 | 06 | [Vela Intelligence and Adaptation](06-VELA-INTELLIGENCE-AND-ADAPTATION.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 | 07 | [Notes, Knowledge, and Thought Stream](07-NOTES-KNOWLEDGE-AND-THOUGHT-STREAM.md) | **Published — pending owner acceptance, v1.0.0-draft** |
-| 08 | Context Intelligence and Memory | Planned |
+| 08 | [Context Intelligence and Memory](08-CONTEXT-INTELLIGENCE-AND-MEMORY.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 | 09 | Intelligence Streams and Observability | Planned |
 | 10 | AI Execution Profiler | Planned |
 | 11 | Timelines and Replay | Planned |
