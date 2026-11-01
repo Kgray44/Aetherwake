@@ -1,0 +1,1811 @@
+{
+  "kind": "Fresh-process native memory probe with no screenshots, videos or forced GC",
+  "sourceRevisionAtLaunch": "759822708d93595b2c7c0b3b2ee23e8be9507f69",
+  "sourceHashesAtLaunch": {
+    "native/main.cjs": "06f741eef592da3ac8b51dde20137dc9202b63dfead1e814e4ef8af938cfaad2",
+    "native/recording.cjs": "41b2258756689a9951072f80ad61f13b5da096862a0718fc5054310e1ef2ec4f",
+    "src/celestial-environment.ts": "49eb62df7944c2796f51ef45080c830c1e7b72776fd7d4aeb23e6ee9bd73ad07",
+    "src/conversation.ts": "63a1a6bbd4224401ca36ab4cc0b912d6a18ffda6eef2c69404f48b04eb5ff542",
+    "src/instrument-geometry.ts": "8f7fa68f57f13936b4a4b46de7809737a02291fdaa6b4223106b92034d7425b9",
+    "src/instrument-materials.ts": "a131d182d18a6970824234995281d97e1810a2fc1846b9a456100d4b53ebe5b8",
+    "src/main.ts": "32f8c7dfbcdd8e127a4c5369182c7fd616f1064cc7706db111ba07a6df6ec6d2",
+    "src/material-occlusion.ts": "ef8a435868dd7d04939b42c8588a84315d5b2b07877c15c1fc265d656cd4a682",
+    "src/motion.ts": "70996a0131dfddfa4e0c430a6b05652802cd24a74d6de86cab622a5f65a44519",
+    "src/orbital-architecture.ts": "18931b7bfb79a92b3957222c9ce09076d1402969c3c3d2908ef85c1f7d70815a",
+    "src/policy.ts": "f3f868b5d6e3936ed338f05460c1d36aa7c665909bbc2329e2cef9eb47211f86",
+    "src/renderer.ts": "bb2bed94e988b7d6ec0bfdc3765a46f63998dd5525234b9671a80972e4a7c7df",
+    "src/scene-state.ts": "b0e1964628f0e3744fa75487b328e3b883aedf5f73e7a8b4467b1bf698060dfe",
+    "src/scene-transition.ts": "55f7b5c04b094f9d9bbfa6ce8983c91b6c53ec41d77b39b6ba0bea6e6385a711",
+    "src/store.ts": "b58472f4619743163dcf838348937baaa4c449a8919fd3181b53fe3274bffb17",
+    "src/style.css": "2627427c938da519fbabd9e4b3c5e3a5395e2f7e3b0842b2aa806078dfe6b01e",
+    "src/workloads.ts": "d8233b60e6028383c444144e371bb6a480da16866b4daf0f167a653e3bbcac40",
+    "package-lock.json": "fac0dfcfd42c160951c68d87f28b0640c2bc922fe47d15f44fc8bcc172d4b6d3",
+    "index.html": "f5a68d2ee7d2eea1d6afab47bee5559cc79bfad86a404afeeb5be1f011ddfad2"
+  },
+  "buildAssets": [
+    "graphics-CQNxUdO7.js",
+    "index-CLIKywP4.css",
+    "index-DCkDzV9N.js"
+  ],
+  "buildAssetHashes": {
+    "graphics-CQNxUdO7.js": "80d90f539b905184d8b7e24f486700e1f697ac7bfb48248d9c2d1b585151ea7d",
+    "index-CLIKywP4.css": "3a814a4b53d0134f62c3511a3622db39875288538236ddd57116f7f0e4b8a88d",
+    "index-DCkDzV9N.js": "6b44d0bae13a2a5362e2dd47245b09cedf8b9d85ba609e016825eaa4e8bf01cb"
+  },
+  "capturedAtUTC": "2026-11-01T22:15:18.402Z",
+  "requestedDurationMs": 90000,
+  "durationMs": 90009,
+  "versions": {
+    "electron": "45.2.1",
+    "chrome": "156.0.8078.75",
+    "node": "24.22.1"
+  },
+  "conditions": {
+    "tier": "balanced",
+    "contentBounds": {
+      "width": 0,
+      "height": 0
+    },
+    "newDedicatedProfile": true,
+    "renderWhileVisible": true,
+    "screenshotCount": 0,
+    "recording": false
+  },
+  "phases": [
+    {
+      "name": "architecture-visible-ambient",
+      "durationMs": 12431,
+      "drawSamples": 733,
+      "callbacks": 2004,
+      "policy": "balanced / ambient idle",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 961,
+        "drawCalls": 39,
+        "triangles": 160840,
+        "lines": 0,
+        "geometries": 25,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 961,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 0,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 1.9800000000000002,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 459.24,
+              "height": 240.3,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 2,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 277.68,
+              "height": 277.68,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 2,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 363.12,
+              "height": 166.608,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 2680,
+              "shapeUpdates": 2,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 56640,
+          "opticalClockSeconds": 16.466100000000004,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.03951864000000001,
+          "longitudinalRotationRadians": 0.03951864000000001,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 524140,
+      "lastWorkingSetKiBSum": 522176,
+      "deltaWorkingSetKiBSum": -1964
+    },
+    {
+      "name": "living-visible-ambient",
+      "durationMs": 12430,
+      "drawSamples": 733,
+      "callbacks": 2004,
+      "policy": "balanced / ambient idle",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 1695,
+        "drawCalls": 18,
+        "triangles": 57086,
+        "lines": 0,
+        "geometries": 29,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 0,
+          "renderedStars": 0,
+          "renderedFrames": 996,
+          "environmentWeight": 0,
+          "visible": false,
+          "batches": 0,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 3,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 0,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 459.24,
+              "height": 240.3,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 2,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 277.68,
+              "height": 277.68,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 2,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 363.12,
+              "height": 166.608,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 2680,
+              "shapeUpdates": 2,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": false,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 56640,
+          "opticalClockSeconds": 28.884334,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.06932240159999999,
+          "longitudinalRotationRadians": 0.06932240159999999,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": false,
+          "environmentWeight": 0,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 526868,
+      "lastWorkingSetKiBSum": 531340,
+      "deltaWorkingSetKiBSum": 4472
+    },
+    {
+      "name": "resource-expand-return",
+      "durationMs": 12435,
+      "drawSamples": 745,
+      "callbacks": 2007,
+      "policy": "balanced / active",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 2441,
+        "drawCalls": 18,
+        "triangles": 57086,
+        "lines": 0,
+        "geometries": 29,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 0,
+          "renderedStars": 0,
+          "renderedFrames": 996,
+          "environmentWeight": 0,
+          "visible": false,
+          "batches": 0,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 3,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 0,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 974.31325262676,
+              "height": 670.5437092453351,
+              "unfold": 0.9524988028455503,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 747,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 180.82995448297447,
+              "height": 85.58004144210938,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 747,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 184.88842401154054,
+              "height": 80.30401766122492,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 2680,
+              "shapeUpdates": 747,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": false,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 56640,
+          "opticalClockSeconds": 33.95344992283723,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.08148827981480934,
+          "longitudinalRotationRadians": 0.08148827981480934,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": false,
+          "environmentWeight": 0,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 576952,
+      "lastWorkingSetKiBSum": 832992,
+      "deltaWorkingSetKiBSum": 256040
+    },
+    {
+      "name": "focused-long-conversation",
+      "durationMs": 12430,
+      "drawSamples": 732,
+      "callbacks": 2004,
+      "policy": "balanced / ambient idle",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 3174,
+        "drawCalls": 18,
+        "triangles": 57086,
+        "lines": 0,
+        "geometries": 29,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 0,
+          "renderedStars": 0,
+          "renderedFrames": 996,
+          "environmentWeight": 0,
+          "visible": false,
+          "batches": 0,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 3,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 0,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 1000,
+              "height": 692,
+              "unfold": 1,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 803,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 176,
+              "height": 76,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 798,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 176,
+              "height": 76,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 2680,
+              "shapeUpdates": 797,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": false,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 56640,
+          "opticalClockSeconds": 34.700931232673284,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.08328223495841587,
+          "longitudinalRotationRadians": 0.08328223495841587,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": false,
+          "environmentWeight": 0,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 859860,
+      "lastWorkingSetKiBSum": 884988,
+      "deltaWorkingSetKiBSum": 25128
+    },
+    {
+      "name": "environment-retarget",
+      "durationMs": 12430,
+      "drawSamples": 748,
+      "callbacks": 2044,
+      "policy": "balanced / active",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 3923,
+        "drawCalls": 44,
+        "triangles": 196686,
+        "lines": 0,
+        "geometries": 29,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "living",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 1557,
+          "environmentWeight": 0.031999292343241795,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 3,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 0.06335859883961877,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 459.24,
+              "height": 240.3,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 872,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 277.68,
+              "height": 277.68,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 862,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 363.12,
+              "height": 166.608,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 2680,
+              "shapeUpdates": 861,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 56640,
+          "opticalClockSeconds": 47.01939071723677,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.11284653772136823,
+          "longitudinalRotationRadians": 0.11284653772136823,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 0.031999292343241795,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 920296,
+      "lastWorkingSetKiBSum": 985000,
+      "deltaWorkingSetKiBSum": 64704
+    },
+    {
+      "name": "quiet-static",
+      "durationMs": 12430,
+      "drawSamples": 9,
+      "callbacks": 78,
+      "policy": "efficient / quiet",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 3932,
+        "drawCalls": 27,
+        "triangles": 109282,
+        "lines": 0,
+        "geometries": 30,
+        "textures": 2,
+        "pixelRatio": 0.8,
+        "quality": "efficient",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "efficient",
+          "starCapacity": 24000,
+          "configuredStars": 6500,
+          "activeStars": 6500,
+          "renderedStars": 6500,
+          "renderedFrames": 1566,
+          "environmentWeight": 0.9910861522904463,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 3,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 1.962350581535084,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "efficient",
+              "width": 459.24,
+              "height": 240.3,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 1,
+              "triangles": 2304,
+              "shapeUpdates": 872,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "efficient",
+              "width": 277.68,
+              "height": 277.68,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 862,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "efficient",
+              "width": 363.12,
+              "height": 166.608,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 1,
+              "triangles": 2304,
+              "shapeUpdates": 861,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": false,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "efficient",
+          "drawObjects": 9,
+          "triangles": 44788,
+          "opticalClockSeconds": 47.01939071723677,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.11284653772136823,
+          "longitudinalRotationRadians": 0.11284653772136823,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 0.9910861522904463,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 1001288,
+      "lastWorkingSetKiBSum": 950840,
+      "deltaWorkingSetKiBSum": -50448
+    },
+    {
+      "name": "native-minimized",
+      "durationMs": 12339,
+      "drawSamples": 1,
+      "callbacks": 1,
+      "policy": "balanced / active",
+      "celestialStudy": "starlit",
+      "instrumentStudy": "optical",
+      "environmentPhaseOverrideSeconds": null,
+      "gpu": {
+        "backend": "Three.js WebGL2",
+        "framesRendered": 3934,
+        "drawCalls": 39,
+        "triangles": 160840,
+        "lines": 0,
+        "geometries": 30,
+        "textures": 2,
+        "pixelRatio": 1.25,
+        "quality": "balanced",
+        "study": "architecture",
+        "contextLost": false,
+        "cosmos": {
+          "backend": "deterministic 3D celestial dome and instanced stellar billboards",
+          "study": "starlit",
+          "quality": "balanced",
+          "starCapacity": 24000,
+          "configuredStars": 14000,
+          "activeStars": 14000,
+          "renderedStars": 14000,
+          "renderedFrames": 1568,
+          "environmentWeight": 1,
+          "visible": true,
+          "batches": 2,
+          "geometryAllocations": 2,
+          "textureAllocations": 0,
+          "catalogBytes": 768000,
+          "translationParallax": "canceled at infinite distance; world orientation copied",
+          "timeVaryingTwinkle": false,
+          "disposed": false
+        },
+        "celestialStudy": "starlit",
+        "instruments": {
+          "study": "optical",
+          "resourceCount": 3,
+          "boundResourceCount": 3,
+          "typeCounts": {
+            "conversation": 1,
+            "research": 1,
+            "note": 1
+          },
+          "geometryAllocations": 24,
+          "materialAllocations": 24,
+          "meshAllocations": 24,
+          "contactCuesRendered": 0,
+          "sharedKey": {
+            "direction": [
+              -0.34355900058832084, 0.5725983343138682, 0.7443778346080286
+            ],
+            "color": 14477567,
+            "intensity": 1.9800000000000002,
+            "meaning": "Mirrors the existing architectural directional source; its background light is unchanged."
+          },
+          "structures": [
+            {
+              "id": "conversation-tidal",
+              "kind": "conversation",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 459.24,
+              "height": 240.3,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 872,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "research-material",
+              "kind": "research",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 277.68,
+              "height": 277.68,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 4608,
+              "shapeUpdates": 862,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            },
+            {
+              "id": "note-field",
+              "kind": "note",
+              "study": "optical",
+              "quality": "balanced",
+              "width": 363.12,
+              "height": 166.608,
+              "unfold": 0,
+              "geometryAllocations": 5,
+              "materialAllocations": 0,
+              "meshCount": 5,
+              "visibleObjects": 2,
+              "triangles": 2680,
+              "shapeUpdates": 861,
+              "coordinates": "resource-local-pixels",
+              "callerOwnsMaterials": true
+            }
+          ],
+          "allocationMeaning": "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately."
+        },
+        "shadows": {
+          "enabled": true,
+          "mapSize": 1024,
+          "meaning": "One fixed architectural directional source; Efficient disables its shadow map."
+        },
+        "architecture": {
+          "concept": "ring",
+          "quality": "balanced",
+          "drawObjects": 13,
+          "triangles": 56640,
+          "opticalClockSeconds": 47.147390717254645,
+          "angularRateRadiansPerSecond": 0.0024,
+          "naturalLongitudinalRotationRadians": 0.11315373772141114,
+          "longitudinalRotationRadians": 0.11315373772141114,
+          "primaryRingRadiusWorldUnits": 30,
+          "primaryShellServiceBays": 13,
+          "structuralDesign": "paired-front-rear-load-spines-with-open-triangulated-service-bays",
+          "scriptedPhaseSeconds": null,
+          "celestialStudy": "starlit",
+          "revealKind": "orientation-driven-PBR-lighting-and-geometric-occlusion",
+          "proceduralSurfaceDetail": "static-derivative-filtered-machined-roughness",
+          "originalProceduralGeometry": true,
+          "environmentVisible": true,
+          "environmentWeight": 1,
+          "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+        },
+        "surfaceCapacity": 3,
+        "surfacesRendered": 3
+      },
+      "firstWorkingSetKiBSum": 588528,
+      "lastWorkingSetKiBSum": 580424,
+      "deltaWorkingSetKiBSum": -8104
+    }
+  ],
+  "samples": [
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 4004,
+      "cpuReportedSum": 2.1619963904434707,
+      "workingSetKiBSum": 524140,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 5005,
+      "cpuReportedSum": 2.1932573049629323,
+      "workingSetKiBSum": 525268,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 6005,
+      "cpuReportedSum": 2.0817359198656726,
+      "workingSetKiBSum": 525296,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 7006,
+      "cpuReportedSum": 2.1595178657237675,
+      "workingSetKiBSum": 526120,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 8007,
+      "cpuReportedSum": 2.0523101327055753,
+      "workingSetKiBSum": 521448,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 9007,
+      "cpuReportedSum": 1.9307713148791916,
+      "workingSetKiBSum": 523896,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 10007,
+      "cpuReportedSum": 1.9625980386294941,
+      "workingSetKiBSum": 524788,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 11008,
+      "cpuReportedSum": 2.102609353397674,
+      "workingSetKiBSum": 521620,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 12009,
+      "cpuReportedSum": 2.1400896016201525,
+      "workingSetKiBSum": 520408,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 13009,
+      "cpuReportedSum": 1.9022677805899098,
+      "workingSetKiBSum": 520936,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 14009,
+      "cpuReportedSum": 2.0299664021274415,
+      "workingSetKiBSum": 521396,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 15010,
+      "cpuReportedSum": 2.1236915362182387,
+      "workingSetKiBSum": 521900,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 15432,
+      "cpuReportedSum": 1.0849477564038112,
+      "workingSetKiBSum": 522176,
+      "processCount": 4
+    },
+    {
+      "phase": "architecture-visible-ambient",
+      "elapsedMs": 15433,
+      "cpuReportedSum": 1.935483870967742,
+      "workingSetKiBSum": 522176,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 16438,
+      "cpuReportedSum": 2.5311945277496237,
+      "workingSetKiBSum": 526868,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 17438,
+      "cpuReportedSum": 1.747019076796073,
+      "workingSetKiBSum": 527460,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 18439,
+      "cpuReportedSum": 1.7316221348336198,
+      "workingSetKiBSum": 527776,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 19438,
+      "cpuReportedSum": 1.9849610914715252,
+      "workingSetKiBSum": 528372,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 20438,
+      "cpuReportedSum": 1.8138035897468514,
+      "workingSetKiBSum": 528840,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 21439,
+      "cpuReportedSum": 1.7302837668081188,
+      "workingSetKiBSum": 529196,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 22439,
+      "cpuReportedSum": 1.702079526484931,
+      "workingSetKiBSum": 528908,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 23439,
+      "cpuReportedSum": 1.9787059212356817,
+      "workingSetKiBSum": 529856,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 24440,
+      "cpuReportedSum": 1.8535969566301222,
+      "workingSetKiBSum": 530024,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 25441,
+      "cpuReportedSum": 1.7177835468603537,
+      "workingSetKiBSum": 530708,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 26441,
+      "cpuReportedSum": 1.6875010966776154,
+      "workingSetKiBSum": 530916,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 27441,
+      "cpuReportedSum": 1.8485973790120651,
+      "workingSetKiBSum": 531268,
+      "processCount": 4
+    },
+    {
+      "phase": "living-visible-ambient",
+      "elapsedMs": 27867,
+      "cpuReportedSum": 1.0688438744943585,
+      "workingSetKiBSum": 531340,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 28878,
+      "cpuReportedSum": 9.887841809188927,
+      "workingSetKiBSum": 576952,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 29881,
+      "cpuReportedSum": 7.15424961765119,
+      "workingSetKiBSum": 602312,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 30886,
+      "cpuReportedSum": 8.712518221547285,
+      "workingSetKiBSum": 651092,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 31892,
+      "cpuReportedSum": 6.632203251637048,
+      "workingSetKiBSum": 677604,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 32896,
+      "cpuReportedSum": 8.783900038857041,
+      "workingSetKiBSum": 693040,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 33899,
+      "cpuReportedSum": 6.839302253936591,
+      "workingSetKiBSum": 703900,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 34905,
+      "cpuReportedSum": 8.890415261928212,
+      "workingSetKiBSum": 742044,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 35911,
+      "cpuReportedSum": 6.607637021380322,
+      "workingSetKiBSum": 766096,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 36918,
+      "cpuReportedSum": 9.73234061331999,
+      "workingSetKiBSum": 809808,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 37922,
+      "cpuReportedSum": 7.737182971043773,
+      "workingSetKiBSum": 813492,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 38926,
+      "cpuReportedSum": 8.856885441832663,
+      "workingSetKiBSum": 813124,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 39928,
+      "cpuReportedSum": 6.524494513758185,
+      "workingSetKiBSum": 821612,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 40297,
+      "cpuReportedSum": 9.915421446339089,
+      "workingSetKiBSum": 832828,
+      "processCount": 4
+    },
+    {
+      "phase": "resource-expand-return",
+      "elapsedMs": 40300,
+      "cpuReportedSum": 14.565742316832775,
+      "workingSetKiBSum": 832992,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 41312,
+      "cpuReportedSum": 7.559672071775897,
+      "workingSetKiBSum": 859860,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 42312,
+      "cpuReportedSum": 2.632082045257857,
+      "workingSetKiBSum": 871416,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 43313,
+      "cpuReportedSum": 2.542845780506175,
+      "workingSetKiBSum": 896308,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 44313,
+      "cpuReportedSum": 1.8357966804260468,
+      "workingSetKiBSum": 898848,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 45314,
+      "cpuReportedSum": 1.7405283303148171,
+      "workingSetKiBSum": 898244,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 46314,
+      "cpuReportedSum": 1.8858181941257088,
+      "workingSetKiBSum": 891508,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 47315,
+      "cpuReportedSum": 1.6334059613439564,
+      "workingSetKiBSum": 884536,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 48316,
+      "cpuReportedSum": 1.7185992933497918,
+      "workingSetKiBSum": 882076,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 49316,
+      "cpuReportedSum": 1.7459333906910377,
+      "workingSetKiBSum": 880460,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 50318,
+      "cpuReportedSum": 1.7580719087574979,
+      "workingSetKiBSum": 880928,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 51317,
+      "cpuReportedSum": 1.7380696004635505,
+      "workingSetKiBSum": 881184,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 52318,
+      "cpuReportedSum": 1.802739395548895,
+      "workingSetKiBSum": 884148,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 52739,
+      "cpuReportedSum": 1.0013257511224218,
+      "workingSetKiBSum": 884988,
+      "processCount": 4
+    },
+    {
+      "phase": "focused-long-conversation",
+      "elapsedMs": 52740,
+      "cpuReportedSum": 2.249574168871593,
+      "workingSetKiBSum": 884988,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 53748,
+      "cpuReportedSum": 6.290361293737203,
+      "workingSetKiBSum": 920296,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 54752,
+      "cpuReportedSum": 3.6720788826367237,
+      "workingSetKiBSum": 945224,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 55752,
+      "cpuReportedSum": 5.575866386780081,
+      "workingSetKiBSum": 953724,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 56753,
+      "cpuReportedSum": 2.867089137234642,
+      "workingSetKiBSum": 953564,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 57755,
+      "cpuReportedSum": 2.652037781729178,
+      "workingSetKiBSum": 952348,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 58757,
+      "cpuReportedSum": 2.9336066100248583,
+      "workingSetKiBSum": 938608,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 59758,
+      "cpuReportedSum": 2.826257865690531,
+      "workingSetKiBSum": 938844,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 60759,
+      "cpuReportedSum": 2.731231158229332,
+      "workingSetKiBSum": 939124,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 61760,
+      "cpuReportedSum": 3.1062823693742794,
+      "workingSetKiBSum": 940896,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 62761,
+      "cpuReportedSum": 2.9171009191890063,
+      "workingSetKiBSum": 938540,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 63763,
+      "cpuReportedSum": 2.6926599590964058,
+      "workingSetKiBSum": 953684,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 64764,
+      "cpuReportedSum": 2.761460261468634,
+      "workingSetKiBSum": 975660,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 65175,
+      "cpuReportedSum": 2.8242949833394744,
+      "workingSetKiBSum": 985000,
+      "processCount": 4
+    },
+    {
+      "phase": "environment-retarget",
+      "elapsedMs": 65176,
+      "cpuReportedSum": 2.944656057597152,
+      "workingSetKiBSum": 985000,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 66178,
+      "cpuReportedSum": 2.232337727532379,
+      "workingSetKiBSum": 1001288,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 67178,
+      "cpuReportedSum": 0.04939200172441581,
+      "workingSetKiBSum": 997736,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 68178,
+      "cpuReportedSum": 0.013838306529826157,
+      "workingSetKiBSum": 997736,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 69178,
+      "cpuReportedSum": 0.013945217771891932,
+      "workingSetKiBSum": 997544,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 70179,
+      "cpuReportedSum": 0.019008096595445664,
+      "workingSetKiBSum": 997348,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 71179,
+      "cpuReportedSum": 0.02783678757955493,
+      "workingSetKiBSum": 995040,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 72179,
+      "cpuReportedSum": 0.01412218073844457,
+      "workingSetKiBSum": 993068,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 73180,
+      "cpuReportedSum": 0.015404580477720737,
+      "workingSetKiBSum": 992404,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 74180,
+      "cpuReportedSum": 0.018512392363768664,
+      "workingSetKiBSum": 992400,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 75180,
+      "cpuReportedSum": 0.019507876227180823,
+      "workingSetKiBSum": 992172,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 76180,
+      "cpuReportedSum": 0.015178895634273378,
+      "workingSetKiBSum": 992172,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 77180,
+      "cpuReportedSum": 3.1336417680416924,
+      "workingSetKiBSum": 957492,
+      "processCount": 4
+    },
+    {
+      "phase": "quiet-static",
+      "elapsedMs": 77607,
+      "cpuReportedSum": 2.359032639013482,
+      "workingSetKiBSum": 950840,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 78685,
+      "cpuReportedSum": 0.7377949614010083,
+      "workingSetKiBSum": 588528,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 79699,
+      "cpuReportedSum": 0.02645009430362081,
+      "workingSetKiBSum": 588504,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 80711,
+      "cpuReportedSum": 0.01421794487852676,
+      "workingSetKiBSum": 588440,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 81725,
+      "cpuReportedSum": 0.014486834542233281,
+      "workingSetKiBSum": 588264,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 82740,
+      "cpuReportedSum": 0.0185885510079155,
+      "workingSetKiBSum": 588076,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 83755,
+      "cpuReportedSum": 0.013186378113628737,
+      "workingSetKiBSum": 588080,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 84768,
+      "cpuReportedSum": 0.011209475685623499,
+      "workingSetKiBSum": 588080,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 85778,
+      "cpuReportedSum": 0.014717218917319818,
+      "workingSetKiBSum": 588080,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 86794,
+      "cpuReportedSum": 0.24610053584538139,
+      "workingSetKiBSum": 580416,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 87799,
+      "cpuReportedSum": 0.013595602231169523,
+      "workingSetKiBSum": 580420,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 88810,
+      "cpuReportedSum": 0.014461862672000121,
+      "workingSetKiBSum": 580420,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 89821,
+      "cpuReportedSum": 0.015847394002981175,
+      "workingSetKiBSum": 580420,
+      "processCount": 4
+    },
+    {
+      "phase": "native-minimized",
+      "elapsedMs": 90008,
+      "cpuReportedSum": 0.02261395827782363,
+      "workingSetKiBSum": 580424,
+      "processCount": 4
+    }
+  ],
+  "reserve": {
+    "utc": "2026-11-01T22:13:48.2270779Z",
+    "allowed": true,
+    "floorBytesEach": 32212254720,
+    "cFreeBytes": 113176559616,
+    "dFreeBytes": 501735165952,
+    "estimatedCBytes": 268435456,
+    "estimatedDBytes": 0,
+    "reason": "Both drives remain above reserve after estimated writes"
+  },
+  "errors": [],
+  "sourceReceipt": {
+    "artifact": ".runtime/memory-v3-5-1793571318402.json",
+    "sha256": "3d3f5980a9aa84ebb61db5eca7caedc229e9f96fcdd5d0765f9e320931169d0c"
+  },
+  "sourceBinding": {
+    "nativeVerification": "evidence-instruments/review-thin-lens/verification.json",
+    "srcHashesMatchNativeVerification": true,
+    "buildHashesMatchNativeVerification": true,
+    "srcHashesMatchSourceTests": true
+  },
+  "limitations": [
+    "Summed Electron working sets may count shared pages repeatedly and measure neither unique resident memory nor VRAM.",
+    "This 90-second exploratory probe cannot establish long-term leak freedom, thermal stability, power use or production memory acceptance.",
+    "A fresh dedicated profile and zero screenshots/recording remove earlier capture retention from this process; desktop load and Chromium allocation/cache changes remain uncontrolled.",
+    "Phase draw counts include entry, scene retarget and reconciliation submissions; they are separate from warmed steady-state Quiet/minimize samples in the full verifier.",
+    "The recorded 0x0 contentBounds were read after the final minimized phase, not during visible work; this receipt does not establish visible viewport dimensions.",
+    "Callbacks, scene submissions and process CPU are not presented-frame timing or physical input latency.",
+    "Private machine paths, process/window identifiers and raw logs are omitted; source/build hashes and measured sample values are retained."
+  ],
+  "summary": {
+    "sampleCount": 95,
+    "phaseCount": 7,
+    "firstWorkingSetMiBSum": 511.85546875,
+    "peakWorkingSetMiBSum": 977.8203125,
+    "lastWorkingSetMiBSum": 566.8203125,
+    "meaning": "Observed shared-page-counting process working-set sum across 95 samples; not unique resident memory, a memory budget or a leak-free conclusion."
+  }
+}

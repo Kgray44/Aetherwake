@@ -1,0 +1,24 @@
+{
+  "routerExit": 0,
+  "router": {
+    "valid": true,
+    "registry_entries": 17,
+    "warnings": []
+  },
+  "testsExit": 0,
+  "testSummary": [
+    "✔ unknown requirement IDs fail closed (0.5105ms)",
+    "✔ incomplete routing coverage and malformed signals fail validation (3.1378ms)",
+    "ℹ tests 33",
+    "ℹ pass 33",
+    "ℹ fail 0"
+  ],
+  "benchmarkExit": 0,
+  "benchmarkPassed": true,
+  "benchmarkFixtures": 7,
+  "engineeringExit": 0,
+  "engineeringPassed": true,
+  "engineeringFixtures": 8,
+  "requirementRecallPercent": 100,
+  "v2CLI": "Pre-existing failure: Cannot read properties of undefined (reading some); direct source fallback used"
+}

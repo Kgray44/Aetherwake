@@ -1,0 +1,317 @@
+{
+  "capturedAt": "2026-11-01T20:23:22.953Z",
+  "kind": "Actual native composition exploration; not the full verifier or a performance result",
+  "sourceHashesAtLaunch": {
+    "native/main.cjs": "12fc7d3d0ad8565637b46d75a31a01cc04659b2e95d6cec00f21f137351fdb48",
+    "native/recording.cjs": "5ba8c55ff3c0321cd083894815be798c8dcd0d3ebd1f8869eec781397812d832",
+    "src/main.ts": "30e8110f894e1f5678664cb20e18f926fb696c1fb2bada6675eb4f256d97e1c6",
+    "src/renderer.ts": "064337c811551e3c48ee451093224615a914d1bc702d78abd931f8cd562fd34c",
+    "src/orbital-architecture.ts": "b9d69f29cda855a0cddd86559f6b9596bacf6d24e4b92741cf40975ec93f64ce",
+    "src/scene-transition.ts": "55f7b5c04b094f9d9bbfa6ce8983c91b6c53ec41d77b39b6ba0bea6e6385a711",
+    "src/motion.ts": "70996a0131dfddfa4e0c430a6b05652802cd24a74d6de86cab622a5f65a44519",
+    "src/style.css": "3dcd9e8e8a9e44392df614d01df207a9f2cacaf9135109298f66bc537434292d",
+    "src/workloads.ts": "d8233b60e6028383c444144e371bb6a480da16866b4daf0f167a653e3bbcac40",
+    "src/conversation.ts": "63a1a6bbd4224401ca36ab4cc0b912d6a18ffda6eef2c69404f48b04eb5ff542",
+    "src/store.ts": "b58472f4619743163dcf838348937baaa4c449a8919fd3181b53fe3274bffb17",
+    "src/policy.ts": "f3f868b5d6e3936ed338f05460c1d36aa7c665909bbc2329e2cef9eb47211f86",
+    "package-lock.json": "fac0dfcfd42c160951c68d87f28b0640c2bc922fe47d15f44fc8bcc172d4b6d3"
+  },
+  "captures": [
+    {
+      "file": "study-architecture.png",
+      "atUTC": "2026-11-01T20:23:16.294Z",
+      "byteCount": 950741,
+      "sha256": "c402976e81c095502e9f2e4a49bd57ee5286983154ca00836d47e8bbed64a698",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 1520,
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "study-living.png",
+      "atUTC": "2026-11-01T20:23:17.535Z",
+      "byteCount": 964680,
+      "sha256": "eb189194608a12fdfaae2dd32ab5eb6314c6ccd95df14ff657aa7a4ac3e028fe",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "living",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 2720.1,
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "study-observatory.png",
+      "atUTC": "2026-11-01T20:23:18.692Z",
+      "byteCount": 803649,
+      "sha256": "746bc56478946708b4672163f7dc8c785418cdead8381865db03027e4fb9c623",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "observatory",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 3974.7000000000003,
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "architecture-ring.png",
+      "atUTC": "2026-11-01T20:23:19.891Z",
+      "byteCount": 954959,
+      "sha256": "ca59fe1b82892e67a44aec667843ec535d903b1ca2837e482cb35dd6a1618232",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 5132.299999999999,
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "architecture-aperture.png",
+      "atUTC": "2026-11-01T20:23:21.103Z",
+      "byteCount": 991178,
+      "sha256": "be9a5e5d9993dc10f0095deafef39cc6b55866ddeeaee9ebfaf577c37856cb1e",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "aperture",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 6320.199999999999,
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "architecture-observatory.png",
+      "atUTC": "2026-11-01T20:23:22.304Z",
+      "byteCount": 888905,
+      "sha256": "b359a91672a101800f661d413e19a9936f8590b26a47b8ad8d16cdaa783c6e2b",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "observatory",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 7532.4,
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    },
+    {
+      "file": "environment-idle.png",
+      "atUTC": "2026-11-01T20:23:22.953Z",
+      "byteCount": 947120,
+      "sha256": "ac9f5e300f25ea343ca25dc75ac845580f6827dc80b00e4735887c9986697965",
+      "pixels": {
+        "width": 2002,
+        "height": 1253
+      },
+      "conditions": {
+        "study": "architecture",
+        "architectureConcept": "ring",
+        "quality": "balanced",
+        "selected": null,
+        "expanded": null,
+        "vela": "idle",
+        "reduced": false,
+        "visualClock": 8187,
+        "contentBounds": {
+          "width": 1601,
+          "height": 1002
+        },
+        "zoomFactor": 1
+      }
+    }
+  ],
+  "checks": [
+    {
+      "name": "three architectural compositions remain selectable without resource replacement",
+      "passed": true,
+      "detail": [
+        {
+          "concept": "ring",
+          "actual": "ring",
+          "gpu": {
+            "backend": "Three.js WebGL2",
+            "framesRendered": 319,
+            "drawCalls": 31,
+            "triangles": 42266,
+            "lines": 2200,
+            "geometries": 36,
+            "textures": 1,
+            "pixelRatio": 1.25,
+            "quality": "balanced",
+            "study": "architecture",
+            "contextLost": false,
+            "architecture": {
+              "concept": "ring",
+              "quality": "balanced",
+              "drawObjects": 19,
+              "triangles": 47584,
+              "originalProceduralGeometry": true,
+              "environmentVisible": true,
+              "environmentWeight": 1,
+              "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+            },
+            "surfaceCapacity": 3,
+            "surfacesRendered": 3
+          }
+        },
+        {
+          "concept": "aperture",
+          "actual": "aperture",
+          "gpu": {
+            "backend": "Three.js WebGL2",
+            "framesRendered": 392,
+            "drawCalls": 38,
+            "triangles": 60026,
+            "lines": 2200,
+            "geometries": 56,
+            "textures": 1,
+            "pixelRatio": 1.25,
+            "quality": "balanced",
+            "study": "architecture",
+            "contextLost": false,
+            "architecture": {
+              "concept": "aperture",
+              "quality": "balanced",
+              "drawObjects": 23,
+              "triangles": 56656,
+              "originalProceduralGeometry": true,
+              "environmentVisible": true,
+              "environmentWeight": 1,
+              "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+            },
+            "surfaceCapacity": 3,
+            "surfacesRendered": 3
+          }
+        },
+        {
+          "concept": "observatory",
+          "actual": "observatory",
+          "gpu": {
+            "backend": "Three.js WebGL2",
+            "framesRendered": 464,
+            "drawCalls": 36,
+            "triangles": 48370,
+            "lines": 2200,
+            "geometries": 74,
+            "textures": 1,
+            "pixelRatio": 1.25,
+            "quality": "balanced",
+            "study": "architecture",
+            "contextLost": false,
+            "architecture": {
+              "concept": "observatory",
+              "quality": "balanced",
+              "drawObjects": 24,
+              "triangles": 53688,
+              "originalProceduralGeometry": true,
+              "environmentVisible": true,
+              "environmentWeight": 1,
+              "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+            },
+            "surfaceCapacity": 3,
+            "surfacesRendered": 3
+          }
+        }
+      ]
+    }
+  ],
+  "gpu": {
+    "backend": "Three.js WebGL2",
+    "framesRendered": 503,
+    "drawCalls": 31,
+    "triangles": 42266,
+    "lines": 2200,
+    "geometries": 74,
+    "textures": 1,
+    "pixelRatio": 1.25,
+    "quality": "balanced",
+    "study": "architecture",
+    "contextLost": false,
+    "architecture": {
+      "concept": "ring",
+      "quality": "balanced",
+      "drawObjects": 19,
+      "triangles": 47584,
+      "originalProceduralGeometry": true,
+      "environmentVisible": true,
+      "environmentWeight": 1,
+      "meaning": "Selected composition geometry estimates, including when its environment is hidden. Actual total submissions are renderer drawCalls/triangles above."
+    },
+    "surfaceCapacity": 3,
+    "surfacesRendered": 3
+  },
+  "errors": []
+}

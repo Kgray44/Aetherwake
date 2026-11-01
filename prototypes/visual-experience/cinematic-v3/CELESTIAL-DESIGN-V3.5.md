@@ -1,5 +1,7 @@
 # Cinematic V3.5 — celestial design specification
 
+Historical specification for checkpoint `877a6d2`. The later owner-directed celestial refinement supersedes its sparse background and procedural visibility veil; see [the current celestial environment addendum](CELESTIAL-ENVIRONMENT-ADDENDUM-V3.5.md). The veil has been removed from current source.
+
 Status: implemented prototype direction for critical review, pending owner artistic acceptance. The original V3 is recoverable at `9c8df82` on `codex/cinematic-experience-v3`. V3.5 extends it on `codex/cinematic-experience-v3-5`; the directory name remains stable to preserve existing tooling and references. No desktop host or production art direction is selected.
 
 ## The intelligent observatory

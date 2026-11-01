@@ -1,8 +1,8 @@
 # Aerynth / Cinematic Experience V3.5
 
-An isolated, executable visual experiment. **Synthetic content; no AI backend connected.** The owner has not accepted this visual direction, and neither Electron nor Tauri is selected as the production host.
+An isolated, executable visual experiment. **Synthetic content; no AI backend connected.** The owner positively reviewed the celestial background; whole-experience artistic acceptance remains open. Neither Electron nor Tauri is selected as the production host.
 
-V3 is preserved at `9c8df82` on `codex/cinematic-experience-v3`. V3.5 extends that implementation on `codex/cinematic-experience-v3-5`, retaining this directory and its existing renderer, Motion Coordinator, resources and studies. V3 evidence remains under `evidence/`; new runs use `evidence-v3-5/`. V3.5 runtime profiles are separate from the V3 profiles.
+V3 is preserved at `9c8df82` on `codex/cinematic-experience-v3`. V3.5 extends it on `codex/cinematic-experience-v3-5`, retaining this directory and its renderer, Motion Coordinator, resources and studies. V3 evidence remains under `evidence/`; pre-celestial V3.5 is under `evidence-v3-5/`, celestial refinement under `evidence-celestial/`, and glass-instrument integration under `evidence-instruments/`. Runtime profiles remain separate.
 
 ## Run
 
@@ -13,7 +13,7 @@ npm ci
 npm start
 ```
 
-`npm run preview` opens **Luminous Architecture** in a separate local profile, with Expressive Vela ambience. The header switches directly to Living Intelligence. Scene controls expose the three orbital composition experiments and preserve the third Aetheric Observatory study. This visible review keeps animating while you use another window; minimize or choose Quiet to still it. `npm start` uses the ordinary profile and also pauses on blur.
+`npm run preview` opens **Luminous Architecture** with Starlit Ring lighting and Optical Glass resources in a separate local profile, with Expressive Vela ambience. The header switches directly to Living Intelligence. Scene controls expose three instrument material studies, three celestial lighting studies and three orbital geometry concepts, and preserve Aetheric Observatory. This review keeps animating while another window has focus; minimize or choose Quiet to still it. `npm start` also pauses on blur.
 
 Keep the host's per-drive storage reserve before installing/building/capturing. A fresh dependency install and verification should be admitted as a bounded 2 GiB C: step, with no D: writes, using the host ReserveGuard. Dependencies/builds/profiles/raw captures are ignored. There is no installer, updater, remote connection, or production deployment.
 
@@ -29,14 +29,18 @@ Tab/Enter operate the controls; Escape closes the foremost utility surface or re
 
 ## Inspect the work
 
-- [Celestial design specification](CELESTIAL-DESIGN-V3.5.md)
-- [V3.5 critical evaluation](EVALUATION-V3.5.md)
-- [V3.5 performance report](PERFORMANCE-V3.5.md)
+- [Current celestial environment design and critical review](CELESTIAL-ENVIRONMENT-ADDENDUM-V3.5.md)
+- [Current foreground integration and critical review](FOREGROUND-INTEGRATION-V3.5.md)
+- [Instrument evidence index](evidence-instruments/README.md) and [performance report](PERFORMANCE-INSTRUMENTS-V3.5.md)
+- [Celestial evidence index](evidence-celestial/README.md)
+- [Celestial performance report](PERFORMANCE-CELESTIAL-V3.5.md)
+- [Historical V3.5 design](CELESTIAL-DESIGN-V3.5.md), [evaluation](EVALUATION-V3.5.md) and [performance](PERFORMANCE-V3.5.md)
 - [V3 visual direction and research](VISUAL-DIRECTION.md)
 - [Motion, materials and Vela contracts](MOTION-AND-VELA.md)
 - [Historical V3 evaluation](EVALUATION.md)
-- [V3.5 architecture](evidence-v3-5/review-material-final/architecture-ring.png), [Living field](evidence-v3-5/review-material-final/study-living.png), [focused conversation](evidence-v3-5/review-material-final/focused-conversation.png)
-- [V3.5 native verification](evidence-v3-5/review-material-final/verification.json), [V3 baseline rerun](evidence-v3-5/baseline/verification.json)
+- [Current architecture and glass resources](evidence-instruments/review-resize-final/instruments-A-optical-glass-workspace.png), [Living field](evidence-instruments/review-resize-final/instruments-A-optical-glass-living-workspace.png), [focused conversation](evidence-instruments/review-resize-final/instruments-A-optical-glass-conversation-focused.png)
+- [Instrument native verification](evidence-instruments/review-resize-final/verification.json), [celestial checkpoint](evidence-celestial/review-radius-motion/verification.json), [V3 baseline rerun](evidence-v3-5/baseline/verification.json)
+- [Native pointer/keyboard smoke](evidence-instruments/native-input-smoke.json), [exact-candidate video manifest](evidence-instruments/native-video.json), [validated live-rendering memory probe](evidence-instruments/fresh-process-memory.json)
 
 ## Verify
 
@@ -48,13 +52,13 @@ npm run record
 npm run soak
 ```
 
-`electron . --record --ambient-study` records a separate 30-second native study of the much larger arc, its slow rotation, spatial uncovering veil and fixed-light reflections, without scripted interaction. It uses the same exact-window, no-audio capture limits as the walkthrough.
+`electron . --record --ambient-study --celestial-study=shadow` records a separate 30-second actual-clock study of slow rotation and fixed-light reflections, without scripted pointer input. The former spatial visibility veil has been removed. It uses the same exact-window, no-audio limits as the walkthrough. Held orientation overrides are reset before recordings.
 
-Each native verification creates a fresh evidence directory and refuses to overwrite an existing receipt. Set `AERYNTH_EVIDENCE_DIR` to a new directory when a specific destination is needed. Generate a performance report using `node scripts/summarize-v3-5.mjs evidence-v3-5/<your-run>`. The old `summarize-evidence.mjs` and `make-motion-evidence.py` belong to historical V3 evidence; do not use them to regenerate V3.5 reports. The fresh-process soak uses no screenshots and reports a bounded exploratory memory journey, not prolonged leak qualification.
+Each native verification creates a fresh evidence directory and refuses to overwrite an existing receipt. Set `AERYNTH_EVIDENCE_DIR` to a new directory when needed. Generate the current performance report with `node scripts/summarize-v3-5.mjs evidence-instruments/<your-run>`. Historical V3 scripts do not regenerate current reports. The fresh-process soak verifies live rendering before measurement, uses no screenshots, and reports an exploratory memory journey rather than prolonged leak qualification.
 
 The native verifier uses a separate ignored profile and excludes physical mouse input during the scripted run. It captures real Electron contents, exercises local application commands, samples callback/draw timing and app metrics, minimizes the native window, and forces actual WebGL context loss/restoration. Its scripted reorder proves layout/motion behavior; separate native pointer/keyboard smoke evidence is required for the input path. Capture intervals are not presented-frame timing. The expanded run takes roughly five minutes.
 
-The recording command captures only its exact application window, with no audio, for at most 35 seconds / 32 MiB. It creates a new ignored `.runtime/*.webm` and a unique local receipt. Recording has explicit own-window capture permission only for that bounded command; normal permissions remain denied. A [de-identified V3.5 video receipt](evidence-v3-5/native-video.json) describes the delivered recordings. Inspect an existing local recording with `electron scripts/inspect-video.cjs <absolute-local-webm-path>` if needed.
+The recording command captures only its exact application window, with no audio, for at most 35 seconds / 32 MiB. It creates a new ignored `.runtime/*.webm` and a matching unique same-basename JSON receipt. Recording has explicit own-window capture permission only for that bounded command; normal permissions remain denied. The [current glass-instrument video manifest](evidence-instruments/native-video.json) identifies the exact resize-corrected clip and its independent decode; [celestial recordings](evidence-celestial/native-video.json) and [earlier V3.5 recording review](evidence-v3-5/README.md) retain their historical scope. The old `recording-latest.json` is a preserved V3 receipt and must not select a current recording. Inspect an existing local recording with `electron scripts/inspect-video.cjs <absolute-local-webm-path>` if needed.
 
 ## Scope and ownership
 

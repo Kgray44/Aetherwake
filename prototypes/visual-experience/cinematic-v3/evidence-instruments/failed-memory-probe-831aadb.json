@@ -1,0 +1,117 @@
+{
+  "kind": "Invalid fresh-process memory attempt; unrendered startup, not active-runtime qualification",
+  "status": "invalid-unrendered-startup",
+  "sourceReceipt": {
+    "artifact": ".runtime/memory-v3-5-1793572415503.json",
+    "sha256": "a565dcd891759afc02032e8fd69fa1bf677f8cd046c279f9a7c530c1cf9db95f"
+  },
+  "sourceRevisionAtLaunch": "831aadb6703a14ca9f910cc990d8d2e74ebf4ebe",
+  "sourceHashesAtLaunch": {
+    "native/main.cjs": "273806aee00ec63a8a28944ea216b9d27c241b916304250805c6deabcb4b2fa6",
+    "native/recording.cjs": "41b2258756689a9951072f80ad61f13b5da096862a0718fc5054310e1ef2ec4f",
+    "src/celestial-environment.ts": "49eb62df7944c2796f51ef45080c830c1e7b72776fd7d4aeb23e6ee9bd73ad07",
+    "src/conversation.ts": "63a1a6bbd4224401ca36ab4cc0b912d6a18ffda6eef2c69404f48b04eb5ff542",
+    "src/instrument-geometry.ts": "8f7fa68f57f13936b4a4b46de7809737a02291fdaa6b4223106b92034d7425b9",
+    "src/instrument-materials.ts": "a131d182d18a6970824234995281d97e1810a2fc1846b9a456100d4b53ebe5b8",
+    "src/main.ts": "3d748511ba0043a8d5a6b08a91cd9167ab5d94a54f156261719587460ca5f82c",
+    "src/material-occlusion.ts": "ef8a435868dd7d04939b42c8588a84315d5b2b07877c15c1fc265d656cd4a682",
+    "src/motion.ts": "70996a0131dfddfa4e0c430a6b05652802cd24a74d6de86cab622a5f65a44519",
+    "src/orbital-architecture.ts": "18931b7bfb79a92b3957222c9ce09076d1402969c3c3d2908ef85c1f7d70815a",
+    "src/policy.ts": "f3f868b5d6e3936ed338f05460c1d36aa7c665909bbc2329e2cef9eb47211f86",
+    "src/renderer.ts": "bb2bed94e988b7d6ec0bfdc3765a46f63998dd5525234b9671a80972e4a7c7df",
+    "src/scene-state.ts": "b0e1964628f0e3744fa75487b328e3b883aedf5f73e7a8b4467b1bf698060dfe",
+    "src/scene-transition.ts": "55f7b5c04b094f9d9bbfa6ce8983c91b6c53ec41d77b39b6ba0bea6e6385a711",
+    "src/store.ts": "b58472f4619743163dcf838348937baaa4c449a8919fd3181b53fe3274bffb17",
+    "src/style.css": "2627427c938da519fbabd9e4b3c5e3a5395e2f7e3b0842b2aa806078dfe6b01e",
+    "src/workloads.ts": "d8233b60e6028383c444144e371bb6a480da16866b4daf0f167a653e3bbcac40",
+    "package-lock.json": "fac0dfcfd42c160951c68d87f28b0640c2bc922fe47d15f44fc8bcc172d4b6d3",
+    "index.html": "f5a68d2ee7d2eea1d6afab47bee5559cc79bfad86a404afeeb5be1f011ddfad2"
+  },
+  "buildAssets": [
+    "graphics-CQNxUdO7.js",
+    "index-0FWzwBut.js",
+    "index-CLIKywP4.css"
+  ],
+  "buildAssetHashes": {
+    "graphics-CQNxUdO7.js": "80d90f539b905184d8b7e24f486700e1f697ac7bfb48248d9c2d1b585151ea7d",
+    "index-0FWzwBut.js": "645bd7dfc4ce22284fc4f11271cd82254e76608c56e115b1a10f28cbba55714f",
+    "index-CLIKywP4.css": "3a814a4b53d0134f62c3511a3622db39875288538236ddd57116f7f0e4b8a88d"
+  },
+  "capturedAtUTC": "2026-11-01T22:33:35.503Z",
+  "requestedDurationMs": 90000,
+  "durationMs": 90004,
+  "versions": {
+    "electron": "45.2.1",
+    "chrome": "156.0.8078.75",
+    "node": "24.22.1"
+  },
+  "conditions": {
+    "tier": "balanced",
+    "contentBounds": {
+      "width": 0,
+      "height": 0
+    },
+    "newDedicatedProfile": true,
+    "renderWhileVisible": true,
+    "screenshotCount": 0,
+    "recording": false
+  },
+  "phaseLiveness": [
+    {
+      "name": "architecture-visible-ambient",
+      "renderedFrames": 0,
+      "callbacks": 0,
+      "drawSamples": 0,
+      "policy": ""
+    },
+    {
+      "name": "living-visible-ambient",
+      "renderedFrames": 0,
+      "callbacks": 0,
+      "drawSamples": 0,
+      "policy": ""
+    },
+    {
+      "name": "resource-expand-return",
+      "renderedFrames": 0,
+      "callbacks": 0,
+      "drawSamples": 0,
+      "policy": ""
+    },
+    {
+      "name": "focused-long-conversation",
+      "renderedFrames": 0,
+      "callbacks": 0,
+      "drawSamples": 0,
+      "policy": ""
+    },
+    {
+      "name": "environment-retarget",
+      "renderedFrames": 0,
+      "callbacks": 0,
+      "drawSamples": 0,
+      "policy": ""
+    },
+    {
+      "name": "quiet-static",
+      "renderedFrames": 0,
+      "callbacks": 0,
+      "drawSamples": 0,
+      "policy": ""
+    },
+    {
+      "name": "native-minimized",
+      "renderedFrames": 0,
+      "callbacks": 0,
+      "drawSamples": 0,
+      "policy": ""
+    }
+  ],
+  "errorCount": 0,
+  "validity": "Every intended active phase remained unrendered with zero coordinator callbacks and an empty policy. No-error logs do not make this an active-runtime observation. Working-set values from this attempt are not published as a valid low-memory result.",
+  "limitations": [
+    "The older harness did not record native/document/controller visibility per phase, so this receipt does not establish why startup never rendered.",
+    "The original raw receipt and all its samples remain preserved locally.",
+    "A bounded visible-window preflight and per-phase activity validation are being added only to the soak harness; frontend 831 and its 57-check graphics matrix remain unchanged."
+  ]
+}

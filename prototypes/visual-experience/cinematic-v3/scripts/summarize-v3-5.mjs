@@ -5,11 +5,23 @@ import { fileURLToPath } from "node:url";
 const root = fileURLToPath(new URL("../", import.meta.url));
 if (!process.argv[2])
   throw new Error(
-    "Pass the evidence directory explicitly, e.g. evidence-v3-5/review-final",
+    "Pass the evidence directory explicitly, e.g. evidence-instruments/review-final, evidence-celestial/review-radius-motion or evidence-v3-5/review-final",
   );
-const relative = process.argv[2].replaceAll("\\", "/");
-if (!relative.startsWith("evidence-v3-5/") || relative.includes(".."))
+const relative = process.argv[2].replaceAll("\\", "/").replace(/\/+$/, "");
+if (relative.includes(".."))
   throw new Error("Expected a V3.5 evidence directory inside this prototype");
+if (/^evidence-instruments\/[a-zA-Z0-9][a-zA-Z0-9_./-]*$/.test(relative)) {
+  await import("./summarize-instruments.mjs");
+  process.exit(0);
+}
+if (/^evidence-celestial\/[a-zA-Z0-9][a-zA-Z0-9_./-]*$/.test(relative)) {
+  await import("./summarize-celestial.mjs");
+  process.exit(0);
+}
+if (!/^evidence-v3-5\/[a-zA-Z0-9][a-zA-Z0-9_./-]*$/.test(relative))
+  throw new Error(
+    "Expected an explicit evidence-v3-5/<run>, evidence-celestial/<run> or evidence-instruments/<run> directory",
+  );
 const report = JSON.parse(
   await fs.readFile(path.join(root, relative, "verification.json"), "utf8"),
 );
@@ -72,7 +84,44 @@ Tool discovery found WPR/WPA and NVIDIA tooling, but PresentMon was unavailable 
 
 The local work uses ReserveGuard with separate 30 GiB floors for C: and D:. Verification admits up to 256 MiB including its capped 190 MiB PNG writer and profile/receipt headroom; the task also uses a broader bounded local allowance. The guard is an instruction/monitor, not an OS quota. It cannot stop unrelated applications, cloud jobs, or local processes that did not load the rule. No user files, games, unique history, unrelated work or retained evidence were deleted.
 `;
-await fs.writeFile(path.join(root, "PERFORMANCE-V3.5.md"), content);
+let memorySection = "";
+try {
+  const memory = JSON.parse(
+    await fs.readFile(
+      path.join(root, "evidence-v3-5/fresh-process-memory.json"),
+      "utf8",
+    ),
+  );
+  const samples = memory.samples;
+  const memoryRows = memory.phases
+    .map((phase) => {
+      const cpu = samples.filter((sample) => sample.phase === phase.name);
+      const mean =
+        cpu.reduce((sum, sample) => sum + sample.cpuReportedSum, 0) /
+        cpu.length;
+      return `| ${phase.name} | ${n(phase.durationMs / 1000)} | ${phase.drawSamples} | ${n(phase.firstWorkingSetKiBSum / 1024)} | ${n(phase.lastWorkingSetKiBSum / 1024)} | ${n(phase.deltaWorkingSetKiBSum / 1024)} | ${n(mean)} |`;
+    })
+    .join("\n");
+  memorySection = `
+## Fresh-process memory probe
+
+[The separate receipt](evidence-v3-5/fresh-process-memory.json) records ${n(memory.durationMs / 1000)} seconds with a fresh dedicated profile, no screenshots, no video and no forced collection. The sampled summed working set starts at ${n(samples[0].workingSetKiBSum / 1024)} MiB, reaches ${n(Math.max(...samples.map((s) => s.workingSetKiBSum)) / 1024)} MiB, and ends at ${n(samples.at(-1).workingSetKiBSum / 1024)} MiB. These sums can double-count shared pages.
+
+| Phase | Seconds | Submissions including entry transitions | First MiB | Last MiB | Delta MiB | CPU reported sum mean % |
+|---|---:|---:|---:|---:|---:|---:|
+${memoryRows}
+
+The full capture-heavy verification grows from about 1.7 GiB to about 3 GiB in summed working sets before falling below 1 GiB during static/reduced/minimized samples. The fresh process starts much lower, but repeated resource resizing and scene changes still produce growth before partial recovery. Browser/compositor caches, deferred collection and working-set double counting are possible contributors; attribution is unproven. The material benefit does not erase this cost. Longer matched V3/V3.5 memory investigations and application-attributed presentation measurements remain required before production acceptance.
+
+Quiet's probe count includes a few entry/reconciliation draws. The separately warmed steady-state native Quiet sample has zero draws. Minimized has zero draws in both measurements. Neither observation establishes zero total CPU work, energy savings or long-term leak freedom.
+`;
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+}
+await fs.writeFile(
+  path.join(root, "PERFORMANCE-V3.5.md"),
+  content + memorySection,
+);
 console.log(
   JSON.stringify({
     report: "PERFORMANCE-V3.5.md",
