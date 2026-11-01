@@ -115,3 +115,37 @@ test("unpinned section selection recognizes motion, branch, and CIE concepts",()
   assert.ok(matched,c.task+" selected "+JSON.stringify(r.selected.filter(s=>s.id===c.id).map(s=>s.title)));
  }
 });
+
+test("GENERAL INVARIANT: every normative requirement of every routed charter is retained, regardless of query words",()=>{
+ for(const task of [
+  {task:"Stabilize many moving luminous components",paths:["src/motion/animation.ts"]},
+  {task:"Restore chronology from diverged discussion histories",paths:["src/conversations/history.ts"]},
+  {task:"Implement reliable cache and reduce repeated model input",paths:["src/context/assembler.ts"]},
+  {task:"Guard delegated writes between autonomous workers",paths:["src/agents/worker.ts"]},
+  {task:"Retain exact accounting for text generation usage",paths:["src/profiler/report.ts"]}
+ ]) {
+  const r=context(task);
+  const covered=new Set([
+   ...r.selected.flatMap(s=>s.mode==="section"?s.requirements??[]:index.documents.find(d=>d.id===s.id)?.sections.flatMap(t=>t.requirementIds)??[]),
+   ...r.normative.map(x=>x.id),
+   ...r.dependencies.map(x=>x.id)
+  ]);
+  for(const charter of new Set(r.selected.map(x=>x.id))) {
+   const all=[...index.requirements.values()].filter(x=>x.charter===charter);
+   for(const req of all)assert.ok(covered.has(req.id),task.task+" missing "+req.id);
+  }
+ }
+});
+test("wording-agnostic scope closure selects cross-cutting safety charters by domain",()=>{
+ const variants=[
+  {task:"A child worker must not gain extra access through delegation",paths:["src/agents/worker.ts"],needed:["05","14","15"]},
+  {task:"Create a glowing background that remains light on the graphics processor",paths:["src/motion/particle-field.ts"],needed:["02","13","15"]},
+  {task:"Let two forks exchange later findings",paths:["src/conversations/forks.ts"],needed:["04","08","14","15"]},
+  {task:"Speed up old-message summarization",paths:["src/context/history.ts"],needed:["08","14","15"]}
+ ];
+ for(const c of variants){
+  const r=context(c);
+  const chosen=new Set(r.selected.map(x=>x.id));
+  for(const id of c.needed)assert.ok(chosen.has(id),c.task+": "+id);
+ }
+});
