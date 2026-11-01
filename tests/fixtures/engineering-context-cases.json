@@ -1,0 +1,171 @@
+{
+  "schemaVersion": 1,
+  "description": "Independently curated synthetic engineering scenarios. Requirements are predeclared in fixture, NEVER passed into retrieval. They test context sufficiency proxies, not actual AI task success.",
+  "cases": [
+    {
+      "id": "bulk-file-scope",
+      "category": "mutation",
+      "task": "Implement Contextual Command for selecting one file and requesting that all files in its parent folder be moved to a destination. Handle the correction 'only the highlighted file', preview bulk effects, and obtain approval before filesystem mutation.",
+      "paths": [
+        "src/interaction/selection.ts",
+        "src/workspaces/file-browser.ts"
+      ],
+      "essential": [
+        "AW-EXP-030",
+        "AW-EXP-031",
+        "AW-TRUST-041",
+        "AW-TRUST-042",
+        "AW-TRUST-043",
+        "AW-QVA-040"
+      ],
+      "critical": [
+        "AW-TRUST-041",
+        "AW-TRUST-043"
+      ]
+    },
+    {
+      "id": "cinematic-performance",
+      "category": "visual",
+      "task": "Implement Atmospheric Motion particle effects with the Motion Coordinator; render GPU particles efficiently and automatically reduce graphic load during gaming without losing usability or reduced-motion accessibility.",
+      "paths": [
+        "src/motion/particles.ts",
+        "src/rendering/particles.ts"
+      ],
+      "essential": [
+        "AW-LIQ-043",
+        "AW-LIQ-045",
+        "AW-LIQ-092",
+        "AW-PLT-048",
+        "AW-QVA-081"
+      ],
+      "critical": [
+        "AW-LIQ-045",
+        "AW-PLT-048"
+      ]
+    },
+    {
+      "id": "connected-branches-access",
+      "category": "privacy",
+      "task": "Implement Connected Branches so sibling chats can find new post-fork findings, preserve provenance and selectively adopt knowledge, without leaking private project data or permissions.",
+      "paths": [
+        "src/conversations/branch-sharing.ts",
+        "src/context/branch-links.ts"
+      ],
+      "essential": [
+        "AW-CHAT-055",
+        "AW-CHAT-057",
+        "AW-CHAT-107",
+        "AW-CIE-060",
+        "AW-TRUST-078",
+        "AW-QVA-052"
+      ],
+      "critical": [
+        "AW-CHAT-107",
+        "AW-TRUST-078"
+      ]
+    },
+    {
+      "id": "memory-compaction",
+      "category": "context",
+      "task": "Implement CIE adaptive compaction of long chat histories, preserving canonical messages, important user decisions and blockers, and checking protected constraints before continuing. Benchmark the quality and token tradeoff.",
+      "paths": [
+        "src/context/compaction.ts"
+      ],
+      "essential": [
+        "AW-CIE-006",
+        "AW-CIE-008",
+        "AW-CIE-042",
+        "AW-CIE-045",
+        "AW-QVA-065",
+        "AW-QVA-068"
+      ],
+      "critical": [
+        "AW-CIE-006",
+        "AW-CIE-008",
+        "AW-CIE-045"
+      ]
+    },
+    {
+      "id": "quick-capture",
+      "category": "knowledge",
+      "task": "Implement Quick Capture notes so a user can jot down an idea immediately without choosing a project or waiting for an AI response; classify the note asynchronously after saving it.",
+      "paths": [
+        "src/notes/quick-capture.ts",
+        "src/interaction/quick-capture.ts"
+      ],
+      "essential": [
+        "AW-NKT-004",
+        "AW-NKT-016",
+        "AW-NKT-020",
+        "AW-EXP-074",
+        "AW-EXP-075",
+        "AW-QVA-063"
+      ],
+      "critical": [
+        "AW-NKT-016",
+        "AW-NKT-020"
+      ]
+    },
+    {
+      "id": "parallel-agent-evidence",
+      "category": "agent",
+      "task": "Implement orchestration of specialized parallel agents working in isolated Git worktrees with task dependencies, safe delegation and evidence-based completion; never mark an unfinished task completed from a chat message.",
+      "paths": [
+        "src/agents/dispatcher.ts",
+        "src/workflows/assignment.ts"
+      ],
+      "essential": [
+        "AW-ATW-010",
+        "AW-ATW-037",
+        "AW-TRUST-053",
+        "AW-TRUST-056",
+        "AW-QVA-056",
+        "AW-QVA-057"
+      ],
+      "critical": [
+        "AW-ATW-010",
+        "AW-TRUST-053"
+      ]
+    },
+    {
+      "id": "truthful-intelligence-stream",
+      "category": "observability",
+      "task": "Implement a live Intelligence Stream with actual tool execution events and reasoning summaries. Show observed versus reported versus inferred evidence and never fabricate private internal thoughts.",
+      "paths": [
+        "src/observability/stream.ts",
+        "src/graphics/intelligence-stream.ts"
+      ],
+      "essential": [
+        "AW-OBS-012",
+        "AW-OBS-013",
+        "AW-OBS-014",
+        "AW-LIQ-053",
+        "AW-QVA-071"
+      ],
+      "critical": [
+        "AW-OBS-013",
+        "AW-OBS-014"
+      ]
+    },
+    {
+      "id": "token-telemetry",
+      "category": "measurement",
+      "task": "Implement per-chat detailed token usage profiling for input output cached reasoning tokens, ensure accurate accounting and do not claim unmeasured savings from context compaction.",
+      "paths": [
+        "src/profiler/token-usage.ts",
+        "src/context/token-efficiency.ts"
+      ],
+      "essential": [
+        "AW-AEP-044",
+        "AW-AEP-045",
+        "AW-AEP-048",
+        "AW-AEP-057",
+        "AW-QVA-068"
+      ],
+      "critical": [
+        "AW-AEP-045",
+        "AW-AEP-057"
+      ]
+    }
+  ]
+}

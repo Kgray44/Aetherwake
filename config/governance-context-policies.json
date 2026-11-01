@@ -1,0 +1,73 @@
+{
+  "schemaVersion": 2,
+  "description": "Conservative, task-phrasing-independent cross-domain dependencies from established Aetherwake subsystem boundaries. Each selected charter contributes every normative requirement (not just top-ranked sections); fuller prose sections remain ranked. This graph is not a claim of complete semantic understanding.",
+  "dependencies": {
+    "10": [
+      "08",
+      "15"
+    ],
+    "11": [
+      "09",
+      "15"
+    ],
+    "12": [
+      "14",
+      "15"
+    ],
+    "13": [
+      "15"
+    ],
+    "14": [
+      "15"
+    ],
+    "15": [],
+    "16": [
+      "15"
+    ],
+    "00": [],
+    "01": [
+      "03",
+      "14",
+      "15"
+    ],
+    "02": [
+      "13",
+      "15"
+    ],
+    "03": [
+      "14",
+      "15"
+    ],
+    "04": [
+      "08",
+      "14",
+      "15"
+    ],
+    "05": [
+      "14",
+      "15"
+    ],
+    "06": [
+      "08",
+      "14",
+      "15"
+    ],
+    "07": [
+      "01",
+      "08",
+      "14",
+      "15"
+    ],
+    "08": [
+      "14",
+      "15"
+    ],
+    "09": [
+      "14",
+      "15"
+    ]
+  },
+  "maxExpansionHops": 1,
+  "coverageMode": "full-normative-requirements-plus-ranked-sections",
+  "policyPrinciple": "Do not assume task text spells out applicable constraints. Select domains by router/path; expand neighboring domains structurally, retain every normative rule in every chosen charter, and disclose missing/uncertain scope."
+}

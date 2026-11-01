@@ -16,7 +16,7 @@ test("registry validates with 17 known authority statuses",()=>{
  assert.deepEqual(check.errors,[]);
  assert.equal(registry.size,17);
 });
-test("constitution is always binding, drafts are advisory, missing planned charter is not loaded",()=>{
+test("constitution is binding and published charters remain advisory until owner acceptance",()=>{
  const r=routeGovernance(config,registry,"Implement contextual command selection",[],exists);
  assert.deepEqual(r.binding.map(x=>x.id),["00"]);
  assert.ok(r.advisory.some(x=>x.id==="03"));
@@ -65,7 +65,7 @@ test("missing published charter causes setup validation error",()=>{
 // Regression guards: publication does not imply ratification, and governance-file edits
 // must never fall through to "constitution only" because the task text is generic.
 test("published charters stay advisory until explicitly accepted",()=>{
- for(const id of ["01","02","03","04","06","07","08","09","10","11","12","13","14","15","16"]){
+ for(const id of ["01","02","03","04","05","06","07","08","09","10","11","12","13","14","15","16"]){
   const r=routeGovernance(config,registry,"", [config.charters[id]],exists);
   assert.ok(r.advisory.some(x=>x.id===id),id);
   assert.ok(!r.binding.some(x=>x.id===id),id);
@@ -76,14 +76,14 @@ test("direct edits to charter paths route the edited charter even without matchi
  assert.ok(ids(r).includes("02"));
  assert.deepEqual(r.binding.map(x=>x.id),["00"]);
 });
-test("planned agent charter remains unavailable, never fabricated",()=>{
+test("newly published agent charter 05 routes advisory, never silently ratified",()=>{
  const r=routeGovernance(config,registry,"Agent orchestration workflow",["src/agents/dispatcher.ts"],exists);
- assert.ok(r.unavailable.some(x=>x.id==="05"));
- assert.ok(!r.advisory.some(x=>x.id==="05"));
+ assert.ok(r.advisory.some(x=>x.id==="05"));
+ assert.ok(!r.binding.some(x=>x.id==="05"));
 });
-test("path-only edits to the missing charter expose the governance gap",()=>{
+test("direct charter 05 edits route to its published advisory source",()=>{
  const r=routeGovernance(config,registry,"",["governance/05-AGENTS-TASKS-AND-WORKFLOWS.md"],exists);
- assert.ok(r.unavailable.some(x=>x.id==="05"));
+ assert.ok(r.advisory.some(x=>x.id==="05"));
 });
 test("incomplete routing coverage and malformed signals fail validation",()=>{
  const partial={...config,signals:{...config.signals}};

@@ -5,24 +5,38 @@ on:
     paths:
       - 'AGENTS.md'
       - 'config/governance-routes.json'
+      - 'config/governance-context-policies.json'
       - 'scripts/governance-router.mjs'
+      - 'scripts/governance-context.mjs'
+      - 'scripts/benchmark-governance-context.mjs'
+      - 'scripts/evaluate-governance-engineering.mjs'
+      - 'tests/fixtures/engineering-context-cases.json'
       - 'scripts/verify-governance.mjs'
       - 'docs/engineering/GOVERNANCE-ROUTER.md'
+      - 'docs/engineering/GOVERNANCE-CONTEXT-ROUTER-V2.md'
       - 'docs/vision/**'
       - 'README.md'
       - 'tests/governance-router.test.mjs'
+      - 'tests/governance-context.test.mjs'
       - 'governance/**'
       - '.github/workflows/governance-router.yml'
   pull_request:
     paths:
       - 'AGENTS.md'
       - 'config/governance-routes.json'
+      - 'config/governance-context-policies.json'
       - 'scripts/governance-router.mjs'
+      - 'scripts/governance-context.mjs'
+      - 'scripts/benchmark-governance-context.mjs'
+      - 'scripts/evaluate-governance-engineering.mjs'
+      - 'tests/fixtures/engineering-context-cases.json'
       - 'scripts/verify-governance.mjs'
       - 'docs/engineering/GOVERNANCE-ROUTER.md'
+      - 'docs/engineering/GOVERNANCE-CONTEXT-ROUTER-V2.md'
       - 'docs/vision/**'
       - 'README.md'
       - 'tests/governance-router.test.mjs'
+      - 'tests/governance-context.test.mjs'
       - 'governance/**'
       - '.github/workflows/governance-router.yml'
 permissions:
@@ -38,6 +52,10 @@ jobs:
       - name: Validate governance registry and charter statuses
         run: node scripts/governance-router.mjs --validate
       - name: Test deterministic routing behavior
-        run: node --test tests/governance-router.test.mjs
+        run: node --test tests/governance-router.test.mjs tests/governance-context.test.mjs
       - name: Validate cross-document links and normative ownership
         run: node scripts/verify-governance.mjs
+      - name: Benchmark section-level governance retrieval and ID coverage
+        run: node scripts/benchmark-governance-context.mjs
+      - name: Audit engineering-context sufficiency against independent required rules
+        run: node scripts/evaluate-governance-engineering.mjs --strict
