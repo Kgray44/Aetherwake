@@ -26,7 +26,7 @@ The repository owner retains final decision authority. Amendments must be explic
 | 03 | [Projects, Workspaces, and Resources](03-PROJECTS-WORKSPACES-AND-RESOURCES.md) | **Published — pending owner acceptance, v1.0.0** |
 | 04 | [Conversations and Connected Branches](04-CONVERSATIONS-AND-CONNECTED-BRANCHES.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 | 05 | Agents, Tasks, and Workflows | Planned |
-| 06 | Vela Intelligence and Adaptation | Planned |
+| 06 | [Vela Intelligence and Adaptation](06-VELA-INTELLIGENCE-AND-ADAPTATION.md) | **Published — pending owner acceptance, v1.0.0-draft** |
 | 07 | Notes, Knowledge, and Thought Stream | Planned |
 | 08 | Context Intelligence and Memory | Planned |
 | 09 | Intelligence Streams and Observability | Planned |
