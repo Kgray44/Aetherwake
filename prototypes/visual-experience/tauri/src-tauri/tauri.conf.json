@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Aerynth Visual Lab",
+  "version": "0.1.0",
+  "identifier": "com.aetherwake.aerynthvisuallab",
+  "build": { "beforeDevCommand": "npm run dev", "devUrl": "http://127.0.0.1:1420", "beforeBuildCommand": "npm run build", "frontendDist": "../dist" },
+  "app": {
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost",
+      "devCsp": "default-src 'self' http://127.0.0.1:1420; img-src 'self' data: http://127.0.0.1:1420; font-src 'self' http://127.0.0.1:1420; style-src 'self' 'unsafe-inline' http://127.0.0.1:1420; connect-src ipc: http://ipc.localhost ws://127.0.0.1:1420 http://127.0.0.1:1420"
+    },
+    "windows": [
+      { "label": "main", "title": "Aerynth · Visual Lab", "width": 1440, "height": 920, "minWidth": 960, "minHeight": 680, "center": true, "backgroundColor": "#070913" },
+      { "label": "activity", "title": "Aerynth · Intelligence Stream", "url": "index.html?surface=stream", "width": 460, "height": 720, "minWidth": 360, "minHeight": 500, "x": 80, "y": 80, "backgroundColor": "#070913" }
+    ]
+  },
+  "bundle": { "active": false }
+}

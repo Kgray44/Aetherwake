@@ -1,0 +1,89 @@
+{
+  "source": "Windows Get-Process; local sample, not GPU telemetry",
+  "processId": 14628,
+  "startedUtc": "2026-11-01T08:12:43.5835323+00:00",
+  "requestedSeconds": 5,
+  "intervalMs": 500,
+  "samples": [
+    {
+      "utc": "2026-11-01T08:12:43.6055499+00:00",
+      "workingSetBytes": 46477312,
+      "privateBytes": 8982528,
+      "handleCount": 419,
+      "cumulativeCpuSeconds": 8.422,
+      "cpuOneCorePercent": null
+    },
+    {
+      "utc": "2026-11-01T08:12:44.1792777+00:00",
+      "workingSetBytes": 46477312,
+      "privateBytes": 8982528,
+      "handleCount": 419,
+      "cumulativeCpuSeconds": 8.422,
+      "cpuOneCorePercent": 0.0
+    },
+    {
+      "utc": "2026-11-01T08:12:44.7127508+00:00",
+      "workingSetBytes": 46477312,
+      "privateBytes": 8982528,
+      "handleCount": 419,
+      "cumulativeCpuSeconds": 8.422,
+      "cpuOneCorePercent": 0.0
+    },
+    {
+      "utc": "2026-11-01T08:12:45.2389770+00:00",
+      "workingSetBytes": 46477312,
+      "privateBytes": 8982528,
+      "handleCount": 419,
+      "cumulativeCpuSeconds": 8.422,
+      "cpuOneCorePercent": 0.0
+    },
+    {
+      "utc": "2026-11-01T08:12:45.7578931+00:00",
+      "workingSetBytes": 46477312,
+      "privateBytes": 8982528,
+      "handleCount": 419,
+      "cumulativeCpuSeconds": 8.438,
+      "cpuOneCorePercent": 3.01
+    },
+    {
+      "utc": "2026-11-01T08:12:46.2715389+00:00",
+      "workingSetBytes": 46477312,
+      "privateBytes": 8982528,
+      "handleCount": 419,
+      "cumulativeCpuSeconds": 8.438,
+      "cpuOneCorePercent": 0.0
+    },
+    {
+      "utc": "2026-11-01T08:12:46.7881966+00:00",
+      "workingSetBytes": 46477312,
+      "privateBytes": 8982528,
+      "handleCount": 419,
+      "cumulativeCpuSeconds": 8.438,
+      "cpuOneCorePercent": 0.0
+    },
+    {
+      "utc": "2026-11-01T08:12:47.3021281+00:00",
+      "workingSetBytes": 46477312,
+      "privateBytes": 8982528,
+      "handleCount": 419,
+      "cumulativeCpuSeconds": 8.438,
+      "cpuOneCorePercent": 0.0
+    },
+    {
+      "utc": "2026-11-01T08:12:47.8170084+00:00",
+      "workingSetBytes": 46477312,
+      "privateBytes": 8982528,
+      "handleCount": 419,
+      "cumulativeCpuSeconds": 8.438,
+      "cpuOneCorePercent": 0.0
+    },
+    {
+      "utc": "2026-11-01T08:12:48.3335950+00:00",
+      "workingSetBytes": 46477312,
+      "privateBytes": 8982528,
+      "handleCount": 419,
+      "cumulativeCpuSeconds": 8.469,
+      "cpuOneCorePercent": 6.05
+    }
+  ]
+}
