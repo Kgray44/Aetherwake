@@ -1,0 +1,34 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { sculptureRegion, overviewPresence } from "../src/presence-layout.ts";
+test("sculpture region stays centered inside the saved card at every viewport scale and offscreen position", () => {
+  for (const zoom of [4, 1, 0.65, 0.369, 0.1, 0.01, 0.0001])
+    for (const origin of [-100000, 0, 25000]) {
+      const card = {
+          x: origin * zoom,
+          y: origin * zoom,
+          w: 208 * zoom,
+          h: 260 * zoom,
+        },
+        body = sculptureRegion(card);
+      assert(body.w > 0 && body.h > 0);
+      assert(body.x >= card.x && body.y >= card.y);
+      assert(body.x + body.w <= card.x + card.w + 1e-8);
+      assert(body.y + body.h <= card.y + card.h + 1e-8);
+      assert(Math.abs(body.x + body.w / 2 - card.x - card.w / 2) < 1e-8);
+      assert(Math.abs(body.y + body.h / 2 - card.y - card.h / 2) < 1e-8);
+    }
+});
+test("overview pose occupies the upper right and clears navigation and bottom controls without a workspace mutation", () => {
+  for (const [width, height, bar] of [
+    [1600, 1000, 201],
+    [800, 650, 249],
+    [2400, 1500, 201],
+  ]) {
+    const rect = overviewPresence(width, height, bar);
+    assert(rect.x > width * 0.7);
+    assert(rect.x + rect.w <= width - 20);
+    assert(rect.y >= bar + 10);
+    assert(rect.y + rect.h <= height - 140);
+  }
+});

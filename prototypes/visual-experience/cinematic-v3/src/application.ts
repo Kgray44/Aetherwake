@@ -18,6 +18,7 @@ import {
   previewBlock as desktopPreviewBlock,
 } from "./organization-preview";
 import "./application.css";
+import { sculptureRegion, overviewPresence } from "./presence-layout";
 import type {
   Block,
   BlockKind,
@@ -103,7 +104,15 @@ export function installApplication(hooks: Hooks) {
     moved: boolean;
   } | null = null;
   let suppressPresenceClick = false;
+  let overviewBarBottom = 201;
   function presenceTarget() {
+    if (state?.navigation.kind === "constellation")
+      return {
+        ...overviewPresence(innerWidth, innerHeight, overviewBarBottom),
+        lift: 0,
+        yaw: 0,
+        opacity: 1,
+      };
     const p = preview?.presence ?? state?.presence;
     if (!p) return;
     return {
@@ -226,7 +235,19 @@ export function installApplication(hooks: Hooks) {
   }
   function apply(next: DesktopSnapshot) {
     const changed = state?.activeWorkspaceId !== next.activeWorkspaceId;
-    if (changed || (previewBase && previewBase.revision !== next.layoutVersion))
+    const navigated =
+      JSON.stringify(state?.navigation) !== JSON.stringify(next.navigation);
+    if (navigated) {
+      presenceDrag = null;
+      cancelResize?.();
+      cancelResize = undefined;
+      document.body.classList.remove("vela-access");
+    }
+    if (
+      changed ||
+      navigated ||
+      (previewBase && previewBase.revision !== next.layoutVersion)
+    )
       cancelPreview();
     state = next;
     zoom = next.viewport?.zoom ?? 1;
@@ -255,6 +276,7 @@ export function installApplication(hooks: Hooks) {
       "Organization mode, layout history and block access";
     universe.hidden = false;
     const overview = next.navigation.kind === "constellation";
+    document.body.classList.toggle("constellation-overview", overview);
     universe.classList.toggle("overview", overview);
     el("#stage").inert = overview;
     el("#stage").style.visibility = overview ? "hidden" : "";
@@ -353,6 +375,14 @@ export function installApplication(hooks: Hooks) {
         },
       };
       constellation = mountConstellation(universe, options);
+      const bar = universe.querySelector<HTMLElement>(".aw-constellation-bar")!;
+      new ResizeObserver(() => {
+        const r = bar.getBoundingClientRect();
+        if (r.height > 0) {
+          overviewBarBottom = r.bottom;
+          hooks.wake();
+        }
+      }).observe(bar);
       void constellation.ready.then(hooks.wake);
     } else constellation.update(navigationSnapshot);
     for (const block of next.blocks)
@@ -1016,6 +1046,7 @@ export function installApplication(hooks: Hooks) {
       const p = state?.presence;
       if (!p) return;
       hooks.home();
+      zoom = 1;
       offset = {
         x: innerWidth / 2 - (p.x + p.width / 2) * zoom,
         y: innerHeight / 2 - (p.y + p.height / 2) * zoom,
@@ -1467,6 +1498,13 @@ export function installApplication(hooks: Hooks) {
       )
         hooks.motion.snap(presenceId);
       velaCard.classList.toggle("vela-card", !!presenceCard());
+      const card = presenceCard();
+      if (card) {
+        const scale = Math.min(1, card.w / 208, card.h / 260);
+        velaCard.style.setProperty("--vela-ui-scale", String(scale));
+        velaCard.style.setProperty("--vela-ui-inset", `${28 * scale}px`);
+        velaGrip.textContent = card.w < 110 ? "⠿" : "⠿ Move Vela";
+      }
       const key = JSON.stringify(policy);
       if (key !== policyKey) {
         policyKey = key;
@@ -1505,10 +1543,12 @@ export function installApplication(hooks: Hooks) {
     }),
     presenceCard,
     presence: () => {
-      const p = presenceCard();
-      return p
-        ? { x: p.x, y: p.y + 28, w: p.w, h: Math.max(44, p.h - 52) }
-        : undefined;
+      const p =
+        state?.navigation.kind === "constellation" &&
+        hooks.motion.bodies.has(presenceId)
+          ? hooks.motion.pose(presenceId)
+          : presenceCard();
+      return p ? sculptureRegion(p) : undefined;
     },
     snapshot: () => state,
     offset: () => offset,

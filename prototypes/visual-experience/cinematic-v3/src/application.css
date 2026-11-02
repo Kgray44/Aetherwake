@@ -315,12 +315,14 @@
   top: 0;
   left: 0;
   right: 0;
-  padding: 7px;
+  padding: 0;
+  height: var(--vela-ui-inset, 28px);
+  line-height: var(--vela-ui-inset, 28px);
   border: 1px solid #b9a4e244;
   border-radius: 12px;
   background: #121326bb;
   color: #d7c8ee;
-  font-size: 11px;
+  font-size: calc(11px * var(--vela-ui-scale, 1));
   cursor: grab;
   touch-action: none;
   z-index: 2;
@@ -339,13 +341,33 @@
   left: 0;
   right: 0;
   transform: none;
+  height: var(--vela-ui-inset, 28px);
+  justify-content: center;
+  max-width: 100%;
+  overflow: hidden;
 }
 .application-ready #vela.vela-card .vela-label b,
 .application-ready #vela.vela-card .vela-label > span {
   display: none;
 }
 .application-ready #vela.vela-card .vela-label small {
-  font-size: 10px;
+  font-size: calc(10px * var(--vela-ui-scale, 1));
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.application-ready.constellation-overview .study-caption {
+  visibility: hidden;
+}
+.application-ready.constellation-overview #vela .vela-label {
+  top: calc(100% + 6px);
+  bottom: auto;
+  left: auto;
+  right: 0;
+  align-items: flex-end;
+  max-width: 208px;
 }
 .layout-preview-guides {
   position: absolute;
