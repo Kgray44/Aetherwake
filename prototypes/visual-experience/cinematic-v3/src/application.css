@@ -757,3 +757,15 @@ body.application-ready
 .application-ready[data-status-placement="chrome"] .window-drag > span {
   visibility: hidden;
 }
+.resource-opening-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.5rem;
+}
+.resource-opening-row .resource-result {
+  min-width: 0;
+}
+.resource-opening-row > [data-attach] {
+  font-size: 0.8rem;
+}

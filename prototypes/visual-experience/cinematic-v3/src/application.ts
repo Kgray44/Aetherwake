@@ -73,6 +73,14 @@ import "../../../block-library/note-view.css";
 import { mountResourceLinks } from "../../../block-library/resource-links-view.ts";
 import "../../../block-library/resource-links-view.css";
 import { createRelatedResourcesPort } from "./related-resources";
+import { createResourceOpener } from "./resource-opening.ts";
+import { createResourceSurface } from "./resource-surface.ts";
+import { mountDirectResourceExperience } from "../../../block-library/direct-resource-view.ts";
+import "../../../block-library/direct-resource-view.css";
+import type {
+  ResourceOpeningInput,
+  ResourceOpeningResult,
+} from "../../../application-contract/resource-opening.ts";
 import {
   unavailableBlock,
   showUnavailableBlock,
@@ -406,6 +414,117 @@ export function installApplication(hooks: Hooks) {
   let conversationSurface: ContextualSurfaceRequest | null = null;
   let conversationDisposing: Promise<void> | null = null;
   let constellation: ReturnType<typeof mountConstellation> | null = null;
+  const directResources = createResourceSurface({
+    surfaces,
+    anchor: () => ({
+      x: innerWidth / 2 - 8,
+      y: Math.max(120, innerHeight / 5),
+      width: 16,
+      height: 16,
+    }),
+    failed: report,
+    mount: (root, resource) =>
+      mountDirectResourceExperience(root, resource, {
+        notes: notesClient,
+        noteSession,
+        saveContent,
+        readResource: (id) =>
+          state?.resources.find(
+            (item) =>
+              item.id === id &&
+              item.available !== false &&
+              item.visible !== false &&
+              item.state !== "archived",
+          ),
+        setTaskStatus: (input) =>
+          enqueueResult(async () => {
+            await flush();
+            await command({ type: "taskStatus", ...input });
+          }),
+        setTaskPriority: (input) =>
+          enqueueResult(async () => {
+            await flush();
+            await command({ type: "taskPriority", ...input });
+          }),
+        manageMembers: taskGroupMembers,
+        openResource: openCanonicalResource,
+        openRelated: openRelatedResources,
+        events: {
+          snapshot: eventWindow,
+          refresh: refreshEvents,
+          openResource: openCanonicalResource,
+        },
+      }),
+  });
+  const resourceOpener = createResourceOpener({
+    resolve: async (input) => {
+      await flush();
+      return (await host.command!(
+        "openResource",
+        input,
+      )) as ResourceOpeningResult;
+    },
+    present: async (result, _input, current) => {
+      if (!current()) return;
+      const resource = result.resource;
+      if (state)
+        state = {
+          ...state,
+          resources: state.resources.some((item) => item.id === resource.id)
+            ? state.resources.map((item) =>
+                item.id === resource.id ? resource : item,
+              )
+            : [...state.resources, resource],
+        };
+      if (
+        result.presentation.mode === "existing-placement" &&
+        result.placement
+      ) {
+        const placement = result.placement;
+        await enqueueResult(async () => {
+          if (!current()) return;
+          await command(
+            {
+              type: "navigate",
+              target: { kind: "workspace", workspaceId: placement.workspaceId },
+            },
+            true,
+          );
+          if (!current()) return;
+          surfaces.close("canonical-resource");
+          surfaces.close("conversations");
+          reveal(placement.blockId);
+          hooks.focus(placement.blockId);
+        });
+      } else if (result.presentation.kind === "conversation") {
+        surfaces.close("canonical-resource");
+        await showConversations(
+          resource.id,
+          result.selection?.messageId,
+          current,
+        );
+      } else {
+        surfaces.close("conversations");
+        directResources.show(resource);
+      }
+    },
+    unavailable: (result) => {
+      directResources.unavailable(result.resourceId);
+      hooks.status(
+        result.status === "unsupported"
+          ? "This resource has no supported viewer yet."
+          : "This resource is unavailable or access has been revoked.",
+      );
+    },
+  });
+  addEventListener(
+    "pagehide",
+    () => {
+      resourceOpener.cancel();
+      directResources.dispose();
+    },
+    { once: true },
+  );
   let policyKey = "";
   const arrivalId = "application:arrival";
   let departingWorkspace = false;
@@ -504,7 +623,7 @@ export function installApplication(hooks: Hooks) {
   el("#status").textContent =
     "Open Workspaces to begin. Empty workspaces are ready for your ideas.";
   el(".place").innerHTML =
-    '<button id="workspace-manager" title="Projects and workspaces (Ctrl+K)">Workspaces ↗</button>';
+    '<button id="workspace-manager" title="Projects and workspaces (Ctrl+K)">Workspaces ↗</button><button id="application-new-chat">＋ Chat</button><button id="application-resources">Resources</button>';
   const dock = el(".dock");
   dock.insertAdjacentHTML(
     "afterbegin",
@@ -535,7 +654,11 @@ export function installApplication(hooks: Hooks) {
       `Action not saved: ${e instanceof Error ? e.message : "operation_failed"}. Your current data is retained.`,
     );
   }
-  async function command(a: DesktopCommand): Promise<DesktopSnapshot> {
+  async function command(
+    a: DesktopCommand,
+    resourceOpening = false,
+  ): Promise<DesktopSnapshot> {
+    if (a.type === "navigate" && !resourceOpening) resourceOpener.cancel();
     const knownWorkspaces = new Set(
       state?.workspaces.map((workspace) => workspace.id),
     );
@@ -682,6 +805,7 @@ export function installApplication(hooks: Hooks) {
         !next.blocks.some((block) => block.resource_id === id)
       )
         noteSessions.delete(id);
+    directResources.reconcile(next.resources);
     layoutControls.refresh();
     zoom = next.viewport?.zoom ?? 1;
     offset = {
@@ -746,18 +870,7 @@ export function installApplication(hooks: Hooks) {
           await command({ type: "navigate", target });
         },
         openResource: async (target) => {
-          const block = state?.blocks.find(
-            (b) =>
-              b.id === target.blockId &&
-              b.resource_id === target.resourceId &&
-              b.workspace_id === target.workspaceId,
-          );
-          const resource = state?.resources.find(
-            (r) => r.id === target.resourceId,
-          );
-          if (!block || !resource || resource.available === false)
-            throw new Error("resource_unavailable");
-          hooks.focus(target.blockId);
+          await resourceOpener.open(target);
         },
         persistence: {
           load: () => host.command!("viewState", {}),
@@ -899,6 +1012,7 @@ export function installApplication(hooks: Hooks) {
     }
   }
   function run(a: DesktopCommand) {
+    if (a.type === "navigate") resourceOpener.cancel();
     return enqueue(async () => {
       await flush();
       return command(a);
@@ -1122,16 +1236,22 @@ export function installApplication(hooks: Hooks) {
     el<HTMLInputElement>("input,select,button", dialog)?.focus();
   }
   function conversations(resourceId?: string) {
-    void showConversations(resourceId).catch(report);
+    if (resourceId) openCanonicalResource(resourceId);
+    else void showConversations().catch(report);
   }
-  async function showConversations(resourceId?: string) {
+  async function showConversations(
+    resourceId?: string,
+    messageId?: string,
+    current: () => boolean = () => true,
+  ) {
     await conversationDisposing;
+    if (!current()) return;
     dialog.close();
     cardConfiguration?.dispose();
     cardConfiguration = null;
     if (conversationManager && conversationSurface) {
       surfaces.open(conversationSurface).id = "conversation-surface";
-      if (resourceId) await conversationManager.open(resourceId);
+      if (resourceId) await conversationManager.open(resourceId, messageId);
       else await conversationManager.refresh();
       return;
     }
@@ -1236,42 +1356,16 @@ export function installApplication(hooks: Hooks) {
       state: conversationView,
       ...(resourceId ? { resourceId } : {}),
       onClose: () => surfaces.close("conversations"),
-      onResource: (id, messageId) => {
-        const resource = state?.resources.find((r) => r.id === id);
-        if (resource?.kind === "conversation") {
-          if (conversationView.selectedResourceId !== id)
-            void controller?.open(id, messageId);
-          else
-            hooks.status(
-              `${resource.title}${messageId ? " · canonical source message" : " · conversation history"}`,
-            );
-          return;
-        }
-        const placement = (state?.navigationBlocks ?? state?.blocks ?? []).find(
-          (b) => b.resource_id === id,
-        );
-        if (!placement) {
-          hooks.status(
-            "This source has no workspace placement. It remains available in Resources.",
-          );
-          return;
-        }
-        surfaces.close("conversations");
-        void enqueue(async () => {
-          await flush();
-          await command({
-            type: "navigate",
-            target: {
-              kind: "workspace",
-              workspaceId: placement.workspace_id,
-            },
-          });
-          reveal(placement.id);
-          hooks.focus(placement.id);
-        });
+      onResource: (id, selectedMessageId) => {
+        // Manager selection also emits this callback. Its own canonical chat
+        // is already open; source links still use the shared dispatch below.
+        if (conversationView.selectedResourceId === id) return;
+        openCanonicalResource(id, selectedMessageId);
       },
     });
-    void controller.ready.catch(report);
+    await controller.ready;
+    if (current() && resourceId && messageId)
+      await controller.open(resourceId, messageId);
   }
   function openVela() {
     if (velaOpen) {
@@ -1299,35 +1393,10 @@ export function installApplication(hooks: Hooks) {
               type: "navigate",
               target: { kind: "constellation", projectId: subject.id },
             });
-          } else if (
-            state?.resources.find((r) => r.id === subject.id)?.kind ===
-            "conversation"
-          ) {
-            conversations(subject.id);
           } else {
-            const placement = (
-              state?.navigationBlocks ??
-              state?.blocks ??
-              []
-            ).find((b) => b.resource_id === subject.id);
-            if (!placement) {
-              hooks.status(
-                "This resource is saved in Resources and has no workspace placement.",
-              );
-              return;
-            }
-            void enqueue(async () => {
-              await flush();
-              await command({
-                type: "navigate",
-                target: {
-                  kind: "workspace",
-                  workspaceId: placement.workspace_id,
-                },
-              });
-              reveal(placement.id);
-              hooks.focus(placement.id);
-            });
+            void resourceOpener
+              .open({ resourceId: subject.id, origin: { source: "vela" } })
+              .catch(report);
           }
         },
       });
@@ -1504,29 +1573,19 @@ export function installApplication(hooks: Hooks) {
           }),
       );
     el("#standalone-chat", dialog).onclick = () => {
-      open(
-        "Start a conversation",
-        '<p>No project or task is required. A local workspace holds the visual placement.</p><form><label>Title<input name="title" value="Conversation" required maxlength="200"></label><button type="submit">Open conversation</button></form>',
-      );
-      form(async (f) => {
-        const w =
-          state!.activeWorkspaceId ??
-          (
-            await command({
-              type: "createWorkspace",
-              title: "Personal",
-              projectId: null,
-            })
-          ).activeWorkspaceId;
-        await command({
-          type: "createResource",
-          kind: "conversation",
-          title: String(f.get("title")),
-          workspaceId: w,
-          provider: "local",
-        });
-      });
+      void newConversation().catch(report);
     };
+  }
+  async function newConversation() {
+    const created = await composerPort.command("create", {
+      title: "",
+      providerId: "local",
+      commandId: crypto.randomUUID(),
+    });
+    await resourceOpener.open({
+      resourceId: created.resourceId,
+      origin: { source: "application" },
+    });
   }
   function add() {
     if (!state?.activeWorkspaceId) {
@@ -1642,8 +1701,8 @@ export function installApplication(hooks: Hooks) {
   function picker() {
     if (!state) return;
     open(
-      "Your canonical resources",
-      '<label>Find a resource<input id="resource-search" type="search" placeholder="Search title or type"></label><div id="resource-results"></div><p>Attaching creates a placement of the same resource. Removing a block preserves its source.</p>',
+      "Resources",
+      '<label>Find a resource<input id="resource-search" type="search" placeholder="Search title or type"></label><button id="standalone-note">New note</button><div id="resource-results"></div>',
     );
     const draw = () => {
       const q = el<HTMLInputElement>(
@@ -1656,9 +1715,20 @@ export function installApplication(hooks: Hooks) {
           .filter((r) => `${r.title} ${r.kind}`.toLowerCase().includes(q))
           .map(
             (r) =>
-              `<button class="resource-result" data-attach="${r.id}">${escape(r.title)}<small>${r.kind} · ${r.id.slice(0, 8)}</small></button>`,
+              `<div class="resource-opening-row"><button class="resource-result" data-open-resource="${r.id}">${escape(r.title)}<small>${r.kind}</small></button><button data-attach="${r.id}" ${!state!.activeWorkspaceId || r.available === false ? "disabled" : ""} aria-label="Add ${escape(r.title)} to this workspace">Add to workspace</button></div>`,
           )
           .join("") || "<p>No matching resources.</p>";
+      dialog
+        .querySelectorAll<HTMLElement>("[data-open-resource]")
+        .forEach((button) => {
+          button.onclick = () => {
+            const resourceId = button.dataset.openResource!;
+            dialog.close();
+            void resourceOpener
+              .open({ resourceId, origin: { source: "library" } })
+              .catch(report);
+          };
+        });
       dialog.querySelectorAll<HTMLElement>("[data-attach]").forEach(
         (b) =>
           (b.onclick = () => {
@@ -1677,6 +1747,26 @@ export function installApplication(hooks: Hooks) {
       );
     };
     el("#resource-search", dialog).oninput = draw;
+    el("#standalone-note", dialog).onclick = () => {
+      void (async () => {
+        const known = new Set(state!.resources.map((resource) => resource.id));
+        const next = await command({
+          type: "createResource",
+          kind: "note",
+          title: "Untitled note",
+          workspaceId: null,
+        });
+        const resource = next.resources.find(
+          (item) => !known.has(item.id) && item.kind === "note",
+        );
+        if (!resource) throw Error("created_resource_unavailable");
+        dialog.close();
+        await resourceOpener.open({
+          resourceId: resource.id,
+          origin: { source: "library" },
+        });
+      })().catch(report);
+    };
     draw();
   }
   function taskGroupMembers(groupId: string) {
@@ -2326,64 +2416,14 @@ export function installApplication(hooks: Hooks) {
       throw error;
     }
   }
-  function openCanonicalResource(resourceId: string) {
-    const resource = state?.resources.find((r) => r.id === resourceId);
-    if (resource?.kind === "conversation") {
-      conversations(resourceId);
-      return;
-    }
-    const placement = (state?.navigationBlocks ?? state?.blocks ?? []).find(
-      (b) => b.resource_id === resourceId,
-    );
-    if (placement) {
-      void enqueue(async () => {
-        await flush();
-        await command({
-          type: "navigate",
-          target: { kind: "workspace", workspaceId: placement.workspace_id },
-        });
-        reveal(placement.id);
-        hooks.focus(placement.id);
-      });
-      return;
-    }
-    if (
-      !resource ||
-      resource.available === false ||
-      resource.kind === "stream"
-    ) {
-      hooks.status(
-        "This canonical resource is unavailable here. Attach an available resource to inspect it in the workspace.",
-      );
-      return;
-    }
-    const content = document.createElement("div"),
-      heading = document.createElement("h3"),
-      editor = document.createElement("textarea"),
-      saved = document.createElement("p");
-    heading.textContent = resource.title;
-    editor.value = resource.content;
-    editor.maxLength = 100000;
-    editor.rows = 12;
-    editor.style.width = "100%";
-    saved.className = "saved";
-    content.append(heading, editor, saved);
-    const session = noteSession(resourceId),
-      view = mountNoteExperience(content, editor, session, notesClient, {
-        kind: resource.kind,
-        openRelated: openRelatedResources,
-      });
-    editor.setAttribute("aria-label", resource.title + " content");
-    editor.oninput = () => saveContent(resourceId, editor.value, content);
-    surfaces.open({
-      id: "canonical-resource",
-      anchor: el(".aw-workspace-add"),
-      content,
-      label: resource.title,
-      minSize: { width: 360, height: 300 },
-      maxSize: { width: 720, height: 680 },
-      onClose: () => view.dispose(),
-    });
+  function openCanonicalResource(resourceId: string, messageId?: string) {
+    void resourceOpener
+      .open({
+        resourceId,
+        origin: { source: "application" },
+        ...(messageId ? { selection: { messageId } } : {}),
+      })
+      .catch(report);
   }
   function decorateSubject(article: HTMLElement, block: Block) {
     if (!block.subject || block.subject.kind === "resource") return;
@@ -3179,6 +3219,10 @@ export function installApplication(hooks: Hooks) {
     }
   });
   el("#workspace-manager").onclick = manager;
+  el("#application-resources").onclick = picker;
+  el("#application-new-chat").onclick = () => {
+    void newConversation().catch(report);
+  };
   el("#add-block").onclick = add;
   el("#resource-picker").onclick = picker;
   el("#layout-manager").onclick = layouts;
@@ -3478,6 +3522,7 @@ export function installApplication(hooks: Hooks) {
       return p ? sculptureRegion(p) : undefined;
     },
     snapshot: () => state,
+    openResource: (input: ResourceOpeningInput) => resourceOpener.open(input),
     openVela,
     offset: () => camera().offset,
     zoom: () => camera().zoom,

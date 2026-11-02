@@ -40,6 +40,7 @@ lines.on("line", async (line) => {
         "branch",
         "conversation",
         "conversationActivity",
+        "openResource",
         "conversationSendPreview",
         "authorizeConversationSend",
         "conversationSend",

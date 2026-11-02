@@ -7,6 +7,7 @@ import {
   materialMotionKey,
 } from "./resource-material-motion.ts";
 import { installApplication, type Application } from "./application";
+import type { ResourceOpeningInput } from "../../../application-contract/resource-opening.ts";
 import { targetDirectCard, directCardLayer } from "./direct-card-motion.ts";
 import type {
   DesktopSnapshot,
@@ -1721,6 +1722,8 @@ function controller() {
       wake();
     },
     application: () => application?.snapshot(),
+    openResource: (input: ResourceOpeningInput) =>
+      application?.openResource(input),
     setPresenceScaleForReview: (scale: number | null) => {
       if (
         scale !== null &&

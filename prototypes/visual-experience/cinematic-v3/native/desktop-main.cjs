@@ -6,6 +6,7 @@ const {
   dialog,
   nativeTheme,
   shell,
+  safeStorage,
 } = require("electron");
 const { spawn, execFileSync } = require("node:child_process");
 const { createInterface } = require("node:readline");
@@ -26,6 +27,7 @@ const {
 } = require("./conversation-broker.cjs");
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
+const { createProtectedStorageBroker } = require("./protected-storage.cjs");
 const root = path.resolve(__dirname, "..");
 const moduleStarted = Date.now();
 const moduleStartedMonotonicMs = performance.now();
@@ -181,6 +183,7 @@ if (deadlineArgument) {
   deadline.unref();
 }
 const pending = new Map();
+let nativeSecretBroker;
 function call(command, input) {
   if (!child || child.killed || !child.stdin.writable)
     return Promise.reject(new Error("backend_disconnected"));
@@ -211,10 +214,22 @@ app.whenReady().then(async () => {
       path.join(privateRoot, "aerynth.sqlite"),
       privateRoot,
       root,
+      "--native-secrets",
     ],
     { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
   );
+  nativeSecretBroker = createProtectedStorageBroker({
+    safeStorage,
+    isReady: () => app.isReady(),
+    platform: process.platform,
+    send: (wire) => {
+      if (!child || child.killed || !child.stdin.writable)
+        throw Error("native_secret_closed");
+      child.stdin.write(JSON.stringify(wire) + "\n");
+    },
+  });
   const fail = () => {
+    nativeSecretBroker?.close();
     for (const p of pending.values()) {
       clearTimeout(p.timer);
       p.reject(new Error("backend_disconnected"));
@@ -233,6 +248,7 @@ app.whenReady().then(async () => {
   createInterface({ input: child.stdout }).on("line", (line) => {
     try {
       const m = JSON.parse(line);
+      if (nativeSecretBroker.handle(m)) return;
       if (m.event) {
         sendToWindow(win, "application-event", m.event);
         return;
@@ -321,6 +337,7 @@ app.whenReady().then(async () => {
           "replay",
           "executionStatus",
           "conversationActivity",
+          "openResource",
           "interrupt",
           "firstPartyChat",
         ].includes(command) &&
@@ -348,6 +365,8 @@ app.whenReady().then(async () => {
         throw new Error("storage_reserve_admission_denied");
       let result;
       if (command === "desktop") result = await call("desktop", input);
+      else if (command === "openResource")
+        result = await call("openResource", input);
       else if (command === "graphAction")
         result = await require("./graph-actions.cjs").graphAction(input, call);
       else if (command === "viewState") result = await call("viewState", input);
@@ -730,6 +749,7 @@ app.on("before-quit", (event) => {
             await call("interrupt", { executionId: e.id }).catch(() => {});
       }
       await call("close", {}).catch(() => {});
+      nativeSecretBroker?.close();
       child.kill();
       app.quit();
     })
@@ -744,6 +764,7 @@ app.on("before-quit", (event) => {
         cancelId: 0,
       });
       if (choice.response === 1) {
+        nativeSecretBroker?.close();
         child.kill();
         app.quit();
       } else await unlockEditingAfterKeptOpen();

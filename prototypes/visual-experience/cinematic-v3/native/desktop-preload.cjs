@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld(
           "replay",
           "executionStatus",
           "conversationActivity",
+          "openResource",
           "interrupt",
           "send",
           "viewState",
