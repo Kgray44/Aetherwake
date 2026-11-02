@@ -206,7 +206,9 @@ export class BackendCore {
       projectAccess:id=>this.libraryAuthorized({kind:'project',id}),resourceAccess:(id,messageId)=>this.productResourceAccess(id,messageId),
       catalog:()=>{
         const observed=this.capabilityCache.inspect(),cap=observed.state==='fresh'?observed.capability:undefined;
-        if(!cap||cap.mock)return null;
+        // An empty observation set is not an available provider. It still lets
+        // unconfigured profiles resolve inherited values and show Needs setup.
+        if(!cap||cap.mock)return {revision:'aerynth.provider-observations:unobserved',providers:[]};
         return {revision:observed.observedAt??'unobserved',providers:[{id:cap.providerId,state:cap.authentication==='available'?'available':cap.authentication==='unavailable'?'unavailable':'unknown',models:cap.models.map(id=>({id,reasoningEfforts:[]})),capabilities:[]}]};
       },
       recordEvent:event=>this.record(event.type,'observed',undefined,'product:'+event.commandId+':'+event.type,{providerId:'aerynth-native',detached:true,resourceId:event.resourceId,correlationId:event.commandId,payload:{redacted:true,application:{resourceVersion:event.resourceVersion,commandId:event.commandId,detail:event.detail}}}),

@@ -27,6 +27,9 @@ test('real Core commands preserve standalone agent identity, versions, archive r
     const created=(await f.core.command('agents',{name:'create',input})).result as AgentMutationReceipt;
     assert.deepEqual(counts(f),{...before,resources:before.resources+1});
     const original=(await f.core.command('agents',{name:'inspect',input:{resourceId:created.agent.resourceId}})).result as AgentProfile;
+    const effective=(await f.core.command('agents',{name:'effective',input:{agent:original.ref}})).result as any;
+    assert.equal(effective.configurationState,'needs-setup');assert.equal(effective.settings.providerId,null);assert.equal(effective.verification,'catalog-only');
+    assert.deepEqual((await f.core.command('agents',{name:'catalog',input:{}})).result,{revision:'aerynth.provider-observations:unobserved',providers:[]});
     assert.deepEqual((await f.core.command('agents',{name:'create',input})).result,created);
     const profile=structuredClone(original.profile);profile.purpose='Synthetic bounded review role';profile.settings.additionalInstructions={source:'override',value:'Synthetic configuration, no execution authorized.'};
     const changed=(await f.core.command('agents',{name:'update',input:{commandId:'synthetic-agent-edit',agent:original.ref,title:original.resource.title,profile}})).result as AgentMutationReceipt;
