@@ -54,6 +54,41 @@ const PROFILES = {
   },
 } as const;
 
+const faceGlareProtection = new WeakMap<
+  THREE.MeshPhysicalMaterial,
+  { value: number }
+>();
+
+/** Keep bright studio reflections from whitening a content-bearing glass face.
+ * The shoulder acts on the completed physical lighting, including clearcoat:
+ * dark shading is unchanged and brighter shading keeps its hue and ordering.
+ * It covers the continuous face, never a rectangle behind individual text.
+ * The separate bevel, perimeter optics and environmental lights stay intact. */
+function protectFaceHighlights(face: THREE.MeshPhysicalMaterial) {
+  const protection = { value: 1 };
+  faceGlareProtection.set(face, protection);
+  const originalCompile = face.onBeforeCompile;
+  const originalKey = face.customProgramCacheKey();
+  face.onBeforeCompile = (shader, renderer) => {
+    originalCompile.call(face, shader, renderer);
+    shader.uniforms.uFaceGlareProtection = protection;
+    shader.fragmentShader =
+      "uniform float uFaceGlareProtection;\n" +
+      shader.fragmentShader.replace(
+        "#include <opaque_fragment>",
+        `
+        float facePeak = max(outgoingLight.r, max(outgoingLight.g, outgoingLight.b));
+        if (uFaceGlareProtection > 0.5 && facePeak > 0.025) {
+          float faceExcess = facePeak - 0.025;
+          float faceShoulder = 0.025 + 0.04 * faceExcess / (0.04 + faceExcess);
+          outgoingLight *= faceShoulder / facePeak;
+        }
+        #include <opaque_fragment>`,
+      );
+  };
+  face.customProgramCacheKey = () => `${originalKey}:aerynth-face-glare-v1`;
+}
+
 /** Seven caller-owned materials are allocated once per canonical resource.
  * Optical glass here means an opaque dark substrate with an optical coat and
  * a separate translucent perimeter seat, not unqualified volumetric refraction. */
@@ -80,6 +115,7 @@ export function createInstrumentMaterials(): InstrumentMaterialSet {
     optics: opaque(),
     accent: opaque(),
   };
+  protectFaceHighlights(materials.face);
   materials.optics.transparent = true;
   materials.optics.depthWrite = false;
   updateInstrumentMaterials(materials, {
@@ -115,6 +151,8 @@ export function updateInstrumentMaterials(
     (1.1 - architecture * 0.1) *
     (1 + emphasis * 0.1);
   const face = materials.face;
+  const protection = faceGlareProtection.get(face);
+  if (protection) protection.value = glass ? 1 : 0;
   face.color.setHex(note ? (glass ? 0x101019 : 0x101419) : profile.face);
   face.roughness = THREE.MathUtils.lerp(
     note

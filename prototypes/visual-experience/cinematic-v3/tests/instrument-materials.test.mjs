@@ -241,3 +241,81 @@ test("focused optical work preserves a coated glass family around its protected 
     dispose(materials);
   }
 });
+
+test("glass face glare protection follows physical clearcoat lighting and leaves the separate optics alone", () => {
+  const materials = createInstrumentMaterials();
+  const shader = {
+    uniforms: {},
+    fragmentShader: THREE.ShaderLib.physical.fragmentShader,
+  };
+  try {
+    materials.face.onBeforeCompile(shader, null);
+    const fragment = shader.fragmentShader;
+    assert(
+      fragment.indexOf("float facePeak") >
+        fragment.indexOf("clearcoatSpecularDirect + clearcoatSpecularIndirect"),
+      "clearcoat glare must be included in the continuous face response",
+    );
+    assert(
+      fragment.indexOf("float facePeak") <
+        fragment.indexOf("#include <opaque_fragment>"),
+    );
+    assert(
+      fragment.indexOf("float facePeak") <
+        fragment.indexOf("#include <tonemapping_fragment>"),
+    );
+    assert(fragment.includes("outgoingLight *= faceShoulder / facePeak"));
+    assert.equal(shader.uniforms.uFaceGlareProtection.value, 1);
+    for (const [name, material] of Object.entries(materials)) {
+      if (name === "face") continue;
+      const separate = {
+        uniforms: {},
+        fragmentShader: THREE.ShaderLib.physical.fragmentShader,
+      };
+      material.onBeforeCompile(separate, null);
+      assert.equal(
+        separate.fragmentShader,
+        THREE.ShaderLib.physical.fragmentShader,
+      );
+      assert.equal(separate.uniforms.uFaceGlareProtection, undefined);
+    }
+  } finally {
+    dispose(materials);
+  }
+});
+
+test("pooled face glare protection changes study without stale compiled uniforms or program churn", () => {
+  const materials = createInstrumentMaterials();
+  const shader = {
+    uniforms: {},
+    fragmentShader: THREE.ShaderLib.physical.fragmentShader,
+  };
+  try {
+    materials.face.onBeforeCompile(shader, null);
+    const uniform = shader.uniforms.uFaceGlareProtection;
+    const key = materials.face.customProgramCacheKey();
+    assert.notEqual(key, materials.edge.customProgramCacheKey());
+    for (const study of ["engineered", "composite", "optical"])
+      for (const kind of ["note", "conversation", "research"])
+        for (const unfold of [0, 0.5, 1]) {
+          updateInstrumentMaterials(materials, {
+            ...base,
+            study,
+            kind,
+            unfold,
+          });
+          assert.equal(uniform.value, study === "engineered" ? 0 : 1);
+          assert.equal(shader.uniforms.uFaceGlareProtection, uniform);
+          assert.equal(materials.face.customProgramCacheKey(), key);
+          assert.equal(materials.face.opacity, 1);
+        }
+    const recompiled = {
+      uniforms: {},
+      fragmentShader: THREE.ShaderLib.physical.fragmentShader,
+    };
+    materials.face.onBeforeCompile(recompiled, null);
+    assert.equal(recompiled.uniforms.uFaceGlareProtection, uniform);
+  } finally {
+    dispose(materials);
+  }
+});
