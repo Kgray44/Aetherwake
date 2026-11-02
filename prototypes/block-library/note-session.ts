@@ -248,14 +248,29 @@ export class NoteSession {
       }
     });
   }
-  /** Refresh clean editors after canonical changes. Dirty editors retain their original revision fence. */
+  /** Refresh metadata without replacing dirty/recovered text or advancing either
+   * revision fence. A competing revision still requires an explicit decision. */
   refresh(): Promise<void> {
     return this.queue(async () => {
       await this.ready;
-      if (this.value.dirty) return;
-      this.sequence = 0;
-      this.committedSequence = 0;
       try {
+        if (this.value.dirty) {
+          const doc = await this.port.readNote(this.resourceId);
+          this.value.document = doc;
+          if (
+            doc.conflict ||
+            doc.resource.version !== this.baseVersion ||
+            doc.draftRevision !== this.draftRevision
+          ) {
+            this.fenced = true;
+            this.value.phase = "conflict";
+            this.value.error = "note_revision_conflict";
+          }
+          this.publish();
+          return;
+        }
+        this.sequence = 0;
+        this.committedSequence = 0;
         await this.load();
       } catch (error) {
         this.fail(error);

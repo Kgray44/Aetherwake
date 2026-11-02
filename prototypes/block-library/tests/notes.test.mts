@@ -10,6 +10,9 @@ import type { CanonicalNoteHost } from "../note-contracts.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { NoteSession } from "../note-session.ts";
 import type { NoteExperiencePort } from "../note-contracts.ts";
+import { mountNoteExperience } from "../note-view.ts";
+import { blockDocument } from "./component-dom.mts";
+import { until } from "../../conversation-product/test/component-dom.mts";
 
 function fixture(path = ":memory:") {
   const kernel = WorkspaceKernel.open(path),
@@ -52,6 +55,13 @@ function fixture(path = ":memory:") {
       );
       if (fail) throw new Error("synthetic_note_save_failure");
     },
+    renameNote(input) {
+      kernel.renameResource(
+        input.resourceId,
+        input.title,
+        input.expectedVersion,
+      );
+    },
   };
   return {
     kernel,
@@ -71,6 +81,7 @@ function sessionPort(f: ReturnType<typeof fixture>): NoteExperiencePort {
     saveNoteDraft: async (input) => f.service.saveNoteDraft(input),
     commitNote: async (input) => f.service.commitNote(input),
     discardNoteDraft: async (input) => f.service.discardNoteDraft(input),
+    renameNote: async (input) => f.service.renameNote(input),
   };
 }
 
@@ -206,6 +217,101 @@ test("an untouched conflicting recovery does not block read-only navigation or b
   assert.deepEqual(f.service.readNote(note.id), before);
   await assert.rejects(session.flush(), /note_revision_conflict/);
   assert.deepEqual(f.service.readNote(note.id), before);
+});
+
+test("Rename changes only metadata while retaining untouched recovered text, editor selection and both revision fences", async (t) => {
+  const f = fixture(),
+    view = blockDocument(),
+    restore = view.install();
+  view.doc.addEventListener = () => {};
+  view.doc.removeEventListener = () => {};
+  let controller: ReturnType<typeof mountNoteExperience> | undefined;
+  t.after(() => {
+    controller?.dispose();
+    restore();
+    f.kernel.close();
+  });
+  const note = f.kernel.createNote(
+      "Synthetic original title",
+      "Canonical body",
+    ),
+    draft = f.service.saveNoteDraft({
+      resourceId: note.id,
+      expectedDraftVersion: 0,
+      baseResourceVersion: 1,
+      content: "Separate recovery body",
+    }),
+    port = sessionPort(f),
+    session = new NoteSession(
+      note.id,
+      port,
+      f.service.readNote(note.id).resource,
+    );
+  await session.flushEdits();
+  const label = view.doc.createElement("label"),
+    editor = view.doc.createElement("textarea");
+  label.append(editor);
+  view.root.append(label);
+  controller = mountNoteExperience(view.root, editor, session, port, {
+    kind: "note",
+    presentation: "workspace",
+  });
+  editor.focus();
+  editor.setSelectionRange(2, 9);
+  view.root
+    .querySelectorAll("button")
+    .find((button: any) => button.textContent === "Rename")
+    .onclick();
+  const form = view.root.querySelector(".aw-note-rename"),
+    title = form.querySelector("input");
+  form.reportValidity = () => true;
+  title.value = "Synthetic renamed title";
+  form.onsubmit({ preventDefault() {} });
+  await until(
+    () =>
+      form.hidden &&
+      session.snapshot().document?.resource.title === title.value,
+  );
+  const saved = f.service.readNote(note.id);
+  assert.equal(saved.resource.title, title.value);
+  assert.equal(saved.resource.version, 2);
+  assert.equal(saved.resource.content, "Canonical body");
+  assert.deepEqual(saved.draft, draft);
+  assert.equal(session.snapshot().content, draft.content);
+  assert.equal(session.hasPendingEdits, false);
+  assert.equal(
+    session.snapshot().phase,
+    "conflict",
+    "Metadata revisions do not silently rebase recovery",
+  );
+  assert.equal(view.root.querySelector("textarea"), editor);
+  assert.deepEqual([editor.selectionStart, editor.selectionEnd], [2, 9]);
+  await session.flushEdits();
+  assert.deepEqual(f.service.readNote(note.id), saved);
+  await assert.rejects(session.flush(), /note_revision_conflict/);
+});
+
+test("dirty metadata refresh observes a competing draft without granting authority to replace its newer revision", async (t) => {
+  const f = fixture();
+  t.after(() => f.kernel.close());
+  const note = f.kernel.createNote("Synthetic refresh fence", "Canonical base"),
+    session = new NoteSession(note.id, sessionPort(f), {
+      version: 1,
+      content: "Canonical base",
+    });
+  await session.edit("Local editor text");
+  const other = f.service.saveNoteDraft({
+    resourceId: note.id,
+    expectedDraftVersion: 1,
+    baseResourceVersion: 1,
+    content: "Competing editor draft",
+  });
+  await session.refresh();
+  assert.equal(session.snapshot().content, "Local editor text");
+  assert.equal(session.snapshot().document?.draft?.content, other.content);
+  await assert.rejects(session.flushEdits(), /note_revision_conflict/);
+  assert.deepEqual(f.service.readNote(note.id).draft, other);
+  assert.equal(f.kernel.getResource(note.id).note.content, "Canonical base");
 });
 
 test("typing during an in-flight canonical save is serialized without dropping the later text", async (t) => {

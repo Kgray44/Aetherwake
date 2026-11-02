@@ -258,7 +258,7 @@ export function mountNoteExperience(
     event.preventDefault();
     if (!rename.reportValidity() || !port.renameNote) return;
     run(async () => {
-      await session.flush();
+      await session.flushEdits();
       const doc = session.snapshot().document!;
       await port.renameNote!({
         resourceId: session.resourceId,
