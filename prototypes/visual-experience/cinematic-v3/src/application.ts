@@ -1916,7 +1916,9 @@ export function installApplication(hooks: Hooks) {
         !blockPresentations.get(id)?.visible
       )
         throw Error("card_approach_unavailable");
-      const previous = { x: -offset.x / zoom, y: -offset.y / zoom, zoom };
+      // Keep the canonical camera verbatim. Inverting its pixel transform can
+      // round fractional origins, changing the view saved by Return.
+      const previous = { ...(state.viewport ?? { x: 0, y: 0, zoom: 1 }) };
       const framed = approachWorkspaceCard({
         block,
         view: previous,
