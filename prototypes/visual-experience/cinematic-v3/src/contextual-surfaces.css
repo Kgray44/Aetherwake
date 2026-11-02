@@ -1,0 +1,91 @@
+.aw-contextual-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1000000;
+  pointer-events: none;
+}
+.aw-contextual-surface {
+  position: fixed;
+  inset: 0 auto auto 0;
+  margin: 0;
+  padding: 14px 18px 18px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid #c8c6e139;
+  border-radius: 18px;
+  color: #e4e7f1;
+  background: linear-gradient(145deg, #383749d9, #101421f2 48%, #141722ed);
+  box-shadow:
+    0 20px 70px #02030a70,
+    inset 0 1px 0 #e8e6ff24;
+  backdrop-filter: blur(22px) saturate(1.1);
+  pointer-events: auto;
+  overflow: hidden;
+  contain: layout;
+  isolation: isolate;
+  text-shadow: 0 1px 2px #03071080;
+}
+.aw-contextual-surface:not([open]) {
+  display: none;
+}
+.aw-contextual-surface::backdrop {
+  background: #03061166;
+}
+.aw-contextual-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex: none;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.025em;
+}
+.aw-contextual-heading > span {
+  overflow-wrap: anywhere;
+}
+.aw-contextual-dismiss {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #d1c8eb26;
+  border-radius: 9px;
+  background: #bcc8ee0b;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-size: 19px;
+  line-height: 1;
+}
+.aw-contextual-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #b7b4d666 transparent;
+}
+.aw-contextual-content > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.aw-contextual-content :is(input, select, textarea) {
+  box-sizing: border-box;
+  max-width: 100%;
+}
+.aw-contextual-content :is(pre, table) {
+  max-width: 100%;
+  overflow: auto;
+}
+.aw-contextual-surface :focus-visible {
+  outline: 2px solid #dacbff;
+  outline-offset: 3px;
+}
+.aw-contextual-surface:focus-visible {
+  outline-offset: -3px;
+}
