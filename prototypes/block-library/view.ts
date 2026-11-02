@@ -18,6 +18,7 @@ import type {
   SubjectBlockKind,
   CreatedSubjectBlock,
   SubjectTargets,
+  LibraryRecommendationContext,
 } from "./contracts.ts";
 import {
   searchBlocks,
@@ -28,6 +29,7 @@ import {
   catalogDefinition,
   isSubjectBlockKind,
   BUILTIN_BLOCKS,
+  recommendBlocks,
 } from "./registry.ts";
 import { captureWorkspaceTemplate } from "./model.ts";
 import { blockPreview } from "./preview.ts";
@@ -126,6 +128,7 @@ export function mountBlockLibrary(
     expectedLayoutVersion: number | (() => number);
     onCreated(result: CreatedBlock): void | Promise<void>;
     onSubjectCreated?(result: CreatedSubjectBlock): void | Promise<void>;
+    context?(): LibraryRecommendationContext | null;
     onClose(): void;
   },
 ) {
@@ -157,6 +160,7 @@ export function mountBlockLibrary(
     ["all", "All blocks"],
     ["favorites", "Favorites"],
     ["recent", "Recently used"],
+    ["recommended", "Recommended for this workspace"],
     ["compatible", "Available here"],
   ]) {
     const option = node("option", "", label);
@@ -740,15 +744,32 @@ export function mountBlockLibrary(
       capabilities,
       (category.value || undefined) as BlockCategory | undefined,
     );
+    const recommendations = recommendBlocks(
+        options.context?.() ?? null,
+        capabilities,
+      ),
+      reasons = new Map(
+        recommendations.map((item) => [item.kind, item.reason]),
+      );
     const filtered = results.filter((d) =>
       discovery.value === "favorites"
         ? preferences?.favorites.includes(d.kind)
         : discovery.value === "recent"
           ? preferences?.recent.includes(d.kind)
-          : discovery.value === "compatible"
-            ? d.availability.state === "available"
-            : true,
+          : discovery.value === "recommended"
+            ? reasons.has(d.kind)
+            : discovery.value === "compatible"
+              ? d.availability.state === "available"
+              : true,
     );
+    if (discovery.value === "recommended")
+      list.append(
+        node(
+          "p",
+          "aw-library__hint",
+          "Based on this workspace’s project and block types. Only available types are suggested.",
+        ),
+      );
     if (discovery.value === "recent")
       filtered.sort(
         (a, b) =>
@@ -756,7 +777,15 @@ export function mountBlockLibrary(
           (preferences?.recent.indexOf(b.kind) ?? 0),
       );
     if (!filtered.length)
-      list.append(node("p", "", "No matching block types."));
+      list.append(
+        node(
+          "p",
+          "",
+          discovery.value === "recommended"
+            ? "No available recommendations match the current workspace metadata and filters."
+            : "No matching block types.",
+        ),
+      );
     for (const definition of filtered) {
       const item = button(
         (preferences?.favorites.includes(definition.kind) ? "★ " : "") +
@@ -772,6 +801,14 @@ export function mountBlockLibrary(
       );
       item.setAttribute("aria-pressed", String(definition.kind === selected));
       item.append(node("small", "aw-library__hint", definition.description));
+      if (discovery.value === "recommended")
+        item.append(
+          node(
+            "small",
+            "aw-library__hint",
+            "Suggested because: " + reasons.get(definition.kind),
+          ),
+        );
       list.append(item);
     }
   };

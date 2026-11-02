@@ -13,6 +13,55 @@ import { shapes } from "../workspace-engine/contracts.mts";
 import type { NonResourceSubjectRef } from "../workspace-kernel/subjects.ts";
 import type { SubjectBlockKind } from "./contracts.ts";
 import type { BlockInstanceKind } from "./contracts.ts";
+import type { LibraryRecommendationContext } from "./contracts.ts";
+/** Explainable local rules over current workspace metadata. No model inference or grant inference. */
+export function recommendBlocks(
+  context: LibraryRecommendationContext | null,
+  capabilities: LibraryCapabilities,
+): { kind: BlockInstanceKind; reason: string }[] {
+  if (!context) return [];
+  const present = new Set(context.presentKinds),
+    result: { kind: BlockInstanceKind; reason: string }[] = [];
+  const propose = (kind: BlockInstanceKind, reason: string) => {
+    if (
+      !present.has(kind) &&
+      blockAvailability(kind, capabilities).state === "available"
+    )
+      result.push({ kind, reason });
+  };
+  if (context.projectId)
+    propose(
+      "project_overview",
+      "This workspace belongs to a project; open its canonical overview.",
+    );
+  if (!present.size) {
+    propose("note", "Start this empty workspace with a local document.");
+    propose("conversation", "Start a conversation without requiring a task.");
+  }
+  if (present.has("conversation")) {
+    propose("note", "Keep a local working note beside this conversation.");
+    propose(
+      "stream",
+      "Inspect captured event metadata for conversation activity.",
+    );
+  }
+  if (present.has("task"))
+    propose(
+      "task_group",
+      "Organize the tasks already represented in this workspace.",
+    );
+  if (present.has("research"))
+    propose(
+      "reference",
+      "Keep user-provided source references beside the research document.",
+    );
+  if (present.size || context.projectId)
+    propose(
+      "resource_browser",
+      "Find and attach existing resources while preserving their identity.",
+    );
+  return result;
+}
 export const isSubjectBlockKind = (
   kind: BlockInstanceKind,
 ): kind is SubjectBlockKind =>

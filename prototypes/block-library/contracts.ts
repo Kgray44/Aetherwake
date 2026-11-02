@@ -42,6 +42,10 @@ export type SubjectBlockKind =
   | "resource_browser"
   | "collection_browser";
 export type BlockInstanceKind = BlockKind | SubjectBlockKind;
+export type LibraryRecommendationContext = {
+  projectId: string | null;
+  presentKinds: readonly BlockInstanceKind[];
+};
 export type BlockDefinition<K extends BlockInstanceKind = BlockKind> = {
   id: string;
   version: 1;

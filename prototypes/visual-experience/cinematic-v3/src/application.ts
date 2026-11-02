@@ -68,6 +68,8 @@ import "../../../block-library/event-view.css";
 import type { StreamEvent } from "../../../integrated-backend/src/contracts.mts";
 import type { SubjectExperiencePort } from "../../../block-library/contracts.ts";
 import type { BlockInstanceSettings } from "../../../block-library/contracts.ts";
+import { subjectBlockKind } from "../../../block-library/registry.ts";
+import type { BlockInstanceKind } from "../../../block-library/contracts.ts";
 import {
   applyBlockConfiguration,
   mountBlockConfiguration,
@@ -1229,6 +1231,26 @@ export function installApplication(hooks: Hooks) {
     });
     controller = mountBlockLibrary(content, libraryClient, {
       workspaceId,
+      context: () =>
+        state?.activeWorkspaceId === workspaceId
+          ? {
+              projectId:
+                state.workspaces.find(
+                  (workspace) => workspace.id === workspaceId,
+                )?.project_id ?? null,
+              presentKinds: state.blocks
+                .map((block) =>
+                  block.resource_id
+                    ? state!.resources.find(
+                        (resource) => resource.id === block.resource_id,
+                      )?.kind
+                    : block.subject && block.subject.kind !== "resource"
+                      ? subjectBlockKind(block.subject)
+                      : undefined,
+                )
+                .filter((kind): kind is BlockInstanceKind => !!kind),
+            }
+          : null,
       expectedLayoutVersion: () => {
         if (state?.activeWorkspaceId !== workspaceId)
           throw Error("workspace_changed");

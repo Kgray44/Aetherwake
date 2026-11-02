@@ -54,3 +54,6 @@ Template limits are now 64 resource roles and 64 placements (the 64 KiB body bou
 
 
 The desktop now loads each current placement's settings once into a bounded current-workspace cache, applies them in place with `applyBlockConfiguration`, and mounts `mountBlockConfiguration` in the existing Card inspector. Request failures are explicit and retryable through that inspector; unsupported versions are not reset. Removed placements release the renderer cache, preserving the canonical historical metadata for undo. Template capture supplies all current per-placement configurations and refuses to silently substitute defaults while any are loading/unavailable. These are renderer integration changes; native preference-change, editor-selection and restart proof remain required on the combined source.
+
+
+`mountBlockLibrary` accepts optional `context: () => LibraryRecommendationContext | null`. The desktop supplies the actual current workspace project and visible canonical block kinds; the browser-safe `recommendBlocks` helper combines that metadata with runtime capability availability. These are explainable local rules, never inferred grants or fabricated intelligence. The Library's Recommended filter displays their reasons and excludes existing block types. It remains empty without context rather than assuming compatibility.
