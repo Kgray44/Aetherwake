@@ -1133,9 +1133,50 @@ exports.verify = async ({
     receipt.passed = true;
   } catch (error) {
     receipt.error = error.stack;
+    // Preserve the actual failed form before shutdown; do not retry or change it.
+    try {
+      receipt.failureDiagnostics = {
+        window: {
+          focused: win.isFocused(),
+          visible: win.isVisible(),
+          minimized: win.isMinimized(),
+          bounds: win.getBounds(),
+        },
+        renderer: await js(`(()=>{
+          const library=document.querySelector('.aw-library[aria-label="Block Library"]');
+          const text=(value,max=512)=>String(value??'').slice(0,max);
+          const rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
+          const describe=e=>{
+            const style=getComputedStyle(e);
+            const result={tag:e.tagName,id:e.id,className:text(e.className,160),name:e.getAttribute('name'),type:e.getAttribute('type'),ariaLabel:e.getAttribute('aria-label'),text:text(e.textContent,160),labels:[...(e.labels??[])].map(l=>text(l.textContent,160)),disabled:e.disabled??null,readOnly:e.readOnly??null,hidden:e.hidden,required:e.required??null,bounds:rect(e),display:style.display,visibility:style.visibility};
+            if('value' in e)result.value=e.type==='password'?'[redacted]':text(e.value,1024);
+            if('checked' in e)result.checked=e.checked;
+            if(e.validity)result.validation={valid:e.validity.valid,valueMissing:e.validity.valueMissing,typeMismatch:e.validity.typeMismatch,rangeUnderflow:e.validity.rangeUnderflow,rangeOverflow:e.validity.rangeOverflow,stepMismatch:e.validity.stepMismatch,patternMismatch:e.validity.patternMismatch,customError:e.validity.customError,message:text(e.validationMessage)};
+            for(const key of ['min','max','step','minLength','maxLength'])if(key in e)result[key]=e[key];
+            return result;
+          };
+          let appState,sceneState;
+          try{const s=window.__aerynth.application();appState={navigation:s.navigation,activeWorkspaceId:s.activeWorkspaceId,projectCount:s.projects.length,workspaceCount:s.workspaces.length,resourceCount:s.resources.length,blockCount:s.blocks.length}}catch(e){appState={error:text(e.message)}}
+          try{const s=window.__aerynth.snapshot();sceneState={location:s.spatial?.location,selected:s.spatial?.selected,camera:s.spatial?.camera,renderer:s.spatial?.renderer,metrics:s.metrics}}catch(e){sceneState={error:text(e.message)}}
+          const active=document.activeElement,ancestors=[];
+          for(let e=active;e&&ancestors.length<8;e=e.parentElement)ancestors.push({tag:e.tagName,id:e.id,className:text(e.className,160),role:e.getAttribute('role')});
+          return {
+            page:{visibility:document.visibilityState,focused:document.hasFocus(),width:innerWidth,height:innerHeight},
+            library:library?{bounds:rect(library),heading:text(library.querySelector('.aw-library__detail h3')?.textContent),status:[...library.querySelectorAll('.status,.error,[role="status"],[role="alert"]')].slice(0,12).map(e=>text(e.textContent)),forms:[...library.querySelectorAll('form')].slice(0,4).map(form=>({id:form.id,noValidate:form.noValidate,controls:[...form.querySelectorAll('input,textarea,select,button')].slice(0,40).map(describe)})),submitTargets:[...library.querySelectorAll('button[type="submit"],input[type="submit"]')].slice(0,8).map(describe)}:null,
+            active:{tag:active?.tagName,id:active?.id,className:text(active?.className,160),ariaLabel:active?.getAttribute('aria-label'),inLibrary:!!library?.contains(active),control:library?.contains(active)?describe(active):null,ancestors},
+            hostStatus:{status:text(document.querySelector('#status')?.textContent),commandError:text(document.querySelector('#command-error')?.textContent)},
+            application:appState,scene:sceneState
+          };
+        })()`),
+      };
+    } catch (diagnosticError) {
+      receipt.failureDiagnosticError = String(diagnosticError.stack ?? diagnosticError).slice(0,2048);
+    }
     try {
       await shot("failure");
-    } catch {}
+    } catch (captureError) {
+      receipt.failureCaptureError = String(captureError.stack ?? captureError).slice(0,2048);
+    }
   } finally {
     if (recorder)
       try {
