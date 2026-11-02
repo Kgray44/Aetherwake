@@ -12,6 +12,7 @@ const { mkdirSync, readFileSync, readdirSync } = require("node:fs");
 const { randomUUID, createHash } = require("node:crypto");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { sendToWindow } = require("./host-lifecycle.cjs");
 const root = path.resolve(__dirname, "..");
 const moduleStarted = Date.now();
 const repository = path.resolve(root, "../../..");
@@ -142,9 +143,8 @@ app.whenReady().then(async () => {
       p.reject(new Error("backend_disconnected"));
     }
     pending.clear();
-    win?.webContents.send("application-event", {
-      type: "backend/disconnected",
-      classification: "observed",
+    if (!closing) sendToWindow(win,"application-event", {
+      type: "backend/disconnected", classification: "observed",
     });
   };
   child.on("error", fail);
@@ -155,8 +155,7 @@ app.whenReady().then(async () => {
     try {
       const m = JSON.parse(line);
       if (m.event) {
-        if (win && !win.isDestroyed())
-          win.webContents.send("application-event", m.event);
+        sendToWindow(win,"application-event", m.event);
         return;
       }
       const p = pending.get(m.id);
@@ -294,8 +293,7 @@ app.whenReady().then(async () => {
     }
   });
   const active = () => {
-    if (!win.isDestroyed())
-      win.webContents.send(
+    sendToWindow(win,
         "host-active",
         win.isVisible() && !win.isMinimized() && win.isFocused(),
       );
@@ -315,7 +313,7 @@ app.whenReady().then(async () => {
   const reserveTimer = setInterval(() => {
     admitted = reserveGuard();
     if (!admitted) {
-      win.webContents.send("application-event", {
+      sendToWindow(win,"application-event", {
         type: "storage/reserve-admission-denied",
         classification: "observed",
       });
