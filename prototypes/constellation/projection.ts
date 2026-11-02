@@ -22,7 +22,7 @@ export function project(
     (w) =>
       permitted(w) && (w.project_id === null || projectIds.has(w.project_id)),
   );
-  const workspaceIds = new Set(workspaces.map((w) => w.id));
+  const workspacesById = new Map(workspaces.map((w) => [w.id, w]));
   const eligibleAnchors = new Set([
     ...projects.map((p) => keyOf("project", p.id)),
     ...workspaces.map((w) => keyOf("workspace", w.id)),
@@ -37,7 +37,7 @@ export function project(
       (!b.subject ||
         (b.subject.kind === "resource" &&
           b.subject.resourceId === b.resource_id)) &&
-      workspaceIds.has(b.workspace_id) &&
+      workspacesById.has(b.workspace_id) &&
       resources.has(b.resource_id),
   );
   const occupied = new Map<string, Set<string>>();
@@ -122,9 +122,23 @@ export function project(
       point: { x: center.x + b.x * 0.6, y: center.y + 160 + b.y * 0.6 },
     });
   }
-  const placed = new Set(blocks.map((b) => b.resource_id));
+  // A reference in another project does not replace the resource's canonical
+  // project association. Existing workspace representations retain their parent.
+  const placedInProjects = new Map<string, Set<string>>();
+  for (const b of blocks) {
+    const projectId = workspacesById.get(b.workspace_id)!.project_id;
+    if (!projectId) continue;
+    const represented =
+      placedInProjects.get(b.resource_id) ?? new Set<string>();
+    represented.add(projectId);
+    placedInProjects.set(b.resource_id, represented);
+  }
   for (const r of resources.values())
-    if (!placed.has(r.id) && r.project_id && projectIds.has(r.project_id)) {
+    if (
+      r.project_id &&
+      projectIds.has(r.project_id) &&
+      !placedInProjects.get(r.id)?.has(r.project_id)
+    ) {
       const key = keyOf("resource", "unplaced:" + r.id),
         parent = keyOf("project", r.project_id),
         center = nodes.get(parent)!.point;
