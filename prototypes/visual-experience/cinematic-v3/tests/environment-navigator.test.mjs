@@ -107,7 +107,16 @@ const action = (f, label) => {
   n.fire("click");
   return n;
 };
-const settled = (f) => until(() => f.root.getAttribute("aria-busy") !== "true");
+const settleMotion = (f) => {
+  for (let i = 0; i < 30; i++) {
+    f.motion.step(0.1);
+    f.controller.frame();
+  }
+};
+const settled = async (f) => {
+  await until(() => f.root.getAttribute("aria-busy") !== "true");
+  settleMotion(f);
+};
 
 test("canonical projects contain their actual workspaces; independent is logical and current selection is explicit", () => {
   const f = fixture();
@@ -125,7 +134,7 @@ test("canonical projects contain their actual workspaces; independent is logical
       "page",
     );
     assert.equal(f.group("p-a").querySelector(".en-workspaces").hidden, false);
-    assert.equal(f.group("p-b").querySelector(".en-workspaces").hidden, true);
+    assert.equal(f.group("p-b").querySelector(".en-workspaces").inert, true);
     const next = snapshot();
     next.navigation = { kind: "constellation", projectId: "p-b" };
     f.controller.update(next);
@@ -157,6 +166,8 @@ test("metadata search filters projects and child counts and quick-switches the o
     f.search.fire("keydown", { key: "Escape" });
     assert.equal(f.search.value, "");
     assert.equal(f.group("p-a").querySelector(".en-workspaces").hidden, false);
+    assert.equal(f.group("p-b").querySelector(".en-workspaces").inert, true);
+    settleMotion(f);
     assert.equal(f.group("p-b").querySelector(".en-workspaces").hidden, true);
     f.search.value = "Atlas";
     f.search.fire("input");
@@ -534,8 +545,7 @@ test("actual hover/focus/press/selection and contextual disclosures retarget the
     ws.fire("blur");
     assert(f.motion.receipts.some((r) => r.status === "retargeted"));
     const create = f.root.querySelector(".en-create");
-    create.open = true;
-    create.fire("toggle");
+    create.querySelector("summary").fire("click");
     f.motion.step(0.08);
     f.controller.frame();
     assert(Number(f.root.style["--en-create-reveal"]) > 0);
@@ -562,6 +572,116 @@ test("actual hover/focus/press/selection and contextual disclosures retarget the
     f.controller.frame();
     assert.equal(returned.style["--en-hover"], "1.000");
   } finally {
+    f.close();
+  }
+});
+
+test("details retain actual children/open through an interruptible closing glide, while accessibility closes immediately", () => {
+  const f = fixture();
+  try {
+    const details = f.root.querySelector(".en-create"),
+      summary = details.querySelector("summary"),
+      children = f.root.querySelector(".en-create-choices");
+    summary.fire("click");
+    settleMotion(f);
+    assert.equal(details.open, true);
+    assert.equal(children.style.opacity, "1.000");
+    summary.fire("click");
+    assert.equal(summary.getAttribute("aria-expanded"), "false");
+    assert.equal(children.inert, true);
+    assert.equal(details.open, true);
+    assert.equal(children.hidden, false);
+    assert.equal(children.style.opacity, "1.000");
+    f.motion.step(0.04);
+    f.controller.frame();
+    const halfway = Number(children.style.opacity);
+    assert(halfway > 0 && halfway < 1);
+    assert.equal(details.open, true);
+    summary.fire("click");
+    assert.equal(children.inert, false);
+    assert.equal(Number(children.style.opacity), halfway);
+    settleMotion(f);
+    assert.equal(children.style.opacity, "1.000");
+    summary.fire("click");
+    settleMotion(f);
+    assert.equal(details.open, false);
+    assert.equal(children.hidden, true);
+    const archive = f.root.querySelector(".en-archive"),
+      archiveSummary = archive.querySelector("summary"),
+      list = f.root.querySelector(".en-archive-list");
+    archiveSummary.fire("click");
+    settleMotion(f);
+    archiveSummary.fire("click");
+    assert.equal(archive.open, true);
+    assert.equal(list.inert, true);
+    assert.equal(list.hidden, false);
+    settleMotion(f);
+    assert.equal(archive.open, false);
+    assert.equal(list.hidden, true);
+  } finally {
+    f.close();
+  }
+});
+
+test("editor/action close retains painted descendants until MC0 and disabled material glides after immediate native denial", async () => {
+  let resolve;
+  const f = fixture({
+    createProject: () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  });
+  try {
+    control(f, "More options for Research").fire("click");
+    settleMotion(f);
+    const actions = f.root.querySelector(".en-workspace-actions");
+    action(f, "Done");
+    assert.equal(actions.inert, true);
+    assert.equal(actions.hidden, false);
+    assert.equal(actions.style.opacity, "1.000");
+    settleMotion(f);
+    assert.equal(actions.hidden, true);
+    action(f, "Project");
+    settleMotion(f);
+    const editor = f.root.querySelector(".en-editor"),
+      input = control(f, "Environment name");
+    input.value = "Retain this closing value";
+    action(f, "Cancel");
+    assert.equal(editor.inert, true);
+    assert.equal(editor.hidden, false);
+    assert.equal(input.value, "Retain this closing value");
+    f.motion.step(0.04);
+    f.controller.frame();
+    assert(
+      Number(editor.style.opacity) > 0 && Number(editor.style.opacity) < 1,
+    );
+    settleMotion(f);
+    assert.equal(editor.hidden, true);
+    action(f, "Project");
+    input.value = "Exact pending project";
+    f.root.querySelector("form").fire("submit");
+    const chat = named(f.root, "New chat");
+    assert.equal(chat.disabled, true);
+    f.controller.frame();
+    assert.equal(chat.style["--en-disabled"], "0.000");
+    f.motion.step(0.04);
+    f.controller.frame();
+    assert(
+      Number(chat.style["--en-disabled"]) > 0 &&
+        Number(chat.style["--en-disabled"]) < 1,
+    );
+    resolve();
+    await settled(f);
+    assert.equal(chat.disabled, false);
+    assert.equal(chat.style["--en-disabled"], "0.000");
+    const css = readFileSync(
+      new URL("../src/environment-navigator.css", import.meta.url),
+      "utf8",
+    );
+    assert(!/:hover|\[data-current=|\[aria-current=/.test(css));
+    assert(!/button:disabled\s*\{[^}]*opacity/.test(css));
+  } finally {
+    resolve?.();
     f.close();
   }
 });
