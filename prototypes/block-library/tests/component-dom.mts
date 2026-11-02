@@ -37,8 +37,23 @@ export function blockDocument() {
   };
   const basicMatches = proto.matches;
   const matches = function (this: any, selector: string) {
+    let present = true;
+    selector = selector.replace(
+      /\[(data-[\w-]+)\]/g,
+      (_match, name: string) => {
+        const key = name
+          .slice(5)
+          .replace(/-([a-z])/g, (_match, letter: string) =>
+            letter.toUpperCase(),
+          );
+        if (this.dataset[key] === undefined && !this.attrs.has(name))
+          present = false;
+        return "";
+      },
+    );
     const tag = selector.match(/^[a-z][a-z0-9-]*/i)?.[0];
     return (
+      present &&
       (!tag || this.tagName === tag.toUpperCase()) &&
       basicMatches.call(this, tag ? selector.slice(tag.length) : selector)
     );
