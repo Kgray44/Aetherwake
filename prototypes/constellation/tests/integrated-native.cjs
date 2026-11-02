@@ -1218,8 +1218,14 @@ async function verifyJourney({
         "resource:" + sourceRow.conversation.block.id,
       );
       await node("resource:" + sourceRow.conversation.block.id);
+      const conversationComposer = `[data-block="${sourceRow.conversation.block.id}"] .cp-chat[data-resource-id="${sourceRow.conversation.resource.id}"] .cp-composer`,
+        conversationInput =
+          conversationComposer + ' textarea[aria-label="Message"]',
+        conversationSend =
+          conversationComposer +
+          ' button[type="submit"][aria-label="Send message"]';
       await wait(
-        `!!document.querySelector('[data-block="${sourceRow.conversation.block.id}"] .conversation-compose')`,
+        `(()=>{const e=document.querySelector(${JSON.stringify(conversationInput)});return !!e&&!e.disabled&&e.getClientRects().length>0})()`,
       );
       await step(
         7,
@@ -1229,13 +1235,8 @@ async function verifyJourney({
         "Synthetic selected context for a reviewed continuation.",
         "Synthetic later message deliberately not selected for handoff.",
       ]) {
-        await fill(
-          `[data-block="${sourceRow.conversation.block.id}"] .conversation-compose textarea`,
-          content,
-        );
-        await click(
-          `[data-block="${sourceRow.conversation.block.id}"] .conversation-compose button[type="submit"]`,
-        );
+        await fill(conversationInput, content);
+        await click(conversationSend);
         await wait(
           `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(sourceRow.conversation.resource.id)}).messages.some(m=>m.content===${JSON.stringify(content)})`,
         );
