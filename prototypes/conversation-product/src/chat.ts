@@ -1,8 +1,9 @@
 import type { ConversationProductPort, Detail, MessageView } from './contracts.ts';
+import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
 import { ConversationDraftSession, type DraftSessionSnapshot } from './draft-session.ts';
 import { renderMarkdown } from './markdown.ts';
 
-export type ConversationExecution = { id: string; resourceId: string; providerId: string; commandId: string; state: 'dispatching'|'running'|'provider_completed'|'failed'|'interrupted'|'unknown'; startedAt: string; endedAt: string|null; taskVerified: false; errorCode?: string };
+export type ConversationExecution = PublicConversationExecution;
 /** The host translates only observed assistant text deltas; never reasoning/tool summaries or fabricated approval events. */
 export type ConversationExecutionObservation = {
   execution?: ConversationExecution; connection?: 'available'|'unavailable'; resourceAvailable?: boolean;
