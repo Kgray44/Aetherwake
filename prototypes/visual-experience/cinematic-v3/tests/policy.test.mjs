@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { motionPolicy } from "../src/policy.ts";
+import { motionPolicy, nextDrawDeadline } from "../src/policy.ts";
 const base = {
   tier: "balanced",
   idle: true,
@@ -41,4 +41,41 @@ test("quiet and ambient-off preserve real transition scheduling while reduced st
     motionPolicy({ ...base, reduced: true, transitioning: true }).continuous,
     false,
   );
+});
+
+test("165Hz transition draws cannot postpone 60Hz drawing after motion settles", () => {
+  const frame = 1000 / 165,
+    cadence = 1000 / 60;
+  let now = 0,
+    next = 0;
+  for (let i = 0; i < 72; i++) {
+    now += frame;
+    next = nextDrawDeadline(now, next, cadence, i === 0);
+    assert(next <= now + cadence + 1e-8);
+  }
+  const settledAt = now,
+    draws = [];
+  for (let i = 0; i < 50; i++) {
+    now += frame;
+    if (now + 0.25 >= next) {
+      draws.push(now);
+      next = nextDrawDeadline(now, next, cadence, false);
+    }
+  }
+  assert(draws[0] - settledAt <= cadence + frame);
+  for (let i = 1; i < draws.length; i++)
+    assert(draws[i] - draws[i - 1] <= cadence + frame + 1e-8);
+});
+
+test("ordinary cadence retains phase while invalidation and long pauses reset from the actual draw", () => {
+  assert.equal(nextDrawDeadline(101, 100, 20, false), 120);
+  assert.equal(nextDrawDeadline(101, 100, 20, true), 121);
+  assert.equal(nextDrawDeadline(1000, 100, 20, false), 1020);
+  assert.equal(nextDrawDeadline(99, 100, 20, false), 119);
+});
+
+test("suppressed and zero-cadence policies keep their existing draw semantics", () => {
+  assert.equal(nextDrawDeadline(100, 90, Infinity, true), Infinity);
+  assert.equal(nextDrawDeadline(100, Infinity, 20, false), 120);
+  assert.equal(nextDrawDeadline(100, 90, 0, false), 100);
 });

@@ -12,7 +12,7 @@ import type {
 } from "../../../application-contract/contracts.ts";
 import type { Resource } from "./store";
 import "./style.css";
-import { motionPolicy } from "./policy";
+import { motionPolicy, nextDrawDeadline } from "./policy";
 import { deriveSceneState } from "./scene-state";
 import { registerScene, retargetScene, sceneWeights } from "./scene-transition";
 import {
@@ -1505,11 +1505,7 @@ function tick(now: number) {
         metrics.draws++;
         metrics.lastDraw = now;
       }
-      nextDraw = !Number.isFinite(cadence)
-        ? Infinity
-        : dirty || !Number.isFinite(nextDraw) || now - nextDraw > cadence * 4
-          ? now + cadence
-          : nextDraw + cadence;
+      nextDraw = nextDrawDeadline(now, nextDraw, cadence, dirty);
       dirty = false;
       pointerDirty = false;
     }
