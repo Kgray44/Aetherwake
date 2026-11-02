@@ -395,12 +395,58 @@
   }
 }
 #constellation-view.constellation-host {
-  inset: 145px 15px 145px;
+  inset: 0;
   padding: 0;
   border: 0;
   background: transparent;
   overflow: visible;
   pointer-events: none;
+}
+.application-ready .topbar {
+  height: 48px;
+  padding: 4px 20px 4px 96px;
+  gap: 16px;
+}
+.application-ready .brand {
+  position: absolute;
+  top: -8px;
+  left: 16px;
+}
+.application-ready .brand > span {
+  display: none;
+}
+.application-ready .place {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  padding-left: 0;
+}
+.application-ready #workspace-manager {
+  max-width: min(24vw, 260px);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.application-ready .topbar > button {
+  padding: 8px 12px;
+}
+@media (max-width: 850px) {
+  .application-ready .topbar {
+    gap: 8px;
+    padding-left: 84px;
+  }
+  .application-ready #workspace-manager {
+    max-width: 120px;
+  }
+  .application-ready #settings-button {
+    font-size: 0;
+  }
+  .application-ready #settings-button span {
+    font-size: 12px;
+    margin-left: 0;
+  }
 }
 #constellation-view.overview {
   background: transparent;

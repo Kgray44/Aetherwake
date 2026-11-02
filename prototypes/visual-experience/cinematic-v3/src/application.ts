@@ -1,9 +1,11 @@
-import type { ControllerOptions } from "../../../constellation/controller.ts";
 import type {
   GraphActions,
   SpatialRenderLayer,
 } from "../../../constellation/spatial-types.ts";
-import { mountConstellation } from "../../../constellation/view.ts";
+import {
+  mountConstellation,
+  type ConstellationViewOptions,
+} from "../../../constellation/view.ts";
 import "../../../constellation/style.css";
 import type { Policy } from "../../../constellation/types.ts";
 import type { MotionCoordinator } from "./motion";
@@ -160,7 +162,11 @@ export function installApplication(hooks: Hooks) {
     wake: hooks.wake,
     viewport: () => ({ width: innerWidth, height: innerHeight }),
     safeInsets: () => ({
-      top: 96,
+      top:
+        Math.max(
+          el(".topbar").getBoundingClientRect().bottom,
+          el(".brand").getBoundingClientRect().bottom,
+        ) + 12,
       left: 16,
       right: 16,
       bottom: Math.max(
@@ -440,6 +446,9 @@ export function installApplication(hooks: Hooks) {
   // Share the existing isolated application stack with scene controls and Vela.
   el("#app").append(universe);
   el(".brand small").textContent = "LIQUID INTELLIGENCE / WORKING REVIEW";
+  el(".brand img").setAttribute("alt", "Aerynth");
+  el("#settings-button").setAttribute("aria-label", "Scene controls");
+  el("#settings-button").setAttribute("title", "Scene controls");
   el(".provenance").textContent = "LOCAL DATA · Codex connects only on request";
   el(".study-caption small").textContent = "Your resources. Your space.";
   el("#vela-state").textContent = "Idle · no background execution";
@@ -681,7 +690,13 @@ export function installApplication(hooks: Hooks) {
       blocks: next.navigationBlocks ?? next.blocks,
     };
     if (!constellation) {
-      const options: ControllerOptions & GraphActions = {
+      const options: ConstellationViewOptions & GraphActions = {
+        hostUiElements: () =>
+          [
+            ...document.querySelectorAll<HTMLElement>(
+              ".topbar,.brand,.dock,.canvas-tools,#status,.keys,.provenance,.window-drag",
+            ),
+          ].slice(0, 32),
         snapshot: navigationSnapshot,
         motion: hooks.motion,
         navigate: async (target) => {
@@ -3337,6 +3352,7 @@ export function installApplication(hooks: Hooks) {
       camera: constellation?.controller.spatial?.camera,
       bookmark: constellation?.controller.spatial?.bookmark(),
       renderer: constellation?.layer.diagnostics,
+      uiExclusions: constellation?.uiExclusions(),
       policy: constellation?.controller.policy,
     }),
     presenceCard,
