@@ -1,0 +1,17 @@
+.aw-agent-block { min-width:0; display:flex; flex-direction:column; gap:.7rem; color:inherit; }
+.aw-agent-profile { display:flex; align-items:center; gap:.8rem; }
+.aw-agent-monogram { display:grid; place-items:center; flex:0 0 44px; height:44px; border-radius:50%; border:1px solid #b9cbe342; background:#b8cde510; font:500 1.4rem Georgia,serif; }
+.aw-agent-profile small { text-transform:uppercase; letter-spacing:.13em; font-size:.65rem; opacity:.65; }
+.aw-agent-block h3,.aw-agent-block h4,.aw-agent-block p { margin:0; }
+.aw-agent-profile h3 { font-size:1.15rem; line-height:1.4; }
+.aw-agent-purpose { white-space:pre-wrap; font-size:.9rem; line-height:1.6; }
+.aw-agent-specialties { display:flex; flex-wrap:wrap; gap:.3rem; }
+.aw-agent-specialties span { padding:.2rem .5rem; border:1px solid #b9cbe328; border-radius:1rem; font-size:.7rem; }
+.aw-agent-compatibility,.aw-agent-status,.aw-agent-work > p,.aw-agent-configuration p { font-size:.78rem; line-height:1.5; }
+.aw-agent-actions { display:flex; align-items:center; flex-wrap:wrap; gap:.4rem; }
+.aw-agent-block button { min-height:32px; padding:.35rem .6rem; border:1px solid #b9cbe342; border-radius:.6rem; color:inherit; background:#b8cde507; font:inherit; font-size:.8rem; cursor:pointer; }
+.aw-agent-block button:disabled { opacity:.45; cursor:default; }.aw-agent-block button:focus-visible { outline:2px solid #b8cde5; outline-offset:3px; }
+.aw-agent-configuration { overflow:hidden; }.aw-agent-configuration dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:.4rem .7rem; margin:.5rem 0; font-size:.8rem; }.aw-agent-configuration dd { margin:0; overflow-wrap:anywhere; }
+.aw-agent-work h4 { font-size:.85rem; margin-bottom:.35rem; }.aw-agent-work ol { list-style:none; padding:0; margin:0; }
+.aw-agent-work li { display:grid; gap:.3rem; padding:.7rem 0; border-top:1px solid #b9cbe325; }.aw-agent-work li strong { font-size:.85rem; }.aw-agent-work li small { font-size:.75rem; line-height:1.5; opacity:.75; }.aw-agent-work li button { justify-self:start; }
+.aw-agent-block [hidden] { display:none; }
