@@ -234,7 +234,7 @@ export class SpatialNavigator {
       cached.aspect === this.viewportAspect
     )
       return cached;
-    const bodies = this.candidateNodes().filter((n) => n.kind === "resource"),
+    const bodies = this.relatedNodes().filter((n) => n.kind === "resource"),
       low = { x: Infinity, y: Infinity, z: Infinity },
       high = { x: -Infinity, y: -Infinity, z: -Infinity };
     for (const body of bodies) {
@@ -257,7 +257,8 @@ export class SpatialNavigator {
       radius = Math.max(
         radius,
         Math.hypot(p.x - target.x, p.y - target.y, p.z - target.z) +
-          this.radius(body.key));
+          this.radius(body.key),
+      );
     }
     const halfFov = Math.atan(
       Math.tan((43 * Math.PI) / 360) * Math.min(1, this.viewportAspect),
@@ -339,9 +340,11 @@ export class SpatialNavigator {
       )
         for (const child of byResource.get(b.childResourceId)!) {
           const parents = byResource.get(b.parentResourceId)!,
-            parent = parents.find((p) => p.workspaceId === child.workspaceId) ??
+            parent =
+              parents.find((p) => p.workspaceId === child.workspaceId) ??
               parents[0];
-          if (parent.key !== child.key) branchSources.set(child.key, parent.key);
+          if (parent.key !== child.key)
+            branchSources.set(child.key, parent.key);
         }
     // A branch's local shell grows with its parent's branches, rather than the
     // unrelated resource count of the whole workspace.
@@ -547,20 +550,41 @@ export class SpatialNavigator {
     };
     this.target(p, "spatial pan");
   }
-  zoom(factor: number) {
+  zoom(factor: number, focusKey?: string) {
     if (!Number.isFinite(factor) || factor <= 0) return;
     this.manualRevision++;
     const p = this.bookmark();
     p.distance = clamp(p.distance / factor, 180, 100000);
-    const c = this.controller;
-    if (c.location.kind === "universe" && factor > 1) {
-      const selected = c.nodes.get(c.selected ?? "");
-      if (selected?.kind === "project")
-        p.target = { ...this.position(selected.key) };
+    const c = this.controller,
+      location = c.location,
+      focus = c.nodes.get(focusKey ?? c.selected ?? ""),
+      focusInScope =
+        !!focus && this.candidateNodes().some((n) => n.key === focus.key);
+    if (
+      factor > 1 &&
+      focus?.available &&
+      ((c.location.kind === "universe" && focus.kind === "project") ||
+        (c.location.kind === "project" &&
+          focusInScope &&
+          (focusKey || !this.neighborhood)))
+    ) {
+      p.target = { ...this.position(focus.key) };
+      if (focusKey) c.select(focusKey);
+    }
+    const working =
+      location.kind === "workspace" || location.kind === "surface";
+    if (working && factor < 1) {
+      // Working panels emerge from the same workspace anchor on the return
+      // trip. Keep this dolly pose across the canonical scope switch.
+      const workspace = c.nodes.get(keyOf("workspace", location.workspaceId));
+      if (workspace) p.target = { ...this.position(workspace.key) };
+      delete p.neighborhood;
     }
     if (
-      this.neighborhood && factor < 1 &&
-      p.distance > Math.max(2200, (this.neighborhoodFrame()?.distance ?? 550) * 1.5)
+      this.neighborhood &&
+      factor < 1 &&
+      p.distance >
+        Math.max(2200, (this.neighborhoodFrame()?.distance ?? 550) * 1.5)
     ) {
       this.neighborhood = undefined;
       delete p.neighborhood;
@@ -568,7 +592,15 @@ export class SpatialNavigator {
     this.target(p, "dolly");
     if (this.semanticPending || c.pending) return;
     let destination: import("./types.ts").Location | undefined;
-    if (
+    if (working && factor < 1) {
+      const projectId = c.snapshot.workspaces.find(
+        (w) => w.id === location.workspaceId,
+      )?.project_id;
+      destination =
+        projectId && c.nodes.has(keyOf("project", projectId))
+          ? { kind: "project", projectId }
+          : { kind: "universe" };
+    } else if (
       c.location.kind === "project" &&
       !this.neighborhood &&
       factor < 1 &&
@@ -581,7 +613,27 @@ export class SpatialNavigator {
         )
     )
       destination = { kind: "universe" };
-    else if (c.location.kind === "universe" && factor > 1) {
+    else if (
+      c.location.kind === "project" &&
+      factor > 1 &&
+      focus?.available &&
+      focusInScope
+    ) {
+      if (focus.kind === "workspace" && p.distance < 700)
+        destination = { kind: "workspace", workspaceId: focus.id };
+      else if (
+        focus.kind === "resource" &&
+        focus.workspaceId &&
+        p.distance < 350
+      )
+        destination = {
+          kind: "surface",
+          workspaceId: focus.workspaceId,
+          resourceId: focus.id,
+          blockId: focus.key.slice("resource:".length),
+        };
+      if (destination) delete p.neighborhood;
+    } else if (c.location.kind === "universe" && factor > 1) {
       const nearest = [...c.nodes.values()]
         .filter((n) => n.kind === "project")
         .sort((a, b) => {
@@ -911,7 +963,11 @@ export class SpatialNavigator {
     const frame = this.neighborhoodFrame();
     if (frame)
       this.target(
-        { ...this.bookmark(), target: { ...frame.target }, distance: frame.distance },
+        {
+          ...this.bookmark(),
+          target: { ...frame.target },
+          distance: frame.distance,
+        },
         "explore related resources",
       );
     await this.controller.persist();
@@ -937,28 +993,35 @@ export class SpatialNavigator {
           workspaces.has(keyOf("workspace", n.workspaceId))),
     );
     if (this.neighborhood) {
-      all = [...c.nodes.values()];
-      const focus = c.nodes.get(this.neighborhood),
-        ids = new Set(focus ? [focus.id] : []);
-      for (const e of edges(c))
-        if (e.sourceId === focus?.id || e.targetId === focus?.id) {
-          ids.add(e.sourceId);
-          ids.add(e.targetId);
-        }
-      const related = all.filter((n) => n.kind === "resource" && ids.has(n.id)),
-        parents = new Set(related.map((n) => n.parent));
-      for (const parent of [...parents]) {
-        let p = parent ? c.nodes.get(parent)?.parent : null;
-        while (p && !parents.has(p)) {
-          parents.add(p);
-          p = c.nodes.get(p)?.parent;
-        }
-      }
-      all = all.filter((n) =>
-        n.kind === "resource" ? ids.has(n.id) : parents.has(n.key),
-      );
+      const keys = new Set(all.map((n) => n.key));
+      for (const n of this.relatedNodes()) if (!keys.has(n.key)) all.push(n);
     }
     return all;
+  }
+  /** Related focus changes emphasis/framing, never erases the surrounding project. */
+  relatedNodes(): Node[] {
+    const c = this.controller,
+      all = [...c.nodes.values()];
+    if (!this.neighborhood) return [];
+    const focus = c.nodes.get(this.neighborhood),
+      ids = new Set(focus ? [focus.id] : []);
+    for (const e of edges(c))
+      if (e.sourceId === focus?.id || e.targetId === focus?.id) {
+        ids.add(e.sourceId);
+        ids.add(e.targetId);
+      }
+    const related = all.filter((n) => n.kind === "resource" && ids.has(n.id)),
+      parents = new Set(related.map((n) => n.parent));
+    for (const parent of [...parents]) {
+      let p = parent ? c.nodes.get(parent)?.parent : null;
+      while (p && !parents.has(p)) {
+        parents.add(p);
+        p = c.nodes.get(p)?.parent;
+      }
+    }
+    return all.filter((n) =>
+      n.kind === "resource" ? ids.has(n.id) : parents.has(n.key),
+    );
   }
   dispose() {
     this.controller.motion.bodies.delete(this.id);

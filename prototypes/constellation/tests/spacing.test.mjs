@@ -320,11 +320,11 @@ test("large-cluster fallback reuse still stops at the earliest fixed neighbor", 
   assert.ok(Math.sqrt(3) * (500 - 100000 * fraction) >= 40 + BODY_GAP);
 });
 
-test("every camera pose keeps rendered silhouettes apart and the projected bounds contain actual mesh vertices", async () => {
+test("orbit retains aligned bodies, physical gaps and projected bounds containing actual mesh vertices", async () => {
   const { c, n, motion } = setup(fixture(120)),
     layer = new ConstellationScene(c, n, () => ({}));
   let checked = 0,
-    decluttered = 0;
+    aligned = 0;
   for (const location of [
     { kind: "project", projectId: "p0" },
     { kind: "universe" },
@@ -342,13 +342,15 @@ test("every camera pose keeps rendered silhouettes apart and the projected bound
       settle(motion);
       layer.update(1440, 900);
       const discs = layer.diagnostics.projectedBodies;
-      decluttered += layer.diagnostics.overlapCulled;
+      assert.equal(layer.diagnostics.overlapCulled, 0);
       for (let a = 0; a < discs.length; a++)
         for (let b = a + 1; b < discs.length; b++)
-          assert.ok(
+          if (
             Math.hypot(discs[a].x - discs[b].x, discs[a].y - discs[b].y) >=
-              discs[a].radius + discs[b].radius + 7.999,
-          );
+            discs[a].radius + discs[b].radius + 8
+          )
+            continue;
+          else aligned++;
       for (const disc of discs) {
         const root = layer.objects.get(disc.key),
           center = root.position.clone();
@@ -381,7 +383,7 @@ test("every camera pose keeps rendered silhouettes apart and the projected bound
     }
   }
   assert.ok(checked > 20);
-  assert.ok(decluttered > 0);
+  assert.ok(aligned > 0, "normal depth-aligned sightlines retain both bodies");
   for (let i = 0; i < 120; i++)
     assert.ok(
       c.search(`Resource ${i}`).some((node) => node.id === `r${i}`),

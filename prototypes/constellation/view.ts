@@ -897,12 +897,24 @@ export function mountConstellation(
         dy = e.deltaY * unit;
       if (e.shiftKey && !e.ctrlKey)
         spatial.pan(dx || dy, dx ? dy : 0, field.clientHeight);
-      else
-        controller.zoom(
-          Math.exp(
+      else {
+        const factor = Math.exp(
             -Math.max(-150, Math.min(150, dy)) * (e.ctrlKey ? 0.008 : 0.003),
           ),
-        );
+          rect = field.getBoundingClientRect(),
+          label = (e.target as HTMLElement).closest<HTMLElement>(".aw-anchor"),
+          focus =
+            factor > 1
+              ? (label?.dataset.key ??
+                layer.pick(
+                  e.clientX - rect.left,
+                  e.clientY - rect.top,
+                  rect.width,
+                  rect.height,
+                )?.key)
+              : undefined;
+        controller.zoom(factor, focus);
+      }
     },
     { passive: false },
   );

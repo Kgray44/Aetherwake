@@ -385,10 +385,10 @@ export class ConstellationController {
     }
     this.changed();
   }
-  zoom(factor: number) {
+  zoom(factor: number, focusKey?: string) {
     if (!Number.isFinite(factor) || factor <= 0)
       throw new Error("Invalid zoom");
-    this.spatial?.zoom(factor);
+    this.spatial?.zoom(factor, focusKey);
     const p = this.motion.bodies.get(this.motionId)!.channels;
     this.move(
       {

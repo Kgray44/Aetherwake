@@ -99,12 +99,14 @@ exports.verify = async ({
     const scene = await spatial(),
       discs = scene.renderer.projectedBodies;
     assert.ok(discs.length > 0, "actual scene has projected body bounds");
+    assert.equal(scene.renderer.overlapCulled, 0, "on-screen bodies are never removed for camera alignment");
+    assert.equal(scene.renderer.nodes, scene.renderer.detailedBodies + scene.renderer.instancedBodies);
     for (let i = 0; i < discs.length; i++)
       for (let j = i + 1; j < discs.length; j++)
         assert.ok(
-          Math.hypot(discs[i].x - discs[j].x, discs[i].y - discs[j].y) >=
-            discs[i].radius + discs[j].radius + 7.99,
-          "actual scene silhouettes retain a screen gap",
+          Math.hypot(discs[i].world.x - discs[j].world.x, discs[i].world.y - discs[j].world.y, discs[i].world.z - discs[j].world.z) >=
+            discs[i].worldRadius + discs[j].worldRadius + 27.99,
+          "actual body envelopes retain their physical gap through orbit",
         );
     assert.equal(
       await js(
@@ -281,10 +283,33 @@ exports.verify = async ({
   };
   const workspaceActions = () =>
     click('.aw-workspace-layout [aria-label="Workspace actions"]');
-  const workspaceOut = async () => {
+  const workspaceOut = async (wheel = false) => {
     await workingHome();
-    await workspaceActions();
-    await click("#workspace-constellation");
+    if (wheel) {
+      const point = await js(`(()=>{for(let y=90;y<innerHeight-70;y+=45)for(let x=45;x<innerWidth-40;x+=55){const e=document.elementFromPoint(x,y);if(e&&['world','stage','app'].includes(e.id))return{x,y}}return null})()`);
+      assert.ok(point, "actual empty workspace background is available for wheel departure");
+      nativeInput(win, { type: "mouseMove", ...point });
+      nativeInput(win, { type: "mouseWheel", ...point, deltaX: 0, deltaY: 120, canScroll: true });
+      await wait("window.__aerynth.application().navigation.kind==='constellation'");
+      mark("Zoomed out through native wheel input over actual empty workspace space");
+    } else {
+      await workspaceActions();
+      await click("#workspace-constellation");
+    }
+    await pause(350);
+  };
+  const workspaceIn = async (workspaceId) => {
+    const workspace = (await snapshot()).workspaces.find((w) => w.id === workspaceId),
+      nodeKey = "workspace:" + workspaceId;
+    assert.ok(workspace);
+    await locate(workspace.title, nodeKey);
+    await click(`[data-key="${nodeKey}"]`);
+    const point = await js(`(()=>{const e=document.querySelector(${JSON.stringify('[data-key="' + nodeKey + '"]')}),r=e?.getBoundingClientRect();if(!r)return null;const x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);return document.elementFromPoint(x,y)?.closest('.aw-anchor')?.dataset.key===${JSON.stringify(nodeKey)}?{x,y}:null})()`);
+    assert.ok(point, "workspace destination is visibly exposed for inward wheel input");
+    nativeInput(win, { type: "mouseMove", ...point });
+    nativeInput(win, { type: "mouseWheel", ...point, deltaX: 0, deltaY: -120, canScroll: true });
+    await wait(`window.__aerynth.application().navigation.kind==='workspace'&&window.__aerynth.application().activeWorkspaceId===${JSON.stringify(workspaceId)}`);
+    mark("Entered the actual workspace through native inward wheel input");
     await pause(350);
   };
   const openBlock = async (id) => {
@@ -785,7 +810,7 @@ exports.verify = async ({
         2,
         "Create, edit, resize, reshape and place another real working block",
       );
-      await workspaceOut();
+      await workspaceOut(true);
       await pause(650);
       await checkOverviewPresence("project");
       step(3, "Zoom out from the workspace");
@@ -1065,7 +1090,7 @@ exports.verify = async ({
       await node("project:" + other.projectId);
       await checkOverviewPresence("other project");
       step(17, "Approach Voyagewright");
-      await node("workspace:" + other.workspaceId);
+      await workspaceIn(other.workspaceId);
       assert.equal((await snapshot()).activeWorkspaceId, other.workspaceId);
       step(18, "Enter its Engineering working workspace");
       // Fluid insertion may legitimately move a prior block beyond this camera.

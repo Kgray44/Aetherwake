@@ -83,7 +83,7 @@ export function spatialControls(
     ["Look around", "Drag empty space"],
     ["Pan", "Shift + drag · middle mouse drag"],
     ["Move closer / farther", "Scroll · + / −"],
-    ["Enter a destination", "Double-click · select, then Enter"],
+    ["Enter a destination", "Scroll toward a body · double-click · Enter"],
     ["Move a body", "Alt + drag · release to pin"],
     ["Return / move out", "Backspace / Alt + ↑"],
     ["Focus / recenter", "F / Home"],
@@ -237,7 +237,7 @@ export function spatialControls(
       : "Explore Constellation.";
     guide.querySelector(".aw-guide-intro")!.textContent = overview
       ? "Explore with your mouse. Keep your place with the keyboard."
-      : "From Workspace actions (⋯), choose Constellation. These gestures apply in the spatial view.";
+      : "Scroll out over empty workspace space to reveal its constellation. You can also choose Constellation from Workspace actions (⋯). The gestures below apply in the spatial view.";
     const opening = guide.hidden;
     opener = document.activeElement as HTMLElement;
     close();

@@ -536,7 +536,7 @@ test("planet and moon appearances are stable per canonical identity, varied and 
     assert.ok(p.palette.flat().every(Number.isFinite));
   }
   assert.equal(signatures.size, 10000);
-  assert.equal(types.size, 5);
+  assert.equal(types.size, 6, "five planetary geologies and a distinct stellar photosphere");
   const { c, navigation } = setup(),
     scene = new ConstellationScene(c, navigation, () => ({
       left: 0,

@@ -67,9 +67,23 @@ for (const [projectCount, count] of [
     layer.update(1920, 1080);
     frames.push(performance.now() - start);
   }
-  const refresh = performance.now();
+  const panFrames = [];
+  for (let i = 0; i < 20; i++) {
+    n.target({
+      ...pose,
+      target: {
+        x: pose.target.x + i * 25,
+        y: pose.target.y + i * 7,
+        z: pose.target.z + i * 12,
+      },
+    });
+    const start = performance.now();
+    layer.update(1920, 1080);
+    panFrames.push(performance.now() - start);
+  }
+  const refreshStarted = performance.now();
   c.update(snapshot);
-  const refreshMs = performance.now() - refresh;
+  const refreshMs = performance.now() - refreshStarted;
   console.log(
     JSON.stringify({
       meaning: "CPU source diagnostic only",
@@ -84,7 +98,14 @@ for (const [projectCount, count] of [
         p95: percentile(frames, 0.95),
         p99: percentile(frames, 0.99),
       },
-      renderedBodies: layer.objects.size,
+      panUpdateMs: {
+        p50: percentile(panFrames, 0.5),
+        p95: percentile(panFrames, 0.95),
+      },
+      visibleBodies: layer.diagnostics.nodes,
+      detailedBodies: layer.objects.size,
+      instancedVisibleBodies: layer.diagnostics.instancedBodies,
+      instanceDrawCount: layer.diagnostics.instanceDrawCount,
       overlapCulled: layer.diagnostics.overlapCulled,
     }),
   );
