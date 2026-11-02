@@ -9,7 +9,7 @@ const { captureAllowed } = require('./library-native.cjs');
 
 test('every A/C renderer factory and branch compiles in direct and actual guarded wait contexts', () => {
   const result = preflight();
-  assert.equal(result.factories, 36); assert.equal(result.cases, 42);
+  assert.equal(result.factories, 38); assert.equal(result.cases, 44);
   assert.deepEqual(result.names, Object.keys(expressions).sort());
   assert.match(result.sha256, /^[a-f0-9]{64}$/);
   assert.deepEqual(result, preflight(), 'source preparation and native execution bind the same deterministic preflight');
@@ -53,4 +53,17 @@ test('failure diagnostics allow observed script errors only with healthy rendere
   for (const health of [{ ...healthy, failed: true }, { ...healthy, contextLost: true }, { ...healthy, errorCount: -1 }, { ...healthy, errorCount: NaN }, { ...healthy, errorCount: 0.5 }]) {
     assert.equal(captureAllowed(health, true), false); assert.equal(captureAllowed(health), false);
   }
+});
+
+test('native header coordinates admit pointer-transparent label fallthrough only to the same noninteractive card surface', () => {
+  const card: any = {}, otherCard = {};
+  const label = { getBoundingClientRect: () => ({ x: 100, y: 200, width: 80, height: 24 }), closest: () => null, contains: () => false };
+  let interactive = false, hitCard: unknown = card;
+  const ancestor = { closest(selector: string) { return selector === '[data-block]' ? hitCard : interactive ? {} : null; } };
+  card.contains = (node: unknown) => node === label || node === ancestor;
+  const context = { document: { querySelector: (selector: string) => selector === '.label' ? label : card, elementFromPoint: () => ancestor }, getComputedStyle: () => ({ visibility: 'visible' }) };
+  assert.equal(runInNewContext(expressions.point('.label'), context), null, 'strict element hit correctly rejects a pointer-transparent label');
+  assert.deepEqual(JSON.parse(JSON.stringify(runInNewContext(expressions.surfacePoint('.label', '.card'), context))), { x: 140, y: 212 });
+  interactive = true; assert.equal(runInNewContext(expressions.surfacePoint('.label', '.card'), context), null, 'a real input/button is never treated as draggable card surface');
+  interactive = false; hitCard = otherCard; assert.equal(runInNewContext(expressions.surfacePoint('.label', '.card'), context), null, 'overlapping foreign cards remain failures');
 });

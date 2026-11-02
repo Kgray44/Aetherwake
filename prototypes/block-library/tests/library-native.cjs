@@ -105,33 +105,40 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
       receipt.actions.push({ action: 'native select', selector, value });
     };
     const card = id => '[data-block=' + q(id) + ']';
-    const point = async selector => {
-      const p = await js(x.point(selector));
-      assert(p, 'Actual unobstructed native target missing: ' + selector); return p;
+    const point = async (selector, surface = false) => {
+      receipt.lastIntent = { action: 'locate native target', selector, surface };
+      const expression = surface ? x.surfacePoint(selector, selector.slice(0, selector.indexOf(' .card-kind-label'))) : x.point(selector);
+      const end = Math.min(Date.now() + 2000, limits.deadlineAt); let previous;
+      while (Date.now() < end) {
+        const p = await js(expression);
+        if (p && previous && Math.hypot(p.x - previous.x, p.y - previous.y) < .75) return p;
+        previous = p; await guard.pause(80);
+      }
+      assert.fail('Actual settled unobstructed native target missing: ' + selector);
     };
     const context = async id => {
-      const p = await point(card(id) + ' .card-kind-label');
+      const p = await point(card(id) + ' .card-kind-label', true);
       guard.input({ type: 'mouseMove', ...p }); guard.input({ type: 'mouseDown', ...p, button: 'right', clickCount: 1 }); guard.input({ type: 'mouseUp', ...p, button: 'right', clickCount: 1 });
       receipt.actions.push({ action: 'native card context menu', blockId: id });
       await wait(x.exists('dialog[open] #detach-card'));
     };
     const drag = async (selector, dx, dy) => {
-      const p = await point(selector);
+      const p = await point(selector, selector.endsWith(' .card-kind-label'));
       guard.input({ type: 'mouseMove', ...p }); guard.input({ type: 'mouseDown', ...p, button: 'left', clickCount: 1 });
       for (let n = 1; n <= 8; n++) { guard.input({ type: 'mouseMove', x: Math.round(p.x + dx * n / 8), y: Math.round(p.y + dy * n / 8), modifiers: ['leftbuttondown'] }); await guard.pause(20); }
       guard.input({ type: 'mouseUp', x: Math.round(p.x + dx), y: Math.round(p.y + dy), button: 'left', clickCount: 1 });
       receipt.actions.push({ action: 'native drag', selector, dx, dy });
     };
     const graphics = () => js(x.graphics());
-    inspectFailure = async () => ({ graphics: await graphics(), context: await js(x.failureContext()) });
+    inspectFailure = async () => ({ graphics: await graphics(), context: await js(x.failureContext()), target: await js(x.targetDiagnostics(receipt.lastIntent?.selector ?? '')) });
     const shot = async (name, diagnostic = false) => {
       assert(receipt.screenshots.length < limits.maxScreenshots, 'native_capture_count_exceeded');
-      const before = await graphics(); await wait(x.drawsAfter(before.draws));
+      const before = await graphics(); if (!diagnostic) await wait(x.drawsAfter(before.draws));
       const health = await graphics(); assert(exports.captureAllowed(health, diagnostic), 'Renderable actual frame required; passing shots additionally require zero errors');
       const png = (await guard.capture()).toPNG(); receipt.pngBytes = (receipt.pngBytes ?? 0) + png.length;
       assert(receipt.pngBytes <= limits.maxPngBytes, 'native_capture_bytes_exceeded');
       await guard.around(() => fs.mkdir(output, { recursive: true })); await guard.around(() => fs.writeFile(path.join(output, name + '.png'), png, { flag: 'wx' }));
-      receipt.screenshots.push({ file: name + '.png', bytes: png.length, sha256: digest(png), draws: health.draws, diagnostic, health });
+      receipt.screenshots.push({ file: name + '.png', bytes: png.length, sha256: digest(png), draws: health.draws, priorDraws: before.draws, freshDraw: health.draws > before.draws, diagnostic, health });
     };
     captureFailure = () => shot('native-library-template-failure', true);
     const ensureNoExecution = async () => assert.deepEqual(await js(x.host('executionStatus', {})), []);
