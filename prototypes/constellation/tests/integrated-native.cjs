@@ -1159,13 +1159,14 @@ exports.verify = async ({
           try{const s=window.__aerynth.application();appState={navigation:s.navigation,activeWorkspaceId:s.activeWorkspaceId,projectCount:s.projects.length,workspaceCount:s.workspaces.length,resourceCount:s.resources.length,blockCount:s.blocks.length}}catch(e){appState={error:text(e.message)}}
           try{const s=window.__aerynth.snapshot();sceneState={location:s.spatial?.location,selected:s.spatial?.selected,camera:s.spatial?.camera,renderer:s.spatial?.renderer,metrics:s.metrics}}catch(e){sceneState={error:text(e.message)}}
           const active=document.activeElement,ancestors=[];
+          const surfaces=[...document.querySelectorAll('dialog.aw-contextual-surface')].slice(0,8).map(e=>{const s=getComputedStyle(e);return {id:e.id,surfaceId:e.dataset.surfaceId,closing:e.dataset.closing??null,inert:e.inert,open:e.open,hidden:e.hidden,ariaHidden:e.getAttribute('aria-hidden'),containsLibrary:!!library&&e.contains(library),bounds:rect(e),display:s.display,visibility:s.visibility,opacity:s.opacity,pointerEvents:s.pointerEvents,transform:s.transform}});
           for(let e=active;e&&ancestors.length<8;e=e.parentElement)ancestors.push({tag:e.tagName,id:e.id,className:text(e.className,160),role:e.getAttribute('role')});
           return {
             page:{visibility:document.visibilityState,focused:document.hasFocus(),width:innerWidth,height:innerHeight},
-            library:library?{bounds:rect(library),heading:text(library.querySelector('.aw-library__detail h3')?.textContent),status:[...library.querySelectorAll('.status,.error,[role="status"],[role="alert"]')].slice(0,12).map(e=>text(e.textContent)),forms:[...library.querySelectorAll('form')].slice(0,4).map(form=>({id:form.id,noValidate:form.noValidate,controls:[...form.querySelectorAll('input,textarea,select,button')].slice(0,40).map(describe)})),submitTargets:[...library.querySelectorAll('button[type="submit"],input[type="submit"]')].slice(0,8).map(describe)}:null,
+            library:library?{bounds:rect(library),heading:text(library.querySelector('.aw-library__detail h3')?.textContent),status:[...library.querySelectorAll('.aw-library__status,.status,.error,[role="status"],[role="alert"]')].slice(0,12).map(e=>text(e.textContent)),forms:[...library.querySelectorAll('form')].slice(0,4).map(form=>({id:form.id,noValidate:form.noValidate,controls:[...form.querySelectorAll('input,textarea,select,button')].slice(0,40).map(describe)})),submitTargets:[...library.querySelectorAll('button[type="submit"],input[type="submit"]')].slice(0,8).map(describe)}:null,
             active:{tag:active?.tagName,id:active?.id,className:text(active?.className,160),ariaLabel:active?.getAttribute('aria-label'),inLibrary:!!library?.contains(active),control:library?.contains(active)?describe(active):null,ancestors},
             hostStatus:{status:text(document.querySelector('#status')?.textContent),commandError:text(document.querySelector('#command-error')?.textContent)},
-            application:appState,scene:sceneState
+            application:appState,scene:sceneState,surfaces
           };
         })()`),
       };
