@@ -10,7 +10,6 @@
 }
 .application-vela-content .vela-core {
   padding: 0;
-  font: inherit;
 }
 .application-vela-content .vela-core-header h2 {
   display: none;
@@ -58,19 +57,67 @@
 #conversation-surface > .aw-contextual-heading > .aw-contextual-dismiss {
   display: none;
 }
-.application-conversation-content
-  .cp-manager
-  :is(input, textarea, select, button, summary),
-.application-conversation-content .cp-disclosure-panel {
-  background: #bbc8ee0b;
-  border-color: #c8c6e139;
+/* Vela speaks from the scene; her existing host supplies geometry and lifecycle.
+   The only standing optical surface is the component's minimal composer. */
+#vela-assistant-surface.aw-contextual-surface {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+  overflow: visible;
+  text-shadow: 0 1px 3px #03020bd9;
 }
-.application-vela-content .vela-core input,
-.application-vela-content .vela-core select,
-.application-vela-content .vela-core textarea,
-.application-vela-content .vela-core-button:not(.vela-core-primary) {
-  background: #bbc8ee0b;
-  border-color: #c8c6e139;
+#vela-assistant-surface > .aw-contextual-heading {
+  position: absolute;
+  top: 3px;
+  right: 6px;
+  width: 26px;
+  height: 26px;
+  z-index: 1;
+  gap: 0;
+}
+#vela-assistant-surface > .aw-contextual-heading > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+#vela-assistant-surface .aw-contextual-dismiss {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: #c4a6e509;
+  color: #c6b6d7;
+  opacity: 0;
+}
+#vela-assistant-surface:hover .aw-contextual-dismiss,
+#vela-assistant-surface:focus-within .aw-contextual-dismiss {
+  opacity: 1;
+}
+#vela-assistant-surface > .aw-contextual-content {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: transparent;
+}
+#vela-assistant-surface .vela-core-compose textarea {
+  padding-right: 28px;
+}
+@media (forced-colors: active) {
+  #vela-assistant-surface.aw-contextual-surface {
+    background: Canvas;
+    border: 1px solid CanvasText;
+  }
+  #vela-assistant-surface .aw-contextual-dismiss {
+    opacity: 1;
+    color: ButtonText;
+    border: 1px solid ButtonText;
+  }
 }
 .command-surface.conversation-surface {
   width: min(1140px, 94vw);

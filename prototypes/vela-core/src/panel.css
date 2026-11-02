@@ -1,72 +1,626 @@
-.vela-core{--vela-muted:var(--text-muted,#b8b5c9);--vela-edge:#d8d0f02b;box-sizing:border-box;display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;width:100%;max-width:680px;height:min(680px,calc(100dvh - 96px));margin:auto;padding:16px;color:var(--text,#eceaf4);font:16px/1.6 var(--font-ui,system-ui,sans-serif);background:#141724f5;border:1px solid var(--vela-edge);border-radius:20px}
-.vela-core *{box-sizing:border-box;min-width:0}
-.vela-core [hidden]{display:none!important}
-.application-vela-content{display:flex;flex-direction:column;min-height:0;height:100%}
-.aw-contextual-content .application-vela-content>.vela-core{height:100%;max-height:100%;max-width:none;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;font:16px/1.6 var(--font-ui,system-ui,sans-serif)}
-.vela-core h2,.vela-core h3,.vela-core p{margin:0;overflow-wrap:anywhere}
-.vela-core h2,.vela-core h3{font-size:18px;line-height:1.4;font-weight:550;letter-spacing:-.015em}
-.vela-core-header{flex:none;display:flex;align-items:start;justify-content:space-between;gap:8px 16px;flex-wrap:wrap}
-.vela-core-header>p{font-size:13px;color:var(--vela-muted);flex:1 1 180px}
-.vela-core-provider-controls{font-size:13px;flex:0 1 auto}
-.vela-core-provider-controls>summary{color:var(--vela-muted)}
-.vela-core-scroll{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#bbb2d455 transparent;padding:0 4px 0 0;display:flex;flex-direction:column;gap:16px}
-.vela-core-conversation{display:flex;flex-direction:column;gap:24px}
-.vela-core-empty{display:flex;flex-direction:column;gap:8px;padding:24px 8px 16px;max-width:34em}
-.vela-core-empty p{color:var(--vela-muted)}
-.vela-core-message{padding:0 8px;overflow-wrap:anywhere}
-.vela-core-message[data-source="user"]{margin-left:24px;padding:12px 16px;background:#d1c3ef0a;border:1px solid #d1c3ef14;border-radius:16px 16px 4px 16px}
-.vela-core-message-author{display:block;font-size:13px;font-weight:550;margin-bottom:8px;color:var(--vela-muted)}
-.vela-core-message p{white-space:pre-wrap;overflow-wrap:anywhere}
-.vela-core-secondary,.vela-core-meta,.vela-core-targets,.vela-core-receipt,.vela-core-availability{font-size:13px;line-height:1.5;color:var(--vela-muted)}
-.vela-core-plans:empty{display:none}
-.vela-core-plans{display:flex;flex-direction:column;gap:12px}
-.vela-core-plan{display:flex;flex-direction:column;gap:12px;padding:16px;border:1px solid var(--vela-edge);border-radius:16px;background:#c8bedb05}
-.vela-core-plan-state{font-size:13px;color:#d5c6ee}
-.vela-core-plan[data-plan-state="unknown"],.vela-core-plan[data-plan-state="failed"]{border-color:#e5bf935c}
-.vela-core-effects{margin:0;padding-left:24px;display:flex;flex-direction:column;gap:12px}
-.vela-core-effects li::marker{color:var(--vela-muted);font-size:13px}
-.vela-core-actions,.vela-core-compose-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.vela-core-button,.vela-core-chip{font:inherit;color:inherit;border:1px solid var(--vela-edge);background:#c5bfdf0a;border-radius:10px;cursor:pointer;max-width:100%;overflow-wrap:anywhere}
-.vela-core-button{font-size:13px;line-height:1.4;min-height:40px;padding:8px 12px;margin:0}
-.vela-core-primary{background:#d4c3ed;color:#24202e;border-color:#e5d6f3;font-weight:600}
-.vela-core-button:hover:not(:disabled),.vela-core-chip:hover{background:#d1c4e71a}
-.vela-core-primary:hover:not(:disabled){background:#e3d3f5}
-.vela-core-button:disabled{opacity:.45;cursor:default}
-.vela-core :focus-visible{outline:2px solid #dcc9f3;outline-offset:3px}
-.vela-core-field{display:flex;flex-direction:column;align-items:stretch;gap:8px;margin:0}
-.vela-core-field>span{font-size:13px;color:var(--vela-muted)}
-.vela-core input,.vela-core select,.vela-core textarea{font:inherit;color:inherit;border:1px solid var(--vela-edge);background:#c6c0dd08;border-radius:10px;padding:8px 12px;min-height:40px;max-width:100%;width:100%}
-.vela-core input::placeholder,.vela-core textarea::placeholder{color:#b6afc38c}
-.vela-core input[type="checkbox"]{width:18px;height:18px;min-height:0;flex:none;accent-color:#d0b7ed;padding:0}
-.vela-core-field:has(input[type="checkbox"]){flex-direction:row;align-items:start}
-.vela-core-field:has(input[type="checkbox"]) input{order:-1;margin-top:2px}
-.vela-core-field:has(input[type="checkbox"])>span{flex:1}
-.vela-core-compose{flex:none;display:flex;flex-direction:column;gap:8px;padding-top:12px;border-top:1px solid var(--vela-edge)}
-.vela-core-compose textarea{min-height:88px;max-height:180px;resize:vertical;line-height:1.6;background:#d0c7e80a}
-.vela-core-compose-hint{font-size:13px;line-height:1.5;color:var(--vela-muted)}
-.vela-core-compose-actions>.vela-core-primary{margin-right:auto}
-.vela-core-consent>span{font-size:13px}
-.vela-core-selection{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.vela-core-chip{font-size:13px;line-height:1.4;padding:4px 8px}
-.vela-core-status{flex:none;font-size:13px;line-height:1.5;padding:8px 12px;border-left:2px solid #bfabd5;color:#d5cddd;background:#c6b2e007}
-.vela-core-status[data-request-state="failed"],.vela-core-status[data-request-state="unknown"],.vela-core-status[data-request-state="invalid-plan"]{border-left-color:#e5bf93;color:#f0d4b1}
-.vela-core-error{flex:none;padding:12px;border:1px solid #e5bf9350;border-radius:12px;color:#f0d4b1;font-size:13px}
-.vela-core-error>.vela-core-button{margin-top:8px}
-.vela-core details{padding:0;max-width:100%}
-.vela-core summary{font-size:13px;font-weight:500;cursor:pointer;list-style-position:inside;overflow-wrap:anywhere;padding:8px 0}
-.vela-core details:not([open])>.vela-core-disclosure-body{display:none}
-.vela-core-disclosure-body{display:flex;flex-direction:column;gap:12px;padding:8px 0 12px}
-.vela-core-more>.vela-core-disclosure-body{border-top:1px solid var(--vela-edge)}
-.vela-core-more details+details{border-top:1px solid #d8d0f014}
-.vela-core-search{display:flex;align-items:start;gap:8px}
-.vela-core-search input{flex:1}
-.vela-core-results{display:flex;flex-direction:column;gap:8px}
-.vela-core-result{display:flex;align-items:center;gap:8px;border-bottom:1px solid #d8d0f014;padding-bottom:8px}
-.vela-core-result>.vela-core-field{flex:1}
-.vela-core-result>.vela-core-meta{font-size:12px}
-.vela-core-update{display:flex;flex-wrap:wrap;gap:8px;padding:12px 0;border-bottom:1px solid var(--vela-edge)}
-.vela-core-update>p,.vela-core-update>details{flex:1 1 100%}
-.vela-core pre{font:12px/1.6 ui-monospace,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%;max-height:240px;overflow:auto;margin:0;padding:12px;border:1px solid var(--vela-edge);border-radius:10px;background:#02040c26}
-.vela-core-change-preview{font:14px/1.6 var(--font-ui,system-ui,sans-serif)!important;white-space:pre-wrap}
-@media(max-width:440px){.vela-core{padding:12px;gap:8px}.vela-core-plan{padding:12px}.vela-core-message[data-source="user"]{margin-left:12px}.vela-core-compose-actions{gap:8px}.vela-core-compose-actions>.vela-core-primary{margin-right:0}.vela-core-search{flex-wrap:wrap}.vela-core-search input{flex-basis:100%}}
-@media(prefers-reduced-motion:reduce){.vela-core *{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
+/* Vela occupies the scene. The host and its shared Motion Coordinator own
+   placement, dimensions and reveal; there are no independent timed effects. */
+.vela-core {
+  --vela-muted: #bcb4cd;
+  --vela-edge: #d0bde62b;
+  --vela-light: #d4b8f5;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  max-width: 680px;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  color: #ede8f5;
+  font: 16px/1.6 var(--font-ui, system-ui, sans-serif);
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.vela-core *,
+.vela-core *::before,
+.vela-core *::after {
+  box-sizing: border-box;
+  min-width: 0;
+}
+.vela-core [hidden] {
+  display: none !important;
+}
+.application-vela-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+.aw-contextual-content .application-vela-content > .vela-core {
+  flex: 1 1 auto;
+  max-width: none;
+  max-height: 100%;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+.vela-core :is(h2, h3, p) {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.vela-core :is(h2, h3) {
+  font-size: 17px;
+  line-height: 1.45;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+}
+.vela-core-header,
+.vela-core-empty {
+  display: none;
+}
+.vela-core-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #bb9fda55 transparent;
+  padding: 8px 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.vela-core[data-view="empty"][data-context="none"]
+  .vela-core-scroll:not(:has(.vela-core-plan)) {
+  display: none;
+}
+.vela-core-conversation {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-height: 0;
+}
+.vela-core-message {
+  max-width: 65ch;
+  padding: 0 6px;
+  overflow-wrap: anywhere;
+  text-shadow: 0 1px 3px #02030ad9;
+}
+.vela-core-message[data-source="user"] {
+  align-self: flex-end;
+  margin-left: 28px;
+  padding: 9px 16px;
+  border: 0;
+  border-radius: 18px 18px 3px 18px;
+  background: linear-gradient(120deg, #d1b9ed0b, #d1b9ed05);
+}
+.vela-core-message-author {
+  display: block;
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 500;
+  color: var(--vela-muted);
+  margin-bottom: 6px;
+}
+.vela-core-message p {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.vela-core-secondary,
+.vela-core-meta,
+.vela-core-targets,
+.vela-core-receipt,
+.vela-core-availability {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--vela-muted);
+}
+.vela-core-plans:empty {
+  display: none;
+}
+.vela-core-plans {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.vela-core-plan {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 12px 8px 16px;
+  border: 0;
+  border-left: 1px solid #d4b8f54d;
+  border-radius: 0;
+  background: linear-gradient(90deg, #bea1df08, transparent 80%);
+}
+.vela-core-plan-state {
+  color: #d6c2ef;
+  font-size: 13px;
+}
+.vela-core-plan[data-plan-state="unknown"],
+.vela-core-plan[data-plan-state="failed"] {
+  border-left-color: #e7bb94;
+}
+.vela-core-effects {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-left: 20px;
+  margin: 0;
+}
+.vela-core-effects li::marker {
+  color: var(--vela-muted);
+  font-size: 12px;
+}
+.vela-core-actions,
+.vela-core-compose-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.vela-core-button,
+.vela-core-chip {
+  font: inherit;
+  color: #dfd6eb;
+  border: 0;
+  border-bottom: 1px solid #cbb5e330;
+  background: transparent;
+  border-radius: 0;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+.vela-core-button {
+  font-size: 13px;
+  line-height: 1.4;
+  min-height: 36px;
+  padding: 7px 8px;
+  margin: 0;
+}
+.vela-core-primary {
+  color: #f0e5ff;
+  background: linear-gradient(90deg, #cfaff31c, #cfaff306);
+  border-color: #d4b8f577;
+}
+.vela-core-button:hover:not(:disabled),
+.vela-core-chip:hover {
+  color: #fff5ff;
+  background: #c7abe714;
+  border-color: #ddc3f2a3;
+}
+.vela-core-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.vela-core :focus-visible {
+  outline: 2px solid #ddc7f7;
+  outline-offset: 3px;
+}
+.vela-core-field {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  margin: 0;
+}
+.vela-core-field > span {
+  font-size: 13px;
+  color: var(--vela-muted);
+}
+.vela-core :is(input, select, textarea) {
+  font: inherit;
+  color: inherit;
+  background: #c4b3dc06;
+  border: 0;
+  border-bottom: 1px solid var(--vela-edge);
+  border-radius: 0;
+  padding: 8px 4px;
+  min-height: 36px;
+  width: 100%;
+  max-width: 100%;
+}
+.vela-core :is(input, textarea)::placeholder {
+  color: #beb2ceaa;
+}
+.vela-core input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  flex: none;
+  accent-color: #d0b7ed;
+  padding: 0;
+}
+.vela-core-field:has(input[type="checkbox"]) {
+  flex-direction: row;
+  align-items: start;
+}
+.vela-core-field:has(input[type="checkbox"]) input {
+  order: -1;
+  margin-top: 2px;
+}
+.vela-core-field:has(input[type="checkbox"]) > span {
+  flex: 1;
+}
+.vela-core-compose {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px 9px;
+  border: 1px solid #d4b8f525;
+  border-radius: 23px 23px 26px 26px;
+  background: linear-gradient(125deg, #d7c0ee12, #11131e9c 48%, #a88bc408);
+  box-shadow:
+    inset 0 1px 0 #e8dbf71a,
+    0 12px 40px #02020b25;
+}
+.vela-core-compose::after {
+  content: "";
+  position: absolute;
+  pointer-events: none;
+  left: 18%;
+  right: 18%;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #d6b7f390, transparent);
+  opacity: calc(0.35 + 0.65 * var(--vela-activity, 0));
+}
+.vela-core-compose:focus-within {
+  border-color: #dbc2f077;
+  box-shadow:
+    inset 0 1px 0 #efe1ff29,
+    0 0 24px #ba8fe00b;
+}
+.vela-core-compose textarea {
+  display: block;
+  flex: none;
+  width: 100%;
+  min-height: 48px;
+  max-height: 160px;
+  resize: none;
+  overflow: auto;
+  border: 0;
+  padding: 3px 4px;
+  background: transparent;
+  line-height: 1.6;
+}
+.vela-core-compose textarea:focus-visible {
+  outline: 1px solid #d9c4ed66;
+  outline-offset: 4px;
+  border-radius: 8px;
+}
+.vela-core-compose-actions {
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+.vela-core-icon {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 34px;
+  width: 34px;
+  min-height: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  background: transparent;
+  color: #c4b8d6;
+  cursor: pointer;
+}
+.vela-core-icon:hover:not(:disabled),
+.vela-core-icon[aria-expanded="true"],
+.vela-core-icon[data-selected="true"] {
+  color: #f3e7ff;
+  border-color: #d9b9f43b;
+  background: radial-gradient(ellipse at 40% 20%, #e5caff1c, transparent 75%);
+}
+.vela-core-icon.vela-core-primary,
+.vela-core-icon:has(.vela-core-icon-mark[data-icon="send"]) {
+  margin-left: auto;
+  color: #f0e5ff;
+  border-color: #d2a9f154;
+  background: radial-gradient(ellipse at 40% 20%, #e9cfff2b, #aa78d608 78%);
+}
+.vela-core-icon:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.vela-core-icon-mark {
+  display: block;
+  width: 18px;
+  height: 18px;
+  background: currentColor;
+  mask: var(--vela-icon) center/contain no-repeat;
+}
+.vela-core-icon[data-pending-count]:not([data-pending-count="0"])::after {
+  content: attr(data-pending-count);
+  position: absolute;
+  right: -3px;
+  top: -3px;
+  padding: 0 3px;
+  min-width: 14px;
+  border-radius: 7px;
+  background: #cfb9e7;
+  color: #20182b;
+  font:
+    10px/14px system-ui,
+    sans-serif;
+}
+.vela-core-selection {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.vela-core-chip,
+.vela-core-provider-choice {
+  font-size: 12px;
+  line-height: 1.5;
+  padding: 2px 6px;
+  color: #d8c4eb;
+}
+.vela-core-status {
+  flex: none;
+  margin: 0 12px;
+  padding: 0;
+  color: #cfc1de;
+  font-size: 13px;
+  line-height: 1.5;
+  background: transparent;
+  border: 0;
+  text-shadow: 0 1px 3px #03020b;
+}
+.vela-core-status[data-request-state="failed"],
+.vela-core-status[data-request-state="unknown"],
+.vela-core-status[data-request-state="invalid-plan"] {
+  color: #efc6b0;
+}
+.vela-core-error {
+  flex: none;
+  padding: 8px 12px;
+  border: 0;
+  border-left: 1px solid #e8b895;
+  color: #edc8b2;
+  font-size: 13px;
+}
+.vela-core-error > .vela-core-button {
+  margin-top: 8px;
+}
+.vela-core-contextual {
+  position: relative;
+  padding: 12px 14px;
+  border: 0;
+  border-top: 1px solid #d2b6ec33;
+  border-radius: 0;
+  background: linear-gradient(145deg, #1c182980, #0c0d1666 70%, transparent);
+  box-shadow: none;
+}
+.vela-core-contextual::before {
+  content: "";
+  position: absolute;
+  top: -1px;
+  left: 0;
+  width: 40%;
+  height: 1px;
+  background: linear-gradient(90deg, #dac2f3aa, transparent);
+  opacity: var(--vela-context-reveal, 1);
+  pointer-events: none;
+}
+.vela-core-contextual-close {
+  float: right;
+  margin: -4px -4px 4px 8px;
+}
+.vela-core details {
+  padding: 0;
+  max-width: 100%;
+}
+.vela-core summary {
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  list-style-position: inside;
+  overflow-wrap: anywhere;
+  padding: 8px 0;
+  color: #d5c8e5;
+}
+.vela-core details:not([open]) > .vela-core-disclosure-body {
+  display: none;
+}
+.vela-core-disclosure-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 0 12px;
+}
+.vela-core-contextual > details > summary {
+  font-size: 14px;
+  color: #e5d9f2;
+}
+.vela-core-more details + details {
+  border-top: 1px solid #d8d0f014;
+}
+.vela-core-search {
+  display: flex;
+  align-items: start;
+  gap: 8px;
+}
+.vela-core-search input {
+  flex: 1;
+}
+.vela-core-results {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.vela-core-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid #d8d0f014;
+  padding-bottom: 8px;
+}
+.vela-core-result > .vela-core-field {
+  flex: 1;
+}
+.vela-core-result > .vela-core-meta {
+  font-size: 12px;
+}
+.vela-core-update {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--vela-edge);
+}
+.vela-core-update > p,
+.vela-core-update > details {
+  flex: 1 1 100%;
+}
+.vela-core pre {
+  font:
+    12px/1.6 ui-monospace,
+    Consolas,
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  max-height: 240px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--vela-edge);
+  border-radius: 8px;
+  background: #02040c26;
+}
+.vela-core-change-preview {
+  font: 14px/1.6 var(--font-ui, system-ui, sans-serif) !important;
+  white-space: pre-wrap;
+}
+@media (max-width: 440px) {
+  .vela-core {
+    gap: 8px;
+  }
+  .vela-core-scroll {
+    padding-inline: 2px;
+  }
+  .vela-core-compose {
+    padding-inline: 10px;
+  }
+  .vela-core-message[data-source="user"] {
+    margin-left: 12px;
+  }
+  .vela-core-search {
+    flex-wrap: wrap;
+  }
+  .vela-core-search input {
+    flex-basis: 100%;
+  }
+  .vela-core-icon {
+    flex-basis: 32px;
+    width: 32px;
+    height: 32px;
+    min-height: 32px;
+  }
+}
+@media (forced-colors: active) {
+  .vela-core-compose,
+  .vela-core-contextual,
+  .vela-core-plan {
+    border: 1px solid CanvasText;
+    background: Canvas;
+  }
+  .vela-core-icon {
+    border-color: ButtonText;
+  }
+  .vela-core-icon-mark {
+    forced-color-adjust: none;
+    background: ButtonText;
+  }
+  .vela-core :focus-visible {
+    outline-color: Highlight;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vela-core * {
+    scroll-behavior: auto !important;
+  }
+}
+.vela-core-icon-mark[data-icon="sources"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.4%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M8%206h12v14H8zM4%2016V3h12M11%2010h6M11%2014h6%22%2F%3E%3C%2Fsvg%3E");
+}
+.vela-core-icon-mark[data-icon="tools"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.4%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M4%207h16v13H4zM8%207V4h8v3M4%2012h16M10%2011v3h4v-3%22%2F%3E%3C%2Fsvg%3E");
+}
+.vela-core-icon-mark[data-icon="preferences"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.4%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M4%206h16M4%2012h16M4%2018h16M8%203v6M16%209v6M10%2015v6%22%2F%3E%3C%2Fsvg%3E");
+}
+.vela-core-icon-mark[data-icon="provider"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.4%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M8%203v5M16%203v5M5%208h14v4a7%207%200%200%201-14%200zM12%2019v3%22%2F%3E%3C%2Fsvg%3E");
+}
+.vela-core-icon-mark[data-icon="attention"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.4%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M5%2017h14l-2-3V9a5%205%200%200%200-10%200v5zM10%2021h4%22%2F%3E%3C%2Fsvg%3E");
+}
+.vela-core-icon-mark[data-icon="stop"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.4%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M7%207h10v10H7z%22%2F%3E%3C%2Fsvg%3E");
+}
+.vela-core-icon-mark[data-icon="send"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.4%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M12%2020V4M5%2011l7-7%207%207%22%2F%3E%3C%2Fsvg%3E");
+}
+.vela-core-icon-mark[data-icon="close"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.4%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M6%206l12%2012M18%206L6%2018%22%2F%3E%3C%2Fsvg%3E");
+}
+
+.vela-core-scroll {
+  background: radial-gradient(ellipse at 40% 40%, #080710ad, transparent 78%);
+  border-radius: 28px;
+}
+.vela-core[data-phase="receiving"] .vela-core-compose {
+  border-color: #dcc2f160;
+}
+.vela-core[data-phase="planning"] .vela-core-compose::after,
+.vela-core[data-phase="applying"] .vela-core-compose::after {
+  background: linear-gradient(90deg, transparent, #e4c8ffb3, transparent);
+}
+.vela-core[data-phase="review"] .vela-core-plan {
+  border-left-color: #e2c4ff99;
+}
+.vela-core[data-phase="error"] .vela-core-compose::after {
+  background: linear-gradient(90deg, transparent, #e6b79999, transparent);
+}
+
+/* The model owner keeps real provider opt-in visible until that request is sent. */
+.vela-core-provider-choice.vela-core-icon {
+  display: inline-flex;
+  justify-content: flex-start;
+  width: fit-content;
+  max-width: 100%;
+  height: auto;
+  min-height: 28px;
+  flex: none;
+  gap: 8px;
+  padding: 2px 7px;
+  border: 0;
+  border-bottom: 1px solid #d2b4e74d;
+  border-radius: 0;
+}
+.vela-core-provider-choice-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  max-width: 26ch;
+  font-size: 12px;
+}
+.vela-core-provider-choice .vela-core-icon-mark {
+  flex: 0 0 12px;
+  width: 12px;
+  height: 12px;
+}
+.vela-core-icon-mark {
+  font-size: 0;
+  line-height: 0;
+  overflow: hidden;
+}
