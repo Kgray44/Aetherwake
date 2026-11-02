@@ -359,6 +359,17 @@ export class WorkspaceEngine {
           patch(b.blockId, { zIndex }); break;
         }
         case 'setBlockLock': patch(command.blockId, { locked: command.locked }); break;
+        case 'setBlockMinimized': {
+          ensure(typeof command.minimized === 'boolean' && Number.isSafeInteger(command.expectedVersion) && command.expectedVersion > 0);
+          const block = find(command.blockId);
+          ensure(block.version === command.expectedVersion, 'CONFLICT');
+          ensure((block.subjectState ?? block.resourceState) === 'active', 'SUBJECT_UNAVAILABLE');
+          ensure(!block.locked, 'LOCKED');
+          // A view-state change must not resolve collisions, reframe the camera,
+          // rewrite dimensions or involve the independent Vela presence.
+          if (block.minimized !== command.minimized) patch(block.blockId, { minimized: command.minimized });
+          break;
+        }
         case 'setBlockPresentation': patch(command.blockId, command.patch); break;
         case 'setPresence': {
           ensure(command.expectedVersion === state.presence.version, 'CONFLICT');
@@ -415,7 +426,7 @@ export class WorkspaceEngine {
       const resolve = ['createBlock', 'attachResource', 'attachSubject', 'duplicateBlock', 'moveBlock', 'resizeBlock', 'setBlockShape', 'setBlockPresentation', 'setPresence', 'saveLayout', 'applyPreset', 'resolveLayout', 'restoreCheckpoint', 'setOrganization', 'applyStructuredPreset', 'reorderPlacements', 'bringAllIntoView'].includes(command.type);
       const resolved = resolve ? this.resolve(workspaceId, policy, state.organization.revision) : { changed: [], viewport: state.viewport };
       const rearrangedPlacementIds = resolved.changed;
-      const noOp = ['resolveLayout', 'setOrganization', 'bringAllIntoView', 'reorderPlacements'].includes(command.type) && hash(before) === hash(this.snapshot(workspaceId)) && hash(state.viewport) === hash(resolved.viewport);
+      const noOp = ['resolveLayout', 'setOrganization', 'bringAllIntoView', 'reorderPlacements', 'setBlockMinimized'].includes(command.type) && hash(before) === hash(this.snapshot(workspaceId)) && hash(state.viewport) === hash(resolved.viewport);
       if (!noOp && this.kernel.openWorkspace(workspaceId).layout.version === state.revision)
         this.kernel.saveLayout(workspaceId, this.readOrganization(workspaceId).mode === 'structured' ? 'structured' : 'freeform', resolved.viewport, [], state.revision);
       if (!noOp && !['undoLayout', 'redoLayout', 'checkpoint'].includes(command.type)) {

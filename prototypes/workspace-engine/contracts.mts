@@ -50,6 +50,7 @@ type Action =
   | { type: 'setBlockShape'; blockId: string; shape: Shape }
   | { type: 'setBlockLayer'; blockId: string; zIndex: number }
   | { type: 'setBlockLock'; blockId: string; locked: boolean }
+  | { type: 'setBlockMinimized'; blockId: string; expectedVersion: number; minimized: boolean }
   | { type: 'setBlockPresentation'; blockId: string; patch: Partial<Presentation> }
   | { type: 'setPresence'; expectedVersion: number; presentation: Partial<Geometry & { locked: boolean }> }
   | { type: 'resolveLayout' }
