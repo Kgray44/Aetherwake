@@ -268,11 +268,7 @@ app.whenReady().then(async () => {
     },
   });
   const startupErrors = [];
-  if (
-    process.argv.includes("--integration-workspace-views") ||
-    process.argv.includes("--integration-visual-smoke") ||
-    process.argv.includes("--integration-product-ui")
-  )
+  if (verify)
     win.webContents.on("console-message", (details) => {
       if (details.level === "error") {
         startupErrors.push({
@@ -543,6 +539,7 @@ app.whenReady().then(async () => {
         call,
         source,
         moduleStarted,
+        startupErrors,
       });
       return;
     }
@@ -553,6 +550,7 @@ app.whenReady().then(async () => {
           app,
           privateRoot,
           source,
+          startupErrors,
           session: session.defaultSession,
           localURL,
         },
