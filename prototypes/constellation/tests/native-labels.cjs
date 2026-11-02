@@ -80,6 +80,17 @@ exports.verifyCompactNavigation = async (win) => {
   );
   await key("Escape");
   await wait('document.querySelector(".aw-destinations").hidden');
+  await js('document.querySelector(".aw-spatial-field").focus()');
+  await key("ArrowRight");
+  const scope =
+    location.kind === "project" ? "project:" + location.projectId : "universe";
+  const saved = () =>
+    wait(
+      `window.aerynthHost.command('viewState',{}).then(state=>JSON.stringify(state.bookmarks[${JSON.stringify(scope)}]?.spatial)===JSON.stringify(window.__aerynth.snapshot().spatial.bookmark))`,
+    );
+  await saved();
+  await key("ArrowLeft");
+  await saved();
   return {
     location,
     guide,
@@ -90,6 +101,7 @@ exports.verifyCompactNavigation = async (win) => {
       "actual-label-clearance",
       "native-F1-and-Escape",
       "CtrlK-without-host-double-opening",
+      "keyboard-camera-autosave-without-save-button-or-explicit-flush",
     ],
   };
 };

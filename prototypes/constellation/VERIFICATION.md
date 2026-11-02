@@ -2,6 +2,8 @@
 
 ## Clearance and gesture-first controls follow-up
 
+Strict TypeScript, the production fixture build and all **55** current source tests pass. The keyboard follow-up captures overview Ctrl K before host bubble handlers and respects open dialogs; working-workspace Ctrl K remains with the shell. Camera/selection changes queue one existing private-view save after shared camera movement settles. The native quick smoke explicitly checks keyboard-camera autosave without a Save button or an explicit flush; it remains unexecuted until Integration runs it.
+
 The current source removes permanent Constellation navigation/camera/selection button banks. Only a small glass location capsule with commands and information controls remains. Searchable commands, native mouse/keyboard gestures and an on-demand selection inspector preserve the underlying operations. A compact glass navigation guide opens from i, F1 or ?, with Escape/outside dismissal. Panning now follows the real perspective camera plane and viewport pixel scale; Alt-drag retains the grabbed point instead of jumping the body center under the cursor.
 
 The renderer and layout share full body footprints including tilted rings, atmosphere and maximum emphasis, with a 28-world-unit gap and varied sibling parent distances. Existing clear positions remain stable. Conflicting legacy positions are repaired explicitly; continuous drag constraints, arrangement previews/apply and undo preserve clearance. Perspective decluttering keeps rendered body silhouettes apart while retaining canonical search and semantic labels.

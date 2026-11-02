@@ -18,6 +18,7 @@ export function spatialControls(
     report: (error: unknown) => void;
     onOpen?: () => void;
     overview: () => boolean;
+    afterRun?: () => void;
   },
 ) {
   const element = <K extends keyof HTMLElementTagNameMap>(
@@ -147,6 +148,7 @@ export function spatialControls(
     close(true);
     try {
       await entry.run();
+      options.afterRun?.();
     } catch (error) {
       options.report(error);
     }

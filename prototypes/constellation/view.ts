@@ -89,10 +89,15 @@ export function mountConstellation(
     dirty = true,
     lastDetailKey = "",
     lastExclusionKey = "",
-    inspectorOpen = false;
+    inspectorOpen = false,
+    pendingViewSave = false;
   const invalidate = () => {
     dirty = true;
     options.onDirty?.();
+  };
+  const queueViewSave = () => {
+    pendingViewSave = true;
+    invalidate();
   };
   const spatial = new SpatialNavigator(controller, invalidate);
   controller.spatial = spatial;
@@ -357,6 +362,7 @@ export function mountConstellation(
       detail.hidden = true;
     },
     overview: () => ["project", "universe"].includes(controller.location.kind),
+    afterRun: queueViewSave,
   });
   const { bar, breadcrumb, drawer } = controls;
   const paintDetail = () => {
@@ -572,6 +578,7 @@ export function mountConstellation(
         v = button("", () => {
           layer.selectedEdge = null;
           controller.select(n.key);
+          queueViewSave();
         });
         v.className = `aw-anchor aw-${n.kind}`;
         v.dataset.key = n.key;
@@ -860,6 +867,7 @@ export function mountConstellation(
     },
     { passive: false },
   );
+  field.addEventListener("wheel", queueViewSave, { passive: true });
   field.onkeydown = (e) => {
     if (
       e.defaultPrevented ||
@@ -910,6 +918,7 @@ export function mountConstellation(
     if (actions[e.key]) {
       e.preventDefault();
       void invoke(actions[e.key]);
+      queueViewSave();
     }
   };
   const closeInformation = (e: KeyboardEvent) => {
@@ -928,7 +937,13 @@ export function mountConstellation(
       });
   media.addEventListener("change", mediaChange);
   mediaChange();
-  const visibility = () => controller.setPolicy({ hidden: document.hidden });
+  const visibility = () => {
+    controller.setPolicy({ hidden: document.hidden });
+    if (document.hidden && pendingViewSave) {
+      pendingViewSave = false;
+      void controller.persist();
+    }
+  };
   document.addEventListener("visibilitychange", visibility);
   function frame(now = performance.now()) {
     if (disposed || controller.policy.hidden) return;
@@ -957,6 +972,10 @@ export function mountConstellation(
     if (dirty || (moving && now - lastFrame >= cadence)) {
       paint();
       lastFrame = now;
+    }
+    if (pendingViewSave && !moving && !pointer && !controller.pending) {
+      pendingViewSave = false;
+      void controller.persist();
     }
   }
   paint();
