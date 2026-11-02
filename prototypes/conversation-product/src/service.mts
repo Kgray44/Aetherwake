@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { ConversationGraph, type Message } from '../../connected-conversations/src/graph.ts';
+import { ConversationGraph, type GraphData, type Message } from '../../connected-conversations/src/graph.ts';
 import type { Snapshot, CommandMap } from '../../integrated-backend/src/contracts.mts';
-import type { DesktopSnapshot } from '../../application-contract/contracts.ts';
+import type { DesktopSnapshot, PublicConversationExecution, Resource } from '../../application-contract/contracts.ts';
 import type { BranchPolicy, CanonicalOrganizationCommand, Collection, ConversationProductPort, ConversationSummary, Detail, Evidence, MessageView, Page, ProductCommandMap, ProviderCapability, SearchHit, SearchQuery, Share } from './contracts.ts';
 import { CONVERSATION_DRAFT_LIMITS, type ConversationDraft } from './contracts.ts';
 import { createNativeChatGPTFidelityDescriptor } from './native-chatgpt-fidelity.ts';
@@ -10,6 +10,8 @@ import { createNativeChatGPTFidelityDescriptor } from './native-chatgpt-fidelity
 export interface CanonicalConversationHost {
  snapshot(): Promise<Snapshot>;
  desktop(): Promise<DesktopSnapshot>;
+ /** Trusted in-process read projection over the SAME canonical graph. No renderer/provider access. */
+ canonicalReadView?(): Promise<ConversationReadView>;
  command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']>;
  organize(input: CanonicalOrganizationCommand): Promise<unknown>;
  /** Optional side-effect-free catalog, so reading local history never starts a connection. */
@@ -32,7 +34,18 @@ const page = <T,>(items: T[], q: { offset?: number; limit?: number }): Page<T> =
  check(Number.isInteger(offset) && offset >= 0 && Number.isInteger(limit) && limit > 0 && limit <= 200, 'invalid_page');
  return { items: items.slice(offset, offset + limit), total: items.length, offset, limit, hasMore: offset + limit < items.length };
 };
-type View = { snapshot: Snapshot; desktop: DesktopSnapshot; graph: ConversationGraph; publicIds: Map<string, string> };
+export interface ConversationReadView {
+ readonly conversations: readonly Snapshot['conversations'][number][]; readonly resourceMap: Readonly<Snapshot['resourceMap']>;
+ readonly graph: Pick<ConversationGraph,'visibleMessages'|'visibleMessageMetadata'>;
+ readonly graphMetadata: Readonly<Pick<GraphData,'providers'|'conversations'|'edges'|'unavailableMessageIds'>>;
+ readonly executions: Readonly<Record<string,PublicConversationExecution>>;
+ /** Only currently visible canonical metadata. Bodies are deliberately absent from this shape. */
+ readonly desktop: Readonly<Pick<DesktopSnapshot,'projects'|'workspaces'|'blocks'>> & {readonly resources:readonly Readonly<Pick<Resource,'id'|'kind'|'title'|'version'|'state'|'visible'|'available'|'project_id'>>[]};
+ messageMetadata(messageId:string): {id:string;conversationId:string;createdAt:string}|null;
+ /** Both lazy callbacks must recheck current source authorization; retained views never confer permission. */
+ resourceContent(resourceId:string): string;
+}
+type View = ConversationReadView & {publicIds:Map<string,string>};
 
 /** Additive metadata on the injected canonical connection. Never opens/closes/resets a DB. */
 export class ConversationProduct implements ConversationProductPort {
@@ -74,22 +87,24 @@ export class ConversationProduct implements ConversationProductPort {
   return this.favorite(input);
  }
  private async view(): Promise<View> {
+  if(this.host.canonicalReadView){const view=await this.host.canonicalReadView();return {...view,publicIds:new Map(Object.entries(view.resourceMap).map(([rid,gid])=>[gid,rid]))};}
   // Sequential reads share the backend's owning command queue. Access is checked again below.
   const snapshot = await this.host.snapshot(), desktop = await this.host.desktop();
-  return { snapshot, desktop, graph: new ConversationGraph([], snapshot.graph), publicIds: new Map(Object.entries(snapshot.resourceMap).map(([rid, gid]) => [gid, rid])) };
+  // Compatibility fallback is explicitly unscaled: it still receives/reconstructs the full graph.
+  return {conversations:snapshot.conversations,resourceMap:snapshot.resourceMap,graphMetadata:{providers:snapshot.graph.providers,conversations:snapshot.graph.conversations,edges:snapshot.graph.edges,unavailableMessageIds:snapshot.graph.unavailableMessageIds},executions:Object.fromEntries(Object.entries(snapshot.executions).map(([id,e])=>[id,{id:e.id,resourceId:e.resourceId,providerId:e.providerId,state:e.state,commandId:e.commandId,startedAt:e.startedAt,endedAt:e.endedAt,taskVerified:false,...(e.errorCode?{errorCode:e.errorCode}:{})}])),desktop:{projects:desktop.projects,workspaces:desktop.workspaces,blocks:desktop.blocks,resources:desktop.resources.map(({id,kind,title,version,state,visible,available,project_id})=>({id,kind,title,version,state,visible,available,project_id}))},graph:new ConversationGraph([],snapshot.graph),publicIds:new Map(Object.entries(snapshot.resourceMap).map(([rid,gid])=>[gid,rid])),messageMetadata:id=>{const m=snapshot.graph.messages.find(m=>m.id===id);return m?{id:m.id,conversationId:m.conversationId,createdAt:m.createdAt}:null;},resourceContent:id=>desktop.resources.find(r=>r.id===id)?.content??''};
  }
  private resource(v: View, id: string, messageId?: string, archived = false) {
   const r = v.desktop.resources.find(r => r.id === id);
   check(r && (archived || r.visible !== false && r.available !== false) && this.host.access?.(id, messageId) !== false, 'source_unavailable');
   // Archived content is accessible only through an explicit host authorization, never merely a surviving placement.
   if (r.visible === false || r.available === false) check(archived && this.host.access?.(id, messageId) === true, 'source_unavailable');
-  if (messageId) check(!v.snapshot.graph.unavailableMessageIds.includes(messageId), 'source_revoked');
+  if (messageId) check(!v.graphMetadata.unavailableMessageIds.includes(messageId), 'source_revoked');
   return r;
  }
  private readable(v: View, id: string, messageId?: string, archived = false) { try { this.resource(v, id, messageId, archived); return true; } catch { return false; } }
  private draftResource(v: View, id: string) {
   const r=this.resource(v,id),canonical=this.db.prepare('SELECT kind,state FROM resources WHERE id=?').get(id);
-  check(r.kind==='conversation'&&(r.state===undefined||r.state==='active')&&canonical?.kind==='conversation'&&canonical.state==='active'&&!!v.snapshot.resourceMap[id]&&v.snapshot.conversations.some(c=>c.resourceId===id),'source_unavailable');
+  check(r.kind==='conversation'&&(r.state===undefined||r.state==='active')&&canonical?.kind==='conversation'&&canonical.state==='active'&&!!v.resourceMap[id]&&v.conversations.some(c=>c.resourceId===id),'source_unavailable');
  }
  private draft(id: string): ConversationDraft {
   const row=this.db.prepare('SELECT version,content,content_bytes,updated_at FROM cp_drafts WHERE resource_id=?').get(id);
@@ -115,15 +130,15 @@ export class ConversationProduct implements ConversationProductPort {
  }
  private message(v: View, resourceId: string, messageId: string): Message {
   this.resource(v, resourceId, messageId);
-  const gid = v.snapshot.resourceMap[resourceId]; check(gid, 'conversation_missing');
+  const gid = v.resourceMap[resourceId]; check(gid, 'conversation_missing');
   const m = v.graph.visibleMessages(gid).find(m => m.id === messageId); check(m, 'message_missing');
   const sourceId = v.publicIds.get(m.conversationId); check(sourceId, 'source_unavailable'); this.resource(v, sourceId, m.id);
   return m;
  }
  private family(v: View, id: string): Set<string> {
-  check(v.snapshot.resourceMap[id], 'conversation_missing');
-  const ids = new Set([v.snapshot.resourceMap[id]]); let expanded = true;
-  while (expanded) { expanded = false; for (const e of v.snapshot.graph.edges) if (ids.has(e.parentId) || ids.has(e.childId)) { if (!ids.has(e.parentId) || !ids.has(e.childId)) expanded = true; ids.add(e.parentId); ids.add(e.childId); } }
+  check(v.resourceMap[id], 'conversation_missing');
+  const ids = new Set([v.resourceMap[id]]); let expanded = true;
+  while (expanded) { expanded = false; for (const e of v.graphMetadata.edges) if (ids.has(e.parentId) || ids.has(e.childId)) { if (!ids.has(e.parentId) || !ids.has(e.childId)) expanded = true; ids.add(e.parentId); ids.add(e.childId); } }
   return new Set([...ids].map(gid => v.publicIds.get(gid)!).filter(Boolean));
  }
  private projectIds(v: View, id: string): string[] {
@@ -134,22 +149,28 @@ export class ConversationProduct implements ConversationProductPort {
   const workspaces=new Set(v.desktop.blocks.filter(b=>b.resource_id===id).map(b=>b.workspace_id));
   return [...new Set(v.desktop.workspaces.filter(w=>workspaces.has(w.id)&&w.project_id).map(w=>w.project_id!))].sort();
  }
- private summary(v: View, resourceId: string): ConversationSummary {
-  const c = v.snapshot.conversations.find(c => c.resourceId === resourceId); check(c, 'conversation_missing');
-  const r = this.resource(v, resourceId, undefined, true), g = v.snapshot.graph.conversations.find(g => g.id === v.snapshot.resourceMap[resourceId])!;
-  return { resourceId, conversationId: g.id, title: r.title, providerId: c.providerId, revision: c.revision, version: r.version, projectId: r.project_id ?? null, projectIds:this.projectIds(v,resourceId), state: r.state ?? 'active', createdAt: g.createdAt, favorite: this.db.prepare('SELECT favorite FROM cp_flags WHERE resource_id=?').get(resourceId)?.favorite === 1, messageCount: v.graph.visibleMessages(g.id).filter(m => this.readable(v, v.publicIds.get(m.conversationId)!, m.id,true)).length, collectionIds: this.db.prepare('SELECT collection_id FROM collection_members WHERE resource_id=?').all(resourceId).map(row => String(row.collection_id)) };
+ private summary(v: View, resourceId: string, archived=false): ConversationSummary {
+  const c = v.conversations.find(c => c.resourceId === resourceId); check(c, 'conversation_missing');
+  const r = this.resource(v, resourceId, undefined, archived), g = v.graphMetadata.conversations.find(g => g.id === v.resourceMap[resourceId])!;
+  const tail=v.graph.visibleMessageMetadata(g.id,{limit:1,maxScan:4096,maxBodyBytes:131072,tail:true,allow:m=>!m.unavailable&&this.readable(v,v.publicIds.get(m.conversationId)!,m.id,archived)}),last=tail.items[0],info=last?v.messageMetadata(last.id):null;
+  const complete=tail.limitedBy===null&&(!last||info?.id===last.id),messageCount=complete?(last?.ordinal??0):null,historyMetadataStatus=complete?'complete':tail.limitedBy==='denied'?'unavailable':'limited';
+  const observed=Object.values(v.executions).filter(e=>e.resourceId===resourceId).sort((a,b)=>b.startedAt.localeCompare(a.startedAt)||a.id.localeCompare(b.id))[0];
+  const execution=observed?{id:observed.id,resourceId:observed.resourceId,providerId:observed.providerId,state:observed.state,commandId:observed.commandId,startedAt:observed.startedAt,endedAt:observed.endedAt,taskVerified:false as const,...(observed.errorCode?{errorCode:observed.errorCode}:{})}:undefined;
+  const lastActivityAt=complete?[g.createdAt,info?.createdAt??'',execution?.startedAt??''].sort().at(-1)!:null;
+  return { resourceId, conversationId: g.id, title: r.title, providerId: c.providerId, revision: c.revision, version: r.version, projectId: r.project_id ?? null, projectIds:this.projectIds(v,resourceId), state: r.state ?? 'active', createdAt: g.createdAt,lastActivityAt,historyMetadataStatus,...(execution?{execution}:{}),favorite: this.db.prepare('SELECT favorite FROM cp_flags WHERE resource_id=?').get(resourceId)?.favorite === 1,messageCount,collectionIds: this.db.prepare('SELECT collection_id FROM collection_members WHERE resource_id=?').all(resourceId).map(row => String(row.collection_id)) };
  }
  private summaries(v: View, q: SearchQuery = {}, ignoreCollection = false): ConversationSummary[] {
   check(!q.text || typeof q.text === 'string' && q.text.length <= 1000, 'invalid_query');
+  check(q.sort===undefined||['activity','created','title','active'].includes(q.sort),'invalid_sort');check(q.searchMode===undefined||['conversations','messages','resources','all'].includes(q.searchMode),'invalid_search_mode');
   const family = q.familyOf ? this.family(v, q.familyOf) : null;
   const collection = !ignoreCollection && q.collectionId ? this.collections(v).find(c => c.id === q.collectionId) : null;
   if (q.collectionId && !ignoreCollection) check(collection, 'collection_missing');
-  return v.snapshot.conversations.filter(c => this.readable(v, c.resourceId, undefined, !!q.archived)).map(c => this.summary(v, c.resourceId)).filter(c =>
+  return v.conversations.filter(c => this.readable(v,c.resourceId,undefined,!!q.archived)&&(!q.providerId||c.providerId===q.providerId)&&(q.projectId===undefined||(q.projectId===null?this.projectIds(v,c.resourceId).length===0:this.projectIds(v,c.resourceId).includes(q.projectId)))&&(!family||family.has(c.resourceId))&&(!collection||collection.memberIds.includes(c.resourceId))).map(c => this.summary(v, c.resourceId,!!q.archived)).filter(c =>
    (q.archived ? c.state === 'archived' : c.state === 'active') &&
    (q.projectId === undefined || (q.projectId===null?c.projectIds.length===0:c.projectIds.includes(q.projectId))) && (!q.providerId || c.providerId === q.providerId) && (!q.favorite || c.favorite) &&
    (!q.after || c.createdAt >= q.after) && (!q.before || c.createdAt <= q.before) && (!family || family.has(c.resourceId)) &&
    (!collection || collection.memberIds.includes(c.resourceId)) && (!q.text || this.matches(v, c, q.text,!!q.archived)))
-   .sort((a,b) => b.createdAt.localeCompare(a.createdAt) || a.resourceId.localeCompare(b.resourceId));
+   .sort((a,b) => (q.sort==='active'?Number(!!b.execution&&['dispatching','running'].includes(b.execution.state))-Number(!!a.execution&&['dispatching','running'].includes(a.execution.state)):0)||(q.sort==='title'?a.title.localeCompare(b.title):q.sort==='created'?b.createdAt.localeCompare(a.createdAt):(b.lastActivityAt??b.createdAt).localeCompare(a.lastActivityAt??a.createdAt))||a.resourceId.localeCompare(b.resourceId));
  }
  private matches(v: View, c: ConversationSummary, query: string, archived=false) {
   const needle = query.toLocaleLowerCase();
@@ -193,9 +214,9 @@ export class ConversationProduct implements ConversationProductPort {
  }
  private async providers(v: View): Promise<ProviderCapability[]> {
   let live: CommandMap['capabilities']['output'] | undefined; try { live = this.host.capabilitySnapshot ? this.host.capabilitySnapshot() : await this.host.command('capabilities',{}); } catch { /* catalog is not proof of a connected provider */ }
-  const local = v.snapshot.graph.providers.find(p => p.id === 'local') ?? v.snapshot.graph.providers.find(p=>p.id==='mock-ordinary');
+  const local = v.graphMetadata.providers.find(p => p.id === 'local') ?? v.graphMetadata.providers.find(p=>p.id==='mock-ordinary');
   const items: ProviderCapability[] = [{ id: local?.id ?? 'local', label: 'Local conversation', available: true, record: true, execute: false, nativeFork:false, history:'local', simulated:false, models:[] }];
-  const codex = v.snapshot.graph.providers.find(p => p.id !== local?.id && p.id!=='mock-ordinary' && p.id!=='local');
+  const codex = v.graphMetadata.providers.find(p => p.id !== local?.id && p.id!=='mock-ordinary' && p.id!=='local');
   const authenticated=live?.authentication==='available';
   if (codex) items.push({id:codex.id,label:live?.mock ? 'Codex fixture (simulated)' : 'Codex',available:authenticated,record:true,execute:authenticated,nativeFork:false,history:'local',simulated:live?.mock ?? codex.mock,models:live?.models ?? [],reason:authenticated?'Connected and authenticated; model catalog only. Execution outcomes are recorded per turn.':'Provider disconnected or authentication unavailable'});
   const accountFidelity=createNativeChatGPTFidelityDescriptor();
@@ -217,26 +238,26 @@ export class ConversationProduct implements ConversationProductPort {
   switch(name) {
    case 'list': result = page(this.summaries(v,a),a); break;
    case 'search': {
-    const needle = String(a.text ?? '').toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const hits: SearchHit[] = [];
-    for (const c of this.summaries(v,{...a,text:undefined})) {
-     if (!needle || c.title.toLocaleLowerCase().includes(needle)) hits.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title});
-     for (const m of v.graph.visibleMessages(c.conversationId)) { const sourceId = v.publicIds.get(m.conversationId)!; if (!this.readable(v,sourceId,m.id,!!a.archived)) continue; const index = m.content.toLocaleLowerCase().indexOf(needle); if (needle && index >= 0) hits.push({kind:'message',resourceId:c.resourceId,messageId:m.id,title:c.title,excerpt:m.content.slice(Math.max(0,index-60),index+160),sourceTime:m.createdAt}); }
+    const needle = String(a.text ?? '').trim().toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const hits: SearchHit[] = [],mode=a.searchMode??(needle?'all':'conversations');check(['conversations','messages','resources','all'].includes(mode),'invalid_search_mode');
+    if(mode!=='resources')for (const c of this.summaries(v,{...a,text:undefined})) {
+     if ((mode==='all'||mode==='conversations')&&(!needle||c.title.toLocaleLowerCase().includes(needle)||mode==='conversations'&&this.matches(v,c,needle,!!a.archived))) hits.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
+     if(needle&&(mode==='all'||mode==='messages'))for (const m of v.graph.visibleMessages(c.conversationId)) { const sourceId = v.publicIds.get(m.conversationId)!; if (!this.readable(v,sourceId,m.id,!!a.archived)) continue; const index = m.content.toLocaleLowerCase().indexOf(needle); if (index >= 0) hits.push({kind:'message',resourceId:c.resourceId,messageId:m.id,title:c.title,excerpt:m.content.slice(Math.max(0,index-60),index+160),sourceTime:m.createdAt,providerId:c.providerId}); }
     }
     const resourceCollection=a.collectionId?this.collections(v).find(c=>c.id===a.collectionId):undefined;
-    if (!a.familyOf && !a.providerId && !a.favorite) for (const r of v.desktop.resources) {
+    if ((mode==='all'||mode==='resources')&&!a.familyOf && !a.providerId && !a.favorite) for (const r of v.desktop.resources) {
      if(r.kind==='conversation'||!this.readable(v,r.id,undefined,!!a.archived)||(a.archived?r.state!=='archived':r.state==='archived'))continue;
      const scopes=this.projectIds(v,r.id);if(a.projectId!==undefined&&(a.projectId===null?scopes.length>0:!scopes.includes(a.projectId)))continue;
      if(resourceCollection&&!resourceCollection.memberIds.includes(r.id))continue;
      const created=String(this.db.prepare('SELECT created_at FROM resources WHERE id=?').get(r.id)?.created_at??'');if(a.after&&created<a.after||a.before&&created>a.before)continue;
-     const content=r.title+'\n'+r.content,index=content.toLocaleLowerCase().indexOf(needle);if(index>=0)hits.push({kind:'resource',resourceId:r.id,title:r.title,excerpt:content.slice(Math.max(0,index-60),index+160)});
+     const content=needle?r.title+'\n'+v.resourceContent(r.id):r.title,index=content.toLocaleLowerCase().indexOf(needle);if(index>=0)hits.push({kind:'resource',resourceId:r.id,title:r.title,excerpt:content.slice(Math.max(0,index-60),index+160)});
     }
     result=page(hits,a); break;
    }
    case 'detail': {
-    this.resource(v,a.resourceId,undefined,true); const c = this.summary(v,a.resourceId), all = v.graph.visibleMessages(c.conversationId).filter(m => this.readable(v,v.publicIds.get(m.conversationId)!,m.id,true)).map(m => ({id:m.id,resourceId:v.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,provenance:m.provenance,inherited:m.conversationId!==c.conversationId,sensitivity:m.sensitivity}));
+    this.resource(v,a.resourceId,undefined,true); const c = this.summary(v,a.resourceId,true), all = v.graph.visibleMessages(c.conversationId).filter(m => this.readable(v,v.publicIds.get(m.conversationId)!,m.id,true)).map(m => ({id:m.id,resourceId:v.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,provenance:m.provenance,inherited:m.conversationId!==c.conversationId,sensitivity:m.sensitivity}));
     const around = a.aroundMessageId ? all.findIndex(m => m.id === a.aroundMessageId) : -1; if (a.aroundMessageId) check(around>=0,'message_unavailable');
-    const family=this.family(v,a.resourceId); const lineage=v.snapshot.graph.edges.map(e=>({id:e.id,parentResourceId:v.publicIds.get(e.parentId)!,childResourceId:v.publicIds.get(e.childId)!,sourceMessageId:e.sourceMessageId,mode:e.mode,createdAt:e.createdAt})).filter(e=>family.has(e.parentResourceId)&&this.readable(v,e.parentResourceId)&&this.readable(v,e.childResourceId));
-    result={conversation:c,messages:page<MessageView>(all,{...a,...(around>=0?{offset:Math.max(0,around-Math.min(10,Math.floor((a.limit??50)/2)))}:{})}),lineage,policy:this.policy(a.resourceId),shares:this.db.prepare('SELECT * FROM cp_shares WHERE source_resource_id=? OR id IN(SELECT share_id FROM cp_adoptions WHERE target_id=?)').all(a.resourceId,a.resourceId).map(row=>this.share(v,row,a.resourceId)),providers:await this.providers(v)} satisfies Detail; break;
+    const family=this.family(v,a.resourceId); const lineage=v.graphMetadata.edges.filter(e=>family.has(v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.childId)!)).filter(e=>{if(v.graphMetadata.unavailableMessageIds.includes(e.sourceMessageId))return false;const source=v.messageMetadata(e.sourceMessageId);return !!source&&this.readable(v,v.publicIds.get(source.conversationId)!,e.sourceMessageId);}).map(e=>({id:e.id,parentResourceId:v.publicIds.get(e.parentId)!,childResourceId:v.publicIds.get(e.childId)!,sourceMessageId:e.sourceMessageId,mode:e.mode,createdAt:e.createdAt}));
+    result={conversation:{...c,messageCount:all.length},messages:page<MessageView>(all,{...a,...(around>=0?{offset:Math.max(0,around-Math.min(10,Math.floor((a.limit??50)/2)))}:{})}),lineage,policy:this.policy(a.resourceId),shares:this.db.prepare('SELECT * FROM cp_shares WHERE source_resource_id=? OR id IN(SELECT share_id FROM cp_adoptions WHERE target_id=?)').all(a.resourceId,a.resourceId).map(row=>this.share(v,row,a.resourceId)),providers:await this.providers(v)} satisfies Detail; break;
    }
    case 'readDraft': this.draftResource(v,a.resourceId);result=this.draft(a.resourceId);break;
    case 'saveDraft': result=this.saveDraft(v,a);break;
@@ -297,7 +318,7 @@ export class ConversationProduct implements ConversationProductPort {
    case 'export': {
     const detail=await this.command('detail',{resourceId:a.resourceId,limit:200});
     const current=await this.view();this.resource(current,a.resourceId,undefined,true);
-    const gid=current.snapshot.resourceMap[a.resourceId];check(gid,'conversation_missing');
+    const gid=current.resourceMap[a.resourceId];check(gid,'conversation_missing');
     const items=current.graph.visibleMessages(gid).filter(m=>this.readable(current,current.publicIds.get(m.conversationId)!,m.id,true)).map(m=>({id:m.id,resourceId:current.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,provenance:m.provenance,inherited:m.conversationId!==gid,sensitivity:m.sensitivity}));
     result={format:'aerynth.conversation-export@1',detail:{...detail,messages:{items,total:items.length,offset:0,limit:items.length,hasMore:false}}};break;
    }

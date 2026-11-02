@@ -7,6 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { BackendCore } from '../../integrated-backend/src/core.mts';
 import type { Snapshot } from '../../integrated-backend/src/contracts.mts';
 import type { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
+import type { ConversationGraph, GraphData } from '../../connected-conversations/src/graph.ts';
 import { ConversationProduct, type CanonicalConversationHost } from '../src/service.mts';
 
 /** Synthetic source data only. The real canonical core owns all conversation writes. */
@@ -142,4 +143,39 @@ test('paged message navigation includes exact hit; resource search honors collec
   assert.equal((await f.product.command('search',{text:'resource needle',collectionId:col.id})).items[0]?.resourceId,note.id);assert.equal((await f.product.command('search',{text:'resource needle',archived:true})).total,0);
   const exportData=await f.product.command('export',{resourceId:c.resourceId});assert.equal(exportData.detail.messages.total,8);assert.equal(exportData.detail.messages.hasMore,false);
  }finally{await f.close();removeFixture(dir);}
+});
+
+test('conversation-first browse, activity/created/title sorts and explicit search modes preserve canonical IDs across restart',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-navigation-product-')),path=join(dir,'canonical.sqlite');let f=fixture(path);
+ try{
+  const older=await create(f,'Zulu older'),newer=await create(f,'Alpha newer'),message=await record(f,older.resourceId,'Synthetic old-topic exact message needle');
+  const desktop=await f.core.command('desktop',{type:'createResource',kind:'note',title:'Synthetic resource needle',workspaceId:null}),note=desktop.resources.find(r=>r.kind==='note')!;
+  assert.deepEqual((await f.product.command('list',{})).items.map(c=>c.resourceId),[older.resourceId,newer.resourceId]);
+  assert.deepEqual((await f.product.command('list',{sort:'created'})).items.map(c=>c.resourceId),[newer.resourceId,older.resourceId]);
+  assert.deepEqual((await f.product.command('list',{sort:'title'})).items.map(c=>c.resourceId),[newer.resourceId,older.resourceId]);
+  const browse=await f.product.command('search',{});assert.ok(browse.items.every(hit=>hit.kind==='conversation'));assert.equal(browse.total,2);
+  assert.ok((await f.product.command('search',{searchMode:'all'})).items.some(hit=>hit.resourceId===note.id));
+  assert.deepEqual((await f.product.command('search',{text:'exact message needle',searchMode:'conversations'})).items.map(hit=>[hit.kind,hit.resourceId]),[['conversation',older.resourceId]]);
+  assert.deepEqual((await f.product.command('search',{text:'exact message needle',searchMode:'messages'})).items.map(hit=>[hit.kind,hit.messageId]),[['message',message.id]]);
+  assert.deepEqual((await f.product.command('search',{text:'resource needle',searchMode:'resources'})).items.map(hit=>hit.resourceId),[note.id]);
+  f.denied.add(message.id);const denied=(await f.product.command('list',{})).items.find(c=>c.resourceId===older.resourceId)!;assert.equal(denied.messageCount,null);assert.equal(denied.lastActivityAt,null);assert.equal(denied.historyMetadataStatus,'unavailable');assert.equal((await f.product.command('search',{text:'exact message needle'})).total,0);f.denied.delete(message.id);
+  const before=await f.product.command('list',{});await f.close();f=fixture(path);assert.deepEqual(await f.product.command('list',{}),before);assert.equal((await f.product.command('detail',{resourceId:older.resourceId,aroundMessageId:message.id})).messages.items[0].id,message.id);
+  await assert.rejects(f.product.command('list',{sort:'guessed' as never}),/invalid_sort/);await assert.rejects(f.product.command('search',{searchMode:'guessed' as never}),/invalid_search_mode/);
+ }finally{await f.close();removeFixture(dir);}
+});
+
+test('trusted same-graph metadata browse avoids snapshot/transcript cloning and fails closed on newly denied inherited sources',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-read-view-product-')),f=fixture(join(dir,'canonical.sqlite'));let restore:()=>void=()=>{};
+ try{
+  const parent=await create(f,'Canonical parent'),anchor=await record(f,parent.resourceId,'Synthetic inherited source'),child=await branch(f,parent.resourceId,anchor.id),snapshot=await f.core.command('snapshot',{}),desktop=await f.core.command('desktop',{type:'snapshot'});
+  const graph=(f.core as unknown as {graph:ConversationGraph}).graph,originalVisible=graph.visibleMessages,originalSnapshot=graph.snapshot;let clones=0,bodyReads=0;
+  const headers=new Map(snapshot.graph.messages.map(m=>[m.id,{id:m.id,conversationId:m.conversationId,createdAt:m.createdAt}]));
+  f.host.canonicalReadView=async()=>({conversations:snapshot.conversations,resourceMap:snapshot.resourceMap,graph,graphMetadata:{providers:snapshot.graph.providers,conversations:snapshot.graph.conversations,edges:snapshot.graph.edges,unavailableMessageIds:snapshot.graph.unavailableMessageIds},executions:{},desktop:{projects:desktop.projects,workspaces:desktop.workspaces,blocks:desktop.blocks,resources:desktop.resources.map(({id,kind,title,version,state,visible,available,project_id})=>({id,kind,title,version,state,visible,available,project_id}))},messageMetadata:id=>headers.get(id)??null,resourceContent:()=>{throw new Error('metadata browse must not request resource bodies');}});
+  f.host.snapshot=async()=>{throw new Error('full snapshot forbidden');};f.host.desktop=async()=>{throw new Error('full desktop forbidden');};graph.visibleMessages=()=>{clones++;throw new Error('transcript cloning forbidden');};graph.snapshot=()=>{throw new Error('graph cloning forbidden');};
+  const source=(graph as unknown as {data:GraphData}).data.messages.find(m=>m.id===anchor.id)!,content=Object.getOwnPropertyDescriptor(source,'content')!;
+  restore=()=>{graph.visibleMessages=originalVisible;graph.snapshot=originalSnapshot;Object.defineProperty(source,'content',content);};
+  const first=await f.product.command('list',{});assert.equal(first.items.find(c=>c.resourceId===child.resourceId)!.messageCount,1);assert.equal(clones,0);
+  Object.defineProperty(source,'content',{configurable:true,get(){bodyReads++;throw new Error('denied source body read');}});f.denied.add(parent.resourceId);
+  const current=await f.product.command('list',{});assert.equal(current.items.some(c=>c.resourceId===parent.resourceId),false);const visibleChild=current.items.find(c=>c.resourceId===child.resourceId)!;assert.equal(visibleChild.messageCount,null);assert.equal(visibleChild.lastActivityAt,null);assert.equal(visibleChild.historyMetadataStatus,'unavailable');assert.equal(bodyReads,0);assert.equal(clones,0);
+ }finally{restore();await f.close();removeFixture(dir);}
 });

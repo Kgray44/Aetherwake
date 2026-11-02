@@ -1,18 +1,21 @@
 /** Browser-safe product contracts; IDs always refer to the canonical application. */
 import type { NativeChatGPTFidelityDescriptor } from './native-chatgpt-fidelity.ts';
+import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
 export type { FidelityStatus, NativeChatGPTAimId, NativeChatGPTAimAssessment, NativeChatGPTFidelityDescriptor } from './native-chatgpt-fidelity.ts';
 export type SharingMode = 'independent' | 'connected' | 'collaborative';
 export type Evidence = 'excerpt' | 'reported' | 'observed' | 'hypothesis' | 'decision' | 'disputed';
-export type SearchQuery = { text?: string; projectId?: string | null; collectionId?: string; familyOf?: string; providerId?: string; favorite?: boolean; archived?: boolean; after?: string; before?: string; offset?: number; limit?: number };
-export type ConversationSummary = { resourceId: string; conversationId: string; title: string; providerId: string; revision: number; version: number; projectId: string | null; projectIds: string[]; state: 'active' | 'archived'; createdAt: string; favorite: boolean; messageCount: number; collectionIds: string[] };
+export type ConversationSort = 'activity' | 'created' | 'title' | 'active';
+export type ConversationSearchMode = 'conversations' | 'messages' | 'resources' | 'all';
+export type SearchQuery = { text?: string; projectId?: string | null; collectionId?: string; familyOf?: string; providerId?: string; favorite?: boolean; archived?: boolean; after?: string; before?: string; sort?: ConversationSort; searchMode?: ConversationSearchMode; offset?: number; limit?: number };
+export type ConversationSummary = { resourceId: string; conversationId: string; title: string; providerId: string; revision: number; version: number; projectId: string | null; projectIds: string[]; state: 'active' | 'archived'; createdAt: string; lastActivityAt?: string | null; historyMetadataStatus?: 'complete' | 'limited' | 'unavailable'; execution?: PublicConversationExecution; favorite: boolean; messageCount: number | null; collectionIds: string[] };
 export type MessageView = { id: string; resourceId: string; role: string; content: string; createdAt: string; provenance: string; inherited: boolean; sensitivity: string };
-export type SearchHit = { kind: 'conversation' | 'message' | 'resource'; resourceId: string; messageId?: string; title: string; excerpt: string; sourceTime?: string };
+export type SearchHit = { kind: 'conversation' | 'message' | 'resource'; resourceId: string; messageId?: string; title: string; excerpt: string; sourceTime?: string; providerId?:string; summary?:ConversationSummary };
 export type Page<T> = { items: T[]; total: number; offset: number; limit: number; hasMore: boolean };
 export type Collection = { id: string; title: string; projectId: string | null; version: number; ruleRevision: number; state: string; parentId: string | null; rule: SearchQuery | null; memberIds: string[]; pinnedIds: string[] };
 export type BranchPolicy = { resourceId: string; revision: number; mode: SharingMode; allowedSourceIds: string[]; allowCrossProject: boolean; maxSensitivity: 'public' | 'internal' | 'sensitive'; categories: Evidence[] };
 export type Share = { id: string; sourceResourceId: string; sourceMessageId: string; sourceTime: string; digest: string; range: { start: number; end: number }; evidence: Evidence; createdAt: string; status: 'current' | 'stale' | 'revoked' | 'unavailable' | 'superseded'; supersedes: string | null; supersededBy: string[]; state: 'discoverable' | 'inspected' | 'attached' | 'sent'; attached: boolean; content?: string; targetResourceId?: string; executionId?: string };
 export type ProviderCapability = { id: string; label: string; available: boolean; record: boolean; execute: boolean; nativeFork: boolean; history: 'local' | 'unavailable'; reason?: string; reasonCode?: string; simulated: boolean; models: string[]; /** Documentation support is separate from the runtime booleans above. */ accountFidelity?: NativeChatGPTFidelityDescriptor };
-export type Detail = { conversation: ConversationSummary; messages: Page<MessageView>; lineage: { id: string; parentResourceId: string; childResourceId: string; sourceMessageId: string; mode: string; createdAt: string }[]; policy: BranchPolicy; shares: Share[]; providers: ProviderCapability[] };
+export type Detail = { conversation: ConversationSummary & {messageCount:number}; messages: Page<MessageView>; lineage: { id: string; parentResourceId: string; childResourceId: string; sourceMessageId: string; mode: string; createdAt: string }[]; policy: BranchPolicy; shares: Share[]; providers: ProviderCapability[] };
 /** Unsent local text. Its revision is independent from the canonical transcript. */
 export type ConversationDraft = { resourceId: string; version: number; content: string; updatedAt: string | null };
 export const CONVERSATION_DRAFT_LIMITS = { contentUnits: 16384, contentBytes: 65536, aggregateBytes: 8 * 1024 * 1024, records: 4096 } as const;
