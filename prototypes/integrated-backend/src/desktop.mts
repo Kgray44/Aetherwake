@@ -618,6 +618,24 @@ export class DesktopState {
         });
         break;
       }
+      case "setBlockMinimized": {
+        check(typeof a.minimized === "boolean" && Number.isSafeInteger(a.expectedVersion) && a.expectedVersion > 0);
+        this.workspace(a.workspaceId);
+        check(s.activeWorkspaceId === a.workspaceId && s.navigation.kind === "workspace" && s.navigation.workspaceId === a.workspaceId, "stale_workspace_context");
+        const b = this.block(a.blockId, a.expectedVersion);
+        check(b.workspace_id === a.workspaceId, "block_workspace_mismatch");
+        const beforeRevision = this.engine.project(a.workspaceId).revision;
+        const result = this.engineCommand(a.workspaceId, {
+          type: "setBlockMinimized",
+          blockId: b.id,
+          expectedVersion: b.version,
+          minimized: a.minimized,
+        });
+        // Still run all engine fences on a no-op, without creating a desktop
+        // event/session revision or a second presentation store.
+        if (result.revision === beforeRevision) return;
+        break;
+      }
       case "lockBlock": {
         const b = this.block(a.blockId, a.expectedVersion);
         this.workspace(b.workspace_id);

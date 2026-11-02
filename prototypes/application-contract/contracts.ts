@@ -264,6 +264,13 @@ type DesktopAction =
   | { type: "attach"; workspaceId: string; resourceId: string }
   | { type: "detach"; blockId: string; expectedVersion: number }
   | {
+      type: "setBlockMinimized";
+      workspaceId: string;
+      blockId: string;
+      expectedVersion: number;
+      minimized: boolean;
+    }
+  | {
       type: "lockBlock";
       blockId: string;
       expectedVersion: number;
