@@ -8,8 +8,8 @@ import type { CanonicalVelaContext, CanonicalVelaMetadata } from '../src/canonic
 import type { ContextManifest, ProviderContribution, VelaMessage } from '../src/contracts.ts';
 import { buildCodexPlanningPrompt } from '../src/codex-planning-adapter.mts';
 import { CAPABILITIES } from '../src/capabilities.ts';
-import { HISTORY_LIMITS, createHistoryProvenance, historyDependenciesFromContext, historyDigest, selectBoundedHistory, unionHistoryDependencies, validateFrozenHistory } from '../src/bounded-history.mts';
-import type { AcceptedHistoryAppend, HistoryDependency, HistoryOrigin, HistoryProofReader, HistoryRequestRecord, HistorySelection, HistorySnapshot, ProviderHistory } from '../src/bounded-history.mts';
+import { HISTORY_LIMITS, createHistoryProvenance, historyDependenciesFromContext, historyDigest, selectBoundedHistory, unionHistoryDependencies, validateFrozenHistory, validateFrozenHistoryMetadata } from '../src/bounded-history.mts';
+import type { AcceptedHistoryAppend, HistoryDependency, HistoryOrigin, HistoryMetadataReader, HistoryProofReader, HistoryRequestRecord, HistorySelection, HistorySnapshot, ProviderHistory } from '../src/bounded-history.mts';
 
 /** Actual kernel schema + canonical policy host on ONE SQLite connection. Canonical graph/request/evidence callback projections below are explicit test fixtures, not model/native qualification or a production history store. */
 function fixture() {
@@ -40,6 +40,18 @@ function fixture() {
     content: (ref, maxBytes) => { sourceReads++; const allowed = host.resolve(ref, host.scope()); if (!allowed || deniedContent.has(ref.id)) return null; const size = db.prepare('SELECT length(CAST(content AS BLOB)) AS bytes FROM notes WHERE resource_id=?').get(ref.id); if (size && Number(size.bytes) > maxBytes) return { overBudget: true }; return host.readContent(ref.id, host.scope()); },
     verifyProviderContribution: c => { evidenceChecks++; const row = c.sourceMessageId && db.prepare('SELECT json FROM test_history_evidence WHERE id=?').get(c.sourceMessageId); return !!row && historyDigest(JSON.parse(String(row.json))) === historyDigest(c); },
   };
+  const metadataReader: HistoryMetadataReader = {
+    request,
+    message: (conversationId, id) => {
+      if (!host.resolve({ id: conversationId, kind: 'resource' }, host.scope()) || deniedContent.has(conversationId) || deniedMessages.has(id)) return null;
+      const row = db.prepare("SELECT ordinal,json_extract(json,'$.id') AS id,json_extract(json,'$.requestId') AS requestId,json_extract(json,'$.role') AS role,json_extract(json,'$.source') AS source,json_extract(json,'$.classification') AS classification,json_extract(json,'$.providerId') AS providerId,json_extract(json,'$.responseKind') AS responseKind,json_extract(json,'$.providerContribution') AS providerContribution FROM test_history_messages WHERE conversation_id=? AND id=?").get(conversationId, id);
+      if (!row) return null;
+      return { conversationId, ordinal: Number(row.ordinal), id: String(row.id), requestId: String(row.requestId), role: row.role as VelaMessage['role'], source: row.source as VelaMessage['source'], classification: row.classification as VelaMessage['classification'], ...(row.providerId ? { providerId: String(row.providerId) } : {}), ...(row.responseKind ? { responseKind: row.responseKind as 'answer' } : {}), ...(row.providerContribution ? { providerContribution: JSON.parse(String(row.providerContribution)) } : {}) };
+    },
+    resolve: reader.resolve,
+    canReadContent: ref => !!host.resolve(ref, host.scope()) && !deniedContent.has(ref.id),
+    verifyProviderContribution: c => { evidenceChecks++; const row = c.sourceMessageId && db.prepare('SELECT json FROM test_history_evidence WHERE id=?').get(c.sourceMessageId); return !!row && historyDigest(JSON.parse(String(row.json))) === historyDigest(c); },
+  };
   const snapshot = (): HistorySnapshot => { const rows = db.prepare('SELECT id,ordinal,request_id,role,source,content_bytes FROM test_history_messages WHERE conversation_id=? ORDER BY ordinal DESC LIMIT ?').all(vela.id, HISTORY_LIMITS.lookbackMessages); return { conversationId: vela.id, revision: revision(), headers: rows.reverse().map(r => ({ id: String(r.id), ordinal: Number(r.ordinal), requestId: String(r.request_id), role: r.role as VelaMessage['role'], source: r.source as VelaMessage['source'], contentBytes: Number(r.content_bytes) })), hasEarlier: Number(db.prepare('SELECT count(*) AS n FROM test_history_messages').get()!.n) > rows.length }; };
   const append = (message: VelaMessage) => { const ordinal = Number(db.prepare('SELECT coalesce(max(ordinal),0)+1 AS n FROM test_history_messages').get()!.n); db.prepare('INSERT INTO test_history_messages VALUES(?,?,?,?,?,?,?,?)').run(message.id, vela.id, ordinal, message.requestId!, message.role, message.source, Buffer.byteLength(message.content), JSON.stringify(message)); db.prepare('UPDATE test_history_conversations SET revision=revision+1 WHERE id=?').run(vela.id); return ordinal; };
   const sourceManifest = (ids: string[]): ContextManifest => { const scope = host.scope(), included = ids.map(id => { const value = host.readContent(id, scope)!; return { ...value.ref, content: value.content, source: value.source, contentDigest: historyDigest(value.content), reason: 'explicit' as const, trust: 'untrusted-source-data' as const }; }); const discovered = included.map(({ id, kind, title, version, resourceKind, projectId, state }) => ({ id, kind, title, version, ...(resourceKind ? { resourceKind } : {}), ...(projectId !== undefined ? { projectId } : {}), ...(state ? { state } : {}) }));
@@ -49,15 +61,15 @@ function fixture() {
     return kernel.withTransaction(() => { const id = randomUUID(), inputId = randomUUID(), outputId = randomUUID(), intent = options.question ?? 'Explain the selected canonical source.', answer = options.answer ?? 'Exact synthetic reported response, without any application effect.';
       const contribution: ProviderContribution = { providerId: 'synthetic:history-provider', classification: 'reported', executionId: randomUUID(), planningConversationId: randomUUID(), sourceMessageId: randomUUID(), nativeThreadId: randomUUID(), nativeTurnId: randomUUID() };
       db.prepare('INSERT INTO test_history_evidence VALUES(?,?)').run(contribution.sourceMessageId!, JSON.stringify(contribution));
-      const sources = historyDependenciesFromContext(sourceManifest(options.sourceIds ?? [note.id]), vela.id), r: HistoryRequestRecord = { id, conversationId: vela.id, intent, state: 'responded', providerId: contribution.providerId, origin: origin(), inputMessageId: inputId, response: { kind: 'answer', messageId: outputId, contentDigest: historyDigest(answer) }, sourcePolicyVersion: context.policyVersion, sourceDependencies: sources };
-      r.provenance = createHistoryProvenance({ requestId: id, conversationId: vela.id, origin: r.origin!, inputMessageId: inputId, intent, dependencies: unionHistoryDependencies(sources, options.dependencies ?? []) }); if (options.legacy) { delete r.origin; delete r.provenance; delete r.inputMessageId; delete r.response!.contentDigest; } saveRequest(r);
+      const sources = historyDependenciesFromContext(sourceManifest(options.sourceIds ?? [note.id]), vela.id), r: HistoryRequestRecord = { id, conversationId: vela.id, inputContentDigest: historyDigest(intent), state: 'responded', providerId: contribution.providerId, origin: origin(), inputMessageId: inputId, response: { kind: 'answer', messageId: outputId, contentDigest: historyDigest(answer) }, sourcePolicyVersion: context.policyVersion, sourceDependencies: sources };
+      r.provenance = createHistoryProvenance({ requestId: id, conversationId: vela.id, origin: r.origin!, inputMessageId: inputId, inputContentDigest: historyDigest(intent), dependencies: unionHistoryDependencies(sources, options.dependencies ?? []) }); if (options.legacy) { delete r.origin; delete r.inputContentDigest; delete r.provenance; delete r.inputMessageId; delete r.response!.contentDigest; } saveRequest(r);
       const input: VelaMessage = { id: inputId, role: 'user', content: intent, source: 'user', classification: 'observed', requestId: id }, output: VelaMessage = { id: outputId, role: 'assistant', content: answer, source: 'provider', classification: 'reported', requestId: id, providerId: contribution.providerId, responseKind: 'answer', providerContribution: contribution }; append(input); append(output); return { request: r, input, output }; });
   }
   const select = (patch: Partial<Parameters<typeof selectBoundedHistory>[0]> = {}) => kernel.withTransaction(() => selectBoundedHistory({ enabled: true, origin: origin(), snapshot: snapshot(), reader, fits: () => true, ...patch }));
   const frozen = (selection: HistorySelection, acceptedAppend?: AcceptedHistoryAppend) => kernel.withTransaction(() => validateFrozenHistory({ fence: selection.fence!, history: selection.history!, origin: origin(), reader, current: { conversationId: vela.id, revision: revision() }, ...(acceptedAppend ? { acceptedAppend } : {}) }));
-  const pending = (selection: HistorySelection, intent = 'The exact new initiating request'): AcceptedHistoryAppend => kernel.withTransaction(() => { const id = randomUUID(), inputId = randomUUID(), r: HistoryRequestRecord = { id, conversationId: vela.id, intent, state: 'planning', providerId: 'synthetic:history-provider', origin: origin(), inputMessageId: inputId, sourcePolicyVersion: context.policyVersion, sourceDependencies: [] }; r.provenance = createHistoryProvenance({ requestId: id, conversationId: vela.id, origin: r.origin!, inputMessageId: inputId, intent, dependencies: selection.fence!.dependencies }); saveRequest(r); append({ id: inputId, role: 'user', source: 'user', classification: 'observed', requestId: id, content: intent }); return { requestId: id, messageId: inputId, contentDigest: historyDigest(intent), revision: revision() }; });
+  const pending = (selection: HistorySelection, intent = 'The exact new initiating request'): AcceptedHistoryAppend => kernel.withTransaction(() => { const id = randomUUID(), inputId = randomUUID(), r: HistoryRequestRecord = { id, conversationId: vela.id, inputContentDigest: historyDigest(intent), state: 'planning', providerId: 'synthetic:history-provider', origin: origin(), inputMessageId: inputId, sourcePolicyVersion: context.policyVersion, sourceDependencies: [] }; r.provenance = createHistoryProvenance({ requestId: id, conversationId: vela.id, origin: r.origin!, inputMessageId: inputId, inputContentDigest: historyDigest(intent), dependencies: selection.fence!.dependencies }); saveRequest(r); append({ id: inputId, role: 'user', source: 'user', classification: 'observed', requestId: id, content: intent }); return { requestId: id, messageId: inputId, contentDigest: historyDigest(intent), revision: revision() }; });
   const editMessage = (id: string, patch: Partial<VelaMessage>, bump = true) => { const value: VelaMessage = JSON.parse(String(db.prepare('SELECT json FROM test_history_messages WHERE id=?').get(id)!.json)); Object.assign(value, patch); db.prepare('UPDATE test_history_messages SET json=?,content_bytes=? WHERE id=?').run(JSON.stringify(value), Buffer.byteLength(value.content), id); if (bump) db.prepare('UPDATE test_history_conversations SET revision=revision+1 WHERE id=?').run(vela.id); };
-  return { kernel, db, host, project, other, workspace, note, privateNote, vela, origin, reader, snapshot, revision, turn, select, frozen, pending, editMessage, request, saveRequest, deniedMetadata, deniedContent, deniedMessages,
+  return { kernel, db, host, project, other, workspace, note, privateNote, vela, origin, reader, metadataReader, snapshot, revision, turn, select, frozen, pending, editMessage, request, saveRequest, deniedMetadata, deniedContent, deniedMessages,
     changeContext: (patch: Partial<CanonicalVelaContext>) => { context = { ...context, ...patch }; }, counts: () => ({ messageReads, sourceReads, evidenceChecks }), close: () => kernel.close() };
 }
 
@@ -94,7 +106,7 @@ test('transitive source and canonical-message proofs prevent answer-to-answer la
 
 test('a recomputed but incomplete transitive proof cannot drop an upstream source', () => {
   const f = fixture(); try { f.turn(); const earlier = f.select(), two = f.turn({ sourceIds: [], dependencies: earlier.fence!.dependencies }), record = f.request(two.request.id)!;
-    const incomplete = unionHistoryDependencies(record.sourceDependencies, earlier.fence!.dependencies.filter(dep => dep.kind === 'message')); record.provenance = createHistoryProvenance({ requestId: record.id, conversationId: record.conversationId, origin: record.origin!, inputMessageId: record.inputMessageId!, intent: record.intent, dependencies: incomplete }); f.saveRequest(record);
+    const incomplete = unionHistoryDependencies(record.sourceDependencies, earlier.fence!.dependencies.filter(dep => dep.kind === 'message')); record.provenance = createHistoryProvenance({ requestId: record.id, conversationId: record.conversationId, origin: record.origin!, inputMessageId: record.inputMessageId!, inputContentDigest: record.inputContentDigest!, dependencies: incomplete }); f.saveRequest(record);
     const selected = f.select(); assert.equal(selected.history, undefined); assert.equal(selected.omissions[0].reason, 'incomplete-proof');
   } finally { f.close(); }
 });
@@ -133,7 +145,7 @@ test('frozen proof rejects changed payload, permissions, origin and same-revisio
 test('proof sets merge metadata/read authority conservatively, reject conflicts/self-reference and bound all validation work', () => {
   const f = fixture(); try { const turn = f.turn(), dep = turn.request.sourceDependencies.find(d => d.ref.id === f.note.id)!; assert.equal(unionHistoryDependencies([{ kind: 'resource', ref: dep.ref }], [dep]).length, 1); assert.equal(unionHistoryDependencies([{ kind: 'resource', ref: dep.ref }], [dep])[0].kind, 'resource'); assert.throws(() => unionHistoryDependencies([dep], [{ ...dep, ref: { ...dep.ref, version: dep.ref.version + 1 } }]), /dependency-conflict/);
     const many: HistoryDependency[] = Array.from({ length: 65 }, (_, i) => ({ kind: 'resource', ref: { id: 'source:' + i, kind: 'resource', version: 1, title: 'Synthetic bounded source' } })); assert.throws(() => unionHistoryDependencies(many), /proof-limit/);
-    const self: HistoryDependency = { kind: 'message', conversationId: f.vela.id, messageId: turn.input.id, requestId: turn.request.id, ordinal: 1, contentDigest: historyDigest(turn.input.content), provenanceDigest: turn.request.provenance!.digest }; assert.throws(() => createHistoryProvenance({ requestId: turn.request.id, conversationId: f.vela.id, origin: turn.request.origin!, inputMessageId: turn.input.id, intent: turn.input.content, dependencies: [self] }), /incomplete-proof/);
+    const self: HistoryDependency = { kind: 'message', conversationId: f.vela.id, messageId: turn.input.id, requestId: turn.request.id, ordinal: 1, contentDigest: historyDigest(turn.input.content), provenanceDigest: turn.request.provenance!.digest }; assert.throws(() => createHistoryProvenance({ requestId: turn.request.id, conversationId: f.vela.id, origin: turn.request.origin!, inputMessageId: turn.input.id, inputContentDigest: historyDigest(turn.input.content), dependencies: [self] }), /incomplete-proof/);
     f.reader.content = () => ({ overBudget: true }); assert.equal(f.select().omissions[0].reason, 'validation-limit');
   } finally { f.close(); }
 });
@@ -148,4 +160,43 @@ test('canonical conversation identity, pair completeness and lookback boundaries
   const wrong = fixture(); try { const turn = wrong.turn(), r = wrong.request(turn.request.id)!; r.conversationId = randomUUID(); wrong.saveRequest(r); assert.equal(wrong.select().omissions[0].reason, 'unproven-request'); } finally { wrong.close(); }
   const missing = fixture(); try { const turn = missing.turn(); missing.db.prepare('DELETE FROM test_history_messages WHERE id=?').run(turn.input.id); const selected = missing.select(); assert.equal(selected.history, undefined); assert.equal(selected.omissions[0].reason, 'missing-pair'); } finally { missing.close(); }
   const window = fixture(); try { for (let i = 0; i < 7; i++) window.turn({ sourceIds: [] }); const selected = window.select(); assert.equal(selected.history!.messages.length, 4); assert(selected.omissions.some(o => o.reason === 'lookback-limit')); assert(selected.omissions.some(o => o.reason === 'message-limit')); } finally { window.close(); }
+});
+
+test('metadata-only catalog gate validates canonical proofs without materializing ANY source or message body', () => {
+  const f = fixture(); try {
+    f.turn(); const one = f.select(); f.turn({ sourceIds: [], dependencies: one.fence!.dependencies }); const selected = f.select(), before = f.counts();
+    f.reader.content = () => { throw new Error('Catalog tools cannot read source bodies'); }; f.reader.message = () => { throw new Error('Catalog tools cannot read message bodies'); };
+    const validate = (acceptedAppend?: AcceptedHistoryAppend) => validateFrozenHistoryMetadata({ fence: selected.fence!, origin: f.origin(), reader: f.metadataReader, current: { conversationId: f.vela.id, revision: f.revision() }, ...(acceptedAppend ? { acceptedAppend } : {}) });
+    assert.deepEqual(validate(), { valid: true }); const append = f.pending(selected); assert.deepEqual(validate(append), { valid: true });
+    assert.equal(f.counts().messageReads, before.messageReads); assert.equal(f.counts().sourceReads, before.sourceReads);
+    assert(!JSON.stringify(f.request(append.requestId)).includes('The exact new initiating request')); assert(!('intent' in f.request(append.requestId)!));
+    f.pending(selected); assert.throws(() => validate(append), /stale-history-revision/);
+  } finally { f.close(); }
+});
+
+test('metadata-only gate fails closed for revoked access, revisions, scope, canonical evidence and incomplete provenance', () => {
+  for (const mutation of ['content-access', 'metadata-access', 'source-revision', 'scope', 'message-access', 'evidence', 'provenance', 'accepted-digest'] as const) {
+    const f = fixture(); try {
+      const turn = f.turn(), selected = f.select();
+      if (mutation === 'content-access') f.deniedContent.add(f.note.id);
+      else if (mutation === 'metadata-access') f.deniedMetadata.add(f.note.id);
+      else if (mutation === 'source-revision') f.kernel.updateNote(f.note.id, 'New version', 1);
+      else if (mutation === 'scope') f.changeContext({ currentWorkspaceId: null });
+      else if (mutation === 'message-access') f.deniedMessages.add(turn.input.id);
+      else if (mutation === 'evidence') f.db.prepare('DELETE FROM test_history_evidence').run();
+      else { const r = f.request(turn.request.id)!; if (mutation === 'provenance') r.provenance!.digest = historyDigest('Tampered provenance'); else r.inputContentDigest = historyDigest('Tampered accepted digest'); f.saveRequest(r); }
+      const before = f.counts(); assert.throws(() => validateFrozenHistoryMetadata({ fence: selected.fence!, origin: f.origin(), reader: f.metadataReader, current: { conversationId: f.vela.id, revision: f.revision() } }));
+      assert.equal(f.counts().messageReads, before.messageReads); assert.equal(f.counts().sourceReads, before.sourceReads);
+    } finally { f.close(); }
+  }
+});
+
+test('metadata revision fence catches real message edits; full gates additionally detect unsafe revisionless body writes', () => {
+  const f = fixture(); try {
+    const turn = f.turn(), selected = f.select(); f.editMessage(turn.output.id, { content: 'Unsafe fixture write bypassing canonical revision' }, false);
+    assert.deepEqual(validateFrozenHistoryMetadata({ fence: selected.fence!, origin: f.origin(), reader: f.metadataReader, current: { conversationId: f.vela.id, revision: f.revision() } }), { valid: true }, 'Metadata gate relies on actual canonical revision; it never pretends to hash bodies');
+    assert.throws(() => f.frozen(selected), /message-changed/);
+    f.editMessage(turn.output.id, { content: 'Canonical versioned edit' });
+    assert.throws(() => validateFrozenHistoryMetadata({ fence: selected.fence!, origin: f.origin(), reader: f.metadataReader, current: { conversationId: f.vela.id, revision: f.revision() } }), /stale-history-revision/);
+  } finally { f.close(); }
 });
