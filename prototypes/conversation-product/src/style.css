@@ -1069,7 +1069,7 @@ details[data-active="true"] > .cp-control .cp-control-glyph {
 }
 .cp-chat[data-presentation="workspace"] .cp-messages {
   flex: 1 1 0;
-  min-height: 0;
+  min-height: max(40px, calc(1.6em + 12px));
   overflow: auto;
   padding: 4px 0 8px;
 }
@@ -1113,6 +1113,23 @@ details[data-active="true"] > .cp-control .cp-control-glyph {
   ) {
   margin-inline: 0;
   font-size: 12px;
+}
+/* Confirmed acknowledgements and redundant local/clean facts remain available
+   to assistive readers without consuming the workspace's transcript area.
+   Missing metadata and every consequential state stay visibly in the flow. */
+.cp-chat[data-presentation="workspace"]
+  .cp-chat-status[data-status-kind="send-accepted"],
+.cp-chat[data-presentation="workspace"]
+  .cp-capability-note[data-capability-kind="local-recording"],
+.cp-chat[data-presentation="workspace"] .cp-draft-status[data-phase="clean"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .cp-chat[data-presentation="workspace"] .cp-control {
   min-height: 32px;
