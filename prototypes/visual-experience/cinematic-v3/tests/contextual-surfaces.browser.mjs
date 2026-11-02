@@ -180,6 +180,41 @@ export async function run() {
       reopened.contains(input) &&
       Number(reopened.style.opacity) === 1,
   );
+  host.resize("draft", { width: 280, height: 180 });
+  for (let i = 0; i < 180; i++) {
+    motion.step(1 / 60);
+    host.frame((i * 1000) / 60);
+  }
+  input.focus();
+  input.setSelectionRange(2, 5);
+  host.resize("draft", { width: 320, height: 260 });
+  motion.step(1 / 60);
+  host.frame(0);
+  const growing = reopened.getBoundingClientRect().height;
+  check(
+    "real DOM dimensions follow an intermediate spring without replacing the focused editor",
+    growing > 180 &&
+      growing < 260 &&
+      reopened.contains(input) &&
+      document.activeElement === input &&
+      input.value === "Preserved draft" &&
+      input.selectionStart === 2 &&
+      input.selectionEnd === 5,
+  );
+  host.resize("draft", { width: 280, height: 180 });
+  host.frame(0);
+  check(
+    "a size reversal paints the same current height before the next physics step",
+    Math.abs(reopened.getBoundingClientRect().height - growing) < 0.02,
+  );
+  motion.reduced = true;
+  host.resize("draft", { width: 320, height: 260 });
+  host.frame(0);
+  check(
+    "reduced motion reconciles real surface dimensions immediately and preserves the input",
+    Math.abs(reopened.getBoundingClientRect().height - 260) < 0.02 &&
+      document.activeElement === input,
+  );
   anchor.remove();
   host.frame(0);
   check(
