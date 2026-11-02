@@ -22,7 +22,7 @@ export async function prepareDragGlide(profile: string) {
     let desktop = await core.command('desktop',{type:'snapshot'});
     const note = desktop.resources.find(value => value.kind === 'note')!;
     const movingBlockId = desktop.blocks.find(value => value.resource_id === note.id)!.id;
-    for (const [kind,x,y,width,height] of [['note',128,272,420,360],['conversation',650,250,360,420],['task',1100,320,320,260]] as const) {
+    for (const [kind,x,y,width,height] of [['note',128,272,420,360],['conversation',700,250,360,420],['task',1100,320,320,260]] as const) {
       const resource = desktop.resources.find(value => value.kind === kind)!;
       const block = desktop.blocks.find(value => value.resource_id === resource.id)!;
       desktop = await core.command('desktop',{type:'geometry',blockId:block.id,expectedVersion:block.version,shape:'rounded',rotation:0,placement:{x,y,width,height,z:block.z}});
