@@ -10,8 +10,10 @@ const {
   assertNoPlacements,
   passingCheckpoint,
   FIXTURE,
+  fillNative,
 } = require("../native/integration-agents.cjs");
 const { createSlot } = require("../native/integration-resource-opening.cjs");
+const vm = require("node:vm");
 const {
   validateBudget,
   admitPNG,
@@ -95,6 +97,34 @@ const desktop = () => ({
   blocks: [],
   resources: [{ id: "synthetic-agent", kind: "agent" }],
   navigationBlocks: [],
+});
+
+test("native fill waits for asynchronously delivered focus and full selection before exact text acceptance", async () => {
+  const old = { value: "Previous title" }, target = { value: "Previous purpose", selectionStart: 4, selectionEnd: 4 }, events = [];
+  let active = old, focusPending = false, selectionPending = false;
+  const document = { querySelector: () => target, get activeElement() { return active; } };
+  await fillNative({
+    async click() { events.push("click-posted"); focusPending = true; },
+    key(key, modifiers) { assert.equal(active, target); assert.equal(key, "A"); assert.deepEqual(modifiers, ["control"]); events.push("select-posted"); selectionPending = true; },
+    async js(code) { return vm.runInNewContext(code, { document }); },
+    async wait(label, check) {
+      if (focusPending || selectionPending) assert.equal(await check(), false, "posted native input has not been delivered yet");
+      if (focusPending) { active = target; focusPending = false; events.push("focus-observed"); }
+      if (selectionPending) { target.selectionStart = 0; target.selectionEnd = target.value.length; selectionPending = false; events.push("selection-observed"); }
+      assert.equal(await check(), true, label);
+    },
+    async insertText(text) { assert.equal(active, target); assert.equal(target.selectionStart, 0); assert.equal(target.selectionEnd, target.value.length); events.push("insert"); target.value = text; },
+  }, "#purpose", "Exact new purpose");
+  assert.deepEqual(events, ["click-posted", "focus-observed", "select-posted", "selection-observed", "insert"]);
+  assert.equal(old.value, "Previous title"); assert.equal(target.value, "Exact new purpose");
+});
+
+test("native fill refuses to type if actual focus or exact text acknowledgement is missing", async () => {
+  let keys = 0, inserts = 0;
+  await assert.rejects(fillNative({ click: async () => {}, key() { keys++; }, js: async () => false, wait: async (_label, check) => { assert.equal(await check(), false); throw Error("focus_not_delivered"); }, insertText: async () => { inserts++; } }, "#purpose", "text"), /focus_not_delivered/);
+  assert.equal(keys, 0); assert.equal(inserts, 0);
+  let reads = 0;
+  await assert.rejects(fillNative({ click: async () => {}, key() {}, js: async () => ++reads <= 2, wait: async (_label, check) => { if (!await check()) throw Error("text_not_accepted"); }, insertText: async () => {} }, "#purpose", "text"), /text_not_accepted/);
 });
 
 test("native Agent Library profile/flag/window admission rejects real or reused unrelated profile names", () => {
