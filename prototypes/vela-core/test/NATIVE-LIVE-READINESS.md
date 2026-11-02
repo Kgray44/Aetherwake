@@ -48,3 +48,9 @@ Read-only audit of clean Root `5b2af123afb113eadfa6291c951db4c325f99ee5` confirm
 | Captures | Actual snapshot GPU stats / draws / native-active flag and writing-focus class; native capture API | Matches |
 
 The added eighth offline test follows the active mounting chain, checks these source contracts, rejects legacy composer selectors and emits the exact inspected source hashes. It passed both against the isolated checkout and explicitly against Root using `AERYNTH_SELECTOR_SOURCE_ROOT`. Source inspection cannot prove runtime visibility, hit testing, focus timing, GPU delivery or actual provider success; those checks remain in the real helper and must pass in Root's separately authorized native run. No production source or guard criteria changed in this selector correction.
+
+## Submit readiness correction
+
+An actual pre-request run found that two geometry samples could still catch the composer settling. Submission now repeatedly samples the actual rectangle and hit test for at most 2.5 seconds within the same global monotonic work deadline. Three consecutive stable samples, 80 ms apart, must agree on center, position and size before one native mouse gesture is sent. Occlusion, unavailable controls, focus loss or parent Escape stop the check. No input is retried after it starts. Parent Escape uses the same sticky abort; the native sharing child's own Escape remains its actual Cancel path. Console/shader error checks are unchanged.
+
+Three focused offline cases exercise moving→stable with zero early input and exactly one gesture, never-stable local/global expiry, and occlusion/focus/Escape/partial-input failure without retry. Total offline tests: 11 passing, plus syntax and whitespace checks. This correction has not been run with a GUI, native approval or provider call.

@@ -82,8 +82,26 @@ const consoleRecord = (details, message, line, source) => {
   const structured = details && typeof details === 'object', level = structured ? details.level : details;
   return level === 'error' || level === 3 ? {message:String(structured ? details.message : message).slice(0,2048), line:structured ? details.lineNumber : line, source:String(structured ? details.sourceId : source).slice(0,300)} : null;
 };
+/** Repeated READINESS samples only. No input is attempted until three actual hit-tested rectangles settle. */
+async function submitStableTarget({slot,sample,sendInput,onReady,wait=pause}) {
+  const end=Math.min(slot.workDeadline,slot.now()+2500);let previous,stable=0,samples=0;
+  while(slot.now()<end){
+    slot.check();const next=await slot.bound(sample);samples++;
+    assert(next&&['x','y','left','top','width','height'].every(key=>Number.isFinite(next[key]))&&next.width>0&&next.height>0,'Native submit unavailable');
+    const settled=previous&&['x','y','left','top','width','height'].every(key=>Math.abs(next[key]-previous[key])<0.75);
+    stable=settled?stable+1:1;previous=next;
+    if(stable===3){
+      const point={x:next.x,y:next.y};slot.check();slot.consent(true);onReady?.({samples,point});
+      // No retry surrounds input: even a partial gesture/focus loss is terminal.
+      for(const type of ['mouseMove','mouseDown','mouseUp']){slot.check();sendInput({type,...point,button:'left',clickCount:1});}
+      return {samples,point};
+    }
+    await slot.bound(()=>wait(Math.min(80,Math.max(0,end-slot.now()))));
+  }
+  slot.check();throw Error('Moving native submit target: bounded readiness did not settle');
+}
 async function cancelObservedPlanning(slot, callback) {
-  if (!slot.failure() || !slot.pendingRequestId || slot.cancellationRequested) return undefined;
+  if (!['native_verification_focus_lost','vela_live_slot_deadline'].includes(slot.failure()?.message) || !slot.pendingRequestId || slot.cancellationRequested) return undefined;
   slot.cancellationRequested=true;
   const result={requestId:slot.pendingRequestId,status:'native-callback-not-wired',confirmed:false};
   if(typeof callback!=='function')return result;
@@ -96,7 +114,7 @@ async function cancelObservedPlanning(slot, callback) {
   } catch(error){result.status='host-error-unconfirmed';result.error=String(error.message??error).slice(0,500);} finally {clearTimeout(cleanupTimer);}
   return result;
 }
-exports._offline = {createSlot, trustedReviewWindow, consoleRecord, cancelObservedPlanning, SLOT_LIMIT_MS, CLEANUP_RESERVE_MS};
+exports._offline = {createSlot, trustedReviewWindow, consoleRecord, cancelObservedPlanning, submitStableTarget, SLOT_LIMIT_MS, CLEANUP_RESERVE_MS};
 
 async function run({win, app, privateRoot, source, startupErrors = [], cancelOwnedPlanning}, slot) {
   const restore = process.argv.includes('--verify-restore'),resume=process.argv.includes('--resume-reviewed-plan');
@@ -171,11 +189,8 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
     const click = async selector => { await focus(); receipt.actions.push({type:'native-mouse', selector, at:Date.now()}); await slot.bound(()=>driver.click(selector)); };
     const submitForNativeReview = async selector => {
       // The shared driver's post-mouseup parent-focus assertion cannot own a modal transition.
-      // Locate and hit-test the actual parent control twice, then send only its real native gesture.
-      const point = async () => js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e?.getBoundingClientRect();if(!r||!r.width||!r.height||e.disabled||e.hidden)throw Error('Native submit unavailable');const x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2),hit=document.elementFromPoint(x,y);if(hit!==e&&!e.contains(hit))throw Error('Native submit occluded');return{x,y}})()`);
-      const first=await point();await slot.bound(()=>pause(80));const final=await point();assert(Math.hypot(first.x-final.x,first.y-final.y)<0.75,'Moving native submit target');
-      slot.consent(true);receipt.actions.push({type:'native-mouse',selector,transition:'actual-native-sharing-review',at:Date.now()});
-      for(const type of ['mouseMove','mouseDown','mouseUp']){slot.check();win.webContents.sendInputEvent({type,...final,button:'left',clickCount:1});}
+      const sample = async () => js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e?.getBoundingClientRect();if(!r||!r.width||!r.height||e.disabled||e.hidden||e.closest('[inert]'))throw Error('Native submit unavailable');const x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2),hit=document.elementFromPoint(x,y);if(hit!==e&&!e.contains(hit))throw Error('Native submit occluded');return{x,y,left:r.left,top:r.top,width:r.width,height:r.height}})()`);
+      await submitStableTarget({slot,sample,sendInput:event=>win.webContents.sendInputEvent(event),onReady:ready=>receipt.actions.push({type:'native-mouse',selector,transition:'actual-native-sharing-review',readiness:ready,at:Date.now()})});
     };
     const observeNativeReview = async expected => {
       let observed=false;
@@ -411,11 +426,13 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
 }
 
 exports.verify = async options => {
-  let slot,monitor,hardStop;
+  let slot,monitor,hardStop,escape;
   try {
     slot=createSlot(options);
+    escape=(_event,input)=>{if(input.type==='keyDown'&&input.key==='Escape')slot.abort(Error('vela_live_operator_escape'));};
+    options.win.webContents.on('before-input-event',escape);
     hardStop=setTimeout(()=>{process.exitCode=1;slot.abort(Error('vela_live_slot_deadline'));options.app.quit();},Math.max(0,slot.deadline-slot.now()));hardStop.unref?.();
     monitor=setInterval(()=>{try{slot.check(true);}catch{}},40);monitor.unref?.();
     return await run(options,slot);
-  } catch(error){process.exitCode=1;throw error;} finally {clearInterval(monitor);clearTimeout(hardStop);options.app.quit();}
+  } catch(error){process.exitCode=1;throw error;} finally {clearInterval(monitor);clearTimeout(hardStop);if(escape)options.win.webContents.removeListener('before-input-event',escape);options.app.quit();}
 };
