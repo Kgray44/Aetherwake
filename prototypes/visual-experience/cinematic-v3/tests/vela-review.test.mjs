@@ -113,6 +113,50 @@ test("resource metadata is disclosed even when its body was not selected", () =>
   assert(html.includes('id="review-title"'));
 });
 
+test("default experience remains the exact Vela presentation and limits", () => {
+  const r = disclosure();
+  assert.equal(reviewPage(r, "Intent"), reviewPage(r, "Intent", "vela"));
+  assert(reviewPage(r).includes("<title>Vela · Review sharing</title>"));
+  assert(reviewPage(r).includes("Previous messages (2)"));
+  assert.throws(() => reviewPage({ ...r, prompt: "&".repeat(110000) }), /native_vela_review_capacity_exceeded/);
+});
+
+test("ordinary presentation preserves the full 256KiB raw JSON body, safely escaped, without inventing a Vela request", () => {
+  const source = "&".repeat(262132), prompt = JSON.stringify({ input: source });
+  assert.equal(Buffer.byteLength(prompt), 262144);
+  const review = {
+    providerId: "chatgpt-plan-responses", prompt,
+    // Ordinary native caller binds the raw request bytes, independently of Vela.
+    promptDigest: createHash("sha256").update(prompt).digest("hex"),
+    context: { included: [{ id: "synthetic:note", kind: "resource", title: "Untrusted </h2><script>bad()</script>", content: source }] },
+    history: { messages: Array.from({ length: 6 }, (_, index) => ({ role: index % 2 ? "assistant" : "user", providerId: "chatgpt-plan-responses", content: `Synthetic local history ${index} <img src=private>` })) },
+  };
+  const before = structuredClone(review), html = reviewPage(review, 'Ask <now> "once"', "ordinary");
+  assert(html.includes("<title>Aerynth · Review sharing</title>"));
+  assert(html.includes("Send to ChatGPT plan?"));
+  assert(html.includes("Aerynth local history (6)"));
+  assert(html.includes("Synthetic local history 5 &lt;img src=private&gt;"));
+  assert(html.includes("One request in this chat. Review exactly what will be shared."));
+  const encodedPrompt = prompt.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+  assert(html.includes(`<pre>${encodedPrompt}</pre>`), "all exact provider bytes remain inspectable after safe HTML decoding");
+  assert(Buffer.byteLength(html) > 524288 && Buffer.byteLength(html) < 4 * 1024 * 1024);
+  assert(html.includes("Untrusted &lt;/h2&gt;&lt;script&gt;bad()&lt;/script&gt;"));
+  assert(!html.includes("<script>") && !html.includes("<img") && !html.includes("Vela"));
+  assert(html.includes("default-src 'none'") && html.includes("script-src 'none'") && html.includes(".content{overflow:auto"));
+  assert.deepEqual(review, before);
+  assert.throws(() => validateReview(preview, review), /invalid_native_vela_review/, "ordinary presentation does not expand Vela validation/authority");
+});
+
+test("unknown native presentation experiences fail closed", async () => {
+  for (const experience of ["Ordinary", "", null, false, {}, "external"]) {
+    assert.throws(() => reviewPage(disclosure(), "", experience), /invalid_native_review_experience/);
+    const f = runtime();
+    await assert.rejects(showVelaReview({ parent: f.parent, review: disclosure(), expiresAt: new Date(Date.now() + 1000).toISOString(), runtime: f.runtime, experience }), /invalid_native_review_experience/);
+    assert.equal(f.children.length, 0);
+    assert.equal(f.ipcMain.eventNames().length, 0);
+  }
+});
+
 function runtime({ autoReady = true, autoPaint = true } = {}) {
   const parent = new EventEmitter(),
     ipcMain = new EventEmitter(),
@@ -270,6 +314,25 @@ test("only the exact child main frame can approve; a parent renderer, foreign fr
   assert(child.destroyed);
   assert.equal(f.ipcMain.listenerCount("vela-review-decision"), 0);
   assert.equal(f.parent.listenerCount("closed"), 0);
+});
+
+test("ordinary review reuses the same sandbox, authenticated readiness and child-only decision lifecycle", async () => {
+  const f = runtime({ autoReady: false });
+  const pending = showVelaReview({ parent: f.parent, review: { providerId: "chatgpt-plan-responses", prompt: '{"input":"Synthetic only"}', promptDigest: "b".repeat(64), context: { included: [] } }, intent: "One ordinary request", expiresAt: new Date(Date.now() + 30000).toISOString(), runtime: f.runtime, experience: "ordinary" });
+  const child = f.children[0]; await Promise.resolve();
+  assert.equal(child.options.title, "Aerynth · Review sharing");
+  assert.equal(child.shown, false);
+  const p = child.options.webPreferences;
+  assert(p.sandbox && p.contextIsolation && !p.nodeIntegration && !p.devTools);
+  const page = decodeURIComponent(child.url.slice("data:text/html;charset=utf-8,".length));
+  assert(page.includes("Send to ChatGPT plan?"));
+  assert(page.includes("No Aerynth local history included."));
+  f.decide(child, "approve"); assert.equal(child.destroyed, false);
+  f.preloadReady(child); assert.equal(isOwnedVelaReviewWindow(child, f.parent), true);
+  f.decide(child, "approve", { sender: f.parent.webContents }); assert.equal(child.destroyed, false);
+  f.decide(child, "cancel"); assert.equal(await pending, false);
+  assert.equal(isOwnedVelaReviewWindow(child, f.parent), false);
+  assert.equal(f.ipcMain.listenerCount("vela-review-decision"), 0);
 });
 
 test("cancel, parent close, child focus loss and process loss deny and release all owned listeners", async () => {
