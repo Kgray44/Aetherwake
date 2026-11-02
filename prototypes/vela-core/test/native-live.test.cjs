@@ -46,5 +46,6 @@ test('current console detail shape and legacy level record actual errors, never 
 
 test('helper source retains real canonical/consent/restart evidence and removes obsolete waits without adding approval transport',()=>{
   const source=fs.readFileSync(path.join(__dirname,'native-live.cjs'),'utf8');assert(!source.includes('240000'));assert(!source.includes('45000'));assert(!/\.focus\s*\(/.test(source));assert(!/command\(['"](?:authorizeVelaRequest|velaNativeReview|execute)['"]/.test(source));assert(!/click\([^\n]*#approve/.test(source));
+  const transition=source.slice(source.indexOf('const observeNativeReview ='),source.indexOf('const control ='));assert(!transition.includes('win.webContents.executeJavaScript'),'Even pre-child observation cannot queue parent reads across the modal transition');assert(transition.includes('mode.child.webContents.executeJavaScript'));
   for(const required of ['planningCoverage','Complete scoped planning evidence must contain no tool or file-change items','Original placements remain canonical and unchanged','Restart retains the exact execution and native IDs','Dispatch retains the exact displayed native source/context bytes','One exact semantic provider input','taskVerified','--resume-reviewed-plan'])assert(source.includes(required),required);
 });

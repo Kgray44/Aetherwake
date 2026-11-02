@@ -192,11 +192,8 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
             console.log(JSON.stringify({status:'vela-live-native-review-observed',providerId:'codex-app-server',promptDigest,promptBytes:Buffer.byteLength(shown.prompt),resourceIds:expected.resourceIds,instruction:'Parent may inspect the actual focused sharing review and choose Send once. The helper does not send consent.'}));
           }
         }else if(observed){slot.consent(false);return;}
-        else{
-          // Parent-only DOM status observation; never send parent RPC/input while a trusted child is active.
-          const status=await slot.bound(()=>win.webContents.executeJavaScript(`(()=>{const e=document.querySelector('.vela-core-status');return{state:e?.dataset.requestState,action:e?.dataset.actionState,text:e?.textContent}})()`,true),true);
-          if(status.action==='failed'||status.state==='failed'||status.state==='provider-unavailable'||/authorization_cancelled|authorization cancelled/i.test(status.text??''))throw Error('Native sharing review did not open: '+status.text);
-        }
+        // Until the actual child is observed, inspect only Electron-owned window properties.
+        // A preview error before opening stays bounded by this same slot; never query the parent across a modal race.
         await slot.bound(()=>pause(Math.min(60,slot.remaining())),true);
       }
       slot.check(true);
