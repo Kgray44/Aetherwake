@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mountVelaPanel } from '../src/panel.ts';
+import { mountVelaPanel, type VelaPanelPresentation } from '../src/panel.ts';
 import { velaPanelStatus } from '../src/panel-status.ts';
 import { VELA_CONTRACT, type VelaClient, type VelaState, type VelaRequest, type VelaPlan, type ActionReceipt } from '../src/contracts.ts';
 
@@ -35,9 +35,11 @@ class Node {
   get selectedOptions() { return this.options.filter(child => child.value === this.value); }
   get firstElementChild() { return this.children[0] ?? null; }
   append(...nodes: Node[]) { for (const node of nodes) { node.remove(); node.parent = this; this.children.push(node); } }
+  prepend(...nodes: Node[]) { for (const node of [...nodes].reverse()) { node.remove(); node.parent = this; this.children.unshift(node); } }
   replaceChildren(...nodes: Node[]) { this.text = ''; for (const child of this.children) child.parent = null; this.children = []; this.append(...nodes); }
   insertBefore(node: Node, next: Node | null) { node.remove(); node.parent = this; const index = next ? this.children.indexOf(next) : -1; this.children.splice(index < 0 ? this.children.length : index, 0, node); }
   setAttribute(name: string, value: string) { this.attributes.set(name, value); }
+  getAttribute(name: string) { return this.attributes.get(name) ?? null; }
   addEventListener(name: string, callback: (event: any) => unknown) { this.listeners.set(name, [...this.listeners.get(name) ?? [], callback]); }
   fire(name: string, extra: Record<string, unknown> = {}) { const event = { target: this, key: '', defaultPrevented: false, stopped: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; }, ...extra }; for (let node: Node | null = this; node; node = node.parent) { for (const callback of node.listeners.get(name) ?? []) callback(event); if (event.stopped) break; } return event; }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); this.parent = null; }
@@ -53,7 +55,7 @@ class Node {
 }
 class Document { activeElement: Node | null = null; createElement(tag: string) { return new Node(tag, this); } }
 async function settles(check: () => boolean) { for (let i = 0; i < 50 && !check(); i++) await new Promise(resolve => setImmediate(resolve)); assert.ok(check(), 'component settled at its canonical state'); }
-const named = (root: Node, text: string) => root.find(node => node.tagName === 'button' && node.textContent === text)!;
+const named = (root: Node, text: string) => root.find(node => node.tagName === 'button' && (node.getAttribute('aria-label') === text || node.textContent === text))!;
 function displayed(node: Node) { for (let parent: Node | null = node; parent; parent = parent.parent) { if (parent.hidden) return false; if (parent.tagName === 'details' && !parent.open && !parent.children[0]?.contains(node)) return false; } return true; }
 
 test('terminal status survives request completion and refresh; connection probe is explicit and state is observed afterward', async () => {
@@ -71,7 +73,7 @@ test('terminal status survives request completion and refresh; connection probe 
   canonical = { ...canonical, requests: [request({ errorCode: 'provider_authorization_required' })] }; resolveRequest(canonical.requests[0]);
   await settles(() => status.dataset.requestState === 'provider-unavailable'); assert.match(status.textContent, /Planning was not enabled/); assert.equal(status.dataset.requestId, 'request:synthetic');
   const terminal = status.textContent; await panel.refresh(); await panel.refresh(); assert.equal(status.textContent, terminal); assert.doesNotMatch(status.textContent, /^Ready|Request:/);
-  root.find(node => node.tagName === 'button' && node.textContent === 'Check planning connection')!.fire('click');
+  named(root, 'Planning provider').fire('click'); assert.equal(displayed(named(root, 'Check planning connection')), true); named(root, 'Check planning connection').fire('click');
   await settles(() => connections === 1 && root.find(node => node.className === 'vela-core-provider')!.textContent.includes('· available'));
   assert.equal(status.dataset.requestState, 'provider-unavailable'); assert.equal(status.textContent, terminal, 'connecting does not rewrite a historical request outcome');
   client.request = async () => { canonical = { ...canonical, requests: [request({ state: 'unknown' })] }; throw new Error('Synthetic lost command response'); };
@@ -109,28 +111,30 @@ test('explicit workspace project survives refresh and selecting an available pro
   panel.dispose();
 });
 
-test('conversational home keeps local tools and source search on demand; Escape closes the inner disclosure before the host surface', async () => {
+test('empty presence is only a composer; icon controls unfold one context and Escape restores its invoker before the host surface', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(); let mutations = 0;
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, { native: async () => { mutations++; throw new Error('No action on opening tools'); } }));
   await settles(() => root.find(node => node.className === 'vela-core-status')!.dataset.requestState === 'idle');
-  assert.match(root.find(node => node.className === 'vela-core-empty')!.textContent, /Find your work/); assert.equal(displayed(named(root, 'Create note')), false);
-  named(root, 'Local tools').fire('click'); const local = root.find(node => node.className === 'vela-core-tools')!, more = root.find(node => node.className === 'vela-core-more')!;
-  assert.equal(local.open, true); assert.equal(more.open, true); const title = root.find(node => node.tagName === 'input' && node.parent?.textContent === 'Name')!; assert.equal(doc.activeElement, title);
-  const first = title.fire('keydown', { key: 'Escape' }); assert.equal(local.open, false); assert.equal(more.open, true); assert.equal(doc.activeElement, local.children[0]); assert.equal(first.defaultPrevented, true); assert.equal(first.stopped, true);
-  local.children[0].fire('keydown', { key: 'Escape' }); assert.equal(more.open, false); assert.equal(doc.activeElement, more.children[0]);
-  assert.equal(more.children[0].fire('keydown', { key: 'Escape' }).defaultPrevented, false, 'Outer surface retains its own Escape handling'); assert.equal(mutations, 0); panel.dispose();
+  assert.equal(root.find(node => node.className === 'vela-core-empty'), undefined); assert.equal(root.find(node => node.className === 'vela-core-scroll')!.hidden, true); assert.equal(displayed(named(root, 'Create note')), false); assert.equal(displayed(root.find(node => node.className === 'vela-core-provider-controls')!), false);
+  const input = root.find(node => node.tagName === 'textarea')!; assert.equal(input.getAttribute('aria-label'), 'Message Vela'); assert.equal(input.parent?.tagName, 'form'); assert.equal(displayed(named(root, 'Send to Vela')), true);
+  named(root, 'Local tools').fire('click'); const local = root.find(node => node.className === 'vela-core-tools')!, more = root.find(node => node.className.includes('vela-core-contextual'))!;
+  assert.equal(local.open, true); assert.equal(more.hidden, false); const title = root.find(node => node.tagName === 'input' && node.parent?.textContent === 'Name')!; assert.equal(doc.activeElement, title); assert.equal(named(root, 'Local tools').getAttribute('aria-expanded'), 'true');
+  named(root, 'Add sources').fire('click'); assert.equal(local.hidden, true); assert.equal(displayed(named(root, 'Create note')), false); assert.equal(named(root, 'Local tools').getAttribute('aria-expanded'), 'false');
+  const search = root.find(node => node.tagName === 'input' && node.parent?.className === 'vela-core-search')!; assert.equal(doc.activeElement, search);
+  const first = search.fire('keydown', { key: 'Escape' }); assert.equal(more.hidden, true); assert.equal(doc.activeElement, named(root, 'Add sources')); assert.equal(first.defaultPrevented, true); assert.equal(first.stopped, true);
+  assert.equal(named(root, 'Add sources').fire('keydown', { key: 'Escape' }).defaultPrevented, false, 'Outer surface retains its own Escape handling'); assert.equal(mutations, 0); panel.dispose();
 });
 
 test('Enter submits, Shift+Enter adds a newline, IME never submits, and later text/selection/consent survive a pending request', async () => {
-  const doc = new Document(), root = doc.createElement('main'); let canonical = state(), resolve!: (value: VelaRequest) => void;
+  const doc = new Document(), root = doc.createElement('main'); let canonical = state(), resolve!: (value: VelaRequest) => void; canonical.planner = { providerId: 'codex-app-server', available: true, busy: false };
   const calls: Parameters<VelaClient['request']>[0][] = [];
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, { request: async input => { calls.push(input); return new Promise(r => { resolve = r; }); } }));
   await settles(() => root.find(node => node.className === 'vela-core-status')!.dataset.requestState === 'idle');
   const input = root.find(node => node.tagName === 'textarea')!, consent = root.find(node => !!node.parent?.className.includes('vela-core-consent') && node.tagName === 'input')!;
-  input.value = 'The exact submitted plan request'; input.fire('input'); consent.checked = true;
+  input.value = 'The exact submitted plan request'; input.fire('input'); consent.checked = true; consent.fire('change');
   assert.equal(input.fire('keydown', { key: 'Enter', shiftKey: true }).defaultPrevented, false); input.fire('compositionstart'); input.fire('keydown', { key: 'Enter' }); input.fire('compositionend'); input.fire('keydown', { key: 'Enter', isComposing: true }); input.fire('keydown', { key: 'Enter', keyCode: 229 }); assert.equal(calls.length, 0);
   assert.equal(input.fire('keydown', { key: 'Enter' }).defaultPrevented, true); assert.equal(calls.length, 1); assert.equal(calls[0].intent, 'The exact submitted plan request'); assert.equal(calls[0].authorizeProvider, true); assert.equal(consent.checked, false, 'Provider choice is one request at a time');
-  input.value = 'Later text typed while waiting'; input.selectionStart = 2; input.selectionEnd = 8; input.fire('input'); consent.checked = true;
+  input.value = 'Later text typed while waiting'; input.selectionStart = 2; input.selectionEnd = 8; input.fire('input'); consent.checked = true; consent.fire('change');
   canonical = { ...canonical, requests: [request({ state: 'awaiting-review' })] }; resolve(canonical.requests[0]); await settles(() => root.find(node => node.className === 'vela-core-status')!.dataset.requestState === 'awaiting-review');
   assert.equal(root.find(node => node.tagName === 'textarea'), input); assert.equal(input.value, 'Later text typed while waiting'); assert.equal(input.selectionStart, 2); assert.equal(input.selectionEnd, 8); assert.equal(consent.checked, true); panel.dispose();
 });
@@ -159,7 +163,7 @@ test('unavailable native tools are disabled by actual host availability and atte
   canonical.attention = [{ id: 'event:one', type: 'task.completed', source: 'application', occurredAt: manifest.createdAt, receivedAt: manifest.createdAt, subject: null, severity: 'info', classification: 'observed', summary: 'A saved task was completed', correlationId: 'synthetic:correlation', disposition: 'silent', reason: 'Quiet mode', reviewedAt: null, dismissedAt: null }];
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, { native: async () => { nativeCalls++; throw new Error('Unavailable'); }, reviewAttention: async ids => { reviewed.push(ids); canonical.attention[0].reviewedAt = manifest.createdAt; } }));
   await settles(() => !!root.find(node => node.className === 'vela-core-availability')); named(root, 'Local tools').fire('click'); assert.equal(named(root, 'Create note').disabled, true); named(root, 'Create note').fire('click'); assert.equal(nativeCalls, 0); assert.match(root.find(node => node.className === 'vela-core-availability')!.textContent, /unavailable/);
-  const attention = root.find(node => node.className === 'vela-core-attention')!; attention.open = true; assert.equal(reviewed.length, 0); named(root, 'Mark reviewed').fire('click'); await settles(() => reviewed.length === 1); assert.deepEqual(reviewed, [['event:one']]); panel.dispose();
+  named(root, 'Attention, 1 update').fire('click'); assert.equal(displayed(named(root, 'Mark reviewed')), true); assert.equal(reviewed.length, 0); named(root, 'Mark reviewed').fire('click'); await settles(() => reviewed.length === 1); assert.deepEqual(reviewed, [['event:one']]); panel.dispose();
 });
 
 test('read-only refresh preserves keyed plan disclosures, reading focus and pending approval controls without replaying actions', async () => {
@@ -182,4 +186,31 @@ test('read-only refresh preserves keyed plan disclosures, reading focus and pend
   approve.fire('click'); assert.equal(reviews, 1); assert.equal(applies, 0); finishReview();
   await settles(() => applies === 1 && root.find(node => node.dataset.planId === plan.id)?.dataset.planState === 'applied');
   assert.equal(reviews, 1); assert.equal(root.find(node => node.dataset.planId === plan.id)!.find(node => node.className === 'vela-core-plan-details')!.open, true); panel.dispose();
+});
+
+test('presentation is a content-free observed baseline and meaningful state changes, never invented planning or automatic attention review', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state(), observed: VelaPanelPresentation[] = [];
+  canonical.conversation = { resourceId: 'chat:vela', revision: 1, messages: [{ id: 'message:existing', role: 'user', content: 'Existing retained history', source: 'user', classification: 'observed' }] };
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => structuredClone(canonical)), { onPresentation: value => { observed.push(value); } });
+  await settles(() => observed.length === 1); assert.deepEqual(observed[0], { phase: 'idle', context: null, messageIds: ['message:existing'], planIds: [] }); assert(Object.isFrozen(observed[0]));
+  await panel.refresh(); await panel.open(); assert.equal(observed.length, 1, 'Hydrating unchanged old history is not a new arrival');
+  const input = root.find(node => node.tagName === 'textarea')!; input.value = 'Unsubmitted private draft'; input.fire('input'); assert.equal(observed.at(-1)!.phase, 'receiving'); const count = observed.length; input.value += ' more'; input.fire('input'); assert.equal(observed.length, count, 'Keystrokes do not replay a state transition');
+  named(root, 'Add sources').fire('click'); assert.equal(observed.at(-1)!.context, 'sources'); named(root, 'Close Vela controls').fire('click'); assert.equal(observed.at(-1)!.context, null);
+  canonical.requests = [request({ state: 'planning' })]; await panel.refresh(); assert.equal(observed.at(-1)!.phase, 'planning', 'Only recorded planning state is planning');
+  const plan: VelaPlan = { id: 'plan:observed', requestId: 'request:synthetic', version: 1, fingerprint: 'synthetic:observed', summary: 'Observed local note', steps: [{ id: 'one', explanation: 'Synthetic fixture only', action: { type: 'createResource', kind: 'note', title: 'Observed note', workspaceId: null } }], targets: [], scope: { principalId: 'synthetic', policyVersion: 'synthetic', resourceIds: [], projectIds: [], workspaceIds: [] }, state: 'prepared', createdAt: manifest.createdAt, expiresAt: manifest.createdAt, contribution: null };
+  canonical.requests[0].state = 'awaiting-review'; canonical.requests[0].planId = plan.id; canonical.plans = [plan]; await panel.refresh(); assert.equal(observed.at(-1)!.phase, 'review'); assert.deepEqual(observed.at(-1)!.planIds, [plan.id]);
+  plan.state = 'applying'; await panel.refresh(); assert.equal(observed.at(-1)!.phase, 'applying'); canonical.requests[0].state = 'unknown'; plan.state = 'unknown'; await panel.refresh(); assert.equal(observed.at(-1)!.phase, 'error');
+  canonical.requests = []; canonical.plans = []; input.value = ''; canonical.attention = [{ id: 'event:unreviewed', type: 'task.completed', source: 'application', occurredAt: manifest.createdAt, receivedAt: manifest.createdAt, subject: null, severity: 'info', classification: 'observed', summary: 'Actual saved event fixture', correlationId: 'synthetic', disposition: 'silent', reason: 'Quiet mode', reviewedAt: null, dismissedAt: null }]; await panel.refresh(); assert.equal(observed.at(-1)!.phase, 'idle', 'An unopened silent digest does not invent attention activity');
+  named(root, 'Attention, 1 update').fire('click'); assert.equal(observed.at(-1)!.phase, 'attention'); assert.equal(canonical.attention[0].reviewedAt, null);
+  for (const value of observed) { assert.deepEqual(Object.keys(value).sort(), ['context', 'messageIds', 'phase', 'planIds']); assert(!JSON.stringify(value).includes('Unsubmitted')); assert(!JSON.stringify(value).includes('Existing retained history')); }
+  panel.dispose(); const ended = observed.length; input.fire('input'); assert.equal(observed.length, ended);
+});
+
+test('provider opt-in is contextual, one-shot, identified and cannot silently move to a different provider', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state(); canonical.planner = { providerId: 'codex-app-server', available: true, busy: false };
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical)); await settles(() => root.find(node => node.className === 'vela-core-status')!.dataset.requestState === 'idle');
+  const consent = root.find(node => node.tagName === 'input' && !!node.parent?.className.includes('vela-core-consent'))!; assert.equal(displayed(consent), false); assert.equal(consent.checked, false);
+  named(root, 'Planning provider').fire('click'); assert.equal(displayed(consent), true); assert.match(consent.parent!.textContent, /Use Codex for this request/); consent.checked = true; consent.fire('change');
+  const choice = root.find(node => node.className.includes('vela-core-provider-choice'))!; assert.equal(choice.hidden, false); assert.match(choice.textContent, /Codex/); named(root, 'Close Vela controls').fire('click'); assert.equal(displayed(choice), true);
+  canonical.planner.providerId = 'other-identified-provider'; await panel.refresh(); assert.equal(consent.checked, false); assert.equal(choice.hidden, true); assert.match(consent.parent!.textContent, /other-identified-provider/); panel.dispose();
 });
