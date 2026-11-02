@@ -1533,6 +1533,13 @@ function tick(now: number) {
           presencePhase: presenceReviewPhase ?? undefined,
           ambientStrength: scene.ambientStrength,
         });
+        const actualVela = environment.presenceBounds();
+        application?.manifestationAfterRender({
+          x: actualVela.x,
+          y: actualVela.y,
+          width: actualVela.w,
+          height: actualVela.h,
+        });
         const presenceCard = (
           application as
             | (Application & {

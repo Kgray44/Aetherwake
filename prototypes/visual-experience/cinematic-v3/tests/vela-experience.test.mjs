@@ -17,7 +17,7 @@ const observation = (extra) => ({
   planIds: [],
   ...extra,
 });
-function fixture() {
+function fixture(phaseOnly = false) {
   const motion = new MotionCoordinator(),
     properties = new Map(),
     sizes = [];
@@ -32,9 +32,31 @@ function fixture() {
     root,
     wake() {},
     resize: (size) => sizes.push(size),
+    phaseOnly,
   });
   return { motion, root, properties, sizes, experience };
 }
+
+test("manifestation ownership keeps the old experience phase-only, without ready-content arrivals or competing sizing", () => {
+  const f = fixture(true);
+  f.experience.setActive(true);
+  f.experience.observe(observation());
+  f.experience.observe(
+    observation({
+      phase: "planning",
+      messageIds: ["saved", "new-canonical-response"],
+      planIds: ["new-plan"],
+    }),
+  );
+  f.motion.step(1 / 60);
+  f.experience.frame(policy);
+  assert.equal(f.motion.bodies.size, 1);
+  assert.deepEqual(f.experience.diagnostics().entries, []);
+  assert.deepEqual(f.sizes, []);
+  assert.equal(f.properties.get("--vela-reveal"), "1");
+  f.experience.setActive(false);
+  assert.equal(f.motion.bodies.size, 0);
+});
 
 test("saved history is baseline; only new canonical IDs arrive, with a bounded shared coordinator lifetime", () => {
   const { motion, experience } = fixture();

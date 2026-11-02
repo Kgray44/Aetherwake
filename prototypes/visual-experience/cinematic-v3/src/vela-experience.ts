@@ -21,6 +21,8 @@ export function createVelaExperience(options: {
   root: HTMLElement;
   wake(): void;
   resize(size: { width: number; height: number }): void;
+  /** The manifestation host owns sizing and ready content; keep phase only. */
+  phaseOnly?: boolean;
 }) {
   const prefix = `vela-experience:${++instances}:`,
     phaseKey = prefix + "phase";
@@ -75,7 +77,7 @@ export function createVelaExperience(options: {
     return { width: 440, height: composer };
   };
   const resizeObserver =
-    typeof ResizeObserver === "undefined"
+    options.phaseOnly || typeof ResizeObserver === "undefined"
       ? null
       : new ResizeObserver(() => {
           if (active && !sizeDirty) {
@@ -107,12 +109,16 @@ export function createVelaExperience(options: {
       options.motion.add(phaseKey, target);
     else options.motion.target(phaseKey, target, "observed Vela phase/context");
     // Limit decorative ownership independently of canonical history length.
-    const desired = [
-      ...latest.messageIds
-        .slice(-16)
-        .map((id) => ({ kind: "message" as const, id })),
-      ...latest.planIds.slice(-8).map((id) => ({ kind: "plan" as const, id })),
-    ];
+    const desired = options.phaseOnly
+      ? []
+      : [
+          ...latest.messageIds
+            .slice(-16)
+            .map((id) => ({ kind: "message" as const, id })),
+          ...latest.planIds
+            .slice(-8)
+            .map((id) => ({ kind: "plan" as const, id })),
+        ];
     const retained = new Set(desired.map((item) => item.kind + ":" + item.id));
     for (const [id, entry] of entries)
       if (!retained.has(id)) {
@@ -132,7 +138,7 @@ export function createVelaExperience(options: {
       entries.set(id, { ...item, key });
     }
     baseline = true;
-    sizeDirty = true;
+    sizeDirty = !options.phaseOnly;
     options.wake();
   }
   return {
@@ -193,6 +199,7 @@ export function createVelaExperience(options: {
         String(Math.max(0, Math.min(1, phase.y))),
       );
       options.root.dataset.velaPhase = latest.phase;
+      if (options.phaseOnly) return;
       for (const node of options.root.querySelectorAll<HTMLElement>(
         "[data-message-id],[data-plan-id]",
       )) {

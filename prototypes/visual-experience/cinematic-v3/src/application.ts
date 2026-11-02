@@ -51,6 +51,7 @@ import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
 import { createVelaExperience } from "./vela-experience";
+import { createVelaManifestation } from "./vela-manifestation.ts";
 import { createConversationExecutionPort } from "./conversation-execution";
 import { workspaceWheelFactor } from "./workspace-wheel";
 import { returnFocusAfterDialogClose } from "./focus-return";
@@ -184,12 +185,27 @@ export function installApplication(hooks: Hooks) {
   let velaRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   const velaContent = document.createElement("div");
   velaContent.className = "application-vela-content";
-  const velaExperience = createVelaExperience({
+  const velaManifestation = createVelaManifestation({
     motion: hooks.motion,
     root: velaContent,
     wake: hooks.wake,
     resize: (size) => surfaces.resize("vela", size),
   });
+  const velaExperience = createVelaExperience({
+    motion: hooks.motion,
+    root: velaContent,
+    wake: hooks.wake,
+    resize: (size) => surfaces.resize("vela", size),
+    phaseOnly: true,
+  });
+  addEventListener(
+    "pagehide",
+    () => {
+      velaManifestation.dispose();
+      velaExperience.dispose();
+    },
+    { once: true },
+  );
   const velaClient = createVelaClient({
     command: (name, input) => host.command!(name, input),
     presentation: () =>
@@ -1265,6 +1281,7 @@ export function installApplication(hooks: Hooks) {
     if (!velaPanel)
       velaPanel = mountVelaPanel(velaContent, velaClient, {
         onPresentation: (value) => velaExperience.observe(value),
+        onManifestation: (value) => velaManifestation.observe(value),
         onConnectProvider: () => host.command!("capabilities", {}),
         onOpenSubject: (subject) => {
           surfaces.close("vela");
@@ -1323,10 +1340,11 @@ export function installApplication(hooks: Hooks) {
       placement: "left",
       minSize: { width: 280, height: 110 },
       maxSize: { width: 560, height: 640 },
-      preferredSize: velaExperience.size(),
+      preferredSize: velaManifestation.size(),
       initialFocus: ".vela-core-compose textarea",
       onClose: () => {
         velaOpen = false;
+        velaPanel?.close();
         velaExperience.setActive(false);
         el("#vela").setAttribute("aria-expanded", "false");
       },
@@ -3357,6 +3375,7 @@ export function installApplication(hooks: Hooks) {
       }
       surfaces.frame(now);
       velaExperience.frame(policy);
+      velaManifestation.frame(policy);
       paintPreview();
       const gridCamera = camera();
       workspaceGrid.update({
@@ -3447,6 +3466,8 @@ export function installApplication(hooks: Hooks) {
       uiExclusions: constellation?.uiExclusions(),
       policy: constellation?.controller.policy,
     }),
+    manifestationAfterRender: velaManifestation.afterRender,
+    manifestationDiagnostics: velaManifestation.diagnostics,
     presenceCard,
     presence: () => {
       const p =
