@@ -203,6 +203,20 @@ test('invalid provider actions/identity remain inspectable and cannot execute', 
   assert.throws(() => validateAction({ type: 'attach', workspaceId: 'w', resourceId: 'r', unauthorized: true }), /unsupported_or_invalid_action/);
 });
 
+test('provider egress authorization includes omitted-source metadata and semantic plan failures preserve the proposal', async () => {
+  const value = proposal({ type: 'workspaceFromResources', title: 'Unauthorized scope', projectId: null, resourceIds: ['note:private'] });
+  const f = fixture({ planner: planner(value).port });
+  try {
+    f.db.prepare("UPDATE canonical_resources SET content=? WHERE id='note:a'").run('x'.repeat(13000));
+    const r = await f.service.request({ intent: 'Organize selected research', resourceIds: ['note:a'], authorizeProvider: true });
+    const auth = f.authRequests.find(a => a.phase === 'provider-context')!;
+    assert.deepEqual(auth.targets.map(t => t.id), ['note:a']);
+    assert.equal(auth.contextManifest?.included.length, 0); assert.equal(auth.contextManifest?.omitted.length, 1);
+    assert.equal(r.state, 'invalid-plan'); assert.equal(r.errorCode, 'resource_not_authorized');
+    assert.deepEqual(r.invalidProposal, value); assert.equal(f.counts().nativeCalls, 0);
+  } finally { f.close(); }
+});
+
 test('provider cancellation preserves user intent and prevents late proposed actions', async () => {
   let finish!: (value: unknown) => void;
   const port: VelaPlanningPort = { providerId: 'synthetic-planner', availability: () => ({ available: true, busy: false }), propose: () => new Promise(resolve => { finish = resolve; }) };
