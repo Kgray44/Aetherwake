@@ -10,30 +10,30 @@ export interface VelaPanelStatus {
 /** Read-only presentation of canonical state. A provider proposal is never an applied effect. */
 export function velaPanelStatus(state: Pick<VelaState, 'requests' | 'plans' | 'receipts'>): VelaPanelStatus {
   const request = state.requests.at(-1);
-  if (!request) return { requestState: 'idle', message: 'Ready. Plans are proposals until host receipts confirm application.' };
+  if (!request) return { requestState: 'idle', message: 'Ready when you are.' };
   const plan = state.plans.find(p => p.id === request.planId && p.requestId === request.id);
   const receipts = state.receipts.filter(r => r.requestId === request.id && r.planId === plan?.id);
   const appliedCount = receipts.filter(r => r.state === 'applied' && r.hostReceiptId).length;
-  const priorEffects = appliedCount ? ' ' + appliedCount + ' earlier command outcome(s) were confirmed; inspect their receipts.' : '';
+  const priorEffects = appliedCount ? ' ' + appliedCount + (appliedCount === 1 ? ' earlier step was confirmed.' : ' earlier steps were confirmed.') + ' Review the details.' : '';
   const result = (message: string): VelaPanelStatus => ({ requestState: request.state, requestId: request.id, ...(plan ? { planState: plan.state } : {}), message });
-  if (request.state === 'unknown' || plan?.state === 'unknown') return result('The request outcome is unknown. Inspect receipts before retrying.' + priorEffects);
-  if (request.state === 'failed' || plan?.state === 'failed') return result('The request failed. Review recorded details and receipts before retrying.' + priorEffects);
-  if (request.state === 'cancelled' || plan?.state === 'cancelled') return result('The request was cancelled. Inspect receipts for any earlier applied actions.' + priorEffects);
-  if (request.state === 'invalid-plan') return result('The provider proposal was invalid and was not applied. Inspect the saved proposal.');
+  if (request.state === 'unknown' || plan?.state === 'unknown') return result('The outcome is unknown. Review the activity details before trying again.' + priorEffects);
+  if (request.state === 'failed' || plan?.state === 'failed') return result('This request stopped. Review what happened before trying again.' + priorEffects);
+  if (request.state === 'cancelled' || plan?.state === 'cancelled') return result('This request was cancelled. Review any earlier changes in the details.' + priorEffects);
+  if (request.state === 'invalid-plan') return result('The provider proposal could not be used. No proposed changes were applied.');
   if (request.state === 'provider-unavailable') {
-    if (request.errorCode === 'provider_authorization_required') return result('Planning was not authorized for this request. Local actions remain available.');
+    if (request.errorCode === 'provider_authorization_required') return result('Planning was not enabled for this request. Local tools are still available.');
     if (request.errorCode === 'provider_busy') return result('The planning provider is busy. This request did not start a planning turn. Local actions remain available.');
-    return result('Planning is unavailable for this request. Local actions remain available.');
+    return result('Planning is unavailable for this request. Local tools are still available.');
   }
   if (plan?.state === 'rejected') return result('The plan was rejected. Its proposed actions were not applied.');
-  if (plan?.state === 'applying') return result('Applying the reviewed plan. Inspect receipts for confirmed command outcomes.' + priorEffects);
+  if (plan?.state === 'applying') return result('Applying the changes you reviewed.' + priorEffects);
   if (request.state === 'completed' || plan?.state === 'applied') {
     const confirmed = plan?.state === 'applied' && plan.steps.length > 0 && plan.steps.every(step => receipts.some(r => r.stepId === step.id && r.state === 'applied' && r.hostReceiptId));
-    if (!confirmed) return result('The plan is recorded complete, but complete host receipts are unavailable. Review the outcome before retrying.');
-    return result('The plan was applied. Host receipts confirm the recorded command outcomes.' + (plan.steps.some(step => step.action.type === 'delegateTask') ? ' Delegated task completion remains unverified.' : ''));
+    if (!confirmed) return result('The plan is marked complete, but some results are missing. Review the details before trying again.');
+    return result('The reviewed plan was applied.' + (plan.steps.some(step => step.action.type === 'delegateTask') ? ' Delegated task completion remains unverified.' : ''));
   }
-  if (plan?.state === 'approved') return result('The plan is approved and ready to apply. Its proposed actions have not run.');
+  if (plan?.state === 'approved') return result('Approved and ready to apply. No changes have run yet.');
   if (request.state === 'awaiting-review') return result('The plan is ready for review. Its proposed actions have not been applied.');
-  if (request.state === 'native-ready') return result('The local action is ready for authorized application.');
-  return result('The planning request is running' + (request.providerId ? ' with ' + request.providerId : '') + '. Proposed actions have not been applied.');
+  if (request.state === 'native-ready') return result('The local action is ready to apply.');
+  return result('The planning request is running' + (request.providerId ? ' with ' + (request.providerId === 'codex-app-server' ? 'Codex' : request.providerId) : '') + '. Proposed actions have not been applied.');
 }

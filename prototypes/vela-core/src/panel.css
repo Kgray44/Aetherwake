@@ -1,24 +1,72 @@
-.vela-core { color: var(--text, #edf3ff); font: 14px/1.5 var(--font-ui, system-ui, sans-serif); max-width: 980px; margin: auto; padding: 16px; }
-.vela-core h2, .vela-core h3, .vela-core p { margin: 0 0 10px; }
-.vela-core-header h2 { font-size: 26px; letter-spacing: .03em; }
-.vela-core-header p, .vela-core-provider, .vela-core-selection { color: var(--text-muted, #bac7db); }
-.vela-core-status { min-height: 24px; }
-.vela-core-conversation { max-height: 32vh; overflow: auto; overscroll-behavior: contain; }
-.vela-core-message, .vela-core-plan, .vela-core-attention article, .vela-core-context article { padding: 12px 14px; margin: 8px 0; border: 1px solid rgba(193, 214, 255, .18); border-radius: 12px; background: rgba(16, 25, 43, .7); }
-.vela-core-message p { white-space: pre-wrap; overflow-wrap: anywhere; }
-.vela-core-field { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
-.vela-core-field > span { min-width: 140px; }
-.vela-core input, .vela-core select, .vela-core textarea { color: inherit; background: #111c2c; border: 1px solid #6f819e; border-radius: 7px; padding: 7px 10px; font: inherit; }
-.vela-core input:not([type="checkbox"]), .vela-core textarea { flex: 1; min-width: 140px; }
-.vela-core input[type="checkbox"] { width: 18px; height: 18px; }
-.vela-core-button { color: inherit; background: #28384e; border: 1px solid #788daa; border-radius: 8px; padding: 8px 12px; margin: 4px 6px 4px 0; cursor: pointer; font: inherit; }
-.vela-core-primary { background: #354e70; }
-.vela-core-button:disabled { opacity: .55; cursor: wait; }
-.vela-core :focus-visible { outline: 2px solid #a7d5ff; outline-offset: 3px; }
-.vela-core details { padding: 9px 0; }
-.vela-core summary { cursor: pointer; font-weight: 600; }
-.vela-core pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; background: #0d1725; padding: 10px; border-radius: 7px; }
-.vela-core-results { max-height: 240px; overflow: auto; }
-.vela-core-result { display: flex; justify-content: space-between; gap: 12px; }
-.vela-core-receipt { font-size: 12px; overflow-wrap: anywhere; }
-@media (max-width: 600px) { .vela-core { padding: 8px; } .vela-core-field { display: block; } .vela-core-field > span { display: block; } .vela-core textarea, .vela-core input:not([type="checkbox"]) { width: 100%; box-sizing: border-box; } }
+.vela-core{--vela-muted:var(--text-muted,#b8b5c9);--vela-edge:#d8d0f02b;box-sizing:border-box;display:flex;flex-direction:column;gap:12px;min-width:0;min-height:0;width:100%;max-width:680px;height:min(680px,calc(100dvh - 96px));margin:auto;padding:16px;color:var(--text,#eceaf4);font:16px/1.6 var(--font-ui,system-ui,sans-serif);background:#141724f5;border:1px solid var(--vela-edge);border-radius:20px}
+.vela-core *{box-sizing:border-box;min-width:0}
+.vela-core [hidden]{display:none!important}
+.application-vela-content{display:flex;flex-direction:column;min-height:0;height:100%}
+.aw-contextual-content .application-vela-content>.vela-core{height:100%;max-height:100%;max-width:none;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;font:16px/1.6 var(--font-ui,system-ui,sans-serif)}
+.vela-core h2,.vela-core h3,.vela-core p{margin:0;overflow-wrap:anywhere}
+.vela-core h2,.vela-core h3{font-size:18px;line-height:1.4;font-weight:550;letter-spacing:-.015em}
+.vela-core-header{flex:none;display:flex;align-items:start;justify-content:space-between;gap:8px 16px;flex-wrap:wrap}
+.vela-core-header>p{font-size:13px;color:var(--vela-muted);flex:1 1 180px}
+.vela-core-provider-controls{font-size:13px;flex:0 1 auto}
+.vela-core-provider-controls>summary{color:var(--vela-muted)}
+.vela-core-scroll{flex:1 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:#bbb2d455 transparent;padding:0 4px 0 0;display:flex;flex-direction:column;gap:16px}
+.vela-core-conversation{display:flex;flex-direction:column;gap:24px}
+.vela-core-empty{display:flex;flex-direction:column;gap:8px;padding:24px 8px 16px;max-width:34em}
+.vela-core-empty p{color:var(--vela-muted)}
+.vela-core-message{padding:0 8px;overflow-wrap:anywhere}
+.vela-core-message[data-source="user"]{margin-left:24px;padding:12px 16px;background:#d1c3ef0a;border:1px solid #d1c3ef14;border-radius:16px 16px 4px 16px}
+.vela-core-message-author{display:block;font-size:13px;font-weight:550;margin-bottom:8px;color:var(--vela-muted)}
+.vela-core-message p{white-space:pre-wrap;overflow-wrap:anywhere}
+.vela-core-secondary,.vela-core-meta,.vela-core-targets,.vela-core-receipt,.vela-core-availability{font-size:13px;line-height:1.5;color:var(--vela-muted)}
+.vela-core-plans:empty{display:none}
+.vela-core-plans{display:flex;flex-direction:column;gap:12px}
+.vela-core-plan{display:flex;flex-direction:column;gap:12px;padding:16px;border:1px solid var(--vela-edge);border-radius:16px;background:#c8bedb05}
+.vela-core-plan-state{font-size:13px;color:#d5c6ee}
+.vela-core-plan[data-plan-state="unknown"],.vela-core-plan[data-plan-state="failed"]{border-color:#e5bf935c}
+.vela-core-effects{margin:0;padding-left:24px;display:flex;flex-direction:column;gap:12px}
+.vela-core-effects li::marker{color:var(--vela-muted);font-size:13px}
+.vela-core-actions,.vela-core-compose-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.vela-core-button,.vela-core-chip{font:inherit;color:inherit;border:1px solid var(--vela-edge);background:#c5bfdf0a;border-radius:10px;cursor:pointer;max-width:100%;overflow-wrap:anywhere}
+.vela-core-button{font-size:13px;line-height:1.4;min-height:40px;padding:8px 12px;margin:0}
+.vela-core-primary{background:#d4c3ed;color:#24202e;border-color:#e5d6f3;font-weight:600}
+.vela-core-button:hover:not(:disabled),.vela-core-chip:hover{background:#d1c4e71a}
+.vela-core-primary:hover:not(:disabled){background:#e3d3f5}
+.vela-core-button:disabled{opacity:.45;cursor:default}
+.vela-core :focus-visible{outline:2px solid #dcc9f3;outline-offset:3px}
+.vela-core-field{display:flex;flex-direction:column;align-items:stretch;gap:8px;margin:0}
+.vela-core-field>span{font-size:13px;color:var(--vela-muted)}
+.vela-core input,.vela-core select,.vela-core textarea{font:inherit;color:inherit;border:1px solid var(--vela-edge);background:#c6c0dd08;border-radius:10px;padding:8px 12px;min-height:40px;max-width:100%;width:100%}
+.vela-core input::placeholder,.vela-core textarea::placeholder{color:#b6afc38c}
+.vela-core input[type="checkbox"]{width:18px;height:18px;min-height:0;flex:none;accent-color:#d0b7ed;padding:0}
+.vela-core-field:has(input[type="checkbox"]){flex-direction:row;align-items:start}
+.vela-core-field:has(input[type="checkbox"]) input{order:-1;margin-top:2px}
+.vela-core-field:has(input[type="checkbox"])>span{flex:1}
+.vela-core-compose{flex:none;display:flex;flex-direction:column;gap:8px;padding-top:12px;border-top:1px solid var(--vela-edge)}
+.vela-core-compose textarea{min-height:88px;max-height:180px;resize:vertical;line-height:1.6;background:#d0c7e80a}
+.vela-core-compose-hint{font-size:13px;line-height:1.5;color:var(--vela-muted)}
+.vela-core-compose-actions>.vela-core-primary{margin-right:auto}
+.vela-core-consent>span{font-size:13px}
+.vela-core-selection{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.vela-core-chip{font-size:13px;line-height:1.4;padding:4px 8px}
+.vela-core-status{flex:none;font-size:13px;line-height:1.5;padding:8px 12px;border-left:2px solid #bfabd5;color:#d5cddd;background:#c6b2e007}
+.vela-core-status[data-request-state="failed"],.vela-core-status[data-request-state="unknown"],.vela-core-status[data-request-state="invalid-plan"]{border-left-color:#e5bf93;color:#f0d4b1}
+.vela-core-error{flex:none;padding:12px;border:1px solid #e5bf9350;border-radius:12px;color:#f0d4b1;font-size:13px}
+.vela-core-error>.vela-core-button{margin-top:8px}
+.vela-core details{padding:0;max-width:100%}
+.vela-core summary{font-size:13px;font-weight:500;cursor:pointer;list-style-position:inside;overflow-wrap:anywhere;padding:8px 0}
+.vela-core details:not([open])>.vela-core-disclosure-body{display:none}
+.vela-core-disclosure-body{display:flex;flex-direction:column;gap:12px;padding:8px 0 12px}
+.vela-core-more>.vela-core-disclosure-body{border-top:1px solid var(--vela-edge)}
+.vela-core-more details+details{border-top:1px solid #d8d0f014}
+.vela-core-search{display:flex;align-items:start;gap:8px}
+.vela-core-search input{flex:1}
+.vela-core-results{display:flex;flex-direction:column;gap:8px}
+.vela-core-result{display:flex;align-items:center;gap:8px;border-bottom:1px solid #d8d0f014;padding-bottom:8px}
+.vela-core-result>.vela-core-field{flex:1}
+.vela-core-result>.vela-core-meta{font-size:12px}
+.vela-core-update{display:flex;flex-wrap:wrap;gap:8px;padding:12px 0;border-bottom:1px solid var(--vela-edge)}
+.vela-core-update>p,.vela-core-update>details{flex:1 1 100%}
+.vela-core pre{font:12px/1.6 ui-monospace,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-width:100%;max-height:240px;overflow:auto;margin:0;padding:12px;border:1px solid var(--vela-edge);border-radius:10px;background:#02040c26}
+.vela-core-change-preview{font:14px/1.6 var(--font-ui,system-ui,sans-serif)!important;white-space:pre-wrap}
+@media(max-width:440px){.vela-core{padding:12px;gap:8px}.vela-core-plan{padding:12px}.vela-core-message[data-source="user"]{margin-left:12px}.vela-core-compose-actions{gap:8px}.vela-core-compose-actions>.vela-core-primary{margin-right:0}.vela-core-search{flex-wrap:wrap}.vela-core-search input{flex-basis:100%}}
+@media(prefers-reduced-motion:reduce){.vela-core *{scroll-behavior:auto!important;animation:none!important;transition:none!important}}
