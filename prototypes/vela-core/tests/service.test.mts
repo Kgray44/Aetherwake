@@ -7,19 +7,20 @@ import { VelaError, validateAction, validateProposal } from '../src/capabilities
 import type { AuthorizationRequest, CanonicalConversation, ContextManifest, HostActionResult, ResourceRef, VelaHostPort, VelaMessage, VelaNativeAction, VelaPlanningPort, VelaScope } from '../src/contracts.ts';
 
 /** Synthetic canonical host: resources, placements, conversations and command receipts share ONE db. */
-function fixture(options: { planner?: VelaPlanningPort } = {}) {
+function fixture(options: { planner?: VelaPlanningPort; preferenceAdapter?: boolean } = {}) {
   const db = new DatabaseSync(':memory:');
   db.exec(`CREATE TABLE canonical_resources(id TEXT PRIMARY KEY,kind TEXT,title TEXT,version INTEGER,content TEXT);
     CREATE TABLE canonical_messages(id TEXT PRIMARY KEY,conversation_id TEXT,json TEXT);
     CREATE TABLE canonical_placements(workspace_id TEXT,resource_id TEXT);
-    CREATE TABLE canonical_receipts(command_id TEXT PRIMARY KEY,json TEXT);`);
+    CREATE TABLE canonical_receipts(command_id TEXT PRIMARY KEY,json TEXT);
+    CREATE TABLE canonical_settings(scope TEXT,key TEXT,value TEXT,PRIMARY KEY(scope,key));`);
   const seed = db.prepare('INSERT INTO canonical_resources VALUES(?,?,?,?,?)');
   seed.run('note:a', 'resource', 'Synthetic research', 1, 'A synthetic research note.');
   seed.run('task:b', 'resource', 'Synthetic task', 1, 'A synthetic task.');
   seed.run('note:private', 'resource', 'Excluded synthetic note', 1, 'Must never enter the planning context.');
   seed.run('workspace:a', 'workspace', 'Synthetic workspace', 1, '');
   let scope: VelaScope = { principalId: 'synthetic:user', policyVersion: 'policy:1', resourceIds: ['note:a', 'task:b'], workspaceIds: ['workspace:a'], projectIds: [] };
-  let txId = 0, nativeCalls = 0, contentReads = 0, delegateCalls = 0, hostThrowsAfterEffect = false;
+  let txId = 0, nativeCalls = 0, contentReads = 0, delegateCalls = 0, preferenceCalls = 0, hostThrowsAfterEffect = false;
   const authRequests: AuthorizationRequest[] = [], authorizations = new Set<string>(), denied = new Set<string>();
   const delegated: unknown[] = [];
   function transaction<T>(work: () => T): T {
@@ -85,9 +86,14 @@ function fixture(options: { planner?: VelaPlanningPort } = {}) {
       return { status: 'applied', receiptId: 'execution-receipt:synthetic' };
     },
   };
+  if (options.preferenceAdapter) host.applyPreference = input => {
+    assert.ok(authorizations.has(input.authorizationRef)); preferenceCalls++;
+    db.prepare('INSERT INTO canonical_settings VALUES(?,?,?) ON CONFLICT(scope,key) DO UPDATE SET value=excluded.value').run(input.action.scope.id ?? 'global', input.action.key, input.action.value);
+    return { status: 'applied', receiptId: 'canonical-preference:' + randomUUID() };
+  };
   const service = new VelaService({ db, host, transaction, planner: options.planner, now: () => '2026-11-02T01:50:00.000Z' });
   return { service, db, host, transaction, authRequests, denied, delegated,
-    counts: () => ({ nativeCalls, contentReads, delegateCalls }),
+    counts: () => ({ nativeCalls, contentReads, delegateCalls, preferenceCalls }),
     setScope: (value: Partial<VelaScope>) => { scope = { ...scope, ...value }; },
     throwAfterEffect: () => { hostThrowsAfterEffect = true; },
     ref, close: () => db.close() };
@@ -277,4 +283,85 @@ test('restart recovers planning/applying as unknown and stale service writers ca
     assert.equal(reopened.state().plans[0].state, 'unknown'); assert.equal(reopened.state().requests[0].state, 'unknown');
     assert.equal(f.counts().nativeCalls, 0);
   } finally { f.close(); }
+});
+
+function configureLearning(f: ReturnType<typeof fixture>, level: 'manual' | 'suggestive' | 'assisted' | 'adaptive') {
+  f.service.preferences({ expectedVersion: f.service.state().preferences.version, patch: { monitoringEnabled: true, allowedEventTypes: ['workspace.presetSelected', 'presentation.densitySelected'] } });
+  f.service.adaptationPolicy({ expectedVersion: f.service.state().adaptation!.policy.version, enabled: true, categories: {
+    presentation: { enabled: true, level }, organization: { enabled: true, level },
+  } });
+}
+function preferenceEvent(f: ReturnType<typeof fixture>, id: string, value: 'balanced' | 'focus' | 'development' | 'research' = 'focus', actor: 'user' | 'vela' = 'user') {
+  f.service.ingestAttention({ id, type: 'workspace.presetSelected', source: 'aerynth-native', actor,
+    occurredAt: '2026-11-02T01:49:00Z', subject: { id: 'workspace:a', kind: 'workspace' }, severity: 'info', classification: 'observed',
+    summary: 'Synthetic user selected a workspace preset', correlationId: 'synthetic:' + id,
+    preferenceSignal: { key: 'organization.defaultPreset', value } });
+  return f.service.observePreference({ eventId: id, key: 'organization.defaultPreset', value, scope: { kind: 'workspace', id: 'workspace:a' } });
+}
+
+test('adaptation defaults off, manual records no inference, and suggestive uses attributable observed user evidence without effects', () => {
+  const f = fixture({ preferenceAdapter: true });
+  try {
+    assert.equal(f.service.state().adaptation?.policy.enabled, false);
+    assert.equal(f.service.observePreference({ eventId: 'none', key: 'presentation.density', value: 'compact', scope: { kind: 'global', id: null } }), null);
+    configureLearning(f, 'manual'); assert.equal(preferenceEvent(f, 'manual:1'), null);
+    configureLearning(f, 'suggestive'); preferenceEvent(f, 'suggest:1'); preferenceEvent(f, 'suggest:2'); const h = preferenceEvent(f, 'suggest:3')!;
+    assert.equal(h.source, 'inferred'); assert.equal(h.confidence, 'medium'); assert.equal(h.state, 'suggested');
+    assert.deepEqual(h.evidence.map(e => e.eventId), ['suggest:1', 'suggest:2', 'suggest:3']);
+    assert.equal(f.counts().preferenceCalls, 0); assert.equal(f.service.effectivePreference(h.key, h.scope), null);
+    assert.throws(() => preferenceEvent(f, 'vela-action:1', 'focus', 'vela'), /unobserved_preference_evidence/);
+    assert.throws(() => f.service.explicitPreference({ key: 'permission.level' as any, value: 'compact', scope: { kind: 'global', id: null }, expectedVersion: 0, apply: false }), /unsupported_preference/);
+  } finally { f.close(); }
+});
+
+test('preference rejection suppresses repeated inference until explicit reset and never promotes inferred records silently', () => {
+  const f = fixture();
+  try {
+    configureLearning(f, 'suggestive'); const h = preferenceEvent(f, 'reject:1')!;
+    assert.equal(f.service.reviewPreference({ hypothesisId: h.id, decision: 'reject', apply: false }).state, 'rejected');
+    assert.equal(preferenceEvent(f, 'reject:2'), null); assert.equal(f.service.state().adaptation?.explicit.length, 0);
+    f.service.resetPreferences({ scope: h.scope, clearSuppressions: true });
+    assert.equal(preferenceEvent(f, 'reset:1')?.state, 'suggested');
+    const restored = new VelaService({ db: f.db, host: f.host, transaction: f.transaction });
+    assert.equal(restored.state().adaptation?.hypotheses.length, 2);
+    assert.equal(restored.state().adaptation?.hypotheses[0].state, 'rejected');
+  } finally { f.close(); }
+});
+
+test('assisted applies only after acceptance; explicit global/user choices override later scoped adaptive inference', () => {
+  const f = fixture({ preferenceAdapter: true });
+  try {
+    configureLearning(f, 'assisted'); const h = preferenceEvent(f, 'assist:1')!; assert.equal(f.counts().preferenceCalls, 0);
+    assert.equal(f.service.reviewPreference({ hypothesisId: h.id, decision: 'accept', apply: true }).state, 'applied');
+    assert.equal(f.counts().preferenceCalls, 1); assert.equal(f.service.effectivePreference(h.key, h.scope)?.source, 'explicit');
+    const p = f.service.explicitPreference({ key: h.key, value: 'balanced', scope: h.scope, expectedVersion: 1, apply: true });
+    assert.equal(p.version, 2); assert.equal(f.service.effectivePreference(h.key, h.scope)?.value, 'balanced');
+    assert.throws(() => f.service.explicitPreference({ key: h.key, value: 'focus', scope: h.scope, expectedVersion: 1, apply: false }), /stale_explicit_preference_version/);
+    configureLearning(f, 'adaptive'); preferenceEvent(f, 'later:1', 'research'); preferenceEvent(f, 'later:2', 'research'); preferenceEvent(f, 'later:3', 'research');
+    assert.equal(f.counts().preferenceCalls, 2); assert.equal(f.service.effectivePreference(h.key, h.scope)?.value, 'balanced');
+    f.service.resetPreferences({ scope: h.scope, clearSuppressions: true });
+    f.service.explicitPreference({ key: h.key, value: 'development', scope: { kind: 'global', id: null }, expectedVersion: 0, apply: false });
+    preferenceEvent(f, 'global-override:1'); preferenceEvent(f, 'global-override:2'); preferenceEvent(f, 'global-override:3');
+    assert.equal(f.counts().preferenceCalls, 2); assert.equal(f.service.effectivePreference(h.key, h.scope)?.value, 'development');
+  } finally { f.close(); }
+});
+
+test('adaptive low-risk changes require enabled policy, three distinct source events, host authorization and actual host capability', () => {
+  const f = fixture({ preferenceAdapter: true });
+  try {
+    configureLearning(f, 'adaptive'); preferenceEvent(f, 'auto:1'); preferenceEvent(f, 'auto:2'); assert.equal(f.counts().preferenceCalls, 0);
+    const h = preferenceEvent(f, 'auto:3')!; assert.equal(h.state, 'applied'); assert.equal(f.counts().preferenceCalls, 1);
+    assert.equal(f.service.effectivePreference(h.key, h.scope)?.source, 'inferred');
+    assert.ok(f.authRequests.some(r => r.phase === 'adaptation' && r.actions[0].type === 'applyPreference'));
+    f.service.adaptationPolicy({ expectedVersion: f.service.state().adaptation!.policy.version, enabled: false, categories: f.service.state().adaptation!.policy.categories });
+    assert.equal(preferenceEvent(f, 'disabled:1', 'research'), null); assert.equal(f.counts().preferenceCalls, 1);
+    assert.equal(f.service.state().adaptation?.receipts[0].state, 'applied');
+  } finally { f.close(); }
+  const unavailable = fixture();
+  try {
+    configureLearning(unavailable, 'adaptive'); preferenceEvent(unavailable, 'unavailable:1'); preferenceEvent(unavailable, 'unavailable:2');
+    const h = preferenceEvent(unavailable, 'unavailable:3')!;
+    assert.equal(h.state, 'failed'); assert.equal(h.errorCode, 'host_preference_application_unavailable');
+    assert.equal(unavailable.counts().preferenceCalls, 0); assert.equal(unavailable.service.state().adaptation?.applicationAvailable, false);
+  } finally { unavailable.close(); }
 });

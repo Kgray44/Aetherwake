@@ -55,7 +55,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   form.append(label('Ask Vela', intent), disclosure, send, stop);
   form.addEventListener('submit', event => { event.preventDefault(); void run(async () => {
     if (busy) return; busy = true; send.disabled = true; status.textContent = 'Waiting for the identified planning provider. Native actions have not run.';
-    try { await client.request({ intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: allowProvider.checked }); intent.value = ''; allowProvider.checked = false; await refresh(); }
+    try { const request = await client.request({ intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: allowProvider.checked }); intent.value = ''; allowProvider.checked = false; busy = false; await refresh(); status.textContent = 'Request: ' + request.state + (request.errorCode ? ' · ' + request.errorCode : '') + '. Proposed actions require review.'; }
     finally { busy = false; send.disabled = false; }
   }); });
   const native = el('details', 'vela-core-tools'); native.append(el('summary', undefined, 'Local actions · available without a model'));
@@ -79,7 +79,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const budget = el('input'); budget.type = 'number'; budget.min = '0'; budget.max = '60';
   settings.append(label('Attention mode', mode), label('Collect authorized application events', monitor), label('Allow separately authorized task delegation', delegation),
     label('Allowed event types (comma separated)', eventTypes), label('Minimum interruption severity', severity), label('Maximum interruptions per hour', budget),
-    el('p', undefined, 'Only authorized application events are considered. Quiet permits silence. Opening Vela does not mark events reviewed. Learning and external monitoring are disabled.'),
+    el('p', undefined, 'Only authorized application events are considered. Quiet permits silence. Opening Vela does not mark events reviewed. External monitoring is unavailable. Adaptive preferences have separate controls.'),
     button('Save preferences', async () => {
       if (!current) return;
       await client.preferences({ expectedVersion: current.preferences.version, patch: {
@@ -89,7 +89,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       } }); await refresh();
     }));
   const attention = el('section', 'vela-core-attention'); attention.setAttribute('aria-label', 'Unreviewed application events');
-  shell.append(header, provider, status, conversation, searchForm, searchResults, selection, form, native, plans, contextDetails, settings, attention);
+  const adaptation = el('details', 'vela-core-adaptation'); adaptation.append(el('summary', undefined, 'Adaptive preferences · inspect, override, reject, or reset'));
+  const adaptationBody = el('div'); adaptation.append(adaptationBody);
+  shell.append(header, provider, status, conversation, searchForm, searchResults, selection, form, native, plans, contextDetails, settings, adaptation, attention);
   root.append(shell);
   function renderSelection() {
     selection.textContent = selected.size ? selected.size + ' resource(s) selected for explicit content retrieval: ' + [...selected.values()].map(r => r.title).join(', ') : 'No content selected. Search discovers metadata locally.';
@@ -128,6 +130,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     }
     mode.value = state.preferences.mode; monitor.checked = state.preferences.monitoringEnabled; delegation.checked = state.preferences.delegationEnabled;
     eventTypes.value = state.preferences.allowedEventTypes.join(', '); severity.value = state.preferences.minimumSeverity; budget.value = String(state.preferences.maxInterruptionsPerHour);
+    renderAdaptation(state);
     attention.replaceChildren(el('h3', undefined, 'Unreviewed application events'));
     const pending = state.attention.filter(item => !item.reviewedAt && !item.dismissedAt);
     if (!pending.length) attention.append(el('p', undefined, 'No unreviewed events in recorded coverage.'));
@@ -138,6 +141,62 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       row.append(button('Mark reviewed', async () => { await client.reviewAttention([item.id]); await refresh(); })); attention.append(row);
     }
     if (!busy) status.textContent = 'Ready. Plans are proposals until host receipts confirm application.';
+  }
+  function renderAdaptation(state: VelaState) {
+    adaptationBody.replaceChildren();
+    const data = state.adaptation;
+    if (!data) { adaptationBody.append(el('p', undefined, 'Adaptive preference storage is not available in this host version.')); return; }
+    adaptationBody.append(el('p', undefined, 'Learning is ' + (data.policy.enabled ? 'enabled for the categories below' : 'disabled') + '. Inferences remain distinct from your explicit choices. Only recorded user application actions can be evidence. No sensors, provider guesses, or privilege settings are learned.'));
+    const enabled = el('input'); enabled.type = 'checkbox'; enabled.checked = data.policy.enabled;
+    adaptationBody.append(label('Enable preference inference', enabled));
+    const categories = {} as Record<'presentation' | 'organization', { enabled: HTMLInputElement; level: HTMLSelectElement }>;
+    for (const category of ['presentation', 'organization'] as const) {
+      const allow = el('input'); allow.type = 'checkbox'; allow.checked = data.policy.categories[category].enabled;
+      const level = el('select'); for (const value of ['manual', 'suggestive', 'assisted', 'adaptive']) { const option = el('option', undefined, value); option.value = value; level.append(option); } level.value = data.policy.categories[category].level;
+      categories[category] = { enabled: allow, level };
+      adaptationBody.append(label('Learn ' + category + ' preferences', allow), label(category + ' level', level));
+    }
+    adaptationBody.append(el('p', undefined, 'Manual records explicit choices only. Suggestive prepares hypotheses. Assisted applies only after your acceptance. Adaptive may apply supported low-risk changes after three distinct observed actions and host authorization; explicit choices always take precedence.'));
+    if (client.adaptationPolicy) adaptationBody.append(button('Save learning policy', async () => {
+      await client.adaptationPolicy!({ expectedVersion: data.policy.version, enabled: enabled.checked, categories: {
+        presentation: { enabled: categories.presentation.enabled.checked, level: categories.presentation.level.value as typeof data.policy.categories.presentation.level },
+        organization: { enabled: categories.organization.enabled.checked, level: categories.organization.level.value as typeof data.policy.categories.organization.level },
+      } }); await refresh();
+    }));
+    adaptationBody.append(el('p', undefined, data.applicationAvailable ? 'Canonical preference application is available.' : 'This host can store and review preferences; applying them to the application is unavailable.'));
+    const explicitSection = el('details'); explicitSection.append(el('summary', undefined, 'Set an explicit override'));
+    const key = el('select'); for (const value of ['presentation.density', 'organization.defaultPreset']) { const option = el('option', undefined, value); option.value = value; key.append(option); }
+    const value = el('select');
+    const values = () => { value.replaceChildren(); for (const v of key.value === 'presentation.density' ? ['comfortable', 'compact'] : ['balanced', 'focus', 'development', 'research']) { const option = el('option', undefined, v); option.value = v; value.append(option); } }; key.addEventListener('change', values); values();
+    const scopeSelect = el('select'); const globalOption = el('option', undefined, 'Global'); globalOption.value = ''; scopeSelect.append(globalOption);
+    const workspaceRefs = new Map<string, string>();
+    for (const plan of state.plans) for (const target of plan.targets) if (target.kind === 'workspace') workspaceRefs.set(target.id, target.title);
+    for (const preference of [...data.hypotheses, ...data.explicit]) if (preference.scope.kind === 'workspace') workspaceRefs.set(preference.scope.id!, workspaceRefs.get(preference.scope.id!) ?? preference.scope.id!);
+    for (const [id, title] of workspaceRefs) { const option = el('option', undefined, title); option.value = id; scopeSelect.append(option); }
+    const apply = el('input'); apply.type = 'checkbox'; apply.disabled = !data.applicationAvailable;
+    explicitSection.append(label('Preference', key), label('Value', value), label('Scope', scopeSelect), label('Apply through the canonical application command port', apply));
+    if (client.explicitPreference) explicitSection.append(button('Save explicit choice', async () => {
+      const scope = scopeSelect.value ? { kind: 'workspace' as const, id: scopeSelect.value } : { kind: 'global' as const, id: null };
+      const previous = data.explicit.find(p => p.key === key.value && p.scope.kind === scope.kind && p.scope.id === scope.id);
+      await client.explicitPreference!({ key: key.value as 'presentation.density' | 'organization.defaultPreset', value: value.value as 'comfortable' | 'compact' | 'balanced' | 'focus' | 'development' | 'research', scope, expectedVersion: previous?.version ?? 0, apply: apply.checked }); await refresh();
+    }));
+    adaptationBody.append(explicitSection);
+    for (const preference of data.explicit.filter(p => p.active)) adaptationBody.append(el('p', undefined, 'Explicit · ' + preference.key + ' = ' + preference.value + ' · ' + (preference.scope.id ?? 'global') + ' · v' + preference.version));
+    for (const hypothesis of data.hypotheses.slice(-12).reverse()) {
+      const card = el('article', 'vela-core-plan'); card.append(el('h3', undefined, 'Inferred · ' + hypothesis.key + ' = ' + hypothesis.value + ' · ' + hypothesis.state),
+        el('p', undefined, hypothesis.explanation), el('p', undefined, 'Scope: ' + (hypothesis.scope.id ?? 'global') + ' · confidence heuristic: ' + hypothesis.confidence));
+      const evidence = el('details'); evidence.append(el('summary', undefined, 'Inspect source app-event evidence'), el('pre', undefined, JSON.stringify(hypothesis.evidence, null, 2))); card.append(evidence);
+      if (hypothesis.errorCode) card.append(el('p', undefined, 'Application status: ' + hypothesis.errorCode));
+      if (hypothesis.state === 'suggested' && client.reviewPreference) {
+        card.append(button('Accept as explicit choice', async () => { await client.reviewPreference!({ hypothesisId: hypothesis.id, decision: 'accept', apply: false }); await refresh(); }));
+        if (data.applicationAvailable) card.append(button('Accept and apply', async () => { await client.reviewPreference!({ hypothesisId: hypothesis.id, decision: 'accept', apply: true }); await refresh(); }));
+        card.append(button('Reject', async () => { await client.reviewPreference!({ hypothesisId: hypothesis.id, decision: 'reject', apply: false }); await refresh(); }), button('Suppress this suggestion', async () => { await client.reviewPreference!({ hypothesisId: hypothesis.id, decision: 'suppress', apply: false }); await refresh(); }));
+      }
+      if (client.resetPreferences) card.append(button('Reset preferences in this scope', async () => { await client.resetPreferences!({ scope: hypothesis.scope, clearSuppressions: true }); await refresh(); }));
+      adaptationBody.append(card);
+    }
+    for (const receipt of data.receipts.slice(-6)) adaptationBody.append(el('p', undefined, 'Preference command · ' + receipt.key + ' · ' + receipt.state + ' · ' + (receipt.hostReceiptId ?? 'pending')));
+    adaptationBody.append(el('p', undefined, 'Reset disables saved overrides and supersedes hypotheses in the chosen scope; it preserves evidence and does not claim to undo a prior application effect. Use an explicit opposite setting to change the application again.'));
   }
   async function refresh() { const state = await client.state(); render(state); return state; }
   void run(refresh);

@@ -89,10 +89,10 @@ export interface ActionReceipt {
   taskVerified: false;
 }
 export interface AuthorizationRequest {
-  phase: 'prepare' | 'provider-context' | 'review' | 'apply' | 'delegate';
+  phase: 'prepare' | 'provider-context' | 'review' | 'apply' | 'delegate' | 'adaptation';
   requestId: string; planId?: string; fingerprint?: string;
   intent: string; scope: VelaScope; targets: ResourceRef[];
-  actions: (VelaNativeAction | DelegateTaskAction)[]; providerId?: string;
+  actions: (VelaNativeAction | DelegateTaskAction | VelaPreferenceAction)[]; providerId?: string;
   /** Only populated from already-recorded host-issued review authorization. */
   priorAuthorizationRef?: string;
 }
@@ -125,6 +125,12 @@ export interface VelaHostPort {
     initiatingIntent: string; sourceConversationId: string;
     context: ContextManifest; authorizationRef: string;
   }): Promise<HostActionResult>;
+  /** Optional canonical low-risk preference command; unsupported adapters must leave suggestions unapplied. */
+  applyPreference?(input: {
+    action: VelaPreferenceAction; commandId: string; authorizationRef: string;
+    expectedVersions: ResourceRef[]; evidenceEventIds: string[];
+    origin: 'explicit-user' | 'authorized-adaptation';
+  }): HostActionResult;
 }
 export interface AttentionPreferences {
   version: number; mode: AttentionMode; monitoringEnabled: boolean; delegationEnabled: boolean;
@@ -137,6 +143,8 @@ export interface AppAttentionEvent {
   subject: Pick<ResourceRef, 'id' | 'kind'> | null;
   severity: 'info' | 'warning' | 'critical'; classification: EvidenceClass;
   summary: string; correlationId: string; coverageGap?: string;
+  actor?: 'user' | 'vela' | 'provider';
+  preferenceSignal?: { key: PreferenceKey; value: PreferenceValue };
 }
 export interface AttentionItem extends AppAttentionEvent {
   receivedAt: string; disposition: 'silent' | 'digest' | 'interrupt'; reason: string;
@@ -149,6 +157,44 @@ export interface VelaState {
   capabilities: CapabilityDescriptor[]; requests: VelaRequest[]; plans: VelaPlan[];
   receipts: ActionReceipt[]; preferences: AttentionPreferences; attention: AttentionItem[];
   lastPresenceAt: string | null; coverage: 'authorized-app-events-only';
+  adaptation?: AdaptationState;
+}
+export type AdaptationLevel = 'manual' | 'suggestive' | 'assisted' | 'adaptive';
+export type PreferenceCategory = 'presentation' | 'organization';
+export type PreferenceKey = 'presentation.density' | 'organization.defaultPreset';
+export type PreferenceValue = 'comfortable' | 'compact' | 'balanced' | 'focus' | 'development' | 'research';
+export interface PreferenceScope { kind: 'global' | 'workspace'; id: string | null }
+export interface VelaPreferenceAction { type: 'applyPreference'; key: PreferenceKey; value: PreferenceValue; scope: PreferenceScope }
+export interface AdaptationPolicy {
+  version: number; enabled: boolean; updatedAt: string;
+  categories: Record<PreferenceCategory, { enabled: boolean; level: AdaptationLevel }>;
+}
+export interface PreferenceEvidence {
+  eventId: string; source: string; occurredAt: string; observedValue: PreferenceValue;
+  subject: AppAttentionEvent['subject']; classification: 'observed'; actor: 'user';
+}
+export interface PreferenceHypothesis {
+  id: string; key: PreferenceKey; value: PreferenceValue; scope: PreferenceScope;
+  source: 'inferred'; state: 'suggested' | 'accepted' | 'rejected' | 'suppressed' | 'superseded' | 'applied' | 'failed' | 'unknown';
+  evidence: PreferenceEvidence[]; confidence: 'low' | 'medium' | 'high';
+  explanation: string; firstObservedAt: string; lastObservedAt: string;
+  reviewedAt?: string; errorCode?: string;
+}
+export interface ExplicitPreference {
+  id: string; key: PreferenceKey; value: PreferenceValue; scope: PreferenceScope;
+  version: number; active: boolean; source: 'explicit'; updatedAt: string;
+}
+export interface AdaptationReceipt {
+  id: string; hypothesisId?: string; commandId: string; key: PreferenceKey; value: PreferenceValue;
+  scope: PreferenceScope; origin: 'explicit-user' | 'authorized-adaptation';
+  state: 'started' | 'applied' | 'failed' | 'cancelled' | 'unknown';
+  startedAt: string; endedAt?: string; hostReceiptId?: string; errorCode?: string;
+}
+export interface AdaptationState {
+  policy: AdaptationPolicy; hypotheses: PreferenceHypothesis[]; explicit: ExplicitPreference[];
+  suppressions: { key: PreferenceKey; scope: PreferenceScope; value: PreferenceValue; createdAt: string }[];
+  receipts: AdaptationReceipt[];
+  applicationAvailable: boolean;
 }
 export interface VelaClient {
   state(): Promise<VelaState>;
@@ -161,4 +207,8 @@ export interface VelaClient {
   cancel(requestId: string): Promise<VelaRequest>;
   preferences(input: { expectedVersion: number; patch: Partial<Omit<AttentionPreferences, 'version' | 'source' | 'updatedAt' | 'learning'>> }): Promise<AttentionPreferences>;
   reviewAttention(ids: string[]): Promise<void>;
+  adaptationPolicy?(input: { expectedVersion: number; enabled: boolean; categories: AdaptationPolicy['categories'] }): Promise<AdaptationPolicy>;
+  explicitPreference?(input: { key: PreferenceKey; value: PreferenceValue; scope: PreferenceScope; expectedVersion: number; apply: boolean }): Promise<ExplicitPreference>;
+  reviewPreference?(input: { hypothesisId: string; decision: 'accept' | 'reject' | 'suppress'; apply: boolean }): Promise<PreferenceHypothesis>;
+  resetPreferences?(input: { scope: PreferenceScope; clearSuppressions: boolean }): Promise<void>;
 }
