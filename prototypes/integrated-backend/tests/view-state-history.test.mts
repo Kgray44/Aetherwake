@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { BackendCore } from "../src/core.mts";
 
-test("canonical view persistence preserves optional Forward entries and legacy schema-1 states across restart", async () => {
+test("canonical view persistence preserves optional Forward/named views and legacy schema-1 states across restart", async () => {
   const root = mkdtempSync(join(tmpdir(), "aerynth-view-history-"));
   const options = {
     path: join(root, "aerynth.sqlite"),
@@ -52,7 +52,8 @@ test("canonical view persistence preserves optional Forward entries and legacy s
         },
       },
     };
-    const state = { ...legacy, future: Array.from({ length: 32 }, () => entry) };
+    const saved = { id: "synthetic-named-view", name: "Synthetic orbit view", ...entry };
+    const state = { ...legacy, future: Array.from({ length: 32 }, () => entry), savedViews: [saved] };
     await core.command("viewState", { state });
     assert.deepEqual(await core.command("viewState", {}), state);
     await core.command("close", {});
@@ -62,6 +63,13 @@ test("canonical view persistence preserves optional Forward entries and legacy s
     for (const invalid of [null, {}, "future", [...state.future, entry]]) {
       await assert.rejects(
         core.command("viewState", { state: { ...state, future: invalid } }),
+        /invalid_view_state/,
+      );
+      assert.deepEqual(await core.command("viewState", {}), state);
+    }
+    for (const invalid of [null, {}, "savedViews", Array.from({ length: 33 }, () => saved)]) {
+      await assert.rejects(
+        core.command("viewState", { state: { ...state, savedViews: invalid } }),
         /invalid_view_state/,
       );
       assert.deepEqual(await core.command("viewState", {}), state);

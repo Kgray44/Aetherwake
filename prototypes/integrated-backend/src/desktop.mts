@@ -208,15 +208,19 @@ export class DesktopState {
     );
     check(
       Object.keys(a.state as object).every((k) =>
-        ["schema", "anchors", "bookmarks", "location", "history", "future"].includes(k),
+        ["schema", "anchors", "bookmarks", "location", "history", "future", "savedViews"].includes(k),
       ),
       "invalid_view_state",
     );
     // Optional schema-1 Forward history uses the same view-only entries as Back.
     // The navigation controller owns entry validation and permission pruning.
-    const future = (a.state as { future?: unknown }).future;
+    const { future, savedViews } = a.state as { future?: unknown; savedViews?: unknown };
     check(
       future === undefined || (Array.isArray(future) && future.length <= 32),
+      "invalid_view_state",
+    );
+    check(
+      savedViews === undefined || (Array.isArray(savedViews) && savedViews.length <= 32),
       "invalid_view_state",
     );
     this.kernel.withTransaction(() =>
