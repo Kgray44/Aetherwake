@@ -9,6 +9,7 @@ const publicNames = new Set([
   "search",
   "native",
   "request",
+  "local",
   "review",
   "apply",
   "cancel",
@@ -112,6 +113,16 @@ exports.velaCommand = async ({
       resourceIds: value.resourceIds,
       authorizeProvider: value.authorizeProvider,
     };
+    const local = await call("vela", {
+      name: "local",
+      input: {
+        intent: request.intent,
+        commandId: value.commandId ?? require("node:crypto").randomUUID(),
+      },
+    });
+    if (local?.matched === true) return local.request;
+    if (!local || local.matched !== false)
+      throw Error("invalid_local_vela_response");
     if (!request.authorizeProvider)
       return call("vela", { name: "request", input: request });
     if (!isReviewOwnerAlive(win))
