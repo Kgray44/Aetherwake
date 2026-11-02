@@ -1,4 +1,5 @@
-import type { DispatchReview, ModelCatalogDiagnostic, NativeCredential, ProviderId, ReportedUsage, TransportOptions, TurnInput, TurnResult } from './contracts.mts';
+import { MIMEType } from 'node:util';
+import type { DispatchReview, ModelCatalogDiagnostic, NativeCredential, ProviderId, ReportedUsage, TransportOptions, TurnHttpDiagnostic, TurnInput, TurnResult } from './contracts.mts';
 import { abortable, boundedJSON, digest, exact, knownRemoteCode, ProviderError, record, requireValue, text } from './common.mts';
 export const RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses';
 export const MODELS_ENDPOINT = 'https://api.openai.com/v1/models';
@@ -47,6 +48,28 @@ function usage(value: unknown): ReportedUsage | undefined {
     const cached = record(value.input_tokens_details) ? value.input_tokens_details.cached_tokens : undefined;
     return { source: 'provider-reported', inputTokens: Number(value.input_tokens), outputTokens: Number(value.output_tokens), totalTokens: Number(value.total_tokens), ...(Number.isSafeInteger(cached) && Number(cached) >= 0 && Number(cached) <= Number(value.input_tokens) ? { cachedInputTokens: Number(cached) } : {}) };
 }
+function turnContentType(response: Response): TurnHttpDiagnostic['contentType'] {
+    let value: string | null;
+    try { value = response.headers.get('content-type'); } catch { return 'missing'; }
+    if (!value) return 'missing';
+    let essence: string;
+    try { essence = new MIMEType(value).essence; } catch { return 'other'; }
+    // MIME type/subtype are case-insensitive; parameters do not change the
+    // essence. The parser rejects a comma-separated list, not a single SSE type.
+    if (essence === 'text/event-stream') return 'event-stream';
+    if (essence === 'text/html') return 'html';
+    if (essence === 'application/json' || essence.split('/')[1]?.endsWith('+json')) return 'json';
+    return essence.startsWith('text/') ? 'text' : 'other';
+}
+function turnHttpDiagnostic(response: Response, credential: NativeCredential): Readonly<TurnHttpDiagnostic> {
+    return Object.freeze(Object.assign(Object.create(null), { contract: 'aerynth.turn-http-diagnostic@1',
+        httpStatus: Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : null,
+        contentType: turnContentType(response), hasBody: response.body !== null, serverRequestId: responseRequestId(response, credential), bodyShape: 'unavailable', remoteCode: null }));
+}
+function turnErrorFacts(data: unknown): Pick<TurnHttpDiagnostic, 'bodyShape' | 'remoteCode'> {
+    const remote = knownRemoteCode(ownData(ownData(data, 'error'), 'code') ?? ownData(data, 'code') ?? ownData(ownData(data, 'detail'), 'code'));
+    return { bodyShape: record(data) ? Object.hasOwn(data, 'error') ? 'error' : Object.hasOwn(data, 'detail') ? 'detail' : 'other' : 'other', remoteCode: remote === 'provider_failed' ? null : remote };
+}
 /** No persistence, auto retries, tool execution, agent instructions or credentials from UI. */
 export class ResponsesTransport {
     private readonly options: TransportOptions;
@@ -85,19 +108,24 @@ export class ResponsesTransport {
             }
             result.dispatched = true;
             const response = await abortable((this.options.fetch ?? fetch)(RESPONSES_ENDPOINT, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json', Accept: 'text/event-stream' }, body, signal: controller.signal, redirect: 'error', credentials: 'omit', cache: 'no-store' }), controller.signal);
+            result.httpDiagnostic = turnHttpDiagnostic(response, credential);
             if (!response.ok) {
                 let code = 'provider_failed';
                 try {
                     const data = await boundedJSON(response, 262144, controller.signal);
-                    if (record(data) && record(data.error))
-                        code = knownRemoteCode(data.error.code);
+                    result.httpDiagnostic = Object.freeze(Object.assign(Object.create(null), result.httpDiagnostic, turnErrorFacts(data)));
+                    code = knownRemoteCode(ownData(ownData(data, 'error'), 'code'));
                 }
-                catch { /* never reflect error bodies */ }
+                catch (error) {
+                    if (error instanceof ProviderError && error.code === 'invalid_json_response')
+                        result.httpDiagnostic = Object.freeze(Object.assign(Object.create(null), result.httpDiagnostic, { bodyShape: 'invalid-json', remoteCode: null }));
+                    // Never reflect error bodies or replace the received HTTP facts.
+                }
                 result.outcome = controller.signal.aborted || response.status >= 500 || response.status === 408 ? 'unknown' : 'failed';
                 result.errorCode = controller.signal.aborted ? 'provider_timeout' : code;
                 return result;
             }
-            requireValue(response.headers.get('content-type')?.split(';')[0].trim() === 'text/event-stream' && response.body, 'invalid_stream_response');
+            requireValue(result.httpDiagnostic.contentType === 'event-stream' && response.body, 'invalid_stream_response');
             reader = response.body.getReader();
             const decoder = new TextDecoder('utf-8', { fatal: true });
             let buffer = '', streamBytes = 0, outputBytes = 0;
@@ -216,7 +244,7 @@ function catalogFacts(data: unknown, providerId: ProviderId): Pick<ModelCatalogD
     return { bodyShape: shape, remoteCode: remote === 'provider_failed' ? null : remote, returnedCount: bounded ? rows.length : null,
         listedCount: bounded ? providerId === 'chatgpt-plan-responses' ? rows.reduce((count, row) => count + Number(ownData(row, 'visibility') === 'list'), 0) : rows.length : null };
 }
-function catalogRequestId(response: Response, credential: NativeCredential): string | null {
+function responseRequestId(response: Response, credential: NativeCredential): string | null {
     try {
         const value = response.headers.get('x-request-id');
         if (!value || !/^req_[A-Za-z0-9_-]{1,128}$/.test(value)) return null;
@@ -251,7 +279,7 @@ export async function fetchModelCatalog(options: {
         const credential = await options.resolveCredential(options.configurationId, options.providerId), headers = credentialHeaders(credential, options.providerId, now);
         const signal = AbortSignal.timeout(15000), response = await abortable((options.fetch ?? fetch)(MODELS_ENDPOINT, { headers, redirect: 'error', credentials: 'omit', cache: 'no-store', signal }), signal);
         httpStatus = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : null;
-        serverRequestId = catalogRequestId(response, credential);
+        serverRequestId = responseRequestId(response, credential);
         if (!response.ok) {
             outcome = 'http-error';
             try { facts = catalogFacts(await boundedJSON(response, 262144, signal, bytes => { responseBytes = bytes; }), options.providerId); }

@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ResponsesTransport, prepareResponsesTurn, fetchModelCatalog, RESPONSES_ENDPOINT, MODELS_ENDPOINT } from '../responses.mts';
-import type { ModelCatalogDiagnostic, NativeCredential, NativeDispatchPort, TurnInput, TurnEvent } from '../contracts.mts';
+import type { ModelCatalogDiagnostic, NativeCredential, NativeDispatchPort, TurnHttpDiagnostic, TurnInput, TurnEvent } from '../contracts.mts';
 import { digest } from '../common.mts';
 const boundary = 'a'.repeat(64);
 const input = (): TurnInput => ({ executionId: 'execution-1', requestId: 'request-1', configurationId: 'ordinary-profile', providerId: 'chatgpt-plan-responses', assistant: 'ordinary', model: 'fixture-model', instructions: 'Ordinary assistant instruction, no coding agent harness.', messages: [{ role: 'user', content: 'Hello\n世界' }], contextDigest: 'b'.repeat(64) });
@@ -134,6 +134,85 @@ test('offline: HTTP error bodies are sanitized, no automatic retry or billing fa
         assert.equal(calls, 1);
         assert.ok(!JSON.stringify(result).includes('secret'));
     }
+});
+function assertTurnDiagnostic(value: TurnHttpDiagnostic | undefined): asserts value is TurnHttpDiagnostic {
+    assert(value); assert.equal(Object.getPrototypeOf(value), null); assert.equal(Object.isFrozen(value), true);
+    assert.deepEqual(Object.keys(value), ['contract', 'httpStatus', 'contentType', 'hasBody', 'serverRequestId', 'bodyShape', 'remoteCode']);
+    assert(Object.values(Object.getOwnPropertyDescriptors(value)).every(d => 'value' in d && d.get === undefined && d.set === undefined));
+    assert(Object.values(value).every(v => v === null || ['string', 'boolean', 'number'].includes(typeof v)));
+}
+test('offline: HTTP200 non-SSE diagnostics are bodyless unknown facts, never JSON success or a second request', async () => {
+    for (const [type, category] of [['application/json', 'json'], ['application/problem+json', 'json'], ['text/plain', 'text'], ['text/html; charset=utf-8', 'html'], ['application/octet-stream', 'other'], ['', 'missing']] as const) {
+        const response = new Response('{"PRIVATE_message":"synthetic-plan-token https://private.invalid/account","output_text":"Do not accept"}');
+        if (type) response.headers.set('content-type', type); else response.headers.delete('content-type'); response.headers.set('x-request-id', 'req_http200');
+        let calls = 0;
+        const f = fixture(ports(), async (url, init) => { calls++; assert.equal(url, RESPONSES_ENDPOINT); assert.equal(init?.method, 'POST'); return response; });
+        const result = await f.transport.turn(input()), diagnostic = result.httpDiagnostic; assertTurnDiagnostic(diagnostic);
+        assert.deepEqual({ ...diagnostic }, { contract: 'aerynth.turn-http-diagnostic@1', httpStatus: 200, contentType: category, hasBody: true, serverRequestId: 'req_http200', bodyShape: 'unavailable', remoteCode: null });
+        assert.equal(result.outcome, 'unknown'); assert.equal(result.errorCode, 'invalid_stream_response'); assert.equal(result.dispatched, true); assert.equal(result.responseId, undefined); assert.equal(result.partialText, ''); assert.deepEqual(f.events, []);
+        assert.equal(calls, 1); assert.equal(response.bodyUsed, false, 'A non-stream success body is never parsed or accepted');
+        for (const secret of ['PRIVATE', 'synthetic-plan-token', 'https://', input().model, input().configurationId, input().executionId, input().requestId, boundary]) assert.equal(JSON.stringify(diagnostic).includes(secret), false);
+    }
+    const response = new Response(null, { headers: { 'Content-Type': 'text/event-stream' } }), result = await fixture(ports(), async () => response).transport.turn(input());
+    assert.equal(result.outcome, 'unknown'); assert.equal(result.errorCode, 'invalid_stream_response'); assert.equal(result.httpDiagnostic?.hasBody, false); assert.equal(result.httpDiagnostic?.contentType, 'event-stream');
+});
+test('offline: SSE essence is case-insensitive and parameter-aware; MIME lookalikes or lists never qualify', async () => {
+    for (const type of ['Text/Event-Stream; Charset=UTF-8', 'TEXT/EVENT-STREAM', 'text/event-stream; label="application/json"', ' text/event-stream ']) {
+        const response = stream([created, delta, completed]); response.headers.set('content-type', type); response.headers.set('x-request-id', 'req_stream123');
+        const result = await fixture(ports(), async () => response).transport.turn(input()); assert.equal(result.outcome, 'completed'); assertTurnDiagnostic(result.httpDiagnostic);
+        assert.equal(result.httpDiagnostic.contentType, 'event-stream'); assert.equal(result.httpDiagnostic.httpStatus, 200); assert.equal(result.httpDiagnostic.serverRequestId, 'req_stream123'); assert.equal(result.httpDiagnostic.bodyShape, 'unavailable');
+    }
+    for (const type of ['text/event-stream, application/json', 'text/event-streamx', 'application/event-stream', 'invalid', 'text/event-stream/extra']) {
+        const response = stream([completed]); response.headers.set('content-type', type);
+        const result = await fixture(ports(), async () => response).transport.turn(input()); assert.equal(result.outcome, 'unknown'); assert.equal(result.errorCode, 'invalid_stream_response'); assert.notEqual(result.httpDiagnostic?.contentType, 'event-stream');
+    }
+});
+test('offline: HTTP failures retain fixed error/detail shape and allowlisted code without raw account or exception text', async () => {
+    for (const [body, shape, remoteCode, errorCode] of [
+        [{ error: { code: 'rate_limit_exceeded', message: 'PRIVATE account/client https://private.invalid' } }, 'error', 'rate_limit_exceeded', 'rate_limit_exceeded'],
+        [{ detail: { code: 'chatpass_v2_scope_not_authorized', message: 'PRIVATE context' } }, 'detail', 'chatpass_v2_scope_not_authorized', 'provider_failed'],
+        [{ detail: 'PRIVATE unauthorized body', account_id: 'PRIVATE' }, 'detail', null, 'provider_failed'],
+        [{ code: 'subscription_sharing_route_not_supported', message: 'PRIVATE route' }, 'other', 'subscription_sharing_route_not_supported', 'provider_failed'],
+        [{ error: { code: 'PRIVATE arbitrary code', message: 'PRIVATE' } }, 'error', null, 'provider_failed'],
+        [['PRIVATE'], 'other', null, 'provider_failed'],
+    ] as const) {
+        let calls = 0;
+        const result = await fixture(ports(), async () => { calls++; return Response.json(body, { status: 403, headers: { 'x-request-id': 'req_error123' } }); }).transport.turn(input());
+        assertTurnDiagnostic(result.httpDiagnostic); assert.equal(result.outcome, 'failed'); assert.equal(result.errorCode, errorCode); assert.equal(result.httpDiagnostic.httpStatus, 403); assert.equal(result.httpDiagnostic.bodyShape, shape); assert.equal(result.httpDiagnostic.remoteCode, remoteCode); assert.equal(result.httpDiagnostic.contentType, 'json'); assert.equal(result.httpDiagnostic.serverRequestId, 'req_error123'); assert.equal(calls, 1);
+        assert.equal(JSON.stringify(result).includes('PRIVATE'), false);
+    }
+    const invalid = await fixture(ports(), async () => new Response('PRIVATE invalid JSON', { status: 502, headers: { 'content-type': 'text/html' } })).transport.turn(input());
+    assert.equal(invalid.outcome, 'unknown'); assert.equal(invalid.httpDiagnostic?.bodyShape, 'invalid-json'); assert.equal(invalid.httpDiagnostic?.contentType, 'html'); assert.equal(JSON.stringify(invalid).includes('PRIVATE'), false);
+    const large = await fixture(ports(), async () => new Response('PRIVATE'.repeat(40000), { status: 503, headers: { 'content-type': 'application/json' } })).transport.turn(input());
+    assert.equal(large.outcome, 'unknown'); assert.equal(large.httpDiagnostic?.bodyShape, 'unavailable'); assert.equal(large.httpDiagnostic?.remoteCode, null); assert.equal(JSON.stringify(large).includes('PRIVATE'), false);
+});
+test('offline: turn request IDs share the credential echo guard and reject controls, URI or identity payloads', async () => {
+    for (const requestId of ['PRIVATE', 'req_space value', 'req_é', 'https://private.invalid', 'req_synthetic-plan-token', 'req_' + boundary, 'req_' + 'a'.repeat(129)]) {
+        const result = await fixture(ports(), async () => Response.json({}, { headers: { 'x-request-id': requestId } })).transport.turn(input()); assert.equal(result.httpDiagnostic?.serverRequestId, null);
+    }
+    const control = Response.json({}); Object.defineProperty(control, 'headers', { value: { get: (key: string) => key === 'content-type' ? 'application/json' : 'req_a\r\nPRIVATE' } });
+    assert.equal((await fixture(ports(), async () => control).transport.turn(input()).then(r => r.httpDiagnostic))?.serverRequestId, null);
+    const vela: TurnInput = { ...input(), providerId: 'openai-api-vela', assistant: 'vela', configurationId: 'separate-private-api' };
+    for (const requestId of ['req_private-api-key', 'req_org-private', 'req_project-private']) {
+        const result = await fixture(ports({ resolveCredential: async () => ({ providerId: 'openai-api-vela', kind: 'openai-api-key', bearer: 'private-api-key', boundaryDigest: boundary, organization: 'org-private', project: 'project-private' }) }), async () => Response.json({}, { headers: { 'x-request-id': requestId } })).transport.turn(vela);
+        assert.equal(result.httpDiagnostic?.serverRequestId, null); assert.equal(result.outcome, 'unknown');
+    }
+});
+test('offline: no response means no HTTP observation; event observer failures cannot erase received HTTP facts', async () => {
+    const denied = await fixture(ports({ authorize: async () => { throw Error('PRIVATE denial'); } })).transport.turn(input()); assert.equal(denied.httpDiagnostic, undefined); assert.equal(denied.dispatched, false);
+    const network = await fixture(ports(), async () => { throw Error('PRIVATE network'); }).transport.turn(input()); assert.equal(network.httpDiagnostic, undefined); assert.equal(network.outcome, 'unknown');
+    const controller = new AbortController(); controller.abort(); const cancelled = await fixture().transport.turn(input(), controller.signal); assert.equal(cancelled.httpDiagnostic, undefined); assert.equal(cancelled.outcome, 'cancelled-before-dispatch');
+    const observer = new ResponsesTransport({ native: ports(), fetch: async () => stream([created, delta, completed]), onEvent: async () => { throw Error('PRIVATE observer'); } });
+    const failed = await observer.turn(input()); assert.equal(failed.outcome, 'unknown'); assert.equal(failed.errorCode, 'provider_transport_unavailable'); assertTurnDiagnostic(failed.httpDiagnostic); assert.equal(failed.httpDiagnostic.contentType, 'event-stream'); assert.equal(JSON.stringify(failed.httpDiagnostic).includes('PRIVATE'), false);
+});
+test('offline: turn diagnostic serialization never invokes inherited body accessors or serializers', async () => {
+    const response = Response.json({ error: { code: 'rate_limit_exceeded', message: 'PRIVATE' } }, { status: 429 });
+    const keys = ['detail', 'toJSON'] as const, prior = keys.map(key => Object.getOwnPropertyDescriptor(Object.prototype, key)); let getters = 0;
+    try {
+        const transport = fixture(ports(), async () => { for (const key of keys) Object.defineProperty(Object.prototype, key, { configurable: true, get() { getters++; throw Error('PRIVATE inherited accessor'); } }); return response; }).transport;
+        const result = await transport.turn(input()); assert.equal(result.outcome, 'failed'); assert.equal(result.errorCode, 'rate_limit_exceeded'); assertTurnDiagnostic(result.httpDiagnostic); assert.equal(JSON.stringify(result.httpDiagnostic).includes('PRIVATE'), false); assert.equal(getters, 0);
+        assert.throws(() => { (result.httpDiagnostic as { httpStatus: number }).httpStatus = 200; }, TypeError);
+    } finally { keys.forEach((key, index) => { if (prior[index]) Object.defineProperty(Object.prototype, key, prior[index]!); else delete (Object.prototype as Record<string, unknown>)[key]; }); }
 });
 test('offline: catalog uses selected route token, preserves authorized order and labels entitlement unproved', async () => {
     let count = 0;

@@ -76,6 +76,18 @@ export interface ReportedUsage {
     cachedInputTokens?: number;
 }
 export type TurnOutcome = 'completed' | 'incomplete' | 'failed' | 'unknown' | 'cancelled-before-dispatch';
+/** Bodyless native HTTP observation. No raw headers/body, message, URL,
+ * credential, account, model, configuration or execution identity. */
+export interface TurnHttpDiagnostic {
+    readonly contract: 'aerynth.turn-http-diagnostic@1';
+    readonly httpStatus: number | null;
+    readonly contentType: 'event-stream' | 'json' | 'text' | 'html' | 'other' | 'missing';
+    readonly hasBody: boolean;
+    readonly serverRequestId: string | null;
+    readonly bodyShape: 'error' | 'detail' | 'other' | 'invalid-json' | 'unavailable';
+    /** Existing fixed knownRemoteCode allowlist only; otherwise null. */
+    readonly remoteCode: string | null;
+}
 export type TurnEvent = {
     type: 'provider/text-delta';
     providerId: ProviderId;
@@ -109,6 +121,8 @@ export interface TurnResult {
     reportedModel?: string;
     usage?: ReportedUsage;
     errorCode?: string;
+    /** Absent until an HTTP response was actually received; not outcome proof. */
+    httpDiagnostic?: Readonly<TurnHttpDiagnostic>;
     cancellation: {
         requested: boolean;
         serverConfirmed: false;
