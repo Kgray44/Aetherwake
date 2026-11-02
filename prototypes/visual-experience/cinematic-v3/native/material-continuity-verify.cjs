@@ -34,6 +34,7 @@ for (const folder of [
   "prototypes/visual-experience/cinematic-v3/native",
   "prototypes/workspace-engine",
   "prototypes/workspace-kernel",
+  "prototypes/constellation",
   "prototypes/integrated-backend/src",
   "prototypes/application-contract",
 ])
@@ -232,6 +233,16 @@ async function run(win) {
     "three unselected resources retain optical coating",
     optical(await sample("01-unselected-three")),
   );
+  const firstMaterials = (await snapshot()).gpu.instruments.surfaces.map(
+    (s) => s.materialIdentity,
+  );
+  const lensCorner = await js(
+    `(()=>{const e=document.querySelector('[data-block="${ids[1]}"]'),r=e.getBoundingClientRect();return document.elementFromPoint(r.x+2,r.y+2)?.closest('.folio')?.dataset.block??null})()`,
+  );
+  check(
+    "empty lens corners do not intercept native hit testing",
+    lensCorner !== ids[1],
+  );
   for (let i = 0; i < ids.length; i++) {
     await js(`window.__aerynth.select(${JSON.stringify(ids[i])})`);
     await pause(400);
@@ -241,6 +252,17 @@ async function run(win) {
     );
     check("selection preserves glass " + i, optical(d) && d.identityRetained);
   }
+  for (let i = 0; i < 24; i++)
+    await js(`window.__aerynth.select(${JSON.stringify(ids[i % ids.length])})`);
+  check(
+    "repeated selection preserves actual GPU material identities",
+    JSON.stringify(firstMaterials) ===
+      JSON.stringify(
+        (await snapshot()).gpu.instruments.surfaces.map(
+          (s) => s.materialIdentity,
+        ),
+      ),
+  );
   const overlap = async (x, y = 420, w = 440, h = 230) => {
     await reset();
     await preview([
@@ -421,17 +443,26 @@ async function run(win) {
     `window.__materialTrace=[];window.__materialTraceRunning=true;(function sampleFrame(t){if(!window.__materialTraceRunning)return;if(window.__materialTrace.length<3600)window.__materialTrace.push({t,cards:[...document.querySelectorAll('.folio')].map(e=>({id:e.dataset.block,veil:getComputedStyle(e,'::before').backgroundColor,unfold:Number(e.style.getPropertyValue('--unfold')),clipLength:getComputedStyle(e.querySelector('.resource-presentation')).clipPath.length,valid:!e.style.cssText.includes('NaN')&&!e.style.cssText.includes('Infinity')}))});requestAnimationFrame(sampleFrame)})(performance.now())`,
   );
   const pointerDrag = async (selector, dx, dy, duration = 2200) => {
+    const id = /data-block="([^"]+)"/.exec(selector)[1];
+    const before = (await state()).blocks.find((b) => b.id === id);
     const start = await js(
       `(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect();const x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2),hit=document.elementFromPoint(x,y);if(!(e===hit||e.contains(hit)))throw Error('Native input target is occluded');return{x,y}})()`,
     );
-    receipt.pointerInputs.push({
+    const input = {
       selector,
       dx,
       dy,
       durationMs: duration,
       method: "webContents native mouse input",
-    });
+      before,
+    };
+    receipt.pointerInputs.push(input);
     win.webContents.sendInputEvent({ type: "mouseMove", ...start });
+    const hovered = await diagnostic();
+    check(
+      "native hover retains glass " + receipt.pointerInputs.length,
+      optical(hovered),
+    );
     win.webContents.sendInputEvent({
       type: "mouseDown",
       button: "left",
@@ -448,13 +479,19 @@ async function run(win) {
         movementY: dy / 60,
         modifiers: ["leftbuttondown"],
       });
-      if (i === (selector.includes("resize") ? 55 : 45))
-        await sample(
+      if (i === (selector.includes("resize") ? 55 : 45)) {
+        input.during = (await snapshot()).poses[id];
+        const crossing = await sample(
           (selector.includes("resize")
             ? "18-native-resize-crossing-"
             : "17-native-drag-crossing-") + ++pointerIndex,
           0,
         );
+        check(
+          "native crossing retains glass " + receipt.pointerInputs.length,
+          optical(crossing),
+        );
+      }
       await pause(duration / 60);
     }
     win.webContents.sendInputEvent({
@@ -464,6 +501,21 @@ async function run(win) {
       x: Math.round(start.x + dx),
       y: Math.round(start.y + dy),
     });
+    const commitDeadline = Date.now() + 8000;
+    do {
+      input.after = (await state()).blocks.find((b) => b.id === id);
+      if (input.after.version > before.version) break;
+      await pause(80);
+    } while (Date.now() < commitDeadline);
+    check(
+      "native pointer commits changed geometry " + receipt.pointerInputs.length,
+      input.after.version > before.version &&
+        (selector.includes("resize")
+          ? input.after.width > before.width + 100 &&
+            input.during.w > before.width + 100
+          : input.after.x > before.x + 100 && input.during.x > before.x + 100),
+      { before, during: input.during, after: input.after },
+    );
     await pause(300);
   };
   if (process.argv.includes("--record")) {
