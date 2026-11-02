@@ -1154,7 +1154,11 @@ export function installApplication(hooks: Hooks) {
         onConnectProvider: () => host.command!("capabilities", {}),
         onOpenSubject: (subject) => {
           surfaces.close("vela");
-          if (subject.kind === "workspace") {
+          if (subject.kind === "collection") {
+            void showConversations()
+              .then(() => conversationManager?.openCollection(subject.id))
+              .catch(report);
+          } else if (subject.kind === "workspace") {
             void run({
               type: "navigate",
               target: { kind: "workspace", workspaceId: subject.id },
