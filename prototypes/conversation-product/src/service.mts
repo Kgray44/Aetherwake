@@ -21,6 +21,8 @@ export interface CanonicalConversationHost {
  organize(input: CanonicalOrganizationCommand): Promise<unknown>;
  /** Optional side-effect-free catalog, so reading local history never starts a connection. */
  capabilitySnapshot?(): CommandMap['capabilities']['output'] | undefined;
+ /** Side-effect-free, explicit canonical registry; history reads never connect. */
+ providerRegistrySnapshot?():{providers:readonly ProviderCapability[];defaultProviderId?:string};
  /** Host policy authority: connections/family membership never grant access. */
  access?(resourceId: string, messageId?: string): boolean;
  /** Uses existing canonical execution service, with context receipt after actual dispatch. */
@@ -44,6 +46,7 @@ export interface ConversationReadView {
  readonly graph: Pick<ConversationGraph,'visibleMessages'|'visibleMessageMetadata'>;
  readonly graphMetadata: Readonly<Pick<GraphData,'providers'|'conversations'|'edges'|'unavailableMessageIds'>>;
  readonly executions: Readonly<Record<string,PublicConversationExecution>>;
+ readonly messageEvidence?:Readonly<Record<string,{executionId:string;outputState?:'complete'|'partial'}>>;
  /** Only currently visible canonical metadata. Bodies are deliberately absent from this shape. */
  readonly desktop: Readonly<Pick<DesktopSnapshot,'projects'|'workspaces'>> & {readonly blocks:readonly {readonly workspace_id:string;readonly resource_id?:string}[];readonly resources:readonly Readonly<Pick<Resource,'id'|'kind'|'title'|'version'|'state'|'visible'|'available'|'project_id'>>[]};
  messageMetadata(messageId:string): {id:string;conversationId:string;createdAt:string}|null;
@@ -115,7 +118,7 @@ export class ConversationProduct implements ConversationProductPort {
   // Sequential reads share the backend's owning command queue. Access is checked again below.
   const snapshot = await this.host.snapshot(), desktop = await this.host.desktop();
   // Compatibility fallback is explicitly unscaled: it still receives/reconstructs the full graph.
-  return this.indexed({conversations:snapshot.conversations,resourceMap:snapshot.resourceMap,graphMetadata:{providers:snapshot.graph.providers,conversations:snapshot.graph.conversations,edges:snapshot.graph.edges,unavailableMessageIds:snapshot.graph.unavailableMessageIds},executions:Object.fromEntries(Object.entries(snapshot.executions).map(([id,e])=>[id,{id:e.id,resourceId:e.resourceId,providerId:e.providerId,state:e.state,commandId:e.commandId,startedAt:e.startedAt,endedAt:e.endedAt,taskVerified:false,...(e.errorCode?{errorCode:e.errorCode}:{})}])),desktop:{projects:desktop.projects,workspaces:desktop.workspaces,blocks:desktop.blocks,resources:desktop.resources.map(({id,kind,title,version,state,visible,available,project_id})=>({id,kind,title,version,state,visible,available,project_id}))},graph:new ConversationGraph([],snapshot.graph),messageMetadata:id=>{const m=snapshot.graph.messages.find(m=>m.id===id);return m?{id:m.id,conversationId:m.conversationId,createdAt:m.createdAt}:null;},resourceContent:id=>desktop.resources.find(r=>r.id===id)?.content??''});
+  return this.indexed({conversations:snapshot.conversations,resourceMap:snapshot.resourceMap,graphMetadata:{providers:snapshot.graph.providers,conversations:snapshot.graph.conversations,edges:snapshot.graph.edges,unavailableMessageIds:snapshot.graph.unavailableMessageIds},messageEvidence:Object.fromEntries(Object.entries(snapshot.messageEvidence).map(([id,e])=>[id,{executionId:e.executionId,...(e.outputState?{outputState:e.outputState}:{})}])),executions:Object.fromEntries(Object.entries(snapshot.executions).map(([id,e])=>[id,{id:e.id,resourceId:e.resourceId,providerId:e.providerId,state:e.state,commandId:e.commandId,startedAt:e.startedAt,endedAt:e.endedAt,taskVerified:false,...(e.errorCode?{errorCode:e.errorCode}:{})}])),desktop:{projects:desktop.projects,workspaces:desktop.workspaces,blocks:desktop.blocks,resources:desktop.resources.map(({id,kind,title,version,state,visible,available,project_id})=>({id,kind,title,version,state,visible,available,project_id}))},graph:new ConversationGraph([],snapshot.graph),messageMetadata:id=>{const m=snapshot.graph.messages.find(m=>m.id===id);return m?{id:m.id,conversationId:m.conversationId,createdAt:m.createdAt}:null;},resourceContent:id=>desktop.resources.find(r=>r.id===id)?.content??''});
  }
  private resource(v: View, id: string, messageId?: string, archived = false) {
   const r = v.indices.resources.get(id);
@@ -266,6 +269,21 @@ export class ConversationProduct implements ConversationProductPort {
   check(p.categories.includes(row.evidence) && sourcePolicy.categories.includes(row.evidence), 'category_denied');
   const s = this.share(v,row,target); check(s.status === 'current','source_' + s.status); return s;
  }
+ /** Trusted canonical host only, absent from RPC/tool command maps. Metadata
+  * comes from the current canonical source, never a renderer's sensitivity. */
+ private contextSources(v:View,target:string,sources:readonly {resourceId:string;messageId:string;sensitivity:string;evidence?:Evidence}[]) {
+  this.resource(v,target);const p=this.policy(target),family=this.family(v,target),ranks:Record<string,number>={public:0,internal:1,sensitive:2,restricted:3};
+  for(const source of sources){
+   this.resource(v,source.resourceId,source.messageId);check(family.has(source.resourceId),'outside_branch_family');check(!p.allowedSourceIds.length||p.allowedSourceIds.includes(source.resourceId),'source_scope_denied');
+   const sp=this.policy(source.resourceId);check(JSON.stringify(this.projectIds(v,source.resourceId))===JSON.stringify(this.projectIds(v,target))||p.allowCrossProject&&sp.allowCrossProject,'cross_project_sharing_denied');
+   check(ranks[source.sensitivity]!==undefined&&ranks[source.sensitivity]<=Math.min(ranks[p.maxSensitivity],ranks[sp.maxSensitivity])&&source.sensitivity!=='restricted','sensitivity_denied');check(p.categories.includes(source.evidence??'excerpt')&&sp.categories.includes(source.evidence??'excerpt'),'category_denied');
+  }
+ }
+ async authorizeContextSources(target:string,sources:readonly {resourceId:string;messageId:string;sensitivity:string}[]):Promise<void> {this.contextSources(await this.view(),target,sources);}
+ /** Final synchronous host fence after async credentials/context preparation. */
+ nativeAuthorizeContextSources(target:string,sources:readonly {resourceId:string;messageId:string;sensitivity:string;evidence?:Evidence}[]):void {
+  check(this.host.canonicalReadBatch,'canonical_read_batch_required');this.host.canonicalReadBatch(view=>this.contextSources(this.indexed(view,true),target,sources));
+ }
  private async providers(v: View): Promise<ProviderCapability[]> {
   let live: CommandMap['capabilities']['output'] | undefined; try { live = this.host.capabilitySnapshot ? this.host.capabilitySnapshot() : await this.host.command('capabilities',{}); } catch { /* catalog is not proof of a connected provider */ }
   const local = v.graphMetadata.providers.find(p => p.id === 'local') ?? v.graphMetadata.providers.find(p=>p.id==='mock-ordinary');
@@ -274,6 +292,8 @@ export class ConversationProduct implements ConversationProductPort {
   const observed=!!codex&&live?.providerId===codex.id,authenticated=observed&&live?.authentication==='available',simulated=observed?live!.mock:!!codex?.mock;
   if (codex) items.push({id:codex.id,label:simulated ? 'Codex fixture (simulated)' : 'Codex',available:authenticated,record:true,execute:authenticated,nativeFork:false,history:'local',simulated,models:observed?live!.models:[],reason:authenticated?'Connected and authenticated; model catalog only. Execution outcomes are recorded per turn.':'Provider disconnected or authentication unavailable'});
   const accountFidelity=createNativeChatGPTFidelityDescriptor();
+  const registry=this.host.providerRegistrySnapshot?.();
+  for(const provider of registry?.providers??[])if(provider.id==='chatgpt-plan-responses')items.push({...structuredClone(provider),...(registry?.defaultProviderId===provider.id?{default:true}:{})});
   items.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:accountFidelity.reason,reasonCode:accountFidelity.reasonCode,accountFidelity,simulated:false,models:[]});
   return items;
  }
@@ -298,7 +318,7 @@ export class ConversationProduct implements ConversationProductPort {
   switch(name) {
    case 'list': case 'search': case 'collections': result=this.readProjection(v,name,a);break;
    case 'detail': {
-    this.resource(v,a.resourceId,undefined,true); const c = this.summary(v,a.resourceId,true), all = v.graph.visibleMessages(c.conversationId).filter(m => this.readable(v,v.publicIds.get(m.conversationId)!,m.id,true)).map(m => ({id:m.id,resourceId:v.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,provenance:m.provenance,inherited:m.conversationId!==c.conversationId,sensitivity:m.sensitivity}));
+    this.resource(v,a.resourceId,undefined,true); const c = this.summary(v,a.resourceId,true), all = v.graph.visibleMessages(c.conversationId).filter(m => this.readable(v,v.publicIds.get(m.conversationId)!,m.id,true)).map(m => ({id:m.id,resourceId:v.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,provenance:m.provenance,inherited:m.conversationId!==c.conversationId,sensitivity:m.sensitivity,...v.messageEvidence?.[m.id]}));
     const around = a.aroundMessageId ? all.findIndex(m => m.id === a.aroundMessageId) : -1; if (a.aroundMessageId) check(around>=0,'message_unavailable');
     const family=this.family(v,a.resourceId); const lineage=v.graphMetadata.edges.filter(e=>family.has(v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.parentId)!)&&this.readable(v,v.publicIds.get(e.childId)!)).filter(e=>{if(v.graphMetadata.unavailableMessageIds.includes(e.sourceMessageId))return false;const source=v.messageMetadata(e.sourceMessageId);return !!source&&this.readable(v,v.publicIds.get(source.conversationId)!,e.sourceMessageId);}).map(e=>({id:e.id,parentResourceId:v.publicIds.get(e.parentId)!,childResourceId:v.publicIds.get(e.childId)!,sourceMessageId:e.sourceMessageId,mode:e.mode,createdAt:e.createdAt}));
     result={conversation:{...c,messageCount:all.length},messages:page<MessageView>(all,{...a,...(around>=0?{offset:Math.max(0,around-Math.min(10,Math.floor((a.limit??50)/2)))}:{})}),lineage,policy:this.policy(a.resourceId),shares:this.db.prepare('SELECT * FROM cp_shares WHERE source_resource_id=? OR id IN(SELECT share_id FROM cp_adoptions WHERE target_id=?)').all(a.resourceId,a.resourceId).map(row=>this.share(v,row,a.resourceId)),providers:await this.providers(v)} satisfies Detail; break;
@@ -325,7 +345,7 @@ export class ConversationProduct implements ConversationProductPort {
    }
    case 'favorite': this.resource(v,a.resourceId);result=this.favorite(a);break;
    case 'providers': result=await this.providers(v);break;
-   case 'create': {text(a.title);const p=(await this.providers(v)).find(p=>p.id===a.providerId || !a.providerId&&p.record&&!p.execute);check(p?.record,'provider_unavailable');result=await this.host.command('createConversation',{...a,providerId:p.id});break;}
+   case 'create': {const title=a.title===undefined||typeof a.title==='string'&&!a.title.trim()?'New conversation':text(a.title);if(a.providerId)check((await this.providers(v)).find(p=>p.id===a.providerId)?.record,'provider_unavailable');result=await this.host.command('createConversation',{...a,title});break;}
    case 'archive': this.resource(v,a.resourceId,undefined,true);result=await this.host.command('desktop',{type:'archiveSubject',kind:'resource',id:a.resourceId,expectedVersion:a.expectedVersion,archived:a.archived});break;
    case 'selectProvider': this.resource(v,a.resourceId);check((await this.providers(v)).some(p=>p.id===a.providerId&&p.available),'provider_unavailable');result=await this.host.command('selectProvider',a);break;
    case 'send': {
@@ -365,7 +385,7 @@ export class ConversationProduct implements ConversationProductPort {
     const detail=await this.command('detail',{resourceId:a.resourceId,limit:200});
     const current=await this.view();this.resource(current,a.resourceId,undefined,true);
     const gid=current.resourceMap[a.resourceId];check(gid,'conversation_missing');
-    const items=current.graph.visibleMessages(gid).filter(m=>this.readable(current,current.publicIds.get(m.conversationId)!,m.id,true)).map(m=>({id:m.id,resourceId:current.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,provenance:m.provenance,inherited:m.conversationId!==gid,sensitivity:m.sensitivity}));
+    const items=current.graph.visibleMessages(gid).filter(m=>this.readable(current,current.publicIds.get(m.conversationId)!,m.id,true)).map(m=>({id:m.id,resourceId:current.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,provenance:m.provenance,inherited:m.conversationId!==gid,sensitivity:m.sensitivity,...current.messageEvidence?.[m.id]}));
     result={format:'aerynth.conversation-export@1',detail:{...detail,messages:{items,total:items.length,offset:0,limit:items.length,hasMore:false}}};break;
    }
    default: throw new ProductError('unsupported_product_command');

@@ -3,6 +3,8 @@ import type { GraphData, Message, ContextPackage, Sensitivity } from '../../conn
 import type { Resource } from '../../workspace-kernel/kernel.mts';
 import type { DesktopCommand, DesktopSnapshot, PublicConversationExecution, ConversationActivitySnapshot, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import type { ResourceOpeningInput, ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
+import type { ProviderConnectionRequest, ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
+import type { NativeAuthorizationStart,NativeCredential,ReportedUsage,TurnInput,TurnOutcome } from '../../openai-provider/contracts.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import type { AttachedContext } from '../../conversation-product/src/service.mts';
 import type { VelaClient, VelaState, ContextManifest, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
@@ -37,8 +39,33 @@ export type ConversationSendInput = ProductCommandMap['send']['input'];
 export interface ConversationSendPreview {
  id: string; commandId: string; resourceId: string; providerId: string; expectedRevision: number;
  prompt: string; model?: string; context: AttachedContext[];
- handoff?: { id:string; fingerprint:string; sourceResourceId:string; items:ContextPackage['items'] };
+ handoff?: { id:string; fingerprint:string; sourceResourceId:string; items:ContextPackage['items'];continued?:true };
  executionText: string; fingerprint: string; expiresAt: string;
+ /** Exact stateless Responses egress, without credentials or account identifiers. */
+ responses?:OrdinaryResponsesPreview;
+}
+export interface OrdinaryResponsesPreview {
+ executionId:string;configurationId:string;connectionVersion:number;model:string;
+ instructions:string;instructionVersion:string;messages:TurnInput['messages'];
+ history:{resourceId:string;messageId:string;digest:string;providerId?:string}[];
+ contextDigest:string;bodyDigest:string;bodyBytes:number;requiresSourceReview:boolean;
+}
+export type ProviderAuthRequest={providerId:'chatgpt-plan-responses'}&(
+ |{type:'begin'}|{type:'finish';attemptId:string}|{type:'cancel';attemptId?:string}
+ |{type:'disconnect'|'refresh';expectedVersion:number});
+/** Native-process connection port. Never a renderer payload or workerData. */
+export interface OrdinaryConnectionPort {
+ status():Promise<ProviderConnectionStatus>;
+ begin():Promise<NativeAuthorizationStart>;finish(attemptId:string):Promise<unknown>;cancel(attemptId?:string):Promise<unknown>;
+ disconnect(expectedVersion:number):Promise<unknown>;refresh(expectedVersion:number):Promise<unknown>;close():Promise<void>|void;
+ resolveCredential(expectedVersion:number):Promise<NativeCredential>;
+ revalidateCredential(expectedVersion:number,boundaryDigest:string):Promise<void>;
+ modelCatalog(expectedVersion:number):Promise<{providerId:'chatgpt-plan-responses';boundaryDigest:string;observedAt:number;catalogOnly:true;models:{id:string;label:string}[]}>;
+}
+/** Explicit synthetic-only override; the real Core constructs its native coordinator. */
+export interface OrdinaryResponsesTestServices {
+ connection:OrdinaryConnectionPort;fetch:typeof fetch;
+ instructions?:(resourceId:string)=>Promise<{text:string;version:string}>;
 }
 export const CONTRACT = 'aerynth.integration@0.1' as const;
 export type Classification = 'observed' | 'reported' | 'inferred' | 'simulated';
@@ -49,6 +76,11 @@ export interface Binding {
 }
 export interface Execution extends PublicConversationExecution {
   binding: Binding | null; turnId: string | null;
+  /** Actual Responses facts, never a fabricated Codex thread/turn binding. */
+  responseId?:string;responseOutcome?:TurnOutcome;usage?:ReportedUsage;reportedModel?:string;
+  connectionVersion?:number;inputMessageId?:string;outputMessageId?:string;
+  requestedModel?:string;requestBodyDigest?:string;contextDigest?:string;instructionVersion?:string;
+  cancellation?:{requested:boolean;serverConfirmed:false};
 }
 export interface Capability {
   providerId: string; mock: boolean; authentication: string;
@@ -78,7 +110,7 @@ export interface StreamEvent {
   correlationId: string | null; causationId: string | null;
   receivedAt: string; providerTime: number | null; providerTimeSource: string | null;
   type: string; classification: Classification;
-  status: string | null; payload: { redacted: true; textBytes?: number; itemType?: string; delta?: string };
+  status: string | null; payload: { redacted: true; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus };
 }
 export interface HandoffReview {
   id: string; resourceId: string; sourceResourceId: string; targetProviderId: string;
@@ -103,6 +135,12 @@ export interface Options {
   velaPlanningPort?: VelaPlanningPort;
 }
 export interface CommandMap {
+  providerConnection:{input:ProviderConnectionRequest;output:ProviderConnectionStatus};
+  /** Explicit catalog read. Also available as providerConnection.refreshModels. */
+  ordinaryProviderCheck:{input:Record<string,never>;output:ProviderConnectionStatus};
+  ordinaryProviderStatus:{input:Record<string,never>;output:ProviderConnectionStatus};
+  /** TRUSTED Main/native only; MUST NOT be exposed in renderer/tool allowlists. */
+  providerAuth:{input:ProviderAuthRequest;output:NativeAuthorizationStart|ProviderConnectionStatus};
   /** Read-only canonical resource resolution; no workspace placement required. */
   openResource: {input:ResourceOpeningInput;output:ResourceOpeningResult};
   conversationActivity: { input: { resourceIds: string[] }; output: ConversationActivitySnapshot };
@@ -125,7 +163,7 @@ export interface CommandMap {
   openWorkspace: { input: { workspaceId: string }; output: { workspace: Record<string, unknown>; layout: Record<string, unknown>; blocks: Array<Record<string, unknown>> } };
   selectProvider: { input: { resourceId: string; providerId: string; expectedRevision: number }; output: ConversationView };
   applyOrdinary: { input: { handoffId: string; prompt: string; commandId: string }; output: Message & { resourceId: string; classification: 'simulated' } };
-  createConversation: { input: { title: string; providerId?: string; commandId: string }; output: ConversationView };
+  createConversation: { input: { title?: string; providerId?: string; commandId: string }; output: ConversationView };
   addMessage: { input: { resourceId: string; role: 'user' | 'assistant'; content: string; sensitivity?: Sensitivity; expectedRevision: number; commandId?: string }; output: Message & { resourceId: string; revision: number } };
   workspace: { input: { title: string; projectTitle?: string }; output: WorkspaceView };
   place: { input: { workspaceId: string; resourceId: string }; output: BlockView };
@@ -147,7 +185,7 @@ export interface Snapshot {
   contract: typeof CONTRACT; schemaVersion: 1; conversations: ConversationView[];
   graph: GraphData; resourceMap: Record<string, string>; bindings: Record<string, Binding[]>;
   handoffs: Record<string, HandoffReview>; executions: Record<string, Execution>;
-  messageEvidence: Record<string, { classification: 'reported' | 'simulated'; executionId: string; providerId: string; nativeTurnId: string; nativeThreadId: string }>;
+  messageEvidence: Record<string, { classification: 'reported' | 'simulated'; executionId: string; providerId: string; nativeTurnId?: string; nativeThreadId?: string;responseId?:string;outputState?:'complete'|'partial' }>;
   resources: Array<{ resource: Resource; conversation?: unknown; externalRefs: unknown[] }>;
   relationships: Array<{ id: string; source_id: string; target_id: string; kind: string; provenance: string }>;
 }

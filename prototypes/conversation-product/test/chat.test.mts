@@ -28,6 +28,20 @@ function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativ
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
 
+test('manager honors a ready ordinary default until explicit provider choice and preserves unavailable choice without sending',async()=>{
+ const f=fixture(),plan={id:'chatgpt-plan-responses',label:'ChatGPT plan · local history',available:true,record:true,execute:true,nativeFork:false,history:'local' as const,simulated:false,models:['synthetic-model'],default:true};f.detail.providers.push(plan);let manager;
+ try{manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;const editor=f.view.root.querySelector('textarea'),picker=f.view.root.querySelector('select[aria-label="New conversation provider"]');assert.equal(picker.value,plan.id);
+  picker.value='local';picker.fire('change');await manager.refresh();assert.equal(picker.value,'local');assert.equal(f.view.root.querySelector('textarea'),editor);
+  picker.value=plan.id;picker.fire('change');plan.available=plan.record=false;await manager.refresh();assert.equal(picker.value,plan.id);assert.equal(named(f.view.root,'Create conversation').disabled,true);assert.equal(f.calls.some(c=>['send','create','selectProvider'].includes(c.name)),false);
+ }finally{await manager?.dispose();f.restore();}
+});
+
+test('canonical partial output is labelled separately while exact text, editor identity and draft remain intact',async()=>{
+ const f=fixture('chatgpt-plan-responses');f.detail.messages.items[1].outputState='partial';f.detail.messages.items[1].executionId='execution:actual-receipt';let chat;
+ try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;const editor=f.view.root.querySelector('textarea'),message=f.view.root.querySelector('[data-message-id="message:assistant"]');assert.equal(message.dataset.outputState,'partial');assert.match(message.querySelector('.cp-message-source').textContent,/partial response/);assert.match(message.querySelector('.cp-message-content').textContent,/readable/);await chat.refresh();assert.equal(f.view.root.querySelector('textarea'),editor);assert.equal(editor.value,'Saved unsent text');assert.equal(f.calls.some(c=>c.name==='send'),false);
+ }finally{await chat?.dispose();f.restore();}
+});
+
 test('conversation search groups exact message links instead of a message wall and retains canonical open targets',async()=>{
   const f=fixture();let manager;
   try{const original=f.detail.messages.items[0];f.detail.messages.items=Array.from({length:8},(_,i)=>({...original,id:'message:match:'+i,content:'needle excerpt '+i}));f.detail.messages.total=f.detail.conversation.messageCount=8;
