@@ -4,7 +4,12 @@ import { renderMarkdown } from './markdown.ts';
 
 export type ConversationExecution = { id: string; resourceId: string; providerId: string; commandId: string; state: 'dispatching'|'running'|'provider_completed'|'failed'|'interrupted'|'unknown'; startedAt: string; endedAt: string|null; taskVerified: false; errorCode?: string };
 /** The host translates only observed assistant text deltas; never reasoning/tool summaries or fabricated approval events. */
-export type ConversationExecutionObservation = { execution?: ConversationExecution; connection?: 'available'|'unavailable'; delta?: { eventId: string; cursor: number; text: string } };
+export type ConversationExecutionObservation = {
+  execution?: ConversationExecution; connection?: 'available'|'unavailable'; resourceAvailable?: boolean;
+  /** Complete, access-checked live buffer from the same canonical execution, through cursor. */
+  preview?: { executionId: string; cursor: number; text: string };
+  delta?: { eventId: string; cursor: number; text: string };
+};
 export interface ConversationExecutionPort {
   observe(resourceId: string, listener: (observation: ConversationExecutionObservation) => void): () => void;
   cancel(executionId: string): Promise<unknown>;
@@ -66,6 +71,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const active = () => execution && ['dispatching','running'].includes(execution.state);
   const viewState = () => options.onViewState?.({resourceId,content:textarea.value,scroll:messages.scrollTop,offset:current?.messages.offset??offset??0});
   const resize = () => { textarea.style.height = 'auto'; textarea.style.height = Math.min(200,Math.max(56,textarea.scrollHeight))+'px'; };
+  function revokeView() {
+    const notify=!accessRevoked;accessRevoked=true;generation++;root.dataset.resourceAvailable='false';current=null;cache.clear();messages.replaceChildren();
+    streamText.textContent='';stream.hidden=true;paging.hidden=true;capabilityNote.textContent=contextNote.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;
+    renderDraft();if(notify)options.onUnavailable?.();report('This conversation is no longer available. Its draft is retained.');
+  }
   function renderDraft(snapshot: DraftSessionSnapshot = session.snapshot()) {
     if (disposed) return;
     // Do not assign equal values: native caret, selection and composition remain intact.
@@ -145,11 +155,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const request=++generation;
     let d: Detail;
     try { d=await port.command('detail',{resourceId,limit:50,...(input.aroundMessageId?{aroundMessageId:input.aroundMessageId}:offset===undefined||input.latest?{offset:Math.max(0,(current?.conversation.messageCount??50)-50)}:{offset})}); }
-    catch(error){if(!disposed&&request===generation&&/source_unavailable|access_denied|not_found/.test(errorText(error))){accessRevoked=true;current=null;cache.clear();messages.replaceChildren();streamText.textContent='';stream.hidden=true;paging.hidden=true;capabilityNote.textContent=contextNote.textContent='';renderDraft();options.onUnavailable?.();report('This conversation is no longer available. Its draft is retained.');}throw error;}
+    catch(error){if(!disposed&&request===generation&&/source_unavailable|access_denied|not_found/.test(errorText(error)))revokeView();throw error;}
     if(disposed||request!==generation)return;
     // Opening uses a bounded page, then fetches the actual latest page when count was not known.
     if((offset===undefined||input.latest)&&!input.aroundMessageId&&d.messages.hasMore){offset=Math.max(0,d.conversation.messageCount-50);await refresh();return;}
-    accessRevoked=false;offset=d.messages.offset;render(d,input.aroundMessageId);
+    accessRevoked=false;root.dataset.resourceAvailable='true';offset=d.messages.offset;render(d,input.aroundMessageId);
   }
   composer.addEventListener('submit',event=>{event.preventDefault();if(send.disabled||!current)return;const before=current,content=textarea.value,commandId=crypto.randomUUID();sending=true;renderDraft();report(['local','mock-ordinary'].includes(before.conversation.providerId)?'Saving message…':'Waiting for native send review. Your draft remains saved.');
     sendTask=(async()=>{
@@ -165,15 +175,23 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   });
   stop.addEventListener('click',()=>{if(!execution||!options.execution||!active()||cancelPending||connection==='unavailable')return;cancelPending=true;renderDraft();const id=execution.id;void options.execution.cancel(id).then(()=>report('Stop requested. Waiting for the provider to confirm.'),error=>report('Stop could not be requested: '+errorText(error))).finally(()=>{cancelPending=false;renderDraft();});});
   if(options.execution)unsubscribeExecution=options.execution.observe(resourceId,observation=>{
-    if(disposed||accessRevoked)return;
+    if(disposed)return;
     if(observation.execution&&observation.execution.resourceId!==resourceId)return;
+    if(observation.resourceAvailable===false){revokeView();return;}
+    // An activity signal cannot grant access. Only a later successful canonical detail read restores it.
+    if(accessRevoked)return;
     if(observation.connection)connection=observation.connection;
     if(connection==='unavailable'){report('Connection unavailable. '+(execution?'Last observed: '+execution.state+'. Outcome unconfirmed.':'Execution state is unavailable.'));renderDraft();}
-    const next=observation.execution;if(!next)return;
+    const next=observation.execution??execution;if(!next)return;
     if(execution&&next.id!==execution.id&&next.startedAt<execution.startedAt)return;
     if(execution?.id===next.id&&!['dispatching','running'].includes(execution.state)&&['dispatching','running'].includes(next.state))return;
     execution=next;
     if(streamExecution!==next.id){streamExecution=next.id;streamText.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;}
+    const preview=observation.preview;
+    if(preview&&active()&&preview.executionId===next.id&&Number.isSafeInteger(preview.cursor)&&preview.cursor>=0&&preview.cursor>=lastCursor){
+      // A complete snapshot supersedes only output through its cursor. Earlier/equal deltas are then covered.
+      const text=preview.text.slice(0,1048576);if(streamText.textContent!==text)streamText.textContent=text;lastCursor=preview.cursor;seenEvents.clear();streamLimited=preview.text.length>1048576;
+    }
     const delta=observation.delta;
     if(delta&&!streamLimited&&Number.isSafeInteger(delta.cursor)&&delta.cursor>lastCursor&&!seenEvents.has(delta.eventId)){
       seenEvents.add(delta.eventId);lastCursor=delta.cursor;const text=(streamText.textContent??'')+delta.text;streamText.textContent=text.slice(0,1048576);streamLimited=text.length>1048576||seenEvents.size>=65536;
