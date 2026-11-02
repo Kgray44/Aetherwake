@@ -1,5 +1,8 @@
 /* Type belongs to the registered DOM identity, not the shared GPU material family. */
 .folio[data-block-kind="agent"] { --aw-type-accent:#b7cadb; }
+.folio[data-block-kind="timeline"] { --aw-type-accent:#cbbfa7; }
+.aw-block-compact[data-layout="chronology"] .aw-identity-row { display:grid; grid-template-columns:4.5em minmax(0,1fr); padding:.45rem 0; border-top:1px solid #cbbfa733; }
+.aw-block-compact[data-layout="chronology"] .aw-identity-time { grid-column:1; grid-row:1/3; }.aw-block-compact[data-layout="chronology"] .aw-identity-row-title,.aw-block-compact[data-layout="chronology"] .aw-identity-row-detail { grid-column:2; }
 .folio[data-block-kind="checklist"] { --aw-type-accent:#bdc9b3; }
 .aw-block-compact[data-layout="agent"] .aw-identity-agent-profile { display:flex; align-items:center; gap:.7rem; margin-bottom:.7rem; }
 .aw-identity-agent-monogram { display:grid; place-items:center; flex:0 0 38px; height:38px; border-radius:50%; border:1px solid #b7cadb55; font:500 1.3rem Georgia,serif; }

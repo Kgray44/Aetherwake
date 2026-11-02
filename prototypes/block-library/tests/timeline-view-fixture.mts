@@ -7,7 +7,7 @@ import type { TimelineEventHeader, TimelineResource, TimelineView, TimelinePort 
 /** Same canonical SQLite schema with synthetic retained headers. No application,
  * provider, competing event store or source-payload access is exercised. */
 export function timelineFixture(t: any) {
-  const kernel = WorkspaceKernel.open(':memory:'), db = kernel.withTransaction(db => db); new DesktopState(kernel, db); t.after(() => kernel.close());
+  const kernel = WorkspaceKernel.open(':memory:'), db = kernel.withTransaction(db => db), desktop = new DesktopState(kernel, db); t.after(() => kernel.close());
   const source = kernel.createNote('Synthetic canonical source', 'Synthetic source content'), deniedResources = new Set<string>();
   let denied = false, writable = true;
   const resource = (id: string): TimelineResource | null => {
@@ -37,5 +37,5 @@ export function timelineFixture(t: any) {
     db.prepare('UPDATE intelligence_events SET json=? WHERE cursor=?').run(JSON.stringify({ ...event, payload: { delta: 'SYNTHETIC_PRIVATE_PAYLOAD_MUST_NOT_RENDER' } }), event.cursor);
     db.prepare('UPDATE integration_meta SET latest=? WHERE id=1').run(event.cursor); return event;
   };
-  return { kernel, db, service, port, created, source, view, add, deniedResources, events, setDenied(value: boolean) { denied = value; }, setWritable(value: boolean) { writable = value; } };
+  return { kernel, db, desktop, service, port, created, source, view, add, deniedResources, events, authorized: () => !denied, setDenied(value: boolean) { denied = value; }, setWritable(value: boolean) { writable = value; } };
 }

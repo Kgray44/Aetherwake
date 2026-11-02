@@ -7,6 +7,7 @@ import type {
 import { sourceLinks } from "./source-links.ts";
 import type { ChecklistDocument } from '../application-contract/checklist.ts';
 import type { AgentBlockProjection } from './agent-view.ts';
+import type { TimelineDocument, TimelineWindow } from '../timeline-product/contracts.ts';
 
 export type SubjectIdentity =
   | { phase: "loading" | "unavailable"; message?: string }
@@ -43,6 +44,7 @@ export type BlockIdentityModel = {
     | "checklist"
     | 'ledger'
     | 'agent'
+    | 'chronology'
     | "timeline"
     | "project"
     | "table"
@@ -77,6 +79,7 @@ const document = (content: string) => {
   };
 };
 const typeLabel = {
+  timeline: 'Timeline',
   agent: 'Agent',
   conversation: "Conversation",
   note: "Note",
@@ -103,10 +106,12 @@ export function blockIdentity(input: {
   events?: IdentityEvent[];
   checklist?: ChecklistDocument;
   agent?: AgentBlockProjection;
+  timeline?: { document: TimelineDocument | null; window: TimelineWindow | null };
   disconnected?: boolean;
 }): BlockIdentityModel {
   const { kind, resource } = input;
   const layouts = {
+    timeline: 'chronology',
     agent: 'agent',
     conversation: resource?.provider === "codex" ? "execution" : "chat",
     note: "document",
@@ -202,6 +207,17 @@ export function blockIdentity(input: {
       : [];
     model.paragraphs = document(content).paragraphs.slice(0, 2);
     model.empty = "Add a description in task details.";
+  } else if (kind === 'timeline') {
+    const projection = input.timeline, timeline = projection?.document, window = projection?.window;
+    if (!timeline || !window || timeline.resource.id !== resource?.id || window.resourceId !== resource?.id || window.resourceVersion !== timeline.resource.version || window.viewDigest !== timeline.viewDigest) {
+      model.phase = projection && !timeline ? 'unavailable' : 'loading'; model.subtitle = model.phase === 'loading' ? 'Loading saved timeline…' : 'Timeline unavailable';
+      model.empty = 'Open the saved timeline to inspect its authorized retained events.';
+    } else {
+      model.heading = timeline.resource.title; model.subtitle = window.source.state === 'unavailable' ? 'Retained source unavailable' : 'Loaded captures' + (window.gaps.length ? ' · evidence gaps' : '');
+      model.metrics = [{ label: 'Loaded events', value: String(window.items.length) }];
+      model.rows = window.items.slice(-4).reverse().map(item => ({ id: String(item.event.cursor) + ':' + item.event.eventId, title: item.event.type.replaceAll('.', ' ').replaceAll('_', ' '), detail: item.evidenceClass + ' · ' + item.event.providerId, time: item.event.receivedAt }));
+      model.empty = window.source.state === 'unavailable' ? 'The retained event source is unavailable.' : 'No authorized captures in the loaded time window.';
+    }
   } else if (kind === 'agent') {
     const agent = input.agent;
     if (!agent || agent.phase !== 'ready' || agent.profile.resource.id !== resource?.id) {

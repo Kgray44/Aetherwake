@@ -86,6 +86,7 @@ export const BLOCK_DEFAULT_SIZES: Readonly<
   task_group: { width: 440, height: 460 },
   checklist: { width: 460, height: 500 },
   agent: { width: 400, height: 460 },
+  timeline: { width: 640, height: 460 },
   stream: { width: 500, height: 380 },
   project_overview: { width: 520, height: 360 },
   resource_browser: { width: 560, height: 440 },
@@ -200,6 +201,10 @@ export const BUILTIN_BLOCKS: readonly BlockDefinition[] = deepFreeze([
     ['Open agent', 'Inspect effective configuration'],
     'References one saved Agent profile. Catalog compatibility does not mean an agent is running.'),
     creation: 'reference-only', requiredServices: ['canonical-resources', 'workspace-engine', 'agent-library'] },
+  { ...define('timeline', 'Timeline', 'planning', 'Explore recorded events in a saved time view. Pan, zoom, filter and inspect their sources.',
+    ['Inspect captured events', 'Filter sources', 'Save supported view changes'],
+    'References a saved Activity or Execution Timeline. Gaps and evidence classifications stay visible.'),
+    creation: 'reference-only', minimumSize: { width: 360, height: 280 }, requiredServices: ['canonical-resources', 'workspace-engine', 'timeline-service', 'event-journal'] },
   define(
     "reference",
     "Reference",
@@ -527,8 +532,10 @@ export function validateCreateBlock(
   )
     throw Object.assign(new Error("invalid_title"), { code: "invalid_title" });
   assertBlockAvailable(input.kind, capabilities, input.provider);
-  if (blockDefinition(input.kind).creation === 'reference-only')
-    throw Object.assign(new Error('agent_library_creation_required'), { code: 'agent_library_creation_required' });
+  if (blockDefinition(input.kind).creation === 'reference-only') {
+    const code = input.kind === 'agent' ? 'agent_library_creation_required' : 'timeline_creation_required';
+    throw Object.assign(new Error(code), { code });
+  }
   return {
     ...input,
     title: input.title.trim(),

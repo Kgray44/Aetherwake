@@ -28,6 +28,7 @@ export type BlockKind =
   | "task_group"
   | "checklist"
   | "agent"
+  | "timeline"
   | "reference"
   | "stream"
   | "file"

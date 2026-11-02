@@ -22,6 +22,12 @@ export function blockPreview(kind: BlockInstanceKind): HTMLElement {
     line('p', 'Purpose · Specialties · Effective configuration');
     line('div', 'Open agent', 'aw-library__sample-input');
     line('p', 'A saved profile is not a running execution.', 'aw-library__hint');
+  } else if (kind === 'timeline') {
+    line('small', 'SAVED TIMELINE · CAPTURED EVENTS · EXAMPLE');
+    line('h4', 'A view through recorded time');
+    line('p', '12:04  workspace saved · observed\n12:09  provider response · reported');
+    line('div', 'Earlier · Zoom · Filters', 'aw-library__sample-input');
+    line('p', 'Evidence gaps stay visible. Events do not establish verified task completion.', 'aw-library__hint');
   } else if (kind === "project_overview") {
     line("small", "PROJECT OVERVIEW · EXAMPLE");
     line("h4", "A project and its work");

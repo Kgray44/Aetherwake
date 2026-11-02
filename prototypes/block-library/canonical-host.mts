@@ -396,7 +396,7 @@ export function createCanonicalTemplateHost(
       return { id: workspace.workspaceId };
     },
     createResource(input) {
-      check(blockDefinition(input.kind).creation !== 'reference-only', 'agent_library_creation_required');
+      check(blockDefinition(input.kind).creation !== 'reference-only', input.kind === 'agent' ? 'agent_library_creation_required' : 'timeline_creation_required');
       requireProject(input.projectId);
       assertBlockAvailable(input.kind, options.capabilities(), input.provider);
       const previousRowid = Number(

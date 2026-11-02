@@ -33,7 +33,7 @@ const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(import.meta.url);
 // Retained ten-kind review profile. New canonical domains require their own
 // native preparation and real Core factories before joining this matrix.
-export const WORKSPACE_SOURCE_REVIEW_BLOCKS = REGISTERED_BLOCKS.filter(definition => definition.kind !== 'checklist' && definition.kind !== 'agent');
+export const WORKSPACE_SOURCE_REVIEW_BLOCKS = REGISTERED_BLOCKS.filter(definition => definition.kind !== 'checklist' && definition.kind !== 'agent' && definition.kind !== 'timeline');
 export type WorkspaceNativeCase = {
   kind: BlockInstanceKind;
   workspaceId: string;

@@ -1,6 +1,8 @@
 import type { Resource } from '../application-contract/contracts.ts';
 import type { NoteExperiencePort } from './note-contracts.ts';
 import type { NoteSession } from './note-session.ts';
+import type { TimelinePort } from '../timeline-product/contracts.ts';
+import { mountTimelineExperience, type TimelineExperience } from './timeline-view.ts';
 import type { ChecklistPort, ChecklistReference } from '../application-contract/checklist.ts';
 import type { ExperienceMotionPort } from '../application-contract/motion.ts';
 import { mountChecklistExperience, type ChecklistExperience } from '../checklist-product/view.ts';
@@ -11,6 +13,7 @@ import { mountEventExperience, type EventWindow } from './event-view.ts';
 export interface DirectResourcePorts {
   notes: NoteExperiencePort;
   noteSession(resourceId: string): NoteSession;
+  timelines?: { port: TimelinePort; motion: ExperienceMotionPort; viewId: string; resourceTitle?(resourceId: string): string | undefined };
   checklists?: {
     port: ChecklistPort;
     motion: ExperienceMotionPort;
@@ -67,6 +70,8 @@ export function mountDirectResourceExperience(
   let events: ReturnType<typeof mountEventExperience> | undefined;
   let session: NoteSession | undefined;
   let checklist: ChecklistExperience | undefined;
+  let timeline: TimelineExperience | undefined;
+  let timelineWasActive = false;
   let refreshVersion: number | undefined;
   let editor: HTMLTextAreaElement | undefined;
   let taskStatus: HTMLInputElement | undefined, taskPriority: HTMLSelectElement | undefined;
@@ -166,6 +171,14 @@ export function mountDirectResourceExperience(
   const mount = () => {
     if (mounted || !available(resource)) return;
     body.replaceChildren();
+    if (kind === 'timeline') {
+      const source = ports.timelines;
+      if (!source) { status.textContent = 'Timeline access is unavailable in this surface.'; return; }
+      timeline = mountTimelineExperience(body, resourceId, source.port, { motion: source.motion, viewId: source.viewId,
+        active, presentation: 'focused', onOpenResource: ports.openResource, resourceTitle: source.resourceTitle });
+      timelineWasActive = active; refreshVersion = resource.version; mounted = true;
+      return;
+    }
     if (kind === 'checklist') {
       const source = ports.checklists;
       if (!source) { status.textContent = 'Checklist access is unavailable in this surface.'; return; }
@@ -221,6 +234,7 @@ export function mountDirectResourceExperience(
     else {
       if (mounted) status.textContent = '';
       try { mount(); } catch (error) {
+        timeline?.dispose(); timeline = undefined; timelineWasActive = false;
         checklist?.dispose(); checklist = undefined;
         note?.dispose(); group?.dispose(); events?.dispose();
         note = undefined; group = undefined; events = undefined;
@@ -231,6 +245,10 @@ export function mountDirectResourceExperience(
       }
     }
     note?.setActive(active && available(resource));
+    const timelineActive = active && available(resource), timelineActivated = timelineActive && !timelineWasActive;
+    timeline?.setActive(timelineActive); timelineWasActive = timelineActive;
+    if (timelineActivated && timeline) refreshVersion = resource.version;
+    if (timeline && timelineActive && refreshVersion !== resource.version) { refreshVersion = resource.version; void timeline.refresh().catch(fail); }
     checklist?.setActive(active && available(resource));
     if (checklist && active && available(resource) && refreshVersion !== resource.version) {
       refreshVersion = resource.version;
@@ -263,6 +281,10 @@ export function mountDirectResourceExperience(
     setActive(value) { if (!disposed) { active = value; reconcile(); } },
     async flush() {
       if (disposed) return;
+      if (timeline) {
+        if (!available(resource)) throw new Error('Timeline is unavailable. Pending view settings remain in its view.');
+        await timeline.flush(); return;
+      }
       if (checklist) {
         if (!available(resource)) throw new Error('Checklist is unavailable. Pending edits are retained in its view.');
         await checklist.flush();
@@ -272,11 +294,12 @@ export function mountDirectResourceExperience(
       if (!available(resource)) throw new Error('Resource is unavailable. Pending text remains in its canonical editor session.');
       await session.flushEdits();
     },
-    frame() { if (!disposed) checklist?.frame(); },
-    reflow() { if (!disposed) checklist?.reflow(); },
+    frame() { if (!disposed) { checklist?.frame(); timeline?.frame(); } },
+    reflow() { if (!disposed) { checklist?.reflow(); timeline?.reflow(); } },
     dispose() {
       if (disposed) return;
       disposed = true;
+      timeline?.dispose();
       checklist?.dispose();
       if (editor) editor.oninput = null;
       if (taskStatus) taskStatus.onchange = null;

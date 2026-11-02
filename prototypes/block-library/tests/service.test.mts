@@ -292,9 +292,9 @@ test("templates capture and reuse 0, 1, 3, 10, 25 and 50 distinct canonical reso
   host.kernel.assertIntegrity();
 });
 
-test("registry includes nine canonical kinds; absent and unavailable capabilities never claim support", (t) => {
+test("registry includes ten canonical kinds; absent and unavailable capabilities never claim support", (t) => {
   const { host, service } = fixture(t);
-  assert.equal(BUILTIN_BLOCKS.length, 9);
+  assert.equal(BUILTIN_BLOCKS.length, 10);
   assert.equal(searchBlocks("canonical task", host.caps).length, 2);
   assert.equal(
     searchBlocks("Intelligence Stream", host.caps)[0].kind,
