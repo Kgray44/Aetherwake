@@ -121,6 +121,14 @@ test('discovery prompt retains a representative source manifest and exact digest
   assert.throws(()=>buildCodexPlanningPrompt(request),/planning_prompt_capacity_exceeded/,'Legacy fallback never silently truncates the same sources');
   request.context.included[0].content='x'.repeat(17000);assert.throws(()=>buildCodexPlanningPrompt(request,{projection:catalog.projection,declaration:catalog.declaration}),/planning_prompt_capacity_exceeded/);
 });
+test('semantic native review is byte-identical before correlation IDs exist; actual grants still bind and validate canonical IDs',async()=>{
+  const original=input(),{requestId:_requestId,conversationId:_conversationId,...semantic}=original;
+  const changedCorrelation:PlanningInput={...original,requestId:'actual:other-request',conversationId:'actual:other-conversation'};
+  const reviewed=buildCodexPlanningPrompt(semantic),dispatched=buildCodexPlanningPrompt(changedCorrelation);
+  assert.equal(reviewed,dispatched);const payload=JSON.parse(reviewed.split('\n').at(-1)!);
+  assert(!Object.hasOwn(payload,'requestId'));assert(!Object.hasOwn(payload,'sourceConversationId'));assert.equal(payload.context.discovered[0].id,'note:synthetic');
+  const f=fixture();await assert.rejects(f.adapter().propose({...original,requestId:''},new AbortController().signal),/invalid_planning_request/);assert.equal(f.counts().authorizations,0);assert.equal(f.counts().turns,0);
+});
 
 test('discovery grants bind the exact declaration and every proposed action passes the same-turn fetched-schema guard',async()=>{
   const catalog=createCapabilityCatalog(CAPABILITIES),f=fixture();let finished=0,checks=0;
