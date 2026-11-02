@@ -181,38 +181,65 @@ export function mountBlockLibrary(
     typeof options.expectedLayoutVersion === "function"
       ? options.expectedLayoutVersion()
       : options.expectedLayoutVersion;
+  const pendingButtons = new Map<HTMLButtonElement, boolean>();
+  const commandButtonState = (button: HTMLButtonElement, disabled: boolean) => {
+    if (pending) pendingButtons.set(button, disabled);
+    button.disabled = pending || disabled;
+  };
   async function performResult<T>(
     work: () => Promise<T>,
     created: (result: T) => void | Promise<void>,
   ) {
     if (pending) return;
     pending = true;
+    let saved = false;
     ui.panel.setAttribute("aria-busy", "true");
     ui.status.textContent = "Saving workspace placement…";
     detail
       .querySelectorAll<HTMLButtonElement>(
         "button[type=submit], [data-attach-resource]",
       )
-      .forEach((b) => (b.disabled = true));
+      .forEach((b) => commandButtonState(b, b.disabled));
     try {
       const result = await work();
+      saved = true;
       if (ui.disposed) return;
       ui.status.textContent = "Block saved.";
-      await created(result);
-      if (port.preferences) preferences = await port.preferences();
-      if (!ui.disposed) {
-        renderList();
-        showDetail();
+      try {
+        await created(result);
+      } catch (error) {
+        if (!ui.disposed)
+          ui.status.textContent =
+            "Block saved. Could not open it: " + errorText(error);
+      }
+      if (ui.disposed) return;
+      if (port.preferences) {
+        try {
+          preferences = await port.preferences();
+        } catch {
+          if (!ui.disposed)
+            ui.status.textContent += " Recent items could not be refreshed.";
+        }
       }
     } catch (error) {
       if (!ui.disposed) {
         ui.status.textContent = errorText(error);
-        showDetail();
       }
     } finally {
       pending = false;
       ui.panel.removeAttribute("aria-busy");
-      if (!ui.disposed) showDetail();
+      if (!ui.disposed) {
+        if (saved) {
+          renderList();
+          showDetail();
+        } else {
+          // A rejected command must retain the actual form, input selection and
+          // presentation choices. A second Add uses the current layout fence.
+          for (const [button, disabled] of pendingButtons)
+            if (button.isConnected) button.disabled = disabled;
+        }
+      }
+      pendingButtons.clear();
     }
   }
   const perform = (work: () => Promise<CreatedBlock>) =>
@@ -306,7 +333,7 @@ export function mountBlockLibrary(
       "Add New " + definition.title,
     );
     create.type = "submit";
-    create.disabled = available.state !== "available" || pending;
+    commandButtonState(create, available.state !== "available");
     const settings = node("details"),
       settingsHeading = node("summary", "", "Configure presentation"),
       shape = node("select"),
@@ -466,7 +493,7 @@ export function mountBlockLibrary(
             );
           });
           action.dataset.attachResource = resource.id;
-          action.disabled = pending || available.state !== "available";
+          commandButtonState(action, available.state !== "available");
           row.append(label, action);
           resourceList.append(row);
         }
@@ -682,8 +709,10 @@ export function mountBlockLibrary(
               ? "*"
               : "";
         const ready = () => {
-          create.disabled =
-            pending || available.state !== "available" || !target.value;
+          commandButtonState(
+            create,
+            available.state !== "available" || !target.value,
+          );
         };
         target.onchange = ready;
         ready();
@@ -794,6 +823,7 @@ export function mountBlockLibrary(
             ? ""
             : " · " + definition.availability.state),
         () => {
+          if (pending) return;
           selected = definition.kind;
           renderList();
           showDetail();
