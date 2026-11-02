@@ -257,6 +257,19 @@ export class WorkspaceKernel {
     return this.tx(() => this.createResource('generic', title, projectId, mutation));
   }
 
+  /** Advance a specialized domain's canonical resource fence without changing
+   * its title/content/ownership. Compose the actual domain edit in withTransaction. */
+  touchGenericResource(resourceId: string, expectedVersion: number, mutation: Mutation = {}): Resource {
+    return this.tx(() => {
+      const resource = this.get('resources', resourceId) as Resource;
+      if (resource.kind !== 'generic' || resource.state !== 'active') throw new KernelError('INVALID', 'Generic resource is unavailable');
+      if (resource.version !== expectedVersion) throw new KernelError('CONFLICT', 'Resource version changed');
+      this.db.prepare('UPDATE resources SET version=version+1,updated_at=? WHERE id=?').run(stamp(), resourceId);
+      this.event('resource', resourceId, expectedVersion + 1, 'resource.metadata_updated', mutation);
+      return this.get('resources', resourceId);
+    });
+  }
+
   createNote(title: string, content: string, projectId: string | null = null, mutation: Mutation = {}): Resource {
     return this.tx(() => {
       if (typeof content !== 'string') throw new KernelError('INVALID', 'Note content must be text');
