@@ -456,6 +456,9 @@ export function installApplication(hooks: Hooks) {
     cancelPreview();
   });
   const velaCard = el<HTMLButtonElement>("#vela");
+  velaCard.addEventListener("focusout", () =>
+    document.body.classList.remove("vela-access"),
+  );
   const velaGrip = document.createElement("span");
   velaGrip.className = "vela-grip";
   velaGrip.textContent = "⠿ Move Vela";
@@ -523,6 +526,7 @@ export function installApplication(hooks: Hooks) {
     if (!presenceDrag) return;
     const d = presenceDrag;
     presenceDrag = null;
+    document.body.classList.remove("vela-access");
     suppressPresenceClick = d.moved;
     if (d.moved)
       void commitLayout({
@@ -1020,6 +1024,7 @@ export function installApplication(hooks: Hooks) {
       hooks.layout();
       hooks.wake();
       void saveView();
+      document.body.classList.add("vela-access");
       velaCard.focus();
     };
     dialog

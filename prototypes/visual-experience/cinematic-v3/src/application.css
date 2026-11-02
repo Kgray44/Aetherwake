@@ -323,6 +323,14 @@
   font-size: 11px;
   cursor: grab;
   touch-action: none;
+  z-index: 2;
+  pointer-events: auto;
+}
+.application-ready #vela.vela-card .presence-target {
+  pointer-events: none;
+}
+.application-ready.vela-access #vela.vela-card {
+  z-index: 300001;
 }
 .application-ready #vela.vela-card .vela-label {
   position: absolute;

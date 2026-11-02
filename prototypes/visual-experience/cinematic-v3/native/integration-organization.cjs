@@ -154,10 +154,13 @@ exports.verify = async ({
       await click("#layout-manager");
       await click(`[data-properties="${id}"]`);
     };
-    const point = async (selector) =>
-      js(
-        `(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,h=document.elementFromPoint(x,y);if(!h||!(e===h||e.contains(h)))throw Error('Native target occluded: '+${JSON.stringify(selector)});return{x:Math.round(x),y:Math.round(y)}})()`,
+    const point = async (selector) => {
+      const p = await js(
+        `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return{error:'Missing native target: '+${JSON.stringify(selector)}};const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,h=document.elementFromPoint(x,y);if(!h||!(e===h||e.contains(h)))return{error:'Native target occluded: '+${JSON.stringify(selector)}+' by '+h?.className};return{x:Math.round(x),y:Math.round(y)}})()`,
       );
+      if (p.error) throw Error(p.error);
+      return p;
+    };
     const drag = async (selector, dx, dy, during, pickup) => {
       const p = await point(selector);
       win.webContents.sendInputEvent({ type: "mouseMove", ...p });
