@@ -10,6 +10,16 @@ import { graphControls } from "./graph-controls.ts";
 import type { Vector3 } from "./spatial-types.ts";
 import { spatialControls, type SpatialCommand } from "./controls.ts";
 import { savedViewControls } from "./saved-view-controls.ts";
+import {
+  pointInsideUi,
+  segmentCrossesUi,
+  visibleUiRectangles,
+} from "./screen-ui.ts";
+
+export type ConstellationViewOptions = ControllerOptions & {
+  /** Up to 32 current host controls; measured on existing frames and input. */
+  hostUiElements?(): readonly HTMLElement[];
+};
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -21,12 +31,12 @@ const el = <K extends keyof HTMLElementTagNameMap>(
   n.className = className;
   return n;
 };
-const button = (text: string, fn: () => unknown) => {
+const button = (text: string, fn: (event: MouseEvent) => unknown) => {
   const b = el("button", text);
   b.type = "button";
-  b.onclick = () => {
+  b.onclick = (event) => {
     Promise.resolve()
-      .then(fn)
+      .then(() => fn(event))
       .catch(() => {});
   };
   return b;
@@ -35,7 +45,7 @@ const button = (text: string, fn: () => unknown) => {
 /** Transparent navigation layer. Host keeps V3.5 environment, Vela and editors. */
 export function mountConstellation(
   container: HTMLElement,
-  options: ControllerOptions,
+  options: ConstellationViewOptions,
 ) {
   let field: HTMLDivElement;
   let layer: ConstellationScene;
@@ -50,16 +60,19 @@ export function mountConstellation(
             : transition.to.kind === "surface"
               ? controller.nodes.get("resource:" + transition.to.blockId)
               : undefined;
-      const bounds = field?.getBoundingClientRect();
+      const bounds = container.getBoundingClientRect(),
+        drawnOrigin = n && layer ? layer.screenOrigin(n.key) : undefined;
       const p =
-        n && bounds && layer
+        !drawnOrigin && n && layer && bounds.width > 0 && bounds.height > 0
           ? layer.project(n.key, bounds.width, bounds.height)
           : null;
       options.onTransition?.({
         ...transition,
-        ...(p && bounds
-          ? { screenOrigin: { x: bounds.left + p.x, y: bounds.top + p.y } }
-          : {}),
+        ...(drawnOrigin
+          ? { screenOrigin: drawnOrigin }
+          : p
+            ? { screenOrigin: { x: bounds.left + p.x, y: bounds.top + p.y } }
+            : {}),
       });
     },
   });
@@ -108,31 +121,25 @@ export function mountConstellation(
   controller.spatial = spatial;
   const uiExclusions = () => {
     const bounds = field.getBoundingClientRect();
-    return [
-      bar,
-      detail,
-      status,
-      drawer,
-      controls.guide,
-      ...root.querySelectorAll<HTMLElement>(".aw-graph-dialog[open]"),
-      ...root.ownerDocument.querySelectorAll<HTMLElement>(
-        "#vela, #vela .vela-label, #vela .vela-grip, dialog.aw-contextual-surface[open], #command-surface[open], .floating-dialog:not([hidden])",
-      ),
-    ]
-      .filter(
-        (e) =>
-          !e.hidden &&
-          e.getClientRects().length > 0 &&
-          getComputedStyle(e).visibility === "visible",
-      )
-      .map((e) => e.getBoundingClientRect())
-      .filter((r) => r.width > 0 && r.height > 0)
-      .map((r) => ({
-        left: r.left - bounds.left,
-        top: r.top - bounds.top,
-        right: r.right - bounds.left,
-        bottom: r.bottom - bounds.top,
-      }));
+    return visibleUiRectangles(
+      [
+        bar,
+        detail,
+        status,
+        drawer,
+        controls.guide,
+        ...root.querySelectorAll<HTMLElement>(".aw-graph-dialog[open]"),
+        ...root.ownerDocument.querySelectorAll<HTMLElement>(
+          "#vela, #vela .vela-label, #vela .vela-grip, dialog.aw-contextual-surface[open], #command-surface[open], .floating-dialog:not([hidden])",
+        ),
+        ...(options.hostUiElements?.().slice(0, 32) ?? []),
+      ],
+      bounds,
+    );
+  };
+  const overUi = (x: number, y: number) => {
+    const bounds = field.getBoundingClientRect();
+    return pointInsideUi(x - bounds.left, y - bounds.top, uiExclusions());
   };
   layer = new ConstellationScene(
     controller,
@@ -633,7 +640,8 @@ export function mountConstellation(
     for (const n of nodes) {
       let v = views.get(n.key);
       if (!v) {
-        v = button("", () => {
+        v = button("", (event) => {
+          if (event.detail > 0 && overUi(event.clientX, event.clientY)) return;
           layer.selectedEdge = null;
           controller.select(n.key);
           queueViewSave();
@@ -645,7 +653,8 @@ export function mountConstellation(
           el("strong", n.title),
           el("small", n.kind),
         );
-        v.ondblclick = () => {
+        v.ondblclick = (event) => {
+          if (overUi(event.clientX, event.clientY)) return;
           void invoke(() => controller.approach(n.key));
         };
         v.onkeydown = (e) => {
@@ -677,8 +686,17 @@ export function mountConstellation(
     lines.replaceChildren();
     lines.style.display = "";
     lines.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    const leaderExclusions = spatialMode ? uiExclusions() : [];
     if (spatialMode)
       for (const p of labels) {
+        if (
+          segmentCrossesUi(
+            { x: p.anchorX, y: p.anchorY },
+            { x: p.x, y: p.y - 15 },
+            leaderExclusions,
+          )
+        )
+          continue;
         const line = document.createElementNS(lines.namespaceURI, "line");
         for (const [key, value] of Object.entries({
           x1: p.anchorX,
@@ -753,6 +771,7 @@ export function mountConstellation(
   } | null = null;
   field.onpointerdown = (e) => {
     if (e.button !== 0 && e.button !== 1) return;
+    if (overUi(e.clientX, e.clientY)) return;
     const label = (e.target as HTMLElement).closest<HTMLElement>(".aw-anchor");
     if (
       e.target !== field &&
@@ -882,8 +901,9 @@ export function mountConstellation(
   };
   field.onpointercancel = cancel;
   field.oncontextmenu = (e) => {
-    e.preventDefault();
     cancel();
+    if (e.button === 2 && overUi(e.clientX, e.clientY)) return;
+    e.preventDefault();
     const label = (e.target as HTMLElement).closest<HTMLElement>(".aw-anchor"),
       rect = field.getBoundingClientRect(),
       key =
@@ -899,6 +919,7 @@ export function mountConstellation(
   };
   field.ondblclick = (e) => {
     if (e.target !== field && e.target !== world) return;
+    if (overUi(e.clientX, e.clientY)) return;
     const rect = field.getBoundingClientRect(),
       hit = layer.pick(
         e.clientX - rect.left,
@@ -911,6 +932,7 @@ export function mountConstellation(
   field.addEventListener(
     "wheel",
     (e) => {
+      if (overUi(e.clientX, e.clientY)) return;
       e.preventDefault();
       const unit =
           e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? field.clientHeight : 1,
@@ -936,10 +958,10 @@ export function mountConstellation(
               : undefined;
         controller.zoom(factor, focus);
       }
+      queueViewSave();
     },
     { passive: false },
   );
-  field.addEventListener("wheel", queueViewSave, { passive: true });
   field.onkeydown = (e) => {
     if (
       e.defaultPrevented ||
@@ -1058,6 +1080,7 @@ export function mountConstellation(
   return {
     controller,
     layer,
+    uiExclusions,
     ready: controller.restore(),
     frame,
     update(snapshot: Snapshot) {

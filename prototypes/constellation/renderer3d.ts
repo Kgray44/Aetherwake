@@ -80,6 +80,12 @@ export class ConstellationScene implements SpatialRenderLayer {
   private disposed = false;
   private preparedKey = "";
   private labelOffsets = new Map<string, { x: number; y: number }>();
+  private renderedProjection?: {
+    left: number;
+    top: number;
+    nodes: Map<string, Node>;
+    bodies: readonly { key: string; x: number; y: number }[];
+  };
   selectedEdge: string | null = null;
   enabled = true;
   diagnostics = {
@@ -243,6 +249,32 @@ export class ConstellationScene implements SpatialRenderLayer {
   project(key: string, width: number, height: number) {
     this.configure(width, height);
     return this.projectPrepared(key, width, height);
+  }
+  /** Last drawn CSS pixels remain valid while canonical arrival hides the field. */
+  screenOrigin(key: string) {
+    if (
+      !this.enabled ||
+      this.lost ||
+      this.disposed ||
+      this.controller.policy.hidden ||
+      !this.controller.policy.graphicsAvailable ||
+      this.navigation.presentation !== "spatial"
+    )
+      return undefined;
+    const rendered = this.renderedProjection,
+      current = this.controller.nodes.get(key),
+      previous = rendered?.nodes.get(key);
+    if (
+      !rendered ||
+      !current ||
+      previous?.id !== current.id ||
+      previous.kind !== current.kind
+    )
+      return undefined;
+    const point = rendered.bodies.find((body) => body.key === key);
+    return point && Number.isFinite(point.x) && Number.isFinite(point.y)
+      ? { x: rendered.left + point.x, y: rendered.top + point.y }
+      : undefined;
   }
   private projectPrepared(key: string, width: number, height: number) {
     const p = this.navigation.position(key),
@@ -743,8 +775,7 @@ export class ConstellationScene implements SpatialRenderLayer {
     const blocked = this.exclusions(),
       halfWidth = 95,
       halfHeight = 34;
-    const free = (x: number, y: number, selected: boolean) =>
-      !(x > width * 0.66 && y < height * 0.5 && !selected) &&
+    const free = (x: number, y: number) =>
       !accepted.some(
         (a) =>
           Math.abs(a.x - x) < halfWidth * 2 &&
@@ -801,11 +832,7 @@ export class ConstellationScene implements SpatialRenderLayer {
             halfHeight,
             Math.min(height - halfHeight, p.y + offset.y),
           );
-        if (
-          width < halfWidth * 2 ||
-          height < halfHeight * 2 ||
-          !free(x, y, n.key === this.controller.selected)
-        )
+        if (width < halfWidth * 2 || height < halfHeight * 2 || !free(x, y))
           continue;
         accepted.push({
           node: n,
@@ -851,24 +878,35 @@ export class ConstellationScene implements SpatialRenderLayer {
               r.bottom + halfHeight + 8,
             ]),
           );
-        scan: for (const y of ys)
+        xs.sort((a, b) => Math.abs(a - p.x) - Math.abs(b - p.x));
+        ys.sort((a, b) => Math.abs(a - p.y) - Math.abs(b - p.y));
+        let nearest: { x: number; y: number; distance: number } | undefined;
+        for (const y of ys) {
+          const vertical = (y - p.y) ** 2;
+          if (nearest && vertical > nearest.distance) break;
           for (const x of xs) {
-            if (free(x, y, n.key === this.controller.selected)) {
-              accepted.push({
-                node: n,
-                x,
-                y,
-                anchorX: p.x,
-                anchorY: p.y,
-                bodyVisible: this.visibleKeys.has(n.key),
-                depth: p.depth,
-                radius: 30,
-              });
-              this.labelOffsets.set(n.key, { x: x - p.x, y: y - p.y });
-              placed = true;
-              break scan;
+            const distance = (x - p.x) ** 2 + vertical;
+            if (nearest && distance >= nearest.distance) break;
+            if (free(x, y)) {
+              nearest = { x, y, distance };
+              break;
             }
           }
+        }
+        if (nearest) {
+          const { x, y } = nearest;
+          accepted.push({
+            node: n,
+            x,
+            y,
+            anchorX: p.x,
+            anchorY: p.y,
+            bodyVisible: this.visibleKeys.has(n.key),
+            depth: p.depth,
+            radius: 30,
+          });
+          this.labelOffsets.set(n.key, { x: x - p.x, y: y - p.y });
+        }
       }
       if (accepted.length >= max) break;
     }
@@ -965,6 +1003,12 @@ export class ConstellationScene implements SpatialRenderLayer {
       renderer.setScissorTest(true);
       renderer.clearDepth();
       renderer.render(this.scene, this.camera);
+      this.renderedProjection = {
+        left: rect.left,
+        top: rect.top,
+        nodes: this.controller.nodes,
+        bodies: this.diagnostics.projectedBodies,
+      };
       this.diagnostics.drawCalls = renderer.info.render.calls - beforeCalls;
       this.diagnostics.triangles =
         renderer.info.render.triangles - beforeTriangles;
@@ -978,6 +1022,7 @@ export class ConstellationScene implements SpatialRenderLayer {
   }
   contextLost() {
     this.lost = true;
+    this.renderedProjection = undefined;
     this.pendingArrivals.clear();
   }
   contextRestored() {
@@ -986,6 +1031,7 @@ export class ConstellationScene implements SpatialRenderLayer {
   }
   dispose() {
     this.disposed = true;
+    this.renderedProjection = undefined;
     this.unsubscribe();
     this.pendingArrivals.clear();
     this.arriving.clear();

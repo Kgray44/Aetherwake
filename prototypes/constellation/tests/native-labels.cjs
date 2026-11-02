@@ -76,14 +76,25 @@ exports.verifyWorkspaceGuide = async (win) => {
 exports.checkLabelClearance = async (win) => {
   const result = await win.webContents.executeJavaScript(
     `(()=>{
-    const visible=e=>!e.hidden&&e.getClientRects().length>0&&getComputedStyle(e).visibility==='visible';
+    const visible=e=>{const s=getComputedStyle(e);return !e.hidden&&e.getClientRects().length>0&&s.visibility==='visible'&&s.display!=='none'&&s.opacity!=='0';};
     const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,top:r.top,right:r.right,bottom:r.bottom};};
-    const ui=[...document.querySelectorAll('.aw-constellation-bar,.aw-spatial-detail,.aw-spatial-status,.aw-destinations,.aw-navigation-guide,.aw-graph-dialog[open],#vela,#vela .vela-label,#vela .vela-grip,dialog.aw-contextual-surface[open],#command-surface[open],.floating-dialog:not([hidden])')].filter(visible).map(e=>({role:e.id||e.className,bounds:rect(e)})).filter(item=>item.bounds.right>item.bounds.left&&item.bounds.bottom>item.bounds.top);
+    const field=document.querySelector('.aw-spatial-field')?.getBoundingClientRect();
+    const fullViewport=field&&Math.abs(field.left)<1&&Math.abs(field.top)<1&&Math.abs(field.width-innerWidth)<1&&Math.abs(field.height-innerHeight)<1;
+    const observed=window.__aerynth?.snapshot?.().spatial?.uiExclusions;
+    if(fullViewport&&!Array.isArray(observed))return {invalid:'Full viewport requires measured host UI exclusions'};
+    if(observed!==undefined&&(!Array.isArray(observed)||observed.length>128||observed.some(r=>!r||!['left','top','right','bottom'].every(k=>Number.isFinite(r[k]))||r.right<=r.left||r.bottom<=r.top)))return {invalid:'Invalid bounded UI exclusion observations'};
+    const measured=field&&Array.isArray(observed)?observed.map((r,i)=>({role:'measured-ui-'+i,bounds:{left:field.left+r.left,top:field.top+r.top,right:field.left+r.right,bottom:field.top+r.bottom}})):[];
+    const ui=[...document.querySelectorAll('.aw-constellation-bar,.aw-spatial-detail,.aw-spatial-status,.aw-destinations,.aw-navigation-guide,.aw-graph-dialog[open],#vela,#vela .vela-label,#vela .vela-grip,dialog.aw-contextual-surface[open],#command-surface[open],.floating-dialog:not([hidden]),.topbar,.dock,.canvas-tools,#status,.keys,.provenance')].filter(visible).map(e=>({role:e.id||e.className,bounds:rect(e)})).filter(item=>item.bounds.right>item.bounds.left&&item.bounds.bottom>item.bounds.top).concat(measured);
     const labels=[...document.querySelectorAll('.aw-spatial-label')].filter(visible).map(e=>({key:e.dataset.key,bounds:rect(e)}));
     const intersects=(a,b)=>a.left<b.right&&a.right>b.left&&a.top<b.bottom&&a.bottom>b.top;
-    return {viewport:{width:innerWidth,height:innerHeight},labels,ui,collisions:labels.flatMap(label=>ui.filter(item=>intersects(label.bounds,item.bounds)).map(item=>({key:label.key,ui:item.role,label:label.bounds,bounds:item.bounds})))};
+    return {viewport:{width:innerWidth,height:innerHeight},measuredUiExclusions:Array.isArray(observed),labels,ui,collisions:labels.flatMap(label=>ui.filter(item=>intersects(label.bounds,item.bounds)).map(item=>({key:label.key,ui:item.role,label:label.bounds,bounds:item.bounds})))};
   })()`,
     true,
+  );
+  assert.equal(
+    result.invalid,
+    undefined,
+    "valid actual UI exclusion observations",
   );
   assert.ok(
     result.labels.length > 0,

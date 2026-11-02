@@ -1,6 +1,7 @@
 .aw-constellation {
   --aw-ink: #eeeaf9;
   --aw-muted: #c0b7d0;
+  --aw-footer-clearance: 56px;
   position: absolute;
   inset: 0;
   color: var(--aw-ink);
@@ -51,7 +52,7 @@
 .aw-constellation-bar {
   position: absolute;
   z-index: 6;
-  bottom: 22px;
+  bottom: var(--aw-footer-clearance);
   left: 24px;
   display: flex;
   align-items: center;
@@ -207,7 +208,7 @@
 .aw-spatial-status {
   position: absolute;
   right: 24px;
-  bottom: 24px;
+  bottom: var(--aw-footer-clearance);
   max-width: min(320px, 40vw);
   font-size: 12px;
   text-shadow: 0 2px 6px #000;
@@ -219,7 +220,7 @@
 .aw-spatial-status.aw-status-away {
   left: 24px;
   right: auto;
-  bottom: 80px;
+  bottom: calc(var(--aw-footer-clearance) + 58px);
 }
 /* Preserve live-region access when both visual hint positions are occupied. */
 .aw-spatial-status.aw-status-quiet {
@@ -234,11 +235,11 @@
 .aw-spatial-detail {
   position: absolute;
   z-index: 7;
-  bottom: 80px;
+  bottom: calc(var(--aw-footer-clearance) + 58px);
   left: 24px;
   width: min(340px, calc(100% - 48px));
   box-sizing: border-box;
-  max-height: calc(100% - 110px);
+  max-height: calc(100% - var(--aw-footer-clearance) - 88px);
   overflow: auto;
   padding: 19px;
   overscroll-behavior: contain;
@@ -463,21 +464,21 @@
 @media (max-width: 600px) {
   .aw-constellation-bar {
     left: 14px;
-    bottom: 14px;
+    bottom: var(--aw-footer-clearance);
     max-width: calc(100% - 28px);
   }
   .aw-destinations,
   .aw-navigation-guide,
   .aw-spatial-detail {
     left: 14px;
-    bottom: 70px;
+    bottom: calc(var(--aw-footer-clearance) + 56px);
     width: min(340px, calc(100% - 28px));
-    max-height: calc(100% - 90px);
+    max-height: calc(100% - var(--aw-footer-clearance) - 76px);
     padding: 16px;
   }
   .aw-spatial-status {
     right: 14px;
-    bottom: 70px;
+    bottom: calc(var(--aw-footer-clearance) + 56px);
     max-width: calc(100% - 28px);
   }
 }
