@@ -1,5 +1,5 @@
 import type { ConstellationController } from "./controller.ts";
-import { keyOf, locationNode } from "./projection.ts";
+import { isUniverseRoot, keyOf, locationNode } from "./projection.ts";
 import type { Anchor, Node } from "./types.ts";
 import type { SpatialCamera, Vector3 } from "./spatial-types.ts";
 import { hash } from "./identity.ts";
@@ -616,7 +616,7 @@ export class SpatialNavigator {
     if (
       factor > 1 &&
       focus?.available &&
-      ((c.location.kind === "universe" && focus.kind === "project") ||
+      ((c.location.kind === "universe" && focusInScope) ||
         (c.location.kind === "project" &&
           focusInScope &&
           (focusKey || !this.neighborhood)))
@@ -666,10 +666,11 @@ export class SpatialNavigator {
     )
       destination = { kind: "universe" };
     else if (
-      c.location.kind === "project" &&
+      (c.location.kind === "project" || c.location.kind === "universe") &&
       factor > 1 &&
       focus?.available &&
-      focusInScope
+      focusInScope &&
+      focus.kind !== "project"
     ) {
       if (focus.kind === "workspace" && p.distance < 700)
         destination = { kind: "workspace", workspaceId: focus.id };
@@ -1038,11 +1039,8 @@ export class SpatialNavigator {
       l = c.location;
     if (l.kind === "workspace" || l.kind === "surface") return [];
     let all = [...c.nodes.values()];
-    if (l.kind === "universe")
-      return all.filter(
-        (n) => n.kind === "project" || (n.kind === "workspace" && !n.parent),
-      );
-    all = this.projectNodes(keyOf("project", l.projectId), all);
+    if (l.kind === "universe") all = all.filter(isUniverseRoot);
+    else all = this.projectNodes(keyOf("project", l.projectId), all);
     if (this.neighborhood) {
       const keys = new Set(all.map((n) => n.key));
       for (const n of this.relatedNodes()) if (!keys.has(n.key)) all.push(n);

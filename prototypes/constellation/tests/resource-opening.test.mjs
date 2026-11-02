@@ -118,12 +118,12 @@ test("unplaced Open dispatches canonical identity and preserves exact spatial co
   dispose();
 });
 
-test("resources with no project, placement or projected node open directly with optional message selection", async () => {
+test("resources with no project or placement are discoverable roots and open directly with optional message selection", async () => {
   const { c, n, calls, dispose } = setup(),
     before = context(c, n);
   assert.equal(
     [...c.nodes.values()].some((node) => node.id === "orphan"),
-    false,
+    true,
   );
   await c.openResource("orphan");
   await c.openResource("unplaced", { selection: { messageId: "message" } });

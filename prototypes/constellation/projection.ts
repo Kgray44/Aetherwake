@@ -9,6 +9,8 @@ export const scopeOf = (l: Location) =>
       : `workspace:${l.workspaceId}`;
 export const permitted = (value: { visible?: boolean }) =>
   value.visible !== false;
+/** Logical Universe scope; this does not create a canonical domain object. */
+export const isUniverseRoot = (node: Node) => node.parent === null;
 
 /** Filter BEFORE layout/counts/search. The service remains the policy authority. */
 export function project(
@@ -40,7 +42,17 @@ export function project(
       workspacesById.has(b.workspace_id) &&
       resources.has(b.resource_id),
   );
-  const occupied = new Map<string, Set<string>>();
+  const placedResources = new Set(blocks.map((block) => block.resource_id)),
+    universeResources = [...resources.values()]
+      .filter(
+        (resource) =>
+          resource.project_id == null && !placedResources.has(resource.id),
+      )
+      .toSorted((a, b) => a.id.localeCompare(b.id));
+  for (const resource of universeResources)
+    eligibleAnchors.add(keyOf("resource", "unplaced:" + resource.id));
+  const occupied = new Map<string, Set<string>>(),
+    cursors = new Map<string, number>();
   const position = (
     key: string,
     scope: string,
@@ -58,18 +70,29 @@ export function project(
       occupied.set(scope, used);
     }
     // Incremental grid: new objects occupy empty cells; existing objects never move.
-    let index = 0,
+    let index = cursors.get(scope) ?? 0,
       x = 0,
       y = 0;
+    const scale = scope === "universe-resources" ? 1 : spacing;
     do {
-      x = (index % 4) - 1.5;
-      y = Math.floor(index / 4) - 0.5;
+      if (scope === "universe-resources") {
+        // A compact append-only spiral avoids a long strip as independent
+        // resources grow. Existing/manual points remain authoritative.
+        const radius = Math.sqrt(index),
+          angle = index * 2.399963229728653;
+        x = Math.round(Math.cos(angle) * radius * spacing);
+        y = Math.round(Math.sin(angle) * radius * spacing);
+      } else {
+        x = (index % 4) - 1.5;
+        y = Math.floor(index / 4) - 0.5;
+      }
       index++;
-    } while (used.has(`${center.x + x * spacing},${center.y + y * spacing}`));
-    used.add(`${center.x + x * spacing},${center.y + y * spacing}`);
+    } while (used.has(`${center.x + x * scale},${center.y + y * scale}`));
+    used.add(`${center.x + x * scale},${center.y + y * scale}`);
+    cursors.set(scope, index);
     return (anchors[key] = {
-      x: center.x + x * spacing,
-      y: center.y + y * spacing,
+      x: center.x + x * scale,
+      y: center.y + y * scale,
     });
   };
   for (const p of projects.toSorted((a, b) => a.id.localeCompare(b.id))) {
@@ -154,6 +177,21 @@ export function project(
         point: { x: center.x + 200, y: center.y + 200 },
       });
     }
+  // Independently granted resources need no project or placement to exist here.
+  for (const resource of universeResources) {
+    const key = keyOf("resource", "unplaced:" + resource.id);
+    nodes.set(key, {
+      key,
+      id: resource.id,
+      resourceId: resource.id,
+      resourceKind: resource.kind,
+      title: resource.title,
+      kind: "resource",
+      parent: null,
+      available: resource.available !== false,
+      point: position(key, "universe-resources", { x: 0, y: 0 }, 160),
+    });
+  }
   // Canonical membership may organize a presentation, never change placement or ownership.
   const memberships = snapshot.relationships.filter(
     (e) =>

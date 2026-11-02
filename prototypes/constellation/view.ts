@@ -565,7 +565,7 @@ export function mountConstellation(
       ? `${p?.title ?? "Standalone"} / ${w?.title ?? "Unavailable"}${l.kind === "surface" ? " / Resource" : ""}`
       : l.kind === "project"
         ? `${p?.title ?? "Project"} / ${spatial.neighborhood ? "Resource neighborhood" : "Constellation"}`
-        : "Universe / Projects";
+        : "Universe";
     breadcrumb.title = breadcrumb.textContent;
     status.textContent =
       controller.error ||
@@ -573,7 +573,7 @@ export function mountConstellation(
       (controller.pending
         ? "Opening destination…"
         : controller.nodes.size === 0
-          ? "No projects yet. Create one in the application."
+          ? "Your constellation is empty. Create a resource to get started."
           : !controller.policy.graphicsAvailable
             ? "Graphics unavailable. Direct navigation remains available."
             : "");

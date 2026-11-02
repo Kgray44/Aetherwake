@@ -5,6 +5,7 @@ import {
 import {
   allowedLocation,
   isLocation,
+  isUniverseRoot,
   keyOf,
   locationNode,
   project,
@@ -140,7 +141,7 @@ export class ConstellationController {
   private defaultCamera(): Camera {
     const n = locationNode(this.location, this.nodes);
     if (this.location.kind === "universe") {
-      const roots = [...this.nodes.values()].filter((n) => n.parent === null);
+      const roots = [...this.nodes.values()].filter(isUniverseRoot);
       return roots.length
         ? {
             x: roots.reduce((s, n) => s + n.point.x, 0) / roots.length,
@@ -553,7 +554,9 @@ export class ConstellationController {
             : { kind: "universe" }
           : projectId
             ? { kind: "project", projectId }
-            : { kind: "workspace", workspaceId: n.workspaceId! };
+            : n.workspaceId
+              ? { kind: "workspace", workspaceId: n.workspaceId }
+              : { kind: "universe" };
     const manualRevision = this.spatial?.manualRevision,
       travel = this.go(parent),
       generation = this.generation;
@@ -888,7 +891,7 @@ export class ConstellationController {
     const candidates = [...this.nodes.values()]
       .filter((n) =>
         l.kind === "universe"
-          ? n.kind === "project" || (n.kind === "workspace" && !n.parent)
+          ? isUniverseRoot(n)
           : n.key === keyOf("project", l.projectId) ||
             n.parent === keyOf("project", l.projectId) ||
             ((c.zoom > 1.4 || n.key === this.selected) &&

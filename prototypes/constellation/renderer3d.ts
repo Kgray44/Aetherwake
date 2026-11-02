@@ -849,6 +849,7 @@ export class ConstellationScene implements SpatialRenderLayer {
     const blocked = this.exclusions(),
       halfWidth = 95,
       halfHeight = 34;
+    let rootCaptions = 0;
     const free = (x: number, y: number) =>
       !accepted.some(
         (a) =>
@@ -863,14 +864,24 @@ export class ConstellationScene implements SpatialRenderLayer {
           y - halfHeight - 8 < r.bottom,
       );
     for (const n of this.labelNodes) {
+      const rootResource = n.kind === "resource" && n.parent === null;
+      if (
+        rootResource &&
+        n.key !== this.controller.selected &&
+        !this.relatedKeys.has(n.key) &&
+        rootCaptions++ >= max
+      )
+        continue;
       const p = this.projectPrepared(n.key, width, height);
       if (p.depth < -1 || p.depth > 1) continue;
       const essential =
         n.kind !== "resource" ||
+        rootResource ||
         n.key === this.controller.selected ||
         this.relatedKeys.has(n.key);
       if (
         n.kind === "resource" &&
+        !rootResource &&
         this.navigation.camera.distance > 2400 &&
         !this.relatedKeys.has(n.key) &&
         n.key !== this.controller.selected
