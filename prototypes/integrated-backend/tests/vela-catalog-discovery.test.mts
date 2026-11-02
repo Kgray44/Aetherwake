@@ -292,7 +292,7 @@ test('native consent refuses a changed effective catalog; a rejected experimenta
     });
     await assert.rejects(
       f.core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature }),
-      /capability_discovery_grant_mismatch/,
+      /stale_capability_catalog/,
     );
     assert.equal(Object.keys((await f.core.command('snapshot', {})).executions).length, 0);
   } finally {

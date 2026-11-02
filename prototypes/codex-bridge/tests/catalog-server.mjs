@@ -1,5 +1,7 @@
 /** Explicit synthetic stdio protocol double. Never authenticates or contacts a provider. */
 import { createInterface } from 'node:readline';
+import { randomUUID } from 'node:crypto';
+const fixtureSession = randomUUID();
 const mode = process.argv[2] ?? 'normal',
   send = (message) => process.stdout.write(JSON.stringify(message) + '\n');
 let experimental = false,
@@ -21,21 +23,20 @@ const session = (id) => ({
 });
 const complete = (status = 'completed') => send({ method: 'turn/completed', params: { threadId: currentThread, turn: { id: currentTurn, status } } });
 const finish = () => {
-  const response =
-    mode === 'answer'
-      ? { schemaVersion: 2, kind: 'answer', content: 'Synthetic observed protocol answer.' }
-      : {
-          schemaVersion: 2,
-          kind: 'plan',
-          summary: 'Synthetic folder proposal.',
-          steps: [
-            {
-              id: 'create',
-              explanation: 'Explicit protocol regression, not live model qualification.',
-              action: { type: 'createCollection', title: 'Synthetic proposed folder', projectId: null },
-            },
-          ],
-        };
+  const response = ['answer', 'answer-catalog'].includes(mode)
+    ? { schemaVersion: 2, kind: 'answer', content: 'Synthetic observed protocol answer.' }
+    : {
+        schemaVersion: 2,
+        kind: 'plan',
+        summary: 'Synthetic folder proposal.',
+        steps: [
+          {
+            id: 'create',
+            explanation: 'Explicit protocol regression, not live model qualification.',
+            action: { type: 'createCollection', title: 'Synthetic proposed folder', projectId: null },
+          },
+        ],
+      };
   send({ method: 'item/agentMessage/delta', params: { threadId: currentThread, turnId: currentTurn, delta: JSON.stringify(response) } });
   complete();
 };
@@ -108,7 +109,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       send({ id: message.id, error: { code: -32602, message: 'dynamicTools unsupported by synthetic protocol mode' } });
       return;
     }
-    currentThread = 'fixture-catalog-thread:' + ++threadCounter;
+    currentThread = 'fixture-catalog-thread:' + fixtureSession + ':' + ++threadCounter;
     send({ method: 'fixture/threadStart', params: { threadId: currentThread, params: message.params, experimental } });
     reply(session(currentThread));
     return;
@@ -123,7 +124,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (message.method === 'turn/start') {
     currentThread = message.params.threadId;
-    currentTurn = 'fixture-catalog-turn:' + threadCounter;
+    currentTurn = 'fixture-catalog-turn:' + fixtureSession + ':' + threadCounter;
     turnRequest = message.id;
     try {
       task = JSON.parse(message.params.input[0].text.split('\n').at(-1));

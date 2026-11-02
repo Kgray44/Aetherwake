@@ -6,21 +6,23 @@ import { DesktopState } from './desktop.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
-import { ConversationGraph, type GraphData, type ProviderAdapter as GraphAdapter } from '../../connected-conversations/src/graph.ts';
+import { ConversationGraph, type GraphData, type MessageMetadata, type ProviderAdapter as GraphAdapter } from '../../connected-conversations/src/graph.ts';
 import { localConversationAdapter, mockOrdinaryAdapter } from '../../connected-conversations/src/adapters.ts';
 import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
 import { nativeProvider, fixtureProvider } from './providers.mts';
 import { ConversationProduct, type AttachedContext } from '../../conversation-product/src/service.mts';
 import { createCanonicalOrganizationAdapter, createCanonicalAccessHelper, createObservedCapabilityCache } from '../../conversation-product/src/canonical-host.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
-import { VelaService } from '../../vela-core/src/service.mts';
+import { VelaService, VELA_PLANNING_INSTRUCTION } from '../../vela-core/src/service.mts';
 import { createCanonicalVelaHost, type CanonicalVelaHost, type CanonicalVelaMetadata } from '../../vela-core/src/canonical-host.mts';
-import { CodexPlanningAdapter, planningDigest, type CodexPlanningGrant, type PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
+import { CodexPlanningAdapter, planningDigest, buildCodexPlanningPrompt, type CodexPlanningGrant, type PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
 import { CAPABILITIES } from '../../vela-core/src/capabilities.ts';
 import { CapabilityCatalogLease, createCapabilityCatalog, validateCatalogDeclaration, capabilityToolFailure } from '../../vela-core/src/capability-catalog.mts';
 import type { CapabilityCatalogSnapshot, CapabilityNativeCall, CapabilityToolReply } from '../../vela-core/src/capability-catalog.mts';
+import { historyDigest } from '../../vela-core/src/bounded-history.mts';
+import type { AcceptedHistoryAppend, HistoryFence, HistoryOrigin, HistoryOmission, PrivateFrozenProviderContext, HistoryMessageMetadata, HistoryRequestRecord, HistorySnapshot } from '../../vela-core/src/bounded-history.mts';
 import type { VelaMessage, ContextManifest, AuthorizationRequest, AuthorizationDecision, VelaPlanningPort, ResourceRef, VelaPlan, HostActionResult, CapabilityDescriptor, VelaScopePurpose } from '../../vela-core/src/contracts.ts';
-import type { VelaRequestPreview, VelaNativeCapabilities, VelaBackendState } from './contracts.mts';
+import type { VelaRequestPreview, VelaNativeReview, VelaNativeCapabilities, VelaBackendState } from './contracts.mts';
 import { TemplateService } from '../../block-library/service.mts';
 import { createCanonicalTemplateHost } from '../../block-library/canonical-host.mts';
 import { NoteExperienceService } from '../../block-library/note-service.mts';
@@ -44,6 +46,10 @@ interface State {
   contextSupplies?: Record<string, { resourceId:string; turnId:string; suppliedAt:string; items:{shareId:string;digest:string;sourceResourceId:string;sourceMessageId:string}[] }>;
   vela?: { conversationId:string|null; messages:Record<string,Omit<VelaMessage,'id'|'role'|'content'>>; planning:Record<string,Omit<PlanningObservation,'executionState'>>; delegations:Record<string,{requestId:string;planId:string;objective:string;resourceIds:string[];executionId:string}> };
 }
+interface PrivateVelaPreview extends VelaRequestPreview {
+  frozenContext:ContextManifest;historyFence?:HistoryFence;origin:HistoryOrigin;historyOmissions:readonly HistoryOmission[];
+  catalog:CapabilityCatalogSnapshot;prompt:string;nativeReviewed:boolean;reviewDigest?:string;acceptedAppend?:AcceptedHistoryAppend;
+}
 
 export class BackendCore {
   private kernel: WorkspaceKernel;
@@ -64,6 +70,7 @@ export class BackendCore {
   private closed = false;
   private desktop: DesktopState;
   private privateMode: boolean;
+  private readonly historyContextEnabled:boolean;
   private conversations!: ConversationProduct;
   private conversationAccess!: ReturnType<typeof createCanonicalAccessHelper>;
   private capabilityCache = createObservedCapabilityCache();
@@ -77,8 +84,8 @@ export class BackendCore {
   private conversationOrganization!:ReturnType<typeof createCanonicalOrganizationAdapter>;
   /** Per-apply presenter context only. Never a resource store or model action. */
   private velaPresentations=new Map<string,WorkspacePresentationContext|null>();
-  private velaPreviews=new Map<string,VelaRequestPreview>();
-  private velaGrants=new Map<string,{previewId:string;expiresAt:string;requestId?:string;consumed:boolean;planning?:CodexPlanningGrant}>();
+  private velaPreviews=new Map<string,PrivateVelaPreview>();
+  private velaGrants=new Map<string,{previewId:string;expiresAt:string;requestId?:string;consumed:boolean;planning?:CodexPlanningGrant;reviewDigest?:string}>();
   private velaCatalogLeases=new Map<string,{catalog:CapabilityCatalogSnapshot;lease:CapabilityCatalogLease;previewId:string;executionId:string;sourceConversationId:string;expiresAt:string;revoked:boolean;threadId?:string;ready:Promise<void>;resolveReady():void}>();
   private velaPolicyGrants=new Map<string,{requestId:string;planId?:string;fingerprint?:string;phase:string;expiresAt:string}>();
   private velaDelegationGrants=new Map<string,{planId:string;stepId:string;fingerprint:string;actionDigest:string;contextDigest:string;expiresAt:string;consumed:boolean}>();
@@ -87,6 +94,7 @@ export class BackendCore {
   private notes!:NoteExperienceService;
   constructor(options: Options, emit: (event: StreamEvent) => void = () => {}) {
     this.privateMode = options.contentPolicy === 'local-private';
+    this.historyContextEnabled=options.velaHistoryContext===true;
     if (options.contentPolicy !== 'synthetic-only') {
       ensure(options.contentPolicy === 'local-private' && options.privateRoot && isAbsolute(options.path), 'protected_storage_unavailable');
       const privateRoot = realpathSync(options.privateRoot!);
@@ -105,6 +113,9 @@ export class BackendCore {
         this.db = db;
         if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_schema'").get()){
           const versions=db.prepare('SELECT version FROM cp_schema').all();ensure(versions.length===1&&[1,2].includes(Number(versions[0].version)),'unsupported_conversation_product_schema');
+        }
+        if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vela_state'").get()){
+          const versions=db.prepare('SELECT schema_version FROM vela_state').all();ensure(versions.length<=1&&versions.every(row=>[1,2,3].includes(Number(row.schema_version))),'unsupported_vela_schema');
         }
         // Hard prototype file ceiling: 128 MiB main database, no WAL. Journal
         // can temporarily add another 128 MiB; ReserveGuard budgets 512 MiB.
@@ -192,7 +203,7 @@ export class BackendCore {
       applyDesktopCommand:command=>this.desktop.apply(command,()=>{throw new ServiceError('unexpected_note_conversation_creation');}),
       renameResource:input=>{this.kernel.renameResource(input.resourceId,input.title,input.expectedVersion);},
     }));
-    this.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources','createResource','attach','applyStructuredPreset','createProject','createWorkspace','renameWorkspace','taskPriority','bringAllIntoView','resolveLayout','setOrganization','createConversation','conversationFavorite','renameConversation','associateConversationProject','createCollection','renameCollection','archiveCollection','collectionMembership'],workspaceRevision:id=>engine.project(id).revision,dispatch:input=>{
+    this.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources','createResource','attach','applyStructuredPreset','createProject','createWorkspace','renameWorkspace','taskPriority','bringAllIntoView','resolveLayout','setOrganization','createConversation','conversationFavorite','renameConversation','associateConversationProject','createCollection','renameCollection','archiveCollection','collectionMembership'],workspaceRevision:id=>Number(this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(id)?.version??0),dispatch:input=>{
       const a=input.action;
       if(a.type==='createCollection') {
         const created=this.conversationOrganization.native({type:'createCollection',title:a.title,projectId:a.projectId}) as {id:string};
@@ -327,8 +338,53 @@ export class BackendCore {
     });
     return {resourceId,revision:this.state.revisions[resourceId],messages};
   }
+  private velaHistorySourceAllowed(meta:Pick<MessageMetadata,'id'|'conversationId'|'unavailable'>,scopeIds:ReadonlySet<string>):boolean {
+    if(meta.unavailable)return false;try{const sourceId=this.publicId(meta.conversationId);return scopeIds.has(sourceId)&&this.conversationAccess.resource(sourceId,'read')===true;}catch{return false;}
+  }
+  private velaHistoryMessageMetadata(conversationId:string,messageId:string):HistoryMessageMetadata|null {
+    if(conversationId!==this.state.vela!.conversationId||!this.conversationAccess.resource(conversationId,'read'))return null;
+    const gid=this.state.resources[conversationId],conversation=this.state.graph.conversations.find(value=>value.id===gid);
+    // The system Vela conversation is a canonical root. Refuse a corrupted/reparented identity rather than recreate lineage rules.
+    if(!conversation||this.state.graph.edges.some(edge=>edge.childId===gid)||this.state.graph.unavailableMessageIds.includes(messageId))return null;
+    const index=conversation.ownMessageIds.indexOf(messageId),message=this.state.graph.messages.find(value=>value.id===messageId&&value.conversationId===gid),meta=this.state.vela!.messages[messageId];
+    if(index<0||!message||!meta)return null;
+    return structuredClone({id:messageId,conversationId,ordinal:index+1,role:message.role,source:meta.source,classification:meta.classification,...(meta.requestId?{requestId:meta.requestId}:{}),...(meta.providerId?{providerId:meta.providerId}:{}),...(meta.responseKind?{responseKind:meta.responseKind}:{}),...(meta.providerContribution?{providerContribution:meta.providerContribution}:{})});
+  }
+  private velaHistorySnapshot(conversationId:string,limit:number):HistorySnapshot|null {
+    if(conversationId!==this.state.vela!.conversationId||!this.conversationAccess.resource(conversationId,'read'))return null;
+    const scopeIds=new Set(this.velaHost.scope().resourceIds),window=this.graph.visibleMessageMetadata(this.gid(conversationId),{limit,maxScan:4096,maxBodyBytes:131072,tail:true,allow:meta=>this.velaHistorySourceAllowed(meta,scopeIds)});
+    if(window.limitedBy==='denied'||window.limitedBy==='scan-limit')return null;
+    const headers=[];for(const item of window.items){const meta=this.velaHistoryMessageMetadata(conversationId,item.id);if(!meta)return null;headers.push({id:item.id,requestId:meta.requestId,role:meta.role,source:meta.source,ordinal:meta.ordinal,contentBytes:item.bodyBytes});}
+    return {conversationId,revision:this.state.revisions[conversationId],headers,hasEarlier:window.hasMore};
+  }
+  private velaHistoryMessage(conversationId:string,messageId:string,maxBytes:number) {
+    const meta=this.velaHistoryMessageMetadata(conversationId,messageId);if(!meta)return null;
+    const message=this.state.graph.messages.find(value=>value.id===messageId)!;
+    if(message.content.length>maxBytes||Buffer.byteLength(message.content)>maxBytes)return {overBudget:true as const};
+    const {conversationId:_id,ordinal,...fields}=meta;return {conversationId,ordinal,message:{...fields,content:message.content}};
+  }
+  private velaHistoryContent(ref:ResourceRef,maxBytes:number) {
+    if(!Number.isSafeInteger(maxBytes)||maxBytes<0)return {overBudget:true as const};
+    const scope=this.velaHost.scope(),current=this.velaHost.resolve(ref,scope);if(!current||current.version!==ref.version||!this.velaHost.canReadContent?.(current,scope))return null;
+    if(ref.resourceKind==='note') {const size=this.db.prepare('SELECT length(CAST(content AS BLOB)) AS bytes FROM notes WHERE resource_id=?').get(ref.id);if(!size)return null;if(Number(size.bytes)>maxBytes)return {overBudget:true as const};}
+    else if(ref.resourceKind==='conversation') {
+      const scopeIds=new Set(scope.resourceIds),window=this.graph.visibleMessageMetadata(this.gid(ref.id),{limit:256,maxScan:4096,maxBodyBytes:Math.min(maxBytes,131072),allow:meta=>this.velaHistorySourceAllowed(meta,scopeIds)});
+      if(window.limitedBy==='denied')return null;if(window.limitedBy||window.hasMore)return {overBudget:true as const};
+      // Six bytes per source byte safely bounds JSON escaping; metadata is serialized without any message body.
+      let upper=Buffer.byteLength(JSON.stringify({resourceId:ref.id,revision:this.state.revisions[ref.id],messages:[]}));
+      for(const item of window.items){const meta=this.state.vela!.messages[item.id]??{source:'user' as const,classification:'observed' as const};upper+=6*item.bodyBytes+Buffer.byteLength(JSON.stringify({id:item.id,role:item.role,content:'',...meta}))+1;}
+      if(upper>maxBytes)return {overBudget:true as const};
+    }else return null;
+    const content=this.velaHost.readContent(ref.id,scope);if(!content)return null;if(Buffer.byteLength(content.content)>maxBytes)return {overBudget:true as const};return content;
+  }
+  private verifyVelaHistoryContribution(contribution:NonNullable<HistoryMessageMetadata['providerContribution']>,message:HistoryMessageMetadata,request:HistoryRequestRecord):boolean {
+    const e=contribution.executionId?this.state.executions[contribution.executionId]:undefined,evidence=contribution.sourceMessageId?this.state.messageEvidence[contribution.sourceMessageId]:undefined;
+    if(this.port.mock||!e||e.state!=='provider_completed'||!e.binding||!e.turnId||e.commandId!=='vela-plan:'+planningDigest(request.id).slice(0,32)+':execute'||e.providerId!==contribution.providerId||e.resourceId!==contribution.planningConversationId||e.binding.nativeThreadId!==contribution.nativeThreadId||e.turnId!==contribution.nativeTurnId||message.requestId!==request.id)return false;
+    const raw=this.state.graph.messages.find(value=>value.id===contribution.sourceMessageId);if(!raw||raw.conversationId!==this.state.resources[e.resourceId]||raw.role!=='assistant'||raw.provenance!=='application'||raw.providerTurnId!==e.turnId||this.state.graph.unavailableMessageIds.includes(raw.id))return false;
+    return !!evidence&&evidence.classification==='reported'&&evidence.executionId===e.id&&evidence.providerId===e.providerId&&evidence.nativeThreadId===e.binding.nativeThreadId&&evidence.nativeTurnId===e.turnId&&this.conversationAccess.resource(e.resourceId,'read')&&!!this.velaHost.resolve({id:e.resourceId,kind:'resource'},this.velaHost.scope());
+  }
   private initializeVela(testPlanner?:VelaPlanningPort) {
-    this.velaHost=createCanonicalVelaHost({db:this.db,transaction:work=>this.atomic(()=>work(this.db)),metadata:purpose=>this.velaMetadata(purpose),currentContext:()=>this.velaContext(),
+    this.velaHost=createCanonicalVelaHost({db:this.db,transaction:work=>this.atomic(()=>work(this.db)),readTransaction:work=>this.kernel.withTransaction(work),metadata:purpose=>this.velaMetadata(purpose),currentContext:()=>this.velaContext(),
       permissions:{scope:(c,m)=>this.velaScope(c,m),metadata:(ref,_c,m)=>ref.kind==='resource'?!!m.resources.find(r=>r.id===ref.id&&r.visible!==false):ref.kind==='workspace'?m.workspaces.some(w=>w.id===ref.id):ref.kind==='collection'?!!m.collections?.some(c=>c.id===ref.id)&&this.conversationAccess.collection(ref.id,'read',ref.state==='archived'):m.projects.some(p=>p.id===ref.id),content:ref=>ref.kind==='resource'&&!!this.conversationAccess.resource(ref.id),authorize:request=>this.authorizeVelaPolicy(request),restoreCollection:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'organize',true),inspectCollectionArchiveReceipt:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'read',true)},
       revisions:{conversation:id=>this.state.revisions[id]??null,workspace:id=>this.velaNative?.workspaceRevision?.(id)??Number(this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(id)?.version??0),collection:id=>Number(this.db.prepare('SELECT version FROM cp_collection_rules WHERE collection_id=?').get(id)?.version??0)},
       conversations:{ensure:()=>{if(!this.state.vela!.conversationId)this.state.vela!.conversationId=this.create('Vela','local').resourceId;return this.state.vela!.conversationId;},read:id=>this.readVelaConversation(id),append:(id,message)=>{
@@ -348,7 +404,7 @@ export class BackendCore {
       const cap=this.capabilityCache.snapshot();return {available:!!cap&&!cap.mock&&cap.providerId==='codex-app-server'&&cap.authentication==='available',busy:!!this.active,reason:cap?'Codex must be a real authenticated observed provider':'Provider capability has not been observed; native actions remain available'};
     },authorizePlanning:input=>{
       const pair=[...this.velaGrants.entries()].find(([,g])=>g.requestId===input.requestId);ensure(pair,'native_vela_grant_required');const [id,g]=pair;this.validateVelaGrant(id);ensure(!g.planning,'native_vela_grant_already_bound');
-      const preview=this.velaPreviews.get(g.previewId)!;this.validateFrozenVelaPreview(preview);ensure(preview.intent===this.vela.state().requests.find(r=>r.id===input.requestId)?.intent&&this.velaEgress(preview.intent,input.context,preview.discovery)===preview.signature,'stale_vela_preview');
+      const preview=this.velaPreviews.get(g.previewId)!;this.validateFrozenVelaPreview(preview);ensure(input.sourceConversationId===this.state.vela!.conversationId&&g.requestId===input.requestId&&this.velaEgress(preview.intent,input.context,preview.discovery,preview)===preview.signature&&input.promptDigest===planningDigest(preview.prompt),'stale_vela_preview');
       ensure(planningDigest(input.discovery??null)===planningDigest(preview.discovery??null),'capability_discovery_grant_mismatch');
       const grant:CodexPlanningGrant={authorizationRef:id,requestId:input.requestId,providerId:'codex-app-server',sourceConversationId:input.sourceConversationId,contextDigest:input.contextDigest,promptDigest:input.promptDigest,expiresAt:g.expiresAt,...(preview.discovery?{discovery:structuredClone(preview.discovery)}:{})};g.planning=grant;return grant;
     },openPlanningConversation:async input=>this.atomic(()=>{
@@ -356,7 +412,7 @@ export class BackendCore {
       return this.once(input.commandId,{type:'velaPlanning',requestId:input.requestId},()=>{const c=this.create(input.title,this.port.id,this.velaContext().currentProjectId);this.kernel.relate(input.sourceConversationId,c.resourceId,'vela_planning','user');return c;});
     }),executePlanning:async input=>{
       const grant=this.validateVelaGrant(input.grant.authorizationRef);ensure(grant.planning&&planningDigest(input.prompt)===grant.planning.promptDigest&&grant.requestId===input.requestId,'native_vela_grant_mismatch');
-      const preview=this.velaPreviews.get(grant.previewId)!;this.validateFrozenVelaPreview(preview);ensure(planningDigest(input.grant.discovery??null)===planningDigest(preview.discovery??null),'capability_discovery_grant_mismatch');grant.consumed=true;
+      const preview=this.velaPreviews.get(grant.previewId)!;this.validateFrozenVelaPreview(preview);ensure(input.prompt===preview.prompt,'native_vela_prompt_mismatch');ensure(planningDigest(input.grant.discovery??null)===planningDigest(preview.discovery??null),'capability_discovery_grant_mismatch');grant.consumed=true;
       return this.runExecution({resourceId:input.resourceId,prompt:input.prompt,commandId:input.commandId,authorized:true,expectedRevision:this.state.revisions[input.resourceId],...(input.model?{model:input.model}:{})},undefined,preview.discovery?{requestId:input.requestId,previewId:preview.id,expiresAt:grant.expiresAt,sourceConversationId:grant.planning.sourceConversationId}:undefined);
     },discovery:{forRequest:(requestId,capabilities)=>{
       const grant=[...this.velaGrants.values()].find(item=>item.requestId===requestId);ensure(grant,'native_vela_grant_required');const preview=this.velaPreviews.get(grant.previewId)!;
@@ -368,9 +424,9 @@ export class BackendCore {
     const selected=testPlanner??adapter;
     this.velaPlanner={providerId:selected.providerId,availability:()=>selected.availability(),propose:(input,signal)=>{
       const grant=[...this.velaGrants.values()].find(item=>item.requestId===input.requestId),preview=grant&&this.velaPreviews.get(grant.previewId);ensure(preview,'native_vela_grant_required');
-      this.validateFrozenVelaPreview(preview);return selected.propose({...input,context:structuredClone(preview.context),capabilities:this.velaCapabilities(input.capabilities)},signal);
+      this.validateFrozenVelaPreview(preview);return selected.propose({...input,context:structuredClone(preview.frozenContext),capabilities:structuredClone(preview.catalog.descriptors)},signal);
     }};
-    this.vela=new VelaService({db:this.db,transaction:work=>this.atomic(work),host:this.velaHost,planner:this.velaPlanner});
+    this.vela=new VelaService({db:this.db,transaction:work=>this.atomic(work),readTransaction:work=>this.kernel.withTransaction(work),host:this.velaHost,planner:this.velaPlanner,history:{snapshot:(id,limit)=>this.velaHistorySnapshot(id,limit),message:(id,messageId,maxBytes)=>this.velaHistoryMessage(id,messageId,maxBytes),content:(ref,maxBytes)=>this.velaHistoryContent(ref,maxBytes),messageMetadata:(id,messageId)=>this.velaHistoryMessageMetadata(id,messageId),verifyProviderContribution:(contribution,message,request)=>this.verifyVelaHistoryContribution(contribution,message,request)}});
   }
   private velaCapability(id:string) {
     if(id==='bringAllIntoView')return this.velaContext().currentWorkspaceId!==null&&this.velaNative?.supportedActions.includes('bringAllIntoView')===true;
@@ -393,15 +449,21 @@ export class BackendCore {
   private velaScopeStamp() {
     const c=this.velaContext();return planningDigest({principalId:c.principalId,policyVersion:c.policyVersion,currentProjectId:c.currentProjectId,currentWorkspaceId:c.currentWorkspaceId,projectVersion:c.currentProjectId?this.db.prepare('SELECT version FROM projects WHERE id=?').get(c.currentProjectId)?.version:null,workspaceVersion:c.currentWorkspaceId?this.db.prepare('SELECT version FROM workspaces WHERE id=?').get(c.currentWorkspaceId)?.version:null,workspaceRevision:c.currentWorkspaceId?(this.velaNative?.workspaceRevision?.(c.currentWorkspaceId)??this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(c.currentWorkspaceId)?.version):null});
   }
-  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery']) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:this.velaPlanner.providerId,instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{})}); }
+  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery'],review?:PrivateVelaPreview) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:this.velaPlanner.providerId,instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{}),...(review?{catalogDigest:review.catalog.projection.digest,promptDigest:planningDigest(review.prompt),historyFenceDigest:review.historyFence?.digest??null,origin:review.origin}:{})}); }
+  private velaSemanticPrompt(intent:string,context:ContextManifest,catalog:CapabilityCatalogSnapshot,discovery?:VelaRequestPreview['discovery']) {
+    return buildCodexPlanningPrompt({intent,context,capabilities:catalog.descriptors,instruction:VELA_PLANNING_INSTRUCTION},discovery?{projection:catalog.projection,declaration:discovery}:undefined);
+  }
   /** Validates reviewed sources in place; never reselects history/resources after the initiating append. */
-  private validateFrozenVelaPreview(preview:VelaRequestPreview,options:{metadataOnly?:boolean}={}) {
+  private validateFrozenVelaPreview(preview:PrivateVelaPreview,options:{metadataOnly?:boolean}={}) {
     ensure(preview&&Date.parse(preview.expiresAt)>Date.now()&&preview.scopeStamp===this.velaScopeStamp(),'stale_vela_preview');
     const scope=this.velaHost.scope();
     for(const ref of preview.context.discovered){const current=this.velaHost.resolve(ref,scope);ensure(current&&current.version===ref.version,'stale_vela_preview');}
     for(const ref of preview.context.included){ensure(this.conversationAccess.resource(ref.id,'read'),'stale_vela_preview');if(!options.metadataOnly){const current=this.velaHost.readContent(ref.id,scope);ensure(current&&current.ref.version===ref.version&&planningDigest(current.content)===ref.contentDigest&&current.source===ref.source,'stale_vela_preview');}}
-    if(preview.discovery){ensure(this.port.catalogDiscovery&&this.port.catalogDiscovery.available!==false,'capability_discovery_unavailable');validateCatalogDeclaration(createCapabilityCatalog(this.velaCapabilities(CAPABILITIES)),preview.discovery);}
-    ensure(this.velaEgress(preview.intent,preview.context,preview.discovery)===preview.signature,'stale_vela_preview');
+    const currentCatalog=createCapabilityCatalog(this.velaCapabilities(CAPABILITIES));ensure(currentCatalog.projection.digest===preview.catalog.projection.digest,'stale_capability_catalog');
+    if(preview.discovery){ensure(this.port.catalogDiscovery&&this.port.catalogDiscovery.available!==false,'capability_discovery_unavailable');validateCatalogDeclaration(currentCatalog,preview.discovery);}
+    this.vela.validateProviderHistory({context:preview.frozenContext,...(preview.historyFence?{historyFence:preview.historyFence}:{})},{...options,...(preview.acceptedAppend?{acceptedAppend:preview.acceptedAppend}:{})});
+    // The schema tool validates immutable proof metadata only; it never serializes cached source/history bodies.
+    if(!options.metadataOnly)ensure(this.velaEgress(preview.intent,preview.frozenContext,preview.discovery,preview)===preview.signature&&this.velaSemanticPrompt(preview.intent,preview.frozenContext,preview.catalog,preview.discovery)===preview.prompt,'stale_vela_preview');
   }
   private finishVelaCatalog(requestId:string) {const entry=this.velaCatalogLeases.get(requestId);if(!entry)return;entry.lease.close();entry.resolveReady();if(entry.threadId)this.port.catalogDiscovery?.release(entry.threadId);this.velaCatalogLeases.delete(requestId);}
   private async readVelaCatalog(requestId:string,call:CapabilityNativeCall):Promise<CapabilityToolReply> {
@@ -413,15 +475,41 @@ export class BackendCore {
   private pruneVelaGrants() {const time=Date.now();for(const [id,p] of this.velaPreviews)if(Date.parse(p.expiresAt)<=time)this.velaPreviews.delete(id);for(const map of [this.velaGrants,this.velaPolicyGrants,this.velaDelegationGrants])for(const [id,g] of map)if(Date.parse(g.expiresAt)<=time)map.delete(id);}
   private previewVelaRequest(input:CommandMap['velaRequestPreview']['input']):VelaRequestPreview {
     this.pruneVelaGrants();ensure(typeof input.intent==='string'&&input.intent.trim()&&input.intent.length<=16000,'invalid_vela_intent');ensure(this.velaPreviews.size<64,'approval_backpressure');
-    const context=this.vela.previewContext(input.resourceIds),discovery=this.port.catalogDiscovery&&this.port.catalogDiscovery.available!==false?createCapabilityCatalog(this.velaCapabilities(CAPABILITIES)).declaration:undefined,preview:VelaRequestPreview={id:randomUUID(),intent:input.intent,resourceIds:[...input.resourceIds],context,providerId:this.velaPlanner.providerId,signature:this.velaEgress(input.intent,context,discovery),scopeStamp:this.velaScopeStamp(),expiresAt:new Date(Date.now()+300000).toISOString(),...(discovery?{discovery}:{})};
-    this.velaPreviews.set(preview.id,preview);return structuredClone(preview);
+    const catalog=createCapabilityCatalog(this.velaCapabilities(CAPABILITIES)),discovery=this.port.catalogDiscovery&&this.port.catalogDiscovery.available!==false?catalog.declaration:undefined;
+    const selected=this.vela.previewProviderContext(input.resourceIds,{includeHistory:this.historyContextEnabled,fits:context=>{try{this.velaSemanticPrompt(input.intent,context,catalog,discovery);return true;}catch(error){if((error as {code?:string}).code==='planning_prompt_capacity_exceeded')return false;throw error;}}});
+    const {history,...context}=selected.context,summary=history?{messageCount:history.messages.length,encodedBytes:Buffer.byteLength(JSON.stringify(history)),digest:historyDigest(history)}:undefined;
+    const publicPreview:VelaRequestPreview={id:randomUUID(),intent:input.intent,resourceIds:[...input.resourceIds],context,providerId:this.velaPlanner.providerId,signature:'',scopeStamp:this.velaScopeStamp(),expiresAt:new Date(Date.now()+300000).toISOString(),...(discovery?{discovery}:{}),...(summary?{history:summary}:{}),...(this.historyContextEnabled?{nativeReviewRequired:true}:{})};
+    const preview:PrivateVelaPreview={...publicPreview,frozenContext:structuredClone(selected.context),origin:selected.origin,...(selected.historyFence?{historyFence:selected.historyFence}:{}),historyOmissions:selected.historyOmissions,catalog,prompt:this.velaSemanticPrompt(input.intent,selected.context,catalog,discovery),nativeReviewed:false};
+    preview.signature=this.velaEgress(input.intent,preview.frozenContext,discovery,preview);publicPreview.signature=preview.signature;this.velaPreviews.set(preview.id,preview);return structuredClone(publicPreview);
+  }
+  private nativeVelaReview(input:CommandMap['velaNativeReview']['input']):VelaNativeReview {
+    const preview=this.velaPreviews.get(input?.previewId);ensure(preview&&input.signature===preview.signature,'approval_scope_mismatch');this.validateFrozenVelaPreview(preview);
+    const {history}=preview.frozenContext,review={previewId:preview.id,signature:preview.signature,providerId:preview.providerId,prompt:preview.prompt,promptDigest:planningDigest(preview.prompt),context:preview.context,...(history?{history}:{}),historyOmissions:preview.historyOmissions.map(item=>({reason:item.reason,...(item.count!==undefined?{count:item.count}:item.messageIds?{count:item.messageIds.length}:{})}))};
+    const reviewDigest=planningDigest(review),result={...review,reviewDigest};ensure(Buffer.byteLength(JSON.stringify(result))<=65536,'vela_native_review_too_large');preview.nativeReviewed=true;preview.reviewDigest=reviewDigest;return structuredClone(result);
   }
   private authorizeVelaRequest(input:CommandMap['authorizeVelaRequest']['input']) {
     this.pruneVelaGrants();const preview=this.velaPreviews.get(input.previewId);ensure(preview,'vela_preview_expired');ensure(preview.signature===input.signature,'approval_scope_mismatch');
     this.validateFrozenVelaPreview(preview);ensure(this.velaGrants.size<64,'approval_backpressure');
-    const grantId=randomUUID(),expiresAt=new Date(Math.min(Date.now()+60000,Date.parse(preview.expiresAt))).toISOString();this.velaGrants.set(grantId,{previewId:preview.id,expiresAt,consumed:false});return {grantId,expiresAt};
+    if(preview.nativeReviewRequired||preview.nativeReviewed||input.reviewDigest!==undefined)ensure(preview.nativeReviewed&&typeof input.reviewDigest==='string'&&input.reviewDigest===preview.reviewDigest,'vela_native_review_required');
+    const grantId=randomUUID(),expiresAt=new Date(Math.min(Date.now()+60000,Date.parse(preview.expiresAt))).toISOString();this.velaGrants.set(grantId,{previewId:preview.id,expiresAt,consumed:false,...(preview.nativeReviewed?{reviewDigest:preview.reviewDigest}:{})});return {grantId,expiresAt};
   }
-  private validateVelaGrant(id:string) {const g=this.velaGrants.get(id);ensure(g&&!g.consumed,'native_vela_grant_required');ensure(Date.parse(g.expiresAt)>Date.now()&&this.velaPreviews.has(g.previewId),'native_vela_grant_expired');return g;}
+  private validateVelaGrant(id:string) {const g=this.velaGrants.get(id);ensure(g&&!g.consumed,'native_vela_grant_required');ensure(Date.parse(g.expiresAt)>Date.now()&&this.velaPreviews.has(g.previewId),'native_vela_grant_expired');if(g.reviewDigest)ensure(this.velaPreviews.get(g.previewId)!.reviewDigest===g.reviewDigest,'native_vela_review_mismatch');return g;}
+  private frozenVelaProviderContext(grantId:string):PrivateFrozenProviderContext {
+    const grant=this.validateVelaGrant(grantId),preview=this.velaPreviews.get(grant.previewId)!;
+    ensure(preview.nativeReviewRequired&&preview.nativeReviewed&&grant.reviewDigest===preview.reviewDigest,'vela_native_review_required');
+    return {context:preview.frozenContext,...(preview.historyFence?{historyFence:preview.historyFence}:{}),
+      validate:(phase,append)=>{
+        ensure(this.velaGrants.get(grantId)===grant&&Date.parse(grant.expiresAt)>Date.now(),'native_vela_grant_expired');
+        if(phase==='before-append')ensure(!grant.consumed&&!grant.requestId&&!preview.acceptedAppend&&!append,'native_vela_grant_consumed');
+        else ensure(preview.acceptedAppend&&append&&planningDigest(append)===planningDigest(preview.acceptedAppend)&&(!grant.requestId||grant.requestId===append.requestId),'invalid_history_append');
+        if(phase==='before-response')ensure(grant.requestId===append?.requestId,'native_vela_grant_mismatch');
+        this.validateFrozenVelaPreview(preview);
+      },onAcceptedAppend:value=>{
+        const id=this.state.vela!.conversationId,meta=this.state.vela!.messages[value.messageId];
+        ensure(!preview.acceptedAppend&&id&&this.state.revisions[id]===value.revision&&meta?.source==='user'&&meta.classification==='observed'&&meta.requestId===value.requestId&&value.contentDigest===historyDigest(preview.intent),'invalid_history_append');
+        preview.acceptedAppend=Object.freeze(structuredClone(value));
+      }};
+  }
   private authorizeVelaPolicy(request:AuthorizationRequest):AuthorizationDecision {
     this.pruneVelaGrants();
     if(request.actions.some(a=>a.type!=='applyPreference'&&!this.velaCapability(a.type)))return {decision:'deny',reason:'Released native capability is unavailable',policyVersion:request.scope.policyVersion};
@@ -429,7 +517,7 @@ export class BackendCore {
     if(request.actions.some(a=>a.type==='createResource'&&a.workspaceId!==null&&!this.velaNative?.supportedActions.includes('createResource')))return {decision:'deny',reason:'Placement capability is unavailable',policyVersion:request.scope.policyVersion};
     if(request.phase==='provider-context') {
       ensure(this.pendingVelaGrant,'native_vela_grant_required');const grant=this.validateVelaGrant(this.pendingVelaGrant),preview=this.velaPreviews.get(grant.previewId)!;
-      this.validateFrozenVelaPreview(preview);ensure(!grant.requestId&&request.contextManifest&&this.velaEgress(request.intent,request.contextManifest,preview.discovery)===preview.signature,'stale_vela_preview');grant.requestId=request.requestId;
+      this.validateFrozenVelaPreview(preview);ensure(!grant.requestId&&request.contextManifest&&this.velaEgress(request.intent,request.contextManifest,preview.discovery,preview)===preview.signature&&(!preview.acceptedAppend||preview.acceptedAppend.requestId===request.requestId),'stale_vela_preview');grant.requestId=request.requestId;
     }
     if(request.phase==='delegate') {
       const action=request.actions[0],grant=[...this.velaDelegationGrants.values()].find(g=>!g.consumed&&g.planId===request.planId&&g.fingerprint===request.fingerprint&&g.actionDigest===planningDigest(action));
@@ -495,7 +583,8 @@ export class BackendCore {
       case 'explicitPreference':return this.vela.explicitPreference(input);case 'reviewPreference':return this.vela.reviewPreference(input);case 'resetPreferences':return this.vela.resetPreferences(input);
       case 'request': {
         if(input?.authorizeProvider===true){ensure(input.grantId&&input.previewId,'native_vela_grant_required');const grant=this.validateVelaGrant(input.grantId),preview=this.velaPreviews.get(grant.previewId)!;ensure(!grant.requestId,'native_vela_grant_consumed');ensure(grant.previewId===input.previewId&&input.intent===preview.intent&&planningDigest(input.resourceIds)===planningDigest(preview.resourceIds),'native_vela_grant_mismatch');}
-        this.pendingVelaGrant=input?.grantId??null;try{return await this.vela.request({intent:input.intent,resourceIds:input.resourceIds,authorizeProvider:input.authorizeProvider});}finally{this.pendingVelaGrant=null;}
+        const frozen=this.historyContextEnabled&&input?.authorizeProvider===true?this.frozenVelaProviderContext(input.grantId):undefined;
+        this.pendingVelaGrant=input?.grantId??null;try{return await this.vela.request({intent:input.intent,resourceIds:input.resourceIds,authorizeProvider:input.authorizeProvider},frozen);}finally{this.pendingVelaGrant=null;}
       }
       default:throw new ServiceError('unsupported_vela_command');
     }
@@ -825,6 +914,7 @@ export class BackendCore {
       case 'library':return this.libraryCommand(a) as any;
       case 'vela':return this.velaCommand(a) as any;
       case 'velaRequestPreview':return this.previewVelaRequest(a) as any;
+      case 'velaNativeReview':return this.nativeVelaReview(a) as any;
       case 'authorizeVelaRequest':return this.authorizeVelaRequest(a) as any;
       case 'authorizeVelaDelegation':return this.authorizeVelaDelegation(a) as any;
       case 'conversation': {

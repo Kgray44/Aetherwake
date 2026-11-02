@@ -9,6 +9,8 @@ import type { PlanningObservation } from '../../vela-core/src/codex-planning-ada
 import type { TemplateService } from '../../block-library/service.mts';
 import type { NoteExperienceService } from '../../block-library/note-service.mts';
 import type { CapabilityCatalogProjection, CapabilityDiscoveryDeclaration, CapabilityNativeCall, CapabilityToolReply } from '../../vela-core/src/capability-catalog.mts';
+import type { ProviderHistory } from '../../vela-core/src/bounded-history.mts';
+import type { HistoryOmissionReason } from '../../vela-core/src/bounded-history.mts';
 export type NoteMethod = 'readNote'|'saveNoteDraft'|'commitNote'|'discardNoteDraft'|'renameNote';
 export type NoteRequest = { [K in NoteMethod]: {name:K;input:Parameters<NoteExperienceService[K]>[0]} }[NoteMethod];
 export type LibraryMethod = 'capabilities'|'preferences'|'setFavorite'|'getBlockSettings'|'configureBlock'|'findResources'|'attachBlock'|'createBlock'|'listTemplates'|'getTemplate'|'saveTemplate'|'renameTemplate'|'archiveTemplate'|'previewTemplate'|'applyTemplate'|'previewWorkspaceFromResources'|'workspaceFromResources'|'requestVelaTemplate'|'subjectTargets'|'createSubjectBlock'|'projectOverview'|'browseResources';
@@ -17,7 +19,9 @@ export type LibraryResponse = {result:unknown;desktop?:DesktopSnapshot};
 export type VelaOperationName = keyof VelaClient;
 export type VelaRequestInput = Parameters<VelaClient['request']>[0] & { previewId?:string;grantId?:string };
 export type VelaOperation = { [K in VelaOperationName]: { name: K; input: K extends 'request' ? VelaRequestInput : Parameters<NonNullable<VelaClient[K]>>[0] extends undefined ? Record<string,never> : Parameters<NonNullable<VelaClient[K]>>[0] } & (K extends 'apply' ? { presentation?:WorkspacePresentationContext } : {}) }[VelaOperationName];
-export interface VelaRequestPreview { id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration }
+export interface VelaRequestPreview { id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};nativeReviewRequired?:boolean }
+/** Trusted host inspection only; never registered in renderer command/subcommand allowlists. */
+export interface VelaNativeReview {previewId:string;signature:string;providerId:string;prompt:string;promptDigest:string;reviewDigest:string;context:ContextManifest;history?:ProviderHistory;historyOmissions:{reason:HistoryOmissionReason;count?:number}[]}
 export interface VelaNativeCapabilities {
   supportedActions: VelaNativeAction['type'][];
   /** Registered released Universal Block/application capability; no fallback implementation is supplied by Vela. */
@@ -87,6 +91,8 @@ export interface Options {
   codexExecutable?: string; codexArgs?: string[]; cwd?: string;
   /** Trusted host opt-in only. Experimental wire fields remain disabled by default. */
   velaCatalogDiscovery?:boolean;
+  /** Trusted native-reviewed bounded context; disabled until native consent integration is qualified. */
+  velaHistoryContext?:boolean;
   instanceId?: string; accountScope?: string;
   retention?: { maxEvents: number };
   contentPolicy: 'synthetic-only' | 'local-private';
@@ -101,8 +107,9 @@ export interface CommandMap {
   library: {input:LibraryRequest;output:LibraryResponse};
   vela: { input: VelaOperation; output: unknown };
   velaRequestPreview: { input: {intent:string;resourceIds:string[]}; output: VelaRequestPreview };
+  velaNativeReview: {input:{previewId:string;signature:string};output:VelaNativeReview};
   /** TRUSTED NATIVE HOST ONLY. Renderer/tool allow-lists MUST exclude this authorization command. */
-  authorizeVelaRequest: { input: {previewId:string;signature:string}; output: {grantId:string;expiresAt:string} };
+  authorizeVelaRequest: { input: {previewId:string;signature:string;reviewDigest?:string}; output: {grantId:string;expiresAt:string} };
   /** TRUSTED NATIVE HOST ONLY. Separate approval of the exact delegated provider step. */
   authorizeVelaDelegation: { input: {planId:string;stepId:string;fingerprint:string}; output: {grantId:string;expiresAt:string} };
   conversation: { input: ConversationProductRequest; output: ConversationProductOutput };
