@@ -397,6 +397,7 @@
   min-height: 56px;
   max-height: 200px;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 4px;
   width: 100%;
   font: inherit;
