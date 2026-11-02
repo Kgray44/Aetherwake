@@ -71,6 +71,7 @@ const source = {
   ),
 };
 const verify =
+  process.argv.includes("--integration-product-ui") ||
   process.argv.includes("--integration-visual-smoke") ||
   process.argv.includes("--integration-verify") ||
   process.argv.includes("--integration-live") ||
@@ -266,7 +267,10 @@ app.whenReady().then(async () => {
     },
   });
   const startupErrors = [];
-  if (process.argv.includes("--integration-visual-smoke"))
+  if (
+    process.argv.includes("--integration-visual-smoke") ||
+    process.argv.includes("--integration-product-ui")
+  )
     win.webContents.on("console-message", (details) => {
       if (details.level === "error") {
         startupErrors.push({
@@ -445,6 +449,16 @@ app.whenReady().then(async () => {
   }, 240000);
   reserveTimer.unref();
   if (verify) {
+    if (process.argv.includes("--integration-product-ui")) {
+      await require("./integration-product-ui.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        source,
+        startupErrors,
+      });
+      return;
+    }
     if (process.argv.includes("--integration-visual-smoke")) {
       await require("./integration-visual-smoke.cjs").verify({
         win,

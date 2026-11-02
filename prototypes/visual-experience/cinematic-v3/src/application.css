@@ -40,6 +40,12 @@
   box-shadow: none;
   background: transparent;
 }
+.application-conversation-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
 .application-conversation-content .cp-manager {
   width: 100%;
   max-height: none;
@@ -59,17 +65,10 @@
   background: #bbc8ee0b;
   border-color: #c8c6e139;
 }
-.application-vela-content .vela-core-message,
-.application-vela-content .vela-core-plan,
-.application-vela-content .vela-core-attention article,
-.application-vela-content .vela-core-context article {
-  background: #9296b00b;
-  border-color: #c8c6e124;
-}
 .application-vela-content .vela-core input,
 .application-vela-content .vela-core select,
 .application-vela-content .vela-core textarea,
-.application-vela-content .vela-core-button {
+.application-vela-content .vela-core-button:not(.vela-core-primary) {
   background: #bbc8ee0b;
   border-color: #c8c6e139;
 }
