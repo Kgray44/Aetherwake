@@ -325,12 +325,18 @@ export function mountBlockLibrary(
     favorite.disabled = !preferences || !port.setFavorite || pending;
     const form = node("form"),
       provider = node("select");
+    const automatic = capabilities.providers.automatic;
+    if (automatic?.state !== 'available') {
+      const choose = node('option', '', 'Choose a conversation type');
+      choose.value = '__choose'; choose.disabled = true; choose.selected = true; provider.append(choose);
+    }
     const later = node(
       "option",
       "",
-      "Choose provider later (empty conversation)",
+      "Automatic ordinary chat" + (automatic?.state === 'available' ? '' : ' — ' + (automatic?.reason ?? automatic?.state ?? 'unknown')),
     );
     later.value = "";
+    later.disabled = automatic?.state !== 'available';
     provider.append(later);
     if (selected === "conversation")
       for (const name of ["local", "codex"] as const) {
@@ -338,19 +344,23 @@ export function mountBlockLibrary(
         const option = node(
           "option",
           "",
-          name + " — " + (state?.reason ?? state?.state ?? "unknown"),
+          (name === 'local' ? 'Local — manual conversation' : 'Codex') + " — " + (state?.reason ?? state?.state ?? "unknown"),
         );
         option.value = name;
         option.disabled = state?.state !== "available";
         provider.append(option);
       }
+    provider.value = automatic?.state === 'available' ? '' : '__choose';
+    const providerAvailable = () => kind !== 'conversation' || (provider.value === '' ? automatic?.state === 'available'
+      : ['local', 'codex'].includes(provider.value) && capabilities?.providers[provider.value as 'local' | 'codex']?.state === 'available');
     const create = node(
       "button",
       "aw-library__button",
       "Add New " + definition.title,
     );
     create.type = "submit";
-    commandButtonState(create, available.state !== "available");
+    commandButtonState(create, available.state !== "available" || !providerAvailable());
+    provider.onchange = () => commandButtonState(create, available.state !== 'available' || !providerAvailable());
     const settings = node("details"),
       settingsHeading = node("summary", "", "Configure presentation"),
       shape = node("select"),
@@ -431,6 +441,7 @@ export function mountBlockLibrary(
     form.onsubmit = (event) => {
       event.preventDefault();
       if (!form.reportValidity()) return;
+      if (!providerAvailable()) { ui.status.textContent = 'Choose an available conversation type.'; return; }
       void perform(() =>
         port.createBlock({
           commandId: commandId(),

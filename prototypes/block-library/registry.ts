@@ -323,10 +323,12 @@ export function blockCapabilities(
                 state: "unknown",
                 reason: "Codex availability has not been checked.",
               })
-            : {
+            : provider === undefined
+              ? (capabilities.providers.automatic ?? { state: 'unknown', reason: 'Automatic ordinary chat availability has not been reported.' })
+              : {
                 state: "unsupported",
                 reason:
-                  "Local conversations store your messages. No ordinary model provider is connected.",
+                  "Manual local conversations record your messages without model execution.",
               },
     });
   }

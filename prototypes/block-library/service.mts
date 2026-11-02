@@ -1320,7 +1320,10 @@ export class TemplateService {
           : this.host.createResource({
               kind: role.source.kind,
               title: role.source.title,
-              provider: role.source.provider,
+              // Schema1/2 templates historically used manual Local when the
+              // provider field was absent. New Add omits provider for Automatic;
+              // do not change old template meaning when the host default evolves.
+              provider: role.source.kind === 'conversation' ? (role.source.provider ?? 'local') : undefined,
               projectId,
             }).id;
     for (const role of body.placements) {

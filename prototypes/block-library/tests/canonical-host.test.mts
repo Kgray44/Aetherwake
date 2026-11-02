@@ -225,6 +225,21 @@ const count = (db: CanonicalTemplateHostOptions["db"], table: string) => {
   return Number(db.prepare("SELECT count(*) AS n FROM " + table).get()!.n);
 };
 
+test('direct ordinary Add forwards no provider while historical templates retain explicit manual-local semantics', t => {
+  const f = fixture(t), calls: unknown[] = [], factory = f.options.createResource;
+  f.options.createResource = (kind, title, provider, projectId) => { calls.push(provider); return factory(kind, title, provider, projectId); };
+  const workspace = f.engine.createWorkspace('Synthetic ordinary routing', null, { mode: 'freeform' });
+  f.service.createBlock({ commandId: randomUUID(), workspaceId: workspace.workspaceId, expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision,
+    kind: 'conversation', title: 'Automatic ordinary' });
+  assert.deepEqual(calls, [undefined]);
+  const body = structuredClone(predefinedTemplates().find(item => item.id === 'builtin:development')!.body);
+  for (const role of body.resources) if (role.source.mode === 'new' && role.source.kind === 'conversation') delete role.source.provider;
+  const template = f.service.saveTemplate({ name: 'Synthetic historical template', description: '', tags: [], body });
+  f.service.applyTemplate(request({ templateId: template.id }));
+  assert.equal(calls.filter(value => value === 'local').length, 1);
+  assert.equal(calls.filter(value => value === undefined).length, body.resources.length);
+});
+
 test("every new block kind uses its distinct preferred geometry without rewriting resized placements or explicit templates", (t) => {
   const f = fixture(t),
     project = f.kernel.createProject("Synthetic size project"),

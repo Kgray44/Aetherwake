@@ -28,7 +28,7 @@ export type Availability = {
 export type LibraryCapabilities = {
   revision: number;
   kinds: Partial<Record<BlockKind, Availability>>;
-  providers: Partial<Record<"local" | "codex", Availability>>;
+  providers: Partial<Record<"local" | "codex" | "automatic", Availability>>;
   velaPlanning: Availability;
   subjects?: Partial<Record<SubjectBlockKind, Availability>>;
   discoveryFilters?: { project?: Availability; collection?: Availability };

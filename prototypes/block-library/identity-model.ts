@@ -132,13 +132,14 @@ export function blockIdentity(input: {
   const content = input.content ?? resource?.content ?? "";
   if (kind === "conversation") {
     const codex = resource?.provider === "codex";
+    const ordinaryAI = !codex && !!resource?.providerId && resource.providerId !== 'local';
     model.layout = codex ? "execution" : "chat";
-    model.label = codex ? "Codex" : "Local chat";
+    model.label = codex ? "Codex" : ordinaryAI ? 'AI conversation' : "Local chat";
     model.subtitle = codex
       ? resource?.execution
         ? "Turn " + resource.execution.state
         : "Codex conversation"
-      : "Messages saved locally";
+      : ordinaryAI ? 'Ordinary conversation' : "Messages saved locally";
     model.rows = (resource?.messages ?? []).slice(-2).map((message) => ({
       id: message.id,
       title:
