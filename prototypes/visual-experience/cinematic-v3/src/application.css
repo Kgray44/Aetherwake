@@ -468,6 +468,7 @@
   z-index: 300001;
 }
 .application-ready #vela.vela-card .vela-label {
+  display: flex;
   position: absolute;
   top: auto;
   bottom: 0;
@@ -477,7 +478,7 @@
   height: var(--vela-ui-inset, 28px);
   justify-content: center;
   max-width: 100%;
-  overflow: hidden;
+  overflow: visible;
 }
 .application-ready #vela.vela-card .vela-label b,
 .application-ready #vela.vela-card .vela-label > span {
@@ -498,12 +499,58 @@
   z-index: 300001;
 }
 .application-ready.constellation-overview #vela .vela-label {
+  display: flex;
   top: calc(100% + 6px);
   bottom: auto;
   left: auto;
   right: 0;
   align-items: flex-end;
   max-width: 208px;
+}
+/* Quiet actual idle presence; standalone synthetic studies keep their labels.
+   The existing button aria-label retains the full observed state. */
+body.application-ready:is(:not([data-vela]), [data-vela="idle"])
+  #vela
+  .vela-label
+  small {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+body.application-ready:is(:not([data-vela]), [data-vela="idle"])
+  #vela.vela-card
+  .vela-label
+  b {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: calc(11px * var(--vela-ui-scale, 1));
+}
+body.application-ready #vela .vela-label > span {
+  visibility: hidden;
+}
+body.application-ready #vela.vela-card .vela-label > span {
+  display: block;
+  position: absolute;
+  bottom: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  margin: 0;
+  font-size: calc(11px * var(--vela-ui-scale, 1));
+  line-height: 1.3;
+}
+body.application-ready
+  #vela:is(:hover, :focus-visible, :focus-within)
+  .vela-label
+  > span {
+  visibility: visible;
 }
 .layout-preview-guides {
   position: absolute;
