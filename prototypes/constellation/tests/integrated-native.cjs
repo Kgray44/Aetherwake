@@ -289,7 +289,10 @@ exports.verify = async ({
       const point = await js(`(()=>{for(let y=90;y<innerHeight-70;y+=45)for(let x=45;x<innerWidth-40;x+=55){const e=document.elementFromPoint(x,y);if(e&&['world','stage','app'].includes(e.id))return{x,y}}return null})()`);
       assert.ok(point, "actual empty workspace background is available for wheel departure");
       nativeInput(win, { type: "mouseMove", ...point });
-      nativeInput(win, { type: "mouseWheel", ...point, deltaX: 0, deltaY: 120, canScroll: true });
+      // Electron passes the native delta through; Blink negates it for DOM wheel.
+      // https://github.com/electron/electron/blob/v45.2.1/shell/common/gin_converters/blink_converter.cc#L409-L410
+      // https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/events/wheel_event.cc#L100-L101
+      nativeInput(win, { type: "mouseWheel", ...point, deltaX: 0, deltaY: -120, canScroll: true });
       await wait("window.__aerynth.application().navigation.kind==='constellation'");
       mark("Zoomed out through native wheel input over actual empty workspace space");
     } else {
@@ -307,7 +310,7 @@ exports.verify = async ({
     const point = await js(`(()=>{const e=document.querySelector(${JSON.stringify('[data-key="' + nodeKey + '"]')}),r=e?.getBoundingClientRect();if(!r)return null;const x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);return document.elementFromPoint(x,y)?.closest('.aw-anchor')?.dataset.key===${JSON.stringify(nodeKey)}?{x,y}:null})()`);
     assert.ok(point, "workspace destination is visibly exposed for inward wheel input");
     nativeInput(win, { type: "mouseMove", ...point });
-    nativeInput(win, { type: "mouseWheel", ...point, deltaX: 0, deltaY: -120, canScroll: true });
+    nativeInput(win, { type: "mouseWheel", ...point, deltaX: 0, deltaY: 120, canScroll: true });
     await wait(`window.__aerynth.application().navigation.kind==='workspace'&&window.__aerynth.application().activeWorkspaceId===${JSON.stringify(workspaceId)}`);
     mark("Entered the actual workspace through native inward wheel input");
     await pause(350);
