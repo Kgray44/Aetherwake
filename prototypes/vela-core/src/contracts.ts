@@ -31,6 +31,9 @@ export interface ContextManifest {
 export type VelaNativeAction =
   | { type: 'navigate'; target: { kind: 'workspace'; workspaceId: string } | { kind: 'constellation'; projectId: string | null } }
   | { type: 'createProject'; title: string }
+  | { type: 'renameProject'; projectId: string; title: string }
+  | { type: 'renameResource'; resourceId: string; title: string }
+  | { type: 'associateResourceProject'; resourceId: string; projectId: string | null }
   | { type: 'createWorkspace'; title: string; projectId: string | null }
   | { type: 'renameWorkspace'; workspaceId: string; title: string }
   | { type: 'bringAllIntoView'; workspaceId: string }

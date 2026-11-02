@@ -50,6 +50,9 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('search', 'Search authorized application resources', 'read', { query: stringSchema }, 'Authorized metadata only; content requires separate retrieval'),
   capability('navigate', 'Open a workspace or project constellation', 'navigate', { type: { const: 'navigate' }, target: { oneOf: [objectSchema({ kind: { const: 'workspace' }, workspaceId: idSchema }), objectSchema({ kind: { const: 'constellation' }, projectId: nullableIdSchema })] } }, 'One authorized navigation target'),
   capability('createProject', 'Create a project', 'create', { type: { const: 'createProject' }, title: stringSchema }, 'One new canonical project; does not change the authorized scope or grant access to another project'),
+  capability('renameProject', 'Rename a project', 'mutate', { type: { const: 'renameProject' }, projectId: idSchema, title: stringSchema }, 'One authorized active project and its exact manifest version'),
+  capability('renameResource', 'Rename a local resource', 'mutate', { type: { const: 'renameResource' }, resourceId: idSchema, title: stringSchema }, 'One authorized active note, task, task group or reference; preserves content, drafts and placements'),
+  capability('associateResourceProject', 'Change a local resource project', 'mutate', { type: { const: 'associateResourceProject' }, resourceId: idSchema, projectId: nullableIdSchema }, 'One authorized active non-chat local resource and exact authorized destination project or null; grants no content or sharing access'),
   capability('createWorkspace', 'Create an empty workspace', 'create', { type: { const: 'createWorkspace' }, title: stringSchema, projectId: nullableIdSchema }, 'One canonical workspace in the exact authorized project or without a project; opens the new workspace'),
   capability('renameWorkspace', 'Rename a workspace', 'mutate', { type: { const: 'renameWorkspace' }, workspaceId: idSchema, title: stringSchema }, 'One authorized workspace; current entity and layout revisions are bound by the target manifest'),
   capability('bringAllIntoView', 'Frame the current workspace', 'mutate', { type: { const: 'bringAllIntoView' }, workspaceId: idSchema }, 'Frame the current authorized workspace using actual presenter bounds supplied outside the model action; does not create or duplicate resources'),
@@ -84,6 +87,9 @@ export function validateAction(value: unknown): VelaNativeAction | DelegateTaskA
       (fields(v.target, ['kind', 'workspaceId']) && v.target.kind === 'workspace' && identifier(v.target.workspaceId)) ||
       (fields(v.target, ['kind', 'projectId']) && v.target.kind === 'constellation' && nullableId(v.target.projectId))); break;
     case 'createProject': valid = fields(v, ['type', 'title']) && text(v.title); break;
+    case 'renameProject': valid = fields(v, ['type', 'projectId', 'title']) && identifier(v.projectId) && text(v.title); break;
+    case 'renameResource': valid = fields(v, ['type', 'resourceId', 'title']) && identifier(v.resourceId) && text(v.title); break;
+    case 'associateResourceProject': valid = fields(v, ['type', 'resourceId', 'projectId']) && identifier(v.resourceId) && nullableId(v.projectId); break;
     case 'createWorkspace': valid = fields(v, ['type', 'title', 'projectId']) && text(v.title) && nullableId(v.projectId); break;
     case 'renameWorkspace': valid = fields(v, ['type', 'workspaceId', 'title']) && identifier(v.workspaceId) && text(v.title); break;
     case 'bringAllIntoView': case 'resolveLayout': valid = fields(v, ['type', 'workspaceId']) && identifier(v.workspaceId); break;

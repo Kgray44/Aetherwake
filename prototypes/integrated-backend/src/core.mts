@@ -203,8 +203,22 @@ export class BackendCore {
       applyDesktopCommand:command=>this.desktop.apply(command,()=>{throw new ServiceError('unexpected_note_conversation_creation');}),
       renameResource:input=>{this.kernel.renameResource(input.resourceId,input.title,input.expectedVersion);},
     }));
-    this.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources','createResource','attach','applyStructuredPreset','createProject','createWorkspace','renameWorkspace','taskPriority','bringAllIntoView','resolveLayout','setOrganization','createConversation','conversationFavorite','renameConversation','associateConversationProject','createCollection','renameCollection','archiveCollection','collectionMembership'],workspaceRevision:id=>Number(this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(id)?.version??0),dispatch:input=>{
+    this.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources','createResource','attach','applyStructuredPreset','createProject','renameProject','renameResource','associateResourceProject','createWorkspace','renameWorkspace','taskPriority','bringAllIntoView','resolveLayout','setOrganization','createConversation','conversationFavorite','renameConversation','associateConversationProject','createCollection','renameCollection','archiveCollection','collectionMembership'],workspaceRevision:id=>Number(this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(id)?.version??0),dispatch:input=>{
       const a=input.action;
+      if(a.type==='renameProject') {
+        ensure(this.conversationAccess.project(a.projectId,'organize'),'project_organization_denied');
+        const project=this.db.prepare("SELECT version FROM projects WHERE id=? AND state='active'").get(a.projectId);ensure(project,'project_unavailable');
+        this.kernel.renameProject(a.projectId,a.title,Number(project.version),{origin:'user',correlationId:input.commandId});
+        this.record('vela.native.'+a.type,'observed');return {status:'applied',receiptId:input.commandId};
+      }
+      if(a.type==='renameResource'||a.type==='associateResourceProject') {
+        ensure(this.conversationAccess.resource(a.resourceId,'organize')&&(a.type!=='associateResourceProject'||this.conversationAccess.project(a.projectId,'organize')),'resource_organization_denied');
+        const resource=this.kernel.getResource(a.resourceId).resource,meta=this.velaMetadata().resources.find(value=>value.id===a.resourceId);
+        ensure(resource.state==='active'&&resource.kind!=='conversation'&&meta&&['note','task','task_group','reference'].includes(meta.kind),'resource_organization_unsupported');
+        if(a.type==='renameResource')this.kernel.renameResource(a.resourceId,a.title,resource.version,{origin:'user',correlationId:input.commandId});
+        else this.kernel.assignResourceProject(a.resourceId,a.projectId,resource.version,{origin:'user',correlationId:input.commandId});
+        this.record('vela.native.'+a.type,'observed');return {status:'applied',receiptId:input.commandId};
+      }
       if(a.type==='createCollection') {
         const created=this.conversationOrganization.native({type:'createCollection',title:a.title,projectId:a.projectId}) as {id:string};
         ensure(created&&typeof created.id==='string','vela_creation_receipt_missing');this.record('vela.native.'+a.type,'observed');return {status:'applied',receiptId:input.commandId,createdCollectionId:created.id};
@@ -301,7 +315,7 @@ export class BackendCore {
   /** Trusted in-process bootstrap only. No RPC exposes capability registration. */
   registerVelaNativeCapabilities(capabilities:VelaNativeCapabilities) {
     ensure(capabilities&&Array.isArray(capabilities.supportedActions)&&typeof capabilities.dispatch==='function','invalid_vela_native_capabilities');
-    ensure(capabilities.supportedActions.every(id=>['navigate','workspaceFromResources','createResource','attach','content','taskStatus','setTaskGroupMembers','relate','applyStructuredPreset','createProject','createWorkspace','renameWorkspace','taskPriority','bringAllIntoView','resolveLayout','setOrganization','createConversation','conversationFavorite','renameConversation','associateConversationProject','createCollection','renameCollection','archiveCollection','collectionMembership'].includes(id)),'invalid_vela_native_capabilities');
+    ensure(capabilities.supportedActions.every(id=>['navigate','workspaceFromResources','createResource','attach','content','taskStatus','setTaskGroupMembers','relate','applyStructuredPreset','createProject','renameProject','renameResource','associateResourceProject','createWorkspace','renameWorkspace','taskPriority','bringAllIntoView','resolveLayout','setOrganization','createConversation','conversationFavorite','renameConversation','associateConversationProject','createCollection','renameCollection','archiveCollection','collectionMembership'].includes(id)),'invalid_vela_native_capabilities');
     this.velaNative=capabilities;
   }
   /** Trusted application selection bridge. Selection is filtered against live local-owner scope, never an access grant. */
@@ -513,6 +527,7 @@ export class BackendCore {
   private authorizeVelaPolicy(request:AuthorizationRequest):AuthorizationDecision {
     this.pruneVelaGrants();
     if(request.actions.some(a=>a.type!=='applyPreference'&&!this.velaCapability(a.type)))return {decision:'deny',reason:'Released native capability is unavailable',policyVersion:request.scope.policyVersion};
+    if(request.actions.some(a=>a.type==='renameProject'&&!this.conversationAccess.project(a.projectId,'organize')||(a.type==='renameResource'||a.type==='associateResourceProject')&&(!this.conversationAccess.resource(a.resourceId,'organize')||a.type==='associateResourceProject'&&!this.conversationAccess.project(a.projectId,'organize'))))return {decision:'deny',reason:'Canonical organization permission is unavailable',policyVersion:request.scope.policyVersion};
     if(request.actions.some(a=>a.type==='createConversation'&&a.providerId==='codex-app-server'&&(this.port.id!=='codex-app-server'||this.port.mock)))return {decision:'deny',reason:'A real Codex conversation provider is not configured',policyVersion:request.scope.policyVersion};
     if(request.actions.some(a=>a.type==='createResource'&&a.workspaceId!==null&&!this.velaNative?.supportedActions.includes('createResource')))return {decision:'deny',reason:'Placement capability is unavailable',policyVersion:request.scope.policyVersion};
     if(request.phase==='provider-context') {
