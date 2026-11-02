@@ -223,17 +223,24 @@ export class BackendCore {
     const result=read?execute():this.atomic(execute);
     return read?{result}:{result,desktop:await this.command('desktop',{type:'snapshot'})};
   }
+  private taskSourceRevision(id:string,messageId?:string):string|null {
+    if(!this.productResourceAccess(id,messageId))return null;
+    if(messageId){
+      const message=this.state.graph.messages.find(m=>m.id===messageId);
+      // Deliberately conservative transcript revision, not a message-body read:
+      // new messages can make an earlier reference require renewed review.
+      return message?hash({resourceId:id,conversationRevision:this.state.revisions[id],messageId:message.id,sequence:message.sequence,role:message.role,provenance:message.provenance,createdAt:message.createdAt,sensitivity:message.sensitivity}):null;
+    }
+    const row=this.db.prepare('SELECT r.version,coalesce(n.revision,0) AS content_revision FROM resources r LEFT JOIN notes n ON n.resource_id=r.id WHERE r.id=?').get(id);
+    return row?'resource:'+row.version+':content:'+row.content_revision+':conversation:'+(this.state.revisions[id]??0):null;
+  }
   private taskObjectiveDomain() {
     const policyVersion='aerynth.local-owner-task-policy@1';
     return createTaskObjectiveCommands({kernel:this.kernel,db:this.db,
       identity:()=>({principalId:'local-owner',actorKind:'user',authority:'manual',policyVersion}),now,
       authorize:input=>({decision:(!input.projectId||this.libraryAuthorized({kind:'project',id:input.projectId}))&&input.resourceIds.every(id=>this.productResourceAccess(id))?'allow':'deny',authorizationRef:'task-manual:'+input.requestDigest,policyVersion}),
       projectAccess:id=>this.libraryAuthorized({kind:'project',id}),resourceAccess:(id,messageId)=>this.productResourceAccess(id,messageId),
-      sourceRevision:(id,messageId)=>{
-        if(!this.productResourceAccess(id,messageId))return null;
-        if(messageId){const message=this.state.graph.messages.find(m=>m.id===messageId);return message?hash({resourceId:id,message}):null;}
-        const row=this.db.prepare('SELECT r.version,coalesce(n.revision,0) AS content_revision FROM resources r LEFT JOIN notes n ON n.resource_id=r.id WHERE r.id=?').get(id);return row?'resource:'+row.version+':content:'+row.content_revision+':conversation:'+(this.state.revisions[id]??0):null;
-      },
+      sourceRevision:(id,messageId)=>this.taskSourceRevision(id,messageId),
       agentProfile:id=>{try{const profile=this.productDomains().agent({name:'inspect',input:{resourceId:id}});return {resourceVersion:profile.ref.resourceVersion,profileVersion:profile.ref.profileVersion};}catch{return null;}},
       execution:id=>{
         const e=this.state.executions[id];if(!e||!this.productResourceAccess(e.resourceId))return null;
