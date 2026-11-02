@@ -31,18 +31,17 @@ import {
 import {
   createManagerState,
   mountConversationManager,
-  acceptedConversationSubmission,
 } from "../../../conversation-product/src/ui.ts";
 import {
   ConversationDraftSession,
   flushConversationDraftSessions,
-  type DraftSessionSnapshot,
 } from "../../../conversation-product/src/draft-session.ts";
 import type {
   ConversationProductPort,
   ProductCommandMap,
 } from "../../../conversation-product/src/contracts.ts";
 import "../../../conversation-product/src/style.css";
+import { mountBlockChat } from "../../../block-library/chat-view.ts";
 import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
@@ -69,6 +68,14 @@ import {
   showUnavailableBlock,
 } from "../../../block-library/availability-view.ts";
 import "../../../block-library/availability-view.css";
+import {
+  blockIdentity,
+  type SubjectIdentity,
+  type BlockIdentityModel,
+} from "../../../block-library/identity-model.ts";
+import { mountBlockIdentity } from "../../../block-library/identity-view.ts";
+import { REGISTERED_BLOCKS } from "../../../block-library/registry.ts";
+import "../../../block-library/identity-view.css";
 import { mountSubjectExperience } from "../../../block-library/subject-view.ts";
 import "../../../block-library/subject-view.css";
 import {
@@ -131,7 +138,8 @@ export function installApplication(hooks: Hooks) {
     command: (name, input) => host.command!(name, input),
     onEvent: (listener) => host.onEvent?.(listener) ?? (() => {}),
     visible: () => !document.hidden && document.hasFocus(),
-    onError: (error) => hooks.status(`Conversation activity: ${(error as Error).message}`),
+    onError: (error) =>
+      hooks.status(`Conversation activity: ${(error as Error).message}`),
   });
   const surfaces = createContextualSurfaces({
     motion: hooks.motion,
@@ -227,6 +235,28 @@ export function installApplication(hooks: Hooks) {
   const settingsReads = new Map<string, Promise<void>>();
   const settingsFailures = new Map<string, unknown>();
   const unavailableBlocks = new Set<string>();
+  const identityViews = new Map<
+    string,
+    ReturnType<typeof mountBlockIdentity>
+  >();
+  const identityModels = new Map<
+    string,
+    {
+      key: string;
+      content: string;
+      projection?: SubjectIdentity;
+      model: BlockIdentityModel;
+    }
+  >();
+  const subjectProjections = new Map<string, SubjectIdentity>();
+  const subjectRefreshKeys = new Map<string, string>();
+  const blockPresentations = new Map<
+    string,
+    { visible: boolean; usable: boolean }
+  >();
+  const focusedBlocks = new Map<string, boolean>();
+  let subjectDataKey = "";
+  let subjectDataEpoch = 0;
   let cardConfiguration: ReturnType<typeof mountBlockConfiguration> | null =
     null;
   let state: DesktopSnapshot | null = null;
@@ -251,10 +281,9 @@ export function installApplication(hooks: Hooks) {
     string,
     { content: string; timer?: ReturnType<typeof setTimeout> }
   >();
-  const streaming = new Map<string, string>();
-  const busy = new Set<string>();
   const composerSessions = new Map<string, ConversationDraftSession>();
-  const composerSendReview = new Set<string>();
+  const chatViews = new Map<string, ReturnType<typeof mountBlockChat>>();
+  const chatRefreshKeys = new Map<string, string>();
   const composerPort: ConversationProductPort = {
     async command<K extends keyof ProductCommandMap>(
       name: K,
@@ -407,16 +436,41 @@ export function installApplication(hooks: Hooks) {
     );
   }
   async function command(a: DesktopCommand): Promise<DesktopSnapshot> {
+    const knownWorkspaces = new Set(
+      state?.workspaces.map((workspace) => workspace.id),
+    );
     const next = (await host.command!("desktop", {
       ...a,
       bounds: a.bounds ?? viewBounds(),
     })) as DesktopSnapshot;
     apply(next);
+    if (
+      a.type === "createWorkspace" &&
+      next.activeWorkspaceId &&
+      !knownWorkspaces.has(next.activeWorkspaceId)
+    )
+      return command({
+        type: "bringAllIntoView",
+        workspaceId: next.activeWorkspaceId,
+      });
     return next;
   }
   function enqueue(action: () => Promise<unknown>) {
     tail = tail.then(action).then(() => {}, report);
     return tail;
+  }
+  function enqueueResult<T>(action: () => Promise<T>): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      void enqueue(async () => {
+        try {
+          const result = await action();
+          resolve(result);
+        } catch (error) {
+          reject(error);
+          throw error;
+        }
+      });
+    });
   }
   function apply(next: DesktopSnapshot) {
     const changed = state?.activeWorkspaceId !== next.activeWorkspaceId;
@@ -438,15 +492,42 @@ export function installApplication(hooks: Hooks) {
     )
       cancelPreview();
     state = next;
-    for (const [id, session] of composerSessions)
-      if (
-        !next.blocks.some((block) => block.resource_id === id) &&
-        session.snapshot().phase === "clean"
-      ) {
-        composerSessions.delete(id);
-        composerSendReview.delete(id);
-        void session.dispose().catch(report);
+    subjectDataKey = JSON.stringify([
+      next.revision,
+      subjectDataEpoch,
+      next.resources.map((resource) => [
+        resource.id,
+        resource.version,
+        resource.state,
+        resource.visible,
+        resource.conversationRevision,
+      ]),
+      next.projects.map((project) => [project.id, project.version]),
+      next.workspaces.map((workspace) => [workspace.id, workspace.version]),
+    ]);
+    for (const [id, view] of identityViews)
+      if (!next.blocks.some((block) => block.id === id)) {
+        view.dispose();
+        identityViews.delete(id);
       }
+    for (const map of [
+      identityModels,
+      subjectProjections,
+      subjectRefreshKeys,
+      blockPresentations,
+      focusedBlocks,
+    ])
+      for (const id of map.keys())
+        if (!next.blocks.some((block) => block.id === id)) map.delete(id);
+    for (const [id, view] of chatViews)
+      if (!next.blocks.some((block) => block.id === id)) {
+        chatViews.delete(id);
+        chatRefreshKeys.delete(id);
+        void view.dispose().catch(report);
+      }
+    // Sessions belong to canonical resources for this native-window lifetime,
+    // including sends that outlive a departed block or a closed manager. View
+    // disposal releases DOM/execution observers, never the in-flight draft owner.
     for (const id of activeBlocks.keys())
       if (!next.blocks.some((block) => block.id === id))
         activeBlocks.delete(id);
@@ -564,6 +645,9 @@ export function installApplication(hooks: Hooks) {
           },
         },
         graphAction: async (action) => {
+          const knownWorkspaces = new Set(
+            state?.workspaces.map((workspace) => workspace.id),
+          );
           await tail;
           await flush();
           const next = (await host.command!("graphAction", {
@@ -571,7 +655,19 @@ export function installApplication(hooks: Hooks) {
             bounds: viewBounds(),
           })) as DesktopSnapshot;
           apply(next);
-          return { ...next, blocks: next.navigationBlocks ?? next.blocks };
+          const framed =
+            action.type === "createWorkspace" &&
+            next.activeWorkspaceId &&
+            !knownWorkspaces.has(next.activeWorkspaceId)
+              ? await command({
+                  type: "bringAllIntoView",
+                  workspaceId: next.activeWorkspaceId,
+                })
+              : next;
+          return {
+            ...framed,
+            blocks: framed.navigationBlocks ?? framed.blocks,
+          };
         },
         capabilities: {
           createProject: true,
@@ -1365,7 +1461,14 @@ export function installApplication(hooks: Hooks) {
           ]),
         );
       },
-      onApplied: () => {
+      onApplied: async (result) => {
+        // applyTemplate creates a new workspace. Frame it once using the existing
+        // camera command; reopening/restoring saved workspaces never enters here.
+        if (state?.activeWorkspaceId === result.workspaceId)
+          await command({
+            type: "bringAllIntoView",
+            workspaceId: result.workspaceId,
+          });
         surfaces.close("workspace-templates");
         hooks.home();
       },
@@ -1728,86 +1831,6 @@ export function installApplication(hooks: Hooks) {
         })
       : Promise.resolve();
   }
-  function paintComposerDraft(resourceId: string, value: DraftSessionSnapshot) {
-    if (
-      !state?.resources.some(
-        (resource) =>
-          resource.id === resourceId && resource.available !== false,
-      )
-    )
-      return;
-    for (const block of state.blocks.filter(
-      (block) => block.resource_id === resourceId,
-    )) {
-      const article = document.querySelector<HTMLElement>(
-          `[data-block="${block.id}"]`,
-        ),
-        surface = article?.querySelector<HTMLElement>(".working-content"),
-        input = surface?.querySelector<HTMLTextAreaElement>(
-          ".conversation-compose textarea",
-        ),
-        status = surface?.querySelector<HTMLElement>(
-          ".conversation-draft-status",
-        );
-      if (!article || !surface || !input || !status) continue;
-      if (input.value !== value.content) {
-        const start = input.selectionStart,
-          end = input.selectionEnd;
-        input.value = value.content;
-        input.setSelectionRange(
-          Math.min(start, value.content.length),
-          Math.min(end, value.content.length),
-        );
-      }
-      input.disabled = value.phase === "loading";
-      const messages = {
-        loading: "Opening saved draft…",
-        clean: value.content
-          ? "Draft recovery saved locally."
-          : "No retained draft text.",
-        dirty: "Saving unsent draft…",
-        saving: "Saving unsent draft…",
-        conflict:
-          "Another composer saved a different draft. Review the stored text before choosing.",
-        error: "Draft recovery failed. Your current text is retained here.",
-      };
-      status.textContent =
-        messages[value.phase] +
-        (value.error ? " " + value.error.replaceAll("_", " ") : "");
-      surface.dataset.conversationDraftState = value.phase;
-      const recovery = el(".conversation-draft-recovery", surface);
-      recovery.hidden =
-        !value.remote &&
-        value.phase !== "error" &&
-        !composerSendReview.has(resourceId);
-      recovery.dataset.remoteVersion = value.remote
-        ? String(value.remote.version)
-        : "";
-      el(".conversation-stored-draft", recovery).textContent =
-        value.remote?.content ?? "No competing stored draft is available.";
-      el(".conversation-stored-draft", recovery).parentElement!.hidden =
-        !value.remote;
-      for (const control of recovery.querySelectorAll<HTMLElement>(
-        "[data-draft-resolve]",
-      ))
-        control.hidden = !value.remote;
-      el(".conversation-draft-retry", recovery).hidden =
-        value.phase !== "error";
-      el(".conversation-send-reviewed", recovery).hidden =
-        !composerSendReview.has(resourceId);
-      el<HTMLButtonElement>(
-        '.conversation-compose button[type="submit"]',
-        surface,
-      ).disabled =
-        busy.has(resourceId) ||
-        ["loading", "conflict", "error"].includes(value.phase) ||
-        composerSendReview.has(resourceId) ||
-        !value.content.trim();
-      if (value.content)
-        el(".folio-preview", article).textContent =
-          "Draft recovery · " + value.content.slice(0, 240);
-    }
-  }
   function composerSession(resourceId: string) {
     let session = composerSessions.get(resourceId);
     if (!session) {
@@ -1823,7 +1846,16 @@ export function installApplication(hooks: Hooks) {
       session = new ConversationDraftSession({
         resourceId,
         port: composerPort,
-        onChange: (value) => paintComposerDraft(resourceId, value),
+        onChange: () => {
+          for (const block of state?.blocks.filter(
+            (block) => block.resource_id === resourceId,
+          ) ?? []) {
+            const article = document.querySelector<HTMLElement>(
+              `[data-block="${block.id}"]`,
+            );
+            if (article) refreshBlockIdentity(article, block.id);
+          }
+        },
       });
       composerSessions.set(resourceId, session);
     }
@@ -1864,6 +1896,14 @@ export function installApplication(hooks: Hooks) {
       )
     )
       return;
+    editor.placeholder =
+      resource.kind === "note"
+        ? "Start writing…"
+        : resource.kind === "task"
+          ? "Describe this task…"
+          : resource.kind === "research"
+            ? "Questions, findings and sources…"
+            : "Add your notes…";
     const session = noteSession(resource.id),
       view = mountNoteExperience(
         el(".working-content", article),
@@ -1888,6 +1928,8 @@ export function installApplication(hooks: Hooks) {
     const session = noteSession(resourceId);
     el(".saved", article).textContent = "Saving recovery draft…";
     void session.edit(content).catch(report);
+    const blockId = article.dataset.block;
+    if (blockId) refreshBlockIdentity(article, blockId);
     draft.timer = setTimeout(() => {
       void enqueue(async () => {
         await flush();
@@ -1966,12 +2008,27 @@ export function installApplication(hooks: Hooks) {
     if (block.subjectState && block.subjectState !== "active") {
       subjectViews.get(block.id)?.dispose();
       subjectViews.delete(block.id);
+      subjectRefreshKeys.delete(block.id);
+      subjectProjections.set(block.id, {
+        phase: "unavailable",
+        message:
+          "This project or collection is archived or unavailable. Your card layout is retained.",
+      });
       surface.textContent =
         "This canonical subject is archived or unavailable. Its view placement is retained.";
       return;
     }
     if (subjectViews.has(block.id)) {
-      void subjectViews.get(block.id)!.refresh();
+      const key =
+        JSON.stringify(block.subject) +
+        "/" +
+        subjectDataKey +
+        "/" +
+        subjectDataEpoch;
+      if (subjectRefreshKeys.get(block.id) !== key) {
+        subjectRefreshKeys.set(block.id, key);
+        void subjectViews.get(block.id)!.refresh();
+      }
       return;
     }
     surface.replaceChildren();
@@ -1988,6 +2045,20 @@ export function installApplication(hooks: Hooks) {
       },
       {
         active: article.classList.contains("expanded") && !document.hidden,
+        visible: blockPresentations.get(block.id)?.visible ?? false,
+        onProjection: (projection) => {
+          if (
+            !state?.blocks.some(
+              (current) =>
+                current.id === block.id &&
+                JSON.stringify(current.subject) ===
+                  JSON.stringify(block.subject),
+            )
+          )
+            return;
+          subjectProjections.set(block.id, projection);
+          refreshBlockIdentity(article, block.id);
+        },
         openWorkspace: (workspaceId) => {
           void run({
             type: "navigate",
@@ -2011,6 +2082,126 @@ export function installApplication(hooks: Hooks) {
       },
     );
     subjectViews.set(block.id, view);
+    subjectRefreshKeys.set(
+      block.id,
+      JSON.stringify(block.subject) +
+        "/" +
+        subjectDataKey +
+        "/" +
+        subjectDataEpoch,
+    );
+  }
+  function refreshBlockIdentity(article: HTMLElement, id: string) {
+    const block = state?.blocks.find((block) => block.id === id);
+    if (!block) return;
+    const resource = block.resource_id
+      ? state?.resources.find((resource) => resource.id === block.resource_id)
+      : undefined;
+    const kind =
+      block.subject && block.subject.kind !== "resource"
+        ? subjectBlockKind(block.subject)
+        : resource?.kind;
+    if (!REGISTERED_BLOCKS.some((definition) => definition.kind === kind))
+      return;
+    const knownKind = kind as BlockInstanceKind;
+    let view = identityViews.get(id);
+    if (!view) {
+      view = mountBlockIdentity(article, {
+        toggleTask: (resourceId, done) =>
+          enqueueResult(async () => {
+            await flush();
+            const task = state?.resources.find(
+              (resource) =>
+                resource.id === resourceId &&
+                resource.kind === "task" &&
+                resource.available !== false &&
+                resource.visible !== false,
+            );
+            if (!task) throw Error("task_unavailable");
+            await command({
+              type: "taskStatus",
+              resourceId,
+              expectedVersion: task.version,
+              status: done ? "done" : "open",
+            });
+          }),
+        openResource: openCanonicalResource,
+        openWorkspace: (workspaceId) => {
+          void run({
+            type: "navigate",
+            target: { kind: "workspace", workspaceId },
+          });
+        },
+        search: (query) => subjectViews.get(id)?.search(query),
+        attachResource: async (resourceId) => {
+          const subject = subjectViews.get(id);
+          if (!subject) throw Error("resource_view_unavailable");
+          await subject.attach(resourceId);
+        },
+        copy: (value) => navigator.clipboard.writeText(value),
+      });
+      identityViews.set(id, view);
+    }
+    const events =
+      knownKind === "stream"
+        ? filterRecordedEvents(eventWindow(), {
+            scope: "all",
+            classification: "",
+            source: "",
+            resourceId: "",
+            executionId: "",
+            query: "",
+          })
+            .slice(0, 4)
+            .reverse()
+            .map((event) => ({
+              id: event.eventId,
+              type: event.type,
+              source: event.providerId,
+              classification: event.classification,
+              receivedAt: event.receivedAt,
+            }))
+        : undefined;
+    const content =
+      resource && resource.available !== false
+        ? (noteSessions.get(resource.id)?.snapshot().content ??
+          resource.content)
+        : "";
+    const projection = subjectProjections.get(id);
+    const key = JSON.stringify([
+      knownKind,
+      resource?.id,
+      resource?.version,
+      resource?.title,
+      resource?.available,
+      resource?.visible,
+      resource?.taskStatus,
+      resource?.taskPriority,
+      resource?.taskMembers,
+      resource?.provider,
+      resource?.conversationRevision,
+      resource?.execution,
+      resource?.messages.slice(-2),
+      events,
+      eventDisconnected,
+    ]);
+    const cached = identityModels.get(id);
+    const model =
+      cached &&
+      cached.key === key &&
+      cached.content === content &&
+      cached.projection === projection
+        ? cached.model
+        : blockIdentity({
+            kind: knownKind,
+            resource,
+            content,
+            subject: projection,
+            events,
+            disconnected: eventDisconnected,
+          });
+    identityModels.set(id, { key, content, projection, model });
+    view.update(model);
   }
   function paintBlockAvailability(article: HTMLElement, block: Block) {
     const subject =
@@ -2045,7 +2236,15 @@ export function installApplication(hooks: Hooks) {
         loadBlockSettings(block.id);
       },
     });
-    if (changed) hooks.wake();
+    if (changed) {
+      subjectViews
+        .get(block.id)
+        ?.setVisible(
+          (blockPresentations.get(block.id)?.visible ?? false) && !reason,
+        );
+      syncBlockActivity(block.id);
+      hooks.wake();
+    }
     return !!reason;
   }
   function rememberBlockSettings(settings: BlockInstanceSettings) {
@@ -2096,6 +2295,16 @@ export function installApplication(hooks: Hooks) {
     settingsReads.set(id, read);
   }
   function decorate(article: HTMLElement, id: string) {
+    article
+      ?.querySelector(".working-content")
+      ?.setAttribute("data-no-card-drag", "");
+    decorateFunctional(article, id);
+    if (!article) return;
+    refreshBlockIdentity(article, id);
+    const block = state?.blocks.find((block) => block.id === id);
+    if (block) paintBlockAvailability(article, block);
+  }
+  function decorateFunctional(article: HTMLElement, id: string) {
     if (!article) return;
     const b = state?.blocks.find((b) => b.id === id);
     if (!b) return;
@@ -2200,242 +2409,39 @@ export function installApplication(hooks: Hooks) {
       r.kind === "task_group" ? "TASK GROUP" : r.kind.toUpperCase();
     if (r.kind === "conversation") {
       const surface = el(".working-content", article);
-      if (!surface.querySelector(".conversation-compose")) {
-        surface.innerHTML =
-          '<p class="provider-label"></p><div class="conversation-transcript" role="log" aria-label="Conversation messages"></div><form class="conversation-compose"><label>Message<textarea rows="2" maxlength="16000" required aria-label="Conversation message"></textarea></label><div><button type="submit">Send</button><button type="button" class="cancel-turn">Cancel turn</button><button type="button" class="open-full-conversation">History, search and branches</button></div><p class="execution-state" role="status"></p></form><p class="conversation-draft-status" role="status" aria-live="polite"></p><div class="conversation-draft-recovery" hidden><details><summary>Stored competing draft</summary><pre class="conversation-stored-draft"></pre></details><button type="button" data-draft-resolve="keep-local">Keep my text</button><button type="button" data-draft-resolve="use-stored">Use stored draft</button><button type="button" class="conversation-draft-retry">Retry draft recovery</button><button type="button" class="conversation-send-reviewed">I reviewed the saved history</button></div>';
-        const input = el<HTMLTextAreaElement>(
-          ".conversation-compose textarea",
-          surface,
-        );
-        input.maxLength = 16384;
-        input.oninput = () => composerSession(r.id).update(input.value);
-        el<HTMLFormElement>("form", surface).onsubmit = (event) => {
-          event.preventDefault();
-          if (
-            busy.has(r.id) ||
-            composerSendReview.has(r.id) ||
-            !input.value.trim()
-          )
-            return;
-          const current = state!.resources.find(
-            (resource) => resource.id === r.id,
-          )!;
-          const session = composerSession(r.id),
-            commandId = crypto.randomUUID(),
-            intentRevision = current.conversationRevision ?? current.version;
-          session.update(input.value);
-          const checkpoint = session.checkpoint();
-          busy.add(r.id);
-          paintComposerDraft(r.id, session.snapshot());
-          hooks.vela("working");
-          el(".execution-state", surface).textContent =
-            "Saving the exact draft before submission…";
-          let submitted = false;
-          void (async () => {
-            const sent = await checkpoint;
-            const before = await composerPort.command("detail", {
-              resourceId: r.id,
-              limit: 50,
-              offset: Math.max(
-                0,
-                (current.messageCount ?? current.messages.length) - 50,
-              ),
-            });
-            if (before.conversation.revision !== intentRevision) {
-              await command({ type: "snapshot" });
-              throw new Error(
-                "Conversation history changed. Review the saved messages before sending again.",
-              );
-            }
-            const evidence = {
-              resourceId: r.id,
-              providerId: before.conversation.providerId,
-              content: sent.record.content,
-              commandId,
-              revision: before.conversation.revision,
-              priorMessageIds: before.messages.items.map(
-                (message) => message.id,
-              ),
-            };
-            el(".execution-state", surface).textContent =
-              current.provider === "codex"
-                ? "Awaiting native authorization / provider response…"
-                : "Recording local message…";
-            submitted = true;
-            const result = await composerPort.command("send", {
-              resourceId: r.id,
-              content: sent.record.content,
-              expectedRevision: before.conversation.revision,
-              commandId,
-            });
-            let accepted = acceptedConversationSubmission(evidence, result);
-            if (!accepted) {
-              const after = await composerPort.command("detail", {
-                resourceId: r.id,
-                limit: 50,
-                offset: Math.max(0, before.conversation.messageCount - 1),
-              });
-              accepted = acceptedConversationSubmission(
-                evidence,
-                result,
-                after,
-              );
-            }
-            if (accepted) {
-              await session.acknowledgeSent(sent);
-              composerSendReview.delete(r.id);
-            } else composerSendReview.add(r.id);
-            const execution = result as { state?: string };
-            el(".execution-state", surface).textContent = !accepted
-              ? "Submission acceptance is unconfirmed. The saved draft is retained; review the history before retrying."
-              : execution.state
-                ? execution.state + " · task verification is separate"
-                : "Message recorded locally. Model response is unavailable.";
-            streaming.delete(r.id);
+      let view = chatViews.get(b.id);
+      if (!view && activeBlocks.get(b.id)) {
+        const session = composerSession(r.id);
+        view = mountBlockChat(surface, {
+          resourceId: r.id,
+          port: composerPort,
+          draftSession: session,
+          execution: conversationExecution,
+          active: true,
+          initialScroll: conversationView.scroll[r.id],
+          initialOffset: conversationView.messageOffset[r.id],
+          onChanged: async () => {
             await command({ type: "snapshot" });
-            hooks.vela(
-              !accepted || ["failed", "unknown"].includes(execution.state ?? "")
-                ? "attention"
-                : ["running", "dispatching"].includes(execution.state ?? "")
-                  ? "working"
-                  : "idle",
-            );
-          })()
-            .catch((error) => {
-              const message =
-                error instanceof Error ? error.message : "submission_failed";
-              if (submitted && message !== "authorization_cancelled")
-                composerSendReview.add(r.id);
-              el(".execution-state", surface).textContent =
-                message === "authorization_cancelled"
-                  ? "Send cancelled. The saved draft is retained."
-                  : message;
-              hooks.vela(
-                message === "authorization_cancelled" ? "idle" : "attention",
-              );
-            })
-            .finally(() => {
-              busy.delete(r.id);
-              paintComposerDraft(r.id, session.snapshot());
-            });
-        };
-        for (const control of surface.querySelectorAll<HTMLButtonElement>(
-          "[data-draft-resolve]",
-        ))
-          control.onclick = () => {
-            const version = Number(
-              el(".conversation-draft-recovery", surface).dataset.remoteVersion,
-            );
-            void composerSession(r.id)
-              .resolve(
-                control.dataset.draftResolve as "keep-local" | "use-stored",
-                version,
-              )
-              .catch(report);
-          };
-        el(".conversation-draft-retry", surface).onclick = () => {
-          const session = composerSession(r.id);
-          void session
-            .reload()
-            .then(() => session.flush())
-            .catch(report);
-        };
-        el(".conversation-send-reviewed", surface).onclick = () => {
-          composerSendReview.delete(r.id);
-          paintComposerDraft(r.id, composerSession(r.id).snapshot());
-        };
-        el(".cancel-turn", surface).onclick = () => {
-          void host.command!("executionStatus", {})
-            .then(async (result) => {
-              const execution = (
-                result as { id: string; resourceId: string; state: string }[]
-              ).find(
-                (e) =>
-                  e.resourceId === r.id &&
-                  ["dispatching", "running"].includes(e.state),
-              );
-              if (!execution) {
-                el(".execution-state", surface).textContent =
-                  "No interruptible turn observed.";
-                return;
-              }
-              await host.command!("interrupt", { executionId: execution.id });
-              el(".execution-state", surface).textContent =
-                "Cancellation requested; waiting for provider confirmation.";
-            })
-            .catch(report);
-        };
+          },
+          onViewState: (value) => {
+            conversationView.drafts[value.resourceId] = value.content;
+            conversationView.scroll[value.resourceId] = value.scroll;
+            conversationView.messageOffset[value.resourceId] = value.offset;
+          },
+          openHistory: () => {
+            conversations(r.id);
+          },
+          failed: report,
+        });
+        chatViews.set(b.id, view);
+        chatRefreshKeys.set(b.id, String(r.conversationRevision ?? r.version));
       }
-      el(".open-full-conversation", surface).onclick = () => {
-        void (async () => {
-          const session = composerSession(r.id);
-          await session.flush();
-          conversationView.drafts[r.id] = session.snapshot().content;
-          conversations(r.id);
-        })().catch(report);
-      };
-      const latestMessage = r.messages.at(-1);
-      el(".folio-preview", article).textContent = latestMessage
-        ? latestMessage.role + " · " + latestMessage.content.slice(0, 500)
-        : "No saved messages yet.";
-      el(".provider-label", surface).textContent =
-        r.provider === "codex"
-          ? "Codex · native instructions/configuration · read-only review policy · authorization on Send"
-          : "Local conversation · durable messages · model response and ChatGPT account history unavailable";
-      if ((r.messageCount ?? r.messages.length) > r.messages.length)
-        el(".provider-label", surface).textContent +=
-          ` · Showing latest ${r.messages.length} of ${r.messageCount} local messages; older messages remain stored`;
-      if (r.execution && !busy.has(r.id))
-        el(".execution-state", surface).textContent =
-          `${r.execution.state}${r.execution.errorCode ? " · " + r.execution.errorCode : ""} · task verification is separate`;
-      el<HTMLButtonElement>(".cancel-turn", surface).hidden =
-        r.provider !== "codex";
-      const session =
-        composerSessions.get(r.id) ??
-        (article.classList.contains("expanded")
-          ? composerSession(r.id)
-          : undefined);
-      if (session) paintComposerDraft(r.id, session.snapshot());
-      else
-        el<HTMLTextAreaElement>(
-          ".conversation-compose textarea",
-          surface,
-        ).disabled = true;
-      if (!article.classList.contains("expanded") || document.hidden) return;
-      const log = el(".conversation-transcript", surface),
-        nearBottom = log.scrollHeight - log.clientHeight - log.scrollTop < 40;
-      const rows = new Map(
-          [...log.querySelectorAll<HTMLElement>("[data-message-id]")].map(
-            (row) => [row.dataset.messageId!, row],
-          ),
-        ),
-        wanted = new Set(r.messages.map((message) => message.id));
-      for (const [id, row] of rows) if (!wanted.has(id)) row.remove();
-      r.messages.forEach((message, index) => {
-        let row = rows.get(message.id);
-        if (!row) {
-          row = document.createElement("p");
-          row.dataset.messageId = message.id;
-          row.append(document.createElement("b"), document.createTextNode(""));
-        }
-        const label = message.role + " · ";
-        if (row.firstChild!.textContent !== label)
-          row.firstChild!.textContent = label;
-        if (row.lastChild!.textContent !== message.content)
-          row.lastChild!.textContent = message.content;
-        const current = log.children[index];
-        if (current !== row) log.insertBefore(row, current ?? null);
-      });
-      let live = log.querySelector<HTMLElement>(".conversation-live-output");
-      if (streaming.has(r.id)) {
-        if (!live) {
-          live = document.createElement("p");
-          live.className = "conversation-live-output";
-          log.append(live);
-        }
-        live.textContent = "Codex (streaming): " + streaming.get(r.id);
-      } else live?.remove();
-      if (nearBottom) log.scrollTop = log.scrollHeight;
+      const key = String(r.conversationRevision ?? r.version);
+      if (view && activeBlocks.get(b.id) && chatRefreshKeys.get(b.id) !== key) {
+        chatRefreshKeys.set(b.id, key);
+        void view.refresh({ latest: true }).catch(report);
+      }
+      view?.setActive(activeBlocks.get(b.id) ?? false);
     } else if (r.kind === "task_group") {
       const surface = el(".working-content", article);
       if (!surface.querySelector(".task-group-summary")) {
@@ -2653,13 +2659,15 @@ export function installApplication(hooks: Hooks) {
         const article = document.querySelector<HTMLElement>(
           `[data-block="${block.id}"]`,
         );
-        if (article)
+        if (article && blockPresentations.get(block.id)?.visible !== false) {
           el(".folio-preview", article).textContent =
             events
               .slice(0, 3)
               .map((event) => event.classification + " · " + event.type)
               .join(" · ") ||
             "No accessible captured events in this retained window.";
+          refreshBlockIdentity(article, block.id);
+        }
       }
   }
   function rememberEvent(e: Activity) {
@@ -2677,6 +2685,10 @@ export function installApplication(hooks: Hooks) {
       return;
     if (seenEvents.has(e.eventId)) return;
     seenEvents.add(e.eventId);
+    if (e.type.toLocaleLowerCase().includes("collection")) {
+      subjectDataEpoch++;
+      for (const view of subjectViews.values()) void view.refresh();
+    }
     localEvents.push(e as StreamEvent);
     localEvents.sort((a, b) => a.cursor - b.cursor);
     retainedLatest = Math.max(retainedLatest, e.cursor!);
@@ -2719,17 +2731,9 @@ export function installApplication(hooks: Hooks) {
       resourceId?: string;
       payload?: { delta?: string };
     };
-    if (e.payload?.delta && e.resourceId) {
-      streaming.set(
-        e.resourceId,
-        (streaming.get(e.resourceId) ?? "") + e.payload.delta,
-      );
-      for (const b of state?.blocks.filter(
-        (b) => b.resource_id === e.resourceId,
-      ) ?? [])
-        decorate(el(`[data-block="${b.id}"]`), b.id);
-      return;
-    }
+    // Assistant text is handled by the one shared execution adapter. It is not
+    // copied into a second transcript, activity payload cache or frame path.
+    if (e.payload?.delta && e.resourceId) return;
     rememberEvent(e);
     fillEvents(el("#events"));
     el("#event-count").textContent = String(localEvents.length);
@@ -2741,6 +2745,7 @@ export function installApplication(hooks: Hooks) {
       );
     if (e.type === "backend/disconnected") {
       eventDisconnected = true;
+      updateStreamSummaries();
       for (const view of eventViews.values()) view.update();
       hooks.status(
         "Backend disconnected. Current surfaces are retained; restart to recover persisted data. Execution outcomes may be unknown.",
@@ -2856,6 +2861,40 @@ export function installApplication(hooks: Hooks) {
         `Application service unavailable: ${(e as Error).message}. Restart to recover; no data was reset.`,
       );
     });
+  function syncBlockActivity(id: string) {
+    const block = state?.blocks.find((block) => block.id === id);
+    const resource = block?.resource_id
+      ? state?.resources.find((resource) => resource.id === block.resource_id)
+      : undefined;
+    const active =
+      !unavailableBlocks.has(id) &&
+      resource?.available !== false &&
+      resource?.visible !== false &&
+      ((focusedBlocks.get(id) ?? false) ||
+        (["note", "conversation"].includes(resource?.kind ?? "") &&
+          (blockPresentations.get(id)?.usable ?? false)));
+    const previous = activeBlocks.get(id) ?? false;
+    activeBlocks.set(id, active);
+    if (previous === active) return;
+    if (active) {
+      ensureNoteView(id);
+      const block = state?.blocks.find((block) => block.id === id);
+      if (
+        block?.resource_id &&
+        state?.resources.find((resource) => resource.id === block.resource_id)
+          ?.kind === "conversation"
+      ) {
+        const article = document.querySelector<HTMLElement>(
+          `[data-block="${id}"]`,
+        );
+        if (article) decorate(article, id);
+      }
+    }
+    chatViews.get(id)?.setActive(active);
+    noteViews.get(id)?.setActive(active);
+    subjectViews.get(id)?.setActive(active);
+    eventViews.get(id)?.setActive(active);
+  }
   return {
     frame(now: number, policy: Policy) {
       surfaces.frame(now);
@@ -2967,27 +3006,22 @@ export function installApplication(hooks: Hooks) {
     block: (id: string) => state?.blocks.find((b) => b.id === id),
     saveContent,
     setBlockActive(id: string, active: boolean) {
-      active = active && !unavailableBlocks.has(id);
-      const previous = activeBlocks.get(id) ?? false;
-      activeBlocks.set(id, active);
-      if (previous === active) return;
-      if (active) {
-        ensureNoteView(id);
-        const block = state?.blocks.find((block) => block.id === id);
-        if (
-          block?.resource_id &&
-          state?.resources.find((resource) => resource.id === block.resource_id)
-            ?.kind === "conversation"
-        ) {
-          const article = document.querySelector<HTMLElement>(
-            `[data-block="${id}"]`,
-          );
-          if (article) decorate(article, id);
-        }
+      focusedBlocks.set(id, active);
+      syncBlockActivity(id);
+    },
+    setBlockPresentation(id: string, visible: boolean, usable: boolean) {
+      const previous = blockPresentations.get(id);
+      if (previous?.visible === visible && previous.usable === usable) return;
+      blockPresentations.set(id, { visible, usable });
+      const article = document.querySelector<HTMLElement>(
+        `[data-block="${id}"]`,
+      );
+      if (article) {
+        article.dataset.workspacePresentation = usable ? "usable" : "preview";
+        if (visible && !previous?.visible) refreshBlockIdentity(article, id);
       }
-      noteViews.get(id)?.setActive(active);
-      subjectViews.get(id)?.setActive(active);
-      eventViews.get(id)?.setActive(active);
+      subjectViews.get(id)?.setVisible(visible && !unavailableBlocks.has(id));
+      syncBlockActivity(id);
     },
     move(id: string, dx: number, dy: number) {
       const b = state?.blocks.find((b) => b.id === id);

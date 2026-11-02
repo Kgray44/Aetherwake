@@ -108,7 +108,11 @@ export function showUnavailableBlock(
     retry.type = "button";
     retry.textContent = "Retry saved block information";
     notice.append(title, message, identity, retry);
-    inner.insertBefore(notice, inner.querySelector(".folio-actions"));
+    const actions = inner.querySelector(".folio-actions");
+    inner.insertBefore(
+      notice,
+      actions?.parentElement === inner ? actions : null,
+    );
     entry = {
       content,
       wasInert: content.inert,

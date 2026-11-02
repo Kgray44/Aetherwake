@@ -121,8 +121,8 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
       );
     }
     const card = `[data-block="${blockId}"]`,
-      input = card + " .conversation-compose textarea",
-      surface = card + " .working-content";
+      input = card + " .cp-composer textarea",
+      surface = card + " .cp-draft-status";
     await wait(
       `document.querySelector(${JSON.stringify(input)})&&!document.querySelector(${JSON.stringify(input)}).disabled`,
     );
@@ -142,7 +142,7 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
         "fresh native process restores exact draft and version without inserting or sending a message",
       );
       await shot("restored-unsent-draft");
-      await click(card + ' .conversation-compose button[type="submit"]');
+      await click(card + ' .cp-composer button[type="submit"]');
       await wait(`document.querySelector(${JSON.stringify(input)}).value===''`);
       const after = await cp("detail", { resourceId, limit: 50 }),
         cleared = await cp("readDraft", { resourceId });
@@ -166,7 +166,7 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
         "Synthetic local draft preserved through an interrupted save.";
       await type(input, original);
       await wait(
-        `document.querySelector(${JSON.stringify(surface)}).dataset.conversationDraftState==='clean'`,
+        `document.querySelector(${JSON.stringify(surface)}).dataset.draftState==='clean'`,
       );
       const first = await cp("readDraft", { resourceId });
       assert.equal(first.content, original);
@@ -179,7 +179,7 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
       const local = original + " New local text kept during conflict.";
       await type(input, local);
       await wait(
-        `document.querySelector(${JSON.stringify(surface)}).dataset.conversationDraftState==='conflict'`,
+        `document.querySelector(${JSON.stringify(surface)}).dataset.draftState==='conflict'`,
       );
       assert.equal(
         (await cp("readDraft", { resourceId })).content,
@@ -189,9 +189,9 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
         await js(`document.querySelector(${JSON.stringify(input)}).value`),
         local,
       );
-      await click(card + ' [data-draft-resolve="keep-local"]');
+      await click(card + " .cp-draft-conflict button:first-of-type");
       await wait(
-        `document.querySelector(${JSON.stringify(surface)}).dataset.conversationDraftState==='clean'`,
+        `document.querySelector(${JSON.stringify(surface)}).dataset.draftState==='clean'`,
       );
       assert.equal((await cp("readDraft", { resourceId })).content, local);
       receipt.checks.push(

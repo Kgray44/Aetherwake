@@ -362,6 +362,19 @@ export class TemplateService {
     return {
       resources,
       nextCursor: consumed < rows.length || rows.length === 256 ? cursor : null,
+      ...(collectionId || projectId
+        ? {
+            scopeTitle: String(
+              this.db
+                .prepare(
+                  collectionId
+                    ? "SELECT title FROM collections WHERE id=?"
+                    : "SELECT title FROM projects WHERE id=?",
+                )
+                .get(collectionId || projectId)?.title ?? "",
+            ),
+          }
+        : {}),
     };
   }
   projectOverview(projectId: string): ProjectOverview {

@@ -196,6 +196,8 @@ export type BrowseResourcesInput = {
   limit?: number;
 };
 export type BrowseResourcesPage = {
+  /** Canonical scope title, read only after the existing subject grant succeeds. */
+  scopeTitle?: string;
   resources: (ResourceCandidate & {
     placementCount: number;
     placementCountComplete: boolean;

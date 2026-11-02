@@ -6,6 +6,7 @@ import type {
   BlockKind,
 } from "./contracts.ts";
 import { BUILTIN_BLOCKS } from "./registry.ts";
+import type { SubjectIdentity } from "./identity-model.ts";
 const node = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
   text = "",
@@ -35,6 +36,8 @@ export function mountSubjectExperience(
   port: SubjectExperiencePort,
   options: {
     active?: boolean;
+    visible?: boolean;
+    onProjection?(projection: SubjectIdentity): void;
     openWorkspace?(workspaceId: string): void;
     openResource?(resourceId: string): void;
     attachResource?(resource: ResourceCandidate): Promise<void>;
@@ -60,8 +63,11 @@ export function mountSubjectExperience(
   root.append(section);
   let disposed = false,
     active = options.active ?? true,
+    visible = options.visible ?? false,
     sequence = 0,
     cursor: string | null = null;
+  let latestPage: BrowseResourcesPage | null = null;
+  let queryTimer: ReturnType<typeof setTimeout> | undefined;
   const search = node("input"),
     kind = node("select"),
     unplaced = node("input"),
@@ -113,11 +119,19 @@ export function mountSubjectExperience(
     };
   }
   const fail = (error: unknown) => {
-    if (!disposed)
+    if (!disposed) {
+      latestPage = null;
+      results.replaceChildren();
+      if (subject.kind === "project") body.replaceChildren();
       status.textContent =
         error instanceof Error
           ? error.message.replaceAll("_", " ")
           : "This canonical view is unavailable.";
+      options.onProjection?.({
+        phase: "unavailable",
+        message: "This canonical view could not be read. Open it to retry.",
+      });
+    }
   };
   const appendResources = (page: BrowseResourcesPage, append: boolean) => {
     if (!append) results.replaceChildren();
@@ -169,19 +183,27 @@ export function mountSubjectExperience(
       : "Canonical local resources. No external files or providers were searched.";
   };
   async function load(append: boolean) {
-    if (!active || disposed) {
+    if ((!active && !visible) || disposed) {
       if (!disposed)
         status.textContent = "Open this block to inspect canonical local data.";
       return;
     }
     const request = ++sequence;
+    options.onProjection?.({ phase: "loading" });
     section.setAttribute("aria-busy", "true");
     status.textContent = "Reading canonical local data…";
     try {
       if (subject.kind === "project") {
         const overview = await port.projectOverview(subject.projectId),
-          resourcePage = await port.browseResources({ subject, limit: 10 });
-        if (disposed || !active || request !== sequence) return;
+          resourcePage = active
+            ? await port.browseResources({ subject, limit: 10 })
+            : null;
+        if (disposed || (!active && !visible) || request !== sequence) return;
+        options.onProjection?.({ phase: "ready", kind: "project", overview });
+        if (!active) {
+          body.replaceChildren();
+          return;
+        }
         body.replaceChildren();
         body.append(
           node("h3", overview.project.title),
@@ -237,8 +259,11 @@ export function mountSubjectExperience(
             node("li", "No recent recorded changes in this bounded view."),
           );
         body.append(events, node("h4", "Project resources"), results);
-        appendResources(resourcePage, false);
-        if (resourcePage.nextCursor)
+        if (resourcePage) {
+          latestPage = resourcePage;
+          appendResources(resourcePage, false);
+        }
+        if (resourcePage?.nextCursor)
           body.append(
             node(
               "p",
@@ -249,15 +274,25 @@ export function mountSubjectExperience(
         status.textContent =
           "Counts describe canonical local state. Task completion is separate from verified execution.";
       } else {
+        const requestedQuery = search.value;
         const page = await port.browseResources({
           subject,
-          query: search.value,
+          query: requestedQuery,
           ...(kind.value ? { kind: kind.value as BlockKind } : {}),
           unplacedOnly: unplaced.checked,
+          limit: active ? 30 : 4,
           ...(append && cursor ? { afterId: cursor } : {}),
         });
-        if (disposed || !active || request !== sequence) return;
-        appendResources(page, append);
+        if (disposed || (!active && !visible) || request !== sequence) return;
+        latestPage = page;
+        options.onProjection?.({
+          phase: "ready",
+          kind: "browser",
+          page,
+          query: requestedQuery,
+        });
+        if (active) appendResources(page, append);
+        else results.replaceChildren();
       }
     } catch (error) {
       if (request === sequence) fail(error);
@@ -274,10 +309,37 @@ export function mountSubjectExperience(
       active = value;
       sequence++;
       section.removeAttribute("aria-busy");
-      if (active) void load(false);
+      if (active || visible) void load(false);
+    },
+    setVisible(value: boolean) {
+      if (visible === value) return;
+      visible = value;
+      if (visible) void load(false);
+      else if (!active) {
+        sequence++;
+        clearTimeout(queryTimer);
+        section.removeAttribute("aria-busy");
+      }
+    },
+    search(query: string) {
+      search.value = query.slice(0, 500);
+      clearTimeout(queryTimer);
+      if (active || visible)
+        queryTimer = setTimeout(() => {
+          void load(false);
+        }, 160);
+    },
+    async attach(resourceId: string) {
+      const resource = latestPage?.resources.find(
+        (resource) => resource.id === resourceId,
+      );
+      if (!resource || !options.attachResource)
+        throw new Error("resource_attachment_unavailable");
+      await options.attachResource(resource);
     },
     dispose() {
       disposed = true;
+      clearTimeout(queryTimer);
       sequence++;
       section.remove();
     },

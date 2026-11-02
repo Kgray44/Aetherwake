@@ -1,3 +1,4 @@
+import { sourceLinks } from "./source-links.ts";
 import type { NoteExperiencePort } from "./note-contracts.ts";
 import { NoteSession } from "./note-session.ts";
 
@@ -67,25 +68,7 @@ export function renderNoteReading(root: HTMLElement, content: string) {
     );
 }
 
-export function sourceLinks(content: string): string[] {
-  const values: string[] = [];
-  for (const match of content.matchAll(/https?:\/\/[^\s<>"'`]+/gi)) {
-    try {
-      const url = new URL(match[0].replace(/[),.;!?\]}]+$/, ""));
-      if (
-        ["http:", "https:"].includes(url.protocol) &&
-        !url.username &&
-        !url.password &&
-        !values.includes(url.href)
-      )
-        values.push(url.href);
-    } catch {
-      /* A malformed source remains plain note text. */
-    }
-    if (values.length === 50) break;
-  }
-  return values;
-}
+export { sourceLinks } from "./source-links.ts";
 
 /** Adds controls around the existing textarea. Its node, selection and input listener are retained. */
 export function mountNoteExperience(
@@ -137,6 +120,7 @@ export function mountNoteExperience(
     rendered = "",
     pending = false;
   status.setAttribute("role", "status");
+  root.dataset.documentKind = options.kind;
   status.setAttribute("aria-live", "polite");
   search.type = "search";
   search.maxLength = 500;
@@ -317,7 +301,7 @@ export function mountNoteExperience(
       ready: "Saved locally.",
       recovered: "Recovered an unsaved draft. Review or save it.",
       saving: "Saving recovery draft…",
-      saved: "Saved in local SQLite.",
+      saved: "Saved locally.",
       conflict:
         "Revision conflict. Your text is retained here. Review both versions before choosing.",
       error:
@@ -346,6 +330,7 @@ export function mountNoteExperience(
       disposed = true;
       unsubscribe();
       delete root.dataset.noteState;
+      delete root.dataset.documentKind;
       document.removeEventListener("pointerdown", dismissMenu);
       tools.remove();
       rename.remove();

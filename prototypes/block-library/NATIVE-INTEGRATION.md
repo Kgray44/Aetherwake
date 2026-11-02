@@ -6,16 +6,16 @@ This increment extends the existing module and canonical adapter. It does not re
 
 Forward the following `TemplateService` methods through the existing validated native command boundary:
 
-| Method | Input | Result |
-| --- | --- | --- |
-| `findResources` | `ResourceDiscoveryInput` | `ResourceDiscoveryPage` |
-| `attachBlock` | `AttachBlockInput` | `CreatedBlock` |
-| `preferences` | none | `LibraryPreferences` |
-| `setFavorite` | kind, favorite, expectedVersion | `LibraryPreferences` |
-| `getBlockSettings` | placementId | `BlockInstanceSettings` |
-| `configureBlock` | placementId, expectedVersion, configuration | `BlockInstanceSettings` |
-| `previewWorkspaceFromResources` | `WorkspaceFromResourcesInput` | `WorkspaceConstructionPreview` |
-| `workspaceFromResources` | `WorkspaceFromResourcesInput` | `ConstructedWorkspace` |
+| Method                          | Input                                       | Result                         |
+| ------------------------------- | ------------------------------------------- | ------------------------------ |
+| `findResources`                 | `ResourceDiscoveryInput`                    | `ResourceDiscoveryPage`        |
+| `attachBlock`                   | `AttachBlockInput`                          | `CreatedBlock`                 |
+| `preferences`                   | none                                        | `LibraryPreferences`           |
+| `setFavorite`                   | kind, favorite, expectedVersion             | `LibraryPreferences`           |
+| `getBlockSettings`              | placementId                                 | `BlockInstanceSettings`        |
+| `configureBlock`                | placementId, expectedVersion, configuration | `BlockInstanceSettings`        |
+| `previewWorkspaceFromResources` | `WorkspaceFromResourcesInput`               | `WorkspaceConstructionPreview` |
+| `workspaceFromResources`        | `WorkspaceFromResourcesInput`               | `ConstructedWorkspace`         |
 
 `createCanonicalTemplateHost` supplies discovery and placement authorization through its existing effective-grant callback. Search uses bounded keyset pages and returns only active resources of the selected kind owned by the target project or unassigned. Attachment rechecks resource and layout versions and grants in the canonical transaction, creates only a placement, and records a persistent command receipt. A disconnected execution provider does not prohibit reading or attaching an otherwise available conversation.
 
@@ -41,7 +41,6 @@ Template body schema 2 additionally supports explicit subject placements: `{subj
 
 The focused suite covers the actual SQLite/kernel/engine/DesktopState adapter, attachment scope and identity, independent settings, undo/redo, schema upgrade and restart, and capability honesty. Type checking covers browser and native modules. These checks do not establish that the native host has wired the ports, that the visual design has owner acceptance, or that an actual Vela model interpreted a construction request. Combined desktop journeys, graphics recovery and renderer performance require the integrated host.
 
-
 ## Canonical subject experiences
 
 The additive native methods are `subjectTargets(workspaceId)`, `createSubjectBlock(input)`, `projectOverview(projectId)` and `browseResources(input)`. Inputs/results are exported by `contracts.ts`. Expose capabilities under `LibraryCapabilities.subjects` for `project_overview`, `resource_browser` and `collection_browser` only after these paths are connected. Missing capability entries are unknown, never available. The optional `discoverBlocks()` service method returns all ten typed manifests with actual availability; `searchBlockCatalog` is the browser-safe equivalent.
@@ -54,8 +53,16 @@ Project Overview reports actual registered resource counts, open/done task metad
 
 Template limits are now 64 resource roles and 64 placements (the 64 KiB body bound remains). The source suite captures, previews and applies real workspaces with 0, 1, 3, 10, 25 and 50 distinct resources, proving reuse without new resource rows and exact Freeform geometry. This is functional source evidence; it does not establish renderer performance or native subject-view acceptance.
 
-
 The desktop now loads each current placement's settings once into a bounded current-workspace cache, applies them in place with `applyBlockConfiguration`, and mounts `mountBlockConfiguration` in the existing Card inspector. Request failures are explicit and retryable through that inspector; unsupported versions are not reset. Removed placements release the renderer cache, preserving the canonical historical metadata for undo. Template capture supplies all current per-placement configurations and refuses to silently substitute defaults while any are loading/unavailable. These are renderer integration changes; native preference-change, editor-selection and restart proof remain required on the combined source.
 
-
 `mountBlockLibrary` accepts optional `context: () => LibraryRecommendationContext | null`. The desktop supplies the actual current workspace project and visible canonical block kinds; the browser-safe `recommendBlocks` helper combines that metadata with runtime capability availability. These are explainable local rules, never inferred grants or fabricated intelligence. The Library's Recommended filter displays their reasons and excludes existing block types. It remains empty without context rather than assuming compatibility.
+
+## Per-kind workspace views and shared inline chat
+
+`identity-model.ts` reads only the existing canonical snapshot, authorized SubjectExperiencePort projection and allowlisted public event metadata. `identity-view.ts` mounts each kind's compact body and moves the existing Open/Back action into its header. No visual identity creates a canonical resource, grants access, fetches a URL, launches a provider or adds a renderer/frame loop. Browser pages include an optional canonical scope title only after the existing subject grant succeeds. Unavailable resources expose no retained body text; unsupported type/version recovery still preserves the original inert editor.
+
+The desktop reports only presentation transitions (`setBlockPresentation`) from its existing Motion Coordinator paint pass. Visible subject cards read bounded four-row projections; opening a browser uses its existing full thirty-row page. Hidden cards invalidate late reads, retain the search text and do not poll. Resource/task/workspace actions retain real IDs and invoke the same existing controllers and versioned native commands.
+
+`chat-view.ts` places `mountConversationChat` inside the existing block. The host supplies its canonical `ConversationDraftSession`, public ConversationProductPort and single conversationExecution adapter. The wrapper only suspends/resumes that observer and retains DOM identity; it does not render another transcript or own a composer store. Component flush/close persists drafts independently of pending provider turns. Resource sessions live through the native-window lifetime, including view departure while a Send is outstanding. The inline draft native helper now targets the shared `.cp-composer`, `.cp-draft-status` and explicit conflict controls; it remains unrun on this source.
+
+CPU component regressions cover per-kind projections, real-ID actions, partial counts, unavailable data, stable search/caret/checkbox nodes, failed mutation recovery, header relocation with unsupported settings, hidden/denied/stale subject reads, shared-chat pause/resume and pending-send departure with later draft edits. The visual owner closed two source review findings (unavailable note/chat fallback and title-bearing peripheral accessible names) by read-only inspection. This is not native layout/visual qualification. The next parent-owned native slot must inspect normal/focused, narrow/short, large text, long title, empty/unavailable, chat selection/scroll and resize continuity; combined journeys A–F and the native scale matrix remain pending.

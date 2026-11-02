@@ -1169,6 +1169,13 @@ test("project overview and collection/resource browsing read actual authorized c
   const scoped = f.service.browseResources({
     subject: { kind: "resource-query", projectId: project.id, query: "" },
   });
+  assert.equal(scoped.scopeTitle, project.title);
+  assert.equal(
+    f.service.browseResources({
+      subject: { kind: "collection", collectionId: collection.id },
+    }).scopeTitle,
+    collection.title,
+  );
   assert.deepEqual(
     new Set(scoped.resources.map((item) => item.id)),
     new Set([note, task]),

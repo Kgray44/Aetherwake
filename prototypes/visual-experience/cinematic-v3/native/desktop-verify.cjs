@@ -265,14 +265,12 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted }) => {
       receipt.checks.push("workspace-switch-restores-canonical-layout");
       await click(`[data-block="${cb.id}"] .unfold`);
       await fill(
-        `[data-block="${cb.id}"] .conversation-compose textarea`,
+        `[data-block="${cb.id}"] .cp-composer textarea`,
         "Synthetic local message, no simulated assistant.",
       );
-      await click(
-        `[data-block="${cb.id}"] .conversation-compose button[type="submit"]`,
-      );
+      await click(`[data-block="${cb.id}"] .cp-composer button[type="submit"]`);
       await wait(
-        'document.querySelector(".conversation-transcript").textContent.includes("Synthetic local message")',
+        'document.querySelector(".cp-messages").textContent.includes("Synthetic local message")',
       );
       await click("#home");
       await js('window.__aerynth.setStudy("living")');
@@ -440,17 +438,17 @@ exports.live = async ({
     const block = (await snapshot()).blocks[0];
     await click(`[data-block="${block.id}"] .unfold`);
     await fill(
-      ".conversation-compose textarea",
+      ".cp-composer textarea",
       "Reply with exactly AERYNTH_LIVE_OK. Do not use tools or inspect files.",
     );
     const start = Date.now();
-    await click('.conversation-compose button[type="submit"]');
+    await click('.cp-composer button[type="submit"]');
     await wait(
-      'document.querySelector(".execution-state").textContent.includes("provider_completed") || document.querySelector(".execution-state").textContent.includes("failed") || document.querySelector(".execution-state").textContent.includes("unknown")',
+      '["provider_completed","failed","unknown","interrupted"].includes(document.querySelector(".cp-chat")?.dataset.executionState)',
     );
     receipt.elapsedMs = Date.now() - start;
     receipt.status = await js(
-      'document.querySelector(".execution-state").textContent',
+      'document.querySelector(".cp-chat-status").textContent',
     );
     const s = await snapshot(),
       conversation = s.resources.find((r) => r.id === block.resource_id);

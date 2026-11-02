@@ -404,7 +404,7 @@ function layout(cause: string) {
     );
     el.inert = false;
     el.querySelector(".unfold")!.textContent =
-      expanded === id ? "Return to workspace ↙" : "Unfold ↗";
+      expanded === id ? "Back ↙" : "Open ↗";
     el.querySelector(".unfold")!.setAttribute(
       "aria-expanded",
       String(expanded === id),
@@ -560,12 +560,21 @@ function mountResource(id: string, r: Resource) {
       r.text.split("\n\n")[0];
     interaction();
   });
-  editor.addEventListener("focus", () => {
+  // Delegate to the card so the shared chat composer receives the same writing
+  // motion policy even though it replaces the bootstrap textarea.
+  article.addEventListener("focusin", (event) => {
+    if (!(event.target instanceof HTMLTextAreaElement)) return;
     quiet = true;
     document.body.classList.add("writing");
     wake();
   });
-  editor.addEventListener("blur", () => {
+  article.addEventListener("focusout", (event) => {
+    if (!(event.target instanceof HTMLTextAreaElement)) return;
+    if (
+      event.relatedTarget instanceof HTMLTextAreaElement &&
+      article.contains(event.relatedTarget)
+    )
+      return;
     quiet = $<HTMLInputElement>("#quiet").checked;
     document.body.classList.remove("writing");
     wake();
@@ -1071,11 +1080,13 @@ addEventListener("resize", () => {
 addEventListener("error", (e) => metrics.errors.push(e.message));
 function lifecycle(active: boolean) {
   nativeActive = active;
-  for (const id of order)
+  for (const id of order) {
+    if (!active) application?.setBlockPresentation(id, false, false);
     application?.setBlockActive(
       id,
       active && !document.hidden && expanded === id,
     );
+  }
   if (!active) {
     cancelAnimationFrame(raf);
     clearTimeout(schedulerTimer);
@@ -1164,6 +1175,22 @@ function renderDOM() {
       p.y + p.h < 120 ||
       p.x > innerWidth ||
       p.y > innerHeight - 100;
+    const visible =
+      nativeActive &&
+      !document.hidden &&
+      workspaceSurfacesVisible() &&
+      !el.hidden &&
+      !el.classList.contains("receded") &&
+      p.opacity > 0.01;
+    const usable =
+      visible &&
+      p.w >= (el.dataset.blockKind === "conversation" ? 360 : 280) &&
+      p.h >= (el.dataset.blockKind === "conversation" ? 360 : 220) &&
+      p.x >= 0 &&
+      p.y >= 104 &&
+      p.x + p.w <= innerWidth &&
+      p.y + p.h <= innerHeight - 56;
+    application?.setBlockPresentation(id, visible, usable);
     const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateZ(${p.rotation}deg) rotateY(${p.yaw}deg);z-index:${compositing.rank + 3};border-radius:${surfaceBorderRadius(p.shape, p.w, p.h, unfold)};clip-path:inset(0 round ${surfaceBorderRadius(p.shape, p.w, p.h, unfold)});--resource-content-clip:${compositing.clipPath || "none"};`;
     if (poseStyleCache.get(id) !== style) {
       applyBlockPoseStyle(el.style, style);
