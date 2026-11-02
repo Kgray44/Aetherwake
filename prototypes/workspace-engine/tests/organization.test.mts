@@ -188,7 +188,10 @@ test('mode changes undo mode/config/geometry durably and keep canonical drafts i
     assert.equal(s.organization.mode, 'freeform'); assert.deepEqual(layouts(s), layouts(before));
     s = run(e2, s, { type: 'redoLayout' }); assert.equal(s.organization.mode, 'structured');
   } finally { reopened.close(); }
-  for (const b of before.blocks) assert.equal(k.getResource(b.resourceId).note.content, 'Canonical synthetic draft');
+  for (const b of before.blocks) {
+    const resourceId = b.resourceId; assert.ok(typeof resourceId === 'string', 'This fixture creates canonical Note resources');
+    assert.equal(k.getResource(resourceId).note.content, 'Canonical synthetic draft');
+  }
 });
 
 test('all six mode transitions preserve identities and can be undone', t => {

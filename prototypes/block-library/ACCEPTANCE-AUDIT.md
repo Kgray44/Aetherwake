@@ -2,7 +2,11 @@
 
 Snapshot: 2026-11-02 UTC; worker source through `57c4805`. The original Universal Block System request remains active. This audit records evidence and remaining work; it creates no new requirement, approval, framework decision or product acceptance.
 
-The latest source regression run passed **211 tests** across workspace-engine, block-library and the selected real backend Library/Note integration suites, with strict block-library TypeScript checking. CPU/component/Core checks establish their exercised behavior, not native interaction, motion, displayed frame rate or artistic acceptance.
+The last combined source regression at `cafcba5` passed **211 tests** across workspace-engine, block-library and the selected real backend Library/Note integration suites. Later scoped checks passed 132 block-library tests for the template presentation, 18 component/real-Core checks for browser relationships and 14 selector/guard/preparation checks for `771b75f`, with strict block-library TypeScript checking. These are separate runs, not additive acceptance counts. CPU/component/Core checks establish their exercised behavior, not native interaction, motion, displayed frame rate or artistic acceptance.
+
+The minimize releases pass **76 workspace-engine tests**, **16 selected desktop/organization/adapter tests**, and **141 block-library tests**, including real SQLite close/reopen and retained-editor/IME source checks. Later explicit string guards in the resource-only engine fixtures resolve the three previously disclosed optional-resource-ID typing errors without changing product code or subject contracts. All 76 engine tests and full strict engine/library module-and-test typing now pass. These separate suites overlap and are not an additive native acceptance count.
+
+The later bounded native-helper readiness suite passes **22 checks**, including actual preparer/Core reopen, Note mode observation, cold-controller activation order and rejection of changed hydrated node/selection/scroll or a wrong canonical draft. Its targeted strict typing passes. The cold-start correction distinguishes first activation from same-process retention; it does not change the initial retention assertions or eagerly activate minimized controllers.
 
 ## Evidence boundaries
 

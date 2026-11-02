@@ -55,7 +55,10 @@ test('dragging Vela rearranges cards in one undo/redo transaction without changi
   disjoint(s); assert.equal(s.revision, before.revision + 1);
   assert.ok(s.blocks.some(b => geometry(b).x !== geometry(before.blocks.find(old => old.blockId === b.blockId)!).x || geometry(b).y !== geometry(before.blocks.find(old => old.blockId === b.blockId)!).y));
   assert.deepEqual(s.blocks.map(b => b.resourceId).sort(), resourceIds);
-  for (const id of resourceIds) assert.equal(k.getResource(id).note.content, 'Synthetic draft remains');
+  for (const id of resourceIds) {
+    assert.ok(typeof id === 'string', 'This fixture creates canonical Note resources');
+    assert.equal(k.getResource(id).note.content, 'Synthetic draft remains');
+  }
   s = run(e, s, { type: 'undoLayout' });
   assert.deepEqual(s.blocks.map(geometry), before.blocks.map(geometry)); assert.deepEqual(geometry(s.presence), geometry(before.presence));
   s = run(e, s, { type: 'redoLayout' }); disjoint(s);
@@ -155,7 +158,8 @@ test('failed schema3 migration rolls back presence columns and archive while ret
     db.exec('DROP TRIGGER fail_presence_migration');
   });
   const recovered = new WorkspaceEngine(k).project(s.workspaceId); assert.equal(recovered.blocks[0].resourceId, s.blocks[0].resourceId);
-  assert.equal(k.getResource(recovered.blocks[0].resourceId).note.content, 'kept');
+  const resourceId = recovered.blocks[0].resourceId; assert.ok(typeof resourceId === 'string', 'Recovered fixture placement retains its Note resource');
+  assert.equal(k.getResource(resourceId).note.content, 'kept');
 });
 
 test('resolver is deterministic under reversed input, respects rotations and finds a nearest vacant slot', () => {
