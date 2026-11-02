@@ -660,6 +660,7 @@ export class BackendCore {
         this.velaPresentations.set(input,presentation===undefined?null:structuredClone(presentation));
         try{return await this.vela.apply(input);}finally{this.velaPresentations.delete(input);}
       }
+      case 'presentation':return this.vela.presentation(input);
       case 'preferences':return this.vela.preferences(input);case 'reviewAttention':return this.vela.reviewAttention(input);case 'adaptationPolicy':return this.vela.adaptationPolicy(input);
       case 'explicitPreference':return this.vela.explicitPreference(input);case 'reviewPreference':return this.vela.reviewPreference(input);case 'resetPreferences':return this.vela.resetPreferences(input);
       case 'request': {
@@ -1047,6 +1048,7 @@ export class BackendCore {
     // Targeted observed facts can respond during unrelated agent execution.
     // Their own strict schema cannot dispatch an action or a provider.
     if(name==='vela'&&a?.name==='local')return this.vela.local(a.input) as any;
+    if(name==='vela'&&a?.name==='presentation')return this.vela.presentation(a.input) as any;
     // Reads, interruption and durable draft recovery remain available during
     // execution. Canonical mutations retain source/approval fences.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft'];

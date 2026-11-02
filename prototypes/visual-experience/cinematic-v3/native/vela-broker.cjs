@@ -10,6 +10,7 @@ const publicNames = new Set([
   "native",
   "request",
   "local",
+  "presentation",
   "review",
   "apply",
   "cancel",

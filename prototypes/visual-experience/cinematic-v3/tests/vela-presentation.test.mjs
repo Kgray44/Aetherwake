@@ -10,6 +10,43 @@ const context = () => ({
   bounds: { x: -20, y: 10, width: 1200, height: 700 },
 });
 
+test("durable response presentation uses its exact service CAS payload and is never a storage-exempt read", async () => {
+  const { isVelaRead } = createRequire(import.meta.url)(
+    "../native/vela-broker.cjs",
+  );
+  const calls = [];
+  const client = createVelaClient({
+    command: async (command, input) => {
+      calls.push({ command, input });
+      return { version: 2 };
+    },
+    changed: async () => {
+      throw Error("presentation must not hydrate desktop bodies");
+    },
+    observed() {},
+  });
+  const input = { expectedVersion: 1, patch: { view: "history" } };
+  await client.presentation(input);
+  assert.deepEqual(calls, [
+    { command: "vela", input: { name: "presentation", input } },
+  ]);
+  assert.equal(isVelaRead({ name: "presentation", input }), false);
+  const result = await velaCommand({
+    win: {},
+    dialog: {
+      showMessageBox: async () => {
+        throw Error("presentation is not provider approval");
+      },
+    },
+    call: async (command, value) => ({ command, value }),
+    input: { name: "presentation", input },
+  });
+  assert.deepEqual(result, {
+    command: "vela",
+    value: { name: "presentation", input },
+  });
+});
+
 test("client supplies fresh presentation only at apply, separately from exact plan identity and model request", async () => {
   const calls = [],
     current = context();

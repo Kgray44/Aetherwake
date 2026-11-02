@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
-import type { VelaLocalDispatch } from '../../vela-core/src/contracts.ts';
+import type { VelaLocalDispatch, VelaPresentationState } from '../../vela-core/src/contracts.ts';
+import type { VelaBackendState } from '../src/contracts.mts';
 
 function fixture(t:any) {
   const dir=mkdtempSync(join(tmpdir(),'aerynth-local-core-'));
@@ -18,6 +19,21 @@ function fixture(t:any) {
   return {get core(){return core;},async reopen(){await core.command('close',{});core=new BackendCore(options);}};
 }
 const local=(core:BackendCore,intent:string,commandId:string)=>core.command('vela',{name:'local',input:{intent,commandId}} as any) as Promise<VelaLocalDispatch>;
+
+test('actual Core persists presentation references with CAS during unrelated execution without changing canonical history',async t=>{
+  const f=fixture(t),answer=await local(f.core,'What time is it?','presentation-clock');assert(answer.matched);
+  const before=await f.core.command('snapshot',{}),state=await f.core.command('vela',{name:'state',input:{}}) as VelaBackendState;
+  assert(state.presentation);
+  (f.core as any).port.connect=async()=>{throw Error('Presentation must not connect a provider');};
+  (f.core as any).active={id:'synthetic-unrelated-execution'};
+  const saved=await f.core.command('vela',{name:'presentation',input:{expectedVersion:state.presentation.version,patch:{view:'history',selectedRequestId:answer.request.id,pinnedRequestIds:[answer.request.id]}}}) as VelaPresentationState;
+  assert.equal(saved.version,state.presentation.version+1);
+  await assert.rejects(f.core.command('vela',{name:'presentation',input:{expectedVersion:state.presentation.version,patch:{view:'current'}}}),/stale_presentation_version/);
+  (f.core as any).active=null;
+  assert.deepEqual((await f.core.command('snapshot',{})).graph,before.graph);
+  await f.reopen();assert.deepEqual((await f.core.command('vela',{name:'state',input:{}}) as VelaBackendState).presentation,saved);
+  assert.deepEqual((await f.core.command('snapshot',{})).graph,JSON.parse(JSON.stringify(before.graph)));
+});
 function forbidContext(core:BackendCore) {
   for(const key of ['velaMetadata','velaContext','previewVelaRequest','nativeVelaReview','authorizeVelaRequest'])
     (core as any)[key]=()=>{throw Error('Unrelated context or provider consent was accessed: '+key);};

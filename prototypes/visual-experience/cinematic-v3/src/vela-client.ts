@@ -42,6 +42,7 @@ export function createVelaClient(options: {
     open: () => invoke("open", {}),
     search: (input) => invoke("search", input),
     local: (input) => invoke("local", input),
+    presentation: (input) => invoke("presentation", input),
     request: (input) => invoke("request", input),
     native: (input) => invoke("native", input),
     review: (input) => invoke("review", input),
