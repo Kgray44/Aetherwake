@@ -3,7 +3,17 @@
 .aw-direct-resource-body[hidden] { display: none; }
 .aw-direct-resource-status:empty { display: none; }
 .aw-direct-document { display: flex; flex-direction: column; gap: .65rem; min-height: 0; }
-.aw-direct-editor { width: 100%; min-height: 12rem; box-sizing: border-box; resize: vertical; }
+.aw-direct-editor {
+  width: 100%; min-height: 12rem; box-sizing: border-box; resize: vertical;
+  appearance: none; background: #b8acd006; color: #e6e1ef; caret-color: #e9dfff;
+  border: 1px solid #c4b5dc24; border-radius: .8rem; padding: 1.1rem 1.2rem;
+  font: inherit; line-height: 1.65; tab-size: 4; scrollbar-color: #b9a8d04d transparent;
+}
+.aw-direct-editor:focus-visible { outline: 2px solid #baa6dd99; outline-offset: 2px; border-color: #c4b5dc4d; }
+.aw-direct-editor::selection { background: #ad8fd04d; }
+/* Retain Root's saveContent hook, but the shared NoteSession status is the
+   single visible save authority; this legacy hook can lag its result. */
+.aw-direct-document .saved { display: none; }
 .aw-direct-document[data-document-kind="note"] .aw-direct-editor { font-family: Georgia, "Times New Roman", serif; font-size: 1.1rem; line-height: 1.7; }
 .aw-direct-task-controls { display: flex; flex-wrap: wrap; gap: 1rem; margin-block: .75rem; }
 .aw-direct-task-controls label { display: flex; align-items: center; gap: .45rem; }
