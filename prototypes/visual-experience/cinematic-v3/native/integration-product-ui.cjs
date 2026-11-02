@@ -22,7 +22,7 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
     const setup = JSON.parse(await fs.readFile(path.join(privateRoot, 'ui-polish-setup.json'), 'utf8'));
     assert.equal(setup.contract, 'aerynth.product-ui-setup@1'); assert.equal(setup.syntheticOnly, true);
     await fs.mkdir(out, { recursive: true });
-    driver = createDriver(win); await driver.init(); foreground();
+    driver = await createDriver(win); foreground();
     const js = code => { foreground(); return driver.js(code); };
     const click = async selector => { foreground(); await driver.click(selector); receipt.actions.push({ type: 'native-mouse', selector }); foreground(); };
     const desktop = () => js("window.aerynthHost.command('desktop',{type:'snapshot'})");
