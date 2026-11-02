@@ -255,7 +255,7 @@ export class SpatialNavigator {
       n = locationNode(l, this.controller.nodes);
     let target = n ? this.position(n.key) : { x: 0, y: 0, z: 0 },
       distance =
-        l.kind === "project" ? 1900 : l.kind === "universe" ? 4700 : 800;
+        l.kind === "project" ? 1450 : l.kind === "universe" ? 2800 : 800;
     if (l.kind === "universe") {
       const roots = [...this.controller.nodes.values()].filter(
         (n) => n.parent === null,
@@ -268,9 +268,9 @@ export class SpatialNavigator {
           z: ps.reduce((s, p) => s + p.z, 0) / ps.length,
         };
         distance = Math.max(
-          2800,
+          2200,
           ...ps.map(
-            (p) => Math.hypot(p.x - target.x, p.z - target.z) * 2.5 + 1500,
+            (p) => Math.hypot(p.x - target.x, p.z - target.z) * 1.6 + 900,
           ),
         );
       }
@@ -350,7 +350,7 @@ export class SpatialNavigator {
         ...this.bookmark(),
         target: this.position(key),
         distance:
-          n.kind === "project" ? 1750 : n.kind === "workspace" ? 850 : 550,
+          n.kind === "project" ? 1450 : n.kind === "workspace" ? 850 : 550,
       },
       "approach selection",
     );

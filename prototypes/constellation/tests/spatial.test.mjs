@@ -367,3 +367,116 @@ test("10000 UUID placement positions fit the private 2MiB view-state bound witho
   assert.equal(json.includes("Synthetic project"), false);
   assert.equal(json.includes("conversation"), false);
 });
+
+test("shared renderer pass restores host state after failure and reports only its own submissions", () => {
+  const { c, navigation } = setup(),
+    layer = new ConstellationScene(c, navigation, () => ({
+      left: 10,
+      top: 10,
+      bottom: 890,
+      width: 1420,
+      height: 880,
+    }));
+  let viewport = [0, 0, 1440, 900],
+    scissor = [0, 0, 1440, 900],
+    scissorTest = false;
+  const renderer = {
+    autoClear: true,
+    info: { autoReset: false, render: { calls: 100, triangles: 1000 } },
+    getViewport: (v) => v.set(...viewport),
+    getScissor: (v) => v.set(...scissor),
+    getScissorTest: () => scissorTest,
+    setViewport: (...v) => {
+      viewport = v.length === 1 ? v[0].toArray() : v;
+    },
+    setScissor: (...v) => {
+      scissor = v.length === 1 ? v[0].toArray() : v;
+    },
+    setScissorTest: (v) => (scissorTest = v),
+    clearDepth: () => {},
+    render: () => {
+      renderer.info.render.calls += 7;
+      renderer.info.render.triangles += 80;
+    },
+  };
+  const frame = {
+    width: 1440,
+    height: 900,
+    time: 0,
+    quality: "balanced",
+    reduced: false,
+    quiet: false,
+  };
+  layer.render(renderer, frame);
+  assert.equal(layer.diagnostics.drawCalls, 7);
+  assert.equal(layer.diagnostics.triangles, 80);
+  renderer.render = () => {
+    throw Error("GPU loss");
+  };
+  assert.throws(() => layer.render(renderer, frame), /GPU loss/);
+  assert.deepEqual(viewport, [0, 0, 1440, 900]);
+  assert.deepEqual(scissor, [0, 0, 1440, 900]);
+  assert.equal(scissorTest, false);
+  assert.equal(renderer.autoClear, true);
+  layer.dispose();
+});
+
+test("a visible scene object can be archived or detached without stale picking/cache failure", () => {
+  const { c, navigation } = setup(),
+    layer = new ConstellationScene(c, navigation, () => ({
+      left: 0,
+      top: 0,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+    }));
+  layer.update(1440, 900);
+  const visible = [...layer.objects.keys()].find((k) =>
+    k.startsWith("resource:"),
+  );
+  assert.ok(visible);
+  const id = c.nodes.get(visible).resourceId,
+    next = fixture();
+  next.resources = next.resources.filter((r) => r.id !== id);
+  c.update(next);
+  assert.doesNotThrow(() => layer.update(1440, 900));
+  assert.equal(layer.objects.has(visible), false);
+  layer.dispose();
+});
+
+test("small project and universe views retain discoverable labels for every visible semantic anchor", async () => {
+  const s = fixture(2);
+  s.projects.push({ id: "second", title: "Second project" });
+  s.workspaces.push({
+    id: "second-w",
+    title: "Second workspace",
+    project_id: "second",
+  });
+  const { c, motion, navigation: n } = setup(s);
+  const p = n.position("project:p");
+  await n.place("workspace:w", { x: p.x + 367, y: p.y + 105, z: p.z - 367 });
+  n.target({ ...n.camera, target: p, distance: 1900 });
+  settle(motion);
+  const scene = new ConstellationScene(c, n, () => ({
+    left: 0,
+    top: 0,
+    bottom: 460,
+    width: 1570,
+    height: 460,
+  }));
+  let labels = scene.labels(1570, 460);
+  assert.ok(labels.some((l) => l.node.key === "workspace:w"));
+  assert.ok(labels.some((l) => l.node.key === "workspace:w2"));
+  await c.go({ kind: "universe" });
+  settle(motion);
+  labels = scene.labels(1570, 460);
+  assert.ok(labels.some((l) => l.node.key === "project:p"));
+  assert.ok(labels.some((l) => l.node.key === "project:second"));
+  for (let i = 0; i < labels.length; i++)
+    for (let j = i + 1; j < labels.length; j++)
+      assert.ok(
+        Math.abs(labels[i].x - labels[j].x) >= 180 ||
+          Math.abs(labels[i].y - labels[j].y) >= 52,
+      );
+  scene.dispose();
+});

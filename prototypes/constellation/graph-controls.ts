@@ -23,7 +23,7 @@ export function graphControls(
 ) {
   const dialog = el("dialog");
   dialog.className = "aw-graph-dialog";
-  dialog.setAttribute("aria-label", "Organize canonical information");
+  dialog.setAttribute("aria-label", "Organize information");
   root.append(dialog);
   let trigger: HTMLElement | null = null;
   const close = () => dialog.close();
@@ -73,7 +73,7 @@ export function graphControls(
     const f = el("form"),
       error = el("p");
     error.setAttribute("role", "status");
-    const save = el("button", "Apply canonical change");
+    const save = el("button", "Apply change");
     save.type = "submit";
     f.append(save, error);
     f.onsubmit = async (e) => {

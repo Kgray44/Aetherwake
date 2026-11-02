@@ -362,3 +362,68 @@
 .aw-graph-dialog button {
   margin: 5px 6px 0 0;
 }
+.aw-camera-settings {
+  position: relative;
+  pointer-events: auto;
+}
+.aw-camera-settings summary {
+  list-style: none;
+  background: #21192ee8;
+  border: 1px solid #bda3db5c;
+  border-radius: 9px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+.aw-camera-settings > div {
+  display: none;
+}
+.aw-camera-settings[open] > div {
+  position: absolute;
+  bottom: calc(100% + 12px);
+  left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: 320px;
+  padding: 14px;
+  background: #171220f5;
+  border: 1px solid #a78abd77;
+  border-radius: 12px;
+  box-shadow: 0 12px 40px #0009;
+}
+.aw-spatial-mode .aw-camera-tools {
+  bottom: 168px;
+}
+.aw-spatial-mode .aw-spatial-detail {
+  max-height: 125px;
+}
+.aw-camera-settings input[type="range"] {
+  width: 100px;
+}
+@media (max-width: 900px) {
+  .aw-constellation-bar {
+    flex-wrap: wrap;
+  }
+  .aw-location {
+    order: 2;
+    flex-basis: 100%;
+    margin: 0;
+  }
+  .aw-spatial-field {
+    top: 120px;
+  }
+  .aw-spatial-mode .aw-spatial-detail {
+    max-width: 90vw;
+  }
+  .aw-spatial-mode .aw-camera-tools {
+    max-width: 95vw;
+    bottom: 160px;
+    gap: 5px;
+  }
+  .aw-camera-tools button,
+  .aw-camera-settings summary {
+    font-size: 12px;
+    padding: 6px 8px;
+  }
+}

@@ -170,7 +170,12 @@ export function mountConstellation(
     spatial.sensitivity = Number(sensitivity.value);
   };
   sensitivity.onchange = () => void controller.persist();
-  tools.append(
+  const settings = el("details", "", "aw-camera-settings"),
+    summary = el("summary", "Camera & layout"),
+    settingsBody = el("div");
+  settings.append(summary, settingsBody);
+  tools.append(settings);
+  settingsBody.append(
     mode,
     sensitivity,
     button("Orbit left", () => spatial.orbit(-70, 0)),
@@ -178,6 +183,7 @@ export function mountConstellation(
     button("Orbit up", () => spatial.orbit(0, -60)),
     button("Orbit down", () => spatial.orbit(0, 60)),
     button("Undo position", () => spatial.undoPosition()),
+    button("Arrange", () => graph.arrange()),
     button("3D / List", () => {
       spatial.presentation =
         spatial.presentation === "spatial" ? "list" : "spatial";
@@ -465,9 +471,7 @@ export function mountConstellation(
       spatialMode
         ? {
             x: labelMap.get(n.key)?.x ?? 0,
-            y:
-              (labelMap.get(n.key)?.y ?? 0) +
-              (n.kind === "project" ? 65 : n.kind === "workspace" ? 38 : 24),
+            y: labelMap.get(n.key)?.y ?? 0,
           }
         : {
             x: width / 2 + (n.point.x - c.x) * c.zoom,
@@ -512,14 +516,27 @@ export function mountConstellation(
       v.style.transform = `translate(${s.x}px,${s.y}px) translate(-50%,-50%)`;
     }
     lines.replaceChildren();
-    lines.style.display = spatialMode ? "none" : "";
+    lines.style.display = "";
     lines.setAttribute("viewBox", `0 0 ${width} ${height}`);
+    if (spatialMode)
+      for (const p of labels) {
+        const line = document.createElementNS(lines.namespaceURI, "line");
+        for (const [key, value] of Object.entries({
+          x1: p.anchorX,
+          y1: p.anchorY,
+          x2: p.x,
+          y2: p.y - 15,
+        }))
+          line.setAttribute(key, String(value));
+        line.setAttribute("opacity", ".25");
+        lines.append(line);
+      }
     // Only canonical relationships between currently visible resources. No proximity links.
     const byResource = new Map(
       nodes.filter((n) => n.kind === "resource").map((n) => [n.id, n]),
     );
     let count = 0;
-    for (const edge of controller.snapshot.relationships) {
+    for (const edge of spatialMode ? [] : controller.snapshot.relationships) {
       const a = byResource.get(edge.source_id),
         b = byResource.get(edge.target_id);
       if (
@@ -653,6 +670,7 @@ export function mountConstellation(
   };
   field.onpointercancel = cancel;
   field.ondblclick = (e) => {
+    if (e.target !== field && e.target !== world) return;
     const rect = field.getBoundingClientRect(),
       hit = layer.pick(
         e.clientX - rect.left,

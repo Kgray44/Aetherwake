@@ -1,5 +1,6 @@
 import { MotionCoordinator } from "../../visual-experience/cinematic-v3/src/motion.ts";
 import { mountConstellation } from "../view.ts";
+import { WebGLRenderer } from "three";
 import type { Snapshot } from "../types.ts";
 import "../style.css";
 import "./style.css";
@@ -30,6 +31,11 @@ const api = async (type: string, payload: unknown = {}) => {
 let snapshot: Fixture = await api("snapshot");
 const motion = new MotionCoordinator(),
   workspace = document.querySelector<HTMLElement>("#workspace")!;
+const renderer = new WebGLRenderer({ alpha: true, antialias: true });
+renderer.setPixelRatio(Math.min(1.5, devicePixelRatio));
+renderer.domElement.style.cssText =
+  "position:absolute;inset:0;width:100%;height:100%;pointer-events:none";
+document.querySelector("#environment")!.append(renderer.domElement);
 let frameId = 0,
   previous = performance.now();
 function wake() {
@@ -40,6 +46,16 @@ function tick(now: number) {
   const moving = motion.step((now - previous) / 1000);
   previous = now;
   view.frame(now);
+  renderer.setSize(innerWidth, innerHeight, false);
+  renderer.clear();
+  view.layer.render(renderer, {
+    width: innerWidth,
+    height: innerHeight,
+    time: now,
+    quality: view.controller.policy.tier,
+    reduced: view.controller.policy.reduced,
+    quiet: view.controller.policy.quiet,
+  });
   if (moving) wake();
 }
 const view = mountConstellation(document.querySelector("#navigation")!, {

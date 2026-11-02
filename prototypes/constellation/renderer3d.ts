@@ -14,6 +14,8 @@ export type ProjectedNode = {
   y: number;
   depth: number;
   radius: number;
+  anchorX: number;
+  anchorY: number;
 };
 /** Bounded, procedural 3D presentation. No renderer/context/RAF/data store ownership. */
 export class ConstellationScene implements SpatialRenderLayer {
@@ -40,6 +42,7 @@ export class ConstellationScene implements SpatialRenderLayer {
   private disposed = false;
   private lastPositions = "";
   private preparedKey = "";
+  private labelOffsets = new Map<string, { x: number; y: number }>();
   selectedEdge: string | null = null;
   enabled = true;
   diagnostics = {
@@ -50,7 +53,7 @@ export class ConstellationScene implements SpatialRenderLayer {
     culled: 0,
     cpuSubmitMs: 0,
     meaning:
-      "CPU submission and geometry counts; not presented FPS or GPU timing",
+      "Last active Constellation pass: CPU submission and geometry counts; not presented FPS or GPU timing",
   };
   readonly controller: ConstellationController;
   readonly navigation: SpatialNavigator;
@@ -259,6 +262,7 @@ export class ConstellationScene implements SpatialRenderLayer {
     const pose = this.navigation.camera;
     const positionKey = [...this.objects.keys()]
       .map((key) => {
+        if (!this.controller.nodes.has(key)) return "removed:" + key;
         const p = this.navigation.position(key);
         return `${p.x},${p.y},${p.z}`;
       })
@@ -462,34 +466,86 @@ export class ConstellationScene implements SpatialRenderLayer {
     for (const n of this.shown) {
       const p = this.project(n.key, width, height);
       if (p.depth < -1 || p.depth > 1) continue;
-      if (
-        n.key !== this.controller.selected &&
-        p.x > width * 0.66 &&
-        p.y < height * 0.5
-      )
-        continue;
-      const item = {
-        node: n,
-        x: p.x,
-        y: p.y,
-        depth: p.depth,
-        radius: n.kind === "project" ? 90 : n.kind === "workspace" ? 55 : 25,
-      };
+      const essential =
+        n.kind !== "resource" || n.key === this.controller.selected;
       if (
         n.kind === "resource" &&
         this.navigation.camera.distance > 2400 &&
         n.key !== this.controller.selected
       )
         continue;
-      if (p.x < 50 || p.x > width - 50 || p.y < 30 || p.y > height - 40)
-        continue;
       if (
-        accepted.some(
-          (a) => Math.abs(a.x - p.x) < 160 && Math.abs(a.y - p.y) < 60,
-        )
+        !essential &&
+        (p.x < 50 || p.x > width - 50 || p.y < 30 || p.y > height - 40)
       )
         continue;
-      accepted.push(item);
+      const below =
+        n.kind === "project" ? 70 : n.kind === "workspace" ? 42 : 25;
+      const previous = this.labelOffsets.get(n.key);
+      const choices = [
+        ...(previous ? [previous] : []),
+        { x: 0, y: below },
+        { x: -180, y: below },
+        { x: 180, y: below },
+        { x: 0, y: below + 60 },
+        { x: 0, y: -65 },
+        { x: -180, y: below + 60 },
+        { x: 180, y: below + 60 },
+        { x: -360, y: below },
+        { x: 360, y: below },
+      ];
+      let placed = false;
+      for (const offset of choices) {
+        const x = Math.max(90, Math.min(width - 90, p.x + offset.x)),
+          y = Math.max(30, Math.min(height - 30, p.y + offset.y));
+        if (
+          x > width * 0.66 &&
+          y < height * 0.5 &&
+          n.key !== this.controller.selected
+        )
+          continue;
+        if (
+          accepted.some(
+            (a) => Math.abs(a.x - x) < 180 && Math.abs(a.y - y) < 52,
+          )
+        )
+          continue;
+        accepted.push({
+          node: n,
+          x,
+          y,
+          anchorX: p.x,
+          anchorY: p.y,
+          depth: p.depth,
+          radius: n.kind === "project" ? 90 : n.kind === "workspace" ? 55 : 25,
+        });
+        this.labelOffsets.set(n.key, { x: x - p.x, y: y - p.y });
+        placed = true;
+        break;
+      }
+      if (!placed && essential) {
+        for (let row = 0; row < Math.floor(height / 56); row++) {
+          const x = 95,
+            y = 30 + row * 56;
+          if (
+            !accepted.some(
+              (a) => Math.abs(a.x - x) < 180 && Math.abs(a.y - y) < 52,
+            )
+          ) {
+            accepted.push({
+              node: n,
+              x,
+              y,
+              anchorX: p.x,
+              anchorY: p.y,
+              depth: p.depth,
+              radius: 30,
+            });
+            placed = true;
+            break;
+          }
+        }
+      }
       if (accepted.length >= max) break;
     }
     return accepted;
@@ -543,29 +599,39 @@ export class ConstellationScene implements SpatialRenderLayer {
       scissor = renderer.getScissor(new THREE.Vector4()),
       test = renderer.getScissorTest(),
       auto = renderer.autoClear;
+    const beforeCalls = renderer.info.autoReset
+        ? 0
+        : renderer.info.render.calls,
+      beforeTriangles = renderer.info.autoReset
+        ? 0
+        : renderer.info.render.triangles;
     renderer.autoClear = false;
-    renderer.setViewport(
-      rect.left,
-      frame.height - rect.bottom,
-      rect.width,
-      rect.height,
-    );
-    renderer.setScissor(
-      rect.left,
-      frame.height - rect.bottom,
-      rect.width,
-      rect.height,
-    );
-    renderer.setScissorTest(true);
-    renderer.clearDepth();
-    renderer.render(this.scene, this.camera);
-    this.diagnostics.drawCalls = renderer.info.render.calls;
-    this.diagnostics.triangles = renderer.info.render.triangles;
-    this.diagnostics.cpuSubmitMs = performance.now() - start;
-    renderer.setViewport(viewport);
-    renderer.setScissor(scissor);
-    renderer.setScissorTest(test);
-    renderer.autoClear = auto;
+    try {
+      renderer.setViewport(
+        rect.left,
+        frame.height - rect.bottom,
+        rect.width,
+        rect.height,
+      );
+      renderer.setScissor(
+        rect.left,
+        frame.height - rect.bottom,
+        rect.width,
+        rect.height,
+      );
+      renderer.setScissorTest(true);
+      renderer.clearDepth();
+      renderer.render(this.scene, this.camera);
+      this.diagnostics.drawCalls = renderer.info.render.calls - beforeCalls;
+      this.diagnostics.triangles =
+        renderer.info.render.triangles - beforeTriangles;
+      this.diagnostics.cpuSubmitMs = performance.now() - start;
+    } finally {
+      renderer.setViewport(viewport);
+      renderer.setScissor(scissor);
+      renderer.setScissorTest(test);
+      renderer.autoClear = auto;
+    }
   }
   contextLost() {
     this.lost = true;
