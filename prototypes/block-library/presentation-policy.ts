@@ -17,7 +17,9 @@ export type BlockApproachTarget = { minimumBodyWidth: number; minimumBodyHeight:
 export const readableBody = Object.freeze({
   conversation: Object.freeze({ width: 240, height: 96 }),
   note: Object.freeze({ width: 192, height: 80 }),
-  task: Object.freeze({ width: 160, height: 48 }),
+  // The actual Task body has completion and priority controls. A one-line
+  // checkbox allowance left the priority row half painted on small pills.
+  task: Object.freeze({ width: 160, height: 96 }),
   task_group: Object.freeze({ width: 224, height: 112 }),
   stream: Object.freeze({ width: 240, height: 112 }),
   project_overview: Object.freeze({ width: 256, height: 112 }),

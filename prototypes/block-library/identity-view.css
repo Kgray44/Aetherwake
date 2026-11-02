@@ -206,9 +206,6 @@
   line-height: 1.65;
   color: #ccc8d6;
 }
-.folio[data-block-kind="task"]:not(.expanded) .title-select {
-  display: none;
-}
 .aw-block-compact[data-layout="checklist"] .aw-identity-row {
   flex-wrap: nowrap;
 }
@@ -641,6 +638,7 @@
   flex-direction: row;
   align-items: center;
   flex: none;
+  padding-bottom: 0;
 }
 .folio[data-block-kind="task"] .task-priority {
   border-radius: 0.6rem;

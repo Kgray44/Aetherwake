@@ -36,6 +36,27 @@ test('hysteresis holds a composition through small camera jitter and never withd
   assert.equal(blockComposition('conversation', { ...small, bodyHeight: 0 }, 'working'), 'overview', 'A genuinely exhausted body still exposes header Approach');
   assert.equal(blockComposition('conversation', { ...small, bodyWidth: NaN }, 'overview'), 'overview');
 });
+
+test('short Tasks use the existing overview before their real controls clip, retaining live priority/editor input through resizing', t => {
+  const view = blockDocument(), restore = view.install(), f = card(view);
+  const priority = document.createElement('select'); priority.setAttribute('aria-label', 'Task priority'); f.working.append(priority);
+  const identity = mountBlockIdentity(f.article, { approach() {} });
+  t.after(() => { identity.dispose(); restore(); });
+  const task: Resource = { id: 'resource:short-task', kind: 'task', title: 'Synthetic meaningful task name', version: 1, provider: 'local', messages: [], content: 'Exact description', taskStatus: 'open', taskPriority: 'normal' };
+  identity.update(blockIdentity({ kind: 'task', resource: task }));
+  const smallTask: BlockFootprint = { width: 315.9, height: 159.3, bodyWidth: 200, bodyHeight: 60, textScale: 1 };
+  f.open.focus(); assert.equal(identity.setFootprint(smallTask), 'overview');
+  assert.match(view.root.querySelector('.aw-block-overview-content').textContent, /Open/); assert.equal(priority.hasAttribute('inert'), true);
+  assert.equal(identity.setFootprint({ ...smallTask, bodyHeight: 110 }), 'working'); priority.focus();
+  assert.equal(identity.setFootprint(smallTask), 'working', 'An active priority field retains its working view and native control');
+  assert.equal(priority.hasAttribute('inert'), false);
+  f.editor.value = 'Exact in-progress Task description'; f.editor.setSelectionRange(3, 9); f.editor.scrollTop = 19; f.editor.focus();
+  assert.equal(identity.setFootprint(smallTask), 'working');
+  f.open.focus(); assert.equal(identity.setFootprint(smallTask), 'overview');
+  assert.equal(f.working.querySelector('select'), priority); assert.equal(f.editor.value, 'Exact in-progress Task description'); assert.deepEqual([f.editor.selectionStart, f.editor.selectionEnd, f.editor.scrollTop], [3, 9, 19]);
+  assert.equal(blockApproachTarget('task').minimumBodyHeight, 108);
+  assert.equal(blockComposition('task', { ...smallTask, width: 500, bodyWidth: 400, bodyHeight: 170, textScale: 2 }), 'overview', 'Readable control height scales with the existing per-instance type scale');
+});
 test('actual identity controller retains editor/caret/scroll through overview, focused/IME input, header focus and approach failure', async t => {
   const view = blockDocument(), restore = view.install(), f = card(view);
   let calls = 0, target: unknown;
