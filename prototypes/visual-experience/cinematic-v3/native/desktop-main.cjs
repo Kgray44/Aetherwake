@@ -18,6 +18,7 @@ const { randomUUID, createHash } = require("node:crypto");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { sendToWindow } = require("./host-lifecycle.cjs");
+const { backendExecutable } = require("./backend-executable.cjs");
 const {
   conversationCommand,
   isConversationRead,
@@ -192,7 +193,7 @@ app.whenReady().then(async () => {
   nativeTheme.themeSource = "dark";
   const localURL = pathToFileURL(path.join(root, "dist/index.html")).href;
   child = spawn(
-    "node",
+    backendExecutable(process.env.AERYNTH_NODE_BIN),
     [
       path.resolve(root, "../../integrated-backend/src/desktop-host.mts"),
       path.join(privateRoot, "aerynth.sqlite"),
