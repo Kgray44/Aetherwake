@@ -173,7 +173,7 @@ test("the selected optical direction is glass-dominant outside an opaque reading
     });
     assert.equal(materials.face.opacity, 1);
     assert.equal(materials.frame.opacity, 1);
-    assert(materials.face.roughness > 0.5);
+    assert(materials.face.roughness > 0.2 && materials.face.roughness < 0.35);
     updateInstrumentMaterials(materials, { ...base, study: "engineered" });
     assert(materials.frame.metalness > 0.7);
     assert.equal(materials.frame.opacity, 1);
@@ -223,4 +223,21 @@ test("shared instrument key follows architectural world direction and color with
     },
     sourceState,
   );
+});
+
+test("focused optical work preserves a coated glass family around its protected reading region", () => {
+  const materials = createInstrumentMaterials();
+  try {
+    for (const kind of ["conversation", "research", "note"])
+      for (const unfold of [0, 0.25, 0.5, 0.75, 1]) {
+        updateInstrumentMaterials(materials, { ...base, kind, unfold });
+        assert.equal(materials.face.opacity, 1);
+        assert(materials.face.clearcoat >= 0.79);
+        assert(materials.face.roughness < 0.35);
+        assert(materials.frame.clearcoat > 0.9);
+        assert(materials.frame.clearcoatRoughness < 0.25);
+      }
+  } finally {
+    dispose(materials);
+  }
 });

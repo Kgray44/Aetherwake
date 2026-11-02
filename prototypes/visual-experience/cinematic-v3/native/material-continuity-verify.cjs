@@ -198,7 +198,7 @@ async function run(win) {
   );
   const diagnostic = () =>
     js(
-      `({snapshot:window.__aerynth.snapshot(),cards:[...document.querySelectorAll('.folio')].map(e=>({id:e.dataset.block,resourceId:e.dataset.resource,rootBackground:getComputedStyle(e).backgroundColor,background:getComputedStyle(e,'::before').backgroundColor,clip:getComputedStyle(e.querySelector('.folio-inner')).clipPath,z:Number(getComputedStyle(e).zIndex),transform:getComputedStyle(e).transform,opacity:Number(getComputedStyle(e).opacity),headerBackground:getComputedStyle(e.querySelector('.folio-top')).backgroundColor,readingBackground:e.querySelector('.working-content')?getComputedStyle(e.querySelector('.working-content')).backgroundColor:null})),materialMode:document.querySelector('#world').dataset.materials,identityRetained:window.__materialArticles.every((e,i)=>e===document.querySelector('[data-block="'+e.dataset.block+'"]')&&e.querySelector('textarea')===window.__materialEditors[i])})`,
+      `({snapshot:window.__aerynth.snapshot(),cards:[...document.querySelectorAll('.folio')].map(e=>({id:e.dataset.block,resourceId:e.dataset.resource,rootBackground:getComputedStyle(e).backgroundColor,background:getComputedStyle(e,'::before').backgroundColor,clip:getComputedStyle(e.querySelector('.resource-presentation')).clipPath,z:Number(getComputedStyle(e).zIndex),transform:getComputedStyle(e).transform,opacity:Number(getComputedStyle(e).opacity),headerBackground:getComputedStyle(e.querySelector('.folio-top')).backgroundColor,controlsClipped:[...e.querySelectorAll('.block-tools,.resize-handle')].every(c=>!!c.closest('.resource-presentation')),readingBackground:e.querySelector('.working-content')?getComputedStyle(e.querySelector('.working-content')).backgroundColor:null})),materialMode:document.querySelector('#world').dataset.materials,identityRetained:window.__materialArticles.every((e,i)=>e===document.querySelector('[data-block="'+e.dataset.block+'"]')&&e.querySelector('textarea')===window.__materialEditors[i])})`,
     );
   const sample = async (name, settle = 130) => {
     await pause(settle);
@@ -270,6 +270,7 @@ async function run(win) {
   check(
     "three overlapping resources preserve opaque substrates and clipping union",
     optical(triple) &&
+      triple.cards.every((c) => c.controlsClipped) &&
       triple.cards.filter((c) => c.clip !== "none").length >= 2,
   );
   await js(`window.__aerynth.select(${JSON.stringify(ids[1])})`);
@@ -395,7 +396,7 @@ async function run(win) {
   await pause(600);
   let pointerIndex = 0;
   await js(
-    `window.__materialTrace=[];window.__materialTraceRunning=true;(function sampleFrame(t){if(!window.__materialTraceRunning)return;if(window.__materialTrace.length<3600)window.__materialTrace.push({t,cards:[...document.querySelectorAll('.folio')].map(e=>({id:e.dataset.block,veil:getComputedStyle(e,'::before').backgroundColor,unfold:Number(e.style.getPropertyValue('--unfold')),clipLength:getComputedStyle(e.querySelector('.folio-inner')).clipPath.length,valid:!e.style.cssText.includes('NaN')&&!e.style.cssText.includes('Infinity')}))});requestAnimationFrame(sampleFrame)})(performance.now())`,
+    `window.__materialTrace=[];window.__materialTraceRunning=true;(function sampleFrame(t){if(!window.__materialTraceRunning)return;if(window.__materialTrace.length<3600)window.__materialTrace.push({t,cards:[...document.querySelectorAll('.folio')].map(e=>({id:e.dataset.block,veil:getComputedStyle(e,'::before').backgroundColor,unfold:Number(e.style.getPropertyValue('--unfold')),clipLength:getComputedStyle(e.querySelector('.resource-presentation')).clipPath.length,valid:!e.style.cssText.includes('NaN')&&!e.style.cssText.includes('Infinity')}))});requestAnimationFrame(sampleFrame)})(performance.now())`,
   );
   const pointerDrag = async (selector, dx, dy, duration = 2200) => {
     const start = await js(
@@ -455,7 +456,17 @@ async function run(win) {
       win.webContents.getURL(),
       file,
     );
-    await wait("window.__aerynthMaterialRecordingReady===true");
+    let recordingFailure = null;
+    recording.catch((error) => {
+      recordingFailure = error;
+    });
+    const readyDeadline = Date.now() + 15000;
+    while (!(await js("window.__aerynthMaterialRecordingReady===true"))) {
+      if (recordingFailure) throw recordingFailure;
+      if (Date.now() > readyDeadline)
+        throw Error("Material recording did not become ready");
+      await pause(80);
+    }
     await pointerDrag(`[data-block="${ids[0]}"] .grip`, 850, 100, 4500);
     await reset();
     await pointerDrag(
@@ -471,6 +482,10 @@ async function run(win) {
     await js('window.__aerynth.setStudy("architecture")');
     await pause(900);
     receipt.video = await recording;
+    session.defaultSession.setPermissionCheckHandler(() => false);
+    session.defaultSession.setPermissionRequestHandler(
+      (_wc, _permission, callback) => callback(false),
+    );
     await fs.writeFile(
       path.join(out, "continuous-overlap.json"),
       JSON.stringify(receipt.video, null, 2),

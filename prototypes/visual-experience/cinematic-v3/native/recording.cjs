@@ -325,7 +325,11 @@ async function recordJourney(configuration) {
   const initial = api.snapshot();
   if (
     initial.graphicsFailed ||
-    !initial.resources.some((resource) => resource.id === "research-material")
+    (configuration.materialContinuity
+      ? initial.resources.length < 2
+      : !initial.resources.some(
+          (resource) => resource.id === "research-material",
+        ))
   ) {
     throw new Error(
       "Cannot record an unavailable or incomplete prototype scene",

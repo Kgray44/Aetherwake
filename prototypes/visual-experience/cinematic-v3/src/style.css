@@ -1165,9 +1165,20 @@ body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   background: rgba(8, 13, 21, 0.06);
   clip-path: var(--resource-content-clip, none);
 }
-.folio .folio-inner,
-.folio .resource-anchor {
+.resource-presentation {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
   clip-path: var(--resource-content-clip, none);
+}
+.folio.receded .block-tools {
+  display: none;
+}
+.folio[data-shape="circle"]:not(.expanded):not(.receded) .block-tools,
+.folio[data-shape="lens"]:not(.expanded):not(.receded) .block-tools {
+  top: 12px;
+  right: 50%;
+  transform: translateX(50%);
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio:not(.receded)::after {

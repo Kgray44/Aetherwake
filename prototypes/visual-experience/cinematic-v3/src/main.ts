@@ -259,14 +259,24 @@ function base(id: string) {
   return restAt(id, order.indexOf(id));
 }
 function restAt(id: string, slot: number) {
-  const block = application?.block(id);
+  const block =
+    (
+      application as
+        | (Application & {
+            previewBlock?: (id: string) => ReturnType<Application["block"]>;
+          })
+        | null
+    )?.previewBlock?.(id) ?? application?.block(id);
   if (block) {
     const offset = application!.offset();
+    const value =
+      (application as Application & { zoom?: () => number }).zoom?.() ?? 1;
+    const zoom = Number.isFinite(value) && value > 0 ? value : 1;
     return {
-      x: block.x + offset.x,
-      y: block.y + offset.y,
-      w: block.width,
-      h: block.height,
+      x: block.x * zoom + offset.x,
+      y: block.y * zoom + offset.y,
+      w: block.width * zoom,
+      h: block.height * zoom,
       lift: 0,
       yaw: 0,
       opacity: 1,
@@ -463,6 +473,9 @@ function move(id: string, to: number) {
 }
 function cancelDrag() {
   if (!drag) return;
+  (
+    application as (Application & { cancelPreview?: () => void }) | null
+  )?.cancelPreview?.();
   drag = null;
   $("#destinations").replaceChildren();
   layout("drag cancellation");
@@ -476,6 +489,10 @@ function mountResource(id: string, r: Resource) {
   article.dataset.block = id;
   article.setAttribute("aria-label", r.title);
   article.innerHTML = `<button class="resource-anchor" aria-label="Open ${r.type}" title="${r.type}" tabindex="-1"><span class="anchor-glyph" aria-hidden="true">${r.type === "research" ? "◌" : r.type === "note" ? "⌁" : "≋"}</span><span class="anchor-label"><small>${r.type}</small><b></b></span></button><div class="folio-edge" aria-hidden="true"></div><div class="folio-inner"><div class="folio-top"><button class="grip" aria-label="Move ${r.type}. Alt plus arrow keys reorders; Escape cancels drag." title="Drag to move · Alt+←/→">⠿ <span>${r.type.toUpperCase()}</span></button><span class="folio-number">${String(order.indexOf(id) + 1).padStart(2, "0")}</span></div><button class="title-select"><h2></h2></button><div class="folio-subtitle"></div><div class="folio-preview"></div><div class="working-content"><p class="synthetic">SYNTHETIC EXAMPLE CONTENT · EDITS STAY LOCAL</p><label>Working draft<textarea spellcheck="false" aria-label="${r.type} working draft"></textarea></label><p class="saved">Saved locally on this device</p></div><div class="folio-actions"><button class="unfold" aria-expanded="false">Unfold ↗</button><div class="move-controls"><button class="earlier" aria-label="Move ${r.type} earlier">←</button><button class="later" aria-label="Move ${r.type} later">→</button></div></div></div>`;
+  const presentation = document.createElement("div");
+  presentation.className = "resource-presentation";
+  while (article.firstChild) presentation.append(article.firstChild);
+  article.append(presentation);
   article.querySelector(".anchor-label b")!.textContent = r.title;
   article
     .querySelector(".resource-anchor")!
@@ -567,6 +584,10 @@ function mountResource(id: string, r: Resource) {
   });
   grip.addEventListener("pointerdown", (e) => {
     if (expanded || e.button !== 0) return;
+    if (application?.block(id)?.locked) {
+      status("This block is locked. Unlock it in Properties to move it.");
+      return;
+    }
     interaction();
     selected = id;
     const p = motion.pose(id);
@@ -601,6 +622,15 @@ function mountResource(id: string, r: Resource) {
     drag.moved ||=
       Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 6;
     if (application) {
+      (
+        application as Application & {
+          previewMove?: (id: string, dx: number, dy: number) => void;
+        }
+      ).previewMove?.(
+        id,
+        Math.round(drag.x - drag.startX),
+        Math.round(drag.y - drag.startY),
+      );
       layout("free drag");
       return;
     }
@@ -1036,6 +1066,17 @@ function renderDOM() {
   for (const p of projected) {
     const id = p.id,
       el = elements.get(id)!;
+    // Keep every host-added control in the same full-size paint clip. Move
+    // existing nodes only; article/editor identities and their state persist.
+    const presentation = el.querySelector<HTMLElement>(
+      ".resource-presentation",
+    )!;
+    if (el.childElementCount > 1)
+      for (let child = el.firstElementChild; child; ) {
+        const next = child.nextElementSibling;
+        if (child !== presentation) presentation.append(child);
+        child = next;
+      }
     const compositing = composite.find((entry) => entry.id === id)!;
     if (el.dataset.materialCovered !== String(compositing.covered))
       el.dataset.materialCovered = String(compositing.covered);

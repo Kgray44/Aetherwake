@@ -124,7 +124,7 @@ export function updateInstrumentMaterials(
       : lens && input.study === "optical"
         ? 0.13
         : profile.roughness,
-    note ? 0.82 : 0.62,
+    glass ? (note ? 0.28 : 0.26) : note ? 0.82 : 0.62,
     reading,
   );
   face.metalness = note
@@ -133,10 +133,12 @@ export function updateInstrumentMaterials(
       : 0.22
     : profile.metalness * (1 - reading * 0.3);
   face.clearcoat =
-    (note ? (glass ? 1 : 0.16) : profile.coat) * (1 - reading * 0.68);
+    (note ? (glass ? 1 : 0.16) : profile.coat) *
+    (1 - reading * (glass ? 0.2 : 0.68));
   face.clearcoatRoughness =
-    (glass ? (lens ? 0.12 : 0.15) : 0.23) + reading * 0.22;
-  face.specularIntensity = (glass ? 1 : note ? 0.38 : 0.88) - reading * 0.3;
+    (glass ? (lens ? 0.12 : 0.15) : 0.23) + reading * (glass ? 0.05 : 0.22);
+  face.specularIntensity =
+    (glass ? 1 : note ? 0.38 : 0.88) - reading * (glass ? 0.1 : 0.3);
   face.envMapIntensity = reflection;
   face.ior = 1.48;
   face.opacity = 1;
@@ -147,9 +149,11 @@ export function updateInstrumentMaterials(
   for (const material of [materials.edge, materials.frame]) {
     material.color.setHex(profile.frame);
     material.metalness = profile.frameMetalness;
-    material.roughness = profile.frameRoughness + reading * 0.15;
+    material.roughness =
+      profile.frameRoughness + reading * (glass ? 0.06 : 0.15);
     material.clearcoat = glass ? 1 : 0.16;
-    material.clearcoatRoughness = (glass ? 0.12 : 0.26) + reading * 0.16;
+    material.clearcoatRoughness =
+      (glass ? 0.12 : 0.26) + reading * (glass ? 0.06 : 0.16);
     material.specularIntensity = glass ? 1 : 0.8;
     material.ior = 1.5;
     // Wide housing faces must remain graphite under the shared stellar key;
@@ -169,7 +173,8 @@ export function updateInstrumentMaterials(
   }
   materials.polish.color.setHex(glass ? 0x29243a : note ? 0x786e5c : 0x788998);
   materials.polish.metalness = glass ? 0.08 : 0.93;
-  materials.polish.roughness = (glass ? 0.12 : 0.24) + reading * 0.18;
+  materials.polish.roughness =
+    (glass ? 0.12 : 0.24) + reading * (glass ? 0.06 : 0.18);
   materials.polish.clearcoat = glass ? 1 : 0.4;
   materials.polish.envMapIntensity = reflection * 0.85;
   materials.polish.emissiveIntensity = 0;

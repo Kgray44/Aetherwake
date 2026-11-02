@@ -1266,7 +1266,7 @@ async function verify() {
   await delay(900);
   await shot("overlapping-materials");
   const overlapReadability = await evaluate(
-    `Array.from(document.querySelectorAll('.folio')).map(el=>({id:el.dataset.resource,clip:getComputedStyle(el.querySelector(".folio-inner")).clipPath,background:getComputedStyle(el,"::before").backgroundColor,covered:el.dataset.materialCovered}))`,
+    `Array.from(document.querySelectorAll('.folio')).map(el=>({id:el.dataset.resource,clip:getComputedStyle(el.querySelector(".resource-presentation")).clipPath,background:getComputedStyle(el,"::before").backgroundColor,covered:el.dataset.materialCovered}))`,
   );
   check(
     "overlap clips rear DOM content while preserving optical veils and opaque GPU substrates",
