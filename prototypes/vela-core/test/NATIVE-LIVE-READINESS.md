@@ -14,6 +14,8 @@ The receipt is separately labelled `aerynth.actual-vela-review-ui@1` / `review-u
 
 The additional **SYNTHETIC hidden-DOM prepared long-request/open-evidence** component regression exercises stable full text, typed evidence, editor/caret and unreplayed review controls. Its CPU harness has no layout engine and proves neither pixels nor a new assistant/provider response. Pure geometry/event/checkpoint fixtures likewise verify guards only; they cannot qualify the actual native mode.
 
+On failure, the last complete raw geometry is retained **before** geometry validation (512 KiB bound). After a successful canonical preflight, one diagnostic-only PNG may use the remaining existing capture budget while the slot is safely focused and active. This capture requests no input, focus change, render or fresh-draw wait, cannot run after a sticky focus/deadline/consent abort, and never changes the failed result or retries the profile.
+
 Executed for this source release: both helper syntax checks, 42 selected lifecycle/geometry/source/component tests, strict Vela TypeScript and diff whitespace checks. **No native window, provider/auth/network call or new rendering acceptance was run by this worker.** Root owns the separately scoped actual clone/operator check and visual review.
 
 `native-live.cjs` retains the actual one-turn synthetic workspace proposal/apply journey and its read-only restore / explicitly bound existing-plan resume modes. Source readiness is not actual provider, native consent, visual or restart qualification. This release ran no Electron window, provider request, network request, approval or grant.
