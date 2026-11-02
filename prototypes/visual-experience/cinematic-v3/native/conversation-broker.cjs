@@ -7,6 +7,7 @@ const readNames = new Set([
   "providers",
   "discover",
   "export",
+  "readDraft",
 ]);
 exports.isConversationRead = (input) => input && readNames.has(input.name);
 
