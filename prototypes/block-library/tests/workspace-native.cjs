@@ -46,6 +46,8 @@ exports.verify = async ({
   moduleStarted,
   startupErrors = [],
 }) => {
+  if (process.argv.includes('--verify-library-templates'))
+    return require('./library-native.cjs').verify({ win, app, privateRoot, source, moduleStarted, startupErrors });
   const output = path.resolve(
     __dirname,
     "../../visual-experience/cinematic-v3/.runtime/application-evidence/workspace-normal-" +
