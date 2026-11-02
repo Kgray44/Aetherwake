@@ -106,7 +106,7 @@ export function mountEnvironmentNavigator(
       selected: false,
       pressed: false,
       painted: "",
-      target: "0,0,0,0",
+      target: "0,0,0,0,0",
     };
     interactive.set(node, state);
     options.motion.add(state.id, neutral);
@@ -132,12 +132,22 @@ export function mountEnvironmentNavigator(
     const s = interactive.get(node);
     if (!s || disposed) return;
     if (selected !== undefined) s.selected = selected;
-    const target = [+s.hover, +s.focus, +s.selected, +s.pressed].join(",");
+    const disabled = +("disabled" in node && node.disabled === true);
+    const target = [+s.hover, +s.focus, +s.selected, +s.pressed, disabled].join(
+      ",",
+    );
     if (target === s.target) return;
     s.target = target;
     options.motion.target(
       s.id,
-      { ...neutral, x: +s.hover, y: +s.focus, w: +s.selected, h: +s.pressed },
+      {
+        ...neutral,
+        x: +s.hover,
+        y: +s.focus,
+        w: +s.selected,
+        h: +s.pressed,
+        lift: disabled,
+      },
       "environment control interaction",
     );
     options.wake();
@@ -296,6 +306,8 @@ export function mountEnvironmentNavigator(
     editing: Editor | null = null,
     focusKey: string | null = null,
     actionWorkspaceId: string | null = null,
+    createExpanded = false,
+    archiveExpanded = false,
     disclosurePainted = "";
   function disclosure() {
     if (disposed) return;
@@ -303,19 +315,33 @@ export function mountEnvironmentNavigator(
       disclosureId,
       {
         ...neutral,
-        x: +create.open,
-        y: +!workspaceActions.hidden,
-        w: +!editor.hidden,
-        h: +archive.open,
+        x: +createExpanded,
+        y: +(actionWorkspaceId !== null),
+        w: +(editing !== null),
+        h: +archiveExpanded,
       },
       "environment contextual disclosure",
     );
-    targetControl(createSummary, create.open);
-    targetControl(archiveSummary, archive.open);
+    targetControl(createSummary, createExpanded);
+    targetControl(archiveSummary, archiveExpanded);
+    createSummary.setAttribute("aria-expanded", String(createExpanded));
+    archiveSummary.setAttribute("aria-expanded", String(archiveExpanded));
+    frame();
     options.wake();
   }
-  create.addEventListener("toggle", disclosure);
-  archive.addEventListener("toggle", disclosure);
+  // Native summary activation (pointer or keyboard) still owns the action.
+  // Keep UA details content rendered through closing instead of removing its
+  // open attribute before the shared coordinator can present that closing.
+  createSummary.addEventListener("click", (event) => {
+    event.preventDefault();
+    createExpanded = !createExpanded;
+    disclosure();
+  });
+  archiveSummary.addEventListener("click", (event) => {
+    event.preventDefault();
+    archiveExpanded = !archiveExpanded;
+    disclosure();
+  });
   const currentWorkspace = () =>
     snapshot.navigation.kind === "workspace"
       ? snapshot.navigation.workspaceId
@@ -382,17 +408,14 @@ export function mountEnvironmentNavigator(
   }
   function closeEditor() {
     editing = null;
-    editor.hidden = true;
     message("");
     disclosure();
   }
   function begin(next: Editor) {
     if (pending || disposed) return;
-    create.open = false;
-    workspaceActions.hidden = true;
+    createExpanded = false;
     actionWorkspaceId = null;
     editing = next;
-    editor.hidden = false;
     message("");
     editor.dataset.mode = next.kind;
     editor.dataset.subjectId = "id" in next ? next.id : "";
@@ -461,6 +484,8 @@ export function mountEnvironmentNavigator(
         !(editing.kind === "project-rename"
           ? projectRecord(editing.id)
           : workspace(editing.id, editing.kind === "workspace-restore"));
+    for (const node of root.querySelectorAll<HTMLButtonElement>("button"))
+      targetControl(node);
   }
   form.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -664,15 +689,13 @@ export function mountEnvironmentNavigator(
   workspaceActions.hidden = true;
   root.insertBefore(workspaceActions, editor);
   function showWorkspaceActions(w: Workspace) {
-    if (actionWorkspaceId === w.id && !workspaceActions.hidden) {
-      workspaceActions.hidden = true;
+    if (actionWorkspaceId === w.id) {
       actionWorkspaceId = null;
       render();
       return;
     }
     closeEditor();
     actionWorkspaceId = w.id;
-    workspaceActions.hidden = false;
     workspaceActions.dataset.workspaceId = w.id;
     workspaceActions.setAttribute("role", "group");
     workspaceActions.setAttribute("aria-label", `Actions for ${w.title}`);
@@ -685,7 +708,6 @@ export function mountEnvironmentNavigator(
         begin({ kind: "workspace-archive", id: w.id, version: w.version }),
       ),
       button("Done", () => {
-        workspaceActions.hidden = true;
         actionWorkspaceId = null;
         render();
       }),
@@ -703,7 +725,8 @@ export function mountEnvironmentNavigator(
         p && p !== tree;
         p = p.parentElement
       )
-        if (p.hidden) return false;
+        if (p.hidden || p.inert || p.getAttribute("aria-hidden") === "true")
+          return false;
       return true;
     });
   }
@@ -791,11 +814,12 @@ export function mountEnvironmentNavigator(
     }
   });
   root.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && (editing || !workspaceActions.hidden)) {
+    if (event.key === "Escape" && (editing || actionWorkspaceId !== null)) {
       event.preventDefault();
       event.stopPropagation();
       closeEditor();
-      workspaceActions.hidden = true;
+      actionWorkspaceId = null;
+      disclosure();
       search.focus();
     }
   });
@@ -852,7 +876,8 @@ export function mountEnvironmentNavigator(
           : active?.project_id === null,
       );
       const open = !!needle || expanded.has(key);
-      g.children.hidden = !open;
+      g.children.inert = !open;
+      g.children.setAttribute("aria-hidden", String(!open));
       g.open.setAttribute("aria-expanded", String(open));
       g.toggle.setAttribute("aria-expanded", String(open));
       g.toggle.textContent = open ? "⌄" : "›";
@@ -875,7 +900,7 @@ export function mountEnvironmentNavigator(
         r.more.setAttribute("aria-label", `More options for ${w.title}`);
         r.more.setAttribute(
           "aria-expanded",
-          String(actionWorkspaceId === w.id && !workspaceActions.hidden),
+          String(actionWorkspaceId === w.id),
         );
         r.current.hidden = w.id !== current;
         r.open.setAttribute(
@@ -884,10 +909,7 @@ export function mountEnvironmentNavigator(
         );
         r.root.dataset.current = String(w.id === current);
         targetControl(r.open, w.id === current);
-        targetControl(
-          r.more,
-          actionWorkspaceId === w.id && !workspaceActions.hidden,
-        );
+        targetControl(r.more, actionWorkspaceId === w.id);
         count++;
       }
     }
@@ -994,8 +1016,22 @@ export function mountEnvironmentNavigator(
   }
   function frame() {
     if (disposed) return;
+    const present = (panel: HTMLElement, open: boolean, progress: number) => {
+      const value = Math.max(0, Math.min(1, progress));
+      if (panel.dataset.open !== String(open))
+        panel.dataset.open = String(open);
+      if (panel.inert !== !open) panel.inert = !open;
+      if (panel.getAttribute("aria-hidden") !== String(!open))
+        panel.setAttribute("aria-hidden", String(!open));
+      const hidden = !open && value === 0;
+      if (panel.hidden !== hidden) panel.hidden = hidden;
+      const opacity = value.toFixed(3);
+      if (panel.style.opacity !== opacity) panel.style.opacity = opacity;
+    };
     for (const g of groups.values()) {
-      const value = options.motion.pose(g.motionId).x.toFixed(3);
+      const progress = options.motion.pose(g.motionId).x,
+        value = progress.toFixed(3);
+      present(g.children, g.expanded, progress);
       if (g.reveal !== value) {
         g.root.style.setProperty("--en-reveal", value);
         g.reveal = value;
@@ -1003,11 +1039,11 @@ export function mountEnvironmentNavigator(
     }
     for (const [node, state] of interactive) {
       const p = options.motion.pose(state.id),
-        values = [p.x, p.y, p.w, p.h].map((v) => v.toFixed(3)),
+        values = [p.x, p.y, p.w, p.h, p.lift].map((v) => v.toFixed(3)),
         painted = values.join(",");
       if (painted !== state.painted) {
-        ["hover", "focus", "selected", "pressed"].forEach((key, i) =>
-          node.style.setProperty("--en-" + key, values[i]),
+        ["hover", "focus", "selected", "pressed", "disabled"].forEach(
+          (key, i) => node.style.setProperty("--en-" + key, values[i]),
         );
         state.painted = painted;
       }
@@ -1021,6 +1057,18 @@ export function mountEnvironmentNavigator(
       );
       disclosurePainted = painted;
     }
+    present(createChoices, createExpanded, p.x);
+    present(workspaceActions, actionWorkspaceId !== null, p.y);
+    present(editor, editing !== null, p.w);
+    present(archiveList, archiveExpanded, p.h);
+    const createMounted = createExpanded || p.x > 0,
+      archiveMounted = archiveExpanded || p.h > 0;
+    if (create.open !== createMounted) create.open = createMounted;
+    if (archive.open !== archiveMounted) archive.open = archiveMounted;
+    root.dataset.createOpen = String(createExpanded);
+    root.dataset.actionsOpen = String(actionWorkspaceId !== null);
+    root.dataset.editorOpen = String(editing !== null);
+    root.dataset.archiveOpen = String(archiveExpanded);
   }
   function update(next: DesktopSnapshot) {
     if (disposed) return;
