@@ -1085,6 +1085,9 @@ body:not(.focused):has(#stream:not([hidden])) #vela .vela-label {
 .receded .folio-inner {
   pointer-events: none;
 }
+.receded .block-tools {
+  display: none;
+}
 .anchor-glyph {
   font-size: 25px;
   line-height: 1;

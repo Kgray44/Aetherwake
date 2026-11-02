@@ -2,6 +2,7 @@ import {
   registerResourceMaterial,
   targetResourceMaterial,
   resourceUnfold,
+  resourceDock,
   materialMotionKey,
 } from "./resource-material-motion.ts";
 import { installApplication, type Application } from "./application";
@@ -373,7 +374,13 @@ function layout(cause: string) {
       }
     }
     motion.target(id, p, cause);
-    targetResourceMaterial(motion, id, expanded === id, cause);
+    targetResourceMaterial(
+      motion,
+      id,
+      expanded === id,
+      cause,
+      !!expanded && expanded !== id,
+    );
     const el = elements.get(id)!;
     el.classList.toggle("selected", selected === id);
     el.classList.toggle("expanded", expanded === id);
@@ -735,6 +742,16 @@ function replaceWorkspace(state: DesktopSnapshot) {
       article.querySelector(".folio-preview")!.textContent =
         resource.content.split("\n\n")[0];
     }
+    // Surface material classes are intentionally broader than resource kinds.
+    // The accessible peripheral label always describes the canonical resource.
+    const article = elements.get(block.id)!;
+    const anchor =
+      article.querySelector<HTMLButtonElement>(".resource-anchor")!;
+    const kind = resource.kind.replaceAll("_", " ");
+    article.querySelector(".anchor-label small")!.textContent = kind;
+    article.querySelector(".anchor-label b")!.textContent = resource.title;
+    anchor.setAttribute("aria-label", `Open ${kind}: ${resource.title}`);
+    anchor.title = `${kind}: ${resource.title}`;
   }
 }
 
@@ -1099,16 +1116,8 @@ function renderDOM() {
     const compositing = composite.find((entry) => entry.id === id)!;
     if (el.dataset.materialCovered !== String(compositing.covered))
       el.dataset.materialCovered = String(compositing.covered);
-    const rest = base(id);
-    const openHeight = Math.max(250, innerHeight - 310);
     const unfold = resourceUnfold(motion, id);
-    const dockWidth = innerWidth >= 1100 ? 176 : 56;
-    // Width can lag its new resting value during an ordinary window resize.
-    // Only an actual focused-work transition may reveal peripheral anchors.
-    const dock = Math.min(
-      clamp((rest.w - p.w) / Math.max(1, rest.w - dockWidth), 0, 1),
-      clamp((focus - 0.13) / 0.87, 0, 1),
-    );
+    const dock = resourceDock(motion, id);
     el.hidden =
       p.x + p.w < 0 ||
       p.y + p.h < 120 ||

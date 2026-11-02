@@ -14,13 +14,19 @@ export function targetResourceMaterial(
   id: string,
   expanded: boolean,
   cause: string,
+  receded = false,
 ) {
   motion.target(
     materialMotionKey(id),
-    { ...neutral, x: expanded ? 1 : 0 },
+    { ...neutral, x: expanded ? 1 : 0, y: receded ? 1 : 0 },
     `optical unfolding: ${cause}`,
   );
 }
 export function resourceUnfold(motion: MotionCoordinator, id: string) {
   return clamp(motion.pose(materialMotionKey(id)).x, 0, 1);
+}
+/** Peripheral content follows semantic focus, including blur/reduced snaps;
+ * arbitrary canonical dimensions and zoom never determine label visibility. */
+export function resourceDock(motion: MotionCoordinator, id: string) {
+  return clamp(motion.pose(materialMotionKey(id)).y, 0, 1);
 }
