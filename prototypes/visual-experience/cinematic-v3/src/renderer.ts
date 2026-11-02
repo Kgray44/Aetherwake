@@ -1562,7 +1562,8 @@ export class Environment {
       color = renderer.getClearColor(new THREE.Color());
     try {
       renderer.setRenderTarget(target);
-      renderer.setViewport(0, 0, width, height);
+      // setRenderTarget installs its pixel-sized viewport. setViewport would
+      // multiply by the canvas DPR and crop/misplace this independent mask.
       renderer.setScissorTest(false);
       renderer.setClearColor(0, 0);
       renderer.clear();
