@@ -1283,3 +1283,72 @@ details[data-active="true"] > .cp-control .cp-control-glyph {
   clip-path: inset(50%);
   white-space: nowrap;
 }
+.cp-chatgpt-compatibility,
+.cp-fidelity-aims,
+.cp-fidelity-related {
+  min-width: 0;
+  max-width: 100%;
+}
+.cp-fidelity-review,
+.cp-fidelity-note,
+.cp-fidelity-related > p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.cp-fidelity-review {
+  color: #d6c6e8;
+}
+.cp-fidelity-aims {
+  margin: 0;
+  padding-inline-start: 24px;
+}
+.cp-manager :is(.cp-fidelity-aim, .cp-fidelity-related-row) > summary {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  width: 100%;
+  min-width: 0;
+  text-align: start;
+}
+.cp-fidelity-status {
+  margin-inline-start: auto;
+  color: #d6c6e8;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.cp-fidelity-facts {
+  margin: 0;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.cp-fidelity-facts dt {
+  margin-top: 8px;
+  color: #d6c6e8;
+}
+.cp-fidelity-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.cp-fidelity-evidence {
+  margin: 0;
+  padding-inline-start: 16px;
+  overflow-wrap: anywhere;
+}
+.cp-fidelity-evidence a {
+  color: #dfcbf3;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+.cp-fidelity-evidence a:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: 3px;
+}
+.cp-fidelity-related > h4 {
+  margin: 8px 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}

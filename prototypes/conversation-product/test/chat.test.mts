@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mountConversationChat, composerShouldSubmit, type ConversationExecutionObservation, type ConversationMessageAction } from '../src/chat.ts';
 import { mountConversationManager } from '../src/ui.ts';
 import { ConversationDraftSession } from '../src/draft-session.ts';
+import { createNativeChatGPTFidelityDescriptor } from '../src/native-chatgpt-fidelity.ts';
 import { markdownBlocks, renderMarkdown } from '../src/markdown.ts';
 import type { ConversationProductPort, Detail, Collection, SearchHit } from '../src/contracts.ts';
 import { componentDocument, named, until } from './component-dom.mts';
@@ -22,6 +23,57 @@ function fixture(providerId='local') {
   const accept=(execution=false)=>{assert.ok(pending);const item={...detail.messages.items[0],id:'message:sent:'+detail.conversation.revision,content:pending.input.content};detail.messages.items.push(item);detail.messages.total++;detail.conversation.messageCount++;detail.conversation.revision++;const p=pending;pending=null;p.resolve(execution?{id:'execution:synthetic',resourceId:draft.resourceId,providerId,commandId:p.input.commandId,state:'provider_completed',taskVerified:false}:{...item,revision:detail.conversation.revision});};
   return {view,port,calls,detail,collections,history,restore,accept,get pending(){return pending;},get draft(){return {...draft};},deny(value=true){denied=value;},failSearch(error:string|null){searchError=error;},gateDetail(gate:Promise<void>|null){detailGate=gate;},external(content:string){draft={...draft,version:draft.version+1,content};}};
 }
+
+function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativeChatGPTFidelityDescriptor()){
+  f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
+}
+
+test('mounted ChatGPT compatibility is explicitly collapsed with exactly 13 labelled status rows and original provider gates',async()=>{
+  const f=fixture();let manager;
+  try{addChatGPTCompatibility(f);manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;
+    const compatibility=f.view.root.querySelector('.cp-chatgpt-compatibility'),providers=f.view.root.querySelector('.cp-provider-capabilities');
+    assert.equal(compatibility.tagName,'DETAILS');assert.equal(compatibility.open,false);assert.equal(providers.open,false);assert.equal(named(compatibility,'ChatGPT compatibility','summary').dataset.cpControl,'providers');
+    const report=createNativeChatGPTFidelityDescriptor(),rows=compatibility.querySelectorAll('.cp-fidelity-aim');assert.equal(rows.length,13);
+    assert.deepEqual(rows.map((row:any)=>row.dataset.aimId),report.aims.map(aim=>aim.id));
+    for(const [index,row]of rows.entries()){assert.equal(row.open,false);assert.equal(row.dataset.status,report.aims[index].status);assert.equal(row.querySelector('.cp-control-label').textContent,report.aims[index].label);assert.ok(row.querySelector('.cp-fidelity-status').textContent);}
+    const picker=f.view.root.querySelector('select[aria-label="Conversation provider"]');assert.equal(picker.options.find((option:any)=>option.value==='chatgpt').disabled,true);
+    assert.equal(f.view.root.querySelector('select[aria-label="New conversation provider"]').options.some((option:any)=>option.value==='chatgpt'),false);
+    assert.ok(f.calls.every(call=>['collections','providers','projects','search','readDraft','detail'].includes(call.name)),'Mounting compatibility cannot authorize, send or connect');
+  }finally{await manager?.dispose();f.restore();}
+});
+
+test('invoked compatibility exposes exact interface/scope/reason/evidence, date and runtime limits; inference/navigation remain separate',async()=>{
+  const f=fixture();let manager;
+  try{const report=createNativeChatGPTFidelityDescriptor();addChatGPTCompatibility(f,report);manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;
+    const extras=f.view.root.querySelector('.cp-chat-extras'),providers=f.view.root.querySelector('.cp-provider-capabilities'),compatibility=f.view.root.querySelector('.cp-chatgpt-compatibility');for(const node of [extras,providers,compatibility]){node.open=true;node.fire('toggle');}
+    const count=f.calls.length,row=compatibility.querySelectorAll('.cp-fidelity-aim').find((node:any)=>node.dataset.aimId==='existing-chat-discovery');row.open=true;row.fire('toggle');
+    const aim=report.aims.find(item=>item.id==='existing-chat-discovery')!,values=row.querySelectorAll('dd').map((node:any)=>node.textContent);assert.deepEqual(values,[aim.interfaceName,aim.statusScope,aim.reason,report.statusDefinitions[aim.status]]);
+    assert.match(row.querySelector('.cp-fidelity-alternative').textContent,/Other native-account interfaces: Unverified/);
+    assert.deepEqual(row.querySelectorAll('a').map((link:any)=>link.href),aim.evidence.map(source=>new URL(source.url).href));for(const link of row.querySelectorAll('a')){assert.equal(link.target,'_blank');assert.equal(link.rel,'noopener noreferrer');}
+    assert.match(compatibility.querySelector('.cp-fidelity-review').textContent,/2026-11-02.*Runtime account access unverified/);
+    const related=compatibility.querySelector('.cp-fidelity-related');assert.equal(related.querySelectorAll('.cp-fidelity-aim').length,0);assert.deepEqual(related.querySelectorAll('.cp-fidelity-related-row').map((node:any)=>node.dataset.relatedCapabilityId),report.relatedCapabilities.map(item=>item.id));assert.match(related.textContent,/do not establish native ChatGPT account fidelity/);
+    const escaped=row.querySelector('summary').fire('keydown',{key:'Escape'});assert.equal(escaped.defaultPrevented,true);assert.equal(row.open,false);assert.equal(compatibility.open,true);assert.equal(f.view.doc.activeElement,row.querySelector('summary'));assert.equal(f.calls.length,count);
+  }finally{await manager?.dispose();f.restore();}
+});
+
+test('compatibility inspection and same-chat refresh retain composer, caret, draft, keyed messages and disclosure scope',async()=>{
+  const f=fixture();let manager;
+  try{addChatGPTCompatibility(f);manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;
+    const extras=f.view.root.querySelector('.cp-chat-extras'),providers=f.view.root.querySelector('.cp-provider-capabilities'),compatibility=f.view.root.querySelector('.cp-chatgpt-compatibility'),row=compatibility.querySelectorAll('.cp-fidelity-aim')[7];for(const node of [extras,providers,compatibility,row]){node.open=true;node.fire('toggle');}
+    const editor=f.view.root.querySelector('textarea'),message=f.view.root.querySelector('.cp-message'),messages=f.view.root.querySelector('.cp-messages');messages.scrollTop=37;editor.value='Exact unsent draft while reviewing compatibility';editor.fire('input');editor.focus();editor.setSelectionRange(6,12);await manager.flush();await manager.refresh();
+    assert.equal(f.view.root.querySelector('textarea'),editor);assert.equal(f.view.root.querySelector('.cp-message'),message);assert.equal(f.view.root.querySelector('.cp-messages'),messages);assert.equal(messages.scrollTop,37);assert.equal(f.view.doc.activeElement,editor);assert.deepEqual([editor.selectionStart,editor.selectionEnd],[6,12]);assert.equal(f.draft.content,editor.value);
+    assert.equal(f.view.root.querySelector('.cp-provider-capabilities').open,true);const refreshed=f.view.root.querySelector('.cp-chatgpt-compatibility');assert.equal(refreshed.open,true);assert.equal(refreshed.querySelectorAll('.cp-fidelity-aim').find((node:any)=>node.dataset.aimId==='account-memories').open,true);
+    assert.equal(f.calls.some(call=>['send','selectProvider','create','capabilities','interrupt'].includes(call.name)),false);
+  }finally{await manager?.dispose();f.restore();}
+});
+
+test('compatibility evidence is text-safe and rejects unsafe links; legacy provider descriptors remain usable',async()=>{
+  const f=fixture();let manager;
+  try{const report=JSON.parse(JSON.stringify(createNativeChatGPTFidelityDescriptor()));report.aims[0].evidence[0].url='javascript:alert(1)';report.aims[0].reason='<img src=x onerror=alert(1)>';addChatGPTCompatibility(f,report);manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;
+    const row=f.view.root.querySelector('.cp-fidelity-aim');assert.equal(row.querySelector('img'),null);assert.match(row.textContent,/<img src=x/);assert.match(row.textContent,/Evidence link unavailable/);assert.equal(row.querySelectorAll('a').some((link:any)=>link.href.startsWith('javascript:')),false);
+    f.detail.providers[1]={id:'chatgpt',label:'Legacy ChatGPT unavailable',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:'Legacy unavailable reason',simulated:false,models:[]};await manager.refresh();assert.equal(f.view.root.querySelector('.cp-chatgpt-compatibility'),null);assert.match(f.view.root.querySelector('.cp-provider-capabilities').textContent,/Legacy unavailable reason/);assert.equal(f.view.root.querySelector('select[aria-label="Conversation provider"]').options.find((option:any)=>option.value==='chatgpt').disabled,true);
+  }finally{await manager?.dispose();f.restore();}
+});
 
 test('safe Markdown supports readable code/list/inline text without executing HTML, script links or remote media',async()=>{
   const view=componentDocument(),restore=view.install();try{

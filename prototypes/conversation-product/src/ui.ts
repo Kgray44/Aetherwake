@@ -1,4 +1,4 @@
-import type { BranchPolicy, Collection, ConversationProductPort, Detail, ProductCommandMap, SearchQuery, Share } from './contracts.ts';
+import type { BranchPolicy, Collection, ConversationProductPort, Detail, FidelityStatus, NativeChatGPTFidelityDescriptor, ProductCommandMap, SearchQuery, Share } from './contracts.ts';
 import { ConversationDraftSession, flushConversationDraftSessions } from './draft-session.ts';
 import { mountConversationChat, decorateConversationControl, decorateConversationDisclosure, type ConversationChat, type ConversationExecutionPort, type ConversationControlIdentity, type ConversationControlPresentation } from './chat.ts';
 export { acceptedConversationSubmission } from './chat.ts';
@@ -12,7 +12,31 @@ const field = (label: string, input: HTMLElement) => {const l=el('label',undefin
 const select = (items: {value:string;label:string;disabled?:boolean}[], value='') => {const node=el('select');node.className='cp-native-select';for(const item of items){const option=el('option',item.label);option.value=item.value;option.disabled=!!item.disabled;node.append(option);}node.value=value;return node;};
 const disclosure = (label:string,className:string) => {
  const node=el('details',undefined,'cp-disclosure '+className),summary=el('summary',label),panel=el('div',undefined,'cp-disclosure-panel');node.append(summary,panel);
- const identities:Record<string,ConversationControlIdentity>={'cp-new-chat':'new-chat','cp-filters':'filters','cp-history-tools':'organize','cp-chat-options':'chat-options','cp-shares':'shares'};decorateConversationDisclosure(node,summary,identities[className]??'action',panel);return {node,summary,panel};
+ const identities:Record<string,ConversationControlIdentity>={'cp-new-chat':'new-chat','cp-filters':'filters','cp-history-tools':'organize','cp-chat-options':'chat-options','cp-shares':'shares','cp-chatgpt-compatibility':'providers','cp-fidelity-aim':'providers','cp-fidelity-related-row':'providers'};decorateConversationDisclosure(node,summary,identities[className]??'action',panel);return {node,summary,panel};
+};
+
+const fidelityStatusLabel=(status:FidelityStatus)=>status==='RequiresAdditionalAuthorization'?'Requires additional authorization':status;
+const officialEvidenceURL=(value:string):string|null=>{
+ try{const url=new URL(value);return url.protocol==='https:'&&!url.username&&!url.password&&(['developers.openai.com','learn.chatgpt.com'].includes(url.hostname)||url.hostname==='github.com'&&url.pathname.startsWith('/openai/'))?url.href:null;}catch{return null;}
+};
+const renderChatGPTCompatibility=(report:NativeChatGPTFidelityDescriptor)=>{
+ const view=disclosure('ChatGPT compatibility','cp-chatgpt-compatibility');view.node.dataset.fidelityId=report.id;view.node.dataset.providerId=report.providerId;
+ view.panel.append(el('p',`Documentation checked ${report.review.dateUtc} · Runtime account access unverified.`, 'cp-fidelity-review'),el('p',report.reason,'cp-fidelity-note'));
+ const row=(label:string,status:FidelityStatus,interfaceName:string,scope:string,reason:string,evidence:NativeChatGPTFidelityDescriptor['aims'][number]['evidence'],className:string)=>{
+  const item=disclosure(label,className),badge=el('span',fidelityStatusLabel(status),'cp-fidelity-status');item.node.dataset.status=status;item.summary.append(badge);
+  const facts=el('dl',undefined,'cp-fidelity-facts');for(const [name,value] of [['Reviewed interface',interfaceName],['Scope',scope],['Reason',reason],['Status meaning',report.statusDefinitions[status]]])facts.append(el('dt',name),el('dd',value));item.panel.append(facts);
+  const sources=el('ul',undefined,'cp-fidelity-evidence');sources.setAttribute('aria-label','Official evidence');
+  for(const source of evidence){const entry=el('li'),href=officialEvidenceURL(source.url);if(href){const link=el('a',source.section+' · '+new URL(href).hostname);link.href=href;link.target='_blank';link.rel='noopener noreferrer';entry.append(link);}else entry.append(el('span',source.section+' · Evidence link unavailable'));sources.append(entry);}
+  item.panel.append(sources);return item;
+ };
+ const aims=el('ol',undefined,'cp-fidelity-aims');aims.setAttribute('aria-label','Native ChatGPT account requirements');
+ for(const aim of report.aims){const entry=el('li'),item=row(aim.label,aim.status,aim.interfaceName,aim.statusScope,aim.reason,aim.evidence,'cp-fidelity-aim');item.node.dataset.aimId=aim.id;item.node.dataset.reasonCode=aim.reasonCode;
+  if(aim.otherNativeInterfaces)item.panel.append(el('p','Other native-account interfaces: Unverified. This interface exclusion does not prove they are impossible.','cp-fidelity-alternative'));
+  entry.append(item.node);aims.append(entry);
+ }
+ const related=el('section',undefined,'cp-fidelity-related');related.setAttribute('aria-label','Separate capabilities');related.append(el('h4','Separate capabilities'),el('p','These do not establish native ChatGPT account fidelity.'));
+ for(const capability of report.relatedCapabilities){const reason=capability.implementation==='on-hold'?'Inference implementation is on hold.':'Source-tested navigation seam; native host is not wired.',item=row(capability.label,capability.status,capability.interfaceName,capability.statusScope,reason,capability.evidence,'cp-fidelity-related-row');item.node.dataset.relatedCapabilityId=capability.id;related.append(item.node);}
+ view.panel.append(aims,related);return view;
 };
 
 /** Temporary surface: the host decides placement, focus transition, and shared Motion Coordinator. */
@@ -84,7 +108,9 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  };
  const renderDetail=(d:Detail)=>{
   const id=d.conversation.resourceId;
-  const optionsOpen=root.dataset.resourceId===id&&!!detailHeader.querySelector<HTMLDetailsElement>('.cp-chat-options')?.open;
+  const sameResource=root.dataset.resourceId===id,optionsOpen=sameResource&&!!detailHeader.querySelector<HTMLDetailsElement>('.cp-chat-options')?.open;
+  const providerOpen=sameResource&&!!secondary.querySelector<HTMLDetailsElement>('.cp-provider-capabilities')?.open,previousCompatibility=sameResource?secondary.querySelector<HTMLDetailsElement>('.cp-chatgpt-compatibility'):null,compatibilityOpen=!!previousCompatibility?.open;
+  const openFidelityRows=new Set(previousCompatibility?[...previousCompatibility.querySelectorAll<HTMLDetailsElement>('details')].filter(item=>item.open).map(item=>item.dataset.aimId??item.dataset.relatedCapabilityId):[]);
   current=d;root.dataset.resourceId=id;
   const chatOptions=disclosure('Chat options','cp-chat-options');chatOptions.node.open=optionsOpen;
   const title=el('input');title.value=d.conversation.title;title.setAttribute('aria-label','Conversation title');const folder=select([{value:'',label:'Choose folder'},...collections.map(c=>({value:c.id,label:c.title}))]),projectSelect=select([{value:'',label:'No project'},...[...project.options].filter(p=>p.value&&p.value!=='__none').map(p=>({value:p.value,label:p.text}))],d.conversation.projectId??'');
@@ -92,8 +118,11 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   chatOptions.panel.append(field('Title',title),button('Rename',async()=>run(async()=>{await call('organize',{type:'renameConversation',resourceId:id,title:title.value,expectedRevision:d.conversation.revision,expectedVersion:d.conversation.version});await refresh();})),favoriteControl,button(d.conversation.state==='archived'?'Restore conversation':'Archive conversation',async()=>run(async()=>{await flush();await call('archive',{resourceId:id,archived:d.conversation.state!=='archived',expectedVersion:d.conversation.version});await refresh();})),field('Project association',projectSelect),button('Associate project',async()=>run(async()=>{await call('organize',{type:'associateProject',resourceId:id,projectId:projectSelect.value||null,expectedVersion:d.conversation.version});await refresh();})),field('Folder',folder),button('Add to folder',async()=>run(async()=>{const c=collections.find(c=>c.id===folder.value);if(!c)throw new Error('Choose a folder');await call('organize',{type:'membership',collectionId:c.id,resourceId:id,member:true,expectedVersion:c.version});await refresh();})),button('Remove from folder',async()=>run(async()=>{const c=collections.find(c=>c.id===folder.value);if(!c)throw new Error('Choose a folder');await call('organize',{type:'membership',collectionId:c.id,resourceId:id,member:false,expectedVersion:c.version});await refresh();})),button('Export conversation',async()=>run(async()=>{const data=await call('export',{resourceId:id});const json=JSON.stringify(data,null,2);if(options.download)options.download('conversation.json',json);else{const url=URL.createObjectURL(new Blob([json],{type:'application/json'})),link=el('a','Download export');link.href=url;link.download='conversation.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}})));
   const identity=el('div',undefined,'cp-chat-identity');identity.append(el('h3',d.conversation.title),el('p',`${d.providers.find(p=>p.id===d.conversation.providerId)?.label??d.conversation.providerId} · ${d.conversation.state}${d.conversation.favorite?' · favorite':''}`));detailHeader.replaceChildren(identity,chatOptions.node,extras);
   const lineage=el('details'),lineageTitle=el('summary','Branch lineage');lineage.append(lineageTitle);decorateConversationDisclosure(lineage,lineageTitle,'lineage');for(const edge of d.lineage)lineage.append(el('p',`${edge.mode} · ${edge.createdAt} · fork at ${edge.sourceMessageId}`),button(`${edge.parentResourceId} → ${edge.childResourceId}`,async()=>run(()=>open(edge.childResourceId,edge.sourceMessageId))));
-  const providers=el('details'),providerSummary=el('summary','Provider capabilities');providers.append(providerSummary);decorateConversationDisclosure(providers,providerSummary,'providers');for(const p of d.providers)providers.append(el('p',`${p.label}: ${p.available?'available':'unavailable'} · ${p.execute?'execution supported':'no model execution'}${p.reason?' · '+p.reason:''}`));
-  const providerSelect=select(d.providers.map(p=>({value:p.id,label:p.label,disabled:!p.available})),d.conversation.providerId);providers.append(providerSelect,button('Use provider for future turns',async()=>run(async()=>{await call('selectProvider',{resourceId:id,providerId:providerSelect.value,expectedRevision:d.conversation.revision});await loadDetail();})));
+  const providers=el('details',undefined,'cp-provider-capabilities'),providerSummary=el('summary','Provider capabilities');providers.open=providerOpen;providers.append(providerSummary);decorateConversationDisclosure(providers,providerSummary,'providers');
+  for(const p of d.providers){const fidelity=p.id==='chatgpt'&&p.accountFidelity?.providerId===p.id&&p.accountFidelity.schemaVersion===1?p.accountFidelity:undefined;providers.append(el('p',`${p.label}: ${p.available?'available':'unavailable'} · ${p.execute?'execution supported':'no model execution'}${p.reason&&!fidelity?' · '+p.reason:''}`,'cp-provider-summary'));
+   if(fidelity){const compatibility=renderChatGPTCompatibility(fidelity);compatibility.node.open=compatibilityOpen;compatibility.node.dataset.open=String(compatibilityOpen);for(const item of compatibility.node.querySelectorAll<HTMLDetailsElement>('details')){item.open=openFidelityRows.has(item.dataset.aimId??item.dataset.relatedCapabilityId);item.dataset.open=String(item.open);}providers.append(compatibility.node);}
+  }
+  const providerSelect=select(d.providers.map(p=>({value:p.id,label:p.label,disabled:!p.available})),d.conversation.providerId);providerSelect.setAttribute('aria-label','Conversation provider');providers.append(providerSelect,button('Use provider for future turns',async()=>run(async()=>{await call('selectProvider',{resourceId:id,providerId:providerSelect.value,expectedRevision:d.conversation.revision});await loadDetail();})));
   const shares=disclosure('Published and attached excerpts · '+d.shares.length,'cp-shares');shares.panel.append(...d.shares.map(s=>renderShare(s,d)));
   secondary.replaceChildren(renderPolicy(d),lineage,providers,...(d.shares.length?[shares.node]:[]));
  };
