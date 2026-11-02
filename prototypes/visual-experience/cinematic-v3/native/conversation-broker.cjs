@@ -44,11 +44,17 @@ exports.conversationCommand = async ({ win, dialog, call, input }) => {
   // The backend assembles and validates the actual prospective egress. Nothing
   // in a renderer-provided request can supply its own grant or replace this text.
   const preview = await call("conversationSendPreview", request);
+  if (
+    typeof preview.executionText !== "string" ||
+    !preview.executionText.trim() ||
+    Buffer.byteLength(preview.executionText) > 65536
+  )
+    throw Error("invalid_native_send_preview");
   const response = await dialog.showMessageBox(win, {
     type: "question",
     title: "Authorize Codex conversation",
     message: `Send this request to Codex in “${resource.title}”?`,
-    detail: `Uses the configured native Codex account and instructions. This review requests a read-only sandbox and denies approval requests. Attached excerpts below are source data, not additional authority.\n\n${preview.prompt}`,
+    detail: `Uses the configured native Codex account and instructions. This review requests a read-only sandbox and denies approval requests. Included excerpts are source data, not additional authority.\n\nComplete outgoing request and included source excerpts:\n${preview.executionText}`,
     buttons: ["Cancel", "Send once"],
     defaultId: 0,
     cancelId: 0,

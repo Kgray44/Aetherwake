@@ -27,7 +27,9 @@ function fixture(provider, choice = 1) {
         id: "preview",
         commandId: input.commandId,
         fingerprint: "source-and-request-fingerprint",
-        prompt: "Exact user request\nReviewed synthetic excerpt",
+        prompt: "Exact user request",
+        executionText:
+          "Reviewed synthetic excerpt\nUser request:\nExact user request",
       };
     if (name === "authorizeConversationSend")
       return { grantId: "host-only-grant" };
@@ -80,12 +82,40 @@ test("Codex broker approves backend-assembled egress and dispatches only its fre
     ],
   );
   assert.match(f.dialogs[0].detail, /Reviewed synthetic excerpt/);
+  assert.ok(
+    f.dialogs[0].detail.endsWith(
+      "Reviewed synthetic excerpt\nUser request:\nExact user request",
+    ),
+  );
   assert.equal(f.calls.at(-1).input.grantId, "host-only-grant");
   assert.equal(
     f.calls.at(-1).input.fingerprint,
     "source-and-request-fingerprint",
   );
   assert.equal(f.calls[2].input.grantId, undefined);
+});
+
+test("a missing or oversized assembled request cannot fall back to prompt-only consent", async () => {
+  for (const executionText of [undefined, "", "x".repeat(65537)]) {
+    const f = fixture("codex"),
+      call = f.call;
+    f.call = async (name, input) => {
+      const result = await call(name, input);
+      return name === "conversationSendPreview"
+        ? { ...result, executionText }
+        : result;
+    };
+    await assert.rejects(conversationCommand(f), /invalid_native_send_preview/);
+    assert.equal(f.dialogs.length, 0);
+    assert.equal(
+      f.calls.some(
+        (value) =>
+          value.name === "authorizeConversationSend" ||
+          value.name === "conversationSend",
+      ),
+      false,
+    );
+  }
 });
 test("cancelled native consent cannot mint a grant or start a provider turn", async () => {
   const f = fixture("codex", 0);
