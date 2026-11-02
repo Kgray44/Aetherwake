@@ -2222,9 +2222,8 @@ export function installApplication(hooks: Hooks) {
         anchor,
         content,
         label: "Related resources",
-        minSize: { width: 300, height: 240 },
-        preferredSize: { width: 440, height: 360 },
-        maxSize: { width: 560, height: 520 },
+        minSize: { width: 440, height: 240 },
+        maxSize: { width: 440, height: 520 },
         initialFocus: 'input[type="search"]',
         onClose: () => {
           closed = true;
