@@ -214,3 +214,23 @@ test('provider opt-in is contextual, one-shot, identified and cannot silently mo
   const choice = root.find(node => node.className.includes('vela-core-provider-choice'))!; assert.equal(choice.hidden, false); assert.match(choice.textContent, /Codex/); named(root, 'Close Vela controls').fire('click'); assert.equal(displayed(choice), true);
   canonical.planner.providerId = 'other-identified-provider'; await panel.refresh(); assert.equal(consent.checked, false); assert.equal(choice.hidden, true); assert.match(consent.parent!.textContent, /other-identified-provider/); panel.dispose();
 });
+
+test('collection review labels retain distinct collection and resource identities even when IDs coincide', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const plan: VelaPlan = {
+    id: 'plan:membership', requestId: 'request:synthetic', version: 1,
+    fingerprint: 'synthetic:membership', summary: 'Organize the existing chat',
+    steps: [{ id: 'membership', explanation: 'Use canonical membership', action: { type: 'collectionMembership', collectionId: 'shared:id', resourceId: 'shared:id', member: true } }],
+    targets: [
+      { id: 'shared:id', kind: 'collection', title: 'Work collection', version: 1 },
+      { id: 'shared:id', kind: 'resource', title: 'Authorized chat', version: 1 },
+    ],
+    scope: { principalId: 'synthetic', policyVersion: 'synthetic', resourceIds: ['shared:id'], collectionIds: ['shared:id'], projectIds: [], workspaceIds: [] },
+    state: 'prepared', createdAt: manifest.createdAt, expiresAt: manifest.createdAt, contribution: null,
+  };
+  canonical.plans = [plan]; canonical.requests = [request({ state: 'awaiting-review', planId: plan.id })];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical));
+  await settles(() => !!root.find(node => node.className === 'vela-core-effects'));
+  assert.equal(root.find(node => node.className === 'vela-core-effects')!.textContent, 'Add Authorized chat to Work collection');
+  panel.dispose();
+});

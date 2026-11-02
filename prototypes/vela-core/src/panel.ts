@@ -154,8 +154,12 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     for (const [id, cached] of messages) if (!target.includes(cached.node)) messages.delete(id);
   }
   function effect(action: PlanStep['action'], plan: VelaPlan): string {
-    const request = current?.requests.find(item => item.id === plan.requestId), refs = [...plan.targets, ...(request?.context.discovered ?? []), ...(current?.applicationContext?.references ?? [])], name = (id: string) => refs.find(ref => ref.id === id)?.title ?? 'the selected item';
+    const request = current?.requests.find(item => item.id === plan.requestId), refs = [...plan.targets, ...(request?.context.discovered ?? []), ...(current?.applicationContext?.references ?? [])], name = (id: string, kind?: ResourceRef['kind']) => refs.find(ref => ref.id === id && (!kind || ref.kind === kind))?.title ?? 'the selected item';
     switch (action.type) {
+      case 'createCollection': return 'Create collection “' + action.title + '”' + (action.projectId ? ' in ' + name(action.projectId, 'project') : '');
+      case 'renameCollection': return 'Rename ' + name(action.collectionId, 'collection') + ' to “' + action.title + '”';
+      case 'archiveCollection': return (action.archived ? 'Archive ' : 'Restore ') + name(action.collectionId, 'collection');
+      case 'collectionMembership': return (action.member ? 'Add ' : 'Remove ') + name(action.resourceId, 'resource') + (action.member ? ' to ' : ' from ') + name(action.collectionId, 'collection');
       case 'createConversation': return 'Create an empty ' + (action.providerId === 'codex-app-server' ? 'Codex' : 'local') + ' conversation “' + action.title + '”';
       case 'conversationFavorite': return (action.favorite ? 'Favorite ' : 'Remove favorite from ') + name(action.resourceId);
       case 'renameConversation': return 'Rename ' + name(action.resourceId) + ' to “' + action.title + '”';
