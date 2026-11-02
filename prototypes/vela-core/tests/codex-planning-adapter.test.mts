@@ -16,6 +16,23 @@ function input(): PlanningInput {
       omitted: [], contentBytes: 22, coverage: 'explicit-resources-only' } };
 }
 
+/** Independent consumer of the emitted rules; canonical schema objects are never modified. */
+function rehydrateCatalog(data:any) {
+  const expand=(value:any):any=>{
+    if(Array.isArray(value))return value.map(expand);if(value===null||typeof value!=='object')return value;
+    if(Object.hasOwn(value,'$ref')) {
+      assert.deepEqual(Object.keys(value),['$ref']);assert.match(value.$ref,/^#\/\$defs\/s\d+$/);
+      const definition=data.$defs[value.$ref.slice('#/$defs/'.length)];assert(definition);return expand(definition);
+    }
+    return Object.fromEntries(Object.entries(value).map(([key,entry])=>[key,expand(entry)]));
+  };
+  return data.capabilities.map((capability:any)=>{
+    const schema=expand({...data.capabilitySchemaDefaults,...capability.schema});
+    if(data.capabilityRequiredDefault==='all-root-properties'&&!Object.hasOwn(schema,'required'))schema.required=Object.keys(schema.properties??{});
+    return {...data.capabilityDefaults,...capability,schema};
+  });
+}
+
 test('current catalog prompt expands to every exact action schema, scope, effect and effective policy without changing source context',()=>{
   const request=input();
   request.instruction='Keep provider identity, current canonical scope, exact versions, reviewed commands and native permission boundaries. '.repeat(7);
@@ -25,17 +42,7 @@ test('current catalog prompt expands to every exact action schema, scope, effect
   assert(Buffer.byteLength(prompt)<=16384);assert(prompt.includes('inherits authorization and reversible'));
   assert.deepEqual(data.context,request.context,'No source text, source metadata or omission record is truncated');
   assert(data.$defs&&Object.keys(data.$defs).length>0);
-  const expand=(value:any):any=>{
-    if(Array.isArray(value))return value.map(expand);if(value===null||typeof value!=='object')return value;
-    if(Object.hasOwn(value,'$ref')) {
-      assert.deepEqual(Object.keys(value),['$ref']);assert.match(value.$ref,/^#\/\$defs\/s\d+$/);
-      const definition=data.$defs[value.$ref.slice('#/$defs/'.length)];assert(definition);return expand(definition);
-    }
-    return Object.fromEntries(Object.entries(value).map(([key,entry])=>[key,expand(entry)]));
-  };
-  assert.deepEqual(data.capabilities.map((capability:any)=>({
-    ...data.capabilityDefaults,...capability,schema:expand({...data.capabilitySchemaDefaults,...capability.schema}),
-  })),request.capabilities.map(({label:_label,...capability})=>capability));
+  assert.deepEqual(rehydrateCatalog(data),request.capabilities.map(({label:_label,...capability})=>capability));
   assert.equal(data.capabilities.find((capability:any)=>capability.id==='delegateTask').authorization,'explicit-execution-authorization');
   assert.equal(data.capabilities.find((capability:any)=>capability.id==='search').reversible,'no-state-change');
 });
@@ -60,16 +67,48 @@ test('root schema defaults rehydrate every original field, explicit override and
     const request=input();request.capabilities=schemas.map((schema,index)=>({...CAPABILITIES[index],schema:structuredClone(schema)}));
     const before=structuredClone(request.capabilities),catalogDigest=createCapabilityCatalog(request.capabilities).projection.digest,
       prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
-    const expand=(value:any):any=>{
-      if(Array.isArray(value))return value.map(expand);if(!value||typeof value!=='object')return value;
-      if(Object.hasOwn(value,'$ref')){assert.deepEqual(Object.keys(value),['$ref']);assert.match(value.$ref,/^#\/\$defs\/s\d+$/);return expand(data.$defs[value.$ref.slice('#/$defs/'.length)]);}
-      return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,expand(item)]));
-    };
-    const restored=data.capabilities.map((capability:any)=>({...data.capabilityDefaults,...capability,schema:expand({...data.capabilitySchemaDefaults,...capability.schema})}));
+    const restored=rehydrateCatalog(data);
     assert.deepEqual(restored,before.map(({label:_label,...capability})=>capability));
     assert.deepEqual(request.capabilities,before);assert.equal(createCapabilityCatalog(request.capabilities).projection.digest,catalogDigest);
     for(const key of ['type','additionalProperties'])if(schemas.some(schema=>!Object.hasOwn(schema,key)))assert(!Object.hasOwn(data.capabilitySchemaDefaults,key));
     assert(prompt.includes('nested schemas do not inherit'));
+  }
+});
+
+test('required/effect defaults retain order, absence, nested arrays and expanded repeated properties exactly',()=>{
+  const properties={z:{type:'string',minLength:1,maxLength:200},a:{type:'string',minLength:1,maxLength:200}},
+    adversarialMap={type:'string',minLength:1,maxLength:200};
+  const variants:Record<string,unknown>[][]=[
+    [
+      {type:'object',additionalProperties:false,properties,required:['z','a']},
+      {type:'object',additionalProperties:false,properties,required:['a','z']},
+      {type:'object',additionalProperties:false,properties,required:['z']},
+      {type:'object',additionalProperties:false,properties,required:[]},
+    ],
+    [
+      {type:'object',additionalProperties:false,properties,required:['z','a']},
+      {type:'object',additionalProperties:false,properties},
+    ],
+    [
+      {type:'object',additionalProperties:false,properties:{nested:{type:'object',properties,required:['a']}},required:['nested']},
+      {type:'object',additionalProperties:false,properties:{nested:{type:'object',properties,required:['z','a']}},required:['nested']},
+    ],
+    // Deliberately adversarial JSON-shaped input: the generic interner can reference this map.
+    // This tests round-trip serialization, not JSON Schema validation of these invented schemas.
+    [
+      {type:'object',additionalProperties:false,properties:adversarialMap,required:Object.keys(adversarialMap)},
+      {type:'object',additionalProperties:false,properties:adversarialMap,required:Object.keys(adversarialMap)},
+    ],
+  ];
+  for(const [index,schemas]of variants.entries()){
+    const request=input();request.capabilities=schemas.map((schema,i)=>({...CAPABILITIES[i],effect:(['read','provider-execution','mutate','navigate'] as const)[i%4],schema:structuredClone(schema)}));
+    const before=structuredClone(request.capabilities),catalog=createCapabilityCatalog(request.capabilities),data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
+    assert.deepEqual(rehydrateCatalog(data),before.map(({label:_label,...entry})=>entry));
+    assert.deepEqual(request.capabilities,before);assert.deepEqual(createCapabilityCatalog(request.capabilities),catalog);
+    assert.equal(data.capabilityDefaults.effect,'mutate');assert.equal(data.capabilities[0].effect,'read');assert.equal(data.capabilities[1].effect,'provider-execution');
+    if(index===0){assert(!Object.hasOwn(data.capabilities[0].schema,'required'));assert.deepEqual(data.capabilities[1].schema.required,['a','z']);assert.deepEqual(data.capabilities[2].schema.required,['z']);assert.deepEqual(data.capabilities[3].schema.required,[]);}
+    if(index===1){assert(!Object.hasOwn(data,'capabilityRequiredDefault'));assert.deepEqual(data.capabilities[0].schema.required,['z','a']);assert(!Object.hasOwn(data.capabilities[1].schema,'required'));}
+    if(index===3){assert(Object.hasOwn(data.capabilities[0].schema.properties,'$ref'));assert(!Object.hasOwn(data.capabilities[0].schema,'required'));assert.deepEqual(rehydrateCatalog(data)[0].schema.required,Object.keys(adversarialMap));}
   }
 });
 const output = () => ({ schemaVersion: 1, summary: 'Propose a research workspace.', steps: [{ id: 'create', explanation: 'Use a reference to the selected canonical note.', action: { type: 'workspaceFromResources', title: 'Research', projectId: null, resourceIds: ['note:synthetic'] } }], contribution: { providerId: 'spoofed-provider', executionId: 'spoofed-execution', nativeThreadId: 'spoofed-thread', classification: 'reported' } });

@@ -109,13 +109,19 @@ function planningCapabilityCatalog(capabilities:PlanningInput['capabilities']) {
   // Root inheritance is explicit metadata formatting, not a change to JSON Schema.
   // A missing original key disables that default globally, preserving absence exactly.
   const capabilitySchemaDefaults=Object.fromEntries(Object.entries({type:'object',additionalProperties:false}).filter(([key])=>capabilities.every(capability=>Object.hasOwn(capability.schema,key))));
-  const compactRoot=(schema:Record<string,unknown>)=>compact(Object.fromEntries(Object.entries(schema).filter(([key,value])=>!Object.hasOwn(capabilitySchemaDefaults,key)||value!==capabilitySchemaDefaults[key])),false);
+  const requiredDefault=capabilities.every(capability=>Object.hasOwn(capability.schema,'required'));
+  const compactRoot=(schema:Record<string,unknown>)=>{
+    const keys=isRecord(schema.properties)?Object.keys(schema.properties):null,required=schema.required;
+    const deriveRequired=requiredDefault&&keys&&Array.isArray(required)&&required.length===keys.length&&required.every((key,index)=>key===keys[index]);
+    return compact(Object.fromEntries(Object.entries(schema).filter(([key,value])=>!(deriveRequired&&key==='required')&&(!Object.hasOwn(capabilitySchemaDefaults,key)||value!==capabilitySchemaDefaults[key]))),false);
+  };
   return {
-    capabilityDefaults:{authorization:'host-policy',reversible:'host-dependent'},
+    capabilityDefaults:{authorization:'host-policy',reversible:'host-dependent',effect:'mutate'},
     capabilitySchemaDefaults,
+    ...(requiredDefault?{capabilityRequiredDefault:'all-root-properties'}:{}),
     $defs:Object.fromEntries([...references].map(([encoded,id])=>[id,compact(repeated.get(encoded)!.schema,false)])),
-    capabilities:capabilities.map(({label:_label,authorization,reversible,schema,...capability})=>({...capability,schema:compactRoot(schema),
-      ...(authorization==='host-policy'?{}:{authorization}),...(reversible==='host-dependent'?{}:{reversible})})),
+    capabilities:capabilities.map(({label:_label,authorization,reversible,effect,schema,...capability})=>({...capability,schema:compactRoot(schema),
+      ...(authorization==='host-policy'?{}:{authorization}),...(reversible==='host-dependent'?{}:{reversible}),...(effect==='mutate'?{}:{effect})})),
   };
 }
 
@@ -134,7 +140,7 @@ Application task constraints:
 ${input.instruction}
 
 Typed task and authorized source data (JSON):
-Complete-catalog schemas use exact local JSON Schema $refs into $defs. Reconstruct each root schema as {...capabilitySchemaDefaults,...entry.schema} before resolving refs; nested schemas do not inherit these defaults. A capability inherits authorization and reversible from capabilityDefaults only when that field is omitted; explicit fields override the defaults. All scope and effect restrictions still apply. Fetched descriptors are already complete.
+Complete-catalog schemas use exact local JSON Schema $refs into $defs. Reconstruct each root schema as {...capabilitySchemaDefaults,...entry.schema} before resolving refs; nested schemas do not inherit these defaults. When capabilityRequiredDefault is "all-root-properties", after expanding all refs an omitted root required equals Object.keys(expandedSchema.properties ?? {}), in insertion order. Explicit required overrides it; nested schemas never inherit it. A capability inherits authorization and reversible from capabilityDefaults only when that field is omitted; effect follows the same rule. Explicit fields override the defaults. All scope and effect restrictions still apply. Fetched descriptors are already complete.
 ${JSON.stringify({ intent: input.intent, context: input.context, ...(discovery?{schemaAvailability:'fetch-before-proposing',capabilityCatalog:discovery.projection,capabilityDiscovery:discovery.declaration}:{schemaAvailability:'complete-approved-catalog',...planningCapabilityCatalog(input.capabilities)}) })}`;
   // Existing canonical BackendCore.execute enforces 16 KiB. Reject before creating/dispatching, never truncate sources.
   check(byteLength(prompt) <= 16384, 'planning_prompt_capacity_exceeded'); return prompt;
