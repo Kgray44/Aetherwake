@@ -215,6 +215,24 @@ test('provider opt-in is contextual, one-shot, identified and cannot silently mo
   canonical.planner.providerId = 'other-identified-provider'; await panel.refresh(); assert.equal(consent.checked, false); assert.equal(choice.hidden, true); assert.match(consent.parent!.textContent, /other-identified-provider/); panel.dispose();
 });
 
+test('responded conversational outcomes show one attributed message without plan controls and preserve pending text/caret and observed presentation', async () => {
+  for (const kind of ['answer', 'clarification', 'inability'] as const) {
+    const doc = new Document(), root = doc.createElement('main'), canonical = state(), observed: VelaPanelPresentation[] = []; let finish!: (value: VelaRequest) => void, calls = 0;
+    canonical.planner = { providerId: 'codex-app-server', available: true, busy: false }; canonical.conversation = { resourceId: 'chat:vela', revision: 1, messages: [] };
+    const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, { request: async input => { calls++; assert.equal(input.authorizeProvider, true); return new Promise(resolve => { finish = resolve; }); } }), { onPresentation: value => observed.push(value) });
+    await settles(() => observed.length === 1); const input = root.find(node => node.tagName === 'textarea')!;
+    named(root, 'Planning provider').fire('click'); const consent = root.find(node => node.tagName === 'input' && !!node.parent?.className.includes('vela-core-consent'))!; consent.checked = true; consent.fire('change'); named(root, 'Close Vela controls').fire('click');
+    input.value = 'An ordinary conversational question'; input.fire('input'); input.fire('keydown', { key: 'Enter' }); assert.equal(calls, 1); assert.equal(consent.checked, false);
+    input.value = 'Later unsent text'; input.selectionStart = 2; input.selectionEnd = 7; input.fire('input');
+    canonical.requests = [request({ state: 'responded', response: { kind, messageId: 'message:actual-response' } })];
+    canonical.conversation.messages = [{ id: 'message:submitted', role: 'user', content: 'An ordinary conversational question', source: 'user', classification: 'observed' }, { id: 'message:actual-response', role: 'assistant', content: 'Exact canonical reported ' + kind + '.', source: 'provider', providerId: 'codex-app-server', classification: 'reported', responseKind: kind, providerContribution: { providerId: 'codex-app-server', classification: 'reported', executionId: 'execution:synthetic-client-reference' } }];
+    finish(canonical.requests[0]); await settles(() => root.find(node => node.className === 'vela-core-status')!.dataset.requestState === 'responded');
+    const provider = root.find(node => node.dataset.messageId === 'message:actual-response')!; assert.equal(provider.children[0].textContent, 'Codex · contribution'); assert.equal(provider.children[1].textContent, 'Exact canonical reported ' + kind + '.'); assert.equal(root.find(node => node.className === 'vela-core-plans')!.children.length, 0); assert.equal(named(root, 'Approve and apply'), undefined);
+    assert.equal(root.find(node => node.tagName === 'textarea'), input); assert.equal(input.value, 'Later unsent text'); assert.equal(input.selectionStart, 2); assert.equal(input.selectionEnd, 7); assert.doesNotMatch(root.find(node => node.className === 'vela-core-status')!.textContent, /applied|complete|running|missing/i);
+    assert(observed.some(value => value.messageIds.includes('message:actual-response'))); assert(observed.every(value => !['planning', 'review', 'applying'].includes(value.phase))); assert.equal(observed.at(-1)!.phase, 'receiving', 'Only the later user draft remains active'); assert.deepEqual(observed.at(-1)!.planIds, []); panel.dispose();
+  }
+});
+
 test('collection review labels retain distinct collection and resource identities even when IDs coincide', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   const plan: VelaPlan = {
