@@ -3,7 +3,7 @@ const { createHash } = require('node:crypto');
 const q = JSON.stringify;
 const app = 'window.__aerynth.application()';
 const buttonQuery = (label, prefix) => `[...root.querySelectorAll('button')].find(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e),t=e.textContent.trim();return r.width>0&&r.height>0&&s.visibility!=='hidden'&&!e.disabled&&${prefix ? `t.startsWith(${q(label)})` : `t===${q(label)}`}})`;
-const pathFor = (scope, query) => `(()=>{const root=document.querySelector(${q(scope)});if(!root)return null;const e=(${query});if(!e||!root.contains(e))return null;const parts=[];for(let n=e;n!==root;n=n.parentElement){if(!n?.parentElement)return null;parts.unshift(n.tagName.toLowerCase()+':nth-child('+([...n.parentElement.children].indexOf(n)+1)+')')}return ${q(scope)}+(parts.length?' > '+parts.join(' > '):'')})()`;
+const pathFor = (scope, query) => `(()=>{const root=document.querySelector(${q(scope)});if(!root)return null;const e=(${query});if(!e||!root.contains(e))return null;if(e.tagName==='BUTTON'&&e.dataset?.templateId)return ${q(scope)}+' button[data-template-id='+JSON.stringify(e.dataset.templateId)+']';const parts=[];for(let n=e;n!==root;n=n.parentElement){if(!n?.parentElement)return null;parts.unshift(n.tagName.toLowerCase()+':nth-child('+([...n.parentElement.children].indexOf(n)+1)+')')}return ${q(scope)}+(parts.length?' > '+parts.join(' > '):'')})()`;
 
 /** Every renderer expression used by the A/C verifier is constructed here.
  * Selectors, labels and values are data encoded with JSON, never quote layers. */

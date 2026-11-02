@@ -1058,6 +1058,7 @@ export function mountWorkspaceTemplates(
             });
           },
         );
+        item.dataset.templateId = template.id;
         list.append(item);
       }
     } catch (error) {
