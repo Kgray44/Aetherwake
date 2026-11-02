@@ -26,6 +26,7 @@ export interface CanonicalVelaHostOptions {
     metadata(ref: ResourceRef, context: CanonicalVelaContext, metadata: CanonicalVelaMetadata): boolean;
     content(ref: ResourceRef, context: CanonicalVelaContext, metadata: CanonicalVelaMetadata): boolean;
     authorize(request: AuthorizationRequest, context: CanonicalVelaContext, metadata: CanonicalVelaMetadata): AuthorizationDecision;
+    attentionPreferences?(intent:'read'|'change-mode',context:CanonicalVelaContext,metadata:CanonicalVelaMetadata):boolean;
     /** Required for any explicit archived-collection restoration metadata. */
     restoreCollection?(ref:ResourceRef,context:CanonicalVelaContext,metadata:CanonicalVelaMetadata):boolean;
     inspectCollectionArchiveReceipt?(ref:ResourceRef,context:CanonicalVelaContext,metadata:CanonicalVelaMetadata):boolean;
@@ -40,6 +41,8 @@ export interface CanonicalVelaHostOptions {
     workspace(workspaceId: string, metadata: CanonicalVelaMetadata): number | null;
     /** Current canonical parent/rule revision, starting at zero; null/absent is unavailable. */
     collection?(collectionId:string,metadata:CanonicalVelaMetadata):number|null;
+    /** Exact canonical AttentionPreferences.version; no state/body projection. */
+    attentionPreferences?():number|null;
   };
   dispatch: {
     /** Mandatory opaque parent dispatcher. Block/layout/template work belongs to Universal Block System. */
@@ -209,6 +212,7 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
     return { ref, content: String(note.content), source: 'aerynth://resource/' + encodeURIComponent(id) + '?version=' + entity.version };
   }
   const host: CanonicalVelaHost = {
+    canReadAttentionPreferences: scope => readWithin(() => {const current=view();selectedScope(scope,current);return options.permissions.attentionPreferences?.('read',current.context,current.metadata)===true;}),
     scope: purpose => readWithin(() => structuredClone(view(purpose?.restoreCollectionIds).scope)),
     context: () => readWithin(() => {
       const current = view(); return { ...current.context,
@@ -253,6 +257,10 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
     }),
     authorize: request => within(() => {
       const current = view(restoringActions(request.actions)); selectedScope(request.scope, current); validateTargets(request.targets, current);
+      for(const action of request.actions)if(action.type==='setAttentionMode') {
+        check(options.permissions.attentionPreferences?.('change-mode',current.context,current.metadata)===true,'canonical_attention_mode_denied');
+        const revision=options.revisions.attentionPreferences?.();check(validVersion(revision)&&revision<Number.MAX_SAFE_INTEGER,'canonical_attention_preferences_unavailable');check(action.expectedVersion===revision,'stale_preference_version');
+      }
       if (request.contextManifest) {
         check(request.contextManifest.policyVersion === current.scope.policyVersion, 'stale_canonical_context_policy');
         validateTargets(request.contextManifest.discovered, current);
@@ -267,6 +275,10 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
       const action = validateAction(input.action),current=view(restoringActions([action])); check(action.type !== 'delegateTask', 'canonical_native_action_required');
       check(identifier(input.authorizationRef) && identifier(input.commandId) && identifier(input.requestId) && identifier(input.planId), 'canonical_dispatch_authorization_required');
       validateTargets(input.expectedVersions, current);
+      if(action.type==='setAttentionMode') {
+        check(options.permissions.attentionPreferences?.('change-mode',current.context,current.metadata)===true,'canonical_attention_mode_denied');
+        const revision=options.revisions.attentionPreferences?.();check(validVersion(revision)&&revision<Number.MAX_SAFE_INTEGER,'canonical_attention_preferences_unavailable');check(action.expectedVersion===revision,'stale_preference_version');
+      }
       for (const subject of actionSubjects(action,current.context)) check(input.expectedVersions.some(target => target.id === subject.id && target.kind === subject.kind), 'canonical_action_target_manifest_required');
       if(action.type==='renameResource'||action.type==='associateResourceProject') {
         const ref=resolve({id:action.resourceId,kind:'resource'},current.scope,current),entity=row('resources',action.resourceId);

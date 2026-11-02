@@ -75,6 +75,7 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('setTaskGroupMembers', 'Organize task group members', 'mutate', { type: { const: 'setTaskGroupMembers' }, groupId: idSchema, expectedVersion: versionSchema, taskIds: arraySchema }, 'One versioned group and an explicit task set'),
   capability('relate', 'Link two resources', 'mutate', { type: { const: 'relate' }, sourceId: idSchema, targetId: idSchema, kind: stringSchema }, 'Two existing resources; source is Vela, not inferred authority'),
   capability('applyStructuredPreset', 'Apply a workspace layout preset', 'mutate', { type: { const: 'applyStructuredPreset' }, workspaceId: idSchema, preset: { enum: ['balanced', 'focus', 'development', 'research'] } }, 'One authorized workspace; references and histories retain identity'),
+  capability('setAttentionMode', 'Set Vela attention mode', 'mutate', { type: { const: 'setAttentionMode' }, mode: { enum: ['normal','quiet','focused','collaborative','proactive'] }, expectedVersion: versionSchema }, 'Global Vela attention mode only; exact preference version. Does not grant monitoring, delegation, event access or learning.'),
   capability('delegateTask', 'Request an explicitly authorized provider execution', 'provider-execution', { type: { const: 'delegateTask' }, title: stringSchema, objective: { type: 'string', minLength: 1, maxLength: 16000 }, providerId: idSchema, resourceIds: arraySchema, constraints: { type: 'array', maxItems: 30, items: { type: 'string', maxLength: 1000 } } }, 'Original intent, source conversation, exact resource manifest, provider identity, and host-issued execution authorization'),
 ];
 
@@ -83,6 +84,7 @@ export function validateAction(value: unknown): VelaNativeAction | DelegateTaskA
   const v = value;
   let valid = false;
   switch (v.type) {
+    case 'setAttentionMode': valid = fields(v, ['type','mode','expectedVersion']) && typeof v.mode==='string' && ['normal','quiet','focused','collaborative','proactive'].includes(v.mode) && version(v.expectedVersion); break;
     case 'navigate': valid = fields(v, ['type', 'target']) && isRecord(v.target) && (
       (fields(v.target, ['kind', 'workspaceId']) && v.target.kind === 'workspace' && identifier(v.target.workspaceId)) ||
       (fields(v.target, ['kind', 'projectId']) && v.target.kind === 'constellation' && nullableId(v.target.projectId))); break;

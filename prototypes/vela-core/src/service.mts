@@ -300,6 +300,7 @@ export class VelaService {
     for (const step of steps) {
       const a = step.action;
       switch (a.type) {
+        case 'setAttentionMode': {const version=this.attentionPreferenceVersion();check(version!==null,'attention_preferences_unavailable');check(version===a.expectedVersion,'stale_preference_version');break;}
         case 'navigate': if (a.target.kind === 'workspace') add(a.target.workspaceId, 'workspace'); else add(a.target.projectId, 'project'); break;
         case 'createWorkspace': add(a.projectId, 'project'); break;
         case 'renameProject': add(a.projectId,'project'); break;
@@ -458,6 +459,7 @@ export class VelaService {
     check(Date.parse(plan.expiresAt) > Date.parse(this.now()), 'plan_expired');
     const body = { requestId: plan.requestId, version: plan.version, summary: plan.summary, steps: plan.steps, targets: plan.targets, scope: plan.scope, contribution: plan.contribution };
     check(digest(body) === plan.fingerprint, 'plan_fingerprint_mismatch');
+    for(const step of plan.steps)if(step.action.type==='setAttentionMode'){const version=this.attentionPreferenceVersion();check(version!==null,'attention_preferences_unavailable');check(version===step.action.expectedVersion,'stale_preference_version');}
     const restoring=new Set(this.restores(plan.steps));
     for (const ref of plan.targets) check(this.resolve(ref.id, ref.kind, scope,ref.kind==='collection'&&restoring.has(ref.id)).version === ref.version, 'stale_target_version');
     for (const ref of this.getRequest(plan.requestId).context.included) check(this.resolve(ref.id, ref.kind, scope).version === ref.version, 'stale_context_version');
@@ -474,16 +476,16 @@ export class VelaService {
     });
   }
   async apply(planId: string): Promise<VelaPlan> {
-    const plan = this.getPlan(planId);
+    let plan = this.getPlan(planId);
     if (plan.state === 'applied') return structuredClone(plan);
     check(plan.state === 'approved' && identifier(plan.authorizationRef), 'review_authorization_required');
     this.validatePlan(plan);
     const authorizationRef = this.authorize(this.authInput(plan, 'apply', plan.authorizationRef));
-    const request = this.getRequest(plan.requestId);
+    let request = this.getRequest(plan.requestId);
     this.atomic(() => { plan.state = 'applying'; });
     for (const step of plan.steps) {
       if (this.getPlan(planId).state !== 'applying') break;
-      const receipt: ActionReceipt = { id: randomUUID(), planId, requestId: plan.requestId, stepId: step.id,
+      let receipt: ActionReceipt = { id: randomUUID(), planId, requestId: plan.requestId, stepId: step.id,
         commandId: 'vela:' + planId + ':' + step.id, source: 'vela', providerId: step.action.type === 'delegateTask' ? step.action.providerId : null,
         state: 'started', startedAt: this.now(), taskVerified: false };
       this.atomic(() => { this.data.receipts.push(receipt); });
@@ -511,11 +513,18 @@ export class VelaService {
         } else {
           // The host must atomically validate expectedVersions, authorizationRef and commandId with canonical writes.
           dispatched = true;
-          result = this.opts.host.applyNative({ action: structuredClone(step.action), commandId: receipt.commandId,
+          const dispatch=()=>this.opts.host.applyNative({ action: structuredClone(step.action) as VelaNativeAction, commandId: receipt.commandId,
             requestId: request.id, planId, intent: request.intent, expectedVersions: targets, authorizationRef });
+          result = step.action.type==='setAttentionMode' ? this.atomic(dispatch) : dispatch();
         }
         check(result && ['applied', 'failed', 'cancelled', 'unknown'].includes(result.status) && identifier(result.receiptId), 'invalid_host_receipt');
       } catch (e) {
+        if(step.action.type==='setAttentionMode') {
+          // Mode mutation uses this SAME service inside the host transaction. Its
+          // rollback restores a clone; reconnect local references to canonical IDs.
+          plan=this.getPlan(planId);request=this.getRequest(plan.requestId);
+          const restored=this.data.receipts.find(value=>value.id===receipt.id);check(restored,'canonical_receipt_missing');receipt=restored;
+        }
         // An adapter can throw after side effects. Never turn that uncertainty into a safe-to-retry failure.
         result = { status: dispatched ? 'unknown' : 'failed', receiptId: receipt.id, errorCode: errorCode(e, dispatched ? 'host_action_outcome_unknown' : 'action_validation_failed') };
       }
@@ -546,6 +555,16 @@ export class VelaService {
       request.updatedAt = this.now();
     });
     this.controllers.get(requestId)?.abort(); return structuredClone(request);
+  }
+  /** Trusted non-RPC scalar. Never clones state/history or materializes source bodies. */
+  attentionPreferenceVersion():number|null {
+    return this.read(()=>{
+      const scope=this.scope();if(this.opts.host.canReadAttentionPreferences?.(scope)!==true)return null;
+      // SQLite projects one scalar from the existing canonical row. A competing
+      // service cannot leave an old in-memory version advertised as current.
+      let version:unknown;try{version=this.opts.db.prepare("SELECT json_extract(json,'$.preferences.version') AS version FROM vela_state WHERE id=1").get()?.version;}catch{return null;}
+      return Number.isSafeInteger(version)&&Number(version)>=1&&Number(version)<Number.MAX_SAFE_INTEGER&&version===this.data.preferences.version?Number(version):null;
+    });
   }
   preferences(input: { expectedVersion: number; patch: Partial<Omit<AttentionPreferences, 'version' | 'source' | 'updatedAt' | 'learning'>> }): AttentionPreferences {
     check(isRecord(input.patch) && Object.keys(input.patch).every(k => ['mode', 'monitoringEnabled', 'delegationEnabled', 'allowedEventTypes', 'minimumSeverity', 'maxInterruptionsPerHour'].includes(k)), 'invalid_preferences');

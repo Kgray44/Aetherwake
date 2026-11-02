@@ -29,6 +29,7 @@ export interface ContextManifest {
   history?: ProviderHistory;
 }
 export type VelaNativeAction =
+  | { type: 'setAttentionMode'; mode: AttentionMode; expectedVersion: number }
   | { type: 'navigate'; target: { kind: 'workspace'; workspaceId: string } | { kind: 'constellation'; projectId: string | null } }
   | { type: 'createProject'; title: string }
   | { type: 'renameProject'; projectId: string; title: string }
@@ -150,6 +151,8 @@ export interface HostActionResult {
   errorCode?: string; createdResourceId?: string; createdWorkspaceId?: string; createdProjectId?: string; createdCollectionId?: string;
 }
 export interface VelaHostPort {
+  /** Trusted current policy metadata only; absent adapters cannot expose attention-version authority. */
+  canReadAttentionPreferences?(scope: VelaScope): boolean;
   scope(purpose?: VelaScopePurpose): VelaScope;
   /** Existing navigation metadata, when the host has it; not implicit provider content or retrieval authority. */
   context?(): { currentProjectId: string | null; currentWorkspaceId: string | null };

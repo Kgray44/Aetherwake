@@ -81,7 +81,7 @@ function livePayload(projectId: string, chatId: string, noteId: string) {
 }
 
 for (const authenticated of [false, true])
-  test(`exact native-live ${authenticated ? 29 : 28}-capability complete catalog fits with full source/context and no provider or preview writes`, async (t) => {
+  test(`exact native-live ${authenticated ? 30 : 29}-capability complete catalog fits with full source/context and no provider or preview writes`, async (t) => {
     const dir = mkdtempSync(join(tmpdir(), "aerynth-vela-live-budget-")),
       file = join(dir, "canonical.sqlite");
     let core: BackendCore | undefined,
@@ -205,7 +205,7 @@ for (const authenticated of [false, true])
       assert.equal(Buffer.byteLength(exact.intent), 669);
       assert.equal(Buffer.byteLength(exact.sourceChat), 40);
       assert.equal(Buffer.byteLength(exact.sourceNote), 60);
-      assert.equal(data.capabilities.length, authenticated ? 29 : 28);
+      assert.equal(data.capabilities.length, authenticated ? 30 : 29);
       assert.equal(data.schemaAvailability, "complete-approved-catalog");
       assert(!data.capabilityDiscovery);
       assert(!data.context.history);

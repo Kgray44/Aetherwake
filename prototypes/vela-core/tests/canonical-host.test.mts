@@ -71,6 +71,26 @@ function fixture() {
     throwAfterWrite: () => { nativeWritesThenThrows = true; }, close: () => kernel.close() };
 }
 
+test('attention mode requires current read/change policy and exact canonical preference revision; absent legacy ports never grant authority',()=>{
+  const f=fixture();try{
+    const host=f.host,scope=host.scope();assert.equal(host.canReadAttentionPreferences!(scope),false);
+    let read=true,change=true,revision:number|null=1;
+    f.options.permissions.attentionPreferences=intent=>intent==='read'?read:change;
+    f.options.revisions.attentionPreferences=()=>revision;
+    assert.equal(host.canReadAttentionPreferences!(scope),true);assert.equal(f.counts().graphReads,0);
+    const action={type:'setAttentionMode' as const,mode:'quiet' as const,expectedVersion:1},request={phase:'review' as const,requestId:'request:attention',planId:'plan:attention',fingerprint:'fingerprint:attention',intent:'Synthetic explicit mode',scope,targets:[],actions:[action]},grant=host.authorize(request);assert.equal(grant.decision,'allow');if(grant.decision!=='allow')return;
+    const input={action,commandId:'command:attention',requestId:request.requestId,planId:request.planId,intent:request.intent,expectedVersions:[],authorizationRef:grant.authorizationRef};
+    change=false;assert.throws(()=>host.authorize(request),/canonical_attention_mode_denied/);assert.throws(()=>host.applyNative(input),/canonical_attention_mode_denied/);
+    read=false;assert.equal(host.canReadAttentionPreferences!(scope),false);read=true;change=true;
+    revision=2;assert.throws(()=>host.authorize(request),/stale_preference_version/);assert.throws(()=>host.applyNative(input),/stale_preference_version/);
+    revision=Number.MAX_SAFE_INTEGER;assert.throws(()=>host.applyNative(input),/canonical_attention_preferences_unavailable/);
+    revision=null;assert.throws(()=>host.applyNative(input),/canonical_attention_preferences_unavailable/);
+    f.options.revisions.attentionPreferences=undefined;assert.throws(()=>host.authorize(request),/canonical_attention_preferences_unavailable/);
+    f.options.permissions.attentionPreferences=undefined;assert.equal(host.canReadAttentionPreferences!(scope),false);assert.throws(()=>host.applyNative(input),/canonical_attention_mode_denied/);
+    assert.equal(f.counts().dispatches,0);assert.equal(f.counts().graphReads,0);
+  }finally{f.close();}
+});
+
 test('history revision and permission hooks are authoritative metadata-only projections', () => {
   const f = fixture(); try {
     const scope = f.host.scope(), ref = f.host.resolve({ id: f.conversation.id, kind: 'resource' }, scope)!, before = f.counts();
