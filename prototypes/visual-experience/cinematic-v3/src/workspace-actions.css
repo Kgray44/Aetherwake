@@ -1,0 +1,240 @@
+.aw-workspace-actions {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  color: inherit;
+  font:
+    14px/1.5 system-ui,
+    sans-serif;
+  background: transparent;
+}
+.aw-workspace-actions *,
+.aw-workspace-actions *::before,
+.aw-workspace-actions *::after {
+  box-sizing: border-box;
+}
+.aw-workspace-actions [hidden] {
+  display: none !important;
+}
+.aw-wa-name {
+  margin: 0;
+  font-size: 13px;
+  color: #c5cad5;
+  overflow-wrap: anywhere;
+}
+.aw-wa-modes,
+.aw-wa-essentials,
+.aw-wa-history,
+.aw-wa-presence,
+.aw-wa-grid-actions,
+.aw-wa-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.aw-wa-modes {
+  gap: 4px;
+}
+.aw-wa-modes > *,
+.aw-wa-essentials > * {
+  flex: 1 1 0;
+}
+.aw-workspace-actions .aw-wa-control {
+  --wa-hover: 0;
+  --wa-focus: 0;
+  --wa-selected: 0;
+  --wa-pressed: 0;
+  --wa-disabled: 0;
+  --wa-pending: 0;
+  min-width: 0;
+  min-height: 36px;
+  padding: 7px 12px;
+  border: 1px solid
+    rgb(
+      219 226 237 /
+        calc(
+          0.11 + var(--wa-hover) * 0.13 + var(--wa-focus) * 0.18 +
+            var(--wa-selected) * 0.17
+        )
+    );
+  border-radius: 9px;
+  background: rgb(
+    216 225 239 /
+      calc(
+        0.025 + var(--wa-hover) * 0.055 + var(--wa-focus) * 0.025 +
+          var(--wa-selected) * 0.085 + var(--wa-pressed) * 0.045
+      )
+  );
+  box-shadow: inset 0 1px 0
+    rgb(
+      239 244 253 /
+        calc(0.02 + var(--wa-selected) * 0.035 + var(--wa-pending) * 0.03)
+    );
+  color: inherit;
+  opacity: calc(1 - var(--wa-disabled) * 0.58);
+  transform: translateY(
+    calc(var(--wa-pressed) * 0.7px - var(--wa-hover) * 0.5px)
+  );
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+.aw-workspace-actions .aw-wa-control:disabled {
+  cursor: default;
+}
+.aw-workspace-actions :is(button, input):focus-visible {
+  outline: 2px solid #dce4ef;
+  outline-offset: 2px;
+}
+.aw-wa-group {
+  min-width: 0;
+}
+.aw-workspace-actions .aw-wa-disclosure-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  text-align: left;
+  border-color: transparent;
+  background: rgb(
+    216 225 239 /
+      calc(
+        var(--wa-hover) * 0.045 + var(--wa-focus) * 0.025 + var(--wa-selected) *
+          0.025
+      )
+  );
+}
+.aw-wa-chevron {
+  display: inline-block;
+  flex: none;
+  width: 16px;
+  color: #c8ced9;
+}
+.aw-workspace-actions-disclosure {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  min-height: 0;
+}
+.aw-wa-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+.aw-wa-disclosure-content {
+  min-width: 0;
+  padding: 8px 1px 2px;
+}
+.aw-wa-history > * {
+  flex: 1 1 calc(50% - 8px);
+}
+.aw-wa-search,
+.aw-wa-grid-field input {
+  --wa-focus: 0;
+  --wa-hover: 0;
+  display: block;
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid
+    rgb(
+      214 223 237 / calc(0.15 + var(--wa-focus) * 0.28 + var(--wa-hover) * 0.1)
+    );
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: rgb(8 13 22 / calc(0.12 + var(--wa-focus) * 0.05));
+  color: inherit;
+  font: inherit;
+}
+.aw-wa-presence {
+  margin-top: 8px;
+}
+.aw-wa-presence > :first-child {
+  flex: 1;
+  text-align: left;
+}
+.aw-workspace-actions .aw-wa-presence > :last-child {
+  font-size: 12px;
+}
+.aw-wa-find-list {
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  margin-top: 8px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+.aw-workspace-actions .aw-wa-find-list .aw-wa-control {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  text-align: left;
+}
+.aw-wa-block-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.aw-wa-block-kind {
+  flex: none;
+  font-size: 12px;
+  color: #b7bfcc;
+}
+.aw-wa-empty,
+.aw-wa-status,
+.aw-wa-grid-notice {
+  margin: 8px 0 0;
+  color: #c9d0dc;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.aw-wa-status[data-state="error"],
+.aw-wa-grid-notice {
+  color: #efd2c8;
+}
+.aw-wa-destinations {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-top: 1px solid #d7dfeb18;
+  padding-top: 8px;
+}
+.aw-workspace-actions .aw-wa-destinations .aw-wa-control {
+  flex: 1 1 calc(50% - 4px);
+  border-color: transparent;
+  font-size: 13px;
+}
+.aw-wa-grid-form {
+  margin: 0;
+}
+.aw-wa-grid-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+.aw-wa-grid-field {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  color: #c5cbd6;
+}
+.aw-wa-grid-actions {
+  margin-top: 12px;
+}
+.aw-wa-presets {
+  margin-top: 12px;
+}
+.aw-workspace-actions .aw-wa-presets .aw-wa-control {
+  flex: 1 1 calc(50% - 8px);
+  font-size: 13px;
+}
+@media (max-width: 420px) {
+  .aw-workspace-actions {
+    font-size: 13px;
+    gap: 8px;
+  }
+  .aw-workspace-actions .aw-wa-control {
+    padding-inline: 8px;
+  }
+}
