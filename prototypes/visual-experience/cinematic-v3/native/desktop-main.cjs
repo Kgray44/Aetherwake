@@ -84,6 +84,10 @@ const verify =
   process.argv.includes("--integration-expanded") ||
   process.argv.includes("--integration-spatial-benchmark");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
+if (verify && (!profileArg || !path.isAbsolute(profileArg.slice(10)))) {
+  console.error("absolute_verification_profile_required");
+  process.exit(2);
+}
 const privateRoot = profileArg
   ? path.resolve(profileArg.slice(10))
   : path.join(app.getPath("appData"), "Aerynth", "review");
