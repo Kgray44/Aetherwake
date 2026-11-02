@@ -35,6 +35,7 @@ import {
 } from "../../../conversation-product/src/ui.ts";
 import {
   ConversationDraftSession,
+  flushConversationDraftSessions,
   type DraftSessionSnapshot,
 } from "../../../conversation-product/src/draft-session.ts";
 import type {
@@ -635,6 +636,7 @@ export function installApplication(hooks: Hooks) {
   async function flushDrafts() {
     await conversationDisposing;
     for (;;) {
+      await flushConversationDraftSessions(() => composerSessions.values());
       await conversationManager?.flush();
       const ids = new Set([
         ...drafts.keys(),
@@ -642,7 +644,15 @@ export function installApplication(hooks: Hooks) {
           .filter(([, session]) => session.snapshot().dirty)
           .map(([id]) => id),
       ]);
-      if (!ids.size) break;
+      if (!ids.size) {
+        if (
+          [...composerSessions.values()].every(
+            (session) => session.snapshot().phase === "clean",
+          )
+        )
+          break;
+        continue;
+      }
       for (const resourceId of ids) {
         const draft = drafts.get(resourceId);
         clearTimeout(draft?.timer);
@@ -652,7 +662,6 @@ export function installApplication(hooks: Hooks) {
         if (drafts.get(resourceId) === draft) drafts.delete(resourceId);
       }
     }
-    for (const session of composerSessions.values()) await session.flush();
   }
   function run(a: DesktopCommand) {
     return enqueue(async () => {
