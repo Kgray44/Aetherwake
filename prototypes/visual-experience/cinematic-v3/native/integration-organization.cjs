@@ -25,6 +25,9 @@ const presence = (s) => {
 const saved = (s) => ({
   workspaceId: s.activeWorkspaceId,
   mode: s.organization.mode,
+  organization: (({ revision, ...organization }) => organization)(
+    s.organization,
+  ),
   geometry: geometry(s),
   presence: presence(s),
   viewport: s.viewport,
@@ -81,10 +84,33 @@ exports.verify = async ({
         `window.__aerynth.application().activeWorkspaceId===${JSON.stringify(id)}`,
       );
     };
-    const newWorkspace = async (title) => {
+    const press = (keyCode, modifiers = []) => {
+      for (const type of ["keyDown", "keyUp"])
+        win.webContents.sendInputEvent({ type, keyCode, modifiers });
+    };
+    const typeNumber = async (selector, value) => {
+      await click(selector);
+      press("A", ["control"]);
+      for (const keyCode of String(value)) {
+        win.webContents.sendInputEvent({ type: "keyDown", keyCode });
+        win.webContents.sendInputEvent({ type: "char", keyCode });
+        win.webContents.sendInputEvent({ type: "keyUp", keyCode });
+      }
+      await pause(60);
+    };
+    const project = async (title) => {
+      await click("#workspace-manager");
+      await click("#new-project");
+      await fill("#project-title", title);
+      await click('dialog button[type="submit"]');
+      await wait('!document.querySelector("#command-surface").open');
+      return (await snapshot()).projects.find((p) => p.title === title).id;
+    };
+    const newWorkspace = async (title, projectId) => {
       await click("#workspace-manager");
       await click("#new-workspace");
       await fill("#workspace-title", title);
+      if (projectId) await fill('dialog select[name="projectId"]', projectId);
       await click('dialog button[type="submit"]');
       await wait('!document.querySelector("#command-surface").open');
       return (await snapshot()).activeWorkspaceId;
@@ -92,7 +118,19 @@ exports.verify = async ({
     const mode = async (value) => {
       await click("#layout-manager");
       await click("#organization-settings");
-      await fill("#organization-mode", value);
+      await click("#organization-mode");
+      press("Home");
+      for (
+        let i = 0;
+        i < ["fluid", "freeform", "structured"].indexOf(value);
+        i++
+      )
+        press("Down");
+      press("Return");
+      await wait(
+        `document.querySelector('#organization-mode')?.value===${JSON.stringify(value)}`,
+        5000,
+      );
       await click('#organization-form button[type="submit"]');
       await wait(
         `window.__aerynth.application().organization.mode===${JSON.stringify(value)}&&!document.querySelector('#command-surface').open`,
@@ -113,7 +151,7 @@ exports.verify = async ({
       js(
         `(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,h=document.elementFromPoint(x,y);if(!h||!(e===h||e.contains(h)))throw Error('Native target occluded: '+${JSON.stringify(selector)});return{x:Math.round(x),y:Math.round(y)}})()`,
       );
-    const drag = async (selector, dx, dy, during) => {
+    const drag = async (selector, dx, dy, during, pickup) => {
       const p = await point(selector);
       win.webContents.sendInputEvent({ type: "mouseMove", ...p });
       win.webContents.sendInputEvent({
@@ -122,7 +160,8 @@ exports.verify = async ({
         button: "left",
         clickCount: 1,
       });
-      await pause(60);
+      await pause(350);
+      if (pickup) await pickup();
       for (let i = 1; i <= 14; i++) {
         win.webContents.sendInputEvent({
           type: "mouseMove",
@@ -164,9 +203,13 @@ exports.verify = async ({
     const moveOnto = async (a, b, checkPreview) => {
       const before = await snapshot(),
         z = before.viewport.zoom;
+      let renderedBefore;
       await drag(
         `[data-block="${a.id}"] .grip`,
-        (b.x - a.x) * z,
+        (b.x -
+          a.x +
+          (before.organization.mode === "structured" ? b.width * 0.55 : 0)) *
+          z,
         (b.y - a.y) * z,
         checkPreview
           ? async () => {
@@ -176,9 +219,38 @@ exports.verify = async ({
                 await js("document.body.dataset.layoutPreview"),
                 before.organization.mode,
               );
+              const rendered = await js("window.__aerynth.snapshot().poses");
+              const yielded = Object.keys(rendered).filter(
+                (id) =>
+                  id !== a.id &&
+                  renderedBefore[id] &&
+                  Math.hypot(
+                    rendered[id].x - renderedBefore[id].x,
+                    rendered[id].y - renderedBefore[id].y,
+                  ) > 3,
+              );
+              if (before.organization.mode === "fluid")
+                assert(
+                  yielded.length > 0,
+                  "A non-target resource must visibly yield before release",
+                );
+              if (before.organization.mode === "freeform")
+                assert.equal(
+                  yielded.length,
+                  0,
+                  "Freeform neighbors must remain visually stationary",
+                );
+              receipt.checks.push(
+                before.organization.mode +
+                  "-rendered-neighbor-motion-" +
+                  yielded.length,
+              );
               await shot(before.organization.mode + "-predictive-yield");
             }
           : undefined,
+        async () => {
+          renderedBefore = await js("window.__aerynth.snapshot().poses");
+        },
       );
       await wait(
         `window.__aerynth.application().layoutVersion>${before.layoutVersion}`,
@@ -203,7 +275,13 @@ exports.verify = async ({
         "fresh-process-restart-restores-each-mode-exact-geometry-layers-Vela-camera-and-canonical-content",
       );
     } else {
-      const a = await newWorkspace("Synthetic organization laboratory");
+      const projectA = await project("A World for Two"),
+        projectB = await project("Voyagewright"),
+        projectC = await project("Airbrush Disc System");
+      const a = await newWorkspace(
+        "Synthetic organization laboratory",
+        projectA,
+      );
       let s = await snapshot();
       assert.equal(s.organization.mode, "fluid");
       const kinds = [
@@ -292,6 +370,40 @@ exports.verify = async ({
       await stop("fluid-interaction");
 
       s = await snapshot();
+      before = s;
+      await click(`[data-block="${s.blocks[0].id}"] .grip`);
+      press("Right", ["alt"]);
+      await wait(
+        `window.__aerynth.application().layoutVersion>${s.layoutVersion}`,
+        8000,
+      );
+      await click("#undo");
+      await pause(200);
+      assert.deepEqual(geometry(await snapshot()), geometry(before));
+      await properties(s.blocks[0].id);
+      await typeNumber(
+        'dialog input[name="width"]',
+        Math.round(s.blocks[0].width + 80),
+      );
+      await click('dialog button[type="submit"]');
+      await pause(250);
+      await click("#undo");
+      await pause(250);
+      assert.deepEqual(geometry(await snapshot()), geometry(before));
+      await drag(`[data-block="${s.blocks[0].id}"] .grip`, 90, 60, async () => {
+        press("Escape");
+        await pause(200);
+        assert.equal(
+          await js("document.body.dataset.layoutPreview"),
+          undefined,
+        );
+      });
+      assert.deepEqual(geometry(await snapshot()), geometry(before));
+      receipt.checks.push(
+        "native-keyboard-move-resize-undo-and-Escape-preview-cancellation",
+      );
+
+      s = await snapshot();
       const fluidGeometry = geometry(s);
       await mode("freeform");
       assert.deepEqual(geometry(await snapshot()), fluidGeometry);
@@ -310,6 +422,11 @@ exports.verify = async ({
         await click(`[data-layer="${direction}"]`);
         await pause(150);
       }
+      s = await snapshot();
+      const freeVela = { ...s.presence };
+      await drag(".vela-grip", 24 * s.viewport.zoom, 18 * s.viewport.zoom);
+      s = await snapshot();
+      assert.notDeepEqual(presence(s), presence({ ...s, presence: freeVela }));
       await shot("04-freeform-overlap-and-layers");
       receipt.checks.push(
         "Freeform-preserves-neighbors-intentional-overlap-and-all-four-layer-controls",
@@ -343,6 +460,20 @@ exports.verify = async ({
       s = await snapshot();
       noOverlap(s);
       await shot("06-structured-spans-and-reorder");
+      s = await snapshot();
+      const gridVela = { ...s.presence },
+        last = s.blocks.at(-1);
+      await drag(
+        ".vela-grip",
+        (last.x + last.width * 0.55 - gridVela.x) * s.viewport.zoom,
+        (last.y - gridVela.y) * s.viewport.zoom,
+      );
+      s = await snapshot();
+      noOverlap(s);
+      assert.notDeepEqual(presence(s), presence({ ...s, presence: gridVela }));
+      receipt.checks.push(
+        "Vela-native-movement-participates-in-Freeform-and-Structured",
+      );
       receipt.checks.push(
         "Structured-grid-variable-spans-reorder-and-mode-undo-redo-preserve-identities",
       );
@@ -354,8 +485,13 @@ exports.verify = async ({
       noOverlap(s);
       const expected = [saved(s)];
 
+      let otherWorkspace;
       for (const organization of ["freeform", "structured"]) {
-        const id = await newWorkspace("Synthetic persistent " + organization);
+        const id = await newWorkspace(
+          "Synthetic persistent " + organization,
+          organization === "freeform" ? projectB : projectC,
+        );
+        if (organization === "freeform") otherWorkspace = id;
         await mode(organization);
         for (const resource of resources) {
           await click("#resource-picker");
@@ -375,7 +511,35 @@ exports.verify = async ({
       await choose(a);
       await click("#zoom-out");
       await pause(350);
-      await click("#nav-back");
+      const clickText = async (text, scope) => {
+        const token = "native-" + Date.now();
+        assert(
+          await js(
+            `(()=>{const e=[...document.querySelectorAll(${JSON.stringify(scope + " button")})].find(e=>e.textContent.trim()===${JSON.stringify(text)});if(!e)return false;e.dataset.qaTarget=${JSON.stringify(token)};return true})()`,
+          ),
+        );
+        await click(`[data-qa-target="${token}"]`);
+      };
+      const openNode = async (key) => {
+        await wait(
+          `!!document.querySelector(${JSON.stringify('[data-key="' + key + '"]')})`,
+          15000,
+        );
+        await click(`[data-key="${key}"]`);
+        await clickText("Open destination", ".aw-spatial-detail");
+        await pause(300);
+      };
+      await clickText("Universe", ".aw-constellation-bar");
+      await pause(350);
+      await openNode("project:" + projectB);
+      await openNode("workspace:" + otherWorkspace);
+      assert.deepEqual(saved(await snapshot()), expected[1]);
+      await click("#zoom-out");
+      await pause(250);
+      await clickText("Universe", ".aw-constellation-bar");
+      await pause(300);
+      await openNode("project:" + projectA);
+      await openNode("workspace:" + a);
       await wait(
         `window.__aerynth.application().navigation.kind==='workspace'&&window.__aerynth.application().activeWorkspaceId===${JSON.stringify(a)}`,
       );

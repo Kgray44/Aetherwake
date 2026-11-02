@@ -157,7 +157,13 @@ type DesktopAction =
       type: "setPresence";
       workspaceId: string;
       expectedVersion: number;
-      placement: { x: number; y: number; width?: number; height?: number };
+      placement: {
+        x?: number;
+        y?: number;
+        width?: number;
+        height?: number;
+        locked?: boolean;
+      };
     }
   | { type: "resolveLayout"; workspaceId: string }
   | {
@@ -192,6 +198,12 @@ type DesktopAction =
     }
   | { type: "attach"; workspaceId: string; resourceId: string }
   | { type: "detach"; blockId: string; expectedVersion: number }
+  | {
+      type: "lockBlock";
+      blockId: string;
+      expectedVersion: number;
+      locked: boolean;
+    }
   | {
       type: "geometry";
       blockId: string;

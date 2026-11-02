@@ -521,6 +521,16 @@ export class DesktopState {
         });
         break;
       }
+      case "lockBlock": {
+        const b = this.block(a.blockId, a.expectedVersion);
+        this.workspace(b.workspace_id);
+        this.engineCommand(b.workspace_id, {
+          type: "setBlockLock",
+          blockId: b.id,
+          locked: a.locked,
+        });
+        break;
+      }
       case "geometry": {
         const b = this.block(a.blockId, a.expectedVersion);
         this.geometry(a.placement);

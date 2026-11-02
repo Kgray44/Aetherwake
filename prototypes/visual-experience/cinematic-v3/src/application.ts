@@ -64,6 +64,7 @@ export function installApplication(hooks: Hooks) {
   let preview: LayoutPreview | undefined;
   let previewRequest: LayoutPreviewRequest | undefined;
   let previewCommitting = false;
+  let cancelResize: (() => void) | undefined;
   const previewGuides = document.createElement("div");
   previewGuides.className = "layout-preview-guides";
   previewGuides.setAttribute("aria-hidden", "true");
@@ -445,6 +446,15 @@ export function installApplication(hooks: Hooks) {
   dialog.addEventListener("close", () => {
     if (!previewCommitting) cancelPreview();
   });
+  addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || (!presenceDrag && !cancelResize)) return;
+    event.preventDefault();
+    suppressPresenceClick = !!presenceDrag;
+    presenceDrag = null;
+    cancelResize?.();
+    cancelResize = undefined;
+    cancelPreview();
+  });
   const velaCard = el<HTMLButtonElement>("#vela");
   const velaGrip = document.createElement("span");
   velaGrip.className = "vela-grip";
@@ -797,6 +807,20 @@ export function installApplication(hooks: Hooks) {
         )
         .join("")}</div>`,
     );
+    dialog.insertAdjacentHTML(
+      "beforeend",
+      `<label><input type="checkbox" id="block-lock" ${b.locked ? "checked" : ""}> Lock placement</label>`,
+    );
+    el<HTMLInputElement>("#block-lock", dialog).onchange = (event) => {
+      const locked = (event.target as HTMLInputElement).checked;
+      dialog.close();
+      void run({
+        type: "lockBlock",
+        blockId,
+        expectedVersion: b.version,
+        locked,
+      });
+    };
     dialog.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach(
       (button) =>
         (button.onclick = () => {
@@ -878,9 +902,25 @@ export function installApplication(hooks: Hooks) {
         structured: {
           columnCount: data.get("columns") ? Number(data.get("columns")) : null,
           rowHeight: Number(data.get("rowHeight")),
+          rowGap: Number(data.get("rowGap")),
+          columnGap: Number(data.get("columnGap")),
+          margin: Number(data.get("margin")),
         },
       };
     };
+    el("#structured-options .geometry-grid", dialog).insertAdjacentHTML(
+      "beforeend",
+      (["rowGap", "columnGap", "margin"] as const)
+        .map(
+          (name) =>
+            `<label>${name === "rowGap" ? "Row spacing" : name === "columnGap" ? "Column spacing" : "Margin"}<input name="${name}" type="number" min="0" max="256" value="${current.structured[name]}"></label>`,
+        )
+        .join(""),
+    );
+    el<HTMLInputElement>(
+      '[name="gap"]',
+      dialog,
+    ).parentElement!.firstChild!.textContent = "Fluid minimum gap";
     const update = () => {
       const organization = read();
       el("#organization-description", dialog).textContent =
@@ -927,6 +967,22 @@ export function installApplication(hooks: Hooks) {
       `<div class="organization-summary"><button id="organization-settings">Organization · ${state.organization?.mode ?? "fluid"}</button><button id="bring-all">Bring All Into View</button></div>`,
     );
     el("#organization-settings", dialog).onclick = organizationControls;
+    dialog.insertAdjacentHTML(
+      "beforeend",
+      `<label><input id="presence-lock" type="checkbox" ${state.presence?.locked ? "checked" : ""}> Lock Vela placement</label>`,
+    );
+    el<HTMLInputElement>("#presence-lock", dialog).onchange = (event) => {
+      const p = state?.presence;
+      if (!p) return;
+      const locked = (event.target as HTMLInputElement).checked;
+      dialog.close();
+      void run({
+        type: "setPresence",
+        workspaceId: p.workspaceId,
+        expectedVersion: p.version,
+        placement: { locked },
+      });
+    };
     el("#bring-all", dialog).onclick = () => {
       const workspaceId = state!.activeWorkspaceId!;
       queuePreview({ intent: "recover" });
@@ -1044,6 +1100,10 @@ export function installApplication(hooks: Hooks) {
           y: event.clientY,
         };
         handle.setPointerCapture(event.pointerId);
+        cancelResize = () => {
+          resizing = null;
+          cancelPreview();
+        };
       };
       const resizeTarget = (event: PointerEvent) => {
         const r = resizing!;
@@ -1079,6 +1139,7 @@ export function installApplication(hooks: Hooks) {
         const current = resizing.block;
         const { width, height } = resizeTarget(event);
         resizing = null;
+        cancelResize = undefined;
         void commitLayout({
           type: "geometry",
           blockId: id,
@@ -1089,6 +1150,7 @@ export function installApplication(hooks: Hooks) {
       };
       handle.onpointercancel = () => {
         resizing = null;
+        cancelResize = undefined;
         cancelPreview();
       };
     }
