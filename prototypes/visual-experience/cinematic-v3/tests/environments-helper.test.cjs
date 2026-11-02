@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
-const { assertOwnedProfile, validateBudget, admitPNG, organizationInvariant, localEventScript, assertOptics, verify } = require('../native/integration-environments.cjs');
+const { assertOwnedProfile, validateBudget, admitPNG, organizationInvariant, layoutGeometry, localEventScript, assertOptics, verify } = require('../native/integration-environments.cjs');
 const { createSlot, waitForCondition, sourceIdentity } = require('../native/integration-resource-opening.cjs');
 const MiB = 1024 * 1024;
 const budget = () => ({ count: 0, bytes: 0, videos: 0, videoBytes: 0, files: [] });
@@ -32,7 +32,7 @@ test('organization comparison ignores only expected workspace names/versions and
   const state = { projects: [{ id: 'p', version: 1 }], workspaces: [{ id: 'w', title: 'one', version: 1 }], archivedWorkspaces: [], layouts: { w: { workspaceId: 'w', projectId: 'p', title: 'one', workspaceVersion: 1, revision: 7, viewport: { x: 8, y: 9, zoom: .7 }, presence: { id: 'system:vela', x: 6 }, blocks: [{ blockId: 'b', resourceId: 'r', x: 20, shape: 'folio', version: 3 }], canUndo: true } }, resources: [{ id: 'r', content: 'Exact synthetic body', version: 2 }], placements: [{ id: 'b', resource_id: 'r', x: 20, version: 3 }], bindings: {}, executions: {}, graph: { messages: [] } };
   const renamed = structuredClone(state); renamed.workspaces[0].title = 'two'; renamed.workspaces[0].version++; renamed.layouts.w.title = 'two'; renamed.layouts.w.workspaceVersion++;
   assert.deepEqual(organizationInvariant(renamed), organizationInvariant(state)); assert.equal(state.layouts.w.title, 'one', 'input is not mutated');
-  for (const change of [s => s.layouts.w.blocks[0].x++, s => s.layouts.w.blocks[0].shape = 'circle', s => s.layouts.w.blocks[0].version++, s => s.layouts.w.presence.x++, s => s.layouts.w.viewport.zoom++, s => s.layouts.w.revision++, s => s.resources[0].content = 'changed', s => s.placements[0].resource_id = 'copy', s => s.projects[0].version++, s => s.executions.e = { state: 'running' }, s => s.bindings.r = ['provider-thread'], s => s.graph.messages.push({ id: 'unauthorized' })]) {
+  for (const change of [s => s.workspaces[0].id = 'copy', s => s.workspaces[0].project_id = 'foreign', s => s.layouts.w.blocks[0].x++, s => s.layouts.w.blocks[0].shape = 'circle', s => s.layouts.w.blocks[0].version++, s => s.layouts.w.presence.x++, s => s.layouts.w.viewport.zoom++, s => s.layouts.w.revision++, s => s.resources[0].content = 'changed', s => s.placements[0].resource_id = 'copy', s => s.projects[0].version++, s => s.executions.e = { state: 'running' }, s => s.bindings.r = ['provider-thread'], s => s.graph.messages.push({ id: 'unauthorized' })]) {
     const altered = structuredClone(state); change(altered); assert.notDeepEqual(organizationInvariant(altered), organizationInvariant(state));
   }
 });
@@ -60,11 +60,18 @@ test('optical acceptance rejects modal/full-scene blur/oversize/unhealthy render
   for (const change of [x => x.modal = true, x => x.sceneModal = true, x => x.filters.push({ id: 'world', filter: 'blur(5px)' }), x => x.bounds.width = 1280, x => x.bounds.x = -1, x => x.failed = true, x => x.contextLost = true, x => x.errors.push('renderer')]) { const value = structuredClone(good); change(value); assert.throws(() => assertOptics(value)); }
 });
 
-test('40/12 second slots include cleanup and focus loss remains sticky after regain', async () => {
+test('45/12 second slots include cleanup and focus loss remains sticky after regain', async () => {
   let now = 0, focused = true; const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => focused, webContents: { isDestroyed: () => false } };
-  const initial = createSlot({ win, startedAt: 0, limitMs: 40000, cleanupMs: 4000, now: () => now }); now = 36000; assert.throws(() => initial.check(), /work_deadline/); assert.equal(initial.remaining(), 4000);
+  const initial = createSlot({ win, startedAt: 0, limitMs: 45000, cleanupMs: 4000, now: () => now }); now = 41000; assert.throws(() => initial.check(), /work_deadline/); assert.equal(initial.remaining(), 4000);
   now = 0; const restore = createSlot({ win, startedAt: 0, limitMs: 12000, cleanupMs: 2500, now: () => now }); focused = false; assert.throws(() => restore.check(), /focus_lost/); focused = true; assert.throws(() => restore.check(), /focus_lost/);
   let checks = 0; now = 0; await assert.rejects(waitForCondition({ slot: { check() {}, workRemaining: () => 36000 - now }, label: 'Unavailable control', check: () => { checks++; return false; }, now: () => now, sleep: async ms => { now += ms; } }), /condition_timeout/); assert.equal(now, 4000); assert(checks > 1);
+});
+
+test('history comparisons retain every canonical placement/presence field except expected optimistic versions', () => {
+  const a = { blocks: [{ blockId: 'b', resourceId: 'r', x: 32, y: 64, width: 220, height: 330, zIndex: 3, rotation: .1, shape: 'folio', locked: false, minimized: false, materialVariant: 'glass', version: 1 }], presence: { id: 'system:vela', workspaceId: 'w', x: 500, y: 300, width: 150, height: 150, locked: false, version: 1 } };
+  const newer = structuredClone(a); newer.blocks[0].version++; newer.presence.version++; assert.deepEqual(layoutGeometry(a), layoutGeometry(newer));
+  for (const change of [x => x.blocks[0].resourceId = 'copy', x => x.blocks[0].x++, x => x.blocks[0].shape = 'circle', x => x.blocks[0].rotation++, x => x.blocks[0].locked = true, x => x.presence.x++, x => x.presence.locked = true]) { const value = structuredClone(a); change(value); assert.notDeepEqual(layoutGeometry(a), layoutGeometry(value)); }
+  assert.equal(a.blocks[0].version, 1);
 });
 
 test('same-source restart binding includes every build/source digest and excludes process start time only', () => {

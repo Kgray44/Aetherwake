@@ -48,9 +48,15 @@ function admitPNG(budget, bytes, file) {
  * engine geometry/presentation/revision, resource and provider field remains. */
 function organizationInvariant(value) {
   const copy = structuredClone(value);
-  delete copy.workspaces; delete copy.archivedWorkspaces;
+  for (const key of ['workspaces', 'archivedWorkspaces']) copy[key] = copy[key].map(({ title, version, ...identity }) => identity);
   for (const layout of Object.values(copy.layouts)) { delete layout.title; delete layout.workspaceVersion; }
   return copy;
+}
+function layoutGeometry(value) {
+  const result = structuredClone({ blocks: value.blocks, presence: value.presence });
+  for (const block of result.blocks) delete block.version;
+  delete result.presence.version;
+  return result;
 }
 /** Reuse the exact visibility/hit-test gate before local form/key events. These
  * are renderer events, never a native keyboard or trusted physical-input claim. */
@@ -59,8 +65,8 @@ function localEventScript(query, kind, value) {
   if (kind === 'keydown') assert(['ArrowLeft', 'ArrowRight', 'Enter'].includes(value), 'unsupported_local_key');
   return `(()=>{const checked=${targetScript(query, 'inspect')};if(!checked.ready)return checked;const node=document.querySelector(${JSON.stringify(query)});${kind === 'change' ? `node.value=${JSON.stringify(value)};node.dispatchEvent(new Event('input',{bubbles:true}));node.dispatchEvent(new Event('change',{bubbles:true}));` : kind === 'submit' ? `const form=node.form;if(!form||!form.checkValidity())return{invalid:true};form.requestSubmit(node);` : `node.dispatchEvent(new KeyboardEvent('keydown',{key:${JSON.stringify(value)},bubbles:true,cancelable:true}));`}return checked})()`;
 }
-function opticalScript() {
-  return `(()=>{const p=document.querySelector(${JSON.stringify(selector.panel)}),n=document.querySelector('.en-navigator'),s=window.__aerynth.snapshot();if(!p||!n)return null;const r=p.getBoundingClientRect(),filters=[];for(const leaf of [document.querySelector('#world'),document.querySelector('#folios')])for(let e=leaf;e;e=e.parentElement){const c=getComputedStyle(e);if(c.filter!=='none'||c.backdropFilter!=='none')filters.push({tag:e.tagName,id:e.id,filter:c.filter,backdrop:c.backdropFilter})}return{modal:p.matches(':modal')||p.getAttribute('aria-modal')==='true',sceneModal:!!document.querySelector('dialog:modal'),filters,glass:getComputedStyle(p).backdropFilter,bounds:{x:r.x,y:r.y,width:r.width,height:r.height},viewport:{width:innerWidth,height:innerHeight},active:s.active,failed:s.graphicsFailed,contextLost:s.gpu?.contextLost,draws:s.metrics.draws,frames:s.gpu?.framesRendered,errors:s.metrics.errors}})()`;
+function opticalScript(panel = selector.panel, content = selector.navigator) {
+  return `(()=>{const p=document.querySelector(${JSON.stringify(panel)}),n=document.querySelector(${JSON.stringify(content)}),s=window.__aerynth.snapshot();if(!p||!n)return null;const r=p.getBoundingClientRect(),filters=[];for(const leaf of [document.querySelector('#world'),document.querySelector('#folios')])for(let e=leaf;e;e=e.parentElement){const c=getComputedStyle(e);if(c.filter!=='none'||c.backdropFilter!=='none')filters.push({tag:e.tagName,id:e.id,filter:c.filter,backdrop:c.backdropFilter})}return{modal:p.matches(':modal')||p.getAttribute('aria-modal')==='true',sceneModal:!!document.querySelector('dialog:modal'),filters,glass:getComputedStyle(p).backdropFilter,bounds:{x:r.x,y:r.y,width:r.width,height:r.height},viewport:{width:innerWidth,height:innerHeight},active:s.active,failed:s.graphicsFailed,contextLost:s.gpu?.contextLost,draws:s.metrics.draws,frames:s.gpu?.framesRendered,errors:s.metrics.errors}})()`;
 }
 function assertOptics(value) {
   assert(value && value.modal === false && value.sceneModal === false && value.filters.length === 0, 'navigator_must_not_modalize_or_blur_scene');
@@ -73,11 +79,12 @@ exports.assertOwnedProfile = assertOwnedProfile;
 exports.validateBudget = validateBudget;
 exports.admitPNG = admitPNG;
 exports.organizationInvariant = organizationInvariant;
+exports.layoutGeometry = layoutGeometry;
 exports.localEventScript = localEventScript;
 exports.assertOptics = assertOptics;
 
 exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], session, localURL, moduleStartedMonotonicMs }) {
-  const restore = process.argv.includes('--verify-restore'), record = process.argv.includes('--record-environments'), limitMs = restore ? 12000 : 40000;
+  const restore = process.argv.includes('--verify-restore'), record = process.argv.includes('--record-environments'), limitMs = restore ? 12000 : 45000;
   const root = path.resolve(privateRoot), out = path.join(root, 'environments-evidence', `${restore ? 'restore' : 'initial'}-${Date.now()}`), expectedFile = path.join(root, 'environments-expected.json'), budgetFile = path.join(root, 'environments-capture-budget.json');
   const receipt = { contract: 'aerynth.environments-integration@1', source, restore, passed: false, syntheticOnly: true, inputMethod: 'Visible renderer DOM click/input/change/submit/keydown and existing canonical App capabilities; no OS input or global hooks', limits: { milliseconds: limitMs, conditionMilliseconds: 4000, combinedPNGs: 3, combinedPNGBytes: 16 * MiB, combinedVideos: 1, videoBytes: 32 * MiB }, actions: [], checks: [], captures: [], motion: {}, errors: [], limitations: ['Requires independent caller confirmation of process/window/backend exit.', 'Callback and CSS presentation samples are not measured monitor presentation performance.', 'Synthetic fresh-profile real-app acceptance; no provider, OAuth, account or existing user-profile access.', 'Screenshots and optional exact-window video require separate artistic inspection.'] };
   let owned = false, admitted = false, slot, driver, recorder, pendingExpected, workTimer, hardTimer, passed = false;
@@ -126,19 +133,52 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       assert.equal(vela.requests.length, 0); assert.equal(vela.plans.length, 0); assert.equal(vela.receipts.length, 0);
       return { projects: sorted(d.projects), workspaces: sorted(d.workspaces), archivedWorkspaces: sorted(d.archivedWorkspaces ?? []), resources: sorted(d.resources), placements: sorted(d.navigationBlocks ?? d.blocks), relationships: sorted(d.relationships), layouts, notes, graph: core.graph, conversations: core.conversations, canonicalResources: core.resources, resourceMap: core.resourceMap, bindings: core.bindings, executions: core.executions, handoffs: core.handoffs, messageEvidence: core.messageEvidence, vela: { requests: vela.requests, plans: vela.plans, receipts: vela.receipts, preferences: vela.preferences } };
     };
-    const optics = async () => assertOptics(await js(opticalScript()));
-    const capture = async name => {
-      const before = await optics(); let prior, stable = 0;
-      await wait('Fresh GPU draw and stable navigator', async () => { const value = await optics(), r = value.bounds; stable = prior && Object.keys(r).every(key => Math.abs(r[key] - prior[key]) < .75) ? stable + 1 : 0; prior = r; return stable >= 2 && value.draws > before.draws && value.frames > before.frames; });
+    const optics = async (panel, content) => assertOptics(await js(opticalScript(panel, content)));
+    const capture = async (name, panel, content) => {
+      const before = await optics(panel, content); let prior, stable = 0;
+      await wait('Fresh GPU draw and stable contextual surface', async () => { const value = await optics(panel, content), r = value.bounds; stable = prior && Object.keys(r).every(key => Math.abs(r[key] - prior[key]) < .75) ? stable + 1 : 0; prior = r; return stable >= 2 && value.draws > before.draws && value.frames > before.frames; });
       const png = (await bounded(win.webContents.capturePage(), slot.workRemaining(), 'environments_capture_deadline')).toPNG(); slot.check();
       const file = path.join(out, name + '.png'), item = admitPNG(budget, png, file);
-      await fs.writeFile(file, png, { flag: 'wx' }); receipt.captures.push({ ...item, evidence: 'Actual integrated owned Electron window', optics: await optics() }); await fs.writeFile(budgetFile, json(budget));
+      await fs.writeFile(file, png, { flag: 'wx' }); receipt.captures.push({ ...item, evidence: 'Actual integrated owned Electron window', optics: await optics(panel, content) }); await fs.writeFile(budgetFile, json(budget));
     };
     const searchOpen = async (id, title) => { await open(); await action(selector.search, 'input', title); await action(rowSelector(id) + ' [data-action="open-workspace"]'); await expression('Exact searched workspace opens', `window.__aerynth.application().navigation.kind==='workspace'&&window.__aerynth.application().activeWorkspaceId===${JSON.stringify(id)}`); };
-    const begin = async mode => { if (!(await js("document.querySelector('.en-create')?.open"))) await action(actionSelector('toggle-create')); await action(actionSelector(mode)); await expression('Actual inline editor', `document.querySelector('.en-editor')?.dataset.mode===${JSON.stringify(mode === 'create-project' ? 'project-create' : 'workspace-create')}&&!document.querySelector('.en-editor').hidden`); };
+    const begin = async mode => { if (!(await js(`document.querySelector(${JSON.stringify(actionSelector('toggle-create'))})?.getAttribute('aria-expanded')==='true'`))) await action(actionSelector('toggle-create')); await action(actionSelector(mode)); await expression('Actual inline editor', `document.querySelector('.en-editor')?.dataset.mode===${JSON.stringify(mode === 'create-project' ? 'project-create' : 'workspace-create')}&&!document.querySelector('.en-editor').hidden`); };
     const submit = mode => action(actionSelector('submit-' + mode), 'submit');
     const createWorkspace = async (title, projectId) => { await open(); await begin('create-workspace'); await action(selector.editor + ' input[name="title"]', 'input', title); await action(selector.editor + ' select[name="projectId"]', 'change', projectId ?? ''); await submit('workspace-create'); let found; await wait('Canonical created workspace and project identity', async () => { found = (await desktop()).workspaces.find(w => w.title === title && w.project_id === projectId); return !!found; }); return found.id; };
     const more = async id => { await action(rowSelector(id) + ' [data-action="workspace-more"]'); await expression('Exact workspace contextual actions', `document.querySelector('.en-workspace-actions')?.dataset.workspaceId===${JSON.stringify(id)}&&!document.querySelector('.en-workspace-actions').hidden`); };
+    const workspaceActions = async fixture => {
+      const panel = '[data-surface-id="workspace-actions"]', content = '.aw-workspace-actions', control = name => `${content} [data-action=${JSON.stringify(name)}]`;
+      const inspect = async () => {
+        const w = (await desktop()).workspaces.find(w => w.id === fixture.workspaceId); assert(w);
+        return assertWorkspaceProjection(w, (await rpc('library', { name: 'inspectWorkspace', input: { workspaceId: w.id } })).result);
+      };
+      const ready = mode => expression('Actual Workspace Actions canonical readiness', `(()=>{const e=document.querySelector(${JSON.stringify(content)});return e?.dataset.workspaceId===${JSON.stringify(fixture.workspaceId)}&&e.dataset.state==='ready'${mode ? `&&e.dataset.mode===${JSON.stringify(mode)}` : ''}})()`);
+      const show = async () => { await action('#layout-manager'); await ready(); };
+      const dismiss = async () => {
+        if (await js(`!!document.querySelector(${JSON.stringify(panel)})&&!document.querySelector(${JSON.stringify(panel)}).inert`)) await action(panel + ' .aw-contextual-dismiss');
+        await expression('Workspace Actions closes through shared coordinator', `!document.querySelector(${JSON.stringify(panel)})`);
+      };
+      await show(); const initial = await inspect(), initialGeometry = layoutGeometry(initial), originalViewport = initial.viewport;
+      await action(control('mode-structured')); await ready('structured'); const structured = await inspect(); assert.equal(structured.organization.mode, 'structured'); assert.deepEqual(layoutGeometry(structured), initialGeometry, 'Mode-only Structured preserves off-grid canonical geometry');
+      await action(control('mode-fluid')); await ready('fluid'); const checkpoint = await inspect(); assert.equal(checkpoint.organization.mode, 'fluid'); assert.deepEqual(layoutGeometry(checkpoint), initialGeometry, 'Mode-only Fluid preserves canonical geometry');
+      await action(control('history-toggle')); await action(control('checkpoint')); await ready('fluid'); assert.equal((await desktop()).hasCheckpoint, true);
+      const block = (await desktop()).blocks.find(b => b.resource_id === fixture.noteId); assert(block); fixture.blockId = block.id;
+      await appCommand({ type: 'geometry', blockId: block.id, expectedVersion: block.version, placement: { x: block.x + 64, y: block.y + 32, width: block.width, height: block.height, z: block.z }, shape: block.shape, rotation: block.rotation ?? 0 });
+      await ready('fluid'); const edited = await inspect(); assert.notDeepEqual(layoutGeometry(edited), initialGeometry, 'Real canonical fixture move must change geometry');
+      await action(control('undo')); await ready('fluid'); assert.deepEqual(layoutGeometry(await inspect()), initialGeometry, 'Actual Undo restores canonical placement and Vela');
+      await action(control('redo')); await ready('fluid'); assert.deepEqual(layoutGeometry(await inspect()), layoutGeometry(edited), 'Actual Redo restores edited canonical placement');
+      await action(control('restore')); await ready('fluid'); assert.deepEqual(layoutGeometry(await inspect()), initialGeometry, 'Actual checkpoint Restore preserves original resource identities/geometry');
+      await action(control('find-toggle')); await action(control('find-vela')); await flush();
+      await wait('Find Vela callback centers actual canonical presence', async () => { const d = await desktop(), size = await js('({width:innerWidth,height:innerHeight})'), p = d.presence, v = d.viewport; return v?.zoom === 1 && p && Math.abs(v.x + p.x + p.width / 2 - size.width / 2) < 1 && Math.abs(v.y + p.y + p.height / 2 - size.height / 2) < 1; });
+      await dismiss(); await show();
+      if (!(await js(`document.querySelector(${JSON.stringify(control('find-toggle'))})?.getAttribute('aria-expanded')==='true'`))) await action(control('find-toggle'));
+      await action(`${control('find-block')}[data-block-id=${JSON.stringify(block.id)}]`); await expression('Find block callback opens exact canonical card', `window.__aerynth.snapshot().expanded===${JSON.stringify(block.id)}`); await dismiss();
+      await js('window.__aerynth.home()'); await appCommand({ type: 'setViewport', workspaceId: fixture.workspaceId, viewport: originalViewport }); await flush();
+      assert.deepEqual(layoutGeometry(await inspect()), initialGeometry, 'Locate/return must preserve all resource geometry and Vela');
+      assert.equal((await rpc('notes', { name: 'readNote', input: fixture.noteId })).result.resource.content, fixture.noteText);
+      await show(); await capture('02-workspace-actions', panel, content); await dismiss();
+      receipt.checks.push('Real contextual Workspace Actions mode-only Structured/Fluid, checkpoint, App geometry edit, actual Undo/Redo/Restore, Find Vela/block and return retain canonical geometry/IDs/text');
+    };
     await expression('Actual combined application ready', "typeof window.__aerynth.execute==='function'&&typeof window.__aerynth.setReduced==='function'&&document.body.dataset.applicationHydrated==='true'");
     if (restore) {
       const expected = JSON.parse(await fs.readFile(expectedFile, 'utf8')); assert.equal(expected.contract, 'aerynth.environments-checkpoint@1'); assert.equal(expected.initialPassed, true); assert.deepEqual(sourceIdentity(source), expected.source);
@@ -160,6 +200,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       await appCommand({ type: 'createResource', kind: 'note', title: 'Synthetic environment preservation note', workspaceId: fixture.workspaceId });
       const note = (await desktop()).resources.find(r => r.title === 'Synthetic environment preservation note'); assert(note); fixture.noteId = note.id;
       await appCommand({ type: 'content', resourceId: note.id, expectedVersion: note.version, content: fixture.noteText });
+      await workspaceActions(fixture);
       const invariant = organizationInvariant(await canonical());
       await open(); await action(selector.search, 'input', '');
       const group = groupSelector(project.id), toggle = group + ' [data-action="toggle-project"]', projectName = group + ' [data-action="open-project"]';
@@ -189,7 +230,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       assert.equal((await desktop()).workspaces.find(w => w.id === stale.id).title, fixture.workspaceTitle + ' concurrent'); await action(actionSelector('cancel-editor'));
       await action(selector.search, 'input', fixture.workspaceTitle + ' concurrent'); await more(stale.id); await action(actionSelector('rename-workspace')); await action(selector.editor + ' input[name="title"]', 'input', fixture.finalTitle); await submit('workspace-rename'); await settled();
       const renamed = (await desktop()).workspaces.find(w => w.id === stale.id); assert.equal(renamed.title, fixture.finalTitle); assert.equal(renamed.version, stale.version + 2);
-      await action(selector.search, 'input', fixture.finalTitle); await more(stale.id); await action(actionSelector('review-archive')); await capture('02-archive-review'); await submit('workspace-archive'); await settled();
+      await action(selector.search, 'input', fixture.finalTitle); await more(stale.id); await action(actionSelector('review-archive')); await submit('workspace-archive'); await settled();
       const archived = await desktop(); assert(!archived.workspaces.some(w => w.id === stale.id)); const saved = archived.archivedWorkspaces.find(w => w.id === stale.id); assert.equal(saved.version, renamed.version + 1);
       await action(actionSelector('toggle-archive')); await action(rowSelector(stale.id, true) + ' [data-action="review-restore"]'); await submit('workspace-restore'); await settled();
       const restored = (await desktop()).workspaces.find(w => w.id === stale.id); assert.equal(restored.title, fixture.finalTitle); assert.equal(restored.version, saved.version + 1);
