@@ -116,6 +116,7 @@
   line-height: 1.55;
   color: var(--vela-muted);
 }
+.vela-core-conversation:empty,
 .vela-core-plans:empty {
   display: none;
 }
