@@ -34,10 +34,15 @@ function hashFolder(folder) {
 }
 for (const folder of [
   "prototypes/integrated-backend/src",
+  "prototypes/connected-conversations/src",
+  "prototypes/codex-bridge/src",
   "prototypes/workspace-kernel",
   "prototypes/workspace-engine",
   "prototypes/constellation",
   "prototypes/application-contract",
+  "prototypes/vela-core/src",
+  "prototypes/conversation-product/src",
+  "prototypes/block-library",
   "prototypes/visual-experience/cinematic-v3/src",
   "prototypes/visual-experience/cinematic-v3/native",
 ])
