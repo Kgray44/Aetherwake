@@ -11,7 +11,7 @@ const helper = require('./workspace-approach.cjs'), { expressions, preflight } =
 
 test('Approach catalog compiles all own branches plus shared A/C expressions before native dispatch', () => {
   const result = preflight();
-  assert.equal(result.factories, 9); assert.equal(result.cases, 13); assert.equal(result.common.factories, 38); assert.equal(result.common.cases, 44);
+  assert.equal(result.factories, 9); assert.equal(result.cases, 13); assert.deepEqual(result.common, require('./library-native-expressions.cjs').preflight());
   assert.deepEqual(result, preflight());
   const source = readFileSync(new URL('./workspace-approach.cjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /\b(?:js|wait)\(\s*['"`]/);
