@@ -58,6 +58,8 @@ exports.verify = async ({
     return require('./workspace-resource-links.cjs').verify({ win, app, privateRoot, source, moduleStarted, startupErrors });
   if (process.argv.includes('--verify-structured-grid'))
     return require('./workspace-structured-grid.cjs').verify({ win, app, privateRoot, source, moduleStarted, startupErrors });
+  if (process.argv.includes('--verify-functional-workspace'))
+    return require('./workspace-functional.cjs').verify({ win, app, privateRoot, source, moduleStarted, startupErrors });
   const output = path.resolve(
     __dirname,
     "../../visual-experience/cinematic-v3/.runtime/application-evidence/workspace-normal-" +
