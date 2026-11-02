@@ -4,6 +4,7 @@ import { edges, hash, type SpatialEdge, SpatialNavigator } from "./spatial.ts";
 import type {
   SpatialRenderFrame,
   SpatialRenderLayer,
+  SpatialBodyProjection,
   Vector3,
 } from "./spatial-types.ts";
 import type { Node } from "./types.ts";
@@ -86,8 +87,10 @@ export class ConstellationScene implements SpatialRenderLayer {
   private renderedProjection?: {
     left: number;
     top: number;
+    width: number;
+    height: number;
     nodes: Map<string, Node>;
-    bodies: readonly { key: string; x: number; y: number }[];
+    bodies: readonly { key: string; x: number; y: number; radius: number }[];
   };
   selectedEdge: string | null = null;
   enabled = true;
@@ -234,6 +237,26 @@ export class ConstellationScene implements SpatialRenderLayer {
         this.pendingArrivals.add(node.key);
     }
   }
+  prepareCelestialCamera(width: number, height: number) {
+    if (
+      !this.enabled ||
+      this.lost ||
+      this.disposed ||
+      this.controller.policy.hidden ||
+      !this.controller.policy.graphicsAvailable ||
+      this.navigation.presentation !== "spatial" ||
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width <= 0 ||
+      height <= 0
+    )
+      return null;
+    // Configure from the shared spring's CURRENT pose, not its destination.
+    // Body visibility is independent: the same view survives focused/working
+    // entry without returning the cosmos to a different camera authority.
+    this.configure(width, height);
+    return this.camera;
+  }
   private configure(width: number, height: number) {
     this.navigation.setViewport(width, height);
     const p = this.navigation.camera,
@@ -256,6 +279,9 @@ export class ConstellationScene implements SpatialRenderLayer {
   }
   /** Last drawn CSS pixels remain valid while canonical arrival hides the field. */
   screenOrigin(key: string) {
+    return this.screenBodyProjection(key)?.center;
+  }
+  screenBodyProjection(key: string): SpatialBodyProjection | null {
     if (
       !this.enabled ||
       this.lost ||
@@ -264,21 +290,59 @@ export class ConstellationScene implements SpatialRenderLayer {
       !this.controller.policy.graphicsAvailable ||
       this.navigation.presentation !== "spatial"
     )
-      return undefined;
+      return null;
     const rendered = this.renderedProjection,
       current = this.controller.nodes.get(key),
       previous = rendered?.nodes.get(key);
     if (
       !rendered ||
-      !current ||
+      !current?.available ||
       previous?.id !== current.id ||
       previous.kind !== current.kind
     )
-      return undefined;
+      return null;
     const point = rendered.bodies.find((body) => body.key === key);
-    return point && Number.isFinite(point.x) && Number.isFinite(point.y)
-      ? { x: rendered.left + point.x, y: rendered.top + point.y }
-      : undefined;
+    if (
+      !point ||
+      ![point.x, point.y, point.radius].every(Number.isFinite) ||
+      point.radius <= 0
+    )
+      return null;
+    const center = { x: rendered.left + point.x, y: rendered.top + point.y },
+      bounds = {
+        left: center.x - point.radius,
+        top: center.y - point.radius,
+        right: center.x + point.radius,
+        bottom: center.y + point.radius,
+      },
+      clippedBounds = {
+        left: Math.max(rendered.left, bounds.left),
+        top: Math.max(rendered.top, bounds.top),
+        right: Math.min(rendered.left + rendered.width, bounds.right),
+        bottom: Math.min(rendered.top + rendered.height, bounds.bottom),
+      };
+    if (
+      clippedBounds.right <= clippedBounds.left ||
+      clippedBounds.bottom <= clippedBounds.top
+    )
+      return null;
+    return {
+      key: current.key,
+      kind: current.kind,
+      ...(current.kind === "resource"
+        ? { resourceId: current.resourceId ?? current.id }
+        : {}),
+      center,
+      radius: point.radius,
+      bounds,
+      clippedBounds,
+      viewport: {
+        left: rendered.left,
+        top: rendered.top,
+        width: rendered.width,
+        height: rendered.height,
+      },
+    };
   }
   private projectPrepared(key: string, width: number, height: number) {
     const p = this.navigation.position(key),
@@ -1018,6 +1082,8 @@ export class ConstellationScene implements SpatialRenderLayer {
       this.renderedProjection = {
         left: rect.left,
         top: rect.top,
+        width: rect.width,
+        height: rect.height,
         nodes: this.controller.nodes,
         bodies: this.diagnostics.projectedBodies,
       };

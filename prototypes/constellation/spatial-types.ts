@@ -1,4 +1,4 @@
-import type { WebGLRenderer } from "three";
+import type { PerspectiveCamera, WebGLRenderer } from "three";
 import type { Snapshot } from "./types.ts";
 
 export type Vector3 = { x: number; y: number; z: number };
@@ -20,9 +20,34 @@ export type SpatialRenderFrame = {
   reduced: boolean;
   quiet: boolean;
 };
+export type SpatialScreenBounds = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+/** Last drawn conservative body envelope, not a raster occlusion mask. */
+export type SpatialBodyProjection = {
+  key: string;
+  kind: "project" | "workspace" | "resource";
+  resourceId?: string;
+  center: { x: number; y: number };
+  radius: number;
+  bounds: SpatialScreenBounds;
+  clippedBounds: SpatialScreenBounds;
+  viewport: { left: number; top: number; width: number; height: number };
+};
 /** Host renders between celestial background and foreground Vela, one context/RAF. */
 export interface SpatialRenderLayer {
   readonly active: boolean;
+  /** Borrow the existing current camera before world passes, including working
+   * views where graph bodies are inactive. Width/height are CSS pixels. The
+   * caller reads this object; it must not mutate its pose or own another clock. */
+  prepareCelestialCamera?(
+    width: number,
+    height: number,
+  ): PerspectiveCamera | null;
+  screenBodyProjection?(key: string): SpatialBodyProjection | null;
   render(renderer: WebGLRenderer, frame: SpatialRenderFrame): void;
   contextLost?(): void;
   contextRestored?(): void;
