@@ -571,12 +571,8 @@ export function installApplication(hooks: Hooks) {
   velaCard.addEventListener("focusout", () =>
     document.body.classList.remove("vela-access"),
   );
-  const velaGrip = document.createElement("span");
-  velaGrip.className = "vela-grip";
-  velaGrip.textContent = "⠿ Move Vela";
-  velaCard.prepend(velaGrip);
   velaCard.title =
-    "Drag by Move Vela, or Alt+arrow keys to move. Enter opens Vela.";
+    "Drag Vela directly, or use Alt+arrow keys. Click or Enter opens Vela.";
   velaCard.addEventListener(
     "click",
     (event) => {
@@ -588,7 +584,7 @@ export function installApplication(hooks: Hooks) {
     },
     true,
   );
-  velaGrip.addEventListener("pointerdown", (event) => {
+  velaCard.addEventListener("pointerdown", (event) => {
     const p = state?.presence;
     if (!p || !presenceCard() || p.locked || event.button !== 0) return;
     event.preventDefault();
@@ -1825,7 +1821,6 @@ export function installApplication(hooks: Hooks) {
         const scale = Math.min(1, card.w / 208, card.h / 260);
         velaCard.style.setProperty("--vela-ui-scale", String(scale));
         velaCard.style.setProperty("--vela-ui-inset", `${28 * scale}px`);
-        velaGrip.textContent = card.w < 110 ? "⠿" : "⠿ Move Vela";
       }
       const key = JSON.stringify(policy);
       if (key !== policyKey) {
