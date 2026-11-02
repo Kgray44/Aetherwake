@@ -43,9 +43,15 @@ export function mountBlockChat(
   const history = document.createElement("button");
   history.type = "button";
   history.className = "aw-chat-history";
-  history.textContent = "History, search and branches";
+  history.textContent = "History";
+  history.title = "History, search and branches";
+  history.setAttribute("aria-label", "History, search and branches");
+  history.dataset.noCardDrag = "true";
   history.onclick = options.openHistory;
-  root.append(history);
+  const header = root
+    .closest(".folio")
+    ?.querySelector(".folio-top .folio-actions");
+  (header ?? root).append(history);
   const chat = mountConversationChat(root, { ...options, execution });
   void chat.ready.catch(options.failed);
   return {

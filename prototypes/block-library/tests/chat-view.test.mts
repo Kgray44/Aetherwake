@@ -7,7 +7,7 @@ import type {
   Detail,
 } from "../../conversation-product/src/contracts.ts";
 import type { ConversationExecutionObservation } from "../../conversation-product/src/chat.ts";
-import { blockDocument } from "./component-dom.mts";
+import { blockDocument, card } from "./component-dom.mts";
 import { until } from "../../conversation-product/test/component-dom.mts";
 
 // Synthetic port, actual shared component/session. No provider, layout or native claim.
@@ -210,6 +210,43 @@ test("pause and resize retain the exact shared transcript/composer/caret, with o
     await session.dispose();
     assert.equal(activeObservers, 0);
   }
+});
+
+test("block History lives in existing card chrome without adding a body row or replacing the shared composer", async (t) => {
+  const f = fixture(t),
+    c = card(f.view);
+  c.top.append(c.actions);
+  const controller = mountBlockChat(c.working, {
+    port: f.port,
+    resourceId: f.draft.resourceId,
+    presentation: "workspace",
+    openHistory() {},
+    failed(error) {
+      throw error;
+    },
+  });
+  try {
+    await controller.ready;
+    const input = c.working.querySelector("textarea"),
+      history = c.top.querySelector(".aw-chat-history");
+    assert(history);
+    assert.equal(c.working.querySelector(".aw-chat-history"), null);
+    assert.equal(
+      history.getAttribute("aria-label"),
+      "History, search and branches",
+    );
+    input.focus();
+    input.setSelectionRange(2, 7);
+    controller.setPresentation("focused");
+    controller.setPresentation("workspace");
+    assert.equal(c.working.querySelector("textarea"), input);
+    assert.equal(f.view.doc.activeElement, input);
+    assert.deepEqual([input.selectionStart, input.selectionEnd], [2, 7]);
+    assert.equal(c.top.querySelector(".aw-chat-history"), history);
+  } finally {
+    await controller.dispose();
+  }
+  assert.equal(c.top.querySelector(".aw-chat-history"), null);
 });
 
 test("leaving an inline block does not wait for a provider RPC or dispose its canonical draft owner", async (t) => {
