@@ -23,7 +23,8 @@ export function renderNoteReading(root: HTMLElement, content: string) {
   root.replaceChildren();
   let code: HTMLElement | null = null,
     list: HTMLOListElement | HTMLUListElement | null = null;
-  for (const line of content.split("\n")) {
+  const lines = content.split("\n");
+  for (const line of lines.slice(0, 1500)) {
     if (/^\s*```/.test(line)) {
       if (code) code = null;
       else {
@@ -57,6 +58,13 @@ export function renderNoteReading(root: HTMLElement, content: string) {
       root.append(element("blockquote", line.replace(/^>\s?/, "")));
     else if (line.trim()) root.append(element("p", line));
   }
+  if (lines.length > 1500)
+    root.append(
+      element(
+        "p",
+        "Reading preview is limited to 1,500 lines. Write mode retains the complete text.",
+      ),
+    );
 }
 
 export function sourceLinks(content: string): string[] {
@@ -267,7 +275,8 @@ export function mountNoteExperience(
   recovery.append(save, local, saved, details);
   reading.hidden = true;
   root.append(tools, rename, status, recovery, reading, sources);
-  const unsubscribe = session.subscribe((value) => {
+  let latest = session.snapshot();
+  const paint = (value: ReturnType<NoteSession["snapshot"]>) => {
     text = value.content;
     if (editor.value !== text) {
       const start = editor.selectionStart,
@@ -300,11 +309,15 @@ export function mountNoteExperience(
     otherDraft.textContent =
       value.document?.draft?.content ?? "No saved recovery draft";
     updateReading();
+  };
+  const unsubscribe = session.subscribe((value) => {
+    latest = value;
+    if (active) paint(value);
   });
   return {
     setActive(value: boolean) {
       active = value;
-      if (active) updateReading();
+      if (active) paint(latest);
     },
     dispose() {
       disposed = true;

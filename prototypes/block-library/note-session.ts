@@ -50,6 +50,9 @@ export class NoteSession {
   snapshot(): NoteSessionState {
     return structuredClone(this.value);
   }
+  get hasObservers(): boolean {
+    return this.listeners.size > 0;
+  }
   subscribe(listener: (state: NoteSessionState) => void) {
     this.listeners.add(listener);
     listener(this.snapshot());

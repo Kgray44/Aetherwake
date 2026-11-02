@@ -408,6 +408,10 @@ function layout(cause: string) {
       "aria-expanded",
       String(expanded === id),
     );
+    application?.setBlockActive(
+      id,
+      nativeActive && !document.hidden && expanded === id,
+    );
   }
   document.body.classList.toggle("focused", !!expanded);
   $("#home").setAttribute("aria-current", expanded ? "false" : "page");
@@ -715,21 +719,46 @@ function replaceWorkspace(state: DesktopSnapshot) {
     }
   order = state.blocks.map((b) => b.id);
   for (const block of state.blocks) {
-    const resource = state.resources.find((r) => r.id === block.resource_id)!;
+    const subject =
+      block.subject && block.subject.kind !== "resource" ? block.subject : null;
+    const resource = block.resource_id
+      ? state.resources.find((r) => r.id === block.resource_id)
+      : undefined;
+    const subjectKind =
+      subject?.kind === "project"
+        ? "Project Overview"
+        : subject?.kind === "collection"
+          ? "Collection Browser"
+          : "Resource Browser";
+    const title =
+      resource?.title ??
+      (subject?.kind === "project"
+        ? state.projects.find((p) => p.id === subject.projectId)?.title
+        : undefined) ??
+      (subject ? subjectKind : "Unavailable resource");
+    const summary =
+      resource?.content ??
+      (subject?.kind === "resource-query"
+        ? subject.query || "Browse canonical local resources"
+        : subject?.kind === "collection"
+          ? "Collection " + subject.collectionId.slice(0, 8)
+          : "Canonical project workspaces, resources and local activity");
     const displayType: Resource["type"] =
-      resource.kind === "research"
+      resource?.kind === "research"
         ? "research"
-        : resource.kind === "conversation"
+        : resource?.kind === "conversation"
           ? "conversation"
           : "note";
     let r = resources.get(block.id);
     const data = {
       id: block.id,
-      canonicalId: resource.id,
+      canonicalId: resource?.id,
       type: displayType,
-      title: resource.title,
-      subtitle: `${resource.kind} · ${resource.id.slice(0, 8)}`,
-      text: resource.content,
+      title,
+      subtitle: resource
+        ? `${resource.kind} · ${resource.id.slice(0, 8)}`
+        : subjectKind,
+      text: summary,
     };
     if (!r) {
       r = data;
@@ -740,20 +769,20 @@ function replaceWorkspace(state: DesktopSnapshot) {
       const article = elements.get(block.id)!;
       article.classList.remove("conversation", "research", "note");
       article.classList.add(displayType);
-      article.querySelector("h2")!.textContent = resource.title;
+      article.querySelector("h2")!.textContent = title;
       article.querySelector(".folio-preview")!.textContent =
-        resource.content.split("\n\n")[0];
+        summary.split("\n\n")[0];
     }
     // Surface material classes are intentionally broader than resource kinds.
     // The accessible peripheral label always describes the canonical resource.
     const article = elements.get(block.id)!;
     const anchor =
       article.querySelector<HTMLButtonElement>(".resource-anchor")!;
-    const kind = resource.kind.replaceAll("_", " ");
+    const kind = resource?.kind.replaceAll("_", " ") ?? subjectKind;
     article.querySelector(".anchor-label small")!.textContent = kind;
-    article.querySelector(".anchor-label b")!.textContent = resource.title;
-    anchor.setAttribute("aria-label", `Open ${kind}: ${resource.title}`);
-    anchor.title = `${kind}: ${resource.title}`;
+    article.querySelector(".anchor-label b")!.textContent = title;
+    anchor.setAttribute("aria-label", `Open ${kind}: ${title}`);
+    anchor.title = `${kind}: ${title}`;
   }
 }
 
@@ -1041,6 +1070,11 @@ addEventListener("resize", () => {
 addEventListener("error", (e) => metrics.errors.push(e.message));
 function lifecycle(active: boolean) {
   nativeActive = active;
+  for (const id of order)
+    application?.setBlockActive(
+      id,
+      active && !document.hidden && expanded === id,
+    );
   if (!active) {
     cancelAnimationFrame(raf);
     clearTimeout(schedulerTimer);
