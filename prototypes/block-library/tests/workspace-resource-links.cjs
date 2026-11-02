@@ -18,6 +18,12 @@ exports.activateDisclosure = guard => {
 exports.workspace = s => ({ blocks: s.blocks, viewport: s.viewport, organization: s.organization, presence: s.presence });
 exports.canonical = s => ({ projects: s.projects, workspaces: s.workspaces, resources: s.resources });
 exports.edges = edges => [...edges].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+exports.assertFrameStable = (before, after) => {
+  assert(before?.ready && after?.ready, 'Related capture requires painted resting content');
+  assert.equal(after.transition.resource, before.transition.resource, 'Related host identity changed during fresh draw');
+  assert.equal(after.transition.transition, before.transition.transition, 'Related host retargeted during fresh draw');
+  for (const key of ['x', 'y', 'width', 'height']) assert(Math.abs(after.rendered[key] - before.rendered[key]) <= 0.75, 'Related host geometry changed during fresh draw: ' + key);
+};
 exports.assertRecovery = (actual, expected) => { assert.deepEqual(actual, expected, 'Read-only links/navigation must not save, discard or change a separate recovery draft'); assert(expected.draft && expected.draft.content !== expected.resource.content, 'Distinct canonical and recovery text required'); };
 exports.fixture = seed => {
   const f = seed.relatedCase; assert(f && seed.relatedValidation && f.note?.blockId && f.note?.resourceId && f.browser?.blockId && f.task?.resourceId, 'explicit_related_recovery_fixture_required');
@@ -78,12 +84,19 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
     const verify = async relationships => { exports.assertState(await snapshot(), seed.expected, fixture.workspaces, relationships); await recovery(); };
     const noExecution = async () => assert.deepEqual(await js(x.host('executionStatus', {})), []);
     const graphics = () => js(x.graphics());
-    const shot = async (name, diagnostic = false) => {
-      assert(receipt.screenshots.length < limits.maxScreenshots, 'native_capture_count_exceeded'); const before = await graphics(); if (!diagnostic) await wait(x.drawsAfter(before.draws)); const health = await graphics(); assert(captureAllowed(health, diagnostic), 'Renderable actual frame required');
+    const shot = async (name, diagnostic = false, expectedFrame) => {
+      assert(receipt.screenshots.length < limits.maxScreenshots, 'native_capture_count_exceeded');
+      let relatedFrameBefore = null, relatedFrameAfter = null;
+      if (!diagnostic) {
+        assert(expectedFrame?.resourceId && expectedFrame.edgeId, 'exact_related_capture_identity_required'); receipt.captureIntent = { name, expected: expectedFrame };
+        await wait(x.relatedResting(expectedFrame)); relatedFrameBefore = await js(x.relatedFrame(expectedFrame)); assert(relatedFrameBefore.ready, 'Related host left its painted resting state before fresh draw');
+      }
+      const before = await graphics(); if (!diagnostic) await wait(x.drawsAfter(before.draws)); const health = await graphics(); assert(captureAllowed(health, diagnostic), 'Renderable actual frame required');
+      if (!diagnostic) { relatedFrameAfter = await js(x.relatedFrame(expectedFrame)); exports.assertFrameStable(relatedFrameBefore, relatedFrameAfter); }
       const png = (await guard.capture()).toPNG(); receipt.pngBytes = (receipt.pngBytes ?? 0) + png.length; assert(receipt.pngBytes <= limits.maxPngBytes, 'native_capture_bytes_exceeded');
-      await guard.around(() => fs.mkdir(output, { recursive: true })); await guard.around(() => fs.writeFile(path.join(output, name + '.png'), png, { flag: 'wx' })); receipt.screenshots.push({ file: name + '.png', bytes: png.length, sha256: digest(png), priorDraws: before.draws, freshDraw: health.draws > before.draws, diagnostic, health });
+      await guard.around(() => fs.mkdir(output, { recursive: true })); await guard.around(() => fs.writeFile(path.join(output, name + '.png'), png, { flag: 'wx' })); receipt.screenshots.push({ file: name + '.png', bytes: png.length, sha256: digest(png), priorDraws: before.draws, freshDraw: health.draws > before.draws, diagnostic, health, relatedFrameBefore, relatedFrameAfter });
     };
-    failureProbe = async () => ({ graphics: await graphics(), context: await js(x.failureContext()), focus: await js(x.focusDetails()), target: await js(x.targetDiagnostics(receipt.lastIntent?.selector ?? '')) }); failureShot = () => shot('native-resource-links-failure', true);
+    failureProbe = async () => ({ graphics: await graphics(), context: await js(x.failureContext()), focus: await js(x.focusDetails()), target: await js(x.targetDiagnostics(receipt.lastIntent?.selector ?? '')), relatedFrame: await js(x.relatedFrame(receipt.captureIntent?.expected)) }); failureShot = () => shot('native-resource-links-failure', true);
     const close = async () => { await click(panel + ' .aw-contextual-dismiss'); await wait(x.absent(panel)); };
     const openNote = async () => {
       await navigate(fixture.note.workspaceId); await wait(x.valueIs(noteInput, fixture.documents[fixture.note.resourceId].draft.content)); await js(x.rememberEditor(noteInput));
@@ -109,22 +122,23 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
       await wait(x.exists(panel + ' [data-relationship-id=' + q(membership.id) + ']')); assert.equal(await js(x.exists(panel + ' [data-remove-link=' + q(membership.id) + ']')), false, 'Task membership cannot be removed as a user link');
       key('Tab'); receipt.keyboardIncomingFocus = await js(x.focusDetails()); assert(receipt.keyboardIncomingFocus?.insideRelated && receipt.keyboardIncomingFocus.tag === 'BUTTON'); await recovery();
     };
+    const incomingFrame = edge => ({ resourceId: fixture.task.resourceId, edgeId: edge.id, membershipId: seed.expected.relationships.find(e => e.kind === 'contains_task' && e.target_id === fixture.task.resourceId).id });
     const remove = async edge => { await click(panel + ' [data-remove-link=' + q(edge.id) + ']'); await wait(x.edgeAbsent(edge.id)); await wait(x.relatedReady(fixture.task.resourceId)); await verify(seed.expected.relationships); };
     await wait(x.ready()); await noExecution();
     if (limits.restore) {
       receipt.phase = 'fresh-process link and recovery persistence'; const expected = await readJson('workspace-resource-links-expected.json', limits.maxCheckpointBytes);
       assert.equal(expected.contract, 'aerynth.workspace-resource-links-checkpoint@1'); assert.deepEqual(expected.documents, fixture.documents); assert.deepEqual(expected.canonical, exports.canonical(await snapshot())); assert.equal((await snapshot()).activeWorkspaceId, expected.activeWorkspaceId);
       assert.deepEqual(exports.edges((await snapshot()).relationships), exports.edges(expected.relationships)); await recovery(); receipt.restoredEdge = expected.persistedEdge;
-      await incoming(expected.persistedEdge); await verify(expected.relationships); await shot('fresh-process-incoming-user-link');
+      await incoming(expected.persistedEdge); await verify(expected.relationships); await shot('fresh-process-incoming-user-link', false, incomingFrame(expected.persistedEdge));
       await remove(expected.persistedEdge); await close(); receipt.removedAfterRestart = expected.persistedEdge.id;
       receipt.checks.push('Separate process restores the exact user link and untouched canonical/recovery data, then actual native removal deletes only that same edge without replayed creation');
     } else {
       receipt.phase = 'native Note actions and outgoing user link'; await openNote(); await verify(seed.expected.relationships);
-      const first = await add('references'); receipt.firstUserEdge = first; await verify([...seed.expected.relationships, first]); await shot('note-outgoing-link-with-recovery-retained');
+      const first = await add('references'); receipt.firstUserEdge = first; await verify([...seed.expected.relationships, first]); await shot('note-outgoing-link-with-recovery-retained', false, { resourceId: fixture.note.resourceId, edgeId: first.id });
       await button(panel + ' [data-relationship-id=' + q(first.id) + ']', fixture.task.title); await wait(x.absent(panel)); await wait(x.openedTarget(fixture.task.resourceId));
       const opened = await snapshot(), placement = opened.blocks.find(b => b.resource_id === fixture.task.resourceId); assert(placement && fixture.task.placements.some(p => p.blockId === placement.id)); receipt.openedTarget = { resourceId: fixture.task.resourceId, blockId: placement.id, workspaceId: opened.activeWorkspaceId };
       await verify([...seed.expected.relationships, first]); await click('[data-block=' + q(placement.id) + '] .unfold'); await wait(x.expanded('[data-block=' + q(placement.id) + ']', false));
-      receipt.phase = 'native incoming provenance and exact user-link removal'; await incoming(first); await verify([...seed.expected.relationships, first]); await shot('task-incoming-link-and-protected-membership'); await remove(first); await close();
+      receipt.phase = 'native incoming provenance and exact user-link removal'; await incoming(first); await verify([...seed.expected.relationships, first]); await shot('task-incoming-link-and-protected-membership', false, incomingFrame(first)); await remove(first); await close();
       receipt.phase = 'native second user link for restart'; await openNote(); const persisted = await add('depends_on'); assert.notEqual(persisted.id, first.id); receipt.persistedUserEdge = persisted; await verify([...seed.expected.relationships, persisted]); await close();
       const final = await snapshot(), checkpoint = { contract: 'aerynth.workspace-resource-links-checkpoint@1', canonical: exports.canonical(final), relationships: final.relationships, documents: fixture.documents, workspaces: fixture.workspaces, removedEdgeId: first.id, persistedEdge: persisted, activeWorkspaceId: final.activeWorkspaceId };
       const bytes = Buffer.from(JSON.stringify(checkpoint)); assert(bytes.length <= limits.maxCheckpointBytes, 'resource_links_checkpoint_bytes_exceeded'); await guard.around(() => fs.writeFile(path.join(privateRoot, 'workspace-resource-links-expected.json'), bytes, { flag: 'wx' }));

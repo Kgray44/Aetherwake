@@ -14,7 +14,7 @@ import type { NoteDocument } from '../note-contracts.ts';
 const require = createRequire(import.meta.url), helper = require('./workspace-resource-links.cjs'), { expressions: x, preflight } = require('./workspace-resource-links-expressions.cjs');
 
 test('Related native expressions exhaust all user link kinds and inherited branches before dispatch, without JS input substitutes', () => {
-  const result = preflight(); assert.equal(result.factories, 7); assert.equal(result.cases, 9); assert.deepEqual(result, preflight());
+  const result = preflight(); assert.equal(result.factories, 9); assert.equal(result.cases, 15); assert.deepEqual(result, preflight());
   assert.deepEqual(result.common, require('./workspace-approach-expressions.cjs').preflight());
   const source = readFileSync(new URL('./workspace-resource-links.cjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /\b(?:js|wait)\(\s*['"`]/); assert.doesNotMatch(source, /\.dispatchEvent\(|\.click\(\)|\.focus\(\)|\.value\s*=/);
@@ -38,6 +38,41 @@ test('Related readiness requires exact canonical source identity and settled bus
   assert.equal(runInNewContext(x.edgeExists('source', 'task', 'references'), context), true); assert.equal(runInNewContext(x.edgeExists('task', 'source', 'references'), context), false);
   state.relationships[0].provenance = 'inferred'; assert.equal(runInNewContext(x.edgeExists('source', 'task', 'references'), context), false);
   assert.equal(runInNewContext(x.edgeAbsent('real-edge'), context), false);
+});
+
+test('Related capture requires the existing contextual transition to settle and exact source/link controls to be fully painted in their real clip', () => {
+  const node = (x: number, y: number, width: number, height: number): any => ({ value: { x, y, width, height }, textContent: 'Synthetic visible label', parentElement: null, style: { display: 'block', visibility: 'visible', opacity: '1' }, closest() { return this.hiddenAncestor || this.inertAncestor ? {} : null; }, getBoundingClientRect() { return this.value; } });
+  const host = node(300, 250, 440, 400), body = node(318, 300, 404, 332);
+  host.open = true; Object.assign(host.style, { width: '440px', height: '400px', background: 'actual computed background', backdropFilter: 'blur(22px)', transform: 'matrix(1,0,0,1,300,250)' });
+  body.parentElement = host; Object.assign(body, { scrollTop: 0, clientHeight: 332, scrollHeight: 420 });
+  const section = { dataset: { resourceId: 'source' }, busy: 'false', getAttribute() { return this.busy; } };
+  const field = (x: number, y: number, width: number, height: number, parent = body) => { const value = node(x, y, width, height); value.parentElement = parent; return value; };
+  const user: any = { target: field(318, 450, 240, 24), detail: field(318, 480, 260, 18), remove: field(630, 450, 80, 24) }, protectedRow: any = { target: field(318, 390, 240, 24), detail: field(318, 420, 260, 18) };
+  const userFields: Record<string, any> = { '.aw-resource-links-target': user.target, small: user.detail, '[data-remove-link]': user.remove }, protectedFields: Record<string, any> = { '.aw-resource-links-target': protectedRow.target, small: protectedRow.detail };
+  user.querySelector = (selector: string) => userFields[selector] ?? null;
+  protectedRow.querySelector = (selector: string) => protectedFields[selector] ?? null;
+  const fields: Record<string, any> = { '.aw-contextual-content': body, '.aw-resource-links': section, '.aw-contextual-heading > span': field(318, 264, 220, 20, host), '.aw-contextual-dismiss': field(692, 264, 28, 28, host), '.aw-resource-links-header h3': field(318, 310, 220, 20), 'input[aria-label="Find related resources"]': field(318, 340, 404, 30), '[data-relationship-id="edge"]': user, '[data-relationship-id="protected"]': protectedRow, '.aw-resource-links-create-toggle > summary': field(318, 650, 160, 24), '.aw-resource-links-help > summary': field(318, 690, 160, 24) };
+  host.querySelector = (selector: string) => fields[selector] ?? null;
+  const motion: any = { receipts: [{ resource: 'contextual:2:related-resources', transition: 17, status: 'settled' }] }, document = { hidden: false, hasFocus: () => true, fonts: { status: 'loaded' }, querySelector: () => host };
+  const context = { document, innerWidth: 1602, innerHeight: 1002, getComputedStyle: (node: any) => node.style, window: { __aerynth: { snapshot: () => motion } } }, expected = { resourceId: 'source', edgeId: 'edge', membershipId: 'protected' };
+  const probe = () => runInNewContext(x.relatedFrame(expected), context);
+  let frame = probe(); assert.equal(frame.ready, true); assert.equal(frame.material.opacity, '1'); assert.equal(frame.items.length, 9); assert.equal(frame.addLink.visible, false, 'Off-clip disclosure is recorded honestly without replacing the required exact visible link controls');
+  motion.receipts.push({ resource: 'ambient', status: 'started' }); assert.equal(probe().ready, true, 'Ambient motion is not a contextual settlement gate'); motion.receipts.pop();
+  motion.receipts[0].status = 'retargeted'; assert.ok(probe().problems.includes('contextual-motion-unsettled')); motion.receipts[0].status = 'settled';
+  host.style.opacity = '0.4'; frame = probe(); assert.equal(frame.ready, false); assert.equal(frame.material.opacity, '0.4'); host.style.opacity = '1';
+  body.style.opacity = '0.8'; assert.equal(probe().ready, false); body.style.opacity = '1';
+  host.style.height = '399px'; assert.ok(probe().problems.includes('host-dimensions-not-painted')); host.style.height = '400px';
+  user.detail.value.y = 625; assert.ok(probe().problems.includes('edge:detail:clipped-or-transparent')); user.detail.value.y = 480;
+  user.remove.inertAncestor = true; assert.ok(probe().problems.includes('edge:remove:clipped-or-transparent')); user.remove.inertAncestor = false;
+  protectedRow.target.hiddenAncestor = true; assert.ok(probe().problems.includes('protected:target:clipped-or-transparent')); protectedRow.target.hiddenAncestor = false;
+  section.dataset.resourceId = 'other'; assert.ok(probe().problems.includes('wrong-or-busy-source')); section.dataset.resourceId = 'source';
+  section.busy = 'true'; assert.equal(probe().ready, false); section.busy = 'false';
+  document.fonts.status = 'loading'; assert.ok(probe().problems.includes('fonts-loading')); document.fonts.status = 'loaded';
+  frame = probe(); assert.equal(frame.ready, true); helper.assertFrameStable(frame, probe());
+  assert.throws(() => helper.assertFrameStable(frame, { ...frame, ready: false }), /painted resting/);
+  assert.throws(() => helper.assertFrameStable(frame, { ...frame, transition: { ...frame.transition, transition: 18 } }), /retargeted/);
+  assert.throws(() => helper.assertFrameStable(frame, { ...frame, rendered: { ...frame.rendered, height: frame.rendered.height + 1 } }), /geometry changed/);
+  assert.equal(runInNewContext(x.relatedResting(), context), false, 'Missing exact identities remain diagnostic observations, never qualifying capture state');
 });
 
 test('recovery and canonical comparisons reject auto-save, discard, changed draft version, geometry, hidden content changes or lost protected edges', () => {
