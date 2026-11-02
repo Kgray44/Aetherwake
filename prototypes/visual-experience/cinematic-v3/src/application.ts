@@ -1445,13 +1445,11 @@ export function installApplication(hooks: Hooks) {
       onClose: () => surfaces.close("block-library"),
       onCreated: (result) => {
         surfaces.close("block-library");
-        reveal(result.placementId);
-        hooks.focus(result.placementId);
+        revealCreatedPlacement(result.placementId);
       },
       onSubjectCreated: (result) => {
         surfaces.close("block-library");
-        reveal(result.placementId);
-        hooks.focus(result.placementId);
+        revealCreatedPlacement(result.placementId);
       },
     });
   }
@@ -1846,6 +1844,15 @@ export function installApplication(hooks: Hooks) {
       offset.y = innerHeight / 2 - (b.y + b.height / 2) * zoom;
     hooks.layout();
     void saveView();
+  }
+  function revealCreatedPlacement(id: string) {
+    hooks.home();
+    reveal(id);
+    const article = document.querySelector<HTMLElement>(`[data-block="${id}"]`);
+    if (article) {
+      article.tabIndex = -1;
+      article.focus({ preventScroll: true });
+    }
   }
   function saveView() {
     return state?.activeWorkspaceId
