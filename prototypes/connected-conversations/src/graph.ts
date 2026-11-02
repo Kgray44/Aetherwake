@@ -26,6 +26,9 @@ export interface Message {
   content: string; provenance: Provenance; createdAt: string;
   referenceIds: string[]; constraint: boolean; sensitivity: Sensitivity; providerTurnId?: string;
 }
+export type MessageMetadata = Readonly<Pick<Message,'id'|'conversationId'|'sequence'|'role'|'sensitivity'> & {ordinal:number;bodyBytes:number;unavailable:boolean}>;
+export interface MessageMetadataWindow {items:MessageMetadata[];emittedCount:number;emittedBodyBytes:number;hasMore:boolean;limitedBy:null|'scan-limit'|'byte-limit'|'denied'}
+class MetadataScanLimit extends Error {}
 export interface Artifact {
   id: string; conversationId: string; sourceMessageId: string;
   label: string; uri: string; provenance: Provenance; createdAt: string;
@@ -177,17 +180,37 @@ export class ConversationGraph {
     this.data.artifacts.push(a);
     return copy(a);
   }
-  visibleMessages(conversationId: string): Message[] {
+  private visibleMessageRecords(conversationId:string,budget?:{remaining:number}):Message[] {
     const c = this.conversation(conversationId);
+    if(budget){const count=1+c.ownMessageIds.length;if(count>budget.remaining)throw new MetadataScanLimit();budget.remaining-=count;}
     const edge = this.data.edges.find(e => e.childId === c.id);
     let inherited: Message[] = [];
     if (edge) {
-      const parent = this.visibleMessages(edge.parentId);
+      const parent = this.visibleMessageRecords(edge.parentId,budget);
       const index = parent.findIndex(m => m.id === edge.sourceMessageId);
       assert(index >= 0, 'fork point absent');
       inherited = parent.slice(0, index + 1);
     }
-    return [...inherited, ...c.ownMessageIds.map(id => this.message(id))].map(copy);
+    return [...inherited, ...c.ownMessageIds.map(id => this.message(id))];
+  }
+  visibleMessages(conversationId: string): Message[] {return this.visibleMessageRecords(conversationId).map(copy);}
+  /** Bounded lineage projection only. Counts/bytes describe this window, never the entire history.
+   * maxScan counts ancestry nodes plus own-message refs before allocation; existing ID searches remain linear.
+   * The mandatory host policy gates ALL contributing messages before anything escapes. */
+  visibleMessageMetadata(conversationId:string,options:{limit:number;maxScan:number;maxBodyBytes:number;offset?:number;tail?:boolean;allow(meta:Readonly<Pick<MessageMetadata,'id'|'conversationId'|'sequence'|'role'|'sensitivity'|'unavailable'>>):boolean}):MessageMetadataWindow {
+    const {limit,maxScan,maxBodyBytes}=options,offset=options.offset??0;
+    assert([limit,maxScan,maxBodyBytes,offset].every(value=>Number.isSafeInteger(value)&&value>=0)&&limit<=256&&maxScan<=4096&&maxBodyBytes<=131072&&offset<=4096&&(options.tail===undefined||typeof options.tail==='boolean')&&typeof options.allow==='function','invalid metadata limits');
+    const empty=(limitedBy:MessageMetadataWindow['limitedBy']):MessageMetadataWindow=>({items:[],emittedCount:0,emittedBodyBytes:0,hasMore:false,limitedBy});
+    let records:Message[];try{records=this.visibleMessageRecords(conversationId,{remaining:maxScan});}catch(error){if(error instanceof MetadataScanLimit)return empty('scan-limit');throw error;}
+    for(const message of records){const meta=Object.freeze({id:message.id,conversationId:message.conversationId,sequence:message.sequence,role:message.role,sensitivity:message.sensitivity,unavailable:this.data.unavailableMessageIds.includes(message.id)});try{if(options.allow(meta)!==true)return empty('denied');}catch{return empty('denied');}}
+    const end=options.tail?Math.max(0,records.length-offset):Math.min(records.length,offset+limit),start=options.tail?Math.max(0,end-limit):Math.min(offset,records.length);
+    const indices=Array.from({length:Math.max(0,end-start)},(_,index)=>start+index);if(options.tail)indices.reverse();
+    const items:MessageMetadata[]=[];let emittedBodyBytes=0,limitedBy:MessageMetadataWindow['limitedBy']=null;
+    for(const index of indices){const message=records[index],remaining=maxBodyBytes-emittedBodyBytes;if(message.content.length>remaining){limitedBy='byte-limit';break;}
+      const bodyBytes=Buffer.byteLength(message.content,'utf8');if(bodyBytes>remaining){limitedBy='byte-limit';break;}
+      items.push({id:message.id,conversationId:message.conversationId,sequence:message.sequence,role:message.role,sensitivity:message.sensitivity,ordinal:index+1,bodyBytes,unavailable:this.data.unavailableMessageIds.includes(message.id)});emittedBodyBytes+=bodyBytes;
+    }
+    if(options.tail)items.reverse();return {items,emittedCount:items.length,emittedBodyBytes,hasMore:start>0||end<records.length||limitedBy!==null,limitedBy};
   }
   branch(input: {
     sourceConversationId: string; sourceMessageId: string; targetKind: Kind;
