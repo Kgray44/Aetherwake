@@ -331,9 +331,32 @@ exports.verify = async ({
         input = card + " .cp-composer textarea",
         send = card + ' .cp-composer button[type="submit"]';
       await click(input);
+      if (expectedMessage !== undefined) await wait(`(()=>{const c=document.querySelector(${q(card)});return [...c.querySelectorAll('.cp-message-user .cp-message-content')].some(e=>e.textContent===${q(expectedMessage)})})()`);
       const bounds = await js(
-        `(()=>{const card=document.querySelector(${q(card)}),body=card.querySelector('.working-content'),input=card.querySelector('.cp-composer textarea'),send=card.querySelector('.cp-composer button[type="submit"]'),b=body.getBoundingClientRect(),c=card.getBoundingClientRect();const inspect=e=>{const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,h=document.elementFromPoint(x,y);return {visible:r.width>0&&r.height>0&&r.top>=Math.max(b.top,c.top)-1&&r.bottom<=Math.min(b.bottom,c.bottom)+1&&r.left>=c.left-1&&r.right<=c.right+1,hit:e===h||e.contains(h),font:parseFloat(getComputedStyle(e).fontSize)}};const messages=card.querySelector('.cp-messages'),m=messages.getBoundingClientRect(),clip={left:Math.max(m.left,b.left,c.left),right:Math.min(m.right,b.right,c.right),top:Math.max(m.top,b.top,c.top),bottom:Math.min(m.bottom,b.bottom,c.bottom)},expected=${q(expectedMessage ?? null)};let userLineVisible=false;if(expected!==null){for(const content of messages.querySelectorAll('.cp-message-user .cp-message-content')){if(content.textContent!==expected||getComputedStyle(content).visibility==='hidden')continue;const range=document.createRange();range.selectNodeContents(content);userLineVisible=[...range.getClientRects()].some(r=>r.width>0&&r.height>0&&r.top>=clip.top-.01&&r.bottom<=clip.bottom+.01&&r.right>clip.left&&r.left<clip.right);if(userLineVisible)break;}}return {input:inspect(input),send:inspect(send),messages:{height:Math.max(0,clip.bottom-clip.top),userLineVisible,canonicalLineRequired:expected!==null}}})()`,
+        `(()=>{
+          const card=document.querySelector(${q(card)}),body=card.querySelector('.working-content'),input=card.querySelector('.cp-composer textarea'),send=card.querySelector('.cp-composer button[type="submit"]'),b=body.getBoundingClientRect(),c=card.getBoundingClientRect();
+          const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};
+          const inspect=e=>{const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,h=document.elementFromPoint(x,y);return {visible:r.width>0&&r.height>0&&r.top>=Math.max(b.top,c.top)-1&&r.bottom<=Math.min(b.bottom,c.bottom)+1&&r.left>=c.left-1&&r.right<=c.right+1,hit:e===h||e.contains(h),font:parseFloat(getComputedStyle(e).fontSize)}};
+          const messages=card.querySelector('.cp-messages'),m=messages.getBoundingClientRect(),style=getComputedStyle(messages),clip={left:Math.max(m.left,b.left,c.left),right:Math.min(m.right,b.right,c.right),top:Math.max(m.top,b.top,c.top),bottom:Math.min(m.bottom,b.bottom,c.bottom)},expected=${q(expectedMessage ?? null)},rows=[];
+          let userLineVisible=false;
+          if(expected!==null){for(const content of [...messages.querySelectorAll('.cp-message-user .cp-message-content')].slice(0,4)){
+            if(content.textContent!==expected)continue;
+            const range=document.createRange();range.selectNodeContents(content);
+            const lines=[...range.getClientRects()].slice(0,16).map(r=>({top:r.top,bottom:r.bottom,left:r.left,right:r.right,width:r.width,height:r.height,inside:r.width>0&&r.height>0&&r.top>=clip.top-.01&&r.bottom<=clip.bottom+.01&&r.right>clip.left&&r.left<clip.right}));
+            const visibility=getComputedStyle(content).visibility,article=content.closest('.cp-message'),actions=article.querySelector('.cp-message-actions');
+            userLineVisible ||= visibility!=='hidden'&&lines.some(r=>r.inside);
+            rows.push({messageId:article.dataset.messageId,content:rect(content),visibility,lineRects:lines,articleMarginBottom:getComputedStyle(article).marginBottom,actions:actions?{...rect(actions),opacity:getComputedStyle(actions).opacity}:null});
+          }}
+          return {input:inspect(input),send:inspect(send),messages:{height:Math.max(0,clip.bottom-clip.top),userLineVisible,canonicalLineRequired:expected!==null,clip,rect:rect(messages),scrollTop:messages.scrollTop,scrollHeight:messages.scrollHeight,clientHeight:messages.clientHeight,paddingTop:style.paddingTop,paddingBottom:style.paddingBottom,rows}};
+        })()`,
       );
+      receipt.shortChat = bounds;
+      if (!bounds.input.visible || !bounds.input.hit || !bounds.send.visible || !bounds.send.hit || bounds.messages.height < 39.99 || (expectedMessage !== undefined && !bounds.messages.userLineVisible)) {
+        if (receipt.screenshots.length < limits.maxScreenshots) {
+          try { await shot("short-chat-readability-failure"); }
+          catch (error) { receipt.readabilityFailureCaptureUnavailable = String(error?.message ?? error).slice(0,1000); }
+        }
+      }
       assert(
         bounds.input.visible &&
           bounds.input.hit &&
@@ -347,7 +370,6 @@ exports.verify = async ({
       );
       assert(bounds.messages.height >= 39.99, "Short normal Chat retains at least 40px of visible transcript");
       if (expectedMessage !== undefined) assert(bounds.messages.userLineVisible, "Short normal Chat exposes at least one complete line of the exact canonical user message");
-      receipt.shortChat = bounds;
       return { input, send };
     };
     await noExecution();
