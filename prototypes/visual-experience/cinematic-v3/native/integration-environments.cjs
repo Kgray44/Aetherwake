@@ -160,7 +160,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         return assertWorkspaceProjection(w, (await rpc('library', { name: 'inspectWorkspace', input: { workspaceId: w.id } })).result);
       };
       const ready = mode => expression('Actual Workspace Actions canonical readiness', `(()=>{const e=document.querySelector(${JSON.stringify(content)});return e?.dataset.workspaceId===${JSON.stringify(fixture.workspaceId)}&&e.dataset.state==='ready'${mode ? `&&e.dataset.mode===${JSON.stringify(mode)}` : ''}})()`);
-      const show = async () => { await action('#layout-manager'); await ready(); };
+      const show = async () => { await action('.aw-workspace-layout button[aria-label="Workspace actions"]'); await ready(); };
       const dismiss = async () => {
         if (await js(`!!document.querySelector(${JSON.stringify(panel)})&&!document.querySelector(${JSON.stringify(panel)}).inert`)) await action(panel + ' .aw-contextual-dismiss');
         await expression('Workspace Actions closes through shared coordinator', `!document.querySelector(${JSON.stringify(panel)})`);
