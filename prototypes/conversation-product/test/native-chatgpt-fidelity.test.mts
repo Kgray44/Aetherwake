@@ -39,7 +39,9 @@ test('documented identity and plan eligibility do not claim app availability or 
 test('eligible inference and local navigation remain outside the 13 native-account aims', () => {
   const report=createNativeChatGPTFidelityDescriptor();
   assert.deepEqual(report.relatedCapabilities.map(item=>item.id),['eligible-plan-responses-inference','local-codex-navigation']);
-  assert.equal(report.relatedCapabilities[0].implementation,'on-hold');
+  assert.equal(report.relatedCapabilities[0].implementation,'in-progress');
+  assert.equal(report.relatedCapabilities[0].reason,'Implementation in progress; account authorization and live inference remain unverified.');
+  assert.equal(report.relatedCapabilities[0].status,'RequiresAdditionalAuthorization');
   assert.equal(report.relatedCapabilities[1].implementation,'source-tested-host-unwired');
   for(const item of report.relatedCapabilities){
     assert.equal(item.satisfiesNativeAccountFidelity,false);
