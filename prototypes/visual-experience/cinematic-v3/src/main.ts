@@ -12,7 +12,11 @@ import type {
 } from "../../../application-contract/contracts.ts";
 import type { Resource } from "./store";
 import "./style.css";
-import { motionPolicy, nextDrawDeadline } from "./policy";
+import {
+  motionPolicy,
+  nextDrawDeadline,
+  DRAW_EARLY_TOLERANCE_MS,
+} from "./policy";
 import { deriveSceneState } from "./scene-state";
 import { registerScene, retargetScene, sceneWeights } from "./scene-transition";
 import {
@@ -1346,8 +1350,10 @@ function tick(now: number) {
       dirty ||
       (transitioning && activeQuality !== "efficient") ||
       (policy.continuous &&
-        (now + 0.25 >= nextDraw || !Number.isFinite(nextDraw))) ||
-      (pointerDirty && now - lastDraw >= pointerCadence - 0.25);
+        (now + DRAW_EARLY_TOLERANCE_MS >= nextDraw ||
+          !Number.isFinite(nextDraw))) ||
+      (pointerDirty &&
+        now - lastDraw >= pointerCadence - DRAW_EARLY_TOLERANCE_MS);
     if (shouldDraw) {
       if (environment && !graphicsFailed) {
         const surfaces = order

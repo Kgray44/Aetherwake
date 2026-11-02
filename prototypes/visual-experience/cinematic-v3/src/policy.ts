@@ -1,4 +1,5 @@
 export type GraphicsTier = "cinematic" | "balanced" | "efficient";
+export const DRAW_EARLY_TOLERANCE_MS = 0.25;
 
 /** A responsive transition may draw before its tier deadline. Start its next
  * interval from that actual draw instead of accumulating future time debt. */
@@ -11,7 +12,7 @@ export function nextDrawDeadline(
   if (!Number.isFinite(cadence)) return Infinity;
   return invalidated ||
     !Number.isFinite(previous) ||
-    now < previous ||
+    now + DRAW_EARLY_TOLERANCE_MS < previous ||
     now - previous > cadence * 4
     ? now + cadence
     : previous + cadence;

@@ -69,6 +69,11 @@ test("165Hz transition draws cannot postpone 60Hz drawing after motion settles",
 
 test("ordinary cadence retains phase while invalidation and long pauses reset from the actual draw", () => {
   assert.equal(nextDrawDeadline(101, 100, 20, false), 120);
+  assert.equal(
+    nextDrawDeadline(99.9, 100, 20, false),
+    120,
+    "ordinary fractional early tolerance retains its phase",
+  );
   assert.equal(nextDrawDeadline(101, 100, 20, true), 121);
   assert.equal(nextDrawDeadline(1000, 100, 20, false), 1020);
   assert.equal(nextDrawDeadline(99, 100, 20, false), 119);
