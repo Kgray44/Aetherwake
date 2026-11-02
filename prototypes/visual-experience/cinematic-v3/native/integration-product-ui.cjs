@@ -25,7 +25,27 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
   let expired = false, timer, totalBytes = 0, driver;
   const foreground = () => assert(!expired && Date.now() < deadline && !win.isDestroyed() && win.isVisible() && !win.isMinimized() && win.isFocused(), 'native_product_ui_focus_or_deadline');
   const graphics = `(()=>{const s=window.__aerynth.snapshot();return {active:s.active,failed:s.graphicsFailed,errors:s.metrics.errors,draws:s.metrics.draws,frames:s.gpu?.framesRendered,contextLost:s.gpu?.contextLost}})()`;
-  const inspect = selector => `(()=>{const root=document.querySelector(${JSON.stringify(selector)}),surface=root?.closest('.aw-contextual-surface');if(!root||!surface)return null;const r=surface.getBoundingClientRect(),body=surface.querySelector('.aw-contextual-content'),composer=root.querySelector('.cp-composer,.vela-core-compose'),input=composer?.querySelector('textarea'),c=composer?.getBoundingClientRect();let opacity=1;for(let e=root;e&&e!==document.body;e=e.parentElement){const s=getComputedStyle(e);if(s.display==='none'||s.visibility==='hidden')return null;opacity*=Number(s.opacity)}return {x:r.x,y:r.y,width:r.width,height:r.height,opacity,inBounds:r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight,outerScrollHeight:body.scrollHeight,outerClientHeight:body.clientHeight,rootScrollWidth:root.scrollWidth,rootClientWidth:root.clientWidth,composerBottom:c?.bottom,bodyBottom:body.getBoundingClientRect().bottom,inputFont:input?parseFloat(getComputedStyle(input).fontSize):null}})()`;
+  const inspect = selector => `(${function (selector) {
+    const root = document.querySelector(selector), surface = root?.closest('.aw-contextual-surface');
+    if (!root || !surface) return null;
+    const r = surface.getBoundingClientRect(), body = surface.querySelector('.aw-contextual-content'),
+      composer = root.querySelector('.cp-composer,.vela-core-compose'), input = composer?.querySelector('textarea'),
+      c = composer?.getBoundingClientRect(), transcript = root.querySelector('.cp-messages'),
+      t = transcript?.getBoundingClientRect(), m = transcript?.querySelector('.cp-message')?.getBoundingClientRect();
+    let opacity = 1;
+    for (let e = root; e && e !== document.body; e = e.parentElement) {
+      const s = getComputedStyle(e);
+      if (s.display === 'none' || s.visibility === 'hidden') return null;
+      opacity *= Number(s.opacity);
+    }
+    return { x: r.x, y: r.y, width: r.width, height: r.height, opacity,
+      inBounds: r.left >= 0 && r.top >= 0 && r.right <= innerWidth && r.bottom <= innerHeight,
+      outerScrollHeight: body.scrollHeight, outerClientHeight: body.clientHeight,
+      rootScrollWidth: root.scrollWidth, rootClientWidth: root.clientWidth,
+      composerBottom: c?.bottom, bodyBottom: body.getBoundingClientRect().bottom,
+      inputFont: input ? parseFloat(getComputedStyle(input).fontSize) : null,
+      transcript: t ? { height: t.height, visibleMessageHeight: m ? Math.max(0, Math.min(m.bottom, t.bottom) - Math.max(m.top, t.top)) : 0 } : null };
+  }.toString()})(${JSON.stringify(selector)})`;
   const run = async () => {
     assert(/^review-ui-polish-/.test(path.basename(privateRoot)), 'Only a dedicated synthetic polish profile is authorized');
     const setup = JSON.parse(await fs.readFile(path.join(privateRoot, 'ui-polish-setup.json'), 'utf8'));
@@ -38,13 +58,25 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
     const desktop = () => js("window.aerynthHost.command('desktop',{type:'snapshot'})");
     const noExecution = async () => assert.deepEqual(await js("window.aerynthHost.command('executionStatus',{})"), [], 'No provider execution authorized');
     await noExecution(); const before = await desktop();
+    // Bounded diagnostics of the actual synthetic note's presentation layers.
+    // Text stays in private evidence and never enters a public source receipt.
+    receipt.noteLayers = await js(`(()=>[...document.querySelectorAll('.folio[data-block-kind="note"]')].slice(0,10).map(root=>({
+      blockId:root.dataset.block,classes:root.className,
+      layers:['.folio-preview','.aw-block-compact','.working-content','.resource-anchor'].map(selector=>{
+        const e=root.querySelector(selector);if(!e)return {selector,missing:true};
+        const s=getComputedStyle(e),r=e.getBoundingClientRect();return {selector,display:s.display,visibility:s.visibility,opacity:s.opacity,
+          x:r.x,y:r.y,width:r.width,height:r.height,text:e.textContent.slice(0,160)};
+      })
+    })))()`);
     const capture = async (selector, name) => {
       receipt.phase = 'Inspect ' + selector;
-      const prior = await js(graphics); let bounds, acknowledgement;
+      const prior = await js(graphics); let bounds, acknowledgement, last, stable = 0;
       for (let sample = 0; sample < 70; sample++) {
         foreground(); bounds = await js(inspect(selector)); const current = await js(graphics);
         receipt.lastBounds = bounds; receipt.lastGraphics = { prior, current };
-        if (bounds?.opacity >= .995 && freshGraphics(prior, current)) { acknowledgement = current; break; }
+        stable = bounds?.opacity >= .995 && last && ['x', 'y', 'width', 'height'].every(key => Math.abs(bounds[key] - last[key]) < .75) ? stable + 1 : 0;
+        last = bounds;
+        if (stable >= 3 && freshGraphics(prior, current)) { acknowledgement = current; break; }
         await pause(60);
       }
       assert(acknowledgement, 'Fresh actual focused GPU draw and visible panel required');
@@ -54,6 +86,10 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
       assert(bounds.outerScrollHeight <= bounds.outerClientHeight + 2, 'Outer surface scrolls instead of transcript');
       assert(bounds.composerBottom <= bounds.bodyBottom + 2, 'Composer extends outside measured host');
       assert(bounds.inputFont >= 15.95, 'Composer below 16px body baseline');
+      if (selector === '.cp-manager') {
+        assert(bounds.transcript?.height >= 80, 'Conversation transcript collapsed');
+        assert(bounds.transcript.visibleMessageHeight >= 40, 'Canonical message is clipped outside its transcript');
+      }
       foreground(); const png = (await win.webContents.capturePage()).toPNG(); foreground();
       assert(receipt.captures.length < 2 && totalBytes + png.length <= 8388608, 'PNG capacity exceeded');
       const file = path.join(out, name + '.png'); await fs.writeFile(file, png); totalBytes += png.length;

@@ -1011,7 +1011,7 @@ export function installApplication(hooks: Hooks) {
       anchor: el(".brand"),
       content,
       label: "Conversations",
-      minSize: { width: 560, height: 360 },
+      minSize: { width: 560, height: 560 },
       maxSize: { width: 1100, height: 760 },
       initialFocus: '.cp-toolbar input[type="search"]',
       beforeClose: async () => {
