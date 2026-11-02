@@ -216,9 +216,9 @@ export class ConversationProduct implements ConversationProductPort {
   let live: CommandMap['capabilities']['output'] | undefined; try { live = this.host.capabilitySnapshot ? this.host.capabilitySnapshot() : await this.host.command('capabilities',{}); } catch { /* catalog is not proof of a connected provider */ }
   const local = v.graphMetadata.providers.find(p => p.id === 'local') ?? v.graphMetadata.providers.find(p=>p.id==='mock-ordinary');
   const items: ProviderCapability[] = [{ id: local?.id ?? 'local', label: 'Local conversation', available: true, record: true, execute: false, nativeFork:false, history:'local', simulated:false, models:[] }];
-  const codex = v.graphMetadata.providers.find(p => p.id !== local?.id && p.id!=='mock-ordinary' && p.id!=='local');
-  const authenticated=live?.authentication==='available';
-  if (codex) items.push({id:codex.id,label:live?.mock ? 'Codex fixture (simulated)' : 'Codex',available:authenticated,record:true,execute:authenticated,nativeFork:false,history:'local',simulated:live?.mock ?? codex.mock,models:live?.models ?? [],reason:authenticated?'Connected and authenticated; model catalog only. Execution outcomes are recorded per turn.':'Provider disconnected or authentication unavailable'});
+  const codex = v.graphMetadata.providers.find(p=>p.id==='codex-app-server')??v.graphMetadata.providers.find(p=>p.id==='fixture-codex');
+  const observed=!!codex&&live?.providerId===codex.id,authenticated=observed&&live?.authentication==='available',simulated=observed?live!.mock:!!codex?.mock;
+  if (codex) items.push({id:codex.id,label:simulated ? 'Codex fixture (simulated)' : 'Codex',available:authenticated,record:true,execute:authenticated,nativeFork:false,history:'local',simulated,models:observed?live!.models:[],reason:authenticated?'Connected and authenticated; model catalog only. Execution outcomes are recorded per turn.':'Provider disconnected or authentication unavailable'});
   const accountFidelity=createNativeChatGPTFidelityDescriptor();
   items.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:accountFidelity.reason,reasonCode:accountFidelity.reasonCode,accountFidelity,simulated:false,models:[]});
   return items;
