@@ -42,6 +42,12 @@ import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
 import { createContextualSurfaces } from "./contextual-surfaces";
 import "./contextual-surfaces.css";
+import {
+  mountBlockLibrary,
+  mountWorkspaceTemplates,
+} from "../../../block-library/view.ts";
+import "../../../block-library/style.css";
+import { createLibraryClient } from "./library-client";
 import type {
   Block,
   BlockKind,
@@ -118,6 +124,10 @@ export function installApplication(hooks: Hooks) {
         hooks.vela("attention");
       else hooks.vela("idle");
     },
+  });
+  const libraryClient = createLibraryClient({
+    command: (name, input) => host.command!(name, input),
+    apply: (snapshot) => apply(snapshot),
   });
   let state: DesktopSnapshot | null = null;
   let offset = { x: 0, y: 0 };
@@ -918,6 +928,36 @@ export function installApplication(hooks: Hooks) {
           projectId: String(f.get("projectId")) || null,
         });
       });
+      dialog.insertAdjacentHTML(
+        "beforeend",
+        '<p>Start blank, reuse a saved template or preset, or ask Vela to help compose a workspace.</p><button id="workspace-templates">Browse templates and presets</button><button id="workspace-ask-vela">Ask Vela</button>',
+      );
+      el("#workspace-templates", dialog).onclick = () => {
+        const projectId =
+          el<HTMLSelectElement>('select[name="projectId"]', dialog).value ||
+          null;
+        dialog.close();
+        templates(projectId);
+      };
+      el("#workspace-ask-vela", dialog).onclick = () => {
+        const title = el<HTMLInputElement>(
+          "#workspace-title",
+          dialog,
+        ).value.trim();
+        const projectId =
+          el<HTMLSelectElement>('select[name="projectId"]', dialog).value ||
+          null;
+        const project = state?.projects.find((p) => p.id === projectId);
+        dialog.close();
+        openVela();
+        const composer = el<HTMLTextAreaElement>(
+          ".vela-core-compose textarea",
+          velaContent,
+        );
+        if (!composer.value.trim())
+          composer.value = `Help me create ${title ? `a workspace named “${title}”` : "a workspace"}${project ? ` in project “${project.title}” (${project.id})` : ""} from available resources. Prepare a plan for my review.`;
+        composer.focus();
+      };
     };
     dialog.querySelectorAll<HTMLElement>("[data-workspace]").forEach(
       (b) =>
@@ -1002,24 +1042,57 @@ export function installApplication(hooks: Hooks) {
       manager();
       return;
     }
-    open(
-      "Give an idea a place",
-      '<form><label>Block type<select id="block-kind" name="kind"><option value="conversation">Conversation</option><option value="note">Note</option><option value="research">Research / document</option><option value="task">Task</option><option value="reference">Resource reference</option><option value="stream">Intelligence Stream</option></select></label><label>Title<input name="title" id="block-title" value="Untitled" required maxlength="200"></label><label>Conversation provider<select name="provider"><option value="local">Local conversation · no model response</option><option value="codex">Codex App Server · explicit authorization on Send</option></select></label><p>Notes, documents, tasks and references work locally. Task automation and file execution are unavailable.</p><button type="submit">Add block</button></form>',
-    );
-    el<HTMLSelectElement>("#block-kind", dialog).insertAdjacentHTML(
-      "beforeend",
-      '<option value="task_group">Task group</option>',
-    );
-    form(async (f) => {
-      const next = await command({
-        type: "createResource",
-        kind: String(f.get("kind")) as BlockKind,
-        title: String(f.get("title")),
-        provider: String(f.get("provider")) as "local" | "codex",
-        workspaceId: state!.activeWorkspaceId,
-      });
-      const b = next.blocks.at(-1);
-      if (b) reveal(b.id);
+    const workspaceId = state.activeWorkspaceId;
+    const content = document.createElement("div");
+    content.className = "application-library-content";
+    let controller: ReturnType<typeof mountBlockLibrary> | undefined;
+    surfaces.open({
+      id: "block-library",
+      anchor: el(".aw-workspace-add"),
+      content,
+      label: "Add to workspace",
+      minSize: { width: 480, height: 300 },
+      maxSize: { width: 960, height: 740 },
+      onClose: () => controller?.dispose(),
+    });
+    controller = mountBlockLibrary(content, libraryClient, {
+      workspaceId,
+      expectedLayoutVersion: () => {
+        if (state?.activeWorkspaceId !== workspaceId)
+          throw Error("workspace_changed");
+        return state.layoutVersion;
+      },
+      onClose: () => surfaces.close("block-library"),
+      onCreated: (result) => {
+        surfaces.close("block-library");
+        reveal(result.placementId);
+        hooks.focus(result.placementId);
+      },
+    });
+  }
+  function templates(projectId: string | null) {
+    const content = document.createElement("div");
+    content.className = "application-library-content";
+    let controller: ReturnType<typeof mountWorkspaceTemplates> | undefined;
+    surfaces.open({
+      id: "workspace-templates",
+      anchor: el("#workspace-manager"),
+      content,
+      label: "Workspace templates",
+      minSize: { width: 480, height: 300 },
+      maxSize: { width: 980, height: 760 },
+      onClose: () => controller?.dispose(),
+    });
+    controller = mountWorkspaceTemplates(content, libraryClient, {
+      projectId,
+      expectedProjectVersion: state?.projects.find((p) => p.id === projectId)
+        ?.version,
+      currentWorkspace: () => state,
+      onApplied: () => {
+        surfaces.close("workspace-templates");
+        hooks.home();
+      },
+      onClose: () => surfaces.close("workspace-templates"),
     });
   }
   function picker() {

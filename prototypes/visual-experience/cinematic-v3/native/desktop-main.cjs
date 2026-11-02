@@ -243,6 +243,19 @@ app.whenReady().then(async () => {
         !["replay", "executionStatus", "interrupt"].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "vela" && isVelaRead(input)) &&
+        !(
+          command === "library" &&
+          [
+            "capabilities",
+            "preferences",
+            "findResources",
+            "listTemplates",
+            "getTemplate",
+            "getBlockSettings",
+            "previewTemplate",
+            "previewWorkspaceFromResources",
+          ].includes(input?.name)
+        ) &&
         !(command === "desktop" && input?.type === "snapshot")
       )
         throw new Error("storage_reserve_admission_denied");
@@ -319,6 +332,8 @@ app.whenReady().then(async () => {
         result = await conversationCommand({ win, dialog, call, input });
       } else if (command === "vela") {
         result = await velaCommand({ win, dialog, call, input });
+      } else if (command === "library") {
+        result = await call("library", input);
       } else throw new Error("unsupported_command");
       return { ok: true, result };
     } catch (e) {

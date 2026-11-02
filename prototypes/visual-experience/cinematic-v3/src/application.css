@@ -12,6 +12,13 @@
   padding: 0;
   font: inherit;
 }
+.application-library-content .aw-library {
+  padding: 0;
+  border: 0;
+  max-height: none;
+  box-shadow: none;
+  background: transparent;
+}
 .application-vela-content .vela-core-message,
 .application-vela-content .vela-core-plan,
 .application-vela-content .vela-core-attention article,
