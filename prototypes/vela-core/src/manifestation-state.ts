@@ -19,6 +19,7 @@ export interface VelaManifestationState {
 }
 export type VelaManifestationSource = Readonly<Pick<VelaState, 'conversation' | 'requests' | 'plans' | 'receipts'>>;
 const required = new Set<VelaPlan['state']>(['prepared', 'approved', 'applying', 'unknown']);
+export const requiresVelaPlanAttention = (state: VelaPlan['state']): boolean => required.has(state);
 const planStates = new Set<VelaPlan['state']>(['prepared', 'approved', 'rejected', 'applying', 'applied', 'failed', 'cancelled', 'unknown']);
 const id = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
 /** Ambiguous duplicate IDs cannot manufacture an object selection. No body values are read. */
@@ -54,7 +55,7 @@ export function projectVelaManifestation(state: VelaManifestationSource | null, 
   if (!state || !conversation || !historyResource) return empty();
   const requests = unique(state.requests.filter(request => request.conversationId === historyResource.resourceId)), messages = unique(conversation.messages);
   const plans = unique(state.plans.filter(plan => requests.get(plan.requestId)?.planId === plan.id && planStates.has(plan.state) && plan.steps.length > 0));
-  const ordered = [...requests.values()], requiredRequests = ordered.filter(request => { const plan = plans.get(request.planId ?? ''); return plan && required.has(plan.state); });
+  const ordered = [...requests.values()], requiredRequests = ordered.filter(request => { const plan = plans.get(request.planId ?? ''); return plan && requiresVelaPlanAttention(plan.state); });
   const requiredPlanIds = requiredRequests.map(request => request.planId!);
   const selected = selection.selectedRequestId === null ? undefined : requests.get(selection.selectedRequestId);
   const request = requiredRequests.at(-1) ?? selected ?? ordered.at(-1); if (!request) return empty();
