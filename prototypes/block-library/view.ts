@@ -1109,7 +1109,7 @@ export function mountWorkspaceTemplates(
       tile.style.width = (p.width / width) * 100 + "%";
       tile.style.height = (p.height / height) * 100 + "%";
       tile.style.borderRadius =
-        p.shape === "circle" || p.shape === "pill" ? "50%" : p.shape === "rectangle" ? "0" : "8px";
+        p.shape === "circle" ? "50%" : p.shape === "pill" ? "999px" : p.shape === "rectangle" ? "0" : "8px";
       tile.title = placementLabel(template, placement) + " · " + p.shape;
       diagram.append(tile);
     }
