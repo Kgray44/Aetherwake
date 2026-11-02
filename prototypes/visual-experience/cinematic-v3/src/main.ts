@@ -324,6 +324,7 @@ function restAt(id: string, slot: number) {
     const size = minimizedCardSize(
       block,
       application?.blockMinimized(id) ?? false,
+      zoom,
     );
     return {
       x: block.x * zoom + offset.x,
