@@ -83,6 +83,10 @@ import "./workspace-actions.css";
 import { createClipboardClient } from "../../../application-contract/clipboard.ts";
 import { createControlMotion } from "./control-motion.ts";
 import "./control-motion.css";
+import { createProductClients } from "./product-clients.ts";
+import { mountAgentLibrary } from "../../../agent-product/view.ts";
+import "../../../agent-product/view.css";
+import type { ExperienceMotionPort } from "../../../application-contract/motion.ts";
 import type { ProviderConnectionStatus } from "../../../application-contract/provider-connections.ts";
 import { mountDirectResourceExperience } from "../../../block-library/direct-resource-view.ts";
 import "../../../block-library/direct-resource-view.css";
@@ -310,6 +314,24 @@ export function installApplication(hooks: Hooks) {
     command: (name, input) => host.command!(name, input),
     apply: (snapshot) => apply(snapshot),
   });
+  const productClients = createProductClients({
+    command: (name, input) => host.command!(name, input),
+    apply: (snapshot) => apply(snapshot),
+  });
+  const experienceMotion: ExperienceMotionPort = {
+    get reduced() {
+      return hooks.motion.reduced;
+    },
+    add: (key, pose) => hooks.motion.add(key, pose),
+    target: (key, pose, cause) => hooks.motion.target(key, pose, cause),
+    pose: (key) => hooks.motion.pose(key),
+    remove: (key) => {
+      hooks.motion.bodies.delete(key);
+    },
+    wake: hooks.wake,
+  };
+  let agentLibrary: ReturnType<typeof mountAgentLibrary> | null = null;
+  let agentSurface: ContextualSurfaceRequest | null = null;
   const noteSessions = new Map<string, NoteSession>();
   const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
   const groupViews = new Map<
@@ -550,6 +572,8 @@ export function installApplication(hooks: Hooks) {
           reveal(placement.blockId);
           hooks.focus(placement.blockId);
         });
+      } else if (result.presentation.kind === "agent") {
+        await showAgents(resource.id);
       } else if (result.presentation.kind === "conversation") {
         surfaces.close("canonical-resource");
         await showConversations(
@@ -577,6 +601,7 @@ export function installApplication(hooks: Hooks) {
     () => {
       environmentNavigator?.dispose();
       workspaceActions?.dispose();
+      agentLibrary?.dispose();
       controlMotion.dispose();
       resourceOpener.cancel();
       directResources.dispose();
@@ -680,7 +705,7 @@ export function installApplication(hooks: Hooks) {
     "Observed application/provider activity · private reasoning unavailable";
   el("#status").textContent = "Ready.";
   el(".place").innerHTML =
-    '<button id="workspace-manager" title="Projects and workspaces (Ctrl+K)">Workspaces ↗</button><button id="application-new-chat">＋ Chat</button><button id="application-resources">Resources</button><button id="application-connections" aria-label="Connections" title="Connections">⌁</button>';
+    '<button id="workspace-manager" title="Projects and workspaces (Ctrl+K)">Workspaces ↗</button><button id="application-new-chat">＋ Chat</button><button id="application-agents" data-aerynth-motion-control="true">Agents</button><button id="application-resources">Resources</button><button id="application-connections" aria-label="Connections" title="Connections">⌁</button>';
   const dock = el(".dock");
   dock.insertAdjacentHTML(
     "afterbegin",
@@ -1297,6 +1322,40 @@ export function installApplication(hooks: Hooks) {
   function conversations(resourceId?: string) {
     if (resourceId) openCanonicalResource(resourceId);
     else void showConversations().catch(report);
+  }
+  async function showAgents(resourceId?: string): Promise<void> {
+    if (!agentLibrary || !agentSurface) {
+      const content = document.createElement("div");
+      content.className = "application-agent-content";
+      agentLibrary = mountAgentLibrary(content, {
+        client: productClients.agents,
+        motion: experienceMotion,
+        onOpenResource: openCanonicalResource,
+      });
+      agentSurface = {
+        id: "agents",
+        anchor: el("#application-agents"),
+        content,
+        label: "Agents",
+        placement: "bottom",
+        minSize: { width: 520, height: 360 },
+        maxSize: { width: 900, height: 720 },
+        preferredSize: { width: 760, height: 560 },
+        initialFocus: ".agent-search",
+        beforeClose: () => {
+          if (!agentLibrary?.hasUnsavedChanges()) return true;
+          hooks.status(
+            "Save or discard the agent profile changes before closing.",
+          );
+          return false;
+        },
+      };
+    }
+    surfaces.open(agentSurface).classList.add("application-agents");
+    if (resourceId) {
+      const opened = await agentLibrary.open(resourceId);
+      if (opened === "unavailable") hooks.status("This agent is unavailable.");
+    } else await agentLibrary.refresh();
   }
   async function showConversations(
     resourceId?: string,
@@ -3241,6 +3300,9 @@ export function installApplication(hooks: Hooks) {
   });
   el("#workspace-manager").onclick = manager;
   el("#application-resources").onclick = picker;
+  el("#application-agents").onclick = () => {
+    void showAgents().catch(report);
+  };
   el("#application-new-chat").onclick = () => {
     void newConversation().catch(report);
   };
@@ -3465,6 +3527,7 @@ export function installApplication(hooks: Hooks) {
       surfaces.frame(now);
       environmentNavigator?.frame();
       workspaceActions?.frame();
+      agentLibrary?.frame();
       controlMotion.frame();
       velaExperience.frame(policy);
       velaManifestation.frame(policy);
@@ -3600,6 +3663,10 @@ export function installApplication(hooks: Hooks) {
     geometry,
     run,
     flush: async () => {
+      if (agentLibrary?.hasUnsavedChanges())
+        throw Error(
+          "Save or discard the agent profile changes before closing.",
+        );
       await flush();
       await constellation?.controller.persist();
       await flush();

@@ -1,4 +1,4 @@
-import type { BlockKind, Resource } from './contracts.ts';
+import type { CanonicalResourceKind, Resource } from './contracts.ts';
 
 /** Browser-safe identity/presentation contract. Opening never places or mutates. */
 export const RESOURCE_OPENING_CONTRACT='aerynth.resource-opening@1' as const;
@@ -16,7 +16,7 @@ export type ResourceOpeningResult=
  | {contract:typeof RESOURCE_OPENING_CONTRACT;status:'ready';resourceId:string;
     /** Conversation messages are deliberately not hydrated here. Use the same
      * canonical chat/draft ports; an empty projection is not a history count. */
-    resource:Resource;presentation:{kind:BlockKind;mode:'direct'|'existing-placement'};
+    resource:Resource;presentation:{kind:CanonicalResourceKind;mode:'direct'|'existing-placement'};
     placement?:{workspaceId:string;blockId:string};placementStatus?:'verified'|'unavailable';selection?:{messageId:string}}
  | {contract:typeof RESOURCE_OPENING_CONTRACT;status:'unavailable';resourceId:string;reason:'resource-unavailable'|'selection-unavailable'}
  | {contract:typeof RESOURCE_OPENING_CONTRACT;status:'unsupported';resourceId:string;reason:'resource-kind-unsupported'|'message-selection-unsupported';kind?:string};

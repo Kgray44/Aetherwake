@@ -4,7 +4,8 @@ import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import type { DatabaseSync } from 'node:sqlite';
-import type { Resource as PublicResource, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
+import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
+import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
 import { RESOURCE_OPENING_CONTRACT, parseResourceOpeningInput, type ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
 import { CHATGPT_PLAN_PROVIDER,PROVIDER_CONNECTION_CONTRACT,type ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
 import { ResponsesTransport,prepareResponsesTurn } from '../../openai-provider/responses.mts';
@@ -190,6 +191,32 @@ export class BackendCore {
       this.ordinaryConnections=ordinaryTest?.connection??new OpenAIConnections({db:this.db,transaction:work=>this.kernel.withTransaction(()=>work(this.db)),nativeHost:this.nativeHostServices,localEligibility:{kind:'local-personal-project',scope:'current-owner-local-installation',decisionRef:'aerynth.owner-local-personal-inference'}});
       this.record('stream/reopened', 'inferred');
     } catch (error) { this.kernel.close(); throw error; }
+  }
+  private productResourceAccess(id:string,messageId?:string):boolean {
+    if(this.libraryAuthorized({kind:'resource',id}))return this.conversationReadAccess(id,messageId);
+    if(messageId!==undefined)return false;
+    // Restoring the owner's archived profile is an explicit management action.
+    // Archived metadata never opens an active resource or broadens project access.
+    if(!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='agent_product_profiles'").get())return false;
+    const row=this.db.prepare("SELECT r.project_id FROM resources r JOIN desktop_resources d ON d.resource_id=r.id JOIN agent_product_profiles a ON a.resource_id=r.id WHERE r.id=? AND r.kind='generic' AND d.kind='agent' AND r.state='archived' AND a.owner_id='local-owner'").get(id);
+    return !!row&&(row.project_id===null||this.libraryAuthorized({kind:'project',id:String(row.project_id)}));
+  }
+  private productDomains() {
+    return compositeProductDomains({kernel:this.kernel,db:this.db,
+      projectAccess:id=>this.libraryAuthorized({kind:'project',id}),resourceAccess:(id,messageId)=>this.productResourceAccess(id,messageId),
+      catalog:()=>{
+        const observed=this.capabilityCache.inspect(),cap=observed.state==='fresh'?observed.capability:undefined;
+        if(!cap||cap.mock)return null;
+        return {revision:observed.observedAt??'unobserved',providers:[{id:cap.providerId,state:cap.authentication==='available'?'available':cap.authentication==='unavailable'?'unavailable':'unknown',models:cap.models.map(id=>({id,reasoningEfforts:[]})),capabilities:[]}]};
+      },
+      recordEvent:event=>this.record(event.type,'observed',undefined,'product:'+event.commandId+':'+event.type,{providerId:'aerynth-native',detached:true,resourceId:event.resourceId,correlationId:event.commandId,payload:{redacted:true,application:{resourceVersion:event.resourceVersion,commandId:event.commandId,detail:event.detail}}}),
+    });
+  }
+  private async productCommand(family:'agents'|'checklists',operation:AgentRequest|ChecklistRequest) {
+    const read=family==='agents'?isAgentRead(operation):isChecklistRead(operation);
+    const execute=()=>{const domains=this.productDomains();return family==='agents'?domains.agent(operation as AgentRequest):domains.checklist(operation as ChecklistRequest);};
+    const result=read?execute():this.atomic(execute);
+    return read?{result}:{result,desktop:await this.command('desktop',{type:'snapshot'})};
   }
   private libraryAuthorized(subject:{kind:'project'|'workspace'|'resource';id:string}):boolean {
     const table=subject.kind==='project'?'projects':subject.kind==='workspace'?'workspaces':'resources';
@@ -864,9 +891,10 @@ export class BackendCore {
     return this.kernel.withTransaction(()=>{
       const row=this.db.prepare('SELECT r.*,d.kind AS desktop_kind,d.metadata_json FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=?').get(resourceId);
       if(!row||row.state!=='active'||!this.libraryAuthorized({kind:'resource',id:resourceId})||!this.conversationReadAccess(resourceId))return unavailable();
-      const actualKind=row.kind==='conversation'?'conversation':row.desktop_kind??(row.kind==='generic'?'reference':row.kind),kinds:BlockKind[]=['conversation','note','research','task','task_group','reference','stream'];
+      const actualKind=row.kind==='conversation'?'conversation':row.desktop_kind??(row.kind==='generic'?'reference':row.kind),kinds:CanonicalResourceKind[]=['conversation','note','research','task','task_group','reference','stream','agent','checklist'];
       if(!kinds.includes(actualKind as BlockKind)||actualKind==='conversation'&&row.kind!=='conversation')return {...base,status:'unsupported',reason:'resource-kind-unsupported',kind:String(actualKind).slice(0,64)};
-      const kind=actualKind as BlockKind;
+      const kind=actualKind as CanonicalResourceKind;
+      if(kind==='agent'||kind==='checklist')try{const domains=this.productDomains();if(kind==='agent')domains.agent({name:'inspect',input:{resourceId}});else domains.checklist({name:'read',input:{resourceId}});}catch{return unavailable();}
       if(request.selection&&kind!=='conversation')return {...base,status:'unsupported',reason:'message-selection-unsupported',kind};
       const conversation=kind==='conversation'?this.state.graph.conversations.find(c=>c.id===this.state.resources[resourceId]):undefined;
       if(kind==='conversation'&&!conversation)return unavailable();
@@ -874,7 +902,7 @@ export class BackendCore {
       // Conversation history/drafts retain their existing canonical ports; this
       // is an opening projection, not a second transcript or a guessed count.
       const resource:PublicResource={id:resourceId,title:String(row.title),kind,version:Number(row.version),project_id:row.project_id===null?null:String(row.project_id),state:'active',visible:true,available:true,content:'',provider:conversation?.kind==='codex'?'codex':'local',messages:[],...(conversation?{providerId:conversation.providerId,conversationRevision:this.state.revisions[resourceId]}:{})};
-      if(kind!=='conversation')resource.content=this.kernel.getResource(resourceId).note?.content??'';
+      if(kind!=='conversation'&&kind!=='agent'&&kind!=='checklist')resource.content=this.kernel.getResource(resourceId).note?.content??'';
       if(kind==='task'||kind==='task_group'){
         let metadata:Record<string,unknown>;try{metadata=JSON.parse(String(row.metadata_json??'{}'));if(!metadata||typeof metadata!=='object'||Array.isArray(metadata))return unavailable();}catch{return unavailable();}
         if(kind==='task'){
@@ -1319,6 +1347,10 @@ export class BackendCore {
     // Reads, interruption and durable draft recovery remain available during
     // execution. Canonical mutations retain source/approval fences.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft'];
+    if(name==='agents'||name==='checklists'){
+      ensure((name==='agents'?isAgentRead(a):isChecklistRead(a))||!this.active,'execution_busy');
+      return this.productCommand(name,a) as any;
+    }
     if (!(name==='close'&&this.active?.providerId===CHATGPT_PLAN_PROVIDER)&&!(name==='conversation'&&a?.name==='saveDraft')&&!['providerActivity','providerConnection','providerAuth','ordinaryProviderStatus','ordinaryProviderCheck','openResource','snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['inspectWorkspace','capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {
       case 'providerAuth':return this.providerAuth(a) as any;

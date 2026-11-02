@@ -40,7 +40,8 @@
   background: transparent;
 }
 .application-environments.aw-contextual-surface,
-.application-workspace-actions.aw-contextual-surface {
+.application-workspace-actions.aw-contextual-surface,
+.application-agents.aw-contextual-surface {
   width: 420px;
   padding: 14px 12px 12px;
   gap: 8px;
@@ -57,25 +58,32 @@
   backdrop-filter: blur(24px) saturate(1.12);
 }
 .application-environments > .aw-contextual-heading,
-.application-workspace-actions > .aw-contextual-heading {
+.application-workspace-actions > .aw-contextual-heading,
+.application-agents > .aw-contextual-heading {
   padding-inline: 8px 0;
   color: #dae9e5;
   font-size: 12px;
   letter-spacing: 0.08em;
 }
 .application-environments > .aw-contextual-content,
-.application-workspace-actions > .aw-contextual-content {
+.application-workspace-actions > .aw-contextual-content,
+.application-agents > .aw-contextual-content {
   overflow: hidden;
   padding: 3px;
 }
 @media (forced-colors: active) {
   .application-environments.aw-contextual-surface,
-  .application-workspace-actions.aw-contextual-surface {
+  .application-workspace-actions.aw-contextual-surface,
+  .application-agents.aw-contextual-surface {
     background: Canvas;
     color: CanvasText;
     border-color: CanvasText;
     box-shadow: none;
   }
+}
+.application-agent-content {
+  min-height: 0;
+  height: 100%;
 }
 .application-conversation-content {
   display: flex;

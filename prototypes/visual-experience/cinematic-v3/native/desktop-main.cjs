@@ -27,6 +27,7 @@ const {
   isConversationRead,
 } = require("./conversation-broker.cjs");
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
+const { productCommand, isProductRead } = require("./product-commands.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
 const { createProtectedStorageBroker } = require("./protected-storage.cjs");
 const { createClipboardCapability } = require("./clipboard-capability.cjs");
@@ -65,6 +66,8 @@ for (const folder of [
   "prototypes/vela-core/src",
   "prototypes/conversation-product/src",
   "prototypes/block-library",
+  "prototypes/agent-product",
+  "prototypes/checklist-product",
   "prototypes/visual-experience/cinematic-v3/src",
   "prototypes/visual-experience/cinematic-v3/native",
 ])
@@ -374,7 +377,11 @@ app.whenReady().then(async () => {
         throw new Error("unauthorized_sender");
       if (
         Buffer.byteLength(JSON.stringify(input ?? {})) >
-        (command === "viewState" ? 2 * 1024 * 1024 + 1024 : 200000)
+        (command === "viewState"
+          ? 2 * 1024 * 1024 + 1024
+          : command === "checklists"
+            ? 600 * 1024
+            : 200000)
       )
         throw new Error("command_too_large");
       if (
@@ -389,6 +396,7 @@ app.whenReady().then(async () => {
         ].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "vela" && isVelaRead(input)) &&
+        !isProductRead(command, input) &&
         !(command === "notes" && input?.name === "readNote") &&
         !(command === "providerConnection" && input?.type === "status") &&
         !(
@@ -506,6 +514,8 @@ app.whenReady().then(async () => {
         result = await call("library", input);
       } else if (command === "notes") {
         result = await call("notes", input);
+      } else if (command === "agents" || command === "checklists") {
+        result = await productCommand({ family: command, input, call });
       } else throw new Error("unsupported_command");
       return { ok: true, result };
     } catch (e) {

@@ -30,6 +30,8 @@ export type BlockKind =
   | "stream"
   | "file"
   | "link";
+/** Canonical domains can exist before a workspace presenter is registered. */
+export type CanonicalResourceKind = BlockKind | "agent" | "checklist";
 export type Shape =
   | "rectangle"
   | "rounded"
@@ -114,7 +116,7 @@ export type Workspace = {
 export type Resource = {
   id: string;
   title: string;
-  kind: BlockKind;
+  kind: CanonicalResourceKind;
   version: number;
   content: string;
   /** Safe metadata only. Native file references and playback authority stay in the host. */

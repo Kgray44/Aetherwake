@@ -14,6 +14,7 @@ import type { NoteExperienceService } from '../../block-library/note-service.mts
 import type { CapabilityCatalogProjection, CapabilityDiscoveryDeclaration, CapabilityNativeCall, CapabilityToolReply } from '../../vela-core/src/capability-catalog.mts';
 import type { ProviderHistory } from '../../vela-core/src/bounded-history.mts';
 import type { HistoryOmissionReason } from '../../vela-core/src/bounded-history.mts';
+import type { AgentRequest,ChecklistRequest,AgentResponse,ChecklistResponse,DomainEvent } from './product-domains.mts';
 export type NoteMethod = 'readNote'|'saveNoteDraft'|'commitNote'|'discardNoteDraft'|'renameNote';
 export type NoteRequest = { [K in NoteMethod]: {name:K;input:Parameters<NoteExperienceService[K]>[0]} }[NoteMethod];
 export type LibraryMethod = 'capabilities'|'preferences'|'setFavorite'|'getBlockSettings'|'configureBlock'|'findResources'|'attachBlock'|'createBlock'|'listTemplates'|'getTemplate'|'saveTemplate'|'renameTemplate'|'archiveTemplate'|'previewTemplate'|'applyTemplate'|'previewWorkspaceFromResources'|'workspaceFromResources'|'requestVelaTemplate'|'subjectTargets'|'createSubjectBlock'|'projectOverview'|'browseResources';
@@ -110,7 +111,7 @@ export interface StreamEvent {
   correlationId: string | null; causationId: string | null;
   receivedAt: string; providerTime: number | null; providerTimeSource: string | null;
   type: string; classification: Classification;
-  status: string | null; payload: { redacted: true; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus };
+  status: string | null; payload: { redacted: true; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent,'resourceVersion'|'commandId'|'detail'> };
 }
 export interface HandoffReview {
   id: string; resourceId: string; sourceResourceId: string; targetProviderId: string;
@@ -148,6 +149,8 @@ export interface CommandMap {
   conversationActivity: { input: { resourceIds: string[] }; output: ConversationActivitySnapshot };
   notes: {input:NoteRequest;output:LibraryResponse};
   library: {input:LibraryRequest;output:LibraryResponse};
+  agents: {input:AgentRequest;output:{result:AgentResponse;desktop?:DesktopSnapshot}};
+  checklists: {input:ChecklistRequest;output:{result:ChecklistResponse;desktop?:DesktopSnapshot}};
   vela: { input: VelaOperation; output: unknown };
   velaRequestPreview: { input: {intent:string;resourceIds:string[]}; output: VelaRequestPreview };
   velaNativeReview: {input:{previewId:string;signature:string};output:VelaNativeReview};

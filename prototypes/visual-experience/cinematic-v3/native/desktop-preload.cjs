@@ -59,6 +59,8 @@ contextBridge.exposeInMainWorld(
           "vela",
           "library",
           "notes",
+          "agents",
+          "checklists",
           "firstPartyChat",
         ].includes(name)
       )

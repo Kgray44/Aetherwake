@@ -10,6 +10,7 @@ import type {
   Block,
   Geometry,
   BlockKind,
+  CanonicalResourceKind,
   Resource,
   Shape,
 } from "../../application-contract/contracts.ts";
@@ -348,6 +349,7 @@ export class DesktopState {
   private attach(workspaceId: string, resourceId: string) {
     const data = this.workspace(workspaceId);
     this.kernel.getResource(resourceId);
+    check(!['agent','checklist'].includes(String(this.resourceKind(resourceId))), 'resource_presenter_unavailable');
     const n = data.blocks.length;
     return this.engineCommand(workspaceId, {
       type: "attachResource",
@@ -795,7 +797,7 @@ export class DesktopState {
         const kind = (this.db
           .prepare("SELECT kind FROM desktop_resources WHERE resource_id=?")
           .get(r.id)?.kind ??
-          (r.kind === "generic" ? "reference" : r.kind)) as BlockKind;
+          (r.kind === "generic" ? "reference" : r.kind)) as CanonicalResourceKind;
         const visible =
           r.state === "active" &&
           (r.project_id === null || projectIds.has(r.project_id));
