@@ -8,7 +8,12 @@ const {
 } = require("electron");
 const { spawn, execFileSync } = require("node:child_process");
 const { createInterface } = require("node:readline");
-const { mkdirSync, readFileSync, readdirSync } = require("node:fs");
+const {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} = require("node:fs");
 const { randomUUID, createHash } = require("node:crypto");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
@@ -76,15 +81,6 @@ const verify =
   process.argv.includes("--integration-vela-live") ||
   process.argv.includes("--integration-expanded") ||
   process.argv.includes("--integration-spatial-benchmark");
-const captureReview =
-  process.argv.includes("--integration-constellation") ||
-  process.argv.includes("--integration-organization") ||
-  process.argv.includes("--integration-direct") ||
-  process.argv.includes("--integration-conversation-product") ||
-  process.argv.includes("--integration-vela") ||
-  process.argv.includes("--integration-vela-live") ||
-  process.argv.includes("--integration-expanded") ||
-  process.argv.includes("--integration-spatial-benchmark");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
 const privateRoot = profileArg
   ? path.resolve(profileArg.slice(10))
@@ -130,6 +126,47 @@ let win,
   child,
   serial = 0,
   closing = false;
+const deadlineArgument = process.argv.find((argument) =>
+  argument.startsWith("--verification-deadline-ms="),
+);
+if (deadlineArgument) {
+  const deadlineMs = Number(deadlineArgument.split("=")[1]);
+  if (
+    !verify ||
+    !profileArg ||
+    !Number.isInteger(deadlineMs) ||
+    deadlineMs < 1000 ||
+    deadlineMs > 180000 ||
+    process.argv.includes("--integration-live") ||
+    process.argv.includes("--integration-vela-live")
+  )
+    throw new Error("bounded_offline_verification_profile_required");
+  const deadline = setTimeout(() => {
+    try {
+      writeFileSync(
+        path.join(privateRoot, "verification-timeout.json"),
+        JSON.stringify(
+          {
+            contract: "aerynth.native-check-deadline@1",
+            state: "timed_out",
+            deadlineMs,
+            at: new Date().toISOString(),
+            complete: false,
+          },
+          null,
+          2,
+        ),
+      );
+    } finally {
+      console.error(
+        "native_verification_deadline_reached; closing owned desktop and backend",
+      );
+      if (child && !child.killed) child.kill();
+      app.exit(124);
+    }
+  }, deadlineMs);
+  deadline.unref();
+}
 const pending = new Map();
 function call(command, input) {
   if (!child || child.killed || !child.stdin.writable)
@@ -358,9 +395,7 @@ app.whenReady().then(async () => {
     sendToWindow(
       win,
       "host-active",
-      win.isVisible() &&
-        !win.isMinimized() &&
-        (win.isFocused() || captureReview),
+      win.isVisible() && !win.isMinimized() && win.isFocused(),
     );
   };
   win.on("close", (event) => {
