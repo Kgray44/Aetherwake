@@ -18,6 +18,13 @@ export type ProjectedNode = {
   anchorX: number;
   anchorY: number;
 };
+/** Field-local CSS-pixel bounds occupied by real foreground controls. */
+export type LabelExclusion = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
 /** Bounded, procedural 3D presentation. No renderer/context/RAF/data store ownership. */
 export class ConstellationScene implements SpatialRenderLayer {
   readonly scene = new THREE.Scene();
@@ -60,16 +67,19 @@ export class ConstellationScene implements SpatialRenderLayer {
   readonly navigation: SpatialNavigator;
   private bounds: () => DOMRect;
   private wake: () => void;
+  private exclusions: () => readonly LabelExclusion[];
   constructor(
     controller: ConstellationController,
     navigation: SpatialNavigator,
     bounds: () => DOMRect,
     wake: () => void = () => {},
+    exclusions: () => readonly LabelExclusion[] = () => [],
   ) {
     this.controller = controller;
     this.navigation = navigation;
     this.bounds = bounds;
     this.wake = wake;
+    this.exclusions = exclusions;
     this.scene.add(this.links);
     this.raycaster.params.Line = { threshold: 12 };
   }
@@ -416,6 +426,23 @@ export class ConstellationScene implements SpatialRenderLayer {
     this.update(width, height);
     const accepted: ProjectedNode[] = [];
     const max = this.controller.policy.tier === "efficient" ? 16 : 30;
+    const blocked = this.exclusions(),
+      halfWidth = 95,
+      halfHeight = 34;
+    const free = (x: number, y: number, selected: boolean) =>
+      !(x > width * 0.66 && y < height * 0.5 && !selected) &&
+      !accepted.some(
+        (a) =>
+          Math.abs(a.x - x) < halfWidth * 2 &&
+          Math.abs(a.y - y) < halfHeight * 2,
+      ) &&
+      !blocked.some(
+        (r) =>
+          x + halfWidth + 8 > r.left &&
+          x - halfWidth - 8 < r.right &&
+          y + halfHeight + 8 > r.top &&
+          y - halfHeight - 8 < r.bottom,
+      );
     for (const n of this.shown) {
       const p = this.projectPrepared(n.key, width, height);
       if (p.depth < -1 || p.depth > 1) continue;
@@ -449,18 +476,18 @@ export class ConstellationScene implements SpatialRenderLayer {
       ];
       let placed = false;
       for (const offset of choices) {
-        const x = Math.max(90, Math.min(width - 90, p.x + offset.x)),
-          y = Math.max(30, Math.min(height - 30, p.y + offset.y));
+        const x = Math.max(
+            halfWidth,
+            Math.min(width - halfWidth, p.x + offset.x),
+          ),
+          y = Math.max(
+            halfHeight,
+            Math.min(height - halfHeight, p.y + offset.y),
+          );
         if (
-          x > width * 0.66 &&
-          y < height * 0.5 &&
-          n.key !== this.controller.selected
-        )
-          continue;
-        if (
-          accepted.some(
-            (a) => Math.abs(a.x - x) < 180 && Math.abs(a.y - y) < 52,
-          )
+          width < halfWidth * 2 ||
+          height < halfHeight * 2 ||
+          !free(x, y, n.key === this.controller.selected)
         )
           continue;
         accepted.push({
@@ -477,27 +504,52 @@ export class ConstellationScene implements SpatialRenderLayer {
         break;
       }
       if (!placed && essential) {
-        for (let row = 0; row < Math.floor(height / 56); row++) {
-          const x = 95,
-            y = 30 + row * 56;
-          if (
-            !accepted.some(
-              (a) => Math.abs(a.x - x) < 180 && Math.abs(a.y - y) < 52,
-            )
-          ) {
-            accepted.push({
-              node: n,
-              x,
-              y,
-              anchorX: p.x,
-              anchorY: p.y,
-              depth: p.depth,
-              radius: 30,
-            });
-            placed = true;
-            break;
+        const slots = (size: number, half: number, edges: number[]) =>
+          [
+            ...new Set([
+              ...Array.from(
+                { length: Math.max(0, Math.floor(size / (half * 2))) },
+                (_, i) => half + i * half * 2,
+              ),
+              size - half,
+              ...edges,
+            ]),
+          ]
+            .filter((v) => v >= half && v <= size - half)
+            .sort((a, b) => a - b);
+        const xs = slots(
+            width,
+            halfWidth,
+            blocked.flatMap((r) => [
+              r.left - halfWidth - 8,
+              r.right + halfWidth + 8,
+            ]),
+          ),
+          ys = slots(
+            height,
+            halfHeight,
+            blocked.flatMap((r) => [
+              r.top - halfHeight - 8,
+              r.bottom + halfHeight + 8,
+            ]),
+          );
+        scan: for (const y of ys)
+          for (const x of xs) {
+            if (free(x, y, n.key === this.controller.selected)) {
+              accepted.push({
+                node: n,
+                x,
+                y,
+                anchorX: p.x,
+                anchorY: p.y,
+                depth: p.depth,
+                radius: 30,
+              });
+              this.labelOffsets.set(n.key, { x: x - p.x, y: y - p.y });
+              placed = true;
+              break scan;
+            }
           }
-        }
       }
       if (accepted.length >= max) break;
     }

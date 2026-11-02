@@ -145,6 +145,28 @@ export function mountConstellation(
     spatial,
     () => field.getBoundingClientRect(),
     invalidate,
+    () => {
+      const bounds = field.getBoundingClientRect();
+      return [
+        bar,
+        tools,
+        detail,
+        status,
+        drawer,
+        ...root.querySelectorAll<HTMLElement>(
+          ".aw-camera-settings[open] > div, .aw-graph-dialog[open]",
+        ),
+      ]
+        .filter((e) => !e.hidden && e.getClientRects().length > 0)
+        .map((e) => e.getBoundingClientRect())
+        .filter((r) => r.width > 0 && r.height > 0)
+        .map((r) => ({
+          left: r.left - bounds.left,
+          top: r.top - bounds.top,
+          right: r.right - bounds.left,
+          bottom: r.bottom - bounds.top,
+        }));
+    },
   );
   const graph = graphControls(root, controller, () => {
     lastDetailKey = "";
@@ -177,6 +199,7 @@ export function mountConstellation(
     summary = el("summary", "Camera & layout"),
     settingsBody = el("div");
   settings.append(summary, settingsBody);
+  settings.addEventListener("toggle", invalidate);
   tools.append(settings);
   settingsBody.append(
     mode,
@@ -576,7 +599,16 @@ export function mountConstellation(
     dirty = true;
     options.onDirty?.();
   });
-  resize.observe(container);
+  for (const node of [
+    container,
+    bar,
+    tools,
+    detail,
+    drawer,
+    settingsBody,
+    ...root.querySelectorAll(".aw-graph-dialog"),
+  ])
+    resize.observe(node);
   let pointer: {
     x: number;
     y: number;

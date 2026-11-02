@@ -817,3 +817,68 @@ test("small project and universe views retain discoverable labels for every visi
       );
   scene.dispose();
 });
+
+test("spatial labels avoid real UI rectangles as toolbars wrap and panels open without losing the independent workspace", () => {
+  const s = {
+    projects: [],
+    workspaces: [
+      { id: "standalone", title: "Synthetic Vela alignment", project_id: null },
+    ],
+    resources: [],
+    blocks: [],
+    relationships: [],
+    activeWorkspaceId: null,
+    navigation: { kind: "constellation", projectId: null },
+  };
+  const { c, navigation: n } = setup(s);
+  let blockers = [{ left: 24, top: 192, right: 900, bottom: 240 }];
+  const scene = new ConstellationScene(
+    c,
+    n,
+    () => ({}),
+    () => {},
+    () => blockers,
+  );
+  const check = (width, height) => {
+    const label = scene
+      .labels(width, height)
+      .find((p) => p.node.key === "workspace:standalone");
+    assert.ok(label, "independent workspace remains discoverable");
+    for (const r of blockers)
+      assert.ok(
+        label.x + 95 <= r.left ||
+          label.x - 95 >= r.right ||
+          label.y + 34 <= r.top ||
+          label.y - 34 >= r.bottom,
+        "reserved UI stays clear of the entire two-line label",
+      );
+    return label;
+  };
+  const original = check(1020, 260);
+  blockers.push({
+    left: original.x - 100,
+    top: original.y - 40,
+    right: original.x + 100,
+    bottom: original.y + 40,
+  });
+  const changed = check(1020, 260);
+  assert.notDeepEqual([changed.x, changed.y], [original.x, original.y]);
+  blockers = [
+    { left: 0, top: 0, right: 720, bottom: 25 },
+    { left: 20, top: 110, right: 680, bottom: 200 },
+  ];
+  check(720, 200);
+  blockers = [
+    { left: 0, top: 0, right: 1400, bottom: 30 },
+    { left: 20, top: 320, right: 1100, bottom: 380 },
+    { left: 960, top: 50, right: 1400, bottom: 500 },
+  ];
+  check(1400, 500);
+  assert.ok(
+    c
+      .search("Synthetic Vela alignment")
+      .some((node) => node.id === "standalone"),
+  );
+  scene.dispose();
+  c.dispose();
+});
