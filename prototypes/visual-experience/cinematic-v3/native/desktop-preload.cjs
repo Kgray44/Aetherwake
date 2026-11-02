@@ -24,6 +24,9 @@ contextBridge.exposeInMainWorld(
           "send",
           "viewState",
           "graphAction",
+          "conversation",
+          "vela",
+          "library",
         ].includes(name)
       )
         throw new Error("unsupported_command");
