@@ -142,7 +142,8 @@ test("trusted organization commands match noncanonical Fluid preview, fence stal
     });
     assert.equal(s.blocks.at(-1)?.id, moving.id);
     const freeform = geometry(s),
-      freePresence = s.presence;
+      freePresence = s.presence,
+      freeViewport = s.viewport;
     s = await call({
       type: "setOrganization",
       workspaceId,
@@ -150,7 +151,9 @@ test("trusted organization commands match noncanonical Fluid preview, fence stal
       organization: { mode: "structured", structured: { columnCount: 3 } },
     });
     assert.equal(s.organization!.mode, "structured");
-    assert.notDeepEqual(geometry(s), freeform);
+    assert.deepEqual(geometry(s), freeform);
+    assert.deepEqual(s.presence, freePresence);
+    assert.deepEqual(s.viewport, freeViewport);
     assert.deepEqual(s.resources, originalResources);
     s = await call({
       type: "setOrganization",
@@ -161,6 +164,8 @@ test("trusted organization commands match noncanonical Fluid preview, fence stal
       },
     });
     assert.equal(s.organization!.structured.spans[moving.id].columns, 2);
+    assert.deepEqual(geometry(s), freeform);
+    assert.deepEqual(s.viewport, freeViewport);
     s = await call({ type: "undo" });
     s = await call({ type: "undo" });
     assert.equal(s.organization!.mode, "freeform");
