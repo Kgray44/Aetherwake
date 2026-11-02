@@ -47,7 +47,8 @@ function nearest(p: CollisionPlacement, occupied: Geometry[], bounds: Geometry |
     const b = { ...box, x, y };
     candidates.push({ x, y, distance: (x - box.x) ** 2 + (y - box.y) ** 2, inside: !bounds || fits(b, bounds), disruption: protectedFootprints.filter(other => intersects(b, other, gap)).length });
   }
-  candidates.sort((a, b) => a.disruption - b.disruption || Number(b.inside) - Number(a.inside) || a.distance - b.distance || a.y - b.y || a.x - b.x);
+  // Keep a displaced card visible whenever a valid in-bounds candidate exists.
+  candidates.sort((a, b) => Number(b.inside) - Number(a.inside) || a.disruption - b.disruption || a.distance - b.distance || a.y - b.y || a.x - b.x);
   const result = candidates.find(c => free({ ...box, x: c.x, y: c.y }));
   ensure(result, 'LAYOUT_SPACE_EXHAUSTED');
   return { ...p, x: result.x - dx, y: result.y - dy };

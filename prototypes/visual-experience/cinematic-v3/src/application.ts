@@ -118,6 +118,18 @@ export function installApplication(hooks: Hooks) {
   } | null = null;
   let suppressPresenceClick = false;
   let overviewBarBottom = 201;
+  function camera() {
+    const viewport = preview?.viewport;
+    return viewport
+      ? {
+          zoom: viewport.zoom,
+          offset: {
+            x: -viewport.x * viewport.zoom,
+            y: -viewport.y * viewport.zoom,
+          },
+        }
+      : { zoom, offset };
+  }
   function presenceTarget() {
     if (state?.navigation.kind === "constellation")
       return {
@@ -128,6 +140,7 @@ export function installApplication(hooks: Hooks) {
       };
     const p = preview?.presence ?? state?.presence;
     if (!p) return;
+    const { zoom, offset } = camera();
     return {
       x: p.x * zoom + offset.x,
       y: p.y * zoom + offset.y,
@@ -466,6 +479,7 @@ export function installApplication(hooks: Hooks) {
     previewRequest = undefined;
     try {
       preview = previewLayout(previewBase, request);
+      const { zoom, offset } = camera();
       const guides = preview.guides.map(
         (g) =>
           `<i class="alignment-guide" style="left:${(g.axis === "x" ? g.position : g.from) * zoom + offset.x}px;top:${(g.axis === "y" ? g.position : g.from) * zoom + offset.y}px;width:${g.axis === "x" ? 1 : (g.to - g.from) * zoom}px;height:${g.axis === "y" ? 1 : (g.to - g.from) * zoom}px"></i>`,
@@ -1760,8 +1774,8 @@ export function installApplication(hooks: Hooks) {
       return p ? sculptureRegion(p) : undefined;
     },
     snapshot: () => state,
-    offset: () => offset,
-    zoom: () => zoom,
+    offset: () => camera().offset,
+    zoom: () => camera().zoom,
     previewBlock: (id: string) => {
       const b = preview?.blocks.find((b) => b.blockId === id);
       return b ? desktopPreviewBlock(b) : undefined;
