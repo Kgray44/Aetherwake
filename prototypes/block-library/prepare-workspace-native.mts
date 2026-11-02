@@ -57,6 +57,8 @@ export type WorkspaceNativeSeed = {
   approachValidation: { preflightSha256: string; expressionHelperSha256: string; commonHelperSha256: string };
   minimizeValidation: { preflightSha256: string; helperSha256: string; expressionHelperSha256: string; commonHelperSha256: string };
   relatedValidation?: { preflightSha256: string; helperSha256: string; expressionHelperSha256: string; commonHelperSha256: string };
+  structuredGridValidation?: { preflightSha256: string; helperSha256: string; expressionHelperSha256: string; commonHelperSha256: string };
+  structuredGridCase?: { workspaceId: string; movingBlockId: string; document: NoteDocument };
   relatedCase?: {
     note: { workspaceId: string; blockId: string; resourceId: string; title: string };
     task: { resourceId: string; title: string; placements: { workspaceId: string; blockId: string }[] };
@@ -70,9 +72,9 @@ export type WorkspaceNativeSeed = {
  * provider turn, fixture transport or alternate resource/layout store. */
 export async function prepareWorkspaceNative(
   profile: string,
-  options: { relatedResources?: boolean } = {},
+  options: { relatedResources?: boolean; structuredGrid?: boolean } = {},
 ): Promise<WorkspaceNativeSeed> {
-  assert(options && typeof options === 'object' && Object.keys(options).every(key => key === 'relatedResources') && (options.relatedResources === undefined || typeof options.relatedResources === 'boolean'), 'invalid_preparation_options');
+  assert(options && typeof options === 'object' && Object.keys(options).every(key => ['relatedResources', 'structuredGrid'].includes(key)) && Object.values(options).every(value => value === undefined || typeof value === 'boolean') && !(options.relatedResources && options.structuredGrid), 'invalid_preparation_options');
   assert(isAbsolute(profile), "absolute_new_profile_required");
   profile = resolve(profile);
   assert(
@@ -109,6 +111,7 @@ export async function prepareWorkspaceNative(
   const minimizePreflight = require('./tests/workspace-minimize-expressions.cjs').preflight();
   const minimizeValidation = { preflightSha256: minimizePreflight.sha256, helperSha256: expressionDigest('workspace-minimize.cjs'), expressionHelperSha256: expressionDigest('workspace-minimize-expressions.cjs'), commonHelperSha256: expressionDigest('workspace-approach-expressions.cjs') };
   const relatedValidation = options.relatedResources ? { preflightSha256: require('./tests/workspace-resource-links-expressions.cjs').preflight().sha256, helperSha256: expressionDigest('workspace-resource-links.cjs'), expressionHelperSha256: expressionDigest('workspace-resource-links-expressions.cjs'), commonHelperSha256: expressionDigest('workspace-approach-expressions.cjs') } : undefined;
+  const structuredGridValidation = options.structuredGrid ? { preflightSha256: require('./tests/workspace-structured-grid-expressions.cjs').preflight().sha256, helperSha256: expressionDigest('workspace-structured-grid.cjs'), expressionHelperSha256: expressionDigest('workspace-structured-grid-expressions.cjs'), commonHelperSha256: expressionDigest('library-native-expressions.cjs') } : undefined;
   mkdirSync(profile);
   const databasePath = join(profile, "aerynth.sqlite"),
     core = new BackendCore({
@@ -194,7 +197,7 @@ export async function prepareWorkspaceNative(
       };
       // Ordinary modes create Note/Chat through the native Library. The explicit
       // relationship fixture needs a preexisting Note recovery draft instead.
-      if (definition.kind !== "conversation" && (definition.kind !== "note" || options.relatedResources)) {
+      if (definition.kind !== "conversation" && (definition.kind !== "note" || options.relatedResources || options.structuredGrid)) {
         const result = isSubjectBlockKind(definition.kind)
           ? await core.command("library", {
               name: "createSubjectBlock",
@@ -352,6 +355,35 @@ export async function prepareWorkspaceNative(
       }
       relatedCase = { note: { workspaceId: note.workspaceId, blockId: note.blockId, resourceId: note.resourceId, title: note.title }, task: { resourceId: taskId, title: cases.find(entry => entry.kind === 'task')!.title, placements }, browser: { workspaceId: browser.workspaceId, blockId: browser.blockId }, documents, workspaces };
     }
+    let structuredGridCase: WorkspaceNativeSeed['structuredGridCase'];
+    if (options.structuredGrid) {
+      const note = cases.find(entry => entry.kind === 'note')!, workspaceId = note.workspaceId;
+      assert(note.blockId && note.resourceId);
+      desktop = await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
+      for (const [kind, shape, x, y, width, height, z] of [
+        ['note', 'folio', 77, 303, 367, 291, 7],
+        ['task', 'pill', 623, 315, 351, 177, -2],
+        ['reference', 'circle', 1077, 357, 251, 251, 3],
+      ] as const) {
+        const entry = cases.find(entry => entry.kind === kind)!; assert(entry.resourceId);
+        let blockId = entry.blockId!;
+        if (kind !== 'note') {
+          const current = desktop.resources.find(resource => resource.id === entry.resourceId)!;
+          const attached = await core.command('library', { name: 'attachBlock', input: { commandId: randomUUID(), workspaceId, expectedLayoutVersion: desktop.layoutVersion, resourceId: entry.resourceId, expectedResourceVersion: current.version, kind, presentation: { shape, width, height } } });
+          desktop = attached.desktop!; blockId = (attached.result as CreatedBlock).placementId;
+        }
+        const block = desktop.blocks.find(block => block.id === blockId)!;
+        desktop = await core.command('desktop', { type: 'geometry', blockId, expectedVersion: block.version, placement: { x, y, width, height, z }, shape });
+      }
+      const noteResource = desktop.resources.find(resource => resource.id === note.resourceId)!;
+      desktop = await core.command('desktop', { type: 'content', resourceId: note.resourceId, expectedVersion: noteResource.version, content: 'Synthetic grid Note. Mode selection and direct geometry gestures preserve this exact content.' });
+      desktop = await core.command('desktop', { type: 'setPresence', workspaceId, expectedVersion: desktop.presence!.version, placement: { x: 1505, y: 337 } });
+      desktop = await core.command('desktop', { type: 'setViewport', workspaceId, viewport: { x: -37, y: -75, zoom: 0.9 } });
+      const document = (await core.command('notes', { name: 'readNote', input: note.resourceId })).result as NoteDocument;
+      assert.equal(document.draft, null); assert.equal(desktop.blocks.length, 3);
+      structuredGridCase = { workspaceId, movingBlockId: note.blockId, document };
+      assert(statSync(databasePath).size <= 32 * 1024 * 1024, 'prepared_database_32MiB_checkpoint_exceeded');
+    }
     desktop = await core.command("desktop", {
       type: "navigate",
       target: {
@@ -370,6 +402,7 @@ export async function prepareWorkspaceNative(
         "prototypes/block-library/service.mts",
         "prototypes/integrated-backend/src/core.mts",
         "prototypes/workspace-engine/engine.mts",
+        ...(options.structuredGrid ? ['prototypes/workspace-engine/organization.mts', 'prototypes/workspace-engine/structured-grid.mts'] : []),
       ].map((name) => [
         name,
         createHash("sha256")
@@ -391,6 +424,7 @@ export async function prepareWorkspaceNative(
       approachValidation,
       minimizeValidation,
       ...(relatedValidation ? { relatedValidation, relatedCase } : {}),
+      ...(structuredGridValidation ? { structuredGridValidation, structuredGridCase } : {}),
     };
     const json = JSON.stringify(seed, null, 2);
     assert(
@@ -416,7 +450,7 @@ if (
     .find((arg) => arg.startsWith("--profile="))
     ?.slice(10);
   assert(profile, "pass_profile_with_new_absolute_path");
-  const seed = await prepareWorkspaceNative(profile, { relatedResources: process.argv.includes('--related-resources') });
+  const seed = await prepareWorkspaceNative(profile, { relatedResources: process.argv.includes('--related-resources'), structuredGrid: process.argv.includes('--structured-grid') });
   process.stdout.write(
     JSON.stringify({
       prepared: true,
@@ -425,6 +459,7 @@ if (
       cases: seed.cases.length,
       explicitShapes: seed.shapeCases.length,
       relatedResources: !!seed.relatedCase,
+      structuredGrid: !!seed.structuredGridCase,
     }) + "\n",
   );
 }

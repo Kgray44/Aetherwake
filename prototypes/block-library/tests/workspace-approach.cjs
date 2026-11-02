@@ -45,7 +45,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
     consoleSource = win.webContents; consoleSource.on('console-message', consoleError);
     const readJson = async (name, bound) => { const file = path.join(privateRoot, name), stat = await guard.around(() => fs.stat(file)); assert(stat.size <= bound, 'approach_json_bound_exceeded'); return JSON.parse(await guard.around(() => fs.readFile(file, 'utf8'))); };
     const seed = await readJson('workspace-native-seed.json', 262144);
-    assert(!seed.relatedCase, 'ordinary_fixture_required_not_recovery_specialization');
+    assert(!seed.relatedCase && !seed.structuredGridCase, 'ordinary_fixture_required_not_recovery_specialization');
     assert.equal(seed.contract, 'aerynth.workspace-native@1'); assert.equal(seed.syntheticOnly, true); assert.equal(seed.cases.length, 10); assert.equal(seed.shapeCases.length, 3);
     const cases = exports.selectCases(seed);
     assert(source?.hashes && typeof source.hashes === 'object', 'host_source_identity_required');
