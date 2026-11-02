@@ -358,7 +358,7 @@ test("every new block kind uses its distinct preferred geometry without rewritin
     );
     sizes.add(placed.width + "x" + placed.height);
   }
-  assert.equal(sizes.size, REGISTERED_BLOCKS.length);
+  assert.equal(sizes.size, creatable.length);
   assert.ok(
     BLOCK_DEFAULT_SIZES.conversation.height >
       BLOCK_DEFAULT_SIZES.conversation.width * 1.5,
