@@ -35,6 +35,12 @@
   font-size: 0.8rem;
   opacity: 0.8;
 }
+.aw-note-copy-status { font-size:.8rem; color:inherit; opacity:.85; }
+.aw-note-copy-status:empty { display:none; }
+.aw-note-actions-panel button:disabled,.aw-note-sources button:disabled,.aw-note-copy-code:disabled { opacity:.45; cursor:default; }
+.aw-note-reading .aw-note-code-block { position:relative; padding-top:2.5rem; }
+.aw-note-copy-code { position:absolute; top:.4rem; right:.4rem; border:1px solid #aac9e626; border-radius:.6rem; padding:.25rem .6rem; background:#9fc6eb0c; color:inherit; font:12px/1.4 system-ui,sans-serif; }
+.aw-note-copy-code:focus-visible { outline:2px solid #d4eaff; outline-offset:2px; }
 .aw-note-recovery details {
   width: 100%;
 }

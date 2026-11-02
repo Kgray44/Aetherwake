@@ -25,7 +25,7 @@ export function renderNoteReading(root: HTMLElement, content: string) {
   let code: HTMLElement | null = null,
     list: HTMLOListElement | HTMLUListElement | null = null;
   const lines = content.split("\n");
-  for (const line of lines.slice(0, 1500)) {
+  for (const [index, line] of lines.slice(0, 1500).entries()) {
     if (/^\s*```/.test(line)) {
       if (code) code = null;
       else {
@@ -38,7 +38,7 @@ export function renderNoteReading(root: HTMLElement, content: string) {
       continue;
     }
     if (code) {
-      code.append(document.createTextNode(line + "\n"));
+      code.append(document.createTextNode(line + (index < lines.length - 1 ? "\n" : '')));
       continue;
     }
     const heading = /^(#{1,6})\s+(.+)$/.exec(line),
@@ -70,6 +70,19 @@ export function renderNoteReading(root: HTMLElement, content: string) {
 
 export { sourceLinks } from "./source-links.ts";
 
+const fencedCode = (content: string) => {
+  const lines = content.split('\n'), values: string[] = [];
+  let current: string[] | null = null;
+  for (const [index, line] of lines.entries()) {
+    if (/^\s*```/.test(line)) {
+      if (current) { values.push(current.join('')); current = null; }
+      else current = [];
+    } else if (current) current.push(line + (index < lines.length - 1 ? '\n' : ''));
+  }
+  if (current) values.push(current.join(''));
+  return values;
+};
+
 /** Adds controls around the existing textarea. Its node, selection and input listener are retained. */
 export function mountNoteExperience(
   root: HTMLElement,
@@ -82,11 +95,15 @@ export function mountNoteExperience(
     initialMode?: "write" | "read";
     presentation?: "workspace" | "focused";
     openExternal?(url: string): Promise<void>;
+    /** Explicit user copy only. Root injects trusted native clipboard writing;
+     * absence never falls back to the browser Clipboard API. */
+    copyText?(text: string): Promise<void>;
     openRelated?(resourceId: string, anchor: HTMLElement): void | Promise<void>;
   },
 ) {
   const tools = element("div", "", "aw-note-tools"),
     status = element("p", "", "aw-note-status"),
+    copyStatus = element('p', '', 'aw-note-copy-status'),
     reading = element("div", "", "aw-note-reading"),
     recovery = element("div", "", "aw-note-recovery"),
     sources = element("section", "", "aw-note-sources"),
@@ -100,7 +117,7 @@ export function mountNoteExperience(
     menuSummary = element("summary", "⋯"),
     menuPanel = element("div", "", "aw-note-actions-panel");
   menuSummary.setAttribute("aria-label", "Document actions");
-  menuSummary.title = "Find, rename and document actions";
+  menuSummary.title = "Find, rename, copy and document actions";
   menu.append(menuSummary, menuPanel);
   const editorLabel = editor.closest("label");
   const dismissMenu = (event: PointerEvent) => {
@@ -121,7 +138,45 @@ export function mountNoteExperience(
     mode: "write" | "read" = options.initialMode ?? "write",
     text = "",
     rendered = "",
-    pending = false;
+    pending = false,
+    copyPending = false,
+    copyEpoch = 0,
+    pointerSelection = '';
+  const copyButtons = new Map<HTMLButtonElement, () => boolean>();
+  copyStatus.setAttribute('role', 'status'); copyStatus.setAttribute('aria-live', 'polite');
+  const selectedText = () => {
+    const selection = window.getSelection?.();
+    if (mode === 'read' && selection && selection.rangeCount > 0 && !selection.isCollapsed && selection.anchorNode && selection.focusNode
+      && ((reading.contains(selection.anchorNode) && reading.contains(selection.focusNode))
+        || (sources.contains(selection.anchorNode) && sources.contains(selection.focusNode)))) return selection.toString();
+    return mode === 'write' && editor.selectionEnd > editor.selectionStart
+      ? editor.value.slice(editor.selectionStart, editor.selectionEnd) : '';
+  };
+  const refreshCopy = () => {
+    for (const [button, enabled] of copyButtons) {
+      if (!root.contains(button)) { copyButtons.delete(button); continue; }
+      button.disabled = !active || !options.copyText || copyPending || !enabled();
+    }
+  };
+  const copy = async (value: string, success: string, failure: string) => {
+    if (disposed || !active || copyPending) return;
+    if (!options.copyText) { copyStatus.textContent = 'Native copying is unavailable in this surface.'; return; }
+    if (!value) { copyStatus.textContent = 'There is no text to copy.'; return; }
+    const epoch = copyEpoch; copyPending = true; copyStatus.textContent = 'Copying…'; refreshCopy();
+    try {
+      await options.copyText(value);
+      if (!disposed && active && epoch === copyEpoch) copyStatus.textContent = success;
+    } catch {
+      if (!disposed && active && epoch === copyEpoch) copyStatus.textContent = failure;
+    } finally { copyPending = false; if (!disposed) refreshCopy(); }
+  };
+  const copyAction = (label: string, value: () => string, success: string, failure: string, enabled = () => !!value()) => {
+    const button = action(label, () => { void copy(value(), success, failure); });
+    copyButtons.set(button, enabled);
+    button.disabled = !active || !options.copyText || copyPending || !enabled();
+    if (!options.copyText) { button.title = 'Native copying is unavailable in this surface.'; button.setAttribute('aria-label', label + ' — native copying unavailable'); }
+    return button;
+  };
   status.setAttribute("role", "status");
   root.dataset.documentKind = options.kind;
   root.dataset.documentPresentation = options.presentation ?? "focused";
@@ -154,6 +209,7 @@ export function mountNoteExperience(
     mode = mode === "write" ? "read" : "write";
     rendered = "";
     updateReading();
+    pointerSelection = ''; refreshCopy();
     if (mode === "write") editor.focus();
   });
   const updateReading = () => {
@@ -169,6 +225,13 @@ export function mountNoteExperience(
       mode !== "read" || !["research", "reference"].includes(options.kind);
     if (!active || mode !== "read" || rendered === text) return;
     renderNoteReading(reading, text);
+    const code = fencedCode(text);
+    reading.querySelectorAll<HTMLElement>('pre code').forEach((node, index) => {
+      const body = code[index] ?? node.textContent ?? '';
+      node.parentElement?.classList.add('aw-note-code-block');
+      const button = copyAction('Copy code', () => body, 'Code copied.', 'Could not copy code. Please try again.');
+      button.className = 'aw-note-copy-code'; node.parentElement?.append(button);
+    });
     rendered = text;
     sources.replaceChildren();
     if (!["research", "reference"].includes(options.kind)) return;
@@ -186,12 +249,7 @@ export function mountNoteExperience(
         address = element("code", url);
       row.append(
         address,
-        action("Copy link", () =>
-          run(async () => {
-            await navigator.clipboard.writeText(url);
-            status.textContent = "Source link copied.";
-          }),
-        ),
+        copyAction('Copy link', () => url, 'Source link copied.', 'Could not copy source link. Please try again.'),
       );
       if (options.openExternal)
         row.append(
@@ -229,6 +287,7 @@ export function mountNoteExperience(
     updateReading();
     editor.focus();
     editor.setSelectionRange(match, match + needle.length);
+    refreshCopy();
   };
   search.onkeydown = (event) => {
     if (event.key === "Enter") {
@@ -241,6 +300,24 @@ export function mountNoteExperience(
     action("Previous match", () => find(true)),
     action("Next match", () => find(false)),
   );
+  const copySelection = copyAction('Copy selection', selectedText, 'Selected text copied.', 'Could not copy selected text. Please try again.', () => !!pointerSelection || !!selectedText());
+  copySelection.onpointerdown = () => { pointerSelection = selectedText(); refreshCopy(); };
+  copySelection.onpointercancel = () => { pointerSelection = ''; refreshCopy(); };
+  copySelection.onclick = event => {
+    const value = event?.detail ? pointerSelection : selectedText(); pointerSelection = '';
+    void copy(value, 'Selected text copied.', 'Could not copy selected text. Please try again.'); refreshCopy();
+  };
+  menuPanel.append(
+    copyAction('Copy text', () => editor.value, 'Text copied.', 'Could not copy text. Please try again.'),
+    copySelection,
+    copyAction('Copy resource information', () => {
+      const resource = session.snapshot().document?.resource;
+      return resource ? `Title: ${resource.title}\nType: ${resource.kind}\nResource ID: ${resource.id}\nVersion: ${resource.version}\nProject ID: ${resource.project_id ?? 'Unassigned'}` : '';
+    }, 'Resource information copied.', 'Could not copy resource information. Please try again.'),
+  );
+  if (!options.copyText) menuPanel.append(element('small', 'Native copying is unavailable in this surface.'));
+  document.addEventListener('selectionchange', refreshCopy);
+  editor.addEventListener('select', refreshCopy); editor.addEventListener('input', refreshCopy);
   tools.append(modeButton, menu);
   const showRename = action("Rename", () => {
     menu.open = false;
@@ -293,7 +370,7 @@ export function mountNoteExperience(
   );
   recovery.append(save, local, saved, details);
   reading.hidden = true;
-  root.append(tools, rename, status, recovery);
+  root.append(tools, rename, status, copyStatus, recovery);
   // Reference cards lead with their citation; research leads with findings.
   root.append(
     ...(options.kind === "reference" ? [sources, reading] : [reading, sources]),
@@ -332,6 +409,7 @@ export function mountNoteExperience(
     otherDraft.textContent =
       value.document?.draft?.content ?? "No saved recovery draft";
     updateReading();
+    refreshCopy();
   };
   const unsubscribe = session.subscribe((value) => {
     latest = value;
@@ -339,23 +417,32 @@ export function mountNoteExperience(
   });
   return {
     setPresentation(value: "workspace" | "focused") {
+      if (disposed) return;
       root.dataset.documentPresentation = value;
     },
     setActive(value: boolean) {
+      if (disposed) return;
+      if (!value) { copyEpoch++; pointerSelection = ''; copyStatus.textContent = ''; }
       active = value;
       if (active) paint(latest);
       else menu.open = false;
+      refreshCopy();
     },
     dispose() {
+      if (disposed) return;
       disposed = true;
+      copyEpoch++; copyButtons.clear();
       unsubscribe();
       delete root.dataset.noteState;
       delete root.dataset.documentKind;
       delete root.dataset.documentPresentation;
       document.removeEventListener("pointerdown", dismissMenu);
+      document.removeEventListener('selectionchange', refreshCopy);
+      editor.removeEventListener('select', refreshCopy); editor.removeEventListener('input', refreshCopy);
       tools.remove();
       rename.remove();
       status.remove();
+      copyStatus.remove();
       recovery.remove();
       reading.remove();
       sources.remove();

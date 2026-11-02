@@ -14,6 +14,7 @@ export interface DirectResourcePorts {
   setTaskPriority(input: { resourceId: string; expectedVersion: number; priority: NonNullable<Resource['taskPriority']> }): Promise<void>;
   manageMembers(resourceId: string): void | Promise<void>;
   openResource(resourceId: string): void;
+  copyText?(text: string): Promise<void>;
   openRelated?(resourceId: string, anchor: HTMLElement): void;
   events?: {
     snapshot(): EventWindow;
@@ -141,6 +142,7 @@ export function mountDirectResourceExperience(
     note = mountNoteExperience(content, editor, session, ports.notes, {
       kind, active, presentation: 'focused', initialMode: ['research', 'reference'].includes(kind) ? 'read' : 'write',
       openRelated: ports.openRelated,
+      copyText: ports.copyText,
     });
     editor.oninput = () => {
       if (disposed || !active || !available(resource)) return;
