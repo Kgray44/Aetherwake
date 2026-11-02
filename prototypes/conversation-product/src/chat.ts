@@ -57,6 +57,21 @@ export interface ConversationChat {
 }
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, cls?: string) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+/** Copy follows the actual provider ID, never the first executable catalog row. */
+function providerCopy(id:string){
+  const local=id==='local'||id==='mock-ordinary',codex=id==='codex-app-server'||id==='fixture-codex',plan=id==='chatgpt-plan-responses';
+  return {local,empty:local?'A place to think. Your messages stay in this local chat.':codex?'Start a conversation with Codex. Each send uses the native approval path.':plan?'Start a conversation. History is saved in Aerynth.':'Start a conversation.',
+   placeholder:local?'Write a message…':codex?'Ask Codex anything…':'Ask anything…',
+   title:local?'Local recording · no model execution':codex?'Native approval is required before a Codex turn':plan?'ChatGPT plan · history saved in Aerynth':'Provider availability is checked before send',
+   capability:local?'Local recording · no model responses':codex?'Each send requires native approval.':plan?'ChatGPT plan access · history saved in Aerynth':'Availability is checked before send.',
+   kind:codex?'native-approval':plan?'ordinary-plan':'provider-connection',pending:local?'Saving message…':plan?'Preparing your message. Your draft remains saved.':'Waiting for native send review. Your draft remains saved.'};
+}
+function canonicalClock(createdAt:string,formats:{parts:Intl.DateTimeFormat;day:Intl.DateTimeFormat;time:Intl.DateTimeFormat}){
+  const instant=new Date(createdAt);
+  if(!Number.isFinite(instant.getTime()))return {day:'unavailable',dayLabel:'Date unavailable',time:'Time unavailable'};
+  const parts=formats.parts.formatToParts(instant),part=(type:string)=>parts.find(p=>p.type===type)?.value??'';
+  return {day:`${part('year')}-${part('month')}-${part('day')}`,dayLabel:formats.day.format(instant),time:formats.time.format(instant)};
+}
 export function composerShouldSubmit(event: Pick<KeyboardEvent, 'key'|'shiftKey'|'isComposing'|'altKey'|'ctrlKey'|'metaKey'>): boolean {
   return event.key === 'Enter' && !event.shiftKey && !event.isComposing && !event.altKey && (!event.ctrlKey || !event.metaKey);
 }
@@ -97,6 +112,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   let pendingFollow:{messageId?:string}|null=null;
   let execution: ConversationExecution|null = null, unsubscribeExecution: (()=>void)|undefined, streamExecution = '', lastCursor = -1, connection: 'available'|'unavailable' = 'available';
   const seenEvents = new Set<string>(), cache = new Map<string,{signature:string;node:HTMLElement}>();
+  const days = new Map<string,{day:string;node:HTMLElement}>();
   const session = options.draftSession ?? new ConversationDraftSession({ resourceId, port, ...(options.initialDraft === undefined ? {} : { initialContent: options.initialDraft }) });
   const copy = options.copy ?? (text => navigator.clipboard.writeText(text));
   const report = (text: string,kind:'notice'|'send-accepted'='notice') => { if (!disposed){status.textContent=text;status.dataset.statusKind=kind;} };
@@ -131,7 +147,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   });
   if(layoutHost)resizeObserver?.observe(layoutHost);
   function revokeView() {
-    const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=null;root.dataset.resourceAvailable='false';current=null;cache.clear();messages.replaceChildren();
+    const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=null;root.dataset.resourceAvailable='false';current=null;cache.clear();days.clear();messages.replaceChildren();
     streamText.textContent='';stream.hidden=true;paging.hidden=true;capabilityNote.textContent=contextNote.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;
     renderDraft();if(notify)options.onUnavailable?.();report('This conversation is no longer available. Its draft is retained.');
   }
@@ -165,12 +181,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   for(const name of ['wheel','pointerdown','touchstart'])messages.addEventListener(name,()=>{pendingFollow=null;},{passive:true});
   messages.addEventListener('keydown',event=>{if(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key))pendingFollow=null;});
   const doAction = (event: ConversationMessageAction) => { Promise.resolve(options.onMessageAction?.(event)).catch(error=>report(errorText(error))); };
-  function messageNode(message: MessageView): HTMLElement {
-    const signature = JSON.stringify(message), cached = cache.get(message.id); if (cached?.signature === signature) return cached.node;
+  function messageNode(message: MessageView,clock:ReturnType<typeof canonicalClock>): HTMLElement {
+    const signature = JSON.stringify([message,clock]), cached = cache.get(message.id); if (cached?.signature === signature) return cached.node;
     const article = el('article', undefined, 'cp-message cp-message-'+message.role); article.dataset.messageId = message.id; article.dataset.sourceResourceId = message.resourceId;
     // MessageView has no per-message provider binding: never relabel old assistant output after a provider change.
     const attribution = message.role === 'user' ? 'You' : message.role === 'assistant' ? (message.provenance==='mock_adapter'?'Assistant · simulated source':'Assistant') : message.role;
     const by = el('p', attribution+(message.inherited?' · inherited source':'')+(message.outputState==='partial'?' · partial response':''), 'cp-message-source'); by.title = message.provenance+' · '+message.createdAt;article.dataset.outputState=message.outputState??'';
+    const time=el('time',clock.time,'cp-message-time');if(clock.day!=='unavailable')time.setAttribute('datetime',message.createdAt);by.append(document.createTextNode(' · '),time);
     const content = message.role === 'assistant' ? renderMarkdown(message.content,copy,report) : el('div',message.content); content.classList.add('cp-message-content');
     const actions = el('details', undefined, 'cp-message-actions'), summary = el('summary','Message actions'), panel = el('div',undefined,'cp-disclosure-panel'); actions.append(summary,panel);
     decorateConversationDisclosure(actions,summary,'message-actions',panel);
@@ -211,18 +228,21 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   function drainPendingFollow(){if(pendingFollow&&followLatestContent(pendingFollow.messageId))pendingFollow=null;}
   function render(detail: Detail, around?:string,followMessageId?:string) {
     const nearBottom = messages.scrollHeight-messages.scrollTop-messages.clientHeight < 80, scroll = messages.scrollTop;
-    current=detail; const nodes=detail.messages.items.map(messageNode);
-    if (!nodes.length) nodes.push(el('div',detail.conversation.providerId==='local'||detail.conversation.providerId==='mock-ordinary'?'A place to think. Your messages stay in this local chat.':'Start a conversation with Codex. Each send uses the native approval path.','cp-chat-empty'));
+    current=detail; const nodes:HTMLElement[]=[],formats={parts:new Intl.DateTimeFormat('en-CA',{year:'numeric',month:'2-digit',day:'2-digit'}),day:new Intl.DateTimeFormat(undefined,{year:'numeric',month:'long',day:'numeric'}),time:new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'})};let previousDay:string|undefined;
+    for(const message of detail.messages.items){const clock=canonicalClock(message.createdAt,formats);if(clock.day!==previousDay){let cached=days.get(message.id);if(!cached||cached.day!==clock.day){const divider=el('div',undefined,'cp-chat-day'),label=el('span',clock.dayLabel),line=el('hr');divider.dataset.day=clock.day;divider.dataset.beforeMessageId=message.id;divider.setAttribute('role','separator');divider.setAttribute('aria-label',clock.dayLabel);label.setAttribute('aria-hidden','true');line.setAttribute('aria-hidden','true');divider.append(label,line);cached={day:clock.day,node:divider};days.set(message.id,cached);}nodes.push(cached.node);previousDay=clock.day;}nodes.push(messageNode(message,clock));}
+    const copy=providerCopy(detail.conversation.providerId);
+    if (!nodes.length) nodes.push(el('div',copy.empty,'cp-chat-empty'));
     for(const child of [...messages.children])if(!nodes.includes(child as HTMLElement))child.remove();
     nodes.forEach((node,i)=>{if(messages.children[i]!==node)messages.insertBefore(node,messages.children[i]??null);});
     for(const [id,value]of cache)if(!nodes.includes(value.node))cache.delete(id);
+    for(const [id,value]of days)if(!nodes.includes(value.node))days.delete(id);
     provider.textContent=detail.providers.find(p=>p.id===detail.conversation.providerId)?.label??detail.conversation.providerId;
     provider.dataset.providerId=detail.conversation.providerId;
-    const local=['local','mock-ordinary'].includes(detail.conversation.providerId);textarea.placeholder=local?'Write a message…':'Ask Codex anything…';setConversationControlLabel(send,local?'Record message':'Send');
-    provider.title=detail.providers.find(p=>p.id===detail.conversation.providerId)?.reason??(local?'Local recording · no model execution':'Native approval is required before a provider turn');
+    const local=copy.local;textarea.placeholder=copy.placeholder;setConversationControlLabel(send,local?'Record message':'Send');
+    provider.title=detail.providers.find(p=>p.id===detail.conversation.providerId)?.reason??copy.title;
     const capability=detail.providers.find(p=>p.id===detail.conversation.providerId),normalLocal=detail.conversation.providerId==='local'&&capability?.available&&capability.record&&!capability.execute&&!capability.simulated;
-    capabilityNote.dataset.capabilityKind=normalLocal?'local-recording':capability?.reason||capability?.available===false?'provider-reason':local?'local-compatibility':'native-approval';
-    capabilityNote.textContent=capability?.reason??(capability?.available===false?'This provider is unavailable for new turns.':local?'Local recording · no model responses':'Each send requires native approval.');
+    capabilityNote.dataset.capabilityKind=normalLocal?'local-recording':capability?.reason||capability?.available===false?'provider-reason':local?'local-compatibility':copy.kind;
+    capabilityNote.textContent=capability?.reason??(capability?.available===false?'This provider is unavailable for new turns.':copy.capability);
     const attached=detail.shares.filter(s=>s.attached&&s.status==='current').length;contextNote.textContent=attached?`${attached} source excerpt${attached===1?'':'s'} attached for send review. Attachment is not proof of model supply.`:'';
     const before=el('button','Earlier messages'),after=el('button','Later messages');before.type=after.type='button';before.disabled=detail.messages.offset===0;after.disabled=!detail.messages.hasMore;
     decorateConversationControl(before,{identity:'previous'});decorateConversationControl(after,{identity:'next'});paging.dataset.cpGroup='transcript-navigation';
@@ -244,7 +264,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if((offset===undefined||input.latest)&&!around&&d.messages.hasMore){offset=Math.max(0,d.conversation.messageCount-50);await refresh();return;}
     accessRevoked=false;root.dataset.resourceAvailable='true';offset=d.messages.offset;render(d,input.aroundMessageId,input.followMessageId);
   }
-  composer.addEventListener('submit',event=>{event.preventDefault();if(send.disabled||!current)return;const before=current,content=textarea.value,commandId=crypto.randomUUID();sending=true;renderDraft();report(['local','mock-ordinary'].includes(before.conversation.providerId)?'Saving message…':'Waiting for native send review. Your draft remains saved.');
+  composer.addEventListener('submit',event=>{event.preventDefault();if(send.disabled||!current)return;const before=current,content=textarea.value,commandId=crypto.randomUUID();sending=true;renderDraft();report(providerCopy(before.conversation.providerId).pending);
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
       const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId});
