@@ -1,0 +1,24 @@
+.vela-core { color: var(--text, #edf3ff); font: 14px/1.5 var(--font-ui, system-ui, sans-serif); max-width: 980px; margin: auto; padding: 16px; }
+.vela-core h2, .vela-core h3, .vela-core p { margin: 0 0 10px; }
+.vela-core-header h2 { font-size: 26px; letter-spacing: .03em; }
+.vela-core-header p, .vela-core-provider, .vela-core-selection { color: var(--text-muted, #bac7db); }
+.vela-core-status { min-height: 24px; }
+.vela-core-conversation { max-height: 32vh; overflow: auto; overscroll-behavior: contain; }
+.vela-core-message, .vela-core-plan, .vela-core-attention article, .vela-core-context article { padding: 12px 14px; margin: 8px 0; border: 1px solid rgba(193, 214, 255, .18); border-radius: 12px; background: rgba(16, 25, 43, .7); }
+.vela-core-message p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.vela-core-field { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.vela-core-field > span { min-width: 140px; }
+.vela-core input, .vela-core select, .vela-core textarea { color: inherit; background: #111c2c; border: 1px solid #6f819e; border-radius: 7px; padding: 7px 10px; font: inherit; }
+.vela-core input:not([type="checkbox"]), .vela-core textarea { flex: 1; min-width: 140px; }
+.vela-core input[type="checkbox"] { width: 18px; height: 18px; }
+.vela-core-button { color: inherit; background: #28384e; border: 1px solid #788daa; border-radius: 8px; padding: 8px 12px; margin: 4px 6px 4px 0; cursor: pointer; font: inherit; }
+.vela-core-primary { background: #354e70; }
+.vela-core-button:disabled { opacity: .55; cursor: wait; }
+.vela-core :focus-visible { outline: 2px solid #a7d5ff; outline-offset: 3px; }
+.vela-core details { padding: 9px 0; }
+.vela-core summary { cursor: pointer; font-weight: 600; }
+.vela-core pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 220px; overflow: auto; background: #0d1725; padding: 10px; border-radius: 7px; }
+.vela-core-results { max-height: 240px; overflow: auto; }
+.vela-core-result { display: flex; justify-content: space-between; gap: 12px; }
+.vela-core-receipt { font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .vela-core { padding: 8px; } .vela-core-field { display: block; } .vela-core-field > span { display: block; } .vela-core textarea, .vela-core input:not([type="checkbox"]) { width: 100%; box-sizing: border-box; } }
