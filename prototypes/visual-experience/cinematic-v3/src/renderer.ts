@@ -1964,6 +1964,8 @@ export class Environment {
       presenceProjection: {
         ...this.presenceProjection.diagnostics(),
         fit: this.presenceFit,
+        shaderPhase: this.ribbons[0].material.uniforms.uTime.value as number,
+        ambientGain: this.ribbons[0].material.uniforms.uAmbient.value as number,
       },
       spatialLayer: {
         attached: !!this.spatialLayer,

@@ -102,11 +102,9 @@ async function run(win) {
   const canonical = () => state().then((s) => JSON.stringify(s.presence));
   const gather = async (name, mask = true) => {
     const a = await js(
-      `(()=>{const e=document.querySelector('#vela'),r=e.getBoundingClientRect(),snap=window.__aerynth.snapshot();return{snapshot:snap,card:{x:r.x,y:r.y,w:r.width,h:r.height},children:[...e.querySelectorAll('.vela-grip,.vela-label small')].filter(e=>getComputedStyle(e).display!=='none').map(e=>{const r=e.getBoundingClientRect();return{x:r.x,y:r.y,w:r.width,h:r.height}})}})()`,
+      `(()=>{const gpuMask=${mask ? "window.__aerynth.presenceMaskForReview()" : "null"},e=document.querySelector('#vela'),r=e.getBoundingClientRect(),snap=window.__aerynth.snapshot();return{snapshot:snap,gpuMask,card:{x:r.x,y:r.y,w:r.width,h:r.height},children:[...e.querySelectorAll('.vela-grip,.vela-label small')].filter(e=>getComputedStyle(e).display!=='none').map(e=>{const r=e.getBoundingClientRect();return{x:r.x,y:r.y,w:r.width,h:r.height}})}})()`,
     );
-    const m = mask
-      ? await js("window.__aerynth.presenceMaskForReview()")
-      : null;
+    const m = a.gpuMask;
     const b = a.snapshot.gpu.presenceBounds,
       f = a.snapshot.gpu.presenceProjection.fit;
     const c = a.card;
