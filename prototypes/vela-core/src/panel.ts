@@ -1,7 +1,10 @@
 import type { ResourceRef, VelaClient, VelaNativeAction, VelaState } from './contracts.ts';
+import { velaPanelStatus } from './panel-status.ts';
 
 export interface VelaPanelOptions {
   onOpenSubject?: (subject: { id: string; kind: ResourceRef['kind'] }) => void;
+  /** Explicit user action only. The host probes its actual supported provider connection. */
+  onConnectProvider?: () => Promise<unknown>;
 }
 /** Mounts into the host's existing Vela dialog. No inference or native actions occur on mount/open. */
 export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: VelaPanelOptions = {}) {
@@ -19,6 +22,15 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const header = el('header', 'vela-core-header');
   header.append(el('h2', undefined, 'Vela'), el('p', undefined, 'Your application assistant · native actions, scoped context, and reviewed plans'));
   const provider = el('p', 'vela-core-provider');
+  const providerControls = el('div', 'vela-core-provider-controls'); providerControls.append(provider);
+  if (options.onConnectProvider) {
+    const connect = button('Check planning connection', async () => {
+      if (connect.disabled) return; connect.disabled = true;
+      try { await options.onConnectProvider!(); await refresh(); }
+      finally { connect.disabled = false; }
+    });
+    providerControls.append(connect);
+  }
   const status = el('p', 'vela-core-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   const conversation = el('div', 'vela-core-conversation'); conversation.setAttribute('aria-label', 'Vela conversation');
   const searchForm = el('form', 'vela-core-search');
@@ -49,19 +61,26 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const send = el('button', 'vela-core-button vela-core-primary', 'Prepare plan'); send.type = 'submit';
   const stop = button('Stop planning', async () => {
     const state = await client.state(); const pending = state.requests.findLast(r => r.state === 'planning');
-    if (pending) { await client.cancel(pending.id); status.textContent = 'Cancellation requested. No proposed actions will be applied.'; await refresh(); }
-    else status.textContent = 'No planning request is currently running.';
+    if (pending) { await client.cancel(pending.id); await refresh(); }
+    else if (current) renderStatus(current);
   });
   form.append(label('Ask Vela', intent), disclosure, send, stop);
   form.addEventListener('submit', event => { event.preventDefault(); void run(async () => {
-    if (busy) return; busy = true; send.disabled = true; status.textContent = 'Waiting for the identified planning provider. Native actions have not run.';
-    try { const request = await client.request({ intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: allowProvider.checked }); intent.value = ''; allowProvider.checked = false; busy = false; await refresh(); status.textContent = 'Request: ' + request.state + (request.errorCode ? ' · ' + request.errorCode : '') + '. Proposed actions require review.'; }
+    if (busy) return; busy = true; send.disabled = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState;
+    status.textContent = 'Preparing this request. Waiting for the application host.';
+    try { const recorded = await client.request({ intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: allowProvider.checked }); intent.value = ''; allowProvider.checked = false; busy = false; renderStatus({ requests: [recorded], plans: [], receipts: [] }); await refresh(); }
+    catch (error) {
+      busy = false;
+      try { await refresh(); }
+      catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; }
+      throw error;
+    }
     finally { busy = false; send.disabled = false; }
   }); });
   const native = el('details', 'vela-core-tools'); native.append(el('summary', undefined, 'Local actions · available without a model'));
   const nativeTitle = el('input'); nativeTitle.maxLength = 200; nativeTitle.placeholder = 'New resource or workspace title';
   native.append(label('Title', nativeTitle));
-  const nativeProject=el('select');let projectChosen=false;nativeProject.addEventListener('change',()=>{projectChosen=true;});
+  const nativeProject=el('select');let projectChosen=false;nativeProject.addEventListener('change',()=>{projectChosen=true;updateWorkspaceAvailability();});
   native.append(label('New workspace project',nativeProject));
   const act = async (action: VelaNativeAction, description: string) => {
     const plan = await client.native({ action, intent: description }); await client.apply(plan.id); await refresh();
@@ -94,7 +113,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const attention = el('section', 'vela-core-attention'); attention.setAttribute('aria-label', 'Unreviewed application events');
   const adaptation = el('details', 'vela-core-adaptation'); adaptation.append(el('summary', undefined, 'Adaptive preferences · inspect, override, reject, or reset'));
   const adaptationBody = el('div'); adaptation.append(adaptationBody);
-  shell.append(header, provider, status, conversation, searchForm, searchResults, selection, form, native, plans, contextDetails, settings, adaptation, attention);
+  shell.append(header, providerControls, status, conversation, searchForm, searchResults, selection, form, native, plans, contextDetails, settings, adaptation, attention);
   root.append(shell);
   function renderSelection() {
     selection.textContent = selected.size ? selected.size + ' resource(s) selected for explicit content retrieval: ' + [...selected.values()].map(r => r.title).join(', ') : 'No content selected. Search discovers metadata locally.';
@@ -102,7 +121,17 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   async function run(action: () => unknown) {
     if (disposed) return;
     try { await action(); }
-    catch (e) { if (!disposed) status.textContent = 'Vela could not complete that action: ' + (e instanceof Error ? e.message : 'unavailable'); }
+    catch (e) { if (!disposed) { status.dataset.actionState = 'failed'; status.textContent = 'Vela could not complete that action: ' + (e instanceof Error ? e.message : 'unavailable'); } }
+  }
+  function updateWorkspaceAvailability() {
+    workspaceCreate.disabled=!current?.capabilities.some(capability=>capability.id==='workspaceFromResources')||!!nativeProject.selectedOptions[0]?.disabled;
+  }
+  function renderStatus(state: Pick<VelaState, 'requests' | 'plans' | 'receipts'>) {
+    const recorded = velaPanelStatus(state);
+    status.dataset.requestState = recorded.requestState;
+    if (recorded.requestId) status.dataset.requestId = recorded.requestId; else delete status.dataset.requestId;
+    if (recorded.planState) status.dataset.planState = recorded.planState; else delete status.dataset.planState;
+    delete status.dataset.actionState; status.textContent = recorded.message;
   }
   function render(state: VelaState) {
     if (disposed) return; current = state;
@@ -112,7 +141,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     for(const ref of state.applicationContext?.references.filter(ref=>ref.kind==='project')??[]){const option=el('option',undefined,ref.title+' · v'+ref.version);option.value=ref.id;nativeProject.append(option);}
     if(chosen&&!Array.from(nativeProject.options).some(option=>option.value===chosen)){const unavailable=el('option',undefined,'Previously selected project · unavailable in current scope');unavailable.value=chosen;unavailable.disabled=true;nativeProject.append(unavailable);}
     nativeProject.value=chosen;
-    workspaceCreate.disabled=!state.capabilities.some(capability=>capability.id==='workspaceFromResources')||!!nativeProject.selectedOptions[0]?.disabled;
+    updateWorkspaceAvailability();
     conversation.replaceChildren();
     for (const message of state.conversation?.messages.slice(-80) ?? []) {
       const entry = el('article', 'vela-core-message');
@@ -149,7 +178,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       if (item.subject && options.onOpenSubject) row.append(button('Open source', () => options.onOpenSubject?.(item.subject!)));
       row.append(button('Mark reviewed', async () => { await client.reviewAttention([item.id]); await refresh(); })); attention.append(row);
     }
-    if (!busy) status.textContent = 'Ready. Plans are proposals until host receipts confirm application.';
+    if (!busy) renderStatus(state);
   }
   function renderAdaptation(state: VelaState) {
     adaptationBody.replaceChildren();
