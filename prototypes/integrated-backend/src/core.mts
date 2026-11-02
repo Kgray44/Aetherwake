@@ -95,7 +95,7 @@ export class BackendCore {
       this.kernel.withTransaction(db => {
         this.db = db;
         if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_schema'").get()){
-          const versions=db.prepare('SELECT version FROM cp_schema').all();ensure(versions.length===1&&versions[0].version===1,'unsupported_conversation_product_schema');
+          const versions=db.prepare('SELECT version FROM cp_schema').all();ensure(versions.length===1&&[1,2].includes(Number(versions[0].version)),'unsupported_conversation_product_schema');
         }
         // Hard prototype file ceiling: 128 MiB main database, no WAL. Journal
         // can temporarily add another 128 MiB; ReserveGuard budgets 512 MiB.
@@ -672,10 +672,10 @@ export class BackendCore {
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
     ensure(!this.closed, 'backend_closed');
     const a: any = input;
-    // Reads and interruption remain available during execution. Local mutation
-    // is rejected rather than racing source approval and streamed commits.
-    const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export'];
-    if (!['snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
+    // Reads, interruption and durable draft recovery remain available during
+    // execution. Canonical mutations retain source/approval fences.
+    const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft'];
+    if (!(name==='conversation'&&a?.name==='saveDraft')&&!['snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {
       case 'notes':return this.noteCommand(a) as any;
       case 'library':return this.libraryCommand(a) as any;
