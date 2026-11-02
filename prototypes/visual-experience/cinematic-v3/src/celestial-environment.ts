@@ -1,4 +1,8 @@
 import * as THREE from "three";
+import {
+  CelestialDepthField,
+  CELESTIAL_DEPTH_SEED,
+} from "./celestial-depth-field.ts";
 
 export type CelestialStudy = "starlit" | "shadow" | "deep";
 export type CelestialQuality = "cinematic" | "balanced" | "efficient";
@@ -9,6 +13,9 @@ export interface CelestialFrame {
   weight: number;
   time?: number;
   ambientStrength?: number;
+  /** Exact current/retained navigation camera, prepared by its existing owner.
+   * Borrowed for projection only; celestial rendering never changes its pose. */
+  spatialCamera?: THREE.PerspectiveCamera | null;
 }
 
 export const CELESTIAL_SEED = 0x41e7a35d;
@@ -266,6 +273,9 @@ export class CelestialEnvironment {
   private readonly dome: THREE.Mesh<THREE.SphereGeometry, THREE.ShaderMaterial>;
   private readonly viewport = new THREE.Vector2(1, 1);
   private readonly worldOrientation = new THREE.Quaternion();
+  private readonly finiteScene = new THREE.Scene();
+  private readonly finite: CelestialDepthField;
+  private spatialCamera: THREE.PerspectiveCamera | null = null;
   private quality: CelestialQuality = "balanced";
   private study: CelestialStudy = "starlit";
   private environmentWeight = 0;
@@ -274,6 +284,8 @@ export class CelestialEnvironment {
   private disposed = false;
 
   constructor(seed = CELESTIAL_SEED) {
+    this.finite = new CelestialDepthField(seed ^ CELESTIAL_DEPTH_SEED);
+    this.finiteScene.add(this.finite.mesh);
     this.catalog = generateCelestialCatalog(CAPACITY, seed);
     const geometry = new THREE.InstancedBufferGeometry();
     geometry.setAttribute(
@@ -352,18 +364,20 @@ export class CelestialEnvironment {
   update(mainCamera: THREE.PerspectiveCamera, frame: CelestialFrame) {
     if (this.disposed)
       throw new Error("Cannot update a disposed celestial environment");
-    mainCamera.updateWorldMatrix(true, false);
-    mainCamera.getWorldQuaternion(this.worldOrientation);
+    this.spatialCamera = frame.spatialCamera ?? null;
+    const viewCamera = this.spatialCamera ?? mainCamera;
+    viewCamera.updateWorldMatrix(true, false);
+    viewCamera.getWorldQuaternion(this.worldOrientation);
     this.camera.position.set(0, 0, 0);
     this.camera.quaternion.copy(this.worldOrientation);
     if (
-      this.camera.fov !== mainCamera.fov ||
-      this.camera.aspect !== mainCamera.aspect ||
-      this.camera.zoom !== mainCamera.zoom
+      this.camera.fov !== viewCamera.fov ||
+      this.camera.aspect !== viewCamera.aspect ||
+      this.camera.zoom !== viewCamera.zoom
     ) {
-      this.camera.fov = mainCamera.fov;
-      this.camera.aspect = mainCamera.aspect;
-      this.camera.zoom = mainCamera.zoom;
+      this.camera.fov = viewCamera.fov;
+      this.camera.aspect = viewCamera.aspect;
+      this.camera.zoom = viewCamera.zoom;
       this.camera.updateProjectionMatrix();
     }
     this.camera.updateMatrixWorld(true);
@@ -373,6 +387,7 @@ export class CelestialEnvironment {
     this.environmentWeight = THREE.MathUtils.clamp(frame.weight, 0, 1);
     const focusedSalience = 1 - THREE.MathUtils.clamp(frame.focus, 0, 1) * 0.78;
     const emphasis = this.environmentWeight * focusedSalience;
+    this.finite.update(this.spatialCamera ? emphasis : 0, frame.quality);
     this.stars.geometry.instanceCount = COUNTS[frame.quality];
     this.stars.material.uniforms.uGain.value = gains[0];
     this.stars.material.uniforms.uEmphasis.value = emphasis;
@@ -399,12 +414,15 @@ export class CelestialEnvironment {
     renderer.getDrawingBufferSize(this.viewport);
     this.stars.material.uniforms.uPixelRatio.value = renderer.getPixelRatio();
     renderer.render(this.scene, this.camera);
+    if (this.spatialCamera && this.finite.mesh.visible)
+      renderer.render(this.finiteScene, this.spatialCamera);
     this.renderedStars = this.stars.geometry.instanceCount;
     this.renderedFrames++;
   }
 
   diagnostics() {
     const visible = !this.disposed && this.environmentWeight > 0.001;
+    const finiteDepth = this.finite.diagnostics();
     return {
       backend:
         "deterministic 3D celestial dome and instanced stellar billboards",
@@ -417,8 +435,8 @@ export class CelestialEnvironment {
       renderedFrames: this.renderedFrames,
       environmentWeight: this.environmentWeight,
       visible,
-      batches: visible ? 2 : 0,
-      geometryAllocations: this.disposed ? 0 : 2,
+      batches: visible ? 2 + (finiteDepth.active ? 1 : 0) : 0,
+      geometryAllocations: this.disposed ? 0 : 3,
       textureAllocations: 0,
       catalogBytes:
         this.catalog.positions.byteLength +
@@ -428,6 +446,7 @@ export class CelestialEnvironment {
       translationParallax:
         "canceled at infinite distance; world orientation copied",
       timeVaryingTwinkle: false,
+      finiteDepth,
       disposed: this.disposed,
     };
   }
@@ -435,6 +454,9 @@ export class CelestialEnvironment {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.spatialCamera = null;
+    this.finite.dispose();
+    this.finiteScene.clear();
     this.stars.geometry.dispose();
     this.stars.material.dispose();
     this.dome.geometry.dispose();

@@ -102,7 +102,7 @@ test("quality and study changes reuse the same two GPU batches and stable stella
         sky.update(camera, { ...frame, quality, study });
         const diagnostic = sky.diagnostics();
         assert.equal(diagnostic.batches, 2);
-        assert.equal(diagnostic.geometryAllocations, 2);
+        assert.equal(diagnostic.geometryAllocations, 3);
         assert.equal(diagnostic.textureAllocations, 0);
         assert(diagnostic.catalogBytes < 1024 * 1024);
         assert(diagnostic.activeStars <= diagnostic.starCapacity);
