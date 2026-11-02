@@ -133,40 +133,50 @@ export function mountConstellation(
     lastFrame = -Infinity,
     dirty = true,
     lastResultKey = "",
-    lastDetailKey = "";
+    lastDetailKey = "",
+    lastExclusionKey = "";
   const invalidate = () => {
     dirty = true;
     options.onDirty?.();
   };
   const spatial = new SpatialNavigator(controller, invalidate);
   controller.spatial = spatial;
+  const uiExclusions = () => {
+    const bounds = field.getBoundingClientRect();
+    return [
+      bar,
+      tools,
+      detail,
+      status,
+      drawer,
+      ...root.querySelectorAll<HTMLElement>(
+        ".aw-camera-settings[open] > div, .aw-graph-dialog[open]",
+      ),
+      ...root.ownerDocument.querySelectorAll<HTMLElement>(
+        "#vela, #vela .vela-label, #vela .vela-grip",
+      ),
+    ]
+      .filter(
+        (e) =>
+          !e.hidden &&
+          e.getClientRects().length > 0 &&
+          getComputedStyle(e).visibility === "visible",
+      )
+      .map((e) => e.getBoundingClientRect())
+      .filter((r) => r.width > 0 && r.height > 0)
+      .map((r) => ({
+        left: r.left - bounds.left,
+        top: r.top - bounds.top,
+        right: r.right - bounds.left,
+        bottom: r.bottom - bounds.top,
+      }));
+  };
   layer = new ConstellationScene(
     controller,
     spatial,
     () => field.getBoundingClientRect(),
     invalidate,
-    () => {
-      const bounds = field.getBoundingClientRect();
-      return [
-        bar,
-        tools,
-        detail,
-        status,
-        drawer,
-        ...root.querySelectorAll<HTMLElement>(
-          ".aw-camera-settings[open] > div, .aw-graph-dialog[open]",
-        ),
-      ]
-        .filter((e) => !e.hidden && e.getClientRects().length > 0)
-        .map((e) => e.getBoundingClientRect())
-        .filter((r) => r.width > 0 && r.height > 0)
-        .map((r) => ({
-          left: r.left - bounds.left,
-          top: r.top - bounds.top,
-          right: r.right - bounds.left,
-          bottom: r.bottom - bounds.top,
-        }));
-    },
+    uiExclusions,
   );
   const graph = graphControls(root, controller, () => {
     lastDetailKey = "";
@@ -762,6 +772,18 @@ export function mountConstellation(
   document.addEventListener("visibilitychange", visibility);
   function frame(now = performance.now()) {
     if (disposed || controller.policy.hidden) return;
+    if (
+      layer.enabled &&
+      ["project", "universe"].includes(controller.location.kind)
+    ) {
+      // The host moves Vela through this same scheduler; position changes do not
+      // trigger ResizeObserver, so keep label exclusions current on host frames.
+      const key = JSON.stringify(uiExclusions());
+      if (key !== lastExclusionKey) {
+        lastExclusionKey = key;
+        dirty = true;
+      }
+    }
     const moving =
       (controller.motion.bodies.get(controller.motionId)?.transitioning ??
         false) ||
