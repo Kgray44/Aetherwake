@@ -2649,20 +2649,31 @@ export function installApplication(hooks: Hooks) {
           el<HTMLInputElement>(".task-completed", article).onchange = (
             event,
           ) => {
-            const status = (event.target as HTMLInputElement).checked
-              ? "done"
-              : "open";
+            const checkbox = event.target as HTMLInputElement;
+            if (checkbox.disabled) return;
+            const status = checkbox.checked ? "done" : "open";
+            checkbox.disabled = true;
+            checkbox.setAttribute("aria-busy", "true");
             void enqueue(async () => {
               await flush();
-              const current = state!.resources.find(
+              const current = state?.resources.find(
                 (resource) => resource.id === r.id,
-              )!;
+              );
+              if (!current || current.available === false)
+                throw new Error("task_unavailable");
               await command({
                 type: "taskStatus",
                 resourceId: r.id,
                 expectedVersion: current.version,
                 status,
               });
+            }).finally(() => {
+              const current = state?.resources.find(
+                (resource) => resource.id === r.id,
+              );
+              checkbox.checked = current?.taskStatus === "done";
+              checkbox.disabled = !current || current.available === false;
+              checkbox.removeAttribute("aria-busy");
             });
           };
         }
