@@ -91,8 +91,30 @@ exports.verify = async ({
       bounds: await js("window.__aerynth.snapshot().gpu.presenceBounds"),
       labelClearance: await checkLabelClearance(win),
     });
+    const scene = await spatial(),
+      discs = scene.renderer.projectedBodies;
+    assert.ok(discs.length > 0, "actual scene has projected body bounds");
+    for (let i = 0; i < discs.length; i++)
+      for (let j = i + 1; j < discs.length; j++)
+        assert.ok(
+          Math.hypot(discs[i].x - discs[j].x, discs[i].y - discs[j].y) >=
+            discs[i].radius + discs[j].radius + 7.99,
+          "actual scene silhouettes retain a screen gap",
+        );
+    assert.equal(
+      await js(
+        'document.querySelectorAll(".aw-constellation-bar button").length',
+      ),
+      2,
+      "only commands and info are persistent Constellation controls",
+    );
   };
   const flush = () => js("window.__aerynth.flush()");
+  const key = async (keyCode, modifiers = []) => {
+    win.webContents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
+    win.webContents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+    await pause(100);
+  };
   const view = () => js("window.aerynthHost.command('viewState',{})");
   const shot = async (name) => {
     assert.ok(receipt.screenshots.length < 14, "screenshot count bound");
@@ -106,7 +128,22 @@ exports.verify = async ({
       sha256: createHash("sha256").update(bytes).digest("hex"),
     });
   };
+  const commandIds = {
+    "Link resources": "link",
+    "Explore neighborhood": "explore",
+    "Inspect relationships": "relationships",
+    "Branch conversation": "branch",
+    Universe: "universe",
+    "Inspect selection": "inspect",
+    Arrange: "arrange",
+  };
+  const command = async (title) => {
+    await click('.aw-quiet-control[aria-label="Commands and destinations"]');
+    await fill(".aw-destinations input", title);
+    await click(`.aw-command-row[data-command="${commandIds[title]}"]`);
+  };
   const textButton = async (text, scope = ".aw-constellation") => {
+    if (commandIds[text] && scope !== ".aw-graph-dialog") return command(text);
     const token = "expanded-" + Date.now();
     await js(
       `(()=>{const e=[...document.querySelectorAll(${JSON.stringify(scope + " button")})].find(e=>e.textContent.trim()===${JSON.stringify(text)});if(!e)throw Error('Missing button: '+${JSON.stringify(text)});e.dataset.expandedTarget=${JSON.stringify(token)}})()`,
@@ -127,16 +164,15 @@ exports.verify = async ({
       `!!document.querySelector(${JSON.stringify('[data-key="' + key + '"]')})`,
     );
     await click(`[data-key="${key}"]`);
-    await textButton("Open destination", ".aw-spatial-detail");
+    await key("Enter");
     await pause(450);
   };
   const locate = async (title, id) => {
-    await textButton("Destinations", ".aw-constellation-bar");
+    await click('.aw-quiet-control[aria-label="Commands and destinations"]');
     await fill(".aw-destinations input", title);
     await click(
-      `.aw-destination-results button[aria-label=${JSON.stringify("Locate " + title)}]`,
+      `.aw-destination-results button[data-command=${JSON.stringify(id)}]`,
     );
-    await textButton("Close destinations", ".aw-destinations");
     await wait(
       `window.__aerynth.snapshot().spatial.selected===${JSON.stringify(id)}`,
     );
@@ -572,7 +608,29 @@ exports.verify = async ({
       const panned = (await spatial()).camera;
       assert.notDeepEqual(panned.target, orbited.target);
       step(6, "Pan across its resource clusters");
-      await shot("02-orbit-and-pan");
+      await click('.aw-quiet-control[aria-label="Navigation guide"]');
+      await wait('!document.querySelector(".aw-navigation-guide").hidden');
+      await pause(200);
+      const guide = await js(
+        '(()=>{const e=document.querySelector(".aw-navigation-guide"),r=e.getBoundingClientRect();return {width:r.width,height:r.height,viewportHeight:innerHeight,text:e.textContent,material:getComputedStyle(e).backdropFilter,buttons:e.querySelectorAll("button").length}})()',
+      );
+      assert.ok(guide.width <= 360 && guide.height < guide.viewportHeight);
+      assert.equal(guide.buttons, 0);
+      assert.ok(
+        guide.text.includes("Alt + drag") && guide.text.includes("Ctrl + K"),
+      );
+      assert.notEqual(guide.material, "none");
+      await checkLabelClearance(win);
+      receipt.actions.push({ label: "Compact glass navigation guide", guide });
+      await shot("02-orbit-pan-and-glass-guide");
+      await key("Escape");
+      await wait('document.querySelector(".aw-navigation-guide").hidden');
+      await key("F1");
+      await wait('!document.querySelector(".aw-navigation-guide").hidden');
+      await key("Escape");
+      receipt.checks.push(
+        "compact-glass-info-guide-with-native-keyboard-opening-and-dismissal",
+      );
       receipt.checks.push(
         "native-pointer-orbit-and-shift-pan-change-real-perspective-camera",
       );
@@ -709,10 +767,11 @@ exports.verify = async ({
           "resource:" + sourceRow.conversation.block.id
         ].spatial,
         desired = {
-          x: Math.round(old.x + 85),
-          y: Math.round(old.y + 45),
-          z: Math.round(old.z - 35),
+          x: Math.round(old.x + 20000),
+          y: Math.round(old.y + 1000),
+          z: Math.round(old.z - 20000),
         };
+      await textButton("Inspect selection");
       for (const axis of ["X", "Y", "Z"])
         await fill(
           `.aw-spatial-detail input[aria-label="Anchor ${axis} position"]`,
@@ -733,6 +792,8 @@ exports.verify = async ({
       ];
       assert.deepEqual(pinned.spatial, desired);
       assert.equal(pinned.pinned, true);
+      await click('.aw-spatial-detail [aria-label="Close information"]');
+      await key("f");
       step(
         12,
         "Set and persist the chosen XYZ and pin using non-drag controls",
