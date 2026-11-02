@@ -32,7 +32,8 @@ test('hysteresis holds a composition through small camera jitter and never withd
   for (const width of [250, 240, 225, 224]) { mode = blockComposition('conversation', { ...small, width: 500, bodyWidth: width, bodyHeight: 200 }, mode); assert.equal(mode, 'working'); }
   assert.equal(blockComposition('conversation', { ...small, width: 500, bodyWidth: 223, bodyHeight: 200 }, mode), 'overview');
   assert.equal(blockComposition('conversation', small, 'overview', true), 'working');
-  assert.equal(blockComposition('conversation', { ...small, bodyWidth: 0 }, 'working'), 'working');
+  assert.equal(blockComposition('conversation', { ...small, width: 0 }, 'working'), 'working', 'Hidden projected card is not a measured body constraint');
+  assert.equal(blockComposition('conversation', { ...small, bodyHeight: 0 }, 'working'), 'overview', 'A genuinely exhausted body still exposes header Approach');
   assert.equal(blockComposition('conversation', { ...small, bodyWidth: NaN }, 'overview'), 'overview');
 });
 test('actual identity controller retains editor/caret/scroll through overview, focused/IME input, header focus and approach failure', async t => {
@@ -45,6 +46,7 @@ test('actual identity controller retains editor/caret/scroll through overview, f
   identity.update(blockIdentity({ kind: 'conversation', resource: chat }));
   f.open.focus();
   assert.equal(identity.setFootprint(small), 'overview', 'Header focus is not working input');
+  assert.equal(identity.setFootprint({ ...small, bodyHeight: 0 }), 'overview');
   assert.equal(editor.hasAttribute('inert'), true);
   assert.equal(view.root.querySelector('.aw-block-overview-content').textContent, 'YouExact canonical message');
   const button = view.root.querySelector('.aw-block-approach');

@@ -38,10 +38,12 @@ export function blockApproachTarget(kind: BlockInstanceKind, textScale = 1): Blo
 }
 
 /** No viewport containment test: a partially visible card can still be used.
- * A missing/hidden initial measurement does not withdraw an existing editor. */
+ * Missing/hidden card measurements retain the prior mode. A real observation
+ * of zero remaining body space on a visible card needs its header Approach. */
 export function blockComposition(kind: BlockInstanceKind, footprint: BlockFootprint, previous: BlockComposition = 'working', inputActive = false): BlockComposition {
   if (inputActive) return 'working';
-  if (!Object.values(footprint).every(value => Number.isFinite(value) && value > 0)) return previous;
+  if (![footprint.width, footprint.height, footprint.textScale].every(value => Number.isFinite(value) && value > 0)
+    || ![footprint.bodyWidth, footprint.bodyHeight].every(value => Number.isFinite(value) && value >= 0)) return previous;
   const minimum = readableBody[kind], factor = scale(footprint.textScale),
     width = Math.min(footprint.width, footprint.bodyWidth),
     height = Math.min(footprint.height, footprint.bodyHeight);
