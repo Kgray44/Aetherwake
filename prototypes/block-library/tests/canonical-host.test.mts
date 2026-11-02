@@ -181,6 +181,7 @@ test("every new block kind uses its distinct preferred geometry without rewritin
     workspace = f.engine.createWorkspace(
       "Synthetic preferred sizes",
       project.id,
+      { mode: "freeform" },
     );
   f.options.capabilities().subjects = {
     project_overview: { state: "available" },
