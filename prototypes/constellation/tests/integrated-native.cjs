@@ -1,6 +1,7 @@
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const assert = require("node:assert/strict");
+const { assertNativeOwner, nativeInput } = require("./native-input.cjs");
 const { createHash } = require("node:crypto");
 const native = "../../visual-experience/cinematic-v3/native/";
 const { createDriver } = require(native + "desktop-verify.cjs");
@@ -114,8 +115,8 @@ exports.verify = async ({
   };
   const flush = () => js("window.__aerynth.flush()");
   const key = async (keyCode, modifiers = []) => {
-    win.webContents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
-    win.webContents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+    nativeInput(win, { type: "keyDown", keyCode, modifiers });
+    nativeInput(win, { type: "keyUp", keyCode, modifiers });
     await pause(100);
   };
   const view = () => js("window.aerynthHost.command('viewState',{})");
@@ -127,10 +128,12 @@ exports.verify = async ({
     );
     const before = await js("window.__aerynth.snapshot().metrics.draws");
     for (const x of [3, 1])
-      win.webContents.sendInputEvent({ type: "mouseMove", x, y: 1 });
+      nativeInput(win, { type: "mouseMove", x, y: 1 });
     await wait(`window.__aerynth.snapshot().metrics.draws>${before}`, 8000);
     await pause(350);
+    assertNativeOwner(win);
     const bytes = (await win.webContents.capturePage()).toPNG();
+    assertNativeOwner(win);
     assert.ok(bytes.length < 8 * 1024 * 1024, "screenshot byte bound");
     await fs.writeFile(path.join(out, name + ".png"), bytes, { flag: "wx" });
     receipt.screenshots.push({
@@ -324,14 +327,14 @@ exports.verify = async ({
       at: new Date().toISOString(),
     };
     for (const type of ["mouseMove", "mouseDown"])
-      win.webContents.sendInputEvent({
+      nativeInput(win, {
         type,
         ...p,
         button: "left",
         clickCount: 1,
       });
     for (let i = 1; i <= 12; i++) {
-      win.webContents.sendInputEvent({
+      nativeInput(win, {
         type: "mouseMove",
         x: Math.round(p.x + (dx * i) / 12),
         y: Math.round(p.y + (dy * i) / 12),
@@ -340,7 +343,7 @@ exports.verify = async ({
       });
       await pause(20);
     }
-    win.webContents.sendInputEvent({
+    nativeInput(win, {
       type: "mouseUp",
       x: p.x + dx,
       y: p.y + dy,
@@ -380,7 +383,7 @@ exports.verify = async ({
   const cardPresentation = async (id, shape) => {
     const p = await cardPoint(id);
     for (const type of ["mouseMove", "mouseDown", "mouseUp"])
-      win.webContents.sendInputEvent({
+      nativeInput(win, {
         type,
         ...p,
         button: "right",
@@ -439,8 +442,8 @@ exports.verify = async ({
     const p = await js(
       `(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e?.getBoundingClientRect();if(!r)throw Error('Missing drag surface');let x=Math.round(r.x+r.width*.2),y=Math.round(r.y+r.height*.7);const key=${JSON.stringify(bodyKey ?? null)};if(key){const label=document.querySelector('[data-key="'+key+'"]'),lr=label?.getBoundingClientRect();if(!lr)throw Error('Body label missing');const lx=lr.x+lr.width/2-r.x,ly=lr.y+lr.height/2-r.y,lines=[...document.querySelectorAll('.aw-connections line')];const line=lines.find(l=>Math.abs(Number(l.getAttribute('x2'))-lx)<4&&Math.abs(Number(l.getAttribute('y2'))+15-ly)<4);if(!line)throw Error('Projected body leader missing');x=Math.round(r.x+Number(line.getAttribute('x1')));y=Math.round(r.y+Number(line.getAttribute('y1')));}const h=document.elementFromPoint(x,y);if(h!==e&&!h?.classList.contains('aw-spatial-world'))throw Error('Drag target occluded: '+h?.className);return {x,y}})()`,
     );
-    win.webContents.sendInputEvent({ type: "mouseMove", ...p, modifiers });
-    win.webContents.sendInputEvent({
+    nativeInput(win, { type: "mouseMove", ...p, modifiers });
+    nativeInput(win, {
       type: "mouseDown",
       ...p,
       button: "left",
@@ -449,7 +452,7 @@ exports.verify = async ({
     });
     await pause(75);
     for (let i = 1; i <= 12; i++) {
-      win.webContents.sendInputEvent({
+      nativeInput(win, {
         type: "mouseMove",
         x: Math.round(p.x + (dx * i) / 12),
         y: Math.round(p.y + (dy * i) / 12),
@@ -458,7 +461,7 @@ exports.verify = async ({
       });
       await pause(20);
     }
-    win.webContents.sendInputEvent({
+    nativeInput(win, {
       type: "mouseUp",
       x: Math.round(p.x + dx),
       y: Math.round(p.y + dy),

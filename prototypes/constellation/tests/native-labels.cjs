@@ -1,4 +1,5 @@
 const assert = require("node:assert/strict");
+const { assertNativeOwner, nativeInput } = require("./native-input.cjs");
 
 /** Working workspace keeps one visible help entry and its existing keyboard owner. */
 exports.verifyWorkspaceGuide = async (win) => {
@@ -34,7 +35,7 @@ exports.verifyWorkspaceGuide = async (win) => {
     ),
   );
   for (const type of ["keyDown", "keyUp"])
-    win.webContents.sendInputEvent({ type, keyCode: "Escape" });
+    nativeInput(win, { type, keyCode: "Escape" });
   await wait('document.querySelector(".aw-navigation-guide").hidden');
   assert.equal(
     await js(
@@ -110,8 +111,8 @@ exports.verifyCompactNavigation = async (win) => {
     "start in an actual overview",
   );
   const key = async (keyCode, modifiers = []) => {
-    win.webContents.sendInputEvent({ type: "keyDown", keyCode, modifiers });
-    win.webContents.sendInputEvent({ type: "keyUp", keyCode, modifiers });
+    nativeInput(win, { type: "keyDown", keyCode, modifiers });
+    nativeInput(win, { type: "keyUp", keyCode, modifiers });
     await new Promise((resolve) => setTimeout(resolve, 150));
   };
   assert.equal(
@@ -151,6 +152,7 @@ exports.verifyCompactNavigation = async (win) => {
   );
   await key("Escape");
   await wait('document.querySelector(".aw-destinations").hidden');
+  assertNativeOwner(win);
   await js('document.querySelector(".aw-spatial-field").focus()');
   await key("ArrowRight");
   const scope =
