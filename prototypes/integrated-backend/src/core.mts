@@ -254,6 +254,13 @@ export class BackendCore {
       }},dispatch:{native:input=>this.applyVelaNative(input),delegateTask:input=>this.executeVelaDelegation(input),preference:input=>{
         ensure(this.velaNative?.applyPreference,'vela_preference_capability_unavailable');this.requireVelaPolicyGrant(input.authorizationRef,undefined,'adaptation');return this.velaNative.applyPreference(input);
       }}});
+    this.velaHost.contextReferences=selectedIds=>{
+      const context=this.velaHost.context(),scope=this.velaHost.scope(),refs:ResourceRef[]=[];
+      const add=(id:string|null,kind:'project'|'workspace')=>{if(id!==null){const ref=this.velaHost.resolve({id,kind},scope);if(ref&&!refs.some(r=>r.id===id&&r.kind===kind))refs.push(ref);}};
+      add(context.currentProjectId,'project');add(context.currentWorkspaceId,'workspace');
+      for(const id of selectedIds){if(!scope.resourceIds.includes(id))continue;const owner=this.db.prepare('SELECT project_id FROM resources WHERE id=?').get(id)?.project_id;if(typeof owner==='string')add(owner,'project');}
+      return refs;
+    };
     const adapter=new CodexPlanningAdapter({backend:{command:(name,input)=>this.command(name,input)},availability:()=>{
       const cap=this.capabilityCache.snapshot();return {available:!!cap&&!cap.mock&&cap.providerId==='codex-app-server'&&cap.authentication==='available',busy:!!this.active,reason:cap?'Codex must be a real authenticated observed provider':'Provider capability has not been observed; native actions remain available'};
     },authorizePlanning:input=>{
@@ -280,7 +287,10 @@ export class BackendCore {
     for(const c of state.capabilities){const available=this.velaCapability(c.id);nativeCapabilities[c.id]={available,...(!available?{reason:'Released host capability is not registered'}:{})};}
     state.capabilities=state.capabilities.filter(c=>nativeCapabilities[c.id].available);
     if(state.adaptation)state.adaptation.applicationAvailable=!!this.velaNative?.applyPreference;
-    return {...state,nativeCapabilities,planningReferences:structuredClone(this.state.vela!.planning)};
+    const context=this.velaHost.context(),scope=this.velaHost.scope();
+    const references=scope.projectIds.map(id=>this.velaHost.resolve({id,kind:'project'},scope)).filter((r):r is ResourceRef=>r!==null);
+    if(context.currentWorkspaceId){const workspace=this.velaHost.resolve({id:context.currentWorkspaceId,kind:'workspace'},scope);if(workspace)references.push(workspace);}
+    return {...state,nativeCapabilities,planningReferences:structuredClone(this.state.vela!.planning),applicationContext:{currentProjectId:context.currentProjectId,currentWorkspaceId:context.currentWorkspaceId,references}};
   }
   private velaScopeStamp() {
     const c=this.velaContext();return planningDigest({principalId:c.principalId,policyVersion:c.policyVersion,currentProjectId:c.currentProjectId,currentWorkspaceId:c.currentWorkspaceId,projectVersion:c.currentProjectId?this.db.prepare('SELECT version FROM projects WHERE id=?').get(c.currentProjectId)?.version:null,workspaceVersion:c.currentWorkspaceId?this.db.prepare('SELECT version FROM workspaces WHERE id=?').get(c.currentWorkspaceId)?.version:null,workspaceRevision:c.currentWorkspaceId?(this.velaNative?.workspaceRevision?.(c.currentWorkspaceId)??this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(c.currentWorkspaceId)?.version):null});

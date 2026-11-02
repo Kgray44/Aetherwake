@@ -7,8 +7,9 @@ import { randomUUID } from 'node:crypto';
 import { BackendCore } from '../src/core.mts';
 import type { LibraryMethod,LibraryRequest,VelaOperation } from '../src/contracts.mts';
 import { captureWorkspaceTemplate } from '../../block-library/model.ts';
+import type { VelaPlanningPort } from '../../vela-core/src/contracts.ts';
 
-function fixture(){const dir=mkdtempSync(join(tmpdir(),'aerynth-library-backend-')),path=join(dir,'canonical.sqlite');let core=new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only'});return {get core(){return core;},async reopen(){await core.command('close',{});core=new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only'});},async close(){await core.command('close',{});const target=resolve(dir),part=relative(resolve(tmpdir()),target);assert.ok(part.startsWith('aerynth-library-backend-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(target,{recursive:true,force:true});}};}
+function fixture(planner?:VelaPlanningPort){const dir=mkdtempSync(join(tmpdir(),'aerynth-library-backend-')),path=join(dir,'canonical.sqlite');let core=new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only',velaPlanningPort:planner});return {get core(){return core;},async reopen(){await core.command('close',{});core=new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only',velaPlanningPort:planner});},async close(){await core.command('close',{});const target=resolve(dir),part=relative(resolve(tmpdir()),target);assert.ok(part.startsWith('aerynth-library-backend-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(target,{recursive:true,force:true});}};}
 const library=(core:BackendCore,name:LibraryMethod,input:any={})=>core.command('library',{name,input} as LibraryRequest) as Promise<any>;
 const vela=(core:BackendCore,name:VelaOperation['name'],input:any={})=>core.command('vela',{name,input} as VelaOperation) as Promise<any>;
 
@@ -55,5 +56,19 @@ test('library scope fences reject cross-project and stale references, and parent
   await assert.rejects(library(f.core,'createBlock',{commandId:randomUUID(),workspaceId:workspace.id,expectedLayoutVersion:before.layoutVersion,kind:'conversation',provider:'local',title:'Must roll back canonical identity'}),/Synthetic failure/);(f.core as any).createLibraryResource=original;
   assert.deepEqual((await f.core.command('snapshot',{})).graph,graph.graph);assert.equal((await f.core.command('desktop',{type:'snapshot'})).resources.length,before.resources.length);
   await f.core.command('desktop',{type:'archiveSubject',kind:'resource',id:resource.id,expectedVersion:resource.version,archived:true});await assert.rejects(library(f.core,'workspaceFromResources',{commandId:randomUUID(),title:'Denied archived source',projectId:p1.id,expectedProjectVersion:p1.version,resources:[{resourceId:resource.id,expectedVersion:resource.version+1}]}),/reference_unavailable/);
+ }finally{await f.close();}
+});
+
+test('consent includes actual project/workspace/owner metadata before binding and contextual proposals retain the reviewed project',async()=>{
+ let observed:any,calls=0;
+ const port:VelaPlanningPort={providerId:'synthetic-context-planning-double',availability:()=>({available:true,busy:false}),propose:async input=>{calls++;observed=input.context;const project=input.context.discovered.find(r=>r.kind==='project')!,resource=input.context.included[0];return {schemaVersion:1,summary:'Synthetic typed proposal using real supplied IDs',steps:[{id:'organize',explanation:'Use the explicit canonical owner project from the manifest',action:{type:'workspaceFromResources',title:'Contextual project workspace',projectId:project.id,resourceIds:[resource.id]}}],contribution:{providerId:'synthetic-context-planning-double',classification:'reported'}};}};
+ const f=fixture(port);try{
+  const project=(await f.core.command('desktop',{type:'createProject',title:'Actual selected project'})).projects[0],workspace=(await f.core.command('desktop',{type:'createWorkspace',title:'Actual selected workspace',projectId:project.id})).workspaces[0],desktop=await f.core.command('desktop',{type:'snapshot'}),created=await library(f.core,'createBlock',{commandId:randomUUID(),workspaceId:workspace.id,expectedLayoutVersion:desktop.layoutVersion,kind:'note',title:'Actual project note'});
+  const first=await f.core.command('velaRequestPreview',{intent:'Create a workspace in this actual project',resourceIds:[created.result.resourceId]});assert.equal((await vela(f.core,'state')).conversation,null);
+  assert.equal(first.context.included[0].projectId,project.id);assert.ok(first.context.discovered.some(ref=>ref.kind==='project'&&ref.id===project.id&&ref.title==='Actual selected project'));assert.ok(first.context.discovered.some(ref=>ref.kind==='workspace'&&ref.id===workspace.id));
+  (f.core as any).kernel.renameProject(project.id,'Renamed actual project',project.version);await assert.rejects(f.core.command('authorizeVelaRequest',{previewId:first.id,signature:first.signature}),/stale_vela_preview/);
+  const preview=await f.core.command('velaRequestPreview',{intent:first.intent,resourceIds:[created.result.resourceId]}),grant=await f.core.command('authorizeVelaRequest',{previewId:preview.id,signature:preview.signature}),request=await vela(f.core,'request',{intent:preview.intent,resourceIds:preview.resourceIds,authorizeProvider:true,previewId:preview.id,grantId:grant.grantId});
+  assert.equal(calls,1);assert.ok(observed.discovered.some((ref:any)=>ref.kind==='project'&&ref.title==='Renamed actual project'));const state=await vela(f.core,'state'),plan=state.plans.find((p:any)=>p.id===request.planId);assert.equal(plan.steps[0].action.projectId,project.id);await vela(f.core,'review',{planId:plan.id,fingerprint:plan.fingerprint,decision:'approve'});assert.equal((await vela(f.core,'apply',plan.id)).state,'applied');
+  const after=await f.core.command('desktop',{type:'snapshot'});assert.equal(after.workspaces.find(w=>w.id===after.activeWorkspaceId)!.project_id,project.id);assert.equal(after.blocks[0].resource_id,created.result.resourceId);
  }finally{await f.close();}
 });

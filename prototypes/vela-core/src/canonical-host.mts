@@ -100,7 +100,7 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
     for (const id of scope.workspaceIds) {
       const entity = row('workspaces', id); if (!entity || entity.state !== 'active' || !metadata.workspaces.some(w => w.id === id) || !projectActive(entity.project_id === null ? null : String(entity.project_id))) continue;
       const revision = options.revisions.workspace(id, metadata); if (revision === null) continue;
-      store({ id, kind: 'workspace', title: String(entity.title), version: canonicalVersionToken(Number(entity.version), revision) });
+      store({ id, kind: 'workspace', title: String(entity.title), version: canonicalVersionToken(Number(entity.version), revision), projectId:entity.project_id===null?null:String(entity.project_id) });
     }
     for (const id of scope.resourceIds) {
       const entity = row('resources', id), meta = metadata.resources.find(r => r.id === id);
@@ -110,7 +110,7 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
         const revision = options.revisions.conversation(id, metadata); if (revision === null) continue;
         version = canonicalVersionToken(version, revision);
       }
-      store({ id, kind: 'resource', title: String(entity.title), version, resourceKind: meta.kind });
+      store({ id, kind: 'resource', title: String(entity.title), version, resourceKind: meta.kind,projectId:entity.project_id===null?null:String(entity.project_id) });
     }
     scope.projectIds = scope.projectIds.filter(id => refs.has(key('project', id)));
     scope.workspaceIds = scope.workspaceIds.filter(id => refs.has(key('workspace', id)));

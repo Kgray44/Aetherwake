@@ -61,12 +61,15 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const native = el('details', 'vela-core-tools'); native.append(el('summary', undefined, 'Local actions · available without a model'));
   const nativeTitle = el('input'); nativeTitle.maxLength = 200; nativeTitle.placeholder = 'New resource or workspace title';
   native.append(label('Title', nativeTitle));
+  const nativeProject=el('select');let projectChosen=false;nativeProject.addEventListener('change',()=>{projectChosen=true;});
+  native.append(label('New workspace project',nativeProject));
   const act = async (action: VelaNativeAction, description: string) => {
     const plan = await client.native({ action, intent: description }); await client.apply(plan.id); await refresh();
   };
+  const workspaceCreate=button('Create workspace with selected resources', () => act({ type: 'workspaceFromResources', title: nativeTitle.value.trim() || 'New workspace', projectId: nativeProject.value||null, resourceIds: [...selected.keys()] }, 'Create a workspace in the explicitly chosen project containing the selected existing resources'));
   native.append(button('Create note', () => act({ type: 'createResource', kind: 'note', title: nativeTitle.value.trim() || 'New note', workspaceId: null }, 'Create a new local note')),
     button('Create task', () => act({ type: 'createResource', kind: 'task', title: nativeTitle.value.trim() || 'New task', workspaceId: null }, 'Create a new local task')),
-    button('Create workspace with selected resources', () => act({ type: 'workspaceFromResources', title: nativeTitle.value.trim() || 'New workspace', projectId: null, resourceIds: [...selected.keys()] }, 'Create a workspace containing the explicitly selected existing resources')));
+    workspaceCreate);
   const plans = el('section', 'vela-core-plans'); plans.setAttribute('aria-label', 'Plan review and receipts');
   const contextDetails = el('details', 'vela-core-context'); contextDetails.append(el('summary', undefined, 'Inspect request context and provenance'));
   const contextBody = el('div'); contextDetails.append(contextBody);
@@ -104,6 +107,12 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function render(state: VelaState) {
     if (disposed) return; current = state;
     provider.textContent = state.planner.available ? 'Planning provider: ' + state.planner.providerId + (state.planner.busy ? ' · busy' : ' · available') : 'Planning unavailable · local actions are available';
+    const chosen=projectChosen?nativeProject.value:state.applicationContext?.currentProjectId??'';
+    nativeProject.replaceChildren();const global=el('option',undefined,'No project · global workspace');global.value='';nativeProject.append(global);
+    for(const ref of state.applicationContext?.references.filter(ref=>ref.kind==='project')??[]){const option=el('option',undefined,ref.title+' · v'+ref.version);option.value=ref.id;nativeProject.append(option);}
+    if(chosen&&!Array.from(nativeProject.options).some(option=>option.value===chosen)){const unavailable=el('option',undefined,'Previously selected project · unavailable in current scope');unavailable.value=chosen;unavailable.disabled=true;nativeProject.append(unavailable);}
+    nativeProject.value=chosen;
+    workspaceCreate.disabled=!state.capabilities.some(capability=>capability.id==='workspaceFromResources')||!!nativeProject.selectedOptions[0]?.disabled;
     conversation.replaceChildren();
     for (const message of state.conversation?.messages.slice(-80) ?? []) {
       const entry = el('article', 'vela-core-message');

@@ -181,6 +181,11 @@ export class VelaService {
       manifest.included.push({ ...ref, content: content.content, source: content.source, reason: 'explicit', contentDigest: digest(content.content), trust: 'untrusted-source-data' });
       manifest.contentBytes += bytes;
     }
+    for(const supplied of this.opts.host.contextReferences?.(ids)??[]) {
+      check(supplied.kind==='project'||supplied.kind==='workspace','invalid_application_context_reference');
+      const actual=this.resolve(supplied.id,supplied.kind,scope);check(actual.version===supplied.version,'stale_application_context_reference');
+      if(!manifest.discovered.some(ref=>ref.id===actual.id&&ref.kind===actual.kind))manifest.discovered.push(actual);
+    }
     return manifest;
   }
   private targets(steps: PlanStep[], scope: VelaScope) {
