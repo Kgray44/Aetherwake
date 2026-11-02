@@ -3,6 +3,8 @@ on:
   pull_request:
     paths:
       - 'prototypes/integrated-backend/**'
+      - 'prototypes/openai-provider/**'
+      - 'prototypes/application-contract/**'
       - 'prototypes/workspace-kernel/**'
       - 'prototypes/connected-conversations/**'
       - 'prototypes/codex-bridge/**'
@@ -19,9 +21,13 @@ jobs:
         with:
           node-version: '24.18.0'
           cache: npm
-          cache-dependency-path: prototypes/integrated-backend/package-lock.json
+          cache-dependency-path: |
+            prototypes/integrated-backend/package-lock.json
+            prototypes/openai-provider/package-lock.json
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: prototypes/integrated-backend
+      - run: npm ci --ignore-scripts --no-audit --no-fund --cache .runtime/npm-cache
+        working-directory: prototypes/openai-provider
       - run: npm run typecheck
         working-directory: prototypes/integrated-backend
       - run: npm test
