@@ -44,6 +44,7 @@ lines.on("line", async (line) => {
         "library",
         "notes",
         "velaRequestPreview",
+        "velaNativeReview",
         "authorizeVelaRequest",
         "authorizeVelaDelegation",
       ].includes(request.command)
