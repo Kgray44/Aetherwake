@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld(
           "interrupt",
           "send",
           "viewState",
+          "graphAction",
         ].includes(name)
       )
         throw new Error("unsupported_command");

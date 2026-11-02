@@ -40,7 +40,9 @@ export class BackendCore {
   private maxEvents: number;
   private closed = false;
   private desktop: DesktopState;
+  private privateMode: boolean;
   constructor(options: Options, emit: (event: StreamEvent) => void = () => {}) {
+    this.privateMode = options.contentPolicy === 'local-private';
     if (options.contentPolicy !== 'synthetic-only') {
       ensure(options.contentPolicy === 'local-private' && options.privateRoot && isAbsolute(options.path), 'protected_storage_unavailable');
       const privateRoot = realpathSync(options.privateRoot!);
@@ -211,6 +213,7 @@ export class BackendCore {
   }
   async execute(input: CommandMap['execute']['input']): Promise<Execution> {
     ensure(!this.active, 'execution_busy');
+    ensure(this.kernel.getResource(input.resourceId).resource.state === 'active', 'resource_archived');
     ensure(input.authorized === true, 'authorization_required');
     ensure(typeof input.prompt === 'string' && input.prompt.length > 0 && Buffer.byteLength(input.prompt) <= 16384, 'invalid_prompt');
     const c = this.conv(input.resourceId); ensure(c.providerId === this.port.id, 'invalid_cross_provider_reference');
@@ -232,7 +235,12 @@ export class BackendCore {
       ensure(Buffer.byteLength(text) <= r.tokenBudget, 'context_budget_exceeded');
     }
     let e: Execution = { id: randomUUID(), resourceId: input.resourceId, providerId: this.port.id, state: 'dispatching', binding: null, turnId: null, commandId: input.commandId, startedAt: now(), endedAt: null, taskVerified: false };
-    this.atomic(() => { this.state.executions[e.id] = e; this.state.receipts[input.commandId] = { fingerprint, result: e.id }; if (r) r.state = 'dispatching'; });
+    this.atomic(() => {
+      this.state.executions[e.id] = e; this.state.receipts[input.commandId] = { fingerprint, result: e.id }; if (r) r.state = 'dispatching';
+      // Persist a private desktop user's authorized request before network dispatch.
+      // A failure or lost process must not erase the user's side of the conversation.
+      if (this.privateMode) { this.graph.addMessage(this.gid(e.resourceId), 'user', input.prompt, { sensitivity: 'internal' }); this.state.revisions[e.resourceId]++; }
+    });
     this.active = e; this.assistantText = ''; this.streamFailure = false;
     let remoteDispatched = false;
     try {
@@ -264,7 +272,7 @@ export class BackendCore {
       this.atomic(() => {
         e.state = terminal.terminalStatus === 'completed' ? 'provider_completed' : terminal.terminalStatus === 'interrupted' ? 'interrupted' : 'failed';
         e.endedAt = now();
-        this.graph.addMessage(this.gid(e.resourceId), 'user', input.prompt);
+        if (!this.privateMode) this.graph.addMessage(this.gid(e.resourceId), 'user', input.prompt);
         if (e.state === 'provider_completed' && this.assistantText.trim()) {
           const m = this.graph.addMessage(this.gid(e.resourceId), 'assistant', this.assistantText, { provenance: this.port.mock ? 'mock_adapter' : 'application', providerTurnId: turnId, referenceIds: r ? [r.id] : [], sensitivity: 'public' });
           this.state.messageEvidence[m.id] = { classification: this.port.mock ? 'simulated' : 'reported', executionId: e.id, providerId: this.port.id, nativeTurnId: turnId, nativeThreadId: binding.nativeThreadId };
@@ -293,14 +301,21 @@ export class BackendCore {
           this.atomic(() => this.desktop.apply(a, (title, codex) => this.create(title, codex ? this.port.id : 'mock-ordinary').resourceId));
           this.record('application/' + a.type, 'observed');
         }
+        const graph = this.graph.snapshot();
+        const conversationMap=new Map(graph.conversations.map(c=>[c.id,c]));
+        const messagesMap=new Map<string,typeof graph.messages>();for(const m of graph.messages){const list=messagesMap.get(m.conversationId)??[];list.push(m);messagesMap.set(m.conversationId,list);}
+        const publicMap=new Map(Object.entries(this.state.resources).map(([id,gid])=>[gid,id]));
+        const branches=graph.edges.filter(edge=>publicMap.has(edge.parentId)&&publicMap.has(edge.childId)).map(edge=>({id:edge.id,parentResourceId:publicMap.get(edge.parentId)!,childResourceId:publicMap.get(edge.childId)!,sourceMessageId:edge.sourceMessageId,mode:edge.mode,createdAt:edge.createdAt,provenance:'recorded conversation lineage'}));
         return this.desktop.snapshot(id => {
-          if (!this.state.resources[id]) return { provider: 'local', messages: [] };
-          const c = this.conv(id), graphId = this.gid(id);
-          return { provider: c.kind === 'codex' ? 'codex' : 'local', version: c.revision, messages: this.graph.snapshot().messages.filter(m => m.conversationId === graphId).slice(-200).map(m => ({ id: m.id, role: m.role, content: m.content })) };
-        }) as any;
+          const graphId=this.state.resources[id],c=conversationMap.get(graphId);if(!c)return {provider:'local',messages:[]};
+          const messages=messagesMap.get(graphId)??[];
+          const execution=Object.values(this.state.executions).filter(e=>e.resourceId===id).at(-1);
+          return {provider:c.kind==='codex'?'codex':'local',providerId:c.providerId,conversationRevision:this.state.revisions[id],messageCount:messages.length,...(execution?{execution:{id:execution.id,state:execution.state,errorCode:execution.errorCode,taskVerified:false as const}}:{}),messages:messages.slice(-200).map(m=>({id:m.id,role:m.role,content:m.content}))};
+        },{revision:graph.counter,branches}) as any;
       }
       case 'createConversation': return this.atomic(() => this.once(a.commandId, { name, ...a }, () => this.create(a.title, a.providerId ?? 'mock-ordinary'))) as any;
       case 'addMessage': return this.atomic(() => {
+        ensure(this.kernel.getResource(a.resourceId).resource.state === 'active', 'resource_archived');
         ensure(this.state.revisions[a.resourceId] === a.expectedRevision, 'stale_resource_version');
         ensure(typeof a.content === 'string' && Buffer.byteLength(a.content) <= 65536, 'invalid_message');
         ensure(!a.sensitivity || ['public','internal','sensitive','restricted'].includes(a.sensitivity), 'invalid_sensitivity');
@@ -319,6 +334,7 @@ export class BackendCore {
         const resource = this.kernel.createConversationRef(a.title);
         this.state.resources[resource.id] = result.conversation.id; this.state.revisions[resource.id] = 1;
         this.kernel.relate(a.resourceId, resource.id, 'application_continuation', 'user');
+        if (a.workspaceId) this.desktop.apply({type:'attach',workspaceId:a.workspaceId,resourceId:resource.id,...(a.bounds?{bounds:a.bounds}:{})},()=>{throw new ServiceError('unsupported_command');});
         const sourceRevision = this.state.revisions[a.resourceId];
         const estimatedTokens = Buffer.byteLength(JSON.stringify(result.handoff.items));
         ensure(estimatedTokens <= a.tokenBudget, 'context_budget_exceeded');

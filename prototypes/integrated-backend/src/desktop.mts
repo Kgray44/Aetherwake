@@ -43,6 +43,12 @@ export class DesktopState {
   private kernel: WorkspaceKernel;
   private db: DatabaseSync;
   private engine!: WorkspaceEngine;
+  private commandBounds?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
   constructor(kernel: WorkspaceKernel, db: DatabaseSync) {
     this.kernel = kernel;
     this.db = db;
@@ -175,6 +181,7 @@ export class DesktopState {
       commandId: randomUUID(),
       workspaceId,
       expectedRevision: this.engine.project(workspaceId).revision,
+      ...(this.commandBounds ? { bounds: this.commandBounds } : {}),
     } as EngineCommand);
   }
   viewState(a: { state?: unknown }): unknown {
@@ -223,7 +230,23 @@ export class DesktopState {
   }
   private workspace(id: unknown) {
     check(typeof id === "string");
-    return this.kernel.openWorkspace(id as string);
+    const result = this.kernel.openWorkspace(id as string);
+    check(result.workspace.state === "active", "workspace_archived");
+    if (result.workspace.project_id)
+      check(
+        this.db
+          .prepare("SELECT id FROM projects WHERE id=? AND state='active'")
+          .get(result.workspace.project_id),
+        "project_archived",
+      );
+    return result;
+  }
+  private visibleWorkspaces(): any[] {
+    return this.db
+      .prepare(
+        "SELECT w.* FROM workspaces w LEFT JOIN projects p ON p.id=w.project_id WHERE w.state='active' AND (w.project_id IS NULL OR p.state='active') ORDER BY w.created_at,w.id",
+      )
+      .all();
   }
   private block(id: string, expected?: number): Block {
     const row = this.db
@@ -300,12 +323,13 @@ export class DesktopState {
         (target.kind === "workspace" || target.kind === "constellation"),
     );
     if (target.kind === "workspace") {
+      this.workspace(target.workspaceId);
       this.engine.switchWorkspace(target.workspaceId);
       s.activeWorkspaceId = target.workspaceId;
     } else if (target.projectId !== null)
       check(
         this.db
-          .prepare("SELECT id FROM projects WHERE id=?")
+          .prepare("SELECT id FROM projects WHERE id=? AND state='active'")
           .get(target.projectId),
         "project_not_found",
       );
@@ -319,6 +343,7 @@ export class DesktopState {
   ): void {
     check(a && typeof a.type === "string");
     if (a.type === "snapshot") return;
+    this.commandBounds = a.bounds;
     const s = this.session();
     switch (a.type) {
       case "createProject":
@@ -336,8 +361,82 @@ export class DesktopState {
           a.expectedVersion,
         );
         break;
+      case "archiveWorkspace": {
+        check(typeof a.archived === "boolean");
+        this.kernel.setWorkspaceArchived(
+          a.workspaceId,
+          a.archived,
+          a.expectedVersion,
+        );
+        if (a.archived) {
+          s.history = s.history.filter(
+            (target) =>
+              target.kind !== "workspace" ||
+              target.workspaceId !== a.workspaceId,
+          );
+          if (s.activeWorkspaceId === a.workspaceId) {
+            const next = this.visibleWorkspaces()[0];
+            s.activeWorkspaceId = next ? String(next.id) : null;
+            this.navigate(
+              s,
+              s.activeWorkspaceId
+                ? { kind: "workspace", workspaceId: s.activeWorkspaceId }
+                : { kind: "constellation", projectId: null },
+              false,
+            );
+          }
+        }
+        break;
+      }
+      case "archiveSubject": {
+        check(typeof a.archived === "boolean");
+        if (a.kind === "project")
+          this.kernel.setProjectArchived(a.id, a.archived, a.expectedVersion);
+        else if (a.kind === "resource")
+          this.kernel.setResourceArchived(a.id, a.archived, a.expectedVersion);
+        else check(false);
+        break;
+      }
+      case "relate": {
+        check(
+          typeof a.kind === "string" &&
+            /^[a-zA-Z][a-zA-Z0-9_.:-]{0,99}$/.test(a.kind),
+          "invalid_relationship_kind",
+        );
+        for (const id of [a.sourceId, a.targetId]) {
+          const r = this.kernel.getResource(id).resource;
+          check(r.state === "active", "resource_archived");
+          if (r.project_id)
+            check(
+              this.db
+                .prepare(
+                  "SELECT id FROM projects WHERE id=? AND state='active'",
+                )
+                .get(r.project_id),
+              "project_archived",
+            );
+        }
+        this.kernel.relate(a.sourceId, a.targetId, a.kind, "user");
+        break;
+      }
+      case "unrelate":
+        check(typeof a.relationshipId === "string");
+        this.kernel.unlinkRelationship(a.relationshipId);
+        break;
       case "navigate":
         this.navigate(s, a.target);
+        break;
+      case "setPresence":
+        this.workspace(a.workspaceId);
+        this.engineCommand(a.workspaceId, {
+          type: "setPresence",
+          expectedVersion: a.expectedVersion,
+          presentation: a.placement,
+        });
+        break;
+      case "resolveLayout":
+        this.workspace(a.workspaceId);
+        this.engineCommand(a.workspaceId, { type: "resolveLayout" });
         break;
       case "back": {
         const target = s.history.pop();
@@ -385,7 +484,11 @@ export class DesktopState {
         const b = this.block(a.blockId, a.expectedVersion);
         this.geometry(a.placement);
         check(shapes.includes(a.shape));
-        if (a.rotation !== undefined) check(Number.isFinite(a.rotation) && Math.abs(a.rotation) <= 360, "invalid_rotation");
+        if (a.rotation !== undefined)
+          check(
+            Number.isFinite(a.rotation) && Math.abs(a.rotation) <= 360,
+            "invalid_rotation",
+          );
         this.engineCommand(b.workspace_id, {
           type: "saveLayout",
           placements: [
@@ -399,7 +502,7 @@ export class DesktopState {
                 height: a.placement.height,
                 zIndex: a.placement.z,
                 shape: a.shape,
-                ...(a.rotation === undefined ? {} : {rotation:a.rotation}),
+                ...(a.rotation === undefined ? {} : { rotation: a.rotation }),
               },
             },
           ],
@@ -411,6 +514,10 @@ export class DesktopState {
           typeof a.content === "string" &&
             Buffer.byteLength(a.content) <= 100000,
           "content_too_large",
+        );
+        check(
+          this.kernel.getResource(a.resourceId).resource.state === "active",
+          "resource_archived",
         );
         this.kernel.updateNote(a.resourceId, a.content, a.expectedVersion);
         break;
@@ -475,14 +582,49 @@ export class DesktopState {
   }
   snapshot(
     conversations: (id: string) => Pick<Resource, "provider" | "messages">,
+    graph: {
+      revision: number;
+      branches: NonNullable<DesktopSnapshot["conversationBranches"]>;
+    } = { revision: 0, branches: [] },
   ): DesktopSnapshot {
     const s = this.session();
-    const resources = this.kernel.searchResources().map((r) => {
+    const projects = this.db
+      .prepare(
+        "SELECT * FROM projects WHERE state='active' ORDER BY created_at,id",
+      )
+      .all() as any[];
+    const projectIds = new Set(projects.map((p) => String(p.id)));
+    const workspaces = this.visibleWorkspaces(),
+      workspaceIds = new Set(workspaces.map((w) => String(w.id)));
+    const eligible = (target: NavigationTarget) =>
+      target.kind === "workspace"
+        ? workspaceIds.has(target.workspaceId)
+        : target.projectId === null || projectIds.has(target.projectId);
+    const previous = JSON.stringify(s);
+    if (s.activeWorkspaceId && !workspaceIds.has(s.activeWorkspaceId))
+      s.activeWorkspaceId = workspaces[0]?.id ?? null;
+    if (!eligible(s.navigation))
+      s.navigation = s.activeWorkspaceId
+        ? { kind: "workspace", workspaceId: s.activeWorkspaceId }
+        : { kind: "constellation", projectId: null };
+    s.history = s.history.filter(eligible);
+    if (previous !== JSON.stringify(s))
+      this.kernel.withTransaction(() => {
+        if (s.activeWorkspaceId)
+          this.engine.switchWorkspace(s.activeWorkspaceId);
+        this.saveSession(s);
+      });
+    // Keep truthful unavailable placeholders for surviving placements. Navigation never
+    // exposes archived subjects, and the renderer never receives dangling references.
+    const resources = this.kernel.searchResources("", true).map((r) => {
       const entry = this.kernel.getResource(r.id);
       const kind = (this.db
         .prepare("SELECT kind FROM desktop_resources WHERE resource_id=?")
         .get(r.id)?.kind ??
         (r.kind === "generic" ? "reference" : r.kind)) as BlockKind;
+      const visible =
+        r.state === "active" &&
+        (r.project_id === null || projectIds.has(r.project_id));
       const metadata = this.db
         .prepare(
           "SELECT metadata_json FROM desktop_resources WHERE resource_id=?",
@@ -492,8 +634,12 @@ export class DesktopState {
         id: r.id,
         title: r.title,
         kind,
+        project_id: r.project_id,
         version: r.version,
-        content: entry.note?.content ?? "",
+        state: r.state,
+        visible,
+        available: visible,
+        content: visible ? (entry.note?.content ?? "") : "",
         ...(kind === "task"
           ? {
               taskStatus:
@@ -503,34 +649,60 @@ export class DesktopState {
           : {}),
         provider: "local" as const,
         messages: [],
-        ...(r.kind === "conversation" ? conversations(r.id) : {}),
+        ...(visible && r.kind === "conversation" ? conversations(r.id) : {}),
       };
     });
+    const visibleIds = new Set(
+      resources.filter((r) => r.visible).map((r) => r.id),
+    );
     const w = s.activeWorkspaceId ? this.workspace(s.activeWorkspaceId) : null;
     return {
       contract: "aerynth.desktop@1",
-      projects: this.db
+      projects,
+      workspaces,
+      archivedWorkspaces: this.db
         .prepare(
-          "SELECT * FROM projects WHERE state='active' ORDER BY created_at",
-        )
-        .all() as any,
-      workspaces: this.db
-        .prepare(
-          "SELECT * FROM workspaces WHERE state='active' ORDER BY created_at",
+          "SELECT * FROM workspaces WHERE state='archived' ORDER BY created_at,id",
         )
         .all() as any,
       resources,
       blocks: s.activeWorkspaceId ? this.blocks(s.activeWorkspaceId) : [],
-      relationships: this.db
-        .prepare("SELECT * FROM relationships")
-        .all() as any,
+      relationships: (
+        this.db.prepare("SELECT * FROM relationships").all() as any[]
+      ).filter(
+        (edge) =>
+          visibleIds.has(edge.source_id) && visibleIds.has(edge.target_id),
+      ),
       ...s,
       navigationBlocks: this.db
         .prepare("SELECT * FROM blocks ORDER BY workspace_id,z,id")
         .all()
+        .filter(
+          (b: any) =>
+            workspaceIds.has(b.workspace_id) && visibleIds.has(b.resource_id),
+        )
         .map((b: any) => ({ ...b, shape: "rectangle" as const })),
       layoutVersion: w?.layout.version ?? 0,
-      viewport: s.activeWorkspaceId ? this.engine.project(s.activeWorkspaceId).viewport : undefined,
+      viewport: s.activeWorkspaceId
+        ? this.engine.project(s.activeWorkspaceId).viewport
+        : undefined,
+      presence: s.activeWorkspaceId
+        ? this.engine.project(s.activeWorkspaceId).presence
+        : undefined,
+      graphRevision:
+        graph.revision +
+        Number(
+          this.db
+            .prepare(
+              "SELECT coalesce(max(rowid),0) AS cursor FROM change_events",
+            )
+            .get()!.cursor,
+        ),
+      conversationBranches: graph.branches.filter(
+        (edge) =>
+          visibleIds.has(edge.parentResourceId) &&
+          visibleIds.has(edge.childResourceId),
+      ),
       canUndo: s.activeWorkspaceId
         ? this.engine.project(s.activeWorkspaceId).canUndo
         : false,

@@ -1,3 +1,8 @@
+import type { ControllerOptions } from "../../../constellation/controller.ts";
+import type {
+  GraphActions,
+  SpatialRenderLayer,
+} from "../../../constellation/spatial-types.ts";
 import { mountConstellation } from "../../../constellation/view.ts";
 import "../../../constellation/style.css";
 import type { Policy } from "../../../constellation/types.ts";
@@ -11,6 +16,7 @@ import type {
   Geometry,
   Resource,
   Shape,
+  WorkspacePresence,
 } from "../../../application-contract/contracts.ts";
 type Hooks = {
   motion: MotionCoordinator;
@@ -61,8 +67,51 @@ export function installApplication(hooks: Hooks) {
   let constellation: ReturnType<typeof mountConstellation> | null = null;
   let policyKey = "";
   const arrivalId = "application:arrival";
+  let arrivalOrigin = { x: innerWidth / 2, y: innerHeight / 2 };
   const arrivalPose = { x: 1, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity: 1 };
   hooks.motion.add(arrivalId, arrivalPose);
+  const presenceId = "application:vela-presence";
+  const arranged = new Set<string>();
+  let presenceDrag: {
+    workspaceId: string;
+    version: number;
+    startX: number;
+    startY: number;
+    origin: WorkspacePresence;
+    moved: boolean;
+  } | null = null;
+  let suppressPresenceClick = false;
+  function presenceTarget() {
+    const p = state?.presence;
+    if (!p) return;
+    return {
+      x: p.x + offset.x,
+      y: p.y + offset.y,
+      w: p.width,
+      h: p.height,
+      lift: 0,
+      yaw: 0,
+      opacity: 1,
+    };
+  }
+  function presenceCard() {
+    if (
+      state?.navigation.kind !== "workspace" ||
+      document.body.classList.contains("focused") ||
+      !hooks.motion.bodies.has(presenceId)
+    )
+      return undefined;
+    const p = hooks.motion.pose(presenceId);
+    return { x: p.x, y: p.y, w: p.w, h: p.h };
+  }
+  function viewBounds() {
+    return {
+      x: 20 - offset.x,
+      y: 170 - offset.y,
+      width: Math.max(240, innerWidth - 40),
+      height: Math.max(260, innerHeight - 320),
+    };
+  }
   const dialog = document.createElement("dialog");
   dialog.id = "command-surface";
   dialog.className = "command-surface";
@@ -122,7 +171,10 @@ export function installApplication(hooks: Hooks) {
     );
   }
   async function command(a: DesktopCommand): Promise<DesktopSnapshot> {
-    const next = (await host.command!("desktop", a)) as DesktopSnapshot;
+    const next = (await host.command!("desktop", {
+      ...a,
+      bounds: viewBounds(),
+    })) as DesktopSnapshot;
     apply(next);
     return next;
   }
@@ -136,6 +188,13 @@ export function installApplication(hooks: Hooks) {
     if (changed) {
       offset = { x: 0, y: 0 };
       hooks.home();
+    }
+    const presence = presenceTarget();
+    if (presence) {
+      if (!hooks.motion.bodies.has(presenceId))
+        hooks.motion.add(presenceId, presence);
+      else if (!presenceDrag)
+        hooks.motion.target(presenceId, presence, "saved Vela placement");
     }
     hooks.replace(next);
     el("#workspace-manager").textContent =
@@ -152,7 +211,7 @@ export function installApplication(hooks: Hooks) {
       blocks: next.navigationBlocks ?? next.blocks,
     };
     if (!constellation) {
-      constellation = mountConstellation(universe, {
+      const options: ControllerOptions & GraphActions = {
         snapshot: navigationSnapshot,
         motion: hooks.motion,
         navigate: async (target) => {
@@ -160,6 +219,17 @@ export function installApplication(hooks: Hooks) {
           await command({ type: "navigate", target });
         },
         openResource: async (target) => {
+          const block = state?.blocks.find(
+            (b) =>
+              b.id === target.blockId &&
+              b.resource_id === target.resourceId &&
+              b.workspace_id === target.workspaceId,
+          );
+          const resource = state?.resources.find(
+            (r) => r.id === target.resourceId,
+          );
+          if (!block || !resource || resource.available === false)
+            throw new Error("resource_unavailable");
           hooks.focus(target.blockId);
         },
         persistence: {
@@ -167,6 +237,26 @@ export function installApplication(hooks: Hooks) {
           save: async (state) => {
             await host.command!("viewState", { state });
           },
+        },
+        graphAction: async (action) => {
+          await tail;
+          await flush();
+          const next = (await host.command!("graphAction", {
+            ...action,
+            bounds: viewBounds(),
+          })) as DesktopSnapshot;
+          apply(next);
+          return { ...next, blocks: next.navigationBlocks ?? next.blocks };
+        },
+        capabilities: {
+          createProject: true,
+          createWorkspace: true,
+          createResource: true,
+          archive: true,
+          detach: true,
+          relate: true,
+          unrelate: true,
+          branch: true,
         },
         onDirty: hooks.wake,
         onTransition: (transition) => {
@@ -179,8 +269,18 @@ export function installApplication(hooks: Hooks) {
               universe.querySelector(".aw-spatial-field") ?? universe
             ).getBoundingClientRect(),
             c = transition.camera;
+          arrivalOrigin = transition.screenOrigin ?? {
+            x:
+              bounds.left +
+              bounds.width / 2 +
+              (transition.origin.x - c.x) * c.zoom,
+            y:
+              bounds.top +
+              bounds.height / 2 +
+              (transition.origin.y - c.y) * c.zoom,
+          };
           el("#stage").style.transformOrigin =
-            `${bounds.left + bounds.width / 2 + (transition.origin.x - c.x) * c.zoom}px ${bounds.top + bounds.height / 2 + (transition.origin.y - c.y) * c.zoom}px`;
+            `${arrivalOrigin.x}px ${arrivalOrigin.y}px`;
           const body = hooks.motion.bodies.get(arrivalId)!;
           if (
             !body.transitioning &&
@@ -198,19 +298,36 @@ export function installApplication(hooks: Hooks) {
           );
           hooks.wake();
         },
-      });
+      };
+      constellation = mountConstellation(universe, options);
       void constellation.ready.then(hooks.wake);
     } else constellation.update(navigationSnapshot);
     for (const block of next.blocks)
       decorate(el(`[data-block="${block.id}"]`), block.id);
     hooks.layout();
     document.body.classList.add("application-ready");
+    if (next.activeWorkspaceId && !arranged.has(next.activeWorkspaceId)) {
+      arranged.add(next.activeWorkspaceId);
+      const workspaceId = next.activeWorkspaceId;
+      void enqueue(async () => {
+        await flush();
+        await command({ type: "resolveLayout", workspaceId });
+      });
+    }
   }
-  async function flush() {
+  let flushInFlight: Promise<void> | null = null;
+  function flush(): Promise<void> {
+    if (flushInFlight) return flushInFlight;
+    flushInFlight = flushDrafts().finally(() => {
+      flushInFlight = null;
+    });
+    return flushInFlight;
+  }
+  async function flushDrafts() {
     for (const [resourceId, draft] of [...drafts]) {
       clearTimeout(draft.timer);
       const r = state?.resources.find((r) => r.id === resourceId);
-      if (!r) continue;
+      if (!r) throw new Error("draft_resource_unavailable");
       await command({
         type: "content",
         resourceId,
@@ -226,6 +343,117 @@ export function installApplication(hooks: Hooks) {
       return command(a);
     });
   }
+  const velaCard = el<HTMLButtonElement>("#vela");
+  const velaGrip = document.createElement("span");
+  velaGrip.className = "vela-grip";
+  velaGrip.textContent = "⠿ Move Vela";
+  velaCard.prepend(velaGrip);
+  velaCard.title =
+    "Drag by Move Vela, or Alt+arrow keys to move. Enter opens Vela.";
+  velaCard.addEventListener(
+    "click",
+    (event) => {
+      if (suppressPresenceClick) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        suppressPresenceClick = false;
+      }
+    },
+    true,
+  );
+  velaGrip.addEventListener("pointerdown", (event) => {
+    const p = state?.presence;
+    if (!p || !presenceCard() || p.locked || event.button !== 0) return;
+    event.preventDefault();
+    velaCard.focus();
+    presenceDrag = {
+      workspaceId: p.workspaceId,
+      version: p.version,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: { ...p },
+      moved: false,
+    };
+    velaCard.setPointerCapture(event.pointerId);
+  });
+  velaCard.addEventListener("pointermove", (event) => {
+    if (!presenceDrag) return;
+    const d = presenceDrag,
+      dx = event.clientX - d.startX,
+      dy = event.clientY - d.startY;
+    d.moved ||= Math.hypot(dx, dy) > 4;
+    hooks.motion.target(
+      presenceId,
+      {
+        x: d.origin.x + offset.x + dx,
+        y: d.origin.y + offset.y + dy,
+        w: d.origin.width,
+        h: d.origin.height,
+        lift: 8,
+        yaw: 0,
+        opacity: 1,
+      },
+      "Vela drag preview",
+    );
+    hooks.wake();
+  });
+  velaCard.addEventListener("pointerup", (event) => {
+    if (!presenceDrag) return;
+    const d = presenceDrag;
+    presenceDrag = null;
+    suppressPresenceClick = d.moved;
+    if (d.moved)
+      void run({
+        type: "setPresence",
+        workspaceId: d.workspaceId,
+        expectedVersion: d.version,
+        placement: {
+          x: Math.round(d.origin.x + event.clientX - d.startX),
+          y: Math.round(d.origin.y + event.clientY - d.startY),
+        },
+      });
+    else {
+      const target = presenceTarget();
+      if (target)
+        hooks.motion.target(presenceId, target, "Vela drag cancelled");
+    }
+  });
+  velaCard.addEventListener("pointercancel", () => {
+    presenceDrag = null;
+    suppressPresenceClick = true;
+    const target = presenceTarget();
+    if (target)
+      hooks.motion.target(presenceId, target, "Vela pointer cancelled");
+    hooks.wake();
+  });
+  velaCard.addEventListener("keydown", (event) => {
+    const p = state?.presence;
+    if (
+      !p ||
+      !event.altKey ||
+      !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)
+    )
+      return;
+    event.preventDefault();
+    event.stopPropagation();
+    void run({
+      type: "setPresence",
+      workspaceId: p.workspaceId,
+      expectedVersion: p.version,
+      placement: {
+        x:
+          p.x +
+          (event.key === "ArrowLeft"
+            ? -24
+            : event.key === "ArrowRight"
+              ? 24
+              : 0),
+        y:
+          p.y +
+          (event.key === "ArrowUp" ? -24 : event.key === "ArrowDown" ? 24 : 0),
+      },
+    });
+  });
   function open(title: string, body: string) {
     lastTrigger = document.activeElement as HTMLElement;
     dialog.innerHTML = `<div class="command-heading"><h2>${title}</h2><button data-close aria-label="Close panel">×</button></div>${body}<p id="command-error" role="status"></p>`;
@@ -257,7 +485,7 @@ export function installApplication(hooks: Hooks) {
     if (!state) return;
     open(
       "Your working environments",
-      `<div class="command-grid"><section><h3>Projects</h3>${state.projects.map((p) => `<p>${escape(p.title)}</p>`).join("")}<button id="new-project">＋ Create project</button></section><section><h3>Workspaces</h3>${state.workspaces.map((w) => `<div class="workspace-row"><button data-workspace="${w.id}">${escape(w.title)}<small>${escape(state!.projects.find((p) => p.id === w.project_id)?.title ?? "Independent workspace")}</small></button><button data-rename="${w.id}" aria-label="Rename ${escape(w.title)}">✎</button></div>`).join("") || "<p>No workspaces yet.</p>"}<button id="new-workspace">＋ Create workspace</button></section></div><button id="standalone-chat">New conversation without a project</button>`,
+      `<div class="command-grid"><section><h3>Projects</h3>${state.projects.map((p) => `<p>${escape(p.title)}</p>`).join("")}<button id="new-project">＋ Create project</button></section><section><h3>Workspaces</h3>${state.workspaces.map((w) => `<div class="workspace-row"><button data-workspace="${w.id}">${escape(w.title)}<small>${escape(state!.projects.find((p) => p.id === w.project_id)?.title ?? "Independent workspace")}</small></button><button data-rename="${w.id}" aria-label="Rename ${escape(w.title)}">✎</button><button data-archive="${w.id}" title="Archive workspace; retain resources and layout">Archive</button></div>`).join("") || "<p>No workspaces yet.</p>"}<button id="new-workspace">＋ Create workspace</button></section></div><button id="standalone-chat">New conversation without a project</button>${state.archivedWorkspaces?.length ? `<details><summary>Archived workspaces</summary>${state.archivedWorkspaces.map((w) => `<div class="workspace-row"><span>${escape(w.title)}</span><button data-restore-workspace="${w.id}">Restore</button></div>`).join("")}</details>` : ""}`,
     );
     el("#new-project", dialog).onclick = () => {
       open(
@@ -309,6 +537,31 @@ export function installApplication(hooks: Hooks) {
           );
         }),
     );
+    for (const [selector, archived] of [
+      ["[data-archive]", true],
+      ["[data-restore-workspace]", false],
+    ] as const)
+      dialog.querySelectorAll<HTMLElement>(selector).forEach(
+        (button) =>
+          (button.onclick = () => {
+            const workspaceId =
+              button.dataset.archive ?? button.dataset.restoreWorkspace!;
+            const workspace = [
+              ...state!.workspaces,
+              ...(state!.archivedWorkspaces ?? []),
+            ].find((w) => w.id === workspaceId)!;
+            void enqueue(async () => {
+              await flush();
+              await command({
+                type: "archiveWorkspace",
+                workspaceId,
+                expectedVersion: workspace.version,
+                archived,
+              });
+              manager();
+            });
+          }),
+      );
     el("#standalone-chat", dialog).onclick = () => {
       open(
         "Start a conversation",
@@ -368,6 +621,7 @@ export function installApplication(hooks: Hooks) {
       ).value.toLowerCase();
       el("#resource-results", dialog).innerHTML =
         state!.resources
+          .filter((r) => r.visible !== false)
           .filter((r) => `${r.title} ${r.kind}`.toLowerCase().includes(q))
           .map(
             (r) =>
@@ -525,6 +779,25 @@ export function installApplication(hooks: Hooks) {
         resizing = null;
       };
     }
+    if (r.available === false) {
+      if (!article.querySelector(".resource-unavailable")) {
+        const notice = document.createElement("p");
+        notice.className = "resource-unavailable";
+        notice.textContent =
+          "Archived or unavailable resource. Its canonical data is retained. Detach this visual block if no longer needed.";
+        el(".working-content", article).prepend(notice);
+      }
+      const editor = article.querySelector<HTMLTextAreaElement>("textarea");
+      if (editor && !drafts.has(r.id)) {
+        editor.value = "";
+        editor.disabled = true;
+      }
+      return;
+    }
+    article.querySelector(".resource-unavailable")?.remove();
+    const restoredEditor =
+      article.querySelector<HTMLTextAreaElement>("textarea");
+    if (restoredEditor) restoredEditor.disabled = false;
     article.dataset.shape = b.shape;
     el(".grip span", article).textContent = r.kind.toUpperCase();
     if (r.kind === "conversation") {
@@ -603,6 +876,14 @@ export function installApplication(hooks: Hooks) {
         r.provider === "codex"
           ? "Codex · native instructions/configuration · read-only review policy · authorization on Send"
           : "Local conversation · durable messages · model response and ChatGPT account history unavailable";
+      if ((r.messageCount ?? r.messages.length) > r.messages.length)
+        el(".provider-label", surface).textContent +=
+          ` · Showing latest ${r.messages.length} of ${r.messageCount} local messages; older messages remain stored`;
+      if (r.execution && !busy.has(r.id))
+        el(".execution-state", surface).textContent =
+          `${r.execution.state}${r.execution.errorCode ? " · " + r.execution.errorCode : ""} · task verification is separate`;
+      el<HTMLButtonElement>(".cancel-turn", surface).hidden =
+        r.provider !== "codex";
       const log = el(".conversation-transcript", surface);
       log.replaceChildren();
       for (const m of r.messages) {
@@ -649,7 +930,7 @@ export function installApplication(hooks: Hooks) {
             void run({
               type: "taskStatus",
               resourceId: r.id,
-              expectedVersion: current.version,
+              expectedVersion: current.conversationRevision ?? current.version,
               status: (event.target as HTMLInputElement).checked
                 ? "done"
                 : "open",
@@ -793,6 +1074,15 @@ export function installApplication(hooks: Hooks) {
     });
   return {
     frame(now: number, policy: Policy) {
+      const target = presenceTarget();
+      if (target && !presenceDrag)
+        hooks.motion.target(presenceId, target, "Vela workspace view");
+      if (
+        hooks.motion.bodies.has(presenceId) &&
+        (policy.reduced || policy.quiet || policy.hidden)
+      )
+        hooks.motion.snap(presenceId);
+      velaCard.classList.toggle("vela-card", !!presenceCard());
       const key = JSON.stringify(policy);
       if (key !== policyKey) {
         policyKey = key;
@@ -806,12 +1096,36 @@ export function installApplication(hooks: Hooks) {
       constellation?.frame(now);
     },
     ready,
+    surfaceView: () => ({
+      scale: hooks.motion.pose(arrivalId).x,
+      opacity: hooks.motion.pose(arrivalId).opacity,
+      originX: arrivalOrigin.x,
+      originY: arrivalOrigin.y,
+    }),
+    spatialLayer: () =>
+      (
+        constellation as
+          | (ReturnType<typeof mountConstellation> & {
+              layer?: SpatialRenderLayer;
+            })
+          | null
+      )?.layer ?? null,
+    presenceCard,
+    presence: () => {
+      const p = presenceCard();
+      return p
+        ? { x: p.x, y: p.y + 28, w: p.w, h: Math.max(44, p.h - 52) }
+        : undefined;
+    },
     snapshot: () => state,
     offset: () => offset,
     decorate,
     geometry,
     run,
-    flush,
+    flush: async () => {
+      await flush();
+      await constellation?.controller.persist();
+    },
     manager,
     block: (id: string) => state?.blocks.find((b) => b.id === id),
     saveContent(resourceId: string, content: string, article: HTMLElement) {

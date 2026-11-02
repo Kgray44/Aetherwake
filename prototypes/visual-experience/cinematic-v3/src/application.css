@@ -306,3 +306,36 @@
 .application-ready #stage .folio {
   pointer-events: auto;
 }
+.vela-grip {
+  display: none;
+}
+.application-ready #vela.vela-card .vela-grip {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  padding: 7px;
+  border: 1px solid #b9a4e244;
+  border-radius: 12px;
+  background: #121326bb;
+  color: #d7c8ee;
+  font-size: 11px;
+  cursor: grab;
+  touch-action: none;
+}
+.application-ready #vela.vela-card .vela-label {
+  position: absolute;
+  top: auto;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  transform: none;
+}
+.application-ready #vela.vela-card .vela-label b,
+.application-ready #vela.vela-card .vela-label > span {
+  display: none;
+}
+.application-ready #vela.vela-card .vela-label small {
+  font-size: 10px;
+}

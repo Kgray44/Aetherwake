@@ -143,9 +143,11 @@ app.whenReady().then(async () => {
       p.reject(new Error("backend_disconnected"));
     }
     pending.clear();
-    if (!closing) sendToWindow(win,"application-event", {
-      type: "backend/disconnected", classification: "observed",
-    });
+    if (!closing)
+      sendToWindow(win, "application-event", {
+        type: "backend/disconnected",
+        classification: "observed",
+      });
   };
   child.on("error", fail);
   child.on("exit", fail);
@@ -155,7 +157,7 @@ app.whenReady().then(async () => {
     try {
       const m = JSON.parse(line);
       if (m.event) {
-        sendToWindow(win,"application-event", m.event);
+        sendToWindow(win, "application-event", m.event);
         return;
       }
       const p = pending.get(m.id);
@@ -218,6 +220,8 @@ app.whenReady().then(async () => {
         throw new Error("storage_reserve_admission_denied");
       let result;
       if (command === "desktop") result = await call("desktop", input);
+      else if (command === "graphAction")
+        result = await require("./graph-actions.cjs").graphAction(input, call);
       else if (command === "viewState") result = await call("viewState", input);
       else if (command === "capabilities")
         result = await call("capabilities", {});
@@ -241,7 +245,10 @@ app.whenReady().then(async () => {
           throw new Error("invalid_message");
         const state = await call("desktop", { type: "snapshot" });
         const resource = state.resources.find(
-          (r) => r.id === input.resourceId && r.kind === "conversation",
+          (r) =>
+            r.id === input.resourceId &&
+            r.kind === "conversation" &&
+            r.available !== false,
         );
         if (!resource) throw new Error("resource_not_found");
         if (resource.provider === "local")
@@ -293,10 +300,11 @@ app.whenReady().then(async () => {
     }
   });
   const active = () => {
-    sendToWindow(win,
-        "host-active",
-        win.isVisible() && !win.isMinimized() && win.isFocused(),
-      );
+    sendToWindow(
+      win,
+      "host-active",
+      win.isVisible() && !win.isMinimized() && win.isFocused(),
+    );
   };
   win.on("close", (event) => {
     if (!closing) {
@@ -313,7 +321,7 @@ app.whenReady().then(async () => {
   const reserveTimer = setInterval(() => {
     admitted = reserveGuard();
     if (!admitted) {
-      sendToWindow(win,"application-event", {
+      sendToWindow(win, "application-event", {
         type: "storage/reserve-admission-denied",
         classification: "observed",
       });

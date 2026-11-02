@@ -5,6 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Backend } from "../src/service.mts";
 import { WorkspaceKernel } from "../../workspace-kernel/kernel.mts";
+import { createRequire } from "node:module";
+const { graphAction } = createRequire(import.meta.url)(
+  "../../visual-experience/cinematic-v3/native/graph-actions.cjs",
+);
 import type { DesktopCommand } from "../../application-contract/contracts.ts";
 
 test("desktop journey persists real resources, two workspaces, shapes, geometry, detach, reattach and history", async () => {
@@ -322,6 +326,293 @@ test("private navigation state is bounded and local task completion survives reo
     s = await b.call("desktop", { type: "snapshot" });
     assert.equal(s.resources[0].taskStatus, "done");
     assert.equal(s.resources[0].id, id);
+  } finally {
+    await b.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+for (const mode of ["unavailable", "unknown-outcome"])
+  test(`private requested messages and ${mode} execution survive restart`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "aerynth-request-test-")),
+      path = join(dir, "db");
+    const options = {
+      path,
+      privateRoot: dir,
+      provider: "fixture" as const,
+      fixtureMode: mode,
+      contentPolicy: "local-private" as const,
+    };
+    let b = new Backend(options);
+    try {
+      let s = await b.call("desktop", {
+        type: "createResource",
+        kind: "conversation",
+        provider: "codex",
+        title: "Synthetic requested turn",
+        workspaceId: null,
+      });
+      const id = s.resources[0].id;
+      const execution = await b.call("execute", {
+        resourceId: id,
+        prompt: "Synthetic request retained before dispatch.",
+        commandId: "private-request",
+        authorized: true,
+      });
+      assert.equal(
+        execution.state,
+        mode === "unavailable" ? "failed" : "unknown",
+      );
+      await b.close();
+      b = new Backend(options);
+      s = await b.call("desktop", { type: "snapshot" });
+      assert.equal(s.resources[0].messages.length, 1);
+      assert.equal(
+        s.resources[0].messages[0].content,
+        "Synthetic request retained before dispatch.",
+      );
+      assert.equal(s.resources[0].execution!.state, execution.state);
+      assert.equal(s.resources[0].execution!.taskVerified, false);
+    } finally {
+      await b.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+test("canonical workspace archive removes a destination and restore retains its exact resources and layout", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aerynth-archive-test-"));
+  const b = new Backend({
+    path: join(dir, "db"),
+    provider: "fixture",
+    contentPolicy: "synthetic-only",
+  });
+  try {
+    let s = await b.call("desktop", {
+      type: "createWorkspace",
+      title: "Archive synthetic",
+      projectId: null,
+    });
+    const id = s.activeWorkspaceId!;
+    s = await b.call("desktop", {
+      type: "createResource",
+      kind: "note",
+      title: "Preserved synthetic",
+      workspaceId: id,
+    });
+    const blocks = s.blocks,
+      resources = s.resources;
+    s = await b.call("desktop", {
+      type: "archiveWorkspace",
+      workspaceId: id,
+      expectedVersion: s.workspaces[0].version,
+      archived: true,
+    });
+    assert.equal(s.workspaces.length, 0);
+    assert.equal(s.archivedWorkspaces!.length, 1);
+    await assert.rejects(
+      b.call("desktop", {
+        type: "navigate",
+        target: { kind: "workspace", workspaceId: id },
+      }),
+    );
+    s = await b.call("desktop", {
+      type: "archiveWorkspace",
+      workspaceId: id,
+      expectedVersion: s.archivedWorkspaces![0].version,
+      archived: false,
+    });
+    s = await b.call("desktop", {
+      type: "navigate",
+      target: { kind: "workspace", workspaceId: id },
+    });
+    assert.deepEqual(s.blocks, blocks);
+    assert.deepEqual(s.resources, resources);
+  } finally {
+    await b.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("archived subjects keep valid unavailable placements and archived projects cannot expose child destinations", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aerynth-eligibility-test-")),
+    path = join(dir, "db");
+  let b = new Backend({
+    path,
+    provider: "fixture",
+    contentPolicy: "synthetic-only",
+  });
+  try {
+    let s = await b.call("desktop", {
+      type: "createProject",
+      title: "Synthetic private project",
+    });
+    const projectId = s.projects[0].id;
+    s = await b.call("desktop", {
+      type: "createWorkspace",
+      title: "Synthetic child",
+      projectId,
+    });
+    const workspaceId = s.activeWorkspaceId!;
+    s = await b.call("desktop", {
+      type: "createResource",
+      kind: "note",
+      title: "Synthetic archive",
+      workspaceId,
+    });
+    const resourceId = s.resources[0].id;
+    await b.close();
+    let kernel = WorkspaceKernel.open(path);
+    kernel.setResourceArchived(resourceId, true, 1);
+    kernel.close();
+    b = new Backend({
+      path,
+      provider: "fixture",
+      contentPolicy: "synthetic-only",
+    });
+    s = await b.call("desktop", { type: "snapshot" });
+    assert.equal(s.resources[0].available, false);
+    assert.equal(s.resources[0].content, "");
+    assert(
+      s.blocks.every((block) =>
+        s.resources.some((r) => r.id === block.resource_id),
+      ),
+    );
+    assert.equal(s.navigationBlocks!.length, 0);
+    await b.close();
+    kernel = WorkspaceKernel.open(path);
+    kernel.setProjectArchived(projectId, true, 1);
+    kernel.close();
+    b = new Backend({
+      path,
+      provider: "fixture",
+      contentPolicy: "synthetic-only",
+    });
+    s = await b.call("desktop", { type: "snapshot" });
+    assert.equal(s.projects.length, 0);
+    assert.equal(s.workspaces.length, 0);
+    assert.equal(s.activeWorkspaceId, null);
+    await assert.rejects(
+      b.call("desktop", {
+        type: "navigate",
+        target: { kind: "workspace", workspaceId },
+      }),
+    );
+    await assert.rejects(
+      b.call("desktop", {
+        type: "navigate",
+        target: { kind: "constellation", projectId },
+      }),
+    );
+  } finally {
+    await b.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("trusted graph actions use canonical identities, typed relations and real local conversation ancestry without inference", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aerynth-graph-actions-")),
+    b = new Backend({
+      path: join(dir, "db"),
+      provider: "fixture",
+      contentPolicy: "synthetic-only",
+    });
+  const action = (a: any) =>
+    graphAction(a, (name: any, input: any) => b.call(name, input));
+  try {
+    let s = await action({
+      type: "createProject",
+      title: "Canonical synthetic",
+    });
+    s = await action({
+      type: "createWorkspace",
+      title: "Graph workspace",
+      projectId: s.projects[0].id,
+    });
+    const workspaceId = s.activeWorkspaceId;
+    s = await action({
+      type: "createResource",
+      kind: "note",
+      title: "Source note",
+      workspaceId,
+    });
+    const note = s.resources[0];
+    s = await action({
+      type: "createResource",
+      kind: "conversation",
+      title: "Local source",
+      workspaceId,
+      provider: "local",
+    });
+    const source = s.resources.find((r: any) => r.kind === "conversation");
+    await b.call("addMessage", {
+      resourceId: source.id,
+      role: "user",
+      content: "Synthetic branch finding.",
+      expectedRevision: source.conversationRevision ?? source.version,
+    });
+    s = await b.call("desktop", { type: "snapshot" });
+    const message = s.resources.find((r: any) => r.id === source.id)!
+      .messages[0];
+    s = await action({
+      type: "relate",
+      sourceId: note.id,
+      targetId: source.id,
+      kind: "informs",
+    });
+    assert.equal(s.relationships[0].provenance, "user");
+    const relation = s.relationships[0].id;
+    s = await action({ type: "unrelate", relationshipId: relation });
+    assert.equal(s.relationships.length, 0);
+    s = await action({
+      type: "branch",
+      resourceId: source.id,
+      messageId: message.id,
+      includeMessageIds: [message.id],
+      title: "Local descendant",
+      providerId: "local",
+      tokenBudget: 4096,
+      workspaceId,
+    });
+    assert.equal(s.conversationBranches.length, 1);
+    assert.equal(s.conversationBranches[0].parentResourceId, source.id);
+    assert.equal(s.conversationBranches[0].sourceMessageId, message.id);
+    assert.equal(s.conversationBranches[0].mode, "application_continuation");
+    const child = s.resources.find(
+      (r: any) => r.id === s.conversationBranches[0].childResourceId,
+    );
+    assert(s.blocks.some((block: any) => block.resource_id === child.id));
+    assert.equal(
+      s.resources.find((r: any) => r.id === source.id).messages[0].content,
+      "Synthetic branch finding.",
+    );
+    await assert.rejects(
+      action({
+        type: "branch",
+        resourceId: source.id,
+        messageId: message.id,
+        includeMessageIds: [message.id],
+        title: "Unsupported provider branch",
+        providerId: "codex",
+        tokenBudget: 4096,
+      }),
+      /unavailable/,
+    );
+    s = await action({
+      type: "archive",
+      kind: "resource",
+      id: source.id,
+      expectedVersion: s.resources.find((r: any) => r.id === source.id).version,
+    });
+    assert.equal(
+      s.resources.find((r: any) => r.id === source.id).available,
+      false,
+    );
+    assert.equal(s.conversationBranches.length, 0);
+    assert(
+      !(await b.call("replay", {})).events.some(
+        (e) => e.type === "turn/started",
+      ),
+    );
   } finally {
     await b.close();
     rmSync(dir, { recursive: true, force: true });

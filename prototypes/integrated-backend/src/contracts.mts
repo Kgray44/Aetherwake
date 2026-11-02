@@ -70,7 +70,7 @@ export interface CommandMap {
   workspace: { input: { title: string; projectTitle?: string }; output: WorkspaceView };
   place: { input: { workspaceId: string; resourceId: string }; output: BlockView };
   move: { input: { blockId: string; workspaceId: string; expectedVersion: number }; output: BlockView };
-  branch: { input: { resourceId: string; messageId: string; includeMessageIds: string[]; providerId: string; title: string; commandId: string; tokenBudget: number }; output: { conversation: ConversationView; handoff: HandoffReview; context: ContextPackage; mode: 'application_continuation' } };
+  branch: { input: { resourceId: string; messageId: string; includeMessageIds: string[]; providerId: string; title: string; commandId: string; tokenBudget: number; workspaceId?: string; bounds?: {x:number;y:number;width:number;height:number} }; output: { conversation: ConversationView; handoff: HandoffReview; context: ContextPackage; mode: 'application_continuation' } };
   review: { input: { handoffId: string; fingerprint: string; approve: boolean }; output: HandoffReview };
   execute: { input: { resourceId: string; handoffId?: string; prompt: string; commandId: string; model?: string; authorized: boolean }; output: Execution };
   reconcile: { input: { resourceId: string }; output: { resourceId: string; providerThreadAvailable: boolean; executionOutcome: 'unchanged'; nativeStatus?: string; syntheticTurnReceipt?: { completePage: boolean; exactMarker: boolean; itemTypes: string[] } } };

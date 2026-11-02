@@ -34,6 +34,7 @@ lines.on("line", async (line) => {
         "replay",
         "close",
         "viewState",
+        "branch",
       ].includes(request.command)
     )
       throw new Error("unsupported_command");
