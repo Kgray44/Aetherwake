@@ -32,6 +32,13 @@ const saved = (s) => ({
   presence: presence(s),
   viewport: s.viewport,
 });
+const blockOf = (s, kind) => {
+  const block = s.blocks.find(
+    (b) => s.resources.find((r) => r.id === b.resource_id)?.kind === kind,
+  );
+  assert(block, "Missing " + kind + " placement");
+  return block;
+};
 exports.verify = async ({
   win,
   app,
@@ -208,7 +215,11 @@ exports.verify = async ({
         `[data-block="${a.id}"] .grip`,
         (b.x -
           a.x +
-          (before.organization.mode === "structured" ? b.width * 0.55 : 0)) *
+          (before.organization.mode === "structured"
+            ? b.width * 0.55
+            : before.organization.mode === "freeform"
+              ? b.width * 0.35
+              : 0)) *
           z,
         (b.y - a.y) * z,
         checkPreview
@@ -305,12 +316,24 @@ exports.verify = async ({
       s = await snapshot();
       assert.equal(s.blocks.length, 9);
       const resources = s.resources;
+      for (const [kind, count] of Object.entries({
+        conversation: 3,
+        note: 2,
+        task: 2,
+        research: 1,
+        stream: 1,
+      }))
+        assert.equal(resources.filter((r) => r.kind === kind).length, count);
       await action("bring-all");
       await pause(600);
       await shot("01-fluid-mixed-workspace");
       await start();
       s = await snapshot();
-      let before = await moveOnto(s.blocks[0], s.blocks[1], true);
+      let before = await moveOnto(
+        blockOf(s, "conversation"),
+        blockOf(s, "note"),
+        true,
+      );
       s = await snapshot();
       noOverlap(s);
       assert.notDeepEqual(geometry(s), geometry(before));
@@ -324,7 +347,7 @@ exports.verify = async ({
       assert.deepEqual(presence(s), presence(before));
       await action("bring-all");
       s = await snapshot();
-      const target = s.blocks.find((b) => b.kind !== "stream") ?? s.blocks[0],
+      const target = blockOf(s, "conversation"),
         p = s.presence,
         z = s.viewport.zoom;
       before = s;
@@ -344,7 +367,7 @@ exports.verify = async ({
       await pause(300);
       s = await snapshot();
       assert.deepEqual(geometry(s), geometry(before));
-      const resize = s.blocks[0];
+      const resize = blockOf(s, "conversation");
       before = s;
       await drag(
         `[data-block="${resize.id}"] .resize-handle`,
@@ -371,7 +394,7 @@ exports.verify = async ({
 
       s = await snapshot();
       before = s;
-      await click(`[data-block="${s.blocks[0].id}"] .grip`);
+      await click(`[data-block="${blockOf(s, "conversation").id}"] .grip`);
       press("Right", ["alt"]);
       await wait(
         `window.__aerynth.application().layoutVersion>${s.layoutVersion}`,
@@ -380,24 +403,29 @@ exports.verify = async ({
       await click("#undo");
       await pause(200);
       assert.deepEqual(geometry(await snapshot()), geometry(before));
-      await properties(s.blocks[0].id);
+      await properties(blockOf(s, "conversation").id);
       await typeNumber(
         'dialog input[name="width"]',
-        Math.round(s.blocks[0].width + 80),
+        Math.round(blockOf(s, "conversation").width + 80),
       );
       await click('dialog button[type="submit"]');
       await pause(250);
       await click("#undo");
       await pause(250);
       assert.deepEqual(geometry(await snapshot()), geometry(before));
-      await drag(`[data-block="${s.blocks[0].id}"] .grip`, 90, 60, async () => {
-        press("Escape");
-        await pause(200);
-        assert.equal(
-          await js("document.body.dataset.layoutPreview"),
-          undefined,
-        );
-      });
+      await drag(
+        `[data-block="${blockOf(s, "conversation").id}"] .grip`,
+        90,
+        60,
+        async () => {
+          press("Escape");
+          await pause(200);
+          assert.equal(
+            await js("document.body.dataset.layoutPreview"),
+            undefined,
+          );
+        },
+      );
       assert.deepEqual(geometry(await snapshot()), geometry(before));
       receipt.checks.push(
         "native-keyboard-move-resize-undo-and-Escape-preview-cancellation",
@@ -409,14 +437,18 @@ exports.verify = async ({
       assert.deepEqual(geometry(await snapshot()), fluidGeometry);
       await start();
       s = await snapshot();
-      before = await moveOnto(s.blocks[0], s.blocks[1], true);
+      before = await moveOnto(
+        blockOf(s, "conversation"),
+        blockOf(s, "note"),
+        true,
+      );
       s = await snapshot();
-      const stationary = before.blocks[1];
+      const stationary = blockOf(before, "note");
       assert.deepEqual(
         geometry(s).find((b) => b.id === stationary.id),
         geometry(before).find((b) => b.id === stationary.id),
       );
-      const moving = before.blocks[0];
+      const moving = blockOf(before, "conversation");
       for (const direction of ["front", "back", "raise", "lower"]) {
         await properties(moving.id);
         await click(`[data-layer="${direction}"]`);
@@ -456,7 +488,7 @@ exports.verify = async ({
       assert.equal(s.organization.structured.spans[moving.id].rows, 4);
       await action("bring-all");
       s = await snapshot();
-      await moveOnto(s.blocks[0], s.blocks[1], true);
+      await moveOnto(blockOf(s, "conversation"), blockOf(s, "note"), true);
       s = await snapshot();
       noOverlap(s);
       await shot("06-structured-spans-and-reorder");
@@ -501,7 +533,7 @@ exports.verify = async ({
         await action("bring-all");
         s = await snapshot();
         if (organization === "freeform")
-          await moveOnto(s.blocks[0], s.blocks[1]);
+          await moveOnto(blockOf(s, "conversation"), blockOf(s, "note"));
         await pause(250);
         s = await snapshot();
         assert.equal(s.resources.length, resources.length);
