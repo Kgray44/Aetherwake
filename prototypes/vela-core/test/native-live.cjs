@@ -93,7 +93,15 @@ exports.verify = async ({win, app, privateRoot, source}) => {
     const clickText = async (text, scope, tag='button', contains=false) => click(await control(scope, text, tag, contains));
     const field = (scope, text, tag='input') => js(`(()=>{const root=document.querySelector(${JSON.stringify(scope)}),label=[...root.querySelectorAll('label')].find(e=>(e.querySelector('span')?.textContent??[...e.childNodes].filter(n=>n.nodeType===Node.TEXT_NODE).map(n=>n.textContent).join('')).trim()===${JSON.stringify(text)}),node=label?.querySelector(${JSON.stringify(tag)});if(!node)throw Error('Missing field '+${JSON.stringify(text)});const parts=[];let e=node;while(e!==root){const peers=[...e.parentElement.children].filter(p=>p.tagName===e.tagName);parts.unshift(e.tagName.toLowerCase()+':nth-of-type('+(peers.indexOf(e)+1)+')');e=e.parentElement;}return ${JSON.stringify(scope)}+' > '+parts.join(' > ')})()`);
     const key = (keyCode, modifiers=[]) => { for (const type of ['keyDown','keyUp']) win.webContents.sendInputEvent({type,keyCode,modifiers}); };
-    const type = async (selector, value) => { await click(selector); key('A',['control']); await win.webContents.insertText(String(value)); receipt.actions.push({type:'native-keyboard-select-and-insert', selector, characters:String(value).length}); await pause(100); };
+    const type = async (selector, value) => {
+      await click(selector);
+      await until(() => js(`document.activeElement===document.querySelector(${JSON.stringify(selector)})`), 'actual editing focus');
+      key('A',['control']);
+      await until(() => js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});return e===document.activeElement&&e.selectionStart===0&&e.selectionEnd===e.value.length})()`), 'native select-all acknowledgement');
+      await win.webContents.insertText(String(value));
+      receipt.actions.push({type:'native-keyboard-select-and-insert', selector, characters:String(value).length});
+      await until(() => js(`document.querySelector(${JSON.stringify(selector)})?.value===${JSON.stringify(String(value))}`), 'exact inserted field value');
+    };
     const choose = async (selector, value) => {
       const index = await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});return [...e.options].findIndex(o=>o.value===${JSON.stringify(value)}&&!o.disabled)})()`);
       assert(index >= 0, 'Actual choice unavailable: ' + value); await click(selector); key('Home'); for (let i=0; i<index; i++) key('Down'); key('Return');
