@@ -84,6 +84,7 @@ export const BLOCK_DEFAULT_SIZES: Readonly<
   note: { width: 440, height: 360 },
   task: { width: 320, height: 260 },
   task_group: { width: 440, height: 460 },
+  checklist: { width: 460, height: 500 },
   stream: { width: 500, height: 380 },
   project_overview: { width: 520, height: 360 },
   resource_browser: { width: 560, height: 440 },
@@ -188,6 +189,12 @@ export const BUILTIN_BLOCKS: readonly BlockDefinition[] = deepFreeze([
     ["Manage task members", "Inspect member status", "Open task"],
     "An empty group. Adding a task references the existing task identity.",
   ),
+  { ...define(
+    'checklist', 'Checklist', 'planning',
+    'A persistent list of your actionable items, with groups, priorities, due dates and linked sources.',
+    ['Add and edit items', 'Check items manually', 'Group and order items', 'Link sources'],
+    'An empty checklist. Checkmarks record manual or explicitly reviewed changes; they do not verify agent work.',
+  ), requiredServices: ['canonical-resources', 'workspace-engine', 'checklist-service'] },
   define(
     "reference",
     "Reference",

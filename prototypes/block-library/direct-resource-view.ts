@@ -1,6 +1,9 @@
 import type { Resource } from '../application-contract/contracts.ts';
 import type { NoteExperiencePort } from './note-contracts.ts';
 import type { NoteSession } from './note-session.ts';
+import type { ChecklistPort, ChecklistReference } from '../application-contract/checklist.ts';
+import type { ExperienceMotionPort } from '../application-contract/motion.ts';
+import { mountChecklistExperience, type ChecklistExperience } from '../checklist-product/view.ts';
 import { mountNoteExperience } from './note-view.ts';
 import { mountTaskGroupExperience } from './task-group-view.ts';
 import { mountEventExperience, type EventWindow } from './event-view.ts';
@@ -8,6 +11,14 @@ import { mountEventExperience, type EventWindow } from './event-view.ts';
 export interface DirectResourcePorts {
   notes: NoteExperiencePort;
   noteSession(resourceId: string): NoteSession;
+  checklists?: {
+    port: ChecklistPort;
+    motion: ExperienceMotionPort;
+    /** Unique per mounted presentation, including multiple views of one resource. */
+    viewId: string;
+    chooseReference?(): Promise<ChecklistReference | null>;
+    openReference?(reference: ChecklistReference): void | Promise<void>;
+  };
   saveContent(resourceId: string, content: string, root: HTMLElement): void;
   readResource?(resourceId: string): Resource | undefined;
   setTaskStatus(input: { resourceId: string; expectedVersion: number; status: 'open' | 'done' }): Promise<void>;
@@ -27,6 +38,8 @@ export interface DirectResourceExperience {
   update(resource: Resource): void;
   setActive(active: boolean): void;
   flush(): Promise<void>;
+  frame?(): void;
+  reflow?(): void;
   dispose(): void;
 }
 
@@ -53,6 +66,7 @@ export function mountDirectResourceExperience(
   let group: ReturnType<typeof mountTaskGroupExperience> | undefined;
   let events: ReturnType<typeof mountEventExperience> | undefined;
   let session: NoteSession | undefined;
+  let checklist: ChecklistExperience | undefined;
   let refreshVersion: number | undefined;
   let editor: HTMLTextAreaElement | undefined;
   let taskStatus: HTMLInputElement | undefined, taskPriority: HTMLSelectElement | undefined;
@@ -152,6 +166,17 @@ export function mountDirectResourceExperience(
   const mount = () => {
     if (mounted || !available(resource)) return;
     body.replaceChildren();
+    if (kind === 'checklist') {
+      const source = ports.checklists;
+      if (!source) { status.textContent = 'Checklist access is unavailable in this surface.'; return; }
+      checklist = mountChecklistExperience(body, resourceId, source.port, {
+        viewId: source.viewId, motion: source.motion, active, presentation: 'focused',
+        chooseReference: source.chooseReference, openReference: source.openReference,
+      });
+      refreshVersion = resource.version;
+      mounted = true;
+      return;
+    }
     if (noteKinds.has(kind)) {
       if (kind === 'task_group') {
         const primary = node('div', 'task-group-primary'); body.append(primary);
@@ -196,6 +221,7 @@ export function mountDirectResourceExperience(
     else {
       if (mounted) status.textContent = '';
       try { mount(); } catch (error) {
+        checklist?.dispose(); checklist = undefined;
         note?.dispose(); group?.dispose(); events?.dispose();
         note = undefined; group = undefined; events = undefined;
         session = undefined; editor = undefined; taskStatus = undefined; taskPriority = undefined;
@@ -205,6 +231,11 @@ export function mountDirectResourceExperience(
       }
     }
     note?.setActive(active && available(resource));
+    checklist?.setActive(active && available(resource));
+    if (checklist && active && available(resource) && refreshVersion !== resource.version) {
+      refreshVersion = resource.version;
+      void checklist.refresh().catch(fail);
+    }
     const document = session?.snapshot().document?.resource;
     if (session && document && active && available(resource) && document.version < resource.version && refreshVersion !== resource.version) {
       refreshVersion = resource.version;
@@ -231,13 +262,22 @@ export function mountDirectResourceExperience(
     },
     setActive(value) { if (!disposed) { active = value; reconcile(); } },
     async flush() {
-      if (disposed || !session) return;
+      if (disposed) return;
+      if (checklist) {
+        if (!available(resource)) throw new Error('Checklist is unavailable. Pending edits are retained in its view.');
+        await checklist.flush();
+        return;
+      }
+      if (!session) return;
       if (!available(resource)) throw new Error('Resource is unavailable. Pending text remains in its canonical editor session.');
       await session.flushEdits();
     },
+    frame() { if (!disposed) checklist?.frame(); },
+    reflow() { if (!disposed) checklist?.reflow(); },
     dispose() {
       if (disposed) return;
       disposed = true;
+      checklist?.dispose();
       if (editor) editor.oninput = null;
       if (taskStatus) taskStatus.onchange = null;
       if (taskPriority) taskPriority.onchange = null;

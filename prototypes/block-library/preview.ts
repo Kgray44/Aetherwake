@@ -59,6 +59,12 @@ export function blockPreview(kind: BlockInstanceKind): HTMLElement {
       "Capture a description, then mark the task done when you choose.",
     );
     line("div", "○ Open    →    ✓ Done", "aw-library__sample-input");
+  } else if (kind === 'checklist') {
+    line('small', 'CHECKLIST · MANUAL ITEMS · EXAMPLE');
+    line('h4', 'Keep the next steps clear');
+    line('p', 'Preparation\n○ Review source material · High · Due Nov 8\n✓ Record questions · Checked manually');
+    line('div', 'Add an item…', 'aw-library__sample-input');
+    line('p', 'Group items and link their sources. No provider is required.', 'aw-library__hint');
   } else if (kind === "task_group") {
     line("small", "MANUAL TASK GROUP · 2 EXAMPLE MEMBERS");
     line("p", "○ Review implementation");

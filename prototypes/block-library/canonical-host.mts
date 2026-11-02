@@ -418,6 +418,8 @@ export function createCanonicalTemplateHost(
         resource.kind === input.kind && resource.projectId === input.projectId,
         "created_resource_scope_mismatch",
       );
+      if (input.kind === 'checklist')
+        check(kernel.getResource(id).resource.kind === 'generic', 'canonical_checklist_resource_required');
       const stored = db
         .prepare("SELECT rowid FROM resources WHERE id=?")
         .get(id);

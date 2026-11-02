@@ -292,9 +292,9 @@ test("templates capture and reuse 0, 1, 3, 10, 25 and 50 distinct canonical reso
   host.kernel.assertIntegrity();
 });
 
-test("registry describes exactly seven implemented kinds; absent and unavailable capabilities never claim support", (t) => {
+test("registry includes eight canonical kinds; absent and unavailable capabilities never claim support", (t) => {
   const { host, service } = fixture(t);
-  assert.equal(BUILTIN_BLOCKS.length, 7);
+  assert.equal(BUILTIN_BLOCKS.length, 8);
   assert.equal(searchBlocks("canonical task", host.caps).length, 2);
   assert.equal(
     searchBlocks("Intelligence Stream", host.caps)[0].kind,
@@ -843,7 +843,7 @@ test('template capture rejects a canonical domain with no registered resource pr
   host.desktop.apply({ type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.workspaceId } }, () => { throw new Error('No provider creation'); });
   const snapshot = host.desktop.snapshot(() => ({ provider: 'local', messages: [] }));
   assert.equal(captureWorkspaceTemplate(snapshot, { [created.resourceId]: 'reference' }).resources[0].source.kind, 'note');
-  for (const kind of ['agent', 'checklist'] as const) {
+  for (const kind of ['agent'] as const) {
     const foreign = structuredClone(snapshot); (foreign.resources.find(resource => resource.id === created.resourceId)! as any).kind = kind;
     const retained = structuredClone(foreign);
     assert.throws(() => captureWorkspaceTemplate(foreign, { [created.resourceId]: 'reference' }), /unsupported_resource_presentation/);

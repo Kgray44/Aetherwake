@@ -4,8 +4,8 @@ import { DesktopState } from '../../integrated-backend/src/desktop.mts';
 import { ChecklistService } from '../service.mts';
 import type { ChecklistHostPort, ChecklistResource } from '../contracts.ts';
 import type { ChecklistOperation, ChecklistReference } from '../../application-contract/checklist.ts';
-export function fixture(t: any, path = ':memory:') {
-  const kernel = WorkspaceKernel.open(path), db = kernel.withTransaction(db => db);
+export function fixture(t: any, path = ':memory:', suppliedKernel?: WorkspaceKernel) {
+  const kernel = suppliedKernel ?? WorkspaceKernel.open(path), db = kernel.withTransaction(db => db);
   // Reuse Root's existing logical-kind table, not a parallel resource catalog.
   new DesktopState(kernel, db);
   const revoked = new Set<string>(), readOnly = new Set<string>(), events: Parameters<ChecklistHostPort['recordEvent']>[0][] = [];
@@ -33,7 +33,7 @@ export function fixture(t: any, path = ':memory:') {
     recordEvent(event) { events.push(structuredClone(event)); if (failEvent) throw new Error('synthetic_canonical_event_failure'); },
   };
   const service = new ChecklistService(kernel, host);
-  let closed = false; const close = () => { if (!closed) { closed = true; kernel.close(); } }; t.after(close);
+  let closed = false; const close = () => { if (!closed) { closed = true; kernel.close(); } }; if (!suppliedKernel) t.after(close);
   const count = (table: 'resources' | 'notes' | 'conversation_refs' | 'blocks' | 'workspaces' | 'checklist_documents' | 'checklist_receipts') => Number(db.prepare('SELECT count(*) AS n FROM ' + table).get()!.n);
   const mutate = (resourceId: string, operations: ChecklistOperation[], expectedVersion = service.read(resourceId).resource.version) => service.mutate({ commandId: randomUUID(), resourceId, expectedVersion, operations });
   return { kernel, db, host, service, events, revoked, readOnly, count, mutate, close, failEvent: () => { failEvent = true; } };

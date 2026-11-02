@@ -5,6 +5,7 @@ import type {
   ProjectOverview,
 } from "./contracts.ts";
 import { sourceLinks } from "./source-links.ts";
+import type { ChecklistDocument } from '../application-contract/checklist.ts';
 
 export type SubjectIdentity =
   | { phase: "loading" | "unavailable"; message?: string }
@@ -39,6 +40,7 @@ export type BlockIdentityModel = {
     | "document"
     | "task"
     | "checklist"
+    | 'ledger'
     | "timeline"
     | "project"
     | "table"
@@ -77,6 +79,7 @@ const typeLabel = {
   note: "Note",
   task: "Manual Task",
   task_group: "Manual Task Group",
+  checklist: 'Checklist',
   stream: "Activity",
   project_overview: "Project",
   resource_browser: "Resource Explorer",
@@ -95,6 +98,7 @@ export function blockIdentity(input: {
   content?: string;
   subject?: SubjectIdentity;
   events?: IdentityEvent[];
+  checklist?: ChecklistDocument;
   disconnected?: boolean;
 }): BlockIdentityModel {
   const { kind, resource } = input;
@@ -103,6 +107,7 @@ export function blockIdentity(input: {
     note: "document",
     task: "task",
     task_group: "checklist",
+    checklist: 'ledger',
     stream: "timeline",
     project_overview: "project",
     resource_browser: "table",
@@ -192,6 +197,23 @@ export function blockIdentity(input: {
       : [];
     model.paragraphs = document(content).paragraphs.slice(0, 2);
     model.empty = "Add a description in task details.";
+  } else if (kind === 'checklist') {
+    const checklist = input.checklist;
+    if (!checklist || checklist.resource.id !== resource?.id) {
+      model.phase = 'loading';
+      model.subtitle = 'Loading checklist…';
+      model.empty = 'Open this checklist to read its saved items.';
+    } else {
+      const checked = checklist.entries.filter(entry => entry.checked).length;
+      model.subtitle = `${checked} of ${checklist.entries.length} checked · ${checklist.syncPolicy}`;
+      model.rows = checklist.entries.slice(0, 4).map(entry => ({
+        id: entry.id, title: (entry.checked ? '✓ ' : '○ ') + entry.text,
+        detail: [entry.priority === 'normal' ? '' : entry.priority, entry.dueDate ? 'Due ' + entry.dueDate : '',
+          entry.checked ? (entry.completion?.basis === 'user-approved' ? 'User-approved update' : 'Checked manually') : '',
+          checklist.groups.find(group => group.id === entry.groupId)?.title ?? ''].filter(Boolean).join(' · '),
+      }));
+      model.empty = 'Add your first item. No provider is required.';
+    }
   } else if (kind === "task_group") {
     model.layout = "checklist";
     const members = resource?.taskMembers;

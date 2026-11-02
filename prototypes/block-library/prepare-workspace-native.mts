@@ -31,6 +31,9 @@ import type { NoteDocument } from './note-contracts.ts';
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(import.meta.url);
+// Retained ten-kind review profile. New canonical domains require their own
+// native preparation and real Core factories before joining this matrix.
+export const WORKSPACE_SOURCE_REVIEW_BLOCKS = REGISTERED_BLOCKS.filter(definition => definition.kind !== 'checklist');
 export type WorkspaceNativeCase = {
   kind: BlockInstanceKind;
   workspaceId: string;

@@ -26,6 +26,7 @@ export type BlockKind =
   | "research"
   | "task"
   | "task_group"
+  | "checklist"
   | "reference"
   | "stream"
   | "file"

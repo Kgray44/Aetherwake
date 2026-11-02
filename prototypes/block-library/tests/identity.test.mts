@@ -58,6 +58,7 @@ test("all registered kinds project a distinct useful structure; Codex has observ
     "note",
     "task",
     "task_group",
+    'checklist',
     "stream",
     "project_overview",
     "resource_browser",
@@ -77,14 +78,14 @@ test("all registered kinds project a distinct useful structure; Codex has observ
         : { resource: resource(kind as Resource["kind"]) }),
     }),
   );
-  assert.equal(new Set(models.map((model) => model.layout)).size, 10);
-  assert.equal(new Set(models.map((model) => model.label)).size, 9);
+  assert.equal(new Set(models.map((model) => model.layout)).size, 11);
+  assert.equal(new Set(models.map((model) => model.label)).size, 10);
   assert.equal(models.find(model => model.kind === 'resource_browser')!.label, 'Resource Explorer');
   assert.equal(models.find(model => model.kind === 'collection_browser')!.label, 'Resource Explorer');
   assert.equal(models[0].rows.length, 0, "No invented assistant response");
-  assert.equal(models[4].rows.length, 0, "No invented activity");
-  assert.equal(models[5].phase, "loading");
-  assert.deepEqual(models[5].metrics, [], "Loading is not a zero count");
+  assert.equal(models.find(model => model.kind === 'stream')!.rows.length, 0, "No invented activity");
+  assert.equal(models.find(model => model.kind === 'project_overview')!.phase, "loading");
+  assert.deepEqual(models.find(model => model.kind === 'project_overview')!.metrics, [], "Loading is not a zero count");
   const codex = blockIdentity({
     kind: "conversation",
     resource: resource("conversation", {

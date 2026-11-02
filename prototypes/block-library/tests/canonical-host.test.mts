@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { fixture as checklistFixture } from '../../checklist-product/tests/fixture.mts';
 import { WorkspaceKernel } from "../../workspace-kernel/kernel.mts";
 import { WorkspaceEngine } from "../../workspace-engine/engine.mts";
 import { DesktopState } from "../../integrated-backend/src/desktop.mts";
@@ -37,6 +38,7 @@ function fixture(t: any) {
     }),
     engine = desktop.nativeBlockServices().engine;
   t.after(() => kernel.close());
+  const checklist = checklistFixture(t, ':memory:', kernel);
   const revoked = new Set<string>(),
     groupCommands: TaskGroupMembershipCommand[] = [],
     factoryCalls: { kind: BlockKind; projectId: string | null }[] = [];
@@ -81,6 +83,7 @@ function fixture(t: any) {
     },
     createResource(kind, title, _provider, projectId) {
       factoryCalls.push({ kind, projectId });
+      if (kind === 'checklist') return checklist.service.create({ commandId: randomUUID(), title, projectId }).resourceId;
       const resource =
         kind === "conversation"
           ? kernel.createConversationRef(title, projectId)
@@ -135,6 +138,7 @@ function fixture(t: any) {
     revoked,
     groupCommands,
     factoryCalls,
+    checklist,
     get graph() {
       return graph;
     },
@@ -149,6 +153,25 @@ function fixture(t: any) {
     },
   };
 }
+
+test('Checklist library creation uses its canonical service and multiple placements retain one resource without Note content', t => {
+  const f = fixture(t), first = f.engine.createWorkspace('Synthetic Checklist workspace A');
+  const created = f.service.createBlock({ commandId: 'checklist:block:create', workspaceId: first.workspaceId,
+    expectedLayoutVersion: first.revision, kind: 'checklist', title: 'Actual canonical Checklist' });
+  assert.equal(f.kernel.getResource(created.resourceId).resource.kind, 'generic');
+  assert.equal(f.checklist.count('notes'), 0);
+  f.checklist.mutate(created.resourceId, [{ type: 'addEntry', key: 'entry', entry: { text: 'Keep one canonical identity' } }]);
+  const document = f.checklist.service.read(created.resourceId), second = f.engine.createWorkspace('Synthetic Checklist workspace B');
+  const reused = f.service.attachBlock({ commandId: 'checklist:block:reuse', workspaceId: second.workspaceId,
+    expectedLayoutVersion: second.revision, kind: 'checklist', resourceId: created.resourceId, expectedResourceVersion: document.resource.version });
+  assert.equal(reused.resourceId, created.resourceId); assert.notEqual(reused.placementId, created.placementId);
+  assert.equal(count(f.db, 'resources'), 1); assert.equal(f.checklist.count('checklist_documents'), 1);
+  const before = structuredClone(document), projected = f.engine.project(first.workspaceId);
+  f.engine.execute({ type: 'detachBlock', commandId: 'checklist:block:detach', workspaceId: first.workspaceId,
+    expectedRevision: projected.revision, blockId: created.placementId });
+  assert.deepEqual(f.checklist.service.read(created.resourceId), before);
+  assert.equal(count(f.db, 'resources'), 1); assert.equal(f.checklist.count('notes'), 0); assert.equal(count(f.db, 'blocks'), 1);
+});
 
 test("vacant initial placement honors host bounds while keeping fixed overlapping Freeform cards and presence exact", t => {
   const f = fixture(t), workspace = f.engine.createWorkspace('Synthetic bounded placement', null, { mode: 'freeform' });
@@ -1365,7 +1388,7 @@ test("registered project/browser views have live capability states and create on
       "Synthetic view workspace",
       project.id,
     );
-  assert.equal(REGISTERED_BLOCKS.length, 10);
+  assert.equal(REGISTERED_BLOCKS.length, 11);
   assert.equal(
     f.service
       .discoverBlocks()
