@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld(
           "notes",
           "agents",
           "checklists",
+          "timelines",
           "firstPartyChat",
         ].includes(name)
       )

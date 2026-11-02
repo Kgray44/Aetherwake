@@ -68,6 +68,7 @@ for (const folder of [
   "prototypes/block-library",
   "prototypes/agent-product",
   "prototypes/checklist-product",
+  "prototypes/timeline-product",
   "prototypes/visual-experience/cinematic-v3/src",
   "prototypes/visual-experience/cinematic-v3/native",
 ])
@@ -516,7 +517,11 @@ app.whenReady().then(async () => {
         result = await call("library", input);
       } else if (command === "notes") {
         result = await call("notes", input);
-      } else if (command === "agents" || command === "checklists") {
+      } else if (
+        command === "agents" ||
+        command === "checklists" ||
+        command === "timelines"
+      ) {
         result = await productCommand({ family: command, input, call });
       } else throw new Error("unsupported_command");
       return { ok: true, result };

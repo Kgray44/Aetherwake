@@ -14,6 +14,8 @@ test("canonical product families expose only explicit operations and classify wr
     ["agents", "list"],
     ["agents", "inspect"],
     ["checklists", "read"],
+    ["timelines", "read"],
+    ["timelines", "query"],
   ]) {
     const input = { name, input: {} };
     assert.equal(isProductRead(family, input), true);
@@ -26,6 +28,8 @@ test("canonical product families expose only explicit operations and classify wr
     ["agents", "create"],
     ["agents", "recordAssignment"],
     ["checklists", "mutate"],
+    ["timelines", "create"],
+    ["timelines", "save"],
   ]) {
     const input = { name, input: {} };
     assert.equal(isProductRead(family, input), false);

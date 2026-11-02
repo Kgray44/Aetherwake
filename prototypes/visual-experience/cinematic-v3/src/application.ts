@@ -2076,6 +2076,7 @@ export function installApplication(hooks: Hooks) {
               if (
                 !resource ||
                 !workspaceId ||
+                resource.kind === "timeline" ||
                 !REGISTERED_BLOCKS.some((def) => def.kind === resource.kind)
               )
                 throw Error(

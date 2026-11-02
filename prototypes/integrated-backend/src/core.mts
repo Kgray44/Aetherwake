@@ -6,6 +6,7 @@ import { DesktopState } from './desktop.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
+import { compositeTimelineDomain,isTimelineRead,type TimelineRequest } from './timeline-domain.mts';
 import { RESOURCE_OPENING_CONTRACT, parseResourceOpeningInput, type ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
 import { CHATGPT_PLAN_PROVIDER,PROVIDER_CONNECTION_CONTRACT,type ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
 import { ResponsesTransport,prepareResponsesTurn } from '../../openai-provider/responses.mts';
@@ -217,6 +218,22 @@ export class BackendCore {
   private async productCommand(family:'agents'|'checklists',operation:AgentRequest|ChecklistRequest) {
     const read=family==='agents'?isAgentRead(operation):isChecklistRead(operation);
     const execute=()=>{const domains=this.productDomains();return family==='agents'?domains.agent(operation as AgentRequest):domains.checklist(operation as ChecklistRequest);};
+    const result=read?execute():this.atomic(execute);
+    return read?{result}:{result,desktop:await this.command('desktop',{type:'snapshot'})};
+  }
+  private async timelineCommand(operation:TimelineRequest) {
+    const read=isTimelineRead(operation);
+    const execute=()=>compositeTimelineDomain({kernel:this.kernel,db:this.db,
+      projectAccess:id=>this.libraryAuthorized({kind:'project',id}),resourceAccess:id=>this.productResourceAccess(id),
+      eventAccess:header=>{
+        if(header.resourceId!==null&&!this.productResourceAccess(header.resourceId))return false;
+        if(header.executionId!==null){const execution=this.state.executions[header.executionId];return !!execution&&this.productResourceAccess(execution.resourceId);}
+        // The installed local owner's unscoped application headers remain local
+        // metadata. The service excludes them from project/resource scopes.
+        return true;
+      },
+      recordEvent:event=>this.record(event.type,'observed',undefined,'timeline:'+event.commandId+':'+event.type,{providerId:'aerynth-native',detached:true,resourceId:event.resourceId,correlationId:event.commandId,payload:{redacted:true,application:{resourceVersion:event.resourceVersion,commandId:event.commandId,detail:event.detail}}}),
+    }).dispatch(operation);
     const result=read?execute():this.atomic(execute);
     return read?{result}:{result,desktop:await this.command('desktop',{type:'snapshot'})};
   }
@@ -1351,6 +1368,7 @@ export class BackendCore {
     // Reads, interruption and durable draft recovery remain available during
     // execution. Canonical mutations retain source/approval fences.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft'];
+    if(name==='timelines'){ensure(isTimelineRead(a)||!this.active,'execution_busy');return this.timelineCommand(a) as any;}
     if(name==='agents'||name==='checklists'){
       ensure((name==='agents'?isAgentRead(a):isChecklistRead(a))||!this.active,'execution_busy');
       return this.productCommand(name,a) as any;

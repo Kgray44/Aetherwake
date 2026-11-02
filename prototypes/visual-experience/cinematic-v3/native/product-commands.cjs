@@ -9,10 +9,12 @@ const reads = Object.freeze({
     "assignment",
   ]),
   checklists: Object.freeze(["read"]),
+  timelines: Object.freeze(["read", "query"]),
 });
 const writes = Object.freeze({
   agents: Object.freeze(["create", "update", "archive", "recordAssignment"]),
   checklists: Object.freeze(["create", "mutate"]),
+  timelines: Object.freeze(["create", "save"]),
 });
 function validEnvelope(family, value) {
   return (

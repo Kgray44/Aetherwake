@@ -28,6 +28,9 @@ test('actual desktop stdio host and worker route Agent/Checklist reads and write
     await call('checklists',mutation);
     const document=(await call('checklists',{name:'read',input:{resourceId:checklist.resourceId}})).result;
     assert.equal(document.entries.length,200);assert.equal(document.entries[199].description,'x'.repeat(1400));
+    const timeline=(await call('timelines',{name:'create',input:{commandId:'synthetic-host-timeline',title:'Synthetic Checklist activity',projectId:null,view:{schemaVersion:1,mode:'activity',scope:{projectId:null,resourceIds:[checklist.resourceId]},sources:{providerIds:[],eventTypes:[],classifications:['observed','reported','inferred','simulated']},viewport:{from:new Date(Date.now()-3600000).toISOString(),to:new Date(Date.now()+3600000).toISOString(),displayTimeZone:'UTC'},selection:null}}})).result;
+    const timelineDocument=(await call('timelines',{name:'read',input:{resourceId:timeline.resourceId}})).result;assert.equal(timelineDocument.canEdit,true);
+    const window=(await call('timelines',{name:'query',input:{resourceId:timeline.resourceId,expectedVersion:timeline.version}})).result;assert(window.items.some((item:any)=>item.event.type==='checklist.changed'));assert.equal(window.coverage.rawPayloads,false);
     const desktop=await call('desktop',{type:'snapshot'});assert.equal(desktop.workspaces.length,0);assert.equal(desktop.blocks.length,0);
     assert.deepEqual(await call('providerActivity',{}),{codexConnections:0,providerRequests:0,systemMemoryReads:0,scope:'process-session-native-attempts'});
     await call('close',{});assert.equal(await ended,0);

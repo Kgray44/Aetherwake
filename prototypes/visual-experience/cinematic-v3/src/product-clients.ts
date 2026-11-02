@@ -1,12 +1,17 @@
 import type { DesktopSnapshot } from "../../../application-contract/contracts.ts";
 import type { ChecklistPort } from "../../../application-contract/checklist.ts";
 import type { AgentLibraryClientPort } from "../../../agent-product/contracts.ts";
+import type { TimelinePort } from "../../../timeline-product/contracts.ts";
 
 /** Transport only. Canonical policy, transactions and identities remain native. */
 export function createProductClients(options: {
   command(name: string, input: unknown): Promise<unknown>;
   apply(snapshot: DesktopSnapshot): void;
-}): { agents: AgentLibraryClientPort; checklists: ChecklistPort } {
+}): {
+  agents: AgentLibraryClientPort;
+  checklists: ChecklistPort;
+  timelines: TimelinePort;
+} {
   async function invoke<T>(
     family: string,
     name: string,
@@ -20,6 +25,12 @@ export function createProductClients(options: {
     return response.result;
   }
   return {
+    timelines: {
+      create: (input) => invoke("timelines", "create", input),
+      read: (resourceId) => invoke("timelines", "read", { resourceId }),
+      save: (input) => invoke("timelines", "save", input),
+      query: (input) => invoke("timelines", "query", input),
+    },
     agents: {
       list: (input) => invoke("agents", "list", input),
       inspect: (resourceId) => invoke("agents", "inspect", { resourceId }),
