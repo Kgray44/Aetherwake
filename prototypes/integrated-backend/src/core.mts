@@ -16,7 +16,7 @@ import type { ProductCommandMap } from '../../conversation-product/src/contracts
 import { VelaService } from '../../vela-core/src/service.mts';
 import { createCanonicalVelaHost, type CanonicalVelaHost, type CanonicalVelaMetadata } from '../../vela-core/src/canonical-host.mts';
 import { CodexPlanningAdapter, planningDigest, type CodexPlanningGrant, type PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
-import type { VelaMessage, ContextManifest, AuthorizationRequest, AuthorizationDecision, VelaPlanningPort, ResourceRef, VelaPlan, HostActionResult, CapabilityDescriptor } from '../../vela-core/src/contracts.ts';
+import type { VelaMessage, ContextManifest, AuthorizationRequest, AuthorizationDecision, VelaPlanningPort, ResourceRef, VelaPlan, HostActionResult, CapabilityDescriptor, VelaScopePurpose } from '../../vela-core/src/contracts.ts';
 import type { VelaRequestPreview, VelaNativeCapabilities, VelaBackendState } from './contracts.mts';
 import { TemplateService } from '../../block-library/service.mts';
 import { createCanonicalTemplateHost } from '../../block-library/canonical-host.mts';
@@ -188,8 +188,20 @@ export class BackendCore {
       applyDesktopCommand:command=>this.desktop.apply(command,()=>{throw new ServiceError('unexpected_note_conversation_creation');}),
       renameResource:input=>{this.kernel.renameResource(input.resourceId,input.title,input.expectedVersion);},
     }));
-    this.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources','createResource','attach','applyStructuredPreset','createProject','createWorkspace','renameWorkspace','taskPriority','bringAllIntoView','resolveLayout','setOrganization','createConversation','conversationFavorite','renameConversation','associateConversationProject'],workspaceRevision:id=>engine.project(id).revision,dispatch:input=>{
+    this.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources','createResource','attach','applyStructuredPreset','createProject','createWorkspace','renameWorkspace','taskPriority','bringAllIntoView','resolveLayout','setOrganization','createConversation','conversationFavorite','renameConversation','associateConversationProject','createCollection','renameCollection','archiveCollection','collectionMembership'],workspaceRevision:id=>engine.project(id).revision,dispatch:input=>{
       const a=input.action;
+      if(a.type==='createCollection') {
+        const created=this.conversationOrganization.native({type:'createCollection',title:a.title,projectId:a.projectId}) as {id:string};
+        ensure(created&&typeof created.id==='string','vela_creation_receipt_missing');this.record('vela.native.'+a.type,'observed');return {status:'applied',receiptId:input.commandId,createdCollectionId:created.id};
+      }
+      if(a.type==='renameCollection'||a.type==='archiveCollection'||a.type==='collectionMembership') {
+        const collection=this.db.prepare('SELECT version FROM collections WHERE id=?').get(a.collectionId);ensure(collection,'collection_missing');
+        const expectedVersion=Number(collection.version);
+        if(a.type==='renameCollection')this.conversationOrganization.native({type:a.type,collectionId:a.collectionId,title:a.title,expectedVersion});
+        else if(a.type==='archiveCollection')this.conversationOrganization.native({type:a.type,collectionId:a.collectionId,archived:a.archived,expectedVersion});
+        else this.conversationOrganization.native({type:'membership',collectionId:a.collectionId,resourceId:a.resourceId,member:a.member,expectedVersion});
+        this.record('vela.native.'+a.type,'observed');return {status:'applied',receiptId:input.commandId};
+      }
       if(a.type==='createConversation') {
         ensure(a.providerId==='local'||a.providerId==='codex-app-server'&&this.port.id==='codex-app-server'&&!this.port.mock,'provider_unavailable');
         const created=this.create(a.title,a.providerId,this.velaContext().currentProjectId);
@@ -274,18 +286,20 @@ export class BackendCore {
   /** Trusted in-process bootstrap only. No RPC exposes capability registration. */
   registerVelaNativeCapabilities(capabilities:VelaNativeCapabilities) {
     ensure(capabilities&&Array.isArray(capabilities.supportedActions)&&typeof capabilities.dispatch==='function','invalid_vela_native_capabilities');
-    ensure(capabilities.supportedActions.every(id=>['navigate','workspaceFromResources','createResource','attach','content','taskStatus','setTaskGroupMembers','relate','applyStructuredPreset','createProject','createWorkspace','renameWorkspace','taskPriority','bringAllIntoView','resolveLayout','setOrganization','createConversation','conversationFavorite','renameConversation','associateConversationProject'].includes(id)),'invalid_vela_native_capabilities');
+    ensure(capabilities.supportedActions.every(id=>['navigate','workspaceFromResources','createResource','attach','content','taskStatus','setTaskGroupMembers','relate','applyStructuredPreset','createProject','createWorkspace','renameWorkspace','taskPriority','bringAllIntoView','resolveLayout','setOrganization','createConversation','conversationFavorite','renameConversation','associateConversationProject','createCollection','renameCollection','archiveCollection','collectionMembership'].includes(id)),'invalid_vela_native_capabilities');
     this.velaNative=capabilities;
   }
   /** Trusted application selection bridge. Selection is filtered against live local-owner scope, never an access grant. */
   setVelaSelection(resourceIds:string[]) { ensure(Array.isArray(resourceIds)&&resourceIds.length<=500&&resourceIds.every(id=>typeof id==='string'),'invalid_vela_selection');this.velaSelection=[...new Set(resourceIds)]; }
-  private velaMetadata():CanonicalVelaMetadata {
+  private velaMetadata(purpose?:VelaScopePurpose):CanonicalVelaMetadata {
     const projects=this.db.prepare("SELECT id,title,version FROM projects WHERE state='active'").all() as any[];
     const ids=new Set(projects.map(p=>p.id));
     const workspaces=this.db.prepare("SELECT * FROM workspaces WHERE state='active'").all().filter(w=>w.project_id===null||ids.has(w.project_id)) as any[];
     const resources=this.db.prepare('SELECT r.*,d.kind AS desktop_kind FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id').all().map(r=>({id:String(r.id),title:String(r.title),kind:r.desktop_kind??(r.kind==='generic'?'reference':r.kind),version:Number(r.version),project_id:r.project_id,state:r.state,visible:r.state==='active'&&(r.project_id===null||ids.has(r.project_id)),available:r.state==='active'&&(r.project_id===null||ids.has(r.project_id)),...(r.kind==='conversation'?{conversationRevision:this.state.revisions[String(r.id)]}:{})})) as any[];
     const blocks=this.db.prepare('SELECT * FROM blocks').all() as any[],session=this.velaSession();
-    return {contract:'aerynth.desktop@1',projects,workspaces,resources,blocks,navigationBlocks:blocks,activeWorkspaceId:session.activeWorkspaceId};
+    const restoreIds=purpose?.restoreCollectionIds??[];
+    const collections=this.db.prepare("SELECT id,title,project_id,version,state FROM collections WHERE state='active'"+(restoreIds.length?' OR id IN('+restoreIds.map(()=>'?').join(',')+')':'')).all(...restoreIds) as any[];
+    return {contract:'aerynth.desktop@1',projects,workspaces,resources,blocks,navigationBlocks:blocks,activeWorkspaceId:session.activeWorkspaceId,collections};
   }
   private velaSession():any { return JSON.parse(String(this.db.prepare('SELECT json FROM desktop_session WHERE id=1').get()!.json)); }
   private velaContext() {
@@ -298,7 +312,8 @@ export class BackendCore {
     const placed=new Set((metadata.navigationBlocks??[]).filter(b=>workspaces.includes(b.workspace_id)).map(b=>b.resource_id));
     const allPlaced=new Set((metadata.navigationBlocks??[]).map(b=>b.resource_id));
     const resources=metadata.resources.filter(r=>r.visible!==false&&(context.currentProjectId===null||r.project_id===null&&!allPlaced.has(r.id)||r.project_id===context.currentProjectId||placed.has(r.id)||r.id===this.state.vela!.conversationId)).map(r=>r.id);
-    return {principalId:context.principalId,policyVersion:context.policyVersion,resourceIds:resources,workspaceIds:workspaces,projectIds:projects};
+    const collections=(metadata.collections??[]).filter(c=>c.state==='active'&&(context.currentProjectId===null||c.project_id===null||c.project_id===context.currentProjectId)&&this.conversationAccess.collection(c.id,'read')).map(c=>c.id);
+    return {principalId:context.principalId,policyVersion:context.policyVersion,resourceIds:resources,workspaceIds:workspaces,projectIds:projects,collectionIds:collections};
   }
   private readVelaConversation(resourceId:string) {
     const scope=this.velaScope(this.velaContext(),this.velaMetadata());
@@ -309,9 +324,9 @@ export class BackendCore {
     return {resourceId,revision:this.state.revisions[resourceId],messages};
   }
   private initializeVela(testPlanner?:VelaPlanningPort) {
-    this.velaHost=createCanonicalVelaHost({db:this.db,transaction:work=>this.atomic(()=>work(this.db)),metadata:()=>this.velaMetadata(),currentContext:()=>this.velaContext(),
-      permissions:{scope:(c,m)=>this.velaScope(c,m),metadata:(ref,_c,m)=>ref.kind==='resource'?!!m.resources.find(r=>r.id===ref.id&&r.visible!==false):ref.kind==='workspace'?m.workspaces.some(w=>w.id===ref.id):m.projects.some(p=>p.id===ref.id),content:ref=>ref.kind==='resource'&&!!this.conversationAccess.resource(ref.id),authorize:request=>this.authorizeVelaPolicy(request)},
-      revisions:{conversation:id=>this.state.revisions[id]??null,workspace:id=>this.velaNative?.workspaceRevision?.(id)??Number(this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(id)?.version??0)},
+    this.velaHost=createCanonicalVelaHost({db:this.db,transaction:work=>this.atomic(()=>work(this.db)),metadata:purpose=>this.velaMetadata(purpose),currentContext:()=>this.velaContext(),
+      permissions:{scope:(c,m)=>this.velaScope(c,m),metadata:(ref,_c,m)=>ref.kind==='resource'?!!m.resources.find(r=>r.id===ref.id&&r.visible!==false):ref.kind==='workspace'?m.workspaces.some(w=>w.id===ref.id):ref.kind==='collection'?!!m.collections?.some(c=>c.id===ref.id)&&this.conversationAccess.collection(ref.id,'read',ref.state==='archived'):m.projects.some(p=>p.id===ref.id),content:ref=>ref.kind==='resource'&&!!this.conversationAccess.resource(ref.id),authorize:request=>this.authorizeVelaPolicy(request),restoreCollection:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'organize',true),inspectCollectionArchiveReceipt:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'read',true)},
+      revisions:{conversation:id=>this.state.revisions[id]??null,workspace:id=>this.velaNative?.workspaceRevision?.(id)??Number(this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(id)?.version??0),collection:id=>Number(this.db.prepare('SELECT version FROM cp_collection_rules WHERE collection_id=?').get(id)?.version??0)},
       conversations:{ensure:()=>{if(!this.state.vela!.conversationId)this.state.vela!.conversationId=this.create('Vela','local').resourceId;return this.state.vela!.conversationId;},read:id=>this.readVelaConversation(id),append:(id,message)=>{
         const m=this.graph.addMessage(this.gid(id),message.role,message.content,{provenance:message.source==='user'?'user':'application',sensitivity:this.privateMode?'internal':'public'});
         const {role:_r,content:_c,...meta}=message;this.state.vela!.messages[m.id]=meta;this.state.revisions[id]++;return {...message,id:m.id};

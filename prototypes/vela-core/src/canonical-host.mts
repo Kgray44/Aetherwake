@@ -2,11 +2,12 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { DesktopSnapshot, Resource as DesktopResource } from '../../application-contract/contracts.ts';
 import { check, identifier, isRecord, text, validateAction } from './capabilities.ts';
 import { validatePreference } from './adaptation.ts';
-import type { AuthorizationDecision, AuthorizationRequest, CanonicalConversation, ResourceRef, VelaHostPort, VelaScope } from './contracts.ts';
+import type { AuthorizationDecision, AuthorizationRequest, CanonicalConversation, ResourceRef, VelaHostPort, VelaScope, VelaScopePurpose } from './contracts.ts';
 
 export type CanonicalResourceMetadata = Pick<DesktopResource, 'id' | 'title' | 'kind' | 'version' | 'state' | 'visible' | 'available' | 'project_id' | 'conversationRevision'>;
+export interface CanonicalCollectionMetadata { id:string; title:string; project_id:string|null; version:number; state:'active'|'archived' }
 /** A metadata projection of the actual DesktopSnapshot. Existing full snapshots also structurally satisfy it. */
-export type CanonicalVelaMetadata = Pick<DesktopSnapshot, 'contract' | 'projects' | 'workspaces' | 'blocks' | 'navigationBlocks' | 'activeWorkspaceId'> & { resources: CanonicalResourceMetadata[] };
+export type CanonicalVelaMetadata = Pick<DesktopSnapshot, 'contract' | 'projects' | 'workspaces' | 'blocks' | 'navigationBlocks' | 'activeWorkspaceId'> & { resources: CanonicalResourceMetadata[]; collections?:CanonicalCollectionMetadata[] };
 export interface CanonicalVelaContext {
   principalId: string; policyVersion: string;
   currentProjectId: string | null; currentWorkspaceId: string | null; selectedResourceIds: string[];
@@ -15,7 +16,7 @@ export interface CanonicalVelaHostOptions {
   db: DatabaseSync;
   /** The actual SAME connection is supplied by the kernel/backend boundary, and checked by identity. */
   transaction<T>(work: (db: DatabaseSync) => T): T;
-  metadata(): CanonicalVelaMetadata;
+  metadata(purpose?:VelaScopePurpose): CanonicalVelaMetadata;
   currentContext(): CanonicalVelaContext;
   permissions: {
     /** Mandatory authoritative allow-list, including any parent-approved placement/project relationships. */
@@ -23,6 +24,9 @@ export interface CanonicalVelaHostOptions {
     metadata(ref: ResourceRef, context: CanonicalVelaContext, metadata: CanonicalVelaMetadata): boolean;
     content(ref: ResourceRef, context: CanonicalVelaContext, metadata: CanonicalVelaMetadata): boolean;
     authorize(request: AuthorizationRequest, context: CanonicalVelaContext, metadata: CanonicalVelaMetadata): AuthorizationDecision;
+    /** Required for any explicit archived-collection restoration metadata. */
+    restoreCollection?(ref:ResourceRef,context:CanonicalVelaContext,metadata:CanonicalVelaMetadata):boolean;
+    inspectCollectionArchiveReceipt?(ref:ResourceRef,context:CanonicalVelaContext,metadata:CanonicalVelaMetadata):boolean;
   };
   conversations: {
     ensure: VelaHostPort['ensureConversation']; read: VelaHostPort['readConversation']; append: VelaHostPort['appendMessage'];
@@ -32,6 +36,8 @@ export interface CanonicalVelaHostOptions {
     conversation(resourceId: string, metadata: CanonicalVelaMetadata): number | null;
     /** Actual current engine projection/layout revision, independently of the workspace metadata version. */
     workspace(workspaceId: string, metadata: CanonicalVelaMetadata): number | null;
+    /** Current canonical parent/rule revision, starting at zero; null/absent is unavailable. */
+    collection?(collectionId:string,metadata:CanonicalVelaMetadata):number|null;
   };
   dispatch: {
     /** Mandatory opaque parent dispatcher. Block/layout/template work belongs to Universal Block System. */
@@ -47,7 +53,7 @@ export interface CanonicalVelaHost extends VelaHostPort {
 interface View { metadata: CanonicalVelaMetadata; context: CanonicalVelaContext; scope: VelaScope; refs: Map<string, ResourceRef> }
 const validVersion = (value: unknown): value is number => Number.isSafeInteger(value) && Number(value) >= 1;
 const key = (kind: ResourceRef['kind'], id: string) => kind + ':' + id;
-const permitted = (scope: VelaScope, ref: Pick<ResourceRef, 'id' | 'kind'>) => (ref.kind === 'resource' ? scope.resourceIds : ref.kind === 'workspace' ? scope.workspaceIds : ref.kind === 'project' ? scope.projectIds : []).includes(ref.id);
+const permitted = (scope: VelaScope, ref: Pick<ResourceRef, 'id' | 'kind'>) => (ref.kind === 'resource' ? scope.resourceIds : ref.kind === 'workspace' ? scope.workspaceIds : ref.kind === 'project' ? scope.projectIds : ref.kind==='collection'?scope.collectionIds??[]:[]).includes(ref.id);
 
 /** Exact injective pairing: max(entityVersion,messageRevision) would miss changes while the smaller value grows. */
 export function canonicalVersionToken(entityVersion: number, dependentRevision: number): number {
@@ -58,8 +64,12 @@ export function canonicalVersionToken(entityVersion: number, dependentRevision: 
 }
 function validateScope(scope: VelaScope) {
   check(isRecord(scope) && identifier(scope.principalId) && identifier(scope.policyVersion), 'invalid_canonical_scope');
-  for (const ids of [scope.resourceIds, scope.workspaceIds, scope.projectIds]) check(Array.isArray(ids) && ids.length <= 10000 && ids.every(identifier) && new Set(ids).size === ids.length, 'invalid_canonical_scope');
+  for (const ids of [scope.resourceIds, scope.workspaceIds, scope.projectIds,scope.collectionIds===undefined?[]:scope.collectionIds]) check(Array.isArray(ids) && ids.length <= 10000 && ids.every(identifier) && new Set(ids).size === ids.length, 'invalid_canonical_scope');
 }
+const restoringActions=(actions:readonly unknown[])=>[...new Set(actions.flatMap(value=>{
+  if(!isRecord(value)||value.type!=='archiveCollection'||value.archived!==false)return [];
+  const action=validateAction(value);return action.type==='archiveCollection'?[action.collectionId]:[];
+}))];
 function actionSubjects(action: ReturnType<typeof validateAction>, context:CanonicalVelaContext): Pick<ResourceRef, 'id' | 'kind'>[] {
   const result: Pick<ResourceRef, 'id' | 'kind'>[] = [];
   const add = (id: string | null, kind: ResourceRef['kind']) => { if (id !== null && !result.some(r => r.id === id && r.kind === kind)) result.push({ id, kind }); };
@@ -69,6 +79,9 @@ function actionSubjects(action: ReturnType<typeof validateAction>, context:Canon
     case 'createConversation': add(context.currentProjectId,'project'); break;
     case 'conversationFavorite': case 'renameConversation': add(action.resourceId,'resource'); break;
     case 'associateConversationProject': add(action.resourceId,'resource'); add(action.projectId,'project'); break;
+    case 'createCollection': add(action.projectId,'project'); break;
+    case 'renameCollection': case 'archiveCollection': add(action.collectionId,'collection'); break;
+    case 'collectionMembership': add(action.collectionId,'collection'); add(action.resourceId,'resource'); break;
     case 'renameWorkspace': case 'bringAllIntoView': case 'resolveLayout': case 'setOrganization': add(action.workspaceId, 'workspace'); break;
     case 'workspaceFromResources': add(action.projectId, 'project'); for (const id of action.resourceIds) add(id, 'resource'); break;
     case 'createResource': add(action.workspaceId, 'workspace'); break;
@@ -88,12 +101,17 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
   check(Number.isSafeInteger(contentLimit) && contentLimit >= 1 && contentLimit <= 1024 * 1024, 'invalid_canonical_content_limit');
   for (const callback of [options.transaction, options.metadata, options.currentContext, options.permissions?.scope, options.permissions?.metadata, options.permissions?.content, options.permissions?.authorize, options.conversations?.ensure, options.conversations?.read, options.conversations?.append, options.revisions?.conversation, options.revisions?.workspace, options.dispatch?.native]) check(typeof callback === 'function', 'canonical_host_callback_required');
   const within = <T,>(work: () => T): T => options.transaction(db => { check(db === options.db, 'canonical_database_connection_mismatch'); return work(); });
-  const row = (table: 'resources' | 'workspaces' | 'projects', id: string) => options.db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(id);
-  function view(): View {
-    const metadata = options.metadata(), context = structuredClone(options.currentContext());
+  const row = (table: 'resources' | 'workspaces' | 'projects' | 'collections', id: string) => options.db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(id);
+  function view(restoreIds:readonly string[]=[]): View {
+    check(Array.isArray(restoreIds)&&restoreIds.length<=100&&restoreIds.every(identifier)&&new Set(restoreIds).size===restoreIds.length,'invalid_collection_restoration_purpose');
+    let metadata = options.metadata();const context = structuredClone(options.currentContext());
     check(metadata.contract === 'aerynth.desktop@1', 'unsupported_canonical_desktop_contract');
     check(identifier(context.principalId) && identifier(context.policyVersion) && (context.currentProjectId === null || identifier(context.currentProjectId)) && (context.currentWorkspaceId === null || identifier(context.currentWorkspaceId)) && Array.isArray(context.selectedResourceIds) && context.selectedResourceIds.length <= 500 && context.selectedResourceIds.every(identifier) && new Set(context.selectedResourceIds).size === context.selectedResourceIds.length, 'invalid_canonical_context');
-    const scope = structuredClone(options.permissions.scope(context, metadata)); validateScope(scope);
+    let scope = structuredClone(options.permissions.scope(context, metadata)); validateScope(scope);
+    if(restoreIds.length&&scope.collectionIds!==undefined&&options.permissions.restoreCollection) {
+      metadata=options.metadata({restoreCollectionIds:restoreIds});check(metadata.contract==='aerynth.desktop@1','unsupported_canonical_desktop_contract');
+      scope=structuredClone(options.permissions.scope(context,metadata));validateScope(scope);
+    }
     check(scope.principalId === context.principalId && scope.policyVersion === context.policyVersion, 'canonical_scope_identity_mismatch');
     const refs = new Map<string, ResourceRef>();
     const projectActive = (id: string | null) => id === null || (!!metadata.projects.find(p => p.id === id) && row('projects', id)?.state === 'active');
@@ -117,9 +135,25 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
       }
       store({ id, kind: 'resource', title: String(entity.title), version, resourceKind: meta.kind,projectId:entity.project_id===null?null:String(entity.project_id) });
     }
+    const collectionIds=new Set(scope.collectionIds??[]),restoring=new Set(scope.collectionIds===undefined?[]:restoreIds),collectionMetadata=new Map((metadata.collections??[]).map(item=>[item.id,item]));
+    for(const id of new Set([...collectionIds,...restoring])) {
+      const meta=collectionMetadata.get(id);if(!meta)continue;
+      const entity=row('collections',id);if(!entity||!['active','archived'].includes(String(entity.state)))continue;
+      const projectId=entity.project_id===null?null:String(entity.project_id);
+      if(!projectActive(projectId)||projectId!==null&&!refs.has(key('project',projectId)))continue;
+      let revision:number|null|undefined;try{revision=options.revisions.collection?.(id,metadata);}catch{continue;}
+      if(revision===null||revision===undefined||!Number.isSafeInteger(revision)||revision<0||revision>=Number.MAX_SAFE_INTEGER||!validVersion(Number(entity.version)))continue;
+      let version:number;try{version=canonicalVersionToken(Number(entity.version),revision+1);}catch{continue;}
+      const ref:ResourceRef={id,kind:'collection',title:String(entity.title),version,projectId,state:entity.state as 'active'|'archived'};
+      if(entity.state==='archived') {
+        if(!restoring.has(id)||options.permissions.restoreCollection?.(ref,context,metadata)!==true)continue;
+      }else if(!collectionIds.has(id))continue;
+      store(ref);if(refs.has(key('collection',id)))collectionIds.add(id);
+    }
     scope.projectIds = scope.projectIds.filter(id => refs.has(key('project', id)));
     scope.workspaceIds = scope.workspaceIds.filter(id => refs.has(key('workspace', id)));
     scope.resourceIds = scope.resourceIds.filter(id => refs.has(key('resource', id)));
+    if(scope.collectionIds!==undefined||restoreIds.length)scope.collectionIds=[...collectionIds].filter(id=>refs.has(key('collection',id)));
     return { metadata, context, scope, refs };
   }
   function selectedScope(input: VelaScope, current: View) {
@@ -128,7 +162,7 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
   }
   function resolve(ref: Pick<ResourceRef, 'id' | 'kind'>, scope: VelaScope, current: View): ResourceRef | null {
     selectedScope(scope, current);
-    if (!identifier(ref.id) || !['resource', 'workspace', 'project'].includes(ref.kind) || !permitted(scope, ref) || !permitted(current.scope, ref)) return null;
+    if (!identifier(ref.id) || !['resource', 'workspace', 'project','collection'].includes(ref.kind) || !permitted(scope, ref) || !permitted(current.scope, ref)) return null;
     return current.refs.get(key(ref.kind, ref.id)) ?? null;
   }
   function requireConversation(id: string, current: View, content = true): ResourceRef {
@@ -165,7 +199,7 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
     return { ref, content: String(note.content), source: 'aerynth://resource/' + encodeURIComponent(id) + '?version=' + entity.version };
   }
   const host: CanonicalVelaHost = {
-    scope: () => within(() => structuredClone(view().scope)),
+    scope: purpose => within(() => structuredClone(view(purpose?.restoreCollectionIds).scope)),
     context: () => within(() => {
       const current = view(); return { ...current.context,
         currentProjectId: current.context.currentProjectId && current.scope.projectIds.includes(current.context.currentProjectId) ? current.context.currentProjectId : null,
@@ -179,7 +213,18 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
     }),
     readConversation: id => within(() => structuredClone(readConversation(id, view()))),
     appendMessage: (id, message) => within(() => { const current = view(); requireConversation(id, current); return options.conversations.append(id, structuredClone(message)); }),
-    resolve: (ref, scope) => within(() => structuredClone(resolve(ref, scope, view()))),
+    resolve: (ref, scope,purpose) => within(() => structuredClone(resolve(ref, scope, view(purpose?.restoreCollection===true&&ref.kind==='collection'?[ref.id]:[])))),
+    canInspectCollectionArchiveReceipt:(ref,scope)=>within(()=>{
+      if(ref.kind!=='collection'||!identifier(ref.id)||!scope.collectionIds?.includes(ref.id))return false;
+      const current=view();selectedScope(scope,current);
+      // Historical target title/version come from the existing receipt. Read
+      // only current ownership/state here, never archived title or members.
+      const entity=options.db.prepare('SELECT project_id,state FROM collections WHERE id=?').get(ref.id);
+      if(!entity||entity.state!=='archived')return false;
+      const projectId=entity.project_id===null?null:String(entity.project_id);
+      if(projectId!==(ref.projectId??null)||projectId!==null&&!current.scope.projectIds.includes(projectId))return false;
+      return options.permissions.inspectCollectionArchiveReceipt?.(ref,current.context,current.metadata)===true;
+    }),
     search: (query, scope, limit) => within(() => {
       check(typeof query === 'string' && query.length <= 200 && Number.isInteger(limit) && limit > 0 && limit <= 1000, 'invalid_canonical_search');
       const current = view(); selectedScope(scope, current); const search = query.normalize('NFKC').toLocaleLowerCase();
@@ -189,7 +234,7 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
     }),
     readContent: (id, scope) => within(() => structuredClone(readContent(id, scope, view()))),
     authorize: request => within(() => {
-      const current = view(); selectedScope(request.scope, current); validateTargets(request.targets, current);
+      const current = view(restoringActions(request.actions)); selectedScope(request.scope, current); validateTargets(request.targets, current);
       if (request.contextManifest) {
         check(request.contextManifest.policyVersion === current.scope.policyVersion, 'stale_canonical_context_policy');
         validateTargets(request.contextManifest.discovered, current);
@@ -201,7 +246,7 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
       return structuredClone(decision);
     }),
     applyNative: input => within(() => {
-      const current = view(), action = validateAction(input.action); check(action.type !== 'delegateTask', 'canonical_native_action_required');
+      const action = validateAction(input.action),current=view(restoringActions([action])); check(action.type !== 'delegateTask', 'canonical_native_action_required');
       check(identifier(input.authorizationRef) && identifier(input.commandId) && identifier(input.requestId) && identifier(input.planId), 'canonical_dispatch_authorization_required');
       validateTargets(input.expectedVersions, current);
       for (const subject of actionSubjects(action,current.context)) check(input.expectedVersions.some(target => target.id === subject.id && target.kind === subject.kind), 'canonical_action_target_manifest_required');

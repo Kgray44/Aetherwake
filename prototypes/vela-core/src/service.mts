@@ -93,18 +93,22 @@ export class VelaService {
     try { return this.opts.transaction(() => { const result = work(); this.save(); return result; }); }
     catch (e) { this.data = before; this.stored = stored; throw e; }
   }
-  private scope(): VelaScope {
-    const scope = this.opts.host.scope();
+  private restores(steps:readonly PlanStep[]):string[] {
+    return [...new Set(steps.flatMap(({action})=>action.type==='archiveCollection'&&!action.archived?[action.collectionId]:[]))];
+  }
+  private scope(steps:readonly PlanStep[]=[]): VelaScope {
+    const restoreCollectionIds=this.restores(steps);
+    const scope = this.opts.host.scope(restoreCollectionIds.length?{restoreCollectionIds}:undefined);
     check(identifier(scope.principalId) && identifier(scope.policyVersion), 'invalid_host_scope');
-    for (const ids of [scope.resourceIds, scope.workspaceIds, scope.projectIds]) check(Array.isArray(ids) && ids.length <= 10000 && ids.every(identifier) && new Set(ids).size === ids.length, 'invalid_host_scope');
+    for (const ids of [scope.resourceIds, scope.workspaceIds, scope.projectIds, scope.collectionIds===undefined?[]:scope.collectionIds]) check(Array.isArray(ids) && ids.length <= 10000 && ids.every(identifier) && new Set(ids).size === ids.length, 'invalid_host_scope');
     return structuredClone(scope);
   }
   private permitted(id: string, kind: ResourceRef['kind'], scope: VelaScope) {
-    return (kind === 'resource' ? scope.resourceIds : kind === 'workspace' ? scope.workspaceIds : scope.projectIds).includes(id);
+    return (kind === 'resource' ? scope.resourceIds : kind === 'workspace' ? scope.workspaceIds : kind==='project'?scope.projectIds:kind==='collection'?scope.collectionIds??[]:[]).includes(id);
   }
-  private resolve(id: string, kind: ResourceRef['kind'], scope: VelaScope): ResourceRef {
+  private resolve(id: string, kind: ResourceRef['kind'], scope: VelaScope, restoreCollection=false): ResourceRef {
     check(identifier(id) && this.permitted(id, kind, scope), 'resource_not_authorized');
-    const ref = this.opts.host.resolve({ id, kind }, scope);
+    const ref = this.opts.host.resolve({ id, kind }, scope,restoreCollection?{restoreCollection:true}:undefined);
     check(ref && ref.id === id && ref.kind === kind && Number.isSafeInteger(ref.version) && ref.version >= 1 && text(ref.title), 'resource_unavailable');
     return structuredClone(ref);
   }
@@ -143,7 +147,17 @@ export class VelaService {
       included: r.context.included.filter(ref => this.permitted(ref.id, ref.kind, scope)),
       omitted: r.context.omitted.filter(ref => scope.resourceIds.includes(ref.id)),
     } }));
-    const planVisible = (p: VelaPlan) => p.scope.principalId === scope.principalId && p.targets.every(r => this.permitted(r.id, r.kind, scope));
+    const restorationScopes=new Map<string,VelaScope>();
+    const planVisible = (p: VelaPlan) => {
+      if(p.scope.principalId!==scope.principalId)return false;
+      const archived=p.state==='applied'?new Set(p.steps.flatMap(step=>step.action.type==='archiveCollection'&&step.action.archived&&this.data.receipts.some(receipt=>receipt.planId===p.id&&receipt.stepId===step.id&&receipt.state==='applied'&&identifier(receipt.hostReceiptId))?[step.action.collectionId]:[])):new Set<string>();
+      const visibleTarget=(ref:ResourceRef,allowed:VelaScope)=>this.permitted(ref.id,ref.kind,allowed)||(ref.kind==='collection'&&archived.has(ref.id)&&this.opts.host.canInspectCollectionArchiveReceipt?.(ref,p.scope)===true);
+      const ids=this.restores(p.steps);
+      try{
+        if(!ids.length)return p.targets.every(r=>visibleTarget(r,scope));
+        const key=JSON.stringify(ids.sort());let allowed=restorationScopes.get(key);if(!allowed){allowed=this.scope(p.steps);restorationScopes.set(key,allowed);}return p.targets.every(r=>visibleTarget(r,allowed!));
+      }catch{return false;}
+    };
     const plans = this.data.plans.filter(planVisible);
     const planIds = new Set(plans.map(p => p.id));
     const result: VelaState = {
@@ -190,7 +204,7 @@ export class VelaService {
   }
   private targets(steps: PlanStep[], scope: VelaScope) {
     const refs = new Map<string, ResourceRef>();
-    const add = (id: string | null, kind: ResourceRef['kind']) => { if (id !== null) { const ref = this.resolve(id, kind, scope); refs.set(kind + ':' + id, ref); } };
+    const add = (id: string | null, kind: ResourceRef['kind'],restoreCollection=false) => { if (id !== null) { const ref = this.resolve(id, kind, scope,restoreCollection); refs.set(kind + ':' + id, ref); } };
     for (const step of steps) {
       const a = step.action;
       switch (a.type) {
@@ -199,6 +213,10 @@ export class VelaService {
         case 'createConversation': for(const ref of this.opts.host.contextReferences?.([])??[])if(ref.kind==='project')add(ref.id,'project'); break;
         case 'conversationFavorite': case 'renameConversation': add(a.resourceId,'resource'); break;
         case 'associateConversationProject': add(a.resourceId,'resource'); add(a.projectId,'project'); break;
+        case 'createCollection': add(a.projectId,'project'); break;
+        case 'renameCollection': add(a.collectionId,'collection'); break;
+        case 'archiveCollection': add(a.collectionId,'collection',!a.archived); break;
+        case 'collectionMembership': add(a.collectionId,'collection'); add(a.resourceId,'resource'); break;
         case 'renameWorkspace': case 'bringAllIntoView': case 'resolveLayout': case 'setOrganization': add(a.workspaceId, 'workspace'); break;
         case 'workspaceFromResources': add(a.projectId, 'project'); for (const id of a.resourceIds) add(id, 'resource'); break;
         case 'createResource': add(a.workspaceId, 'workspace'); break;
@@ -220,11 +238,11 @@ export class VelaService {
   }
   private authInput(plan: VelaPlan, phase: AuthorizationRequest['phase'], priorAuthorizationRef?: string): AuthorizationRequest {
     return { phase, requestId: plan.requestId, planId: plan.id, fingerprint: plan.fingerprint,
-      intent: this.getRequest(plan.requestId).intent, scope: this.scope(), targets: plan.targets,
+      intent: this.getRequest(plan.requestId).intent, scope: this.scope(plan.steps), targets: plan.targets,
       actions: plan.steps.map(s => s.action), ...(priorAuthorizationRef ? { priorAuthorizationRef } : {}) };
   }
   private prepare(request: VelaRequest, summary: string, steps: PlanStep[], contribution: VelaPlan['contribution']): VelaPlan {
-    const scope = this.scope(), targets = this.targets(steps, scope);
+    const scope = this.scope(steps), targets = this.targets(steps, scope);
     const body = { requestId: request.id, version: 1 as const, summary, steps, targets, scope, contribution };
     const plan: VelaPlan = { ...body, id: randomUUID(), fingerprint: digest(body), state: 'prepared', createdAt: this.now(), expiresAt: new Date(Date.parse(this.now()) + 15 * 60000).toISOString() };
     this.authorize(this.authInput(plan, 'prepare'));
@@ -296,12 +314,13 @@ export class VelaService {
     });
   }
   private validatePlan(plan: VelaPlan) {
-    const scope = this.scope();
+    const scope = this.scope(plan.steps);
     check(scope.principalId === plan.scope.principalId && scope.policyVersion === plan.scope.policyVersion, 'stale_policy_version');
     check(Date.parse(plan.expiresAt) > Date.parse(this.now()), 'plan_expired');
     const body = { requestId: plan.requestId, version: plan.version, summary: plan.summary, steps: plan.steps, targets: plan.targets, scope: plan.scope, contribution: plan.contribution };
     check(digest(body) === plan.fingerprint, 'plan_fingerprint_mismatch');
-    for (const ref of plan.targets) check(this.resolve(ref.id, ref.kind, scope).version === ref.version, 'stale_target_version');
+    const restoring=new Set(this.restores(plan.steps));
+    for (const ref of plan.targets) check(this.resolve(ref.id, ref.kind, scope,ref.kind==='collection'&&restoring.has(ref.id)).version === ref.version, 'stale_target_version');
     for (const ref of this.getRequest(plan.requestId).context.included) check(this.resolve(ref.id, ref.kind, scope).version === ref.version, 'stale_context_version');
   }
   review(input: { planId: string; fingerprint: string; decision: 'approve' | 'reject' }): VelaPlan {
@@ -333,7 +352,7 @@ export class VelaService {
       let dispatched = false;
       try {
         // Targets/permissions are checked again at every boundary, including between steps.
-        const scope = this.scope();
+        const scope = this.scope([step]);
         check(scope.policyVersion === plan.scope.policyVersion, 'stale_policy_version');
         const targets = this.targets([step], scope);
         for (const ref of targets) check(plan.targets.some(p => p.id === ref.id && p.kind === ref.kind && p.version === ref.version), 'stale_target_version');
@@ -367,6 +386,7 @@ export class VelaService {
         if (result.createdResourceId) receipt.createdResourceId = result.createdResourceId;
         if (result.createdWorkspaceId) receipt.createdWorkspaceId = result.createdWorkspaceId;
         if (result.createdProjectId) receipt.createdProjectId = result.createdProjectId;
+        if (result.createdCollectionId) receipt.createdCollectionId = result.createdCollectionId;
         if (result.status !== 'applied') { plan.state = result.status; request.state = result.status === 'failed' ? 'failed' : result.status; request.errorCode = result.errorCode; }
       });
     }

@@ -14,6 +14,30 @@ function input(): PlanningInput {
       included: [{ id: 'note:synthetic', kind: 'resource', version: 1, title: 'Synthetic note', reason: 'explicit', content: 'Synthetic source text.', contentDigest: 'synthetic-digest', source: 'aerynth://note/synthetic', trust: 'untrusted-source-data' }],
       omitted: [], contentBytes: 22, coverage: 'explicit-resources-only' } };
 }
+
+test('current catalog prompt expands to every exact action schema, scope, effect and effective policy without changing source context',()=>{
+  const request=input();
+  request.instruction='Keep provider identity, current canonical scope, exact versions, reviewed commands and native permission boundaries. '.repeat(7);
+  request.context.included[0].content='Synthetic canonical note with preserved provenance and current resource identifiers. '.repeat(4);
+  request.context.contentBytes=Buffer.byteLength(request.context.included[0].content);
+  const prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
+  assert(Buffer.byteLength(prompt)<=16384);assert(prompt.includes('inherits authorization and reversible'));
+  assert.deepEqual(data.context,request.context,'No source text, source metadata or omission record is truncated');
+  assert(data.$defs&&Object.keys(data.$defs).length>0);
+  const expand=(value:any):any=>{
+    if(Array.isArray(value))return value.map(expand);if(value===null||typeof value!=='object')return value;
+    if(Object.hasOwn(value,'$ref')) {
+      assert.deepEqual(Object.keys(value),['$ref']);assert.match(value.$ref,/^#\/\$defs\/s\d+$/);
+      const definition=data.$defs[value.$ref.slice('#/$defs/'.length)];assert(definition);return expand(definition);
+    }
+    return Object.fromEntries(Object.entries(value).map(([key,entry])=>[key,expand(entry)]));
+  };
+  assert.deepEqual(data.capabilities.map((capability:any)=>({
+    ...data.capabilityDefaults,...capability,schema:expand(capability.schema),
+  })),request.capabilities.map(({label:_label,...capability})=>capability));
+  assert.equal(data.capabilities.find((capability:any)=>capability.id==='delegateTask').authorization,'explicit-execution-authorization');
+  assert.equal(data.capabilities.find((capability:any)=>capability.id==='search').reversible,'no-state-change');
+});
 const output = () => ({ schemaVersion: 1, summary: 'Propose a research workspace.', steps: [{ id: 'create', explanation: 'Use a reference to the selected canonical note.', action: { type: 'workspaceFromResources', title: 'Research', projectId: null, resourceIds: ['note:synthetic'] } }], contribution: { providerId: 'spoofed-provider', executionId: 'spoofed-execution', nativeThreadId: 'spoofed-thread', classification: 'reported' } });
 function fixture(mode: 'normal' | 'invalid-json' | 'simulated' | 'unknown' | 'pending' | 'missing-output' = 'normal') {
   let now = Date.parse('2026-11-02T02:00:00Z'), turns = 0, opens = 0, authorizations = 0, interrupts = 0;

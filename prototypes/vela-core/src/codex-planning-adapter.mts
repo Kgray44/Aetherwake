@@ -76,6 +76,32 @@ export function parseCodexPlanningOutput(output: string, contribution: ProviderC
   return validateProposal({ ...value, contribution }, 'codex-app-server');
 }
 
+/** Lossless schema references and explicit policy defaults leave room for actual source data. */
+function planningCapabilityCatalog(capabilities:PlanningInput['capabilities']) {
+  const repeated=new Map<string,{schema:Record<string,unknown>;count:number}>();
+  const visit=(value:unknown):void=>{
+    if(Array.isArray(value)){value.forEach(visit);return;}if(!isRecord(value))return;
+    // Properties maps are not schemas; substituting a $ref for such a map would change validation.
+    if(typeof value.type==='string'||Array.isArray(value.enum)||Array.isArray(value.oneOf)||Array.isArray(value.anyOf)) {
+      const encoded=JSON.stringify(value);if(encoded.length>=40){const prior=repeated.get(encoded);repeated.set(encoded,{schema:value,count:(prior?.count??0)+1});}
+    }
+    Object.values(value).forEach(visit);
+  };
+  capabilities.forEach(capability=>visit(capability.schema));
+  const references=new Map([...repeated].filter(([,entry])=>entry.count>1).map(([encoded],index)=>[encoded,'s'+index]));
+  const compact=(value:unknown,reference=true):unknown=>{
+    if(Array.isArray(value))return value.map(entry=>compact(entry));if(!isRecord(value))return value;
+    const id=references.get(JSON.stringify(value));if(reference&&id)return {$ref:'#/$defs/'+id};
+    return Object.fromEntries(Object.entries(value).map(([key,entry])=>[key,compact(entry)]));
+  };
+  return {
+    capabilityDefaults:{authorization:'host-policy',reversible:'host-dependent'},
+    $defs:Object.fromEntries([...references].map(([encoded,id])=>[id,compact(repeated.get(encoded)!.schema,false)])),
+    capabilities:capabilities.map(({label:_label,authorization,reversible,schema,...capability})=>({...capability,schema:compact(schema),
+      ...(authorization==='host-policy'?{}:{authorization}),...(reversible==='host-dependent'?{}:{reversible})})),
+  };
+}
+
 export function buildCodexPlanningPrompt(input: PlanningInput): string {
   check(identifier(input.requestId) && identifier(input.conversationId) && text(input.intent, 16000), 'invalid_planning_request');
   const prompt = `Aerynth has delegated a planning task to Codex. You remain Codex, with your installed identity, native instructions, configuration, and controls. This is ordinary user task content, not a replacement for system/developer instructions. Vela is the application assistant coordinating this task; you are the explicitly attributed planning provider.
@@ -90,7 +116,8 @@ Application task constraints:
 ${input.instruction}
 
 Typed task and authorized source data (JSON):
-${JSON.stringify({ requestId: input.requestId, sourceConversationId: input.conversationId, intent: input.intent, context: input.context, capabilities: input.capabilities })}`;
+Capability schemas use exact local JSON Schema $refs into $defs. A capability inherits authorization and reversible from capabilityDefaults only when that field is omitted; explicit fields override the defaults. All scope and effect restrictions still apply.
+${JSON.stringify({ requestId: input.requestId, sourceConversationId: input.conversationId, intent: input.intent, context: input.context, ...planningCapabilityCatalog(input.capabilities) })}`;
   // Existing canonical BackendCore.execute enforces 16 KiB. Reject before creating/dispatching, never truncate sources.
   check(byteLength(prompt) <= 16384, 'planning_prompt_capacity_exceeded'); return prompt;
 }

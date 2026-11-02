@@ -3,12 +3,16 @@ import type { OrganizationUpdate, TaskPriority } from '../../application-contrac
 export const VELA_CONTRACT = 'aerynth.vela@1' as const;
 export type EvidenceClass = 'observed' | 'reported' | 'inferred' | 'unknown';
 export type AttentionMode = 'normal' | 'quiet' | 'focused' | 'collaborative' | 'proactive';
-export type SubjectKind = 'resource' | 'workspace' | 'project';
-export interface ResourceRef { id: string; kind: SubjectKind; version: number; title: string; resourceKind?: string; projectId?: string | null }
+export type SubjectKind = 'resource' | 'workspace' | 'project' | 'collection';
+export interface ResourceRef { id: string; kind: SubjectKind; version: number; title: string; resourceKind?: string; projectId?: string | null; state?: 'active' | 'archived' }
 export interface VelaScope {
   principalId: string; policyVersion: string;
   resourceIds: string[]; workspaceIds: string[]; projectIds: string[];
+  /** Absent in legacy scopes; absence never grants collection access. */
+  collectionIds?: string[];
 }
+/** Internal purpose derived only from validated explicit restoration steps. */
+export interface VelaScopePurpose { restoreCollectionIds?: readonly string[] }
 export interface ContextEntry extends ResourceRef {
   reason: 'selected' | 'explicit' | 'targeted-search';
   content: string; contentDigest: string; source: string;
@@ -33,6 +37,10 @@ export type VelaNativeAction =
   | { type: 'conversationFavorite'; resourceId: string; favorite: boolean }
   | { type: 'renameConversation'; resourceId: string; title: string }
   | { type: 'associateConversationProject'; resourceId: string; projectId: string | null }
+  | { type: 'createCollection'; title: string; projectId: string | null }
+  | { type: 'renameCollection'; collectionId: string; title: string }
+  | { type: 'archiveCollection'; collectionId: string; archived: boolean }
+  | { type: 'collectionMembership'; collectionId: string; resourceId: string; member: boolean }
   | { type: 'workspaceFromResources'; title: string; projectId: string | null; resourceIds: string[] }
   | { type: 'createResource'; kind: 'note' | 'task' | 'task_group'; title: string; workspaceId: string | null }
   | { type: 'attach'; workspaceId: string; resourceId: string }
@@ -100,7 +108,7 @@ export interface ActionReceipt {
   source: 'vela'; providerId: string | null;
   state: 'started' | 'applied' | 'failed' | 'cancelled' | 'unknown';
   startedAt: string; endedAt?: string; hostReceiptId?: string; errorCode?: string;
-  createdResourceId?: string; createdWorkspaceId?: string; createdProjectId?: string;
+  createdResourceId?: string; createdWorkspaceId?: string; createdProjectId?: string; createdCollectionId?: string;
   /** A delegated provider completing a turn is not verified task completion. */
   taskVerified: false;
 }
@@ -119,10 +127,10 @@ export type AuthorizationDecision =
   | { decision: 'deny'; reason: string; policyVersion: string };
 export interface HostActionResult {
   status: 'applied' | 'failed' | 'cancelled' | 'unknown'; receiptId: string;
-  errorCode?: string; createdResourceId?: string; createdWorkspaceId?: string; createdProjectId?: string;
+  errorCode?: string; createdResourceId?: string; createdWorkspaceId?: string; createdProjectId?: string; createdCollectionId?: string;
 }
 export interface VelaHostPort {
-  scope(): VelaScope;
+  scope(purpose?: VelaScopePurpose): VelaScope;
   /** Explicit metadata only, inserted into the actual consent/planner manifest before authorization. */
   contextReferences?(selectedResourceIds: readonly string[]): ResourceRef[];
   /** Both conversation operations use the canonical host resource/graph, on the injected db transaction. */
@@ -130,7 +138,9 @@ export interface VelaHostPort {
   readConversation(resourceId: string): CanonicalConversation;
   appendMessage(resourceId: string, message: Omit<VelaMessage, 'id'>): VelaMessage;
   search(query: string, scope: VelaScope, limit: number): ResourceRef[];
-  resolve(ref: Pick<ResourceRef, 'id' | 'kind'>, scope: VelaScope): ResourceRef | null;
+  resolve(ref: Pick<ResourceRef, 'id' | 'kind'>, scope: VelaScope, purpose?: { restoreCollection?: boolean }): ResourceRef | null;
+  /** Only for a persisted applied archive action/receipt; does not rediscover archived metadata. */
+  canInspectCollectionArchiveReceipt?(ref:ResourceRef,scope:VelaScope):boolean;
   readContent(id: string, scope: VelaScope): { ref: ResourceRef; content: string; source: string } | null;
   /** Must evaluate actual host policy, issue opaque references, and revalidate grants at the action boundary. */
   authorize(request: AuthorizationRequest): AuthorizationDecision;
