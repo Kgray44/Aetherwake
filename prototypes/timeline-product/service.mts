@@ -296,7 +296,7 @@ export class TimelineService {
     }
     return true;
   }
-  private resource(resourceId: string, write = false) {
+  private authorizedResource(resourceId: string, write = false) {
     check(id(resourceId), "timeline_invalid_id");
     const entry = this.host.readResource(resourceId),
       r = entry?.resource;
@@ -309,7 +309,8 @@ export class TimelineService {
         this.allow(() => this.host.resourceAccess(resourceId)),
       "timeline_unavailable",
     );
-    check(!write || entry.writable === true, "timeline_read_only");
+    const canEdit = entry.writable === true;
+    check(!write || canEdit, "timeline_read_only");
     const raw = this.host.db
       .prepare(
         "SELECT r.*,d.kind AS semantic_kind FROM resources r JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=?",
@@ -326,7 +327,10 @@ export class TimelineService {
     );
     if (r.projectId !== null)
       check(this.project(r.projectId), "timeline_scope_unavailable");
-    return structuredClone(r);
+    return { resource: structuredClone(r), canEdit };
+  }
+  private resource(resourceId: string, write = false) {
+    return this.authorizedResource(resourceId, write).resource;
   }
   private project(projectId: string) {
     return (
@@ -443,7 +447,7 @@ export class TimelineService {
   }
   private stored(resourceId: string) {
     check(this.schema(false), "timeline_unavailable");
-    const resource = this.resource(resourceId),
+    const { resource, canEdit } = this.authorizedResource(resourceId),
       row = this.host.db
         .prepare(
           "SELECT * FROM timeline_views WHERE resource_id=? AND owner_id=?",
@@ -470,6 +474,7 @@ export class TimelineService {
     this.scope(view, resource);
     return {
       resource,
+      canEdit,
       view,
       viewDigest: String(row.view_digest),
       createdAt: String(row.created_at),

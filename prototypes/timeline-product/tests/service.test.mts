@@ -940,6 +940,7 @@ test("invalid/unsupported DTOs, unowned resources and denied canonical targets c
     },
   });
   assert.equal(readOnly.read(made.resourceId).resource.id, made.resourceId);
+  assert.equal(readOnly.read(made.resourceId).canEdit, false);
   assert.throws(
     () =>
       readOnly.save({
@@ -959,4 +960,57 @@ test("invalid/unsupported DTOs, unowned resources and denied canonical targets c
       }),
     /timeline_invalid_query/,
   );
+});
+
+test("canEdit is a fresh explicit host hint from the same authorized read, never stored or trusted for save", (t) => {
+  const f = fixture(t),
+    made = f.create(),
+    before = f.service.read(made.resourceId);
+  assert.equal(before.canEdit, true);
+  const durable = f.db.prepare("SELECT * FROM timeline_views").all(),
+    receipts = f.db.prepare("SELECT * FROM timeline_receipts").all(),
+    changes = f.db.prepare("SELECT total_changes() AS n").get()!.n;
+  let hint: unknown = false,
+    reads = 0;
+  const current = new TimelineService(f.kernel, {
+    ...f.host,
+    readResource(id) {
+      reads++;
+      const entry = f.host.readResource(id);
+      return entry && { ...entry, writable: hint as boolean };
+    },
+  });
+  for (hint of [false, undefined, "true", 1, true, false]) {
+    const previousReads = reads,
+      document = current.read(made.resourceId);
+    assert.equal(
+      reads - previousReads,
+      1,
+      "no second policy read after canonical validation",
+    );
+    assert.equal(document.canEdit, hint === true);
+    assert.deepEqual({ ...document, canEdit: true }, before);
+  }
+  assert.throws(
+    () =>
+      current.save({
+        commandId: "read-hint-is-not-a-grant",
+        resourceId: made.resourceId,
+        expectedVersion: 1,
+        view: view(),
+      }),
+    /timeline_read_only/,
+  );
+  assert.deepEqual(f.db.prepare("SELECT * FROM timeline_views").all(), durable);
+  assert.deepEqual(
+    f.db.prepare("SELECT * FROM timeline_receipts").all(),
+    receipts,
+  );
+  assert.equal(f.db.prepare("SELECT total_changes() AS n").get()!.n, changes);
+  assert.equal(
+    f.db.prepare("SELECT version FROM timeline_schema").get()!.version,
+    1,
+  );
+  assert(!JSON.stringify(durable).includes("canEdit"));
+  assert(!JSON.stringify(receipts).includes("canEdit"));
 });
