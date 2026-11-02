@@ -9,6 +9,13 @@ import type {
 } from "../workspace-engine/contracts.mts";
 import type { Handle } from "../workspace-engine/geometry.mts";
 
+/** Transient presentation only. Geometry stays in the existing preview path;
+ * the host's Motion Coordinator owns lift, spring following and settlement. */
+export type DirectGesturePresentation = Readonly<{
+  blockId: string;
+  intent: "move" | "resize";
+  phase: "active" | "committing";
+}>;
 export type DirectManipulationOptions = {
   blockId: string;
   state(): GestureState | null;
@@ -17,6 +24,7 @@ export type DirectManipulationOptions = {
   cancel(): void;
   failed(error: unknown): void;
   context?(event: MouseEvent): void;
+  onGestureChange?(state: DirectGesturePresentation | null): void;
 };
 const interactive =
   "input,textarea,select,button,a,[contenteditable=true],[role=log],pre,[data-no-card-drag]";
@@ -69,6 +77,13 @@ export function mountDirectManipulation(
     } | null = null,
     pending = false,
     suppressClick = false;
+  let gesturePresentation: DirectGesturePresentation | null = null;
+  const publishGesture = (phase: DirectGesturePresentation["phase"] | null, intent?: "move" | "resize") => {
+    if (phase === null && gesturePresentation === null) return;
+    if (phase !== null && gesturePresentation?.phase === phase && gesturePresentation.intent === intent) return;
+    gesturePresentation = phase === null ? null : Object.freeze({ blockId: options.blockId, intent: intent!, phase });
+    options.onGestureChange?.(gesturePresentation);
+  };
   const release = () => {
     const current = gesture;
     if (!current) return;
@@ -81,6 +96,7 @@ export function mountDirectManipulation(
   };
   const cancel = () => {
     if (!release()) return;
+    publishGesture(null);
     options.cancel();
   };
   const commit = async (command: Command, intent: "move" | "resize") => {
@@ -88,6 +104,7 @@ export function mountDirectManipulation(
     pending = true;
     article.setAttribute("aria-busy", "true");
     try {
+      publishGesture("committing", intent);
       await options.commit(command, intent);
     } catch (error) {
       options.failed(error);
@@ -95,6 +112,7 @@ export function mountDirectManipulation(
     } finally {
       pending = false;
       article.removeAttribute("aria-busy");
+      publishGesture(null);
     }
   };
   article.addEventListener(
@@ -136,6 +154,7 @@ export function mountDirectManipulation(
           event.preventDefault();
           document.documentElement.style.userSelect = "none";
           article.classList.add("direct-manipulating");
+          publishGesture("active", "resize");
         }
       } catch (error) {
         options.failed(error);
@@ -166,6 +185,7 @@ export function mountDirectManipulation(
       document.documentElement.style.userSelect = "none";
       article.classList.add("direct-manipulating");
       try {
+        publishGesture("active", current.intent);
         options.preview(
           current.value.update(dx, dy, 0, event.shiftKey),
           current.intent,
@@ -197,6 +217,7 @@ export function mountDirectManipulation(
         const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
         if (gesture.active || Math.hypot(dx, dy) >= 4) {
           gesture.active = true;
+          publishGesture("active", gesture.intent);
           options.preview(gesture.value.update(dx, dy, 0, event.shiftKey), gesture.intent);
         }
       } catch (error) {
@@ -206,6 +227,7 @@ export function mountDirectManipulation(
       }
       const current = release()!;
       if (!current.active) {
+        publishGesture(null);
         options.cancel();
         return;
       }
@@ -221,7 +243,7 @@ export function mountDirectManipulation(
         after.height !== before.height;
       if (changed)
         void commit(current.value.command(crypto.randomUUID()), current.intent);
-      else options.cancel();
+      else { publishGesture(null); options.cancel(); }
     },
     { capture: true, signal },
   );
@@ -310,8 +332,10 @@ export function mountDirectManipulation(
     );
   return {
     cancel,
+    presentation: () => gesturePresentation,
     dispose() {
       cancel();
+      publishGesture(null);
       abort.abort();
       edges.remove();
       delete article.dataset.directManipulation;
