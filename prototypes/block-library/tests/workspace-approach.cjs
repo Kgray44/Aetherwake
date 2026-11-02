@@ -10,6 +10,18 @@ const q = JSON.stringify, digest = value => createHash('sha256').update(value).d
 exports.preflight = preflight;
 exports.placementState = state => ({ blocks: state.blocks, organization: state.organization, presence: state.presence });
 exports.workspaceState = state => ({ ...exports.placementState(state), viewport: state.viewport });
+/** Task-group member status is a live projection of its canonical Task, not a
+ * second mutation. Preserve all group fields, membership IDs/order and titles. */
+exports.assertResourceEffects = (before, after, effects) => {
+  assert.deepEqual(after.map(item => item.id), before.map(item => item.id), 'Exact canonical resource identities');
+  for (const resource of before) {
+    const actual = after.find(item => item.id === resource.id), effect = effects.get(resource.id);
+    let expected = effect ? { ...resource, ...effect, version: actual.version } : resource;
+    if (effect) assert(actual.version > resource.version, 'Native edit/status must advance its canonical resource version');
+    if (resource.taskMembers) expected = { ...expected, taskMembers: resource.taskMembers.map(member => effects.has(member.id) && Object.hasOwn(effects.get(member.id), 'taskStatus') ? { ...member, status: effects.get(member.id).taskStatus } : member) };
+    assert.deepEqual(actual, expected, 'Only intended canonical effects and derived member status: ' + resource.id);
+  }
+};
 exports.selectCases = seed => {
   const selected = [seed.cases.find(item => item.kind === 'research'), seed.shapeCases.find(item => item.shape === 'pill' && item.kind === 'task'), seed.shapeCases.find(item => item.shape === 'circle' && item.kind === 'reference')];
   assert(selected.every(item => item?.workspaceId && item.blockId && item.resourceId), 'existing_research_pill_circle_fixture_required');
@@ -89,7 +101,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
     } else {
       receipt.phase = 'native Approach, primary controls and exact Return';
       const initial = await snapshot(); assert.deepEqual(initial.resources, seed.expected.resources, 'Fresh preparer state, not an already consumed profile');
-      const expectedWorkspaces = {}, changedResources = new Set();
+      const expectedWorkspaces = {}, resourceEffects = new Map();
       const researchText = '# Synthetic native Approach edit\n' + Array.from({ length: 40 }, (_, n) => 'Retained research line ' + String(n + 1).padStart(2, '0')).join('\n');
       for (const entry of cases) {
         await navigate(entry); const selector = card(entry), original = await snapshot(), block = original.blocks.find(item => item.id === entry.blockId); assert(block);
@@ -111,13 +123,13 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
           receipt.actions.push({ action: 'native Research text input', text: researchText }); await wait(x.resourceTextIs(entry.resourceId, researchText));
           key('Home'); for (let n = 0; n < 3; n++) key('Right', ['shift']);
           result.editorBeforeReturn = await js(x.rememberEditor(input)); assert(result.editorBeforeReturn.end - result.editorBeforeReturn.start === 3, 'Native selection required');
-          changedResources.add(entry.resourceId);
+          resourceEffects.set(entry.resourceId, { content: researchText });
           // Native Tab leaves writing's intentional GPU pause without changing the text/caret.
           key('Tab'); receipt.actions.push({ action: 'native Tab leaves editor for live-frame capture' });
           await shot('approached-research-editing');
         } else if (entry.kind === 'task') {
           assert.equal(original.resources.find(item => item.id === entry.resourceId).taskStatus, 'open', 'Fresh Task toggle may happen once');
-          await click(input); await wait(x.taskStatusIs(entry.resourceId, 'done')); changedResources.add(entry.resourceId);
+          await click(input); await wait(x.taskStatusIs(entry.resourceId, 'done')); resourceEffects.set(entry.resourceId, { taskStatus: 'done' });
         }
         await click(selector + ' .aw-block-approach[aria-label="Return to previous view"]'); await wait(x.composition(selector, 'overview'));
         const returned = await snapshot(); assert.deepEqual(exports.workspaceState(returned), exports.workspaceState(tiny), 'Return restores exact viewport without changing saved geometry/organization/presence');
@@ -131,8 +143,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
         }
         expectedWorkspaces[entry.workspaceId] = exports.workspaceState(await snapshot()); result.returned = await js(x.dom(selector)); receipt.cases.push(result);
       }
-      const final = await snapshot(); assert.deepEqual(final.resources.map(item => item.id), initial.resources.map(item => item.id)); assert.deepEqual(final.relationships, initial.relationships);
-      for (const resource of initial.resources) if (!changedResources.has(resource.id)) assert.deepEqual(final.resources.find(item => item.id === resource.id), resource, 'Unaffected canonical resource unchanged');
+      const final = await snapshot(); exports.assertResourceEffects(initial.resources, final.resources, resourceEffects); assert.deepEqual(final.relationships, initial.relationships);
       const checkpoint = { contract: 'aerynth.workspace-approach-checkpoint@1', resources: final.resources, relationships: final.relationships, workspaces: expectedWorkspaces, activeWorkspaceId: final.activeWorkspaceId, researchText };
       const encoded = Buffer.from(JSON.stringify(checkpoint)); assert(encoded.length <= limits.maxCheckpointBytes, 'approach_checkpoint_bytes_exceeded'); await guard.around(() => fs.writeFile(path.join(privateRoot, 'workspace-approach-expected.json'), encoded, { flag: 'wx' }));
       receipt.checks.push('Native Approach/Return preserves identities and exact saved geometry/camera for Research, saved pill Task and saved circle Reference', 'Research editor text/node/caret/scroll retained; native Task change is canonical; native circle Open/Back fallback remains reachable');

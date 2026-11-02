@@ -232,6 +232,12 @@ test("offline normal-card preparation and fresh Core restore use canonical kinds
     Object.keys((await core.command("snapshot", {})).executions).length,
     0,
   );
+  const task = initial.resources.find(resource => resource.id === seed.taskId)!;
+  const toggled = await core.command('desktop', { type: 'taskStatus', resourceId: task.id, expectedVersion: task.version, status: 'done' });
+  assert.doesNotThrow(() => approach.assertResourceEffects(initial.resources, toggled.resources, new Map([[task.id, { taskStatus: 'done' }]])));
+  const group = toggled.resources.find(resource => resource.kind === 'task_group')!;
+  assert.equal(group.taskMembers![0].status, 'done', 'Real canonical projection follows the Task without changing group membership');
+  assert.throws(() => approach.assertResourceEffects(initial.resources, toggled.resources.map(resource => resource.id === group.id ? { ...resource, title: 'Unexpected group mutation' } : resource), new Map([[task.id, { taskStatus: 'done' }]])), /Only intended canonical effects/);
   const before = readFileSync(join(profile, "workspace-native-seed.json"));
   await assert.rejects(
     prepareWorkspaceNative(profile),
