@@ -296,9 +296,10 @@ export class DesktopState {
   private blocks(id: string): Block[] {
     return this.engine
       .project(id)
-      .blocks.map((b) => ({
+      .blocks.map((b):Block => ({
         id: b.blockId,
-        resource_id: b.resourceId,
+        ...(typeof b.resourceId==='string'?{resource_id:b.resourceId,subject:{kind:'resource' as const,resourceId:b.resourceId}}:{subject:b.subject}),
+        subjectState:b.subjectState??b.resourceState,
         workspace_id: b.workspaceId,
         version: b.version,
         x: b.x,
@@ -843,9 +844,9 @@ export class DesktopState {
         .all()
         .filter(
           (b: any) =>
-            workspaceIds.has(b.workspace_id) && visibleIds.has(b.resource_id),
+            workspaceIds.has(b.workspace_id) && (b.resource_id?visibleIds.has(b.resource_id):this.kernel.subjectState(this.kernel.readBlockSubject(String(b.id)))==='active'),
         )
-        .map((b: any) => ({ ...b, shape: "rectangle" as const })),
+        .map((b: any):Block => {const {resource_id,subject_ref_id,...placement}=b;const subject=this.kernel.readBlockSubject(String(b.id));return subject.kind==='resource'?{...placement,resource_id:subject.resourceId,subject,subjectState:this.kernel.subjectState(subject),shape:'rectangle'}:{...placement,subject,subjectState:this.kernel.subjectState(subject),shape:'rounded'};}),
       layoutVersion: w?.layout.version ?? 0,
       viewport: s.activeWorkspaceId
         ? this.engine.project(s.activeWorkspaceId).viewport
