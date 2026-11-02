@@ -4,6 +4,7 @@ import type {
 } from "../application-contract/contracts.ts";
 import type {
   Presentation,
+  Geometry,
   OrganizationUpdate,
   WorkspaceOrganization,
   GridSpan,
@@ -113,6 +114,7 @@ export type AttachBlockInput = {
   expectedResourceVersion: number;
   presentation?: Partial<Presentation>;
   configuration?: BlockConfiguration;
+  bounds?: Geometry;
 };
 export type BlockInstanceSettings = {
   placementId: string;
@@ -136,6 +138,7 @@ export type CreateBlockInput = {
   provider?: "local" | "codex";
   presentation?: Partial<Presentation>;
   configuration?: BlockConfiguration;
+  bounds?: Geometry;
 };
 export type CreatedBlock = {
   resourceId: string;
@@ -185,6 +188,7 @@ export type CreateSubjectBlockInput = {
   subject: NonResourceSubjectRef;
   presentation?: Partial<Presentation>;
   configuration?: BlockConfiguration;
+  bounds?: Geometry;
 };
 export type CreatedSubjectBlock = {
   workspaceId: string;
@@ -401,6 +405,9 @@ export type TemplateMountOptions = {
 /** Trusted synchronous host seam. Its atomic callback must roll back SQLite AND any in-memory canonical state. */
 export interface CanonicalTemplateHost<Database = unknown> {
   readonly db: Database;
+  /** Explicit support for canonical vacant initial placement. Absent legacy hosts
+   * may still accept explicit coordinates; automatic placement fails closed. */
+  readonly initialPlacement?: 'nearest-free';
   atomic<T>(operation: () => T): T;
   capabilities(): LibraryCapabilities;
   readProject(
@@ -437,6 +444,8 @@ export interface CanonicalTemplateHost<Database = unknown> {
     workspaceId: string;
     subject: NonResourceSubjectRef;
     presentation: Presentation;
+    placement?: 'nearest-free';
+    bounds?: Geometry;
   }): { id: string };
   subjectTargets?(workspaceId: string): SubjectTargets;
   createWorkspace(input: {
@@ -456,6 +465,8 @@ export interface CanonicalTemplateHost<Database = unknown> {
     workspaceId: string;
     resourceId: string;
     presentation: Presentation;
+    placement?: 'nearest-free';
+    bounds?: Geometry;
   }): { id: string };
   /** Apply once after placements, remapping role order/spans to actual placement IDs. Existing Vela presence is left to the engine. */
   setOrganization(input: {

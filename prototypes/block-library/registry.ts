@@ -481,6 +481,7 @@ export function validateCreateBlock(
           "kind",
           "title",
           "provider",
+          "bounds",
           "presentation",
           "configuration",
         ].includes(k),

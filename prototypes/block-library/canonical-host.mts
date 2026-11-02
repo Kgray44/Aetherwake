@@ -138,11 +138,11 @@ export function createCanonicalTemplateHost(
     );
     return state;
   };
-  const envelope = (state: WorkspaceProjection) => ({
+  const envelope = (state: WorkspaceProjection, bounds?: Geometry) => ({
     commandId: "library-engine:" + randomUUID(),
     workspaceId: state.workspaceId,
     expectedRevision: state.revision,
-    ...(options.bounds ? { bounds: options.bounds(state.workspaceId) } : {}),
+    ...(bounds ? { bounds } : options.bounds ? { bounds: options.bounds(state.workspaceId) } : {}),
   });
   const capabilities = (): LibraryCapabilities => {
     const snapshot = structuredClone(options.capabilities());
@@ -163,6 +163,7 @@ export function createCanonicalTemplateHost(
   };
   return {
     db,
+    initialPlacement: 'nearest-free',
     atomic: <T,>(operation: () => T) => options.atomic(operation),
     capabilities,
     readProject,
@@ -238,10 +239,11 @@ export function createCanonicalTemplateHost(
       );
       const existing = new Set(state.blocks.map((block) => block.blockId));
       const result = engine.execute({
-        ...envelope(state),
         type: "attachSubject",
+        ...envelope(state, input.bounds),
         subject: input.subject,
         presentation: input.presentation,
+        ...(input.placement ? { placement: input.placement } : {}),
       });
       const added = result.blocks.filter(
         (block) => !existing.has(block.blockId),
@@ -438,10 +440,11 @@ export function createCanonicalTemplateHost(
       );
       const existing = new Set(state.blocks.map((block) => block.blockId));
       const result = engine.execute({
-        ...envelope(state),
         type: "attachResource",
+        ...envelope(state, input.bounds),
         resourceId: resource.id,
         presentation: input.presentation,
+        ...(input.placement ? { placement: input.placement } : {}),
       });
       const added = result.blocks.filter(
         (block) => !existing.has(block.blockId),

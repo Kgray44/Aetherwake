@@ -22,6 +22,7 @@ import { predefinedTemplates } from "../model.ts";
 import { presentation } from "../../workspace-engine/geometry.mts";
 
 class KernelHost implements CanonicalTemplateHost<DatabaseSync> {
+  readonly initialPlacement = 'nearest-free' as const;
   readonly kernel: WorkspaceKernel;
   readonly db: DatabaseSync;
   readonly engine: WorkspaceEngine;
@@ -140,6 +141,8 @@ class KernelHost implements CanonicalTemplateHost<DatabaseSync> {
       expectedRevision: current.revision,
       resourceId: input.resourceId,
       presentation: input.presentation,
+      ...(input.placement ? { placement: input.placement } : {}),
+      ...(input.bounds ? { bounds: input.bounds } : {}),
     });
     this.placed++;
     if (this.failAfterPlacement && this.placed >= this.failAfterPlacement)

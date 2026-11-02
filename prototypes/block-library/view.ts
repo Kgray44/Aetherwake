@@ -34,6 +34,7 @@ import {
 } from "./registry.ts";
 import { captureWorkspaceTemplate } from "./model.ts";
 import { blockPreview } from "./preview.ts";
+import type { Geometry } from '../workspace-engine/contracts.mts';
 
 const node = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -127,6 +128,8 @@ export function mountBlockLibrary(
   options: {
     workspaceId: string;
     expectedLayoutVersion: number | (() => number);
+    /** Read fresh usable world bounds for this exact workspace when submitting. */
+    bounds?(): Geometry | undefined;
     onCreated(result: CreatedBlock): void | Promise<void>;
     onSubjectCreated?(result: CreatedSubjectBlock): void | Promise<void>;
     context?(): LibraryRecommendationContext | null;
@@ -178,6 +181,10 @@ export function mountBlockLibrary(
     selected: BlockInstanceKind = "conversation",
     pending = false,
     detailSequence = 0;
+  const placementBounds = () => {
+    const bounds = options.bounds?.();
+    return bounds ? { bounds } : {};
+  };
   const revision = () =>
     typeof options.expectedLayoutVersion === "function"
       ? options.expectedLayoutVersion()
@@ -423,6 +430,7 @@ export function mountBlockLibrary(
           kind,
           title: title.value,
           presentation: placement(),
+          ...placementBounds(),
           ...(port.configureBlock ? { configuration: configuration() } : {}),
           ...(kind === "conversation" && provider.value
             ? { provider: provider.value as "local" | "codex" }
@@ -575,6 +583,7 @@ export function mountBlockLibrary(
                 resourceId: resource.id,
                 expectedResourceVersion: resource.version,
                 presentation: placement(),
+                ...placementBounds(),
                 ...(port.configureBlock
                   ? { configuration: configuration() }
                   : {}),
@@ -851,6 +860,7 @@ export function mountBlockLibrary(
             expectedLayoutVersion: revision(),
             kind,
             subject,
+            ...placementBounds(),
             presentation: {
               shape: shape.value as typeof definition.defaultPresentation.shape,
               width: Number(width.value),

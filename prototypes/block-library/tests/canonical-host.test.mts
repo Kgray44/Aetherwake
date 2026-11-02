@@ -22,6 +22,7 @@ import {
   BLOCK_DEFAULT_SIZES,
 } from "../registry.ts";
 import { limits } from "../../workspace-engine/geometry.mts";
+import { footprint, intersects } from "../../workspace-engine/collisions.mts";
 import type {
   BlockKind,
   LibraryCapabilities,
@@ -148,6 +149,59 @@ function fixture(t: any) {
     },
   };
 }
+
+test("vacant initial placement honors host bounds while keeping fixed overlapping Freeform cards and presence exact", t => {
+  const f = fixture(t), workspace = f.engine.createWorkspace('Synthetic bounded placement', null, { mode: 'freeform' });
+  const bounds = { x: 20, y: 170, width: 1240, height: 750 };
+  f.options.bounds = () => bounds;
+  for (let index = 0; index < 2; index++) f.service.createBlock({
+    commandId: randomUUID(), workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision,
+    kind: 'note', title: 'Synthetic fixed overlap',
+    presentation: { x: 90, y: 160, width: 300, height: 220, rotation: index * 27, locked: true },
+  });
+  const before = f.engine.project(workspace.workspaceId), created = f.service.createBlock({
+    commandId: randomUUID(), workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: before.revision, kind: 'conversation', title: 'Synthetic vacant Chat', provider: 'local',
+  }), after = f.engine.project(workspace.workspaceId), added = after.blocks.find(b => b.blockId === created.placementId)!;
+  assert.deepEqual(after.blocks.filter(b => b.blockId !== added.blockId), before.blocks);
+  assert.deepEqual(after.presence, before.presence);
+  const box = footprint({ ...added, id: added.blockId });
+  assert.ok(box.x >= bounds.x && box.y >= bounds.y && box.x + box.width <= bounds.x + bounds.width && box.y + box.height <= bounds.y + bounds.height);
+  for (const item of [...before.blocks.map(b => ({ ...b, id: b.blockId })), before.presence]) assert.equal(intersects(box, footprint(item)), false);
+});
+
+test("legacy hosts fail automatic placement before creating a resource; either explicit coordinate retains exact overlap", t => {
+  const f = fixture(t), workspace = f.engine.createWorkspace('Synthetic legacy placement', null, { mode: 'freeform' }),
+    legacy = new TemplateService(f.db, { ...f.host, initialPlacement: undefined });
+  const input = { commandId: randomUUID(), workspaceId: workspace.workspaceId, expectedLayoutVersion: workspace.revision, kind: 'note' as const, title: 'Synthetic legacy note' };
+  assert.throws(() => legacy.createBlock(input), /initial_placement_unavailable/);
+  assert.equal(f.factoryCalls.length, 0);
+  for (const patch of [{ x: 32 }, { y: 32 }, { x: 32, y: 32 }]) {
+    const created = legacy.createBlock({ ...input, commandId: randomUUID(), expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision, presentation: patch });
+    const added = f.engine.project(workspace.workspaceId).blocks.find(b => b.blockId === created.placementId)!;
+    assert.deepEqual([added.x, added.y], [32, 32]);
+  }
+});
+
+test("failure after canonical vacant placement rolls back its resource, geometry, mapping, history and retry receipt", t => {
+  const f = fixture(t), workspace = f.engine.createWorkspace('Synthetic atomic placement', null, { mode: 'freeform' }),
+    before = f.engine.project(workspace.workspaceId), graph = f.graph.snapshot(), mappings = { ...f.mappings },
+    place = f.host.placeResource;
+  const input = { commandId: randomUUID(), workspaceId: workspace.workspaceId, expectedLayoutVersion: before.revision, kind: 'conversation' as const, title: 'Synthetic atomic Chat', provider: 'local' as const };
+  f.host.placeResource = value => { place(value); throw new Error('synthetic_after_vacant_placement'); };
+  assert.throws(() => f.service.createBlock(input), /synthetic_after_vacant_placement/);
+  assert.deepEqual(f.engine.project(workspace.workspaceId), before);
+  assert.deepEqual(f.graph.snapshot(), graph);
+  assert.deepEqual(f.mappings, mappings);
+  assert.equal(count(f.db, 'resources'), 0);
+  assert.equal(count(f.db, 'block_library_receipts'), 0);
+  f.host.placeResource = place;
+  const created = f.service.createBlock(input);
+  assert.deepEqual(f.service.createBlock(input), created);
+  assert.equal(count(f.db, 'resources'), 1);
+  assert.equal(f.engine.project(workspace.workspaceId).blocks.length, 1);
+});
 const request = (
   extra: Partial<TemplateApplyInput> = {},
 ): TemplateApplyInput => ({

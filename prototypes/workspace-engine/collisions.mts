@@ -53,6 +53,15 @@ function nearest(p: CollisionPlacement, occupied: Geometry[], bounds: Geometry |
   ensure(result, 'LAYOUT_SPACE_EXHAUSTED');
   return { ...p, x: result.x - dx, y: result.y - dy };
 }
+/** Choose only a new placement. Existing Freeform footprints may intentionally
+ * overlap one another; they are occupied space, never anchors to validate/reflow. */
+export function findVacantPlacement(placement: CollisionPlacement, occupied: CollisionPlacement[], bounds?: Geometry, gap = collisionGap): CollisionPlacement {
+  if (bounds) validateBounds(bounds);
+  ensure(Number.isFinite(gap) && gap >= 0 && gap <= 256);
+  for (const p of [placement, ...occupied])
+    ensure(p && [p.x, p.y, p.width, p.height, p.rotation ?? 0].every(Number.isFinite) && p.width > 0 && p.height > 0 && typeof p.locked === 'boolean');
+  return nearest(placement, occupied.map(footprint), bounds, gap);
+}
 /** Fixed anchors first, explicit drop targets next, then stable existing placements.
  * Noncolliding neighbors keep their exact manual positions, including pannable ones. */
 export function resolveCollisions(placements: CollisionPlacement[], targetIds: string[] = [], bounds?: Geometry, options: { gap?: number; yieldVisible?: boolean; protectNeighbors?: boolean } = {}): CollisionPlacement[] {

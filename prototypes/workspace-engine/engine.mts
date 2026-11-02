@@ -5,7 +5,7 @@ import { WorkspaceKernel } from '../workspace-kernel/kernel.mts';
 import { validateSubjectRef, type BlockSubjectRef, type NonResourceSubjectRef } from '../workspace-kernel/subjects.ts';
 import { CONTRACT, type Command, type CommandResult, type WorkspaceProjection, type Presentation, type Viewport, type BlockTemplate, type WorkspaceSummary, type PresencePlacement, type Geometry, type WorkspaceOrganization, type OrganizationUpdate, type LayoutPreviewRequest } from './contracts.mts';
 import { ensure, WorkspaceError, defaults, presentation, resize, snapValue, presetGeometry } from './geometry.mts';
-import { validateBounds } from './collisions.mts';
+import { validateBounds, findVacantPlacement } from './collisions.mts';
 import { defaultOrganization, updateOrganization, applyOrganizationPolicy, previewLayout, type PolicyOptions } from './organization.mts';
 export { WorkspaceError } from './geometry.mts';
 export type * from './contracts.mts';
@@ -301,6 +301,7 @@ export class WorkspaceEngine {
     ensure(Number.isSafeInteger(command.expectedRevision) && command.expectedRevision > 0);
     ensure(Buffer.byteLength(JSON.stringify(command)) <= 262144, 'INPUT_TOO_LARGE');
     if (command.bounds) validateBounds(command.bounds);
+    if ('placement' in command) ensure(['createBlock', 'attachResource', 'attachSubject'].includes(command.type) && (command.placement === undefined || command.placement === 'nearest-free'));
     const fingerprint = hash(command);
     return this.atomic(() => {
       const receipt = this.db.prepare('SELECT * FROM workspace_engine_receipts WHERE command_id=?').get(command.commandId);
@@ -320,10 +321,15 @@ export class WorkspaceEngine {
         if ((p.width !== undefined && p.width !== old.width) || (p.height !== undefined && p.height !== old.height) || (p.shape === 'circle' && old.width !== old.height)) resizeIds.push(blockId);
         return this.apply(workspaceId, [{ blockId, expectedVersion: old.version, presentation: p }], state.revision, state.viewport);
       };
-      const newPresentation = (c: { templateId?: string; presentation?: Partial<Presentation> }) => {
+      const newPresentation = (c: { templateId?: string; presentation?: Partial<Presentation>; placement?: 'nearest-free' }) => {
         const t = c.templateId ? templates.find(t => t.id === c.templateId) : undefined;
         ensure(!c.templateId || t, 'UNKNOWN_TEMPLATE');
-        return presentation({ x: 32 + state.blocks.length % 10 * 24, y: 32 + state.blocks.length % 10 * 24, ...t?.presentation, ...c.presentation });
+        const next = presentation({ x: 32 + state.blocks.length % 10 * 24, y: 32 + state.blocks.length % 10 * 24, ...t?.presentation, ...c.presentation });
+        if (c.placement !== 'nearest-free') return next;
+        const vacant = findVacantPlacement({ ...next, id: 'initial-placement' }, [
+          ...state.blocks.map(b => ({ ...b, id: b.blockId })), state.presence,
+        ], command.bounds, state.organization.gap);
+        return presentation({ x: vacant.x, y: vacant.y }, next);
       };
       switch (command.type) {
         case 'createBlock': {

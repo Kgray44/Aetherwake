@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { validateBounds } from '../workspace-engine/collisions.mts';
 import { randomUUID, createHash } from "node:crypto";
 import type {
   CanonicalTemplateHost,
@@ -158,6 +159,16 @@ export class TemplateService {
     );
     return subject;
   }
+  private initialPlacement(patch: CreateBlockInput['presentation'], bounds?: CreateBlockInput['bounds']) {
+    if (bounds !== undefined) {
+      check(bounds && typeof bounds === 'object' && !Array.isArray(bounds) && Object.keys(bounds).every(key => ['x', 'y', 'width', 'height'].includes(key)), 'invalid_placement_bounds');
+      validateBounds(bounds);
+    }
+    const context = bounds ? { bounds } : {};
+    if (patch?.x !== undefined || patch?.y !== undefined) return context;
+    check(this.host.initialPlacement === 'nearest-free', 'initial_placement_unavailable');
+    return { ...context, placement: 'nearest-free' as const };
+  }
   createSubjectBlock(input: CreateSubjectBlockInput): CreatedSubjectBlock {
     check(
       input &&
@@ -169,6 +180,7 @@ export class TemplateService {
             "expectedLayoutVersion",
             "kind",
             "subject",
+            "bounds",
             "presentation",
             "configuration",
           ].includes(k),
@@ -214,6 +226,7 @@ export class TemplateService {
             workspaceId: workspace.id,
             subject: valid,
             presentation: geometry,
+            ...this.initialPlacement(input.presentation, input.bounds),
           });
           this.writeSubjectSettings(placed.id, valid, configuration);
           this.used(input.kind);
@@ -786,6 +799,7 @@ export class TemplateService {
             "expectedLayoutVersion",
             "kind",
             "resourceId",
+            "bounds",
             "expectedResourceVersion",
             "presentation",
             "configuration",
@@ -841,6 +855,7 @@ export class TemplateService {
           workspaceId: workspace.id,
           resourceId: resource.id,
           presentation: geometry,
+          ...this.initialPlacement(input.presentation, input.bounds),
         });
         this.writeSettings(
           placement.id,
@@ -1216,6 +1231,7 @@ export class TemplateService {
             "project_unavailable",
           );
         }
+        const initialPlacement = this.initialPlacement(input.presentation, input.bounds);
         const resource = this.host.createResource({
           kind: command.kind,
           title: command.title,
@@ -1226,6 +1242,7 @@ export class TemplateService {
           workspaceId: workspace.id,
           resourceId: resource.id,
           presentation: command.presentation,
+          ...initialPlacement,
         });
         this.writeSettings(
           placement.id,

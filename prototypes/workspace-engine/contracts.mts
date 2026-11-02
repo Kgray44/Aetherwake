@@ -40,9 +40,9 @@ export type NewResource = { kind: 'note'; title: string; content: string } | { k
 export type BlockTemplate = { id: string; title: string; presentation: Partial<Presentation> };
 export type PlacementUpdate = { blockId: string; expectedVersion: number; presentation: Partial<Presentation> };
 type Action =
-  | { type: 'attachResource'; resourceId: string; presentation?: Partial<Presentation>; templateId?: string }
-  | { type: 'attachSubject'; subject: NonResourceSubjectRef; presentation?: Partial<Presentation>; templateId?: string }
-  | { type: 'createBlock'; resource: NewResource; presentation?: Partial<Presentation>; templateId?: string }
+  | { type: 'attachResource'; resourceId: string; presentation?: Partial<Presentation>; templateId?: string; placement?: 'nearest-free' }
+  | { type: 'attachSubject'; subject: NonResourceSubjectRef; presentation?: Partial<Presentation>; templateId?: string; placement?: 'nearest-free' }
+  | { type: 'createBlock'; resource: NewResource; presentation?: Partial<Presentation>; templateId?: string; placement?: 'nearest-free' }
   | { type: 'duplicateBlock'; blockId: string }
   | { type: 'detachBlock'; blockId: string }
   | { type: 'moveBlock'; blockId: string; x: number; y: number; snap?: number }
