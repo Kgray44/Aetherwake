@@ -11,3 +11,5 @@ All SQLite tests use synthetic records, a real in-memory SQLite database and a c
 Source review added full-manifest provider-egress authorization and preservation of semantically rejected proposals, plus one focused regression. Both the resulting 16-test suite and final panel typecheck passed in the final owner-released short CPU slot. The worker immediately returned the CPU reservation for integrated organization/native/ETW acceptance.
 
 Actual integrated desktop, genuine provider planning, cinematic experience, accessibility, performance and owner acceptance remain unverified by this module checkpoint.
+
+A subsequent real `CodexPlanningAdapter` implementation and seven synthetic command-port regressions are now added for the root's next live planning demonstration. Those new regressions and a refreshed full-module typecheck are **queued, not run**, while root native/ETW acceptance is active. The preceding 16/16 result applies to the core/adaptation/manifest source before this adapter addition. See `CODEX-PLANNING.md` for the actual canonical host authorization/create/execute/audit seam and qualification limits.
