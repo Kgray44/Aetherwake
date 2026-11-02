@@ -75,6 +75,23 @@ export const subjectBlockKind = (
       ? "collection_browser"
       : "resource_browser";
 
+/** Preferred geometry for NEW placements. Restores and templates retain their
+ * persisted presentation; the workspace engine remains the constraint authority. */
+export const BLOCK_DEFAULT_SIZES: Readonly<
+  Record<BlockInstanceKind, Readonly<{ width: number; height: number }>>
+> = deepFreeze({
+  conversation: { width: 380, height: 600 },
+  note: { width: 440, height: 360 },
+  task: { width: 320, height: 260 },
+  task_group: { width: 440, height: 460 },
+  stream: { width: 500, height: 380 },
+  project_overview: { width: 520, height: 360 },
+  resource_browser: { width: 560, height: 440 },
+  collection_browser: { width: 460, height: 400 },
+  research: { width: 420, height: 420 },
+  reference: { width: 340, height: 300 },
+});
+
 const define = (
   kind: BlockKind,
   title: string,
@@ -107,8 +124,7 @@ const define = (
   ],
   defaultPresentation: presentation({
     shape: kind === "note" ? "folio" : kind === "research" ? "lens" : "rounded",
-    width: kind === "conversation" ? 520 : kind === "task" ? 320 : 400,
-    height: kind === "conversation" ? 400 : kind === "task" ? 220 : 280,
+    ...BLOCK_DEFAULT_SIZES[kind],
   }),
   compatibleResourceKinds: [kind],
   minimumSize: { width: limits.minWidth, height: limits.minHeight },
@@ -220,8 +236,7 @@ const subjectDefinition = (
   ],
   defaultPresentation: presentation({
     shape: "rounded",
-    width: 440,
-    height: 340,
+    ...BLOCK_DEFAULT_SIZES[kind],
   }),
 });
 export const SUBJECT_BLOCKS: readonly BlockDefinition<SubjectBlockKind>[] =

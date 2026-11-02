@@ -19,7 +19,9 @@ import {
   resolveBlockType,
   validateConfiguration,
   REGISTERED_BLOCKS,
+  BLOCK_DEFAULT_SIZES,
 } from "../registry.ts";
+import { limits } from "../../workspace-engine/geometry.mts";
 import type {
   BlockKind,
   LibraryCapabilities,
@@ -168,6 +170,111 @@ const count = (db: CanonicalTemplateHostOptions["db"], table: string) => {
   );
   return Number(db.prepare("SELECT count(*) AS n FROM " + table).get()!.n);
 };
+
+test("every new block kind uses its distinct preferred geometry without rewriting resized placements or explicit templates", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic size project"),
+    collection = f.kernel.createCollection(
+      "Synthetic size collection",
+      project.id,
+    ),
+    workspace = f.engine.createWorkspace(
+      "Synthetic preferred sizes",
+      project.id,
+    );
+  f.options.capabilities().subjects = {
+    project_overview: { state: "available" },
+    resource_browser: { state: "available" },
+    collection_browser: { state: "available" },
+  };
+  const sizes = new Set<string>();
+  for (const manifest of REGISTERED_BLOCKS) {
+    const base = {
+      commandId: "default-size:" + manifest.kind,
+      workspaceId: workspace.workspaceId,
+      expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision,
+    };
+    const created =
+      manifest.kind === "project_overview"
+        ? f.service.createSubjectBlock({
+            ...base,
+            kind: manifest.kind,
+            subject: { kind: "project", projectId: project.id },
+          })
+        : manifest.kind === "resource_browser"
+          ? f.service.createSubjectBlock({
+              ...base,
+              kind: manifest.kind,
+              subject: {
+                kind: "resource-query",
+                projectId: project.id,
+                query: "",
+              },
+            })
+          : manifest.kind === "collection_browser"
+            ? f.service.createSubjectBlock({
+                ...base,
+                kind: manifest.kind,
+                subject: { kind: "collection", collectionId: collection.id },
+              })
+            : f.service.createBlock({
+                ...base,
+                kind: manifest.kind,
+                title: "Synthetic " + manifest.kind,
+              });
+    const placed = f.engine
+      .project(workspace.workspaceId)
+      .blocks.find((b) => b.blockId === created.placementId)!;
+    const preferred = BLOCK_DEFAULT_SIZES[manifest.kind];
+    assert.deepEqual({ width: placed.width, height: placed.height }, preferred);
+    assert.ok(
+      placed.width >= limits.minWidth && placed.height >= limits.minHeight,
+    );
+    assert.ok(
+      placed.width <= limits.maxSize && placed.height <= limits.maxSize,
+    );
+    sizes.add(placed.width + "x" + placed.height);
+  }
+  assert.equal(sizes.size, REGISTERED_BLOCKS.length);
+  assert.ok(
+    BLOCK_DEFAULT_SIZES.conversation.height >
+      BLOCK_DEFAULT_SIZES.conversation.width * 1.5,
+  );
+  const before = f.engine.project(workspace.workspaceId),
+    first = before.blocks[0];
+  f.engine.execute({
+    type: "resizeBlock",
+    commandId: randomUUID(),
+    workspaceId: workspace.workspaceId,
+    expectedRevision: before.revision,
+    blockId: first.blockId,
+    width: 635,
+    height: 415,
+  });
+  const resized = f.engine.project(workspace.workspaceId);
+  const explicit = f.service.createBlock({
+    commandId: "explicit-size",
+    workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: resized.revision,
+    kind: "note",
+    title: "Synthetic explicit geometry",
+    presentation: { width: 708, height: 352 },
+  });
+  // A fresh service/catalog read and template preview must not migrate stored geometry.
+  const reopened = new TemplateService(f.db, f.host);
+  reopened.discoverBlocks();
+  reopened.previewTemplate(request());
+  const after = f.engine.project(workspace.workspaceId);
+  assert.deepEqual(
+    after.blocks.find((b) => b.blockId === first.blockId),
+    resized.blocks[0],
+  );
+  const custom = after.blocks.find((b) => b.blockId === explicit.placementId)!;
+  assert.deepEqual(
+    { width: custom.width, height: custom.height },
+    { width: 708, height: 352 },
+  );
+});
 
 test("factory requires the identical kernel, engine and SQLite connection and delegates parent atomic", (t) => {
   const fixtureA = fixture(t),
