@@ -24,7 +24,7 @@ function presentationContext(value) {
     typeof value.workspaceId === "string" && value.workspaceId.length > 0 && value.workspaceId.length <= 200 &&
     !/[\x00-\x1f]/.test(value.workspaceId) && value.bounds && !Array.isArray(value.bounds) &&
     Object.keys(value.bounds).length === 4 && ["x", "y", "width", "height"].every(key =>
-      typeof value.bounds[key] === "number" && Number.isFinite(value.bounds[key])) &&
+      typeof value.bounds[key] === "number" && Number.isFinite(value.bounds[key]) && Math.abs(value.bounds[key]) <= 1000000) &&
     value.bounds.width > 0 && value.bounds.height > 0;
   if (!valid) throw Error("invalid_vela_presentation");
   return { workspaceId: value.workspaceId, bounds: { x: value.bounds.x, y: value.bounds.y,

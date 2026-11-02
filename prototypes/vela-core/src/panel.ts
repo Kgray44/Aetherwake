@@ -156,6 +156,13 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function effect(action: PlanStep['action'], plan: VelaPlan): string {
     const request = current?.requests.find(item => item.id === plan.requestId), refs = [...plan.targets, ...(request?.context.discovered ?? []), ...(current?.applicationContext?.references ?? [])], name = (id: string) => refs.find(ref => ref.id === id)?.title ?? 'the selected item';
     switch (action.type) {
+      case 'createProject': return 'Create project “' + action.title + '”';
+      case 'createWorkspace': return 'Create workspace “' + action.title + '”' + (action.projectId ? ' in ' + name(action.projectId) : '');
+      case 'renameWorkspace': return 'Rename ' + name(action.workspaceId) + ' to “' + action.title + '”';
+      case 'taskPriority': return 'Set ' + name(action.resourceId) + ' priority to ' + action.priority;
+      case 'bringAllIntoView': return 'Bring all blocks in ' + name(action.workspaceId) + ' into the current view';
+      case 'resolveLayout': return 'Resolve block overlaps in ' + name(action.workspaceId);
+      case 'setOrganization': return 'Set ' + name(action.workspaceId) + ' organization to ' + action.organization.mode;
       case 'workspaceFromResources': return 'Create “' + action.title + '” with ' + action.resourceIds.length + (action.resourceIds.length === 1 ? ' existing source · ' : ' existing sources · ') + (action.projectId ? name(action.projectId) : 'No project');
       case 'createResource': return 'Create ' + action.kind.replaceAll('_', ' ') + ' “' + action.title + '”' + (action.workspaceId ? ' in ' + name(action.workspaceId) : '');
       case 'attach': return 'Place ' + name(action.resourceId) + ' in ' + name(action.workspaceId);
