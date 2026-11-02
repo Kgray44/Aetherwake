@@ -93,6 +93,7 @@ export type PublicConversationExecution = {
   endedAt: string | null;
   taskVerified: false;
   errorCode?: string;
+  httpDiagnostic?: Readonly<import("../openai-provider/contracts.mts").TurnHttpDiagnostic>;
 };
 /** Read-only, scoped to at most 64 requested conversations per call. Live text
  * is the existing ephemeral provider buffer, never a second transcript store. */

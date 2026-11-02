@@ -45,6 +45,19 @@ test('populated provider changes require a reviewed continuation and stale branc
  }finally{await f.close();}
 });
 
+test('ordinary unknown non-stream HTTP facts persist without response bodies, false completion or retry',async()=>{
+ const f=fixture();try{
+  await f.core.command('ordinaryProviderCheck',{});const c=await f.core.command('createConversation',{commandId:randomUUID()}),p=await prepare(f,c.resourceId,'Synthetic inspectable transport test'),g=await grant(f,p.preview);
+  f.responses.push(()=>Response.json({PRIVATE:'NEVER_RETAIN_PROVIDER_BODY'},{headers:{'x-request-id':'req_fixture_non_stream'}}));
+  const result=await f.core.command('conversationSend',g);
+  assert.equal(result.state,'unknown');assert.equal(result.errorCode,'invalid_stream_response');
+  const diagnostic=result.httpDiagnostic;assert(diagnostic);assert.equal(diagnostic.httpStatus,200);assert.equal(diagnostic.contentType,'json');assert.equal(diagnostic.hasBody,true);assert.equal(diagnostic.serverRequestId,'req_fixture_non_stream');
+  assert.equal(result.responseId,undefined);assert.equal(result.outputMessageId,undefined);assert.equal(f.requests.length,1);
+  assert.equal(JSON.stringify(await f.core.command('snapshot',{})).includes('NEVER_RETAIN_PROVIDER_BODY'),false);
+  await f.reopen();const after=await f.core.command('snapshot',{});assert.deepEqual(after.executions[result.id].httpDiagnostic,diagnostic);assert.equal(after.executions[result.id].state,'unknown');assert.equal(f.requests.length,1);
+ }finally{await f.close();}
+});
+
 test('ordinary Responses uses canonical identity, exact grant and stateless local continuity across follow-up and SQLite restart',async()=>{
  const f=fixture();try{
   await f.core.command('ordinaryProviderCheck',{});const c=await f.core.command('createConversation',{commandId:randomUUID()});assert.equal(c.providerId,providerId);assert.equal(c.kind,'ordinary');assert.equal(c.title,'New conversation');assert.equal(f.owner.db.prepare('SELECT count(*) AS n FROM workspaces').get().n,0);

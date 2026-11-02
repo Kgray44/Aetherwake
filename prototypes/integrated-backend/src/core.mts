@@ -17,6 +17,7 @@ import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { ConversationGraph, type GraphData, type MessageMetadata, type ProviderAdapter as GraphAdapter } from '../../connected-conversations/src/graph.ts';
 import { localConversationAdapter, mockOrdinaryAdapter } from '../../connected-conversations/src/adapters.ts';
 import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
+import { projectTurnHttpDiagnostic } from '../../application-contract/provider-diagnostics.ts';
 import { nativeProvider, fixtureProvider } from './providers.mts';
 import { ConversationProduct, type AttachedContext, type ConversationReadView } from '../../conversation-product/src/service.mts';
 import type { NativeHostServices } from './native-host.mts';
@@ -836,7 +837,7 @@ export class BackendCore {
         return [{resourceId,revision:this.state.revisions[resourceId],title:c.title,providerId:c.providerId,kind:c.kind,taskId:null,projectId:resource.project_id}];
       });
       const blocks=this.db.prepare('SELECT workspace_id,resource_id FROM blocks WHERE resource_id IS NOT NULL').all().filter(b=>activeWorkspaces.has(String(b.workspace_id))).map(b=>({workspace_id:String(b.workspace_id),resource_id:String(b.resource_id)}));
-      const executions=Object.fromEntries(Object.entries(this.state.executions).map(([id,e])=>[id,{id:e.id,resourceId:e.resourceId,providerId:e.providerId,state:e.state,commandId:e.commandId,startedAt:e.startedAt,endedAt:e.endedAt,taskVerified:false as const,...(e.errorCode?{errorCode:e.errorCode}:{})}]));
+      const executions=Object.fromEntries(Object.entries(this.state.executions).map(([id,e])=>[id,{id:e.id,resourceId:e.resourceId,providerId:e.providerId,state:e.state,commandId:e.commandId,startedAt:e.startedAt,endedAt:e.endedAt,taskVerified:false as const,...(e.errorCode?{errorCode:e.errorCode}:{}),...(e.httpDiagnostic?{httpDiagnostic:projectTurnHttpDiagnostic(e.httpDiagnostic)}:{})}]));
       const sourceId=(gid:string)=>this.state.graph===graphAtRead?publicIds.get(gid):Object.entries(this.state.resources).find(([,value])=>value===gid)?.[0];
       const currentSource=(gid:string,messageId?:string)=>{assertOpen?.();const rid=sourceId(gid);return !!rid&&this.conversationReadAccess(rid,messageId);};
       return {conversations,resourceMap,executions,desktop:{projects,workspaces,resources,blocks},messageEvidence:Object.fromEntries(Object.entries(this.state.messageEvidence).map(([id,e])=>[id,{executionId:e.executionId,...(e.outputState?{outputState:e.outputState}:{})}])),
@@ -957,7 +958,7 @@ export class BackendCore {
     ensure(input&&Array.isArray(input.resourceIds)&&input.resourceIds.length<=64&&input.resourceIds.every(id=>typeof id==='string'&&id.length>0&&id.length<=256)&&new Set(input.resourceIds).size===input.resourceIds.length,'invalid_conversation_activity');
     const resources=input.resourceIds.map(resourceId=>({resourceId,available:!!this.state.resources[resourceId]&&this.conversationAccess.access(resourceId)}));
     const allowed=new Set(resources.filter(item=>item.available).map(item=>item.resourceId));
-    const publicExecution=(execution:Execution):PublicConversationExecution=>({id:execution.id,resourceId:execution.resourceId,providerId:execution.providerId,commandId:execution.commandId,state:execution.state,startedAt:execution.startedAt,endedAt:execution.endedAt,taskVerified:false,...(execution.errorCode?{errorCode:execution.errorCode}:{})});
+    const publicExecution=(execution:Execution):PublicConversationExecution=>({id:execution.id,resourceId:execution.resourceId,providerId:execution.providerId,commandId:execution.commandId,state:execution.state,startedAt:execution.startedAt,endedAt:execution.endedAt,taskVerified:false,...(execution.errorCode?{errorCode:execution.errorCode}:{}),...(execution.httpDiagnostic?{httpDiagnostic:projectTurnHttpDiagnostic(execution.httpDiagnostic)}:{})});
     const current=this.active?this.state.executions[this.active.id]:null;
     const latest=new Map<string,Execution>();for(const execution of Object.values(this.state.executions))if(allowed.has(execution.resourceId))latest.set(execution.resourceId,execution);
     if(current&&allowed.has(current.resourceId))latest.set(current.resourceId,current);
@@ -1246,7 +1247,7 @@ export class BackendCore {
       let valid=true;try{await fence();}catch{valid=false;}
       if(result.responseId&&!e.responseId&&valid)await supply(result.responseId);
       this.atomic(()=>{
-        e.responseOutcome=result!.outcome;e.cancellation=result!.cancellation;if(result!.responseId)e.responseId=result!.responseId;if(result!.usage)e.usage=result!.usage;if(result!.reportedModel)e.reportedModel=result!.reportedModel;
+        e.responseOutcome=result!.outcome;e.cancellation=result!.cancellation;if(result!.httpDiagnostic)e.httpDiagnostic=projectTurnHttpDiagnostic(result!.httpDiagnostic);if(result!.responseId)e.responseId=result!.responseId;if(result!.usage)e.usage=result!.usage;if(result!.reportedModel)e.reportedModel=result!.reportedModel;
         e.state=!valid?(result!.dispatched?'unknown':'failed'):result!.outcome==='completed'?'provider_completed':result!.outcome==='unknown'?'unknown':result!.outcome==='cancelled-before-dispatch'?'interrupted':'failed';
         if(!valid)e.errorCode='ordinary_context_changed';else if(result!.errorCode)e.errorCode=result!.errorCode;
         e.endedAt=now();

@@ -4,7 +4,7 @@ import type { Resource } from '../../workspace-kernel/kernel.mts';
 import type { DesktopCommand, DesktopSnapshot, PublicConversationExecution, ConversationActivitySnapshot, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import type { ResourceOpeningInput, ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
 import type { ProviderConnectionRequest, ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
-import type { NativeAuthorizationStart,NativeCredential,ReportedUsage,TurnInput,TurnOutcome } from '../../openai-provider/contracts.mts';
+import type { NativeAuthorizationStart,NativeCredential,ReportedUsage,TurnInput,TurnOutcome,TurnHttpDiagnostic } from '../../openai-provider/contracts.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import type { AttachedContext } from '../../conversation-product/src/service.mts';
 import type { VelaClient, VelaState, ContextManifest, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
@@ -83,6 +83,8 @@ export interface Execution extends PublicConversationExecution {
   connectionVersion?:number;inputMessageId?:string;outputMessageId?:string;
   requestedModel?:string;requestBodyDigest?:string;contextDigest?:string;instructionVersion?:string;
   cancellation?:{requested:boolean;serverConfirmed:false};
+  /** Fixed bodyless transport facts, separate from provider completion. */
+  httpDiagnostic?:Readonly<TurnHttpDiagnostic>;
 }
 export interface Capability {
   providerId: string; mock: boolean; authentication: string;
