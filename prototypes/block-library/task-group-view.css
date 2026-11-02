@@ -1,0 +1,75 @@
+.aw-task-group {
+  color: inherit;
+  min-height: 0;
+}
+.aw-task-group-summary {
+  font-size: 1.25em;
+  margin: 0 0 0.5rem;
+  color: #cbdce8;
+}
+.aw-task-group-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.aw-task-group-tools input {
+  flex: 1 1 8rem;
+  min-width: 0;
+  width: 0;
+}
+.aw-task-group :is(input[type="search"], select, button) {
+  font: inherit;
+  color: inherit;
+  background: #acc3d70a;
+  border: 1px solid #acc3d72b;
+  border-radius: 0.6rem;
+  padding: 0.35rem 0.5rem;
+}
+.aw-task-group-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.6rem 0;
+}
+.aw-task-group-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-bottom: 1px solid #acc3d720;
+  padding-block: 0.35rem;
+}
+.aw-task-group-list input[type="checkbox"] {
+  flex: none;
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: #acc3d7;
+  cursor: pointer;
+}
+.aw-task-group-list .aw-task-group-title {
+  background: none;
+  border: 0;
+  padding: 0.25rem 0;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.aw-task-group-list [data-status="done"] .aw-task-group-title {
+  text-decoration: line-through;
+  color: #abb9c6;
+}
+.aw-task-group button {
+  cursor: pointer;
+}
+.aw-task-group :is(input, select, button):focus-visible {
+  outline: 2px solid #d0e2ef;
+  outline-offset: 2px;
+}
+.aw-task-group :disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+.aw-task-group-status {
+  font-size: 0.8em;
+  margin: 0.4rem 0 0;
+}
+.aw-task-group-status:empty {
+  display: none;
+}

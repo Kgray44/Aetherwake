@@ -79,6 +79,8 @@ export function mountNoteExperience(
   options: {
     kind: string;
     active?: boolean;
+    initialMode?: "write" | "read";
+    presentation?: "workspace" | "focused";
     openExternal?(url: string): Promise<void>;
   },
 ) {
@@ -115,12 +117,13 @@ export function mountNoteExperience(
   };
   let active = options.active ?? true,
     disposed = false,
-    mode: "write" | "read" = "write",
+    mode: "write" | "read" = options.initialMode ?? "write",
     text = "",
     rendered = "",
     pending = false;
   status.setAttribute("role", "status");
   root.dataset.documentKind = options.kind;
+  root.dataset.documentPresentation = options.presentation ?? "focused";
   status.setAttribute("aria-live", "polite");
   search.type = "search";
   search.maxLength = 500;
@@ -169,7 +172,7 @@ export function mountNoteExperience(
     sources.replaceChildren();
     if (!["research", "reference"].includes(options.kind)) return;
     sources.append(
-      element("h3", "Sources in this document"),
+      element("h3", options.kind === "reference" ? "Source links" : "Sources"),
       element(
         "p",
         "User-provided links. Aerynth has not fetched or verified these sources.",
@@ -280,7 +283,11 @@ export function mountNoteExperience(
   );
   recovery.append(save, local, saved, details);
   reading.hidden = true;
-  root.append(tools, rename, status, recovery, reading, sources);
+  root.append(tools, rename, status, recovery);
+  // Reference cards lead with their citation; research leads with findings.
+  root.append(
+    ...(options.kind === "reference" ? [sources, reading] : [reading, sources]),
+  );
   let latest = session.snapshot();
   const paint = (value: ReturnType<NoteSession["snapshot"]>) => {
     text = value.content;
@@ -321,6 +328,9 @@ export function mountNoteExperience(
     if (active) paint(value);
   });
   return {
+    setPresentation(value: "workspace" | "focused") {
+      root.dataset.documentPresentation = value;
+    },
     setActive(value: boolean) {
       active = value;
       if (active) paint(latest);
@@ -331,6 +341,7 @@ export function mountNoteExperience(
       unsubscribe();
       delete root.dataset.noteState;
       delete root.dataset.documentKind;
+      delete root.dataset.documentPresentation;
       document.removeEventListener("pointerdown", dismissMenu);
       tools.remove();
       rename.remove();

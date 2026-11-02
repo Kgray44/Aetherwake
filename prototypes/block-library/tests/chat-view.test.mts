@@ -139,6 +139,7 @@ test("pause and resize retain the exact shared transcript/composer/caret, with o
     activeObservers = 0,
     histories = 0;
   const controller = mountBlockChat(f.view.root, {
+    presentation: "workspace",
     port: f.port,
     resourceId: f.draft.resourceId,
     draftSession: session,
@@ -167,6 +168,19 @@ test("pause and resize retain the exact shared transcript/composer/caret, with o
     input.focus();
     input.setSelectionRange(3, 9);
     log.scrollTop = 44;
+    const callsBeforePose = f.calls.length;
+    controller.setPresentation("focused");
+    controller.setPresentation("workspace");
+    assert.equal(
+      f.view.root.querySelector(".cp-chat").dataset.presentation,
+      "workspace",
+    );
+    assert.equal(
+      f.calls.length,
+      callsBeforePose,
+      "Pose changes do not read or save canonical state",
+    );
+    assert.equal(f.view.doc.activeElement, input);
     assert.equal(f.view.root.querySelectorAll(".cp-chat").length, 1);
     assert.equal(activeObservers, 1);
     controller.setActive(false);

@@ -52,6 +52,7 @@ export function mountBlockChat(
     ready: chat.ready,
     refresh: chat.refresh,
     whenSubmissionSettled: chat.whenSubmissionSettled,
+    setPresentation: chat.setPresentation,
     setActive(value: boolean) {
       if (active === value || disposed) return;
       active = value;

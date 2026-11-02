@@ -37,6 +37,7 @@ export function mountSubjectExperience(
   options: {
     active?: boolean;
     visible?: boolean;
+    presentation?: "workspace" | "focused";
     onProjection?(projection: SubjectIdentity): void;
     openWorkspace?(workspaceId: string): void;
     openResource?(resourceId: string): void;
@@ -49,6 +50,8 @@ export function mountSubjectExperience(
     refresh = button("Refresh", () => {
       void load(false);
     });
+  section.dataset.presentation = options.presentation ?? "focused";
+  section.dataset.subjectKind = subject.kind;
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
   section.setAttribute(
@@ -90,9 +93,13 @@ export function mountSubjectExperience(
       option.value = definition.kind;
       kind.append(option);
     }
-    const filters = node("div", "", "aw-subject-filters");
-    filters.append(search, kind, field("No visible placements", unplaced));
-    body.append(filters);
+    const tools = node("div", "", "aw-subject-tools"),
+      filters = node("details", "", "aw-subject-filter-menu"),
+      filterBody = node("div", "", "aw-subject-filters");
+    filters.append(node("summary", "Filters"), filterBody);
+    filterBody.append(kind, field("No visible placements", unplaced));
+    tools.append(search, filters);
+    body.append(tools);
     if (
       subject.kind === "resource-query" &&
       (subject.query || subject.kinds?.length)
@@ -108,9 +115,7 @@ export function mountSubjectExperience(
       );
     body.append(results, more);
     more.hidden = true;
-    search.oninput = () => {
-      void load(false);
-    };
+    search.oninput = () => scheduleSearch();
     kind.onchange = () => {
       void load(false);
     };
@@ -118,11 +123,64 @@ export function mountSubjectExperience(
       void load(false);
     };
   }
+  const rows = new Map<
+    string,
+    {
+      row: HTMLLIElement;
+      title: HTMLElement;
+      metadata: HTMLElement;
+      address: HTMLElement;
+      resource: ResourceCandidate;
+    }
+  >();
+  const workspaceRows = new Map<
+    string,
+    { row: HTMLLIElement; title: HTMLElement; workspaceId: string }
+  >();
+  const projectSummary = node("p", "", "aw-project-summary"),
+    projectCounts = node("p", "", "aw-project-counts"),
+    projectHint = node("p", "", "aw-subject-hint"),
+    workspaces = node("ul", "", "aw-project-workspaces"),
+    projectMore = node("details", "", "aw-project-details"),
+    events = node("ol"),
+    scopeTitle = node("p", "", "aw-subject-scope");
+  if (subject.kind === "project") {
+    projectMore.append(
+      node("summary", "Resources and recent changes"),
+      projectCounts,
+      projectHint,
+      node("h4", "Recent changes"),
+      events,
+      node("h4", "Resources"),
+      results,
+    );
+    body.append(
+      projectSummary,
+      node("h4", "Workspaces"),
+      workspaces,
+      projectMore,
+    );
+  } else body.insertBefore(scopeTitle, body.firstChild);
+  function scheduleSearch() {
+    clearTimeout(queryTimer);
+    if (active || visible)
+      queryTimer = setTimeout(() => {
+        void load(false);
+      }, 160);
+  }
   const fail = (error: unknown) => {
     if (!disposed) {
       latestPage = null;
+      rows.clear();
       results.replaceChildren();
-      if (subject.kind === "project") body.replaceChildren();
+      if (subject.kind === "project") {
+        workspaceRows.clear();
+        workspaces.replaceChildren();
+        events.replaceChildren();
+        projectSummary.textContent = "Project unavailable";
+        projectCounts.textContent = "";
+        projectHint.textContent = "";
+      }
       status.textContent =
         error instanceof Error
           ? error.message.replaceAll("_", " ")
@@ -134,53 +192,85 @@ export function mountSubjectExperience(
     }
   };
   const appendResources = (page: BrowseResourcesPage, append: boolean) => {
-    if (!append) results.replaceChildren();
+    const ids = new Set(page.resources.map((resource) => resource.id));
+    if (!append)
+      for (const [id, item] of rows)
+        if (!ids.has(id)) {
+          item.row.remove();
+          rows.delete(id);
+        }
     results.querySelector(".aw-subject-empty")?.remove();
     for (const resource of page.resources) {
-      const row = node("li"),
-        title = node("strong", resource.title),
-        metadata = node(
-          "small",
-          resource.kind +
-            " · " +
-            resource.id +
-            " · " +
-            resource.placementCount +
-            (resource.placementCountComplete ? "" : "+") +
-            " visible placements",
-        ),
-        actions = node("div", "", "aw-subject-actions");
-      row.append(title, metadata, actions);
-      if (options.openResource)
-        actions.append(
-          button("Open", () => options.openResource!(resource.id)),
-        );
-      if (options.attachResource) {
-        const attach = button("Attach to workspace", () => {
-          attach.disabled = true;
-          void options.attachResource!(resource)
-            .then(() => {
-              if (!disposed)
-                status.textContent = "Attached the same canonical resource.";
-            })
-            .catch(fail)
-            .finally(() => {
-              if (!disposed) attach.disabled = false;
-            });
-        });
-        actions.append(attach);
+      let item = rows.get(resource.id);
+      if (!item) {
+        const row = node("li"),
+          title = options.openResource
+            ? button(resource.title, () => {
+                if (active && !disposed && rows.has(resource.id))
+                  options.openResource!(resource.id);
+              })
+            : node("strong", resource.title),
+          metadata = node("small"),
+          address = node("code"),
+          details = node("details", "", "aw-subject-resource-details"),
+          actions = node("div", "", "aw-subject-actions");
+        title.className = "aw-subject-resource-title";
+        row.dataset.resourceId = resource.id;
+        details.append(node("summary", "Details"), address);
+        row.append(title, metadata, actions, details);
+        if (options.attachResource) {
+          const attach = button("Attach", () => {
+            const current = rows.get(resource.id)?.resource;
+            if (!current || !active || disposed || attach.disabled) return;
+            attach.disabled = true;
+            void options.attachResource!(current)
+              .then(() => {
+                if (!disposed && active)
+                  status.textContent = "Attached to workspace.";
+              })
+              .catch(fail)
+              .finally(() => {
+                if (!disposed) attach.disabled = false;
+              });
+          });
+          attach.setAttribute(
+            "aria-label",
+            "Attach " + resource.title + " to workspace",
+          );
+          actions.append(attach);
+        }
+        item = { row, title, metadata, address, resource };
+        rows.set(resource.id, item);
       }
-      results.append(row);
+      item.resource = resource;
+      item.title.textContent = resource.title;
+      if (options.openResource)
+        item.title.setAttribute("aria-label", "Open " + resource.title);
+      item.metadata.textContent =
+        resource.kind.replaceAll("_", " ") +
+        " · " +
+        resource.placementCount +
+        (resource.placementCountComplete ? "" : "+") +
+        " placements";
+      item.address.textContent = resource.id;
     }
-    if (!results.children.length)
-      results.append(
-        node("li", "No matching resources on this page.", "aw-subject-empty"),
-      );
+    // Keep unchanged rows mounted (including an open Details disclosure and focus).
+    const ordered = append
+      ? [...rows.keys()]
+      : page.resources.map((resource) => resource.id);
+    ordered.forEach((id, index) => {
+      const row = rows.get(id)!.row,
+        current = results.children[index];
+      if (current !== row) results.insertBefore(row, current ?? null);
+    });
+    if (!rows.size)
+      results.append(node("li", "No matching resources.", "aw-subject-empty"));
+    scopeTitle.textContent = page.scopeTitle ?? "";
     cursor = page.nextCursor;
     more.hidden = !cursor;
     status.textContent = cursor
-      ? "This page is bounded. Load more to continue searching authorized resources."
-      : "Canonical local resources. No external files or providers were searched.";
+      ? "More resources available."
+      : rows.size + " resources shown.";
   };
   async function load(append: boolean) {
     if ((!active && !visible) || disposed) {
@@ -195,84 +285,82 @@ export function mountSubjectExperience(
     try {
       if (subject.kind === "project") {
         const overview = await port.projectOverview(subject.projectId),
-          resourcePage = active
-            ? await port.browseResources({ subject, limit: 10 })
-            : null;
+          resourcePage =
+            active && !disposed && request === sequence
+              ? await port.browseResources({ subject, limit: 10 })
+              : null;
         if (disposed || (!active && !visible) || request !== sequence) return;
         options.onProjection?.({ phase: "ready", kind: "project", overview });
-        if (!active) {
-          body.replaceChildren();
-          return;
-        }
-        body.replaceChildren();
-        body.append(
-          node("h3", overview.project.title),
-          node(
-            "p",
-            overview.tasks.open +
-              " open tasks · " +
-              overview.tasks.done +
-              " completed locally",
-          ),
-          node(
-            "p",
-            Object.entries(overview.resourcesByKind)
-              .map(([kind, count]) => count + " " + kind)
-              .join(" · ") ||
-              "No accessible registered resources in this project.",
-          ),
+        if (!active) return;
+        projectSummary.textContent =
+          overview.tasks.open +
+          " open · " +
+          overview.tasks.done +
+          " done" +
+          (overview.resourceCountsComplete ? "" : " · partial counts");
+        projectCounts.textContent =
+          Object.entries(overview.resourcesByKind)
+            .map(([kind, count]) => count + " " + kind.replaceAll("_", " "))
+            .join(" · ") || "No accessible resources.";
+        projectHint.textContent = [
+          !overview.resourceCountsComplete
+            ? "Resource counts are partial."
+            : "",
+          !overview.workspaceListComplete ? "Workspace list is bounded." : "",
+          resourcePage?.nextCursor
+            ? "Showing the first resource page. Use a Resource Browser for more."
+            : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        const ids = new Set(
+          overview.workspaces.map((workspace) => workspace.id),
         );
-        if (!overview.resourceCountsComplete)
-          body.append(
-            node("p", "Resource counts are partial.", "aw-subject-hint"),
+        for (const [id, item] of workspaceRows)
+          if (!ids.has(id)) {
+            item.row.remove();
+            workspaceRows.delete(id);
+          }
+        workspaces.querySelector(".aw-subject-empty")?.remove();
+        overview.workspaces.forEach((workspace, index) => {
+          let item = workspaceRows.get(workspace.id);
+          if (!item) {
+            const row = node("li"),
+              title = options.openWorkspace
+                ? button(workspace.title, () => {
+                    if (active && !disposed && workspaceRows.has(workspace.id))
+                      options.openWorkspace!(workspace.id);
+                  })
+                : node("span", workspace.title);
+            row.dataset.workspaceId = workspace.id;
+            row.append(title);
+            item = { row, title, workspaceId: workspace.id };
+            workspaceRows.set(workspace.id, item);
+          }
+          item.title.textContent = workspace.title;
+          const current = workspaces.children[index];
+          if (current !== item.row)
+            workspaces.insertBefore(item.row, current ?? null);
+        });
+        if (!workspaceRows.size)
+          workspaces.append(
+            node("li", "No accessible workspaces.", "aw-subject-empty"),
           );
-        body.append(node("h4", "Workspaces"));
-        const workspaces = node("ul");
-        for (const workspace of overview.workspaces) {
-          const row = node("li");
-          row.append(
-            options.openWorkspace
-              ? button(workspace.title, () =>
-                  options.openWorkspace!(workspace.id),
-                )
-              : node("span", workspace.title),
-          );
-          workspaces.append(row);
-        }
-        if (!workspaces.children.length)
-          workspaces.append(node("li", "No accessible active workspaces."));
-        body.append(workspaces);
-        if (!overview.workspaceListComplete)
-          body.append(
-            node("p", "Workspace list is bounded.", "aw-subject-hint"),
-          );
-        body.append(node("h4", "Recent recorded local changes"));
-        const events = node("ol");
+        events.replaceChildren();
         for (const event of overview.recentEvents) {
-          const row = node("li", event.type),
-            time = node("small", event.occurredAt + " · " + event.entityKind);
-          row.append(time);
+          const row = node("li", event.type);
+          row.append(
+            node("small", event.occurredAt + " · " + event.entityKind),
+          );
           events.append(row);
         }
         if (!events.children.length)
-          events.append(
-            node("li", "No recent recorded changes in this bounded view."),
-          );
-        body.append(events, node("h4", "Project resources"), results);
+          events.append(node("li", "No recent recorded changes."));
         if (resourcePage) {
           latestPage = resourcePage;
           appendResources(resourcePage, false);
         }
-        if (resourcePage?.nextCursor)
-          body.append(
-            node(
-              "p",
-              "Showing the first accessible resource page. Use a Resource Browser for full discovery.",
-              "aw-subject-hint",
-            ),
-          );
-        status.textContent =
-          "Counts describe canonical local state. Task completion is separate from verified execution.";
+        status.textContent = overview.workspaces.length + " workspaces shown.";
       } else {
         const requestedQuery = search.value;
         const page = await port.browseResources({
@@ -292,7 +380,6 @@ export function mountSubjectExperience(
           query: requestedQuery,
         });
         if (active) appendResources(page, append);
-        else results.replaceChildren();
       }
     } catch (error) {
       if (request === sequence) fail(error);
@@ -304,6 +391,9 @@ export function mountSubjectExperience(
   void load(false);
   return {
     refresh: () => load(false),
+    setPresentation(value: "workspace" | "focused") {
+      section.dataset.presentation = value;
+    },
     setActive(value: boolean) {
       if (active === value) return;
       active = value;
@@ -314,7 +404,7 @@ export function mountSubjectExperience(
     setVisible(value: boolean) {
       if (visible === value) return;
       visible = value;
-      if (visible) void load(false);
+      if (visible && !active) void load(false);
       else if (!active) {
         sequence++;
         clearTimeout(queryTimer);
@@ -323,11 +413,7 @@ export function mountSubjectExperience(
     },
     search(query: string) {
       search.value = query.slice(0, 500);
-      clearTimeout(queryTimer);
-      if (active || visible)
-        queryTimer = setTimeout(() => {
-          void load(false);
-        }, 160);
+      scheduleSearch();
     },
     async attach(resourceId: string) {
       const resource = latestPage?.resources.find(

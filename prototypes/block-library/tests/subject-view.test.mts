@@ -27,6 +27,135 @@ const page = (): BrowseResourcesPage => ({
   nextCursor: null,
 });
 
+test("normal browser search and same-ID actions stay mounted across pose, refresh and filtering", async (t) => {
+  const view = blockDocument();
+  t.after(view.install());
+  const reads: BrowseResourcesInput[] = [],
+    attached: ResourceCandidate[] = [],
+    opened: string[] = [];
+  const controller = mountSubjectExperience(
+    view.root,
+    { kind: "collection", collectionId: "collection:actual" },
+    {
+      async projectOverview() {
+        throw Error("unexpected");
+      },
+      async browseResources(input) {
+        reads.push(input);
+        return page();
+      },
+    },
+    {
+      presentation: "workspace",
+      attachResource: async (resource) => {
+        attached.push(resource);
+      },
+      openResource: (id) => opened.push(id),
+    },
+  );
+  t.after(() => controller.dispose());
+  await until(
+    () => view.root.querySelectorAll("[data-resource-id]").length === 1,
+  );
+  const search = view.root.querySelector("input"),
+    row = view.root.querySelector("[data-resource-id]"),
+    details = row.querySelector("details");
+  details.open = true;
+  row.scrollTop = 17;
+  search.value = "Synthetic";
+  search.focus();
+  search.setSelectionRange(2, 5);
+  search.oninput();
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  assert.equal(reads.at(-1)!.query, "Synthetic");
+  const before = reads.length;
+  controller.setPresentation("focused");
+  controller.setPresentation("workspace");
+  await controller.refresh();
+  assert.equal(
+    reads.length,
+    before + 1,
+    "Pose changes do not query the backend",
+  );
+  assert.equal(view.root.querySelector("[data-resource-id]"), row);
+  assert.equal(row.querySelector("details"), details);
+  assert.equal(details.open, true);
+  assert.equal(view.doc.activeElement, search);
+  assert.deepEqual(
+    [search.value, search.selectionStart, search.selectionEnd, row.scrollTop],
+    ["Synthetic", 2, 5, 17],
+  );
+  row.querySelector(".aw-subject-resource-title").onclick();
+  row.querySelector(".aw-subject-action").onclick();
+  await until(() => attached.length === 1);
+  assert.deepEqual(opened, ["resource:actual"]);
+  assert.equal(attached[0].id, "resource:actual");
+  assert.equal(attached[0].version, 7);
+  assert.equal(view.root.querySelector(".aw-subject-filter-menu").open, false);
+  controller.setActive(false);
+  const paused = reads.length;
+  await controller.refresh();
+  assert.equal(reads.length, paused);
+});
+
+test("normal project keeps workspace navigation and secondary disclosures stable on canonical updates", async (t) => {
+  const view = blockDocument();
+  t.after(view.install());
+  const opened: string[] = [];
+  const overview: ProjectOverview = {
+    project: { id: "project:a", title: "Synthetic project", version: 1 },
+    workspaces: [
+      { id: "workspace:a", title: "Synthetic workspace", version: 1 },
+    ],
+    workspaceListComplete: true,
+    resourcesByKind: { note: 3 },
+    tasks: { open: 2, done: 1 },
+    resourceCountsComplete: false,
+    recentEvents: [],
+  };
+  const controller = mountSubjectExperience(
+    view.root,
+    { kind: "project", projectId: "project:a" },
+    {
+      async projectOverview() {
+        return structuredClone(overview);
+      },
+      async browseResources() {
+        return page();
+      },
+    },
+    {
+      presentation: "workspace",
+      openWorkspace(id) {
+        opened.push(id);
+      },
+    },
+  );
+  t.after(() => controller.dispose());
+  await until(
+    () => view.root.querySelectorAll("[data-workspace-id]").length === 1,
+  );
+  const row = view.root.querySelector("[data-workspace-id]"),
+    button = row.querySelector("button"),
+    more = view.root.querySelector(".aw-project-details");
+  more.open = true;
+  button.focus();
+  overview.tasks.open = 5;
+  controller.setPresentation("focused");
+  await controller.refresh();
+  controller.setPresentation("workspace");
+  assert.equal(view.root.querySelector("[data-workspace-id]"), row);
+  assert.equal(view.root.querySelector(".aw-project-details"), more);
+  assert.equal(more.open, true);
+  assert.equal(view.doc.activeElement, button);
+  assert.match(
+    view.root.querySelector(".aw-project-summary").textContent,
+    /5 open · 1 done · partial counts/,
+  );
+  button.onclick();
+  assert.deepEqual(opened, ["workspace:a"]);
+});
+
 test("compact subject reads only when visible, uses a bounded page, and attaches the same granted resource", async (t) => {
   const view = blockDocument();
   t.after(view.install());

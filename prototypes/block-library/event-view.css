@@ -54,3 +54,45 @@
   overflow-wrap: anywhere;
   user-select: text;
 }
+
+.aw-event-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.45rem;
+}
+.aw-event-tools > input {
+  flex: 1 1 9rem;
+  min-width: 0;
+  width: 0;
+  color: inherit;
+  font: inherit;
+  background: #adc9e70a;
+  border: 1px solid #b8d8f330;
+  border-radius: 0.6rem;
+  padding: 0.4rem;
+}
+.aw-event-advanced > summary,
+.aw-event-about > summary {
+  padding: 0.35rem 0;
+}
+.aw-event-about {
+  font-size: 0.85em;
+  opacity: 0.8;
+}
+.aw-event-view > ol {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding-left: 0.7rem;
+  border-left: 1px solid #a7c8cb44;
+}
+.aw-event-view[data-presentation="workspace"] {
+  font-size: 1em;
+}
+.aw-event-view[data-presentation="workspace"] dl {
+  grid-template-columns: minmax(0, 1fr);
+}
+.aw-event-view :is(input, select, summary, button):focus-visible {
+  outline: 2px solid #c4e2e5;
+  outline-offset: 2px;
+}

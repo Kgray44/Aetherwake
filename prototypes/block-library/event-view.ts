@@ -143,7 +143,7 @@ export function mountEventExperience(
     refresh(): Promise<void>;
     openResource?(resourceId: string): void;
   },
-  options: { active?: boolean } = {},
+  options: { active?: boolean; presentation?: "workspace" | "focused" } = {},
 ) {
   const section = node("section"),
     filters = node("div"),
@@ -158,6 +158,7 @@ export function mountEventExperience(
     execution = node("input"),
     since = node("input");
   section.className = "aw-event-view";
+  section.dataset.presentation = options.presentation ?? "focused";
   filters.className = "aw-event-filters";
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
@@ -222,7 +223,6 @@ export function mountEventExperience(
   );
   filters.append(
     label("Scope", scope),
-    query,
     label("Evidence", classification),
     label("Source", source),
     label("Resource", resource),
@@ -233,7 +233,7 @@ export function mountEventExperience(
     disposed = false,
     busy = false;
   const refresh = button("Refresh retained events", () => {
-    if (busy) return;
+    if (busy || disposed || !active) return;
     busy = true;
     refresh.disabled = true;
     status.textContent = "Reading the canonical retained event window…";
@@ -241,7 +241,7 @@ export function mountEventExperience(
       .refresh()
       .then(update)
       .catch((error) => {
-        if (!disposed)
+        if (!disposed && active)
           status.textContent =
             error instanceof Error
               ? error.message
@@ -252,17 +252,27 @@ export function mountEventExperience(
         refresh.disabled = false;
       });
   });
-  section.append(
+  const tools = node("div"),
+    advanced = node("details"),
+    about = node("details");
+  tools.className = "aw-event-tools";
+  advanced.className = "aw-event-advanced";
+  advanced.append(node("summary", "Filters"), filters);
+  about.className = "aw-event-about";
+  about.append(
+    node("summary", "Evidence coverage"),
     node(
       "p",
       "Recorded local events. Evidence classes describe their source; receipt alone is not verification. Private reasoning and uncaptured activity are unavailable.",
     ),
-    filters,
-    refresh,
     coverage,
-    status,
-    list,
+    node(
+      "p",
+      "Workspace and project scopes use current membership, not membership at event time.",
+    ),
   );
+  tools.append(query, advanced, refresh);
+  section.append(tools, status, list, about);
   root.append(section);
   for (const input of [
     scope,
@@ -338,7 +348,7 @@ export function mountEventExperience(
     ]
       .filter(Boolean)
       .join(" ");
-    status.textContent = `${result.length} matching records in a window of ${window.events.length}. Showing up to 100. Workspace and project scopes use current membership, not membership at event time.`;
+    status.textContent = `${Math.min(result.length, 100)} of ${result.length} matching records · ${window.events.length} in retained window.`;
     const visible = result.slice(0, 100),
       ids = new Set(visible.map((event) => event.eventId));
     for (const [id, row] of rows)
@@ -363,9 +373,10 @@ export function mountEventExperience(
         details.append(summary, metadata);
         if (event.resourceId && port.openResource)
           details.append(
-            button("Open related resource", () =>
-              port.openResource!(event.resourceId!),
-            ),
+            button("Open related resource", () => {
+              if (active && !disposed && rows.has(event.eventId))
+                port.openResource!(event.resourceId!);
+            }),
           );
         row.append(details);
         rows.set(event.eventId, row);
@@ -382,6 +393,9 @@ export function mountEventExperience(
   update();
   return {
     update,
+    setPresentation(value: "workspace" | "focused") {
+      section.dataset.presentation = value;
+    },
     setActive(value: boolean) {
       if (active === value) return;
       active = value;

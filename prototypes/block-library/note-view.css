@@ -143,3 +143,26 @@
 [data-note-state] label[hidden] {
   display: none;
 }
+
+[data-document-presentation="workspace"] .aw-note-tools {
+  margin: 0;
+  gap: 0.3rem;
+  flex: none;
+}
+[data-document-presentation="workspace"] .aw-note-status {
+  margin: 0.2rem 0;
+  font-size: 0.8em;
+}
+[data-document-presentation="workspace"] .aw-note-reading > :first-child {
+  margin-top: 0;
+}
+[data-document-presentation="workspace"] .aw-note-sources :is(h3, p) {
+  margin: 0.35rem 0;
+}
+[data-document-presentation="workspace"] .aw-note-sources ul {
+  margin: 0;
+  padding-left: 1rem;
+}
+[data-document-kind="reference"] .aw-note-sources code {
+  font-size: 1em;
+}

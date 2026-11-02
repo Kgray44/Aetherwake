@@ -5,9 +5,11 @@ import {
   filterRecordedEvents,
   readRecentEvents,
   eventMetadata,
+  mountEventExperience,
   type EventWindow,
   type EventFilters,
 } from "../event-view.ts";
+import { blockDocument } from "./component-dom.mts";
 test("recent event replay seeks the retained tail instead of showing the first default page as the latest activity", async () => {
   const calls: { after: number; limit: number }[] = [];
   const result = await readRecentEvents(async (input) => {
@@ -175,4 +177,64 @@ test("metadata detail allowlist excludes assistant output and private tool paylo
   assert.equal(metadata["Recorded output bytes"], "0");
   assert.equal(metadata["Execution"], "execution-a");
   assert.equal(text.includes("SYNTHETIC_PRIVATE"), false);
+});
+
+test("normal stream exposes search and real metadata details while preserving focus, disclosure and inactive suspension", (t) => {
+  const view = blockDocument();
+  t.after(view.install());
+  const actual = window(),
+    opened: string[] = [];
+  let reads = 0;
+  const controller = mountEventExperience(
+    view.root,
+    {
+      snapshot() {
+        reads++;
+        return actual;
+      },
+      async refresh() {},
+      openResource(id) {
+        opened.push(id);
+      },
+    },
+    { presentation: "workspace" },
+  );
+  t.after(() => controller.dispose());
+  const query = view.root.querySelector(".aw-event-tools input");
+  query.value = "synthetic-event-7";
+  query.focus();
+  query.setSelectionRange(2, 6);
+  query.fire("input");
+  const row = view.root.querySelector("[data-event-id]"),
+    details = row.querySelector("details"),
+    open = row.querySelector("button");
+  details.open = true;
+  const before = reads;
+  controller.setPresentation("focused");
+  controller.setPresentation("workspace");
+  assert.equal(reads, before);
+  controller.update();
+  assert.equal(view.root.querySelector("[data-event-id]"), row);
+  assert.equal(details.open, true);
+  assert.equal(view.doc.activeElement, query);
+  assert.deepEqual([query.selectionStart, query.selectionEnd], [2, 6]);
+  assert.match(row.textContent, /simulated/);
+  open.onclick();
+  assert.deepEqual(opened, ["resource-b"]);
+  assert.equal(view.root.querySelector(".aw-event-advanced").open, false);
+  controller.setActive(false);
+  const paused = reads;
+  controller.update();
+  assert.equal(reads, paused);
+  actual.resources = actual.resources.filter(
+    (resource) => resource.id !== "resource-b",
+  );
+  controller.setActive(true);
+  assert.equal(view.root.querySelectorAll("[data-event-id]").length, 0);
+  open.onclick();
+  assert.deepEqual(
+    opened,
+    ["resource-b"],
+    "An unavailable old row cannot open its resource",
+  );
 });

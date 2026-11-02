@@ -432,10 +432,6 @@
 .folio[data-block-kind="note"] .aw-note-tools :is(button, summary) {
   font-size: calc(12px * var(--aw-block-text-scale, 1));
 }
-.folio[data-workspace-presentation="preview"]:not(.expanded)
-  .aw-identity-search {
-  display: none;
-}
 @container (max-width: 300px) {
   .aw-identity-metrics {
     gap: 0.4rem;
@@ -583,4 +579,81 @@
   .folio[data-block-kind="conversation"] .cp-chat {
     gap: 4px;
   }
+}
+
+/* Every registered normal card uses its actual working view. Visibility and
+   activity are controlled by the host; width is never an editing permission. */
+.folio[data-block-kind][data-workspace-presentation="usable"]:not(.receded):not(
+    [data-resource-availability="unavailable"]
+  ):not([data-block-availability="unavailable"])
+  .working-content {
+  display: flex;
+  flex-direction: column;
+  opacity: 1;
+  margin-top: 0.5rem;
+  gap: 0.4rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  font-size: calc(14px * var(--aw-block-text-scale, 1));
+  line-height: 1.5;
+}
+.folio[data-block-kind][data-workspace-presentation="usable"]:not(
+    [data-resource-availability="unavailable"]
+  ):not([data-block-availability="unavailable"])
+  .aw-block-compact {
+  display: none;
+}
+.folio[data-block-kind]:not(.expanded)
+  .working-content
+  > :is(.synthetic, .saved) {
+  display: none;
+}
+.folio[data-block-kind]:not(.expanded) .title-select h2 {
+  font-size: calc(19px * var(--aw-block-text-scale, 1));
+  line-height: 1.25;
+  margin-block: 0.3rem;
+}
+.folio[data-block-kind="conversation"][data-workspace-presentation="usable"]
+  .working-content {
+  overflow: hidden;
+}
+.folio[data-block-kind] .working-content > label {
+  flex: none;
+  font-size: calc(12px * var(--aw-block-text-scale, 1));
+  letter-spacing: normal;
+  gap: 0.25rem;
+}
+.folio[data-block-kind] .working-content > label:has(textarea) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 4rem;
+  min-height: 0;
+  font-size: 0;
+}
+.folio[data-block-kind] .working-content[data-note-state] textarea {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.35rem 0;
+  border: 0;
+}
+.folio[data-block-kind="task"] .local-task-state {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  flex: none;
+}
+.folio[data-block-kind="task"] .task-priority {
+  border-radius: 0.6rem;
+  padding: 0.25rem 0.4rem;
+  border: 1px solid #b8cada30;
+  background: #b8cada0a;
+  color: inherit;
+  font: inherit;
+}
+.folio[data-block-kind="reference"] .aw-note-sources {
+  order: -1;
+}
+.folio[data-block-kind="research"] .aw-note-reading {
+  border-left: 2px solid #9fc9d344;
+  padding-left: 0.7rem;
 }
