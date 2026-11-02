@@ -271,8 +271,9 @@ export function captureWorkspaceTemplate(
   configurations: Record<string, BlockConfiguration> = {},
 ): TemplateBody {
   check(snapshot.activeWorkspaceId, "workspace_required");
+  check(snapshot.blocks.every(b=>typeof b.resource_id==='string'),'subject_template_capture_unavailable');
   const blocks = snapshot.blocks.filter(
-    (b) => b.workspace_id === snapshot.activeWorkspaceId,
+    (b): b is typeof b & {resource_id:string} => b.workspace_id === snapshot.activeWorkspaceId && typeof b.resource_id==='string',
   );
   const resourceIds = [...new Set(blocks.map((b) => b.resource_id))];
   check(

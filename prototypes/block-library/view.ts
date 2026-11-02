@@ -962,7 +962,7 @@ export function mountWorkspaceTemplates(
       field("Description", description),
       field("Categories / tags (comma separated)", tags),
     );
-    for (const id of new Set(snapshot.blocks.map((b) => b.resource_id))) {
+    for (const id of new Set(snapshot.blocks.flatMap((b) => b.resource_id?[b.resource_id]:[]))) {
       const resource = snapshot.resources.find((r) => r.id === id);
       if (!resource) continue;
       const select = node("select");

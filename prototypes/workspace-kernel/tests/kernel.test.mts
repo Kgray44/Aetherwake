@@ -83,7 +83,7 @@ test('canonical resource survives multiple blocks, moves, layout save and restar
     k.addToCollection(collection.id, note.id);
     k.close();
     k = WorkspaceKernel.open(f.path);
-    assert.equal(k.schemaVersion(), 2);
+    assert.equal(k.schemaVersion(), 3);
     assert.equal(k.getResource(note.id).note.content, 'Fixture content');
     assert.equal(k.openWorkspace(right.id).blocks[0].resource_id, note.id);
     assert.equal(k.openWorkspace(right.id).layout.viewport.zoom, 1.25);
@@ -209,7 +209,7 @@ test('migrates v1 schema and refuses unknown future schema', () => {
     raw.exec(readFileSync(join(base, '../migrations/001-initial.sql'), 'utf8'));
     raw.close();
     const k = WorkspaceKernel.open(f.path);
-    assert.equal(k.schemaVersion(), 2);
+    assert.equal(k.schemaVersion(), 3);
     const n = k.createNote('Migrated note', 'content');
     k.addExternalRef(n.id, 'synthetic', '', 'id');
     k.close();
