@@ -4,6 +4,20 @@ import type { Resource } from '../../workspace-kernel/kernel.mts';
 import type { DesktopCommand, DesktopSnapshot } from '../../application-contract/contracts.ts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import type { AttachedContext } from '../../conversation-product/src/service.mts';
+import type { VelaClient, VelaState, ContextManifest, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
+import type { PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
+export type VelaOperationName = keyof VelaClient;
+export type VelaRequestInput = Parameters<VelaClient['request']>[0] & { previewId?:string;grantId?:string };
+export type VelaOperation = { [K in VelaOperationName]: { name: K; input: K extends 'request' ? VelaRequestInput : Parameters<NonNullable<VelaClient[K]>>[0] extends undefined ? Record<string,never> : Parameters<NonNullable<VelaClient[K]>>[0] } }[VelaOperationName];
+export interface VelaRequestPreview { id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string }
+export interface VelaNativeCapabilities {
+  supportedActions: VelaNativeAction['type'][];
+  /** Registered released Universal Block/application capability; no fallback implementation is supplied by Vela. */
+  dispatch: VelaHostPort['applyNative'];
+  workspaceRevision?: (workspaceId:string)=>number;
+  applyPreference?: VelaHostPort['applyPreference'];
+}
+export type VelaBackendState = VelaState & { nativeCapabilities: Record<string,{available:boolean;reason?:string}>; planningReferences:Record<string,Omit<PlanningObservation,'executionState'>> };
 export type ConversationProductRequest = { [K in keyof ProductCommandMap]: { name: K; input: ProductCommandMap[K]['input'] } }[keyof ProductCommandMap];
 export type ConversationProductOutput = ProductCommandMap[keyof ProductCommandMap]['output'];
 export type ConversationSendInput = ProductCommandMap['send']['input'];
@@ -69,8 +83,16 @@ export interface Options {
   contentPolicy: 'synthetic-only' | 'local-private';
   /** Host-owned directory outside the source checkout; never accepted from the renderer. */
   privateRoot?: string;
+  /** Explicit synthetic test seam; rejected for local-private production data. Never accepted through renderer RPC. */
+  velaPlanningPort?: VelaPlanningPort;
 }
 export interface CommandMap {
+  vela: { input: VelaOperation; output: unknown };
+  velaRequestPreview: { input: {intent:string;resourceIds:string[]}; output: VelaRequestPreview };
+  /** TRUSTED NATIVE HOST ONLY. Renderer/tool allow-lists MUST exclude this authorization command. */
+  authorizeVelaRequest: { input: {previewId:string;signature:string}; output: {grantId:string;expiresAt:string} };
+  /** TRUSTED NATIVE HOST ONLY. Separate approval of the exact delegated provider step. */
+  authorizeVelaDelegation: { input: {planId:string;stepId:string;fingerprint:string}; output: {grantId:string;expiresAt:string} };
   conversation: { input: ConversationProductRequest; output: ConversationProductOutput };
   conversationSendPreview: { input: ConversationSendInput; output: ConversationSendPreview };
   /** Trusted native host only; MUST NOT be exposed to a renderer or tool caller. */
