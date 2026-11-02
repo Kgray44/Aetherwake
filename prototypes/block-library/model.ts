@@ -1,11 +1,11 @@
 import type { DesktopSnapshot } from '../application-contract/contracts.ts';
 import { presentation } from '../workspace-engine/geometry.mts';
 import { defaultOrganization, updateOrganization } from '../workspace-engine/organization.mts';
-import type { CaptureChoices, TemplateBody, TemplateDraft, TemplateResourceRole, SaveTemplateInput } from './contracts.ts';
+import type { CaptureChoices, TemplateBody, TemplateDraft, TemplateResourceRole } from './contracts.ts';
 import { blockDefinition } from './registry.ts';
 
 export const TEMPLATE_LIMITS = { templates: 256, resources: 32, placements: 64, bodyBytes: 65536, receipts: 4096 } as const;
-export function check(condition: unknown, code: string): asserts condition { if (!condition) throw new Error(code); }
+export function check(condition: unknown, code: string): asserts condition { if (!condition) throw Object.assign(new Error(code), {code}); }
 const object = (value: any, keys: string[]) => check(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).every(k => keys.includes(k)), 'invalid_template_fields');
 export const text = (value: unknown, max = 120): string => { check(typeof value === 'string' && value.trim().length > 0 && value.length <= max, 'invalid_template_text'); return value.trim(); };
 export const version = (value: unknown): number => { check(Number.isInteger(value) && Number(value) >= 1, 'invalid_version'); return Number(value); };

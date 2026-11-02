@@ -17,7 +17,7 @@ export const BUILTIN_BLOCKS: readonly BlockDefinition[] = Object.freeze([
 ]);
 export const blockDefinition = (kind: BlockKind): BlockDefinition => {
   const found = BUILTIN_BLOCKS.find(item => item.kind === kind);
-  if (!found) throw new Error('unsupported_block_kind');
+  if (!found) throw Object.assign(new Error('unsupported_block_kind'), {code:'unsupported_block_kind'});
   return found;
 };
 export const blockAvailability = (kind: BlockKind, capabilities: LibraryCapabilities): Availability => capabilities.kinds[kind] ?? { state: 'unknown', reason: 'The host has not advertised this block capability.' };
@@ -29,18 +29,18 @@ export function searchBlocks(query: string, capabilities: LibraryCapabilities, c
 export function assertBlockAvailable(kind: BlockKind, capabilities: LibraryCapabilities, provider?: 'local' | 'codex'): void {
   blockDefinition(kind);
   const state = blockAvailability(kind, capabilities);
-  if (state.state !== 'available') throw new Error('block_unavailable: ' + (state.reason ?? state.state));
+  if (state.state !== 'available') throw Object.assign(new Error('block_unavailable: ' + (state.reason ?? state.state)), {code:'block_unavailable'});
   if (provider !== undefined) {
-    if (kind !== 'conversation') throw new Error('provider_only_for_conversation');
-    if (!['local', 'codex'].includes(provider)) throw new Error('unsupported_provider');
+    if (kind !== 'conversation') throw Object.assign(new Error('provider_only_for_conversation'), {code:'provider_only_for_conversation'});
+    if (!['local', 'codex'].includes(provider)) throw Object.assign(new Error('unsupported_provider'), {code:'unsupported_provider'});
     const available = capabilities.providers[provider];
-    if (available?.state !== 'available') throw new Error('provider_unavailable: ' + (available?.reason ?? available?.state ?? 'unknown'));
+    if (available?.state !== 'available') throw Object.assign(new Error('provider_unavailable: ' + (available?.reason ?? available?.state ?? 'unknown')), {code:'provider_unavailable'});
   }
 }
 export function validateCreateBlock(input: CreateBlockInput, capabilities: LibraryCapabilities): CreateBlockInput & { presentation: Presentation } {
-  if (!input || typeof input !== 'object' || Object.keys(input).some(k => !['commandId','workspaceId','expectedLayoutVersion','kind','title','provider','presentation'].includes(k))) throw new Error('invalid_create_block');
-  if (typeof input.commandId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,198}$/.test(input.commandId) || typeof input.workspaceId !== 'string' || !input.workspaceId || input.workspaceId.length > 200 || !Number.isInteger(input.expectedLayoutVersion) || input.expectedLayoutVersion < 1) throw new Error('invalid_create_block');
-  if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 120) throw new Error('invalid_title');
+  if (!input || typeof input !== 'object' || Object.keys(input).some(k => !['commandId','workspaceId','expectedLayoutVersion','kind','title','provider','presentation'].includes(k))) throw Object.assign(new Error('invalid_create_block'), {code:'invalid_create_block'});
+  if (typeof input.commandId !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,198}$/.test(input.commandId) || typeof input.workspaceId !== 'string' || !input.workspaceId || input.workspaceId.length > 200 || !Number.isInteger(input.expectedLayoutVersion) || input.expectedLayoutVersion < 1) throw Object.assign(new Error('invalid_create_block'), {code:'invalid_create_block'});
+  if (typeof input.title !== 'string' || !input.title.trim() || input.title.length > 120) throw Object.assign(new Error('invalid_title'), {code:'invalid_title'});
   assertBlockAvailable(input.kind, capabilities, input.provider);
   return { ...input, title: input.title.trim(), presentation: presentation(input.presentation ?? {}, blockDefinition(input.kind).defaultPresentation) };
 }

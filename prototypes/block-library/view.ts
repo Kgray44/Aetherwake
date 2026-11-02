@@ -1,4 +1,4 @@
-import type { BlockLibraryHostPort, BlockKind, CreatedBlock, LibraryCapabilities, TemplateMountOptions, WorkspaceTemplatePort, WorkspaceTemplate, TemplateApplyInput, CaptureChoices, VelaTemplatePlan } from './contracts.ts';
+import type { BlockLibraryHostPort, BlockKind, BlockCategory, CreatedBlock, LibraryCapabilities, TemplateMountOptions, WorkspaceTemplatePort, WorkspaceTemplate, TemplateApplyInput, CaptureChoices, VelaTemplatePlan } from './contracts.ts';
 import { searchBlocks, blockDefinition, blockAvailability } from './registry.ts';
 import { captureWorkspaceTemplate } from './model.ts';
 
@@ -7,7 +7,7 @@ const node = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', tex
 };
 const button = (text: string, run: () => void) => { const element = node('button','aw-library__button',text); element.type = 'button'; element.onclick = run; return element; };
 const field = (label: string, input: HTMLElement) => { const element = node('label','aw-library__field',label); element.append(input); return element; };
-const errorText = (error: unknown) => error instanceof Error ? error.message : 'The host could not complete this operation.';
+const errorText = (error: unknown) => error instanceof Error ? error.message.replaceAll('_',' ') : 'The host could not complete this operation.';
 const commandId = () => 'library:' + crypto.randomUUID();
 function shell(root: HTMLElement, title: string, onClose: () => void) {
   const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -48,7 +48,7 @@ export function mountBlockLibrary(root: HTMLElement, port: BlockLibraryHostPort,
         .finally(()=>{pending=false;if(!ui.disposed)create.disabled=available.state!=='available';});};
     detail.append(heading,description,preview,node('h4','','Canonical controls'),controls,form);
   };
-  const renderList=()=>{if(!capabilities)return;list.replaceChildren();const results=searchBlocks(search.value,capabilities,(category.value||undefined) as any);
+  const renderList=()=>{if(!capabilities)return;list.replaceChildren();const results=searchBlocks(search.value,capabilities,(category.value||undefined) as BlockCategory|undefined);
     if(!results.length)list.append(node('p','','No matching supported block types.'));
     for(const definition of results){const item=button(definition.title+(definition.availability.state==='available'?'':' · '+definition.availability.state),()=>{selected=definition.kind;renderList();showDetail();});item.setAttribute('aria-pressed',String(definition.kind===selected));list.append(item);}
   };
