@@ -40,7 +40,8 @@ test("native acceptance observes foreground ownership without ever reclaiming it
   const { state, win } = nativeWindow();
   const driver = await createDriver(win);
   await driver.wait("true");
-  assert.equal(state.reads, 1);
+  const readsBeforeLoss = state.reads;
+  assert.ok(readsBeforeLoss > 0);
   assert.equal(state.focusCalls, 0);
   state.focused = false;
   await assert.rejects(driver.wait("true"), /native_verification_focus_lost/);
@@ -52,7 +53,7 @@ test("native acceptance observes foreground ownership without ever reclaiming it
     driver.fill("input", "synthetic"),
     /native_verification_focus_lost/,
   );
-  assert.equal(state.reads, 1);
+  assert.equal(state.reads, readsBeforeLoss);
   assert.equal(state.inputs, 0);
   assert.equal(state.focusCalls, 0);
 });

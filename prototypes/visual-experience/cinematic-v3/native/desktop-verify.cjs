@@ -355,6 +355,7 @@ async function driver(win) {
       settled = false;
     do {
       await pause(80);
+      foreground();
       p = await js(
         `(()=>{let e=document.querySelector(${JSON.stringify(selector)});e?.scrollIntoView({block:'nearest',inline:'nearest'});let r=e?.getBoundingClientRect();if(!r||!r.width||!r.height||e.disabled||e.hidden)return{error:'Unavailable '+${JSON.stringify(selector)}};let x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2),h=document.elementFromPoint(x,y);if(!h||!(e===h||e.contains(h)))return{error:'Occluded '+${JSON.stringify(selector)}+' by '+h?.outerHTML.slice(0,240),x,y};return {x,y}})()`,
       );
@@ -371,6 +372,7 @@ async function driver(win) {
     } while (Date.now() < deadline);
     if (p.error) throw Error(p.error);
     if (!settled) throw Error("Moving native click target " + selector);
+    foreground();
     const inputAt = Date.now();
     for (const type of ["mouseMove", "mouseDown", "mouseUp"])
       win.webContents.sendInputEvent({
