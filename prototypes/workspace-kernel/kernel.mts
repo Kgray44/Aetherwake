@@ -251,6 +251,12 @@ export class WorkspaceKernel {
     return resource;
   }
 
+  /** Canonical identity for a specialized domain. Its host composes domain
+   * metadata in the same transaction; this never creates a note or placement. */
+  createGenericResource(title: string, projectId: string | null = null, mutation: Mutation = {}): Resource {
+    return this.tx(() => this.createResource('generic', title, projectId, mutation));
+  }
+
   createNote(title: string, content: string, projectId: string | null = null, mutation: Mutation = {}): Resource {
     return this.tx(() => {
       if (typeof content !== 'string') throw new KernelError('INVALID', 'Note content must be text');
