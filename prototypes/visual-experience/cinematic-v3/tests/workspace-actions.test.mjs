@@ -642,7 +642,11 @@ test("absent workspace disables mutations truthfully; disposal cancels preview a
     assert(f.motion.bodies.has("synthetic:external-body"));
     assert.equal(f.dom.root.children.length, 0);
     assert.equal(f.wakes(), before);
-    assert.equal(cancels, 1);
+    assert.equal(
+      cancels,
+      0,
+      "opening/disposing cannot cancel another surface's unowned preview",
+    );
   } finally {
     f.cleanup();
   }

@@ -451,7 +451,9 @@ export function mountWorkspaceActions(
     gridDirty = false,
     gridGeneration = 0,
     gridConflict = false,
-    gridRejected = false;
+    gridRejected = false,
+    previewOwned = false,
+    previewGeneration = 0;
   const gridForm = node("form", "aw-wa-grid-form"),
     gridNotice = node("p", "aw-wa-grid-notice");
   gridNotice.setAttribute("role", "status");
@@ -493,7 +495,12 @@ export function mountWorkspaceActions(
         const value = readGrid();
         if (value && !gridConflict) {
           try {
-            options.previewOrganization?.(value);
+            if (options.previewOrganization) {
+              previewOwned = true;
+              previewGeneration++;
+              options.previewOrganization(value);
+              checkGrid();
+            }
           } catch {
             errorText = "The preview is unavailable. Your edits are kept.";
             showStatus();
@@ -521,10 +528,13 @@ export function mountWorkspaceActions(
       void run(
         "grid-apply",
         async () => {
+          // The host owns any preview it creates internally while committing.
+          const preview = previewGeneration;
           const next = await options.configureOrganization!({
             organization,
             expectedRevision,
           });
+          if (preview === previewGeneration) previewOwned = false;
           if (
             !disposed &&
             next &&
@@ -558,8 +568,15 @@ export function mountWorkspaceActions(
       const b = button(title, "preset-" + preset, () => {
         if (grid.open)
           void run("preset-" + preset, async () => {
-            options.previewStructuredPreset?.(preset);
-            return options.applyStructuredPreset!(preset);
+            let preview = previewGeneration;
+            if (options.previewStructuredPreset) {
+              preview = ++previewGeneration;
+              previewOwned = true;
+              options.previewStructuredPreset(preset);
+            }
+            const next = await options.applyStructuredPreset!(preset);
+            if (preview === previewGeneration) previewOwned = false;
+            return next;
           });
       });
       b.setAttribute("aria-pressed", "false");
@@ -569,8 +586,11 @@ export function mountWorkspaceActions(
     grid.content.append(group);
   }
   function cancelPreview() {
+    if (!previewOwned) return true;
     try {
       options.cancelOrganizationPreview?.();
+      previewOwned = false;
+      previewGeneration++;
       return true;
     } catch {
       if (!disposed) {
@@ -654,7 +674,8 @@ export function mountWorkspaceActions(
       pending.has("grid-apply"),
     );
     state(gridReload, !active() || pending.has("grid-apply"));
-    state(gridCancel, pending.has("grid-apply"));
+    state(gridCancel, organizationBusy());
+    gridCancel.hidden = !previewOwned;
   }
   const destinations = node("nav", "aw-wa-destinations");
   destinations.setAttribute("aria-label", "Workspace destinations");
