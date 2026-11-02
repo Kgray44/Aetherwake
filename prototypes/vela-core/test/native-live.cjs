@@ -74,6 +74,7 @@ function createSlot({win, slotStartedAt, deadlineMs = SLOT_LIMIT_MS, now = () =>
   };
   return { started, deadline, workDeadline, now, abort, check, remaining: () => Math.max(0, workDeadline - now()),
     consent(value) { consentPending = value; },
+    isConsentPending: () => consentPending,
     async bound(operation, allowReview = false) { check(allowReview); const result = await Promise.race([Promise.resolve().then(operation), aborted]); check(allowReview); return result; },
     failure: () => failure,
   };
@@ -114,9 +115,23 @@ async function cancelObservedPlanning(slot, callback) {
   } catch(error){result.status='host-error-unconfirmed';result.error=String(error.message??error).slice(0,500);} finally {clearTimeout(cleanupTimer);}
   return result;
 }
-exports._offline = {createSlot, trustedReviewWindow, consoleRecord, cancelObservedPlanning, submitStableTarget, SLOT_LIMIT_MS, CLEANUP_RESERVE_MS};
+/** Cached native stage metadata only: never a renderer RPC, broker action or raw error/body projection. */
+function readNativeRequestDiagnostics(read) {
+  if(read===undefined)return [];
+  assert.equal(typeof read,'function','invalid_native_request_diagnostics');let records;
+  try{records=read();}catch{throw Error('native_request_diagnostics_unavailable');}
+  assert(Array.isArray(records)&&records.length<=24,'invalid_native_request_diagnostics');
+  return records.map(record=>{
+    assert(record&&typeof record==='object'&&!Array.isArray(record)&&Object.keys(record).every(key=>['stage','state','code'].includes(key))&&['preview','review','grant','request'].includes(record.stage)&&['started','completed','failed'].includes(record.state)&&(record.code===undefined||typeof record.code==='string'&&/^[A-Za-z0-9_.:-]{1,160}$/.test(record.code)),'invalid_native_request_diagnostics');
+    return {stage:record.stage,state:record.state,...(record.code===undefined?{}:{code:record.code})};
+  });
+}
+function nativeRequestFailure(records) {
+  const failed=records.find(record=>record.state==='failed');return failed?Error('native_'+failed.stage+'_failed:'+ (failed.code??'unspecified_native_failure')):null;
+}
+exports._offline = {createSlot, trustedReviewWindow, consoleRecord, cancelObservedPlanning, submitStableTarget, readNativeRequestDiagnostics, nativeRequestFailure, SLOT_LIMIT_MS, CLEANUP_RESERVE_MS};
 
-async function run({win, app, privateRoot, source, startupErrors = [], cancelOwnedPlanning}, slot) {
+async function run({win, app, privateRoot, source, startupErrors = [], cancelOwnedPlanning, getNativeRequestDiagnostics}, slot) {
   const restore = process.argv.includes('--verify-restore'),resume=process.argv.includes('--resume-reviewed-plan');
   const argument = name => process.argv.find(value=>value.startsWith(name+'='))?.slice(name.length+1);
   const out = path.join(runtime, 'application-evidence', 'vela-live-' + Date.now());
@@ -129,6 +144,7 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
     contract:'aerynth.actual-vela-live-workspace@1', at:new Date().toISOString(), restore, resume, source, privateRoot, passed:false,
     host:'Actual released desktop, Vela, Library, canonical SQLite, and identified native Codex planning adapter',
     syntheticSources:true, actions:[], checks:[], captures:[], consoleErrors:startupErrors.slice(0,32).map(e=>({message:String(e.message).slice(0,2048),line:e.line,source:String(e.source??'').slice(0,300)})), partial:{},
+    nativeRequestDiagnostics:[],nativeRequestDiagnosticsAvailable:typeof getNativeRequestDiagnostics==='function',
     slot:{startedAt:slot.started,deadlineMs:slot.deadline-slot.started,workDeadlineAt:slot.workDeadline},
     bounds:{planningRequests:resume||restore?0:1, realTurns:resume||restore?0:1, delegatedTurns:0, automaticRetries:0, pngs:6, pngBytes:12*1024*1024},
     consent:{method:resume||restore?'Original bound native planning approval; this phase requests no provider consent':'Actual native host dialog, operated externally by the parent', automaticGrants:false, dialogObservation:'Only the actual parent-owned sharing child is observed. The parent operator alone may choose Send once; observation never implies approval.'},
@@ -140,6 +156,7 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
       'A failed or invalid provider response is preserved without proposal substitution or automatic retry.',
     ],
   };
+  const observeDiagnostics=()=>receipt.nativeRequestDiagnostics=readNativeRequestDiagnostics(getNativeRequestDiagnostics);
   let driver, budget = {count:0, bytes:0, files:[]};
   const check = (name, detail) => receipt.checks.push({name, ...(detail === undefined ? {} : {detail})});
   const consoleError = (event, ...args) => {
@@ -149,10 +166,12 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
   win.webContents.on('console-message', consoleError);
   const diagnostic = async () => {
     if (!driver) return {error:'driver_not_ready'};
+    if (slot.isConsentPending()) return {error:'parent_diagnostic_withheld_during_native_consent'};
     try { return await slot.bound(()=>driver.js(`(()=>{try{return {status:document.querySelector('.vela-core-status')?.textContent,requestState:document.querySelector('.vela-core-status')?.dataset.requestState,requestId:document.querySelector('.vela-core-status')?.dataset.requestId,planState:document.querySelector('.vela-core-status')?.dataset.planState,actionState:document.querySelector('.vela-core-status')?.dataset.actionState,provider:document.querySelector('.vela-core-provider')?.textContent,selection:document.querySelector('.vela-core-selection')?.textContent,library:document.querySelector('.aw-library__status')?.textContent,command:document.querySelector('#command-error')?.textContent,panels:[...document.querySelectorAll('dialog[open]')].map(e=>e.id||e.getAttribute('aria-label')),plans:[...document.querySelectorAll('.vela-core-plan')].map(e=>e.textContent.slice(0,6000)),blocks:[...document.querySelectorAll('[data-block]')].map(e=>({id:e.dataset.block,expanded:e.classList.contains('expanded')}))}}catch(error){return {error:String(error)}}})()`)); }
     catch (error) { return {error:String(error.message ?? error)}; }
   };
   try {
+    observeDiagnostics();
     assert(process.argv.includes('--integration-vela-live'), 'Explicit live acceptance flag required');
     assert(!(resume&&restore),'Resume reviewed application and restart verification are separate modes');
     assert(!process.argv.includes('--integration-live'), 'Do not combine with the legacy live helper/auto-consent flag');
@@ -196,6 +215,7 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
       let observed=false;
       while(slot.remaining()>0){
         const mode=slot.check(true);
+        const nativeFailure=nativeRequestFailure(observeDiagnostics());if(nativeFailure)throw nativeFailure;
         if(mode.kind==='native-review'){
           if(!observed){
             const shown=await slot.bound(()=>mode.child.webContents.executeJavaScript(`(()=>{const nodes=[...document.querySelectorAll('details')],exact=nodes.find(e=>e.querySelector('summary')?.textContent==='Exact provider request');return{title:document.querySelector('#review-title')?.textContent,intent:document.querySelector('.intent')?.textContent,prompt:exact?.querySelector('pre')?.textContent,digest:exact?.querySelector('small')?.textContent}})()`,true),true);
@@ -413,11 +433,13 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
     }
     assert.equal(receipt.consoleErrors.length,0,'Observed startup/runtime console or shader errors');slot.check();receipt.passed=true;
   } catch(error) {
+    try{observeDiagnostics();}catch{receipt.nativeRequestDiagnosticsError='native_request_diagnostics_unavailable';}
     if(slot.failure()){receipt.abort={reason:slot.failure().message,elapsedMs:slot.now()-slot.started};receipt.cancellation=await cancelObservedPlanning(slot,cancelOwnedPlanning);}
     receipt.error={message:String(error.message??error),stack:error.stack}; receipt.partial.ui=await diagnostic();
-    if(driver&&!slot.failure())for(const [key,command,input] of [['vela','vela',{name:'state',input:{}}],['executions','executionStatus',{}]])try{receipt.partial[key]=await slot.bound(()=>driver.js(`window.aerynthHost.command(${JSON.stringify(command)},${JSON.stringify(input)})`));}catch(readError){receipt.partial[key]={readError:String(readError.message??readError)};}
-    if(driver&&!slot.failure()&&Array.isArray(receipt.partial.executions))for(const execution of receipt.partial.executions.slice(0,1))try{receipt.partial.providerOutput=await slot.bound(()=>driver.js(`window.aerynthHost.command('conversation',${JSON.stringify({name:'detail',input:{resourceId:execution.resourceId,limit:50}})})`));}catch(readError){receipt.partial.providerOutput={readError:String(readError.message??readError)};}
+    if(driver&&!slot.failure()&&!slot.isConsentPending())for(const [key,command,input] of [['vela','vela',{name:'state',input:{}}],['executions','executionStatus',{}]])try{receipt.partial[key]=await slot.bound(()=>driver.js(`window.aerynthHost.command(${JSON.stringify(command)},${JSON.stringify(input)})`));}catch(readError){receipt.partial[key]={readError:String(readError.message??readError)};}
+    if(driver&&!slot.failure()&&!slot.isConsentPending()&&Array.isArray(receipt.partial.executions))for(const execution of receipt.partial.executions.slice(0,1))try{receipt.partial.providerOutput=await slot.bound(()=>driver.js(`window.aerynthHost.command('conversation',${JSON.stringify({name:'detail',input:{resourceId:execution.resourceId,limit:50}})})`));}catch(readError){receipt.partial.providerOutput={readError:String(readError.message??readError)};}
   }
+  try{observeDiagnostics();}catch{receipt.nativeRequestDiagnosticsError='native_request_diagnostics_unavailable';receipt.passed=false;}
   win.webContents.removeListener('console-message',consoleError);
   receipt.slot.elapsedMs=slot.now()-slot.started;
   await fs.writeFile(path.join(out,restore?'restore.json':'journey.json'),encode(receipt));
