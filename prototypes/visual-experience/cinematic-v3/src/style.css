@@ -1140,9 +1140,8 @@ body:not(.focused):has(#stream:not([hidden])) #vela .vela-label {
 /* Opaque GPU substrates protect content; rear DOM paint and hit regions are
    clipped by the canonical front silhouette. Ordinary overlap never changes
    this optical veil. Focus protects only its central reading region. */
-body:has(#world[data-materials="physical"]):not(.graphics-fallback)
-  .folio:not(.receded) {
-  background: rgba(8, 13, 21, 0.06);
+body:has(#world[data-materials="physical"]):not(.graphics-fallback) .folio {
+  background: transparent;
   border-color: transparent;
   box-shadow: none;
 }
@@ -1161,8 +1160,14 @@ body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   margin: -4px -6px 0;
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
-  .folio:not(.receded)::before {
-  opacity: 0;
+  .folio::before {
+  opacity: 1;
+  background: rgba(8, 13, 21, 0.06);
+  clip-path: var(--resource-content-clip, none);
+}
+.folio .folio-inner,
+.folio .resource-anchor {
+  clip-path: var(--resource-content-clip, none);
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio:not(.receded)::after {

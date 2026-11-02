@@ -1786,6 +1786,7 @@ export class Environment {
       placement.h > 0
     ) {
       const fit = Math.min(
+        1,
         placement.w / Math.max(1, this.projectedPresence.w),
         placement.h / Math.max(1, this.projectedPresence.h),
       );

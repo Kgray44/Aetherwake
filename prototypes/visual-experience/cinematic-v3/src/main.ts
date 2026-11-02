@@ -125,6 +125,7 @@ let architectureConcept: ArchitectureConcept = "ring";
 document.body.dataset.study = study;
 let celestialStudy: CelestialStudy = "starlit";
 let instrumentStudy: InstrumentStudy = "optical";
+let presenceReviewScale: number | null = null;
 document.body.dataset.instrumentStudy = instrumentStudy;
 // Explicit native evidence hook. Null means the ordinary autonomous clock.
 let environmentPhase: number | null = null;
@@ -1053,7 +1054,7 @@ function renderDOM() {
       p.y + p.h < 120 ||
       p.x > innerWidth ||
       p.y > innerHeight - 100;
-    const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateZ(${p.rotation}deg) rotateY(${p.yaw}deg);z-index:${compositing.rank + 3};border-radius:${surfaceBorderRadius(p.shape, p.w, p.h, unfold)};clip-path:${compositing.clipPath || "none"};`;
+    const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateZ(${p.rotation}deg) rotateY(${p.yaw}deg);z-index:${compositing.rank + 3};border-radius:${surfaceBorderRadius(p.shape, p.w, p.h, unfold)};clip-path:inset(0 round ${surfaceBorderRadius(p.shape, p.w, p.h, unfold)});--resource-content-clip:${compositing.clipPath || "none"};`;
     if (poseStyleCache.get(id) !== style) {
       el.style.cssText = style;
       poseStyleCache.set(id, style);
@@ -1225,14 +1226,22 @@ function tick(now: number) {
         surfaces,
         surfaceView,
         quiet,
-        presencePlacement: (
-          application as
-            | (Application & {
-                presence?: () => { x: number; y: number; w: number; h: number };
-              })
-            | null
-        )?.presence?.(),
-        presenceScale: desktopMode ? 0.65 : 1,
+        presencePlacement:
+          presenceReviewScale !== null
+            ? undefined
+            : (
+                application as
+                  | (Application & {
+                      presence?: () => {
+                        x: number;
+                        y: number;
+                        w: number;
+                        h: number;
+                      };
+                    })
+                  | null
+              )?.presence?.(),
+        presenceScale: presenceReviewScale ?? (desktopMode ? 0.65 : 1),
         ambientStrength: scene.ambientStrength,
       });
       const presence =
@@ -1327,6 +1336,11 @@ function controller() {
       metrics: { ...metrics },
       gpu: environment?.stats(),
       compositing: materialCompositor.diagnostics(),
+      spatial: (
+        application as
+          | (Application & { spatialDiagnostics?: () => unknown })
+          | null
+      )?.spatialDiagnostics?.(),
     }),
     // Native synthetic review only: transient poses stay in the existing
     // coordinator and never write or compete with canonical engine geometry.
@@ -1346,6 +1360,15 @@ function controller() {
       wake();
     },
     application: () => application?.snapshot(),
+    setPresenceScaleForReview: (scale: number | null) => {
+      if (
+        scale !== null &&
+        (!Number.isFinite(scale) || scale < 0.2 || scale > 2)
+      )
+        return;
+      presenceReviewScale = scale;
+      wake();
+    },
     execute: (command: DesktopCommand) => application?.run(command),
     flush: () => application?.flush(),
     select,
