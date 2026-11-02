@@ -300,7 +300,12 @@ app.whenReady().then(async () => {
         throw new Error("command_too_large");
       if (
         !admitted &&
-        !["replay", "executionStatus", "interrupt"].includes(command) &&
+        ![
+          "replay",
+          "executionStatus",
+          "conversationActivity",
+          "interrupt",
+        ].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "vela" && isVelaRead(input)) &&
         !(command === "notes" && input?.name === "readNote") &&
@@ -337,7 +342,9 @@ app.whenReady().then(async () => {
           limit: 250,
         });
         result.truncated ||= bounds.latest > 250;
-      } else if (command === "executionStatus")
+      } else if (command === "conversationActivity")
+        result = await call("conversationActivity", input);
+      else if (command === "executionStatus")
         result = Object.values((await call("snapshot", {})).executions);
       else if (command === "interrupt")
         result = await call("interrupt", { executionId: input.executionId });

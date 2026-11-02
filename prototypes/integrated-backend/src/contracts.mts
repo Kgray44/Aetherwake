@@ -1,7 +1,7 @@
 import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
 import type { GraphData, Message, ContextPackage, Sensitivity } from '../../connected-conversations/src/graph.ts';
 import type { Resource } from '../../workspace-kernel/kernel.mts';
-import type { DesktopCommand, DesktopSnapshot } from '../../application-contract/contracts.ts';
+import type { DesktopCommand, DesktopSnapshot, PublicConversationExecution, ConversationActivitySnapshot } from '../../application-contract/contracts.ts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import type { AttachedContext } from '../../conversation-product/src/service.mts';
 import type { VelaClient, VelaState, ContextManifest, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
@@ -36,16 +36,13 @@ export interface ConversationSendPreview {
 }
 export const CONTRACT = 'aerynth.integration@0.1' as const;
 export type Classification = 'observed' | 'reported' | 'inferred' | 'simulated';
-export type ExecutionState = 'dispatching' | 'running' | 'provider_completed' | 'failed' | 'interrupted' | 'unknown';
+export type ExecutionState = PublicConversationExecution['state'];
 export interface Binding {
   providerId: string; instanceId: string; accountScope: string;
   nativeThreadId: string; nativeSessionId: string | null;
 }
-export interface Execution {
-  id: string; resourceId: string; providerId: string; state: ExecutionState;
-  binding: Binding | null; turnId: string | null; commandId: string;
-  startedAt: string; endedAt: string | null; taskVerified: false;
-  errorCode?: string;
+export interface Execution extends PublicConversationExecution {
+  binding: Binding | null; turnId: string | null;
 }
 export interface Capability {
   providerId: string; mock: boolean; authentication: string;
@@ -94,6 +91,7 @@ export interface Options {
   velaPlanningPort?: VelaPlanningPort;
 }
 export interface CommandMap {
+  conversationActivity: { input: { resourceIds: string[] }; output: ConversationActivitySnapshot };
   notes: {input:NoteRequest;output:LibraryResponse};
   library: {input:LibraryRequest;output:LibraryResponse};
   vela: { input: VelaOperation; output: unknown };

@@ -4,6 +4,7 @@ import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import type { DatabaseSync } from 'node:sqlite';
+import type { ConversationActivitySnapshot, PublicConversationExecution } from '../../application-contract/contracts.ts';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { ConversationGraph, type GraphData, type ProviderAdapter as GraphAdapter } from '../../connected-conversations/src/graph.ts';
 import { localConversationAdapter, mockOrdinaryAdapter } from '../../connected-conversations/src/adapters.ts';
@@ -52,6 +53,7 @@ export class BackendCore {
   private sequence = 0;
   private active: Execution | null = null;
   private assistantText = '';
+  private assistantCursor = 0;
   private streamFailure = false;
   private stopEvents: () => void;
   private emit: (event: StreamEvent) => void;
@@ -419,6 +421,20 @@ export class BackendCore {
     const time=Date.now();for(const [id,value] of this.sendPreviews)if(Date.parse(value.preview.expiresAt)<=time)this.sendPreviews.delete(id);
     for(const [id,value] of this.sendGrants)if(Date.parse(value.expiresAt)<=time)this.sendGrants.delete(id);
   }
+  private conversationActivity(input:{resourceIds:string[]}):ConversationActivitySnapshot {
+    ensure(input&&Array.isArray(input.resourceIds)&&input.resourceIds.length<=64&&input.resourceIds.every(id=>typeof id==='string'&&id.length>0&&id.length<=256)&&new Set(input.resourceIds).size===input.resourceIds.length,'invalid_conversation_activity');
+    const resources=input.resourceIds.map(resourceId=>({resourceId,available:!!this.state.resources[resourceId]&&this.conversationAccess.access(resourceId)}));
+    const allowed=new Set(resources.filter(item=>item.available).map(item=>item.resourceId));
+    const publicExecution=(execution:Execution):PublicConversationExecution=>({id:execution.id,resourceId:execution.resourceId,providerId:execution.providerId,commandId:execution.commandId,state:execution.state,startedAt:execution.startedAt,endedAt:execution.endedAt,taskVerified:false,...(execution.errorCode?{errorCode:execution.errorCode}:{})});
+    const current=this.active?this.state.executions[this.active.id]:null;
+    const latest=new Map<string,Execution>();for(const execution of Object.values(this.state.executions))if(allowed.has(execution.resourceId))latest.set(execution.resourceId,execution);
+    if(current&&allowed.has(current.resourceId))latest.set(current.resourceId,current);
+    const executions=[...latest.values()].map(publicExecution);
+    const preview=current&&allowed.has(current.resourceId)&&this.conversationAccess.resource(current.resourceId)&&['dispatching','running'].includes(current.state)&&this.assistantCursor>0&&this.assistantText
+      ? {resourceId:current.resourceId,executionId:current.id,providerId:current.providerId,cursor:this.assistantCursor,text:this.assistantText,classification:this.port.mock?'simulated' as const:'reported' as const}
+      : null;
+    return {contract:'aerynth.conversation-activity@1',resources,executions,preview};
+  }
   private async prepareConversationSend(input:ConversationSendInput,revisionOffset=0,dispatchingHandoffId?:string):Promise<Omit<ConversationSendPreview,'id'|'expiresAt'>> {
     ensure(input&&typeof input.content==='string'&&input.content.trim()&&Buffer.byteLength(input.content)<=16384,'invalid_prompt');
     ensure(typeof input.commandId==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,198}$/.test(input.commandId),'invalid_command_id');
@@ -567,7 +583,8 @@ export class BackendCore {
         this.assistantText += e.payload.delta;
         // Only assistant output is forwarded live. Durable stream records remain metadata-only.
         // Private reasoning/tool payloads never cross this desktop boundary.
-        this.emit({ ...this.recordedEventForDelta(), payload: { redacted: true, delta: e.payload.delta } });
+        const recorded=this.recordedEventForDelta();this.assistantCursor=recorded.cursor;
+        if(this.conversationAccess.resource(this.active.resourceId))this.emit({ ...recorded, payload: { redacted: true, delta: e.payload.delta } });
       }
     } catch { this.streamFailure = true; } // Never throw into transport callbacks; fail the execution closed.
   }
@@ -620,7 +637,7 @@ export class BackendCore {
       // A failure or lost process must not erase the user's side of the conversation.
       if (this.privateMode||managed) { this.graph.addMessage(this.gid(e.resourceId), 'user', input.prompt, { sensitivity: 'internal' }); this.state.revisions[e.resourceId]++; }
     });
-    this.active = e; this.assistantText = ''; this.streamFailure = false;
+    this.active = e; this.assistantText = ''; this.assistantCursor=0; this.streamFailure = false;
     let remoteDispatched = false;
     try {
       await this.port.connect();
@@ -678,7 +695,7 @@ export class BackendCore {
     // Reads, interruption and durable draft recovery remain available during
     // execution. Canonical mutations retain source/approval fences.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft'];
-    if (!(name==='conversation'&&a?.name==='saveDraft')&&!['snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
+    if (!(name==='conversation'&&a?.name==='saveDraft')&&!['snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {
       case 'notes':return this.noteCommand(a) as any;
       case 'library':return this.libraryCommand(a) as any;
@@ -700,6 +717,7 @@ export class BackendCore {
       case 'conversationSendPreview': return this.previewConversationSend(a) as any;
       case 'authorizeConversationSend': return this.authorizeConversationSend(a) as any;
       case 'conversationSend': return this.sendConversation(a) as any;
+      case 'conversationActivity': return this.conversationActivity(a) as any;
       case 'viewState': return this.desktop.viewState(a) as any;
       case 'desktop': {
         if (a.type !== 'snapshot') {

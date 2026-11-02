@@ -86,6 +86,7 @@ export type PublicConversationExecution = {
 export type ConversationActivitySnapshot = {
   contract: "aerynth.conversation-activity@1";
   resources: { resourceId: string; available: boolean }[];
+  /** Current active or latest retained execution per requested readable resource. */
   executions: PublicConversationExecution[];
   preview: {
     resourceId: string;

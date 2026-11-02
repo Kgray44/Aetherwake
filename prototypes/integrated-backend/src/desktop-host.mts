@@ -36,6 +36,7 @@ lines.on("line", async (line) => {
         "viewState",
         "branch",
         "conversation",
+        "conversationActivity",
         "conversationSendPreview",
         "authorizeConversationSend",
         "conversationSend",
