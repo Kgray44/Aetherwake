@@ -1,6 +1,9 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { isProductRead, productCommand } = require("../native/product-commands.cjs");
+const {
+  isProductRead,
+  productCommand,
+} = require("../native/product-commands.cjs");
 test("canonical product families expose only explicit operations and classify writes separately", async () => {
   const seen = [],
     call = async (...args) => {
