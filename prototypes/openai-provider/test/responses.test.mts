@@ -169,7 +169,7 @@ async function observedCatalog(response: Response, observer?: (value: Readonly<M
 test('offline: catalog diagnostic is once-only frozen bodyless scalars with HTTP request identity and bounded returned/listed counts', async () => {
     const { result, error, diagnostic } = await observedCatalog(Response.json(catalogBody(), { headers: { 'x-request-id': 'req_catalog123' } }));
     assert.equal(error, undefined); assert.deepEqual(result?.models.map(model => model.id), ['private-model-z', 'private-model-a']);
-    assert.deepEqual({ ...diagnostic }, { contract: 'aerynth.model-catalog-diagnostic@1', outcome: 'accepted', httpStatus: 200, serverRequestId: 'req_catalog123', bodyShape: 'models', remoteCode: null, returnedCount: 3, listedCount: 2, observedAt: catalogClock });
+    assert.deepEqual({ ...diagnostic }, { contract: 'aerynth.model-catalog-diagnostic@1', outcome: 'accepted', httpStatus: 200, serverRequestId: 'req_catalog123', bodyShape: 'models', remoteCode: null, returnedCount: 3, listedCount: 2, observedAt: catalogClock, responseBytes: Buffer.byteLength(JSON.stringify(catalogBody())) });
     const serialized = JSON.stringify(diagnostic); for (const secret of ['private-', 'synthetic-plan-token', boundary, 'Private model', 'Authorization', 'https://']) assert.equal(serialized.includes(secret), false);
 });
 
@@ -197,11 +197,22 @@ test('offline: HTTP200 malformed JSON/schema/duplicate catalog have distinct saf
 });
 
 test('offline: catalog diagnostic preserves byte/row ceilings and unavailable shape without retry or raw body on failure', async () => {
-    const large = 'PRIVATE'.repeat(40000);
+    const large = 'PRIVATE'.repeat(300000);
     const ok = await observedCatalog(new Response(large)); assert.match(String(ok.error), /response_capacity_exceeded/); assert.equal(ok.diagnostic.outcome, 'invalid-catalog'); assert.equal(ok.diagnostic.bodyShape, 'unavailable');
     const denied = await observedCatalog(new Response(large, { status: 403 })); assert.match(String(denied.error), /model_catalog_unavailable/); assert.equal(denied.diagnostic.outcome, 'http-error'); assert.equal(denied.diagnostic.bodyShape, 'unavailable');
     const rows = await observedCatalog(Response.json({ models: Array.from({ length: 2049 }, () => ({ visibility: 'hide' })) })); assert.match(String(rows.error), /invalid_model_catalog/); assert.equal(rows.diagnostic.returnedCount, null); assert.equal(rows.diagnostic.listedCount, null);
     const other = await observedCatalog(Response.json(['PRIVATE'])); assert.match(String(other.error), /invalid_model_catalog/); assert.equal(other.diagnostic.bodyShape, 'other');
+});
+
+test('offline: bounded account catalog metadata above the former 256 KiB ceiling projects only listed model identities', async () => {
+    const body = { ...catalogBody(), metadata: 'PRIVATE'.repeat(50000) };
+    const { result, error, diagnostic } = await observedCatalog(Response.json(body));
+    assert.equal(error, undefined);
+    assert.equal(diagnostic.outcome, 'accepted');
+    assert.equal(diagnostic.responseBytes, Buffer.byteLength(JSON.stringify(body)));
+    assert(diagnostic.responseBytes! > 262144 && diagnostic.responseBytes! < 2097152);
+    assert.deepEqual(result?.models.map(row => row.id), ['private-model-z', 'private-model-a']);
+    assert.equal(JSON.stringify(diagnostic).includes('PRIVATE'), false);
 });
 
 test('offline: server request ID rejects non-ASCII, URI/control data and credential echoes', async () => {

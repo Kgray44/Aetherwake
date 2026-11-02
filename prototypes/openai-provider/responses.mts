@@ -243,7 +243,7 @@ export async function fetchModelCatalog(options: {
         label: string;
     }[];
 }> {
-    let outcome: ModelCatalogDiagnostic['outcome'] = 'unavailable', httpStatus: number | null = null, serverRequestId: string | null = null, observedAt = Date.now();
+    let outcome: ModelCatalogDiagnostic['outcome'] = 'unavailable', httpStatus: number | null = null, serverRequestId: string | null = null, observedAt = Date.now(), responseBytes: number | null = null;
     let facts: Pick<ModelCatalogDiagnostic, 'bodyShape' | 'remoteCode' | 'returnedCount' | 'listedCount'> = { bodyShape: 'unavailable', remoteCode: null, returnedCount: null, listedCount: null };
     try {
         requireValue((options.providerId === 'chatgpt-plan-responses' || options.providerId === 'openai-api-vela') && text(options.configurationId), 'invalid_catalog_configuration');
@@ -254,13 +254,15 @@ export async function fetchModelCatalog(options: {
         serverRequestId = catalogRequestId(response, credential);
         if (!response.ok) {
             outcome = 'http-error';
-            try { facts = catalogFacts(await boundedJSON(response, 262144, signal), options.providerId); }
+            try { facts = catalogFacts(await boundedJSON(response, 262144, signal, bytes => { responseBytes = bytes; }), options.providerId); }
             catch (error) { if (error instanceof ProviderError && error.code === 'invalid_json_response') facts = { ...facts, bodyShape: 'invalid-json' }; }
             throw new ProviderError('model_catalog_unavailable');
         }
         outcome = 'invalid-catalog';
         let data: unknown;
-        try { data = await boundedJSON(response, 262144, signal); }
+        // The live account catalog exceeded the old 256 KiB ceiling. Keep a
+        // separate 2 MiB success ceiling; errors retain the smaller limit.
+        try { data = await boundedJSON(response, 2097152, signal, bytes => { responseBytes = bytes; }); }
         catch (error) { if (error instanceof ProviderError && error.code === 'invalid_json_response') facts = { ...facts, bodyShape: 'invalid-json' }; throw error; }
         facts = catalogFacts(data, options.providerId);
         requireValue(record(data), 'invalid_model_catalog');
@@ -290,7 +292,7 @@ export async function fetchModelCatalog(options: {
         // Null prototype + frozen own scalars: no inherited toJSON/getter or
         // secret-bearing body/cause/credential object can cross this callback.
         const diagnostic: Readonly<ModelCatalogDiagnostic> = Object.freeze(Object.assign(Object.create(null), { contract: 'aerynth.model-catalog-diagnostic@1', outcome, httpStatus, serverRequestId,
-            bodyShape: facts.bodyShape, remoteCode: facts.remoteCode, returnedCount: facts.returnedCount, listedCount: facts.listedCount, observedAt }));
+            bodyShape: facts.bodyShape, remoteCode: facts.remoteCode, returnedCount: facts.returnedCount, listedCount: facts.listedCount, observedAt, responseBytes }));
         try {
             const observation: unknown = options.onDiagnostic?.(diagnostic);
             if (observation instanceof Promise) void Promise.prototype.then.call(observation, undefined, () => {});

@@ -54,6 +54,8 @@ function safeCatalog(value) {
   ];
   const diagnostic =
     value && Object.getOwnPropertyDescriptor(value, "diagnostic")?.value;
+  if (diagnostic && Object.hasOwn(diagnostic, "responseBytes"))
+    keys.push("responseBytes");
   const count = (n) =>
     n === null || (Number.isSafeInteger(n) && n >= 0 && n <= 2048);
   if (
@@ -71,6 +73,13 @@ function safeCatalog(value) {
     ) ||
     !["ready", "unavailable"].includes(value.state) ||
     !exact(diagnostic, keys) ||
+    !(
+      diagnostic.responseBytes === undefined ||
+      diagnostic.responseBytes === null ||
+      (Number.isSafeInteger(diagnostic.responseBytes) &&
+        diagnostic.responseBytes >= 0 &&
+        diagnostic.responseBytes <= 2097153)
+    ) ||
     diagnostic.contract !== "aerynth.model-catalog-diagnostic@1" ||
     !["accepted", "http-error", "invalid-catalog", "unavailable"].includes(
       diagnostic.outcome,

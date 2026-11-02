@@ -587,7 +587,7 @@ test("catalog byte-limit failure is safely distinguished from authorization and 
   const f = fixture();
   try {
     await f.connect();
-    f.setModelResponse(() => new Response("x".repeat(262145)));
+    f.setModelResponse(() => new Response("x".repeat(2097153)));
     await assert.rejects(
       f.coordinator.modelCatalog(2),
       /response_capacity_exceeded/,

@@ -14,16 +14,19 @@ export async function abortable<T>(promise: Promise<T>, signal: AbortSignal): Pr
         throw new ProviderError('operation_aborted');
     return new Promise((resolve, reject) => { const stop = () => { cleanup(); reject(new ProviderError('operation_aborted')); }; const cleanup = () => signal.removeEventListener('abort', stop); signal.addEventListener('abort', stop, { once: true }); promise.then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); }); });
 }
-export async function boundedJSON(response: Response, max = 262144, signal?: AbortSignal): Promise<unknown> {
+export async function boundedJSON(response: Response, max = 262144, signal?: AbortSignal, observeBytes?: (bytes: number) => void): Promise<unknown> {
     requireValue(!!response.body, 'response_body_unavailable');
     const reader = response.body.getReader(), parts: Uint8Array[] = [];
     let size = 0;
+    const observe = () => { try { observeBytes?.(Math.min(size, max + 1)); } catch { /* metadata observation is not read authority */ } };
+    observe();
     try {
         while (true) {
             const next = await (signal ? abortable(reader.read(), signal) : reader.read());
             if (next.done)
                 break;
             size += next.value.length;
+            observe();
             requireValue(size <= max, 'response_capacity_exceeded');
             parts.push(next.value);
         }

@@ -259,6 +259,33 @@
   margin: 0 0 8px;
   font-weight: 500;
 }
+.cp-chat-day {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: min(100%, 72ch);
+  margin: 28px auto 22px;
+  color: var(--aw-control-muted, #bcb4cd);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.cp-chat-day > span {
+  flex: 0 0 auto;
+}
+.cp-chat-day > hr {
+  flex: 1 1 auto;
+  min-width: 18px;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--aw-control-rim, #d4b8f529);
+}
+.cp-message-time {
+  white-space: nowrap;
+  color: var(--aw-control-muted, #bcb4cd);
+  font-size: 12px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
 .cp-message-content {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

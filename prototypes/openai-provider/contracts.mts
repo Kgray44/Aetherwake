@@ -17,6 +17,9 @@ export interface ModelCatalogDiagnostic {
     readonly listedCount: number | null;
     /** Same request observation clock as the existing catalog result. */
     readonly observedAt: number;
+    /** Exact consumed JSON bytes on success; saturates at the route's limit+1
+     * on overflow. No body content is retained or exposed. */
+    readonly responseBytes?: number | null;
 }
 export interface TurnInput {
     readonly executionId: string;
