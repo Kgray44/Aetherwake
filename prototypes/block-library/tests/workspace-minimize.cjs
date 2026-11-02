@@ -134,7 +134,12 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
         if (entry.kind !== 'reference') {
           const ready = await snapshot(), block = ready.blocks.find(b => b.id === entry.blockId);
           await wait(x.restoredSize(selector, { width: block.width * ready.viewport.zoom, height: block.height * ready.viewport.zoom }));
-          if (entry.kind === 'note') await click(selector + ' .aw-note-tools button[aria-label="Edit document"]');
+          if (entry.kind === 'note') {
+            const observed = await js(x.documentMode(selector)); receipt.activeCase.documentBeforeEdit = observed;
+            assert(['write', 'read'].includes(observed.mode) && !observed.editorDisabled, 'A real enabled Note mode is required');
+            if (observed.mode === 'read') await click(selector + ' .aw-note-tools button[aria-label="Edit document"]');
+            await wait(x.point(input));
+          }
           const value = Array.from({ length: 40 }, (_, n) => 'Synthetic retained ' + entry.kind + ' line ' + (n + 1)).join('\n');
           await type(input, value); if (entry.kind === 'conversation') { chatDraft = value; await wait(x.draftIs(entry.resourceId, value)); } else await wait(x.noteAndEditorText(input, entry.resourceId, value));
           key('Home'); for (let n = 0; n < 3; n++) key('Right', ['shift']);

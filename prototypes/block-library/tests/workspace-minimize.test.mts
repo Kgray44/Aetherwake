@@ -9,12 +9,21 @@ import { tmpdir } from 'node:os';
 const require = createRequire(import.meta.url), helper = require('./workspace-minimize.cjs'), { expressions: x, preflight } = require('./workspace-minimize-expressions.cjs');
 
 test('minimize preflight compiles Boolean branches and physical-size observations with every inherited expression before dispatch', () => {
-  const p = preflight(); assert.equal(p.factories, 4); assert.equal(p.cases, 5);
+  const p = preflight(); assert.equal(p.factories, 5); assert.equal(p.cases, 6);
   assert.deepEqual(p.common, require('./workspace-approach-expressions.cjs').preflight()); assert.deepEqual(p, preflight());
   const source = readFileSync(new URL('./workspace-minimize.cjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /\b(?:js|wait)\(\s*['"`]/);
   assert.doesNotMatch(source, /\.dispatchEvent\(|\.click\(\)|\.focus\(\)|\.value\s*=/);
   assert.match(source, /driver\.js\(compileExpression\(code\)\)/);
+});
+
+test('Note mode observation uses the actual mode control and retained editor visibility, with no toggle when already writing', () => {
+  let label = 'Read document'; const editor = { hidden: false, disabled: false }, button = { getAttribute: () => label };
+  const root = { querySelector: (selector: string) => selector.includes('textarea') ? editor : button }, context = { document: { querySelector: () => root } };
+  const observe = () => JSON.parse(JSON.stringify(runInNewContext(x.documentMode('[data-block="actual-note"]'), context)));
+  assert.deepEqual(observe(), { mode: 'write', buttonLabel: 'Read document', editorHidden: false, editorDisabled: false });
+  label = 'Edit document'; editor.hidden = true; assert.equal(observe().mode, 'read');
+  editor.hidden = false; assert.equal(observe().mode, 'unavailable', 'Inconsistent or unfinished paint is not a usable editor');
 });
 
 test('size observations require actual physical shrink/effective overview and exact restored extent without writing DOM or geometry', () => {
