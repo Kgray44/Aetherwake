@@ -154,7 +154,8 @@ export function installApplication(hooks: Hooks) {
   universe.className = "constellation-host";
   universe.hidden = true;
   universe.setAttribute("aria-label", "Constellation navigation");
-  document.body.append(universe);
+  // Share the existing isolated application stack with scene controls and Vela.
+  el("#app").append(universe);
   el(".brand small").textContent = "LIQUID INTELLIGENCE / WORKING REVIEW";
   el(".provenance").textContent = "LOCAL DATA · Codex connects only on request";
   el(".study-caption small").textContent = "Your resources. Your space.";
@@ -186,7 +187,7 @@ export function installApplication(hooks: Hooks) {
   canvasTools.setAttribute("aria-label", "Canvas navigation");
   canvasTools.innerHTML =
     '<button data-pan="left" aria-label="Pan left">←</button><button data-pan="up" aria-label="Pan up">↑</button><button data-pan="home" aria-label="Reset canvas view">⌑</button><button data-pan="down" aria-label="Pan down">↓</button><button data-pan="right" aria-label="Pan right">→</button>';
-  document.body.append(canvasTools);
+  el("#app").append(canvasTools);
   canvasTools.addEventListener("click", (event) => {
     const direction = (event.target as HTMLElement).dataset.pan;
     if (!direction) return;
