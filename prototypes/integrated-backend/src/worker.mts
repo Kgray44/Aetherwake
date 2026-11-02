@@ -14,10 +14,9 @@ try {
     const { id, contract, command, input } = request;
     try {
       if (contract !== CONTRACT) throw Object.assign(new Error(), { code: 'unsupported_contract' });
-      if(command==='close')nativeClient?.close();
       const result = await core.command(command, input);
       port.postMessage({ id, result });
-      if (command === 'close') port.close();
+      if (command === 'close') { nativeClient?.close();port.close(); }
     } catch (e) {
       // Raw native diagnostics may contain personal paths/content. Send codes only.
       const candidate = (e as any).code ?? (e as any).kind;

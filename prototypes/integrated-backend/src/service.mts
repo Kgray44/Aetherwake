@@ -11,6 +11,8 @@ export class Backend {
   private listeners = new Set<(e: StreamEvent) => void>();
   private ready: Promise<void>;
   private dead = false;
+  private closed = false;
+  private closing:Promise<void>|null = null;
   private nativeServer:ReturnType<typeof createNativeHostServer>;
   constructor(options: Options, nativeHost?:NativeHostServices) {
     this.worker = new Worker(new URL('./worker.mts', import.meta.url), { workerData: nativeHost?{nativeHostProtocol:1,options}:options });
@@ -33,14 +35,20 @@ export class Backend {
   }
   async call<K extends keyof CommandMap>(command: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
     await this.ready;
-    if (this.dead) throw new ServiceError('backend_disconnected');
+    if (this.dead||this.closed) throw new ServiceError('backend_disconnected');
     if (this.pending.size >= 64) throw new ServiceError('backpressure');
     if (Buffer.byteLength(JSON.stringify(input)) > (command === 'viewState' ? 2 * 1024 * 1024 + 1024 : 256 * 1024)) throw new ServiceError('command_too_large');
     const id = ++this.next;
     return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ id, contract: CONTRACT, command, input }); });
   }
   subscribe(listener: (event: StreamEvent) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
-  async close() { this.nativeServer.close(); if (!this.dead) await this.call('close', {}); }
+  async close() {
+    if(this.dead||this.closed)return;
+    if(this.closing)return this.closing;
+    const task=(async()=>{await this.call('close',{});this.closed=true;this.nativeServer.close();})();
+    this.closing=task;
+    try{await task;}finally{if(this.closing===task)this.closing=null;}
+  }
   /** Explicit process-loss exercise, not a cancellation confirmation. */
-  async terminate() { this.nativeServer.close(); await this.worker.terminate(); }
+  async terminate() { this.closed=true;this.nativeServer.close(); await this.worker.terminate(); }
 }

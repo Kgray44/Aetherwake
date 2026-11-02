@@ -12,6 +12,13 @@ const backend = new Backend({
   provider: "codex",
   retention: { maxEvents: 10000 },
 },nativeClient?.services);
+let closeTask:Promise<void>|null=null;
+const closeBackend=()=>{
+  if(closeTask)return closeTask;
+  const task=backend.close().then(()=>{nativeClient?.close();});closeTask=task;
+  void task.catch(()=>{if(closeTask===task)closeTask=null;});
+  return task;
+};
 backend.subscribe((event) => write({ event }));
 const lines = createInterface({ input: process.stdin });
 lines.on("line", async (line) => {
@@ -58,10 +65,9 @@ lines.on("line", async (line) => {
       ].includes(request.command)
     )
       throw new Error("unsupported_command");
-    const result = await backend.call(request.command, request.input);
+    const result = request.command==='close'?(await closeBackend(),null):await backend.call(request.command, request.input);
     write({ id, result });
     if (request.command === "close") {
-      nativeClient?.close();
       lines.close();
       process.exitCode = 0;
     }
@@ -77,8 +83,7 @@ lines.on("line", async (line) => {
 lines.on(
   "close",
   () =>
-    {nativeClient?.close();void backend
-      .close()
-      .catch(() => {})
-      .finally(() => process.exit());},
+    {void closeBackend()
+      .then(()=>process.exit())
+      .catch(async()=>{nativeClient?.close();await backend.terminate().catch(()=>{});process.exit(1);});},
 );
