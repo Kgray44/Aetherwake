@@ -175,3 +175,54 @@ export interface AgentHostPort {
     id: string,
   ): { id: string; revision: string; providerId: string } | null;
 }
+
+/** Renderer-safe asynchronous projection of the canonical service. The caller
+ * owns RPC, policy, persistence, and cached catalogs; no provider discovery here. */
+export type AgentSummary = Pick<AgentProfile, "contract" | "ref" | "resource">;
+export interface AgentLibraryClientPort {
+  list(input: {
+    projectId?: string | null;
+    includeArchived?: boolean;
+    query?: string;
+    limit?: number;
+  }): Promise<{
+    contract: typeof AGENT_CONTRACT;
+    items: AgentSummary[];
+    coverage: "complete" | "bounded";
+  }>;
+  inspect(resourceId: string): Promise<AgentProfile>;
+  create(input: {
+    commandId: string;
+    title: string;
+    projectId: string | null;
+    profile: AgentProfileData;
+  }): Promise<AgentMutationReceipt>;
+  update(input: {
+    commandId: string;
+    agent: AgentRef;
+    title: string;
+    profile: AgentProfileData;
+  }): Promise<AgentMutationReceipt>;
+  archive(input: {
+    commandId: string;
+    agent: AgentRef;
+    archived: boolean;
+  }): Promise<AgentMutationReceipt>;
+  effective(
+    agent: AgentRef,
+    contextProjectId?: string | null,
+  ): Promise<EffectiveAgentConfiguration>;
+  templates(): Promise<
+    {
+      id: string;
+      title: string;
+      profile: AgentProfileData;
+      startsExecution: false;
+    }[]
+  >;
+  projects(): Promise<{ id: string; title: string; version: number }[]>;
+  /** Existing cached/authorized metadata only. Null is a truthful unavailable catalog. */
+  catalog(): Promise<AgentProviderCatalog | null>;
+  /** Optional actual authorized reference history, never synthetic execution activity. */
+  references?(resourceId: string): Promise<AgentAssignmentReference[]>;
+}
