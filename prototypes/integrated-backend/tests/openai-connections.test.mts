@@ -80,6 +80,7 @@ function fixture() {
     scopeChanges: Record<string, unknown> = {},
     cryptoGate: Promise<void> | null = null,
     onFinalSeal: (() => void) | undefined;
+  let modelResponse: (() => Response) | undefined;
   const calls: { url: string; method: string }[] = [],
     crypto = { available: 0, seal: 0, open: 0 };
   const options: OpenAIConnectionsOptions = {
@@ -163,6 +164,7 @@ function fixture() {
           new Headers(init?.headers).get("authorization"),
           "Bearer " + currentToken,
         );
+        if (modelResponse) return modelResponse();
         return Response.json({
           models: [
             {
@@ -218,6 +220,9 @@ function fixture() {
     connect,
     setAvailable: (value: boolean) => {
       available = value;
+    },
+    setModelResponse: (value: () => Response) => {
+      modelResponse = value;
     },
     setIdentityOnly: () => {
       identityOnly = true;
@@ -496,6 +501,82 @@ test("fresh selected-token catalog/refresh/version and disconnect revocation rem
       f.calls.filter(
         (call) => call.url === "https://api.openai.com/v1/responses",
       ).length,
+      0,
+    );
+  } finally {
+    await f.close();
+  }
+});
+
+test("model discovery failure preserves ready identity and publishes only version-bound safe observations", async () => {
+  const f = fixture();
+  try {
+    await f.connect();
+    assert.equal((await f.coordinator.status()).modelCatalog, undefined);
+    for (const [status, body, shape, remoteCode] of [
+      [
+        403,
+        {
+          error: {
+            code: "subscription_sharing_user_not_eligible",
+            message: marker,
+          },
+        },
+        "error",
+        "subscription_sharing_user_not_eligible",
+      ],
+      [503, { detail: marker }, "detail", null],
+      [200, { data: [{ id: marker }] }, "data", null],
+    ] as const) {
+      f.setModelResponse(() =>
+        Response.json(body, {
+          status,
+          headers: { "x-request-id": "req_synthetic_catalog" },
+        }),
+      );
+      await assert.rejects(
+        f.coordinator.modelCatalog(2),
+        /model_catalog_unavailable|invalid_model_catalog/,
+      );
+      const current = await f.coordinator.status();
+      assert.equal(current.state, "ready");
+      assert.equal(current.planUsageEnabled, true);
+      assert.equal(current.registrationVersion, 2);
+      assert.equal(current.modelCatalog?.state, "unavailable");
+      assert.equal(current.modelCatalog?.diagnostic.httpStatus, status);
+      assert.equal(current.modelCatalog?.diagnostic.bodyShape, shape);
+      assert.equal(current.modelCatalog?.diagnostic.remoteCode, remoteCode);
+      assert.equal(
+        current.modelCatalog?.diagnostic.serverRequestId,
+        "req_synthetic_catalog",
+      );
+      assertSafe(current);
+    }
+    f.setModelResponse(() =>
+      Response.json({
+        models: [
+          {
+            slug: "fixture-model",
+            display_name: "Fixture",
+            visibility: "list",
+          },
+        ],
+      }),
+    );
+    await f.coordinator.modelCatalog(2);
+    assert.equal((await f.coordinator.status()).modelCatalog?.state, "ready");
+    const refreshed = await f.coordinator.refresh(2);
+    assert.equal(refreshed.state, "ready");
+    assert.equal(refreshed.registrationVersion, 3);
+    assert.equal(refreshed.modelCatalog, undefined);
+    await f.reopen();
+    assert.equal((await f.coordinator.status()).modelCatalog, undefined);
+    assert.equal(
+      f.calls.filter((call) => call.url.endsWith("/v1/models")).length,
+      4,
+    );
+    assert.equal(
+      f.calls.filter((call) => call.url.endsWith("/v1/responses")).length,
       0,
     );
   } finally {

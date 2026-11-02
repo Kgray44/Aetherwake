@@ -461,19 +461,24 @@ export class OpenAIConnections {
           errorCode: "auth_lock_recovery_required",
         };
       const current = await runtime.manager.status(CHATGPT_PLAN_REGISTRATION);
-      if (current.state !== "ready" || current.version !== this.catalogObservation?.version)
+      if (
+        current.state !== "ready" ||
+        current.version !== this.catalogObservation?.version
+      )
         this.catalogObservation = null;
       return {
         ...this.base(true),
         state: current.state,
         registrationVersion: current.version,
         planUsageEnabled: current.planUsageEnabled,
-        ...(this.catalogObservation ? {
-          modelCatalog: {
-            state: this.catalogObservation.state,
-            diagnostic: structuredClone(this.catalogObservation.diagnostic),
-          },
-        } : {}),
+        ...(this.catalogObservation
+          ? {
+              modelCatalog: {
+                state: this.catalogObservation.state,
+                diagnostic: structuredClone(this.catalogObservation.diagnostic),
+              },
+            }
+          : {}),
       };
     } catch (error) {
       return { ...this.base(available), errorCode: code(error) };
@@ -638,9 +643,7 @@ export class OpenAIConnections {
     );
     return this.status();
   }
-  async disconnect(
-    expectedVersion: number,
-  ): Promise<{
+  async disconnect(expectedVersion: number): Promise<{
     status: PublicConnectionStatus;
     remoteRevocation: "confirmed" | "unconfirmed" | "not-needed";
   }> {
@@ -709,7 +712,10 @@ export class OpenAIConnections {
         fetch: (input, init) => this.nativeFetch(input, init),
         now: this.options.now,
         onDiagnostic: (diagnostic) => {
-          if (!this.closed && !this.operation.getStore()?.controller.signal.aborted)
+          if (
+            !this.closed &&
+            !this.operation.getStore()?.controller.signal.aborted
+          )
             this.catalogObservation = {
               version: expectedVersion,
               state: "unavailable",
@@ -719,7 +725,8 @@ export class OpenAIConnections {
       });
       this.assert();
       await this.revalidateCredential(expectedVersion, result.boundaryDigest);
-      if (result.models.length > 0) this.acceptCatalogObservation(expectedVersion);
+      if (result.models.length > 0)
+        this.acceptCatalogObservation(expectedVersion);
       return { ...result, providerId: "chatgpt-plan-responses" };
     });
   }

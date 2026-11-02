@@ -86,6 +86,7 @@ const source = {
   ),
 };
 const verify =
+  process.argv.includes("--integration-timeline") ||
   process.argv.includes("--integration-checklists") ||
   process.argv.includes("--integration-agents") ||
   process.argv.includes("--integration-desktop-basics") ||
@@ -108,6 +109,12 @@ const verify =
   process.argv.includes("--integration-expanded") ||
   process.argv.includes("--integration-spatial-benchmark");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
+const checkCatalog = process.argv.includes("--check-model-catalog");
+if (
+  checkCatalog &&
+  (verify || !profileArg || !path.isAbsolute(profileArg.slice(10)))
+)
+  throw Error("explicit_normal_profile_required_for_catalog_check");
 if (verify && (!profileArg || !path.isAbsolute(profileArg.slice(10)))) {
   console.error("absolute_verification_profile_required");
   process.exit(2);
@@ -571,7 +578,34 @@ app.whenReady().then(async () => {
     }
   }, 240000);
   reserveTimer.unref();
+  if (checkCatalog) {
+    // Explicit CLI support action uses this normal app's existing managed
+    // connection. The window stays open; this installs no input hooks.
+    const receipt =
+      await require("./model-catalog-check.cjs").checkModelCatalog({ call });
+    const bytes = JSON.stringify(receipt, null, 2);
+    if (Buffer.byteLength(bytes) > 8192)
+      throw Error("catalog_diagnostic_capacity");
+    writeFileSync(
+      path.join(privateRoot, `model-catalog-check-${Date.now()}.json`),
+      bytes,
+      { flag: "wx" },
+    );
+  }
   if (verify) {
+    if (process.argv.includes("--integration-timeline")) {
+      await require("./integration-timeline.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        call,
+        source,
+        startupErrors,
+        moduleStartedMonotonicMs,
+        observeProviderActivity: () => call("providerActivity", {}),
+      });
+      return;
+    }
     if (process.argv.includes("--integration-checklists")) {
       await require("./integration-checklists.cjs").verify({
         win,

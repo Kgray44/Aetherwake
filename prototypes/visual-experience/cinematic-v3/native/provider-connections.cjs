@@ -20,31 +20,85 @@ const exact = (input, keys) =>
   );
 const version = (value) => Number.isSafeInteger(value) && value > 0;
 const catalogCodes = new Set([
-  "subscription_sharing_usage_limit_exceeded", "subscription_sharing_usage_unavailable",
-  "subscription_sharing_unsupported_capability", "subscription_sharing_route_not_supported",
-  "subscription_sharing_invalid_user", "chatpass_v2_scope_not_authorized",
-  "chatpass_v2_invalid_authorization_context", "subscription_sharing_user_unavailable",
-  "subscription_sharing_user_not_eligible", "invalid_grant", "invalid_refresh_token",
-  "token_expired", "refresh_token_expired", "refresh_token_invalidated",
-  "refresh_token_reused", "invalid_client", "insufficient_quota",
-  "rate_limit_exceeded", "invalid_api_key",
+  "subscription_sharing_usage_limit_exceeded",
+  "subscription_sharing_usage_unavailable",
+  "subscription_sharing_unsupported_capability",
+  "subscription_sharing_route_not_supported",
+  "subscription_sharing_invalid_user",
+  "chatpass_v2_scope_not_authorized",
+  "chatpass_v2_invalid_authorization_context",
+  "subscription_sharing_user_unavailable",
+  "subscription_sharing_user_not_eligible",
+  "invalid_grant",
+  "invalid_refresh_token",
+  "token_expired",
+  "refresh_token_expired",
+  "refresh_token_invalidated",
+  "refresh_token_reused",
+  "invalid_client",
+  "insufficient_quota",
+  "rate_limit_exceeded",
+  "invalid_api_key",
 ]);
 function safeCatalog(value) {
-  const keys = ["contract", "outcome", "httpStatus", "serverRequestId", "bodyShape", "remoteCode", "returnedCount", "listedCount", "observedAt"];
-  const diagnostic = value && Object.getOwnPropertyDescriptor(value, "diagnostic")?.value;
-  const count = (n) => n === null || (Number.isSafeInteger(n) && n >= 0 && n <= 2048);
-  if (!exact(value, ["state", "diagnostic"]) || !["ready", "unavailable"].includes(value.state) ||
-    !exact(diagnostic, keys) || diagnostic.contract !== "aerynth.model-catalog-diagnostic@1" ||
-    !["accepted", "http-error", "invalid-catalog", "unavailable"].includes(diagnostic.outcome) ||
-    !(diagnostic.httpStatus === null || (Number.isInteger(diagnostic.httpStatus) && diagnostic.httpStatus >= 100 && diagnostic.httpStatus <= 599)) ||
-    !(diagnostic.serverRequestId === null || (typeof diagnostic.serverRequestId === "string" && /^req_[A-Za-z0-9_-]{1,128}$/.test(diagnostic.serverRequestId))) ||
-    !["error", "detail", "models", "data", "other", "invalid-json", "unavailable"].includes(diagnostic.bodyShape) ||
-    !(diagnostic.remoteCode === null || catalogCodes.has(diagnostic.remoteCode)) ||
-    !count(diagnostic.returnedCount) || !count(diagnostic.listedCount) ||
-    !Number.isFinite(diagnostic.observedAt) || diagnostic.observedAt < 0 ||
-    (value.state === "ready" && (diagnostic.outcome !== "accepted" || !(diagnostic.listedCount > 0))))
+  const keys = [
+    "contract",
+    "outcome",
+    "httpStatus",
+    "serverRequestId",
+    "bodyShape",
+    "remoteCode",
+    "returnedCount",
+    "listedCount",
+    "observedAt",
+  ];
+  const diagnostic =
+    value && Object.getOwnPropertyDescriptor(value, "diagnostic")?.value;
+  const count = (n) =>
+    n === null || (Number.isSafeInteger(n) && n >= 0 && n <= 2048);
+  if (
+    !exact(value, ["state", "diagnostic"]) ||
+    !["ready", "unavailable"].includes(value.state) ||
+    !exact(diagnostic, keys) ||
+    diagnostic.contract !== "aerynth.model-catalog-diagnostic@1" ||
+    !["accepted", "http-error", "invalid-catalog", "unavailable"].includes(
+      diagnostic.outcome,
+    ) ||
+    !(
+      diagnostic.httpStatus === null ||
+      (Number.isInteger(diagnostic.httpStatus) &&
+        diagnostic.httpStatus >= 100 &&
+        diagnostic.httpStatus <= 599)
+    ) ||
+    !(
+      diagnostic.serverRequestId === null ||
+      (typeof diagnostic.serverRequestId === "string" &&
+        /^req_[A-Za-z0-9_-]{1,128}$/.test(diagnostic.serverRequestId))
+    ) ||
+    ![
+      "error",
+      "detail",
+      "models",
+      "data",
+      "other",
+      "invalid-json",
+      "unavailable",
+    ].includes(diagnostic.bodyShape) ||
+    !(
+      diagnostic.remoteCode === null || catalogCodes.has(diagnostic.remoteCode)
+    ) ||
+    !count(diagnostic.returnedCount) ||
+    !count(diagnostic.listedCount) ||
+    !Number.isFinite(diagnostic.observedAt) ||
+    diagnostic.observedAt < 0 ||
+    (value.state === "ready" &&
+      (diagnostic.outcome !== "accepted" || !(diagnostic.listedCount > 0)))
+  )
     throw Error("invalid_provider_catalog_status");
-  return { state: value.state, diagnostic: Object.fromEntries(keys.map((key) => [key, diagnostic[key]])) };
+  return {
+    state: value.state,
+    diagnostic: Object.fromEntries(keys.map((key) => [key, diagnostic[key]])),
+  };
 }
 
 function safeStatus(value) {
@@ -79,7 +133,9 @@ function safeStatus(value) {
     nativeAccountHistory: false,
     nativeAccountMemory: false,
     nativeAccountSync: false,
-    ...(value.modelCatalog === undefined ? {} : { modelCatalog: safeCatalog(value.modelCatalog) }),
+    ...(value.modelCatalog === undefined
+      ? {}
+      : { modelCatalog: safeCatalog(value.modelCatalog) }),
     ...(typeof value.errorCode === "string" &&
     /^[a-z][a-z0-9_]{2,80}$/.test(value.errorCode)
       ? { errorCode: value.errorCode }
