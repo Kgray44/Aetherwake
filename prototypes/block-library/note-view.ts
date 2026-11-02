@@ -109,7 +109,27 @@ export function mountNoteExperience(
     details = element("details"),
     canonical = element("pre"),
     otherDraft = element("pre"),
-    rename = element("form", "", "aw-note-rename");
+    rename = element("form", "", "aw-note-rename"),
+    menu = element("details", "", "aw-note-actions"),
+    menuSummary = element("summary", "⋯"),
+    menuPanel = element("div", "", "aw-note-actions-panel");
+  menuSummary.setAttribute("aria-label", "Document actions");
+  menuSummary.title = "Find, rename and document actions";
+  menu.append(menuSummary, menuPanel);
+  const editorLabel = editor.closest("label");
+  const dismissMenu = (event: PointerEvent) => {
+    if (active && menu.open && !menu.contains(event.target as Node))
+      menu.open = false;
+  };
+  document.addEventListener("pointerdown", dismissMenu);
+  menu.onkeydown = (event) => {
+    if (event.key === "Escape" && menu.open) {
+      event.preventDefault();
+      event.stopPropagation();
+      menu.open = false;
+      menuSummary.focus();
+    }
+  };
   let active = options.active ?? true,
     disposed = false,
     mode: "write" | "read" = "write",
@@ -142,8 +162,20 @@ export function mountNoteExperience(
         pending = false;
       });
   };
+  const modeButton = action("Read", () => {
+    mode = mode === "write" ? "read" : "write";
+    rendered = "";
+    updateReading();
+    if (mode === "write") editor.focus();
+  });
   const updateReading = () => {
+    modeButton.textContent = mode === "write" ? "Read" : "Edit";
+    modeButton.setAttribute(
+      "aria-label",
+      mode === "write" ? "Read document" : "Edit document",
+    );
     reading.hidden = mode !== "read";
+    if (editorLabel) editorLabel.hidden = mode === "read";
     editor.hidden = mode === "read";
     sources.hidden =
       mode !== "read" || !["research", "reference"].includes(options.kind);
@@ -187,16 +219,6 @@ export function mountNoteExperience(
     if (links.length === 50)
       sources.append(element("p", "Showing up to 50 source links."));
   };
-  const write = action("Write", () => {
-      mode = "write";
-      updateReading();
-      editor.focus();
-    }),
-    read = action("Read", () => {
-      mode = "read";
-      rendered = "";
-      updateReading();
-    });
   const find = (backward: boolean) => {
     if (!search.value) return;
     const haystack = editor.value.toLocaleLowerCase(),
@@ -226,21 +248,21 @@ export function mountNoteExperience(
       find(event.shiftKey);
     }
   };
-  tools.append(
-    write,
-    read,
+  menuPanel.append(
     search,
     action("Previous match", () => find(true)),
     action("Next match", () => find(false)),
   );
+  tools.append(modeButton, menu);
   const showRename = action("Rename", () => {
+    menu.open = false;
     rename.hidden = !rename.hidden;
     if (!rename.hidden) {
       title.value = session.snapshot().document?.resource.title ?? "";
       title.focus();
     }
   });
-  tools.append(showRename);
+  menuPanel.append(showRename);
   const submit = element("button", "Save title");
   submit.type = "submit";
   rename.append(title, submit);
@@ -318,10 +340,13 @@ export function mountNoteExperience(
     setActive(value: boolean) {
       active = value;
       if (active) paint(latest);
+      else menu.open = false;
     },
     dispose() {
       disposed = true;
       unsubscribe();
+      delete root.dataset.noteState;
+      document.removeEventListener("pointerdown", dismissMenu);
       tools.remove();
       rename.remove();
       status.remove();
@@ -329,6 +354,7 @@ export function mountNoteExperience(
       reading.remove();
       sources.remove();
       editor.hidden = false;
+      if (editorLabel) editorLabel.hidden = false;
     },
   };
 }

@@ -84,3 +84,55 @@
 .aw-note-reading[hidden] {
   display: none;
 }
+
+.aw-note-tools {
+  justify-content: flex-end;
+  position: relative;
+}
+.aw-note-actions {
+  position: relative;
+}
+.aw-note-actions > summary {
+  cursor: pointer;
+  list-style: none;
+  border: 1px solid #aac9e626;
+  border-radius: 1rem;
+  padding: 0.3rem 0.7rem;
+  background: #9fc6eb0c;
+  font: inherit;
+}
+.aw-note-actions > summary::marker {
+  content: "";
+}
+.aw-note-actions > summary:focus-visible {
+  outline: 2px solid #d4eaff;
+  outline-offset: 3px;
+}
+.aw-note-actions-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.35rem);
+  z-index: 20;
+  width: min(22rem, 70vw);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.4rem;
+  padding: 0.65rem;
+  border: 1px solid #b4d7f42b;
+  border-radius: 0.9rem;
+  background: #122033de;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 0.6rem 2rem #0005;
+}
+.aw-note-actions-panel input {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+.aw-note-actions:not([open]) > .aw-note-actions-panel {
+  display: none;
+}
+
+[data-note-state] textarea[hidden],
+[data-note-state] label[hidden] {
+  display: none;
+}
