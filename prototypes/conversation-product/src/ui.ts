@@ -43,6 +43,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const detail=el('section',undefined,'cp-detail'),detailHeader=el('div',undefined,'cp-detail-header'),chatHost=el('div',undefined,'cp-chat-host'),secondary=el('div',undefined,'cp-secondary'),extras=el('details',undefined,'cp-chat-extras'),extrasSummary=el('summary','Branches and context');extras.append(extrasSummary,secondary);decorateConversationDisclosure(extras,extrasSummary,'branches',secondary);detailHeader.append(extras);detail.append(detailHeader,chatHost);body.append(catalog,detail);root.append(header,status,body);container.append(root);
  let disposed=false,request=0,current:Detail|null=null,collections:Collection[]=[],busy=false,searchTimer:ReturnType<typeof setTimeout>|undefined,closing=false,filterQueued=false;
  let chat:ConversationChat|null=null,chatResource:string|null=null,selectedMessageId:string|undefined;
+ let running:Promise<void>|null=null,collectionOpening:Promise<void>=Promise.resolve();
  const draftSessions=new Map<string,ConversationDraftSession>();
  const ownedDraftSessions=new Set<ConversationDraftSession>();
  const detachedSubmissions=new Set<Promise<void>>();
@@ -52,7 +53,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const flush=async()=>{if(disposed)return;await chat?.flush();await flushConversationDraftSessions(()=>draftSessions.values(),save);};
  const detachChat=async()=>{if(!chat)return;const previous=chat,pending=previous.whenSubmissionSettled();await previous.dispose();chat=null;chatResource=null;detachedSubmissions.add(pending);void pending.finally(()=>detachedSubmissions.delete(pending)).catch(()=>{});};
  async function closeManager(){if(closing||disposed)return;closing=true;close.disabled=true;try{await flush();options.onClose?.();}catch(error){status.textContent='Draft recovery needs attention before closing: '+(error instanceof Error?error.message:String(error));}finally{closing=false;close.disabled=false;}}
- const run=async(action:()=>Promise<void>)=>{if(busy||disposed)return;busy=true;root.setAttribute('aria-busy','true');try{status.textContent='';await action();}catch(error){status.textContent=error instanceof Error?error.message:String(error);}finally{busy=false;root.removeAttribute('aria-busy');save();if(filterQueued&&!disposed){filterQueued=false;void run(refresh);}}};
+ const run=(action:()=>Promise<void>,propagate=false):Promise<void>=>{if(busy||disposed)return Promise.resolve();busy=true;root.setAttribute('aria-busy','true');status.textContent='';const operation=Promise.resolve().then(action).catch(error=>{status.textContent=error instanceof Error?error.message:String(error);if(propagate)throw error;}).finally(()=>{busy=false;running=null;root.removeAttribute('aria-busy');save();if(filterQueued&&!disposed){filterQueued=false;void run(refresh);}});running=operation;return operation;};
  const bindChat=async(resourceId:string,aroundMessageId?:string)=>{
   if(chatResource===resourceId&&chat){await chat.refresh(aroundMessageId?{aroundMessageId}:{});return;}
   await detachChat();
@@ -96,15 +97,32 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   const shares=disclosure('Published and attached excerpts · '+d.shares.length,'cp-shares');shares.panel.append(...d.shares.map(s=>renderShare(s,d)));
   secondary.replaceChildren(renderPolicy(d),lineage,providers,...(d.shares.length?[shares.node]:[]));
  };
- const loadDetail=async(aroundMessageId?:string)=>{const id=state.selectedResourceId;if(!id){detailHeader.replaceChildren(el('p','Open or create a conversation.'));return;}await bindChat(id,aroundMessageId);};
- const reloadCollections=async()=>{collections=await call('collections',{});const previous=collection.value;collection.replaceChildren(el('option','All collections'));collection.options[0].value='';for(const c of collections){const o=el('option',`${c.parentId?'↳ ':''}${c.title}${c.rule?' (smart)':''}`);o.value=c.id;collection.append(o);}collection.value=state.query.collectionId??previous;syncFilterControls();};
- const refresh=async()=>{
-  save();await reloadCollections();const [list,providers]=await Promise.all([call('search',{...state.query,offset:state.query.offset??0,limit:50}),call('providers',{})]);if(disposed)return;
+ const loadDetail=async(aroundMessageId?:string)=>{const id=state.selectedResourceId;if(!id){const selected=collections.find(c=>c.id===state.query.collectionId&&c.state==='active');if(selected){root.dataset.collectionId=selected.id;detailHeader.replaceChildren(el('h3',selected.title),el('p','Choose a conversation or resource from this collection.'));}else{delete root.dataset.collectionId;detailHeader.replaceChildren(el('p','Open or create a conversation.'));}return;}delete root.dataset.collectionId;await bindChat(id,aroundMessageId);};
+ const reloadCollections=async(provided?:Collection[])=>{collections=provided??await call('collections',{});const previous=collection.value;collection.replaceChildren(el('option','All collections'));collection.options[0].value='';for(const c of collections){const o=el('option',`${c.parentId?'↳ ':''}${c.title}${c.rule?' (smart)':''}`);o.value=c.id;collection.append(o);}collection.value=state.query.collectionId??previous;syncFilterControls();};
+ type CatalogRead={collections:Collection[];list:ProductCommandMap['search']['output'];providers:ProductCommandMap['providers']['output'];projects:ProductCommandMap['projects']['output']};
+ const refresh=async(provided?:CatalogRead)=>{
+  const generation=++request,scope={...state.query};save();const visible=provided?.collections??await call('collections',{});
+  const [list,providers,projects]=provided?[provided.list,provided.providers,provided.projects]:await Promise.all([call('search',{...scope,offset:scope.offset??0,limit:50}),call('providers',{}),call('projects',{})]);if(disposed||generation!==request)return;
+  await reloadCollections(visible);if(disposed||generation!==request)return;
   newProvider.replaceChildren();for(const p of providers.filter(p=>p.record)){const o=el('option',p.label);o.value=p.id;newProvider.append(o);}resultCount.textContent=`${list.total} matching locations`;results.replaceChildren();
   for(const hit of list.items){const row=button(`${hit.title}${hit.kind==='message'?' · message':''}\n${hit.excerpt}`,async()=>run(async()=>{if(hit.kind==='resource')options.onResource?.(hit.resourceId);else await open(hit.resourceId,hit.messageId);}),{identity:'history-result'});row.dataset.resourceId=hit.resourceId;row.dataset.resultKind=hit.kind;if(hit.messageId)row.dataset.messageId=hit.messageId;row.setAttribute('aria-current',String(hit.resourceId===state.selectedResourceId&&(hit.kind!=='message'||hit.messageId===selectedMessageId)));const label=row.querySelector<HTMLElement>('.cp-control-label')!;label.replaceChildren(el('span',hit.title+(hit.kind==='message'?' · message':''),'cp-result-title'),el('span','\n'+hit.excerpt,'cp-result-excerpt'));results.append(row);}
   const previous=button('Previous results',async()=>run(async()=>{state.query.offset=Math.max(0,list.offset-50);await refresh();}),{identity:'previous'}),next=button('More results',async()=>run(async()=>{if(list.hasMore){state.query.offset=list.offset+50;await refresh();}}),{identity:'next'});previous.disabled=list.offset===0;next.disabled=!list.hasMore;paging.dataset.cpGroup='history-navigation';paging.replaceChildren(previous,next);paging.hidden=list.total<=50;
   // Available project IDs come from visible canonical summaries; host may also provide its normal project picker.
-  const projects=await call('projects',{}),prior=project.value;project.replaceChildren();for(const p of [{value:'',label:'All projects'},{value:'__none',label:'No project'},...projects.map(p=>({value:p.id,label:p.title}))]){const o=el('option',p.label);o.value=p.value;project.append(o);}project.value=prior|| (state.query.projectId===null?'__none':state.query.projectId??'');await loadDetail();
+  const prior=project.value;project.replaceChildren();for(const p of [{value:'',label:'All projects'},{value:'__none',label:'No project'},...projects.map(p=>({value:p.id,label:p.title}))]){const o=el('option',p.label);o.value=p.value;project.append(o);}project.value=prior|| (state.query.projectId===null?'__none':state.query.projectId??'');await loadDetail();
+ };
+ const openCollection=(collectionId:string):Promise<void>=>{
+  const operation=collectionOpening.then(async()=>{await ready;while(running)await running;if(disposed)throw new Error('conversation_manager_closed');
+   await run(async()=>{
+    if(typeof collectionId!=='string'||!collectionId)throw new Error('collection_missing');
+    const check=(items:Collection[])=>{if(!items.some(c=>c.id===collectionId&&c.state==='active'))throw new Error('collection_missing');};
+    check(await call('collections',{}));await flush();const visible=await call('collections',{});check(visible);
+    const next:SearchQuery={collectionId,offset:0},[list,providers,projects]=await Promise.all([call('search',{...next,limit:50}),call('providers',{}),call('projects',{})]);
+    if(disposed)throw new Error('conversation_manager_closed');await detachChat();if(disposed)throw new Error('conversation_manager_closed');
+    clearTimeout(searchTimer);filterQueued=false;state.selectedResourceId=null;selectedMessageId=undefined;current=null;delete root.dataset.resourceId;state.query=next;
+    query.value='';project.value='';collection.value=collectionId;archive.value='active';favorite.checked=false;folderEditor.replaceChildren();secondary.replaceChildren();extras.open=false;
+    root.classList.add('cp-history-open');historyToggle.setAttribute('aria-expanded','true');await refresh({collections:visible,list,providers,projects});if(!disposed)query.focus();
+   },true);
+  });collectionOpening=operation.catch(()=>{});return operation;
  };
  const filter=()=>{state.query={...state.query,text:query.value,projectId:project.value==='__none'?null:project.value||undefined,collectionId:collection.value||undefined,archived:archive.value==='archived',favorite:favorite.checked,offset:0};syncFilterControls();if(busy)filterQueued=true;else void run(refresh);};
  query.addEventListener('input',()=>{clearSearch.hidden=!query.value;clearTimeout(searchTimer);searchTimer=setTimeout(filter,180);});for(const control of [project,collection,archive,favorite])control.addEventListener('change',filter);
@@ -115,7 +133,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   const target=event.target as HTMLElement,active=target.closest<HTMLDetailsElement>('details[open]')??[...root.querySelectorAll<HTMLDetailsElement>('details[open]')].at(-1);
   event.preventDefault();event.stopPropagation();if(active){active.open=false;active.querySelector('summary')?.focus();return;}void closeManager();
  }});
- const ready=run(refresh);return {ready,state,flush,refresh:()=>run(refresh),open:(id:string,messageId?:string)=>run(()=>open(id,messageId)),async dispose(){if(disposed)return;await flush();await detachChat();disposed=true;request++;clearTimeout(searchTimer);root.remove();
+ const ready=run(refresh);return {ready,state,flush,refresh:()=>run(refresh),open:(id:string,messageId?:string)=>run(()=>open(id,messageId)),openCollection,async dispose(){if(disposed)return;await flush();await detachChat();disposed=true;request++;clearTimeout(searchTimer);root.remove();
   if(detachedSubmissions.size)void Promise.allSettled([...detachedSubmissions]).then(()=>Promise.allSettled([...ownedDraftSessions].map(session=>session.dispose()))).catch(()=>{});
   else await Promise.all([...ownedDraftSessions].map(session=>session.dispose()));
  }};
