@@ -17,6 +17,9 @@ const REQUIRED_MATRIX = Object.freeze([
 ]);
 const LIMITS = Object.freeze({
   samples: 40,
+  universeSamples: 40,
+  presentationCaptures: 2,
+  screenshots: 5,
   samplePauseMs: 250,
   pngBytes: 8 * 1024 * 1024,
   csvBytes: 8 * 1024 * 1024,
@@ -114,6 +117,10 @@ async function nativeOrbit(win, js, key, guard = () => {}) {
     ["Up", "Right", "Down", "Left"].includes(key),
     "bounded orbit direction",
   );
+  return nativeSpatialKey(win, js, key, ["shift"], guard);
+}
+
+async function nativeSpatialKey(win, js, key, modifiers, guard) {
   guard();
   assertNativeOwner(win);
   const focused = await js(
@@ -122,9 +129,229 @@ async function nativeOrbit(win, js, key, guard = () => {}) {
   guard();
   assertNativeOwner(win);
   assert.equal(focused, true, "actual spatial field must own keyboard focus");
-  nativeInput(win, { type: "keyDown", keyCode: key, modifiers: ["shift"] });
+  nativeInput(win, { type: "keyDown", keyCode: key, modifiers });
   guard();
-  nativeInput(win, { type: "keyUp", keyCode: key, modifiers: ["shift"] });
+  nativeInput(win, { type: "keyUp", keyCode: key, modifiers });
+}
+
+const nativeRecenter = (win, js, guard = () => {}) =>
+  nativeSpatialKey(win, js, "Home", [], guard);
+
+/** Standalone browser projection. Inspect only the at-most-ten Universe body
+ * keys after verifying scope/length; never transfer the project geometry array. */
+function universeObservation(snapshot, expectedProjectIds) {
+  const scope = snapshot?.spatial?.location?.kind;
+  if (scope !== "universe")
+    return {
+      scope: typeof scope === "string" ? scope.slice(0, 24) : null,
+      invalid: "not_universe",
+    };
+  if (
+    !Array.isArray(expectedProjectIds) ||
+    !expectedProjectIds.length ||
+    expectedProjectIds.length > 10 ||
+    expectedProjectIds.some(
+      (id) => typeof id !== "string" || !id.length || id.length > 128,
+    ) ||
+    new Set(expectedProjectIds).size !== expectedProjectIds.length
+  )
+    return { scope, invalid: "invalid_canonical_project_ids" };
+  const bodies = snapshot?.spatial?.renderer?.projectedBodies;
+  if (!Array.isArray(bodies) || bodies.length > 10)
+    return {
+      scope,
+      canonicalProjectCount: expectedProjectIds.length,
+      invalid: "unbounded_or_missing_universe_bodies",
+    };
+  const expected = new Set(expectedProjectIds.map((id) => "project:" + id)),
+    visible = new Set();
+  let unexpectedBodies = 0,
+    duplicateBodies = 0;
+  for (const body of bodies) {
+    if (!expected.has(body?.key)) unexpectedBodies++;
+    else if (visible.has(body.key)) duplicateBodies++;
+    else visible.add(body.key);
+  }
+  return {
+    scope,
+    canonicalProjectCount: expected.size,
+    visibleProjectStars: visible.size,
+    unexpectedBodies,
+    duplicateBodies,
+    allCanonicalStarsVisible:
+      visible.size === expected.size && !unexpectedBodies && !duplicateBodies,
+  };
+}
+
+function assertUniverseObservation(value, expectedCount, allVisible = false) {
+  assert.equal(value.scope, "universe", "actual Universe scope required");
+  assert.equal(value.invalid, undefined, "valid bounded Universe observation");
+  assert.equal(
+    value.canonicalProjectCount,
+    expectedCount,
+    "actual canonical project count",
+  );
+  assert.equal(
+    value.unexpectedBodies,
+    0,
+    "only canonical project stars in this seeded Universe",
+  );
+  assert.equal(
+    value.duplicateBodies,
+    0,
+    "each canonical star has one rendered body",
+  );
+  assert(
+    Number.isInteger(value.visibleProjectStars) &&
+      value.visibleProjectStars > 0 &&
+      value.visibleProjectStars <= expectedCount,
+  );
+  if (allVisible)
+    assert.equal(
+      value.allCanonicalStarsVisible,
+      true,
+      "all canonical project stars framed together",
+    );
+}
+
+function assertUniverseFrame(observation, expectedCount, allVisible = false) {
+  assertUniverseObservation(observation.universe, expectedCount, allVisible);
+  assertBodyCounters(observation.renderer, 160, expectedCount);
+  assert.equal(
+    observation.renderer.nodes,
+    observation.universe.visibleProjectStars,
+    "rendered body count matches canonical projected stars",
+  );
+  assert.equal(
+    observation.renderer.nodes + observation.renderer.culled,
+    expectedCount,
+    "all canonical project stars remain allocated",
+  );
+}
+
+function qualifyPerformanceCase(receipt) {
+  const universe = receipt.universe;
+  const progresses = (phase, initial, count) => {
+    const frame = phase?.timing?.motionSamples?.initialGpuFrame;
+    return (
+      phase?.presentation?.qualified === true &&
+      phase.samples?.length === count &&
+      Number.isFinite(frame) &&
+      phase.samples.some((sample) => sample.gpu?.framesRendered > frame) &&
+      phase.samples.some(
+        (sample) =>
+          Math.abs(sample.camera?.yaw - initial?.yaw) > 0.001 ||
+          Math.abs(sample.camera?.pitch - initial?.pitch) > 0.001,
+      )
+    );
+  };
+  if (
+    !progresses(receipt, receipt.initialCamera, LIMITS.samples) ||
+    universe?.state !== "completed" ||
+    !progresses(
+      universe,
+      universe.initialObservation?.camera,
+      LIMITS.universeSamples,
+    )
+  )
+    return false;
+  try {
+    assert([1, 3, 10].includes(receipt.seed?.projectCount));
+    assertUniverseFrame(
+      universe.initialObservation,
+      receipt.seed.projectCount,
+      true,
+    );
+    assertUniverseFrame(
+      universe.finalObservation,
+      receipt.seed.projectCount,
+      true,
+    );
+    for (const sample of universe.samples)
+      assertUniverseFrame(sample, receipt.seed.projectCount);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Start only from an admitted native slot after checking the pinned tool hash.
+ * The returned child belongs to this run; separate phases never share a CSV. */
+function startPresentationCapture(
+  tool,
+  gpuPid,
+  out,
+  phase,
+  spawnChild = spawn,
+  now = Date.now,
+) {
+  assert(["project", "universe"].includes(phase), "bounded presentation phase");
+  assert(
+    Number.isInteger(gpuPid) && gpuPid > 0,
+    "actual target GPU PID required",
+  );
+  assert(
+    path.isAbsolute(tool) && path.isAbsolute(out),
+    "absolute presentation tool/output required",
+  );
+  const file = path.join(
+    out,
+    phase === "project" ? "presentation.csv" : "universe-presentation.csv",
+  );
+  const timing = {
+    spawnRequestedAt: new Date(now()).toISOString(),
+    requestedSeconds: 12,
+    targetGpuPid: gpuPid,
+    phase,
+  };
+  const child = spawnChild(
+    tool,
+    [
+      "--process_id",
+      String(gpuPid),
+      "--output_file",
+      file,
+      "--timed",
+      "12",
+      "--terminate_after_timed",
+      "--no_console_stats",
+      "--v1_metrics",
+      "--session_name",
+      "Aerynth-" + phase + "-" + process.pid + "-" + now(),
+    ],
+    { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  child.once("spawn", () => {
+    timing.spawnedAt = new Date(now()).toISOString();
+  });
+  const log = [];
+  let logBytes = 0;
+  for (const stream of [child.stdout, child.stderr])
+    stream.on("data", (chunk) => {
+      const take = chunk.subarray(0, Math.max(0, 65536 - logBytes));
+      if (take.length) {
+        log.push(take.toString());
+        logBytes += take.length;
+      }
+    });
+  const capture = { child, file, timing, result: undefined, done: undefined };
+  capture.done = new Promise((resolve) => {
+    const finish = (result) => {
+      if (capture.result) return;
+      capture.result = {
+        ...result,
+        log: log.join(""),
+        endedAt: new Date(now()).toISOString(),
+      };
+      timing.endedAt = capture.result.endedAt;
+      resolve(capture.result);
+    };
+    child.once("error", (error) =>
+      finish({ error: String(error.message).slice(0, 4096) }),
+    );
+    child.once("close", (code, signal) => finish({ code, signal }));
+  });
+  return capture;
 }
 
 /** Every awaited UI lookup is followed by a fresh deadline/operator/owner check
@@ -232,6 +459,12 @@ exports.LIMITS = LIMITS;
 exports.verificationDeadline = verificationDeadline;
 exports.spatialObservation = spatialObservation;
 exports.nativeOrbit = nativeOrbit;
+exports.nativeRecenter = nativeRecenter;
+exports.universeObservation = universeObservation;
+exports.assertUniverseObservation = assertUniverseObservation;
+exports.assertUniverseFrame = assertUniverseFrame;
+exports.qualifyPerformanceCase = qualifyPerformanceCase;
+exports.startPresentationCapture = startPresentationCapture;
 exports.benchmarkControls = benchmarkControls;
 exports.assertBodyCounters = assertBodyCounters;
 
@@ -250,7 +483,7 @@ exports.verify = async ({
   );
   const helperStarted = Date.now();
   const receipt = {
-    contract: "aerynth.spatial-scale@2",
+    contract: "aerynth.spatial-scale@3",
     source,
     syntheticData: true,
     passed: false,
@@ -271,13 +504,17 @@ exports.verify = async ({
       "Bounded progress/checkpoint I/O and CSV-size monitoring are part of this harness's overhead.",
       "Bounded samples do not establish long-term memory, power, thermal or full product/artistic acceptance.",
       "Other applications and background hardware load were not controlled.",
+      "Project and Universe use separate OS presentation windows; their samples are never merged.",
+      "Universe body counts identify actual canonical stars, not the total stored resource count.",
     ],
   };
   let present,
+    presentFile,
     budget,
     abort,
     ownerContents,
     progressBytes = 0;
+  const presentationChildren = new Set();
   const beforeInput = (_event, input) => {
     if (input.type === "keyDown" && input.key === "Escape")
       abort = new Error("native_spatial_operator_escape");
@@ -296,8 +533,7 @@ exports.verify = async ({
       if (present)
         try {
           assert(
-            (await fs.stat(path.join(out, "presentation.csv"))).size <=
-              LIMITS.csvBytes,
+            (await fs.stat(presentFile)).size <= LIMITS.csvBytes,
             "presentation CSV byte bound",
           );
         } catch (error) {
@@ -333,6 +569,10 @@ exports.verify = async ({
   }
   async function capture(name) {
     guard();
+    assert(
+      receipt.captures.length < LIMITS.screenshots,
+      "screenshot count bound",
+    );
     const bytes = (await win.webContents.capturePage()).toPNG();
     guard();
     assert(bytes.length <= LIMITS.pngBytes, "screenshot byte bound");
@@ -443,6 +683,9 @@ exports.verify = async ({
     await click("#settings-close");
     await ownedPause(1200);
     receipt.foreground = win.isFocused();
+    receipt.viewport = await read(
+      "({width:innerWidth,height:innerHeight,dpr:devicePixelRatio})",
+    );
     receipt.labelClearance = await checkLabelClearance(win);
     await capture("project-before");
     const initial = await observe();
@@ -454,8 +697,7 @@ exports.verify = async ({
     const tool = process.argv
       .find((a) => a.startsWith("--presentmon="))
       ?.slice(13);
-    let presentDone;
-    if (tool && gpu) {
+    if (tool) {
       guard();
       assert(path.isAbsolute(tool));
       assert(
@@ -468,54 +710,92 @@ exports.verify = async ({
           .digest("hex"),
         "b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af",
       );
-      receipt.timing.presentMon = {
-        spawnRequestedAt: new Date().toISOString(),
-        requestedSeconds: 12,
-        targetGpuPid: gpu.pid,
-      };
-      present = spawn(
-        tool,
-        [
-          "--process_id",
-          String(gpu.pid),
-          "--output_file",
-          path.join(out, "presentation.csv"),
-          "--timed",
-          "12",
-          "--terminate_after_timed",
-          "--no_console_stats",
-          "--v1_metrics",
-          "--session_name",
-          "Aerynth-" + process.pid + "-" + Date.now(),
-        ],
-        { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] },
-      );
-      present.once("spawn", () => {
-        receipt.timing.presentMon.spawnedAt = new Date().toISOString();
-      });
-      const log = [];
-      let logBytes = 0;
-      for (const stream of [present.stdout, present.stderr])
-        stream.on("data", (chunk) => {
-          const take = chunk.subarray(0, Math.max(0, 65536 - logBytes));
-          if (take.length) {
-            log.push(take.toString());
-            logBytes += take.length;
-          }
-        });
-      presentDone = new Promise((resolve) => {
-        present.once("error", (error) =>
-          resolve({ error: error.message, endedAt: new Date().toISOString() }),
-        );
-        present.once("exit", (code) =>
-          resolve({
-            code,
-            log: log.join(""),
-            endedAt: new Date().toISOString(),
-          }),
-        );
-      });
     }
+    let captureCount = 0;
+    const running = (child) =>
+      child?.pid && child.exitCode === null && child.signalCode === null;
+    const launchPresentation = (target, phase, currentGpu) => {
+      guard();
+      assert(
+        !present || !running(present),
+        "previous owned presentation capture must finish before the next phase",
+      );
+      if (!tool || !currentGpu) return null;
+      assert(
+        captureCount++ < LIMITS.presentationCaptures,
+        "presentation capture count bound",
+      );
+      const started = startPresentationCapture(
+        tool,
+        currentGpu.pid,
+        out,
+        phase,
+      );
+      present = started.child;
+      presentFile = started.file;
+      presentationChildren.add(started.child);
+      target.timing.presentMon = started.timing;
+      target.timing.presentMon.file = path.basename(started.file);
+      return started;
+    };
+    const finishPresentation = async (target, started) => {
+      if (!started) {
+        target.presentation = {
+          qualified: false,
+          reason: "PresentMon_or_target_GPU_PID_unavailable",
+        };
+        return;
+      }
+      const end = Math.min(budget.expiresAt, Date.now() + 16000);
+      while (!started.result && Date.now() < end) await ownedPause(50);
+      const result = started.result ?? {
+        error: "presentation_capture_timeout",
+        endedAt: new Date().toISOString(),
+      };
+      target.presentMon = result;
+      target.timing.presentMon.observationCompletedAt =
+        new Date().toISOString();
+      if (result.error && running(started.child)) {
+        started.child.kill();
+        const drain = Math.min(budget.expiresAt, Date.now() + 2000);
+        while (running(started.child) && Date.now() < drain)
+          await ownedPause(50);
+        assert(
+          !running(started.child),
+          "owned presentation process did not stop",
+        );
+      }
+      try {
+        assert(
+          !result.error && result.code === 0 && !result.signal,
+          "presentation process did not finish successfully",
+        );
+        assert(
+          (await fs.stat(started.file)).size <= LIMITS.csvBytes,
+          "presentation CSV byte bound",
+        );
+        const csv = await fs.readFile(started.file);
+        assert(
+          csv.length <= LIMITS.csvBytes,
+          "presentation CSV read byte bound",
+        );
+        target.timing.presentMon.csvBytes = csv.length;
+        target.timing.presentMon.csvSha256 = createHash("sha256")
+          .update(csv)
+          .digest("hex");
+        target.presentation = summarizePresentMon(
+          csv.toString("utf8"),
+          started.timing.targetGpuPid,
+        );
+      } catch (error) {
+        target.presentation = { qualified: false, reason: error.message };
+      }
+      if (present === started.child && !running(started.child)) {
+        present = undefined;
+        presentFile = undefined;
+      }
+    };
+    const projectCapture = launchPresentation(receipt, "project", gpu);
     receipt.timing.callbackWindow = {
       resetRequestedAt: new Date().toISOString(),
     };
@@ -584,6 +864,9 @@ exports.verify = async ({
       draws: metrics.draws,
       policy: String(metrics.policy).slice(0, 160),
     };
+    receipt.observedRendererErrors = Array.isArray(metrics.errors)
+      ? metrics.errors.slice(-16).map((error) => String(error).slice(0, 1024))
+      : null;
     receipt.callbackIntervalsMs = percentiles(metrics.intervals);
     receipt.drawIntervalsMs = percentiles(metrics.drawIntervals);
     receipt.spatialCpuSubmissionMs = percentiles(
@@ -624,42 +907,7 @@ exports.verify = async ({
     receipt.memory.completedAt = new Date().toISOString();
     receipt.state = "sampled";
     await checkpoint();
-    if (presentDone) {
-      const end = Math.min(budget.expiresAt, Date.now() + 16000);
-      let done;
-      presentDone.then((result) => {
-        done = result;
-      });
-      while (!done && Date.now() < end) await ownedPause(50);
-      const result = done ?? {
-        error: "presentation_capture_timeout",
-        endedAt: new Date().toISOString(),
-      };
-      receipt.presentMon = result;
-      receipt.timing.presentMon.endedAt = result.endedAt;
-      if (result.error && present?.exitCode === null) present.kill();
-      try {
-        assert(
-          !result.error && result.code === 0,
-          "presentation process did not finish successfully",
-        );
-        const file = path.join(out, "presentation.csv");
-        assert(
-          (await fs.stat(file)).size <= LIMITS.csvBytes,
-          "presentation CSV byte bound",
-        );
-        receipt.presentation = summarizePresentMon(
-          await fs.readFile(file, "utf8"),
-          gpu.pid,
-        );
-      } catch (error) {
-        receipt.presentation = { qualified: false, reason: error.message };
-      }
-    } else
-      receipt.presentation = {
-        qualified: false,
-        reason: "PresentMon_or_target_GPU_PID_unavailable",
-      };
+    await finishPresentation(receipt, projectCapture);
     if (process.argv.includes("--spatial-regression")) {
       await ownedPause(14500);
       receipt.idlePolicy = await read(
@@ -775,7 +1023,206 @@ exports.verify = async ({
     assert.equal(s.resources.length, seed.resourceCount);
     assert.equal(s.relationships.length, seed.relationshipCount);
     await capture("project-after");
-    receipt.passed = receipt.presentation?.qualified === true;
+    receipt.universe = {
+      state: "navigating",
+      timing: { navigationRequestedAt: new Date().toISOString() },
+      samples: [],
+      canonicalProjectCount: seed.projectCount,
+    };
+    const universe = receipt.universe;
+    receipt.state = "universe-navigating";
+    await progress({ phase: receipt.state });
+    await checkpoint();
+    // Optional project regressions leave different policy settings. Measure the
+    // second scope in the same standard policy through the real controls.
+    await click("#settings-button");
+    await fill("#quality", "balanced");
+    for (const selector of ["#quiet", "#reduced"])
+      if (
+        await read(
+          "document.querySelector(" + JSON.stringify(selector) + ").checked",
+        )
+      )
+        await click(selector);
+    await click("#settings-close");
+    await click('.aw-quiet-control[aria-label="Commands and destinations"]');
+    await fill(".aw-destinations input", "Universe");
+    await click('.aw-command-row[data-command="universe"]');
+    await waitOwned(
+      "window.__aerynth.snapshot().spatial.location.kind==='universe'",
+    );
+    await nativeRecenter(win, js, guard);
+    await waitOwned(
+      "JSON.stringify(window.__aerynth.snapshot().spatial.camera)===JSON.stringify(window.__aerynth.snapshot().spatial.bookmark)",
+    );
+    const canonicalProjectIds = await read(
+      "window.__aerynth.application().projects.map(p=>p.id)",
+    );
+    assert.equal(canonicalProjectIds.length, seed.projectCount);
+    assert.equal(new Set(canonicalProjectIds).size, seed.projectCount);
+    assert(
+      canonicalProjectIds.every(
+        (id) => typeof id === "string" && id.length && id.length <= 128,
+      ),
+    );
+    universe.canonicalProjectIdentitySha256 = createHash("sha256")
+      .update(JSON.stringify([...canonicalProjectIds].sort()))
+      .digest("hex");
+    const observeUniverse = () =>
+      read(
+        "(()=>{const s=window.__aerynth.snapshot();return {...(" +
+          spatialObservation.toString() +
+          ")(s),universe:(" +
+          universeObservation.toString() +
+          ")(s," +
+          JSON.stringify(canonicalProjectIds) +
+          ")}})()",
+      );
+    const universeInitial = await observeUniverse();
+    universe.initialObservation = universeInitial;
+    assertUniverseFrame(universeInitial, seed.projectCount, true);
+    universe.viewport = await read(
+      "({width:innerWidth,height:innerHeight,dpr:devicePixelRatio})",
+    );
+    universe.timing.navigationCompletedAt = new Date().toISOString();
+    await capture("universe-before");
+    const universeGpu = app.getAppMetrics().find((p) => p.type === "GPU");
+    const universeCapture = launchPresentation(
+      universe,
+      "universe",
+      universeGpu,
+    );
+    universe.timing.callbackWindow = {
+      resetRequestedAt: new Date().toISOString(),
+    };
+    await read("window.__aerynth.resetMetrics()");
+    const universeStart = await observeUniverse();
+    assert(
+      Number.isFinite(universeStart.gpu.framesRendered),
+      "real Universe GPU frame counter required",
+    );
+    universe.state = "sampling";
+    receipt.state = "universe-sampling";
+    universe.timing.motionSamples = {
+      startedAt: new Date().toISOString(),
+      targetPauseMs: LIMITS.samplePauseMs,
+      initialGpuFrame: universeStart.gpu.framesRendered,
+    };
+    await checkpoint();
+    for (let i = 0; i < LIMITS.universeSamples; i++) {
+      await nativeOrbit(win, js, ["Up", "Right", "Down", "Left"][i % 4], guard);
+      await ownedPause(LIMITS.samplePauseMs);
+      const observation = await observeUniverse();
+      assertUniverseFrame(observation, seed.projectCount);
+      assert(
+        observation.gpu.spatialLayer.active &&
+          observation.gpu.spatialLayer.failed === false,
+      );
+      assert(
+        Number.isFinite(observation.renderer.cpuSubmitMs) &&
+          observation.renderer.cpuSubmitMs >= 0,
+      );
+      const sample = {
+        at: new Date().toISOString(),
+        moduleElapsedMs: Date.now() - moduleStarted,
+        ...observation,
+        focused: win.isFocused(),
+        minimized: win.isMinimized(),
+      };
+      universe.samples.push(sample);
+      await progress({ phase: "universe-sample", index: i, sample });
+      if ((i + 1) % 10 === 0) await checkpoint();
+    }
+    universe.timing.motionSamples.endedAt = new Date().toISOString();
+    universe.timing.motionSamples.count = universe.samples.length;
+    assert(
+      universe.samples.some(
+        (sample) =>
+          sample.gpu.framesRendered > universeStart.gpu.framesRendered,
+      ),
+      "actual GPU draws must advance during Universe input",
+    );
+    assert(
+      universe.samples.some(
+        (sample) =>
+          Math.abs(sample.camera.yaw - universeInitial.camera.yaw) > 0.001 ||
+          Math.abs(sample.camera.pitch - universeInitial.camera.pitch) > 0.001,
+      ),
+      "actual native input must move the Universe camera",
+    );
+    universe.foregroundThroughoutSamples = universe.samples.every(
+      (sample) => sample.focused && !sample.minimized,
+    );
+    const universeMetrics = await read("window.__aerynth.snapshot().metrics");
+    universe.timing.callbackWindow.readCompletedAt = new Date().toISOString();
+    universe.callbackMetrics = {
+      callbacks: universeMetrics.callbacks,
+      draws: universeMetrics.draws,
+      policy: String(universeMetrics.policy).slice(0, 160),
+    };
+    universe.observedRendererErrors = Array.isArray(universeMetrics.errors)
+      ? universeMetrics.errors
+          .slice(-16)
+          .map((error) => String(error).slice(0, 1024))
+      : null;
+    universe.callbackIntervalsMs = percentiles(universeMetrics.intervals);
+    universe.drawIntervalsMs = percentiles(universeMetrics.drawIntervals);
+    universe.spatialCpuSubmissionMs = percentiles(
+      universe.samples
+        .filter(
+          (sample, i) =>
+            i === 0 ||
+            sample.gpu.framesRendered !==
+              universe.samples[i - 1].gpu.framesRendered,
+        )
+        .map((sample) => sample.renderer.cpuSubmitMs),
+    );
+    universe.visibleProjectStars = {
+      min: Math.min(
+        ...universe.samples.map(
+          (sample) => sample.universe.visibleProjectStars,
+        ),
+      ),
+      max: Math.max(
+        ...universe.samples.map(
+          (sample) => sample.universe.visibleProjectStars,
+        ),
+      ),
+    };
+    universe.state = "sampled";
+    await checkpoint();
+    await finishPresentation(universe, universeCapture);
+    await nativeRecenter(win, js, guard);
+    await waitOwned(
+      "JSON.stringify(window.__aerynth.snapshot().spatial.camera)===JSON.stringify(window.__aerynth.snapshot().spatial.bookmark)",
+    );
+    universe.finalObservation = await observeUniverse();
+    assertUniverseFrame(universe.finalObservation, seed.projectCount, true);
+    assert.deepEqual(
+      (
+        await read("window.__aerynth.application().projects.map(p=>p.id)")
+      ).sort(),
+      [...canonicalProjectIds].sort(),
+      "canonical project identities remain unchanged across Universe sampling",
+    );
+    const universeMemory = app.getAppMetrics();
+    universe.memory = {
+      requestedAt: new Date().toISOString(),
+      rendererKiB: scalarMemory(
+        universeMemory.find((p) => p.pid === win.webContents.getOSProcessId())
+          ?.memory,
+      ),
+      gpuKiB: scalarMemory(
+        universeMemory.find((p) => p.type === "GPU")?.memory,
+      ),
+      backendBytes: scalarMemory(await call("metrics", {})),
+    };
+    universe.memory.completedAt = new Date().toISOString();
+    await capture("universe-after");
+    universe.state =
+      universe.presentation?.qualified === true ? "completed" : "partial";
+    universe.timing.finishedAt = new Date().toISOString();
+    receipt.passed = qualifyPerformanceCase(receipt);
     receipt.state = receipt.passed ? "completed" : "partial";
     await progress({
       phase: receipt.state,
@@ -801,7 +1248,9 @@ exports.verify = async ({
         receipt.listenerCleanupError = String(error.message).slice(0, 1024);
       }
       try {
-        if (present?.exitCode === null) present.kill();
+        for (const child of presentationChildren)
+          if (child.pid && child.exitCode === null && child.signalCode === null)
+            child.kill();
       } catch (error) {
         receipt.presentationCleanupError = String(error.message).slice(0, 1024);
       }
@@ -830,6 +1279,9 @@ exports.verify = async ({
           passed: receipt.passed,
           error: receipt.error,
           presentation: receipt.presentation,
+          universePresentation: receipt.universe?.presentation,
+          universeProjectStars:
+            receipt.universe?.finalObservation?.universe.visibleProjectStars,
           projects: receipt.seed?.projectCount,
           resources: receipt.seed?.resourceCount,
           matrixComplete: false,

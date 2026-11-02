@@ -1,6 +1,8 @@
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const vm = require("node:vm");
+const { EventEmitter } = require("node:events");
+const path = require("node:path");
 const {
   REQUIRED_MATRIX,
   LIMITS,
@@ -9,6 +11,11 @@ const {
   nativeOrbit,
   benchmarkControls,
   assertBodyCounters,
+  universeObservation,
+  assertUniverseFrame,
+  qualifyPerformanceCase,
+  nativeRecenter,
+  startPresentationCapture,
 } = require("../../visual-experience/cinematic-v3/native/integration-spatial-benchmark.cjs");
 
 function snapshot() {
@@ -252,4 +259,263 @@ test("the required separate native matrix retains all project/resource scales an
   );
   assert.equal(LIMITS.samples, 40);
   assert.ok(LIMITS.receiptBytes <= 1024 * 1024);
+});
+
+function universeFixture(count = 10, visible = count) {
+  const ids = Array.from({ length: count }, (_, i) => "canonical-project-" + i),
+    s = snapshot();
+  s.spatial.location = { kind: "universe" };
+  Object.assign(s.spatial.renderer, {
+    nodes: visible,
+    detailedBodies: visible,
+    instancedBodies: 0,
+    instanceDrawCount: count,
+    culled: count - visible,
+    projectedBodies: ids
+      .slice(0, visible)
+      .map((id) => ({ key: "project:" + id })),
+  });
+  return {
+    ids,
+    s,
+    observation: {
+      ...spatialObservation(s),
+      universe: universeObservation(s, ids),
+    },
+  };
+}
+
+test("actual Universe browser projection verifies canonical star identity/count and never reads large project geometry in another scope", () => {
+  const f = universeFixture();
+  const value = vm.runInNewContext(
+    "(" + universeObservation.toString() + ")(fixture,ids)",
+    { fixture: f.s, ids: f.ids },
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(value)), f.observation.universe);
+  assert.equal(value.visibleProjectStars, 10);
+  assert.equal(value.allCanonicalStarsVisible, true);
+  assert.ok(Buffer.byteLength(JSON.stringify(value)) < 1024);
+  const wrong = snapshot();
+  wrong.spatial.location = { kind: "project" };
+  Object.defineProperty(wrong.spatial.renderer, "projectedBodies", {
+    get() {
+      assert.fail(
+        "never scan the dense project array for Universe qualification",
+      );
+    },
+  });
+  assert.equal(universeObservation(wrong, f.ids).invalid, "not_universe");
+  const oversized = universeFixture();
+  oversized.s.spatial.renderer.projectedBodies = new Proxy(Array(10000), {
+    get(target, key) {
+      if (key !== "length") assert.fail("do not iterate unbounded body data");
+      return target.length;
+    },
+  });
+  assert.equal(
+    universeObservation(oversized.s, oversized.ids).invalid,
+    "unbounded_or_missing_universe_bodies",
+  );
+});
+
+test("Universe frame admission rejects substituted/duplicate stars, stale counts and partial framing", () => {
+  const f = universeFixture();
+  assertUniverseFrame(f.observation, 10, true);
+  const partial = universeFixture(10, 9);
+  assertUniverseFrame(partial.observation, 10);
+  assert.throws(
+    () => assertUniverseFrame(partial.observation, 10, true),
+    /framed together/,
+  );
+  for (const key of [
+    "workspace:wrong",
+    "project:foreign",
+    "project:" + f.ids[0],
+  ]) {
+    const changed = universeFixture();
+    changed.s.spatial.renderer.projectedBodies[1].key = key;
+    assert.throws(() =>
+      assertUniverseFrame(
+        {
+          ...changed.observation,
+          universe: universeObservation(changed.s, changed.ids),
+        },
+        10,
+        true,
+      ),
+    );
+  }
+  assert.throws(() =>
+    assertUniverseFrame(
+      {
+        ...f.observation,
+        renderer: {
+          ...f.observation.renderer,
+          nodes: 9,
+          instancedBodies: 0,
+          detailedBodies: 9,
+        },
+      },
+      10,
+    ),
+  );
+  assert.equal(
+    universeObservation(f.s, [...f.ids, f.ids[0]]).invalid,
+    "invalid_canonical_project_ids",
+  );
+});
+
+test("case qualification requires both independent OS captures, complete native samples, GPU/camera progress and real Universe coverage", () => {
+  const f = universeFixture();
+  const phase = {
+    presentation: { qualified: true },
+    timing: { motionSamples: { initialGpuFrame: 1 } },
+    samples: Array.from({ length: 40 }, () => ({
+      ...structuredClone(f.observation),
+      gpu: { framesRendered: 2 },
+      camera: { yaw: 0.8, pitch: 0.4 },
+    })),
+  };
+  const receipt = {
+    ...structuredClone(phase),
+    seed: { projectCount: 10 },
+    initialCamera: { yaw: 0.4, pitch: 0.3 },
+    universe: {
+      ...structuredClone(phase),
+      state: "completed",
+      initialObservation: structuredClone(f.observation),
+      finalObservation: structuredClone(f.observation),
+    },
+  };
+  assert.equal(qualifyPerformanceCase(receipt), true);
+  const mutations = [
+    (r) => {
+      r.presentation.qualified = false;
+    },
+    (r) => {
+      r.universe.presentation.qualified = false;
+    },
+    (r) => {
+      r.universe.state = "partial";
+    },
+    (r) => {
+      r.samples.pop();
+    },
+    (r) => {
+      r.universe.samples.pop();
+    },
+    (r) => {
+      r.universe.finalObservation = universeFixture(10, 9).observation;
+    },
+    (r) => {
+      r.universe.samples[0].universe.scope = "project";
+    },
+    (r) => {
+      r.universe.samples.forEach((s) => (s.gpu.framesRendered = 1));
+    },
+    (r) => {
+      r.universe.samples.forEach(
+        (s) => (s.camera = structuredClone(f.observation.camera)),
+      );
+    },
+  ];
+  for (const change of mutations) {
+    const copy = structuredClone(receipt);
+    change(copy);
+    assert.equal(qualifyPerformanceCase(copy), false);
+  }
+  assert.equal(qualifyPerformanceCase({}), false);
+});
+
+test("separate owned PresentMon captures use different files/session names, pinned bounded arguments and independent timestamps", async () => {
+  const calls = [],
+    children = [];
+  let now = 1000000;
+  const spawnChild = (tool, args, options) => {
+    calls.push({ tool, args, options });
+    const child = new EventEmitter();
+    Object.assign(child, {
+      stdout: new EventEmitter(),
+      stderr: new EventEmitter(),
+      pid: 200 + children.length,
+      exitCode: null,
+      signalCode: null,
+    });
+    children.push(child);
+    return child;
+  };
+  const out = path.resolve("unit-evidence-not-written"),
+    tool = path.resolve("unit-tool-not-executed.exe");
+  const project = startPresentationCapture(
+    tool,
+    345,
+    out,
+    "project",
+    spawnChild,
+    () => now,
+  );
+  children[0].emit("spawn");
+  children[0].stdout.emit("data", Buffer.alloc(70000, 65));
+  now += 12000;
+  children[0].emit("close", 0, null);
+  const first = await project.done;
+  const universe = startPresentationCapture(
+    tool,
+    346,
+    out,
+    "universe",
+    spawnChild,
+    () => now,
+  );
+  children[1].emit("spawn");
+  now += 12000;
+  children[1].emit("close", 0, null);
+  const second = await universe.done;
+  assert.notEqual(project.file, universe.file);
+  assert.equal(path.dirname(universe.file), out);
+  assert.notDeepEqual(project.timing, universe.timing);
+  assert.equal(project.timing.endedAt, universe.timing.spawnRequestedAt);
+  assert.equal(Buffer.byteLength(first.log), 65536);
+  assert.equal(second.log, "");
+  for (const call of calls) {
+    assert.equal(call.options.windowsHide, true);
+    assert.equal(call.options.stdio[0], "ignore");
+    assert.equal(call.args[call.args.indexOf("--timed") + 1], "12");
+    assert.ok(call.args.includes("--terminate_after_timed"));
+  }
+  assert.notEqual(
+    calls[0].args[calls[0].args.indexOf("--session_name") + 1],
+    calls[1].args[calls[1].args.indexOf("--session_name") + 1],
+  );
+  assert.throws(() =>
+    startPresentationCapture(tool, 345, out, "../../escape", spawnChild),
+  );
+  assert.equal(calls.length, 2);
+  const failed = startPresentationCapture(
+    tool,
+    345,
+    out,
+    "project",
+    spawnChild,
+    () => now,
+  );
+  children[2].emit("error", Error("capture unavailable"));
+  assert.equal((await failed.done).error, "capture unavailable");
+});
+
+test("Universe recenter dispatches the real Home key with the same focus/deadline fences and no window reclamation", async () => {
+  const a = owner();
+  await nativeRecenter(a.win, async () => true);
+  assert.deepEqual(a.sent, [
+    { type: "keyDown", keyCode: "Home", modifiers: [] },
+    { type: "keyUp", keyCode: "Home", modifiers: [] },
+  ]);
+  const b = owner();
+  await assert.rejects(
+    nativeRecenter(b.win, async () => {
+      b.blur();
+      return true;
+    }),
+  );
+  assert.equal(b.sent.length, 0);
 });
