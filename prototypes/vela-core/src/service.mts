@@ -240,6 +240,7 @@ export class VelaService {
       const conversation = this.opts.host.resolve({ id: this.data.conversationId, kind: 'resource' }, scope);
       if (!conversation || this.opts.host.canReadContent?.(conversation, scope) !== true) return { context, origin, historyOmissions: [{ reason: 'message-unavailable' }] };
       const readers = this.historyReaders(), snapshot = this.opts.history!.snapshot(this.data.conversationId, HISTORY_LIMITS.lookbackMessages);
+      if (snapshot === null) return { context, origin, historyOmissions: [{ reason: 'message-unavailable' }] };
       const selection = selectBoundedHistory({ enabled: true, origin, snapshot, reader: readers.full, fits: history => options.fits({ ...context, ...(history ? { history } : {}) }) });
       if (selection.fence) {
         try { unionHistoryDependencies(historyDependenciesFromContext(context, this.data.conversationId), selection.fence.dependencies); }

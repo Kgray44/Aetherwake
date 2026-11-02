@@ -77,6 +77,16 @@ test('read-only history preview never opens Vela or reads implicit messages when
   } finally { f.close(); }
 });
 
+test('unavailable bounded metadata scan preserves the existing conversation and reports unavailable history', async () => {
+  const f = fixture(); try {
+    assert.equal(f.preview().historyOmissions[0].reason, 'no-conversation');
+    await f.send(); const before = f.service().state(), counts = f.counts(), changes = f.db.prepare('SELECT total_changes() AS n').get()!.n;
+    f.history.snapshot = () => null;
+    const preview = f.preview(); assert.equal(preview.context.history, undefined); assert.equal(preview.historyFence, undefined); assert.deepEqual(preview.historyOmissions, [{ reason: 'message-unavailable' }]);
+    assert.equal(preview.origin.navigation.kind, 'known'); assert.deepEqual(f.service().state(), before); assert.deepEqual(f.counts(), counts); assert.equal(f.db.prepare('SELECT total_changes() AS n').get()!.n, changes);
+  } finally { f.close(); }
+});
+
 test('frozen service context keeps exact reviewed messages through its sole canonical append and persists only reference proofs', async () => {
   const f = fixture(); try {
     const first = await f.send(), preview = f.preview(), binding = f.bind(preview); assert.equal(preview.context.history!.messages.length, 2);
