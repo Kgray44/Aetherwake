@@ -169,7 +169,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const article = el('article', undefined, 'cp-message cp-message-'+message.role); article.dataset.messageId = message.id; article.dataset.sourceResourceId = message.resourceId;
     // MessageView has no per-message provider binding: never relabel old assistant output after a provider change.
     const attribution = message.role === 'user' ? 'You' : message.role === 'assistant' ? (message.provenance==='mock_adapter'?'Assistant · simulated source':'Assistant') : message.role;
-    const by = el('p', attribution+(message.inherited?' · inherited source':''), 'cp-message-source'); by.title = message.provenance+' · '+message.createdAt;
+    const by = el('p', attribution+(message.inherited?' · inherited source':'')+(message.outputState==='partial'?' · partial response':''), 'cp-message-source'); by.title = message.provenance+' · '+message.createdAt;article.dataset.outputState=message.outputState??'';
     const content = message.role === 'assistant' ? renderMarkdown(message.content,copy,report) : el('div',message.content); content.classList.add('cp-message-content');
     const actions = el('details', undefined, 'cp-message-actions'), summary = el('summary','Message actions'), panel = el('div',undefined,'cp-disclosure-panel'); actions.append(summary,panel);
     decorateConversationDisclosure(actions,summary,'message-actions',panel);
