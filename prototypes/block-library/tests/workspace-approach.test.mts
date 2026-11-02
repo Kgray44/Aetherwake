@@ -11,7 +11,7 @@ const helper = require('./workspace-approach.cjs'), { expressions, preflight } =
 
 test('Approach catalog compiles all own branches plus shared A/C expressions before native dispatch', () => {
   const result = preflight();
-  assert.equal(result.factories, 9); assert.equal(result.cases, 13); assert.deepEqual(result.common, require('./library-native-expressions.cjs').preflight());
+  assert.equal(result.factories, 10); assert.equal(result.cases, 14); assert.deepEqual(result.common, require('./library-native-expressions.cjs').preflight());
   assert.deepEqual(result, preflight());
   const source = readFileSync(new URL('./workspace-approach.cjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /\b(?:js|wait)\(\s*['"`]/);
@@ -19,14 +19,17 @@ test('Approach catalog compiles all own branches plus shared A/C expressions bef
 });
 
 test('retention observations compare the actual retained node, text, native selection and scroll without writing them', () => {
-  const node = { value: 'Saved "quoted"\ntext', selectionStart: 3, selectionEnd: 6, scrollTop: 21 };
-  const context = { window: {}, document: { querySelector() { return node; } } };
+  const node = { value: 'Saved "quoted"\ntext', selectionStart: 3, selectionEnd: 6, scrollTop: 21, scrollLeft: 0, clientWidth: 200, clientHeight: 100, scrollWidth: 200, scrollHeight: 600, closest() { return null; }, getBoundingClientRect() { return { width: 200, height: 100 }; } };
+  const context = { window: {}, document: { querySelector() { return node; }, activeElement: node }, getComputedStyle() { return { fontSize: '16px', lineHeight: '24px', overflowAnchor: 'auto' }; } };
   assert.equal(runInNewContext(expressions.rememberNode('textarea'), context), true);
   runInNewContext(expressions.rememberEditor('textarea'), context);
-  assert.deepEqual(JSON.parse(JSON.stringify(runInNewContext(expressions.retainedEditor('textarea'), context))), { sameNode: true, sameText: true, sameSelection: true, scrollDelta: 0 });
+  const retained = JSON.parse(JSON.stringify(runInNewContext(expressions.retainedEditor('textarea'), context)));
+  assert.deepEqual({ sameNode: retained.sameNode, sameText: retained.sameText, sameSelection: retained.sameSelection, scrollDelta: retained.scrollDelta }, { sameNode: true, sameText: true, sameSelection: true, scrollDelta: 0 });
+  assert.deepEqual(retained.before, retained.after); assert.equal(retained.before.scrollHeight, 600);
   node.selectionStart = 0; node.scrollTop = 9;
   const changed = JSON.parse(JSON.stringify(runInNewContext(expressions.retainedEditor('textarea'), context)));
   assert.equal(changed.sameSelection, false); assert.equal(changed.scrollDelta, 12);
+  assert.equal(changed.before.scroll, 21); assert.equal(changed.after.scroll, 9); assert.equal(changed.after.start, 0);
   const replacement = { ...node }; context.document.querySelector = () => replacement;
   assert.equal(runInNewContext(expressions.sameNode('textarea'), context), false, 'a rebuilt matching-value editor is not preservation');
 });

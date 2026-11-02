@@ -78,7 +78,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
       await guard.around(() => fs.mkdir(output, { recursive: true })); await guard.around(() => fs.writeFile(path.join(output, name + '.png'), png, { flag: 'wx' }));
       receipt.screenshots.push({ file: name + '.png', bytes: png.length, sha256: digest(png), priorDraws: before.draws, freshDraw: health.draws > before.draws, diagnostic, health });
     };
-    failureProbe = async () => ({ graphics: await graphics(), context: await js(x.failureContext()), cards: await Promise.all(cases.map(entry => js(x.dom(card(entry))))) });
+    failureProbe = async () => ({ graphics: await graphics(), context: await js(x.failureContext()), editor: await js(x.editorMetrics(card(cases[0]) + ' textarea')), cards: await Promise.all(cases.map(entry => js(x.dom(card(entry))))) });
     failureShot = () => shot('native-approach-failure', true);
     const noExecution = async () => assert.deepEqual(await js(x.host('executionStatus', {})), []);
     await wait(x.ready()); await noExecution();
@@ -114,6 +114,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
         const input = selector + (entry.kind === 'task' ? ' .task-completed' : ' textarea');
         assert(await js(x.rememberNode(input)), 'Existing editor/control node required');
         const result = { kind: entry.kind, shape: entry.shape ?? 'default', blockId: entry.blockId, resourceId: entry.resourceId, tiny: await js(x.dom(selector)), viewportBefore: tiny.viewport };
+        receipt.activeCase = result;
         if (entry.kind === 'research') await shot('tiny-research-with-approach');
         await click(primary); await wait(x.composition(selector, 'working')); await wait(x.expanded(selector, false));
         const approached = await snapshot(); assert(approached.viewport.zoom > tiny.viewport.zoom, 'Native Approach must increase usable footprint'); assert.deepEqual(exports.placementState(approached), exports.placementState(tiny));
@@ -123,15 +124,19 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
           receipt.actions.push({ action: 'native Research text input', text: researchText }); await wait(x.resourceTextIs(entry.resourceId, researchText));
           key('Home'); for (let n = 0; n < 3; n++) key('Right', ['shift']);
           result.editorBeforeReturn = await js(x.rememberEditor(input)); assert(result.editorBeforeReturn.end - result.editorBeforeReturn.start === 3, 'Native selection required');
+          result.editorBeforeTab = result.editorBeforeReturn.metrics;
           resourceEffects.set(entry.resourceId, { content: researchText });
           // Native Tab leaves writing's intentional GPU pause without changing the text/caret.
           key('Tab'); receipt.actions.push({ action: 'native Tab leaves editor for live-frame capture' });
+          result.editorAfterTab = await js(x.editorMetrics(input));
           await shot('approached-research-editing');
         } else if (entry.kind === 'task') {
           assert.equal(original.resources.find(item => item.id === entry.resourceId).taskStatus, 'open', 'Fresh Task toggle may happen once');
           await click(input); await wait(x.taskStatusIs(entry.resourceId, 'done')); resourceEffects.set(entry.resourceId, { taskStatus: 'done' });
         }
+        if (entry.kind === 'research') result.editorImmediatelyBeforeReturn = await js(x.editorMetrics(input));
         await click(selector + ' .aw-block-approach[aria-label="Return to previous view"]'); await wait(x.composition(selector, 'overview'));
+        if (entry.kind === 'research') result.editorAfterReturn = await js(x.editorMetrics(input));
         const returned = await snapshot(); assert.deepEqual(exports.workspaceState(returned), exports.workspaceState(tiny), 'Return restores exact viewport without changing saved geometry/organization/presence');
         assert.equal(await js(x.sameNode(input)), true);
         if (entry.kind === 'research') { result.retainedEditor = await js(x.retainedEditor(input)); assert.equal(result.retainedEditor.sameNode, true); assert.equal(result.retainedEditor.sameText, true); assert.equal(result.retainedEditor.sameSelection, true); assert(result.retainedEditor.scrollDelta <= 1, 'Return retains editor scroll'); }
@@ -141,7 +146,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
           await click(open); await wait(x.expanded(selector, false)); await wait(x.composition(selector, 'overview'));
           assert.deepEqual(exports.workspaceState(await snapshot()), exports.workspaceState(tiny), 'Native Open/Back fallback preserves the tiny workspace exactly'); result.openBackFallback = true;
         }
-        expectedWorkspaces[entry.workspaceId] = exports.workspaceState(await snapshot()); result.returned = await js(x.dom(selector)); receipt.cases.push(result);
+        expectedWorkspaces[entry.workspaceId] = exports.workspaceState(await snapshot()); result.returned = await js(x.dom(selector)); receipt.cases.push(result); delete receipt.activeCase;
       }
       const final = await snapshot(); exports.assertResourceEffects(initial.resources, final.resources, resourceEffects); assert.deepEqual(final.relationships, initial.relationships);
       const checkpoint = { contract: 'aerynth.workspace-approach-checkpoint@1', resources: final.resources, relationships: final.relationships, workspaces: expectedWorkspaces, activeWorkspaceId: final.activeWorkspaceId, researchText };
