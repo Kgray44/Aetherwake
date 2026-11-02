@@ -694,7 +694,7 @@ export function installApplication(hooks: Hooks) {
         hostUiElements: () =>
           [
             ...document.querySelectorAll<HTMLElement>(
-              ".topbar,.brand,.dock,.canvas-tools,#status,.keys,.provenance,.window-drag",
+              ".topbar,.brand,.place,.aw-workspace-layout,.scene-navigation,#settings-button,.dock,.canvas-tools,#status,.keys,.provenance,.window-drag",
             ),
           ].slice(0, 32),
         snapshot: navigationSnapshot,

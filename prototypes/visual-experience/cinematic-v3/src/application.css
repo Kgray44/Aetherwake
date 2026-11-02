@@ -417,6 +417,7 @@
 }
 .application-ready .place {
   flex-direction: row;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px;
   min-width: 0;
