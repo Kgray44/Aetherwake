@@ -58,6 +58,7 @@ exports.verify = async ({
     syntheticData: true,
     host: "Actual Aerynth desktop + canonical SQLite + V3.5 Environment",
     checks: [],
+    actions: [],
     screenshots: [],
     videos: [],
     passed: false,
@@ -79,6 +80,12 @@ exports.verify = async ({
     };
     const start = async () => {
       recording = await startWindowRecording(win, session, localURL);
+      receipt.actions.push({
+        type: "recording-ready",
+        at: Date.now(),
+        startedAt: recording.startedAt,
+        readyAt: recording.readyAt,
+      });
     };
     const stop = async (name) => {
       receipt.videos.push(await recording.stop(path.join(out, name + ".webm")));
@@ -155,14 +162,27 @@ exports.verify = async ({
       await click(`[data-properties="${id}"]`);
     };
     const point = async (selector) => {
-      const p = await js(
-        `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return{error:'Missing native target: '+${JSON.stringify(selector)}};const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,h=document.elementFromPoint(x,y);if(!h||!(e===h||e.contains(h)))return{error:'Native target occluded: '+${JSON.stringify(selector)}+' by '+h?.className};return{x:Math.round(x),y:Math.round(y)}})()`,
-      );
-      if (p.error) throw Error(p.error);
-      return p;
+      let p;
+      for (let attempt = 0; attempt < 20; attempt++) {
+        p = await js(
+          `(()=>{const e=document.querySelector(${JSON.stringify(selector)});if(!e)return{error:'Missing native target: '+${JSON.stringify(selector)}};const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,h=document.elementFromPoint(x,y);if(!h||!(e===h||e.contains(h)))return{error:'Native target occluded: '+${JSON.stringify(selector)}+' by '+h?.className+' in '+h?.closest('[data-block]')?.dataset.block};return{x:Math.round(x),y:Math.round(y)}})()`,
+        );
+        if (!p.error) return p;
+        await pause(80);
+      }
+      throw Error(p.error);
     };
     const drag = async (selector, dx, dy, during, pickup) => {
       const p = await point(selector);
+      receipt.actions.push({
+        type: "pointer-down",
+        selector,
+        at: Date.now(),
+        x: p.x,
+        y: p.y,
+        dx,
+        dy,
+      });
       win.webContents.sendInputEvent({ type: "mouseMove", ...p });
       win.webContents.sendInputEvent({
         type: "mouseDown",
@@ -184,6 +204,13 @@ exports.verify = async ({
       }
       await pause(220);
       if (during) await during();
+      receipt.actions.push({
+        type: "pointer-up",
+        selector,
+        at: Date.now(),
+        x: Math.round(p.x + dx),
+        y: Math.round(p.y + dy),
+      });
       win.webContents.sendInputEvent({
         type: "mouseUp",
         x: Math.round(p.x + dx),
@@ -497,11 +524,15 @@ exports.verify = async ({
       await shot("06-structured-spans-and-reorder");
       s = await snapshot();
       const gridVela = { ...s.presence },
-        last = s.blocks.at(-1);
+        first = s.blocks.find(
+          (b) =>
+            b.id ===
+            s.organization.structured.order.find((id) => id !== "system:vela"),
+        );
       await drag(
         ".vela-grip",
-        (last.x + last.width * 0.55 - gridVela.x) * s.viewport.zoom,
-        (last.y - gridVela.y) * s.viewport.zoom,
+        (first.x - 20 - gridVela.x) * s.viewport.zoom,
+        (first.y - gridVela.y) * s.viewport.zoom,
       );
       s = await snapshot();
       noOverlap(s);

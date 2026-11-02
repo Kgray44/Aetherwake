@@ -5,7 +5,8 @@ const { createHash } = require("node:crypto");
 async function startWindowRecording(win, session, localURL) {
   if (
     !process.argv.includes("--integration-constellation") &&
-    !process.argv.includes("--integration-organization")
+    !process.argv.includes("--integration-organization") &&
+    !process.argv.includes("--integration-expanded")
   )
     throw new Error("recording_mode_required");
   const sourceId = win.getMediaSourceId(),
@@ -61,21 +62,25 @@ async function startWindowRecording(win, session, localURL) {
     },
     { useSystemPicker: false },
   );
-  await win.webContents.executeJavaScript(
+  const ready = await win.webContents.executeJavaScript(
     `(async()=>{
     const stream=await navigator.mediaDevices.getDisplayMedia({audio:false,video:{frameRate:30}});
     const mimeType=['video/webm;codecs=vp9','video/webm;codecs=vp8'].find(m=>MediaRecorder.isTypeSupported(m));
     if(!mimeType){stream.getTracks().forEach(t=>t.stop());throw Error('webm_unavailable');}
-    const chunks=[];let bytes=0,problem=null,started=0;
+    const chunks=[];let bytes=0,problem=null,started=0,firstChunkResolve;
+    const firstChunk=new Promise(resolve=>{firstChunkResolve=resolve;});
     const recorder=new MediaRecorder(stream,{mimeType,videoBitsPerSecond:6000000});
-    const done=new Promise((resolve,reject)=>{recorder.ondataavailable=e=>{bytes+=e.data.size;if(bytes>48*1024*1024){problem='capture_size_limit';recorder.stop();}else chunks.push(e.data);};recorder.onerror=()=>{problem='capture_failed';};recorder.onstop=()=>{stream.getTracks().forEach(t=>t.stop());if(problem){reject(Error(problem));return;}const reader=new FileReader();reader.onload=()=>resolve({dataURL:reader.result,bytes,durationMs:performance.now()-started,mimeType});reader.onerror=()=>reject(Error('capture_read_failed'));reader.readAsDataURL(new Blob(chunks,{type:mimeType}));};});
-    recorder.start(500);started=performance.now();const timer=setTimeout(()=>{if(recorder.state!=='inactive')recorder.stop();},60000);
-    window.__aerynthVerificationCaptureStop=async()=>{clearTimeout(timer);if(recorder.state!=='inactive')recorder.stop();return done;};return true;
+    const done=new Promise((resolve,reject)=>{recorder.ondataavailable=e=>{bytes+=e.data.size;if(e.data.size)firstChunkResolve();if(bytes>48*1024*1024){problem='capture_size_limit';recorder.stop();}else chunks.push(e.data);};recorder.onerror=()=>{problem='capture_failed';};recorder.onstop=()=>{stream.getTracks().forEach(t=>t.stop());if(problem){reject(Error(problem));return;}const reader=new FileReader();reader.onload=()=>resolve({dataURL:reader.result,bytes,durationMs:performance.now()-started,mimeType});reader.onerror=()=>reject(Error('capture_read_failed'));reader.readAsDataURL(new Blob(chunks,{type:mimeType}));};});
+    done.catch(()=>{});recorder.start(500);started=performance.now();const timer=setTimeout(()=>{if(recorder.state!=='inactive')recorder.stop();},60000);
+    window.__aerynthVerificationCaptureStop=async()=>{clearTimeout(timer);if(recorder.state!=='inactive')recorder.stop();return done;};
+    let warmTimer;try{await Promise.race([firstChunk,new Promise((_,reject)=>{warmTimer=setTimeout(()=>reject(Error('capture_warmup_timeout')),5000);})]);}catch(error){clearTimeout(timer);if(recorder.state!=='inactive')recorder.stop();stream.getTracks().forEach(t=>t.stop());throw error;}finally{clearTimeout(warmTimer);}return {startedAt:performance.timeOrigin+started,readyAt:Date.now()};
   })()`,
     true,
   );
   if (!granted) throw new Error("capture_not_bound_to_window");
   return {
+    startedAt: ready.startedAt,
+    readyAt: ready.readyAt,
     async stop(destination) {
       try {
         const result = await win.webContents.executeJavaScript(
@@ -95,6 +100,8 @@ async function startWindowRecording(win, session, localURL) {
           byteCount: bytes.length,
           sha256: createHash("sha256").update(bytes).digest("hex"),
           durationMs: result.durationMs,
+          startedAt: ready.startedAt,
+          readyAt: ready.readyAt,
           mimeType: result.mimeType,
           source: "Exact application BrowserWindow",
           audio: false,

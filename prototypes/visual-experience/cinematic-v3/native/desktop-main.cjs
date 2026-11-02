@@ -59,10 +59,14 @@ const verify =
   process.argv.includes("--integration-live") ||
   process.argv.includes("--integration-benchmark") ||
   process.argv.includes("--integration-constellation") ||
-  process.argv.includes("--integration-organization");
+  process.argv.includes("--integration-organization") ||
+  process.argv.includes("--integration-expanded") ||
+  process.argv.includes("--integration-spatial-benchmark");
 const captureReview =
   process.argv.includes("--integration-constellation") ||
-  process.argv.includes("--integration-organization");
+  process.argv.includes("--integration-organization") ||
+  process.argv.includes("--integration-expanded") ||
+  process.argv.includes("--integration-spatial-benchmark");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
 const privateRoot = profileArg
   ? path.resolve(profileArg.slice(10))
@@ -344,6 +348,30 @@ app.whenReady().then(async () => {
   }, 240000);
   reserveTimer.unref();
   if (verify) {
+    if (process.argv.includes("--integration-spatial-benchmark")) {
+      await require("./integration-spatial-benchmark.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        call,
+        source,
+        moduleStarted,
+      });
+      return;
+    }
+    if (process.argv.includes("--integration-expanded")) {
+      await require("../../../constellation/tests/integrated-native.cjs").verify(
+        {
+          win,
+          app,
+          privateRoot,
+          source,
+          session: session.defaultSession,
+          localURL,
+        },
+      );
+      return;
+    }
     if (process.argv.includes("--integration-organization")) {
       await require("./integration-organization.cjs").verify({
         win,
