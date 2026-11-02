@@ -23,7 +23,11 @@ import {
   mountWorkspaceLayoutControls,
 } from "../../../block-library/direct-manipulation.ts";
 import "../../../block-library/direct-manipulation.css";
-import { sculptureRegion, overviewPresence } from "./presence-layout";
+import {
+  sculptureRegion,
+  overviewPresence,
+  overviewChromeBottom,
+} from "./presence-layout";
 import {
   createManagerState,
   mountConversationManager,
@@ -457,13 +461,15 @@ export function installApplication(hooks: Hooks) {
       };
       constellation = mountConstellation(universe, options);
       const bar = universe.querySelector<HTMLElement>(".aw-constellation-bar")!;
-      new ResizeObserver(() => {
+      const updateOverviewChrome = () => {
         const r = bar.getBoundingClientRect();
         if (r.height > 0) {
-          overviewBarBottom = r.bottom;
+          overviewBarBottom = overviewChromeBottom(innerWidth, innerHeight, r);
           hooks.wake();
         }
-      }).observe(bar);
+      };
+      new ResizeObserver(updateOverviewChrome).observe(bar);
+      addEventListener("resize", updateOverviewChrome);
       void constellation.ready.then(hooks.wake);
     } else constellation.update(navigationSnapshot);
     for (const block of next.blocks)

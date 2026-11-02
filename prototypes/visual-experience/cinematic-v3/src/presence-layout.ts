@@ -1,4 +1,16 @@
 export type PresenceRect = { x: number; y: number; w: number; h: number };
+/** Only top chrome crossing Vela's own column reserves vertical space. */
+export function overviewChromeBottom(
+  width: number,
+  height: number,
+  chrome: { left: number; right: number; top: number; bottom: number },
+) {
+  const right = width - 28;
+  const left = right - Math.min(208, width * 0.18);
+  return chrome.right > left && chrome.left < right && chrome.top < height / 2
+    ? chrome.bottom
+    : 104;
+}
 /** Symmetric UI reserves keep the sculpture and full card centers identical. */
 export function sculptureRegion(card: PresenceRect): PresenceRect {
   const inset = 28 * Math.min(1, card.w / 208, card.h / 260);
