@@ -1,6 +1,6 @@
 # Block operation-scale sample
 
-Run the bounded diagnostic after ReserveGuard admission, using `node prototypes/block-library/benchmark-scale.mts --output=<private-report.json>`. The fixed workload creates 18 synthetic SQLite fixtures (three trials at each of 0,1,3,10,25,50 Note placements), with at most128 MiB allocated per fixture and a112 MiB checkpoint. Admit4 GiB on C and0 on D for the whole bounded run. The caller must apply the host reserve rule and recheck during a run exceeding five minutes. Fixture DBs and their private index are retained outside the repository; no cleanup is forced. This run's18 final databases total28,377,088 bytes.
+Run the bounded diagnostic after ReserveGuard admission, using `node prototypes/block-library/benchmark-scale.mts --output=<private-report.json>`. The fixed workload creates18 synthetic SQLite fixtures (three trials at each of0,1,3,10,25,50 Note placements). Core limits each main database to128 MiB and a temporary DELETE-mode rollback journal can add another128 MiB for the one active fixture. The112 MiB post-command checkpoint is not a peak-allocation quota. The byte helper now includes a surviving rollback journal; prior closed-database byte totals and measured timings are unchanged. For the recorded C:-resident temporary fixtures and report, admit4 GiB on C and0 on D for the whole sequential run; adjust admission if the temporary/report drives differ. The caller must apply the host reserve rule and recheck during a run exceeding five minutes. Fixture DBs and their private index are retained outside the repository; no cleanup is forced. This run's18 final databases total28,377,088 bytes.
 
 The public baseline records all timings, anonymous Node process memory samples, source hashes and explicit limits. It ran direct public BackendCore commands in one Node process over the real SQLite/kernel/desktop/engine/library path, with a synthetic fixture provider and no provider execution. It did not run a native window, IPC worker, renderer or GPU. Same-process database close/reopen is not native app restart. Memory samples include module caches and uncontrolled garbage collection. These samples are diagnostic evidence, not an acceptance threshold or framework choice.
 
@@ -58,3 +58,25 @@ All18 repeated samples pass exact resource/placement identity, captured per-role
 |50|918.63|854.84|1258.66|94.88|
 
 The50-card geometry figure is a total for ten persisted backend commands, not input latency or displayed frame rate. Native direct resize, mixed resource workloads, idle/hidden rendering, GPU/resource use and physical application restart remain unqualified by these source samples. Node process RSS samples ranged73,539,584–338,800,640 bytes across these18 sequential trials; garbage collection and module/fixture lifetime prevent attributing that range solely to the cache or declaring leak freedom. The original baseline and both candidates remain available rather than replacing adverse or slower measurements. This run retained28,381,184 bytes of synthetic SQLite fixtures outside the repository.
+
+## Bounded native scale preparation and driver
+
+`prepare-native-scale.mts` now prepares a new private profile for one required count:0,1,3,10,25 or50. It uses the actual Core, canonical library factory, SQLite kernel and workspace engine with the native host's Codex transport selected but never started. Conversations are explicitly local records; it performs no capability probe, model turn or synthetic assistant response. Profiles with ten or more blocks include all seven implemented resource kinds; the primary note contains over7,000 characters and a real persisted150% text-scale preference. An empty alternate workspace supports actual native switching. The preparer refuses existing profiles and unsupported counts before writing, admits a bounded512 MiB profile allocation, and stops the small corpus at a32 MiB main-database checkpoint. The admission covers this owned writer, rather than enforcing an OS quota or stopping other applications.
+
+Eight CPU-only tests pass, including real SQLite/Core reopening at every required count, exact canonical content/IDs/geometry/organization/presence/preferences and zero provider executions. Test profiles and preparation receipts remain private. These checks prepare native work; they are not rendered scale results.
+
+The old `--integration-benchmark` implementation referenced removed block-creation controls and omitted the0/1/3 cases. It now delegates to `native/integration-block-scale.cjs`. This replacement is **unrun natively**. It requires one count per process, a prepared profile and an explicit deadline of at most30 seconds. It uses the existing no-refocus driver and guarded native input; losing focus ends the action. It measures fitted overview and working-scale resource/renderer/memory observations separately, exercises actual workspace buttons, note focus/collapse and a southeast-corner resize, checks custom font scale through pose changes, and writes a separate expected-state receipt for a fresh native process. The fitted viewport and visible/mounted counts are recorded rather than pretending every card is readable at once.
+
+Prepare outside the source checkout using an absolute, new private path:
+
+```powershell
+node prototypes/block-library/prepare-native-scale.mts --profile=C:\private\new-scale-50 --block-count=50
+```
+
+After the native owner builds and allocates a desktop slot, run from `prototypes/visual-experience/cinematic-v3` with that same private path:
+
+```powershell
+.\node_modules\.bin\electron.cmd native/desktop-main.cjs --integration-benchmark --profile=C:\private\new-scale-50 --block-count=50 --sample-ms=750 --verification-deadline-ms=30000
+```
+
+Use a second process with the same arguments plus `--verify-restore` for exact native-process restoration, and separate prepared profiles for the other counts. Neither these source helpers nor their CPU-only tests qualify Library form interactions, actual minimized-window behavior, OS restart, long-term memory, display-presented frames, GPU elapsed time/VRAM/utilization, framework selection or complete product acceptance. Callback/draw intervals and backend/runtime memory observations retain their own timestamps and evidence meanings. No desktop was launched to prepare or validate this source release.

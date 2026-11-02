@@ -68,7 +68,7 @@ const measure = async <T,>(work: () => Promise<T> | T) => {
   return { value, ms: performance.now() - start };
 };
 function bytes(path: string) {
-  return [path, path + "-wal", path + "-shm"].reduce(
+  return [path, path + "-journal", path + "-wal", path + "-shm"].reduce(
     (total, file) => total + (existsSync(file) ? statSync(file).size : 0),
     0,
   );
@@ -76,7 +76,7 @@ function bytes(path: string) {
 function checkpoint(path: string) {
   assert.ok(
     bytes(path) < 112 * 1024 * 1024,
-    "Synthetic fixture reached its 112 MiB checkpoint; stop before the 128 MiB allocation bound.",
+    "Synthetic fixture reached its 112 MiB post-command checkpoint; preserve it and stop. The 128 MiB main-database ceiling also permits a temporary rollback journal.",
   );
 }
 const digest = (snapshot: DesktopSnapshot) =>
