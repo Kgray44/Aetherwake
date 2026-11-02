@@ -53,12 +53,25 @@ function trustedReviewWindow(win, windows) {
   });
   assert(matches.length <= 1, 'ambiguous_native_review_owner'); return matches[0] ?? null;
 }
+/** Failure-only native properties. No IDs, URLs, paths, tokens, page text or error strings leave this projection. */
+function nativeFocusSnapshot(win, enumerate) {
+  const bool=read=>{try{const value=read();return typeof value==='boolean'?value:null;}catch{return null;}};
+  const basics=window=>({destroyed:bool(()=>window.isDestroyed()),contentsDestroyed:bool(()=>window.webContents.isDestroyed()),visible:bool(()=>window.isVisible()),minimized:bool(()=>window.isMinimized()),focused:bool(()=>window.isFocused()),enabled:bool(()=>window.isEnabled()),loading:bool(()=>window.webContents.isLoading())});
+  const parent=basics(win);let values;try{values=enumerate();}catch{return {parent,enumerationAvailable:false,truncated:false,windows:[]};}
+  if(!Array.isArray(values))return {parent,enumerationAvailable:false,truncated:false,windows:[]};
+  return {parent,enumerationAvailable:true,truncated:values.length>8,windows:values.slice(0,8).map(child=>{
+    const facts={...basics(child),isParent:child===win,sameParent:bool(()=>child.getParentWindow()===win),modal:bool(()=>child.isModal()),parentDisabled:parent.enabled===null?null:!parent.enabled};
+    let prefs,url;try{prefs=child.webContents.getLastWebPreferences();}catch{}try{url=child.webContents.getURL();}catch{}
+    const trust={contextIsolation:prefs?prefs.contextIsolation===true:null,sandbox:prefs?prefs.sandbox===true:null,nodeIntegrationDisabled:prefs?prefs.nodeIntegration===false:null,preloadMatches:bool(()=>path.resolve(prefs.preload??'')===reviewPreload),tokenArgumentPresent:bool(()=>prefs.additionalArguments.some(v=>/^--vela-review-token=[a-f0-9-]{36}$/.test(v))),reviewDataUrlShape:typeof url==='string'?url.startsWith('data:text/html;charset=utf-8,'):null,reviewTitleMatches:bool(()=>typeof url==='string'&&url.startsWith('data:text/html;charset=utf-8,')&&decodeURIComponent(url.slice(url.indexOf(',')+1)).includes('<title>Vela · Review sharing</title>'))};
+    return {...facts,trust,trustedByCurrentPredicate:!facts.isParent&&facts.destroyed===false&&facts.contentsDestroyed===false&&facts.visible===true&&facts.minimized===false&&facts.focused===true&&facts.sameParent===true&&facts.modal===true&&facts.parentDisabled===true&&Object.values(trust).every(value=>value===true)};
+  })};
+}
 /** Pure lifecycle guard. It never focuses a window, sends input, calls a provider or grants consent. */
 function createSlot({win, slotStartedAt, deadlineMs = SLOT_LIMIT_MS, now = () => performance.now(), windows = () => require('electron').BrowserWindow.getAllWindows()}) {
   assert(Number.isFinite(deadlineMs) && deadlineMs > CLEANUP_RESERVE_MS && deadlineMs <= SLOT_LIMIT_MS, 'invalid_vela_live_deadline');
   const started = slotStartedAt ?? now(); assert(Number.isFinite(started) && started <= now(), 'invalid_vela_live_slot_start');
   const deadline = started + deadlineMs, workDeadline = deadline - CLEANUP_RESERVE_MS;
-  let failure, consentPending = false, rejectAbort;
+  let failure, focusFailure, consentPending = false, rejectAbort;
   const aborted = new Promise((_, reject) => { rejectAbort = reject; }); aborted.catch(() => {});
   const abort = error => { if (!failure) { failure = error; rejectAbort(error); } return failure; };
   const check = (allowReview = false) => {
@@ -70,13 +83,17 @@ function createSlot({win, slotStartedAt, deadlineMs = SLOT_LIMIT_MS, now = () =>
       const child = allowReview && consentPending ? trustedReviewWindow(win, windows()) : null;
       if (child) return {kind:'native-review', child};
       throw Error('native_verification_focus_lost');
-    } catch (error) { throw abort(error); }
+    } catch (error) {
+      if(focusFailure===undefined)try{focusFailure={allowReview,consentPending,...nativeFocusSnapshot(win,windows)};}catch{focusFailure={allowReview,consentPending,enumerationAvailable:false,truncated:false,windows:[]};}
+      throw abort(error);
+    }
   };
   return { started, deadline, workDeadline, now, abort, check, remaining: () => Math.max(0, workDeadline - now()),
     consent(value) { consentPending = value; },
     isConsentPending: () => consentPending,
     async bound(operation, allowReview = false) { check(allowReview); const result = await Promise.race([Promise.resolve().then(operation), aborted]); check(allowReview); return result; },
     failure: () => failure,
+    focusFailureSnapshot: () => focusFailure===undefined?null:structuredClone(focusFailure),
   };
 }
 const consoleRecord = (details, message, line, source) => {
@@ -129,7 +146,7 @@ function readNativeRequestDiagnostics(read) {
 function nativeRequestFailure(records) {
   const failed=records.find(record=>record.state==='failed');return failed?Error('native_'+failed.stage+'_failed:'+ (failed.code??'unspecified_native_failure')):null;
 }
-exports._offline = {createSlot, trustedReviewWindow, consoleRecord, cancelObservedPlanning, submitStableTarget, readNativeRequestDiagnostics, nativeRequestFailure, SLOT_LIMIT_MS, CLEANUP_RESERVE_MS};
+exports._offline = {createSlot, trustedReviewWindow, nativeFocusSnapshot, consoleRecord, cancelObservedPlanning, submitStableTarget, readNativeRequestDiagnostics, nativeRequestFailure, SLOT_LIMIT_MS, CLEANUP_RESERVE_MS};
 
 async function run({win, app, privateRoot, source, startupErrors = [], cancelOwnedPlanning, getNativeRequestDiagnostics}, slot) {
   const restore = process.argv.includes('--verify-restore'),resume=process.argv.includes('--resume-reviewed-plan');
@@ -434,7 +451,7 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
     assert.equal(receipt.consoleErrors.length,0,'Observed startup/runtime console or shader errors');slot.check();receipt.passed=true;
   } catch(error) {
     try{observeDiagnostics();}catch{receipt.nativeRequestDiagnosticsError='native_request_diagnostics_unavailable';}
-    if(slot.failure()){receipt.abort={reason:slot.failure().message,elapsedMs:slot.now()-slot.started};receipt.cancellation=await cancelObservedPlanning(slot,cancelOwnedPlanning);}
+    if(slot.failure()){receipt.abort={reason:slot.failure().message,elapsedMs:slot.now()-slot.started,nativeWindows:slot.focusFailureSnapshot()};receipt.cancellation=await cancelObservedPlanning(slot,cancelOwnedPlanning);}
     receipt.error={message:String(error.message??error),stack:error.stack}; receipt.partial.ui=await diagnostic();
     if(driver&&!slot.failure()&&!slot.isConsentPending())for(const [key,command,input] of [['vela','vela',{name:'state',input:{}}],['executions','executionStatus',{}]])try{receipt.partial[key]=await slot.bound(()=>driver.js(`window.aerynthHost.command(${JSON.stringify(command)},${JSON.stringify(input)})`));}catch(readError){receipt.partial[key]={readError:String(readError.message??readError)};}
     if(driver&&!slot.failure()&&!slot.isConsentPending()&&Array.isArray(receipt.partial.executions))for(const execution of receipt.partial.executions.slice(0,1))try{receipt.partial.providerOutput=await slot.bound(()=>driver.js(`window.aerynthHost.command('conversation',${JSON.stringify({name:'detail',input:{resourceId:execution.resourceId,limit:50}})})`));}catch(readError){receipt.partial.providerOutput={readError:String(readError.message??readError)};}

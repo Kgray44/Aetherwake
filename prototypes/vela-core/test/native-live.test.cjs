@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
-const {createSlot,trustedReviewWindow,consoleRecord,cancelObservedPlanning,submitStableTarget,readNativeRequestDiagnostics,nativeRequestFailure} = require('./native-live.cjs')._offline;
+const {createSlot,trustedReviewWindow,nativeFocusSnapshot,consoleRecord,cancelObservedPlanning,submitStableTarget,readNativeRequestDiagnostics,nativeRequestFailure} = require('./native-live.cjs')._offline;
 
 /** Pure lifecycle fixtures only. These never launch Electron or qualify actual native/provider behavior. */
 function fixture(){
@@ -28,6 +28,27 @@ test('only the focused actual parent-disabled review child permits observational
     const v=fixture();v.enable(false);v.focus(false);change(v.child);assert.equal(trustedReviewWindow(v.win,[v.child]),null);
   }
   const enabled=fixture();assert.equal(trustedReviewWindow(enabled.win,[enabled.child]),null,'A matching title or child alone never authorizes the modal exception');
+});
+
+test('first focus failure distinguishes hidden/loading, disabled-parent gap and visible-unfocused child without waiting or changing abort',()=>{
+  const hidden=fixture();hidden.enable(false);hidden.focus(false);hidden.windows.push(hidden.child);hidden.child.isVisible=()=>false;hidden.child.webContents.isLoading=()=>true;hidden.child.webContents.getURL=()=>'';hidden.slot.consent(true);
+  assert.throws(()=>hidden.slot.check(true),/focus_lost/);const loading=hidden.slot.focusFailureSnapshot();assert.equal(loading.parent.enabled,false);assert.equal(loading.windows[0].visible,false);assert.equal(loading.windows[0].loading,true);assert.equal(loading.windows[0].trust.reviewDataUrlShape,false);assert.equal(loading.windows[0].trustedByCurrentPredicate,false);
+  const gap=fixture();gap.enable(false);gap.focus(false);gap.slot.consent(true);assert.throws(()=>gap.slot.check(true),/focus_lost/);assert.equal(gap.slot.focusFailureSnapshot().parent.enabled,false);assert.deepEqual(gap.slot.focusFailureSnapshot().windows,[]);
+  const unfocused=fixture();unfocused.enable(false);unfocused.focus(false);unfocused.windows.push(unfocused.child);unfocused.child.isFocused=()=>false;unfocused.slot.consent(true);assert.throws(()=>unfocused.slot.check(true),/focus_lost/);const snapshot=unfocused.slot.focusFailureSnapshot();assert.equal(snapshot.windows[0].visible,true);assert.equal(snapshot.windows[0].focused,false);assert.equal(snapshot.windows[0].trust.preloadMatches,true);assert.equal(snapshot.windows[0].trustedByCurrentPredicate,false);
+  unfocused.child.isFocused=()=>true;unfocused.focus(true);assert.throws(()=>unfocused.slot.check(true),/focus_lost/);assert.deepEqual(unfocused.slot.focusFailureSnapshot(),snapshot,'Later window recovery never overwrites the first failure or clears abort');
+});
+
+test('focused trusted child stays accepted only in the existing modal phase; diagnostics never broaden focus policy',()=>{
+  const f=fixture();f.enable(false);f.focus(false);f.windows.push(f.child);f.slot.consent(true);assert.equal(f.slot.check(true).child,f.child);assert.equal(f.slot.focusFailureSnapshot(),null);
+  assert.throws(()=>f.slot.check(),/focus_lost/);const snapshot=f.slot.focusFailureSnapshot();assert.equal(snapshot.allowReview,false);assert.equal(snapshot.consentPending,true);assert.equal(snapshot.windows[0].trustedByCurrentPredicate,true);
+  snapshot.windows[0].focused=false;assert.equal(f.slot.focusFailureSnapshot().windows[0].focused,true,'Receipt accessor returns a clone of the immutable first observation');
+});
+
+test('native window diagnostics return at most eight boolean-only projections with no URL, token, path, ID or page content',()=>{
+  const f=fixture();f.enable(false);const snapshot=nativeFocusSnapshot(f.win,()=>Array(10).fill(f.child));assert.equal(snapshot.windows.length,8);assert.equal(snapshot.truncated,true);
+  const leaves=value=>{if(value&&typeof value==='object')Object.values(value).forEach(leaves);else assert(value===null||typeof value==='boolean');};leaves(snapshot);
+  const raw=JSON.stringify(snapshot);assert(!raw.includes('data:text'));assert(!raw.includes('12345678-'));assert(!raw.includes('Review sharing'));assert(!raw.includes('vela-review-preload'));assert(!raw.includes('PRIVATE'));
+  const unavailable=nativeFocusSnapshot(f.win,()=>{throw Error('PRIVATE');});assert.equal(unavailable.enumerationAvailable,false);assert.deepEqual(unavailable.windows,[]);leaves(unavailable);
 });
 
 test('pending async work is bounded by the same abort and cannot restart after its late completion',async()=>{
