@@ -336,15 +336,24 @@ async function driver(win) {
   };
   const click = async (selector) => {
     const deadline = Date.now() + 2000;
-    let p;
+    let p, previous;
     do {
       await pause(80);
       p = await js(
         `(()=>{let e=document.querySelector(${JSON.stringify(selector)});e?.scrollIntoView({block:'nearest',inline:'nearest'});let r=e?.getBoundingClientRect();if(!r||!r.width||!r.height||e.disabled||e.hidden)return{error:'Unavailable '+${JSON.stringify(selector)}};let x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2),h=document.elementFromPoint(x,y);if(!h||!(e===h||e.contains(h)))return{error:'Occluded '+${JSON.stringify(selector)}+' by '+h?.outerHTML.slice(0,240),x,y};return {x,y}})()`,
       );
-      if (!p.error) break;
+      if (
+        !p.error &&
+        previous &&
+        !previous.error &&
+        Math.hypot(p.x - previous.x, p.y - previous.y) < 0.75
+      )
+        break;
+      previous = p;
     } while (Date.now() < deadline);
     if (p.error) throw Error(p.error);
+    if (!previous || Math.hypot(p.x - previous.x, p.y - previous.y) >= 0.75)
+      throw Error("Moving native click target " + selector);
     const inputAt = Date.now();
     for (const type of ["mouseMove", "mouseDown", "mouseUp"])
       win.webContents.sendInputEvent({
