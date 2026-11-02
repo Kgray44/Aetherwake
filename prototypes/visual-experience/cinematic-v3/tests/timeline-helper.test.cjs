@@ -1,8 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
-const { assertOwnedProfile, assertRead, assertTimeline, assertWindow, assertNoExecution, expectedViewport, passingCheckpoint, HEADER_KEYS, CAPABILITIES, verify } = require('../native/integration-timeline.cjs');
-const { createSlot } = require('../native/integration-resource-opening.cjs');
+const vm = require('node:vm');
+const { assertOwnedProfile, assertRead, assertTimeline, assertWindow, assertNoExecution, expectedViewport, passingCheckpoint, timelineCaptureScript, timelineCaptureReady, waitForTimelineReveal, captureRevealedTimeline, HEADER_KEYS, CAPABILITIES, verify } = require('../native/integration-timeline.cjs');
+const { createSlot, waitForCondition } = require('../native/integration-resource-opening.cjs');
 const { validateBudget, admitPNG } = require('../native/integration-desktop-basics.cjs');
 const source = () => ({ hashes: { source: 'a'.repeat(64) }, buildAssets: { 'app.js': 'b'.repeat(64) } });
 const document = () => ({ contract: 'aerynth.timeline@1', schemaVersion: 1, resource: { id: 'synthetic-timeline', kind: 'timeline', title: 'Recent activity', projectId: null, version: 6, state: 'active' }, canEdit: true, view: { schemaVersion: 1, mode: 'activity', scope: { projectId: null, resourceIds: [] }, sources: { providerIds: ['aerynth-native'], eventTypes: ['checklist.created'], classifications: ['observed'] }, viewport: { from: '2026-11-02T00:00:00.000Z', to: '2026-11-03T00:00:00.000Z', displayTimeZone: 'America/New_York' }, selection: { eventId: 'synthetic-event', cursor: 3 } }, viewDigest: 'c'.repeat(64), selectionUnavailable: false, createdAt: '2026-11-02T12:00:00.000Z', updatedAt: '2026-11-02T12:05:00.000Z', capabilities: { ...CAPABILITIES } });
@@ -75,6 +76,67 @@ test('45/12-second slots retain sticky focus loss and cleanup; native captures s
   const slot = createSlot({ win, startedAt: 0, limitMs: 45000, cleanupMs: 4000, now: () => now }); focused = false; assert.throws(() => slot.check()); focused = true; assert.throws(() => slot.check());
   const short = createSlot({ win, startedAt: 0, limitMs: 12000, cleanupMs: 2500, now: () => now }); now = 9500; assert.throws(() => short.check()); assert.equal(short.remaining(), 2500);
   const budget = { count: 0, bytes: 0, files: [] }, png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.alloc(8)]); admitPNG(budget, png, 'initial-1'); admitPNG(budget, png, 'initial-2'); const shared = validateBudget(structuredClone(budget)); admitPNG(shared, png, 'restore'); assert.throws(() => admitPNG(shared, png, 'fourth'));
+});
+
+function captureDOM() {
+  const node = () => ({ dataset: {}, isConnected: true, hidden: false, inert: false, parentElement: null, style: { opacity: '1', display: 'block', visibility: 'visible' } });
+  const layer = node(), surface = node(), owner = node(), viewer = node();
+  surface.parentElement = layer; owner.parentElement = surface; viewer.parentElement = owner;
+  surface.dataset.surfaceId = 'canonical-resource'; owner.dataset.resourceId = viewer.dataset.resourceId = 'synthetic-timeline';
+  let blocked = false, duplicate = false, wrongBoundary = false, occluded = false, bounds = { x: 100, y: 40, width: 600, height: 600 };
+  viewer.closest = selector => selector === '.application-direct-resource' ? owner : selector === '[data-surface-id]' ? wrongBoundary ? layer : surface : blocked ? surface : null;
+  surface.querySelector = selector => selector === `.aw-timeline[data-resource-id=${JSON.stringify(viewer.dataset.resourceId)}]` ? viewer : null;
+  surface.contains = node => [surface, owner, viewer].includes(node);
+  surface.getBoundingClientRect = () => ({ ...bounds }); viewer.getBoundingClientRect = () => ({ x: 110, y: 80, width: 580, height: 540 });
+  const context = { document: { querySelectorAll: selector => { assert.equal(selector, '[data-surface-id="canonical-resource"]'); return duplicate ? [surface, surface] : [surface]; }, elementFromPoint: () => occluded ? layer : viewer }, getComputedStyle: element => element.style, innerWidth: 900, innerHeight: 700 };
+  const observe = () => JSON.parse(JSON.stringify(vm.runInNewContext(timelineCaptureScript('synthetic-timeline'), context)));
+  return { surface, owner, viewer, layer, context, observe, block: () => { blocked = true; }, duplicate: () => { duplicate = true; }, occlude: () => { occluded = true; }, wrongBoundary: () => { wrongBoundary = true; }, bounds: patch => { bounds = { ...bounds, ...patch }; } };
+}
+test('capture DOM observation needs the actual owning canonical Timeline, ancestor reveal and visible window bounds', () => {
+  const f = captureDOM(), first = f.observe(); assert.equal(first.ready, true); assert.equal(first.opacity, 1); assert(timelineCaptureReady(f.observe(), 'synthetic-timeline', first));
+  f.surface.style.opacity = '.2'; assert.equal(f.observe().ready, false, 'Functional data readiness alone is not screenshot readiness');
+  f.surface.style.opacity = '.98'; f.layer.style.opacity = '.99'; assert.equal(f.observe().ready, false, 'Effective ancestor opacity matters');
+  f.surface.style.opacity = '.99'; assert.equal(f.observe().ready, true);
+  for (const mutate of [g => g.owner.dataset.resourceId = 'different-resource', g => g.viewer.dataset.resourceId = 'different-timeline', g => g.viewer.isConnected = false, g => g.surface.isConnected = false, g => g.layer.inert = true, g => g.layer.hidden = true, g => g.layer.style.display = 'none', g => g.owner.style.visibility = 'hidden', g => g.owner.style.visibility = 'collapse', g => g.surface.style.opacity = 'NaN', g => g.block(), g => g.duplicate(), g => g.occlude(), g => g.wrongBoundary(), g => g.bounds({ width: 0 }), g => g.bounds({ x: -1 }), g => g.bounds({ x: 500 }), g => g.bounds({ height: Infinity })]) { const value = captureDOM(); mutate(value); assert.equal(value.observe().ready, false); }
+  assert.throws(() => timelineCaptureScript(), /timeline_capture_identity_required/);
+});
+test('capture requires two qualifying stable observations, never a stale owner, dim frame or viewport retarget', () => {
+  const good = captureDOM().observe(); assert.equal(timelineCaptureReady(good, 'synthetic-timeline'), false);
+  for (const patch of [{ ready: false }, { opacity: .979 }, { opacity: NaN }, { ownerId: 'replacement' }, { timelineId: 'replacement' }, { surfaceId: 'another-surface' }, { resourceId: 'replacement' }, { rect: { ...good.rect, x: good.rect.x + 1 } }, { rect: { ...good.rect, height: good.rect.height - 1 } }, { viewport: { ...good.viewport, width: good.viewport.width + 1 } }]) assert.equal(timelineCaptureReady({ ...good, ...patch }, 'synthetic-timeline', good), false);
+  assert.equal(timelineCaptureReady(good, 'synthetic-timeline', { ...good, ready: false }), false); assert.equal(timelineCaptureReady(good, 'another-id', good), false);
+});
+function captureWait(limitMs = 45000, cleanupMs = 4000) {
+  let now = 0, focused = true;
+  const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => focused, webContents: { isDestroyed: () => false } };
+  const slot = createSlot({ win, startedAt: 0, limitMs, cleanupMs, now: () => now });
+  const wait = (label, check) => waitForCondition({ slot, label, check, now: () => now, sleep: async ms => { now += ms; } });
+  return { slot, wait, now: () => now, advance: value => { now = value; }, blur: () => { focused = false; } };
+}
+test('reveal wait observes dim-to-full motion and stable geometry without delay beyond the existing polling condition', async () => {
+  const f = captureWait(), dom = captureDOM(); let observations = 0;
+  const ready = await waitForTimelineReveal({ ...f, resourceId: 'synthetic-timeline', observe: async () => { observations++; dom.surface.style.opacity = observations === 1 ? '.3' : '1'; dom.bounds({ x: observations < 3 ? 101 : 100 }); return dom.observe(); } });
+  assert.equal(observations, 4); assert.equal(ready.rect.x, 100); assert.equal(f.now(), 105);
+});
+test('unrevealed capture times out within four seconds and slot exhaustion/focus loss never grants late readiness', async () => {
+  const f = captureWait(), dom = captureDOM(); dom.surface.style.opacity = '.4'; let observations = 0;
+  await assert.rejects(waitForTimelineReveal({ ...f, resourceId: 'synthetic-timeline', observe: async () => { observations++; return dom.observe(); } }), /condition_timeout/); assert.equal(f.now(), 4000); assert(observations > 1); assert.equal(f.slot.remaining(), 41000);
+  for (const restore of [false, true]) {
+    const short = captureWait(restore ? 12000 : 45000, restore ? 2500 : 4000), deadline = restore ? 9500 : 41000; short.advance(deadline - 10); let reads = 0;
+    await assert.rejects(waitForTimelineReveal({ ...short, resourceId: 'synthetic-timeline', observe: async () => { reads++; short.advance(deadline); return captureDOM().observe(); } }), /work_deadline/); assert.equal(reads, 1); assert.equal(short.slot.remaining(), restore ? 2500 : 4000);
+  }
+  const lost = captureWait(); await assert.rejects(waitForTimelineReveal({ ...lost, resourceId: 'synthetic-timeline', observe: async () => { lost.blur(); return captureDOM().observe(); } }), /focus_lost/);
+});
+test('capture and receipt admission reject reveal interruption or canonical resource retarget before and during capture', async () => {
+  for (const stage of ['draw', 'capture', 'after-capture-dim']) {
+    const f = captureWait(), dom = captureDOM(); let captures = 0, admitted = 0;
+    await assert.rejects((async () => {
+      await captureRevealedTimeline({ ...f, resourceId: 'synthetic-timeline', observe: async () => dom.observe(), freshDraw: async () => { if (stage === 'draw') dom.owner.dataset.resourceId = 'replacement'; }, capture: async () => { captures++; if (stage === 'capture') dom.owner.dataset.resourceId = 'replacement'; else if (stage === 'after-capture-dim') dom.surface.style.opacity = '.2'; return Buffer.from('synthetic-not-written'); } }); admitted++;
+    })(), /timeline_capture_retargeted_or_unrevealed/);
+    assert.equal(captures, stage === 'draw' ? 0 : 1); assert.equal(admitted, 0);
+  }
+  const f = captureWait(), dom = captureDOM(); let draws = 0, captures = 0;
+  const result = await captureRevealedTimeline({ ...f, resourceId: 'synthetic-timeline', observe: async () => dom.observe(), freshDraw: async () => { draws++; }, capture: async () => { captures++; return Buffer.from('synthetic-not-written'); } });
+  assert.equal(draws, 1); assert.equal(captures, 1); assert.equal(result.surfaceBefore.resourceId, 'synthetic-timeline'); assert.equal(result.surfaceAfter.opacity, 1);
 });
 
 test('Timeline journey uses source-producing UI and native barriers without synthetic source events, true evaluation or authority bypass', () => {

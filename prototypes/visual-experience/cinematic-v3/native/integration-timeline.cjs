@@ -18,6 +18,49 @@ const FIXTURE = Object.freeze({ checklist: 'SYNTHETIC Timeline source checklist'
 const CAPABILITIES = Object.freeze({ planning: false, forecasts: false, dependencies: false, stateReconstruction: false, reexecution: false, export: false });
 const HEADER_KEYS = Object.freeze(['schemaVersion', 'eventId', 'cursor', 'resourceId', 'executionId', 'providerId', 'providerInstanceId', 'connectionId', 'nativeEventId', 'nativeSequence', 'threadId', 'turnId', 'correlationId', 'causationId', 'receivedAt', 'providerTime', 'providerTimeSource', 'type', 'classification', 'status']);
 const timelineScope = id => `.aw-timeline[data-resource-id=${JSON.stringify(id)}]`;
+/** Read-only DOM observation, separate from functional/input readiness. */
+function timelineCaptureScript(resourceId) {
+  assert(typeof resourceId === 'string' && resourceId.length > 0 && resourceId.length <= 512, 'timeline_capture_identity_required');
+  return `(${function (resourceId) {
+    const unavailable = { ready: false, resourceId };
+    const surfaces = document.querySelectorAll('[data-surface-id="canonical-resource"]'); if (surfaces.length !== 1) return unavailable;
+    const surface = surfaces[0], viewer = surface.querySelector('.aw-timeline[data-resource-id=' + JSON.stringify(resourceId) + ']'), owner = viewer?.closest('.application-direct-resource');
+    if (!viewer || !owner || owner.dataset.resourceId !== resourceId || viewer.dataset.resourceId !== resourceId || viewer.closest('[data-surface-id]') !== surface || !surface.isConnected || !owner.isConnected || !viewer.isConnected || viewer.closest('[hidden],[inert],[aria-hidden="true"]')) return unavailable;
+    let opacity = 1;
+    for (let node = viewer; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (node.hidden || node.inert || style.display === 'none' || ['hidden', 'collapse'].includes(style.visibility)) return unavailable;
+      const alpha = Number(style.opacity); if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) return unavailable; opacity *= alpha;
+    }
+    const r = surface.getBoundingClientRect(), v = viewer.getBoundingClientRect();
+    const rect = { x: r.x, y: r.y, width: r.width, height: r.height }, viewport = { width: innerWidth, height: innerHeight };
+    const finite = [...Object.values(rect), ...Object.values(viewport), v.x, v.y, v.width, v.height].every(Number.isFinite);
+    const contained = finite && r.width > 0 && r.height > 0 && r.x >= 0 && r.y >= 0 && r.x + r.width <= innerWidth && r.y + r.height <= innerHeight;
+    const visibleViewer = v.width > 0 && v.height > 0 && Math.max(v.x, r.x) < Math.min(v.x + v.width, r.x + r.width) && Math.max(v.y, r.y) < Math.min(v.y + v.height, r.y + r.height);
+    const hit = contained ? document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) : null;
+    return { ready: contained && visibleViewer && !!hit && surface.contains(hit) && opacity >= .98, resourceId, surfaceId: surface.dataset.surfaceId, ownerId: owner.dataset.resourceId, timelineId: viewer.dataset.resourceId, opacity, rect, viewport };
+  }.toString()})(${JSON.stringify(resourceId)})`;
+}
+function timelineCaptureReady(current, resourceId, previous) {
+  const valid = value => value?.ready === true && value.resourceId === resourceId && value.ownerId === resourceId && value.timelineId === resourceId && value.surfaceId === 'canonical-resource' && Number.isFinite(value.opacity) && value.opacity >= .98 && value.opacity <= 1 && value.rect && value.viewport &&
+    ['x', 'y', 'width', 'height'].every(key => Number.isFinite(value.rect[key])) && ['width', 'height'].every(key => Number.isFinite(value.viewport[key]) && value.viewport[key] > 0) && value.rect.x >= 0 && value.rect.y >= 0 && value.rect.width > 0 && value.rect.height > 0 && value.rect.x + value.rect.width <= value.viewport.width && value.rect.y + value.rect.height <= value.viewport.height;
+  return !!(valid(current) && valid(previous) && ['x', 'y', 'width', 'height'].every(key => Math.abs(current.rect[key] - previous.rect[key]) <= .5) && ['width', 'height'].every(key => current.viewport[key] === previous.viewport[key]));
+}
+async function waitForTimelineReveal({ slot, resourceId, observe, wait }) {
+  let previous;
+  return wait('Canonical Timeline surface fully revealed with stable owned bounds', async () => {
+    slot.check(); const current = await observe(); slot.check(); const ready = timelineCaptureReady(current, resourceId, previous); previous = current;
+    return ready ? current : false;
+  });
+}
+async function captureRevealedTimeline({ slot, resourceId, observe, wait, freshDraw, capture }) {
+  const revealed = await waitForTimelineReveal({ slot, resourceId, observe, wait });
+  await freshDraw(); slot.check();
+  const surfaceBefore = await observe(); slot.check(); assert(timelineCaptureReady(surfaceBefore, resourceId, revealed), 'timeline_capture_retargeted_or_unrevealed');
+  const png = await capture(); slot.check();
+  const surfaceAfter = await observe(); slot.check(); assert(timelineCaptureReady(surfaceAfter, resourceId, surfaceBefore), 'timeline_capture_retargeted_or_unrevealed');
+  return { png, surfaceBefore, surfaceAfter };
+}
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 function encode(value) { const text = JSON.stringify(value, null, 2); assert(Buffer.byteLength(text) <= MiB, 'timeline_receipt_capacity'); return text; }
 function assertOwnedProfile(root, argv, title, userData) {
@@ -78,7 +121,7 @@ function passingCheckpoint(checkpoint, initial) {
 }
 async function bounded(promise, ms, code) { assert(ms > 0, code); let timer; try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Error(code)), ms); })]); } finally { clearTimeout(timer); } }
 async function readJson(file) { assert((await fs.stat(file)).size <= MiB, 'bounded_timeline_checkpoint_required'); return JSON.parse(await fs.readFile(file, 'utf8')); }
-Object.assign(exports, { assertOwnedProfile, assertRead, assertTimeline, assertWindow, assertNoExecution, expectedViewport, passingCheckpoint, FIXTURE, HEADER_KEYS, CAPABILITIES });
+Object.assign(exports, { assertOwnedProfile, assertRead, assertTimeline, assertWindow, assertNoExecution, expectedViewport, passingCheckpoint, timelineCaptureScript, timelineCaptureReady, waitForTimelineReveal, captureRevealedTimeline, FIXTURE, HEADER_KEYS, CAPABILITIES });
 
 exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs, observeProviderActivity }) {
   const restore = process.argv.includes('--verify-restore'), limitMs = restore ? 12000 : 45000;
@@ -88,7 +131,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     inputMethod: 'Software native-window mouse/key/insertText against actual App controls, with observed focus/selection/value barriers. Every renderer evaluation false. No event injection, mutation RPC, provider, account, auth, OS input/global hooks, clipboard or refocus.',
     limits: { milliseconds: limitMs, combinedPNGs: 3, combinedPNGBytes: 16 * MiB, videos: 0 }, actions: [], checks: [], captures: [], errors: [],
     limitations: ['Retained headers are not all activity, raw payloads, verified tasks or globally causal/provider-time order.', 'Planning, forecasts, dependencies, state reconstruction, reexecution and export remain unsupported.', 'A fresh GPU draw is not monitor-presentation, artistic or performance acceptance. Root must inspect native-window captures and confirm all processes exited.', 'Startup stream/reopened and saved-view events may advance the observed source cursor; restart compares exact saved view and selected source header, not a falsely frozen global event window.'] };
-  let owned = false, admitted = false, listenersInstalled = false, budgetWritable = false, passed = false, slot, expected, pendingExpected, workTimer, hardTimer, rejectAbort, failureCapture;
+  let owned = false, admitted = false, listenersInstalled = false, budgetWritable = false, passed = false, slot, expected, pendingExpected, workTimer, hardTimer, rejectAbort, failureCapture, lastReadTimelineId;
   let budget = { count: 0, bytes: 0, files: [] };
   const aborted = new Promise((_, reject) => { rejectAbort = reject; }); aborted.catch(() => {});
   const abort = code => rejectAbort(slot?.abort(code) ?? Error(code));
@@ -115,7 +158,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const js = async code => { slot.check(); const result = await bounded(win.webContents.executeJavaScript(code, false), slot.workRemaining(), 'timeline_renderer_deadline'); slot.check(); return result; };
     const rpc = async (name, input) => { assertRead(name, input); slot.check(); const result = await bounded(call(name, input), slot.workRemaining(), 'timeline_read_deadline'); slot.check(); return result; };
     const desktop = () => rpc('desktop', { type: 'snapshot' });
-    const read = async id => { const document = assertTimeline((await rpc('timelines', { name: 'read', input: { resourceId: id } })).result); assert.equal(document.resource.id, id); return document; };
+    const read = async id => { const document = assertTimeline((await rpc('timelines', { name: 'read', input: { resourceId: id } })).result); assert.equal(document.resource.id, id); lastReadTimelineId = id; return document; };
     const checklist = async id => { const document = assertChecklist((await rpc('checklists', { name: 'read', input: { resourceId: id } })).result); assert.equal(document.resource.id, id); return document; };
     const query = async document => { const value = (await rpc('timelines', { name: 'query', input: { resourceId: document.resource.id, expectedVersion: document.resource.version, limit: 200 } })).result; return assertWindow(value, document, await rpc('replay', { after: 0 })); };
     const wait = (label, check) => { receipt.phase = label; return waitForCondition({ slot, label, check, diagnose: () => js("({timeline:[...document.querySelectorAll('.aw-timeline')].map(n=>({id:n.dataset.resourceId,title:n.querySelector('h3')?.textContent,busy:n.getAttribute('aria-busy'),status:n.querySelector('.aw-timeline-status')?.textContent,coverage:n.querySelector('.aw-timeline-coverage')?.textContent,events:[...n.querySelectorAll('[data-event-id]')].map(e=>({id:e.dataset.eventId,cursor:e.dataset.eventCursor})),selection:n.querySelector('.aw-timeline-selection')?.textContent})),checklist:document.querySelector('.aw-checklist-status')?.textContent,surfaces:[...document.querySelectorAll('[data-surface-id]')].map(n=>n.dataset.surfaceId),error:document.querySelector('#command-error')?.textContent})") }); };
@@ -149,10 +192,14 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       const core = await rpc('snapshot', {}), d = await desktop(), events = await rpc('replay', { after: 0 }); assert.equal(typeof observeProviderActivity, 'function', 'actual_provider_observer_required'); const counters = await bounded(observeProviderActivity(), slot.workRemaining(), 'timeline_observer_deadline'); assertNoExecution(core, events, counters, d);
       return { graph: core.graph, resourceMap: core.resourceMap, projects: d.projects, workspaces: d.workspaces, blocks: d.blocks, resources: d.resources.map(r => ({ id: r.id, kind: r.kind, title: r.title, version: r.version, projectId: r.project_id })).sort((a, b) => a.id.localeCompare(b.id)), relationships: d.relationships, counters };
     };
-    const capture = async name => {
+    const capture = async (name, resourceId = lastReadTimelineId) => {
+      const observe = () => js(timelineCaptureScript(resourceId));
       const sample = () => js("(()=>{const s=window.__aerynth.snapshot();return{frames:s.gpu?.framesRendered,draws:s.metrics.draws,active:s.active,lost:s.gpu?.contextLost,failed:s.graphicsFailed,errors:s.metrics.errors}})()");
-      const before = await sample(); await wait('Focused new actual Timeline GPU draw', async () => { const next = await sample(); return next.active === true && next.failed === false && next.lost === false && next.errors.length === 0 && next.frames > before.frames && next.draws > before.draws; });
-      const png = (await bounded(win.webContents.capturePage(), slot.workRemaining(), 'timeline_capture_deadline')).toPNG(); slot.check(); const file = path.join(out, name + '.png'), item = admitPNG(budget, png, file); await fs.writeFile(file, png, { flag: 'wx' }); receipt.captures.push({ ...item, focused: true, before, after: await sample() });
+      let before;
+      const { png, surfaceBefore, surfaceAfter } = await captureRevealedTimeline({ slot, resourceId, observe, wait,
+        freshDraw: async () => { before = await sample(); await wait('Focused new actual Timeline GPU draw', async () => { const next = await sample(); return next.active === true && next.failed === false && next.lost === false && next.errors.length === 0 && next.frames > before.frames && next.draws > before.draws; }); },
+        capture: async () => (await bounded(win.webContents.capturePage(), slot.workRemaining(), 'timeline_capture_deadline')).toPNG() });
+      const file = path.join(out, name + '.png'), item = admitPNG(budget, png, file); await fs.writeFile(file, png, { flag: 'wx' }); receipt.captures.push({ ...item, focused: true, resourceId, surfaceBefore, surfaceAfter, before, after: await sample() });
     }; failureCapture = () => capture('failure');
     const renderedSelection = async (document, item) => {
       const container = timelineScope(document.resource.id), event = item.event;
@@ -172,7 +219,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       const value = await canonical(expected.timelineId, expected.checklistId, expected.canonical.document.view.selection); assert.deepEqual(value, expected.canonical, 'exact_timeline_view_version_selection_source_and_checklist_restart');
       await openTimeline(value.document); await readyDocument(value.document); await renderedSelection(value.document, value.source); await byText(timelineScope(value.document.resource.id) + ' .aw-timeline-tools', 'Filters');
       await wait('Actual restored filter controls', () => js(`(()=>{const n=document.querySelector(${JSON.stringify(timelineScope(value.document.resource.id))});return n?.querySelector('[aria-label="Source"]')?.value==='aerynth-native'&&n.querySelector('[aria-label="Event type"]')?.value==='checklist.created'&&n.querySelector('[aria-label="Evidence class"]')?.value==='observed'})()`));
-      await capture('03-timeline-restart'); receipt.canonical = value;
+      await capture('03-timeline-restart', value.document.resource.id); receipt.canonical = value;
     } else {
       assert.equal(receipt.startingCanonical.resources.length, 0, 'fresh_empty_timeline_profile_required');
       await click('#application-resources'); await click('#standalone-checklist'); await fill('.aw-checklist-creator input[aria-label="Checklist title"]', FIXTURE.checklist); await byText('.aw-checklist-creator', 'Create checklist');
@@ -185,7 +232,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       let timelineId, document; await wait('Immediate canonical Recent activity Timeline created by UI', async () => { const resource = (await desktop()).resources.find(r => r.kind === 'timeline'); if (!resource) return false; timelineId = resource.id; document = await read(timelineId); return document.view.mode === 'activity'; });
       const container = timelineScope(timelineId); await wait('Actual Timeline read and query ready', () => js(`document.querySelector(${JSON.stringify(container)})?.getAttribute('aria-busy')==='false'`));
       await readyDocument(document); const initial = document, firstWindow = await query(document); receipt.initialWindow = firstWindow;
-      assert(firstWindow.items.some(i => i.event.type === 'checklist.created' && i.event.resourceId === checklistId), 'actual_checklist_event_must_already_be_retained'); await capture('01-retained-activity-timeline');
+      assert(firstWindow.items.some(i => i.event.type === 'checklist.created' && i.event.resourceId === checklistId), 'actual_checklist_event_must_already_be_retained'); await capture('01-retained-activity-timeline', timelineId);
       for (const action of ['Earlier', 'Zoom out', 'Later']) {
         const before = await read(timelineId); await readyDocument(before); const fields = await js(`(()=>{const n=document.querySelector(${JSON.stringify(container)});return{from:n.querySelector('[aria-label="From (UTC)"]').value,to:n.querySelector('[aria-label="To (UTC)"]').value}})()`), viewport = expectedViewport(fields.from, fields.to, action);
         await byText(container + ' .aw-timeline-tools', action); await wait('Exact canonical saved viewport ' + action, async () => { document = await read(timelineId); return document.resource.version === before.resource.version + 1; });
@@ -197,7 +244,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       const filtered = await query(document), sourceItem = filtered.items.find(i => i.event.type === 'checklist.created' && i.event.resourceId === checklistId); assert(sourceItem, 'permitted_actual_source_in_saved_window');
       await click(`${container} .aw-timeline-items [data-event-id=${JSON.stringify(sourceItem.event.eventId)}][data-event-cursor=${JSON.stringify(String(sourceItem.event.cursor))}]>button`); await renderedSelection(document, sourceItem);
       before = await read(timelineId); await byText(container + ' .aw-timeline-filters', 'Save view'); await wait('Actual selected source saved on canonical Timeline ID', async () => { document = await read(timelineId); return document.resource.version === before.resource.version + 1 && document.view.selection?.eventId === sourceItem.event.eventId; });
-      await readyDocument(document); await renderedSelection(document, sourceItem); await capture('02-selected-source-provenance'); await byText(container + ' .aw-timeline-selection', 'Open source');
+      await readyDocument(document); await renderedSelection(document, sourceItem); await capture('02-selected-source-provenance', timelineId); await byText(container + ' .aw-timeline-selection', 'Open source');
       await wait('Actual canonical source opens without workspace or copy', () => js(`(()=>{const n=document.querySelector(${JSON.stringify(producerScope)}),e=n?.querySelector('[data-checklist-entry-id="'+CSS.escape(${JSON.stringify(entryId)})+'"]');return n&&!n.closest('[hidden],[inert]')&&e?.querySelector('[aria-label="Checklist item text"]')?.value===${JSON.stringify(FIXTURE.item)}&&e.querySelector('[aria-label="Check item manually"]')?.checked===true})()`));
       await close(); const value = await canonical(timelineId, checklistId, document.view.selection); await openTimeline(value.document); await readyDocument(value.document); await renderedSelection(value.document, value.source);
       assert.deepEqual(await read(timelineId), value.document, 'source_open_and_return_preserve_exact_saved_timeline_view'); receipt.canonical = value;
