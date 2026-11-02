@@ -104,6 +104,23 @@
 .aw-spatial-field:active {
   cursor: grabbing;
 }
+@supports selector(:has(*)) {
+  /* Keep scene keyboard focus visible on its compact navigation landmark. */
+  .aw-constellation:has(> .aw-spatial-field:focus-visible)
+    > .aw-constellation-bar {
+    outline: 2px solid #e3d6ff;
+    outline-offset: 3px;
+  }
+  .aw-constellation > .aw-spatial-field:focus-visible {
+    outline: none;
+  }
+  @media (forced-colors: active) {
+    .aw-constellation:has(> .aw-spatial-field:focus-visible)
+      > .aw-constellation-bar {
+      outline-color: Highlight;
+    }
+  }
+}
 .aw-spatial-world,
 .aw-connections {
   position: absolute;
