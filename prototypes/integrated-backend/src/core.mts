@@ -868,7 +868,7 @@ export class BackendCore {
     const status=await this.refreshOrdinaryStatus();ensure(status.state==='ready'&&status.planUsageEnabled&&!status.pending&&Number.isSafeInteger(status.registrationVersion),'chatgpt_plan_grant_required');
     const catalog=await this.ordinaryConnections.modelCatalog(status.registrationVersion!);await this.ordinaryConnections.revalidateCredential(status.registrationVersion!,catalog.boundaryDigest);
     ensure(catalog.providerId===CHATGPT_PLAN_PROVIDER&&catalog.models.length>0,'ordinary_model_catalog_unavailable');
-    this.ordinaryCatalog={version:status.registrationVersion!,boundaryDigest:catalog.boundaryDigest,expiresAt:Date.now()+300000,models:structuredClone(catalog.models)};this.updateOrdinaryAdapter();return structuredClone(this.ordinaryStatus);
+    this.ordinaryCatalog={version:status.registrationVersion!,boundaryDigest:catalog.boundaryDigest,expiresAt:Date.now()+300000,models:structuredClone(catalog.models)};return this.refreshOrdinaryStatus();
   }
   private updateOrdinaryAdapter(){if(!this.ordinaryGraphAdapter)return;const available=this.ordinaryAuthorized();this.ordinaryGraphAdapter.snapshot.availability=available?'available':'requires_auth';this.ordinaryGraphAdapter.snapshot.chat={supported:true,authorized:available,availability:available?'available':'requires_auth'};}
   private async providerAuth(input:CommandMap['providerAuth']['input']):Promise<CommandMap['providerAuth']['output']> {
