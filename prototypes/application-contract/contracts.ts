@@ -62,6 +62,40 @@ export type Block = Geometry & {
   );
 export type Project = { id: string; title: string; version: number };
 export type TaskPriority = "low" | "normal" | "high" | "urgent";
+/** Public execution projection; private provider bindings and grants stay native. */
+export type ConversationExecutionState =
+  | "dispatching"
+  | "running"
+  | "provider_completed"
+  | "failed"
+  | "interrupted"
+  | "unknown";
+export type PublicConversationExecution = {
+  id: string;
+  resourceId: string;
+  providerId: string;
+  commandId: string;
+  state: ConversationExecutionState;
+  startedAt: string;
+  endedAt: string | null;
+  taskVerified: false;
+  errorCode?: string;
+};
+/** Read-only, scoped to at most 64 requested conversations per call. Live text
+ * is the existing ephemeral provider buffer, never a second transcript store. */
+export type ConversationActivitySnapshot = {
+  contract: "aerynth.conversation-activity@1";
+  resources: { resourceId: string; available: boolean }[];
+  executions: PublicConversationExecution[];
+  preview: {
+    resourceId: string;
+    executionId: string;
+    providerId: string;
+    cursor: number;
+    text: string;
+    classification: "reported" | "simulated";
+  } | null;
+};
 export type Workspace = {
   id: string;
   project_id: string | null;
