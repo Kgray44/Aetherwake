@@ -47,6 +47,11 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
       const file = path.join(out, name + '.png'); await fs.writeFile(file, png); totalBytes += png.length;
       receipt.captures.push({ file, bytes: png.length, sha256: hash(png), bounds, before: prior, acknowledgement });
     };
+    // Existing saved placements are preserved. Exercise the real, discoverable
+    // viewport-only recovery instead of moving Vela or bypassing hit testing.
+    await click('.aw-workspace-layout button[aria-label="Workspace actions"]');
+    await click('#locate-vela');
+    await driver.wait("document.body.classList.contains('vela-access')");
     await click('#vela');
     await driver.wait("!!document.querySelector('.vela-core-compose textarea')");
     await click('[data-surface-id="vela"] .aw-contextual-heading');
@@ -71,7 +76,20 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
   };
   try {
     await Promise.race([run(), new Promise((_, reject) => { timer = setTimeout(() => { expired = true; reject(new Error('native_product_ui_15s_deadline')); app.quit(); }, 15000); })]);
-  } catch (error) { receipt.error = { message: error.message, stack: String(error.stack).slice(0, 5000) }; }
+  } catch (error) {
+    receipt.error = { message: error.message, stack: String(error.stack).slice(0, 5000) };
+    // A labelled failure still is diagnostic evidence, never a passed draw check.
+    try {
+      foreground();
+      if (receipt.captures.length < 2) {
+        const png = (await win.webContents.capturePage()).toPNG(); foreground();
+        if (totalBytes + png.length <= 8388608) {
+          const file = path.join(out, 'failure.png'); await fs.writeFile(file, png);
+          receipt.captures.push({ file, bytes: png.length, sha256: hash(png), failure: true, freshDrawQualified: false });
+        }
+      }
+    } catch { /* A lost focus/deadline does not authorize another capture. */ }
+  }
   finally {
     expired = true; clearTimeout(timer); receipt.elapsedMs = Date.now() - started;
     receipt.startupErrors = startupErrors.slice(0, 16); if (startupErrors.length) receipt.passed = false;
