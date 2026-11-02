@@ -65,6 +65,7 @@ exports.verify = async ({
     host: "Existing actual Aerynth desktop host, canonical SQLite and shared V3.5 WebGL context",
     checks: [],
     actions: [],
+    steps: [],
     screenshots: [],
     videos: [],
     passed: false,
@@ -78,6 +79,8 @@ exports.verify = async ({
   const { js, wait, click, fill, snapshot } = await createDriver(win);
   const mark = (label) =>
     receipt.actions.push({ label, at: new Date().toISOString() });
+  const step = (number, label) =>
+    receipt.steps.push({ number, label, at: new Date().toISOString() });
   const spatial = () => js("window.__aerynth.snapshot().spatial");
   const checkOverviewPresence = async (label) => {
     await wait(
@@ -92,7 +95,7 @@ exports.verify = async ({
   const flush = () => js("window.__aerynth.flush()");
   const view = () => js("window.aerynthHost.command('viewState',{})");
   const shot = async (name) => {
-    assert.ok(receipt.screenshots.length < 12, "screenshot count bound");
+    assert.ok(receipt.screenshots.length < 14, "screenshot count bound");
     await pause(350);
     const bytes = (await win.webContents.capturePage()).toPNG();
     assert.ok(bytes.length < 8 * 1024 * 1024, "screenshot byte bound");
@@ -171,6 +174,37 @@ exports.verify = async ({
     assert.ok(r && b, "created canonical resource and block");
     return { resource: r, block: b };
   };
+  const openBlock = async (id) => {
+    await click("#layout-manager");
+    await click(`[data-locate="${id}"]`);
+  };
+  const projectView = async () => {
+    for (
+      let i = 0;
+      i < 2 && (await spatial()).location.kind !== "project";
+      i++
+    ) {
+      await click("#zoom-out");
+      await pause(350);
+    }
+    assert.equal((await spatial()).location.kind, "project");
+  };
+  const relate = async (sourceId, targetId) => {
+    await textButton("Link resources", ".aw-constellation-bar");
+    await fill(".aw-graph-dialog label:nth-of-type(1) select", sourceId);
+    await fill(".aw-graph-dialog label:nth-of-type(2) select", targetId);
+    await fill(".aw-graph-dialog label:nth-of-type(3) select", "references");
+    await click('.aw-graph-dialog button[type="submit"]');
+    await wait('!document.querySelector(".aw-graph-dialog").open');
+    assert.ok(
+      (await snapshot()).relationships.some(
+        (e) =>
+          e.source_id === sourceId &&
+          e.target_id === targetId &&
+          e.kind === "references",
+      ),
+    );
+  };
   const startSegment = async (label) => {
     assert.ok(
       receipt.videos.length < 2,
@@ -225,12 +259,39 @@ exports.verify = async ({
           "utf8",
         ),
       );
+      assert.notEqual(
+        source.startedAt,
+        expected.sourceStartedAt,
+        "new native process start",
+      );
+      assert.deepEqual(
+        source.hashes,
+        expected.sourceHashes,
+        "same final source across restart",
+      );
+      assert.deepEqual(
+        source.buildAssets,
+        expected.buildAssets,
+        "same compiled assets across restart",
+      );
+      step(
+        24,
+        "Restart the actual native host and service with the same source and profile",
+      );
       const actual = await snapshot();
       assert.equal(
         actual.activeWorkspaceId,
         expected.snapshot.activeWorkspaceId,
       );
       assert.deepEqual(geometry(actual), geometry(expected.snapshot));
+      assert.deepEqual(
+        geometry({ blocks: actual.navigationBlocks ?? actual.blocks }),
+        geometry({
+          blocks:
+            expected.snapshot.navigationBlocks ?? expected.snapshot.blocks,
+        }),
+        "all authorized workspace layouts survive restart",
+      );
       for (const key of [
         "projects",
         "workspaces",
@@ -269,6 +330,10 @@ exports.verify = async ({
         "actual camera restored, beyond the stored receipt",
       );
       assert.equal(live.selected, expected.view.bookmarks[scope].selected);
+      step(
+        25,
+        "Verify all workspace geometry, canonical relationships, branch ancestry, XYZ, pins, bookmarks, history and live camera survived restart",
+      );
       receipt.checks.push(
         "fresh-process-restart-keeps-canonical-identities-content-relationships-branch-ancestry-and-complete-spatial-view",
       );
@@ -287,6 +352,10 @@ exports.verify = async ({
         "saved project pose is visible after restart",
       );
       await shot("12-restored-project");
+      assert.deepEqual(
+        receipt.steps.map((s) => s.number),
+        [24, 25],
+      );
     } else {
       const projects = [],
         workspaces = [],
@@ -345,116 +414,213 @@ exports.verify = async ({
       assert.equal(projects.length, 3);
       assert.equal(workspaces.length, 6);
       const originalRow = records[0],
-        other = records[2];
-      await selectWorkspace(other.workspaceId);
-      const extraTask = await add("task", "Engineering verification task"),
-        taskGroup = await add("task_group", "Engineering local task group");
-      await click(`[data-block="${taskGroup.block.id}"] .unfold`);
-      await click(`[data-block="${taskGroup.block.id}"] .manage-task-members`);
-      for (const taskId of [other.task.resource.id, extraTask.resource.id])
+        other = records[2],
+        sourceRow = originalRow;
+      receipt.taskGroups = [];
+      for (const row of [records[0], records[2], records[4]]) {
+        await selectWorkspace(row.workspaceId);
+        await add("conversation", row.title + " follow-up conversation");
+        const extraTask = await add("task", row.title + " verification task"),
+          taskGroup = await add("task_group", row.title + " local task group");
+        await click(`[data-block="${taskGroup.block.id}"] .unfold`);
         await click(
-          `#task-group-members input[name="taskId"][value="${taskId}"]`,
+          `[data-block="${taskGroup.block.id}"] .manage-task-members`,
         );
-      await click('#task-group-members button[type="submit"]');
-      await wait('!document.querySelector("#command-surface").open');
-      await wait(
-        `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(taskGroup.resource.id)}).taskMembers.length===2`,
-      );
-      await click(
-        `[data-block="${taskGroup.block.id}"] .group-task[data-task-id="${extraTask.resource.id}"]`,
-      );
-      await wait(
-        `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(extraTask.resource.id)}).taskStatus==='done'`,
-      );
-      const grouped = (await snapshot()).resources.find(
-        (r) => r.id === taskGroup.resource.id,
-      );
-      assert.equal(
-        grouped.taskMembers.filter((t) => t.status === "done").length,
-        1,
-      );
-      for (const taskId of [other.task.resource.id, extraTask.resource.id])
-        assert.ok(
-          (await snapshot()).relationships.some(
-            (e) =>
-              e.kind === "contains_task" &&
-              e.source_id === taskGroup.resource.id &&
-              e.target_id === taskId,
+        for (const taskId of [row.task.resource.id, extraTask.resource.id])
+          await click(
+            `#task-group-members input[name="taskId"][value="${taskId}"]`,
+          );
+        await click('#task-group-members button[type="submit"]');
+        await wait('!document.querySelector("#command-surface").open');
+        await wait(
+          `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(taskGroup.resource.id)}).taskMembers.length===2`,
+        );
+        await click(
+          `[data-block="${taskGroup.block.id}"] .group-task[data-task-id="${extraTask.resource.id}"]`,
+        );
+        await wait(
+          `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(extraTask.resource.id)}).taskStatus==='done'`,
+        );
+        const grouped = (await snapshot()).resources.find(
+          (r) => r.id === taskGroup.resource.id,
+        );
+        assert.equal(
+          grouped.taskMembers.filter((t) => t.status === "done").length,
+          1,
+        );
+        for (const taskId of [row.task.resource.id, extraTask.resource.id])
+          assert.ok(
+            (await snapshot()).relationships.some(
+              (e) =>
+                e.kind === "contains_task" &&
+                e.source_id === taskGroup.resource.id &&
+                e.target_id === taskId,
+            ),
+          );
+        receipt.taskGroups.push({
+          projectId: row.projectId,
+          resourceId: taskGroup.resource.id,
+          blockId: taskGroup.block.id,
+          memberResourceIds: [row.task.resource.id, extraTask.resource.id],
+        });
+        await click("#home");
+        await projectView();
+        await relate(row.conversation.resource.id, row.note.resource.id);
+      }
+      assert.equal(receipt.taskGroups.length, 3);
+      const fixtureState = await snapshot();
+      for (const id of projects) {
+        const projectWorkspaces = new Set(
+            fixtureState.workspaces
+              .filter((w) => w.project_id === id)
+              .map((w) => w.id),
           ),
+          projectResources = new Set(
+            (fixtureState.navigationBlocks ?? fixtureState.blocks)
+              .filter((b) => projectWorkspaces.has(b.workspace_id))
+              .map((b) => b.resource_id),
+          );
+        assert.ok(
+          fixtureState.resources.filter(
+            (r) => projectResources.has(r.id) && r.kind === "conversation",
+          ).length >= 3,
+          "each project has several ordinary conversations",
         );
-      receipt.taskGroup = {
-        resourceId: taskGroup.resource.id,
-        blockId: taskGroup.block.id,
-        memberResourceIds: [other.task.resource.id, extraTask.resource.id],
-      };
+        assert.ok(
+          fixtureState.resources.some(
+            (r) =>
+              projectResources.has(r.id) &&
+              r.kind === "task_group" &&
+              r.taskMembers?.length >= 2,
+          ),
+          "each project has a real task group",
+        );
+        assert.ok(
+          fixtureState.relationships.some(
+            (e) =>
+              e.kind === "references" &&
+              projectResources.has(e.source_id) &&
+              projectResources.has(e.target_id) &&
+              fixtureState.resources.find((r) => r.id === e.target_id)?.kind ===
+                "note",
+          ),
+          "each project has a canonical related note",
+        );
+      }
+      await selectWorkspace(records[4].workspaceId);
+      await openBlock(receipt.taskGroups[2].blockId);
       receipt.focusedDock = await js(
         `([...document.querySelectorAll('.dock,.dock button,.dock span')].map(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {tag:e.tagName,text:e.textContent,rect:{x:r.x,y:r.y,w:r.width,h:r.height},scrollWidth:e.scrollWidth,clientWidth:e.clientWidth,clipPath:s.clipPath,transform:s.transform,opacity:s.opacity,overflow:s.overflow}}))`,
       );
       await shot("00-real-local-task-group");
       receipt.checks.push(
-        "native-canonical-task-group-creation-membership-and-real-local-member-status-update-without-execution",
+        "each-of-three-projects-has-a-canonical-task-group-two-real-members-local-status-and-related-note",
       );
       await click("#home");
       await selectWorkspace(originalRow.workspaceId);
-      const original = await snapshot();
       await shot("01-original-working-workspace");
-      receipt.checks.push(
-        "three-named-projects-six-distinct-workspaces-thirty-two-real-typed-resources-and-durable-note-content",
+      step(
+        1,
+        "Start in the normal A World for Two Development glass workspace",
       );
-      await startSegment("orbit, pan, inspect and reviewed branch");
+      receipt.checks.push(
+        "three-named-projects-six-workspaces-thirty-nine-typed-fixture-resources-with-three-ordinary-conversations-per-project",
+      );
+      await startSegment(
+        "working block creation, orbit, pan, conversation approach and reviewed branch",
+      );
+      const journeyNote = await add("note", "Development journey note");
+      await openBlock(journeyNote.block.id);
+      await fill(
+        `[data-block="${journeyNote.block.id}"] textarea`,
+        "Synthetic note created and arranged at the start of the real journey.",
+      );
+      await flush();
+      await click("#home");
+      await click(`[data-block="${journeyNote.block.id}"] .block-properties`);
+      for (const [field, value] of Object.entries({
+        x: 320,
+        y: 350,
+        width: 390,
+        height: 230,
+      }))
+        await fill(`#command-surface input[name="${field}"]`, String(value));
+      await fill('#command-surface select[name="shape"]', "folio");
+      await click('#command-surface button[type="submit"]');
+      await wait('!document.querySelector("#command-surface").open');
+      assert.equal(
+        (await snapshot()).blocks.find((b) => b.id === journeyNote.block.id)
+          .shape,
+        "folio",
+      );
+      await shot("01b-new-block-created-and-arranged");
+      step(
+        2,
+        "Create, edit, resize, reshape and place another real working block",
+      );
       await click("#zoom-out");
       await pause(650);
       await checkOverviewPresence("project");
+      step(3, "Zoom out from the workspace");
+      step(4, "Observe its real project system");
       const before = (await spatial()).camera;
       await drag(".aw-spatial-field", 95, -25);
       const orbited = (await spatial()).camera;
       assert.notEqual(orbited.yaw, before.yaw);
+      step(5, "Orbit the project with native pointer input");
       await drag(".aw-spatial-field", 60, 25, ["shift"]);
       const panned = (await spatial()).camera;
       assert.notDeepEqual(panned.target, orbited.target);
+      step(6, "Pan across its resource clusters");
       await shot("02-orbit-and-pan");
       receipt.checks.push(
         "native-pointer-orbit-and-shift-pan-change-real-perspective-camera",
       );
-      await textButton("Universe", ".aw-constellation-bar");
-      await pause(650);
-      await checkOverviewPresence("universe");
-      await shot("03-three-planet-universe");
-      assert.equal(
-        (await snapshot()).projects.filter((p) => projects.includes(p.id))
-          .length,
-        3,
+      await locate(
+        sourceRow.conversation.resource.title,
+        "resource:" + sourceRow.conversation.block.id,
       );
-      await node("project:" + other.projectId);
-      await checkOverviewPresence("other project");
-      await node("workspace:" + other.workspaceId);
-      await click(`[data-block="${other.conversation.block.id}"] .unfold`);
+      await node("resource:" + sourceRow.conversation.block.id);
+      await wait(
+        `!!document.querySelector('[data-block="${sourceRow.conversation.block.id}"] .conversation-compose')`,
+      );
+      step(
+        7,
+        "Approach the original project's actual conversation and unfold its working surface",
+      );
       for (const content of [
         "Synthetic selected context for a reviewed continuation.",
         "Synthetic later message deliberately not selected for handoff.",
       ]) {
         await fill(
-          `[data-block="${other.conversation.block.id}"] .conversation-compose textarea`,
+          `[data-block="${sourceRow.conversation.block.id}"] .conversation-compose textarea`,
           content,
         );
         await click(
-          `[data-block="${other.conversation.block.id}"] .conversation-compose button[type="submit"]`,
+          `[data-block="${sourceRow.conversation.block.id}"] .conversation-compose button[type="submit"]`,
         );
         await wait(
-          `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(other.conversation.resource.id)}).messages.some(m=>m.content===${JSON.stringify(content)})`,
+          `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(sourceRow.conversation.resource.id)}).messages.some(m=>m.content===${JSON.stringify(content)})`,
         );
       }
       await click("#home");
-      await click("#zoom-out");
-      await pause(500);
+      await projectView();
       const source = (await snapshot()).resources.find(
-        (r) => r.id === other.conversation.resource.id,
+        (r) => r.id === sourceRow.conversation.resource.id,
       );
       assert.equal(source.provider, "local");
       assert.equal(source.messages.length, 2);
-      await locate(source.title, "resource:" + other.conversation.block.id);
+      await locate(source.title, "resource:" + sourceRow.conversation.block.id);
+      await textButton("Explore neighborhood", ".aw-spatial-detail");
+      await wait(
+        `window.__aerynth.snapshot().spatial.camera.neighborhood===${JSON.stringify("resource:" + sourceRow.conversation.block.id)}`,
+      );
       await textButton("Inspect relationships", ".aw-spatial-detail");
       await shot("04-inspected-resource-provenance");
+      step(
+        8,
+        "Inspect the conversation's canonical note reference and placement",
+      );
       await closeGraph();
       await textButton("Branch conversation", ".aw-spatial-detail");
       assert.equal(
@@ -465,7 +631,7 @@ exports.verify = async ({
       );
       await fill(
         '.aw-graph-dialog input[type="text"]',
-        "Reviewed Engineering continuation",
+        "Reviewed Development continuation",
       );
       await fill(".aw-graph-dialog select", source.messages.at(-1).id);
       await click('.aw-graph-dialog fieldset input[type="checkbox"]');
@@ -480,7 +646,7 @@ exports.verify = async ({
       await wait('!document.querySelector(".aw-graph-dialog").open');
       const afterBranch = await snapshot(),
         child = afterBranch.resources.find(
-          (r) => r.title === "Reviewed Engineering continuation",
+          (r) => r.title === "Reviewed Development continuation",
         ),
         lineage = afterBranch.conversationBranches.find(
           (b) => b.childResourceId === child?.id,
@@ -501,30 +667,46 @@ exports.verify = async ({
       receipt.checks.push(
         "native-reviewed-app-level-branch-with-explicit-source-selection-real-ancestry-and-unchanged-parent",
       );
+      step(
+        9,
+        "Create a canonical app-level continuation using explicitly reviewed source context",
+      );
+      const childBlock = (
+        afterBranch.navigationBlocks ?? afterBranch.blocks
+      ).find((b) => b.resource_id === child.id);
+      await locate(child.title, "resource:" + childBlock.id);
+      assert.equal((await spatial()).selected, "resource:" + childBlock.id);
+      await checkOverviewPresence("new branch in original project");
+      await shot("05b-new-branch-visible");
+      step(
+        10,
+        "Observe the new branch in the real original project constellation",
+      );
       await stopSegment("01-orbit-inspect-reviewed-branch.webm");
 
       await startSegment("pin, typed relationship and exact working return");
-      await locate(source.title, "resource:" + other.conversation.block.id);
+      await locate(source.title, "resource:" + sourceRow.conversation.block.id);
       const beforeDrag = (await spatial()).anchors[
-        "resource:" + other.conversation.block.id
+        "resource:" + sourceRow.conversation.block.id
       ].spatial;
       await drag(
         ".aw-spatial-field",
         55,
         -30,
         ["alt"],
-        "resource:" + other.conversation.block.id,
+        "resource:" + sourceRow.conversation.block.id,
       );
       const afterDrag = (await spatial()).anchors[
-        "resource:" + other.conversation.block.id
+        "resource:" + sourceRow.conversation.block.id
       ];
       assert.notDeepEqual(afterDrag.spatial, beforeDrag);
       assert.equal(afterDrag.pinned, true);
+      step(11, "Move the ray-picked conversation moon using native Alt-drag");
       receipt.checks.push(
         "native-alt-drag-moves-and-pins-the-ray-picked-3D-moon",
       );
       const old = (await spatial()).anchors[
-          "resource:" + other.conversation.block.id
+          "resource:" + sourceRow.conversation.block.id
         ].spatial,
         desired = {
           x: Math.round(old.x + 85),
@@ -547,17 +729,21 @@ exports.verify = async ({
       await textButton("Save position", ".aw-spatial-detail");
       await flush();
       const pinned = (await spatial()).anchors[
-        "resource:" + other.conversation.block.id
+        "resource:" + sourceRow.conversation.block.id
       ];
       assert.deepEqual(pinned.spatial, desired);
       assert.equal(pinned.pinned, true);
+      step(
+        12,
+        "Set and persist the chosen XYZ and pin using non-drag controls",
+      );
       await shot("06-moved-and-pinned-moon");
       await textButton("Link resources", ".aw-constellation-bar");
       // Each select belongs to a label, so address the form's label order explicitly.
       await fill(".aw-graph-dialog label:nth-of-type(1) select", source.id);
       await fill(
         ".aw-graph-dialog label:nth-of-type(2) select",
-        other.note.resource.id,
+        sourceRow.research.resource.id,
       );
       await fill(".aw-graph-dialog label:nth-of-type(3) select", "references");
       await click('.aw-graph-dialog button[type="submit"]');
@@ -565,10 +751,14 @@ exports.verify = async ({
       const relationship = (await snapshot()).relationships.find(
         (e) =>
           e.source_id === source.id &&
-          e.target_id === other.note.resource.id &&
+          e.target_id === sourceRow.research.resource.id &&
           e.kind === "references",
       );
       assert.ok(relationship);
+      step(
+        13,
+        "Create a new explicit canonical resource-reference relationship",
+      );
       await textButton("Inspect relationships", ".aw-spatial-detail");
       assert.ok(
         (
@@ -577,28 +767,44 @@ exports.verify = async ({
       );
       await shot("07-typed-relationship-inspection");
       await closeGraph();
+      step(14, "Inspect the new relationship's direction, type and provenance");
       receipt.checks.push(
         "native-position-pin-and-canonical-directed-relationship-creation-with-inspection",
       );
-      await textButton("Universe", ".aw-constellation-bar");
-      await pause(550);
-      await node("project:" + originalRow.projectId);
+      // Explicit branch placement is an authorized layout mutation. Capture the
+      // working reference AFTER those changes and BEFORE cross-project travel.
       await node("workspace:" + originalRow.workspaceId);
-      assert.deepEqual(geometry(await snapshot()), geometry(original));
-      assert.deepEqual(
-        (await snapshot()).presence,
-        original.presence,
-        "overview placement never overwrites saved workspace Vela",
+      const original = await snapshot();
+      receipt.workingReference = {
+        workspaceId: original.activeWorkspaceId,
+        geometry: geometry(original),
+        resourceIds: original.blocks.map((b) => b.resource_id),
+        scope:
+          "After explicit branch/relationship changes; before cross-project travel",
+      };
+      await shot("07b-working-reference-before-travel");
+      await projectView();
+      await textButton("Universe", ".aw-constellation-bar");
+      await pause(650);
+      await checkOverviewPresence("universe");
+      step(15, "Zoom out to Universe");
+      assert.equal(
+        (await snapshot()).projects.filter((p) => projects.includes(p.id))
+          .length,
+        3,
       );
-      for (const r of original.resources.filter(
-        (r) => r.project_id === originalRow.projectId,
-      ))
-        assert.deepEqual(
-          (await snapshot()).resources.find((x) => x.id === r.id),
-          r,
+      for (const id of projects)
+        assert.ok(
+          await js(`!!document.querySelector('[data-key="project:${id}"]')`),
         );
-      await shot("08-exact-original-workspace-return");
-      await selectWorkspace(other.workspaceId);
+      await shot("03-three-planet-universe");
+      step(16, "Observe all three actual named project systems");
+      await node("project:" + other.projectId);
+      await checkOverviewPresence("other project");
+      step(17, "Approach Voyagewright");
+      await node("workspace:" + other.workspaceId);
+      assert.equal((await snapshot()).activeWorkspaceId, other.workspaceId);
+      step(18, "Enter its Engineering working workspace");
       // Fluid insertion may legitimately move a prior block beyond this camera.
       // Exercise the real offscreen-block access instead of assuming visibility.
       await click("#layout-manager");
@@ -608,9 +814,44 @@ exports.verify = async ({
         "Synthetic real editor change after spatial branch and relationship navigation.",
       );
       await flush();
+      assert.equal(
+        (await snapshot()).resources.find(
+          (r) => r.id === other.note.resource.id,
+        ).content,
+        "Synthetic real editor change after spatial branch and relationship navigation.",
+      );
+      await shot("08a-other-workspace-real-edit");
+      step(19, "Edit and save a real persistent glass-panel note");
       await click("#home");
-      await selectWorkspace(originalRow.workspaceId);
+      await projectView();
+      await textButton("Universe", ".aw-constellation-bar");
+      await pause(500);
+      step(20, "Return to Universe");
+      await node("project:" + originalRow.projectId);
+      step(21, "Navigate back to A World for Two");
+      await node("workspace:" + originalRow.workspaceId);
+      step(22, "Restore its Development working workspace");
       assert.deepEqual(geometry(await snapshot()), geometry(original));
+      assert.deepEqual(
+        (await snapshot()).presence,
+        original.presence,
+        "overview placement never overwrites saved workspace Vela",
+      );
+      assert.deepEqual(
+        (await snapshot()).viewport,
+        original.viewport,
+        "working viewport restored",
+      );
+      for (const id of original.blocks.map((b) => b.resource_id))
+        assert.deepEqual(
+          (await snapshot()).resources.find((r) => r.id === id),
+          original.resources.find((r) => r.id === id),
+        );
+      await shot("08-exact-original-workspace-return");
+      step(
+        23,
+        "Verify exact original resource identities, geometry, shapes, content, viewport and Vela footprint",
+      );
       assert.equal(
         (await snapshot()).resources.find(
           (r) => r.id === other.note.resource.id,
@@ -624,17 +865,21 @@ exports.verify = async ({
       await stopSegment("02-pin-relationship-return.webm");
       await flush();
       const expected = {
+        sourceStartedAt: source.startedAt,
+        sourceHashes: source.hashes,
+        buildAssets: source.buildAssets,
         snapshot: await snapshot(),
         view: await view(),
         reviewedBranch: receipt.reviewedBranch,
       };
       assert.deepEqual(
-        expected.view.anchors["resource:" + other.conversation.block.id]
+        expected.view.anchors["resource:" + sourceRow.conversation.block.id]
           .spatial,
         desired,
       );
       assert.equal(
-        expected.view.anchors["resource:" + other.conversation.block.id].pinned,
+        expected.view.anchors["resource:" + sourceRow.conversation.block.id]
+          .pinned,
         true,
       );
       await fs.writeFile(
@@ -645,6 +890,10 @@ exports.verify = async ({
       receipt.finalSpatial = await spatial();
       receipt.checks.push(
         "saved-private-view-state-includes-pins-XYZ-camera-bookmarks-and-history-with-real-canonical-branch-and-relationship",
+      );
+      assert.deepEqual(
+        receipt.steps.map((s) => s.number),
+        Array.from({ length: 23 }, (_, i) => i + 1),
       );
     }
     receipt.passed = true;
