@@ -41,6 +41,11 @@ export type Geometry = {
   height: number;
   z: number;
 };
+/** Current presenter context, supplied separately from an assistant/model action. */
+export interface WorkspacePresentationContext {
+  workspaceId: string;
+  bounds: Omit<Geometry, "z">;
+}
 export type Block = Geometry & {
   id: string;
   workspace_id: string;
