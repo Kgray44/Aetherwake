@@ -48,19 +48,26 @@
   padding: 0.75rem;
   border-radius: 0.65rem;
 }
+/* The editor sits inside a small field label. Set its body size explicitly:
+   inheriting the label's font also bypasses the placement text-scale setting. */
+[data-note-state] textarea,
+[data-aw-content-mode] .working-content[data-note-state] textarea,
+[data-note-state] .aw-note-reading {
+  font-size: calc(16px * var(--aw-block-text-scale, 1));
+  line-height: 1.65;
+}
 .aw-note-reading {
-  line-height: 1.6;
   overflow-wrap: anywhere;
   user-select: text;
 }
 .aw-note-reading h1 {
-  font-size: 1.6rem;
+  font-size: 1.6em;
 }
 .aw-note-reading h2 {
-  font-size: 1.35rem;
+  font-size: 1.35em;
 }
 .aw-note-reading h3 {
-  font-size: 1.15rem;
+  font-size: 1.15em;
 }
 .aw-note-reading blockquote {
   border-left: 2px solid #9ab9d6;
