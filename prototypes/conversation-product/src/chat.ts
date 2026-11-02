@@ -4,6 +4,23 @@ import { ConversationDraftSession, type DraftSessionSnapshot } from './draft-ses
 import { renderMarkdown } from './markdown.ts';
 
 export type ConversationExecution = PublicConversationExecution;
+export type ConversationControlIdentity = 'action'|'new-chat'|'create-chat'|'history'|'close'|'search'|'clear-search'|'filters'|'organize'|'chat-options'|'branches'|'branch-policy'|'lineage'|'providers'|'shares'|'new-folder'|'manage-folder'|'favorite'|'history-result'|'previous'|'next'|'send'|'stop'|'message-actions'|'copy'|'quote'|'source'|'branch'|'publish'|'source-excerpt'|'draft-conflict'|'draft-recovery';
+export type ConversationControlPresentation = { identity: ConversationControlIdentity; emphasis?: 'primary'|'secondary'|'quiet'|'danger'; label?: string };
+/** Semantic styling hooks only. Native buttons/summaries retain their actual keyboard and disabled behavior. */
+export function decorateConversationControl(node: HTMLElement, presentation: ConversationControlPresentation): void {
+  const label=presentation.label??node.textContent??'',glyph=document.createElement('span'),caption=document.createElement('span');
+  glyph.className='cp-control-glyph';glyph.dataset.glyph=presentation.identity;glyph.setAttribute('aria-hidden','true');caption.className='cp-control-label';caption.textContent=label;
+  node.classList.add('cp-control');node.dataset.cpControl=presentation.identity;node.dataset.emphasis=presentation.emphasis??'quiet';node.replaceChildren(glyph,caption);
+}
+export function setConversationControlLabel(node: HTMLElement, label: string): void {
+  const caption=node.querySelector<HTMLElement>('.cp-control-label');if(caption)caption.textContent=label;else node.textContent=label;
+}
+let disclosureId=0;
+export function decorateConversationDisclosure(node: HTMLDetailsElement, summary: HTMLElement, identity: ConversationControlIdentity, panel?: HTMLElement): void {
+  node.dataset.cpDisclosure=identity;node.dataset.open=String(node.open);decorateConversationControl(summary,{identity,emphasis:'secondary'});
+  if(panel){panel.id||=`cp-control-group-${++disclosureId}`;panel.dataset.cpGroup=identity;panel.setAttribute('role','group');panel.setAttribute('aria-label',summary.textContent??identity);summary.setAttribute('aria-controls',panel.id);}
+  node.addEventListener('toggle',()=>{node.dataset.open=String(node.open);});
+}
 /** The host translates only observed assistant text deltas; never reasoning/tool summaries or fabricated approval events. */
 export type ConversationExecutionObservation = {
   execution?: ConversationExecution; connection?: 'available'|'unavailable'; resourceAvailable?: boolean;
@@ -17,8 +34,10 @@ export interface ConversationExecutionPort {
 }
 export type MessageSelection = { start: number; end: number; text: string };
 export type ConversationMessageAction = { action: 'branch'|'source'|'publish'; message: MessageView; selection?: MessageSelection };
+export type ConversationChatPresentation = 'workspace'|'focused';
 export interface ConversationChatOptions {
   port: ConversationProductPort; resourceId: string;
+  presentation?: ConversationChatPresentation;
   /** Externally supplied sessions remain owned by the caller. */
   draftSession?: ConversationDraftSession; initialDraft?: string; initialScroll?: number; initialOffset?: number;
   execution?: ConversationExecutionPort; copy?: (text: string) => Promise<void>;
@@ -29,6 +48,7 @@ export interface ConversationChatOptions {
 export interface ConversationChat {
   ready: Promise<void>; refresh(options?: { aroundMessageId?: string; latest?: boolean }): Promise<void>;
   focusComposer(): void; flush(): Promise<void>; dispose(): Promise<void>;
+  setPresentation(mode: ConversationChatPresentation): void;
   /** Explicit receipt/lifecycle observation only. Closing or editor draining must not await a provider turn. */
   whenSubmissionSettled(): Promise<void>;
 }
@@ -48,6 +68,7 @@ export function acceptedConversationSubmission(input: { resourceId:string;provid
 /** One canonical chat, independent of its block/panel placement. No store, provider connection or authorization issuance. */
 export function mountConversationChat(container: HTMLElement, options: ConversationChatOptions): ConversationChat {
   const { port, resourceId } = options;
+  let presentation=options.presentation??'focused';if(presentation!=='workspace'&&presentation!=='focused')throw new Error('invalid_chat_presentation');
   if (options.draftSession && options.draftSession.resourceId !== resourceId) throw new Error('draft_resource_mismatch');
   const root = el('section', undefined, 'cp-chat'); root.dataset.resourceId = resourceId; root.setAttribute('aria-label', 'Chat');
   const messages = el('div', undefined, 'cp-messages'); messages.tabIndex = 0; messages.setAttribute('aria-label', 'Conversation messages');
@@ -56,11 +77,14 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const composer = el('form', undefined, 'cp-composer'), textarea = el('textarea'), tools = el('div', undefined, 'cp-composer-tools'), provider = el('span', '', 'cp-composer-provider'), send = el('button', 'Send'), stop = el('button', 'Stop'), hint = el('span', 'Enter to send · Shift+Enter for a new line', 'cp-composer-hint');
   textarea.setAttribute('aria-label', 'Message'); textarea.placeholder = 'Ask anything, or share an idea'; textarea.rows = 2;
   send.type = 'submit'; send.setAttribute('aria-label', 'Send message'); stop.type = 'button'; stop.hidden = true; tools.append(provider, hint, stop, send); composer.append(textarea, tools);
+  decorateConversationControl(send,{identity:'send',emphasis:'primary'});decorateConversationControl(stop,{identity:'stop',emphasis:'secondary'});tools.dataset.cpGroup='composer';tools.setAttribute('role','group');tools.setAttribute('aria-label','Message controls');
   const capabilityNote=el('p','','cp-capability-note'),contextNote=el('p','','cp-context-note'),draftStatus = el('p', '', 'cp-draft-status'), recovery = el('div', undefined, 'cp-draft-recovery'); draftStatus.setAttribute('role', 'status');
   const recoveryDetails = el('details', undefined, 'cp-draft-conflict'), recoverySummary = el('summary', 'Review draft conflict'), localText = el('pre'), storedText = el('pre');
   const keep = el('button', 'Keep this editor’s draft'), useStored = el('button', 'Use the stored draft'), retry = el('button', 'Retry draft recovery'), reviewed = el('button', 'I reviewed the send outcome');
   for (const b of [keep,useStored,retry,reviewed]) b.type = 'button';
+  for (const b of [keep,useStored,retry,reviewed])decorateConversationControl(b,{identity:'draft-recovery',emphasis:'secondary'});
   recoveryDetails.append(recoverySummary, el('p','This editor'),localText,el('p','Stored draft'),storedText,keep,useStored);
+  decorateConversationDisclosure(recoveryDetails,recoverySummary,'draft-conflict');
   const feedback=el('div',undefined,'cp-chat-feedback');feedback.append(status,capabilityNote,contextNote,draftStatus,recovery);
   root.append(messages,paging,stream,feedback,composer); container.append(root);
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
@@ -75,7 +99,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   let measuredHeight=0;
   const resize = () => {
     const height=measuredHeight||root.clientHeight,managerHeight=root.closest<HTMLElement>('.cp-manager')?.clientHeight;
-    const compact=(managerHeight?managerHeight<420:height>0&&height<280);
+    const compact=presentation==='workspace'||(managerHeight?managerHeight<420:height>0&&height<280);
+    root.dataset.presentation=presentation;root.classList.add('cp-chat-'+presentation);root.classList.remove('cp-chat-'+(presentation==='workspace'?'focused':'workspace'));
     if(compact)root.classList.add('cp-chat-compact');else root.classList.remove('cp-chat-compact');
     textarea.rows=compact?1:2;
     const minimum=compact?34:56,maximum=height>0?Math.max(minimum,Math.min(compact?96:200,height*(compact ? .25 : .35))):200;
@@ -102,6 +127,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if (uncertain && reviewed.parentNode !== recovery) recovery.append(el('p','Send acceptance is not confirmed. Your draft is retained; inspect the chat before retrying.'),reviewed);
     keep.disabled = useStored.disabled = retry.disabled = recovering;
     send.disabled = sending || !!active() || uncertain || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
+    send.dataset.state=uncertain?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=cancelPending?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = cancelPending || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; viewState();
   }
   const unsubscribeDraft = session.subscribe(renderDraft);
@@ -123,15 +149,17 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const by = el('p', attribution+(message.inherited?' · inherited source':''), 'cp-message-source'); by.title = message.provenance+' · '+message.createdAt;
     const content = message.role === 'assistant' ? renderMarkdown(message.content,copy,report) : el('div',message.content); content.classList.add('cp-message-content');
     const actions = el('details', undefined, 'cp-message-actions'), summary = el('summary','Message actions'), panel = el('div',undefined,'cp-disclosure-panel'); actions.append(summary,panel);
-    const action = (label:string, work:()=>void|Promise<void>) => { const b = el('button',label); b.type='button'; b.addEventListener('click',()=>{Promise.resolve(work()).catch(error=>report(errorText(error)));});panel.append(b);return b; };
-    action('Copy',async()=>{await copy(message.content);report('Copied');actions.open=false;});
-    action('Quote',()=>{session.update(session.snapshot().content+(session.snapshot().content?'\n\n':'')+`> ${message.content.replaceAll('\n','\n> ')}\n`);actions.open=false;textarea.focus();});
+    decorateConversationDisclosure(actions,summary,'message-actions',panel);
+    const action = (label:string, work:()=>void|Promise<void>,identity:ConversationControlIdentity='action') => { const b = el('button',label); b.type='button';decorateConversationControl(b,{identity}); b.addEventListener('click',()=>{if(!b.disabled)Promise.resolve(work()).catch(error=>report(errorText(error)));});panel.append(b);return b; };
+    action('Copy',async()=>{await copy(message.content);report('Copied');actions.open=false;},'copy');
+    action('Quote',()=>{session.update(session.snapshot().content+(session.snapshot().content?'\n\n':'')+`> ${message.content.replaceAll('\n','\n> ')}\n`);actions.open=false;textarea.focus();},'quote');
     if (options.onMessageAction) {
-      action('Source',()=>doAction({action:'source',message})); action('Branch from here',()=>{actions.open=false;doAction({action:'branch',message});});
+      action('Source',()=>doAction({action:'source',message}),'source'); action('Branch from here',()=>{actions.open=false;doAction({action:'branch',message});},'branch');
       const source = el('pre',message.content,'cp-message-raw'), note = el('p','Select an exact source passage below to publish an excerpt. Markdown source offsets are preserved.','cp-selection-note');
       const sourceDisclosure = el('details'), sourceSummary = el('summary','Select source excerpt'); sourceDisclosure.append(sourceSummary,note,source);panel.append(sourceDisclosure);
+      decorateConversationDisclosure(sourceDisclosure,sourceSummary,'source-excerpt');
       let selection: MessageSelection|null = null;
-      const publish = action('Publish selected excerpt',()=>{if(selection&&message.content.slice(selection.start,selection.end)===selection.text)doAction({action:'publish',message,selection});});publish.disabled=true;
+      const publish = action('Publish selected excerpt',()=>{if(selection&&message.content.slice(selection.start,selection.end)===selection.text)doAction({action:'publish',message,selection});},'publish');publish.disabled=true;
       const capture = () => {
         const selected=window.getSelection();selection=null;
         if (selected && !selected.isCollapsed && selected.rangeCount && selected.anchorNode && selected.focusNode && source.contains(selected.anchorNode) && source.contains(selected.focusNode)) {
@@ -152,11 +180,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     nodes.forEach((node,i)=>{if(messages.children[i]!==node)messages.insertBefore(node,messages.children[i]??null);});
     for(const [id,value]of cache)if(!nodes.includes(value.node))cache.delete(id);
     provider.textContent=detail.providers.find(p=>p.id===detail.conversation.providerId)?.label??detail.conversation.providerId;
-    const local=['local','mock-ordinary'].includes(detail.conversation.providerId);textarea.placeholder=local?'Write a message…':'Ask Codex anything…';send.textContent=local?'Record message':'Send';
+    provider.dataset.providerId=detail.conversation.providerId;
+    const local=['local','mock-ordinary'].includes(detail.conversation.providerId);textarea.placeholder=local?'Write a message…':'Ask Codex anything…';setConversationControlLabel(send,local?'Record message':'Send');
     provider.title=detail.providers.find(p=>p.id===detail.conversation.providerId)?.reason??(local?'Local recording · no model execution':'Native approval is required before a provider turn');
     capabilityNote.textContent=detail.providers.find(p=>p.id===detail.conversation.providerId)?.reason??(local?'Local recording · no model responses':'Each send requires native approval.');
     const attached=detail.shares.filter(s=>s.attached&&s.status==='current').length;contextNote.textContent=attached?`${attached} source excerpt${attached===1?'':'s'} attached for send review. Attachment is not proof of model supply.`:'';
     const before=el('button','Earlier messages'),after=el('button','Later messages');before.type=after.type='button';before.disabled=detail.messages.offset===0;after.disabled=!detail.messages.hasMore;
+    decorateConversationControl(before,{identity:'previous'});decorateConversationControl(after,{identity:'next'});paging.dataset.cpGroup='transcript-navigation';
     before.addEventListener('click',()=>{offset=Math.max(0,detail.messages.offset-50);void refresh().catch(error=>report(errorText(error)));});after.addEventListener('click',()=>{offset=detail.messages.offset+50;void refresh().catch(error=>report(errorText(error)));});
     paging.replaceChildren(before,el('span',`${detail.messages.total?detail.messages.offset+1:0}–${detail.messages.offset+detail.messages.items.length} of ${detail.messages.total}`),after);paging.hidden=detail.messages.total<=detail.messages.limit;
     renderDraft();options.onDetail?.(detail);
@@ -219,7 +249,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   // The send RPC can remain pending through the entire native provider turn. Draft durability
   // must be independent so a pane can close and the host can offer interruption on quit.
   const flush=async()=>{await session.flush();viewState();};
-  return {ready,refresh,focusComposer:()=>textarea.focus(),flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
+  return {ready,refresh,focusComposer:()=>textarea.focus(),setPresentation(mode){if(mode!=='workspace'&&mode!=='focused')throw new Error('invalid_chat_presentation');if(disposed)return;const scroll=messages.scrollTop;presentation=mode;resize();messages.scrollTop=scroll;},flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
     if(disposed)return;await flush();disposed=true;generation++;unsubscribeDraft();unsubscribeExecution?.();resizeObserver?.disconnect();viewState();root.remove();
     if(!options.draftSession){
       if(sendTask){void sendTask.then(()=>session.dispose(),()=>session.dispose()).catch(()=>{/* Existing durable recovery is untouched; never overwrite or replay a conflict. */});}
