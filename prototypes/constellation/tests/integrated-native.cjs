@@ -312,6 +312,17 @@ exports.verify = async ({
     const before = await snapshot(),
       old = before.blocks.find((b) => b.id === id),
       p = await cardPoint(id, edge);
+    assert.ok(Number.isSafeInteger(old?.version), "canonical gesture target has a revision");
+    receipt.lastGesture = {
+      blockId: id,
+      edge: edge ?? null,
+      before: old,
+      startingLayoutVersion: before.layoutVersion,
+      point: p,
+      dx,
+      dy,
+      at: new Date().toISOString(),
+    };
     for (const type of ["mouseMove", "mouseDown"])
       win.webContents.sendInputEvent({
         type,
@@ -337,10 +348,12 @@ exports.verify = async ({
       clickCount: 1,
     });
     await wait(
-      `window.__aerynth.application().layoutVersion>${before.layoutVersion}`,
+      `(()=>{const s=window.__aerynth.application(),b=s.blocks.find(b=>b.id===${JSON.stringify(id)});return s.layoutVersion>${before.layoutVersion}&&b?.version>${old.version}&&(${edge ? `b.width!==${old.width}||b.height!==${old.height}` : `b.x!==${old.x}||b.y!==${old.y}`})})()`,
     );
     const after = await snapshot(),
       moved = after.blocks.find((b) => b.id === id);
+    receipt.lastGesture.after = moved;
+    receipt.lastGesture.endingLayoutVersion = after.layoutVersion;
     assert.ok(
       edge
         ? moved.width !== old.width || moved.height !== old.height
@@ -1133,6 +1146,16 @@ exports.verify = async ({
     receipt.passed = true;
   } catch (error) {
     receipt.error = error.stack;
+    if (receipt.lastGesture)
+      try {
+        const current = await snapshot();
+        receipt.lastGesture.observedAfterFailure = current.blocks.find(
+          (b) => b.id === receipt.lastGesture.blockId,
+        );
+        receipt.lastGesture.observedLayoutVersion = current.layoutVersion;
+      } catch (gestureError) {
+        receipt.lastGesture.observationError = String(gestureError.message);
+      }
     // Preserve the actual failed form before shutdown; do not retry or change it.
     try {
       receipt.failureDiagnostics = {
