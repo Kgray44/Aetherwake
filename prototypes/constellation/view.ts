@@ -90,7 +90,7 @@ export function mountConstellation(
   field.setAttribute("role", "region");
   field.setAttribute(
     "aria-label",
-    "Spatial overview. Drag empty space or use arrow keys to pan. Plus and minus zoom. Escape stops camera.",
+    "Spatial overview. Drag to orbit; Shift-drag or arrow keys pan. Alt-drag moves and pins a body. Plus and minus zoom. Escape stops camera.",
   );
   const world = el("div", "", "aw-spatial-world"),
     lines = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -186,7 +186,6 @@ export function mountConstellation(
     button("Orbit up", () => spatial.orbit(0, -60)),
     button("Orbit down", () => spatial.orbit(0, 60)),
     button("Undo position", () => spatial.undoPosition()),
-    button("Arrange", () => graph.arrange()),
     button("3D / List", () => {
       spatial.presentation =
         spatial.presentation === "spatial" ? "list" : "spatial";

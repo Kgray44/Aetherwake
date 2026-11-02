@@ -575,6 +575,60 @@ test("a visible scene object can be archived or detached without stale picking/c
   layer.dispose();
 });
 
+test("a canonical refresh changes a cached connection's provenance and removes revoked edges", () => {
+  const { c, navigation } = setup(),
+    layer = new ConstellationScene(c, navigation, () => ({}));
+  layer.update(1440, 900);
+  const line = () =>
+    layer.scene.children
+      .flatMap((group) => group.children)
+      .find((o) => o.userData.edge === "edge1");
+  assert.equal(line().material.type, "LineBasicMaterial");
+  const next = fixture();
+  next.relationships[0].provenance = "inferred";
+  c.update(next);
+  layer.update(1440, 900);
+  assert.equal(line().material.type, "LineDashedMaterial");
+  next.resources[0].visible = false;
+  c.update(next);
+  layer.update(1440, 900);
+  assert.equal(line(), undefined);
+  layer.dispose();
+  c.dispose();
+});
+
+test("a distant culled moon remains searchable and becomes visible when fitted", async () => {
+  const { c, motion, navigation: n } = setup(),
+    layer = new ConstellationScene(c, n, () => ({}));
+  await n.place("resource:b0", { x: 50000, y: 400, z: 50000 });
+  layer.update(1440, 900);
+  assert.equal(layer.objects.has("resource:b0"), false);
+  assert.ok(c.search("Synthetic 0").some((node) => node.key === "resource:b0"));
+  c.select("resource:b0");
+  n.fit();
+  settle(motion);
+  layer.update(1440, 900);
+  assert.equal(layer.objects.has("resource:b0"), true);
+  layer.dispose();
+  c.dispose();
+});
+
+test("scope changes refresh the rendered bodies even with an identical camera pose", async () => {
+  const { c, navigation: n } = setup(),
+    layer = new ConstellationScene(c, n, () => ({}));
+  layer.update(1440, 900);
+  assert.ok(
+    [...layer.objects.keys()].some((key) => key.startsWith("resource:")),
+  );
+  await c.go({ kind: "universe" }, undefined, n.camera);
+  layer.update(1440, 900);
+  assert.ok(
+    [...layer.objects.keys()].every((key) => key.startsWith("project:")),
+  );
+  layer.dispose();
+  c.dispose();
+});
+
 test("small project and universe views retain discoverable labels for every visible semantic anchor", async () => {
   const s = fixture(2);
   s.projects.push({ id: "second", title: "Second project" });

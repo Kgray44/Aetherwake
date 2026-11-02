@@ -37,11 +37,11 @@ export class ConstellationScene implements SpatialRenderLayer {
   private candidates: Node[] = [];
   private shown: Node[] = [];
   private dataNodes: Map<string, Node> | null = null;
-  private resourceKinds = new Map<string, string>();
+  private edgeData: SpatialEdge[] = [];
+  private candidateScope = "";
   private linkKey = "";
   private lost = false;
   private disposed = false;
-  private lastPositions = "";
   private preparedKey = "";
   private labelOffsets = new Map<string, { x: number; y: number }>();
   selectedEdge: string | null = null;
@@ -128,6 +128,9 @@ export class ConstellationScene implements SpatialRenderLayer {
   }
   project(key: string, width: number, height: number) {
     this.configure(width, height);
+    return this.projectPrepared(key, width, height);
+  }
+  private projectPrepared(key: string, width: number, height: number) {
     const p = this.navigation.position(key),
       v = new THREE.Vector3(p.x, p.y, p.z).project(this.camera);
     return {
@@ -154,6 +157,7 @@ export class ConstellationScene implements SpatialRenderLayer {
       width,
       height,
       pose,
+      this.controller.location,
       this.controller.selected,
       this.selectedEdge,
       this.controller.policy.tier,
@@ -167,12 +171,18 @@ export class ConstellationScene implements SpatialRenderLayer {
     this.preparedKey = preparedKey;
     if (this.dataNodes !== this.controller.nodes) {
       this.dataNodes = this.controller.nodes;
-      this.resourceKinds = new Map(
-        this.controller.snapshot.resources.map((r) => [r.id, r.kind]),
-      );
+      this.edgeData = edges(this.controller);
+      this.candidateScope = "";
       this.linkKey = "";
     }
-    this.candidates = this.navigation.candidateNodes();
+    const scope = JSON.stringify([
+      this.controller.location,
+      this.navigation.neighborhood,
+    ]);
+    if (this.candidateScope !== scope) {
+      this.candidateScope = scope;
+      this.candidates = this.navigation.candidateNodes();
+    }
     const frustum = new THREE.Frustum().setFromProjectionMatrix(
       new THREE.Matrix4().multiplyMatrices(
         this.camera.projectionMatrix,
@@ -186,15 +196,24 @@ export class ConstellationScene implements SpatialRenderLayer {
           ? 160
           : 280;
     const target = this.navigation.camera.target;
+    const sphere = new THREE.Sphere();
+    const resourceRangeSquared = Math.max(1800, pose.distance * 2) ** 2;
     this.shown = this.candidates
       .filter((n) => {
         const p = this.navigation.position(n.key);
-        return frustum.intersectsSphere(
-          new THREE.Sphere(
-            new THREE.Vector3(p.x, p.y, p.z),
-            n.kind === "project" ? 260 : n.kind === "workspace" ? 100 : 50,
-          ),
-        );
+        if (
+          n.kind === "resource" &&
+          n.key !== this.controller.selected &&
+          (p.x - target.x) ** 2 +
+            (p.y - target.y) ** 2 +
+            (p.z - target.z) ** 2 >
+            resourceRangeSquared
+        )
+          return false;
+        sphere.center.set(p.x, p.y, p.z);
+        sphere.radius =
+          n.kind === "project" ? 260 : n.kind === "workspace" ? 100 : 50;
+        return frustum.intersectsSphere(sphere);
       })
       .sort((a, b) =>
         a.key === this.controller.selected
@@ -301,17 +320,11 @@ export class ConstellationScene implements SpatialRenderLayer {
         return `${n.key}:${p.x},${p.y},${p.z}`;
       })
       .join("|");
-    const edgeData = edges(this.controller),
-      edgeKey =
-        positions +
-        this.controller.selected +
-        this.selectedEdge +
-        edgeData.map((e) => e.id).join("|");
+    const edgeKey = positions + this.controller.selected + this.selectedEdge;
     if (edgeKey !== this.linkKey) {
       this.linkKey = edgeKey;
-      this.rebuildLinks(edgeData);
+      this.rebuildLinks(this.edgeData);
     }
-    this.lastPositions = positions;
     this.scene.updateMatrixWorld(true);
     this.diagnostics.nodes = this.shown.length;
     this.diagnostics.culled = this.candidates.length - this.shown.length;
@@ -404,7 +417,7 @@ export class ConstellationScene implements SpatialRenderLayer {
     const accepted: ProjectedNode[] = [];
     const max = this.controller.policy.tier === "efficient" ? 16 : 30;
     for (const n of this.shown) {
-      const p = this.project(n.key, width, height);
+      const p = this.projectPrepared(n.key, width, height);
       if (p.depth < -1 || p.depth > 1) continue;
       const essential =
         n.kind !== "resource" || n.key === this.controller.selected;
