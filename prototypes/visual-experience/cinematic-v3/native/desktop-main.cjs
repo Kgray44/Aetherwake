@@ -71,6 +71,7 @@ const source = {
   ),
 };
 const verify =
+  process.argv.includes("--integration-workspace-views") ||
   process.argv.includes("--integration-product-ui") ||
   process.argv.includes("--integration-visual-smoke") ||
   process.argv.includes("--integration-verify") ||
@@ -456,6 +457,12 @@ app.whenReady().then(async () => {
   }, 240000);
   reserveTimer.unref();
   if (verify) {
+    if (process.argv.includes("--integration-workspace-views")) {
+      await require("../../../block-library/tests/workspace-native.cjs").verify({
+        win, app, privateRoot, source, moduleStarted, startupErrors,
+      });
+      return;
+    }
     if (process.argv.includes("--integration-product-ui")) {
       await require("./integration-product-ui.cjs").verify({
         win,
