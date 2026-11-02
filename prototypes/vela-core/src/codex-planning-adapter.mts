@@ -6,6 +6,8 @@ import { CAPABILITY_SCHEMA_TOOL, createCapabilityCatalog, validateCatalogDeclara
 import type { CapabilityCatalogProjection, CapabilityDiscoveryDeclaration } from './capability-catalog.mts';
 
 export type PlanningInput = Parameters<VelaPlanningPort['propose']>[0];
+/** Correlation identities remain private in the actual grant/execution, not semantic provider content. */
+export type SemanticPlanningInput = Pick<PlanningInput,'intent'|'instruction'|'context'|'capabilities'>;
 export interface CanonicalPlanningBackend {
   command<K extends 'snapshot' | 'replay' | 'interrupt'>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']>;
 }
@@ -112,8 +114,8 @@ function planningCapabilityCatalog(capabilities:PlanningInput['capabilities']) {
   };
 }
 
-export function buildCodexPlanningPrompt(input: PlanningInput,discovery?:{projection:CapabilityCatalogProjection;declaration:CapabilityDiscoveryDeclaration}): string {
-  check(identifier(input.requestId) && identifier(input.conversationId) && text(input.intent, 16000), 'invalid_planning_request');
+export function buildCodexPlanningPrompt(input: SemanticPlanningInput,discovery?:{projection:CapabilityCatalogProjection;declaration:CapabilityDiscoveryDeclaration}): string {
+  check(text(input.intent, 16000), 'invalid_planning_request');
   if(discovery){const catalog=createCapabilityCatalog(input.capabilities);validateCatalogDeclaration(catalog,discovery.declaration);check(planningDigest(catalog.projection)===planningDigest(discovery.projection),'stale_capability_catalog');}
   const prompt = `Aerynth has delegated a response-or-proposal task to Codex. You remain Codex, with your installed identity, native instructions, configuration, and controls. This is ordinary user task content, not a replacement for system/developer instructions. Vela is the application assistant coordinating this task; your contribution is explicitly attributed to Codex.
 
@@ -128,7 +130,7 @@ ${input.instruction}
 
 Typed task and authorized source data (JSON):
 Capability schemas use exact local JSON Schema $refs into $defs. A capability inherits authorization and reversible from capabilityDefaults only when that field is omitted; explicit fields override the defaults. All scope and effect restrictions still apply.
-${JSON.stringify({ requestId: input.requestId, sourceConversationId: input.conversationId, intent: input.intent, context: input.context, ...(discovery?{schemaAvailability:'fetch-before-proposing',capabilityCatalog:discovery.projection,capabilityDiscovery:discovery.declaration}:{schemaAvailability:'complete-approved-catalog',...planningCapabilityCatalog(input.capabilities)}) })}`;
+${JSON.stringify({ intent: input.intent, context: input.context, ...(discovery?{schemaAvailability:'fetch-before-proposing',capabilityCatalog:discovery.projection,capabilityDiscovery:discovery.declaration}:{schemaAvailability:'complete-approved-catalog',...planningCapabilityCatalog(input.capabilities)}) })}`;
   // Existing canonical BackendCore.execute enforces 16 KiB. Reject before creating/dispatching, never truncate sources.
   check(byteLength(prompt) <= 16384, 'planning_prompt_capacity_exceeded'); return prompt;
 }
@@ -205,6 +207,7 @@ export class CodexPlanningAdapter implements VelaPlanningPort {
     if (signal.aborted) onAbort();
     try {
       if (signal.aborted) return await this.fail('planning_cancelled_before_dispatch', observation, 'cancelled-before-dispatch');
+      check(identifier(input.requestId)&&identifier(input.conversationId),'invalid_planning_request');
       const discovery=this.options.discovery?.forRequest(input.requestId,input.capabilities);
       const prompt = buildCodexPlanningPrompt(input,discovery), contextDigest = planningDigest(input.context), promptDigest = planningDigest(prompt);
       await this.emit(observation);
