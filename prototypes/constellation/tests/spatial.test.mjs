@@ -918,12 +918,12 @@ test("a canonical refresh changes a cached connection's provenance and removes r
     layer.scene.children
       .flatMap((group) => group.children)
       .find((o) => o.userData.edge === "edge1");
-  assert.equal(line().material.type, "LineBasicMaterial");
+  assert.equal(line().material.dashed, false);
   const next = fixture(2);
   next.relationships[0].provenance = "inferred";
   c.update(next);
   layer.update(1440, 900);
-  assert.equal(line().material.type, "LineDashedMaterial");
+  assert.equal(line().material.dashed, true);
   next.resources[0].visible = false;
   c.update(next);
   layer.update(1440, 900);

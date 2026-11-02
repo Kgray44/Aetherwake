@@ -14,6 +14,7 @@ import {
   setPlanetInstance,
 } from "./planets.ts";
 import { BODY_MAX_SCALE } from "./body-metrics.ts";
+import { RelationshipFilament } from "./relationship-filaments.ts";
 
 export type ProjectedNode = {
   node: Node;
@@ -47,7 +48,7 @@ export class ConstellationScene implements SpatialRenderLayer {
   };
   private materials = new Set<THREE.Material>();
   private links = new THREE.Group();
-  private lineObjects: THREE.Line[] = [];
+  private lineObjects: RelationshipFilament[] = [];
   private raycaster = new THREE.Raycaster();
   private candidates: Node[] = [];
   private shown: Node[] = [];
@@ -76,6 +77,8 @@ export class ConstellationScene implements SpatialRenderLayer {
   private resourceKeys = new Map<string, string[]>();
   private relatedKeys = new Set<string>();
   private linkKey = "";
+  private linkCandidatesKey = "";
+  private scopedEdges: { edge: SpatialEdge; a: Node; b: Node }[] = [];
   private lost = false;
   private disposed = false;
   private preparedKey = "";
@@ -133,6 +136,7 @@ export class ConstellationScene implements SpatialRenderLayer {
     navigation.setViewport(rect.width, rect.height);
     this.scene.add(this.links);
     this.raycaster.params.Line = { threshold: 12 };
+    this.raycaster.params.Line2 = { threshold: 4 };
     this.unsubscribe = controller.subscribe(() => this.observeGraph());
   }
   get active() {
@@ -337,6 +341,7 @@ export class ConstellationScene implements SpatialRenderLayer {
       this.orderKey = "";
       this.orderTarget = undefined;
       this.linkKey = "";
+      this.linkCandidatesKey = "";
       this.distantKey = "";
       for (const key of this.appearances.keys())
         if (!this.controller.nodes.has(key)) this.appearances.delete(key);
@@ -578,6 +583,8 @@ export class ConstellationScene implements SpatialRenderLayer {
       this.linkKey = edgeKey;
       this.rebuildLinks(visibleEdges);
     }
+    for (const line of this.lineObjects)
+      line.updateViewport(this.camera, width, height);
     this.scene.updateMatrixWorld(true);
     this.diagnostics.nodes = this.shown.length;
     this.diagnostics.detailedBodies = detailed.length;
@@ -679,37 +686,56 @@ export class ConstellationScene implements SpatialRenderLayer {
     this.distantPicker = undefined;
   }
   private visibleEdges() {
+    const scopeKey = JSON.stringify([
+      this.candidateScope,
+      this.controller.selected,
+      this.selectedEdge,
+    ]);
+    if (scopeKey === this.linkCandidatesKey) return this.scopedEdges;
     const result: { edge: SpatialEdge; a: Node; b: Node }[] = [],
-      selected = this.controller.nodes.get(this.controller.selected ?? "");
+      selected = this.controller.nodes.get(this.controller.selected ?? ""),
+      inScope = new Set(this.candidates.map((node) => node.key));
     const resolve = (key: string | undefined, id: string) => {
-      const visible =
+      const candidate =
         key ??
-        this.resourceKeys.get(id)?.find((key) => this.visibleKeys.has(key));
-      return visible && this.visibleKeys.has(visible)
-        ? this.controller.nodes.get(visible)
+        (selected?.kind === "resource" &&
+        selected.id === id &&
+        inScope.has(selected.key)
+          ? selected.key
+          : undefined) ??
+        this.resourceKeys.get(id)?.find((key) => inScope.has(key));
+      return candidate && inScope.has(candidate)
+        ? this.controller.nodes.get(candidate)
         : undefined;
     };
     for (const edge of this.edgeData) {
       const a = resolve(edge.sourceKey, edge.sourceId),
         b = resolve(edge.targetKey, edge.targetId);
-      if (!a || !b) continue;
-      if (
-        selected?.kind === "resource" &&
-        selected.id !== a.id &&
-        selected.id !== b.id &&
-        edge.id !== this.selectedEdge
-      )
-        continue;
+      if (!a?.available || !b?.available) continue;
       result.push({ edge, a, b });
-      if (result.length >= 40) break;
     }
-    return result;
+    // Scope/explicit selection determine the bounded context, never camera
+    // angle, body frustum, distance, or detail tier. An off-screen endpoint can
+    // still have an on-screen arc; GPU clipping handles that curve correctly.
+    const priority = ({ edge, a, b }: (typeof result)[number]) =>
+      edge.id === this.selectedEdge
+        ? 0
+        : selected && (a.key === selected.key || b.key === selected.key)
+          ? 1
+          : edge.kind === "project_membership"
+            ? 2
+            : edge.id.startsWith("membership:")
+              ? 4
+              : 3;
+    this.linkCandidatesKey = scopeKey;
+    return (this.scopedEdges = result
+      .sort((a, b) => priority(a) - priority(b))
+      .slice(0, 40));
   }
   private rebuildLinks(all: { edge: SpatialEdge; a: Node; b: Node }[]) {
     for (const child of [...this.links.children]) {
-      if (child instanceof THREE.Line) {
-        child.geometry.dispose();
-        (child.material as THREE.Material).dispose();
+      if (child instanceof RelationshipFilament) {
+        child.dispose();
       } else if (child instanceof THREE.Mesh) {
         (child.material as THREE.Material).dispose();
       }
@@ -724,9 +750,6 @@ export class ConstellationScene implements SpatialRenderLayer {
         middle = start.clone().lerp(end, 0.5);
       middle.y += Math.min(150, start.distanceTo(end) * 0.16) + 40;
       const curve = new THREE.QuadraticBezierCurve3(start, middle, end),
-        geometry = new THREE.BufferGeometry().setFromPoints(
-          curve.getPoints(32),
-        ),
         color =
           edge.id === this.selectedEdge
             ? 0xf0d9ff
@@ -736,23 +759,12 @@ export class ConstellationScene implements SpatialRenderLayer {
                   edge.kind.includes("branch")
                 ? 0xbaa0e0
                 : 0x9189b8;
-      const material =
-        edge.provenance === "inferred"
-          ? new THREE.LineDashedMaterial({
-              color,
-              dashSize: 12,
-              gapSize: 10,
-              transparent: true,
-              opacity: 0.7,
-            })
-          : new THREE.LineBasicMaterial({
-              color,
-              transparent: true,
-              opacity: edge.id.startsWith("membership:") ? 0.17 : 0.75,
-            });
-      const line = new THREE.Line(geometry, material);
-      line.computeLineDistances();
-      line.userData.edge = edge.id;
+      const line = new RelationshipFilament(
+        edge,
+        curve,
+        color,
+        edge.id === this.selectedEdge,
+      );
       this.links.add(line);
       this.lineObjects.push(line);
       const point = curve.getPoint(0.83),
@@ -1041,9 +1053,8 @@ export class ConstellationScene implements SpatialRenderLayer {
     this.appearances.clear();
     for (const g of Object.values(this.primitives)) g.dispose();
     for (const o of this.links.children)
-      if (o instanceof THREE.Line) {
-        o.geometry.dispose();
-        (o.material as THREE.Material).dispose();
+      if (o instanceof RelationshipFilament) {
+        o.dispose();
       } else if (o instanceof THREE.Mesh)
         (o.material as THREE.Material).dispose();
     this.links.clear();
