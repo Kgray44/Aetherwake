@@ -18,6 +18,10 @@ const REQUIRED_MATRIX = Object.freeze([
 const LIMITS = Object.freeze({
   samples: 40,
   universeSamples: 40,
+  tailSamples: 16,
+  tailPauseMs: 250,
+  markersPerPhase: 96,
+  intervalValues: 50000,
   presentationCaptures: 2,
   screenshots: 5,
   samplePauseMs: 250,
@@ -29,6 +33,226 @@ const LIMITS = Object.freeze({
   toolBytes: 64 * 1024 * 1024,
 });
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Supplemental diagnostics, not a responsiveness acceptance threshold. Every
+ * finite value, including long gaps and zeros, participates in this summary. */
+function intervalDistribution(values) {
+  if (!Array.isArray(values)) return null;
+  assert(values.length <= LIMITS.intervalValues, "interval diagnostic bound");
+  const a = values.filter(Number.isFinite).sort((a, b) => a - b);
+  const at = (fraction) => a[Math.floor(a.length * fraction)] ?? null;
+  return {
+    count: a.length,
+    invalidValues: values.length - a.length,
+    p50: at(0.5),
+    p95: at(0.95),
+    p99: at(0.99),
+    p999: at(0.999),
+    min: a[0] ?? null,
+    max: a.at(-1) ?? null,
+    mean: a.length ? a.reduce((sum, n) => sum + n, 0) / a.length : null,
+    countsGreaterThanMs: Object.fromEntries(
+      [16.667, 33.333, 50, 100, 250, 500].map((threshold) => [
+        String(threshold),
+        a.filter((value) => value > threshold).length,
+      ]),
+    ),
+  };
+}
+
+/** Read-only supplement to the shared parser. Never merges swap chains or
+ * removes a long interval. Raw-row accounting includes dropped/invalid rows. */
+function presentationTailStatistics(csv, targetPid) {
+  assert(
+    Number.isInteger(targetPid) && targetPid > 0,
+    "target GPU PID required",
+  );
+  assert(
+    Buffer.byteLength(csv) <= LIMITS.csvBytes,
+    "CSV diagnostic byte bound",
+  );
+  const lines = csv
+    .replace(/^\uFEFF/, "")
+    .trim()
+    .split(/\r?\n/);
+  assert(lines.length <= LIMITS.intervalValues + 1, "CSV diagnostic row bound");
+  const cells = (line) => {
+    const result = [];
+    let value = "",
+      quoted = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') {
+        if (quoted && line[i + 1] === '"') {
+          value += '"';
+          i++;
+        } else quoted = !quoted;
+      } else if (c === "," && !quoted) {
+        result.push(value);
+        value = "";
+      } else value += c;
+    }
+    assert(!quoted, "unterminated CSV diagnostic cell");
+    result.push(value);
+    return result;
+  };
+  const header = cells(lines.shift()).map((name) => name.trim().toLowerCase());
+  assert.equal(new Set(header).size, header.length, "duplicate CSV columns");
+  for (const name of [
+    "processid",
+    "swapchainaddress",
+    "dropped",
+    "msbetweendisplaychange",
+  ])
+    assert(header.includes(name), "missing CSV diagnostic column " + name);
+  const groups = new Map();
+  const number = (value) =>
+    typeof value === "string" && value.trim() ? Number(value) : NaN;
+  let targetRows = 0;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const values = cells(line);
+    assert.equal(values.length, header.length, "CSV diagnostic column count");
+    const row = Object.fromEntries(
+      values.map((value, i) => [header[i], value]),
+    );
+    if (number(row.processid) !== targetPid) continue;
+    targetRows++;
+    let group = groups.get(row.swapchainaddress);
+    if (!group) {
+      group = {
+        rows: 0,
+        droppedRows: 0,
+        unknownDroppedRows: 0,
+        display: [],
+        displayed: [],
+        presents: [],
+      };
+      groups.set(row.swapchainaddress, group);
+    }
+    group.rows++;
+    group.droppedRows += row.dropped === "1" ? 1 : 0;
+    group.unknownDroppedRows += ["0", "1"].includes(row.dropped) ? 0 : 1;
+    const interval = number(row.msbetweendisplaychange);
+    group.display.push(interval);
+    group.presents.push(number(row.msbetweenpresents));
+    if (row.dropped === "0" && interval > 0) group.displayed.push(interval);
+  }
+  return {
+    meaning:
+      "Unfiltered target-row diagnostics; displayed intervals retain every positive non-dropped display event, including outliers. Threshold counts are observations, not acceptance limits.",
+    targetRows,
+    swapchains: [...groups].map(([key, group]) => ({
+      id: createHash("sha256").update(key).digest("hex").slice(0, 12),
+      rows: group.rows,
+      droppedRows: group.droppedRows,
+      unknownDroppedRows: group.unknownDroppedRows,
+      allReportedDisplayIntervalsMs: intervalDistribution(group.display),
+      displayedIntervalsMs: intervalDistribution(group.displayed),
+      betweenPresentsMs: intervalDistribution(group.presents),
+    })),
+  };
+}
+
+function callbackWindowStatistics(metrics) {
+  const number = (value) => (Number.isFinite(value) ? value : null);
+  return {
+    callbacks: number(metrics?.callbacks),
+    draws: number(metrics?.draws),
+    policy:
+      typeof metrics?.policy === "string" ? metrics.policy.slice(0, 160) : null,
+    callbackIntervalsMs: intervalDistribution(metrics?.intervals),
+    drawIntervalsMs: intervalDistribution(metrics?.drawIntervals),
+    intervalBufferSaturated: Array.isArray(metrics?.intervals)
+      ? metrics.intervals.length >= 18000
+      : null,
+    drawBufferSaturated: Array.isArray(metrics?.drawIntervals)
+      ? metrics.drawIntervals.length >= 18000
+      : null,
+    observedRendererErrors: Array.isArray(metrics?.errors)
+      ? metrics.errors.slice(-16).map((error) => String(error).slice(0, 1024))
+      : null,
+  };
+}
+
+function hostClock(now = Date.now, monotonic = () => process.hrtime.bigint()) {
+  return {
+    utc: new Date(now()).toISOString(),
+    monotonicNs: String(monotonic()),
+  };
+}
+
+function nativeMarker(win, label) {
+  return {
+    label,
+    ...hostClock(),
+    native: {
+      destroyed: win.isDestroyed(),
+      visible: win.isVisible(),
+      focused: win.isFocused(),
+      minimized: win.isMinimized(),
+      contentsDestroyed: win.webContents.isDestroyed(),
+    },
+  };
+}
+
+/** Standalone browser read. No focus, input, wake, snapshot or mutation. */
+function browserTimingState() {
+  return {
+    visibilityState: document.visibilityState,
+    hidden: document.hidden,
+    focused: document.hasFocus(),
+    timeOriginMs: performance.timeOrigin,
+    nowMs: performance.now(),
+  };
+}
+
+/** No-input observations after the original loop. Stop reading when capture
+ * closure is observed; a read crossing closure is explicitly identified. */
+async function collectPresentationTail({
+  closed,
+  observe,
+  ownedPause,
+  guard,
+  mark,
+  record = async () => {},
+  deadlineAt,
+  now = Date.now,
+  elapsedNow = () => performance.now(),
+}) {
+  const result = {
+    kind: "no-input measurement tail",
+    samples: [],
+    samplePauseMs: LIMITS.tailPauseMs,
+    maxSamples: LIMITS.tailSamples,
+  };
+  let nextRead = elapsedNow() + LIMITS.tailPauseMs;
+  while (!closed() && now() < deadlineAt) {
+    guard();
+    if (
+      result.samples.length < LIMITS.tailSamples &&
+      elapsedNow() >= nextRead
+    ) {
+      const requested = mark("tail-read-start");
+      const observation = await observe();
+      guard();
+      const completed = mark("tail-read-end");
+      const sample = {
+        requested,
+        completed,
+        captureClosedAtReadCompletion: closed(),
+        observation,
+      };
+      result.samples.push(sample);
+      await record(sample, result.samples.length - 1);
+      nextRead = elapsedNow() + LIMITS.tailPauseMs;
+    } else await ownedPause(Math.min(50, Math.max(1, deadlineAt - now())));
+  }
+  guard();
+  result.captureClosedObserved = closed();
+  result.sampleLimitReached = result.samples.length === LIMITS.tailSamples;
+  return result;
+}
 
 function verificationDeadline(argv, moduleStarted, now = Date.now()) {
   const args = argv.filter((arg) =>
@@ -303,6 +527,7 @@ function startPresentationCapture(
     requestedSeconds: 12,
     targetGpuPid: gpuPid,
     phase,
+    spawnRequestedClock: hostClock(now),
   };
   const child = spawnChild(
     tool,
@@ -323,6 +548,7 @@ function startPresentationCapture(
   );
   child.once("spawn", () => {
     timing.spawnedAt = new Date(now()).toISOString();
+    timing.spawnedClock = hostClock(now);
   });
   const log = [];
   let logBytes = 0;
@@ -344,6 +570,7 @@ function startPresentationCapture(
         endedAt: new Date(now()).toISOString(),
       };
       timing.endedAt = capture.result.endedAt;
+      timing.endedClock = hostClock(now);
       resolve(capture.result);
     };
     child.once("error", (error) =>
@@ -467,6 +694,13 @@ exports.qualifyPerformanceCase = qualifyPerformanceCase;
 exports.startPresentationCapture = startPresentationCapture;
 exports.benchmarkControls = benchmarkControls;
 exports.assertBodyCounters = assertBodyCounters;
+exports.intervalDistribution = intervalDistribution;
+exports.presentationTailStatistics = presentationTailStatistics;
+exports.callbackWindowStatistics = callbackWindowStatistics;
+exports.hostClock = hostClock;
+exports.nativeMarker = nativeMarker;
+exports.browserTimingState = browserTimingState;
+exports.collectPresentationTail = collectPresentationTail;
 
 exports.verify = async ({
   win,
@@ -484,6 +718,7 @@ exports.verify = async ({
   const helperStarted = Date.now();
   const receipt = {
     contract: "aerynth.spatial-scale@3",
+    diagnosticsVersion: 1,
     source,
     syntheticData: true,
     passed: false,
@@ -506,6 +741,8 @@ exports.verify = async ({
       "Other applications and background hardware load were not controlled.",
       "Project and Universe use separate OS presentation windows; their samples are never merged.",
       "Universe body counts identify actual canonical stars, not the total stored resource count.",
+      "No-input tail observations and phase markers add bounded measurement overhead; they do not establish a cause for presentation gaps.",
+      "Post-capture callback statistics cover reset before tool launch through a read after capture closure, a wider window than ETW. UTC/host monotonic clocks are not exact ETW/QPC alignment.",
     ],
   };
   let present,
@@ -524,6 +761,16 @@ exports.verify = async ({
     if (budget && Date.now() >= budget.expiresAt)
       throw Error("native_spatial_deadline");
     if (ownership) assertNativeOwner(win);
+  }
+  function markPhase(target, label) {
+    guard();
+    const markers = (target.timing.diagnosticMarkers ??= []);
+    assert(markers.length < LIMITS.markersPerPhase, "phase marker bound");
+    assert(label.length <= 64, "phase marker label bound");
+    const marker = nativeMarker(win, label);
+    markers.push(marker);
+    guard();
+    return marker;
   }
   async function ownedPause(ms, ownership = true) {
     const end = Date.now() + ms;
@@ -569,6 +816,8 @@ exports.verify = async ({
   }
   async function capture(name) {
     guard();
+    const target = name.startsWith("universe") ? receipt.universe : receipt;
+    markPhase(target, "png-" + name + "-start");
     assert(
       receipt.captures.length < LIMITS.screenshots,
       "screenshot count bound",
@@ -583,6 +832,7 @@ exports.verify = async ({
       sha256: createHash("sha256").update(bytes).digest("hex"),
       at: new Date().toISOString(),
     });
+    markPhase(target, "png-" + name + "-end");
   }
   try {
     budget = verificationDeadline(process.argv, moduleStarted);
@@ -716,11 +966,15 @@ exports.verify = async ({
       child?.pid && child.exitCode === null && child.signalCode === null;
     const launchPresentation = (target, phase, currentGpu) => {
       guard();
+      markPhase(target, "capture-launch-start");
       assert(
         !present || !running(present),
         "previous owned presentation capture must finish before the next phase",
       );
-      if (!tool || !currentGpu) return null;
+      if (!tool || !currentGpu) {
+        markPhase(target, "capture-unavailable");
+        return null;
+      }
       assert(
         captureCount++ < LIMITS.presentationCaptures,
         "presentation capture count bound",
@@ -736,9 +990,21 @@ exports.verify = async ({
       presentationChildren.add(started.child);
       target.timing.presentMon = started.timing;
       target.timing.presentMon.file = path.basename(started.file);
+      markPhase(target, "capture-launch-end");
       return started;
     };
-    const finishPresentation = async (target, started) => {
+    const tailObservation = async (observePhase) => {
+      const observation = await observePhase();
+      const browser = await read("(" + browserTimingState.toString() + ")()");
+      assert(
+        browser.visibilityState === "visible" &&
+          !browser.hidden &&
+          browser.focused,
+        "tail observation lost document visibility/focus",
+      );
+      return { ...observation, browser };
+    };
+    const finishPresentation = async (target, started, observePhase) => {
       if (!started) {
         target.presentation = {
           qualified: false,
@@ -746,8 +1012,23 @@ exports.verify = async ({
         };
         return;
       }
+      markPhase(target, "capture-wait-start");
       const end = Math.min(budget.expiresAt, Date.now() + 16000);
-      while (!started.result && Date.now() < end) await ownedPause(50);
+      target.measurementTail = await collectPresentationTail({
+        closed: () => !!started.result,
+        observe: () => tailObservation(observePhase),
+        ownedPause,
+        guard,
+        mark: (label) => markPhase(target, label),
+        record: (sample, index) =>
+          progress({
+            phase: target === receipt ? "project-tail" : "universe-tail",
+            index,
+            sample,
+          }),
+        deadlineAt: end,
+      });
+      markPhase(target, "capture-wait-end");
       const result = started.result ?? {
         error: "presentation_capture_timeout",
         endedAt: new Date().toISOString(),
@@ -765,6 +1046,25 @@ exports.verify = async ({
           "owned presentation process did not stop",
         );
       }
+      markPhase(target, "capture-close-observed");
+      const callbackReadStart = markPhase(
+        target,
+        "post-capture-callback-read-start",
+      );
+      const fullMetrics = await read("window.__aerynth.snapshot().metrics");
+      const callbackReadEnd = markPhase(
+        target,
+        "post-capture-callback-read-end",
+      );
+      target.fullCaptureCallbacks = {
+        meaning:
+          "Reset before tool launch through post-closure read, including the original loop and no-input tail/measurement overhead; not an exactly aligned ETW window.",
+        resetRequestedAt: target.timing.callbackWindow.resetRequestedAt,
+        requested: callbackReadStart,
+        completed: callbackReadEnd,
+        captureClosedBeforeRead: !!started.result,
+        ...callbackWindowStatistics(fullMetrics),
+      };
       try {
         assert(
           !result.error && result.code === 0 && !result.signal,
@@ -787,6 +1087,10 @@ exports.verify = async ({
           csv.toString("utf8"),
           started.timing.targetGpuPid,
         );
+        target.presentation.tails = presentationTailStatistics(
+          csv.toString("utf8"),
+          started.timing.targetGpuPid,
+        );
       } catch (error) {
         target.presentation = { qualified: false, reason: error.message };
       }
@@ -795,11 +1099,13 @@ exports.verify = async ({
         presentFile = undefined;
       }
     };
-    const projectCapture = launchPresentation(receipt, "project", gpu);
+    markPhase(receipt, "sample-callback-reset-start");
     receipt.timing.callbackWindow = {
       resetRequestedAt: new Date().toISOString(),
     };
     await read("window.__aerynth.resetMetrics()");
+    markPhase(receipt, "sample-callback-reset-end");
+    const projectCapture = launchPresentation(receipt, "project", gpu);
     const samplingStart = await observe();
     assert(
       Number.isFinite(samplingStart.gpu.framesRendered),
@@ -839,6 +1145,7 @@ exports.verify = async ({
     }
     receipt.timing.motionSamples.endedAt = new Date().toISOString();
     receipt.timing.motionSamples.count = receipt.samples.length;
+    markPhase(receipt, "input-sample-loop-end");
     assert(
       receipt.samples.some(
         (sample) =>
@@ -857,8 +1164,10 @@ exports.verify = async ({
     receipt.foregroundThroughoutSamples = receipt.samples.every(
       (sample) => sample.focused && !sample.minimized,
     );
+    markPhase(receipt, "sample-callback-read-start");
     const metrics = await read("window.__aerynth.snapshot().metrics");
     receipt.timing.callbackWindow.readCompletedAt = new Date().toISOString();
+    markPhase(receipt, "sample-callback-read-end");
     receipt.callbackMetrics = {
       callbacks: metrics.callbacks,
       draws: metrics.draws,
@@ -893,6 +1202,7 @@ exports.verify = async ({
         Math.max(...receipt.samples.map((sample) => sample.renderer[key])),
       ]),
     );
+    markPhase(receipt, "memory-read-start");
     const memoryAt = new Date().toISOString(),
       ownMetrics = app.getAppMetrics();
     receipt.memory = {
@@ -905,9 +1215,12 @@ exports.verify = async ({
       backendBytes: scalarMemory(await call("metrics", {})),
     };
     receipt.memory.completedAt = new Date().toISOString();
+    markPhase(receipt, "memory-read-end");
     receipt.state = "sampled";
+    markPhase(receipt, "sample-checkpoint-start");
     await checkpoint();
-    await finishPresentation(receipt, projectCapture);
+    markPhase(receipt, "sample-checkpoint-end");
+    await finishPresentation(receipt, projectCapture, observe);
     if (process.argv.includes("--spatial-regression")) {
       await ownedPause(14500);
       receipt.idlePolicy = await read(
@@ -1030,6 +1343,7 @@ exports.verify = async ({
       canonicalProjectCount: seed.projectCount,
     };
     const universe = receipt.universe;
+    markPhase(universe, "navigation-start");
     receipt.state = "universe-navigating";
     await progress({ phase: receipt.state });
     await checkpoint();
@@ -1085,17 +1399,20 @@ exports.verify = async ({
       "({width:innerWidth,height:innerHeight,dpr:devicePixelRatio})",
     );
     universe.timing.navigationCompletedAt = new Date().toISOString();
+    markPhase(universe, "navigation-end");
     await capture("universe-before");
     const universeGpu = app.getAppMetrics().find((p) => p.type === "GPU");
+    markPhase(universe, "sample-callback-reset-start");
+    universe.timing.callbackWindow = {
+      resetRequestedAt: new Date().toISOString(),
+    };
+    await read("window.__aerynth.resetMetrics()");
+    markPhase(universe, "sample-callback-reset-end");
     const universeCapture = launchPresentation(
       universe,
       "universe",
       universeGpu,
     );
-    universe.timing.callbackWindow = {
-      resetRequestedAt: new Date().toISOString(),
-    };
-    await read("window.__aerynth.resetMetrics()");
     const universeStart = await observeUniverse();
     assert(
       Number.isFinite(universeStart.gpu.framesRendered),
@@ -1135,6 +1452,7 @@ exports.verify = async ({
     }
     universe.timing.motionSamples.endedAt = new Date().toISOString();
     universe.timing.motionSamples.count = universe.samples.length;
+    markPhase(universe, "input-sample-loop-end");
     assert(
       universe.samples.some(
         (sample) =>
@@ -1153,8 +1471,10 @@ exports.verify = async ({
     universe.foregroundThroughoutSamples = universe.samples.every(
       (sample) => sample.focused && !sample.minimized,
     );
+    markPhase(universe, "sample-callback-read-start");
     const universeMetrics = await read("window.__aerynth.snapshot().metrics");
     universe.timing.callbackWindow.readCompletedAt = new Date().toISOString();
+    markPhase(universe, "sample-callback-read-end");
     universe.callbackMetrics = {
       callbacks: universeMetrics.callbacks,
       draws: universeMetrics.draws,
@@ -1190,12 +1510,16 @@ exports.verify = async ({
       ),
     };
     universe.state = "sampled";
+    markPhase(universe, "sample-checkpoint-start");
     await checkpoint();
-    await finishPresentation(universe, universeCapture);
+    markPhase(universe, "sample-checkpoint-end");
+    await finishPresentation(universe, universeCapture, observeUniverse);
+    markPhase(universe, "post-capture-recenter-start");
     await nativeRecenter(win, js, guard);
     await waitOwned(
       "JSON.stringify(window.__aerynth.snapshot().spatial.camera)===JSON.stringify(window.__aerynth.snapshot().spatial.bookmark)",
     );
+    markPhase(universe, "post-capture-recenter-end");
     universe.finalObservation = await observeUniverse();
     assertUniverseFrame(universe.finalObservation, seed.projectCount, true);
     assert.deepEqual(
@@ -1205,6 +1529,7 @@ exports.verify = async ({
       [...canonicalProjectIds].sort(),
       "canonical project identities remain unchanged across Universe sampling",
     );
+    markPhase(universe, "memory-read-start");
     const universeMemory = app.getAppMetrics();
     universe.memory = {
       requestedAt: new Date().toISOString(),
@@ -1218,6 +1543,7 @@ exports.verify = async ({
       backendBytes: scalarMemory(await call("metrics", {})),
     };
     universe.memory.completedAt = new Date().toISOString();
+    markPhase(universe, "memory-read-end");
     await capture("universe-after");
     universe.state =
       universe.presentation?.qualified === true ? "completed" : "partial";

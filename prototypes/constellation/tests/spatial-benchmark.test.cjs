@@ -16,6 +16,13 @@ const {
   qualifyPerformanceCase,
   nativeRecenter,
   startPresentationCapture,
+  intervalDistribution,
+  presentationTailStatistics,
+  callbackWindowStatistics,
+  hostClock,
+  nativeMarker,
+  browserTimingState,
+  collectPresentationTail,
 } = require("../../visual-experience/cinematic-v3/native/integration-spatial-benchmark.cjs");
 
 function snapshot() {
@@ -518,4 +525,233 @@ test("Universe recenter dispatches the real Home key with the same focus/deadlin
     }),
   );
   assert.equal(b.sent.length, 0);
+});
+
+test("rare long gaps survive percentile summaries, with explicit unknown/zero accounting and no acceptance threshold", () => {
+  const values = [...Array(1803).fill(6.1), 18.17, 709.0925];
+  const result = intervalDistribution(values);
+  assert.equal(result.count, 1805);
+  assert.equal(result.p99, 6.1, "P99 alone misses this rare gap");
+  assert.equal(result.p999, 18.17);
+  assert.equal(result.max, 709.0925);
+  assert.equal(result.countsGreaterThanMs["500"], 1);
+  assert.equal(result.countsGreaterThanMs["16.667"], 2);
+  assert.deepEqual(intervalDistribution([0, NaN, Infinity]).count, 1);
+  assert.equal(intervalDistribution([0, NaN]).invalidValues, 1);
+  assert.equal(intervalDistribution([]).max, null);
+  assert.equal(intervalDistribution(undefined), null);
+  assert.throws(
+    () => intervalDistribution(Array(LIMITS.intervalValues + 1)),
+    /bound/,
+  );
+  assert.equal(
+    values.at(-1),
+    709.0925,
+    "input data is not sorted or rewritten",
+  );
+});
+
+test("OS tail diagnostics retain every owned row, rare gaps and dropped/invalid accounting without merging swapchains", () => {
+  const csv =
+    "\uFEFFApplication,ProcessID,SwapChainAddress,Dropped,msBetweenDisplayChange,msBetweenPresents\n" +
+    '"elec,tron.exe",345,A,0,6.1,6.2\n' +
+    "electron.exe,345,A,0,709.0925,717.5336\n" +
+    "electron.exe,345,A,1,0,6.1\n" +
+    "electron.exe,345,A,0,,6.1\n" +
+    "electron.exe,345,B,0,18.5,19\n" +
+    "foreign.exe,999,A,0,9000,9000\n";
+  const result = presentationTailStatistics(csv, 345);
+  assert.equal(result.targetRows, 5);
+  assert.equal(result.swapchains.length, 2);
+  const a = result.swapchains.find((s) => s.rows === 4);
+  assert.equal(a.droppedRows, 1);
+  assert.equal(a.allReportedDisplayIntervalsMs.count, 3);
+  assert.equal(a.allReportedDisplayIntervalsMs.min, 0);
+  assert.equal(a.allReportedDisplayIntervalsMs.invalidValues, 1);
+  assert.equal(a.displayedIntervalsMs.count, 2);
+  assert.equal(a.displayedIntervalsMs.max, 709.0925);
+  assert.equal(a.betweenPresentsMs.max, 717.5336);
+  assert.equal(a.displayedIntervalsMs.countsGreaterThanMs["500"], 1);
+  assert.equal(
+    result.swapchains.find((s) => s.rows === 1).displayedIntervalsMs.max,
+    18.5,
+  );
+  assert.throws(
+    () => presentationTailStatistics("missing,columns\n1,2", 345),
+    /column/,
+  );
+  assert.throws(() => presentationTailStatistics(csv, 0), /PID/);
+  assert.throws(
+    () => presentationTailStatistics("x".repeat(LIMITS.csvBytes + 1), 345),
+    /byte bound/,
+  );
+});
+
+test("post-capture callback statistics retain long tails and reveal missing/saturated source buffers", () => {
+  const stats = callbackWindowStatistics({
+    callbacks: 1805,
+    draws: 1804,
+    policy: "balanced / active",
+    intervals: [6.1, 709],
+    drawIntervals: [6.2, 710],
+    errors: [],
+  });
+  assert.equal(stats.callbackIntervalsMs.max, 709);
+  assert.equal(stats.drawIntervalsMs.max, 710);
+  assert.deepEqual(stats.observedRendererErrors, []);
+  assert.equal(stats.intervalBufferSaturated, false);
+  assert.equal(
+    callbackWindowStatistics({ intervals: Array(18000).fill(6) })
+      .intervalBufferSaturated,
+    true,
+  );
+  const absent = callbackWindowStatistics({});
+  assert.equal(absent.callbacks, null);
+  assert.equal(absent.callbackIntervalsMs, null);
+  assert.equal(absent.observedRendererErrors, null);
+});
+
+function tailFixture(closesAt = 850) {
+  let time = 0;
+  const reads = [],
+    marks = [],
+    records = [];
+  const options = {
+    closed: () => time >= closesAt,
+    observe: async () => {
+      reads.push(time);
+      return { gpu: { framesRendered: reads.length } };
+    },
+    ownedPause: async (ms) => {
+      assert(ms > 0 && ms <= 50);
+      time += ms;
+    },
+    guard: () => {},
+    mark: (label) => {
+      const marker = {
+        label,
+        utc: new Date(time).toISOString(),
+        monotonicNs: String(time * 1000000),
+      };
+      marks.push(marker);
+      return marker;
+    },
+    record: async (sample) => {
+      records.push(sample);
+    },
+    deadlineAt: 10000,
+    now: () => time,
+    elapsedNow: () => time,
+  };
+  return {
+    options,
+    reads,
+    marks,
+    records,
+    setTime: (value) => {
+      time = value;
+    },
+  };
+}
+
+test("no-input tail observations stop on capture closure, retain crossing reads and enforce the cap/spacing", async () => {
+  const normal = tailFixture();
+  const result = await collectPresentationTail(normal.options);
+  assert.deepEqual(normal.reads, [250, 500, 750]);
+  assert.equal(result.captureClosedObserved, true);
+  assert.equal(result.sampleLimitReached, false);
+  assert.equal(normal.records.length, 3);
+  const bounded = tailFixture(Infinity);
+  const capped = await collectPresentationTail(bounded.options);
+  assert.equal(capped.samples.length, 16);
+  assert.equal(capped.captureClosedObserved, false);
+  assert.equal(capped.sampleLimitReached, true);
+  assert(
+    bounded.reads.every((time, i) => !i || time - bounded.reads[i - 1] >= 250),
+  );
+  const closed = tailFixture(0);
+  assert.equal(
+    (await collectPresentationTail(closed.options)).samples.length,
+    0,
+  );
+  const crossing = tailFixture();
+  crossing.options.observe = async () => {
+    crossing.setTime(900);
+    return { observed: true };
+  };
+  const crossed = await collectPresentationTail(crossing.options);
+  assert.equal(crossed.samples.length, 1);
+  assert.equal(crossed.samples[0].captureClosedAtReadCompletion, true);
+});
+
+test("tail reads honor operator/deadline/owner guards before and after awaited observations", async () => {
+  for (const reason of ["operator_escape", "deadline", "focus_lost"]) {
+    const early = tailFixture();
+    early.options.guard = () => {
+      throw Error(reason);
+    };
+    await assert.rejects(
+      collectPresentationTail(early.options),
+      new RegExp(reason),
+    );
+    assert.equal(early.reads.length, 0);
+    const late = tailFixture();
+    let aborted = false;
+    late.options.observe = async () => {
+      aborted = true;
+      return { ignored: true };
+    };
+    late.options.guard = () => {
+      if (aborted) throw Error(reason);
+    };
+    await assert.rejects(
+      collectPresentationTail(late.options),
+      new RegExp(reason),
+    );
+    assert.equal(
+      late.records.length,
+      0,
+      "a stale read is not accepted after owner loss",
+    );
+  }
+});
+
+test("native/renderer clock and visibility markers read real state without focus, wake or input operations", () => {
+  assert.deepEqual(
+    hostClock(
+      () => 1000,
+      () => 123456789n,
+    ),
+    { utc: "1970-01-01T00:00:01.000Z", monotonicNs: "123456789" },
+  );
+  const a = owner();
+  const marker = nativeMarker(a.win, "sample-end");
+  assert.deepEqual(marker.native, {
+    destroyed: false,
+    visible: true,
+    focused: true,
+    minimized: false,
+    contentsDestroyed: false,
+  });
+  assert.equal(a.sent.length, 0);
+  a.blur();
+  assert.equal(nativeMarker(a.win, "lost-focus").native.focused, false);
+  const browser = vm.runInNewContext(
+    "(" + browserTimingState.toString() + ")()",
+    {
+      document: {
+        visibilityState: "visible",
+        hidden: false,
+        hasFocus: () => true,
+      },
+      performance: { timeOrigin: 1000, now: () => 25 },
+    },
+  );
+  assert.deepEqual(JSON.parse(JSON.stringify(browser)), {
+    visibilityState: "visible",
+    hidden: false,
+    focused: true,
+    timeOriginMs: 1000,
+    nowMs: 25,
+  });
 });
