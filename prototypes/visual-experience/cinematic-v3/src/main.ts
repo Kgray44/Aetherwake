@@ -1223,6 +1223,22 @@ function renderDOM() {
       statusMetricsDirty = false;
     }
     const obstacles = [...statusChrome];
+    const presence = (
+      application as
+        | (Application & {
+            presenceCard?: () =>
+              | { x: number; y: number; w: number; h: number }
+              | undefined;
+          })
+        | null
+    )?.presenceCard?.();
+    if (presence)
+      obstacles.push({
+        left: presence.x,
+        top: presence.y,
+        right: presence.x + presence.w,
+        bottom: presence.y + presence.h,
+      });
     if (workspaceSurfacesVisible())
       for (const entry of composite) {
         const node = elements.get(entry.id);
