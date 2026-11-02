@@ -172,6 +172,7 @@ export function mountNoteExperience(
   };
   const copyAction = (label: string, value: () => string, success: string, failure: string, enabled = () => !!value()) => {
     const button = action(label, () => { void copy(value(), success, failure); });
+    button.dataset.nativeCopyControl = 'true';
     copyButtons.set(button, enabled);
     button.disabled = !active || !options.copyText || copyPending || !enabled();
     if (!options.copyText) { button.title = 'Native copying is unavailable in this surface.'; button.setAttribute('aria-label', label + ' — native copying unavailable'); }
