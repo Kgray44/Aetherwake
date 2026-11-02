@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { WorkspaceEngine } from "../../workspace-engine/engine.mts";
+import { WorkspaceEngine, type EngineOptions } from "../../workspace-engine/engine.mts";
 import type { Command as EngineCommand } from "../../workspace-engine/contracts.mts";
 import type { WorkspaceKernel } from "../../workspace-kernel/kernel.mts";
 import type {
@@ -51,7 +51,7 @@ export class DesktopState {
     width: number;
     height: number;
   };
-  constructor(kernel: WorkspaceKernel, db: DatabaseSync) {
+  constructor(kernel: WorkspaceKernel, db: DatabaseSync, blockOptions:EngineOptions={}) {
     this.kernel = kernel;
     this.db = db;
     kernel.withTransaction(() => {
@@ -71,7 +71,7 @@ export class DesktopState {
             [1, 2, 3].includes(Number(versions[0].version)),
           "unsupported_desktop_schema",
         );
-      this.engine = new WorkspaceEngine(kernel);
+      this.engine = new WorkspaceEngine(kernel,blockOptions);
       const existing = db
         .prepare("SELECT id FROM workspaces ORDER BY created_at LIMIT 1")
         .get();
@@ -176,6 +176,10 @@ export class DesktopState {
         );
       db.exec("UPDATE desktop_schema SET version=3");
     });
+  }
+  /** Trusted in-process bridge only. Never expose the engine or callbacks through renderer IPC. */
+  nativeBlockServices():Readonly<{engine:WorkspaceEngine;navigateWorkspace(workspaceId:string):void}>{
+    return Object.freeze({engine:this.engine,navigateWorkspace:(workspaceId:string)=>{this.apply({type:'navigate',target:{kind:'workspace',workspaceId}},()=>{throw new Error('unexpected_block_bridge_conversation_creation');});}});
   }
   private engineCommand(workspaceId: string, action: Record<string, unknown>) {
     return this.engine.execute({

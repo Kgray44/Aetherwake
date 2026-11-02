@@ -28,10 +28,8 @@ import type {
 function fixture(t: any) {
   const kernel = WorkspaceKernel.open(":memory:"),
     db = kernel.withTransaction((db) => db),
-    desktop = new DesktopState(kernel, db),
-    engine = new WorkspaceEngine(kernel, {
-      allowSubjectAttachment: () => true,
-    });
+    desktop = new DesktopState(kernel, db,{allowSubjectAttachment:()=>true}),
+    engine = desktop.nativeBlockServices().engine;
   t.after(() => kernel.close());
   const revoked = new Set<string>(),
     groupCommands: TaskGroupMembershipCommand[] = [],
