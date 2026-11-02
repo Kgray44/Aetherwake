@@ -62,6 +62,11 @@ import { createNotesClient } from "./notes-client";
 import { NoteSession } from "../../../block-library/note-session.ts";
 import { mountNoteExperience } from "../../../block-library/note-view.ts";
 import "../../../block-library/note-view.css";
+import {
+  unavailableBlock,
+  showUnavailableBlock,
+} from "../../../block-library/availability-view.ts";
+import "../../../block-library/availability-view.css";
 import { mountSubjectExperience } from "../../../block-library/subject-view.ts";
 import "../../../block-library/subject-view.css";
 import {
@@ -212,7 +217,8 @@ export function installApplication(hooks: Hooks) {
   >();
   const blockSettings = new Map<string, BlockInstanceSettings>();
   const settingsReads = new Map<string, Promise<void>>();
-  const settingsFailures = new Set<string>();
+  const settingsFailures = new Map<string, unknown>();
+  const unavailableBlocks = new Set<string>();
   let cardConfiguration: ReturnType<typeof mountBlockConfiguration> | null =
     null;
   let state: DesktopSnapshot | null = null;
@@ -454,9 +460,12 @@ export function installApplication(hooks: Hooks) {
     for (const id of blockSettings.keys())
       if (!next.blocks.some((block) => block.id === id))
         blockSettings.delete(id);
-    for (const id of settingsFailures)
+    for (const id of settingsFailures.keys())
       if (!next.blocks.some((block) => block.id === id))
         settingsFailures.delete(id);
+    for (const id of unavailableBlocks)
+      if (!next.blocks.some((block) => block.id === id))
+        unavailableBlocks.delete(id);
     for (const [id, binding] of directBindings)
       if (!next.blocks.some((block) => block.id === id)) {
         binding.dispose();
@@ -1992,6 +2001,42 @@ export function installApplication(hooks: Hooks) {
     );
     subjectViews.set(block.id, view);
   }
+  function paintBlockAvailability(article: HTMLElement, block: Block) {
+    const subject =
+      block.subject && block.subject.kind !== "resource" ? block.subject : null;
+    const resource = block.resource_id
+      ? state?.resources.find((resource) => resource.id === block.resource_id)
+      : undefined;
+    const kind = subject ? subjectBlockKind(subject) : resource?.kind;
+    const reason =
+      resource?.available === false
+        ? null
+        : unavailableBlock({
+            kind,
+            settingsError: settingsFailures.get(block.id),
+            missingResource: !subject && !resource,
+          });
+    if (reason) unavailableBlocks.add(block.id);
+    else unavailableBlocks.delete(block.id);
+    const changed = showUnavailableBlock(article, reason, {
+      kind,
+      referenceId: resource?.id ?? block.resource_id ?? block.id,
+      preview:
+        resource?.content.split("\n\n")[0] ??
+        "Canonical project and resource view",
+      subtitle: resource
+        ? `${resource.kind} · ${resource.id.slice(0, 8)}`
+        : subject
+          ? subjectBlockKind(subject).replaceAll("_", " ")
+          : "Unavailable resource",
+      retry: () => {
+        settingsFailures.delete(block.id);
+        loadBlockSettings(block.id);
+      },
+    });
+    if (changed) hooks.wake();
+    return !!reason;
+  }
   function rememberBlockSettings(settings: BlockInstanceSettings) {
     if (!state?.blocks.some((block) => block.id === settings.placementId))
       return;
@@ -2003,6 +2048,10 @@ export function installApplication(hooks: Hooks) {
     if (article) {
       applyBlockConfiguration(article, settings.configuration);
       article.dataset.configurationState = "ready";
+      const block = state?.blocks.find(
+        (block) => block.id === settings.placementId,
+      );
+      if (block) paintBlockAvailability(article, block);
     }
   }
   function loadBlockSettings(id: string) {
@@ -2020,12 +2069,17 @@ export function installApplication(hooks: Hooks) {
     const read = libraryClient
       .getBlockSettings(id)
       .then(rememberBlockSettings)
-      .catch(() => {
-        settingsFailures.add(id);
+      .catch((error) => {
+        if (!state?.blocks.some((block) => block.id === id)) return;
+        settingsFailures.set(id, error);
         const article = document.querySelector<HTMLElement>(
           `[data-block="${id}"]`,
         );
-        if (article) article.dataset.configurationState = "unavailable";
+        if (article) {
+          article.dataset.configurationState = "unavailable";
+          const block = state?.blocks.find((block) => block.id === id);
+          if (block) paintBlockAvailability(article, block);
+        }
       })
       .finally(() => settingsReads.delete(id));
     settingsReads.set(id, read);
@@ -2093,6 +2147,7 @@ export function installApplication(hooks: Hooks) {
           context: () => geometry(id),
         }),
       );
+    if (paintBlockAvailability(article, b)) return;
     if (b.subject && b.subject.kind !== "resource") {
       decorateSubject(article, b);
       return;
@@ -2901,6 +2956,7 @@ export function installApplication(hooks: Hooks) {
     block: (id: string) => state?.blocks.find((b) => b.id === id),
     saveContent,
     setBlockActive(id: string, active: boolean) {
+      active = active && !unavailableBlocks.has(id);
       const previous = activeBlocks.get(id) ?? false;
       activeBlocks.set(id, active);
       if (previous === active) return;
