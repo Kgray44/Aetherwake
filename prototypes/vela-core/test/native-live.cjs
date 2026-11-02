@@ -102,7 +102,13 @@ exports.verify = async ({win, app, privateRoot, source}) => {
     const toggle = async (selector, value) => { if (await js(`document.querySelector(${JSON.stringify(selector)}).checked`) !== value) await click(selector); assert.equal(await js(`document.querySelector(${JSON.stringify(selector)}).checked`), value); };
     const capture = async name => {
       assert(budget.count < 6, 'Combined six-PNG profile budget exhausted'); await focus();
-      const before = await js(`(()=>{const s=window.__aerynth.snapshot();return {frames:s.gpu?.framesRendered,draws:s.metrics.draws}})()`); assert(Number.isFinite(before.frames), 'Actual GPU renderer unavailable');
+      const before = await js(`(()=>{const s=window.__aerynth.snapshot();return {frames:s.gpu?.framesRendered,draws:s.metrics.draws,writing:document.body.classList.contains('writing'),focusedTag:document.activeElement?.tagName}})()`); assert(Number.isFinite(before.frames), 'Actual GPU renderer unavailable');
+      // A focused working editor deliberately suspends ambient frames. Traverse
+      // focus with real input; never force production rendering or accept stale pixels.
+      if (before.writing) {
+        key('Tab');
+        receipt.actions.push({type:'native-focus-traversal-for-capture',key:'Tab',reason:'leave paused writing focus',at:Date.now()});
+      }
       let acknowledgement;
       await until(async () => { const next=await js(`(()=>{const s=window.__aerynth.snapshot();return {frames:s.gpu?.framesRendered,draws:s.metrics.draws,active:s.active,failed:s.graphicsFailed}})()`); if(win.isFocused()&&next.active&&!next.failed&&next.frames>before.frames&&next.draws>before.draws){acknowledgement=next;return true;}return false; }, 'new focused actual GPU draw acknowledgement', 6000);
       assert(win.isFocused(), 'Focus lost before capture'); const png=(await win.webContents.capturePage()).toPNG(); assert(win.isFocused(), 'Focus lost during capture'); assert(budget.bytes + png.length <= 12*1024*1024, 'Combined PNG byte budget exceeded');
