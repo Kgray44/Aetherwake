@@ -131,6 +131,17 @@ test('native ChatGPT fidelity metadata cannot promote account history, inference
  }finally{await f.close();removeFixture(dir);}
 });
 
+test('reserved plan/API provider IDs and foreign cached catalogs never become Codex by provider order',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-provider-identity-')),f=fixture(join(dir,'canonical.sqlite'));
+ try{
+  f.setTransform(snapshot=>{const out=structuredClone(snapshot),template=out.graph.providers.find(p=>p.id==='fixture-codex')!;out.graph.providers.unshift({...template,id:'chatgpt-plan-responses',label:'Plan inference',mock:false},{...template,id:'openai-api-vela',label:'Vela API',mock:false});return out;});
+  f.host.capabilitySnapshot=()=>({providerId:'chatgpt-plan-responses',mock:false,authentication:'available',models:['plan-only-model'],catalogOnly:true,nativeFork:false,chatgptHistory:false});
+  let providers=await f.product.command('providers',{}),codex=providers.find(p=>p.id==='fixture-codex')!;assert.equal(codex.available,false);assert.equal(codex.execute,false);assert.deepEqual(codex.models,[]);assert.equal(codex.simulated,true);assert.equal(providers.some(p=>p.id==='chatgpt-plan-responses'||p.id==='openai-api-vela'),false,'Graph metadata alone does not register an operational provider');assert.equal(providers.find(p=>p.id==='chatgpt')!.available,false);
+  await assert.rejects(f.product.command('create',{title:'Unregistered plan route',providerId:'chatgpt-plan-responses',commandId:crypto.randomUUID()}),/provider_unavailable/);
+  f.host.capabilitySnapshot=()=>({providerId:'fixture-codex',mock:true,authentication:'available',models:['synthetic-codex-model'],catalogOnly:true,nativeFork:false,chatgptHistory:false});providers=await f.product.command('providers',{});codex=providers.find(p=>p.id==='fixture-codex')!;assert.equal(codex.available,true);assert.deepEqual(codex.models,['synthetic-codex-model']);
+ }finally{await f.close();removeFixture(dir);}
+});
+
 test('paged message navigation includes exact hit; resource search honors collection and archive filters',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'aerynth-paging-product-')),f=fixture(join(dir,'canonical.sqlite'));
  try{
