@@ -3,7 +3,10 @@ const fs = require("node:fs/promises");
 const { createHash } = require("node:crypto");
 /** Bounded, video-only capture of this exact synthetic verification window. */
 async function startWindowRecording(win, session, localURL) {
-  if (!process.argv.includes("--integration-constellation"))
+  if (
+    !process.argv.includes("--integration-constellation") &&
+    !process.argv.includes("--integration-organization")
+  )
     throw new Error("recording_mode_required");
   const sourceId = win.getMediaSourceId(),
     title = win.getTitle(),

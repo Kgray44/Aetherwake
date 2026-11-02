@@ -1,3 +1,14 @@
+import type {
+  OrganizationUpdate,
+  WorkspaceOrganization,
+  StructuredPreset,
+} from "../workspace-engine/contracts.mts";
+export type {
+  OrganizationMode,
+  OrganizationUpdate,
+  WorkspaceOrganization,
+  StructuredPreset,
+} from "../workspace-engine/contracts.mts";
 /** Renderer-safe contracts. Canonical resources and visual placements have separate IDs. */
 export type BlockKind =
   | "conversation"
@@ -102,6 +113,7 @@ export type DesktopSnapshot = {
   hasCheckpoint: boolean;
   navigationBlocks?: Block[];
   viewport?: { x: number; y: number; zoom: number; displayId?: string };
+  organization?: WorkspaceOrganization;
   presence?: WorkspacePresence;
   conversationBranches?: {
     id: string;
@@ -149,6 +161,29 @@ type DesktopAction =
     }
   | { type: "resolveLayout"; workspaceId: string }
   | {
+      type: "setOrganization";
+      workspaceId: string;
+      organization: OrganizationUpdate;
+      expectedOrganizationRevision: number;
+    }
+  | {
+      type: "applyStructuredPreset";
+      workspaceId: string;
+      preset: StructuredPreset;
+    }
+  | { type: "reorderPlacements"; workspaceId: string; order: string[] }
+  | { type: "bringAllIntoView"; workspaceId: string }
+  | {
+      type: "layerBlock";
+      blockId: string;
+      direction: "front" | "back" | "raise" | "lower";
+    }
+  | {
+      type: "setViewport";
+      workspaceId: string;
+      viewport: NonNullable<DesktopSnapshot["viewport"]>;
+    }
+  | {
       type: "createResource";
       kind: BlockKind;
       title: string;
@@ -182,5 +217,6 @@ type DesktopAction =
   | { type: "checkpoint" }
   | { type: "restore" };
 export type DesktopCommand = DesktopAction & {
+  expectedLayoutVersion?: number;
   bounds?: { x: number; y: number; width: number; height: number };
 };

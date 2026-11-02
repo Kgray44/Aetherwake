@@ -43,6 +43,7 @@ export class DesktopState {
   private kernel: WorkspaceKernel;
   private db: DatabaseSync;
   private engine!: WorkspaceEngine;
+  private commandRevision?: number;
   private commandBounds?: {
     x: number;
     y: number;
@@ -180,7 +181,8 @@ export class DesktopState {
       ...action,
       commandId: randomUUID(),
       workspaceId,
-      expectedRevision: this.engine.project(workspaceId).revision,
+      expectedRevision:
+        this.commandRevision ?? this.engine.project(workspaceId).revision,
       ...(this.commandBounds ? { bounds: this.commandBounds } : {}),
     } as EngineCommand);
   }
@@ -289,12 +291,12 @@ export class DesktopState {
         ),
     );
     check(
-      Math.abs(p.x) <= 50000 &&
-        Math.abs(p.y) <= 50000 &&
-        p.width >= 240 &&
-        p.width <= 2400 &&
-        p.height >= 160 &&
-        p.height <= 1800 &&
+      Math.abs(p.x) <= 1000000 &&
+        Math.abs(p.y) <= 1000000 &&
+        p.width >= 128 &&
+        p.width <= 4096 &&
+        p.height >= 96 &&
+        p.height <= 4096 &&
         Number.isInteger(p.z) &&
         Math.abs(p.z) <= 10000,
       "invalid_geometry",
@@ -344,6 +346,7 @@ export class DesktopState {
     check(a && typeof a.type === "string");
     if (a.type === "snapshot") return;
     this.commandBounds = a.bounds;
+    this.commandRevision = a.expectedLayoutVersion;
     const s = this.session();
     switch (a.type) {
       case "createProject":
@@ -437,6 +440,44 @@ export class DesktopState {
       case "resolveLayout":
         this.workspace(a.workspaceId);
         this.engineCommand(a.workspaceId, { type: "resolveLayout" });
+        break;
+      case "setOrganization":
+        this.workspace(a.workspaceId);
+        this.engineCommand(a.workspaceId, {
+          type: a.type,
+          organization: a.organization,
+          expectedOrganizationRevision: a.expectedOrganizationRevision,
+        });
+        break;
+      case "applyStructuredPreset":
+        this.workspace(a.workspaceId);
+        this.engineCommand(a.workspaceId, { type: a.type, preset: a.preset });
+        break;
+      case "reorderPlacements":
+        this.workspace(a.workspaceId);
+        this.engineCommand(a.workspaceId, { type: a.type, order: a.order });
+        break;
+      case "bringAllIntoView":
+        this.workspace(a.workspaceId);
+        this.engineCommand(a.workspaceId, { type: a.type });
+        break;
+      case "layerBlock": {
+        const b = this.block(a.blockId);
+        this.workspace(b.workspace_id);
+        this.engineCommand(b.workspace_id, {
+          type: a.type,
+          blockId: b.id,
+          direction: a.direction,
+        });
+        break;
+      }
+      case "setViewport":
+        this.workspace(a.workspaceId);
+        this.engineCommand(a.workspaceId, {
+          type: "saveLayout",
+          placements: [],
+          viewport: a.viewport,
+        });
         break;
       case "back": {
         const target = s.history.pop();
@@ -689,6 +730,9 @@ export class DesktopState {
       layoutVersion: w?.layout.version ?? 0,
       viewport: s.activeWorkspaceId
         ? this.engine.project(s.activeWorkspaceId).viewport
+        : undefined,
+      organization: s.activeWorkspaceId
+        ? this.engine.project(s.activeWorkspaceId).organization
         : undefined,
       presence: s.activeWorkspaceId
         ? this.engine.project(s.activeWorkspaceId).presence

@@ -339,3 +339,32 @@
 .application-ready #vela.vela-card .vela-label small {
   font-size: 10px;
 }
+.layout-preview-guides {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.layout-preview-guides i {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+.alignment-guide {
+  background: #c8b3e748;
+}
+.placement-area {
+  border: 1px solid #d1baf27a;
+  border-radius: 16px;
+  background: linear-gradient(150deg, #c9b5f00c, transparent);
+  box-shadow: inset 0 0 22px #c4a5e80c;
+}
+.layer-actions,
+.organization-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0;
+}
+.command-surface details {
+  padding: 12px 0;
+}

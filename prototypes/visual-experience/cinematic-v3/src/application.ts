@@ -7,6 +7,16 @@ import { mountConstellation } from "../../../constellation/view.ts";
 import "../../../constellation/style.css";
 import type { Policy } from "../../../constellation/types.ts";
 import type { MotionCoordinator } from "./motion";
+import { previewLayout } from "../../../workspace-engine/organization.mts";
+import type {
+  LayoutState,
+  LayoutPreview,
+  LayoutPreviewRequest,
+} from "../../../workspace-engine/contracts.mts";
+import {
+  layoutState,
+  previewBlock as desktopPreviewBlock,
+} from "./organization-preview";
 import "./application.css";
 import type {
   Block,
@@ -14,6 +24,9 @@ import type {
   DesktopCommand,
   DesktopSnapshot,
   Geometry,
+  OrganizationMode,
+  OrganizationUpdate,
+  StructuredPreset,
   Resource,
   Shape,
   WorkspacePresence,
@@ -46,6 +59,15 @@ export function installApplication(hooks: Hooks) {
   const host = window.aerynthHost!;
   let state: DesktopSnapshot | null = null;
   let offset = { x: 0, y: 0 };
+  let zoom = 1;
+  let previewBase: LayoutState | undefined;
+  let preview: LayoutPreview | undefined;
+  let previewRequest: LayoutPreviewRequest | undefined;
+  let previewCommitting = false;
+  const previewGuides = document.createElement("div");
+  previewGuides.className = "layout-preview-guides";
+  previewGuides.setAttribute("aria-hidden", "true");
+  el("#stage").append(previewGuides);
   let tail = Promise.resolve();
   const drafts = new Map<
     string,
@@ -81,13 +103,13 @@ export function installApplication(hooks: Hooks) {
   } | null = null;
   let suppressPresenceClick = false;
   function presenceTarget() {
-    const p = state?.presence;
+    const p = preview?.presence ?? state?.presence;
     if (!p) return;
     return {
-      x: p.x + offset.x,
-      y: p.y + offset.y,
-      w: p.width,
-      h: p.height,
+      x: p.x * zoom + offset.x,
+      y: p.y * zoom + offset.y,
+      w: p.width * zoom,
+      h: p.height * zoom,
       lift: 0,
       yaw: 0,
       opacity: 1,
@@ -105,10 +127,10 @@ export function installApplication(hooks: Hooks) {
   }
   function viewBounds() {
     return {
-      x: 20 - offset.x,
-      y: 170 - offset.y,
-      width: Math.max(240, innerWidth - 40),
-      height: Math.max(260, innerHeight - 320),
+      x: (20 - offset.x) / zoom,
+      y: (170 - offset.y) / zoom,
+      width: Math.max(240, innerWidth - 40) / zoom,
+      height: Math.max(260, innerHeight - 320) / zoom,
     };
   }
   const dialog = document.createElement("dialog");
@@ -157,12 +179,32 @@ export function installApplication(hooks: Hooks) {
   canvasTools.addEventListener("click", (event) => {
     const direction = (event.target as HTMLElement).dataset.pan;
     if (!direction) return;
-    if (direction === "home") offset = { x: 0, y: 0 };
-    else {
-      offset.x += direction === "left" ? 350 : direction === "right" ? -350 : 0;
-      offset.y += direction === "up" ? 280 : direction === "down" ? -280 : 0;
-    }
-    hooks.layout();
+    if (!state?.activeWorkspaceId) return;
+    const v = state.viewport ?? { x: 0, y: 0, zoom: 1 };
+    void run({
+      type: "setViewport",
+      workspaceId: state.activeWorkspaceId,
+      viewport:
+        direction === "home"
+          ? { x: 0, y: 0, zoom: 1 }
+          : {
+              ...v,
+              x:
+                v.x +
+                (direction === "right"
+                  ? 350 / zoom
+                  : direction === "left"
+                    ? -350 / zoom
+                    : 0),
+              y:
+                v.y +
+                (direction === "down"
+                  ? 280 / zoom
+                  : direction === "up"
+                    ? -280 / zoom
+                    : 0),
+            },
+    });
   });
   function report(e: unknown) {
     hooks.status(
@@ -172,7 +214,7 @@ export function installApplication(hooks: Hooks) {
   async function command(a: DesktopCommand): Promise<DesktopSnapshot> {
     const next = (await host.command!("desktop", {
       ...a,
-      bounds: viewBounds(),
+      bounds: a.bounds ?? viewBounds(),
     })) as DesktopSnapshot;
     apply(next);
     return next;
@@ -183,9 +225,15 @@ export function installApplication(hooks: Hooks) {
   }
   function apply(next: DesktopSnapshot) {
     const changed = state?.activeWorkspaceId !== next.activeWorkspaceId;
+    if (changed || (previewBase && previewBase.revision !== next.layoutVersion))
+      cancelPreview();
     state = next;
+    zoom = next.viewport?.zoom ?? 1;
+    offset = {
+      x: -(next.viewport?.x ?? 0) * zoom,
+      y: -(next.viewport?.y ?? 0) * zoom,
+    };
     if (changed) {
-      offset = { x: 0, y: 0 };
       hooks.home();
     }
     const presence = presenceTarget();
@@ -200,6 +248,10 @@ export function installApplication(hooks: Hooks) {
       `${next.workspaces.find((w) => w.id === next.activeWorkspaceId)?.title ?? "Workspaces"} ↗`;
     el<HTMLButtonElement>("#undo").disabled = !next.canUndo;
     el("#undo span").textContent = "Undo layout";
+    el("#layout-manager").innerHTML =
+      `▣ <span>${next.organization?.mode ? next.organization.mode[0].toUpperCase() + next.organization.mode.slice(1) : "Layout"}</span>`;
+    el("#layout-manager").title =
+      "Organization mode, layout history and block access";
     universe.hidden = false;
     const overview = next.navigation.kind === "constellation";
     universe.classList.toggle("overview", overview);
@@ -335,6 +387,64 @@ export function installApplication(hooks: Hooks) {
       return command(a);
     });
   }
+  function queuePreview(request: LayoutPreviewRequest) {
+    if (!state || previewCommitting) return;
+    previewBase ??= layoutState(state);
+    if (!previewBase) return;
+    previewRequest = {
+      ...request,
+      expectedRevision: previewBase.revision,
+      bounds: request.bounds ?? viewBounds(),
+    };
+    hooks.wake();
+  }
+  function paintPreview() {
+    if (!previewRequest || !previewBase) return;
+    const request = previewRequest;
+    previewRequest = undefined;
+    try {
+      preview = previewLayout(previewBase, request);
+      const guides = preview.guides.map(
+        (g) =>
+          `<i class="alignment-guide" style="left:${(g.axis === "x" ? g.position : g.from) * zoom + offset.x}px;top:${(g.axis === "y" ? g.position : g.from) * zoom + offset.y}px;width:${g.axis === "x" ? 1 : (g.to - g.from) * zoom}px;height:${g.axis === "y" ? 1 : (g.to - g.from) * zoom}px"></i>`,
+      );
+      const areas = preview.placementAreas.map(
+        (a) =>
+          `<i class="placement-area" style="left:${a.x * zoom + offset.x}px;top:${a.y * zoom + offset.y}px;width:${a.width * zoom}px;height:${a.height * zoom}px"></i>`,
+      );
+      previewGuides.innerHTML = [...guides, ...areas].join("");
+      document.body.dataset.layoutPreview = preview.organization.mode;
+      hooks.layout();
+    } catch (error) {
+      hooks.status(
+        `Placement preview unavailable: ${(error as Error).message}. Saved layout retained.`,
+      );
+    }
+  }
+  function cancelPreview() {
+    previewRequest = undefined;
+    preview = undefined;
+    previewBase = undefined;
+    previewGuides.replaceChildren();
+    delete document.body.dataset.layoutPreview;
+    hooks.layout();
+    hooks.wake();
+  }
+  function commitLayout(a: DesktopCommand) {
+    paintPreview();
+    const revision = previewBase?.revision;
+    previewCommitting = true;
+    return run({
+      ...a,
+      ...(revision === undefined ? {} : { expectedLayoutVersion: revision }),
+    }).finally(() => {
+      previewCommitting = false;
+      cancelPreview();
+    });
+  }
+  dialog.addEventListener("close", () => {
+    if (!previewCommitting) cancelPreview();
+  });
   const velaCard = el<HTMLButtonElement>("#vela");
   const velaGrip = document.createElement("span");
   velaGrip.className = "vela-grip";
@@ -377,16 +487,26 @@ export function installApplication(hooks: Hooks) {
     hooks.motion.target(
       presenceId,
       {
-        x: d.origin.x + offset.x + dx,
-        y: d.origin.y + offset.y + dy,
-        w: d.origin.width,
-        h: d.origin.height,
+        x: d.origin.x * zoom + offset.x + dx,
+        y: d.origin.y * zoom + offset.y + dy,
+        w: d.origin.width * zoom,
+        h: d.origin.height * zoom,
         lift: 8,
         yaw: 0,
         opacity: 1,
       },
       "Vela drag preview",
     );
+    queuePreview({
+      presence: {
+        expectedVersion: d.version,
+        presentation: {
+          x: Math.round(d.origin.x + dx / zoom),
+          y: Math.round(d.origin.y + dy / zoom),
+        },
+      },
+      intent: "move",
+    });
     hooks.wake();
   });
   velaCard.addEventListener("pointerup", (event) => {
@@ -395,13 +515,13 @@ export function installApplication(hooks: Hooks) {
     presenceDrag = null;
     suppressPresenceClick = d.moved;
     if (d.moved)
-      void run({
+      void commitLayout({
         type: "setPresence",
         workspaceId: d.workspaceId,
         expectedVersion: d.version,
         placement: {
-          x: Math.round(d.origin.x + event.clientX - d.startX),
-          y: Math.round(d.origin.y + event.clientY - d.startY),
+          x: Math.round(d.origin.x + (event.clientX - d.startX) / zoom),
+          y: Math.round(d.origin.y + (event.clientY - d.startY) / zoom),
         },
       });
     else {
@@ -412,7 +532,8 @@ export function installApplication(hooks: Hooks) {
   });
   velaCard.addEventListener("pointercancel", () => {
     presenceDrag = null;
-    suppressPresenceClick = true;
+    suppressPresenceClick = false;
+    cancelPreview();
     const target = presenceTarget();
     if (target)
       hooks.motion.target(presenceId, target, "Vela pointer cancelled");
@@ -660,6 +781,139 @@ export function installApplication(hooks: Hooks) {
         shape: String(f.get("shape")) as Shape,
       });
     });
+    dialog.insertAdjacentHTML(
+      "beforeend",
+      `<div class="layer-actions" aria-label="Stacking order">${(
+        [
+          ["front", "Bring to front"],
+          ["back", "Send to back"],
+          ["raise", "Raise one level"],
+          ["lower", "Lower one level"],
+        ] as const
+      )
+        .map(
+          ([value, label]) =>
+            `<button type="button" data-layer="${value}">${label}</button>`,
+        )
+        .join("")}</div>`,
+    );
+    dialog.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach(
+      (button) =>
+        (button.onclick = () => {
+          dialog.close();
+          void run({
+            type: "layerBlock",
+            blockId,
+            direction: button.dataset.layer as
+              | "front"
+              | "back"
+              | "raise"
+              | "lower",
+          });
+        }),
+    );
+    if (state?.organization?.mode === "structured") {
+      const span = state.organization.structured.spans[blockId] ?? {
+        columns: 1,
+        rows: 1,
+      };
+      dialog.insertAdjacentHTML(
+        "beforeend",
+        `<form id="grid-span-form"><fieldset><legend>Structured grid span</legend><label>Columns<input name="columns" type="number" min="1" max="128" value="${span.columns}" required></label><label>Rows<input name="rows" type="number" min="1" max="128" value="${span.rows}" required></label><button type="submit">Apply span</button></fieldset></form>`,
+      );
+      el<HTMLFormElement>("#grid-span-form", dialog).onsubmit = (event) => {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget as HTMLFormElement);
+        const organization = {
+          structured: {
+            spans: {
+              [blockId]: {
+                columns: Number(data.get("columns")),
+                rows: Number(data.get("rows")),
+              },
+            },
+          },
+        };
+        void commitLayout({
+          type: "setOrganization",
+          workspaceId: state!.activeWorkspaceId!,
+          expectedOrganizationRevision: state!.organization!.revision,
+          organization,
+        }).then(() => dialog.close());
+      };
+    }
+  }
+  const modeDescriptions = {
+    fluid: "Resources intelligently make room for one another.",
+    freeform: "Position and overlap resources however you want.",
+    structured: "Organize resources using grids and alignment.",
+  } as const;
+  function organizationControls() {
+    if (!state?.organization || !state.activeWorkspaceId) return;
+    const current = state.organization,
+      workspaceId = state.activeWorkspaceId;
+    open(
+      "Workspace organization",
+      `<form id="organization-form"><label>Organization<select id="organization-mode" name="mode">${(["fluid", "freeform", "structured"] as const).map((mode) => `<option value="${mode}" ${current.mode === mode ? "selected" : ""}>${mode[0].toUpperCase() + mode.slice(1)}</option>`).join("")}</select></label><p id="organization-description"></p><details id="structured-options"><summary>Grid and spacing</summary><div class="geometry-grid"><label>Minimum gap<input name="gap" type="number" min="0" max="256" value="${current.gap}"></label><label>Columns · blank for automatic<input name="columns" type="number" min="1" max="12" value="${current.structured.columnCount ?? ""}"></label><label>Row height<input name="rowHeight" type="number" min="32" max="512" value="${current.structured.rowHeight}"></label></div></details><p>Preview changes below. Apply records one undoable transformation. Saved checkpoints also retain the organization mode.</p><button type="submit">Apply organization</button><button id="cancel-organization" type="button">Cancel preview</button></form><details><summary>Structured arrangements</summary><div class="layout-actions">${(
+        [
+          ["balanced", "Balanced grid"],
+          ["focus", "Focus and companions"],
+          ["development", "Development"],
+          ["research", "Research"],
+        ] as const
+      )
+        .map(
+          ([preset, title]) =>
+            `<button type="button" data-grid-preset="${preset}">${title}</button>`,
+        )
+        .join("")}</div></details>`,
+    );
+    const read = (): OrganizationUpdate => {
+      const data = new FormData(
+        el<HTMLFormElement>("#organization-form", dialog),
+      );
+      return {
+        mode: String(data.get("mode")) as OrganizationMode,
+        gap: Number(data.get("gap")),
+        structured: {
+          ...(data.get("columns")
+            ? { columnCount: Number(data.get("columns")) }
+            : {}),
+          rowHeight: Number(data.get("rowHeight")),
+        },
+      };
+    };
+    const update = () => {
+      const organization = read();
+      el("#organization-description", dialog).textContent =
+        modeDescriptions[organization.mode!];
+      queuePreview({ organization, intent: "mode" });
+    };
+    el<HTMLFormElement>("#organization-form", dialog).oninput = update;
+    el<HTMLFormElement>("#organization-form", dialog).onchange = update;
+    el("#organization-description", dialog).textContent =
+      modeDescriptions[current.mode];
+    el("#cancel-organization", dialog).onclick = () => dialog.close();
+    form(async () =>
+      commitLayout({
+        type: "setOrganization",
+        workspaceId,
+        expectedOrganizationRevision: current.revision,
+        organization: read(),
+      }),
+    );
+    dialog.querySelectorAll<HTMLButtonElement>("[data-grid-preset]").forEach(
+      (button) =>
+        (button.onclick = () => {
+          const preset = button.dataset.gridPreset as StructuredPreset;
+          queuePreview({ structuredPreset: preset, intent: "mode" });
+          void commitLayout({
+            type: "applyStructuredPreset",
+            workspaceId,
+            preset,
+          }).then(() => dialog.close());
+        }),
+    );
   }
   function layouts() {
     if (!state?.activeWorkspaceId) {
@@ -670,6 +924,18 @@ export function installApplication(hooks: Hooks) {
       "Layouts and blocks",
       `<div class="layout-actions"><button id="save-layout">Save layout checkpoint</button><button id="restore-layout" ${state.hasCheckpoint ? "" : "disabled"}>Restore checkpoint</button><button id="undo-layout" ${state.canUndo ? "" : "disabled"}>Undo layout</button><button id="redo-layout" ${state.canRedo ? "" : "disabled"}>Redo layout</button><button id="resolve-layout">Make room · undoable</button></div><p>Saved geometry remains unchanged until you edit or organize it. Checkpoints and history restore placements, shapes and geometry. Resource text remains independent.</p><button id="locate-vela">Locate Vela</button>${state.blocks.map((b) => `<div class="workspace-row"><button data-locate="${b.id}">${escape(state!.resources.find((r) => r.id === b.resource_id)?.title ?? "Resource")}</button><button data-properties="${b.id}">Properties</button></div>`).join("")}`,
     );
+    dialog.insertAdjacentHTML(
+      "afterbegin",
+      `<div class="organization-summary"><button id="organization-settings">Organization · ${state.organization?.mode ?? "fluid"}</button><button id="bring-all">Bring All Into View</button></div>`,
+    );
+    el("#organization-settings", dialog).onclick = organizationControls;
+    el("#bring-all", dialog).onclick = () => {
+      const workspaceId = state!.activeWorkspaceId!;
+      queuePreview({ intent: "recover" });
+      void commitLayout({ type: "bringAllIntoView", workspaceId }).then(() =>
+        dialog.close(),
+      );
+    };
     for (const [id, type] of [
       ["save-layout", "checkpoint"],
       ["restore-layout", "restore"],
@@ -693,12 +959,13 @@ export function installApplication(hooks: Hooks) {
       if (!p) return;
       hooks.home();
       offset = {
-        x: innerWidth / 2 - p.x - p.width / 2,
-        y: innerHeight / 2 - p.y - p.height / 2,
+        x: innerWidth / 2 - (p.x + p.width / 2) * zoom,
+        y: innerHeight / 2 - (p.y + p.height / 2) * zoom,
       };
       presenceTarget();
       hooks.layout();
       hooks.wake();
+      void saveView();
       velaCard.focus();
     };
     dialog
@@ -716,11 +983,27 @@ export function installApplication(hooks: Hooks) {
   function reveal(id: string) {
     const b = state?.blocks.find((b) => b.id === id);
     if (!b) return;
-    if (b.x + offset.x < 20 || b.x + b.width + offset.x > innerWidth - 20)
-      offset.x = Math.min(0, innerWidth / 2 - b.x - b.width / 2);
-    if (b.y + offset.y < 180 || b.y + b.height + offset.y > innerHeight - 170)
-      offset.y = Math.min(0, innerHeight / 2 - b.y - b.height / 2);
+    if (
+      b.x * zoom + offset.x < 20 ||
+      (b.x + b.width) * zoom + offset.x > innerWidth - 20
+    )
+      offset.x = innerWidth / 2 - (b.x + b.width / 2) * zoom;
+    if (
+      b.y * zoom + offset.y < 180 ||
+      (b.y + b.height) * zoom + offset.y > innerHeight - 170
+    )
+      offset.y = innerHeight / 2 - (b.y + b.height / 2) * zoom;
     hooks.layout();
+    void saveView();
+  }
+  function saveView() {
+    return state?.activeWorkspaceId
+      ? run({
+          type: "setViewport",
+          workspaceId: state.activeWorkspaceId,
+          viewport: { x: -offset.x / zoom, y: -offset.y / zoom, zoom },
+        })
+      : Promise.resolve();
   }
   function decorate(article: HTMLElement, id: string) {
     if (!article) return;
@@ -732,7 +1015,9 @@ export function installApplication(hooks: Hooks) {
       controls.className = "block-tools";
       controls.innerHTML =
         '<button class="block-properties" title="Move, resize, shape and layer">⋯</button><button class="block-remove" title="Remove visual block, preserve resource">×</button><button class="resize-handle" aria-label="Resize block; use Properties for keyboard resizing">↘</button>';
-      article.append(controls);
+      (article.querySelector(".resource-presentation") ?? article).append(
+        controls,
+      );
       el(".block-properties", controls).onclick = () => geometry(id);
       el(".block-remove", controls).onclick = () => {
         const current = state!.blocks.find((b) => b.id === id)!;
@@ -743,6 +1028,7 @@ export function installApplication(hooks: Hooks) {
         });
       };
       let resizing: {
+        block: Block;
         width: number;
         height: number;
         x: number;
@@ -751,7 +1037,9 @@ export function installApplication(hooks: Hooks) {
       const handle = el(".resize-handle", controls);
       handle.onpointerdown = (event) => {
         const current = state!.blocks.find((b) => b.id === id)!;
+        if (current.locked || event.button !== 0) return;
         resizing = {
+          block: { ...current },
           width: current.width,
           height: current.height,
           x: event.clientX,
@@ -759,29 +1047,41 @@ export function installApplication(hooks: Hooks) {
         };
         handle.setPointerCapture(event.pointerId);
       };
+      const resizeTarget = (event: PointerEvent) => {
+        const r = resizing!;
+        const width = Math.round(
+          Math.max(128, Math.min(4096, r.width + (event.clientX - r.x) / zoom)),
+        );
+        const height =
+          r.block.shape === "circle"
+            ? width
+            : Math.round(
+                Math.max(
+                  96,
+                  Math.min(4096, r.height + (event.clientY - r.y) / zoom),
+                ),
+              );
+        return { width, height };
+      };
+      handle.onpointermove = (event) => {
+        if (!resizing) return;
+        queuePreview({
+          placements: [
+            {
+              blockId: id,
+              expectedVersion: resizing.block.version,
+              presentation: resizeTarget(event),
+            },
+          ],
+          intent: "resize",
+        });
+      };
       handle.onpointerup = (event) => {
         if (!resizing) return;
-        const current = state!.blocks.find((b) => b.id === id)!;
-        const width = Math.round(
-            Math.max(
-              240,
-              Math.min(2400, resizing.width + event.clientX - resizing.x),
-            ),
-          ),
-          height =
-            current.shape === "circle"
-              ? width
-              : Math.round(
-                  Math.max(
-                    160,
-                    Math.min(
-                      1800,
-                      resizing.height + event.clientY - resizing.y,
-                    ),
-                  ),
-                );
+        const current = resizing.block;
+        const { width, height } = resizeTarget(event);
         resizing = null;
-        void run({
+        void commitLayout({
           type: "geometry",
           blockId: id,
           expectedVersion: current.version,
@@ -791,6 +1091,7 @@ export function installApplication(hooks: Hooks) {
       };
       handle.onpointercancel = () => {
         resizing = null;
+        cancelPreview();
       };
     }
     if (r.available === false) {
@@ -1091,6 +1392,7 @@ export function installApplication(hooks: Hooks) {
     });
   return {
     frame(now: number, policy: Policy) {
+      paintPreview();
       const target = presenceTarget();
       if (target && !presenceDrag)
         hooks.motion.target(presenceId, target, "Vela workspace view");
@@ -1145,6 +1447,29 @@ export function installApplication(hooks: Hooks) {
     },
     snapshot: () => state,
     offset: () => offset,
+    zoom: () => zoom,
+    previewBlock: (id: string) => {
+      const b = preview?.blocks.find((b) => b.blockId === id);
+      return b ? desktopPreviewBlock(b) : undefined;
+    },
+    previewMove(id: string, dx: number, dy: number) {
+      const b = state?.blocks.find((b) => b.id === id);
+      if (!b || b.locked) return;
+      queuePreview({
+        placements: [
+          {
+            blockId: id,
+            expectedVersion: b.version,
+            presentation: {
+              x: Math.round(b.x + dx / zoom),
+              y: Math.round(b.y + dy / zoom),
+            },
+          },
+        ],
+        intent: "move",
+      });
+    },
+    cancelPreview,
     decorate,
     geometry,
     run,
@@ -1171,11 +1496,15 @@ export function installApplication(hooks: Hooks) {
     move(id: string, dx: number, dy: number) {
       const b = state?.blocks.find((b) => b.id === id);
       if (b)
-        return run({
+        return commitLayout({
           type: "geometry",
           blockId: b.id,
           expectedVersion: b.version,
-          placement: { ...b, x: b.x + dx, y: b.y + dy },
+          placement: {
+            ...b,
+            x: Math.round(b.x + dx / zoom),
+            y: Math.round(b.y + dy / zoom),
+          },
           shape: b.shape,
         });
     },

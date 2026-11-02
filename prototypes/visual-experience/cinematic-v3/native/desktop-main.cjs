@@ -58,8 +58,11 @@ const verify =
   process.argv.includes("--integration-verify") ||
   process.argv.includes("--integration-live") ||
   process.argv.includes("--integration-benchmark") ||
-  process.argv.includes("--integration-constellation");
-const captureReview = process.argv.includes("--integration-constellation");
+  process.argv.includes("--integration-constellation") ||
+  process.argv.includes("--integration-organization");
+const captureReview =
+  process.argv.includes("--integration-constellation") ||
+  process.argv.includes("--integration-organization");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
 const privateRoot = profileArg
   ? path.resolve(profileArg.slice(10))
@@ -341,6 +344,17 @@ app.whenReady().then(async () => {
   }, 240000);
   reserveTimer.unref();
   if (verify) {
+    if (process.argv.includes("--integration-organization")) {
+      await require("./integration-organization.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        source,
+        session: session.defaultSession,
+        localURL,
+      });
+      return;
+    }
     if (captureReview) {
       await require("./integration-constellation.cjs").verify({
         win,
