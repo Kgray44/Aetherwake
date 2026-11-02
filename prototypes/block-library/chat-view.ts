@@ -52,7 +52,11 @@ export function mountBlockChat(
     .closest(".folio")
     ?.querySelector(".folio-top .folio-actions");
   (header ?? root).append(history);
-  const chat = mountConversationChat(root, { ...options, execution });
+  const chat = mountConversationChat(root, {
+    ...options,
+    execution,
+    layoutHost: root.closest<HTMLElement>(".folio") ?? options.layoutHost,
+  });
   void chat.ready.catch(options.failed);
   return {
     ready: chat.ready,

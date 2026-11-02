@@ -216,6 +216,25 @@ test("block History lives in existing card chrome without adding a body row or r
   const f = fixture(t),
     c = card(f.view);
   c.top.append(c.actions);
+  const previous = globalThis.ResizeObserver,
+    observed: Element[] = [];
+  let disconnected = false;
+  class HostObserver {
+    constructor(_callback: ResizeObserverCallback) {}
+    observe(target: Element) {
+      observed.push(target);
+    }
+    disconnect() {
+      disconnected = true;
+    }
+  }
+  globalThis.ResizeObserver = HostObserver as unknown as typeof ResizeObserver;
+  t.after(() => {
+    if (previous === undefined) delete (globalThis as any).ResizeObserver;
+    else globalThis.ResizeObserver = previous;
+  });
+  Object.defineProperty(c.article, "clientHeight", { value: 600 });
+  Object.defineProperty(c.article, "clientWidth", { value: 380 });
   const controller = mountBlockChat(c.working, {
     port: f.port,
     resourceId: f.draft.resourceId,
@@ -230,6 +249,12 @@ test("block History lives in existing card chrome without adding a body row or r
     const input = c.working.querySelector("textarea"),
       history = c.top.querySelector(".aw-chat-history");
     assert(history);
+    assert.deepEqual(
+      observed,
+      [c.article],
+      "Only the existing externally sized placement is observed",
+    );
+    assert.notEqual(observed[0], c.working.querySelector(".cp-chat"));
     assert.equal(c.working.querySelector(".aw-chat-history"), null);
     assert.equal(
       history.getAttribute("aria-label"),
@@ -243,10 +268,16 @@ test("block History lives in existing card chrome without adding a body row or r
     assert.equal(f.view.doc.activeElement, input);
     assert.deepEqual([input.selectionStart, input.selectionEnd], [2, 7]);
     assert.equal(c.top.querySelector(".aw-chat-history"), history);
+    assert.equal(
+      observed.length,
+      1,
+      "Pose changes retain one external host observer",
+    );
   } finally {
     await controller.dispose();
   }
   assert.equal(c.top.querySelector(".aw-chat-history"), null);
+  assert.equal(disconnected, true);
 });
 
 test("leaving an inline block does not wait for a provider RPC or dispose its canonical draft owner", async (t) => {
