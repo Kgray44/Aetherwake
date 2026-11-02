@@ -1619,7 +1619,7 @@ export function installApplication(hooks: Hooks) {
     if (!block) return;
     open(
       "Card",
-      `<div class="layout-actions"><button id="focus-card">Open</button><button id="front-card">Bring to front</button><button id="detach-card">Remove from workspace</button></div><label><input type="checkbox" id="block-lock" ${block.locked ? "checked" : ""}> Lock placement</label><form><label>Presentation<select name="shape"><option value="rounded">Card</option><option value="lens">Lens</option><option value="circle">Circle</option><option value="pill">Pill</option></select></label><button type="submit">Save presentation</button></form>`,
+      `<div class="layout-actions"><button id="focus-card">Open</button><button id="minimize-card" ${block.locked ? "disabled" : ""}>${block.minimized ? "Restore" : "Minimize"}</button><button id="front-card">Bring to front</button><button id="detach-card">Remove from workspace</button></div><label><input type="checkbox" id="block-lock" ${block.locked ? "checked" : ""}> Lock placement</label><form><label>Presentation<select name="shape"><option value="rounded">Card</option><option value="lens">Lens</option><option value="circle">Circle</option><option value="pill">Pill</option></select></label><button type="submit">Save presentation</button></form>`,
     );
     const configurationRoot = document.createElement("section");
     configurationRoot.className = "card-content-preferences";
@@ -1665,6 +1665,12 @@ export function installApplication(hooks: Hooks) {
     el("#front-card", dialog).onclick = () => {
       dialog.close();
       void run({ type: "layerBlock", blockId, direction: "front" });
+    };
+    el("#minimize-card", dialog).onclick = () => {
+      dialog.close();
+      void changeBlockMinimized(blockId, !block.minimized, block.version).catch(
+        report,
+      );
     };
     el("#detach-card", dialog).onclick = () => {
       dialog.close();
@@ -1900,6 +1906,32 @@ export function installApplication(hooks: Hooks) {
     approachReturn?.button.remove();
     approachReturn = null;
     approachFocus = null;
+  }
+  function changeBlockMinimized(
+    id: string,
+    minimized: boolean,
+    expectedVersion?: number,
+  ) {
+    return enqueueResult(async () => {
+      await flush();
+      const block = state?.blocks.find((item) => item.id === id);
+      if (
+        !block ||
+        state?.navigation.kind !== "workspace" ||
+        state.activeWorkspaceId !== block.workspace_id
+      )
+        throw Error("stale_workspace_context");
+      if (expectedVersion !== undefined && expectedVersion !== block.version)
+        throw Error("block_version_conflict");
+      return command({
+        type: "setBlockMinimized",
+        workspaceId: block.workspace_id,
+        blockId: id,
+        expectedVersion: block.version,
+        minimized,
+        expectedLayoutVersion: state.layoutVersion,
+      });
+    });
   }
   function approachBlock(id: string, minimum: BlockApproachTarget) {
     const inputRevision = approachInputRevision;
@@ -2382,6 +2414,15 @@ export function installApplication(hooks: Hooks) {
     if (!view) {
       view = mountBlockIdentity(article, {
         approach: (minimum) => approachBlock(id, minimum),
+        restore: async () => {
+          await changeBlockMinimized(id, false);
+        },
+        onMinimizedPresentationChange: (observation) => {
+          syncBlockActivity(id);
+          if (observation.effectiveMinimized && focusedBlocks.get(id))
+            hooks.home();
+          else hooks.layout();
+        },
         toggleTask: (resourceId, done) =>
           enqueueResult(async () => {
             await flush();
@@ -2477,6 +2518,7 @@ export function installApplication(hooks: Hooks) {
           });
     identityModels.set(id, { key, content, projection, model });
     view.update(model);
+    view.setMinimized(block.minimized === true);
     const footprint = blockFootprints.get(id);
     if (footprint) view.setFootprint(footprint);
   }
@@ -3160,6 +3202,10 @@ export function installApplication(hooks: Hooks) {
       : undefined;
     const active =
       !unavailableBlocks.has(id) &&
+      !(
+        identityViews.get(id)?.minimizedPresentation().effectiveMinimized ??
+        false
+      ) &&
       resource?.available !== false &&
       resource?.visible !== false &&
       ((focusedBlocks.get(id) ?? false) ||
@@ -3335,6 +3381,10 @@ export function installApplication(hooks: Hooks) {
     conversations,
     block: (id: string) => state?.blocks.find((b) => b.id === id),
     saveContent,
+    blockMinimized: (id: string) =>
+      identityViews.get(id)?.minimizedPresentation().effectiveMinimized ??
+      false,
+    setBlockMinimized: changeBlockMinimized,
     setBlockActive(id: string, active: boolean) {
       focusedBlocks.set(id, active);
       syncBlockActivity(id);

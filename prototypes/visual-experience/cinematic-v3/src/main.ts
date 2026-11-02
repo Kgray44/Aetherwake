@@ -28,6 +28,7 @@ import { defaultSurfaceShape, surfaceBorderRadius } from "./surface-contour";
 import { applyBlockPoseStyle } from "../../../block-library/pose-style.ts";
 import { placeStatus, type StatusObstacle } from "./status-placement.ts";
 import { createWorkingFootprints } from "./working-footprints";
+import { minimizedCardSize } from "./minimized-card";
 import type { ArchitectureConcept } from "./orbital-architecture";
 import type { CelestialStudy } from "./celestial-environment";
 import type { InstrumentStudy } from "./instrument-materials";
@@ -320,11 +321,15 @@ function restAt(id: string, slot: number) {
     const value =
       (application as Application & { zoom?: () => number }).zoom?.() ?? 1;
     const zoom = Number.isFinite(value) && value > 0 ? value : 1;
+    const size = minimizedCardSize(
+      block,
+      application?.blockMinimized(id) ?? false,
+    );
     return {
       x: block.x * zoom + offset.x,
       y: block.y * zoom + offset.y,
-      w: block.width * zoom,
-      h: block.height * zoom,
+      w: size.width * zoom,
+      h: size.height * zoom,
       lift: 0,
       yaw: 0,
       opacity: 1,
@@ -1716,12 +1721,21 @@ if (desktopMode)
     layout: () => layout("application state"),
     home,
     focus: (id) => {
-      if (expanded !== id) expand(id);
-      else
-        elements
-          .get(id)
-          ?.querySelector<HTMLTextAreaElement>("textarea")
-          ?.focus();
+      const focus = () => {
+        if (!elements.has(id)) return;
+        if (expanded !== id) expand(id);
+        else
+          elements
+            .get(id)
+            ?.querySelector<HTMLTextAreaElement>("textarea")
+            ?.focus();
+      };
+      if (application?.blockMinimized(id))
+        void application
+          .setBlockMinimized(id, false)
+          .then(focus)
+          .catch((error) => status(String(error.message ?? error)));
+      else focus();
     },
     vela: setVela,
   });
