@@ -910,6 +910,8 @@ exports.verify = async ({
           (b) => b.childResourceId === child?.id,
         );
       assert.ok(child && lineage);
+      assert.equal(child.provider, "local");
+      assert.equal(child.providerId, "local", "continuation uses the real local provider identity");
       assert.equal(lineage.parentResourceId, sourceConversation.id);
       assert.equal(lineage.sourceMessageId, sourceConversation.messages.at(-1).id);
       assert.equal(lineage.mode, "application_continuation");

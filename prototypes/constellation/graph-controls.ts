@@ -248,7 +248,7 @@ export function graphControls(
         .filter(([, i]) => i.checked && !i.disabled)
         .map(([id]) => id),
       title: name.value,
-      providerId: "mock-ordinary",
+      providerId: "local",
       tokenBudget: Number(budget.value),
       workspaceId: n.workspaceId,
     }));
