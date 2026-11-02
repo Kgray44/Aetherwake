@@ -86,6 +86,8 @@ The full native Library/template journey PASSED at `6528f40`: 120 actual native 
 
 Actual A/C still review confirmed a visible recognizable glossy Vela, quiet idle caption and working direct controls. Remaining findings include dense template utility controls, a clipped Task status line and deliberate saved Freeform overlap. Persistence success does not close those visual/usability findings or establish whole-app artistic acceptance.
 
+Related-resource callbacks are now wired from document menus and resource-browser row details into a locally anchored contextual surface. The host reads the current canonical snapshot and dispatches only the existing native graphAction family; the module owns no resource/relationship store. Queue/lifetime checks prevent a closed surface from starting a later action, new edits flush before mutation, and uncertain results are not replayed. Read-only inspection does not flush drafts. The released module confirms actual relationship effects in returned state, limits removals to supported user-authored kinds and keeps other provenance inspectable. All 171 application and 136 block-library tests, strict application typing and build pass. Native interaction and visual review for this App hookup remain pending.
+
 | Category | Actual status |
 | --- | --- |
 | Implemented in subsystem source | Navigation, spatial graph/layout commands, working card views, libraries, conversations and Vela foundations exist; expanded product scope remains ongoing. |

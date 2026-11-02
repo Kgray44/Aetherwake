@@ -64,6 +64,9 @@ import { createNotesClient } from "./notes-client";
 import { NoteSession } from "../../../block-library/note-session.ts";
 import { mountNoteExperience } from "../../../block-library/note-view.ts";
 import "../../../block-library/note-view.css";
+import { mountResourceLinks } from "../../../block-library/resource-links-view.ts";
+import "../../../block-library/resource-links-view.css";
+import { createRelatedResourcesPort } from "./related-resources";
 import {
   unavailableBlock,
   showUnavailableBlock,
@@ -2109,6 +2112,7 @@ export function installApplication(hooks: Hooks) {
         kind: resource.kind,
         active: true,
         presentation: blockPresentation(id),
+        openRelated: openRelatedResources,
         initialMode: ["research", "reference"].includes(resource.kind)
           ? "read"
           : "write",
@@ -2137,6 +2141,63 @@ export function installApplication(hooks: Hooks) {
         el(".saved", article).textContent = "Saved in local SQLite";
       });
     }, 350);
+  }
+  function openRelatedResources(resourceId: string, trigger: HTMLElement) {
+    const available = () =>
+      state?.resources.some(
+        (resource) =>
+          resource.id === resourceId &&
+          resource.available !== false &&
+          resource.visible !== false &&
+          resource.state !== "archived",
+      );
+    if (!trigger.isConnected || !available())
+      throw Error("resource_unavailable");
+    // Document actions close their details before this callback. Anchor to the
+    // still-visible summary rather than its now-hidden menu item.
+    const anchor =
+      trigger
+        .closest(".aw-note-actions")
+        ?.querySelector<HTMLElement>("summary") ?? trigger;
+    const content = document.createElement("div");
+    let closed = false;
+    let view: ReturnType<typeof mountResourceLinks> | undefined;
+    surfaces.open({
+      id: "related-resources",
+      anchor,
+      content,
+      label: "Related resources",
+      minSize: { width: 300, height: 240 },
+      preferredSize: { width: 440, height: 360 },
+      maxSize: { width: 560, height: 520 },
+      initialFocus: 'input[type="search"]',
+      onClose: () => {
+        closed = true;
+        view?.dispose();
+      },
+    });
+    view = mountResourceLinks(
+      content,
+      resourceId,
+      createRelatedResourcesPort({
+        active: () => !closed && anchor.isConnected && !!available(),
+        enqueue: enqueueResult,
+        flush,
+        read: () => command({ type: "snapshot" }),
+        change: async (action) => {
+          const next = (await host.command!(
+            "graphAction",
+            action,
+          )) as DesktopSnapshot;
+          apply(next);
+          return next;
+        },
+        openResource: (id) => {
+          surfaces.close("related-resources");
+          openCanonicalResource(id);
+        },
+      }),
+    );
   }
   function openCanonicalResource(resourceId: string) {
     const resource = state?.resources.find((r) => r.id === resourceId);
@@ -2183,6 +2244,7 @@ export function installApplication(hooks: Hooks) {
     const session = noteSession(resourceId),
       view = mountNoteExperience(content, editor, session, notesClient, {
         kind: resource.kind,
+        openRelated: openRelatedResources,
       });
     editor.setAttribute("aria-label", resource.title + " content");
     editor.oninput = () => saveContent(resourceId, editor.value, content);
@@ -2268,6 +2330,7 @@ export function installApplication(hooks: Hooks) {
           });
         },
         openResource: openCanonicalResource,
+        openRelated: openRelatedResources,
         attachResource: (resource) => {
           const workspaceId = block.workspace_id;
           return enqueueResult(async () => {
