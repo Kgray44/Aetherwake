@@ -134,8 +134,8 @@ renders 50 messages per page. Search input is debounced; there is no animation l
 backend subscription, native window, capture, inference timer, or hidden renderer.
 The host owns shared Motion Coordinator and visual integration. Keyboard operation,
 status/error announcements, reduced-motion fallback and readable plain text are
-included. Project pickers currently derive authorized IDs from available catalog
-entries; the integrating host can use its named canonical project picker.
+included. Named project pickers read the host's canonical desktop project catalog;
+legacy project placement is used for filtering without changing resource ownership.
 
 ## Verification
 
