@@ -39,7 +39,7 @@ test('current catalog prompt expands to every exact action schema, scope, effect
   assert.equal(data.capabilities.find((capability:any)=>capability.id==='search').reversible,'no-state-change');
 });
 const output = () => ({ schemaVersion: 1, summary: 'Propose a research workspace.', steps: [{ id: 'create', explanation: 'Use a reference to the selected canonical note.', action: { type: 'workspaceFromResources', title: 'Research', projectId: null, resourceIds: ['note:synthetic'] } }], contribution: { providerId: 'spoofed-provider', executionId: 'spoofed-execution', nativeThreadId: 'spoofed-thread', classification: 'reported' } });
-function fixture(mode: 'normal' | 'invalid-json' | 'simulated' | 'unknown' | 'pending' | 'missing-output' = 'normal') {
+function fixture(mode: 'normal' | 'invalid-json' | 'simulated' | 'unknown' | 'pending' | 'missing-output' = 'normal', providerOutput?: unknown) {
   let now = Date.parse('2026-11-02T02:00:00Z'), turns = 0, opens = 0, authorizations = 0, interrupts = 0;
   const observations: PlanningObservation[] = [], prompts: string[] = [];
   const snapshot = {
@@ -72,7 +72,7 @@ function fixture(mode: 'normal' | 'invalid-json' | 'simulated' | 'unknown' | 'pe
       snapshot.executions[e.id] = e;
       if (mode !== 'missing-output') {
         snapshot.graph.messages.push({ id: 'message:synthetic', conversationId: 'graph:planning', role: 'assistant', sequence: 1,
-          content: mode === 'invalid-json' ? 'This is not a JSON proposal.' : JSON.stringify(output()), provenance: 'application', createdAt: new Date(now).toISOString(), referenceIds: [], constraint: false, sensitivity: 'internal', providerTurnId: e.turnId! });
+          content: mode === 'invalid-json' ? 'This is not a JSON proposal.' : JSON.stringify(providerOutput === undefined ? output() : providerOutput), provenance: 'application', createdAt: new Date(now).toISOString(), referenceIds: [], constraint: false, sensitivity: 'internal', providerTurnId: e.turnId! });
         snapshot.messageEvidence['message:synthetic'] = { classification: mode === 'simulated' ? 'simulated' : 'reported', executionId: e.id, providerId: 'codex-app-server', nativeThreadId: e.binding!.nativeThreadId, nativeTurnId: e.turnId! };
       }
       return structuredClone(e);
@@ -93,6 +93,7 @@ test('real adapter routes through host-authorized canonical planning execution a
   assert.equal(proposal.contribution.nativeTurnId, 'native-turn:synthetic');
   assert.deepEqual(f.counts(), { turns: 1, opens: 1, authorizations: 1, interrupts: 0 });
   assert.equal(f.observations.at(-1)?.stage, 'proposal-ready');
+  assert.equal(proposal.schemaVersion, 2); assert.equal(proposal.kind, 'plan', 'Legacy plan output normalizes explicitly');
   assert.ok(f.prompts[0].includes('You remain Codex'));
   assert.ok(f.prompts[0].includes('Synthetic source text.'));
   assert.ok(f.prompts[0].includes('"id":"note:synthetic"'));
@@ -146,7 +147,7 @@ test('pre-dispatch cancellation starts no turn; canonical unknown and polling ti
   await assert.rejects(cancelled.adapter().propose(input(), controller.signal), /planning_cancelled_before_dispatch/);
   assert.equal(cancelled.counts().turns, 0); assert.equal(cancelled.counts().opens, 0);
   const unknown = fixture('unknown');
-  await assert.rejects(unknown.adapter().propose(input(), new AbortController().signal), (error: unknown) => { assert.ok(error instanceof CodexPlanningError); assert.equal(error.observation.stage, 'unknown'); return true; });
+  await assert.rejects(unknown.adapter().propose(input(), new AbortController().signal), (error: unknown) => { assert.ok(error instanceof CodexPlanningError); assert.equal(error.observation.stage, 'unknown'); assert.equal(error.outcome, 'unknown'); return true; });
   const pending = fixture('pending');
   await assert.rejects(pending.adapter().propose(input(), new AbortController().signal), /planning_execution_outcome_unknown_timeout/);
   assert.equal(pending.counts().turns, 1); assert.equal(pending.counts().interrupts, 0);
@@ -158,4 +159,27 @@ test('parser accepts one enclosing JSON fence, rejects prose and unknown native 
   assert.throws(() => parseCodexPlanningOutput('Here is the plan:\n' + JSON.stringify(output()), contribution), /planning_output_not_json/);
   assert.throws(() => parseCodexPlanningOutput(JSON.stringify({ ...output(), steps: [{ id: 'bad', explanation: 'Unsupported action', action: { type: 'shell', command: 'not executable' } }] }), contribution), /unsupported_or_invalid_action/);
   assert.ok(Buffer.byteLength(buildCodexPlanningPrompt(input())) <= 16384);
+});
+
+test('wire-v2 conversational kinds use only the observed canonical provider turn and replace spoofed identity/native references', async () => {
+  for (const kind of ['answer', 'clarification', 'inability'] as const) {
+    const result = { schemaVersion: 2, kind, content: 'Explicit synthetic command-port ' + kind + '.', contribution: output().contribution }, f = fixture('normal', result);
+    const response = await f.adapter().propose(input(), new AbortController().signal);
+    assert.equal(response.kind, kind); assert.equal(response.schemaVersion, 2); assert.equal('content' in response && response.content, result.content); assert.equal('steps' in response, false);
+    assert.deepEqual(response.contribution, { providerId: 'codex-app-server', classification: 'reported', executionId: 'execution:synthetic', planningConversationId: 'conversation:planning', sourceMessageId: 'message:synthetic', nativeThreadId: 'native-thread:synthetic', nativeTurnId: 'native-turn:synthetic' });
+    assert.equal(f.observations.at(-1)!.stage, 'response-ready'); assert.equal(f.observations.at(-1)!.responseKind, kind); assert.equal(Object.keys(f.snapshot.executions).length, 1, 'The authorized response turn stays canonical, with no follow-on execution');
+    assert.deepEqual(f.counts(), { turns: 1, opens: 1, authorizations: 1, interrupts: 0 }); assert.equal(f.snapshot.graph.messages[0].content, JSON.stringify(result), 'Exact raw provider output is retained separately from parsed conversation content');
+    assert(f.prompts[0].includes('schemaVersion:2')); assert(f.prompts[0].includes('NO steps or actions')); assert(f.prompts[0].includes('You remain Codex')); assert(!f.prompts[0].includes('return an empty steps array')); assert(Buffer.byteLength(f.prompts[0]) <= 16384);
+  }
+});
+
+test('conversational output remains strict bounded JSON and invalid response kinds preserve the canonical raw output', async () => {
+  const contribution = { providerId: 'codex-app-server', classification: 'reported' as const, executionId: 'execution:trusted' };
+  for (const bad of [{ schemaVersion: 2, kind: 'answer', content: 'x'.repeat(16001) }, { schemaVersion: 2, kind: 'answer', content: 'Not an action', steps: [] }, { schemaVersion: 2, kind: 'unknown', content: 'No guessing' }]) {
+    const f = fixture('normal', bad);
+    await assert.rejects(f.adapter().propose(input(), new AbortController().signal), /invalid_provider_result/); assert.equal(f.observations.at(-1)!.stage, 'invalid-output'); assert.equal(f.observations.at(-1)!.sourceMessageId, 'message:synthetic'); assert.equal(f.snapshot.graph.messages[0].content, JSON.stringify(bad)); assert.equal(f.counts().turns, 1);
+  }
+  assert.throws(() => parseCodexPlanningOutput('A plain conversational answer', contribution), /planning_output_not_json/);
+  assert.throws(() => parseCodexPlanningOutput('x'.repeat(65537), contribution), /planning_output_capacity_exceeded/);
+  const v2 = parseCodexPlanningOutput(JSON.stringify({ ...output(), schemaVersion: 2, kind: 'plan' }), contribution); assert.equal(v2.kind, 'plan');
 });

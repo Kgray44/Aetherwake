@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { VelaService } from '../src/service.mts';
-import { VelaError, validateAction, validateProposal } from '../src/capabilities.ts';
-import type { AuthorizationRequest, CanonicalConversation, ContextManifest, HostActionResult, ResourceRef, VelaHostPort, VelaMessage, VelaNativeAction, VelaPlanningPort, VelaScope } from '../src/contracts.ts';
+import { VelaError, validateAction, validateProposal, validateProviderResult } from '../src/capabilities.ts';
+import { velaPanelStatus } from '../src/panel-status.ts';
+import type { AuthorizationRequest, CanonicalConversation, ContextManifest, HostActionResult, ProviderReplyKind, ResourceRef, VelaHostPort, VelaMessage, VelaNativeAction, VelaPlanningPort, VelaScope } from '../src/contracts.ts';
 
 /** Synthetic canonical host: resources, placements, conversations and command receipts share ONE db. */
 function fixture(options: { planner?: VelaPlanningPort; preferenceAdapter?: boolean } = {}) {
@@ -109,6 +110,121 @@ function planner(value: unknown = proposal()) {
     propose: async input => { calls++; captured = input; return structuredClone(value); } };
   return { port, calls: () => calls, captured: () => captured };
 }
+function reply(kind: ProviderReplyKind = 'answer') {
+  return { schemaVersion: 2 as const, kind, content: 'Exact reported ' + kind + ' from the explicitly synthetic provider port.',
+    contribution: { providerId: 'synthetic-planner', classification: 'reported' as const, executionId: 'execution:synthetic-response', planningConversationId: 'conversation:synthetic-provider', sourceMessageId: 'message:synthetic-native-output', nativeThreadId: 'thread:synthetic', nativeTurnId: 'turn:synthetic' } };
+}
+function pendingReply() {
+  let finish!: (value: unknown) => void, signal!: AbortSignal, calls = 0;
+  const port: VelaPlanningPort = { providerId: 'synthetic-planner', availability: () => ({ available: true, busy: false }), propose: (_input, abort) => { calls++; signal = abort; return new Promise(resolve => { finish = resolve; }); } };
+  return { port, finish: (value: unknown = reply()) => finish(value), signal: () => signal, calls: () => calls };
+}
+function assertNoResponseEffects(f: ReturnType<typeof fixture>) {
+  assert.equal(f.service.state().plans.length, 0); assert.equal(f.service.state().receipts.length, 0);
+  assert.equal(f.counts().nativeCalls, 0); assert.equal(f.counts().delegateCalls, 0); assert.equal(f.counts().preferenceCalls, 0);
+  assert(!f.authRequests.some(a => ['prepare', 'review', 'apply', 'delegate'].includes(a.phase)));
+  assert.equal(f.db.prepare('SELECT count(*) AS n FROM canonical_receipts').get()!.n, 0);
+}
+
+test('wire-v2 answers, clarifications and inability append one exact canonical attributed message, never an action plan', async () => {
+  for (const kind of ['answer', 'clarification', 'inability'] as const) {
+    const output = reply(kind), p = planner(output), f = fixture({ planner: p.port });
+    try {
+      const request = await f.service.request({ intent: 'A conversational request without application changes', resourceIds: ['note:a'], authorizeProvider: true });
+      assert.equal(request.state, 'responded'); assert.equal(request.planId, undefined); assert.equal(request.response?.kind, kind); assert.equal(p.calls(), 1); assertNoResponseEffects(f);
+      const state = f.service.state(), message = state.conversation!.messages.find(m => m.id === request.response!.messageId)!;
+      assert.equal(state.conversation!.messages.length, 2); assert.equal(message.content, output.content); assert.equal(message.source, 'provider'); assert.equal(message.providerId, 'synthetic-planner'); assert.equal(message.classification, 'reported'); assert.equal(message.responseKind, kind); assert.deepEqual(message.providerContribution, output.contribution); assert.equal(message.planId, undefined);
+      assert.deepEqual(Object.keys(request.response!).sort(), ['kind', 'messageId'], 'No reply text is copied into request metadata');
+      const status = velaPanelStatus(state); assert.equal(status.requestState, 'responded'); assert.equal(status.planState, undefined); assert.doesNotMatch(status.message, /applied|complete|success|running|missing/i);
+      assert.throws(() => f.service.cancel(request.id), /completed_request_not_cancellable/); assert.throws(() => f.service.review({ planId: request.id, fingerprint: 'none', decision: 'approve' }), /plan_not_found/);
+      const reopened = new VelaService({ db: f.db, host: f.host, transaction: f.transaction, planner: p.port });
+      assert.deepEqual(reopened.state().requests, state.requests); assert.deepEqual(reopened.state().conversation, state.conversation); assert.equal(p.calls(), 1); assertNoResponseEffects(f);
+    } finally { f.close(); }
+  }
+});
+
+test('legacy wire-v1 plans normalize while stored v1 upgrades preserve IDs, canonical history and plan fingerprints', async () => {
+  const p = planner(), f = fixture({ planner: p.port });
+  try {
+    assert.equal(validateProviderResult(proposal(), 'synthetic-planner').kind, 'plan');
+    const v2 = validateProviderResult({ ...proposal(), schemaVersion: 2, kind: 'plan' }, 'synthetic-planner'); assert.equal(v2.schemaVersion, 2); assert.equal(v2.kind, 'plan');
+    assert.throws(() => validateProviderResult({ ...proposal(), steps: [] }, 'synthetic-planner'), /invalid_provider_proposal/);
+    const request = await f.service.request({ intent: 'Legacy plan', resourceIds: ['note:a'], authorizeProvider: true }); assert.equal(request.state, 'awaiting-review');
+    const before = f.service.state(), stored = JSON.parse(String(f.db.prepare('SELECT json FROM vela_state WHERE id=1').get()!.json)); stored.schemaVersion = 1;
+    f.db.prepare('UPDATE vela_state SET schema_version=1,json=? WHERE id=1').run(JSON.stringify(stored));
+    const reopened = new VelaService({ db: f.db, host: f.host, transaction: f.transaction, planner: p.port });
+    assert.equal(f.db.prepare('SELECT schema_version FROM vela_state WHERE id=1').get()!.schema_version, 2); assert.deepEqual(reopened.state().requests, before.requests); assert.deepEqual(reopened.state().plans, before.plans); assert.deepEqual(reopened.state().conversation, before.conversation); assert.equal(p.calls(), 1);
+    const current = JSON.parse(String(f.db.prepare('SELECT json FROM vela_state WHERE id=1').get()!.json)); current.schemaVersion = 3; f.db.prepare('UPDATE vela_state SET schema_version=3,json=? WHERE id=1').run(JSON.stringify(current));
+    assert.throws(() => new VelaService({ db: f.db, host: f.host, transaction: f.transaction }), /unsupported_vela_schema/);
+  } finally { f.close(); }
+});
+
+test('reply schema rejects empty, oversized, spoofed, action-bearing and unsupported responses without interpreting them', async () => {
+  for (const bad of [ { ...reply(), content: '' }, { ...reply(), content: 'x'.repeat(16001) }, { ...reply(), kind: 'shell' }, { ...reply(), steps: [] }, { ...reply(), action: proposal().steps[0].action }, { ...reply(), schemaVersion: 3 }, { ...reply(), contribution: { providerId: 'impersonated', classification: 'reported' } } ]) {
+    const f = fixture({ planner: planner(bad).port });
+    try { const request = await f.service.request({ intent: 'Do not manufacture an answer', resourceIds: [], authorizeProvider: true }); assert.equal(request.state, 'invalid-plan'); assert.deepEqual(request.invalidProposal, bad); assert.equal(request.response, undefined); assert(!f.service.state().conversation!.messages.some(m => m.source === 'provider')); assertNoResponseEffects(f); }
+    finally { f.close(); }
+  }
+});
+
+test('reply commit rechecks revocation, policy, metadata, content permission and exact source freshness after provider completion', async () => {
+  const cases: [string, (f: ReturnType<typeof fixture>) => void][] = [
+    ['metadata revoked', f => f.setScope({ resourceIds: ['task:b'] })], ['policy changed', f => f.setScope({ policyVersion: 'policy:2' })], ['principal changed', f => f.setScope({ principalId: 'different:user' })],
+    ['source version changed', f => { f.db.prepare("UPDATE canonical_resources SET version=version+1 WHERE id='note:a'").run(); }],
+    ['source text changed without a version', f => { f.db.prepare("UPDATE canonical_resources SET content='Changed canonical content' WHERE id='note:a'").run(); }],
+    ['content permission revoked', f => { f.host.readContent = () => null; }],
+    ['metadata-only source changed', f => { f.db.prepare("UPDATE canonical_resources SET version=version+1 WHERE id='workspace:a'").run(); }],
+    ['navigation scope changed from null', f => { f.host.context = () => ({ currentProjectId: 'project:new', currentWorkspaceId: null }); }],
+  ];
+  for (const [name, change] of cases) {
+    const p = pendingReply(), f = fixture({ planner: p.port });
+    try {
+      f.host.contextReferences = () => [f.ref('workspace:a')!];
+      f.host.context = () => ({ currentProjectId: null, currentWorkspaceId: null });
+      const pending = f.service.request({ intent: 'Use only the reviewed context', resourceIds: ['note:a'], authorizeProvider: true }); assert.equal(p.calls(), 1); change(f); p.finish();
+      const request = await pending; assert.equal(request.state, 'invalid-plan', name); assert.equal(request.response, undefined); assert(!f.service.state().conversation!.messages.some(m => m.source === 'provider'), name); assertNoResponseEffects(f);
+    } finally { f.close(); }
+  }
+});
+
+test('cancelled or superseded pending reply cannot become a late duplicate response or restart inference', async () => {
+  const cancelled = pendingReply(), f = fixture({ planner: cancelled.port });
+  try {
+    const pending = f.service.request({ intent: 'Cancel this response', resourceIds: [], authorizeProvider: true }), request = f.service.state().requests.at(-1)!;
+    f.service.cancel(request.id); assert.equal(cancelled.signal().aborted, true); cancelled.finish(); assert.equal((await pending).state, 'cancelled'); assert(!f.service.state().conversation!.messages.some(m => m.source === 'provider')); assertNoResponseEffects(f);
+  } finally { f.close(); }
+  const p = pendingReply(), stale = fixture({ planner: p.port });
+  try {
+    const pending = stale.service.request({ intent: 'Preserve uncertain restart', resourceIds: [], authorizeProvider: true });
+    const reopened = new VelaService({ db: stale.db, host: stale.host, transaction: stale.transaction, planner: p.port }); assert.equal(reopened.state().requests.at(-1)!.state, 'unknown');
+    p.finish(); await assert.rejects(pending, /concurrent_vela_writer/); assert.equal(reopened.state().requests.at(-1)!.state, 'unknown'); assert(!reopened.state().conversation!.messages.some(m => m.source === 'provider')); assert.equal(p.calls(), 1);
+  } finally { stale.close(); }
+  const once = pendingReply(), only = fixture({ planner: once.port });
+  try {
+    const pending = only.service.request({ intent: 'One observed provider response only', resourceIds: [], authorizeProvider: true }); once.finish(); const response = await pending; once.finish({ ...reply(), content: 'Late duplicate must not append' });
+    const reopened = new VelaService({ db: only.db, host: only.host, transaction: only.transaction, planner: once.port }); assert.equal(reopened.state().conversation!.messages.filter(m => m.source === 'provider').length, 1); assert.equal(reopened.state().requests[0].response!.messageId, response.response!.messageId); assert.equal(once.calls(), 1); assertNoResponseEffects(only);
+  } finally { only.close(); }
+});
+
+test('canonical reply append and request outcome roll back together; only an explicit new request may retry', async () => {
+  const p = planner(reply()), f = fixture({ planner: p.port }), append = f.host.appendMessage;
+  try {
+    f.host.appendMessage = (id, message) => { const result = append(id, message); if (message.source === 'provider') throw new Error('Synthetic response persistence failure'); return result; };
+    const failed = await f.service.request({ intent: 'Commit this reply atomically', resourceIds: [], authorizeProvider: true }); assert.equal(failed.state, 'invalid-plan'); assert.equal(failed.response, undefined); assert.equal(p.calls(), 1); assert(!f.service.state().conversation!.messages.some(m => m.source === 'provider')); assertNoResponseEffects(f);
+    f.host.appendMessage = append;
+    const retried = await f.service.request({ intent: 'Explicitly request a new response', resourceIds: [], authorizeProvider: true }); assert.equal(retried.state, 'responded'); assert.notEqual(retried.id, failed.id); assert.equal(p.calls(), 2); assert.equal(f.service.state().conversation!.messages.filter(m => m.source === 'provider').length, 1); assertNoResponseEffects(f);
+  } finally { f.close(); }
+});
+
+test('reply text is inert and an explicitly unknown provider outcome remains unknown without an answer or automatic retry', async () => {
+  const output = { ...reply(), content: JSON.stringify(proposal().steps[0].action) }, f = fixture({ planner: planner(output).port });
+  try { const request = await f.service.request({ intent: 'Keep quoted commands as text', resourceIds: [], authorizeProvider: true }); assert.equal(request.state, 'responded'); assert.equal(f.service.state().conversation!.messages.at(-1)!.content, output.content); assertNoResponseEffects(f); }
+  finally { f.close(); }
+  let calls = 0;
+  const uncertain = fixture({ planner: { providerId: 'synthetic-planner', availability: () => ({ available: true, busy: false }), propose: async () => { calls++; throw new VelaError('explicit_provider_outcome_uncertain', 'unknown'); } } });
+  try { const request = await uncertain.service.request({ intent: 'Do not invent a response', resourceIds: [], authorizeProvider: true }); assert.equal(request.state, 'unknown'); assert.equal(request.response, undefined); assert(!uncertain.service.state().conversation!.messages.some(m => m.source === 'provider')); assert.equal(calls, 1); assertNoResponseEffects(uncertain); }
+  finally { uncertain.close(); }
+});
 async function reviewed(f: ReturnType<typeof fixture>) {
   const request = await f.service.request({ intent: 'Make a research workspace with the selected note', resourceIds: ['note:a'], authorizeProvider: true });
   assert.equal(request.state, 'awaiting-review');

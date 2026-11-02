@@ -61,6 +61,8 @@ export interface VelaMessage {
   id: string; role: 'user' | 'assistant' | 'system'; content: string;
   source: 'user' | 'vela-native' | 'provider'; providerId?: string;
   requestId?: string; planId?: string; classification: EvidenceClass;
+  /** Parsed conversational content remains attributed to the actual observed provider output. */
+  responseKind?: ProviderReplyKind; providerContribution?: ProviderContribution;
 }
 export interface CanonicalConversation { resourceId: string; revision: number; messages: VelaMessage[] }
 export interface ProviderContribution {
@@ -73,25 +75,33 @@ export interface DelegateTaskAction {
   resourceIds: string[]; constraints: string[];
 }
 export interface PlanStep { id: string; explanation: string; action: VelaNativeAction | DelegateTaskAction }
+/** Legacy wire-v1 action plan; accepted on read and normalized to ProviderResult. */
 export interface ProviderProposal {
   schemaVersion: 1; summary: string; steps: PlanStep[];
   contribution: ProviderContribution;
 }
+export type ProviderReplyKind = 'answer' | 'clarification' | 'inability';
+export type ProviderResult =
+  | { schemaVersion: 2; kind: 'plan'; summary: string; steps: PlanStep[]; contribution: ProviderContribution }
+  | { schemaVersion: 2; kind: ProviderReplyKind; content: string; contribution: ProviderContribution };
 export interface VelaPlanningPort {
   readonly providerId: string;
   /** Availability is observed by the adapter, never inferred from a model catalog. */
   availability(): { available: boolean; busy: boolean; reason?: string };
+  /** Returns untrusted wire-v2 result or a legacy v1 plan; both are validated by the service. */
   propose(input: {
     requestId: string; conversationId: string; intent: string;
     context: ContextManifest; capabilities: CapabilityDescriptor[];
     instruction: string;
   }, signal: AbortSignal): Promise<unknown>;
 }
-export type RequestState = 'planning' | 'awaiting-review' | 'native-ready' | 'provider-unavailable' | 'invalid-plan' | 'failed' | 'cancelled' | 'unknown' | 'completed';
+export type RequestState = 'planning' | 'awaiting-review' | 'native-ready' | 'provider-unavailable' | 'invalid-plan' | 'failed' | 'cancelled' | 'unknown' | 'completed' | 'responded';
 export interface VelaRequest {
   id: string; conversationId: string; intent: string; state: RequestState;
   createdAt: string; updatedAt: string; providerId: string | null;
   context: ContextManifest; planId?: string; errorCode?: string;
+  /** Reference only: content lives in the SAME canonical conversation, never a second transcript. */
+  response?: { kind: ProviderReplyKind; messageId: string };
   /** Raw provider plans are preserved locally, including invalid plans; never interpreted as commands. */
   invalidProposal?: unknown;
 }
@@ -131,6 +141,8 @@ export interface HostActionResult {
 }
 export interface VelaHostPort {
   scope(purpose?: VelaScopePurpose): VelaScope;
+  /** Existing navigation metadata, when the host has it; not implicit provider content or retrieval authority. */
+  context?(): { currentProjectId: string | null; currentWorkspaceId: string | null };
   /** Explicit metadata only, inserted into the actual consent/planner manifest before authorization. */
   contextReferences?(selectedResourceIds: readonly string[]): ResourceRef[];
   /** Both conversation operations use the canonical host resource/graph, on the injected db transaction. */

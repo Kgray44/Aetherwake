@@ -1,10 +1,12 @@
-import type { CapabilityDescriptor, DelegateTaskAction, PlanStep, ProviderProposal, VelaNativeAction } from './contracts.ts';
+import type { CapabilityDescriptor, DelegateTaskAction, PlanStep, ProviderContribution, ProviderProposal, ProviderResult, VelaNativeAction } from './contracts.ts';
 import { defaultOrganization, updateOrganization } from '../../workspace-engine/organization.mts';
 import type { OrganizationUpdate } from '../../workspace-engine/contracts.mts';
 
 export class VelaError extends Error {
   readonly code: string;
-  constructor(code: string) { super(code); this.code = code; }
+  /** Trusted adapter failure semantics; never inferred from model prose or an error-code pattern. */
+  readonly outcome?: 'unknown';
+  constructor(code: string, outcome?: 'unknown') { super(code); this.code = code; this.outcome = outcome; }
 }
 export function check(condition: unknown, code: string): asserts condition {
   if (!condition) throw new VelaError(code);
@@ -109,16 +111,33 @@ export function validateAction(value: unknown): VelaNativeAction | DelegateTaskA
   return structuredClone(v) as unknown as VelaNativeAction | DelegateTaskAction;
 }
 
+function validateContribution(value: unknown, providerId: string): ProviderContribution {
+  const c = value;
+  check(isRecord(c) && c.providerId === providerId && c.classification === 'reported' && Object.keys(c).every(k => ['providerId', 'model', 'nativeThreadId', 'nativeTurnId', 'executionId', 'planningConversationId', 'sourceMessageId', 'classification'].includes(k)) && Object.entries(c).every(([k, v]) => k === 'classification' || text(v, 200)), 'invalid_provider_attribution');
+  return structuredClone(c) as unknown as ProviderContribution;
+}
 export function validateProposal(value: unknown, providerId: string): ProviderProposal {
   check(isRecord(value) && fields(value, ['schemaVersion', 'summary', 'steps', 'contribution']), 'invalid_provider_proposal');
   check(value.schemaVersion === 1 && text(value.summary, 4000) && Array.isArray(value.steps) && value.steps.length > 0 && value.steps.length <= 12, 'invalid_provider_proposal');
-  const c = value.contribution;
-  check(isRecord(c) && c.providerId === providerId && c.classification === 'reported' && Object.keys(c).every(k => ['providerId', 'model', 'nativeThreadId', 'nativeTurnId', 'executionId', 'planningConversationId', 'sourceMessageId', 'classification'].includes(k)) && Object.entries(c).every(([k, v]) => k === 'classification' || text(v, 200)), 'invalid_provider_attribution');
+  const contribution = validateContribution(value.contribution, providerId);
   const steps = value.steps.map((step): PlanStep => {
     check(isRecord(step) && fields(step, ['id', 'explanation', 'action']) && identifier(step.id) && text(step.explanation, 2000), 'invalid_plan_step');
     return { id: step.id, explanation: step.explanation, action: validateAction(step.action) };
   });
   check(new Set(steps.map(s => s.id)).size === steps.length, 'duplicate_plan_step');
   // Independent steps only: overlapping mutations would need refreshed previews and version manifests.
-  return { schemaVersion: 1, summary: value.summary, steps, contribution: c as unknown as ProviderProposal['contribution'] };
+  return { schemaVersion: 1, summary: value.summary, steps, contribution };
+}
+/** Explicit wire discrimination; legacy plans normalize without weakening their non-empty action contract. */
+export function validateProviderResult(value: unknown, providerId: string): ProviderResult {
+  check(isRecord(value), 'invalid_provider_result');
+  if (value.schemaVersion === 1) { const plan = validateProposal(value, providerId); return { ...plan, schemaVersion: 2, kind: 'plan' }; }
+  check(value.schemaVersion === 2, 'invalid_provider_result');
+  if (value.kind === 'plan') {
+    check(fields(value, ['schemaVersion', 'kind', 'summary', 'steps', 'contribution']), 'invalid_provider_result');
+    const plan = validateProposal({ schemaVersion: 1, summary: value.summary, steps: value.steps, contribution: value.contribution }, providerId);
+    return { ...plan, schemaVersion: 2, kind: 'plan' };
+  }
+  check(['answer', 'clarification', 'inability'].includes(String(value.kind)) && fields(value, ['schemaVersion', 'kind', 'content', 'contribution']) && text(value.content, 16000), 'invalid_provider_result');
+  return { schemaVersion: 2, kind: value.kind as 'answer' | 'clarification' | 'inability', content: value.content, contribution: validateContribution(value.contribution, providerId) };
 }
