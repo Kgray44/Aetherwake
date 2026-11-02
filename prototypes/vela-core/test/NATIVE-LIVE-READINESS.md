@@ -1,5 +1,21 @@
 # Bounded live helper readiness
 
+## Historical review UI mode — source readiness only
+
+An explicit `--integration-vela-live --verify-review-ui --review-source-evidence=<absolute successful journey.json>` invokes `native-review-ui.cjs` through the existing helper lifecycle. It is mutually exclusive with restore, resume and submission. `deadlineMs` is shortened to at most **25,000 ms**, including startup and the existing 1.5-second cleanup reserve. The strict focus/Escape abort and unconditional owned-app quit remain unchanged. There is no approval flag, consent operation, provider probe, new turn or retry.
+
+The host must prepare a fresh **external physical** `review-vela-review-ui-<digits>` profile, containing only its explicitly cloned closed successful SQLite and an exact copy of `vela-live-expected.json`. The helper never clones or opens the source SQLite. It reads/hashes the explicit successful original journey and its original checkpoint, verifies the copy, then compares the actual clone's canonical resources, project/workspaces, all four placements, local chat/note, persistent Vela history/requests/plans/receipts/preferences, provider output and native execution IDs **before native input**. Unknown/mismatched source, geometry or scope fails closed. `adaptation.applicationAvailable` is reported separately as a host-derived capability; durable policy/evidence still compare exactly.
+
+This mode intentionally binds **current source/assets separately** from the original successful source/assets. It does not modify or relax the original restore mode's exact same-source comparisons. The normal native/live source and behavior remain untouched.
+
+Actual visible Vela and its historical applied-plan disclosure are operated with the shared guarded driver. Native wheel events traverse the outer scroll gutter and technical code viewport; no DOM click, focus, scrollTop, input-value mutation or synthetic event substitutes are used. Read-only `Range` line rectangles reject overlapping visible reading groups and shrunken text boxes. Every actual text line must have a fully visible native-scroll observation. A verification-only in-memory WeakMap identifies existing nodes without changing DOM attributes/content/styles; editor value/caret, keyed reading controls, accessibility and stable composer geometry must survive. Three opaque stable samples and actual new GPU draw counters after the native open/disclosure interaction precede capture; no ambient ribbon or forced render is requested.
+
+The receipt is separately labelled `aerynth.actual-vela-review-ui@1` / `review-ui.json`, with **two PNGs / 8 MiB** and a separate `vela-review-ui-capture-budget.json`; historical capture budgets are not copied/reused. It records any bounded genuine app-only presence/UI journal entries while requiring the retained provider scope, execution count, action receipts and canonical resource/content/layout projection to remain unchanged. Native preview/review/grant/request diagnostics must remain empty. The original receipts/checkpoints are rehashed at completion.
+
+The additional **SYNTHETIC hidden-DOM prepared long-request/open-evidence** component regression exercises stable full text, typed evidence, editor/caret and unreplayed review controls. Its CPU harness has no layout engine and proves neither pixels nor a new assistant/provider response. Pure geometry/event/checkpoint fixtures likewise verify guards only; they cannot qualify the actual native mode.
+
+Executed for this source release: both helper syntax checks, 42 selected lifecycle/geometry/source/component tests, strict Vela TypeScript and diff whitespace checks. **No native window, provider/auth/network call or new rendering acceptance was run by this worker.** Root owns the separately scoped actual clone/operator check and visual review.
+
 `native-live.cjs` retains the actual one-turn synthetic workspace proposal/apply journey and its read-only restore / explicitly bound existing-plan resume modes. Source readiness is not actual provider, native consent, visual or restart qualification. This release ran no Electron window, provider request, network request, approval or grant.
 
 Host interface:

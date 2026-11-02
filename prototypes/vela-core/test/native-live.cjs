@@ -468,11 +468,13 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
 exports.verify = async options => {
   let slot,monitor,hardStop,escape;
   try {
-    slot=createSlot(options);
+    const reviewUi=process.argv.includes('--verify-review-ui');
+    const review=reviewUi?require('./native-review-ui.cjs'):null;
+    slot=createSlot(review?{...options,deadlineMs:review.reviewDeadline(options.deadlineMs)}:options);
     escape=(_event,input)=>{if(input.type==='keyDown'&&input.key==='Escape')slot.abort(Error('vela_live_operator_escape'));};
     options.win.webContents.on('before-input-event',escape);
     hardStop=setTimeout(()=>{process.exitCode=1;slot.abort(Error('vela_live_slot_deadline'));options.app.quit();},Math.max(0,slot.deadline-slot.now()));hardStop.unref?.();
     monitor=setInterval(()=>{try{slot.check(true);}catch{}},40);monitor.unref?.();
-    return await run(options,slot);
+    return review?await review.verifyReviewUi(options,slot):await run(options,slot);
   } catch(error){process.exitCode=1;throw error;} finally {clearInterval(monitor);clearTimeout(hardStop);if(escape)options.win.webContents.removeListener('before-input-event',escape);options.app.quit();}
 };
