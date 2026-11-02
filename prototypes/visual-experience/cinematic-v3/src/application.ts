@@ -33,6 +33,11 @@ import type {
   ProductCommandMap,
 } from "../../../conversation-product/src/contracts.ts";
 import "../../../conversation-product/src/style.css";
+import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
+import "../../../vela-core/src/panel.css";
+import { createVelaClient } from "./vela-client";
+import { createContextualSurfaces } from "./contextual-surfaces";
+import "./contextual-surfaces.css";
 import type {
   Block,
   BlockKind,
@@ -72,6 +77,44 @@ const escape = (s: string) =>
 
 export function installApplication(hooks: Hooks) {
   const host = window.aerynthHost!;
+  const surfaces = createContextualSurfaces({
+    motion: hooks.motion,
+    wake: hooks.wake,
+    viewport: () => ({ width: innerWidth, height: innerHeight }),
+    safeInsets: { top: 96, left: 16, right: 16, bottom: 24 },
+  });
+  addEventListener("resize", surfaces.viewportChanged);
+  let velaPanel: ReturnType<typeof mountVelaPanel> | null = null;
+  let velaOpen = false;
+  let velaRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  const velaContent = document.createElement("div");
+  velaContent.className = "application-vela-content";
+  const velaClient = createVelaClient({
+    command: (name, input) => host.command!(name, input),
+    changed: async () => {
+      apply(
+        (await host.command!("desktop", {
+          type: "snapshot",
+        })) as DesktopSnapshot,
+      );
+    },
+    observed: (value) => {
+      if (
+        value.requests.some((r) => r.state === "planning") ||
+        value.receipts.some((r) => r.state === "started")
+      )
+        hooks.vela("working");
+      else if (
+        value.preferences.mode !== "quiet" &&
+        value.attention.some(
+          (e) =>
+            e.disposition === "interrupt" && !e.reviewedAt && !e.dismissedAt,
+        )
+      )
+        hooks.vela("attention");
+      else hooks.vela("idle");
+    },
+  });
   let state: DesktopSnapshot | null = null;
   let offset = { x: 0, y: 0 };
   let zoom = 1;
@@ -194,8 +237,7 @@ export function installApplication(hooks: Hooks) {
   el(".provenance").textContent = "LOCAL DATA · Codex connects only on request";
   el(".study-caption small").textContent = "Your resources. Your space.";
   el("#vela-state").textContent = "Idle · no background execution";
-  el("#vela-dialog p").textContent =
-    "Vela’s AI coordination is unavailable in this review. Use the workspace commands to organize locally; Codex conversations have their own explicit Send action.";
+  el("#vela-dialog").setAttribute("aria-hidden", "true");
   el("#vela-expression")
     .closest("section")!
     .querySelector('label[for="vela-expression"]')!.textContent =
@@ -737,6 +779,90 @@ export function installApplication(hooks: Hooks) {
       },
     );
     void conversationManager.ready.catch(report);
+  }
+  function openVela() {
+    if (velaOpen) {
+      surfaces.close("vela", "close-button");
+      return;
+    }
+    if (!velaPanel)
+      velaPanel = mountVelaPanel(velaContent, velaClient, {
+        onOpenSubject: (subject) => {
+          surfaces.close("vela");
+          if (subject.kind === "workspace") {
+            void run({
+              type: "navigate",
+              target: { kind: "workspace", workspaceId: subject.id },
+            });
+          } else if (subject.kind === "project") {
+            void run({
+              type: "navigate",
+              target: { kind: "constellation", projectId: subject.id },
+            });
+          } else if (
+            state?.resources.find((r) => r.id === subject.id)?.kind ===
+            "conversation"
+          ) {
+            conversations(subject.id);
+          } else {
+            const placement = (
+              state?.navigationBlocks ??
+              state?.blocks ??
+              []
+            ).find((b) => b.resource_id === subject.id);
+            if (!placement) {
+              hooks.status(
+                "This resource is saved in Resources and has no workspace placement.",
+              );
+              return;
+            }
+            void enqueue(async () => {
+              await flush();
+              await command({
+                type: "navigate",
+                target: {
+                  kind: "workspace",
+                  workspaceId: placement.workspace_id,
+                },
+              });
+              reveal(placement.id);
+              hooks.focus(placement.id);
+            });
+          }
+        },
+      });
+    velaOpen = true;
+    const surface = surfaces.open({
+      id: "vela",
+      anchor: el("#vela"),
+      content: velaContent,
+      label: "Vela",
+      placement: "left",
+      minSize: { width: 360, height: 260 },
+      maxSize: { width: 560, height: 720 },
+      initialFocus: ".vela-core-compose textarea",
+      onClose: () => {
+        velaOpen = false;
+        el("#vela").setAttribute("aria-expanded", "false");
+      },
+    });
+    surface.id = "vela-assistant-surface";
+    el("#vela").setAttribute("aria-controls", surface.id);
+    el("#vela").setAttribute("aria-expanded", "true");
+    void velaPanel.open().catch(report);
+  }
+  function refreshVelaFromEvent() {
+    if (!velaPanel || velaRefreshTimer) return;
+    velaRefreshTimer = setTimeout(() => {
+      velaRefreshTimer = undefined;
+      // Keep an in-progress settings edit intact while still observing real presence.
+      const editing =
+        velaContent.contains(document.activeElement) &&
+        document.activeElement?.matches("input,textarea,select");
+      void (
+        velaOpen && !editing ? velaPanel!.refresh() : velaClient.state()
+      ).catch(report);
+    }, 150);
   }
   dialog.addEventListener(
     "close",
@@ -1571,6 +1697,7 @@ export function installApplication(hooks: Hooks) {
     }
   }
   host.onEvent?.((event) => {
+    refreshVelaFromEvent();
     const e = event as Activity & {
       resourceId?: string;
       payload?: { delta?: string };
@@ -1682,6 +1809,7 @@ export function installApplication(hooks: Hooks) {
     });
   return {
     frame(now: number, policy: Policy) {
+      surfaces.frame(now);
       paintPreview();
       const target = presenceTarget();
       if (target && !presenceDrag)
@@ -1753,6 +1881,7 @@ export function installApplication(hooks: Hooks) {
       return p ? sculptureRegion(p) : undefined;
     },
     snapshot: () => state,
+    openVela,
     offset: () => camera().offset,
     zoom: () => camera().zoom,
     previewBlock: (id: string) => {

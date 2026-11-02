@@ -8,6 +8,24 @@
   max-height: 82vh;
   box-shadow: 0 30px 120px #000c;
 }
+.application-vela-content .vela-core {
+  padding: 0;
+  font: inherit;
+}
+.application-vela-content .vela-core-message,
+.application-vela-content .vela-core-plan,
+.application-vela-content .vela-core-attention article,
+.application-vela-content .vela-core-context article {
+  background: #9296b00b;
+  border-color: #c8c6e124;
+}
+.application-vela-content .vela-core input,
+.application-vela-content .vela-core select,
+.application-vela-content .vela-core textarea,
+.application-vela-content .vela-core-button {
+  background: #bbc8ee0b;
+  border-color: #c8c6e139;
+}
 .command-surface.conversation-surface {
   width: min(1140px, 94vw);
   max-height: 88vh;
@@ -125,7 +143,9 @@
   cursor: nwse-resize;
   touch-action: none;
 }
-.folio[data-shape="rounded"]:not(.expanded) { border-radius: 18px; }
+.folio[data-shape="rounded"]:not(.expanded) {
+  border-radius: 18px;
+}
 .folio[data-shape="circle"]:not(.expanded) {
   border-radius: 50%;
 }
@@ -147,8 +167,15 @@
   gap: 8px;
   z-index: 30;
 }
-.application-ready .dock { display: none; }
-.application-ready .place { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.application-ready .dock {
+  display: none;
+}
+.application-ready .place {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 .canvas-tools button {
   background: #141727c9;
   border: 1px solid #b9a3dc33;

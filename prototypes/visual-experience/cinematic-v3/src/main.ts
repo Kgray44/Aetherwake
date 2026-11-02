@@ -773,7 +773,7 @@ function setVela(state: VelaState) {
     `${labels[state]} · ${desktopMode ? "application activity" : "synthetic"}`;
   $("#vela").setAttribute(
     "aria-label",
-    `Address Vela. ${labels[state]}, synthetic presence`,
+    `Address Vela. ${labels[state]}, ${desktopMode ? "application assistant" : "synthetic presence"}`,
   );
   $<HTMLSelectElement>("#vela-expression").value = state;
   document.body.dataset.vela = state;
@@ -789,6 +789,10 @@ function showDialog(id: string, button: string, show: boolean) {
   interaction();
 }
 $("#vela").addEventListener("click", () => {
+  if (application) {
+    application.openVela();
+    return;
+  }
   const open = $("#vela-dialog").hidden;
   showDialog("#vela-dialog", "#vela", open);
   if (open) {
