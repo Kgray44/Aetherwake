@@ -7,6 +7,7 @@ const { createDriver } = require('../../visual-experience/cinematic-v3/native/de
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const digest = data => createHash('sha256').update(data).digest('hex');
 const MAX_PNGS = 6, MAX_PNG_BYTES = 8 * 1024 * 1024;
+const titleSelector = '.cp-detail input[aria-label="Conversation title"]';
 const runtime = path.resolve(__dirname, '../../visual-experience/cinematic-v3/.runtime');
 const inside = (root, target) => { const relative = path.relative(path.resolve(root), path.resolve(target)); return relative && !relative.startsWith('..') && !path.isAbsolute(relative); };
 const checkedJson = value => { const data = JSON.stringify(value, null, 2); assert(Buffer.byteLength(data) <= 1024 * 1024, 'Private receipt exceeds bounded 1 MiB'); return data; };
@@ -26,7 +27,7 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
   const budgetPath = path.join(path.resolve(privateRoot), 'conversation-product-capture-budget.json');
   const receipt = { contract:'aerynth.actual-conversation-acceptance@1', at:new Date().toISOString(), restore, source,
     host:'Actual desktop + actual canonical SQLite + mounted ConversationProduct', syntheticData:true,
-    provider:'No provider commands are issued by this helper; execution state is independently checked empty.', actions:[], checks:[], captures:[], partial:{}, passed:false,
+    provider:'No provider commands are issued by this helper; execution state is independently checked empty.', actions:[], checks:[], captures:[], consoleErrors:[], partial:{}, passed:false,
     limits:{maxPngs:MAX_PNGS,maxPngBytes:MAX_PNG_BYTES,scope:'combined journey and restore for this private profile'},
     limitations:['GPU draw acknowledgements and focused capture do not establish monitor presentation or performance acceptance.',
       'Branch review is exercised through the real UI; its private review record is not exposed by the read-only product contract.',
@@ -34,6 +35,27 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
   };
   let driver, budget={count:0,bytes:0,files:[]};
   const check = (name, detail) => receipt.checks.push({name, ...(detail===undefined?{}:{detail})});
+  const consoleError = (_event,details,message,line,sourceId) => {
+    const structured=details&&typeof details==='object',level=structured?details.level:details;if(level!=='error'&&level!==3)return;
+    receipt.consoleErrors.push({message:String(structured?details.message:message).slice(0,2048),line:structured?details.lineNumber:line,source:String(structured?details.sourceId:sourceId).slice(0,300)});
+    if(receipt.consoleErrors.length>32)receipt.consoleErrors.shift();
+  };
+  win.webContents.on('console-message',consoleError);
+  const uiSnapshot = async () => {
+    if(!driver)return {snapshotError:'driver_not_ready'};
+    try{return await driver.js(`(()=>{try{const root=document.querySelector('.cp-manager'),title=document.querySelector(${JSON.stringify(titleSelector)})?.value??null,app=window.__aerynth?.application?.();return {title,status:document.querySelector('.cp-status')?.textContent??null,managerMounted:!!root,managerVisible:!!root&&root.getClientRects().length>0,busy:root?.hasAttribute('aria-busy')??false,query:root?.querySelector('input[type=search]')?.value??null,selectedResource:{reportedId:root?.dataset.resourceId??null,title,canonicalCandidates:(app?.resources??[]).filter(r=>r.kind==='conversation'&&r.title===title).map(r=>r.id),identitySource:'Rendered title matched against canonical application snapshot; manager exposes no selected resource ID.'},renderedMessages:[...document.querySelectorAll('.cp-message')].slice(0,60).map(e=>({id:e.dataset.messageId,content:e.querySelector('.cp-message-content')?.textContent??null})),results:[...document.querySelectorAll('.cp-results button')].slice(0,50).map(e=>e.textContent.slice(0,700))};}catch(error){return {snapshotError:String(error)}}})()`);}
+    catch(error){return {snapshotError:String(error.message??error)};}
+  };
+  const waitUi = async (predicate,label,expected) => {
+    const deadline=Date.now()+20000;let actual;
+    while(Date.now()<deadline){actual=await uiSnapshot();if(!actual.snapshotError&&predicate(actual))return actual;await pause(80);}
+    receipt.partial.renderWait={label,expected,actual};
+    throw Error('Timed out: '+label+'; '+JSON.stringify({status:actual?.status,renderedMessageIds:actual?.renderedMessages?.map(m=>m.id),results:actual?.results,selectedResource:actual?.selectedResource,busy:actual?.busy,snapshotError:actual?.snapshotError}));
+  };
+  const waitMessage = async (resourceId,title,message) => {
+    await waitUi(actual=>!actual.busy&&actual.title===title&&actual.renderedMessages.some(m=>m.id===message.id&&m.content===message.content),'canonical message ID and content render',{resourceId,title,message});
+    check('canonical-message-id-and-content-rendered',{resourceId,messageId:message.id,title});
+  };
   try {
     assert(privateRoot && path.isAbsolute(privateRoot), 'Host must provide its already-authorized absolute private profile');
     // Host owns private-root validation/lifecycle; this helper never opens SQLite.
@@ -91,7 +113,7 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
     };
     const manager = async () => {if(!await js('(()=>{const e=document.querySelector(".cp-manager");return !!e&&e.getClientRects().length>0})()')){await click('#workspace-manager');await click('#conversation-manager');}await idle();};
     const search = async text => {await type('.cp-manager input[type="search"]',text);await pause(350);await idle();};
-    const open = async title => {await search(title);await clickText(title,'.cp-results','button',false);await idle();assert.equal(await js('document.querySelector(".cp-detail input[aria-label=\"Conversation title\"]").value'),title);};
+    const open = async title => {await search(title);await clickText(title,'.cp-results','button',false);await idle();await waitUi(actual=>!actual.busy&&actual.title===title,'selected conversation title render',{title});};
     const send = async content => {await type('.cp-composer textarea',content);await clickText('Record message','.cp-composer');await idle();};
     const selectMessageText = async messageId => {
       const selector=`.cp-message[data-message-id="${messageId}"] .cp-message-content`;
@@ -105,7 +127,7 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
     await focus();await assertOffline();
     if(restore){
       const expected=JSON.parse(await fs.readFile(expectedPath,'utf8'));assert.equal(expected.contract,'aerynth.conversation-restore@1');assert.deepEqual(receipt.moduleHashes,expected.sourceHashes,'Restore uses the same module source');assert.deepEqual(receipt.verifiedBuildAssets,expected.buildAssets,'Restore uses the same actual build assets');await manager();
-      for(const saved of expected.details){const actual=await read('detail',{resourceId:saved.conversation.resourceId});assert.deepEqual(normalize(actual),saved,'Fresh backend preserves exact canonical conversation state');await open(saved.conversation.title);assert.deepEqual(await js('[...document.querySelectorAll(".cp-message")].map(e=>({id:e.dataset.messageId,content:e.querySelector(".cp-message-content").textContent}))'),saved.messages.map(m=>({id:m.id,content:m.content})),'Fresh UI reads the same message IDs and content');}
+      for(const saved of expected.details){const actual=await read('detail',{resourceId:saved.conversation.resourceId});assert.deepEqual(normalize(actual),saved,'Fresh backend preserves exact canonical conversation state');await open(saved.conversation.title);for(const message of saved.messages)await waitMessage(saved.conversation.resourceId,saved.conversation.title,message);assert.deepEqual(await js('[...document.querySelectorAll(".cp-message")].map(e=>({id:e.dataset.messageId,content:e.querySelector(".cp-message-content").textContent}))'),saved.messages.map(m=>({id:m.id,content:m.content})),'Fresh UI reads the same message IDs and content');}
       const collections=await read('collections');for(const saved of expected.collections)assert.deepEqual(normalizeCollection(collections.find(c=>c.id===saved.id)),saved,'Fresh backend preserves exact collection metadata and membership');
       await open(expected.ui.title);assert.equal(await js('document.querySelector(".cp-composer textarea").value'),expected.ui.draft,'Manager draft survives actual process restart');await assertOffline();await capture('06-restart-restored');check('fresh-process-exact-canonical-and-ui-restore');receipt.expectedPath=expectedPath;
     }else{
@@ -123,7 +145,7 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
       await type('input[aria-label="Conversation title"]',renamedTitle);await clickText('Rename','.cp-detail > div:first-child');await idle();
       if(projectId){await choose(await fieldOf('.cp-detail > div:first-child','Project association','select'),projectId);await clickText('Associate project');await idle();}
       parentDetail=await read('detail',{resourceId:parent.resourceId});assert.equal(parentDetail.conversation.title,renamedTitle);assert.equal(parentDetail.conversation.favorite,true);assert.equal(parentDetail.conversation.projectId,projectId);assert(parentDetail.conversation.collectionIds.includes(folder.id));
-      await search(parentOnly);await clickText(renamedTitle,'.cp-results','button',false);await idle();assert.equal(await js('document.querySelector(".cp-message[data-message-id=\"'+parentDetail.messages.items[1].id+'\"] .cp-message-content").textContent'),parentOnly);check('actual-history-search-message-navigation-and-organization');await capture('02-organized-history');
+      await search(parentOnly);const messageResult=renamedTitle+' · message\n'+parentOnly;await waitUi(actual=>!actual.busy&&actual.results.includes(messageResult),'canonical message search result render',{resourceId:parent.resourceId,messageId:parentDetail.messages.items[1].id,messageResult});await clickText(messageResult,'.cp-results');await idle();await waitMessage(parent.resourceId,renamedTitle,parentDetail.messages.items[1]);check('actual-history-search-message-navigation-and-organization');await capture('02-organized-history');
       const forkMessage=parentDetail.messages.items[0];await clickText('Branch from here',`.cp-message[data-message-id="${forkMessage.id}"]`);await type('input[aria-label="Branch title"]',childTitle);await choose(await fieldOf('.cp-secondary','Provider','select'),'local');await clickText('Create branch and review context');await idle();await wait('document.querySelector(".cp-secondary").textContent.includes("awaiting your review")');check('branch-context-prepared-before-review');await clickText('Approve selected context');await idle();
       const child=(await read('list',{text:childTitle})).items.find(c=>c.title===childTitle);assert(child);receipt.partial.childResourceId=child.resourceId;await send(finding);let childDetail=await read('detail',{resourceId:child.resourceId});assert.deepEqual(childDetail.messages.items.map(m=>m.content),[origin,finding]);assert.equal(childDetail.messages.items[0].id,forkMessage.id);assert.equal(childDetail.messages.items[0].inherited,true);assert.equal(childDetail.lineage.length,1);assert.equal(childDetail.lineage[0].sourceMessageId,forkMessage.id);
       await choose('.cp-detail > div:first-child > select',folder.id);await clickText('Add to folder');await idle();await capture('03-independent-branch');
@@ -136,7 +158,8 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
       await fs.writeFile(expectedPath,checkedJson(expected));receipt.expectedPath=expectedPath;check('exact-canonical-ids-content-organization-policy-and-draft-saved');
     }
     receipt.passed=true;
-  }catch(error){receipt.error={message:error.message,stack:error.stack};if(driver)try{receipt.partial.ui=await driver.js('({title:document.querySelector(".cp-detail input[aria-label=\"Conversation title\"]")?.value,status:document.querySelector(".cp-status")?.textContent,managerMounted:!!document.querySelector(".cp-manager")})');}catch{} }
+  }catch(error){receipt.error={message:error.message,stack:error.stack};receipt.partial.ui=await uiSnapshot();}
+  win.webContents.removeListener('console-message',consoleError);
   // Preserve partial receipts even when focus/GPU capture failed. Never fabricate a failure image.
   await fs.writeFile(path.join(out,restore?'restore.json':'journey.json'),checkedJson(receipt));
   console.log(JSON.stringify({passed:receipt.passed,restore,error:receipt.error?.message,evidence:out,captures:receipt.captures.length,provider:'no provider commands issued by helper'}));
