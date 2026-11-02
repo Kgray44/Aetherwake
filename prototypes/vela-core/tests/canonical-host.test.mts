@@ -71,6 +71,15 @@ function fixture() {
     throwAfterWrite: () => { nativeWritesThenThrows = true; }, close: () => kernel.close() };
 }
 
+test('history revision and permission hooks are authoritative metadata-only projections', () => {
+  const f = fixture(); try {
+    const scope = f.host.scope(), ref = f.host.resolve({ id: f.conversation.id, kind: 'resource' }, scope)!, before = f.counts();
+    assert.equal(f.host.conversationRevision!(ref.id), 1); assert.equal(f.host.canReadContent!(ref, scope), true); assert.deepEqual(f.counts(), before);
+    f.contentDenied.add(ref.id); assert.equal(f.host.conversationRevision!(ref.id), null); assert.equal(f.host.canReadContent!(ref, scope), false); assert.deepEqual(f.counts(), before);
+    f.contentDenied.delete(ref.id); f.metadataDenied.add(ref.id); assert.equal(f.host.conversationRevision!(ref.id), null); assert.equal(f.host.canReadContent!(ref, scope), false); assert.deepEqual(f.counts(), before);
+  } finally { f.close(); }
+});
+
 test('canonical host discovers only authorized active metadata, including legacy placed chats without changing ownership', () => {
   const f = fixture();
   try {

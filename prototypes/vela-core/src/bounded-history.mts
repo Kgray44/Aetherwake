@@ -3,7 +3,7 @@ import type { ContextManifest, ProviderContribution, ProviderReplyKind, Resource
 import type { HistoryOrigin, HistoryResourceDependency, HistoryMessageDependency, HistoryDependency, HistoryProvenance, ProviderHistoryMessage, ProviderHistory } from './history-contracts.ts';
 export type { HistoryOrigin, HistoryResourceDependency, HistoryMessageDependency, HistoryDependency, HistoryProvenance, ProviderHistoryMessage, ProviderHistory } from './history-contracts.ts';
 
-/** Unwired canonical history/proof primitives. Readers run in the caller's SAME canonical read transaction. */
+/** Canonical history/proof primitives. Readers run in the caller's SAME canonical read transaction. */
 export const HISTORY_LIMITS = Object.freeze({ maxMessages: 4, maxEncodedBytes: 4096, lookbackMessages: 12, maxDependencies: 64, maxValidationBytes: 131072 });
 /** Metadata projection of an actual persisted request; no history/source content is copied into this projection. */
 export interface HistoryRequestRecord extends Pick<VelaRequest, 'id' | 'conversationId' | 'state' | 'providerId'> {
@@ -240,7 +240,7 @@ export function validateFrozenHistoryMetadata(input: {
   const append = input.acceptedAppend;
   if (append) {
     const r = proveRequest(reader.request(append.requestId), append.requestId, input.origin, fence.conversationId, 'planning'), m = reader.message(fence.conversationId, append.messageId);
-    requireValue(m && m.id === append.messageId && m.conversationId === fence.conversationId && m.requestId === append.requestId && m.role === 'user' && m.source === 'user' && m.classification === 'observed' && m.ordinal > fence.messages.at(-1)!.ordinal && r.inputMessageId === append.messageId && r.inputContentDigest === append.contentDigest, 'invalid-history-append');
+    requireValue(m && m.id === append.messageId && m.conversationId === fence.conversationId && m.requestId === append.requestId && m.role === 'user' && m.source === 'user' && m.classification === 'observed' && m.ordinal === fence.messages.at(-1)!.ordinal + 1 && r.inputMessageId === append.messageId && r.inputContentDigest === append.contentDigest, 'invalid-history-append');
     const declared = new Map(r.provenance!.dependencies.map(dep => [dependencyKey(dep), dep]));
     for (const dep of dependencies) requireValue(declared.has(dependencyKey(dep)) && containsDependency(declared.get(dependencyKey(dep))!, dep), 'incomplete-proof');
   }
@@ -306,7 +306,8 @@ export function validateFrozenHistory(input: {
   }
   if (append) {
     requireValue(append.revision === fence.baseRevision + 1 && identifier(append.requestId) && identifier(append.messageId) && hash(append.contentDigest) && !fence.messages.some(m => m.messageId === append.messageId), 'invalid-history-append');
-    const actual = verifier.message(fence.conversationId, append.messageId).message;
+    const appended = verifier.message(fence.conversationId, append.messageId), actual = appended.message;
+    requireValue(appended.ordinal === fence.messages.at(-1)!.ordinal + 1, 'invalid-history-append');
     requireValue(actual.role === 'user' && actual.source === 'user' && actual.classification === 'observed' && actual.requestId === append.requestId && historyDigest(actual.content) === append.contentDigest, 'invalid-history-append');
     const request = proveRequest(input.reader.request(append.requestId), append.requestId, input.origin, fence.conversationId, 'planning'); requireValue(request.inputMessageId === append.messageId && request.inputContentDigest === historyDigest(actual.content), 'invalid-history-append');
     const declared = new Map(request.provenance!.dependencies.map(dep => [dependencyKey(dep), dep]));
