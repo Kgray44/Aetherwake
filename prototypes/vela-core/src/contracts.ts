@@ -3,7 +3,7 @@ export const VELA_CONTRACT = 'aerynth.vela@1' as const;
 export type EvidenceClass = 'observed' | 'reported' | 'inferred' | 'unknown';
 export type AttentionMode = 'normal' | 'quiet' | 'focused' | 'collaborative' | 'proactive';
 export type SubjectKind = 'resource' | 'workspace' | 'project';
-export interface ResourceRef { id: string; kind: SubjectKind; version: number; title: string; resourceKind?: string }
+export interface ResourceRef { id: string; kind: SubjectKind; version: number; title: string; resourceKind?: string; projectId?: string | null }
 export interface VelaScope {
   principalId: string; policyVersion: string;
   resourceIds: string[]; workspaceIds: string[]; projectIds: string[];
@@ -111,6 +111,8 @@ export interface HostActionResult {
 }
 export interface VelaHostPort {
   scope(): VelaScope;
+  /** Explicit metadata only, inserted into the actual consent/planner manifest before authorization. */
+  contextReferences?(selectedResourceIds: readonly string[]): ResourceRef[];
   /** Both conversation operations use the canonical host resource/graph, on the injected db transaction. */
   ensureConversation(key: 'system:vela'): string;
   readConversation(resourceId: string): CanonicalConversation;
@@ -164,6 +166,7 @@ export interface VelaState {
   receipts: ActionReceipt[]; preferences: AttentionPreferences; attention: AttentionItem[];
   lastPresenceAt: string | null; coverage: 'authorized-app-events-only';
   adaptation?: AdaptationState;
+  applicationContext?: { currentProjectId:string|null;currentWorkspaceId:string|null;references:ResourceRef[] };
 }
 export type AdaptationLevel = 'manual' | 'suggestive' | 'assisted' | 'adaptive';
 export type PreferenceCategory = 'presentation' | 'organization';

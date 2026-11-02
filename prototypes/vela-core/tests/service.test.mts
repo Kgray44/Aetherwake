@@ -151,6 +151,14 @@ test('previewContext uses exact authorized builder without side effects and chan
   } finally { f.close(); }
 });
 
+test('typed application metadata hook participates in the same prospective manifest without implicit content retrieval', () => {
+  const f=fixture();try{
+    f.host.contextReferences=()=>[{id:'workspace:a',kind:'workspace',title:'Synthetic workspace',version:1}];
+    const preview=f.service.previewContext(['note:a']);assert.deepEqual(preview.discovered.map(ref=>ref.id),['note:a','workspace:a']);assert.deepEqual(preview.included.map(ref=>ref.id),['note:a']);assert.equal(f.counts().contentReads,1);assert.equal(f.service.state().conversation,null);
+    f.host.contextReferences=()=>[{id:'project:denied',kind:'project',title:'Must not be disclosed',version:1}];assert.throws(()=>f.service.previewContext(['note:a']),/resource_not_authorized/);
+  }finally{f.close();}
+});
+
 test('native actions work without provider and apply an atomic canonical workspace with exact existing resource placements', async () => {
   const f = fixture();
   try {

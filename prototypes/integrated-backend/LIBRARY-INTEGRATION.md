@@ -37,4 +37,12 @@ Focused real-SQLite library + existing Vela backend regressions: **12/12 passed*
 
 The combined backend typecheck reports the already identified Universal subject-arm issues in `desktop.mts:297` and `desktop.test.mts:169`; no new Core/contracts diagnostics were reported. The Universal/Desktop owner is supplying those tagged-union fixes. This commit does not edit those owned files or claim the combined typecheck passed.
 
-No actual Codex/model turn, native application window or network request ran. Parent owns public IPC admissions/view mounting/native policy review and combined/live acceptance. Notes recovery and explicit Vela project-context enrichment are subsequent bounded integration steps.
+No actual Codex/model turn, native application window or network request ran. Parent owns public IPC admissions/view mounting/native policy review and combined/live acceptance. Notes recovery is a subsequent bounded integration step.
+
+## Explicit project-context consent
+
+The typed optional `VelaHostPort.contextReferences(selectedResourceIds)` hook now contributes authorized current project/workspace metadata and selected-resource owner projects to `ContextManifest.discovered` **before** native preview/consent/signature binding. Resource/workspace references carry their actual canonical `projectId`. Content retrieval remains separate; this hook loads no additional note/chat bodies and grants no extra source access. The model receives real IDs/titles/versions instead of inventing project IDs. A changed project version/title invalidates an earlier preview.
+
+Backend state exposes authorized `applicationContext` metadata for native controls. The Vela panel's explicit workspace-project selector defaults to the current project until the user chooses; a user's choice survives refresh. A previously selected project outside current scope remains visibly unavailable and disables creation. Reviewed `projectId:null` is still never rewritten.
+
+Context follow-up verification: **13/13** focused library/Vela backend tests passed, **34/34** Vela module tests passed, and the Vela module TypeScript check passed with zero diagnostics. The new integration regression submits a clearly synthetic planning-port proposal using the supplied canonical project ID, then applies it through the actual released library and verifies the resulting project/placements. This is not real model qualification or native panel visual acceptance.
