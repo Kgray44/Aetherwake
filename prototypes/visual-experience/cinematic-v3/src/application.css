@@ -542,3 +542,62 @@
 .conversation-draft-recovery [hidden] {
   display: none;
 }
+/* Application status belongs in the reserved footer, outside resource content.
+   Keep the existing live region and text; only its visual placement changes. */
+.application-ready #status {
+  position: fixed;
+  left: 50%;
+  right: auto;
+  bottom: 14px;
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  max-width: min(32rem, calc(100vw - 48rem));
+  max-height: 32px;
+  margin: 0;
+  padding: 5px 12px;
+  border: 1px solid #c8c6e12e;
+  border-radius: 10px;
+  background: #11141ee8;
+  color: #e0ddea;
+  font:
+    12px/1.4 system-ui,
+    sans-serif;
+  letter-spacing: normal;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+.application-ready #status:empty {
+  display: none;
+}
+
+/* The existing keyboard footer is hidden at this breakpoint. Use its left
+   slot and leave a separate, bounded right slot for the local-data notice. */
+@media (max-width: 1100px) {
+  .application-ready #status {
+    left: 24px;
+    transform: none;
+    max-width: min(32rem, calc(100vw - 16rem));
+  }
+  .application-ready .provenance {
+    right: 24px;
+    bottom: 18px;
+    max-width: 12rem;
+    margin: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+    text-align: right;
+  }
+}
+@media (max-width: 640px) {
+  .application-ready #status {
+    max-width: calc(100vw - 13rem);
+  }
+  .application-ready .provenance {
+    max-width: 9rem;
+    font-size: 8px;
+  }
+}
