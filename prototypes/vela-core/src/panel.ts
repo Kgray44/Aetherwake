@@ -156,6 +156,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function effect(action: PlanStep['action'], plan: VelaPlan): string {
     const request = current?.requests.find(item => item.id === plan.requestId), refs = [...plan.targets, ...(request?.context.discovered ?? []), ...(current?.applicationContext?.references ?? [])], name = (id: string, kind?: ResourceRef['kind']) => refs.find(ref => ref.id === id && (!kind || ref.kind === kind))?.title ?? 'the selected item';
     switch (action.type) {
+      case 'setAttentionMode': return 'Set Vela attention to ' + action.mode;
       case 'createCollection': return 'Create collection “' + action.title + '”' + (action.projectId ? ' in ' + name(action.projectId, 'project') : '');
       case 'renameCollection': return 'Rename ' + name(action.collectionId, 'collection') + ' to “' + action.title + '”';
       case 'archiveCollection': return (action.archived ? 'Archive ' : 'Restore ') + name(action.collectionId, 'collection');
