@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { WorkspaceEngine, type EngineOptions } from "../../workspace-engine/engine.mts";
-import type { Command as EngineCommand } from "../../workspace-engine/contracts.mts";
+import type { Command as EngineCommand, WorkspaceProjection } from "../../workspace-engine/contracts.mts";
 import type { WorkspaceKernel } from "../../workspace-kernel/kernel.mts";
 import type {
   DesktopCommand,
@@ -293,9 +293,8 @@ export class DesktopState {
     const group = this.kernel.getResource(id);
     this.kernel.updateNote(id, group.note.content, group.resource.version);
   }
-  private blocks(id: string): Block[] {
-    return this.engine
-      .project(id)
+  private blocks(id: string, projection?: WorkspaceProjection): Block[] {
+    return (projection ?? this.engine.project(id))
       .blocks.map((b):Block => ({
         id: b.blockId,
         ...(typeof b.resourceId==='string'?{resource_id:b.resourceId,subject:{kind:'resource' as const,resourceId:b.resourceId}}:{subject:b.subject}),
@@ -826,6 +825,9 @@ export class DesktopState {
           });
       }
     const w = s.activeWorkspaceId ? this.workspace(s.activeWorkspaceId) : null;
+    // One synchronous publication uses one canonical projection. Rebuilding it for
+    // each field repeatedly normalizes the same complete undo/redo history.
+    const projection = s.activeWorkspaceId ? this.engine.project(s.activeWorkspaceId) : null;
     return {
       contract: "aerynth.desktop@1",
       projects,
@@ -836,7 +838,7 @@ export class DesktopState {
         )
         .all() as any,
       resources,
-      blocks: s.activeWorkspaceId ? this.blocks(s.activeWorkspaceId) : [],
+      blocks: s.activeWorkspaceId && projection ? this.blocks(s.activeWorkspaceId,projection) : [],
       relationships,
       ...s,
       navigationBlocks: this.db
@@ -848,15 +850,9 @@ export class DesktopState {
         )
         .map((b: any):Block => {const {resource_id,subject_ref_id,...placement}=b;const subject=this.kernel.readBlockSubject(String(b.id));return subject.kind==='resource'?{...placement,resource_id:subject.resourceId,subject,subjectState:this.kernel.subjectState(subject),shape:'rectangle'}:{...placement,subject,subjectState:this.kernel.subjectState(subject),shape:'rounded'};}),
       layoutVersion: w?.layout.version ?? 0,
-      viewport: s.activeWorkspaceId
-        ? this.engine.project(s.activeWorkspaceId).viewport
-        : undefined,
-      organization: s.activeWorkspaceId
-        ? this.engine.project(s.activeWorkspaceId).organization
-        : undefined,
-      presence: s.activeWorkspaceId
-        ? this.engine.project(s.activeWorkspaceId).presence
-        : undefined,
+      viewport: projection?.viewport,
+      organization: projection?.organization,
+      presence: projection?.presence,
       graphRevision:
         graph.revision +
         Number(
@@ -871,12 +867,8 @@ export class DesktopState {
           visibleIds.has(edge.parentResourceId) &&
           visibleIds.has(edge.childResourceId),
       ),
-      canUndo: s.activeWorkspaceId
-        ? this.engine.project(s.activeWorkspaceId).canUndo
-        : false,
-      canRedo: s.activeWorkspaceId
-        ? this.engine.project(s.activeWorkspaceId).canRedo
-        : false,
+      canUndo: projection?.canUndo ?? false,
+      canRedo: projection?.canRedo ?? false,
       hasCheckpoint: s.activeWorkspaceId
         ? this.engine.listCheckpoints(s.activeWorkspaceId).length > 0
         : false,
