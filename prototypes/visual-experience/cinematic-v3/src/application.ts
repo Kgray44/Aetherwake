@@ -367,7 +367,7 @@ export function installApplication(hooks: Hooks) {
         onDirty: hooks.wake,
         onTransition: (transition) => {
           if (
-            transition.to.kind !== "workspace" ||
+            !["workspace", "surface"].includes(transition.to.kind) ||
             ["workspace", "surface"].includes(transition.from.kind)
           )
             return;
@@ -1646,6 +1646,8 @@ export function installApplication(hooks: Hooks) {
   };
   addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+      if (event.defaultPrevented || state?.navigation.kind === "constellation")
+        return;
       event.preventDefault();
       manager();
     }
