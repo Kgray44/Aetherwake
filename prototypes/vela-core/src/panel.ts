@@ -194,6 +194,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function renderReading() {
     const projection = project(), selectedRequest = immediateLocal?.request.id === projection.currentRequestId ? immediateLocal.request : current?.requests.find(request => request.id === projection.currentRequestId), message = current?.conversation?.messages.find(message => message.id === projection.currentMessageId), local = immediateLocal?.request.id === projection.currentRequestId ? immediateLocal.result : null;
     const content = local?.content ?? message?.content ?? '', signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind, content });
+    manifestationBody.dataset.density = content.length > 140 ? 'reading' : 'signal';
     shell.dataset.manifestationKind = projection.kind; shell.dataset.presentationView = view(); manifestation.dataset.requestId = projection.currentRequestId ?? ''; manifestation.dataset.currentMessageId = projection.currentMessageId ?? '';
     manifestation.hidden = projection.kind === 'none' || view() === 'history' && !projection.requiredPlanIds.length;
     manifestationKicker.textContent = projection.kind === 'insight' && message?.source === 'provider' ? providerName(message.providerId) + ' · contribution' : 'Vela';

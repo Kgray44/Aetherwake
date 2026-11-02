@@ -641,6 +641,11 @@
   line-height: 1.65;
   white-space: pre-wrap;
 }
+.vela-manifestation-content[data-density="reading"] .vela-manifestation-value {
+  font-size: 17px;
+  line-height: 1.55;
+  letter-spacing: 0;
+}
 .vela-manifestation-content :is(ul, ol) {
   margin: 0;
   padding-left: 24px;
