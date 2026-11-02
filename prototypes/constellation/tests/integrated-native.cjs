@@ -2,6 +2,7 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const assert = require("node:assert/strict");
 const { assertNativeOwner, nativeInput } = require("./native-input.cjs");
+const { loadPreparedWorkspaces } = require("./prepared-workspaces.cjs");
 const { createHash } = require("node:crypto");
 const native = "../../visual-experience/cinematic-v3/native/";
 const { createDriver } = require(native + "desktop-verify.cjs");
@@ -578,9 +579,15 @@ exports.verify = async ({
         [24, 25],
       );
     } else {
-      const projects = [],
+      let projects = [],
         workspaces = [],
         records = [];
+      if (process.argv.includes("--prepared-workspaces")) {
+        const prepared = await loadPreparedWorkspaces(privateRoot, source, await snapshot());
+        ({ projects, workspaces, records } = prepared);
+        receipt.taskGroups = prepared.taskGroups;
+        receipt.setup = prepared.evidence;
+      } else {
       for (const [pi, [name, names]] of [
         ["A World for Two", ["Development", "Planning"]],
         ["Voyagewright", ["Engineering", "Review"]],
@@ -629,9 +636,6 @@ exports.verify = async ({
       }
       assert.equal(projects.length, 3);
       assert.equal(workspaces.length, 6);
-      const originalRow = records[0],
-        other = records[2],
-        sourceRow = originalRow;
       receipt.taskGroups = [];
       for (const row of [records[0], records[2], records[4]]) {
         await selectWorkspace(row.workspaceId);
@@ -683,6 +687,12 @@ exports.verify = async ({
         await projectView();
         await relate(row.conversation.resource.id, row.note.resource.id);
       }
+      }
+      const originalRow = records[0],
+        other = records[2],
+        sourceRow = originalRow;
+      assert.equal(projects.length, 3);
+      assert.equal(workspaces.length, 6);
       assert.equal(receipt.taskGroups.length, 3);
       const fixtureState = await snapshot();
       for (const id of projects) {

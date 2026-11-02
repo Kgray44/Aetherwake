@@ -85,6 +85,16 @@ On Windows, launch the native harness with `Start-Process -WindowStyle Hidden -P
 
 See [VERIFICATION.md](VERIFICATION.md) for evidence, requirements, and remaining acceptance boundaries.
 
+For a short combined-desktop verification window, the integration owner can prepare the fixed 39-resource fixture offline through the actual application's BackendCore, DesktopState and Block Library:
+
+```powershell
+node --experimental-strip-types prototypes/constellation/tests/prepare-integrated.mts --profile=<fresh-absolute-review-expanded-profile> --app-root=<combined-checkout>
+```
+
+The CLI admits 1 GiB through the C:/D: reserve guard, requires a fresh private profile outside the checkout, checks finite command/data/time bounds, and writes that profile's actual `aerynth.sqlite` plus `expanded-setup.json`. It uses the native host's real Codex provider identity without connecting, probing capabilities or executing a provider turn; all nine demonstration conversations are local. The unchanged host also registers an unused `mock-ordinary` catalog entry, which the receipt identifies explicitly.
+
+The owner's existing desktop host can then add `--prepared-workspaces` to its `--integration-expanded --profile=...` launch. The helper checks canonical source hashes and the exact loaded resource identities, contents, relationships and placements before skipping only repetitive fixture construction. Every ordered native step, additional block creation, branch, drag/resize, graph edit, exact return, recording and fresh-process restart check remains. Default UI fixture construction is preserved. Native input stops when the operator leaves the window; the integration host owns the short deadline and immediate process cleanup. Offline preparation is not native acceptance evidence.
+
 ### Body clearance
 
 Planet geometry and spatial layout share one conservative size contract, including rings, atmosphere and maximum selection enlargement. Automatic placement leaves 28 world units between those envelopes and varies siblings' distance and elevation. Clear saved positions and pins remain authoritative; conflicting legacy positions are repaired deterministically with a visible notice. Drag previews stop before fixed neighbors, and arrangements/undo are validated against the current graph.
