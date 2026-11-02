@@ -491,6 +491,15 @@ async function run(win) {
           "native crossing retains glass " + receipt.pointerInputs.length,
           optical(crossing),
         );
+        if (selector.includes("resize")) {
+          input.presenceClip = await js(
+            "getComputedStyle(document.querySelector('#vela')).clipPath",
+          );
+          check(
+            "foreground resize clips rear presence status text",
+            input.presenceClip !== "none",
+          );
+        }
       }
       await pause(duration / 60);
     }
@@ -563,7 +572,7 @@ async function run(win) {
       (_wc, _permission, callback) => callback(false),
     );
     await fs.writeFile(
-      path.join(out, "continuous-overlap.json"),
+      path.join(out, "aerynth-v3-5-material-continuity.json"),
       JSON.stringify(receipt.video, null, 2),
     );
   } else {
@@ -632,12 +641,19 @@ async function run(win) {
     ),
   ];
   const reference = pixel(logo.w + 4, 1),
-    corner = pixel(1, 1);
+    corners = [
+      [1, 1],
+      [logo.w - 2, 1],
+      [1, logo.h - 2],
+      [logo.w - 2, logo.h - 2],
+    ].map(([x, y]) => pixel(x, y));
   receipt.logoAlpha = {
     referenceNativeChannels: reference,
-    cornerNativeChannels: corner,
+    cornerNativeChannels: corners,
     maxDifference: Math.max(
-      ...reference.map((v, i) => Math.abs(v - corner[i])),
+      ...corners.flatMap((corner) =>
+        reference.map((v, i) => Math.abs(v - corner[i])),
+      ),
     ),
     meaning:
       "Rendered black-source corner matches the colored backing beside the image. The source PNG is unchanged.",

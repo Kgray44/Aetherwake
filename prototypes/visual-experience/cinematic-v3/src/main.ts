@@ -1299,11 +1299,25 @@ function tick(now: number) {
         )?.presenceCard?.() ?? environment.presenceBounds();
       const presenceWidth = Math.max(44, presence.w),
         presenceHeight = Math.max(44, presence.h);
+      const presenceX = clamp(presence.x, 4, innerWidth - presenceWidth - 4),
+        presenceY = Math.max(100, presence.y);
       Object.assign($("#vela").style, {
-        left: `${clamp(presence.x, 4, innerWidth - presenceWidth - 4)}px`,
-        top: `${Math.max(100, presence.y)}px`,
+        left: `${presenceX}px`,
+        top: `${presenceY}px`,
         width: `${presenceWidth}px`,
         height: `${presenceHeight}px`,
+        clipPath: document.body.classList.contains("vela-access")
+          ? "none"
+          : materialCompositor.clipOverlay({
+              id: "vela-dom-presentation",
+              x: presenceX,
+              y: presenceY,
+              w: presenceWidth,
+              h: presenceHeight,
+              lift: 0,
+              yaw: 0,
+              opacity: 1,
+            }) || "none",
       });
       if (lastDraw && metrics.drawIntervals.length < 18000)
         metrics.drawIntervals.push(now - lastDraw);

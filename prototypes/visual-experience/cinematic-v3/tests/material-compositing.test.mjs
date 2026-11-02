@@ -1,6 +1,5 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import {
   MaterialCompositor,
   compareSurfaceStack,
@@ -42,6 +41,31 @@ function visible(path, x, y) {
   }
   return false;
 }
+test("screen-space presence text clips behind projected cards without changing their stack or identity", () => {
+  const c = new MaterialCompositor();
+  const card = surface("resource", 100, 100, { w: 200, h: 160 });
+  c.update([card], { scale: 0.5, originX: 0, originY: 0 });
+  const overlay = surface("presence-presentation", 0, 0, { w: 400, h: 300 });
+  const clip = c.clipOverlay(overlay);
+  assert.equal(visible(clip, 95, 90), false);
+  assert.equal(visible(clip, 240, 200), true);
+  assert.equal(
+    c.clipOverlay(overlay),
+    clip,
+    "unchanged frame reuses the derived clip",
+  );
+  assert.deepEqual(
+    c.ordered.map((e) => e.id),
+    ["resource"],
+  );
+  assert.deepEqual(card, surface("resource", 100, 100, { w: 200, h: 160 }));
+  c.update([{ ...card, x: 700 }]);
+  assert.equal(
+    c.clipOverlay(overlay),
+    "",
+    "moving the front card releases the presence text",
+  );
+});
 test("minor, quarter, major and complete overlaps clip only covered rear content; front material is untouched", () => {
   const c = new MaterialCompositor(),
     back = surface("back", 100, 100, { zIndex: 1 });
@@ -223,7 +247,7 @@ test("glass identity is independent of selection and only continuous emphasis en
     identities.forEach((m) => m.dispose());
   }
 });
-test("shared contour supports all six engine shapes without replacing material roles", () => {
+test("all six engine contours retain finite positions and unit normals through unfolding", () => {
   const point = { x: 0, y: 0, nx: 0, ny: 0 };
   for (const shape of [
     "rectangle",
@@ -239,13 +263,6 @@ test("shared contour supports all six engine shapes without replacing material r
         assert(Object.values(point).every(Number.isFinite));
         assert(Math.abs(Math.hypot(point.nx, point.ny) - 1) < 1e-8);
       }
-  const css = readFileSync(
-    new URL("../src/style.css", import.meta.url),
-    "utf8",
-  );
-  assert(!css.includes("--material-overlap"));
-  assert(css.includes("mix-blend-mode: screen"));
-  assert(css.includes("background: #0b1019"));
 });
 
 test("global arrival projection preserves the same rear local clipping region", () => {

@@ -255,129 +255,163 @@ export class MaterialCompositor {
     for (let i = 0; i < this.ordered.length; i++) {
       const rear = this.ordered[i];
       rear.rank = i;
-      rear.covered = false;
-      if (!rear.valid) {
-        rear.clipPath = "inset(50%)";
-        rear.covered = true;
-        continue;
-      }
-      this.pool.cursor = 0;
-      this.fragments.length = 0;
-      const initial = this.pool.take();
-      // Work in screen space; the final fragments are inversely projected into
-      // the rear article's local coordinates before its own CSS transform.
-      for (let k = 0; k < rear.polygon.count; k++)
-        push(
-          initial,
-          rear.polygon.points[k * 2],
-          rear.polygon.points[k * 2 + 1],
-        );
-      this.fragments.push(initial);
-      let clipped = false;
-      for (
-        let j = this.ordered.length - 1;
-        j > i && this.fragments.length;
-        j--
-      ) {
-        const front = this.ordered[j];
-        if (
-          !front.valid ||
-          front.pose.opacity <= 0.05 ||
-          !intersects(rear, front)
-        )
-          continue;
-        this.next.length = 0;
-        for (const fragment of this.fragments) {
-          let outsideEdge = false,
-            fullyInside = true;
-          for (let edge = 0; edge < front.polygon.count; edge++) {
-            const nextEdge = (edge + 1) % front.polygon.count;
-            const ax = front.polygon.points[edge * 2],
-              ay = front.polygon.points[edge * 2 + 1],
-              dx = front.polygon.points[nextEdge * 2] - ax,
-              dy = front.polygon.points[nextEdge * 2 + 1] - ay;
-            let allOutside = true;
-            for (let v = 0; v < fragment.count; v++) {
-              const distance =
-                dx * (fragment.points[v * 2 + 1] - ay) -
-                dy * (fragment.points[v * 2] - ax);
-              if (distance >= -EPSILON) allOutside = false;
-              if (distance < -EPSILON) fullyInside = false;
-            }
-            if (allOutside) {
-              outsideEdge = true;
-              break;
-            }
-          }
-          if (outsideEdge) {
-            this.next.push(fragment);
-            continue;
-          }
-          if (fullyInside) {
-            clipped = true;
-            continue;
-          }
-          let current = fragment;
-          for (let k = 0; k < front.polygon.count && current.count >= 3; k++) {
-            const next = (k + 1) % front.polygon.count;
-            const inside =
-                current === this.insideA ? this.insideB : this.insideA,
-              outside = this.outside;
-            inside.count = 0;
-            outside.count = 0;
-            split(
-              current,
-              front.polygon.points[k * 2],
-              front.polygon.points[k * 2 + 1],
-              front.polygon.points[next * 2],
-              front.polygon.points[next * 2 + 1],
-              inside,
-              outside,
-            );
-            if (outside.count >= 3 && Math.abs(area(outside)) > EPSILON) {
-              const saved = this.pool.take();
-              for (let t = 0; t < outside.count; t++)
-                push(saved, outside.points[t * 2], outside.points[t * 2 + 1]);
-              this.next.push(saved);
-            }
-            current = inside;
-          }
-          if (current.count >= 3 && Math.abs(area(current)) > EPSILON)
-            clipped = true;
-        }
-        const swap = this.fragments;
-        this.fragments = this.next;
-        this.next = swap;
-      }
-      if (!clipped) {
-        rear.clipPath = "";
-        continue;
-      }
-      rear.covered = this.fragments.length === 0;
-      if (rear.covered) {
-        rear.clipPath = "inset(50%)";
-        continue;
-      }
-      let path = "";
-      for (const poly of this.fragments) {
-        for (let k = 0; k < poly.count; k++) {
-          const point = inversePoint(
-            rear.pose,
-            this.view.originX +
-              (poly.points[k * 2] - this.view.originX) / this.view.scale,
-            this.view.originY +
-              (poly.points[k * 2 + 1] - this.view.originY) / this.view.scale,
-          );
-          path +=
-            (k ? "L" : "M") + point.x.toFixed(3) + " " + point.y.toFixed(3);
-        }
-        path += "Z";
-      }
-      rear.clipPath = `path("${path}")`;
+      this.clipRear(rear, i + 1, this.view);
     }
     return this.ordered;
   }
-  private project(e: Entry) {
+  private clipRear(rear: Entry, firstFront: number, view: SurfaceView) {
+    rear.covered = false;
+    if (!rear.valid) {
+      rear.clipPath = "inset(50%)";
+      rear.covered = true;
+      return;
+    }
+    this.pool.cursor = 0;
+    this.fragments.length = 0;
+    const initial = this.pool.take();
+    // Work in screen space; the final fragments are inversely projected into
+    // the rear article's local coordinates before its own CSS transform.
+    for (let k = 0; k < rear.polygon.count; k++)
+      push(initial, rear.polygon.points[k * 2], rear.polygon.points[k * 2 + 1]);
+    this.fragments.push(initial);
+    let clipped = false;
+    for (
+      let j = this.ordered.length - 1;
+      j >= firstFront && this.fragments.length;
+      j--
+    ) {
+      const front = this.ordered[j];
+      if (
+        !front.valid ||
+        front.pose.opacity <= 0.05 ||
+        !intersects(rear, front)
+      )
+        continue;
+      this.next.length = 0;
+      for (const fragment of this.fragments) {
+        let outsideEdge = false,
+          fullyInside = true;
+        for (let edge = 0; edge < front.polygon.count; edge++) {
+          const nextEdge = (edge + 1) % front.polygon.count;
+          const ax = front.polygon.points[edge * 2],
+            ay = front.polygon.points[edge * 2 + 1],
+            dx = front.polygon.points[nextEdge * 2] - ax,
+            dy = front.polygon.points[nextEdge * 2 + 1] - ay;
+          let allOutside = true;
+          for (let v = 0; v < fragment.count; v++) {
+            const distance =
+              dx * (fragment.points[v * 2 + 1] - ay) -
+              dy * (fragment.points[v * 2] - ax);
+            if (distance >= -EPSILON) allOutside = false;
+            if (distance < -EPSILON) fullyInside = false;
+          }
+          if (allOutside) {
+            outsideEdge = true;
+            break;
+          }
+        }
+        if (outsideEdge) {
+          this.next.push(fragment);
+          continue;
+        }
+        if (fullyInside) {
+          clipped = true;
+          continue;
+        }
+        let current = fragment;
+        for (let k = 0; k < front.polygon.count && current.count >= 3; k++) {
+          const next = (k + 1) % front.polygon.count;
+          const inside = current === this.insideA ? this.insideB : this.insideA,
+            outside = this.outside;
+          inside.count = 0;
+          outside.count = 0;
+          split(
+            current,
+            front.polygon.points[k * 2],
+            front.polygon.points[k * 2 + 1],
+            front.polygon.points[next * 2],
+            front.polygon.points[next * 2 + 1],
+            inside,
+            outside,
+          );
+          if (outside.count >= 3 && Math.abs(area(outside)) > EPSILON) {
+            const saved = this.pool.take();
+            for (let t = 0; t < outside.count; t++)
+              push(saved, outside.points[t * 2], outside.points[t * 2 + 1]);
+            this.next.push(saved);
+          }
+          current = inside;
+        }
+        if (current.count >= 3 && Math.abs(area(current)) > EPSILON)
+          clipped = true;
+      }
+      const swap = this.fragments;
+      this.fragments = this.next;
+      this.next = swap;
+    }
+    if (!clipped) {
+      rear.clipPath = "";
+      return;
+    }
+    rear.covered = this.fragments.length === 0;
+    if (rear.covered) {
+      rear.clipPath = "inset(50%)";
+      return;
+    }
+    let path = "";
+    for (const poly of this.fragments) {
+      for (let k = 0; k < poly.count; k++) {
+        const point = inversePoint(
+          rear.pose,
+          view.originX + (poly.points[k * 2] - view.originX) / view.scale,
+          view.originY + (poly.points[k * 2 + 1] - view.originY) / view.scale,
+        );
+        path += (k ? "L" : "M") + point.x.toFixed(3) + " " + point.y.toFixed(3);
+      }
+      path += "Z";
+    }
+    rear.clipPath = `path("${path}")`;
+  }
+  /** Clip a non-resource DOM overlay behind the already projected surfaces.
+   * Its pose is screen-local, so global stage arrival is not applied twice.
+   * The one reusable derived entry is not canonical presence or block state. */
+  private overlay?: Entry;
+  clipOverlay(pose: CompositeSurface) {
+    const values = [
+      pose.x,
+      pose.y,
+      pose.w,
+      pose.h,
+      pose.lift,
+      pose.yaw,
+      pose.opacity,
+      pose.rotation ?? 0,
+      this.recomputations,
+    ];
+    if (this.overlay && values.every((v, i) => v === this.overlay!.key[i]))
+      return this.overlay.clipPath;
+    const e = (this.overlay ??= {
+      id: pose.id,
+      pose,
+      key: [],
+      shape: "rectangle",
+      polygon: { points: new Float64Array(128), count: 0 },
+      left: 0,
+      top: 0,
+      right: 0,
+      bottom: 0,
+      valid: false,
+      clipPath: "",
+      covered: false,
+      rank: -1,
+    });
+    e.pose = pose;
+    e.key = values;
+    this.project(e, IDENTITY_VIEW);
+    this.clipRear(e, 0, IDENTITY_VIEW);
+    return e.clipPath;
+  }
+  private project(e: Entry, view = this.view) {
     const p = e.pose;
     e.valid =
       e.key.every(Number.isFinite) &&
@@ -418,8 +452,8 @@ export class MaterialCompositor {
         return;
       }
       const q = projectSurfacePoint(p, v.x, -v.y);
-      q.x = this.view.originX + (q.x - this.view.originX) * this.view.scale;
-      q.y = this.view.originY + (q.y - this.view.originY) * this.view.scale;
+      q.x = view.originX + (q.x - view.originX) * view.scale;
+      q.y = view.originY + (q.y - view.originY) * view.scale;
       push(e.polygon, q.x, q.y);
       e.left = Math.min(e.left, q.x);
       e.top = Math.min(e.top, q.y);
