@@ -52,6 +52,8 @@ exports.verify = async ({
     return require('./library-native.cjs').verify({ win, app, privateRoot, source, moduleStarted, startupErrors });
   if (process.argv.includes('--verify-approach'))
     return require('./workspace-approach.cjs').verify({ win, app, privateRoot, source, moduleStarted, startupErrors });
+  if (process.argv.includes('--verify-minimize'))
+    return require('./workspace-minimize.cjs').verify({ win, app, privateRoot, source, moduleStarted, startupErrors });
   const output = path.resolve(
     __dirname,
     "../../visual-experience/cinematic-v3/.runtime/application-evidence/workspace-normal-" +

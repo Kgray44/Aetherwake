@@ -157,6 +157,9 @@ test("offline normal-card preparation and fresh Core restore use canonical kinds
   assert.equal(seed.approachValidation.preflightSha256, expressions.preflight().sha256);
   assert.match(seed.approachValidation.expressionHelperSha256, /^[a-f0-9]{64}$/);
   assert.match(seed.approachValidation.commonHelperSha256, /^[a-f0-9]{64}$/);
+  assert.equal(seed.minimizeValidation.preflightSha256, require('./workspace-minimize-expressions.cjs').preflight().sha256);
+  for (const value of [seed.minimizeValidation.helperSha256, seed.minimizeValidation.expressionHelperSha256, seed.minimizeValidation.commonHelperSha256]) assert.match(value, /^[a-f0-9]{64}$/);
+  assert.deepEqual(require('./workspace-minimize.cjs').selectCases(seed).map((entry: any) => entry.kind), ['conversation', 'note', 'reference']);
   const selected = approach.selectCases(seed);
   assert.deepEqual(selected.map((entry: any) => entry.kind), ['research', 'task', 'reference']);
   assert.deepEqual(selected.map((entry: any) => entry.shape ?? 'default'), ['default', 'pill', 'circle']);

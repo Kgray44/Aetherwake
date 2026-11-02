@@ -54,6 +54,7 @@ export type WorkspaceNativeSeed = {
   hashes: Record<string, string>;
   expected: DesktopSnapshot;
   approachValidation: { preflightSha256: string; expressionHelperSha256: string; commonHelperSha256: string };
+  minimizeValidation: { preflightSha256: string; helperSha256: string; expressionHelperSha256: string; commonHelperSha256: string };
 };
 
 /** Bounded offline preparation using the actual canonical Core. No window,
@@ -94,6 +95,8 @@ export async function prepareWorkspaceNative(
   const approachPreflight = require('./tests/workspace-approach-expressions.cjs').preflight();
   const expressionDigest = (name: string) => createHash('sha256').update(readFileSync(join(sourceRoot, 'prototypes/block-library/tests', name))).digest('hex');
   const approachValidation = { preflightSha256: approachPreflight.sha256, expressionHelperSha256: expressionDigest('workspace-approach-expressions.cjs'), commonHelperSha256: expressionDigest('library-native-expressions.cjs') };
+  const minimizePreflight = require('./tests/workspace-minimize-expressions.cjs').preflight();
+  const minimizeValidation = { preflightSha256: minimizePreflight.sha256, helperSha256: expressionDigest('workspace-minimize.cjs'), expressionHelperSha256: expressionDigest('workspace-minimize-expressions.cjs'), commonHelperSha256: expressionDigest('workspace-approach-expressions.cjs') };
   mkdirSync(profile);
   const databasePath = join(profile, "aerynth.sqlite"),
     core = new BackendCore({
@@ -350,6 +353,7 @@ export async function prepareWorkspaceNative(
       hashes,
       expected: desktop,
       approachValidation,
+      minimizeValidation,
     };
     const json = JSON.stringify(seed, null, 2);
     assert(
