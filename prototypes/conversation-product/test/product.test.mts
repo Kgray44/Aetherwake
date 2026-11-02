@@ -114,6 +114,21 @@ test('smart conversation rules accept the exact UI mode, reject mixed-resource m
  }finally{await f.close();removeFixture(dir);}
 });
 
+test('conversation-only search summarizes matching canonical IDs once and rechecks message denials before counting or returning a match',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-match-before-metadata-')),f=fixture(join(dir,'canonical.sqlite'));
+ try{
+  const title=await create(f,'Synthetic searchable marker title'),body=await create(f,'Synthetic body match'),absent=await create(f,'Synthetic unrelated');
+  const message=await record(f,body.resourceId,'Synthetic searchable marker body');await record(f,absent.resourceId,'Synthetic irrelevant body');
+  const owner=f.core as unknown as {conversationReadView():ConversationReadView};let metadata=0,bodyReads=0;
+  f.host.canonicalReadView=async()=>{const view=owner.conversationReadView();return {...view,graph:{visibleMessages:id=>{bodyReads++;return view.graph.visibleMessages(id);},visibleMessageMetadata:(id,options)=>{metadata++;return view.graph.visibleMessageMetadata(id,options);}}};};
+  let found=await f.product.command('search',{text:'searchable marker',searchMode:'conversations'});
+  assert.deepEqual(new Set(found.items.map(h=>h.resourceId)),new Set([title.resourceId,body.resourceId]));assert.equal(metadata,2,'no metadata scan for unrelated conversation');assert.equal(bodyReads,2,'one body match per non-title candidate');
+  f.denied.add(message.id);metadata=0;bodyReads=0;found=await f.product.command('search',{text:'searchable marker',searchMode:'conversations'});
+  assert.deepEqual(found.items.map(h=>h.resourceId),[title.resourceId]);assert.equal(metadata,1);assert.equal(bodyReads,2);
+  metadata=0;await f.product.command('search',{text:'',searchMode:'conversations'});assert.equal(metadata,3,'empty browse still projects each visible conversation with truthful coverage');
+ }finally{await f.close();removeFixture(dir);}
+});
+
 test('synchronous read batches scope derived projections and authority to one call, then recheck inherited denial and metadata changes',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'aerynth-read-batch-')),f=fixture(join(dir,'canonical.sqlite'));
  try{
