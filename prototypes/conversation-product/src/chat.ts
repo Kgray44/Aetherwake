@@ -23,6 +23,8 @@ export interface ConversationChatOptions {
 export interface ConversationChat {
   ready: Promise<void>; refresh(options?: { aroundMessageId?: string; latest?: boolean }): Promise<void>;
   focusComposer(): void; flush(): Promise<void>; dispose(): Promise<void>;
+  /** Explicit receipt/lifecycle observation only. Closing or editor draining must not await a provider turn. */
+  whenSubmissionSettled(): Promise<void>;
 }
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, cls?: string) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = text; if (cls) n.className = cls; return n; };
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
@@ -158,7 +160,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       if(!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
       if(acceptedConversationSubmission(input,result,evidence)) { const cleared=await session.acknowledgeSent(checkpoint);report(cleared?'Message accepted.':'Message accepted. Later draft edits were retained.'); }
       else { uncertain=true;report('Send acceptance is not confirmed. Inspect the chat before retrying.'); }
-      await refresh({latest:true});await options.onChanged?.();
+      if(!disposed){await refresh({latest:true});if(!disposed)await options.onChanged?.();}
     })().catch(error=>{if(errorText(error)==='authorization_cancelled')report('Send cancelled. Your saved draft was retained.');else{uncertain=true;report('Send could not be confirmed: '+errorText(error));}}).finally(()=>{sending=false;sendTask=null;renderDraft();});
   });
   stop.addEventListener('click',()=>{if(!execution||!options.execution||!active()||cancelPending||connection==='unavailable')return;cancelPending=true;renderDraft();const id=execution.id;void options.execution.cancel(id).then(()=>report('Stop requested. Waiting for the provider to confirm.'),error=>report('Stop could not be requested: '+errorText(error))).finally(()=>{cancelPending=false;renderDraft();});});
@@ -184,6 +186,14 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   });
   const ready=(async()=>{await session.ready;renderDraft();await refresh();messages.scrollTop=options.initialScroll??messages.scrollHeight;resize();})().catch(error=>{report(errorText(error));throw error;});
   root.addEventListener('keydown',event=>{if(event.key!=='Escape')return;const details=(event.target as HTMLElement).closest<HTMLDetailsElement>('details[open]');if(details&&root.contains(details)){event.preventDefault();event.stopPropagation();details.open=false;details.querySelector('summary')?.focus();}});
-  const flush=async()=>{await session.flush();await sendTask;await session.flush();viewState();};
-  return {ready,refresh,focusComposer:()=>textarea.focus(),flush,async dispose(){if(disposed)return;await flush();if(!options.draftSession)await session.dispose();disposed=true;generation++;unsubscribeDraft();unsubscribeExecution?.();viewState();root.remove();}};
+  // The send RPC can remain pending through the entire native provider turn. Draft durability
+  // must be independent so a pane can close and the host can offer interruption on quit.
+  const flush=async()=>{await session.flush();viewState();};
+  return {ready,refresh,focusComposer:()=>textarea.focus(),flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
+    if(disposed)return;await flush();disposed=true;generation++;unsubscribeDraft();unsubscribeExecution?.();viewState();root.remove();
+    if(!options.draftSession){
+      if(sendTask){void sendTask.then(()=>session.dispose(),()=>session.dispose()).catch(()=>{/* Existing durable recovery is untouched; never overwrite or replay a conflict. */});}
+      else await session.dispose();
+    }
+  }};
 }

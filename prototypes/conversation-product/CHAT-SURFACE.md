@@ -10,14 +10,23 @@ mountConversationChat(container, {
   port, resourceId, draftSession: sharedSession, execution,
   onMessageAction: ({ action, message, selection }) => { /* host-scoped extras */ },
 });
-// { ready, refresh({aroundMessageId?, latest?}), focusComposer(), flush(), dispose() }
+// { ready, refresh({aroundMessageId?, latest?}), focusComposer(), flush(), dispose(), whenSubmissionSettled() }
 ```
 
 `ManagerOptions.draftSession(resourceId)` lets the host give full and inline views
 one coordinator. Supplied sessions are flushed and unsubscribed, never disposed.
-Fallback sessions are owned by the component/manager. `flush()` waits for pending
-send acceptance and its canonical refresh, then drains later draft edits. Hosts
-must await it before closing; unresolved recovery conflicts prevent disposal.
+Fallback sessions are owned by the component/manager. `flush()` drains only draft
+persistence, including captured submissions and later typing. It never waits for a
+native provider turn or issues interruption. Hosts must await it before closing;
+unresolved recovery conflicts prevent disposal. Closing promptly detaches UI and
+observations while the existing native send/receipt continues. A pending internally
+owned session stays alive only until exact acceptance/CAS processing finishes, then
+is released by a caught background finalizer; externally owned sessions remain owned
+by their host. Detached sends do not refresh the closed UI or invoke `onChanged`.
+`whenSubmissionSettled()` explicitly observes that pending acceptance work; ordinary
+close and before-quit editor draining must not await it. If the renderer exits first,
+the already-flushed recovery remains and canonical host execution/receipts own the
+execution lifecycle.
 
 The composer supports Enter to send and Shift+Enter for a newline, without sending
 during composition. Native send review remains explicit; there are no renderer
