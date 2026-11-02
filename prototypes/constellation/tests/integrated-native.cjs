@@ -606,6 +606,23 @@ async function verifyJourney({
     await workingHome();
     await workspaceActions();
     await click(`[data-locate="${id}"]`);
+    await wait(`!!document.querySelector('[data-block="${id}"].expanded')`);
+  };
+  const editDocument = async (id, content) => {
+    const scope = `[data-block="${id}"]`,
+      input = scope + " textarea",
+      edit = scope + ' .aw-note-tools button[aria-label="Edit document"]';
+    // Notes begin in Write; research/reference begin in Read. Open the actual
+    // Edit control only when present, never toggle a writable note back to Read.
+    await wait(
+      `(()=>{const e=document.querySelector(${JSON.stringify(input)});return !!e&&!e.disabled})()`,
+    );
+    if (await js(`!!document.querySelector(${JSON.stringify(edit)})`))
+      await click(edit);
+    await wait(
+      `(()=>{const e=document.querySelector(${JSON.stringify(input)});return !!e&&!e.disabled&&!e.hidden&&!e.closest('[hidden],[inert]')&&e.getClientRects().length>0})()`,
+    );
+    await fill(input, content);
   };
   const cardPoint = async (id, edge) => {
     const selector = `[data-block="${id}"] ${edge ? ".aw-card-edge--" + edge : ".folio-top"}`;
@@ -995,14 +1012,14 @@ async function verifyJourney({
             await workingHome();
             await cardGesture(b.id, null, 35 + pi * 10, 15 + wi * 10);
             await openBlock(b.id);
-            await fill(
-              `[data-block="${b.id}"] textarea`,
+            await editDocument(
+              b.id,
               "Synthetic durable " + title + " note. Stable resource identity.",
             );
             await flush();
             await openBlock(row.reference.block.id);
-            await fill(
-              `[data-block="${row.reference.block.id}"] textarea`,
+            await editDocument(
+              row.reference.block.id,
               "Synthetic link: https://example.invalid/" + title.toLowerCase(),
             );
             await flush();
@@ -1022,8 +1039,9 @@ async function verifyJourney({
               row.title + " local task group",
             );
           await openBlock(taskGroup.block.id);
-          await click(
-            `[data-block="${taskGroup.block.id}"] .manage-task-members`,
+          await textButton(
+            "Manage tasks",
+            `[data-block="${taskGroup.block.id}"] .aw-task-group[aria-label="Task group checklist"]`,
           );
           for (const taskId of [row.task.resource.id, extraTask.resource.id])
             await click(
@@ -1035,7 +1053,7 @@ async function verifyJourney({
             `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(taskGroup.resource.id)}).taskMembers.length===2`,
           );
           await click(
-            `[data-block="${taskGroup.block.id}"] .group-task[data-task-id="${extraTask.resource.id}"]`,
+            `[data-block="${taskGroup.block.id}"] .aw-task-group [data-task-id="${extraTask.resource.id}"] input[type="checkbox"]`,
           );
           await wait(
             `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(extraTask.resource.id)}).taskStatus==='done'`,
@@ -1114,6 +1132,35 @@ async function verifyJourney({
       }
       await selectWorkspace(records[4].workspaceId);
       await openBlock(receipt.taskGroups[2].blockId);
+      const observedGroup = (await snapshot()).resources.find(
+        (r) => r.id === receipt.taskGroups[2].resourceId,
+      );
+      const renderedMembers = await js(
+        `(()=>{const root=document.querySelector('[data-block="${receipt.taskGroups[2].blockId}"] .aw-task-group[aria-label="Task group checklist"]');if(!root||!root.getClientRects().length)return null;return [...root.querySelectorAll('[data-task-id]')].map(row=>{const input=row.querySelector('input[type="checkbox"]');return{id:row.dataset.taskId,checked:input?.checked??null,label:input?.getAttribute('aria-label')??null,visible:!!input?.getClientRects().length}})})()`,
+      );
+      assert.ok(
+        renderedMembers?.length,
+        "actual registered task group renders its checklist",
+      );
+      assert.deepEqual(
+        renderedMembers
+          .map((row) => ({ id: row.id, checked: row.checked }))
+          .sort((a, b) => a.id.localeCompare(b.id)),
+        observedGroup.taskMembers
+          .map((row) => ({ id: row.id, checked: row.status === "done" }))
+          .sort((a, b) => a.id.localeCompare(b.id)),
+        "rendered keyed task checkboxes match canonical membership and status",
+      );
+      assert.ok(
+        renderedMembers.every(
+          (row) => row.visible && row.label?.startsWith("Mark "),
+        ),
+        "task status controls remain visible and accessible",
+      );
+      receipt.renderedTaskGroup = {
+        resourceId: observedGroup.id,
+        members: renderedMembers,
+      };
       receipt.focusedControls = await js(
         `([...document.querySelectorAll('.aw-workspace-layout,.aw-workspace-layout button,#workspace-manager')].map(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {tag:e.tagName,text:e.textContent,rect:{x:r.x,y:r.y,w:r.width,h:r.height},display:s.display,opacity:s.opacity}}))`,
       );
@@ -1145,8 +1192,8 @@ async function verifyJourney({
       );
       const journeyNote = await add("note", "Development journey note");
       await openBlock(journeyNote.block.id);
-      await fill(
-        `[data-block="${journeyNote.block.id}"] textarea`,
+      await editDocument(
+        journeyNote.block.id,
         "Synthetic note created and arranged at the start of the real journey.",
       );
       await flush();
@@ -1495,8 +1542,8 @@ async function verifyJourney({
       // Fluid insertion may legitimately move a prior block beyond this camera.
       // Exercise the real offscreen-block access instead of assuming visibility.
       await openBlock(other.note.block.id);
-      await fill(
-        `[data-block="${other.note.block.id}"] textarea`,
+      await editDocument(
+        other.note.block.id,
         "Synthetic real editor change after spatial branch and relationship navigation.",
       );
       await flush();
