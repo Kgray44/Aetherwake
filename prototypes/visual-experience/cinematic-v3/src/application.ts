@@ -54,6 +54,15 @@ import { mountNoteExperience } from "../../../block-library/note-view.ts";
 import "../../../block-library/note-view.css";
 import { mountSubjectExperience } from "../../../block-library/subject-view.ts";
 import "../../../block-library/subject-view.css";
+import {
+  mountEventExperience,
+  readRecentEvents,
+  type ReplayWindow,
+  filterRecordedEvents,
+  type EventWindow,
+} from "../../../block-library/event-view.ts";
+import "../../../block-library/event-view.css";
+import type { StreamEvent } from "../../../integrated-backend/src/contracts.mts";
 import type { SubjectExperiencePort } from "../../../block-library/contracts.ts";
 import type {
   Block,
@@ -177,15 +186,12 @@ export function installApplication(hooks: Hooks) {
   >();
   const streaming = new Map<string, string>();
   const busy = new Set<string>();
-  type Activity = {
-    eventId?: string;
-    cursor?: number;
-    providerId?: string;
-    type: string;
-    classification: string;
-    receivedAt: string;
-  };
-  const localEvents: Activity[] = [];
+  type Activity = Partial<StreamEvent> & { type: string };
+  const localEvents: StreamEvent[] = [];
+  const eventViews = new Map<string, ReturnType<typeof mountEventExperience>>();
+  let retainedEarliest: number | null = null,
+    retainedLatest = 0,
+    eventDisconnected = false;
   const seenEvents = new Set<string>();
   let lastTrigger: HTMLElement | null = null;
   const conversationView = createManagerState();
@@ -359,6 +365,11 @@ export function installApplication(hooks: Hooks) {
       if (!next.blocks.some((b) => b.id === id)) {
         view.dispose();
         subjectViews.delete(id);
+      }
+    for (const [id, view] of eventViews)
+      if (!next.blocks.some((block) => block.id === id)) {
+        view.dispose();
+        eventViews.delete(id);
       }
     for (const [id, binding] of directBindings)
       if (!next.blocks.some((block) => block.id === id)) {
@@ -1921,9 +1932,25 @@ export function installApplication(hooks: Hooks) {
       }
     } else if (r.kind === "stream") {
       const content = el(".working-content", article);
-      content.innerHTML =
-        '<p>Observed events, reported output and inferred states remain distinct. Retention is bounded; raw reasoning is unavailable.</p><ol class="inline-events"></ol>';
-      fillEvents(el(".inline-events", content));
+      if (!eventViews.has(id)) {
+        content.replaceChildren();
+        eventViews.set(
+          id,
+          mountEventExperience(
+            content,
+            {
+              snapshot: eventWindow,
+              refresh: refreshEvents,
+              openResource: openCanonicalResource,
+            },
+            {
+              active:
+                article.classList.contains("expanded") && !document.hidden,
+            },
+          ),
+        );
+      } else eventViews.get(id)!.update();
+      updateStreamSummaries();
     } else {
       el(".synthetic", article).textContent =
         r.kind === "task"
@@ -2014,21 +2041,98 @@ export function installApplication(hooks: Hooks) {
       }
     }
   }
+  function eventWindow(): EventWindow {
+    return {
+      events: localEvents,
+      earliest: retainedEarliest,
+      latest: retainedLatest,
+      disconnected: eventDisconnected,
+      resources: (state?.resources ?? [])
+        .filter(
+          (resource) =>
+            resource.available !== false && resource.visible !== false,
+        )
+        .map((resource) => ({
+          id: resource.id,
+          title: resource.title,
+          projectId: resource.project_id ?? null,
+        })),
+      workspaceResourceIds: (state?.blocks ?? []).flatMap((block) =>
+        block.resource_id ? [block.resource_id] : [],
+      ),
+      projectId:
+        state?.workspaces.find(
+          (workspace) => workspace.id === state?.activeWorkspaceId,
+        )?.project_id ?? null,
+    };
+  }
+  function updateStreamSummaries() {
+    if (document.hidden || !document.hasFocus()) return;
+    const events = filterRecordedEvents(eventWindow(), {
+      scope: "all",
+      classification: "",
+      source: "",
+      resourceId: "",
+      executionId: "",
+      query: "",
+    });
+    for (const block of state?.blocks ?? [])
+      if (
+        state!.resources.find((resource) => resource.id === block.resource_id)
+          ?.kind === "stream"
+      ) {
+        const article = document.querySelector<HTMLElement>(
+          `[data-block="${block.id}"]`,
+        );
+        if (article)
+          el(".folio-preview", article).textContent =
+            events
+              .slice(0, 3)
+              .map((event) => event.classification + " · " + event.type)
+              .join(" · ") ||
+            "No accessible captured events in this retained window.";
+      }
+  }
   function rememberEvent(e: Activity) {
-    if (e.eventId && seenEvents.has(e.eventId)) return;
-    if (e.eventId) seenEvents.add(e.eventId);
-    localEvents.push(e);
-    localEvents.sort(
-      (a, b) =>
-        (a.cursor ?? Number.MAX_SAFE_INTEGER) -
-        (b.cursor ?? Number.MAX_SAFE_INTEGER),
-    );
+    if (
+      e.schemaVersion !== 1 ||
+      !e.eventId ||
+      !Number.isSafeInteger(e.cursor) ||
+      e.cursor! < 1 ||
+      typeof e.receivedAt !== "string" ||
+      !e.providerId ||
+      !["observed", "reported", "inferred", "simulated"].includes(
+        e.classification ?? "",
+      )
+    )
+      return;
+    if (seenEvents.has(e.eventId)) return;
+    seenEvents.add(e.eventId);
+    localEvents.push(e as StreamEvent);
+    localEvents.sort((a, b) => a.cursor - b.cursor);
+    retainedLatest = Math.max(retainedLatest, e.cursor!);
     if (localEvents.length > 250) {
       const expired = localEvents.shift();
-      if (expired?.eventId) seenEvents.delete(expired.eventId);
+      if (expired) seenEvents.delete(expired.eventId);
     }
   }
+  async function refreshEvents() {
+    const replay = await readRecentEvents(
+      async (input) => (await host.command!("replay", input)) as ReplayWindow,
+    );
+    const newer = localEvents.filter((event) => event.cursor > replay.latest);
+    localEvents.length = 0;
+    seenEvents.clear();
+    retainedEarliest = replay.earliest;
+    retainedLatest = replay.latest;
+    eventDisconnected = false;
+    for (const event of [...replay.events, ...newer]) rememberEvent(event);
+    fillEvents(el("#events"));
+    updateStreamSummaries();
+    for (const view of eventViews.values()) view.update();
+  }
   function fillEvents(list: HTMLElement) {
+    if (document.hidden || list.closest("[hidden]")) return;
     list.replaceChildren();
     for (const e of localEvents.slice(-100).reverse()) {
       const li = document.createElement("li");
@@ -2037,6 +2141,9 @@ export function installApplication(hooks: Hooks) {
       list.append(li);
     }
   }
+  el("#stream-button").addEventListener("click", () =>
+    fillEvents(el("#events")),
+  );
   host.onEvent?.((event) => {
     refreshVelaFromEvent();
     const e = event as Activity & {
@@ -2057,16 +2164,15 @@ export function installApplication(hooks: Hooks) {
     rememberEvent(e);
     fillEvents(el("#events"));
     el("#event-count").textContent = String(localEvents.length);
-    for (const b of state?.blocks.filter(
-      (b) =>
-        state!.resources.find((r) => r.id === b.resource_id)?.kind === "stream",
-    ) ?? [])
-      decorate(el(`[data-block="${b.id}"]`), b.id);
+    updateStreamSummaries();
+    for (const view of eventViews.values()) view.update();
     if (e.type === "storage/reserve-admission-denied")
       hooks.status(
         "Storage reserve reached. Saving and new execution are stopped; data is retained. External applications are outside this guard.",
       );
     if (e.type === "backend/disconnected") {
+      eventDisconnected = true;
+      for (const view of eventViews.values()) view.update();
       hooks.status(
         "Backend disconnected. Current surfaces are retained; restart to recover persisted data. Execution outcomes may be unknown.",
       );
@@ -2133,16 +2239,7 @@ export function installApplication(hooks: Hooks) {
   const ready = command({ type: "snapshot" })
     .then(async () => {
       await constellation?.ready;
-      const replay = (await host.command!("replay", {})) as {
-        events: typeof localEvents;
-        truncated: boolean;
-      };
-      for (const e of replay.events) rememberEvent(e);
-      if (replay.truncated)
-        hooks.status(
-          "Event history is partial: this view shows the latest 250 retained records.",
-        );
-      fillEvents(el("#events"));
+      await refreshEvents();
       await tail;
       document.body.dataset.applicationHydrated = "true";
     })
@@ -2264,6 +2361,7 @@ export function installApplication(hooks: Hooks) {
       if (active) ensureNoteView(id);
       noteViews.get(id)?.setActive(active);
       subjectViews.get(id)?.setActive(active);
+      eventViews.get(id)?.setActive(active);
     },
     move(id: string, dx: number, dy: number) {
       const b = state?.blocks.find((b) => b.id === id);
