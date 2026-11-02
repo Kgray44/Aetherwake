@@ -662,7 +662,7 @@
    yields space to the actual working body; primary controls stay scrollable. */
 @container (max-height: 340px) {
   .folio[data-block-kind]:not(.expanded):not(.receded) .folio-inner {
-    padding: 12px 16px;
+    padding: 12px 20px;
   }
   .folio[data-block-kind]:not(.expanded) .title-select {
     flex: none;
@@ -709,7 +709,7 @@
 }
 @container (max-height: 210px) {
   .folio[data-block-kind]:not(.expanded):not(.receded) .folio-inner {
-    padding: 8px 12px;
+    padding: 8px 20px;
   }
 }
 
@@ -727,6 +727,6 @@
   );
   padding-inline: max(
     16px,
-    calc(var(--aw-resize-radius-x, 18px) * 0.2928932188134524 + 8px)
+    calc(var(--aw-resize-radius-x, 18px) * 0.2928932188134524 + 16px)
   );
 }
