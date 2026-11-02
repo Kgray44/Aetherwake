@@ -26,12 +26,13 @@ const keyOf = (item: RecordedTimelineItem) => item.event.cursor + ':' + item.eve
 
 /** Retained-header viewer. Root owns time/event storage, current authority,
  * canonical mutations, source navigation and the existing shared frame. */
-export function mountTimelineExperience(root: HTMLElement, resourceId: string, port: TimelinePort, options: {
-  motion: ExperienceMotionPort; viewId: string; active?: boolean; presentation?: 'workspace' | 'focused';
+export interface TimelineExperienceOptions {
+  motion: ExperienceMotionPort; viewId: string; active?: boolean; presentation?: 'workspace' | 'focused'; showTitle?: boolean;
   onOpenResource?(resourceId: string): void | Promise<void>;
   resourceTitle?(resourceId: string): string | undefined;
   onProjection?(document: TimelineDocument | null, window: TimelineWindow | null): void;
-}): TimelineExperience {
+}
+export function mountTimelineExperience(root: HTMLElement, resourceId: string, port: TimelinePort, options: TimelineExperienceOptions): TimelineExperience {
   if (!options.viewId || !options.motion) throw new Error('A unique view identity and shared motion port are required.');
   const motion = options.motion, prefix = 'timeline:' + options.viewId, owned = new Set<string>();
   const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text = '', cls = '') => {
@@ -141,6 +142,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   function paint() {
     if (disposed) return;
     title.textContent = current?.resource.title ?? (unavailable ? 'Timeline unavailable' : 'Loading timeline…');
+    title.hidden = options.showTitle === false;
     range.textContent = current ? `${formatTime(current.view.viewport.from)} — ${formatTime(current.view.viewport.to)} · capture time (${current.view.viewport.displayTimeZone})` : '';
     const live = new Set(window?.items.map(keyOf) ?? []);
     for (const [id, row] of rows) if (!live.has(id)) { row.row.remove(); row.dot.remove(); motion.remove(row.key); motion.remove(row.key + ':dot'); owned.delete(row.key); owned.delete(row.key + ':dot'); rows.delete(id); }

@@ -11,11 +11,11 @@ import type { SaveTimeline, TimelineDocument, TimelinePort, TimelineWindow } fro
 const button = (root: any, text: string) => root.querySelectorAll('button').find((value: any) => value.textContent === text);
 const input = (root: any, name: string) => root.querySelectorAll('input').find((value: any) => value.getAttribute('aria-label') === name);
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; };
-async function setup(t: any, configure?: (f: ReturnType<typeof timelineFixture>) => { port?: TimelinePort; active?: boolean }) {
+async function setup(t: any, configure?: (f: ReturnType<typeof timelineFixture>) => { port?: TimelinePort; active?: boolean; showTitle?: boolean }) {
   const f = timelineFixture(t); f.add(); const configured = configure?.(f) ?? {}, dom = blockDocument(), restore = dom.install(), coordinator = new MotionCoordinator();
   const motion: ExperienceMotionPort = { get reduced() { return coordinator.reduced; }, add: (key, pose) => coordinator.add(key, pose), target: (key, pose, cause) => coordinator.target(key, pose, cause), pose: key => coordinator.pose(key), remove: key => { coordinator.bodies.delete(key); }, wake() {} };
   const opened: string[] = []; let document: TimelineDocument | null = null, window: TimelineWindow | null = null;
-  const controller = mountTimelineExperience(dom.root, f.created.resourceId, configured.port ?? f.port, { motion, viewId: 'synthetic:timeline-view', active: configured.active,
+  const controller = mountTimelineExperience(dom.root, f.created.resourceId, configured.port ?? f.port, { motion, viewId: 'synthetic:timeline-view', active: configured.active, showTitle: configured.showTitle,
     onOpenResource: id => { opened.push(id); }, onProjection: (doc, value) => { document = doc; window = value; } });
   t.after(() => { controller.dispose(); restore(); });
   const settled = () => dom.root.querySelector('.aw-timeline').getAttribute('aria-busy') === 'false';
@@ -26,6 +26,7 @@ async function setup(t: any, configure?: (f: ReturnType<typeof timelineFixture>)
 
 test('Timeline reads real retained headers, saves pan/zoom/back/selection through canonical commands and uses only shared motion', async t => {
   const s = await setup(t); await s.ready(); s.frame();
+  assert.equal(s.dom.root.querySelector('.aw-timeline h3').hidden, false, 'Standalone title is visible by default');
   assert.equal(s.window!.items.length, 1); assert.equal(s.dom.root.querySelectorAll('.aw-timeline-items li').length, 1);
   assert.doesNotMatch(s.dom.root.textContent, /SYNTHETIC_PRIVATE_PAYLOAD/);
   s.dom.root.querySelector('.aw-timeline-items button').onclick();
@@ -40,6 +41,13 @@ test('Timeline reads real retained headers, saves pan/zoom/back/selection throug
   button(s.dom.root, 'Filters').onclick(); assert.equal(filters.inert, true); s.frame(); assert.equal(filters.hidden, true);
   assert.equal(s.f.db.prepare('SELECT count(*) n FROM workspaces').get()!.n, 0); assert.equal(s.f.db.prepare('SELECT count(*) n FROM blocks').get()!.n, 0);
   assert.equal(s.f.kernel.getResource(s.f.created.resourceId).resource.kind, 'generic');
+});
+
+test('a host-owned title can suppress the retained Timeline heading through refresh without hiding its experience', async t => {
+  const s = await setup(t, () => ({ showTitle: false })); await s.ready(); s.frame();
+  const heading = s.dom.root.querySelector('.aw-timeline h3'); assert.equal(heading.hidden, true); assert.equal(heading.textContent, s.document!.resource.title);
+  await s.controller.refresh(); assert.equal(s.dom.root.querySelector('.aw-timeline h3'), heading); assert.equal(heading.hidden, true);
+  assert.equal(s.dom.root.querySelector('.aw-timeline').hidden, false); assert.equal(s.window!.items.length, 1);
 });
 
 test('lost save acknowledgment retries its exact receipt, saved/read-failure stays truthful, and fresh read-only permission disables actual edits', async t => {

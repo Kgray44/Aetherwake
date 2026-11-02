@@ -1,5 +1,9 @@
 # Retained canonical Timeline viewer
 
+`TimelineExperienceOptions.showTitle` defaults to true. Hosts that already own
+the resource heading and accessible surface title may pass false to suppress
+the component's duplicate h3 while retaining its current canonical text.
+
 `mountTimelineExperience(root, canonicalTimelineResourceId, timelinePort, options)` supplies workspace or direct content over Root's existing Timeline service. Options are `{ motion, viewId, active?, presentation?, onOpenResource?, resourceTitle?, onProjection? }`. Import `timeline-view.css`. Root calls `frame()` from its existing loop, `reflow()` after resizing and `refresh()` when the canonical resource/policy changes. The controller also exposes `setActive`, `setPresentation`, `flush` and `dispose`. Each presentation owns only its own borrowed motion keys. There is no coordinator, scheduler, clock engine, event database, provider or resource factory in this component.
 
 The working composition has a capture-position track, source lanes, a bounded event list, local selection/provenance inspection and actual canonical source navigation. Source classifications remain observed/reported/inferred/simulated. Capture time and display time zone are identified; UTC range input never silently uses the machine's local time zone. Event/capture references appear only in the selected provenance inspector. Provider status and captured events do not become verified task completion or global causality. Planning, forecasts, state reconstruction, re-execution and export are not advertised; the service supports Activity and Execution modes only.
