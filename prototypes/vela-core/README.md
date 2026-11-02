@@ -40,6 +40,8 @@ Proposals are validated as data, never evaluated as code. Unknown capabilities/f
 
 The panel is browser-safe and creates no native window. The host retains cinematic presentation and Motion Coordinator ownership. The panel itself uses no animation, continuous polling, pseudo-progress, fabricated thinking, provider turns, or external monitoring.
 
+Visible status is derived from the latest canonical request, its plan and actual command receipts, and persists across refreshes. The status element exposes `data-request-state`/`data-request-id` and, when linked, `data-plan-state` for semantic host assertions. Unknown or partial outcomes direct users to receipts; a completed delegated provider turn is never described as verified task completion. The optional `onConnectProvider: () => Promise<unknown>` host callback adds an explicit **Check planning connection** button and refreshes observed state after it returns. Mount/open never invokes this callback, starts inference or changes a historical request outcome.
+
 ## Attention foundation
 
 Preferences persist normal/quiet/focused/collaborative/proactive modes, explicit app-event subscriptions, severity thresholds, interruption budgets, and independent monitoring/delegation toggles. Monitoring and delegation default off; learned preferences are explicitly disabled. Quiet produces silent recorded items; focused mode defers interruptions. Other modes use the configured threshold/budget, so changing a mode cannot silently broaden event subscriptions or permissions.
@@ -61,5 +63,7 @@ Actual application uses the optional `host.applyPreference()` **canonical comman
 ## Verification and limits
 
 Run `node --test prototypes/vela-core/tests/*.test.mts` with Node 24.18+ and typecheck `tsconfig.json` using the existing repository TypeScript installation. Tests use synthetic data and a real in-memory SQLite canonical host on the exact injected connection; they do not launch inference or native windows.
+
+The terminal-status/connection-control correction passed **37/37 module tests** and the module TypeScript check. Its minimal DOM component harness checks async request settlement, status persistence across refresh, explicit-only connection probing, observed provider refresh and persistent workspace-project choice. Pure state assertions check review/rejection, missing receipts, confirmed application, partial failure, unknown outcomes and unverified delegated completion. This is component/source evidence, not native browser rendering or provider qualification.
 
 No integrated desktop/provider, cinematic, keyboard/screen-reader, performance, long-history, cross-account, real Codex planning, or owner acceptance claim follows from these tests. Those checks belong to the actual application integration. The module's JSON state has a 4 MiB preservation limit; it refuses additional writes at capacity and never silently drops historical evidence. User-controlled export/retention and unknown-outcome reconciliation remain host integration work. Host transaction rollback must include its canonical graph/in-memory state, not SQLite alone. Adaptive preference application additionally requires an actual host adapter and appropriate product usability/reversibility review.
