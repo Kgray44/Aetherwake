@@ -320,7 +320,15 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted }) => {
 
 async function driver(win) {
   const foreground = () => {
-    if (!win.isMinimized() && !win.isFocused()) win.focus();
+    if (
+      win.isDestroyed() ||
+      !win.isVisible() ||
+      win.isMinimized() ||
+      !win.isFocused()
+    )
+      throw new Error(
+        "native_verification_focus_lost: stopped instead of reclaiming the desktop",
+      );
   };
   foreground();
   const js = (code) => win.webContents.executeJavaScript(code, true);
@@ -374,10 +382,12 @@ async function driver(win) {
     await pause(50);
     return inputAt;
   };
-  const fill = async (selector, value) =>
-    js(
+  const fill = async (selector, value) => {
+    foreground();
+    return js(
       `(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.value=${JSON.stringify(value)};e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))})()`,
     );
+  };
   await wait('document.body.dataset.applicationHydrated === "true"');
   return {
     js,
