@@ -195,10 +195,12 @@ export class VelaService {
       const a = step.action;
       switch (a.type) {
         case 'navigate': if (a.target.kind === 'workspace') add(a.target.workspaceId, 'workspace'); else add(a.target.projectId, 'project'); break;
+        case 'createWorkspace': add(a.projectId, 'project'); break;
+        case 'renameWorkspace': case 'bringAllIntoView': case 'resolveLayout': case 'setOrganization': add(a.workspaceId, 'workspace'); break;
         case 'workspaceFromResources': add(a.projectId, 'project'); for (const id of a.resourceIds) add(id, 'resource'); break;
         case 'createResource': add(a.workspaceId, 'workspace'); break;
         case 'attach': add(a.workspaceId, 'workspace'); add(a.resourceId, 'resource'); break;
-        case 'content': case 'taskStatus': add(a.resourceId, 'resource'); check(refs.get('resource:' + a.resourceId)!.version === a.expectedVersion, 'stale_resource_version'); break;
+        case 'content': case 'taskStatus': case 'taskPriority': add(a.resourceId, 'resource'); check(refs.get('resource:' + a.resourceId)!.version === a.expectedVersion, 'stale_resource_version'); break;
         case 'setTaskGroupMembers': add(a.groupId, 'resource'); check(refs.get('resource:' + a.groupId)!.version === a.expectedVersion, 'stale_resource_version'); for (const id of a.taskIds) add(id, 'resource'); break;
         case 'relate': add(a.sourceId, 'resource'); add(a.targetId, 'resource'); break;
         case 'applyStructuredPreset': add(a.workspaceId, 'workspace'); break;
@@ -361,6 +363,7 @@ export class VelaService {
         if (result.errorCode) receipt.errorCode = result.errorCode;
         if (result.createdResourceId) receipt.createdResourceId = result.createdResourceId;
         if (result.createdWorkspaceId) receipt.createdWorkspaceId = result.createdWorkspaceId;
+        if (result.createdProjectId) receipt.createdProjectId = result.createdProjectId;
         if (result.status !== 'applied') { plan.state = result.status; request.state = result.status === 'failed' ? 'failed' : result.status; request.errorCode = result.errorCode; }
       });
     }

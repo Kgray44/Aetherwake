@@ -65,10 +65,12 @@ function actionSubjects(action: ReturnType<typeof validateAction>): Pick<Resourc
   const add = (id: string | null, kind: ResourceRef['kind']) => { if (id !== null && !result.some(r => r.id === id && r.kind === kind)) result.push({ id, kind }); };
   switch (action.type) {
     case 'navigate': if (action.target.kind === 'workspace') add(action.target.workspaceId, 'workspace'); else add(action.target.projectId, 'project'); break;
+    case 'createWorkspace': add(action.projectId, 'project'); break;
+    case 'renameWorkspace': case 'bringAllIntoView': case 'resolveLayout': case 'setOrganization': add(action.workspaceId, 'workspace'); break;
     case 'workspaceFromResources': add(action.projectId, 'project'); for (const id of action.resourceIds) add(id, 'resource'); break;
     case 'createResource': add(action.workspaceId, 'workspace'); break;
     case 'attach': add(action.workspaceId, 'workspace'); add(action.resourceId, 'resource'); break;
-    case 'content': case 'taskStatus': add(action.resourceId, 'resource'); break;
+    case 'content': case 'taskStatus': case 'taskPriority': add(action.resourceId, 'resource'); break;
     case 'setTaskGroupMembers': add(action.groupId, 'resource'); for (const id of action.taskIds) add(id, 'resource'); break;
     case 'relate': add(action.sourceId, 'resource'); add(action.targetId, 'resource'); break;
     case 'applyStructuredPreset': add(action.workspaceId, 'workspace'); break;

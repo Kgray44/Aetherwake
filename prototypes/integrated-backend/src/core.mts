@@ -4,7 +4,7 @@ import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import type { DatabaseSync } from 'node:sqlite';
-import type { ConversationActivitySnapshot, PublicConversationExecution } from '../../application-contract/contracts.ts';
+import type { ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { ConversationGraph, type GraphData, type ProviderAdapter as GraphAdapter } from '../../connected-conversations/src/graph.ts';
 import { localConversationAdapter, mockOrdinaryAdapter } from '../../connected-conversations/src/adapters.ts';
@@ -71,6 +71,8 @@ export class BackendCore {
   private velaPlanner!: VelaPlanningPort;
   private velaSelection:string[]=[];
   private velaNative:VelaNativeCapabilities|null=null;
+  /** Per-apply presenter context only. Never a resource store or model action. */
+  private velaPresentations=new Map<string,WorkspacePresentationContext|null>();
   private velaPreviews=new Map<string,VelaRequestPreview>();
   private velaGrants=new Map<string,{previewId:string;expiresAt:string;requestId?:string;consumed:boolean;planning?:CodexPlanningGrant}>();
   private velaPolicyGrants=new Map<string,{requestId:string;planId?:string;fingerprint?:string;phase:string;expiresAt:string}>();
@@ -185,8 +187,34 @@ export class BackendCore {
       applyDesktopCommand:command=>this.desktop.apply(command,()=>{throw new ServiceError('unexpected_note_conversation_creation');}),
       renameResource:input=>{this.kernel.renameResource(input.resourceId,input.title,input.expectedVersion);},
     }));
-    this.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources','createResource','attach','applyStructuredPreset'],workspaceRevision:id=>engine.project(id).revision,dispatch:input=>{
+    this.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources','createResource','attach','applyStructuredPreset','createProject','createWorkspace','renameWorkspace','taskPriority','bringAllIntoView','resolveLayout','setOrganization'],workspaceRevision:id=>engine.project(id).revision,dispatch:input=>{
       const a=input.action;
+      if(a.type==='createProject'||a.type==='createWorkspace') {
+        const table=a.type==='createProject'?'projects':'workspaces',before=new Set(this.db.prepare('SELECT id FROM '+table).all().map(row=>String(row.id)));
+        this.desktop.apply(a,()=>{throw new ServiceError('unexpected_vela_conversation_creation');});
+        const created=this.db.prepare('SELECT id FROM '+table).all().find(row=>!before.has(String(row.id)));ensure(created,'vela_creation_receipt_missing');
+        this.record('vela.native.'+a.type,'observed');return {status:'applied',receiptId:input.commandId,...(a.type==='createProject'?{createdProjectId:String(created.id)}:{createdWorkspaceId:String(created.id)})};
+      }
+      if(a.type==='renameWorkspace') {
+        // The canonical host already revalidated the composite entity/layout
+        // token in this transaction. Desktop expects the raw entity version.
+        this.desktop.apply({...a,expectedVersion:engine.project(a.workspaceId).workspaceVersion},()=>{throw new ServiceError('unexpected_vela_conversation_creation');});
+        this.record('vela.native.'+a.type,'observed');return {status:'applied',receiptId:input.commandId};
+      }
+      if(a.type==='setOrganization') {
+        this.desktop.apply({...a,expectedOrganizationRevision:engine.project(a.workspaceId).organization.revision},()=>{throw new ServiceError('unexpected_vela_conversation_creation');});
+        this.record('vela.native.'+a.type,'observed');return {status:'applied',receiptId:input.commandId};
+      }
+      if(a.type==='bringAllIntoView') {
+        const presentation=this.velaPresentations.get(input.planId),session=this.velaSession();
+        ensure(presentation?.workspaceId===a.workspaceId&&session.navigation.kind==='workspace'&&session.navigation.workspaceId===a.workspaceId,'vela_presentation_unavailable');
+        this.desktop.apply({...a,bounds:presentation.bounds},()=>{throw new ServiceError('unexpected_vela_conversation_creation');});
+        this.record('vela.native.'+a.type,'observed');return {status:'applied',receiptId:input.commandId};
+      }
+      if(a.type==='taskPriority'||a.type==='resolveLayout') {
+        this.desktop.apply(a,()=>{throw new ServiceError('unexpected_vela_conversation_creation');});
+        this.record('vela.native.'+a.type,'observed');return {status:'applied',receiptId:input.commandId};
+      }
       if(a.type==='workspaceFromResources') {
         const result=this.library.workspaceFromResources({commandId:input.commandId,title:a.title,projectId:a.projectId,...(a.projectId?{expectedProjectVersion:Number(this.db.prepare('SELECT version FROM projects WHERE id=?').get(a.projectId)?.version)}:{}),resources:a.resourceIds.map(id=>({resourceId:id,expectedVersion:this.kernel.getResource(id).resource.version}))});
         return {status:'applied',receiptId:result.receipt.commandId,createdWorkspaceId:result.createdWorkspaceId};
@@ -233,7 +261,7 @@ export class BackendCore {
   /** Trusted in-process bootstrap only. No RPC exposes capability registration. */
   registerVelaNativeCapabilities(capabilities:VelaNativeCapabilities) {
     ensure(capabilities&&Array.isArray(capabilities.supportedActions)&&typeof capabilities.dispatch==='function','invalid_vela_native_capabilities');
-    ensure(capabilities.supportedActions.every(id=>['navigate','workspaceFromResources','createResource','attach','content','taskStatus','setTaskGroupMembers','relate','applyStructuredPreset'].includes(id)),'invalid_vela_native_capabilities');
+    ensure(capabilities.supportedActions.every(id=>['navigate','workspaceFromResources','createResource','attach','content','taskStatus','setTaskGroupMembers','relate','applyStructuredPreset','createProject','createWorkspace','renameWorkspace','taskPriority','bringAllIntoView','resolveLayout','setOrganization'].includes(id)),'invalid_vela_native_capabilities');
     this.velaNative=capabilities;
   }
   /** Trusted application selection bridge. Selection is filtered against live local-owner scope, never an access grant. */
@@ -303,6 +331,7 @@ export class BackendCore {
     this.vela=new VelaService({db:this.db,transaction:work=>this.atomic(work),host:this.velaHost,planner:this.velaPlanner});
   }
   private velaCapability(id:string) {
+    if(id==='bringAllIntoView')return this.velaContext().currentWorkspaceId!==null&&this.velaNative?.supportedActions.includes('bringAllIntoView')===true;
     return ['search','navigate','content','taskStatus','setTaskGroupMembers','relate','createResource'].includes(id)||this.velaNative?.supportedActions.includes(id as any)===true||(id==='delegateTask'&&this.capabilityCache.snapshot()?.authentication==='available');
   }
   private velaState():VelaBackendState {
@@ -382,7 +411,23 @@ export class BackendCore {
     const input=operation?.input;
     switch(operation?.name) {
       case 'state':return this.velaState();case 'open':this.vela.open();return this.velaState();case 'search':return this.vela.search(input);
-      case 'native':return this.vela.native(input);case 'review':return this.vela.review(input);case 'apply':return this.vela.apply(input);case 'cancel':return this.vela.cancel(input);
+      case 'native':return this.vela.native(input);case 'review':return this.vela.review(input);case 'cancel':return this.vela.cancel(input);
+      case 'apply': {
+        ensure(typeof input==='string'&&input.length>0&&input.length<=200,'invalid_vela_plan');
+        ensure(!this.velaPresentations.has(input),'vela_apply_in_progress');
+        const presentation=operation.presentation;
+        if(presentation!==undefined) {
+          ensure(presentation&&typeof presentation==='object'&&!Array.isArray(presentation)&&Object.keys(presentation).length===2&&Object.keys(presentation).every(key=>['workspaceId','bounds'].includes(key))&&typeof presentation.workspaceId==='string'&&presentation.workspaceId.length>0&&presentation.workspaceId.length<=200,'invalid_vela_presentation');
+          const b=presentation.bounds;
+          ensure(b&&typeof b==='object'&&!Array.isArray(b)&&Object.keys(b).length===4&&Object.keys(b).every(key=>['x','y','width','height'].includes(key))&&[b.x,b.y,b.width,b.height].every(value=>typeof value==='number'&&Number.isFinite(value)&&Math.abs(value)<=1e6)&&b.width>0&&b.height>0,'invalid_vela_presentation');
+          const session=this.velaSession();ensure(session.navigation.kind==='workspace'&&session.navigation.workspaceId===presentation.workspaceId,'vela_presentation_unavailable');
+        }
+        const plan=this.vela.state().plans.find(item=>item.id===input);
+        if(plan&&plan.state!=='applied')for(const step of plan.steps)if(step.action.type==='bringAllIntoView')ensure(presentation?.workspaceId===step.action.workspaceId,'vela_presentation_unavailable');
+        ensure(this.velaPresentations.size<64,'approval_backpressure');
+        this.velaPresentations.set(input,presentation===undefined?null:structuredClone(presentation));
+        try{return await this.vela.apply(input);}finally{this.velaPresentations.delete(input);}
+      }
       case 'preferences':return this.vela.preferences(input);case 'reviewAttention':return this.vela.reviewAttention(input);case 'adaptationPolicy':return this.vela.adaptationPolicy(input);
       case 'explicitPreference':return this.vela.explicitPreference(input);case 'reviewPreference':return this.vela.reviewPreference(input);case 'resetPreferences':return this.vela.resetPreferences(input);
       case 'request': {

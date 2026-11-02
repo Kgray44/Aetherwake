@@ -1,4 +1,6 @@
 import type { CapabilityDescriptor, DelegateTaskAction, PlanStep, ProviderProposal, VelaNativeAction } from './contracts.ts';
+import { defaultOrganization, updateOrganization } from '../../workspace-engine/organization.mts';
+import type { OrganizationUpdate } from '../../workspace-engine/contracts.mts';
 
 export class VelaError extends Error {
   readonly code: string;
@@ -20,6 +22,23 @@ const arraySchema = { type: 'array', maxItems: 100, uniqueItems: true, items: id
 const nullableIdSchema = { anyOf: [idSchema, { type: 'null' }] };
 const versionSchema = { type: 'integer', minimum: 1 };
 const objectSchema = (properties: Record<string, unknown>) => ({ type: 'object', additionalProperties: false, properties, required: Object.keys(properties) });
+const boundedNumber = (minimum: number, maximum: number) => ({ type: 'number', minimum, maximum });
+const optionalObjectSchema = (properties: Record<string, unknown>) => ({ type: 'object', additionalProperties: false, properties });
+const organizationSchema = optionalObjectSchema({
+  mode: { enum: ['fluid', 'freeform', 'structured'] }, gap: boundedNumber(0, 256),
+  structured: optionalObjectSchema({
+    columnCount: { anyOf: [{ type: 'integer', minimum: 1, maximum: 12 }, { type: 'null' }] },
+    rowHeight: boundedNumber(32, 512), rowGap: boundedNumber(0, 256), columnGap: boundedNumber(0, 256), margin: boundedNumber(0, 256),
+    preset: { enum: ['balanced', 'focus', 'development', 'research'] },
+    order: { type: 'array', uniqueItems: true, items: { type: 'string', minLength: 1, maxLength: 512 } },
+    spans: { type: 'object', additionalProperties: objectSchema({ columns: { type: 'integer', minimum: 1, maximum: 128 }, rows: { type: 'integer', minimum: 1, maximum: 256 } }) },
+  }),
+});
+function organization(value: unknown): value is OrganizationUpdate {
+  if (!isRecord(value)) return false;
+  if (isRecord(value.structured) && isRecord(value.structured.spans) && !Object.values(value.structured.spans).every(span => isRecord(span) && fields(span, ['columns', 'rows']))) return false;
+  try { updateOrganization(defaultOrganization(), value); return true; } catch { return false; }
+}
 function capability(id: CapabilityDescriptor['id'], label: string, effect: CapabilityDescriptor['effect'], properties: Record<string, unknown>, scope: string): CapabilityDescriptor {
   return { id, label, effect, schema: objectSchema(properties), scope,
     authorization: id === 'delegateTask' ? 'explicit-execution-authorization' : 'host-policy',
@@ -28,11 +47,18 @@ function capability(id: CapabilityDescriptor['id'], label: string, effect: Capab
 export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('search', 'Search authorized application resources', 'read', { query: stringSchema }, 'Authorized metadata only; content requires separate retrieval'),
   capability('navigate', 'Open a workspace or project constellation', 'navigate', { type: { const: 'navigate' }, target: { oneOf: [objectSchema({ kind: { const: 'workspace' }, workspaceId: idSchema }), objectSchema({ kind: { const: 'constellation' }, projectId: nullableIdSchema })] } }, 'One authorized navigation target'),
+  capability('createProject', 'Create a project', 'create', { type: { const: 'createProject' }, title: stringSchema }, 'One new canonical project; does not change the authorized scope or grant access to another project'),
+  capability('createWorkspace', 'Create an empty workspace', 'create', { type: { const: 'createWorkspace' }, title: stringSchema, projectId: nullableIdSchema }, 'One canonical workspace in the exact authorized project or without a project; opens the new workspace'),
+  capability('renameWorkspace', 'Rename a workspace', 'mutate', { type: { const: 'renameWorkspace' }, workspaceId: idSchema, title: stringSchema }, 'One authorized workspace; current entity and layout revisions are bound by the target manifest'),
+  capability('bringAllIntoView', 'Frame the current workspace', 'mutate', { type: { const: 'bringAllIntoView' }, workspaceId: idSchema }, 'Frame the current authorized workspace using actual presenter bounds supplied outside the model action; does not create or duplicate resources'),
+  capability('resolveLayout', 'Resolve workspace layout collisions', 'mutate', { type: { const: 'resolveLayout' }, workspaceId: idSchema }, 'One authorized workspace and its existing canonical layout participants, including Vela'),
+  capability('setOrganization', 'Set workspace organization', 'mutate', { type: { const: 'setOrganization' }, workspaceId: idSchema, organization: organizationSchema }, 'One authorized workspace; validates the canonical organization update and retains resource identities'),
   capability('workspaceFromResources', 'Create a workspace from existing resources', 'create', { type: { const: 'workspaceFromResources' }, title: stringSchema, projectId: nullableIdSchema, resourceIds: arraySchema }, 'Create one workspace; attach references to the exact existing resource IDs; never duplicate resources'),
   capability('createResource', 'Create a note, task, or task group', 'create', { type: { const: 'createResource' }, kind: { enum: ['note', 'task', 'task_group'] }, title: stringSchema, workspaceId: nullableIdSchema }, 'One local canonical resource; optional authorized workspace placement'),
   capability('attach', 'Place an existing resource', 'mutate', { type: { const: 'attach' }, workspaceId: idSchema, resourceId: idSchema }, 'One existing canonical resource and one workspace'),
   capability('content', 'Edit a local resource', 'mutate', { type: { const: 'content' }, resourceId: idSchema, expectedVersion: versionSchema, content: { type: 'string', maxLength: 100000 } }, 'One versioned resource; host validates resource type'),
   capability('taskStatus', 'Update task status', 'mutate', { type: { const: 'taskStatus' }, resourceId: idSchema, expectedVersion: versionSchema, status: { enum: ['open', 'done'] } }, 'One versioned task; status does not assert verified outcome'),
+  capability('taskPriority', 'Update task priority', 'mutate', { type: { const: 'taskPriority' }, resourceId: idSchema, expectedVersion: versionSchema, priority: { enum: ['low', 'normal', 'high', 'urgent'] } }, 'One authorized versioned task; priority does not change completion or verification state'),
   capability('setTaskGroupMembers', 'Organize task group members', 'mutate', { type: { const: 'setTaskGroupMembers' }, groupId: idSchema, expectedVersion: versionSchema, taskIds: arraySchema }, 'One versioned group and an explicit task set'),
   capability('relate', 'Link two resources', 'mutate', { type: { const: 'relate' }, sourceId: idSchema, targetId: idSchema, kind: stringSchema }, 'Two existing resources; source is Vela, not inferred authority'),
   capability('applyStructuredPreset', 'Apply a workspace layout preset', 'mutate', { type: { const: 'applyStructuredPreset' }, workspaceId: idSchema, preset: { enum: ['balanced', 'focus', 'development', 'research'] } }, 'One authorized workspace; references and histories retain identity'),
@@ -47,11 +73,17 @@ export function validateAction(value: unknown): VelaNativeAction | DelegateTaskA
     case 'navigate': valid = fields(v, ['type', 'target']) && isRecord(v.target) && (
       (fields(v.target, ['kind', 'workspaceId']) && v.target.kind === 'workspace' && identifier(v.target.workspaceId)) ||
       (fields(v.target, ['kind', 'projectId']) && v.target.kind === 'constellation' && nullableId(v.target.projectId))); break;
+    case 'createProject': valid = fields(v, ['type', 'title']) && text(v.title); break;
+    case 'createWorkspace': valid = fields(v, ['type', 'title', 'projectId']) && text(v.title) && nullableId(v.projectId); break;
+    case 'renameWorkspace': valid = fields(v, ['type', 'workspaceId', 'title']) && identifier(v.workspaceId) && text(v.title); break;
+    case 'bringAllIntoView': case 'resolveLayout': valid = fields(v, ['type', 'workspaceId']) && identifier(v.workspaceId); break;
+    case 'setOrganization': valid = fields(v, ['type', 'workspaceId', 'organization']) && identifier(v.workspaceId) && organization(v.organization); break;
     case 'workspaceFromResources': valid = fields(v, ['type', 'title', 'projectId', 'resourceIds']) && text(v.title) && nullableId(v.projectId) && ids(v.resourceIds); break;
     case 'createResource': valid = fields(v, ['type', 'kind', 'title', 'workspaceId']) && ['note', 'task', 'task_group'].includes(String(v.kind)) && text(v.title) && nullableId(v.workspaceId); break;
     case 'attach': valid = fields(v, ['type', 'workspaceId', 'resourceId']) && identifier(v.workspaceId) && identifier(v.resourceId); break;
     case 'content': valid = fields(v, ['type', 'resourceId', 'expectedVersion', 'content']) && identifier(v.resourceId) && version(v.expectedVersion) && typeof v.content === 'string' && v.content.length <= 100000; break;
     case 'taskStatus': valid = fields(v, ['type', 'resourceId', 'expectedVersion', 'status']) && identifier(v.resourceId) && version(v.expectedVersion) && ['open', 'done'].includes(String(v.status)); break;
+    case 'taskPriority': valid = fields(v, ['type', 'resourceId', 'expectedVersion', 'priority']) && identifier(v.resourceId) && version(v.expectedVersion) && ['low', 'normal', 'high', 'urgent'].includes(String(v.priority)); break;
     case 'setTaskGroupMembers': valid = fields(v, ['type', 'groupId', 'expectedVersion', 'taskIds']) && identifier(v.groupId) && version(v.expectedVersion) && ids(v.taskIds); break;
     case 'relate': valid = fields(v, ['type', 'sourceId', 'targetId', 'kind']) && identifier(v.sourceId) && identifier(v.targetId) && typeof v.kind === 'string' && /^[a-zA-Z][a-zA-Z0-9_.:-]{0,99}$/.test(v.kind); break;
     case 'applyStructuredPreset': valid = fields(v, ['type', 'workspaceId', 'preset']) && identifier(v.workspaceId) && ['balanced', 'focus', 'development', 'research'].includes(String(v.preset)); break;

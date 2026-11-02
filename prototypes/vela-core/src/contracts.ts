@@ -1,3 +1,4 @@
+import type { OrganizationUpdate, TaskPriority } from '../../application-contract/contracts.ts';
 /** Browser-safe Vela contracts. Canonical data and provider execution remain host-owned. */
 export const VELA_CONTRACT = 'aerynth.vela@1' as const;
 export type EvidenceClass = 'observed' | 'reported' | 'inferred' | 'unknown';
@@ -22,11 +23,18 @@ export interface ContextManifest {
 }
 export type VelaNativeAction =
   | { type: 'navigate'; target: { kind: 'workspace'; workspaceId: string } | { kind: 'constellation'; projectId: string | null } }
+  | { type: 'createProject'; title: string }
+  | { type: 'createWorkspace'; title: string; projectId: string | null }
+  | { type: 'renameWorkspace'; workspaceId: string; title: string }
+  | { type: 'bringAllIntoView'; workspaceId: string }
+  | { type: 'resolveLayout'; workspaceId: string }
+  | { type: 'setOrganization'; workspaceId: string; organization: OrganizationUpdate }
   | { type: 'workspaceFromResources'; title: string; projectId: string | null; resourceIds: string[] }
   | { type: 'createResource'; kind: 'note' | 'task' | 'task_group'; title: string; workspaceId: string | null }
   | { type: 'attach'; workspaceId: string; resourceId: string }
   | { type: 'content'; resourceId: string; expectedVersion: number; content: string }
   | { type: 'taskStatus'; resourceId: string; expectedVersion: number; status: 'open' | 'done' }
+  | { type: 'taskPriority'; resourceId: string; expectedVersion: number; priority: TaskPriority }
   | { type: 'setTaskGroupMembers'; groupId: string; expectedVersion: number; taskIds: string[] }
   | { type: 'relate'; sourceId: string; targetId: string; kind: string }
   | { type: 'applyStructuredPreset'; workspaceId: string; preset: 'balanced' | 'focus' | 'development' | 'research' };
@@ -88,7 +96,7 @@ export interface ActionReceipt {
   source: 'vela'; providerId: string | null;
   state: 'started' | 'applied' | 'failed' | 'cancelled' | 'unknown';
   startedAt: string; endedAt?: string; hostReceiptId?: string; errorCode?: string;
-  createdResourceId?: string; createdWorkspaceId?: string;
+  createdResourceId?: string; createdWorkspaceId?: string; createdProjectId?: string;
   /** A delegated provider completing a turn is not verified task completion. */
   taskVerified: false;
 }
@@ -107,7 +115,7 @@ export type AuthorizationDecision =
   | { decision: 'deny'; reason: string; policyVersion: string };
 export interface HostActionResult {
   status: 'applied' | 'failed' | 'cancelled' | 'unknown'; receiptId: string;
-  errorCode?: string; createdResourceId?: string; createdWorkspaceId?: string;
+  errorCode?: string; createdResourceId?: string; createdWorkspaceId?: string; createdProjectId?: string;
 }
 export interface VelaHostPort {
   scope(): VelaScope;
