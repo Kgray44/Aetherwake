@@ -22,7 +22,19 @@ export type Snapshot = {
   blocks: ({
     id: string;
     workspace_id: string;
-    resource_id: string;
+    resource_id?: string;
+    subject?:
+      | { kind: "resource"; resourceId: string }
+      | { kind: "project"; projectId: string }
+      | { kind: "collection"; collectionId: string }
+      | {
+          kind: "resource-query";
+          projectId: string | null;
+          query: string;
+          kinds?: string[];
+          collectionId?: string;
+        };
+    subjectState?: "active" | "archived" | "unavailable";
     x: number;
     y: number;
     width: number;

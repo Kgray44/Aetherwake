@@ -31,8 +31,12 @@ export function project(
     snapshot.resources.filter(permitted).map((r) => [r.id, r]),
   );
   const blocks = snapshot.blocks.filter(
-    (b) =>
+    (b): b is Snapshot["blocks"][number] & { resource_id: string } =>
       permitted(b) &&
+      typeof b.resource_id === "string" &&
+      (!b.subject ||
+        (b.subject.kind === "resource" &&
+          b.subject.resourceId === b.resource_id)) &&
       workspaceIds.has(b.workspace_id) &&
       resources.has(b.resource_id),
   );
@@ -110,7 +114,11 @@ export function project(
       title: r.title,
       kind: "resource",
       parent,
-      available: r.available !== false && b.available !== false,
+      available:
+        r.available !== false &&
+        b.available !== false &&
+        b.subjectState !== "archived" &&
+        b.subjectState !== "unavailable",
       point: { x: center.x + b.x * 0.6, y: center.y + 160 + b.y * 0.6 },
     });
   }
