@@ -30,6 +30,7 @@ export function createVelaExperience(options: {
   >();
   let active = false,
     baseline = false,
+    sizeDirty = false,
     latest: VelaPanelPresentation | null = null;
   const size = () => {
     const feedback = Math.min(
@@ -77,7 +78,10 @@ export function createVelaExperience(options: {
     typeof ResizeObserver === "undefined"
       ? null
       : new ResizeObserver(() => {
-          if (active) options.resize(size());
+          if (active && !sizeDirty) {
+            sizeDirty = true;
+            options.wake();
+          }
         });
   function clear() {
     options.motion.bodies.delete(phaseKey);
@@ -128,7 +132,7 @@ export function createVelaExperience(options: {
       entries.set(id, { ...item, key });
     }
     baseline = true;
-    options.resize(size());
+    sizeDirty = true;
     options.wake();
   }
   return {
@@ -156,12 +160,19 @@ export function createVelaExperience(options: {
           resizeObserver?.observe(feedback);
         reconcile();
       } else {
+        sizeDirty = false;
         resizeObserver?.disconnect();
         clear();
       }
     },
     frame(policy: Policy) {
       if (!active || !latest || !options.motion.bodies.has(phaseKey)) return;
+      // Contextual resize measures and writes layout. Keep it outside observer
+      // delivery and coalesce notifications into the existing application frame.
+      if (sizeDirty) {
+        sizeDirty = false;
+        options.resize(size());
+      }
       const snap =
         policy.reduced ||
         policy.quiet ||
@@ -223,6 +234,7 @@ export function createVelaExperience(options: {
     dispose() {
       active = false;
       baseline = false;
+      sizeDirty = false;
       latest = null;
       resizeObserver?.disconnect();
       clear();

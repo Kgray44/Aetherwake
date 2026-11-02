@@ -83,9 +83,9 @@ test("actual context and phase retarget in place, while quiet/reduced/graphics l
   experience.observe(observation({ messageIds: [] }));
   assert.deepEqual(experience.size(), { width: 440, height: 150 });
   experience.observe(observation({ phase: "review", context: "sources" }));
-  assert.deepEqual(sizes.at(-1), { width: 520, height: 580 });
   motion.step(1 / 60);
   experience.frame(policy);
+  assert.deepEqual(sizes.at(-1), { width: 520, height: 580 });
   assert(
     Number(properties.get("--vela-context-reveal")) > 0 &&
       Number(properties.get("--vela-context-reveal")) < 1,
@@ -109,6 +109,84 @@ test("actual context and phase retarget in place, while quiet/reduced/graphics l
   experience.frame({ ...policy, reduced: true });
   assert.equal(experience.diagnostics().energy, 0.35);
   experience.dispose();
+});
+
+test("content resize never measures or writes during observer delivery and drains only while active", () => {
+  const previous = globalThis.ResizeObserver;
+  let delivery,
+    inDelivery = false,
+    measurements = 0,
+    disconnected = 0;
+  globalThis.ResizeObserver = class {
+    constructor(callback) {
+      delivery = callback;
+    }
+    observe() {}
+    disconnect() {
+      disconnected++;
+    }
+  };
+  const motion = new MotionCoordinator(),
+    sizes = [];
+  let height = 100;
+  const composer = {
+    getBoundingClientRect() {
+      assert.equal(inDelivery, false, "no synchronous observer layout read");
+      measurements++;
+      return { height };
+    },
+  };
+  const root = {
+    style: { setProperty() {} },
+    dataset: {},
+    querySelectorAll: () => [],
+    querySelector: (selector) =>
+      selector === ".vela-core-compose" ? composer : null,
+  };
+  const experience = createVelaExperience({
+    motion,
+    root,
+    wake() {},
+    resize(size) {
+      assert.equal(inDelivery, false, "no synchronous observer resize write");
+      sizes.push(size);
+    },
+  });
+  const notify = () => {
+    inDelivery = true;
+    try {
+      delivery([]);
+    } finally {
+      inDelivery = false;
+    }
+  };
+  try {
+    experience.observe(observation({ messageIds: [] }));
+    experience.setActive(true);
+    experience.frame(policy);
+    const initial = measurements;
+    height = 210;
+    notify();
+    notify();
+    notify();
+    assert.equal(measurements, initial);
+    assert.equal(sizes.length, 1);
+    experience.frame(policy);
+    assert.equal(measurements, initial + 1);
+    assert.deepEqual(sizes.at(-1), { width: 440, height: 238 });
+    experience.frame(policy);
+    assert.equal(sizes.length, 2, "unchanged frames do not resize again");
+    notify();
+    experience.setActive(false);
+    experience.frame(policy);
+    notify();
+    assert.equal(sizes.length, 2, "closing drops pending sizing work");
+    assert(disconnected > 0);
+  } finally {
+    experience.dispose();
+    if (previous === undefined) delete globalThis.ResizeObserver;
+    else globalThis.ResizeObserver = previous;
+  }
 });
 
 test("an empty source search uses its measured content rather than a standing large panel", () => {
