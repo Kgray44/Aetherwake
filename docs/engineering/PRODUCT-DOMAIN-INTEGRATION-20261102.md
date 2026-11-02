@@ -38,7 +38,26 @@ reference receipts. Requested capabilities grant no permissions. The current
 service does **not** run an agent. Actual execution, task orchestration,
 approvals, results and full tool/skill/environment configuration remain work.
 
-## Checklists: connected source implementation, native journey pending
+## Checklists: verified in the combined desktop
+
+Candidate `ddf3417d927554aa673dba54ec26e2edb056c3b6` passed actual UI
+creation of standalone and conversation-linked Checklists, manual add/edit/check,
+groups, descriptions, priority, due date, source selection, direct reopening and
+exact separate-process restart. Resource, entry, group and reference identities,
+versions, content and manual attribution persisted. No project, workspace, Note,
+block, native binding, message or execution was created for these Checklists.
+Registered provider-attempt counters remained zero.
+
+Initial/restore durations were 14.44/4.94 seconds including cleanup. Windows and
+their backend processes exited and were independently checked. Most input was
+software native-window input with focus/selection acknowledgement; date editing
+used explicitly recorded DOM input on the actual visible date field. All script
+inspection used false activation. Native screenshots were inspected; unnecessary
+normal conflict controls were identified for refinement. This is functional
+acceptance, not artistic, motion-recording or presentation-performance acceptance.
+An earlier profile guard failure remains failed evidence: it expected the root
+instead of the application's Chromium child directory. The corrected guard
+checks both exact locations and the explicit owned-profile argument.
 
 The canonical Checklist service, desktop/worker/Main/preload commands, retained
 editor, standalone creator, actual source picker, conversation-context creation,
@@ -56,7 +75,7 @@ Real Core tests verify conversation linkage without a workspace, exact restart,
 rollback, idempotency, canonical event provenance, two workspace placements of
 one Checklist, type-specific default size and retained entries after detaching.
 The actual desktop stdio/worker test exercises a valid request exceeding the
-ordinary chat packet size. Source tests do not establish native usability.
+ordinary chat packet size. These source tests complement the native journey.
 
 Checklist templates require an explicit existing-resource reference; silently
 copying a content-free shell is rejected. Entries/groups/sources remain with
@@ -70,11 +89,11 @@ discovery and native cross-workspace interaction still need acceptance.
 
 | Domain | Current boundary |
 |---|---|
-| Agent blocks | Universal Block System has supplied a real profile component. Manifest/desktop mounting and native placement acceptance are separate work. |
+| Agent blocks | Real profile component, reference-only manifest and shared-motion desktop mounting are connected in source. Native placement acceptance remains. |
 | Research Notebook | Existing note-like Research identity/content is preserved under the clearer presentation name. It is not a Research Agent. |
 | Manual Task / Task Group | Compatibility presentations remain. A checkbox is not an agentic task objective or verification. |
 | Resource Explorer | Existing resource/collection meanings remain distinct under common Explorer presentation. Broader hierarchy/search refinement remains. |
-| Timeline | Isolated canonical Activity/Execution foundation is integrated as source at `e6ffda3`. It saves view configuration and queries existing event headers with permission checks, frozen pagination and explicit evidence gaps. It copies no event database. Desktop commands/view/native acceptance remain pending. |
+| Timeline | Activity/Execution service and actual native/Core/stdio commands are connected. They persist view configuration and query existing event headers with permission checks, frozen pagination and explicit evidence gaps. They copy no event database. The retained viewer is supplied; presentation/creation integration and native acceptance remain pending. |
 | Workflow / rich Task Tracker | Not implemented by these profile, checklist or timeline foundations. No synthetic execution is advertised. |
 | Vela integration | General authorized orchestration and reviewed checklist suggestions remain incomplete. Vela remains separate from Codex and ChatGPT. |
 
@@ -95,7 +114,7 @@ Private native receipts retain exact source/build hashes, original restart
 bindings, screenshots and process-exit observations. No user profile,
 credentials, private conversations or host measurements are committed here.
 
-Next acceptance must demonstrate actual Checklist interaction/restart, saved
-Agent block identity after removal, and authorized real execution through the
-existing task/provider boundary. No whole-product, native ChatGPT account
+Next acceptance must demonstrate saved Agent block identity after removal,
+Timeline navigation/restart, and authorized real execution through the existing
+task/provider boundary. No whole-product, native ChatGPT account
 history/memory, performance or artistic acceptance follows from this record.
