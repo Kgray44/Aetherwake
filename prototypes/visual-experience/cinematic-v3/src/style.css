@@ -1146,7 +1146,8 @@ body:not(.focused):has(#stream:not([hidden])) #vela .vela-label {
 }
 /* Opaque GPU substrates protect content; rear DOM paint and hit regions are
    clipped by the canonical front silhouette. Ordinary overlap never changes
-   this optical veil. Focus protects only its central reading region. */
+   this optical veil. Focus uses one continuous absorptive film across the
+   same glass face, rather than opaque rectangles behind individual sections. */
 body:has(#world[data-materials="physical"]):not(.graphics-fallback) .folio {
   background: transparent;
   border-color: transparent;
@@ -1155,13 +1156,12 @@ body:has(#world[data-materials="physical"]):not(.graphics-fallback) .folio {
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio:not(.receded)
   .working-content {
-  background: #0b1019;
-  border-radius: 7px;
+  background: transparent;
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio:not(.receded)
   .folio-top {
-  background: rgba(4, 7, 14, 0.58);
+  background: transparent;
   border-radius: 5px;
   padding: 4px 6px;
   margin: -4px -6px 0;
@@ -1178,6 +1178,15 @@ body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   border-radius: inherit;
   clip-path: var(--resource-content-clip, none);
   container-type: size;
+}
+body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+  .resource-presentation {
+  /* Preserve the actual GPU light response everywhere, including under
+     text. This full-face tint follows the existing semantic material spring. */
+  background: rgba(3, 7, 15, calc(var(--unfold, 0) * 0.46));
+}
+.folio .folio-inner {
+  text-shadow: 0 1px 2px #030710b3;
 }
 /* Short dynamic spans keep the action reachable without changing the glass,
    canonical geometry or editor identity. Size follows each card, not viewport. */
@@ -1245,8 +1254,7 @@ body[data-study="architecture"] .folio.expanded {
   color: #d6e0eb;
 }
 .folio .title-select {
-  background: rgba(4, 7, 14, calc(var(--unfold, 0) * 0.82));
-  border-radius: 5px;
+  background: transparent;
 }
 .folio .folio-top,
 .folio .grip {
