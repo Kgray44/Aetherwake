@@ -214,6 +214,7 @@ export function installApplication(hooks: Hooks) {
   let previewRequest: LayoutPreviewRequest | undefined;
   let previewCommitting = false;
   let cancelResize: (() => void) | undefined;
+  const activeBlocks = new Map<string, boolean>();
   const directBindings = new Map<
     string,
     ReturnType<typeof mountDirectManipulation>
@@ -401,6 +402,9 @@ export function installApplication(hooks: Hooks) {
     )
       cancelPreview();
     state = next;
+    for (const id of activeBlocks.keys())
+      if (!next.blocks.some((block) => block.id === id))
+        activeBlocks.delete(id);
     for (const [id, view] of noteViews)
       if (!next.blocks.some((b) => b.id === id)) {
         view.dispose();
@@ -1964,7 +1968,7 @@ export function installApplication(hooks: Hooks) {
       const surface = el(".working-content", article);
       if (!surface.querySelector(".conversation-compose")) {
         surface.innerHTML =
-          '<p class="provider-label"></p><div class="conversation-transcript" role="log" aria-label="Conversation messages"></div><form class="conversation-compose"><label>Message<textarea rows="2" maxlength="16000" required aria-label="Conversation message"></textarea></label><div><button type="submit">Send</button><button type="button" class="cancel-turn">Cancel turn</button></div><p class="execution-state" role="status"></p></form>';
+          '<p class="provider-label"></p><div class="conversation-transcript" role="log" aria-label="Conversation messages"></div><form class="conversation-compose"><label>Message<textarea rows="2" maxlength="16000" required aria-label="Conversation message"></textarea></label><div><button type="submit">Send</button><button type="button" class="cancel-turn">Cancel turn</button><button type="button" class="open-full-conversation">History, search and branches</button></div><p class="execution-state" role="status"></p></form>';
         el<HTMLFormElement>("form", surface).onsubmit = (event) => {
           event.preventDefault();
           const input = el<HTMLTextAreaElement>("textarea", surface);
@@ -2032,6 +2036,12 @@ export function installApplication(hooks: Hooks) {
             .catch(report);
         };
       }
+      el(".open-full-conversation", surface).onclick = () =>
+        conversations(r.id);
+      const latestMessage = r.messages.at(-1);
+      el(".folio-preview", article).textContent = latestMessage
+        ? latestMessage.role + " · " + latestMessage.content.slice(0, 500)
+        : "No saved messages yet.";
       el(".provider-label", surface).textContent =
         r.provider === "codex"
           ? "Codex · native instructions/configuration · read-only review policy · authorization on Send"
@@ -2044,20 +2054,41 @@ export function installApplication(hooks: Hooks) {
           `${r.execution.state}${r.execution.errorCode ? " · " + r.execution.errorCode : ""} · task verification is separate`;
       el<HTMLButtonElement>(".cancel-turn", surface).hidden =
         r.provider !== "codex";
-      const log = el(".conversation-transcript", surface);
-      log.replaceChildren();
-      for (const m of r.messages) {
-        const message = document.createElement("p");
-        const role = document.createElement("b");
-        role.textContent = `${m.role} · `;
-        message.append(role, document.createTextNode(m.content));
-        log.append(message);
-      }
+      if (!article.classList.contains("expanded") || document.hidden) return;
+      const log = el(".conversation-transcript", surface),
+        nearBottom = log.scrollHeight - log.clientHeight - log.scrollTop < 40;
+      const rows = new Map(
+          [...log.querySelectorAll<HTMLElement>("[data-message-id]")].map(
+            (row) => [row.dataset.messageId!, row],
+          ),
+        ),
+        wanted = new Set(r.messages.map((message) => message.id));
+      for (const [id, row] of rows) if (!wanted.has(id)) row.remove();
+      r.messages.forEach((message, index) => {
+        let row = rows.get(message.id);
+        if (!row) {
+          row = document.createElement("p");
+          row.dataset.messageId = message.id;
+          row.append(document.createElement("b"), document.createTextNode(""));
+        }
+        const label = message.role + " · ";
+        if (row.firstChild!.textContent !== label)
+          row.firstChild!.textContent = label;
+        if (row.lastChild!.textContent !== message.content)
+          row.lastChild!.textContent = message.content;
+        const current = log.children[index];
+        if (current !== row) log.insertBefore(row, current ?? null);
+      });
+      let live = log.querySelector<HTMLElement>(".conversation-live-output");
       if (streaming.has(r.id)) {
-        const p = document.createElement("p");
-        p.textContent = `Codex (streaming): ${streaming.get(r.id)}`;
-        log.append(p);
-      }
+        if (!live) {
+          live = document.createElement("p");
+          live.className = "conversation-live-output";
+          log.append(live);
+        }
+        live.textContent = "Codex (streaming): " + streaming.get(r.id);
+      } else live?.remove();
+      if (nearBottom) log.scrollTop = log.scrollHeight;
     } else if (r.kind === "task_group") {
       const surface = el(".working-content", article);
       if (!surface.querySelector(".task-group-summary")) {
@@ -2550,7 +2581,23 @@ export function installApplication(hooks: Hooks) {
     block: (id: string) => state?.blocks.find((b) => b.id === id),
     saveContent,
     setBlockActive(id: string, active: boolean) {
-      if (active) ensureNoteView(id);
+      const previous = activeBlocks.get(id) ?? false;
+      activeBlocks.set(id, active);
+      if (previous === active) return;
+      if (active) {
+        ensureNoteView(id);
+        const block = state?.blocks.find((block) => block.id === id);
+        if (
+          block?.resource_id &&
+          state?.resources.find((resource) => resource.id === block.resource_id)
+            ?.kind === "conversation"
+        ) {
+          const article = document.querySelector<HTMLElement>(
+            `[data-block="${id}"]`,
+          );
+          if (article) decorate(article, id);
+        }
+      }
       noteViews.get(id)?.setActive(active);
       subjectViews.get(id)?.setActive(active);
       eventViews.get(id)?.setActive(active);
