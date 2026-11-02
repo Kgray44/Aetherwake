@@ -2194,20 +2194,6 @@ export function installApplication(hooks: Hooks) {
     const content = document.createElement("div");
     let closed = false;
     let view: ReturnType<typeof mountResourceLinks> | undefined;
-    surfaces.open({
-      id: "related-resources",
-      anchor,
-      content,
-      label: "Related resources",
-      minSize: { width: 300, height: 240 },
-      preferredSize: { width: 440, height: 360 },
-      maxSize: { width: 560, height: 520 },
-      initialFocus: 'input[type="search"]',
-      onClose: () => {
-        closed = true;
-        view?.dispose();
-      },
-    });
     view = mountResourceLinks(
       content,
       resourceId,
@@ -2230,6 +2216,26 @@ export function installApplication(hooks: Hooks) {
         },
       }),
     );
+    try {
+      surfaces.open({
+        id: "related-resources",
+        anchor,
+        content,
+        label: "Related resources",
+        minSize: { width: 300, height: 240 },
+        preferredSize: { width: 440, height: 360 },
+        maxSize: { width: 560, height: 520 },
+        initialFocus: 'input[type="search"]',
+        onClose: () => {
+          closed = true;
+          view?.dispose();
+        },
+      });
+    } catch (error) {
+      closed = true;
+      view.dispose();
+      throw error;
+    }
   }
   function openCanonicalResource(resourceId: string) {
     const resource = state?.resources.find((r) => r.id === resourceId);
