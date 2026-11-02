@@ -1,6 +1,23 @@
 /** Native-process module contracts. No secret-bearing type is a renderer RPC. */
 export type ProviderId = 'chatgpt-plan-responses' | 'openai-api-vela';
 export type AssistantId = 'ordinary' | 'vela';
+/** Safe catalog observation only. No credentials, raw body/header object,
+ * URL, configuration/account/client/host identity or entitlement claim. */
+export interface ModelCatalogDiagnostic {
+    readonly contract: 'aerynth.model-catalog-diagnostic@1';
+    readonly outcome: 'accepted' | 'http-error' | 'invalid-catalog' | 'unavailable';
+    readonly httpStatus: number | null;
+    readonly serverRequestId: string | null;
+    readonly bodyShape: 'error' | 'detail' | 'models' | 'data' | 'other' | 'invalid-json' | 'unavailable';
+    /** Fixed knownRemoteCode allowlist only; unrecognized values are null. */
+    readonly remoteCode: string | null;
+    /** Selected route array length / explicitly list-visible rows, <=2048.
+     * Null means unobserved or outside the bounded catalog schema. */
+    readonly returnedCount: number | null;
+    readonly listedCount: number | null;
+    /** Same request observation clock as the existing catalog result. */
+    readonly observedAt: number;
+}
 export interface TurnInput {
     readonly executionId: string;
     readonly requestId: string;

@@ -1,4 +1,4 @@
-import type { DispatchReview, NativeCredential, ProviderId, ReportedUsage, TransportOptions, TurnInput, TurnResult } from './contracts.mts';
+import type { DispatchReview, ModelCatalogDiagnostic, NativeCredential, ProviderId, ReportedUsage, TransportOptions, TurnInput, TurnResult } from './contracts.mts';
 import { abortable, boundedJSON, digest, exact, knownRemoteCode, ProviderError, record, requireValue, text } from './common.mts';
 export const RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses';
 export const MODELS_ENDPOINT = 'https://api.openai.com/v1/models';
@@ -201,6 +201,29 @@ export class ResponsesTransport {
         }
     }
 }
+/** Inspect only own data properties; diagnostic projection never invokes body
+ * accessors, serializers or arbitrary remote text. Parsed JSON normally has none. */
+function ownData(value: unknown, key: string): unknown {
+    if (!record(value)) return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && 'value' in descriptor ? descriptor.value : undefined;
+}
+function catalogFacts(data: unknown, providerId: ProviderId): Pick<ModelCatalogDiagnostic, 'bodyShape' | 'remoteCode' | 'returnedCount' | 'listedCount'> {
+    const shape = record(data) ? (['error', 'detail', 'models', 'data'] as const).find(key => Object.hasOwn(data, key)) ?? 'other' : 'other';
+    const remote = knownRemoteCode(ownData(ownData(data, 'error'), 'code') ?? ownData(data, 'code') ?? ownData(ownData(data, 'detail'), 'code'));
+    const rows = ownData(data, providerId === 'chatgpt-plan-responses' ? 'models' : 'data');
+    const bounded = Array.isArray(rows) && rows.length <= 2048;
+    return { bodyShape: shape, remoteCode: remote === 'provider_failed' ? null : remote, returnedCount: bounded ? rows.length : null,
+        listedCount: bounded ? providerId === 'chatgpt-plan-responses' ? rows.reduce((count, row) => count + Number(ownData(row, 'visibility') === 'list'), 0) : rows.length : null };
+}
+function catalogRequestId(response: Response, credential: NativeCredential): string | null {
+    try {
+        const value = response.headers.get('x-request-id');
+        if (!value || !/^req_[A-Za-z0-9_-]{1,128}$/.test(value)) return null;
+        if ([credential.bearer, credential.organization, credential.project, credential.boundaryDigest].some(secret => typeof secret === 'string' && secret.length > 0 && value.includes(secret))) return null;
+        return value;
+    } catch { return null; }
+}
 /** Native-only explicit catalog request. Does not establish inference entitlement. */
 export async function fetchModelCatalog(options: {
     providerId: ProviderId;
@@ -208,6 +231,8 @@ export async function fetchModelCatalog(options: {
     resolveCredential: TransportOptions['native']['resolveCredential'];
     fetch?: typeof fetch;
     now?: () => number;
+    /** Once, synchronously, after outcome; observer failures cannot alter it. */
+    onDiagnostic?: (diagnostic: Readonly<ModelCatalogDiagnostic>) => void;
 }): Promise<{
     providerId: ProviderId;
     boundaryDigest: string;
@@ -218,31 +243,57 @@ export async function fetchModelCatalog(options: {
         label: string;
     }[];
 }> {
-    requireValue((options.providerId === 'chatgpt-plan-responses' || options.providerId === 'openai-api-vela') && text(options.configurationId), 'invalid_catalog_configuration');
-    const now = options.now?.() ?? Date.now(), credential = await options.resolveCredential(options.configurationId, options.providerId), headers = credentialHeaders(credential, options.providerId, now);
-    const signal = AbortSignal.timeout(15000), response = await abortable((options.fetch ?? fetch)(MODELS_ENDPOINT, { headers, redirect: 'error', credentials: 'omit', cache: 'no-store', signal }), signal);
-    requireValue(response.ok, 'model_catalog_unavailable');
-    const data = await boundedJSON(response, 262144, signal);
-    requireValue(record(data), 'invalid_model_catalog');
-    const rows = options.providerId === 'chatgpt-plan-responses' ? data.models : data.data;
-    requireValue(Array.isArray(rows) && rows.length <= 2048, 'invalid_model_catalog');
-    const models: {
-        id: string;
-        label: string;
-    }[] = [];
-    for (const row of rows) {
-        requireValue(record(row), 'invalid_model_catalog');
-        if (options.providerId === 'chatgpt-plan-responses') {
-            if (row.visibility !== 'list')
-                continue;
-            requireValue(text(row.slug) && text(row.display_name), 'invalid_model_catalog');
-            models.push({ id: row.slug, label: row.display_name });
+    let outcome: ModelCatalogDiagnostic['outcome'] = 'unavailable', httpStatus: number | null = null, serverRequestId: string | null = null, observedAt = Date.now();
+    let facts: Pick<ModelCatalogDiagnostic, 'bodyShape' | 'remoteCode' | 'returnedCount' | 'listedCount'> = { bodyShape: 'unavailable', remoteCode: null, returnedCount: null, listedCount: null };
+    try {
+        requireValue((options.providerId === 'chatgpt-plan-responses' || options.providerId === 'openai-api-vela') && text(options.configurationId), 'invalid_catalog_configuration');
+        const now = options.now?.() ?? Date.now(); if (Number.isSafeInteger(now) && now >= 0 && now <= 8640000000000000) observedAt = now;
+        const credential = await options.resolveCredential(options.configurationId, options.providerId), headers = credentialHeaders(credential, options.providerId, now);
+        const signal = AbortSignal.timeout(15000), response = await abortable((options.fetch ?? fetch)(MODELS_ENDPOINT, { headers, redirect: 'error', credentials: 'omit', cache: 'no-store', signal }), signal);
+        httpStatus = Number.isInteger(response.status) && response.status >= 100 && response.status <= 599 ? response.status : null;
+        serverRequestId = catalogRequestId(response, credential);
+        if (!response.ok) {
+            outcome = 'http-error';
+            try { facts = catalogFacts(await boundedJSON(response, 262144, signal), options.providerId); }
+            catch (error) { if (error instanceof ProviderError && error.code === 'invalid_json_response') facts = { ...facts, bodyShape: 'invalid-json' }; }
+            throw new ProviderError('model_catalog_unavailable');
         }
-        else {
-            requireValue(text(row.id), 'invalid_model_catalog');
-            models.push({ id: row.id, label: row.id });
+        outcome = 'invalid-catalog';
+        let data: unknown;
+        try { data = await boundedJSON(response, 262144, signal); }
+        catch (error) { if (error instanceof ProviderError && error.code === 'invalid_json_response') facts = { ...facts, bodyShape: 'invalid-json' }; throw error; }
+        facts = catalogFacts(data, options.providerId);
+        requireValue(record(data), 'invalid_model_catalog');
+        const rows = options.providerId === 'chatgpt-plan-responses' ? data.models : data.data;
+        requireValue(Array.isArray(rows) && rows.length <= 2048, 'invalid_model_catalog');
+        const models: {
+            id: string;
+            label: string;
+        }[] = [];
+        for (const row of rows) {
+            requireValue(record(row), 'invalid_model_catalog');
+            if (options.providerId === 'chatgpt-plan-responses') {
+                if (row.visibility !== 'list')
+                    continue;
+                requireValue(text(row.slug) && text(row.display_name), 'invalid_model_catalog');
+                models.push({ id: row.slug, label: row.display_name });
+            }
+            else {
+                requireValue(text(row.id), 'invalid_model_catalog');
+                models.push({ id: row.id, label: row.id });
+            }
         }
+        requireValue(new Set(models.map(model => model.id)).size === models.length, 'ambiguous_model_catalog');
+        outcome = 'accepted';
+        return { providerId: options.providerId, boundaryDigest: credential.boundaryDigest, observedAt: now, catalogOnly: true, models };
+    } finally {
+        // Null prototype + frozen own scalars: no inherited toJSON/getter or
+        // secret-bearing body/cause/credential object can cross this callback.
+        const diagnostic: Readonly<ModelCatalogDiagnostic> = Object.freeze(Object.assign(Object.create(null), { contract: 'aerynth.model-catalog-diagnostic@1', outcome, httpStatus, serverRequestId,
+            bodyShape: facts.bodyShape, remoteCode: facts.remoteCode, returnedCount: facts.returnedCount, listedCount: facts.listedCount, observedAt }));
+        try {
+            const observation: unknown = options.onDiagnostic?.(diagnostic);
+            if (observation instanceof Promise) void Promise.prototype.then.call(observation, undefined, () => {});
+        } catch { /* observation is not dispatch/catalog authority */ }
     }
-    requireValue(new Set(models.map(model => model.id)).size === models.length, 'ambiguous_model_catalog');
-    return { providerId: options.providerId, boundaryDigest: credential.boundaryDigest, observedAt: now, catalogOnly: true, models };
 }
