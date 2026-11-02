@@ -10,6 +10,8 @@ export interface CanonicalConversationHost {
  desktop(): Promise<DesktopSnapshot>;
  command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']>;
  organize(input: CanonicalOrganizationCommand): Promise<unknown>;
+ /** Optional side-effect-free catalog, so reading local history never starts a connection. */
+ capabilitySnapshot?(): CommandMap['capabilities']['output'] | undefined;
  /** Host policy authority: connections/family membership never grant access. */
  access?(resourceId: string, messageId?: string): boolean;
  /** Uses existing canonical execution service, with context receipt after actual dispatch. */
@@ -123,10 +125,12 @@ export class ConversationProduct implements ConversationProductPort {
  private share(v: View, row: Record<string, any>, targetId?: string, includeContent = false): Share {
   const id = String(row.id), sourceId = String(row.source_resource_id), messageId = String(row.source_message_id);
   let status: Share['status'] = row.revoked ? 'revoked' : 'current', content: string | undefined;
+  const supersededBy=this.db.prepare('SELECT id FROM cp_shares WHERE supersedes=? ORDER BY created_at,id').all(id).map(r=>String(r.id));
+  if(status==='current'&&supersededBy.length)status='superseded';
   if (!this.readable(v, sourceId, messageId)) status = 'unavailable';
   if (status === 'current') { try { const m = this.message(v,sourceId,messageId); if (hash(m.content) !== row.digest) status = 'stale'; else if (includeContent) content = m.content.slice(Number(row.start),Number(row.end)); } catch { status='unavailable'; } }
   const a = targetId ? this.db.prepare('SELECT * FROM cp_adoptions WHERE share_id=? AND target_id=?').get(id,targetId) : undefined;
-  return { id, sourceResourceId: sourceId, sourceMessageId: messageId, sourceTime: String(row.source_time), digest: String(row.digest), range: { start: Number(row.start), end: Number(row.end) }, evidence: row.evidence, createdAt: String(row.created_at), supersedes: row.supersedes ? String(row.supersedes) : null, status, state: a?.sent_at ? 'sent' : a?.attached_at ? 'attached' : a?.inspected_at ? 'inspected' : 'discoverable', ...(targetId ? { targetResourceId:targetId } : {}), ...(a?.execution_id ? { executionId:String(a.execution_id) } : {}), ...(content === undefined ? {} : {content}) };
+  return { id, sourceResourceId: sourceId, sourceMessageId: messageId, sourceTime: String(row.source_time), digest: String(row.digest), range: { start: Number(row.start), end: Number(row.end) }, evidence: row.evidence, createdAt: String(row.created_at), supersedes: row.supersedes ? String(row.supersedes) : null, supersededBy, status, state: a?.sent_at ? 'sent' : a?.attached_at ? 'attached' : a?.inspected_at ? 'inspected' : 'discoverable', attached:!!a?.attached_at, ...(targetId ? { targetResourceId:targetId } : {}), ...(a?.execution_id ? { executionId:String(a.execution_id) } : {}), ...(content === undefined ? {} : {content}) };
  }
  private allowedShare(v: View, row: Record<string,any>, target: string) {
   this.resource(v,target); this.resource(v,String(row.source_resource_id),String(row.source_message_id));
@@ -142,7 +146,7 @@ export class ConversationProduct implements ConversationProductPort {
   const s = this.share(v,row,target); check(s.status === 'current','source_' + s.status); return s;
  }
  private async providers(v: View): Promise<ProviderCapability[]> {
-  let live: CommandMap['capabilities']['output'] | undefined; try { live = await this.host.command('capabilities',{}); } catch { /* catalog is not proof of a connected provider */ }
+  let live: CommandMap['capabilities']['output'] | undefined; try { live = this.host.capabilitySnapshot ? this.host.capabilitySnapshot() : await this.host.command('capabilities',{}); } catch { /* catalog is not proof of a connected provider */ }
   const local = v.snapshot.graph.providers.find(p => p.id === 'local') ?? v.snapshot.graph.providers.find(p=>p.id==='mock-ordinary');
   const items: ProviderCapability[] = [{ id: local?.id ?? 'local', label: 'Local conversation', available: true, record: true, execute: false, nativeFork:false, history:'local', simulated:false, models:[] }];
   const codex = v.snapshot.graph.providers.find(p => p.id !== local?.id && p.id!=='mock-ordinary' && p.id!=='local');
@@ -171,14 +175,21 @@ export class ConversationProduct implements ConversationProductPort {
      if (!needle || c.title.toLocaleLowerCase().includes(needle)) hits.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title});
      for (const m of v.graph.visibleMessages(c.conversationId)) { const sourceId = v.publicIds.get(m.conversationId)!; if (!this.readable(v,sourceId,m.id,!!a.archived)) continue; const index = m.content.toLocaleLowerCase().indexOf(needle); if (needle && index >= 0) hits.push({kind:'message',resourceId:c.resourceId,messageId:m.id,title:c.title,excerpt:m.content.slice(Math.max(0,index-60),index+160),sourceTime:m.createdAt}); }
     }
-    if (!a.collectionId && !a.familyOf && !a.providerId && !a.favorite) for (const r of v.desktop.resources) if (r.kind !== 'conversation' && this.readable(v,r.id) && (a.projectId === undefined || (r.project_id ?? null) === a.projectId)) { const content = r.title + '\n' + r.content, index = content.toLocaleLowerCase().indexOf(needle); if (index >= 0) hits.push({kind:'resource',resourceId:r.id,title:r.title,excerpt:content.slice(Math.max(0,index-60),index+160)}); }
+    const resourceCollection=a.collectionId?this.collections(v).find(c=>c.id===a.collectionId):undefined;
+    if (!a.familyOf && !a.providerId && !a.favorite) for (const r of v.desktop.resources) {
+     if(r.kind==='conversation'||!this.readable(v,r.id,undefined,!!a.archived)||(a.archived?r.state!=='archived':r.state==='archived'))continue;
+     const scopes=this.projectIds(v,r.id);if(a.projectId!==undefined&&(a.projectId===null?scopes.length>0:!scopes.includes(a.projectId)))continue;
+     if(resourceCollection&&!resourceCollection.memberIds.includes(r.id))continue;
+     const created=String(this.db.prepare('SELECT created_at FROM resources WHERE id=?').get(r.id)?.created_at??'');if(a.after&&created<a.after||a.before&&created>a.before)continue;
+     const content=r.title+'\n'+r.content,index=content.toLocaleLowerCase().indexOf(needle);if(index>=0)hits.push({kind:'resource',resourceId:r.id,title:r.title,excerpt:content.slice(Math.max(0,index-60),index+160)});
+    }
     result=page(hits,a); break;
    }
    case 'detail': {
     this.resource(v,a.resourceId,undefined,true); const c = this.summary(v,a.resourceId), all = v.graph.visibleMessages(c.conversationId).filter(m => this.readable(v,v.publicIds.get(m.conversationId)!,m.id,true)).map(m => ({id:m.id,resourceId:v.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,provenance:m.provenance,inherited:m.conversationId!==c.conversationId,sensitivity:m.sensitivity}));
     const around = a.aroundMessageId ? all.findIndex(m => m.id === a.aroundMessageId) : -1; if (a.aroundMessageId) check(around>=0,'message_unavailable');
     const family=this.family(v,a.resourceId); const lineage=v.snapshot.graph.edges.map(e=>({id:e.id,parentResourceId:v.publicIds.get(e.parentId)!,childResourceId:v.publicIds.get(e.childId)!,sourceMessageId:e.sourceMessageId,mode:e.mode,createdAt:e.createdAt})).filter(e=>family.has(e.parentResourceId)&&this.readable(v,e.parentResourceId)&&this.readable(v,e.childResourceId));
-    result={conversation:c,messages:page<MessageView>(all,{...a,...(around>=0?{offset:Math.max(0,around-10)}:{})}),lineage,policy:this.policy(a.resourceId),shares:this.db.prepare('SELECT * FROM cp_shares WHERE source_resource_id=? OR id IN(SELECT share_id FROM cp_adoptions WHERE target_id=?)').all(a.resourceId,a.resourceId).map(row=>this.share(v,row,a.resourceId)),providers:await this.providers(v)} satisfies Detail; break;
+    result={conversation:c,messages:page<MessageView>(all,{...a,...(around>=0?{offset:Math.max(0,around-Math.min(10,Math.floor((a.limit??50)/2)))}:{})}),lineage,policy:this.policy(a.resourceId),shares:this.db.prepare('SELECT * FROM cp_shares WHERE source_resource_id=? OR id IN(SELECT share_id FROM cp_adoptions WHERE target_id=?)').all(a.resourceId,a.resourceId).map(row=>this.share(v,row,a.resourceId)),providers:await this.providers(v)} satisfies Detail; break;
    }
    case 'collections': result=this.collections(v); break;
    case 'projects': result=v.desktop.projects;break;

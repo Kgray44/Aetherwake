@@ -48,6 +48,7 @@ test('canonical IDs, multiple canonical collections, favorites and migrations su
   await f.close();f=fixture(path);new ConversationProduct(f.db,f.host);
   const restored=await f.product.command('detail',{resourceId:c.resourceId});assert.equal(restored.conversation.conversationId,first.conversation.conversationId);assert.equal(restored.conversation.favorite,true);assert.equal(restored.messages.items[0].id,m.id);assert.equal(restored.conversation.collectionIds.length,2);
   const found=await f.product.command('search',{text:'persistent searchable'});assert.ok(found.items.some(hit=>hit.resourceId===c.resourceId&&hit.messageId===m.id));
+  f.db.prepare('UPDATE cp_schema SET version=2 WHERE id=1').run();assert.throws(()=>new ConversationProduct(f.db,f.host),/unsupported_conversation_product_schema/);assert.equal(f.db.prepare('SELECT version FROM cp_schema WHERE id=1').get()!.version,2);assert.equal((await f.core.command('snapshot',{})).graph.messages[0].id,m.id);f.db.prepare('UPDATE cp_schema SET version=1 WHERE id=1').run();
  }finally{await f.close();removeFixture(dir);}
 });
 
@@ -79,6 +80,9 @@ test('access revocation and source edits prevent search, inspection, and future 
   const detail=await f.product.command('detail',{resourceId:child.resourceId});assert.equal(detail.shares[0].status,'unavailable');assert.equal(detail.shares[0].content,undefined);
   f.denied.delete(m.id);f.setTransform(s=>{const out=structuredClone(s);out.graph.messages.find(msg=>msg.id===m.id)!.content='Source was corrected';return out;});
   assert.equal((await f.product.command('detail',{resourceId:child.resourceId})).shares[0].status,'stale');await assert.rejects(f.product.command('inspectShare',{resourceId:child.resourceId,shareId:share.id}),/source_stale/);await assert.rejects(f.product.attachedContext(child.resourceId),/source_stale/);
+  f.setTransform(s=>s);const correction=await record(f,source.resourceId,'Synthetic corrected finding');const replacement=await f.product.command('publish',{sourceResourceId:source.resourceId,sourceMessageId:correction.id,evidence:'observed',supersedes:share.id});
+  const superseded=(await f.product.command('detail',{resourceId:source.resourceId})).shares.find(s=>s.id===share.id)!;assert.equal(superseded.status,'superseded');assert.deepEqual(superseded.supersededBy,[replacement.id]);await assert.rejects(f.product.attachedContext(child.resourceId),/source_superseded/);
+  await f.product.command('revokeShare',{shareId:replacement.id});assert.equal((await f.product.command('detail',{resourceId:source.resourceId})).shares.find(s=>s.id===share.id)!.status,'superseded','revoking a correction cannot silently reactivate a superseded claim');
  }finally{await f.close();removeFixture(dir);}
 });
 
@@ -103,6 +107,20 @@ test('provider absence, stale commands, unrelated branches and policy restrictio
   await assert.rejects(f.product.command('send',{resourceId:codex.resourceId,content:'Must fail without an invented response',expectedRevision:1,commandId:crypto.randomUUID()}),/provider_disconnected/);assert.equal((await f.product.command('detail',{resourceId:codex.resourceId})).messages.total,0);
   const p=(await f.product.command('detail',{resourceId:child.resourceId})).policy;await f.product.command('policy',{...p,expectedRevision:0,allowedSourceIds:[outside.resourceId]});await assert.rejects(f.product.command('policy',{...p,expectedRevision:0}),/stale_policy_version/);
   const s=await f.product.command('publish',{sourceResourceId:one.resourceId,sourceMessageId:m.id,evidence:'excerpt'});assert.deepEqual(await f.product.command('discover',{resourceId:child.resourceId}),[]);await assert.rejects(f.product.command('inspectShare',{resourceId:outside.resourceId,shareId:s.id}),/outside_branch_family/);
-  const original=f.host.command;f.host.command=async(name,input)=>{if(name==='capabilities')throw new Error('offline');return original(name,input);};const d=await f.product.command('detail',{resourceId:one.resourceId});await f.product.command('send',{resourceId:one.resourceId,content:'Still local while offline',expectedRevision:d.conversation.revision,commandId:crypto.randomUUID()});assert.equal((await f.product.command('detail',{resourceId:one.resourceId})).messages.total,2);
+  const original=f.host.command;let connections=0;f.host.command=async(name,input)=>{if(name==='capabilities'){connections++;throw new Error('offline');}return original(name,input);};f.host.capabilitySnapshot=()=>undefined;const d=await f.product.command('detail',{resourceId:one.resourceId});await f.product.command('send',{resourceId:one.resourceId,content:'Still local while offline',expectedRevision:d.conversation.revision,commandId:crypto.randomUUID()});assert.equal((await f.product.command('detail',{resourceId:one.resourceId})).messages.total,2);assert.equal(connections,0,'offline history and local recording must not start a provider connection when host supplies snapshot');
+ }finally{await f.close();removeFixture(dir);}
+});
+
+test('paged message navigation includes exact hit; resource search honors collection and archive filters',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-paging-product-')),f=fixture(join(dir,'canonical.sqlite'));
+ try{
+  const c=await create(f);const ids:string[]=[];for(let i=0;i<8;i++)ids.push((await record(f,c.resourceId,`Synthetic message ${i}`)).id);
+  const first=await f.product.command('detail',{resourceId:c.resourceId,limit:3});assert.equal(first.messages.items.length,3);assert.equal(first.messages.hasMore,true);
+  const around=await f.product.command('detail',{resourceId:c.resourceId,aroundMessageId:ids[6],limit:3});assert.ok(around.messages.items.some(m=>m.id===ids[6]));await assert.rejects(f.product.command('detail',{resourceId:c.resourceId,limit:201}),/invalid_page/);
+  const desktop=await f.core.command('desktop',{type:'createResource',kind:'note',title:'Synthetic searchable note',workspaceId:null});const note=desktop.resources.find(r=>r.kind==='note')!;
+  await f.core.command('desktop',{type:'content',resourceId:note.id,expectedVersion:note.version,content:'Synthetic resource needle'});
+  const col=await f.product.command('organize',{type:'createCollection',title:'Notes and conversations',projectId:null}) as {id:string;version:number};await f.product.command('organize',{type:'membership',collectionId:col.id,resourceId:note.id,member:true,expectedVersion:col.version});
+  assert.equal((await f.product.command('search',{text:'resource needle',collectionId:col.id})).items[0]?.resourceId,note.id);assert.equal((await f.product.command('search',{text:'resource needle',archived:true})).total,0);
+  const exportData=await f.product.command('export',{resourceId:c.resourceId});assert.equal(exportData.detail.messages.total,8);assert.equal(exportData.detail.messages.hasMore,false);
  }finally{await f.close();removeFixture(dir);}
 });

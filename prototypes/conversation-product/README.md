@@ -36,6 +36,7 @@ const conversations = new ConversationProduct(canonicalDb, {
   desktop: () => core.command('desktop', { type: 'snapshot' }),
   command: (name, input) => core.command(name, input),
   organize: input => canonicalOrganization(input),
+  capabilitySnapshot: () => lastObservedProviderCapability,
   access: (resourceId, messageId) => policy.canRead(resourceId, messageId),
   sendWithContext: (input, context) => canonicalSend(input, context),
   contextReceipt: (executionId, resourceId, shareId, digest) =>
@@ -48,6 +49,12 @@ host delegates create/rename/archive collection and membership to the existing
 kernel, with canonical version fences. It owns title synchronization between
 resource and graph, project association, event attribution, and canonical mutation
 authorization. The product service only SQL-writes tables prefixed `cp_`.
+
+`capabilitySnapshot` is an optional, side-effect-free last-observed provider catalog.
+Supply it in the native host so reading local histories does not start or wait on
+App Server connection/authentication. An unknown snapshot reports native execution
+unavailable while preserving local recording and history. Without it, compatibility
+hosts use the existing `capabilities` command, which may establish a connection.
 
 Host access must enforce current project/resource/message scopes, including
 legacy project placement where ownership was null. Family links and collections
