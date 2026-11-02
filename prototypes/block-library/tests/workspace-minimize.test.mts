@@ -54,6 +54,33 @@ test('minimize mode chooses existing empty Chat/Note destinations and saved circ
   assert.throws(() => helper.selectCases({ ...seed, shapeCases: [] }), /existing_chat_note_circle/);
 });
 
+test('fresh minimized Chat verifies durable draft before native Restore and hydrates only on activation, without inventing prior DOM identity', async () => {
+  const events: string[] = []; let active = false;
+  const entry = { kind: 'conversation', resourceId: 'canonical-chat', editorValue: 'Exact saved unsent draft' };
+  const forbidden = () => { throw Error('A cold unmounted controller has no earlier editor state'); };
+  const result = await helper.recoverEditor({ entry,
+    readDraft: async (id: string) => { assert.equal(id, entry.resourceId); events.push('canonical draft'); return { content: entry.editorValue }; },
+    probe: async () => { events.push('observe unmounted'); return { mounted: false, hydrated: false }; },
+    rememberEditor: forbidden,
+    restore: async () => { events.push('native Restore'); active = true; },
+    waitForText: async () => { assert(active, 'No demand for hidden unmounted UI hydration'); events.push('exact hydrated text'); },
+    sameNode: forbidden, retainedEditor: forbidden,
+  });
+  assert.deepEqual(events, ['canonical draft', 'observe unmounted', 'native Restore', 'exact hydrated text', 'canonical draft']);
+  assert.equal(result.editorMountedBeforeRestore, false); assert.equal(result.sameExistingNode, null); assert.equal(result.retainedEditor, null); assert.equal(result.checkpointTextMatches, true);
+});
+
+test('fresh restore retains existing editor identity and never relaxes state checks for a hydrated controller', async () => {
+  const entry = { kind: 'conversation', resourceId: 'canonical-chat', editorValue: 'Exact persisted draft' }, events: string[] = [];
+  const ports = { entry, readDraft: async () => ({ content: entry.editorValue }), probe: async () => ({ mounted: true, hydrated: true }), rememberEditor: async () => { events.push('remember'); }, restore: async () => { events.push('native Restore'); }, waitForText: async () => { events.push('exact text'); }, sameNode: async () => true, retainedEditor: async () => ({ sameNode: true, sameText: true, sameSelection: true, scrollDelta: 0 }) };
+  const result = await helper.recoverEditor(ports); assert.equal(result.sameExistingNode, true); assert.equal(result.retainedEditor.scrollDelta, 0); assert.deepEqual(events, ['remember', 'native Restore', 'exact text']);
+  await assert.rejects(helper.recoverEditor({ ...ports, sameNode: async () => false }), /existing reopened editor/);
+  await assert.rejects(helper.recoverEditor({ ...ports, retainedEditor: async () => ({ sameNode: true, sameText: true, sameSelection: false, scrollDelta: 0 }) }), /already hydrated/);
+  await assert.rejects(helper.recoverEditor({ ...ports, retainedEditor: async () => ({ sameNode: true, sameText: true, sameSelection: true, scrollDelta: 2 }) }), /already hydrated/);
+  events.length = 0;
+  await assert.rejects(helper.recoverEditor({ ...ports, readDraft: async () => ({ content: 'Wrong draft' }) }), /Exact persisted Chat draft/); assert.deepEqual(events, [], 'A wrong canonical draft fails before native input');
+});
+
 test('explicit minimize dispatch rejects startup errors before any native operation and releases actual owner listeners', async () => {
   const argv = process.argv; process.argv = [...argv, '--verify-minimize', '--verification-deadline-ms=30000'];
   const contents: any = new EventEmitter(); contents.isDestroyed = () => false;

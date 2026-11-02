@@ -27,6 +27,25 @@ exports.selectCases = seed => {
   assert(selected[2].blockId && selected[2].resourceId, 'existing_saved_circle_required');
   return selected.map(c => ({ ...c }));
 };
+/** A cold minimized controller may intentionally not exist after process start.
+ * Durable data is checked first; only native Restore may activate/hydrate it.
+ * Existing hydrated editors keep the full same-process retention assertions. */
+exports.recoverEditor = async ({ entry, readDraft, probe, rememberEditor, restore, waitForText, sameNode, retainedEditor }) => {
+  const canonicalDraft = async () => { if (entry.kind === 'conversation') assert.equal((await readDraft(entry.resourceId)).content, entry.editorValue, 'Exact persisted Chat draft, independent of controller activation'); };
+  await canonicalDraft();
+  const observed = await probe();
+  if (observed.hydrated) { assert(observed.mounted); await rememberEditor(); }
+  await restore();
+  await waitForText();
+  if (observed.mounted) assert.equal(await sameNode(), true, 'Restore retains any existing reopened editor node');
+  let retained = null;
+  if (observed.hydrated) {
+    retained = await retainedEditor();
+    assert(retained.sameNode && retained.sameText && retained.sameSelection && retained.scrollDelta <= 1, 'Restore retains an already hydrated editor');
+  }
+  await canonicalDraft();
+  return { editorMountedBeforeRestore: observed.mounted, controllerHydratedBeforeRestore: observed.hydrated, sameExistingNode: observed.mounted ? true : null, checkpointTextMatches: true, retainedEditor: retained, hydration: observed.hydrated ? 'already hydrated' : 'explicit native Restore activation' };
+};
 /** Parent-owned native slot only. Existing host, fixture, guard and real controls.
  * No native IME is fabricated; source IME coverage remains a separate tier. */
 exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupErrors = [] }) => {
@@ -114,17 +133,26 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
       for (const entry of expected.cases) {
         await navigate(entry); const selector = card(entry), input = editor(entry); receipt.activeCase = { kind: entry.kind, blockId: entry.blockId };
         assert.deepEqual(exports.workspace(await snapshot()), expected.workspaces[entry.workspaceId]); await wait(x.shrunk(selector, entry.workingPose));
-        await wait(x.valueIs(input, entry.editorValue)); assert(await js(x.rememberEditor(input)));
-        if (entry.kind === 'conversation') assert.equal((await cp('readDraft', { resourceId: entry.resourceId })).content, expected.chatDraft);
+        if (entry.kind === 'conversation') assert.equal(entry.editorValue, expected.chatDraft);
         const before = await snapshot(); receipt.activeCase.minimizedPose = await js(x.pose(selector));
         if (entry.shape === 'circle') { await settledPoint(selector + ' .aw-block-restore'); await shot('fresh-process-minimized-circle-restore'); }
-        await restore(entry); await wait(x.restoredSize(selector, entry.workingPose));
-        if (entry.kind !== 'reference') await wait(x.composition(selector, 'working'));
+        receipt.activeCase.editorRecovery = await exports.recoverEditor({
+          entry,
+          readDraft: resourceId => cp('readDraft', { resourceId }),
+          probe: async () => {
+            const mounted = await js(x.rememberNode(input)), controller = selector + (entry.kind === 'conversation' ? ' .cp-chat' : ' .working-content[data-document-kind]');
+            return { mounted, hydrated: mounted && await js(x.exists(controller)) && await js(x.valueIs(input, entry.editorValue)) };
+          },
+          rememberEditor: () => js(x.rememberEditor(input)),
+          restore: async () => { await restore(entry); await wait(x.restoredSize(selector, entry.workingPose)); if (entry.kind !== 'reference') await wait(x.composition(selector, 'working')); },
+          waitForText: async () => { await wait(x.valueIs(input, entry.editorValue)); if (entry.kind === 'conversation') await wait(x.exists(selector + ' .cp-chat[data-resource-id=' + q(entry.resourceId) + ']')); },
+          sameNode: () => js(x.sameNode(input)),
+          retainedEditor: () => js(x.retainedEditor(input)),
+        });
         const after = await snapshot(); exports.assertTransition(before, after, entry.blockId, false);
-        const retained = await js(x.retainedEditor(input)); assert(retained.sameNode && retained.sameText && retained.sameSelection && retained.scrollDelta <= 1, 'Fresh-process Restore retains the editor');
-        receipt.cases.push({ ...receipt.activeCase, restored: true, retainedEditor: retained }); delete receipt.activeCase;
+        receipt.cases.push({ ...receipt.activeCase, restored: true }); delete receipt.activeCase;
       }
-      receipt.checks.push('Separate process restores exact minimized flags/geometry/content/draft/camera, then actual native Restore retains each reopened editor without replaying creation/editing/minimize');
+      receipt.checks.push('Separate process restores exact minimized flags/geometry/content/draft/camera; actual native Restore activates a cold controller and hydrates exact persisted text without input replay, retaining any existing editor and full state of already hydrated controllers');
     } else {
       receipt.phase = 'native inspector Minimize and header Restore'; const cases = exports.selectCases(seed), workspaces = {};
       let chatDraft;
