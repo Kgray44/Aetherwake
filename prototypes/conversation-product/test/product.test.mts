@@ -8,7 +8,7 @@ import { BackendCore } from '../../integrated-backend/src/core.mts';
 import type { Snapshot } from '../../integrated-backend/src/contracts.mts';
 import type { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import type { ConversationGraph, GraphData } from '../../connected-conversations/src/graph.ts';
-import { ConversationProduct, type CanonicalConversationHost } from '../src/service.mts';
+import { ConversationProduct, type CanonicalConversationHost, type ConversationReadView } from '../src/service.mts';
 
 /** Synthetic source data only. The real canonical core owns all conversation writes. */
 function removeFixture(dir:string){const absolute=resolve(dir),rel=relative(resolve(tmpdir()),absolute);assert.ok(rel&&!rel.startsWith('..')&&!isAbsolute(rel)&&rel.startsWith('aerynth-'),'fixture cleanup must stay in the explicitly created temp fixture');rmSync(absolute,{recursive:true,force:true});}
@@ -94,6 +94,54 @@ test('smart collection membership follows canonical content and preserves manual
   const col=await f.product.command('organize',{type:'createCollection',title:'Thermal',projectId:null}) as {id:string;version:number};await f.product.command('organize',{type:'membership',collectionId:col.id,resourceId:one.resourceId,member:true,expectedVersion:col.version});
   let collection=(await f.product.command('collections',{}))[0];const input={collectionId:col.id,parentId:null,rule:{text:'thermal'},expectedVersion:collection.version,expectedRuleRevision:0};await f.product.command('collectionRule',input);collection=(await f.product.command('collections',{}))[0];assert.deepEqual(new Set(collection.memberIds),new Set([one.resourceId,two.resourceId]));assert.deepEqual(collection.pinnedIds,[one.resourceId]);assert.equal((await f.product.command('list',{collectionId:col.id})).total,2);
   await assert.rejects(f.product.command('collectionRule',input),/stale_collection_rule/);await assert.rejects(f.product.command('collectionRule',{...input,expectedRuleRevision:1,parentId:col.id}),/folder_cycle/);
+ }finally{await f.close();removeFixture(dir);}
+});
+
+test('smart conversation rules accept the exact UI mode, reject mixed-resource modes, and do not calculate activity to derive IDs',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-smart-rule-mode-')),f=fixture(join(dir,'canonical.sqlite'));
+ try{
+  const one=await create(f,'Synthetic matching title'),two=await create(f,'Synthetic manual pin');
+  const col=await f.product.command('organize',{type:'createCollection',title:'Synthetic smart folder',projectId:null}) as {id:string;version:number};
+  await f.product.command('organize',{type:'membership',collectionId:col.id,resourceId:two.resourceId,member:true,expectedVersion:col.version});
+  let collection=(await f.product.command('collections',{}))[0],metadataCalls=0;
+  const view=(f.core as unknown as {conversationReadView():ConversationReadView}).conversationReadView();
+  f.host.canonicalReadView=async()=>({...view,graph:{...view.graph,visibleMessages:view.graph.visibleMessages,visibleMessageMetadata(){metadataCalls++;throw Error('smart IDs must not calculate activity/count');}}});
+  const input={collectionId:col.id,parentId:null,rule:{text:'matching title',searchMode:'conversations' as const},expectedVersion:collection.version,expectedRuleRevision:0};
+  const saved=await f.product.command('collectionRule',input);collection=saved.find(c=>c.id===col.id)!;
+  assert.deepEqual(new Set(collection.memberIds),new Set([one.resourceId,two.resourceId]));assert.deepEqual(collection.pinnedIds,[two.resourceId]);assert.equal(metadataCalls,0);
+  for(const mode of ['resources','all','messages'] as const)await assert.rejects(f.product.command('collectionRule',{...input,expectedRuleRevision:1,rule:{...input.rule,searchMode:mode}}),/unsupported_collection_filter/);
+  assert.equal((await f.product.command('collections',{}))[0].ruleRevision,1);assert.equal(metadataCalls,0);
+ }finally{await f.close();removeFixture(dir);}
+});
+
+test('synchronous read batches scope derived projections and authority to one call, then recheck inherited denial and metadata changes',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-read-batch-')),f=fixture(join(dir,'canonical.sqlite'));
+ try{
+  const parent=await create(f,'Synthetic parent'),anchor=await record(f,parent.resourceId,'Synthetic inherited text'),child=await branch(f,parent.resourceId,anchor.id);
+  const col=await f.product.command('organize',{type:'createCollection',title:'Synthetic nested metadata',projectId:null}) as {id:string;version:number};
+  const owner=f.core as unknown as {conversationReadView():ConversationReadView;kernel:WorkspaceKernel},access=f.host.access!;
+  let active=false,batches=0,escaped:ConversationReadView|undefined,checks=0,duplicateChecks=0,asyncReads=0;
+  f.host.canonicalReadBatch=<T,>(read:(view:ConversationReadView)=>T):T=>{
+   assert.equal(active,false,'nested batch denied');return owner.kernel.withTransaction(()=>{
+    active=true;batches++;const memo=new Map<string,boolean>(),calls=new Map<string,number>();
+    f.host.access=(id,messageId)=>{assert(active,'closed_read_batch');const key=id+'\0'+(messageId??'');if(memo.has(key))return memo.get(key)!;checks++;calls.set(key,(calls.get(key)??0)+1);const allowed=access(id,messageId);memo.set(key,allowed);return allowed;};
+    const current=owner.conversationReadView(),fence=()=>assert(active,'closed_read_batch');
+    const view:ConversationReadView={...current,graph:{visibleMessages:id=>{fence();return current.graph.visibleMessages(id);},visibleMessageMetadata:(id,options)=>{fence();return current.graph.visibleMessageMetadata(id,options);}},messageMetadata:id=>{fence();return current.messageMetadata(id);},resourceContent:id=>{fence();return current.resourceContent(id);}};escaped=view;
+    try{const result=read(view);assert(!result||typeof (result as {then?:unknown}).then!=='function','async_read_batch');duplicateChecks+=[...calls.values()].filter(n=>n>1).length;return result;}
+    finally{active=false;memo.clear();f.host.access=access;}
+   });
+  };
+  f.host.snapshot=async()=>{throw Error('batch must not use snapshot');};f.host.desktop=async()=>{throw Error('batch must not use desktop snapshot');};f.host.canonicalReadView=async()=>{asyncReads++;return owner.conversationReadView();};
+  let list=await f.product.command('list',{});assert.equal(list.items.find(c=>c.resourceId===child.resourceId)!.messageCount,1);assert.equal(batches,1);assert(checks>0);assert.equal(duplicateChecks,0);assert.equal(asyncReads,0);
+  assert.throws(()=>escaped!.messageMetadata(anchor.id),/closed_read_batch/);assert.throws(()=>escaped!.graph.visibleMessages(escaped!.resourceMap[child.resourceId]),/closed_read_batch/);
+  // Caller mutation of detached results is not a retained service projection.
+  list.items[0].title='caller mutation';await f.product.command('favorite',{resourceId:child.resourceId,favorite:true});
+  list=await f.product.command('list',{favorite:true});assert.deepEqual(list.items.map(c=>c.resourceId),[child.resourceId]);assert.notEqual(list.items[0].title,'caller mutation');assert.equal(batches,2);
+  f.denied.add(anchor.id);list=await f.product.command('list',{});const restricted=list.items.find(c=>c.resourceId===child.resourceId)!;assert.equal(restricted.messageCount,null);assert.equal(restricted.lastActivityAt,null);assert.equal(restricted.historyMetadataStatus,'unavailable');assert.equal(batches,3);
+  f.denied.delete(anchor.id);assert.equal((await f.product.command('search',{})).items.find(c=>c.resourceId===child.resourceId)!.summary!.messageCount,1);assert.equal(batches,4);
+  assert.deepEqual((await f.product.command('collections',{})).find(c=>c.id===col.id)!.memberIds,[]);assert.equal(batches,5);assert.equal(active,false);
+  await assert.rejects(f.product.command('list',{sort:'invalid' as never}),/invalid_sort/);assert.equal(active,false);assert.throws(()=>escaped!.messageMetadata(anchor.id),/closed_read_batch/);
+  assert.equal((await f.product.command('list',{})).items.find(c=>c.resourceId===child.resourceId)!.messageCount,1,'failed batch does not retain denial or close the next scope');
  }finally{await f.close();removeFixture(dir);}
 });
 

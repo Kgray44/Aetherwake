@@ -12,6 +12,11 @@ export interface CanonicalConversationHost {
  desktop(): Promise<DesktopSnapshot>;
  /** Trusted in-process read projection over the SAME canonical graph. No renderer/provider access. */
  canonicalReadView?(): Promise<ConversationReadView>;
+ /** Optional trusted SAME-connection synchronous read transaction. The host
+  * creates a fresh view + authorization memo for this call only, rejects nested
+  * or thenable callbacks, and fences every lazy callback when the call closes.
+  * No await/provider/native work or escaping lazy authority is permitted. */
+ canonicalReadBatch?<T>(read:(view:ConversationReadView)=>T):T;
  command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']>;
  organize(input: CanonicalOrganizationCommand): Promise<unknown>;
  /** Optional side-effect-free catalog, so reading local history never starts a connection. */
@@ -45,7 +50,12 @@ export interface ConversationReadView {
  /** Both lazy callbacks must recheck current source authorization; retained views never confer permission. */
  resourceContent(resourceId:string): string;
 }
-type View = ConversationReadView & {publicIds:Map<string,string>};
+type View = ConversationReadView & {
+ publicIds:Map<string,string>;
+ indices:{resources:Map<string,ConversationReadView['desktop']['resources'][number]>;conversations:Map<string,ConversationReadView['conversations'][number]>;headers:Map<string,GraphData['conversations'][number]>;projectIds:Map<string,string[]>;unavailable:Set<string>;executions:Map<string,PublicConversationExecution>;flags?:Set<string>;memberships?:Map<string,string[]>;members?:Map<string,string[]>};
+ /** Derived metadata only, usable while the host's synchronous batch is open. */
+ projection?:{summaries:Map<string,ConversationSummary>;collections?:Collection[]};
+};
 
 /** Additive metadata on the injected canonical connection. Never opens/closes/resets a DB. */
 export class ConversationProduct implements ConversationProductPort {
@@ -86,19 +96,33 @@ export class ConversationProduct implements ConversationProductPort {
   check(row.project_id===null||this.db.prepare("SELECT id FROM projects WHERE id=? AND state='active'").get(row.project_id)!==undefined,'source_unavailable');
   return this.favorite(input);
  }
+ private indexed(view:ConversationReadView,batch=false):View {
+  const resources=new Map(view.desktop.resources.map(r=>[r.id,r])),projectIds=new Map<string,string[]>(),workspaces=new Map(view.desktop.workspaces.map(w=>[w.id,w])),executions=new Map<string,PublicConversationExecution>();
+  for(const r of view.desktop.resources)projectIds.set(r.id,r.project_id?[r.project_id]:[]);
+  for(const b of view.desktop.blocks){if(!b.resource_id||resources.get(b.resource_id)?.project_id)continue;const project=workspaces.get(b.workspace_id)?.project_id;if(project){const ids=projectIds.get(b.resource_id);if(ids&&!ids.includes(project))ids.push(project);}}
+  for(const ids of projectIds.values())ids.sort();
+  for(const e of Object.values(view.executions)){const prior=executions.get(e.resourceId);if(!prior||e.startedAt>prior.startedAt||e.startedAt===prior.startedAt&&e.id<prior.id)executions.set(e.resourceId,e);}
+  return {...view,publicIds:new Map(Object.entries(view.resourceMap).map(([rid,gid])=>[gid,rid])),indices:{resources,conversations:new Map(view.conversations.map(c=>[c.resourceId,c])),headers:new Map(view.graphMetadata.conversations.map(c=>[c.id,c])),projectIds,unavailable:new Set(view.graphMetadata.unavailableMessageIds),executions},...(batch?{projection:{summaries:new Map()}}:{})};
+ }
+ private summaryMetadata(v:View) {
+  // One command-local projection of existing canonical metadata, not a store
+  // or authorization cache. Resource/message permission checks remain live.
+  if(!v.indices.flags)v.indices.flags=new Set(this.db.prepare('SELECT resource_id FROM cp_flags WHERE favorite=1').all().map(r=>String(r.resource_id)));
+  if(!v.indices.memberships){const memberships=new Map<string,string[]>(),members=new Map<string,string[]>();for(const row of this.db.prepare('SELECT collection_id,resource_id FROM collection_members').all()){const rid=String(row.resource_id),cid=String(row.collection_id);if(!v.indices.resources.has(rid))continue;const cs=memberships.get(rid)??[];cs.push(cid);memberships.set(rid,cs);const rs=members.get(cid)??[];rs.push(rid);members.set(cid,rs);}v.indices.memberships=memberships;v.indices.members=members;}
+ }
  private async view(): Promise<View> {
-  if(this.host.canonicalReadView){const view=await this.host.canonicalReadView();return {...view,publicIds:new Map(Object.entries(view.resourceMap).map(([rid,gid])=>[gid,rid]))};}
+  if(this.host.canonicalReadView)return this.indexed(await this.host.canonicalReadView());
   // Sequential reads share the backend's owning command queue. Access is checked again below.
   const snapshot = await this.host.snapshot(), desktop = await this.host.desktop();
   // Compatibility fallback is explicitly unscaled: it still receives/reconstructs the full graph.
-  return {conversations:snapshot.conversations,resourceMap:snapshot.resourceMap,graphMetadata:{providers:snapshot.graph.providers,conversations:snapshot.graph.conversations,edges:snapshot.graph.edges,unavailableMessageIds:snapshot.graph.unavailableMessageIds},executions:Object.fromEntries(Object.entries(snapshot.executions).map(([id,e])=>[id,{id:e.id,resourceId:e.resourceId,providerId:e.providerId,state:e.state,commandId:e.commandId,startedAt:e.startedAt,endedAt:e.endedAt,taskVerified:false,...(e.errorCode?{errorCode:e.errorCode}:{})}])),desktop:{projects:desktop.projects,workspaces:desktop.workspaces,blocks:desktop.blocks,resources:desktop.resources.map(({id,kind,title,version,state,visible,available,project_id})=>({id,kind,title,version,state,visible,available,project_id}))},graph:new ConversationGraph([],snapshot.graph),publicIds:new Map(Object.entries(snapshot.resourceMap).map(([rid,gid])=>[gid,rid])),messageMetadata:id=>{const m=snapshot.graph.messages.find(m=>m.id===id);return m?{id:m.id,conversationId:m.conversationId,createdAt:m.createdAt}:null;},resourceContent:id=>desktop.resources.find(r=>r.id===id)?.content??''};
+  return this.indexed({conversations:snapshot.conversations,resourceMap:snapshot.resourceMap,graphMetadata:{providers:snapshot.graph.providers,conversations:snapshot.graph.conversations,edges:snapshot.graph.edges,unavailableMessageIds:snapshot.graph.unavailableMessageIds},executions:Object.fromEntries(Object.entries(snapshot.executions).map(([id,e])=>[id,{id:e.id,resourceId:e.resourceId,providerId:e.providerId,state:e.state,commandId:e.commandId,startedAt:e.startedAt,endedAt:e.endedAt,taskVerified:false,...(e.errorCode?{errorCode:e.errorCode}:{})}])),desktop:{projects:desktop.projects,workspaces:desktop.workspaces,blocks:desktop.blocks,resources:desktop.resources.map(({id,kind,title,version,state,visible,available,project_id})=>({id,kind,title,version,state,visible,available,project_id}))},graph:new ConversationGraph([],snapshot.graph),messageMetadata:id=>{const m=snapshot.graph.messages.find(m=>m.id===id);return m?{id:m.id,conversationId:m.conversationId,createdAt:m.createdAt}:null;},resourceContent:id=>desktop.resources.find(r=>r.id===id)?.content??''});
  }
  private resource(v: View, id: string, messageId?: string, archived = false) {
-  const r = v.desktop.resources.find(r => r.id === id);
+  const r = v.indices.resources.get(id);
   check(r && (archived || r.visible !== false && r.available !== false) && this.host.access?.(id, messageId) !== false, 'source_unavailable');
   // Archived content is accessible only through an explicit host authorization, never merely a surviving placement.
   if (r.visible === false || r.available === false) check(archived && this.host.access?.(id, messageId) === true, 'source_unavailable');
-  if (messageId) check(!v.graphMetadata.unavailableMessageIds.includes(messageId), 'source_revoked');
+  if (messageId) check(!v.indices.unavailable.has(messageId), 'source_revoked');
   return r;
  }
  private readable(v: View, id: string, messageId?: string, archived = false) { try { this.resource(v, id, messageId, archived); return true; } catch { return false; } }
@@ -142,48 +166,76 @@ export class ConversationProduct implements ConversationProductPort {
   return new Set([...ids].map(gid => v.publicIds.get(gid)!).filter(Boolean));
  }
  private projectIds(v: View, id: string): string[] {
-  const resource=v.desktop.resources.find(r=>r.id===id);
-  if(resource?.project_id)return [resource.project_id];
-  // Legacy records can lack primary ownership while their canonical placements
-  // remain project-scoped. Referencing a placement does not change that record.
-  const workspaces=new Set(v.desktop.blocks.filter(b=>b.resource_id===id).map(b=>b.workspace_id));
-  return [...new Set(v.desktop.workspaces.filter(w=>workspaces.has(w.id)&&w.project_id).map(w=>w.project_id!))].sort();
+  return v.indices.projectIds.get(id)??[];
  }
  private summary(v: View, resourceId: string, archived=false): ConversationSummary {
-  const c = v.conversations.find(c => c.resourceId === resourceId); check(c, 'conversation_missing');
-  const r = this.resource(v, resourceId, undefined, archived), g = v.graphMetadata.conversations.find(g => g.id === v.resourceMap[resourceId])!;
+  const key=(archived?'archived:':'active:')+resourceId,cached=v.projection?.summaries.get(key);if(cached)return cached;
+  const c = v.indices.conversations.get(resourceId); check(c, 'conversation_missing');
+  const r = this.resource(v, resourceId, undefined, archived), g = v.indices.headers.get(v.resourceMap[resourceId])!;
   const tail=v.graph.visibleMessageMetadata(g.id,{limit:1,maxScan:4096,maxBodyBytes:131072,tail:true,allow:m=>!m.unavailable&&this.readable(v,v.publicIds.get(m.conversationId)!,m.id,archived)}),last=tail.items[0],info=last?v.messageMetadata(last.id):null;
   const complete=tail.limitedBy===null&&(!last||info?.id===last.id),messageCount=complete?(last?.ordinal??0):null,historyMetadataStatus=complete?'complete':tail.limitedBy==='denied'?'unavailable':'limited';
-  const observed=Object.values(v.executions).filter(e=>e.resourceId===resourceId).sort((a,b)=>b.startedAt.localeCompare(a.startedAt)||a.id.localeCompare(b.id))[0];
+  const observed=v.indices.executions.get(resourceId);
   const execution=observed?{id:observed.id,resourceId:observed.resourceId,providerId:observed.providerId,state:observed.state,commandId:observed.commandId,startedAt:observed.startedAt,endedAt:observed.endedAt,taskVerified:false as const,...(observed.errorCode?{errorCode:observed.errorCode}:{})}:undefined;
   const lastActivityAt=complete?[g.createdAt,info?.createdAt??'',execution?.startedAt??''].sort().at(-1)!:null;
-  return { resourceId, conversationId: g.id, title: r.title, providerId: c.providerId, revision: c.revision, version: r.version, projectId: r.project_id ?? null, projectIds:this.projectIds(v,resourceId), state: r.state ?? 'active', createdAt: g.createdAt,lastActivityAt,historyMetadataStatus,...(execution?{execution}:{}),favorite: this.db.prepare('SELECT favorite FROM cp_flags WHERE resource_id=?').get(resourceId)?.favorite === 1,messageCount,collectionIds: this.db.prepare('SELECT collection_id FROM collection_members WHERE resource_id=?').all(resourceId).map(row => String(row.collection_id)) };
+  this.summaryMetadata(v);
+  const result:ConversationSummary={ resourceId, conversationId: g.id, title: r.title, providerId: c.providerId, revision: c.revision, version: r.version, projectId: r.project_id ?? null, projectIds:[...this.projectIds(v,resourceId)], state: r.state ?? 'active', createdAt: g.createdAt,lastActivityAt,historyMetadataStatus,...(execution?{execution}:{}),favorite:v.indices.flags!.has(resourceId),messageCount,collectionIds:[...(v.indices.memberships!.get(resourceId)??[])] };
+  v.projection?.summaries.set(key,result);return result;
  }
- private summaries(v: View, q: SearchQuery = {}, ignoreCollection = false): ConversationSummary[] {
-  check(!q.text || typeof q.text === 'string' && q.text.length <= 1000, 'invalid_query');
-  check(q.sort===undefined||['activity','created','title','active'].includes(q.sort),'invalid_sort');check(q.searchMode===undefined||['conversations','messages','resources','all'].includes(q.searchMode),'invalid_search_mode');
+ private candidates(v:View,q:SearchQuery,ignoreCollection=false) {
+  this.validateQuery(q);
   const family = q.familyOf ? this.family(v, q.familyOf) : null;
   const collection = !ignoreCollection && q.collectionId ? this.collections(v).find(c => c.id === q.collectionId) : null;
   if (q.collectionId && !ignoreCollection) check(collection, 'collection_missing');
-  return v.conversations.filter(c => this.readable(v,c.resourceId,undefined,!!q.archived)&&(!q.providerId||c.providerId===q.providerId)&&(q.projectId===undefined||(q.projectId===null?this.projectIds(v,c.resourceId).length===0:this.projectIds(v,c.resourceId).includes(q.projectId)))&&(!family||family.has(c.resourceId))&&(!collection||collection.memberIds.includes(c.resourceId))).map(c => this.summary(v, c.resourceId,!!q.archived)).filter(c =>
-   (q.archived ? c.state === 'archived' : c.state === 'active') &&
-   (q.projectId === undefined || (q.projectId===null?c.projectIds.length===0:c.projectIds.includes(q.projectId))) && (!q.providerId || c.providerId === q.providerId) && (!q.favorite || c.favorite) &&
-   (!q.after || c.createdAt >= q.after) && (!q.before || c.createdAt <= q.before) && (!family || family.has(c.resourceId)) &&
-   (!collection || collection.memberIds.includes(c.resourceId)) && (!q.text || this.matches(v, c, q.text,!!q.archived)))
+  if(q.favorite)this.summaryMetadata(v);
+  return v.conversations.filter(c=>{
+   const r=v.indices.resources.get(c.resourceId),g=v.indices.headers.get(v.resourceMap[c.resourceId]);
+   return !!r&&!!g&&(q.archived?r.state==='archived':(r.state??'active')==='active')&&(!q.providerId||c.providerId===q.providerId)&&(!family||family.has(c.resourceId))&&(!collection||collection.memberIds.includes(c.resourceId))&&(q.projectId===undefined||(q.projectId===null?this.projectIds(v,c.resourceId).length===0:this.projectIds(v,c.resourceId).includes(q.projectId)))&&(!q.favorite||v.indices.flags!.has(c.resourceId))&&(!q.after||g.createdAt>=q.after)&&(!q.before||g.createdAt<=q.before)&&this.readable(v,c.resourceId,undefined,!!q.archived);
+  });
+ }
+ private summaries(v: View, q: SearchQuery = {}, ignoreCollection = false): ConversationSummary[] {
+  return this.candidates(v,q,ignoreCollection).filter(c=>!q.text||this.matches(v,{title:v.indices.resources.get(c.resourceId)!.title,conversationId:v.resourceMap[c.resourceId]},q.text,!!q.archived)).map(c=>this.summary(v,c.resourceId,!!q.archived))
    .sort((a,b) => (q.sort==='active'?Number(!!b.execution&&['dispatching','running'].includes(b.execution.state))-Number(!!a.execution&&['dispatching','running'].includes(a.execution.state)):0)||(q.sort==='title'?a.title.localeCompare(b.title):q.sort==='created'?b.createdAt.localeCompare(a.createdAt):(b.lastActivityAt??b.createdAt).localeCompare(a.lastActivityAt??a.createdAt))||a.resourceId.localeCompare(b.resourceId));
  }
- private matches(v: View, c: ConversationSummary, query: string, archived=false) {
+ private validateQuery(q:SearchQuery) {
+  check(!q.text || typeof q.text === 'string' && q.text.length <= 1000, 'invalid_query');
+  check(q.sort===undefined||['activity','created','title','active'].includes(q.sort),'invalid_sort');check(q.searchMode===undefined||['conversations','messages','resources','all'].includes(q.searchMode),'invalid_search_mode');
+ }
+ private matches(v: View, c: Pick<ConversationSummary,'title'|'conversationId'>, query: string, archived=false) {
   const needle = query.toLocaleLowerCase();
   return c.title.toLocaleLowerCase().includes(needle) || v.graph.visibleMessages(c.conversationId).some(m => this.readable(v, v.publicIds.get(m.conversationId)!, m.id,archived) && m.content.toLocaleLowerCase().includes(needle));
  }
  private collections(v: View): Collection[] {
+  if(v.projection?.collections)return v.projection.collections;
+  this.summaryMetadata(v);
   const rows = this.db.prepare("SELECT c.*, x.parent_id, x.rule, x.version AS rule_revision FROM collections c LEFT JOIN cp_collection_rules x ON x.collection_id=c.id WHERE c.state='active' ORDER BY c.title,c.id").all();
-  return rows.filter(r => r.project_id === null || v.desktop.projects.some(p => p.id === r.project_id)).map(r => {
-   const pinnedIds = this.db.prepare('SELECT resource_id FROM collection_members WHERE collection_id=?').all(r.id).map(m => String(m.resource_id)).filter(id => this.readable(v,id));
+  const result=rows.filter(r => r.project_id === null || v.desktop.projects.some(p => p.id === r.project_id)).map(r => {
+   const pinnedIds = (v.indices.members!.get(String(r.id))??[]).filter(id => this.readable(v,id));
    const rule = r.rule ? JSON.parse(String(r.rule)) as SearchQuery : null;
-   const derived = rule ? this.summaries(v, { ...rule, collectionId: undefined }, true).map(c => c.resourceId) : [];
+   // Membership needs matching canonical IDs, not activity/count projections.
+   // Body queries remain explicit, authorized canonical reads, independently
+   // measured from empty metadata browse and never indexed in another store.
+   const derived = rule ? this.candidates(v,{...rule,collectionId:undefined},true).filter(c=>!rule.text||this.matches(v,{title:v.indices.resources.get(c.resourceId)!.title,conversationId:v.resourceMap[c.resourceId]},rule.text,!!rule.archived)).map(c=>c.resourceId) : [];
    return { id: String(r.id), title: String(r.title), projectId: r.project_id === null ? null : String(r.project_id), version: Number(r.version), ruleRevision:Number(r.rule_revision??0), state: String(r.state), parentId: r.parent_id ? String(r.parent_id) : null, rule, memberIds: [...new Set([...pinnedIds,...derived])], pinnedIds };
   });
+  if(v.projection)v.projection.collections=result;return result;
+ }
+ private readProjection(v:View,name:'list'|'search'|'collections',a:SearchQuery):unknown {
+  if(name==='list')return page(this.summaries(v,a),a);
+  if(name==='collections')return this.collections(v);
+  const needle = String(a.text ?? '').trim().toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const hits: SearchHit[] = [],mode=a.searchMode??(needle?'all':'conversations');check(['conversations','messages','resources','all'].includes(mode),'invalid_search_mode');
+  if(mode!=='resources')for (const c of this.summaries(v,{...a,text:undefined})) {
+   if ((mode==='all'||mode==='conversations')&&(!needle||c.title.toLocaleLowerCase().includes(needle)||mode==='conversations'&&this.matches(v,c,needle,!!a.archived))) hits.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
+   if(needle&&(mode==='all'||mode==='messages'))for (const m of v.graph.visibleMessages(c.conversationId)) { const sourceId = v.publicIds.get(m.conversationId)!; if (!this.readable(v,sourceId,m.id,!!a.archived)) continue; const index = m.content.toLocaleLowerCase().indexOf(needle); if (index >= 0) hits.push({kind:'message',resourceId:c.resourceId,messageId:m.id,title:c.title,excerpt:m.content.slice(Math.max(0,index-60),index+160),sourceTime:m.createdAt,providerId:c.providerId}); }
+  }
+  const resourceCollection=a.collectionId?this.collections(v).find(c=>c.id===a.collectionId):undefined;
+  if ((mode==='all'||mode==='resources')&&!a.familyOf && !a.providerId && !a.favorite) for (const r of v.desktop.resources) {
+   if(r.kind==='conversation'||!this.readable(v,r.id,undefined,!!a.archived)||(a.archived?r.state!=='archived':r.state==='archived'))continue;
+   const scopes=this.projectIds(v,r.id);if(a.projectId!==undefined&&(a.projectId===null?scopes.length>0:!scopes.includes(a.projectId)))continue;
+   if(resourceCollection&&!resourceCollection.memberIds.includes(r.id))continue;
+   const created=String(this.db.prepare('SELECT created_at FROM resources WHERE id=?').get(r.id)?.created_at??'');if(a.after&&created<a.after||a.before&&created>a.before)continue;
+   const content=needle?r.title+'\n'+v.resourceContent(r.id):r.title,index=content.toLocaleLowerCase().indexOf(needle);if(index>=0)hits.push({kind:'resource',resourceId:r.id,title:r.title,excerpt:content.slice(Math.max(0,index-60),index+160)});
+  }
+  return page(hits,a);
  }
  private policy(id: string): BranchPolicy {
   const row = this.db.prepare('SELECT json FROM cp_policy WHERE resource_id=?').get(id);
@@ -234,25 +286,15 @@ export class ConversationProduct implements ConversationProductPort {
   const result = this.db.prepare('UPDATE cp_adoptions SET sent_at=?,execution_id=? WHERE share_id=? AND target_id=? AND attached_at IS NOT NULL').run(stamp(),executionId,shareId,resourceId); check(Number(result.changes) === 1,'share_not_attached');
  }
  async command<K extends keyof ProductCommandMap>(name: K, input: ProductCommandMap[K]['input']): Promise<ProductCommandMap[K]['output']> {
-  const a = input as any, v = await this.view(); let result: unknown;
+  const a = input as any;
+  if(this.host.canonicalReadBatch&&(name==='list'||name==='search'||name==='collections')){
+   const result=this.host.canonicalReadBatch(view=>this.readProjection(this.indexed(view,true),name,a));
+   check(!result||typeof (result as {then?:unknown}).then!=='function','synchronous_canonical_callback_required');
+   return result as ProductCommandMap[K]['output'];
+  }
+  const v = await this.view(); let result: unknown;
   switch(name) {
-   case 'list': result = page(this.summaries(v,a),a); break;
-   case 'search': {
-    const needle = String(a.text ?? '').trim().toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const hits: SearchHit[] = [],mode=a.searchMode??(needle?'all':'conversations');check(['conversations','messages','resources','all'].includes(mode),'invalid_search_mode');
-    if(mode!=='resources')for (const c of this.summaries(v,{...a,text:undefined})) {
-     if ((mode==='all'||mode==='conversations')&&(!needle||c.title.toLocaleLowerCase().includes(needle)||mode==='conversations'&&this.matches(v,c,needle,!!a.archived))) hits.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
-     if(needle&&(mode==='all'||mode==='messages'))for (const m of v.graph.visibleMessages(c.conversationId)) { const sourceId = v.publicIds.get(m.conversationId)!; if (!this.readable(v,sourceId,m.id,!!a.archived)) continue; const index = m.content.toLocaleLowerCase().indexOf(needle); if (index >= 0) hits.push({kind:'message',resourceId:c.resourceId,messageId:m.id,title:c.title,excerpt:m.content.slice(Math.max(0,index-60),index+160),sourceTime:m.createdAt,providerId:c.providerId}); }
-    }
-    const resourceCollection=a.collectionId?this.collections(v).find(c=>c.id===a.collectionId):undefined;
-    if ((mode==='all'||mode==='resources')&&!a.familyOf && !a.providerId && !a.favorite) for (const r of v.desktop.resources) {
-     if(r.kind==='conversation'||!this.readable(v,r.id,undefined,!!a.archived)||(a.archived?r.state!=='archived':r.state==='archived'))continue;
-     const scopes=this.projectIds(v,r.id);if(a.projectId!==undefined&&(a.projectId===null?scopes.length>0:!scopes.includes(a.projectId)))continue;
-     if(resourceCollection&&!resourceCollection.memberIds.includes(r.id))continue;
-     const created=String(this.db.prepare('SELECT created_at FROM resources WHERE id=?').get(r.id)?.created_at??'');if(a.after&&created<a.after||a.before&&created>a.before)continue;
-     const content=needle?r.title+'\n'+v.resourceContent(r.id):r.title,index=content.toLocaleLowerCase().indexOf(needle);if(index>=0)hits.push({kind:'resource',resourceId:r.id,title:r.title,excerpt:content.slice(Math.max(0,index-60),index+160)});
-    }
-    result=page(hits,a); break;
-   }
+   case 'list': case 'search': case 'collections': result=this.readProjection(v,name,a);break;
    case 'detail': {
     this.resource(v,a.resourceId,undefined,true); const c = this.summary(v,a.resourceId,true), all = v.graph.visibleMessages(c.conversationId).filter(m => this.readable(v,v.publicIds.get(m.conversationId)!,m.id,true)).map(m => ({id:m.id,resourceId:v.publicIds.get(m.conversationId)!,role:m.role,content:m.content,createdAt:m.createdAt,provenance:m.provenance,inherited:m.conversationId!==c.conversationId,sensitivity:m.sensitivity}));
     const around = a.aroundMessageId ? all.findIndex(m => m.id === a.aroundMessageId) : -1; if (a.aroundMessageId) check(around>=0,'message_unavailable');
@@ -261,7 +303,6 @@ export class ConversationProduct implements ConversationProductPort {
    }
    case 'readDraft': this.draftResource(v,a.resourceId);result=this.draft(a.resourceId);break;
    case 'saveDraft': result=this.saveDraft(v,a);break;
-   case 'collections': result=this.collections(v); break;
    case 'projects': result=v.desktop.projects;break;
    case 'organize': {
     if (a.resourceId) this.resource(v,a.resourceId,undefined,true);
@@ -270,12 +311,15 @@ export class ConversationProduct implements ConversationProductPort {
     result=await this.host.organize(a); break;
    }
    case 'collectionRule': {
-    const collection=this.collections(v).find(c=>c.id===a.collectionId); check(collection,'collection_missing'); check(collection.version===a.expectedVersion,'stale_collection_version');check(collection.ruleRevision===a.expectedRuleRevision,'stale_collection_rule');
+    // Rule/header validation must not run every existing smart content query.
+    const headers=this.db.prepare("SELECT c.id,c.version,c.project_id,x.parent_id,COALESCE(x.version,0) AS rule_revision FROM collections c LEFT JOIN cp_collection_rules x ON x.collection_id=c.id WHERE c.state='active'").all().filter(c=>c.project_id===null||v.desktop.projects.some(p=>p.id===c.project_id)),byId=new Map(headers.map(c=>[String(c.id),c]));
+    const collection=byId.get(a.collectionId); check(collection,'collection_missing'); check(collection.version===a.expectedVersion,'stale_collection_version');check(collection.rule_revision===a.expectedRuleRevision,'stale_collection_rule');
     check(a.rule===null || typeof a.rule==='object' && !Array.isArray(a.rule) && !a.rule.collectionId,'invalid_collection_rule');
-    const allowedKeys=['text','projectId','familyOf','providerId','favorite','archived','after','before']; check(a.rule===null || Object.keys(a.rule).every(k=>allowedKeys.includes(k)),'unsupported_collection_filter');
-    if (a.rule) this.summaries(v,a.rule,true);
-    let parent=a.parentId, seen=new Set([a.collectionId]); while(parent) { check(!seen.has(parent),'folder_cycle'); seen.add(parent); const c=this.collections(v).find(c=>c.id===parent); check(c,'parent_collection_missing'); parent=c.parentId; }
-    this.tx(()=>{const revision=Number(this.db.prepare('SELECT version FROM cp_collection_rules WHERE collection_id=?').get(a.collectionId)?.version??0);check(revision===a.expectedRuleRevision,'stale_collection_rule');this.db.prepare('INSERT INTO cp_collection_rules VALUES(?,?,?,1) ON CONFLICT(collection_id) DO UPDATE SET parent_id=excluded.parent_id,rule=excluded.rule,version=cp_collection_rules.version+1').run(a.collectionId,a.parentId,a.rule===null?null:JSON.stringify(a.rule)); this.audit('collection.rule',a.collectionId); }); result=this.collections(v);break;
+    const allowedKeys=['text','projectId','familyOf','providerId','favorite','archived','after','before','searchMode']; check(a.rule===null || Object.keys(a.rule).every(k=>allowedKeys.includes(k))&&(a.rule.searchMode===undefined||a.rule.searchMode==='conversations'),'unsupported_collection_filter');
+    if (a.rule){this.validateQuery(a.rule);if(a.rule.familyOf)this.family(v,a.rule.familyOf);}
+    let parent=a.parentId, seen=new Set([a.collectionId]); while(parent) { check(!seen.has(parent),'folder_cycle'); seen.add(parent); const c=byId.get(parent); check(c,'parent_collection_missing'); parent=c.parent_id; }
+    this.tx(()=>{const current=this.db.prepare("SELECT version FROM collections WHERE id=? AND state='active'").get(a.collectionId);check(current?.version===a.expectedVersion,'stale_collection_version');const revision=Number(this.db.prepare('SELECT version FROM cp_collection_rules WHERE collection_id=?').get(a.collectionId)?.version??0);check(revision===a.expectedRuleRevision,'stale_collection_rule');this.db.prepare('INSERT INTO cp_collection_rules VALUES(?,?,?,1) ON CONFLICT(collection_id) DO UPDATE SET parent_id=excluded.parent_id,rule=excluded.rule,version=cp_collection_rules.version+1').run(a.collectionId,a.parentId,a.rule===null?null:JSON.stringify(a.rule)); this.audit('collection.rule',a.collectionId); });
+    result=this.host.canonicalReadBatch?this.host.canonicalReadBatch(view=>this.collections(this.indexed(view,true))):this.collections(v);break;
    }
    case 'favorite': this.resource(v,a.resourceId);result=this.favorite(a);break;
    case 'providers': result=await this.providers(v);break;
