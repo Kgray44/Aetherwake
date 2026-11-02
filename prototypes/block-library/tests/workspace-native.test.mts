@@ -153,6 +153,13 @@ test("offline normal-card preparation and fresh Core restore use canonical kinds
     });
   t.after(() => core.command("close", {}));
   assert.equal(seed.cases.length, REGISTERED_BLOCKS.length);
+  const approach = require('./workspace-approach.cjs'), expressions = require('./workspace-approach-expressions.cjs');
+  assert.equal(seed.approachValidation.preflightSha256, expressions.preflight().sha256);
+  assert.match(seed.approachValidation.expressionHelperSha256, /^[a-f0-9]{64}$/);
+  assert.match(seed.approachValidation.commonHelperSha256, /^[a-f0-9]{64}$/);
+  const selected = approach.selectCases(seed);
+  assert.deepEqual(selected.map((entry: any) => entry.kind), ['research', 'task', 'reference']);
+  assert.deepEqual(selected.map((entry: any) => entry.shape ?? 'default'), ['default', 'pill', 'circle']);
   assert.deepEqual(
     new Set(seed.shapeCases.map((entry) => entry.shape)),
     new Set(["lens", "circle", "pill"]),

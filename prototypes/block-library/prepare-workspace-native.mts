@@ -11,6 +11,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { createHash, randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { BackendCore } from "../integrated-backend/src/core.mts";
 import {
@@ -28,6 +29,7 @@ import type { DesktopSnapshot } from "../application-contract/contracts.ts";
 import type { Collection } from "../conversation-product/src/contracts.ts";
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const require = createRequire(import.meta.url);
 export type WorkspaceNativeCase = {
   kind: BlockInstanceKind;
   workspaceId: string;
@@ -51,6 +53,7 @@ export type WorkspaceNativeSeed = {
   })[];
   hashes: Record<string, string>;
   expected: DesktopSnapshot;
+  approachValidation: { preflightSha256: string; expressionHelperSha256: string; commonHelperSha256: string };
 };
 
 /** Bounded offline preparation using the actual canonical Core. No window,
@@ -87,6 +90,10 @@ export async function prepareWorkspaceNative(
     );
     assert.equal(admitted.allowed, true, "storage_reserve_required");
   }
+  // Pure compilation only, before profile allocation or provider construction.
+  const approachPreflight = require('./tests/workspace-approach-expressions.cjs').preflight();
+  const expressionDigest = (name: string) => createHash('sha256').update(readFileSync(join(sourceRoot, 'prototypes/block-library/tests', name))).digest('hex');
+  const approachValidation = { preflightSha256: approachPreflight.sha256, expressionHelperSha256: expressionDigest('workspace-approach-expressions.cjs'), commonHelperSha256: expressionDigest('library-native-expressions.cjs') };
   mkdirSync(profile);
   const databasePath = join(profile, "aerynth.sqlite"),
     core = new BackendCore({
@@ -342,6 +349,7 @@ export async function prepareWorkspaceNative(
       shapeCases,
       hashes,
       expected: desktop,
+      approachValidation,
     };
     const json = JSON.stringify(seed, null, 2);
     assert(
