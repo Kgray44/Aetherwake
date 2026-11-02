@@ -1,0 +1,165 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { prepareWorkspaceNative } from "../prepare-workspace-native.mts";
+import { BackendCore } from "../../integrated-backend/src/core.mts";
+import { REGISTERED_BLOCKS } from "../registry.ts";
+const require = createRequire(import.meta.url);
+const { options, workspaceState, verify } = require("./workspace-native.cjs");
+
+test("normal-card native entry requires the qualified explicit deadline and exact host start", () => {
+  for (const deadline of [undefined, "", "0", "90001", "NaN", "Infinity"])
+    assert.throws(() =>
+      options(
+        deadline === undefined
+          ? []
+          : ["--verification-deadline-ms=" + deadline],
+        1000,
+      ),
+    );
+  assert.throws(() => options(["--verification-deadline-ms=90000"], undefined));
+  const value = options(
+    ["--verification-deadline-ms=90000", "--verify-restore"],
+    1000,
+  );
+  assert.equal(value.deadlineAt, 91000);
+  assert.equal(value.maxScreenshots, 2);
+  assert.equal(value.maxPngBytes, 8388608);
+  assert.equal(value.maxCheckpointBytes, 131072);
+  assert.equal(value.restore, true);
+});
+
+test("normal-card helper immediately stops on lost ownership, saves only a bounded failure receipt and exits its own app", async () => {
+  const argv = process.argv;
+  process.argv = [...argv, "--verification-deadline-ms=30000"];
+  let exits = 0,
+    removed = 0;
+  const fail = () => {
+    throw Error("No input, JS, capture or focus acquisition is permitted");
+  };
+  const win = {
+    isDestroyed: () => false,
+    isVisible: () => true,
+    isMinimized: () => false,
+    isFocused: () => false,
+    focus: fail,
+    show: fail,
+    setSize: fail,
+    webContents: {
+      on() {},
+      removeListener() {
+        removed++;
+      },
+      isDestroyed: () => false,
+      executeJavaScript: fail,
+      sendInputEvent: fail,
+      capturePage: fail,
+      insertText: fail,
+    },
+  };
+  try {
+    const receipt = await verify({
+      win,
+      app: {
+        exit(code: number) {
+          assert.equal(code, 1);
+          exits++;
+        },
+      },
+      privateRoot: join(tmpdir(), "review-workspace-native-never-open"),
+      source: {},
+      moduleStarted: Date.now(),
+    });
+    assert.equal(receipt.passed, false);
+    assert.match(receipt.error, /native_owner_window_inactive/);
+    assert.equal(receipt.actions.length + receipt.screenshots.length, 0);
+    assert.equal(exits, 1);
+    assert.equal(removed, 1);
+  } finally {
+    process.argv = argv;
+  }
+});
+
+test("offline normal-card preparation and fresh Core restore use canonical kinds, distinct defaults and actual subject membership with no execution", async (t) => {
+  const profile = join(
+      tmpdir(),
+      "review-workspace-native-source-" + randomUUID(),
+    ),
+    seed = await prepareWorkspaceNative(profile);
+  // Preserve this bounded synthetic profile as a private preparation receipt.
+  const path = join(profile, "aerynth.sqlite"),
+    core = new BackendCore({
+      path,
+      privateRoot: profile,
+      provider: "codex",
+      contentPolicy: "local-private",
+    });
+  t.after(() => core.command("close", {}));
+  assert.equal(seed.cases.length, REGISTERED_BLOCKS.length);
+  assert.equal(
+    seed.cases.filter((entry) => !entry.blockId).length,
+    2,
+    "Note and Chat require actual native Library creation",
+  );
+  assert.equal(
+    new Set(
+      seed.cases.map(
+        (entry) => entry.defaultSize.width + "x" + entry.defaultSize.height,
+      ),
+    ).size,
+    10,
+  );
+  const initial = await core.command("desktop", { type: "snapshot" });
+  assert.deepEqual(initial, seed.expected);
+  for (const entry of seed.cases) {
+    const state = await core.command("desktop", {
+      type: "navigate",
+      target: { kind: "workspace", workspaceId: entry.workspaceId },
+    });
+    assert.equal(state.organization!.mode, "freeform");
+    if (!entry.blockId) {
+      assert.equal(state.blocks.length, 0);
+      continue;
+    }
+    const block = state.blocks.find((block) => block.id === entry.blockId)!;
+    assert(block);
+    assert.deepEqual(
+      { width: block.width, height: block.height },
+      entry.defaultSize,
+    );
+    assert.deepEqual(workspaceState(state).blocks, state.blocks);
+    if (entry.kind === "task_group")
+      assert.equal(
+        state.resources.find((resource) => resource.id === entry.resourceId)!
+          .taskMembers![0].id,
+        seed.taskId,
+      );
+    if (entry.kind === "collection_browser") {
+      const page = await core.command("library", {
+        name: "browseResources",
+        input: {
+          subject: { kind: "collection", collectionId: seed.collectionId },
+          limit: 30,
+        },
+      });
+      assert.equal((page.result as any).resources[0].id, seed.memberId);
+    }
+  }
+  assert.equal(
+    Object.keys((await core.command("snapshot", {})).executions).length,
+    0,
+  );
+  const before = readFileSync(join(profile, "workspace-native-seed.json"));
+  await assert.rejects(
+    prepareWorkspaceNative(profile),
+    /existing_profiles_must_be_preserved/,
+  );
+  assert.deepEqual(
+    readFileSync(join(profile, "workspace-native-seed.json")),
+    before,
+  );
+});
