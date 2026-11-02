@@ -1,5 +1,5 @@
 /** Deliberately small Markdown subset. HTML and remote media are always literal text. */
-export type MarkdownBlock = { kind: 'paragraph' | 'heading' | 'quote' | 'list' | 'code'; text: string; level?: number; language?: string; ordered?: boolean; items?: string[] };
+export type MarkdownBlock = { kind: 'paragraph' | 'heading' | 'quote' | 'list' | 'code'; text: string; level?: number; language?: string; ordered?: boolean; start?: number; items?: string[] };
 export function markdownBlocks(source: string): MarkdownBlock[] {
   const lines = source.replaceAll('\r\n', '\n').split('\n'), blocks: MarkdownBlock[] = [];
   let i = 0;
@@ -21,8 +21,11 @@ export function markdownBlocks(source: string): MarkdownBlock[] {
     const list = /^(?:([-*]) |(\d+)\. )(.*)$/.exec(line);
     if (list) {
       const ordered = !!list[2], items = [list[3]], pattern = ordered ? /^\d+\. (.*)$/ : /^[-*] (.*)$/;
+      const start = ordered ? Number(list[2]) : undefined;
+      // HTML's start attribute is a signed 32-bit integer. Unsupported numbers remain literal.
+      if (start !== undefined && (!Number.isSafeInteger(start) || start > 2147483647)) { blocks.push({kind:'paragraph',text:line});continue; }
       while (i < lines.length) { const match = pattern.exec(lines[i]); if (!match) break; items.push(match[1]); i++; }
-      blocks.push({ kind: 'list', text: '', ordered, items }); continue;
+      blocks.push({ kind: 'list', text: '', ordered, ...(ordered?{start}:{}), items }); continue;
     }
     const body = [line]; while (i < lines.length && !special(lines[i])) body.push(lines[i++]);
     blocks.push({ kind: 'paragraph', text: body.join('\n') });
@@ -60,6 +63,7 @@ export function renderMarkdown(source: string, copy: (text: string) => Promise<v
       code.textContent = block.text; pre.append(code); header.append(language, button); section.append(header, pre); root.append(section);
     } else if (block.kind === 'list') {
       const list = document.createElement(block.ordered ? 'ol' : 'ul');
+      if(block.ordered)list.setAttribute('start',String(block.start));
       for (const item of block.items!) { const li = document.createElement('li'); appendInlineMarkdown(li, item); list.append(li); } root.append(list);
     } else {
       const node = document.createElement(block.kind === 'heading' ? `h${Math.min(4, block.level! + 1)}` : block.kind === 'quote' ? 'blockquote' : 'p');
