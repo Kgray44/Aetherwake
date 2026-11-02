@@ -67,7 +67,11 @@
   white-space: nowrap;
   padding: 0.25rem 0.5rem;
 }
-.folio[data-block-kind] .folio-preview {
+/* Outrank legacy material-family previews regardless of stylesheet order.
+   A registered type owns its compact body; unavailable manifests retain their
+   existing recovery summary instead. */
+.folio[data-block-kind]:not([data-block-availability="unavailable"])
+  .folio-preview {
   display: none;
 }
 .folio[data-block-kind] .folio-subtitle {
