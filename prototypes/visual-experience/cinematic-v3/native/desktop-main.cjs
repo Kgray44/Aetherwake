@@ -70,12 +70,14 @@ const verify =
   process.argv.includes("--integration-constellation") ||
   process.argv.includes("--integration-organization") ||
   process.argv.includes("--integration-direct") ||
+  process.argv.includes("--integration-conversation-product") ||
   process.argv.includes("--integration-expanded") ||
   process.argv.includes("--integration-spatial-benchmark");
 const captureReview =
   process.argv.includes("--integration-constellation") ||
   process.argv.includes("--integration-organization") ||
   process.argv.includes("--integration-direct") ||
+  process.argv.includes("--integration-conversation-product") ||
   process.argv.includes("--integration-expanded") ||
   process.argv.includes("--integration-spatial-benchmark");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
@@ -362,6 +364,15 @@ app.whenReady().then(async () => {
   }, 240000);
   reserveTimer.unref();
   if (verify) {
+    if (process.argv.includes("--integration-conversation-product")) {
+      await require("../../../conversation-product/test/native-desktop.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        source,
+      });
+      return;
+    }
     if (process.argv.includes("--integration-direct")) {
       await require("./integration-direct.cjs").verify({
         win,
