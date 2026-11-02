@@ -320,6 +320,53 @@ test("canonical relationships, placements and branch lineage preserve distinct t
   );
 });
 
+test("new branches use their own parent's neighborhood in a dense workspace and retain every saved anchor", async () => {
+  const s = fixture(1000);
+  for (const block of s.blocks) block.workspace_id = "w2";
+  const { c, navigation: n } = setup(s);
+  await n.place("resource:b0", { x: 50000, y: 30000, z: 50000 });
+  const before = structuredClone(c.state.anchors);
+  const next = structuredClone(s);
+  next.resources.push({ id: "branch-child", title: "Synthetic branch", kind: "conversation" });
+  next.blocks.push({
+    id: "branch-child-block", resource_id: "branch-child", workspace_id: "w2",
+    x: 0, y: 0, width: 300, height: 200, z: 1001,
+  });
+  next.conversationBranches = [{
+    parentResourceId: "r0", childResourceId: "branch-child", sourceMessageId: "m1",
+    mode: "application_continuation",
+  }];
+  c.update(next);
+  const a = n.position("resource:b0"), b = n.position("resource:branch-child-block");
+  assert.ok(Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) < 400);
+  for (const [key, anchor] of Object.entries(before))
+    assert.deepEqual(c.state.anchors[key], anchor);
+  c.dispose();
+});
+
+test("branch placement follows the parent placement in the child's workspace", async () => {
+  const s = fixture(2);
+  s.blocks.push({ ...s.blocks[0], id: "parent-alias", workspace_id: "w" });
+  const { c, navigation: n } = setup(s);
+  await n.place("resource:b0", { x: 50000, y: 30000, z: 50000 });
+  await n.place("resource:parent-alias", { x: -50000, y: -30000, z: -50000 });
+  const next = structuredClone(s);
+  next.resources.push({ id: "branch-child", title: "Synthetic branch", kind: "conversation" });
+  next.blocks.push({
+    id: "branch-child-block", resource_id: "branch-child", workspace_id: "w2",
+    x: 0, y: 0, width: 300, height: 200, z: 5,
+  });
+  next.conversationBranches = [{
+    parentResourceId: "r0", childResourceId: "branch-child", sourceMessageId: "m1",
+    mode: "application_continuation",
+  }];
+  c.update(next);
+  const a = n.position("resource:b0"), b = n.position("resource:branch-child-block");
+  assert.ok(Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) < 400);
+  assert.equal(c.nodes.get("resource:branch-child-block").workspaceId, "w2");
+  c.dispose();
+});
+
 test("explicit task membership clusters only the same-workspace placement and retains canonical workspace edges", () => {
   const s = groupedFixture();
   s.blocks.push({

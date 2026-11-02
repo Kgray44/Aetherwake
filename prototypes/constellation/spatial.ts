@@ -323,9 +323,13 @@ export class SpatialNavigator {
       ranks.set(n.key, rank);
       ordinals.set(parent, rank + 1);
     }
-    const byResource = new Map(
-      nodes.filter((n) => n.kind === "resource").map((n) => [n.id, n]),
-    );
+    const byResource = new Map<string, Node[]>();
+    for (const n of nodes)
+      if (n.kind === "resource") {
+        const placements = byResource.get(n.id) ?? [];
+        placements.push(n);
+        byResource.set(n.id, placements);
+      }
     const branchSources = new Map<string, string>();
     for (const b of c.snapshot.conversationBranches ?? [])
       if (
@@ -333,10 +337,22 @@ export class SpatialNavigator {
         byResource.has(b.parentResourceId) &&
         byResource.has(b.childResourceId)
       )
-        branchSources.set(
-          b.childResourceId,
-          byResource.get(b.parentResourceId)!.key,
-        );
+        for (const child of byResource.get(b.childResourceId)!) {
+          const parents = byResource.get(b.parentResourceId)!,
+            parent = parents.find((p) => p.workspaceId === child.workspaceId) ??
+              parents[0];
+          if (parent.key !== child.key) branchSources.set(child.key, parent.key);
+        }
+    // A branch's local shell grows with its parent's branches, rather than the
+    // unrelated resource count of the whole workspace.
+    const branchOrdinals = new Map<string, number>();
+    for (const n of nodes) {
+      const parent = branchSources.get(n.key);
+      if (!parent) continue;
+      const rank = branchOrdinals.get(parent) ?? 0;
+      ranks.set(n.key, rank);
+      branchOrdinals.set(parent, rank + 1);
+    }
     const pinned = pending
       .filter((n) => c.state.anchors[n.key]?.pinned && oldPositions.has(n.key))
       .sort((a, b) => a.key.localeCompare(b.key));
@@ -380,7 +396,7 @@ export class SpatialNavigator {
           ? old
           : { x: n.point.x * 2, y: (h - 0.5) * 240, z: n.point.y * 1.6 };
       if ((!old || legacy) && parent) {
-        const centerKey = branchSources.get(n.id) ?? n.parent!,
+        const centerKey = branchSources.get(n.key) ?? n.parent!,
           center = c.state.anchors[centerKey]?.spatial ?? parent,
           pr = this.radius(centerKey),
           distance =
