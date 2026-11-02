@@ -253,6 +253,12 @@ export function mountSubjectExperience(
         (resource.placementCountComplete ? "" : "+") +
         " placements";
       item.address.textContent = resource.id;
+      item.row
+        .querySelector(".aw-subject-action")
+        ?.setAttribute(
+          "aria-label",
+          "Attach " + resource.title + " to workspace",
+        );
     }
     // Keep unchanged rows mounted (including an open Details disclosure and focus).
     const ordered = append

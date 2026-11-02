@@ -32,7 +32,8 @@ test("normal browser search and same-ID actions stay mounted across pose, refres
   t.after(view.install());
   const reads: BrowseResourcesInput[] = [],
     attached: ResourceCandidate[] = [],
-    opened: string[] = [];
+    opened: string[] = [],
+    currentPage = page();
   const controller = mountSubjectExperience(
     view.root,
     { kind: "collection", collectionId: "collection:actual" },
@@ -42,7 +43,7 @@ test("normal browser search and same-ID actions stay mounted across pose, refres
       },
       async browseResources(input) {
         reads.push(input);
-        return page();
+        return structuredClone(currentPage);
       },
     },
     {
@@ -71,6 +72,8 @@ test("normal browser search and same-ID actions stay mounted across pose, refres
   const before = reads.length;
   controller.setPresentation("focused");
   controller.setPresentation("workspace");
+  currentPage.resources[0].title = "Synthetic renamed resource";
+  currentPage.resources[0].version = 8;
   await controller.refresh();
   assert.equal(
     reads.length,
@@ -90,7 +93,11 @@ test("normal browser search and same-ID actions stay mounted across pose, refres
   await until(() => attached.length === 1);
   assert.deepEqual(opened, ["resource:actual"]);
   assert.equal(attached[0].id, "resource:actual");
-  assert.equal(attached[0].version, 7);
+  assert.equal(attached[0].version, 8);
+  assert.equal(
+    row.querySelector(".aw-subject-action").getAttribute("aria-label"),
+    "Attach Synthetic renamed resource to workspace",
+  );
   assert.equal(view.root.querySelector(".aw-subject-filter-menu").open, false);
   controller.setActive(false);
   const paused = reads.length;
