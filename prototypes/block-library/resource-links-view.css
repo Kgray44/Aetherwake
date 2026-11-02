@@ -62,7 +62,8 @@
   outline: 2px solid #d8e6fc;
   outline-offset: 3px;
 }
-.aw-resource-links button:disabled {
+.aw-resource-links button:disabled,
+.aw-resource-links button[aria-disabled="true"] {
   opacity: 0.5;
   cursor: default;
 }

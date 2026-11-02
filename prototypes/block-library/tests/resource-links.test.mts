@@ -516,6 +516,10 @@ test("a delayed confirmed reply cannot collapse creation or move focus during an
   add.focus();
   submit(form);
   assert.equal(status.dataset.state, "progress");
+  assert.equal(add.disabled, false, "Pending submit keeps its native focus target");
+  assert.equal(add.getAttribute("aria-disabled"), "true");
+  submit(form);
+  assert.equal(status.dataset.state, "progress");
   search.focus();
   search.fire("compositionstart");
   search.value = "target task";
@@ -524,6 +528,8 @@ test("a delayed confirmed reply cannot collapse creation or move focus during an
   assert.equal(root.querySelector("[data-relationship-id]"), imported, "Incomplete composition does not refilter rows");
   release();
   await until(() => status.dataset.state === "success");
+  assert.equal(add.getAttribute("aria-disabled"), "false");
+  assert.equal(f.actions.length, 1, "Pending native/keyboard repeat submission is not replayed");
   assert.equal(creation.open, true);
   assert.equal(f.view.doc.activeElement, search);
   assert.equal(root.querySelector("input"), search);

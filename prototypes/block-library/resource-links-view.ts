@@ -137,12 +137,19 @@ export function mountResourceLinks(
       !source ||
       !port.change ||
       !port.capabilities.relate;
-    add.disabled = target.disabled || !target.value;
+    // Keep the submitting button's native focus while a request is pending.
+    // The mutation guard also rejects repeat input; aria-disabled reports that
+    // state without forcing focus onto the document body.
+    add.disabled = uncertain || !source || !port.change ||
+      !port.capabilities.relate || !target.value;
+    add.setAttribute("aria-disabled", String(pending || add.disabled));
     refreshButton.disabled = pending;
     for (const control of list.querySelectorAll<HTMLButtonElement>(
       "[data-remove-link]",
-    ))
-      control.disabled = pending || uncertain;
+    )) {
+      control.disabled = uncertain;
+      control.setAttribute("aria-disabled", String(pending || uncertain));
+    }
   };
   const render = () => {
     if (disposed) return;
