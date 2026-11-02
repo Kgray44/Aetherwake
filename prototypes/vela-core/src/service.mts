@@ -418,7 +418,7 @@ export class VelaService {
       check(message && message.id === previous.response!.messageId && message.requestId === previous.id && message.role === 'assistant' && message.source === 'vela-native' && message.classification === 'observed' && message.providerId === undefined && message.providerContribution === undefined && message.planId === undefined && message.responseKind === previous.response!.kind && digest(message.content) === previous.response!.contentDigest, 'local_response_unavailable');
       const ended = performance.now(); return { matched: true, request: structuredClone(previous), result: { ...structuredClone(previous.local!), messageId: message.id, content: message.content, replayed: true, timing: { classificationMs: classified - started, capabilityMs: ended - classified, persistenceMs: 0, totalMs: ended - started } } };
     }
-    const answer = evaluateLocalCapability(capabilityId, host), recordedAt = this.now(), observedAt = answer.facts.kind === 'time' || answer.facts.kind === 'date' ? answer.facts.utc : recordedAt; check(!signal?.aborted, 'local_request_cancelled');
+    const answer = evaluateLocalCapability(capabilityId, host), recordedAt = this.now(), observedAt = answer.facts.kind === 'time' || answer.facts.kind === 'date' ? answer.facts.utc : answer.facts.kind === 'system-memory' ? answer.facts.measurement.measuredAt : recordedAt; check(!signal?.aborted, 'local_request_cancelled');
     const record: VelaLocalRecord = { schemaVersion: 1, commandId: input.commandId, capabilityId, classification: 'observed', providerId: null, observedAt, facts: answer.facts }; validateLocalRecord(record);
     const committing = performance.now();
     const value = this.atomic(() => {

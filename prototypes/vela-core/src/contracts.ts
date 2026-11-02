@@ -1,5 +1,6 @@
 import type { OrganizationUpdate, TaskPriority } from '../../application-contract/contracts.ts';
 import type { HistoryOrigin, HistoryProvenance, HistoryMessageDependency, ProviderHistory } from './history-contracts.ts';
+import type { SystemMemoryMeasurement, VelaReadOnlySystemHost } from './system-information.ts';
 /** Browser-safe Vela contracts. Canonical data and provider execution remain host-owned. */
 export const VELA_CONTRACT = 'aerynth.vela@1' as const;
 export type EvidenceClass = 'observed' | 'reported' | 'inferred' | 'unknown';
@@ -88,12 +89,13 @@ export interface ProviderProposal {
   contribution: ProviderContribution;
 }
 export type ProviderReplyKind = 'answer' | 'clarification' | 'inability';
-export type VelaLocalCapabilityId = 'local.time' | 'local.date' | 'local.workspace-status' | 'local.project-count' | 'local.execution-status';
+export type VelaLocalCapabilityId = 'local.time' | 'local.date' | 'local.workspace-status' | 'local.project-count' | 'local.execution-status' | 'system.memory';
 export type VelaLocalFacts =
   | { kind: 'time' | 'date'; epochMs: number; utc: string; timeZone: string; locale: string; utcOffsetMinutes: number; calendarDate: string; formatted: string }
   | { kind: 'workspace-status'; workspace: ResourceRef | null; persistence: 'persisted' | 'pending' | 'unknown'; coverage: 'canonical-workspace-layout' }
   | { kind: 'project-count'; count: number; coverage: 'authorized-active-projects' }
   | { kind: 'execution-status'; running: number; unknown: number; coverage: 'aerynth-owned-executions' }
+  | { kind: 'system-memory'; measurement: SystemMemoryMeasurement }
   | { kind: 'unavailable'; code: string };
 /** Facts/provenance only. Answer content lives exclusively in the canonical message. */
 export interface VelaLocalRecord {
@@ -110,6 +112,9 @@ export type VelaLocalDispatch = { matched: false } | { matched: true; request: V
 export interface VelaLocalHost {
   identity(): { principalId: string; policyVersion: string };
   clock(): { epochMs: number; timeZone: string; locale: string };
+  /** Native registration is an explicit low-risk memory-only policy decision.
+   * No renderer permissions, provider calls, execution or general OS access. */
+  system?: VelaReadOnlySystemHost;
   /** SAME canonical graph/DB, with targeted system:vela access checks; must not call the general metadata/context view. */
   ensureConversation(): string;
   appendMessage(conversationId: string, message: Omit<VelaMessage, 'id'>): VelaMessage;
