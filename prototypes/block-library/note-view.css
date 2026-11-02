@@ -1,0 +1,86 @@
+.aw-note-tools,
+.aw-note-recovery,
+.aw-note-rename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.6rem 0;
+}
+.aw-note-tools input[type="search"] {
+  flex: 1;
+  min-width: 8rem;
+}
+.aw-note-tools button,
+.aw-note-recovery button,
+.aw-note-rename button,
+.aw-note-sources button {
+  border: 1px solid #aac9e626;
+  border-radius: 1rem;
+  padding: 0.3rem 0.65rem;
+  background: #9fc6eb0c;
+  color: inherit;
+  font: inherit;
+}
+.aw-note-tools input,
+.aw-note-rename input {
+  background: #0b172733;
+  border: 1px solid #b4d7f42b;
+  border-radius: 0.6rem;
+  color: inherit;
+  padding: 0.35rem 0.5rem;
+  font: inherit;
+}
+.aw-note-status {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+.aw-note-recovery details {
+  width: 100%;
+}
+.aw-note-recovery pre,
+.aw-note-reading pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 20rem;
+  overflow: auto;
+  background: #0a14241f;
+  padding: 0.75rem;
+  border-radius: 0.65rem;
+}
+.aw-note-reading {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.aw-note-reading h1 {
+  font-size: 1.6rem;
+}
+.aw-note-reading h2 {
+  font-size: 1.35rem;
+}
+.aw-note-reading h3 {
+  font-size: 1.15rem;
+}
+.aw-note-reading blockquote {
+  border-left: 2px solid #9ab9d6;
+  margin-left: 0;
+  padding-left: 0.8rem;
+}
+.aw-note-sources code {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.aw-note-sources li {
+  margin: 0.5rem 0;
+}
+.aw-note-sources button {
+  margin-left: 0.4rem;
+}
+.aw-note-tools [hidden],
+.aw-note-recovery[hidden],
+.aw-note-recovery [hidden],
+.aw-note-rename[hidden],
+.aw-note-reading[hidden] {
+  display: none;
+}
