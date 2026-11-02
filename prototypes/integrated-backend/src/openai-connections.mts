@@ -10,6 +10,7 @@ import type {
   NativeAuthorizationStart,
   NativeCredential,
   NativeCredentialVault,
+  ModelCatalogDiagnostic,
 } from "../../openai-provider/contracts.mts";
 import type { SiwcSessionManager } from "../../openai-provider/auth.mts";
 import type { SqliteNativeVault } from "../../openai-provider/native-storage.mts";
@@ -168,6 +169,11 @@ export class OpenAIConnections {
   private readonly stopped = new AbortController();
   private closed = false;
   private runtimePromise: Promise<Runtime> | null = null;
+  private catalogObservation: {
+    version: number;
+    state: "ready" | "unavailable";
+    diagnostic: ModelCatalogDiagnostic;
+  } | null = null;
   private pending: Flight | null = null;
   private mutation: Operation | null = null;
   constructor(options: OpenAIConnectionsOptions) {
@@ -455,11 +461,19 @@ export class OpenAIConnections {
           errorCode: "auth_lock_recovery_required",
         };
       const current = await runtime.manager.status(CHATGPT_PLAN_REGISTRATION);
+      if (current.state !== "ready" || current.version !== this.catalogObservation?.version)
+        this.catalogObservation = null;
       return {
         ...this.base(true),
         state: current.state,
         registrationVersion: current.version,
         planUsageEnabled: current.planUsageEnabled,
+        ...(this.catalogObservation ? {
+          modelCatalog: {
+            state: this.catalogObservation.state,
+            diagnostic: structuredClone(this.catalogObservation.diagnostic),
+          },
+        } : {}),
       };
     } catch (error) {
       return { ...this.base(available), errorCode: code(error) };
@@ -476,6 +490,7 @@ export class OpenAIConnections {
   }
   /** PRIVATE native route: URL must never be returned by renderer-facing providerConnection. */
   async begin(): Promise<NativeAuthorizationStart> {
+    this.catalogObservation = null;
     this.assert();
     check(!this.pending && !this.mutation, "connection_busy");
     const flight: Flight = {
@@ -672,12 +687,17 @@ export class OpenAIConnections {
       "credential_boundary_mismatch",
     );
   }
+  private acceptCatalogObservation(expectedVersion: number) {
+    if (this.catalogObservation?.version === expectedVersion)
+      this.catalogObservation.state = "ready";
+  }
   async modelCatalog(expectedVersion: number): Promise<PlanModelCatalog> {
     check(
       Number.isSafeInteger(expectedVersion) && expectedVersion >= 1,
       "invalid_connection_request",
     );
     return this.mutate(async (runtime) => {
+      this.catalogObservation = null;
       const result = await runtime.models({
         providerId: "chatgpt-plan-responses",
         configurationId: CHATGPT_PLAN_REGISTRATION,
@@ -688,9 +708,18 @@ export class OpenAIConnections {
           ),
         fetch: (input, init) => this.nativeFetch(input, init),
         now: this.options.now,
+        onDiagnostic: (diagnostic) => {
+          if (!this.closed && !this.operation.getStore()?.controller.signal.aborted)
+            this.catalogObservation = {
+              version: expectedVersion,
+              state: "unavailable",
+              diagnostic: structuredClone(diagnostic),
+            };
+        },
       });
       this.assert();
       await this.revalidateCredential(expectedVersion, result.boundaryDigest);
+      if (result.models.length > 0) this.acceptCatalogObservation(expectedVersion);
       return { ...result, providerId: "chatgpt-plan-responses" };
     });
   }
