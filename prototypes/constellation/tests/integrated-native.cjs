@@ -79,6 +79,15 @@ exports.verify = async ({
   const mark = (label) =>
     receipt.actions.push({ label, at: new Date().toISOString() });
   const spatial = () => js("window.__aerynth.snapshot().spatial");
+  const checkOverviewPresence = async (label) => {
+    await wait(
+      "(()=>{const b=window.__aerynth.snapshot().gpu.presenceBounds;return b&&b.w>0&&b.h>0&&b.x+b.w/2>=innerWidth*.75&&b.x+b.w/2<=innerWidth&&b.y+b.h/2>=0&&b.y+b.h/2<=innerHeight*.5})()",
+    );
+    receipt.actions.push({
+      label: "Overview Vela placement: " + label,
+      bounds: await js("window.__aerynth.snapshot().gpu.presenceBounds"),
+    });
+  };
   const flush = () => js("window.__aerynth.flush()");
   const view = () => js("window.aerynthHost.command('viewState',{})");
   const shot = async (name) => {
@@ -345,6 +354,7 @@ exports.verify = async ({
       await startSegment("orbit, pan, inspect and reviewed branch");
       await click("#zoom-out");
       await pause(650);
+      await checkOverviewPresence("project");
       const before = (await spatial()).camera;
       await drag(".aw-spatial-field", 95, -25);
       const orbited = (await spatial()).camera;
@@ -358,6 +368,7 @@ exports.verify = async ({
       );
       await textButton("Universe", ".aw-constellation-bar");
       await pause(650);
+      await checkOverviewPresence("universe");
       await shot("03-three-planet-universe");
       assert.equal(
         (await snapshot()).projects.filter((p) => projects.includes(p.id))
@@ -365,6 +376,7 @@ exports.verify = async ({
         3,
       );
       await node("project:" + other.projectId);
+      await checkOverviewPresence("other project");
       await node("workspace:" + other.workspaceId);
       await click(`[data-block="${other.conversation.block.id}"] .unfold`);
       for (const content of [
@@ -523,6 +535,11 @@ exports.verify = async ({
       await node("project:" + originalRow.projectId);
       await node("workspace:" + originalRow.workspaceId);
       assert.deepEqual(geometry(await snapshot()), geometry(original));
+      assert.deepEqual(
+        (await snapshot()).presence,
+        original.presence,
+        "overview placement never overwrites saved workspace Vela",
+      );
       for (const r of original.resources.filter(
         (r) => r.project_id === originalRow.projectId,
       ))
@@ -549,6 +566,7 @@ exports.verify = async ({
       );
       receipt.checks.push(
         "real-working-editor-save-and-exact-original-workspace-geometry-identities-return",
+        "automatic-upper-right-overview-Vela-preserves-the-canonical-workspace-footprint",
       );
       await stopSegment("02-pin-relationship-return.webm");
       await flush();
