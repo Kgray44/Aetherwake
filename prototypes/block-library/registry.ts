@@ -14,6 +14,18 @@ import type { NonResourceSubjectRef } from "../workspace-kernel/subjects.ts";
 import type { SubjectBlockKind } from "./contracts.ts";
 import type { BlockInstanceKind } from "./contracts.ts";
 import type { LibraryRecommendationContext } from "./contracts.ts";
+import type { MediaImportRequest } from '../application-contract/media.ts';
+
+/** Import variants of two canonical resource kinds. These are picker intents,
+ * not additional canonical kinds, resources or duplicate block manifests. */
+export const MEDIA_IMPORT_CHOICES = Object.freeze([
+  { id: 'media.pdf', kind: 'file', variant: 'pdf', title: 'PDF', description: 'Read real pages, select text, zoom and find within a PDF.', example: 'Page 1 / 12 · 100% · Find in document' },
+  { id: 'media.document', kind: 'file', variant: 'document', title: 'Document', description: 'Read DOCX headings, text, tables and supported embedded images.', example: 'Document heading\nA readable document with text and tables.' },
+  { id: 'media.video', kind: 'file', variant: 'video', title: 'Video', description: 'Use native playback controls for a selected local video. No autoplay.', example: 'Video · player controls appear after explicit Open player' },
+  { id: 'media.file', kind: 'file', variant: 'any', title: 'File', description: 'Open images and UTF-8 text, or inspect file facts and open the original.', example: 'File name · actual type · size' },
+  { id: 'media.link', kind: 'link', variant: 'any', title: 'Link / YouTube', description: 'Keep a canonical web link or YouTube source. Open it externally; inline playback requires native capability.', example: 'example.org\nA canonical source link' },
+] as const satisfies readonly { id: string; kind: MediaImportRequest['kind']; variant: MediaImportRequest['variant']; title: string; description: string; example: string }[]);
+export type MediaImportChoice = typeof MEDIA_IMPORT_CHOICES[number];
 /** Explainable local rules over current workspace metadata. No model inference or grant inference. */
 export function recommendBlocks(
   context: LibraryRecommendationContext | null,
@@ -227,6 +239,12 @@ export const BUILTIN_BLOCKS: readonly BlockDefinition[] = deepFreeze([
     "Recorded events only. An empty or disconnected stream is shown truthfully.",
     "recorded-events",
   ),
+  { ...define('file', 'File', 'knowledge', 'A canonical original file with a format-specific reader: PDF, DOCX, video, image or text.',
+    ['Read original file', 'Open original externally'], 'Source import is required. Unsupported formats retain accurate file facts and external opening.'),
+    minimumSize: { width: 280, height: 180 }, requiredServices: ['canonical-resources', 'workspace-engine', 'native-media-access'] },
+  { ...define('link', 'Link', 'knowledge', 'A canonical web or YouTube source with an explicit native Open action.',
+    ['Inspect canonical link', 'Open original externally'], 'No remote content is loaded on mount. YouTube embedding requires native identity and capability.'),
+    minimumSize: { width: 280, height: 160 }, requiredServices: ['canonical-resources', 'workspace-engine', 'native-media-access'] },
 ]);
 function deepFreeze<T>(value: T): T {
   if (value && typeof value === "object") {
@@ -497,6 +515,8 @@ export function validateCreateBlock(
   input: CreateBlockInput,
   capabilities: LibraryCapabilities,
 ): CreateBlockInput & { presentation: Presentation } {
+  if (input?.kind === 'file' || input?.kind === 'link')
+    throw Object.assign(new Error('media_import_required'), { code: 'media_import_required' });
   if (
     !input ||
     typeof input !== "object" ||

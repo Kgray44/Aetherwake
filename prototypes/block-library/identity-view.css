@@ -1,3 +1,5 @@
+@import "./media-view.css";
+
 /* Type belongs to the registered DOM identity, not the shared GPU material family. */
 .folio[data-block-kind="task_objective"] { --aw-type-accent:#c6d0b4; }
 .aw-identity-objective,.aw-overview-objective { font:500 1.15rem/1.55 Georgia,serif; margin:0 0 .6rem; }
@@ -40,6 +42,12 @@
 .folio[data-block-kind="reference"] {
   --aw-type-accent: #cabbac;
 }
+.folio[data-block-kind="file"] { --aw-type-accent:#b5c7ce; }
+.folio[data-block-kind="link"] { --aw-type-accent:#c4b9df; }
+.aw-block-compact[data-layout="file"] .aw-identity-document-heading { padding-bottom:.6rem; border-bottom:1px solid #b9c6d333; font:500 1.15rem/1.4 system-ui,sans-serif; }
+.aw-block-compact[data-layout="file"] p { font:12px/1.6 ui-monospace,Consolas,monospace; }
+.aw-block-compact[data-layout="link"] .aw-identity-document-heading { font:500 1.25rem/1.4 system-ui,sans-serif; }
+.aw-block-compact[data-layout="link"] p { overflow-wrap:anywhere; border-left:2px solid #c4b9df55; padding-left:.7rem; }
 .folio[data-block-kind] .folio-top {
   gap: 0.65rem;
 }

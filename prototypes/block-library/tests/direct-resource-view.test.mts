@@ -161,7 +161,7 @@ test('direct resource source matrix uses canonical unplaced content and existing
         const view = mount({ ...resource('note'), kind: kind as Resource['kind'] });
         try {
           assert.equal(view.dom.root.querySelector('textarea'), null);
-          assert.match(view.dom.root.textContent, /not supported/);
+          assert.match(view.dom.root.textContent, kind === 'link' ? /Native media access is unavailable/ : /not supported/);
         } finally { view.close(); }
       }
       const mismatched = mount(resource('note'), { ...ports, noteSession: () => ports.noteSession(task.id) });

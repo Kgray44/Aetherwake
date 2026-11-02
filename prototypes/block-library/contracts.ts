@@ -13,6 +13,7 @@ import type {
   NonResourceSubjectRef,
   SubjectState,
 } from "../workspace-kernel/subjects.ts";
+import type { MediaImportPort } from '../application-contract/media.ts';
 
 export type { BlockKind, Presentation };
 export type Availability = {
@@ -149,6 +150,8 @@ export type CreatedBlock = {
   workspaceId: string;
 };
 export interface BlockLibraryHostPort {
+  /** Explicit native source selection, never an empty generic file shell. */
+  mediaImport?: MediaImportPort;
   capabilities(): Promise<LibraryCapabilities>;
   createBlock(input: CreateBlockInput): Promise<CreatedBlock>;
   /** Optional while older hosts upgrade. The UI reports unavailable functionality explicitly. */

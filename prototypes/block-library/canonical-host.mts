@@ -396,6 +396,7 @@ export function createCanonicalTemplateHost(
       return { id: workspace.workspaceId };
     },
     createResource(input) {
+      check(input.kind !== 'file' && input.kind !== 'link', 'media_import_required');
       check(blockDefinition(input.kind).creation !== 'reference-only', input.kind === 'agent' ? 'agent_library_creation_required' : input.kind === 'task_objective' ? 'task_objective_creation_required' : 'timeline_creation_required');
       requireProject(input.projectId);
       assertBlockAvailable(input.kind, options.capabilities(), input.provider);

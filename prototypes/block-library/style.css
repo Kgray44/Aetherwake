@@ -369,3 +369,4 @@
 .aw-library__bindings strong { font-size: 13px; font-weight: 500; }
 .aw-library__bindings small { display: block; color: #b6c3dc; font-size: 12px; }
 .aw-library__detail > .aw-library__button { margin: 0 8px 8px 0; }
+.aw-library__media-preview { white-space:pre-wrap; padding:1rem; border-left:2px solid #b7a1d855; font:inherit; line-height:1.7; }

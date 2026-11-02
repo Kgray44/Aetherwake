@@ -179,6 +179,7 @@ export function validateBody(input: TemplateBody): TemplateBody {
       "invalid_binding_mode",
     );
     if (role.source.mode === "new") {
+      check(role.source.kind !== 'file' && role.source.kind !== 'link', 'media_import_required');
       check(
         role.source.provider === undefined ||
           (role.source.kind === "conversation" &&
@@ -385,6 +386,7 @@ export function captureWorkspaceTemplate(
       choices[id] === "reference" || choices[id] === "new",
       "binding_choice_required",
     );
+    check((r.kind !== 'file' && r.kind !== 'link') || choices[id] === 'reference', 'media_import_required');
     return {
       key: roles.get(id)!,
       label: r.title,

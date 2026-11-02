@@ -1,0 +1,42 @@
+/* Content only: shared optical materials, rounding and motion stay with Root. */
+.aw-media { display:flex; flex-direction:column; min-width:0; min-height:0; height:100%; color:#e2e0ea; font-family:inherit; font-size:13px; line-height:1.5; }
+.aw-media-heading { display:flex; align-items:baseline; gap:.65rem; min-width:0; }
+.aw-media-kind { flex:none; color:#b9b1d4; font:600 10px/1.3 system-ui,sans-serif; letter-spacing:.12em; text-transform:uppercase; }
+.aw-media-title { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font:500 16px/1.4 system-ui,sans-serif; margin:0; }
+.aw-media-information { margin:.3rem 0 .65rem; color:#b7b3c4; overflow-wrap:anywhere; font-size:11px; }
+.aw-media-tools { display:flex; align-items:center; flex-wrap:wrap; gap:.4rem; padding-bottom:.6rem; }
+.aw-media-button,.aw-media-tools input,.aw-media-tools select { border:1px solid #bdb5da36; border-radius:8px; color:inherit; background:#10101b55; font:inherit; padding:.3rem .6rem; min-height:32px; }
+.aw-media-button { cursor:pointer; }
+.aw-media button:disabled { opacity:.45; cursor:default; }
+.aw-media :is(button,input,select):focus-visible { outline:2px solid #c4b3f1; outline-offset:2px; }
+.aw-media-body { flex:1; min-height:0; overflow:auto; overscroll-behavior:contain; }
+.aw-media-status { flex:none; margin:.45rem 0 0; color:#c3bfd0; font-size:11px; }
+.aw-media-pagination,.aw-media-find { display:flex; align-items:center; flex-wrap:wrap; gap:.3rem; }
+.aw-media-pagination input { width:4rem; }
+.aw-media-find input { width:10rem; min-width:0; }
+.aw-media-pdf-page { position:relative; width:max-content; max-width:none; margin:.25rem auto 1rem; box-shadow:0 2px 18px #0005; }
+.aw-media-pdf-page canvas { display:block; background:#fff; }
+.aw-media-pdf-text { position:absolute; inset:0; overflow:hidden; line-height:1; text-align:initial; letter-spacing:normal; word-spacing:normal; text-size-adjust:none; forced-color-adjust:none; transform-origin:0 0; z-index:1; --min-font-size:1; --text-scale-factor:calc(var(--total-scale-factor) * var(--min-font-size)); --min-font-size-inv:calc(1 / var(--min-font-size)); }
+.aw-media-pdf-text :is(span,br) { position:absolute; color:transparent; white-space:pre; cursor:text; transform-origin:0 0; }
+.aw-media-pdf-text > :not(.markedContent),.aw-media-pdf-text .markedContent span:not(.markedContent) { --font-height:0; --scale-x:1; --rotate:0deg; font-size:calc(var(--text-scale-factor) * var(--font-height)); transform:rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv)); }
+.aw-media-pdf-text .markedContent { display:contents; }
+.aw-media-pdf-text ::selection { background:#8f74ca88; }
+.aw-media-pdf-text .aw-media-match { background:#a680ca55; }
+.aw-media-document { max-width:68ch; margin:0 auto; padding:1.6rem clamp(.8rem,3vw,2.6rem) 3rem; background:#ded7f008; border-inline:1px solid #ccc2e315; font:15px/1.75 Georgia,serif; overflow-wrap:anywhere; }
+.aw-media-document h1 { font-size:1.8em; line-height:1.3; margin:0 0 1.2em; }
+.aw-media-document h2 { font-size:1.4em; margin-top:1.8em; }
+.aw-media-document p { margin:0 0 1em; }
+.aw-media-document table { border-collapse:collapse; max-width:100%; display:block; overflow:auto; }
+.aw-media-document :is(td,th) { border:1px solid #c5bbd633; padding:.4rem .65rem; }
+.aw-media-document img { max-width:100%; height:auto; }
+.aw-media-document blockquote { margin-left:0; border-left:2px solid #bbabd4; padding-left:1rem; color:#c3bdce; }
+.aw-document-link { text-decoration:underline dotted; text-underline-offset:3px; }
+.aw-media mark { color:#171021; background:#d0b9e8; border-radius:2px; }
+.aw-media-video,.aw-media-youtube { display:block; width:100%; height:100%; min-height:200px; max-height:100%; aspect-ratio:16/9; border:0; background:#030305; border-radius:8px; }
+.aw-media-screen { display:grid; place-content:center; width:100%; min-height:200px; aspect-ratio:16/9; background:#06060b88; border-radius:8px; color:#a9a1bb; font:500 18px/1.5 system-ui,sans-serif; }
+.aw-media-image { display:block; object-fit:contain; width:100%; height:100%; min-height:0; }
+.aw-media-text { margin:0; padding:1rem; font:13px/1.7 ui-monospace,Consolas,monospace; tab-size:4; white-space:pre; }
+.aw-media-domain { margin:.6rem 0; font:500 24px/1.3 system-ui,sans-serif; overflow-wrap:anywhere; }
+.aw-media-url { color:#b8b0cf; overflow-wrap:anywhere; border-left:2px solid #af9acb; padding-left:.8rem; }
+.aw-media-file-facts { display:grid; grid-template-columns:auto 1fr; gap:.6rem 1rem; margin:1rem 0; }
+.aw-media-file-facts dt { color:#b7adc9; }.aw-media-file-facts dd { margin:0; overflow-wrap:anywhere; }

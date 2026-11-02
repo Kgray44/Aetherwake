@@ -294,7 +294,20 @@ test('direct ordinary Add forwards no provider while historical templates retain
   assert.equal(calls.filter(value => value === undefined).length, body.resources.length);
 });
 
-test("every new block kind uses its distinct preferred geometry without rewriting resized placements or explicit templates", (t) => {
+test('registered file/link kinds cannot create empty canonical shells through generic Add, host factories or new-resource templates', t => {
+  const f = fixture(t), workspace = f.engine.createWorkspace('Synthetic explicit import boundary', null, { mode: 'freeform' });
+  for (const kind of ['file', 'link'] as const) {
+    assert.throws(() => f.service.createBlock({ commandId: randomUUID(), workspaceId: workspace.workspaceId,
+      expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision, kind, title: 'No source' }), /media_import_required/);
+    assert.throws(() => f.host.createResource({ kind, title: 'No source', projectId: null }), /media_import_required/);
+    const body = structuredClone(predefinedTemplates().find(item => item.id === 'builtin:development')!.body);
+    body.resources[0].source = { mode: 'new', kind, title: 'No source' };
+    assert.throws(() => f.service.saveTemplate({ name: 'Refused empty media', description: '', tags: [], body }), /media_import_required/);
+  }
+  assert.equal(f.factoryCalls.length, 0); assert.equal(count(f.db, 'resources'), 0); assert.equal(count(f.db, 'blocks'), 0);
+});
+
+test("every non-media new block uses its distinct preferred geometry without rewriting resized placements or explicit templates", (t) => {
   const f = fixture(t),
     project = f.kernel.createProject("Synthetic size project"),
     collection = f.kernel.createCollection(
@@ -312,7 +325,7 @@ test("every new block kind uses its distinct preferred geometry without rewritin
     collection_browser: { state: "available" },
   };
   const sizes = new Set<string>();
-  const creatable = REGISTERED_BLOCKS.filter(definition => definition.creation !== 'reference-only');
+  const creatable = REGISTERED_BLOCKS.filter(definition => definition.creation !== 'reference-only' && definition.kind !== 'file' && definition.kind !== 'link');
   for (const manifest of creatable) {
     const base = {
       commandId: "default-size:" + manifest.kind,
@@ -1420,7 +1433,7 @@ test("registered project/browser views have live capability states and create on
       "Synthetic view workspace",
       project.id,
     );
-  assert.equal(REGISTERED_BLOCKS.length, 14);
+  assert.equal(REGISTERED_BLOCKS.length, 16);
   assert.equal(
     f.service
       .discoverBlocks()

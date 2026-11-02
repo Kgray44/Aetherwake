@@ -10,6 +10,7 @@ import type { AgentBlockProjection } from './agent-view.ts';
 import type { TimelineDocument } from '../timeline-product/contracts.ts';
 import { timelineItemTime, timelineItemTitle, type TimelinePresentationWindow } from './timeline-presentation.ts';
 import type { TaskObjectiveDocument } from '../task-product/contracts.ts';
+import { validateMediaMetadata, canonicalMediaUrl } from './media-policy.ts';
 
 export type SubjectIdentity =
   | { phase: "loading" | "unavailable"; message?: string }
@@ -53,7 +54,9 @@ export type BlockIdentityModel = {
     | "table"
     | "collection"
     | "research"
-    | "reference";
+    | "reference"
+    | 'file'
+    | 'link';
   label: string;
   subtitle: string;
   phase: "ready" | "loading" | "unavailable";
@@ -130,8 +133,8 @@ export function blockIdentity(input: {
     collection_browser: "collection",
     research: "research",
     reference: "reference",
-    file: 'document',
-    link: 'reference',
+    file: 'file',
+    link: 'link',
   } as const;
   const model: BlockIdentityModel = {
     kind,
@@ -155,6 +158,25 @@ export function blockIdentity(input: {
     };
   }
   const content = input.content ?? resource?.content ?? "";
+  if (kind === 'file' || kind === 'link') {
+    try {
+      if (!resource?.media) throw new Error('Media source information is unavailable.');
+      const metadata = validateMediaMetadata(resource.media);
+      if (metadata.source !== kind) throw new Error('Media source type is unavailable.');
+      model.label = ({ pdf: 'PDF', docx: 'Document', video: 'Video', image: 'Image', text: 'Text file', binary: 'File', web: 'Web link', youtube: 'YouTube' })[metadata.format];
+      model.heading = metadata.name;
+      if (metadata.source === 'file') {
+        model.subtitle = metadata.mime || 'Original file';
+        model.paragraphs = [metadata.byteLength.toLocaleString() + ' bytes', metadata.format === 'binary' ? 'Open the original in its external application.' : 'Open the original content in its reader.'];
+      } else {
+        model.subtitle = canonicalMediaUrl(metadata.url).hostname;
+        model.paragraphs = [metadata.url, metadata.format === 'youtube' ? 'Playback requires an explicit action and native capability.' : 'Open the canonical source in your browser.'];
+      }
+    } catch {
+      model.phase = 'unavailable'; model.subtitle = 'Source information unavailable'; model.empty = 'The canonical resource is retained. Reconnect its native source access.';
+    }
+    return model;
+  }
   if (kind === "conversation") {
     const codex = resource?.provider === "codex";
     const ordinaryAI = !codex && !!resource?.providerId && resource.providerId !== 'local';

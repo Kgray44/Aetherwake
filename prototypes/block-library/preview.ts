@@ -28,6 +28,11 @@ export function blockPreview(kind: BlockInstanceKind): HTMLElement {
     line('p', '12:04  workspace saved · observed\n12:09  provider response · reported');
     line('div', 'Earlier · Zoom · Filters', 'aw-library__sample-input');
     line('p', 'Evidence gaps stay visible. Events do not establish verified task completion.', 'aw-library__hint');
+  } else if (kind === 'file' || kind === 'link') {
+    line('small', kind === 'file' ? 'FILE READER · EXAMPLE' : 'CANONICAL LINK · EXAMPLE');
+    line('h4', kind === 'file' ? 'A source with its own reader' : 'example.org');
+    line('p', kind === 'file' ? 'PDF pages · DOCX reading · native video · images · text' : 'A web or YouTube source. No network activity on mount.');
+    line('div', 'Open original', 'aw-library__sample-input');
   } else if (kind === "project_overview") {
     line("small", "PROJECT OVERVIEW · EXAMPLE");
     line("h4", "A project and its work");

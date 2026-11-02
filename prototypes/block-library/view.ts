@@ -33,11 +33,15 @@ import {
   BUILTIN_BLOCKS,
   REGISTERED_BLOCKS,
   recommendBlocks,
+  MEDIA_IMPORT_CHOICES,
+  type MediaImportChoice,
 } from "./registry.ts";
 import { captureWorkspaceTemplate } from "./model.ts";
 import { blockPreview } from "./preview.ts";
 import type { Geometry } from '../workspace-engine/contracts.mts';
 import { mountLibraryDrop, type LibraryDropOptions } from './placement-drop.ts';
+import type { MediaImportPort } from '../application-contract/media.ts';
+import { canonicalMediaUrl } from './media-policy.ts';
 
 const node = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -142,6 +146,7 @@ export function mountBlockLibrary(
     /** Read fresh usable world bounds for this exact workspace when submitting. */
     bounds?(): Geometry | undefined;
     onCreated(result: CreatedBlock, origin?: 'drop'): void | Promise<void>;
+    onMediaCreated?(result: NonNullable<Awaited<ReturnType<MediaImportPort['chooseMediaForAdd']>>>): void | Promise<void>;
     onSubjectCreated?(result: CreatedSubjectBlock, origin?: 'drop'): void | Promise<void>;
     drop?: LibraryDropOptions;
     showHeader?: boolean;
@@ -196,6 +201,7 @@ export function mountBlockLibrary(
   let capabilities: LibraryCapabilities | null = null,
     preferences: LibraryPreferences | null = null,
     selected: BlockInstanceKind = "conversation",
+    selectedMedia: MediaImportChoice | null = null,
     pending = false,
     detailSequence = 0;
   const placementBounds = () => {
@@ -280,6 +286,7 @@ export function mountBlockLibrary(
     const generation = ++detailSequence;
     detail.replaceChildren();
     if (!capabilities) return;
+    if (selectedMedia) selected = selectedMedia.kind;
     if (isSubjectBlockKind(selected)) {
       showSubjectDetail(selected, generation);
       return;
@@ -684,6 +691,79 @@ export function mountBlockLibrary(
       attach.append(settings);
       if (port.findResources && port.attachBlock) void loadResources();
     }
+    if (kind === 'file' || kind === 'link') {
+      const choice = selectedMedia ?? MEDIA_IMPORT_CHOICES.find(item => item.kind === kind && item.variant === 'any')!;
+      heading.textContent = choice.title;
+      description.textContent = choice.description;
+      detail.insertBefore(mediaImportForm(choice), form);
+      form.remove();
+    }
+  };
+  const mediaImportForm = (choice: MediaImportChoice) => {
+    const availability = capabilities?.kinds[choice.kind];
+    const connected = !!port.mediaImport && !!options.onMediaCreated;
+    const enabled = connected && availability?.state === 'available';
+    const form = node('form');
+    const preview = node('figure', 'aw-library__sample');
+    preview.dataset.kind = choice.id;
+    preview.append(node('figcaption', '', 'Example preview · synthetic content'), node('div', 'aw-library__media-preview', choice.example));
+    form.append(preview);
+    const urlInput = choice.kind === 'link' ? node('input') : undefined;
+    if (urlInput) {
+      urlInput.type = 'url';
+      urlInput.required = true;
+      urlInput.maxLength = 8192;
+      urlInput.placeholder = 'https://example.com';
+      urlInput.disabled = !enabled;
+      form.append(field('Source URL', urlInput));
+    }
+    const create = node('button', 'aw-library__button', urlInput ? 'Add link' : 'Choose ' + choice.title.toLowerCase());
+    create.type = 'submit';
+    create.disabled = !enabled;
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      if (!enabled || pending || !port.mediaImport) return;
+      const url = urlInput?.value.trim();
+      if (urlInput) {
+        try { canonicalMediaUrl(url ?? ''); }
+        catch (error) { ui.status.textContent = errorText(error); urlInput.focus(); return; }
+      }
+      pending = true;
+      create.disabled = true;
+      if (urlInput) urlInput.disabled = true;
+      ui.panel.setAttribute('aria-busy', 'true');
+      ui.status.textContent = urlInput ? 'Adding link…' : 'Choose an original file…';
+      const request = {
+        kind: choice.kind,
+        variant: choice.variant,
+        workspaceId: options.workspaceId,
+        expectedLayoutVersion: revision(),
+        ...placementBounds(),
+        ...(url ? { url } : {}),
+      };
+      void port.mediaImport.chooseMediaForAdd(request)
+        .then(async result => {
+          if (ui.disposed) return;
+          if (!result) { ui.status.textContent = 'Selection cancelled.'; return; }
+          if (!result.placementId) { ui.status.textContent = 'The resource was imported, but no workspace placement was returned. Open it from Resources.'; return; }
+          ui.status.textContent = 'Source added to this workspace.';
+          try { await options.onMediaCreated!(result); }
+          catch (error) { if (!ui.disposed) ui.status.textContent = 'Source added. Could not reveal it: ' + errorText(error); }
+        })
+        .catch(error => { if (!ui.disposed) ui.status.textContent = errorText(error); })
+        .finally(() => {
+          pending = false;
+          if (ui.disposed) return;
+          ui.panel.removeAttribute('aria-busy');
+          create.disabled = !enabled;
+          if (urlInput) urlInput.disabled = !enabled;
+        });
+    });
+    form.append(create, node('p', 'aw-library__hint', !connected ? 'This native host has not connected source import and workspace placement.'
+      : availability?.state !== 'available' ? availability?.reason ?? 'Native source import is unavailable.'
+      : urlInput ? 'Adding a link saves its address. Open it explicitly from the card.'
+      : 'The original source stays canonical. Its detected format determines the initial size and viewer; cancellation creates nothing.'));
+    return form;
   };
   function showSubjectDetail(kind: SubjectBlockKind, generation: number) {
     const definition = catalogDefinition(kind),
@@ -907,7 +987,7 @@ export function mountBlockLibrary(
       reasons = new Map(
         recommendations.map((item) => [item.kind, item.reason]),
       );
-    const filtered = results.filter((d) =>
+    const filtered = results.filter(d => !['file', 'link'].includes(d.kind) || ['favorites', 'recent', 'recommended'].includes(discovery.value)).filter((d) =>
       discovery.value === "favorites"
         ? preferences?.favorites.includes(d.kind)
         : discovery.value === "recent"
@@ -918,6 +998,11 @@ export function mountBlockLibrary(
               ? d.availability.state === "available"
               : true,
     );
+    const terms = search.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean).slice(0, 16);
+    const mediaChoices = !['favorites', 'recent', 'recommended'].includes(discovery.value) && (!category.value || category.value === 'knowledge')
+      ? MEDIA_IMPORT_CHOICES.filter(choice => terms.every(term => (choice.title + ' ' + choice.kind + ' ' + choice.description).toLocaleLowerCase().includes(term))
+        && (discovery.value !== 'compatible' || capabilities?.kinds[choice.kind]?.state === 'available'))
+      : [];
     if (discovery.value === "recommended")
       list.append(
         node(
@@ -932,7 +1017,7 @@ export function mountBlockLibrary(
           (preferences?.recent.indexOf(a.kind) ?? 0) -
           (preferences?.recent.indexOf(b.kind) ?? 0),
       );
-    if (!filtered.length)
+    if (!filtered.length && !mediaChoices.length)
       list.append(
         node(
           "p",
@@ -965,11 +1050,12 @@ export function mountBlockLibrary(
         () => {
           if (pending) return;
           selected = definition.kind;
+          selectedMedia = null;
           renderList();
           showDetail();
         },
       );
-      item.setAttribute("aria-pressed", String(definition.kind === selected));
+      item.setAttribute("aria-pressed", String(!selectedMedia && definition.kind === selected));
       item.dataset.blockKind = definition.kind;
       item.dataset.blockType = definition.id;
       if (discovery.value === "recommended")
@@ -993,6 +1079,11 @@ export function mountBlockLibrary(
         } });
       }
       groupFor(catalogDefinition(kind).category).append(item);
+    }
+    for (const choice of mediaChoices) {
+      const item = button(choice.title, () => { if (pending) return; selectedMedia = choice; renderList(); showDetail(); });
+      item.dataset.mediaImport = choice.id; item.setAttribute('aria-pressed', String(selectedMedia?.id === choice.id));
+      item.append(node('small', 'aw-library__hint', choice.description)); list.append(item);
     }
   };
   search.oninput = renderList;
@@ -1459,6 +1550,7 @@ export function mountWorkspaceTemplates(
       ]) {
         const option = node("option", "", label);
         option.value = value;
+        if (value === 'new' && (resource.kind === 'file' || resource.kind === 'link')) option.disabled = true;
         select.append(option);
       }
       select.onchange = () => {

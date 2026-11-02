@@ -33,6 +33,8 @@ const glyphs: Record<BlockIdentityModel["layout"], string> = {
   collection: "M3 4h14v13H3zM7 8h14v13H7M6 7h7M6 11h7",
   research: "M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14M15 15l6 6M7 10h6M10 7v6",
   reference: "M6 3h12v18l-6-4-6 4zM9 7h6M9 11h6",
+  file: 'M5 3h9l5 5v13H5zM14 3v6h5M8 14h8M8 17h5',
+  link: 'M10 7l2-2a5 5 0 0 1 7 7l-2 2M14 17l-2 2a5 5 0 0 1-7-7l2-2M8 16l8-8',
 };
 export type BlockMinimizedPresentation = Readonly<{
   canonicalMinimized: boolean;
