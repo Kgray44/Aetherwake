@@ -62,7 +62,7 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [], ses
     const readNotes = async snapshot => {
       const ids = snapshot.resources.filter(resource => resource.kind === 'note' && resource.available !== false).map(resource => resource.id);
       assert(ids.length > 0 && ids.length <= 10, 'Bounded canonical note fixture required');
-      return js(`Promise.all(${JSON.stringify(ids)}.map(resourceId=>window.aerynthHost.command('notes',{name:'readNote',input:{resourceId}})))`);
+      return js(`Promise.all(${JSON.stringify(ids)}.map(resourceId=>window.aerynthHost.command('notes',{name:'readNote',input:resourceId})))`);
     };
     const beforeNotes = await readNotes(before);
     assert(beforeNotes.some(value => value.result?.draft && value.result.draft.content !== value.result.resource.content), 'Separate untouched note recovery draft required for this check');
