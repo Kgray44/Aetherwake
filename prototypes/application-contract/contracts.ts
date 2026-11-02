@@ -8,6 +8,7 @@ import type {
   NonResourceSubjectRef,
   SubjectState,
 } from "../workspace-kernel/subjects.ts";
+import type { MediaMetadata } from "./media.ts";
 export type {
   BlockSubjectRef,
   NonResourceSubjectRef,
@@ -26,7 +27,9 @@ export type BlockKind =
   | "task"
   | "task_group"
   | "reference"
-  | "stream";
+  | "stream"
+  | "file"
+  | "link";
 export type Shape =
   | "rectangle"
   | "rounded"
@@ -114,6 +117,8 @@ export type Resource = {
   kind: BlockKind;
   version: number;
   content: string;
+  /** Safe metadata only. Native file references and playback authority stay in the host. */
+  media?: MediaMetadata;
   taskStatus?: "open" | "done";
   taskPriority?: TaskPriority;
   taskMembers?: { id: string; title: string; status: "open" | "done" }[];
