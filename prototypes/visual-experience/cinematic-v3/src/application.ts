@@ -75,6 +75,14 @@ import {
   type BlockIdentityModel,
 } from "../../../block-library/identity-model.ts";
 import { mountBlockIdentity } from "../../../block-library/identity-view.ts";
+import type {
+  BlockFootprint,
+  BlockApproachTarget,
+} from "../../../block-library/presentation-policy.ts";
+import {
+  approachWorkspaceCard,
+  type WorkspaceView,
+} from "./workspace-approach";
 import { REGISTERED_BLOCKS } from "../../../block-library/registry.ts";
 import "../../../block-library/identity-view.css";
 import { mountSubjectExperience } from "../../../block-library/subject-view.ts";
@@ -256,6 +264,28 @@ export function installApplication(hooks: Hooks) {
     string,
     ReturnType<typeof mountBlockIdentity>
   >();
+  const blockFootprints = new Map<string, BlockFootprint>();
+  const footprintFocus = new Map<string, boolean>();
+  let approachReturn: {
+    workspaceId: string;
+    blockId: string;
+    view: WorkspaceView;
+    button: HTMLButtonElement;
+  } | null = null;
+  let approachFocus: {
+    workspaceId: string;
+    blockId: string;
+    deadline: number;
+  } | null = null;
+  let approachInputRevision = 0;
+  const cancelApproachFocus = () => {
+    approachInputRevision++;
+    approachFocus = null;
+  };
+  addEventListener("pointerdown", cancelApproachFocus, true);
+  addEventListener("keydown", cancelApproachFocus, true);
+  addEventListener("blur", cancelApproachFocus);
+  document.addEventListener("visibilitychange", cancelApproachFocus);
   const identityModels = new Map<
     string,
     {
@@ -496,6 +526,13 @@ export function installApplication(hooks: Hooks) {
       next.navigation.kind === "constellation";
     const navigated =
       JSON.stringify(state?.navigation) !== JSON.stringify(next.navigation);
+    if (
+      changed ||
+      navigated ||
+      (approachReturn &&
+        !next.blocks.some((block) => block.id === approachReturn!.blockId))
+    )
+      clearApproachReturn();
     if (navigated) {
       presenceDrag = null;
       cancelResize?.();
@@ -533,6 +570,8 @@ export function installApplication(hooks: Hooks) {
       subjectRefreshKeys,
       blockPresentations,
       focusedBlocks,
+      blockFootprints,
+      footprintFocus,
     ])
       for (const id of map.keys())
         if (!next.blocks.some((block) => block.id === id)) map.delete(id);
@@ -1854,6 +1893,102 @@ export function installApplication(hooks: Hooks) {
     hooks.layout();
     void saveView();
   }
+  function clearApproachReturn() {
+    approachReturn?.button.remove();
+    approachReturn = null;
+    approachFocus = null;
+  }
+  function approachBlock(id: string, minimum: BlockApproachTarget) {
+    const inputRevision = approachInputRevision;
+    return enqueueResult(async () => {
+      const workspaceId = state?.activeWorkspaceId;
+      await flush();
+      const block = state?.blocks.find((block) => block.id === id);
+      const body = blockFootprints.get(id);
+      if (
+        !workspaceId ||
+        state?.activeWorkspaceId !== workspaceId ||
+        state.navigation.kind !== "workspace" ||
+        !block ||
+        !body ||
+        preview ||
+        unavailableBlocks.has(id) ||
+        !blockPresentations.get(id)?.visible
+      )
+        throw Error("card_approach_unavailable");
+      const previous = { x: -offset.x / zoom, y: -offset.y / zoom, zoom };
+      const framed = approachWorkspaceCard({
+        block,
+        view: previous,
+        body,
+        minimum,
+        safe: {
+          x: 20,
+          y: 170,
+          width: Math.max(1, innerWidth - 40),
+          height: Math.max(1, innerHeight - 320),
+        },
+      });
+      if (framed.constrained && framed.viewport.zoom <= previous.zoom + 1e-8)
+        throw Error("card_approach_needs_more_room");
+      await command({
+        type: "setViewport",
+        workspaceId,
+        viewport: framed.viewport,
+      });
+      if (
+        state?.activeWorkspaceId !== workspaceId ||
+        state.navigation.kind !== "workspace"
+      )
+        return;
+      if (!approachReturn || approachReturn.blockId !== id) {
+        clearApproachReturn();
+        const article = document.querySelector<HTMLElement>(
+          `[data-block="${id}"]`,
+        );
+        const actions = article?.querySelector(".folio-actions");
+        if (!actions) return;
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "aw-block-approach";
+        button.textContent = "↶";
+        button.title = "Return to previous view";
+        button.setAttribute("aria-label", "Return to previous view");
+        button.setAttribute("data-no-card-drag", "");
+        approachReturn = { workspaceId, blockId: id, view: previous, button };
+        button.onclick = () => {
+          const saved = approachReturn;
+          if (!saved || saved.button !== button) return;
+          button.disabled = true;
+          void enqueueResult(async () => {
+            await flush();
+            if (
+              state?.activeWorkspaceId !== saved.workspaceId ||
+              state.navigation.kind !== "workspace"
+            )
+              throw Error("workspace_changed");
+            await command({
+              type: "setViewport",
+              workspaceId: saved.workspaceId,
+              viewport: saved.view,
+            });
+            if (approachReturn === saved) clearApproachReturn();
+          }).catch((error) => {
+            button.disabled = false;
+            report(error);
+          });
+        };
+        actions.append(button);
+      }
+      if (inputRevision === approachInputRevision)
+        approachFocus = {
+          workspaceId,
+          blockId: id,
+          deadline: performance.now() + 5000,
+        };
+      hooks.wake();
+    });
+  }
   function revealCreatedPlacement(id: string) {
     hooks.home();
     reveal(id);
@@ -2181,6 +2316,7 @@ export function installApplication(hooks: Hooks) {
     let view = identityViews.get(id);
     if (!view) {
       view = mountBlockIdentity(article, {
+        approach: (minimum) => approachBlock(id, minimum),
         toggleTask: (resourceId, done) =>
           enqueueResult(async () => {
             await flush();
@@ -2276,6 +2412,8 @@ export function installApplication(hooks: Hooks) {
           });
     identityModels.set(id, { key, content, projection, model });
     view.update(model);
+    const footprint = blockFootprints.get(id);
+    if (footprint) view.setFootprint(footprint);
   }
   function paintBlockAvailability(article: HTMLElement, block: Block) {
     const subject =
@@ -2336,6 +2474,7 @@ export function installApplication(hooks: Hooks) {
         (block) => block.id === settings.placementId,
       );
       if (block) paintBlockAvailability(article, block);
+      hooks.wake();
     }
   }
   function loadBlockSettings(id: string) {
@@ -2992,6 +3131,36 @@ export function installApplication(hooks: Hooks) {
   }
   return {
     frame(now: number, policy: Policy) {
+      if (
+        approachFocus &&
+        (now > approachFocus.deadline ||
+          !document.hasFocus() ||
+          document.hidden ||
+          state?.activeWorkspaceId !== approachFocus.workspaceId ||
+          state.navigation.kind !== "workspace")
+      )
+        approachFocus = null;
+      if (
+        approachFocus &&
+        hooks.motion.bodies.get(approachFocus.blockId)?.transitioning === false
+      ) {
+        const article = document.querySelector<HTMLElement>(
+          `[data-block="${approachFocus.blockId}"]`,
+        );
+        if (article?.dataset.blockComposition === "working") {
+          const control = [
+            ...article.querySelectorAll<HTMLElement>(
+              '.working-content textarea:not([disabled]), .working-content input:not([disabled]), .working-content [contenteditable="true"], .working-content button:not([disabled])',
+            ),
+          ].find(
+            (control) =>
+              !control.closest("[inert],[hidden]") &&
+              control.getClientRects().length > 0,
+          );
+          control?.focus({ preventScroll: true });
+          approachFocus = null;
+        }
+      }
       surfaces.frame(now);
       velaExperience.frame(policy);
       paintPreview();
@@ -3104,6 +3273,28 @@ export function installApplication(hooks: Hooks) {
     setBlockActive(id: string, active: boolean) {
       focusedBlocks.set(id, active);
       syncBlockActivity(id);
+    },
+    setBlockFootprint(id: string, measured: Omit<BlockFootprint, "textScale">) {
+      if (!state?.blocks.some((block) => block.id === id)) return;
+      const value = {
+        ...measured,
+        textScale: blockSettings.get(id)?.configuration.textScale ?? 1,
+      };
+      const prior = blockFootprints.get(id);
+      const focused = focusedBlocks.get(id) ?? false;
+      if (
+        prior &&
+        footprintFocus.get(id) === focused &&
+        Object.keys(value).every(
+          (key) =>
+            prior[key as keyof BlockFootprint] ===
+            value[key as keyof BlockFootprint],
+        )
+      )
+        return;
+      blockFootprints.set(id, value);
+      footprintFocus.set(id, focused);
+      identityViews.get(id)?.setFootprint(value);
     },
     setBlockPresentation(
       id: string,

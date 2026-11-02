@@ -27,6 +27,7 @@ import {
 import { defaultSurfaceShape, surfaceBorderRadius } from "./surface-contour";
 import { applyBlockPoseStyle } from "../../../block-library/pose-style.ts";
 import { placeStatus, type StatusObstacle } from "./status-placement.ts";
+import { createWorkingFootprints } from "./working-footprints";
 import type { ArchitectureConcept } from "./orbital-architecture";
 import type { CelestialStudy } from "./celestial-environment";
 import type { InstrumentStudy } from "./instrument-materials";
@@ -120,6 +121,12 @@ const motion = new MotionCoordinator();
 registerScene(motion, "architecture");
 const elements = new Map<string, HTMLElement>();
 const poseStyleCache = new Map<string, string>();
+const workingFootprints = desktopMode
+  ? createWorkingFootprints(() => wake(false))
+  : null;
+addEventListener("pagehide", () => workingFootprints?.dispose(), {
+  once: true,
+});
 const materialCompositor = new MaterialCompositor();
 let surfaceView: SurfaceView = { scale: 1, originX: 0, originY: 0 };
 let statusMetricsDirty = true;
@@ -726,6 +733,8 @@ function mountResource(id: string, r: Resource) {
   grip.addEventListener("pointercancel", cancelDrag);
   $("#stage").append(article);
   elements.set(id, article);
+  const working = article.querySelector(".working-content");
+  if (working) workingFootprints?.track(id, working);
   motion.add(id, base(id));
   registerResourceMaterial(motion, id);
 }
@@ -738,6 +747,7 @@ function replaceWorkspace(state: DesktopSnapshot) {
   if (selected && !alive.has(selected)) selected = null;
   for (const [id, article] of elements)
     if (!alive.has(id)) {
+      workingFootprints?.release(id);
       article.remove();
       elements.delete(id);
       resources.delete(id);
@@ -1209,6 +1219,15 @@ function renderDOM() {
       visible,
       expanded === id ? "focused" : "workspace",
     );
+    workingFootprints?.setVisible(id, visible);
+    const body = visible ? workingFootprints?.read(id) : undefined;
+    if (body)
+      application?.setBlockFootprint(id, {
+        width: p.w,
+        height: p.h,
+        bodyWidth: body.width,
+        bodyHeight: body.height,
+      });
     const radius = surfaceBorderRadius(p.shape, p.w, p.h, unfold);
     const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateZ(${p.rotation}deg) rotateY(${p.yaw}deg);z-index:${compositing.rank + 3};border-radius:${radius};clip-path:inset(0 round ${radius});--resource-content-clip:${compositing.clipPath || "none"};`;
     if (poseStyleCache.get(id) !== style) {
