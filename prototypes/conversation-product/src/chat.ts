@@ -3,7 +3,7 @@ import type { PublicConversationExecution } from '../../application-contract/con
 import { ConversationDraftSession, type DraftSessionSnapshot } from './draft-session.ts';
 import { renderMarkdown } from './markdown.ts';
 import type { ExperienceMotionPort, ExperiencePose } from '../../application-contract/motion.ts';
-import { mountConversationPicker, conversationControlStates, type ConversationPicker } from './picker.ts';
+import { mountConversationPicker, conversationControlStates, conversationDisclosures, type ConversationPicker } from './picker.ts';
 let chatSerial=0;
 
 export type ConversationExecution = PublicConversationExecution;
@@ -106,6 +106,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const paging = el('div', undefined, 'cp-paging'), stream = el('article', undefined, 'cp-stream'), streamText = el('pre', '', 'cp-stream-text'); stream.append(el('p', 'Observed live output', 'cp-message-source'), streamText); stream.hidden = true;
   const status = el('p', '', 'cp-chat-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   const composer = el('form', undefined, 'cp-composer'), textarea = el('textarea'), tools = el('div', undefined, 'cp-composer-tools'), provider = el('span', '', 'cp-composer-provider'), send = el('button', 'Send'), stop = el('button', 'Stop'), hint = el('span', 'Enter to send · Shift+Enter for a new line', 'cp-composer-hint');
+  composer.dataset.aerynthMotionControl='true';
   textarea.setAttribute('aria-label', 'Message'); textarea.placeholder = 'Ask anything, or share an idea'; textarea.rows = 2;
   send.type = 'submit'; send.setAttribute('aria-label', 'Send message'); stop.type = 'button'; stop.hidden = true; tools.append(hint, stop, send); composer.append(textarea, tools);providerSlot.append(provider);provider.classList.add('cp-chat-provider-label');
   decorateConversationControl(send,{identity:'send',emphasis:'primary'});decorateConversationControl(stop,{identity:'stop',emphasis:'secondary'});tools.dataset.cpGroup='composer';tools.setAttribute('role','group');tools.setAttribute('aria-label','Message controls');
@@ -126,6 +127,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const seenEvents = new Set<string>(), cache = new Map<string,{signature:string;node:HTMLElement}>();
   const days = new Map<string,{day:string;node:HTMLElement}>();
   const controlStates=options.motion?conversationControlStates(root,{motion:options.motion,viewId:options.viewId!}):null;
+  const disclosures=options.motion?conversationDisclosures(root,{motion:options.motion,viewId:options.viewId!}):null;
   let feedbackOpen=false,feedbackHeight=0,feedbackBarHeight=-1,inspectionFollow=false,liveFollow=false,inspectionReturn:number|null=null;
   const feedbackKey=options.viewId+':feedback',feedbackBarKey=options.viewId+':feedback-bar',feedbackPose=(h:number,opacity:number):ExperiencePose=>({x:0,y:0,w:0,h,lift:0,yaw:0,opacity});
   options.motion?.add(feedbackKey,feedbackPose(0,0));options.motion?.add(feedbackBarKey,feedbackPose(0,0));
@@ -215,7 +217,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const doAction = (event: ConversationMessageAction) => { Promise.resolve(options.onMessageAction?.(event)).catch(error=>report(errorText(error))); };
   function messageNode(message: MessageView,clock:ReturnType<typeof canonicalClock>): HTMLElement {
     const signature = JSON.stringify([message,clock]), cached = cache.get(message.id); if (cached?.signature === signature) return cached.node;
-    const article = el('article', undefined, 'cp-message cp-message-'+message.role); article.dataset.messageId = message.id; article.dataset.sourceResourceId = message.resourceId;
+    const article = el('article', undefined, 'cp-message cp-message-'+message.role); article.dataset.messageId = message.id; article.dataset.sourceResourceId = message.resourceId;article.dataset.aerynthMotionControl='true';
     // MessageView has no per-message provider binding: never relabel old assistant output after a provider change.
     const attribution = message.role === 'user' ? 'You' : message.role === 'assistant' ? (message.provenance==='mock_adapter'?'Assistant · simulated source':'Assistant') : message.role;
     const by = el('p', attribution+(message.inherited?' · inherited source':'')+(message.outputState==='partial'?' · partial response':''), 'cp-message-source'); by.title = message.provenance+' · '+message.createdAt;article.dataset.outputState=message.outputState??'';
@@ -281,7 +283,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     decorateConversationControl(before,{identity:'previous'});decorateConversationControl(after,{identity:'next'});paging.dataset.cpGroup='transcript-navigation';
     before.addEventListener('click',()=>{offset=Math.max(0,detail.messages.offset-50);void refresh().catch(error=>report(errorText(error)));});after.addEventListener('click',()=>{offset=detail.messages.offset+50;void refresh().catch(error=>report(errorText(error)));});
     paging.replaceChildren(before,el('span',`${detail.messages.total?detail.messages.offset+1:0}–${detail.messages.offset+detail.messages.items.length} of ${detail.messages.total}`),after);paging.hidden=detail.messages.total<=detail.messages.limit;
-    renderDraft();options.onDetail?.(detail);
+    disclosures?.sync();renderDraft();options.onDetail?.(detail);
     if(followMessageId){pendingFollow={messageId:followMessageId};drainPendingFollow();}
     else if(around){pendingFollow=null;messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(around)}"]`)?.scrollIntoView({block:'center'});}
     else if(pendingFollow)drainPendingFollow();else if(nearBottom)followLatestContent();else messages.scrollTop=scroll;
@@ -347,12 +349,12 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   // The send RPC can remain pending through the entire native provider turn. Draft durability
   // must be independent so a pane can close and the host can offer interruption on quit.
   const flush=async()=>{await session.flush();viewState();};
-  const frame=()=>{if(disposed)return;providerPicker?.frame();controlStates?.frame();let settled=true;if(options.motion){const p=options.motion.pose(feedbackKey),bar=options.motion.pose(feedbackBarKey),height=Math.max(0,p.h)+'px',barHeight=Math.max(0,bar.h)+'px';if(feedbackBody.style.height!==height)feedbackBody.style.height=height;if(feedbackBody.style.opacity!==String(p.opacity))feedbackBody.style.opacity=String(p.opacity);if(feedback.style.height!==barHeight)feedback.style.height=barHeight;if(feedback.style.opacity!==String(bar.opacity))feedback.style.opacity=String(bar.opacity);if(!feedbackOpen&&p.opacity<.001)feedbackBody.hidden=true;settled=Math.abs(p.h-feedbackHeight)<1&&p.opacity>.995;}
+  const frame=()=>{if(disposed)return;providerPicker?.frame();disclosures?.frame();controlStates?.frame();reconcileFeedback();let settled=true;if(options.motion){const p=options.motion.pose(feedbackKey),bar=options.motion.pose(feedbackBarKey),height=Math.max(0,p.h)+'px',barHeight=Math.max(0,bar.h)+'px';if(feedbackBody.style.height!==height)feedbackBody.style.height=height;if(feedbackBody.style.opacity!==String(p.opacity))feedbackBody.style.opacity=String(p.opacity);if(feedback.style.height!==barHeight)feedback.style.height=barHeight;if(feedback.style.opacity!==String(bar.opacity))feedback.style.opacity=String(bar.opacity);if(!feedbackOpen&&p.opacity<.001)feedbackBody.hidden=true;settled=Math.abs(p.h-feedbackHeight)<1&&p.opacity>.995;}
     if(inspectionFollow&&feedbackOpen&&messages.clientHeight>0){const box=messages.getBoundingClientRect(),body=feedbackBody.getBoundingClientRect(),scale=box.height/(messages.offsetHeight||messages.clientHeight);if(Number.isFinite(scale)&&scale>0&&body.height>0){const next=Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(body.top-box.top)/scale));if(messages.scrollTop!==next)messages.scrollTop=next;if(settled)inspectionFollow=false;}}
     if(liveFollow&&!feedbackOpen&&!stream.hidden&&messages.clientHeight>0){const next=Math.max(0,messages.scrollHeight-messages.clientHeight);if(messages.scrollTop!==next)messages.scrollTop=next;liveFollow=false;}
   };
   return {ready,refresh,focusComposer:()=>textarea.focus(),frame,setPresentation(mode){if(mode!=='workspace'&&mode!=='focused')throw new Error('invalid_chat_presentation');if(disposed)return;const scroll=messages.scrollTop;presentation=mode;resize();messages.scrollTop=scroll;drainPendingFollow();},flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
-    if(disposed)return;await flush();disposed=true;generation++;pendingFollow=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();controlStates?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
+    if(disposed)return;await flush();disposed=true;generation++;pendingFollow=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
     if(!options.draftSession){
       if(sendTask){void sendTask.then(()=>session.dispose(),()=>session.dispose()).catch(()=>{/* Existing durable recovery is untouched; never overwrite or replay a conflict. */});}
       else await session.dispose();
