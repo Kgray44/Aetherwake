@@ -26,8 +26,17 @@ const glyphs: Record<BlockIdentityModel["layout"], string> = {
   research: "M10 3a7 7 0 1 0 0 14 7 7 0 0 0 0-14M15 15l6 6M7 10h6M10 7v6",
   reference: "M6 3h12v18l-6-4-6 4zM9 7h6M9 11h6",
 };
+export type BlockMinimizedPresentation = Readonly<{
+  canonicalMinimized: boolean;
+  effectiveMinimized: boolean;
+  deferredReason: 'composition' | 'uninitialized' | 'loading' | 'unavailable' | null;
+}>;
 type Actions = {
   approach?(target: BlockApproachTarget): void | Promise<void>;
+  restore?(): Promise<void>;
+  /** Host wakes its existing presentation coordinator on an actual transition.
+   * Physical shrink must follow effectiveMinimized, not the persisted flag. */
+  onMinimizedPresentationChange?(state: BlockMinimizedPresentation): void;
   toggleTask?(id: string, done: boolean): Promise<void>;
   openResource?(id: string): void;
   openWorkspace?(id: string): void;
@@ -61,11 +70,14 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
   const overview = element('section', 'aw-block-overview'),
     overviewContent = element('div', 'aw-block-overview-content'),
     approach = element('button', 'aw-block-approach', 'Approach'),
+    restore = element('button', 'aw-block-restore', 'Restore'),
     approachStatus = element('p', 'aw-block-approach-status');
   overview.hidden = true;
   approach.hidden = true;
+  restore.hidden = true;
   overview.setAttribute('data-no-card-drag', '');
   approach.type = 'button';
+  restore.type = 'button';
   approachStatus.setAttribute('role', 'status');
   overview.append(overviewContent, approachStatus);
   working.append(overview);
@@ -90,6 +102,7 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
     originalActionsParent = openActions?.parentElement;
   if (openActions) top.append(openActions);
   (openActions ?? overview).append(approach);
+  (openActions ?? overview).append(restore);
   const openControl = article.querySelector<HTMLButtonElement>('.unfold');
   let heldOpenName: { previous: string | null; assigned: string } | undefined;
   const releaseOpenName = () => {
@@ -103,6 +116,13 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
     fingerprint = "",
     disposed = false;
   let footprint: BlockFootprint | undefined, composition: BlockComposition = 'working', composing = false, approaching = false;
+  // This is a projection of the existing canonical placement flag, not a store.
+  let canonicalMinimized = false, restoring = false, compositionEpoch = 0, minimizedEpoch = 0;
+  let minimizedPresentation: BlockMinimizedPresentation = Object.freeze({ canonicalMinimized: false, effectiveMinimized: false, deferredReason: null });
+  const observeMinimized = (): BlockMinimizedPresentation => {
+    const deferredReason = !canonicalMinimized ? null : composing ? 'composition' : !model ? 'uninitialized' : model.phase === 'loading' ? 'loading' : model.phase !== 'ready' ? 'unavailable' : null;
+    return Object.freeze({ canonicalMinimized, effectiveMinimized: canonicalMinimized && deferredReason === null, deferredReason });
+  };
   const heldInert = new Map<HTMLElement, boolean>();
   const releaseWorking = () => {
     for (const [child, alreadyInert] of heldInert) if (!alreadyInert) child.removeAttribute('inert');
@@ -115,13 +135,19 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
   };
   const reconcileComposition = () => {
     if (disposed) return;
-    const next = model && model.phase === 'ready' && footprint && actions.approach && !article.classList.contains('expanded')
-      ? blockComposition(model.kind, footprint, composition, composing || hasWorkingFocus()) : 'working';
+    const observation = observeMinimized(), next = observation.effectiveMinimized ? 'overview'
+      : model && model.phase === 'ready' && footprint && actions.approach && !article.classList.contains('expanded')
+        ? blockComposition(model.kind, footprint, composition, composing || hasWorkingFocus()) : 'working';
     composition = next;
     if (article.dataset.blockComposition !== next) article.dataset.blockComposition = next;
     if (overview.parentElement !== working) working.append(overview);
     overview.hidden = next !== 'overview';
-    approach.hidden = next !== 'overview';
+    approach.hidden = next !== 'overview' || observation.effectiveMinimized;
+    restore.hidden = !observation.effectiveMinimized;
+    restore.disabled = restoring || !actions.restore;
+    restore.setAttribute('aria-label', 'Restore ' + (model?.label.toLowerCase() ?? 'block'));
+    restore.title = actions.restore ? 'Restore this card' : 'Restore is unavailable';
+    article.dataset.blockMinimized = String(observation.effectiveMinimized);
     if (next === 'overview') {
       if (openControl && !heldOpenName) {
         heldOpenName = { previous: openControl.getAttribute('aria-label'), assigned: 'Open ' + model!.label.toLowerCase() + ' in focused view' };
@@ -132,12 +158,23 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
         child.setAttribute('inert', '');
       }
     } else { releaseWorking(); releaseOpenName(); }
+    if (observation.canonicalMinimized !== minimizedPresentation.canonicalMinimized || observation.effectiveMinimized !== minimizedPresentation.effectiveMinimized || observation.deferredReason !== minimizedPresentation.deferredReason) {
+      minimizedPresentation = observation;
+      actions.onMinimizedPresentationChange?.(observation);
+    }
   };
   const focusChanged = () => queueMicrotask(() => reconcileComposition());
   const compositionStarted = (event: Event) => {
-    if (event.target instanceof HTMLElement && working.contains(event.target) && !overview.contains(event.target)) { composing = true; reconcileComposition(); }
+    if (event.target instanceof HTMLElement && working.contains(event.target) && !overview.contains(event.target)) { compositionEpoch++; composing = true; reconcileComposition(); }
   };
-  const compositionEnded = () => { composing = false; reconcileComposition(); };
+  const compositionEnded = (event: Event) => {
+    if (!(event.target instanceof HTMLElement) || !working.contains(event.target) || overview.contains(event.target)) return;
+    const epoch = ++compositionEpoch;
+    const finish = () => { if (!disposed && epoch === compositionEpoch) { composing = false; reconcileComposition(); } };
+    // Let the final native input following compositionend settle before the
+    // host observes permission to shrink. No timer or polling/frame loop.
+    if (canonicalMinimized) queueMicrotask(finish); else finish();
+  };
   article.addEventListener('focusin', focusChanged);
   article.addEventListener('focusout', focusChanged);
   article.addEventListener('compositionstart', compositionStarted, true);
@@ -151,6 +188,14 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
     void Promise.resolve().then(() => { if (!disposed) return actions.approach!(target); })
       .catch(() => { if (!disposed) text(approachStatus, 'Could not approach this card.'); })
       .finally(() => { if (!disposed) { approaching = false; approach.disabled = false; } });
+  };
+  restore.onclick = () => {
+    if (disposed || restoring || !minimizedPresentation.effectiveMinimized || !actions.restore) return;
+    const epoch = minimizedEpoch;
+    restoring = true; restore.disabled = true; text(approachStatus, '');
+    void Promise.resolve().then(() => { if (!disposed && canonicalMinimized && minimizedPresentation.effectiveMinimized && epoch === minimizedEpoch) return actions.restore!(); })
+      .catch(() => { if (!disposed) text(approachStatus, 'Could not restore this card. Your data is retained.'); })
+      .finally(() => { if (!disposed) { restoring = false; reconcileComposition(); } });
   };
   function renderOverview(value: BlockIdentityModel) {
     overview.dataset.layout = value.layout;
@@ -453,6 +498,12 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
   return {
     update,
     setFootprint(value: BlockFootprint) { footprint = value; reconcileComposition(); return composition; },
+    setMinimized(value: boolean) {
+      if (typeof value !== 'boolean') throw new TypeError('invalid_canonical_minimized_flag');
+      if (!disposed) { if (canonicalMinimized !== value) minimizedEpoch++; canonicalMinimized = value; reconcileComposition(); }
+      return minimizedPresentation;
+    },
+    minimizedPresentation() { return minimizedPresentation; },
     search: query,
     dispose() {
       disposed = true;
@@ -464,7 +515,9 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
       releaseOpenName();
       overview.remove();
       approach.remove();
+      restore.remove();
       delete article.dataset.blockComposition;
+      delete article.dataset.blockMinimized;
       root.remove();
       mark.remove();
       if (openActions && originalActionsParent?.isConnected)
