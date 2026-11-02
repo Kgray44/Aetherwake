@@ -8,6 +8,7 @@ import { sourceLinks } from "./source-links.ts";
 import type { ChecklistDocument } from '../application-contract/checklist.ts';
 import type { AgentBlockProjection } from './agent-view.ts';
 import type { TimelineDocument, TimelineWindow } from '../timeline-product/contracts.ts';
+import type { TaskObjectiveDocument } from '../task-product/contracts.ts';
 
 export type SubjectIdentity =
   | { phase: "loading" | "unavailable"; message?: string }
@@ -45,6 +46,7 @@ export type BlockIdentityModel = {
     | 'ledger'
     | 'agent'
     | 'chronology'
+    | 'objective'
     | "timeline"
     | "project"
     | "table"
@@ -80,6 +82,7 @@ const document = (content: string) => {
 };
 const typeLabel = {
   timeline: 'Timeline',
+  task_objective: 'Task Tracker',
   agent: 'Agent',
   conversation: "Conversation",
   note: "Note",
@@ -107,11 +110,13 @@ export function blockIdentity(input: {
   checklist?: ChecklistDocument;
   agent?: AgentBlockProjection;
   timeline?: { document: TimelineDocument | null; window: TimelineWindow | null };
+  taskObjective?: TaskObjectiveDocument | null;
   disconnected?: boolean;
 }): BlockIdentityModel {
   const { kind, resource } = input;
   const layouts = {
     timeline: 'chronology',
+    task_objective: 'objective',
     agent: 'agent',
     conversation: resource?.provider === "codex" ? "execution" : "chat",
     note: "document",
@@ -207,6 +212,19 @@ export function blockIdentity(input: {
       : [];
     model.paragraphs = document(content).paragraphs.slice(0, 2);
     model.empty = "Add a description in task details.";
+  } else if (kind === 'task_objective') {
+    const objective = input.taskObjective;
+    if (!objective || objective.resource.id !== resource?.id) {
+      model.phase = input.taskObjective === null ? 'unavailable' : 'loading'; model.subtitle = model.phase === 'loading' ? 'Loading objective…' : 'Objective unavailable';
+      model.empty = 'Open this Task Tracker to inspect its authorized objective and manual decisions.';
+    } else {
+      model.heading = objective.resource.title;
+      model.subtitle = 'Objective ' + objective.disposition + ' · manual verification ' + objective.verification + ' · acceptance ' + objective.acceptance.state;
+      model.paragraphs = [excerpt(objective.definition.objective, 240)];
+      model.rows = objective.definition.requirements.slice(0, 3).map(item => ({ id: item.id, title: item.text, detail: 'Requirement · definition version ' + objective.definitionVersion }));
+      model.metrics = [{ label: 'Requirements', value: String(objective.definition.requirements.length) }, { label: 'Execution references', value: String(objective.attempts.length) }];
+      model.empty = 'No separate requirements recorded. Outcome review still requires evidence.';
+    }
   } else if (kind === 'timeline') {
     const projection = input.timeline, timeline = projection?.document, window = projection?.window;
     if (!timeline || !window || timeline.resource.id !== resource?.id || window.resourceId !== resource?.id || window.resourceVersion !== timeline.resource.version || window.viewDigest !== timeline.viewDigest) {

@@ -1,4 +1,8 @@
 /* Type belongs to the registered DOM identity, not the shared GPU material family. */
+.folio[data-block-kind="task_objective"] { --aw-type-accent:#c6d0b4; }
+.aw-identity-objective,.aw-overview-objective { font:500 1.15rem/1.55 Georgia,serif; margin:0 0 .6rem; }
+.aw-identity-objective-state { display:block; font-size:.72rem; line-height:1.5; padding:.5rem 0; border-block:1px solid #c6d0b433; }
+.aw-identity-objective-requirements { padding-left:1.3rem; margin:.7rem 0 0; }.aw-identity-objective-requirements li { padding:.2rem 0; font-size:.8rem; line-height:1.5; }
 .folio[data-block-kind="agent"] { --aw-type-accent:#b7cadb; }
 .folio[data-block-kind="timeline"] { --aw-type-accent:#cbbfa7; }
 .aw-block-compact[data-layout="chronology"] .aw-identity-row { display:grid; grid-template-columns:4.5em minmax(0,1fr); padding:.45rem 0; border-top:1px solid #cbbfa733; }

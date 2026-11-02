@@ -3,6 +3,8 @@ import type { NoteExperiencePort } from './note-contracts.ts';
 import type { NoteSession } from './note-session.ts';
 import type { TimelinePort } from '../timeline-product/contracts.ts';
 import { mountTimelineExperience, type TimelineExperience } from './timeline-view.ts';
+import type { TaskObjectivePort } from '../task-product/contracts.ts';
+import { mountTaskTrackerExperience, type TaskTrackerExperience } from './task-tracker-view.ts';
 import type { ChecklistPort, ChecklistReference } from '../application-contract/checklist.ts';
 import type { ExperienceMotionPort } from '../application-contract/motion.ts';
 import { mountChecklistExperience, type ChecklistExperience } from '../checklist-product/view.ts';
@@ -14,6 +16,7 @@ export interface DirectResourcePorts {
   notes: NoteExperiencePort;
   noteSession(resourceId: string): NoteSession;
   timelines?: { port: TimelinePort; motion: ExperienceMotionPort; viewId: string; resourceTitle?(resourceId: string): string | undefined };
+  taskObjectives?: Omit<Parameters<typeof mountTaskTrackerExperience>[3], 'active' | 'presentation' | 'openResource'> & { port: TaskObjectivePort };
   checklists?: {
     port: ChecklistPort;
     motion: ExperienceMotionPort;
@@ -43,6 +46,11 @@ export interface DirectResourceExperience {
   flush(): Promise<void>;
   frame?(): void;
   reflow?(): void;
+  /** Root invokes this for dependency/source/execution/policy changes even when
+   * the represented resource version did not change. No polling is installed. */
+  refresh?(): Promise<void>;
+  /** Available for Task Tracker drafts; Root owns navigation/discard decisions. */
+  hasUnsavedChanges?(): boolean;
   dispose(): void;
 }
 
@@ -72,6 +80,7 @@ export function mountDirectResourceExperience(
   let checklist: ChecklistExperience | undefined;
   let timeline: TimelineExperience | undefined;
   let timelineWasActive = false;
+  let taskObjective: TaskTrackerExperience | undefined, taskObjectiveWasActive = false;
   let refreshVersion: number | undefined;
   let editor: HTMLTextAreaElement | undefined;
   let taskStatus: HTMLInputElement | undefined, taskPriority: HTMLSelectElement | undefined;
@@ -171,11 +180,18 @@ export function mountDirectResourceExperience(
   const mount = () => {
     if (mounted || !available(resource)) return;
     body.replaceChildren();
+    if (kind === 'task_objective') {
+      const source = ports.taskObjectives;
+      if (!source) { status.textContent = 'Task Objective access is unavailable in this surface.'; return; }
+      const { port, ...options } = source;
+      taskObjective = mountTaskTrackerExperience(body, resourceId, port, { ...options, active, presentation: 'focused', showTitle: false, openResource: ports.openResource });
+      taskObjectiveWasActive = active; refreshVersion = resource.version; mounted = true; return;
+    }
     if (kind === 'timeline') {
       const source = ports.timelines;
       if (!source) { status.textContent = 'Timeline access is unavailable in this surface.'; return; }
       timeline = mountTimelineExperience(body, resourceId, source.port, { motion: source.motion, viewId: source.viewId,
-        active, presentation: 'focused', onOpenResource: ports.openResource, resourceTitle: source.resourceTitle });
+        active, presentation: 'focused', showTitle: false, onOpenResource: ports.openResource, resourceTitle: source.resourceTitle });
       timelineWasActive = active; refreshVersion = resource.version; mounted = true;
       return;
     }
@@ -234,6 +250,7 @@ export function mountDirectResourceExperience(
     else {
       if (mounted) status.textContent = '';
       try { mount(); } catch (error) {
+        taskObjective?.dispose(); taskObjective = undefined; taskObjectiveWasActive = false;
         timeline?.dispose(); timeline = undefined; timelineWasActive = false;
         checklist?.dispose(); checklist = undefined;
         note?.dispose(); group?.dispose(); events?.dispose();
@@ -245,6 +262,10 @@ export function mountDirectResourceExperience(
       }
     }
     note?.setActive(active && available(resource));
+    const objectiveActive = active && available(resource), objectiveActivated = objectiveActive && !taskObjectiveWasActive;
+    taskObjective?.setActive(objectiveActive); taskObjectiveWasActive = objectiveActive;
+    if (objectiveActivated && taskObjective) refreshVersion = resource.version;
+    if (taskObjective && objectiveActive && refreshVersion !== resource.version) { refreshVersion = resource.version; void taskObjective.refresh().catch(fail); }
     const timelineActive = active && available(resource), timelineActivated = timelineActive && !timelineWasActive;
     timeline?.setActive(timelineActive); timelineWasActive = timelineActive;
     if (timelineActivated && timeline) refreshVersion = resource.version;
@@ -281,6 +302,10 @@ export function mountDirectResourceExperience(
     setActive(value) { if (!disposed) { active = value; reconcile(); } },
     async flush() {
       if (disposed) return;
+      if (taskObjective) {
+        if (!available(resource)) throw new Error('Task Objective is unavailable. Pending decisions remain in its view.');
+        await taskObjective.flush(); return;
+      }
       if (timeline) {
         if (!available(resource)) throw new Error('Timeline is unavailable. Pending view settings remain in its view.');
         await timeline.flush(); return;
@@ -294,11 +319,14 @@ export function mountDirectResourceExperience(
       if (!available(resource)) throw new Error('Resource is unavailable. Pending text remains in its canonical editor session.');
       await session.flushEdits();
     },
-    frame() { if (!disposed) { checklist?.frame(); timeline?.frame(); } },
-    reflow() { if (!disposed) { checklist?.reflow(); timeline?.reflow(); } },
+    frame() { if (!disposed) { checklist?.frame(); timeline?.frame(); taskObjective?.frame(); } },
+    reflow() { if (!disposed) { checklist?.reflow(); timeline?.reflow(); taskObjective?.reflow(); } },
+    async refresh() { if (!disposed && active && available(resource)) { if (taskObjective) await taskObjective.refresh(); else if (timeline) await timeline.refresh(); else if (checklist) await checklist.refresh(); else if (session) await session.refresh(); else if (events) await ports.events?.refresh(); } },
+    ...(kind === 'task_objective' ? { hasUnsavedChanges: () => taskObjective?.hasUnsavedChanges() ?? false } : {}),
     dispose() {
       if (disposed) return;
       disposed = true;
+      taskObjective?.dispose();
       timeline?.dispose();
       checklist?.dispose();
       if (editor) editor.oninput = null;

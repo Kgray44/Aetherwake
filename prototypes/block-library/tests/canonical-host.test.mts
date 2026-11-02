@@ -1418,7 +1418,7 @@ test("registered project/browser views have live capability states and create on
       "Synthetic view workspace",
       project.id,
     );
-  assert.equal(REGISTERED_BLOCKS.length, 13);
+  assert.equal(REGISTERED_BLOCKS.length, 14);
   assert.equal(
     f.service
       .discoverBlocks()

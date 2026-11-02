@@ -22,6 +22,7 @@ const glyphs: Record<BlockIdentityModel["layout"], string> = {
   ledger: 'M5 3h14v18H5zM8 7h2v2H8zM13 8h3M8 12h2v2H8zM13 13h3M8 17h2v2H8zM13 18h3',
   agent: 'M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M4 21v-3a8 8 0 0 1 16 0v3M8 17h8',
   chronology: 'M3 12h18M6 8v8M12 5v14M18 8v8M4 4h4M16 20h4',
+  objective: 'M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5M12 12l8-8M16 4h4v4',
   timeline: "M6 3v18M3 6h6M3 12h6M3 18h6M12 6h9M12 12h6M12 18h8",
   project: "M12 3l8 5v9l-8 4-8-4V8zM4 8l8 5 8-5M12 13v8",
   table: "M3 5h18v15H3zM3 10h18M8 5v15M3 15h18",
@@ -215,6 +216,10 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
     } else if (value.kind === 'task') {
       paragraph(value.rows[0]?.detail ?? value.empty, 'aw-overview-state');
       paragraph(value.paragraphs[0] ?? '', 'aw-overview-excerpt');
+    } else if (value.kind === 'task_objective') {
+      paragraph(value.paragraphs[0] ?? value.empty, 'aw-overview-objective');
+      paragraph(value.subtitle, 'aw-overview-state');
+      paragraph(value.metrics.map(metric => metric.value + ' ' + metric.label.toLowerCase()).join(' · '), 'aw-overview-meta');
     } else if (value.kind === 'task_group') {
       paragraph(value.subtitle, 'aw-overview-state');
       for (const row of value.rows.slice(0, 2)) paragraph((row.checked ? '✓ ' : '○ ') + row.title, 'aw-overview-task');
@@ -420,7 +425,13 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
       rowNodes.clear();
       return;
     }
-    if (value.layout === 'agent') {
+    if (value.layout === 'objective') {
+      body.replaceChildren(); rowNodes.clear();
+      body.append(element('p', 'aw-identity-objective', value.paragraphs[0] ?? value.empty), element('small', 'aw-identity-objective-state', value.subtitle));
+      const requirements = element('ol', 'aw-identity-objective-requirements');
+      for (const item of value.rows) requirements.append(element('li', '', item.title));
+      if (value.rows.length) body.append(requirements);
+    } else if (value.layout === 'agent') {
       body.replaceChildren(); rowNodes.clear();
       const hero = element('div', 'aw-identity-agent-profile'), monogram = element('span', 'aw-identity-agent-monogram', Array.from(value.heading.trim())[0]?.toUpperCase() ?? 'A');
       hero.append(monogram, element('h3', '', value.heading)); body.append(hero);

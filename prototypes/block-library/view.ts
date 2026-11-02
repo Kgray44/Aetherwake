@@ -676,9 +676,10 @@ export function mountBlockLibrary(
     if (definition.creation === 'reference-only') {
       form.onsubmit = event => { event.preventDefault(); };
       create.disabled = true; form.remove(); attach.open = true;
-      attachHeading.textContent = kind === 'agent' ? 'Choose a saved agent' : 'Choose a saved timeline';
+      attachHeading.textContent = kind === 'agent' ? 'Choose a saved agent' : kind === 'task_objective' ? 'Choose a saved task objective' : 'Choose a saved timeline';
       detail.insertBefore(node('p', 'aw-library__hint', kind === 'agent'
         ? 'Create and configure agent profiles in the Agent Library, then attach the same saved agent here.'
+        : kind === 'task_objective' ? 'Create a Task Objective independently, then attach the same objective with its requirements and review history here.'
         : 'Create and configure a Timeline independently, then attach the same saved time view here.'), attach);
       attach.append(settings);
       if (port.findResources && port.attachBlock) void loadResources();
@@ -1464,6 +1465,11 @@ export function mountWorkspaceTemplates(
         const fresh = select.querySelector<HTMLOptionElement>('option[value="new"]');
         if (fresh) { fresh.disabled = true; fresh.textContent = 'Reuse a configured Timeline'; }
         form.append(node('p', 'aw-library__hint', 'Reuse the saved Timeline to retain its scope, filters and selection. Timeline settings are not copied.'));
+      }
+      if (resource.kind === 'task_objective') {
+        const fresh = select.querySelector<HTMLOptionElement>('option[value="new"]');
+        if (fresh) { fresh.disabled = true; fresh.textContent = 'Reuse the saved Task Objective'; }
+        form.append(node('p', 'aw-library__hint', 'Reuse this objective to retain its requirements, evidence and review history. A workspace template does not copy objectives or execute work.'));
       }
       form.append(field(resource.title + " · " + resource.kind, select));
     }

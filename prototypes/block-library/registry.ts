@@ -87,6 +87,7 @@ export const BLOCK_DEFAULT_SIZES: Readonly<
   checklist: { width: 460, height: 500 },
   agent: { width: 400, height: 460 },
   timeline: { width: 640, height: 460 },
+  task_objective: { width: 600, height: 540 },
   stream: { width: 500, height: 380 },
   project_overview: { width: 520, height: 360 },
   resource_browser: { width: 560, height: 440 },
@@ -205,6 +206,10 @@ export const BUILTIN_BLOCKS: readonly BlockDefinition[] = deepFreeze([
     ['Inspect captured events', 'Filter sources', 'Save supported view changes'],
     'References a saved Activity or Execution Timeline. Gaps and evidence classifications stay visible.'),
     creation: 'reference-only', minimumSize: { width: 360, height: 280 }, requiredServices: ['canonical-resources', 'workspace-engine', 'timeline-service', 'event-journal'] },
+  { ...define('task_objective', 'Task Tracker', 'planning', 'Track a saved objective, its requirements, evidence, existing execution references and your explicit outcome decisions.',
+    ['Edit objective and requirements', 'Link existing execution', 'Record manual review', 'Review acceptance', 'Inspect history'],
+    'References one canonical Task Objective. Execution state, manual verification and acceptance stay separate; this block does not start or stop work.'),
+    creation: 'reference-only', minimumSize: { width: 360, height: 300 }, requiredServices: ['canonical-resources', 'workspace-engine', 'task-objective-service'] },
   define(
     "reference",
     "Reference",
@@ -533,7 +538,7 @@ export function validateCreateBlock(
     throw Object.assign(new Error("invalid_title"), { code: "invalid_title" });
   assertBlockAvailable(input.kind, capabilities, input.provider);
   if (blockDefinition(input.kind).creation === 'reference-only') {
-    const code = input.kind === 'agent' ? 'agent_library_creation_required' : 'timeline_creation_required';
+    const code = input.kind === 'agent' ? 'agent_library_creation_required' : input.kind === 'task_objective' ? 'task_objective_creation_required' : 'timeline_creation_required';
     throw Object.assign(new Error(code), { code });
   }
   return {

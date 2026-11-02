@@ -61,6 +61,7 @@ test("all registered kinds project a distinct useful structure; Codex has observ
     'checklist',
     'agent',
     'timeline',
+    'task_objective',
     "stream",
     "project_overview",
     "resource_browser",
@@ -80,8 +81,8 @@ test("all registered kinds project a distinct useful structure; Codex has observ
         : { resource: resource(kind as Resource["kind"]) }),
     }),
   );
-  assert.equal(new Set(models.map((model) => model.layout)).size, 13);
-  assert.equal(new Set(models.map((model) => model.label)).size, 12);
+  assert.equal(new Set(models.map((model) => model.layout)).size, 14);
+  assert.equal(new Set(models.map((model) => model.label)).size, 13);
   assert.equal(models.find(model => model.kind === 'resource_browser')!.label, 'Resource Explorer');
   assert.equal(models.find(model => model.kind === 'collection_browser')!.label, 'Resource Explorer');
   assert.equal(models[0].rows.length, 0, "No invented assistant response");

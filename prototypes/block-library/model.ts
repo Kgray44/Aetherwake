@@ -172,6 +172,7 @@ export function validateBody(input: TemplateBody): TemplateBody {
     check(role.source.kind !== 'checklist' || role.source.mode !== 'new', 'checklist_template_reference_required');
     check(role.source.kind !== 'agent' || role.source.mode !== 'new', 'agent_template_reference_required');
     check(role.source.kind !== 'timeline' || role.source.mode !== 'new', 'timeline_template_reference_required');
+    check(role.source.kind !== 'task_objective' || role.source.mode !== 'new', 'task_objective_template_reference_required');
     blockDefinition(role.source.kind);
     check(
       ["new", "reference"].includes(role.source.mode),
@@ -379,6 +380,7 @@ export function captureWorkspaceTemplate(
     check(kind !== 'checklist' || choices[id] === 'reference', 'checklist_template_reference_required');
     check(kind !== 'agent' || choices[id] === 'reference', 'agent_template_reference_required');
     check(kind !== 'timeline' || choices[id] === 'reference', 'timeline_template_reference_required');
+    check(kind !== 'task_objective' || choices[id] === 'reference', 'task_objective_template_reference_required');
     check(
       choices[id] === "reference" || choices[id] === "new",
       "binding_choice_required",

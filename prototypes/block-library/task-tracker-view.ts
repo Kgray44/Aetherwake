@@ -150,7 +150,7 @@ export function mountTaskTrackerExperience(root: HTMLElement, resourceId: string
     if (values.attempt && !attempt?.execution.current) { status.textContent = 'The selected execution record is unavailable. Refresh before linking this review.'; return; }
     return mutate({ type: 'review', attemptId: attempt?.id ?? null, ...(attempt ? { executionRevision: attempt.execution.current!.revision } : {}),
       decision: values.decision, requirementIds: values.criteria, evidence: values.evidence, note: values.note }, () => {
-        if (same(reviewValues(), values)) { reviewCriteria.clear(); reviewEvidence = []; reviewNote = ''; reviewBasis = null; reviewNoteInput.value = ''; show(review, false); }
+        if (same(reviewValues(), values)) { reviewCriteria.clear(); reviewEvidence = []; reviewNote = ''; reviewBasis = null; reviewDecision = 'needs-work'; reviewAttempt = ''; reviewNoteInput.value = ''; show(review, false); }
       });
   });
   const reviewContext = node('p'), reviewCurrentDefinition = action('Review current definition', () => { if (decisionReady() && current) { reviewBasis = { version: current.definitionVersion, digest: current.definitionDigest }; reviewCriteria.clear(); paintReview(); } });
@@ -292,7 +292,7 @@ export function mountTaskTrackerExperience(root: HTMLElement, resourceId: string
     frame() { if (disposed || !active && section.hidden) return; const value = motion.pose(prefix); section.style.opacity = String(value.opacity); section.style.transform = `translateY(${value.y}px)`; if (!active && value.opacity < .001) section.hidden = true;
       for (const value of panels) { const body = motion.pose(value.key); value.element.style.height = Math.max(0, body.h) + 'px'; value.element.style.opacity = String(body.opacity); if ((!value.open || !current) && body.h < .5) value.element.hidden = true; } },
     async flush() { if (operation) await operation; if (retryRequest || needsRefresh) throw new Error('Task Objective change needs confirmation before leaving.'); },
-    hasUnsavedChanges() { return !!draft || !!reviewNote || reviewEvidence.length > 0 || reviewCriteria.size > 0 || !!retryRequest; },
+    hasUnsavedChanges() { return !!draft || !!reviewNote || reviewEvidence.length > 0 || reviewCriteria.size > 0 || !!reviewBasis && (reviewDecision !== 'needs-work' || !!reviewAttempt) || !!retryRequest; },
     dispose() { if (disposed) return; disposed = true; sequence++; historySequence++; section.inert = true; section.remove(); for (const key of keys) motion.remove(key); keys.clear(); criterionInputs.clear(); reviewChecks.clear(); },
   };
 }

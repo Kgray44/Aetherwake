@@ -50,3 +50,14 @@ workspace creation, receipt retry, freshness, access redaction, competing edits,
 current-definition review, late history and inactive reads. This does not prove
 native input, rendered appearance, Core authorization, provider behavior,
 performance or whole-product acceptance. Root owns those integration receipts.
+
+The reference-only `Task Tracker` manifest uses a 600 x 540 rounded default and
+an objective-specific compact and overview composition. Generic creation rejects
+with `task_objective_creation_required`; template roles must explicitly reuse
+the saved objective (`task_objective_template_reference_required`). Direct
+opening accepts `DirectResourcePorts.taskObjectives` with the same component
+options and exposes `refresh`, `frame`, `reflow`, `flush` and `hasUnsavedChanges`.
+Root must promote the `task_objective` presentation kind in its shared contract,
+mount the workspace component and enable its capability only when actual host
+resolution and service access are wired. A canonical kind alone does not enable
+a workspace presentation. Native acceptance is still required.

@@ -50,7 +50,7 @@ export type LibraryRecommendationContext = {
   presentKinds: readonly BlockInstanceKind[];
 };
 export type BlockDefinition<K extends BlockInstanceKind = BlockKind> = {
-  /** Canonical profiles are created in their domain library, then referenced. */
+  /** Canonical domain objects are created through their own service, then referenced. */
   creation?: 'reference-only';
   id: string;
   version: 1;
