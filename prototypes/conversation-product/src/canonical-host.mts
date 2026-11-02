@@ -113,7 +113,7 @@ export function createCanonicalOrganizationAdapter(options:CanonicalOrganization
   const value=structuredClone(synchronous(options.conversation(resourceId)));
   requireValue(value&&typeof value.id==='string'&&typeof value.title==='string'&&Number.isSafeInteger(value.revision)&&value.revision>0,'invalid_canonical_conversation');return value;
  };
- return async (input:CanonicalOrganizationCommand):Promise<unknown>=>{
+ const run=(input:CanonicalOrganizationCommand):unknown=>{
   requireValue(input&&typeof input==='object'&&typeof input.type==='string','invalid_organization_command');
   return synchronous(options.atomic(()=>{
    const mutation=synchronous(options.mutation?.()??{origin:'user' as const,correlationId:randomUUID()});
@@ -160,6 +160,9 @@ export function createCanonicalOrganizationAdapter(options:CanonicalOrganization
    }
   }));
  };
+ // Trusted synchronous host path shares the exact checks and transaction.
+ // The ordinary product port retains its asynchronous contract.
+ return Object.assign(async(input:CanonicalOrganizationCommand):Promise<unknown>=>run(input),{native:run});
 }
 
 export type ObservedCapabilitySnapshot = { state:'unknown'|'fresh'|'stale'; capability?:Capability; observedAt?:string; source:'canonical.capabilities' };

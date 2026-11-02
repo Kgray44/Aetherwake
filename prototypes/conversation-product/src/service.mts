@@ -59,6 +59,19 @@ export class ConversationProduct implements ConversationProductPort {
  }
  private tx<T>(fn: () => T): T { this.db.exec('SAVEPOINT conversation_product'); try { const result = fn(); this.db.exec('RELEASE conversation_product'); return result; } catch (error) { this.db.exec('ROLLBACK TO conversation_product'); this.db.exec('RELEASE conversation_product'); throw error; } }
  private audit(action: string, id: string) { this.db.prepare('INSERT INTO cp_audit VALUES(?,?,?,?)').run(randomUUID(), action, id, stamp()); }
+ private favorite(input:ProductCommandMap['favorite']['input']):boolean {
+  check(typeof input.favorite==='boolean','invalid_favorite');
+  this.tx(()=>{this.db.prepare('INSERT INTO cp_flags VALUES(?,?) ON CONFLICT(resource_id) DO UPDATE SET favorite=excluded.favorite').run(input.resourceId,input.favorite?1:0);this.audit('favorite',input.resourceId);});
+  return input.favorite;
+ }
+ /** Trusted synchronous canonical host path only; deliberately absent from ProductCommandMap. */
+ nativeFavorite(input:ProductCommandMap['favorite']['input']):boolean {
+  check(input&&typeof input==='object'&&!Array.isArray(input)&&typeof input.resourceId==='string'&&input.resourceId.length>0&&input.resourceId.length<=256&&Object.keys(input).every(key=>['resourceId','favorite'].includes(key)),'invalid_favorite');
+  const row=this.db.prepare('SELECT kind,state,project_id FROM resources WHERE id=?').get(input.resourceId);
+  check(row?.kind==='conversation'&&row.state==='active'&&this.host.access?.(input.resourceId)===true,'source_unavailable');
+  check(row.project_id===null||this.db.prepare("SELECT id FROM projects WHERE id=? AND state='active'").get(row.project_id)!==undefined,'source_unavailable');
+  return this.favorite(input);
+ }
  private async view(): Promise<View> {
   // Sequential reads share the backend's owning command queue. Access is checked again below.
   const snapshot = await this.host.snapshot(), desktop = await this.host.desktop();
@@ -241,7 +254,7 @@ export class ConversationProduct implements ConversationProductPort {
     let parent=a.parentId, seen=new Set([a.collectionId]); while(parent) { check(!seen.has(parent),'folder_cycle'); seen.add(parent); const c=this.collections(v).find(c=>c.id===parent); check(c,'parent_collection_missing'); parent=c.parentId; }
     this.tx(()=>{const revision=Number(this.db.prepare('SELECT version FROM cp_collection_rules WHERE collection_id=?').get(a.collectionId)?.version??0);check(revision===a.expectedRuleRevision,'stale_collection_rule');this.db.prepare('INSERT INTO cp_collection_rules VALUES(?,?,?,1) ON CONFLICT(collection_id) DO UPDATE SET parent_id=excluded.parent_id,rule=excluded.rule,version=cp_collection_rules.version+1').run(a.collectionId,a.parentId,a.rule===null?null:JSON.stringify(a.rule)); this.audit('collection.rule',a.collectionId); }); result=this.collections(v);break;
    }
-   case 'favorite': this.resource(v,a.resourceId);check(typeof a.favorite==='boolean','invalid_favorite');this.tx(()=>{this.db.prepare('INSERT INTO cp_flags VALUES(?,?) ON CONFLICT(resource_id) DO UPDATE SET favorite=excluded.favorite').run(a.resourceId,a.favorite?1:0);this.audit('favorite',a.resourceId);});result=a.favorite;break;
+   case 'favorite': this.resource(v,a.resourceId);result=this.favorite(a);break;
    case 'providers': result=await this.providers(v);break;
    case 'create': {text(a.title);const p=(await this.providers(v)).find(p=>p.id===a.providerId || !a.providerId&&p.record&&!p.execute);check(p?.record,'provider_unavailable');result=await this.host.command('createConversation',{...a,providerId:p.id});break;}
    case 'archive': this.resource(v,a.resourceId,undefined,true);result=await this.host.command('desktop',{type:'archiveSubject',kind:'resource',id:a.resourceId,expectedVersion:a.expectedVersion,archived:a.archived});break;

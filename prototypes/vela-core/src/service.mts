@@ -196,6 +196,9 @@ export class VelaService {
       switch (a.type) {
         case 'navigate': if (a.target.kind === 'workspace') add(a.target.workspaceId, 'workspace'); else add(a.target.projectId, 'project'); break;
         case 'createWorkspace': add(a.projectId, 'project'); break;
+        case 'createConversation': for(const ref of this.opts.host.contextReferences?.([])??[])if(ref.kind==='project')add(ref.id,'project'); break;
+        case 'conversationFavorite': case 'renameConversation': add(a.resourceId,'resource'); break;
+        case 'associateConversationProject': add(a.resourceId,'resource'); add(a.projectId,'project'); break;
         case 'renameWorkspace': case 'bringAllIntoView': case 'resolveLayout': case 'setOrganization': add(a.workspaceId, 'workspace'); break;
         case 'workspaceFromResources': add(a.projectId, 'project'); for (const id of a.resourceIds) add(id, 'resource'); break;
         case 'createResource': add(a.workspaceId, 'workspace'); break;

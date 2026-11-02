@@ -29,6 +29,10 @@ export type VelaNativeAction =
   | { type: 'bringAllIntoView'; workspaceId: string }
   | { type: 'resolveLayout'; workspaceId: string }
   | { type: 'setOrganization'; workspaceId: string; organization: OrganizationUpdate }
+  | { type: 'createConversation'; title: string; providerId: 'local' | 'codex-app-server' }
+  | { type: 'conversationFavorite'; resourceId: string; favorite: boolean }
+  | { type: 'renameConversation'; resourceId: string; title: string }
+  | { type: 'associateConversationProject'; resourceId: string; projectId: string | null }
   | { type: 'workspaceFromResources'; title: string; projectId: string | null; resourceIds: string[] }
   | { type: 'createResource'; kind: 'note' | 'task' | 'task_group'; title: string; workspaceId: string | null }
   | { type: 'attach'; workspaceId: string; resourceId: string }

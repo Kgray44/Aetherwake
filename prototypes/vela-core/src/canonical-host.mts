@@ -60,12 +60,15 @@ function validateScope(scope: VelaScope) {
   check(isRecord(scope) && identifier(scope.principalId) && identifier(scope.policyVersion), 'invalid_canonical_scope');
   for (const ids of [scope.resourceIds, scope.workspaceIds, scope.projectIds]) check(Array.isArray(ids) && ids.length <= 10000 && ids.every(identifier) && new Set(ids).size === ids.length, 'invalid_canonical_scope');
 }
-function actionSubjects(action: ReturnType<typeof validateAction>): Pick<ResourceRef, 'id' | 'kind'>[] {
+function actionSubjects(action: ReturnType<typeof validateAction>, context:CanonicalVelaContext): Pick<ResourceRef, 'id' | 'kind'>[] {
   const result: Pick<ResourceRef, 'id' | 'kind'>[] = [];
   const add = (id: string | null, kind: ResourceRef['kind']) => { if (id !== null && !result.some(r => r.id === id && r.kind === kind)) result.push({ id, kind }); };
   switch (action.type) {
     case 'navigate': if (action.target.kind === 'workspace') add(action.target.workspaceId, 'workspace'); else add(action.target.projectId, 'project'); break;
     case 'createWorkspace': add(action.projectId, 'project'); break;
+    case 'createConversation': add(context.currentProjectId,'project'); break;
+    case 'conversationFavorite': case 'renameConversation': add(action.resourceId,'resource'); break;
+    case 'associateConversationProject': add(action.resourceId,'resource'); add(action.projectId,'project'); break;
     case 'renameWorkspace': case 'bringAllIntoView': case 'resolveLayout': case 'setOrganization': add(action.workspaceId, 'workspace'); break;
     case 'workspaceFromResources': add(action.projectId, 'project'); for (const id of action.resourceIds) add(id, 'resource'); break;
     case 'createResource': add(action.workspaceId, 'workspace'); break;
@@ -201,7 +204,7 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
       const current = view(), action = validateAction(input.action); check(action.type !== 'delegateTask', 'canonical_native_action_required');
       check(identifier(input.authorizationRef) && identifier(input.commandId) && identifier(input.requestId) && identifier(input.planId), 'canonical_dispatch_authorization_required');
       validateTargets(input.expectedVersions, current);
-      for (const subject of actionSubjects(action)) check(input.expectedVersions.some(target => target.id === subject.id && target.kind === subject.kind), 'canonical_action_target_manifest_required');
+      for (const subject of actionSubjects(action,current.context)) check(input.expectedVersions.some(target => target.id === subject.id && target.kind === subject.kind), 'canonical_action_target_manifest_required');
       // No block, template, placement, layout or fallback implementation. Parent dispatcher owns capability/release checks.
       return options.dispatch.native(structuredClone(input));
     }),
