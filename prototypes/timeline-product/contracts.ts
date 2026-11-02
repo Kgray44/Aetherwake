@@ -1,0 +1,178 @@
+/** Browser-safe timeline DTOs. These are views of retained evidence, not task,
+ * provider, event-ingestion, planning, replay or scheduling authority. */
+export const TIMELINE_CONTRACT = "aerynth.timeline@1" as const;
+export type EvidenceClass = "observed" | "reported" | "inferred" | "simulated";
+export interface TimelineResource {
+  id: string;
+  kind: "timeline";
+  title: string;
+  projectId: string | null;
+  version: number;
+  state: "active" | "archived";
+}
+export interface TimelineSelection {
+  eventId: string;
+  cursor: number;
+}
+export interface TimelineView {
+  schemaVersion: 1;
+  mode: "activity" | "execution";
+  /** Empty resourceIds means the authorized project/application scope, not all data. */
+  scope: { projectId: string | null; resourceIds: string[] };
+  sources: {
+    providerIds: string[];
+    eventTypes: string[];
+    classifications: EvidenceClass[];
+  };
+  /** Pan/zoom changes the capture-time interval; source timestamps are never rewritten. */
+  viewport: { from: string; to: string; displayTimeZone: string };
+  selection: TimelineSelection | null;
+}
+export const timelineCapabilities = Object.freeze({
+  planning: false,
+  forecasts: false,
+  dependencies: false,
+  stateReconstruction: false,
+  reexecution: false,
+  export: false,
+});
+export interface TimelineDocument {
+  contract: typeof TIMELINE_CONTRACT;
+  schemaVersion: 1;
+  resource: TimelineResource;
+  view: TimelineView;
+  viewDigest: string;
+  selectionUnavailable: boolean;
+  createdAt: string;
+  updatedAt: string;
+  capabilities: typeof timelineCapabilities;
+}
+/** Exactly the version-1 retained header. No event payloads, deltas, account
+ * status, model answers, tool output or private reasoning are materialized. */
+export interface TimelineEventHeader {
+  schemaVersion: 1;
+  eventId: string;
+  cursor: number;
+  resourceId: string | null;
+  executionId: string | null;
+  providerId: string;
+  providerInstanceId: string;
+  connectionId: string;
+  nativeEventId: string | null;
+  nativeSequence: number | null;
+  threadId: string | null;
+  turnId: string | null;
+  correlationId: string | null;
+  causationId: string | null;
+  receivedAt: string;
+  providerTime: number | null;
+  providerTimeSource: string | null;
+  type: string;
+  classification: EvidenceClass;
+  status: string | null;
+}
+export interface RecordedTimelineItem {
+  kind: "recorded-event";
+  temporalClass: "historical";
+  evidenceClass: EvidenceClass;
+  event: TimelineEventHeader;
+  source: {
+    store: "intelligence_events";
+    cursor: number;
+    eventId: string;
+    schemaVersion: 1;
+  };
+  navigation: { resourceId: string; state: "active" | "archived" } | null;
+  taskVerification: "not-established-by-this-projection";
+}
+export type TimelineGapReason =
+  | "source-unavailable"
+  | "before-retained-cursor"
+  | "cursor-discontinuity"
+  | "unsupported-event-schema"
+  | "invalid-event"
+  | "access-filtered"
+  | "scan-limit"
+  | "selection-unavailable";
+export interface TimelineEvidenceGap {
+  kind: "evidence-gap";
+  reason: TimelineGapReason;
+  /** No protected source IDs, times, bodies or hidden counts are attached. */
+  cause: "unknown" | "unavailable" | "policy" | "bounded-query";
+}
+export interface TimelinePage {
+  resourceId: string;
+  resourceVersion: number;
+  viewDigest: string;
+  afterCursor: number;
+  throughCursor: number;
+}
+export interface TimelineWindow {
+  contract: "aerynth.timeline-window@1";
+  resourceId: string;
+  resourceVersion: number;
+  viewDigest: string;
+  order: "capture-cursor";
+  timeAxis: "receivedAt";
+  scopeBasis: "current-authorized-canonical-resources";
+  items: RecordedTimelineItem[];
+  gaps: TimelineEvidenceGap[];
+  next: TimelinePage | null;
+  source: {
+    store: "intelligence_events";
+    state: "retained-history" | "unavailable";
+    earliestRetainedCursor: number | null;
+    throughCursor: number | null;
+    observedLatestCursor: number | null;
+  };
+  coverage: {
+    matchingItems: "complete-retained-window" | "bounded" | "unavailable";
+    allActivity: false;
+    rawPayloads: false;
+    unscopedEvents: "authorized-global-only";
+    timeComparability: "capture-order-is-not-global-causality";
+  };
+  hasNewEvents: boolean | null;
+  selectionUnavailable: boolean;
+  capabilities: typeof timelineCapabilities;
+}
+export interface CreateTimeline {
+  commandId: string;
+  title: string;
+  projectId: string | null;
+  view: TimelineView;
+}
+export interface SaveTimeline {
+  commandId: string;
+  resourceId: string;
+  expectedVersion: number;
+  view: TimelineView;
+}
+export interface TimelineMutationResult {
+  resourceId: string;
+  version: number;
+  viewDigest: string;
+}
+export interface QueryTimeline {
+  resourceId: string;
+  expectedVersion: number;
+  limit?: number;
+  page?: TimelinePage;
+}
+export interface TimelinePort {
+  create(input: CreateTimeline): Promise<TimelineMutationResult>;
+  read(resourceId: string): Promise<TimelineDocument>;
+  save(input: SaveTimeline): Promise<TimelineMutationResult>;
+  query(input: QueryTimeline): Promise<TimelineWindow>;
+}
+export const TIMELINE_LIMITS = Object.freeze({
+  views: 256,
+  receipts: 4096,
+  viewBytes: 16384,
+  resourceIds: 64,
+  sourceFilters: 32,
+  events: 200,
+  scan: 1000,
+  headerBytes: 16384,
+  windowBytes: 262144,
+});
