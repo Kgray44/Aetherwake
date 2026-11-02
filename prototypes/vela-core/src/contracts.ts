@@ -1,4 +1,5 @@
 import type { OrganizationUpdate, TaskPriority } from '../../application-contract/contracts.ts';
+import type { HistoryOrigin, HistoryProvenance, HistoryMessageDependency, ProviderHistory } from './history-contracts.ts';
 /** Browser-safe Vela contracts. Canonical data and provider execution remain host-owned. */
 export const VELA_CONTRACT = 'aerynth.vela@1' as const;
 export type EvidenceClass = 'observed' | 'reported' | 'inferred' | 'unknown';
@@ -24,6 +25,8 @@ export interface ContextManifest {
   discovered: ResourceRef[]; included: ContextEntry[];
   omitted: { id: string; reason: string }[];
   contentBytes: number; coverage: 'explicit-resources-only';
+  /** Exact reviewed egress only. Persisted request context never copies these canonical message bodies. */
+  history?: ProviderHistory;
 }
 export type VelaNativeAction =
   | { type: 'navigate'; target: { kind: 'workspace'; workspaceId: string } | { kind: 'constellation'; projectId: string | null } }
@@ -101,7 +104,11 @@ export interface VelaRequest {
   createdAt: string; updatedAt: string; providerId: string | null;
   context: ContextManifest; planId?: string; errorCode?: string;
   /** Reference only: content lives in the SAME canonical conversation, never a second transcript. */
-  response?: { kind: ProviderReplyKind; messageId: string };
+  response?: { kind: ProviderReplyKind; messageId: string; contentDigest?: string };
+  /** Schema-3 provenance is absent on legacy requests; unavailable origin is never inferred as known-null. */
+  origin?: HistoryOrigin; inputMessageId?: string; inputContentDigest?: string; provenance?: HistoryProvenance;
+  /** References/proofs only; actual history text remains in the canonical conversation. */
+  history?: { schemaVersion: 1; fenceDigest: string; historyDigest: string; messages: readonly HistoryMessageDependency[] };
   /** Raw provider plans are preserved locally, including invalid plans; never interpreted as commands. */
   invalidProposal?: unknown;
 }
@@ -148,12 +155,16 @@ export interface VelaHostPort {
   /** Both conversation operations use the canonical host resource/graph, on the injected db transaction. */
   ensureConversation(key: 'system:vela'): string;
   readConversation(resourceId: string): CanonicalConversation;
+  /** Cheap authoritative graph revision; never implemented by cloning the transcript. */
+  conversationRevision?(resourceId: string): number | null;
   appendMessage(resourceId: string, message: Omit<VelaMessage, 'id'>): VelaMessage;
   search(query: string, scope: VelaScope, limit: number): ResourceRef[];
   resolve(ref: Pick<ResourceRef, 'id' | 'kind'>, scope: VelaScope, purpose?: { restoreCollection?: boolean }): ResourceRef | null;
   /** Only for a persisted applied archive action/receipt; does not rediscover archived metadata. */
   canInspectCollectionArchiveReceipt?(ref:ResourceRef,scope:VelaScope):boolean;
   readContent(id: string, scope: VelaScope): { ref: ResourceRef; content: string; source: string } | null;
+  /** Current content-policy decision without reading content; absence disables implicit history. */
+  canReadContent?(ref: ResourceRef, scope: VelaScope): boolean;
   /** Must evaluate actual host policy, issue opaque references, and revalidate grants at the action boundary. */
   authorize(request: AuthorizationRequest): AuthorizationDecision;
   /** Must be idempotent by commandId. workspaceFromResources is one atomic canonical create/attach operation. */

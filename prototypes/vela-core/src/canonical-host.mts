@@ -212,6 +212,11 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
       check(identifier(id), 'invalid_canonical_conversation'); requireConversation(id, view()); return id;
     }),
     readConversation: id => within(() => structuredClone(readConversation(id, view()))),
+    conversationRevision: id => within(() => { const current = view();
+      const ref = resolve({ id, kind: 'resource' }, current.scope, current);
+      if (!ref || ref.resourceKind !== 'conversation' || options.permissions.content(ref, current.context, current.metadata) !== true) return null;
+      const revision = options.revisions.conversation(id, current.metadata); return validVersion(revision) ? revision : null;
+    }),
     appendMessage: (id, message) => within(() => { const current = view(); requireConversation(id, current); return options.conversations.append(id, structuredClone(message)); }),
     resolve: (ref, scope,purpose) => within(() => structuredClone(resolve(ref, scope, view(purpose?.restoreCollection===true&&ref.kind==='collection'?[ref.id]:[])))),
     canInspectCollectionArchiveReceipt:(ref,scope)=>within(()=>{
@@ -233,6 +238,9 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
         .sort((a, b) => priority(a) - priority(b) || a.title.localeCompare(b.title) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id)).slice(0, limit).map(ref => structuredClone(ref));
     }),
     readContent: (id, scope) => within(() => structuredClone(readContent(id, scope, view()))),
+    canReadContent: (ref, scope) => within(() => { const current = view(), actual = resolve(ref, scope, current);
+      return !!actual && actual.version === ref.version && options.permissions.content(actual, current.context, current.metadata) === true;
+    }),
     authorize: request => within(() => {
       const current = view(restoringActions(request.actions)); selectedScope(request.scope, current); validateTargets(request.targets, current);
       if (request.contextManifest) {

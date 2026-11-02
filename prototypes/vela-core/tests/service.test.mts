@@ -134,7 +134,7 @@ test('wire-v2 answers, clarifications and inability append one exact canonical a
       assert.equal(request.state, 'responded'); assert.equal(request.planId, undefined); assert.equal(request.response?.kind, kind); assert.equal(p.calls(), 1); assertNoResponseEffects(f);
       const state = f.service.state(), message = state.conversation!.messages.find(m => m.id === request.response!.messageId)!;
       assert.equal(state.conversation!.messages.length, 2); assert.equal(message.content, output.content); assert.equal(message.source, 'provider'); assert.equal(message.providerId, 'synthetic-planner'); assert.equal(message.classification, 'reported'); assert.equal(message.responseKind, kind); assert.deepEqual(message.providerContribution, output.contribution); assert.equal(message.planId, undefined);
-      assert.deepEqual(Object.keys(request.response!).sort(), ['kind', 'messageId'], 'No reply text is copied into request metadata');
+      assert.deepEqual(Object.keys(request.response!).sort(), ['contentDigest', 'kind', 'messageId'], 'No reply text is copied into request metadata');
       const status = velaPanelStatus(state); assert.equal(status.requestState, 'responded'); assert.equal(status.planState, undefined); assert.doesNotMatch(status.message, /applied|complete|success|running|missing/i);
       assert.throws(() => f.service.cancel(request.id), /completed_request_not_cancellable/); assert.throws(() => f.service.review({ planId: request.id, fingerprint: 'none', decision: 'approve' }), /plan_not_found/);
       const reopened = new VelaService({ db: f.db, host: f.host, transaction: f.transaction, planner: p.port });
@@ -153,8 +153,8 @@ test('legacy wire-v1 plans normalize while stored v1 upgrades preserve IDs, cano
     const before = f.service.state(), stored = JSON.parse(String(f.db.prepare('SELECT json FROM vela_state WHERE id=1').get()!.json)); stored.schemaVersion = 1;
     f.db.prepare('UPDATE vela_state SET schema_version=1,json=? WHERE id=1').run(JSON.stringify(stored));
     const reopened = new VelaService({ db: f.db, host: f.host, transaction: f.transaction, planner: p.port });
-    assert.equal(f.db.prepare('SELECT schema_version FROM vela_state WHERE id=1').get()!.schema_version, 2); assert.deepEqual(reopened.state().requests, before.requests); assert.deepEqual(reopened.state().plans, before.plans); assert.deepEqual(reopened.state().conversation, before.conversation); assert.equal(p.calls(), 1);
-    const current = JSON.parse(String(f.db.prepare('SELECT json FROM vela_state WHERE id=1').get()!.json)); current.schemaVersion = 3; f.db.prepare('UPDATE vela_state SET schema_version=3,json=? WHERE id=1').run(JSON.stringify(current));
+    assert.equal(f.db.prepare('SELECT schema_version FROM vela_state WHERE id=1').get()!.schema_version, 3); assert.deepEqual(reopened.state().requests, before.requests); assert.deepEqual(reopened.state().plans, before.plans); assert.deepEqual(reopened.state().conversation, before.conversation); assert.equal(p.calls(), 1);
+    const current = JSON.parse(String(f.db.prepare('SELECT json FROM vela_state WHERE id=1').get()!.json)); current.schemaVersion = 4; f.db.prepare('UPDATE vela_state SET schema_version=4,json=? WHERE id=1').run(JSON.stringify(current));
     assert.throws(() => new VelaService({ db: f.db, host: f.host, transaction: f.transaction }), /unsupported_vela_schema/);
   } finally { f.close(); }
 });
