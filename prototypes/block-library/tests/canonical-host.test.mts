@@ -667,6 +667,169 @@ test("attachment discovers only authorized compatible resources and preserves on
   f.kernel.assertIntegrity();
 });
 
+test("attachment filters narrow the current workspace fence by project and authorized collection without writes", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic filter target"),
+    other = f.kernel.createProject("Synthetic other scope"),
+    workspace = f.engine.createWorkspace(
+      "Synthetic filtered workspace",
+      project.id,
+    ),
+    standalone = f.engine.createWorkspace("Synthetic independent workspace"),
+    note = f.options.createResource(
+      "note",
+      "Synthetic target note",
+      undefined,
+      project.id,
+    ),
+    global = f.options.createResource(
+      "note",
+      "Synthetic unassigned note",
+      undefined,
+      null,
+    ),
+    foreign = f.options.createResource(
+      "note",
+      "Synthetic foreign note",
+      undefined,
+      other.id,
+    ),
+    collection = f.kernel.createCollection(
+      "Synthetic authorized collection",
+      other.id,
+    );
+  f.kernel.addToCollection(collection.id, note);
+  f.kernel.addToCollection(collection.id, global);
+  f.kernel.addToCollection(collection.id, foreign);
+  const before = ["resources", "blocks", "relationships", "workspaces"].map(
+    (table) => count(f.db, table),
+  );
+  const query = { workspaceId: workspace.workspaceId, kind: "note" as const };
+  assert.deepEqual(
+    new Set(
+      f.service.findResources(query).resources.map((resource) => resource.id),
+    ),
+    new Set([note, global]),
+  );
+  assert.deepEqual(
+    f.service
+      .findResources({ ...query, projectScope: "workspace-project" })
+      .resources.map((resource) => resource.id),
+    [note],
+  );
+  assert.deepEqual(
+    f.service
+      .findResources({ ...query, projectScope: "unassigned" })
+      .resources.map((resource) => resource.id),
+    [global],
+  );
+  assert.deepEqual(
+    new Set(
+      f.service
+        .findResources({ ...query, collectionId: collection.id })
+        .resources.map((resource) => resource.id),
+    ),
+    new Set([note, global]),
+    "An accessible foreign collection does not grant attachment of its foreign-owned member",
+  );
+  assert.deepEqual(
+    f.service
+      .findResources({
+        ...query,
+        projectScope: "unassigned",
+        collectionId: collection.id,
+      })
+      .resources.map((resource) => resource.id),
+    [global],
+  );
+  assert.deepEqual(
+    f.service.findResources({
+      ...query,
+      workspaceId: standalone.workspaceId,
+      projectScope: "workspace-project",
+    }).resources,
+    [],
+  );
+  assert.throws(
+    () =>
+      f.service.findResources({
+        ...query,
+        projectScope: "all-projects" as never,
+      }),
+    /invalid_resource_query/,
+  );
+  f.options.capabilities().discoveryFilters = {
+    project: { state: "disabled" },
+    collection: { state: "unsupported" },
+  };
+  assert.throws(
+    () => f.service.findResources({ ...query, projectScope: "unassigned" }),
+    /project_filter_unavailable/,
+  );
+  assert.throws(
+    () => f.host.findResources!({ ...query, projectScope: "unassigned" }),
+    /project_filter_unavailable/,
+  );
+  assert.throws(
+    () => f.service.findResources({ ...query, collectionId: collection.id }),
+    /collection_filter_unavailable/,
+  );
+  assert.equal(
+    f.service.findResources(query).resources.length,
+    2,
+    "Ordinary compatible search still works when filters are disabled",
+  );
+  assert.deepEqual(
+    ["resources", "blocks", "relationships", "workspaces"].map((table) =>
+      count(f.db, table),
+    ),
+    before,
+  );
+});
+
+test("collection discovery rechecks actual grants and archive state on every page without exposing retained members", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic restricted collection project"),
+    workspace = f.engine.createWorkspace("Synthetic restricted picker"),
+    collection = f.kernel.createCollection(
+      "Synthetic private collection",
+      project.id,
+    ),
+    note = f.options.createResource(
+      "note",
+      "Synthetic retained member",
+      undefined,
+      null,
+    );
+  f.kernel.addToCollection(collection.id, note);
+  const query = {
+    workspaceId: workspace.workspaceId,
+    kind: "note" as const,
+    collectionId: collection.id,
+  };
+  assert.equal(f.service.findResources(query).resources[0].id, note);
+  f.revoked.add(collection.id);
+  assert.throws(() => f.service.findResources(query), /subject_unavailable/);
+  assert.throws(
+    () => f.host.findResources!(query),
+    /subject_unavailable/,
+    "Direct adapter calls also retain the subject grant boundary",
+  );
+  f.revoked.delete(collection.id);
+  f.revoked.add(project.id);
+  assert.throws(() => f.service.findResources(query), /subject_unavailable/);
+  f.revoked.delete(project.id);
+  f.kernel.setCollectionArchived(collection.id, true, 1);
+  assert.throws(() => f.service.findResources(query), /subject_unavailable/);
+  assert.throws(
+    () =>
+      f.service.findResources({ ...query, collectionId: "missing:collection" }),
+    /subject_unavailable/,
+  );
+  assert.equal(f.kernel.getResource(note).note.content, "");
+  assert.equal(f.kernel.listCollection(collection.id)[0].id, note);
+});
+
 test("placement settings have independent revisions and never mutate canonical content or geometry", (t) => {
   const f = fixture(t),
     workspace = f.engine.createWorkspace("Synthetic settings workspace", null, {

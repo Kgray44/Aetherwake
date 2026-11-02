@@ -118,7 +118,7 @@ async function until(check: () => boolean) {
     await new Promise((resolve) => setImmediate(resolve));
   assert.ok(check(), "actual component operation settles");
 }
-function fixture(t: any) {
+function fixture(t: any, withProject = false, legacyScopes = false) {
   const globals = globalThis as any,
     previous = { document: globals.document, HTMLElement: globals.HTMLElement };
   documentRoot = new Element("main");
@@ -161,20 +161,38 @@ function fixture(t: any) {
       return resource.id;
     },
     resourceKind: () => "note",
+    authorizeSubject: () => true,
     isAuthorized: () => true,
     navigateWorkspace() {},
     setTaskGroupMembers() {},
   });
   const service = new TemplateService(db, host),
-    workspace = engine.createWorkspace("Synthetic component recovery");
+    project = withProject
+      ? kernel.createProject("Synthetic picker project")
+      : null,
+    workspace = engine.createWorkspace(
+      "Synthetic component recovery",
+      project?.id ?? null,
+    );
   let revision = workspace.revision,
     preferenceReads = 0,
     failPreferences = false;
   const results: any[] = [];
+  let scopeTargetReads = 0;
   const port: BlockLibraryHostPort = {
-    capabilities: async () => service.capabilities(),
+    capabilities: async () => {
+      const value = service.capabilities();
+      if (legacyScopes) delete value.discoveryFilters;
+      return value;
+    },
     createBlock: async (input) => service.createBlock(input),
     configureBlock: async (input) => service.configureBlock(input),
+    findResources: async (input) => service.findResources(input),
+    attachBlock: async (input) => service.attachBlock(input),
+    subjectTargets: async (workspaceId) => {
+      scopeTargetReads++;
+      return service.subjectTargets(workspaceId);
+    },
     preferences: async () => {
       preferenceReads++;
       if (failPreferences && preferenceReads > 1)
@@ -196,6 +214,10 @@ function fixture(t: any) {
     engine,
     service,
     workspace,
+    project,
+    get scopeTargetReads() {
+      return scopeTargetReads;
+    },
     root: documentRoot,
     results,
     setRevision: (value: number) => {
@@ -305,4 +327,176 @@ test("Library does not describe a committed block as failed when the later recen
     f.root.querySelector(".aw-library__status")!.textContent,
     /Block saved.*recent/i,
   );
+});
+
+test("Library scope filters use actual project and collection discovery while retaining form nodes and canonical attachment", async (t) => {
+  const f = fixture(t, true),
+    local = f.kernel.createNote(
+      "Synthetic project note",
+      "Original project content",
+      f.project!.id,
+    ),
+    unassigned = f.kernel.createNote(
+      "Synthetic global note",
+      "Original shared content",
+    ),
+    other = f.kernel.createProject("Synthetic other project"),
+    foreign = f.kernel.createNote(
+      "Synthetic foreign note",
+      "Private foreign content",
+      other.id,
+    ),
+    collection = f.kernel.createCollection(
+      "Synthetic actual collection",
+      other.id,
+    );
+  f.kernel.addToCollection(collection.id, unassigned.id);
+  f.kernel.addToCollection(collection.id, foreign.id);
+  f.mount();
+  const form = await configureNote(f.root),
+    title = field(form, "Title");
+  const attach = f.root
+    .querySelectorAll("details")
+    .find(
+      (details) => details.querySelector("summary")?.text === "Attach Existing",
+    )!;
+  attach.open = true;
+  attach.ontoggle();
+  const resourceIds = () =>
+    attach
+      .querySelectorAll("button")
+      .filter((button) => button.dataset.attachResource)
+      .map((button) => button.dataset.attachResource);
+  await until(() => resourceIds().length === 2);
+  assert.deepEqual(new Set(resourceIds()), new Set([local.id, unassigned.id]));
+  const scopes = attach.querySelector(".aw-library__scope-filters")!;
+  scopes.open = true;
+  scopes.ontoggle();
+  const project = field(scopes, "Project"),
+    collectionSelect = field(scopes, "Collection");
+  await until(() => !collectionSelect.disabled);
+  assert.ok(
+    collectionSelect.children.some(
+      (option) =>
+        option.value === collection.id && option.text === collection.title,
+    ),
+  );
+  project.value = "workspace-project";
+  project.onchange();
+  await until(() => resourceIds().length === 1);
+  assert.deepEqual(resourceIds(), [local.id]);
+  project.value = "unassigned";
+  project.onchange();
+  await until(() => resourceIds().length === 1);
+  assert.deepEqual(resourceIds(), [unassigned.id]);
+  collectionSelect.value = collection.id;
+  collectionSelect.onchange();
+  await until(() => resourceIds().length === 1);
+  assert.deepEqual(
+    resourceIds(),
+    [unassigned.id],
+    "Collection membership cannot expand target project scope",
+  );
+  assert.equal(f.root.querySelector("form"), form);
+  assert.equal(field(form, "Title"), title);
+  assert.equal(title.value, "Synthetic recovery title");
+  assert.equal(field(form, "Text scale").value, "1.5");
+  attach
+    .querySelectorAll("button")
+    .find((button) => button.dataset.attachResource === unassigned.id)!
+    .onclick();
+  await until(() => f.results.length === 1);
+  assert.equal(f.results[0].resourceId, unassigned.id);
+  assert.equal(
+    f.kernel.getResource(unassigned.id).note.content,
+    "Original shared content",
+  );
+  assert.equal(
+    f.kernel.getResource(foreign.id).note.content,
+    "Private foreign content",
+  );
+  assert.equal(
+    f.engine.project(f.workspace.workspaceId).blocks[0].resourceId,
+    unassigned.id,
+  );
+});
+
+test("Library clears stale attachment actions when its selected collection becomes unavailable", async (t) => {
+  const f = fixture(t),
+    note = f.kernel.createNote(
+      "Synthetic retained note",
+      "Retained after denial",
+    ),
+    collection = f.kernel.createCollection("Synthetic disappearing scope");
+  f.kernel.addToCollection(collection.id, note.id);
+  f.mount();
+  const form = await configureNote(f.root);
+  const attach = f.root
+    .querySelectorAll("details")
+    .find(
+      (details) => details.querySelector("summary")?.text === "Attach Existing",
+    )!;
+  attach.open = true;
+  attach.ontoggle();
+  const scopes = attach.querySelector(".aw-library__scope-filters")!;
+  scopes.open = true;
+  scopes.ontoggle();
+  const collectionSelect = field(scopes, "Collection");
+  await until(() => !collectionSelect.disabled);
+  collectionSelect.value = collection.id;
+  collectionSelect.onchange();
+  await until(() =>
+    attach
+      .querySelectorAll("button")
+      .some((button) => button.dataset.attachResource === note.id),
+  );
+  f.kernel.setCollectionArchived(collection.id, true, 1);
+  attach.querySelector("input")!.oninput();
+  await until(() => attach.textContent.includes("subject unavailable"));
+  assert.equal(
+    attach
+      .querySelectorAll("button")
+      .some((button) => button.dataset.attachResource),
+    false,
+  );
+  assert.equal(f.root.querySelector("form"), form);
+  assert.equal(f.results.length, 0);
+  assert.equal(
+    f.kernel.getResource(note.id).note.content,
+    "Retained after denial",
+  );
+});
+
+test("older hosts retain compatible attachment without inferring unadvertised scope filtering", async (t) => {
+  const f = fixture(t, false, true),
+    note = f.kernel.createNote(
+      "Synthetic legacy compatible note",
+      "Retained legacy content",
+    );
+  f.mount();
+  await configureNote(f.root);
+  const attach = f.root
+    .querySelectorAll("details")
+    .find(
+      (details) => details.querySelector("summary")?.text === "Attach Existing",
+    )!;
+  attach.open = true;
+  attach.ontoggle();
+  await until(() =>
+    attach
+      .querySelectorAll("button")
+      .some((button) => button.dataset.attachResource === note.id),
+  );
+  const scopes = attach.querySelector(".aw-library__scope-filters")!;
+  scopes.open = true;
+  scopes.ontoggle();
+  assert.equal(field(scopes, "Project").disabled, true);
+  assert.equal(field(scopes, "Collection").disabled, true);
+  assert.match(scopes.textContent, /filtering is unavailable/);
+  assert.equal(
+    f.scopeTargetReads,
+    0,
+    "Method existence alone does not imply filtering capability",
+  );
+  assert.equal(f.engine.project(f.workspace.workspaceId).blocks.length, 0);
 });

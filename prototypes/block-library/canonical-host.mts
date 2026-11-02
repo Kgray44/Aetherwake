@@ -144,10 +144,27 @@ export function createCanonicalTemplateHost(
     expectedRevision: state.revision,
     ...(options.bounds ? { bounds: options.bounds(state.workspaceId) } : {}),
   });
+  const capabilities = (): LibraryCapabilities => {
+    const snapshot = structuredClone(options.capabilities());
+    return {
+      ...snapshot,
+      discoveryFilters: {
+        project: snapshot.discoveryFilters?.project ?? { state: "available" },
+        collection:
+          snapshot.discoveryFilters?.collection ??
+          (options.authorizeSubject
+            ? { state: "available" }
+            : {
+                state: "unsupported",
+                reason: "Collection authorization is unavailable.",
+              }),
+      },
+    };
+  };
   return {
     db,
     atomic: <T,>(operation: () => T) => options.atomic(operation),
-    capabilities: () => structuredClone(options.capabilities()),
+    capabilities,
     readProject,
     readResource,
     readWorkspace,
@@ -271,12 +288,63 @@ export function createCanonicalTemplateHost(
           .toLocaleLowerCase()
           .split(/\s+/)
           .filter(Boolean);
+      check(
+        [undefined, "compatible", "workspace-project", "unassigned"].includes(
+          input.projectScope,
+        ),
+        "invalid_resource_query",
+      );
+      if (input.projectScope && input.projectScope !== "compatible")
+        check(
+          capabilities().discoveryFilters?.project?.state === "available",
+          "project_filter_unavailable",
+        );
+      const predicates = [
+          "r.id>?",
+          "r.state='active'",
+          "coalesce(d.kind,r.kind)=?",
+          "(r.project_id IS NULL OR r.project_id=?)",
+        ],
+        parameters: (string | null)[] = [
+          input.afterId ?? "",
+          input.kind,
+          workspace.projectId,
+        ];
+      if (input.projectScope === "workspace-project") {
+        // An independent workspace has no project-owned candidates.
+        predicates.push("r.project_id=?");
+        parameters.push(workspace.projectId);
+      } else if (input.projectScope === "unassigned")
+        predicates.push("r.project_id IS NULL");
+      if (input.collectionId !== undefined) {
+        check(
+          capabilities().discoveryFilters?.collection?.state === "available",
+          "collection_filter_unavailable",
+        );
+        const collectionId = identifier(input.collectionId),
+          subject = { kind: "collection" as const, collectionId },
+          collection = db
+            .prepare("SELECT project_id,state FROM collections WHERE id=?")
+            .get(collectionId);
+        check(
+          collection?.state === "active" &&
+            projectVisible(collection.project_id as string | null) &&
+            options.authorizeSubject?.(subject) === true,
+          "subject_unavailable",
+        );
+        predicates.push(
+          "EXISTS(SELECT 1 FROM collection_members m WHERE m.collection_id=? AND m.resource_id=r.id)",
+        );
+        parameters.push(collectionId);
+      }
       // Bounded keyset pages. Authorization is checked before exposing any title or identity.
       const rows = db
         .prepare(
-          "SELECT r.id,r.title FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id>? AND r.state='active' AND coalesce(d.kind,r.kind)=? AND (r.project_id IS NULL OR r.project_id=?) ORDER BY r.id LIMIT 256",
+          "SELECT r.id,r.title FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE " +
+            predicates.join(" AND ") +
+            " ORDER BY r.id LIMIT 256",
         )
-        .all(input.afterId ?? "", input.kind, workspace.projectId);
+        .all(...parameters);
       const resources = [];
       let scanned = input.afterId ?? "",
         consumed = 0;

@@ -19,6 +19,7 @@ import type {
   CreatedSubjectBlock,
   SubjectTargets,
   LibraryRecommendationContext,
+  ResourceDiscoveryInput,
 } from "./contracts.ts";
 import {
   searchBlocks,
@@ -432,6 +433,10 @@ export function mountBlockLibrary(
     const attach = node("details"),
       attachHeading = node("summary", "", "Attach Existing"),
       resourceSearch = node("input"),
+      scopeFilters = node("details", "aw-library__scope-filters"),
+      projectScope = node("select"),
+      collectionScope = node("select"),
+      scopeStatus = node("p", "aw-library__hint"),
       resourceList = node("div", "aw-library__resources"),
       more = button("Load more resources", () => {
         void loadResources(true);
@@ -443,6 +448,76 @@ export function mountBlockLibrary(
       "Search existing " + definition.title + " resources",
     );
     more.hidden = true;
+    projectScope.setAttribute(
+      "aria-label",
+      "Filter compatible resources by project",
+    );
+    collectionScope.setAttribute(
+      "aria-label",
+      "Filter compatible resources by collection",
+    );
+    for (const [value, title] of [
+      ["compatible", "All compatible resources"],
+      ["workspace-project", "Workspace project only"],
+      ["unassigned", "Unassigned resources only"],
+    ]) {
+      const option = node("option", "", title);
+      option.value = value;
+      projectScope.append(option);
+    }
+    projectScope.value = "compatible";
+    projectScope.disabled =
+      capabilities?.discoveryFilters?.project?.state !== "available";
+    const allCollections = node("option", "", "All resources");
+    allCollections.value = "";
+    collectionScope.append(allCollections);
+    collectionScope.value = "";
+    collectionScope.disabled = true;
+    scopeStatus.setAttribute("role", "status");
+    scopeFilters.append(
+      node("summary", "", "Filter resources"),
+      field("Project", projectScope),
+      field("Collection", collectionScope),
+      scopeStatus,
+    );
+    let scopeTargetsLoading = false,
+      scopeTargetsLoaded = false;
+    const loadScopeTargets = async () => {
+      if (scopeTargetsLoaded || scopeTargetsLoading) return;
+      if (
+        !port.subjectTargets ||
+        capabilities?.discoveryFilters?.collection?.state !== "available"
+      ) {
+        scopeStatus.textContent =
+          "Collection filtering is unavailable in this host. Compatible search remains available.";
+        return;
+      }
+      scopeTargetsLoading = true;
+      scopeStatus.textContent = "Loading accessible collections…";
+      try {
+        const targets = await port.subjectTargets(options.workspaceId);
+        if (ui.disposed || generation !== detailSequence) return;
+        for (const collection of targets.collections) {
+          const option = node("option", "", collection.title);
+          option.value = collection.id;
+          collectionScope.append(option);
+        }
+        collectionScope.disabled = false;
+        scopeTargetsLoaded = true;
+        scopeStatus.textContent = targets.truncated
+          ? "The collection list is bounded; additional collections may be omitted."
+          : "Filters narrow the resources compatible with this workspace.";
+      } catch {
+        if (!ui.disposed && generation === detailSequence)
+          scopeStatus.textContent =
+            "Could not load collections. Reopen these filters to retry; compatible search remains available.";
+      } finally {
+        scopeTargetsLoading = false;
+      }
+    };
+    scopeFilters.ontoggle = () => {
+      if (scopeFilters.open) void loadScopeTargets();
+    };
     let cursor: string | null = null,
       querySequence = 0;
     const queried = node("p", "aw-library__hint");
@@ -450,11 +525,25 @@ export function mountBlockLibrary(
       if (!port.findResources || !port.attachBlock) return;
       const request = ++querySequence;
       queried.textContent = "Finding authorized resources…";
+      if (!append) {
+        resourceList.replaceChildren();
+        cursor = null;
+        more.hidden = true;
+      }
       try {
         const page = await port.findResources({
           workspaceId: options.workspaceId,
           kind,
           query: resourceSearch.value,
+          ...(projectScope.value !== "compatible"
+            ? {
+                projectScope:
+                  projectScope.value as ResourceDiscoveryInput["projectScope"],
+              }
+            : {}),
+          ...(collectionScope.value
+            ? { collectionId: collectionScope.value }
+            : {}),
           ...(append && cursor ? { afterId: cursor } : {}),
         });
         if (
@@ -502,17 +591,24 @@ export function mountBlockLibrary(
           !ui.disposed &&
           generation === detailSequence &&
           request === querySequence
-        )
+        ) {
+          resourceList.replaceChildren();
+          cursor = null;
+          more.hidden = true;
           queried.textContent = errorText(error);
+        }
       }
     }
     attach.append(attachHeading);
     if (port.findResources && port.attachBlock) {
-      attach.append(resourceSearch, queried, resourceList, more);
+      attach.append(resourceSearch, scopeFilters, queried, resourceList, more);
       attach.ontoggle = () => {
         if (attach.open) void loadResources();
       };
       resourceSearch.oninput = () => {
+        void loadResources();
+      };
+      projectScope.onchange = collectionScope.onchange = () => {
         void loadResources();
       };
     } else

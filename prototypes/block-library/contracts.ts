@@ -30,6 +30,7 @@ export type LibraryCapabilities = {
   providers: Partial<Record<"local" | "codex", Availability>>;
   velaPlanning: Availability;
   subjects?: Partial<Record<SubjectBlockKind, Availability>>;
+  discoveryFilters?: { project?: Availability; collection?: Availability };
 };
 export type BlockCategory =
   | "conversation"
@@ -86,6 +87,9 @@ export type ResourceDiscoveryInput = {
   workspaceId: string;
   kind: BlockKind;
   query?: string;
+  /** Narrows the existing workspace attachment fence; never grants another project. */
+  projectScope?: "compatible" | "workspace-project" | "unassigned";
+  collectionId?: string;
   afterId?: string;
   limit?: number;
 };

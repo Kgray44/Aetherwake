@@ -720,12 +720,29 @@ export class TemplateService {
     check(
       input &&
         Object.keys(input).every((k) =>
-          ["workspaceId", "kind", "query", "afterId", "limit"].includes(k),
+          [
+            "workspaceId",
+            "kind",
+            "query",
+            "projectScope",
+            "collectionId",
+            "afterId",
+            "limit",
+          ].includes(k),
         ),
       "invalid_resource_query",
     );
     identifier(input.workspaceId);
     blockDefinition(input.kind);
+    check(
+      [undefined, "compatible", "workspace-project", "unassigned"].includes(
+        input.projectScope,
+      ),
+      "invalid_resource_query",
+    );
+    if (input.collectionId !== undefined) {
+      identifier(input.collectionId);
+    }
     check(
       typeof (input.query ?? "") === "string" &&
         (input.query?.length ?? 0) <= 500 &&
@@ -740,6 +757,21 @@ export class TemplateService {
       workspace?.authorized && workspace.state === "active",
       "workspace_unavailable",
     );
+    if (input.projectScope && input.projectScope !== "compatible")
+      check(
+        this.capabilities().discoveryFilters?.project?.state === "available",
+        "project_filter_unavailable",
+      );
+    if (input.collectionId !== undefined) {
+      check(
+        this.capabilities().discoveryFilters?.collection?.state === "available",
+        "collection_filter_unavailable",
+      );
+      this.availableSubject({
+        kind: "collection",
+        collectionId: input.collectionId,
+      });
+    }
     check(this.host.findResources, "resource_discovery_unavailable");
     return this.host.findResources(input);
   }
