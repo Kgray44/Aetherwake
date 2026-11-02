@@ -3,6 +3,17 @@ import type { Conversation, ProviderAdapter, ProviderSnapshot, SessionRequest } 
 function capability(supported: boolean) {
   return { supported, authorized: supported, availability: supported ? 'available' as const : 'unsupported' as const };
 }
+/** Durable ordinary conversation recording. It has no model or generated reply. */
+export function localConversationAdapter(): ProviderAdapter {
+  return {
+    snapshot: {
+      id: 'local', label: 'Local conversation · no model response', version: '1',
+      mock: false, availability: 'available', chat: capability(true), nativeFork: capability(false),
+      models: [], usage: 'unknown', observedAt: new Date().toISOString(),
+    },
+    open() { return { providerSessionId: null }; },
+  };
+}
 export function mockOrdinaryAdapter(): ProviderAdapter {
   const snapshot: ProviderSnapshot = {
     id: 'mock-ordinary', label: 'Deterministic ordinary chat (MOCK)', version: '1',

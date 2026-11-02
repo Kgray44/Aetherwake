@@ -66,13 +66,13 @@ export interface CommandMap {
   selectProvider: { input: { resourceId: string; providerId: string; expectedRevision: number }; output: ConversationView };
   applyOrdinary: { input: { handoffId: string; prompt: string; commandId: string }; output: Message & { resourceId: string; classification: 'simulated' } };
   createConversation: { input: { title: string; providerId?: string; commandId: string }; output: ConversationView };
-  addMessage: { input: { resourceId: string; role: 'user' | 'assistant'; content: string; sensitivity?: Sensitivity; expectedRevision: number }; output: Message & { resourceId: string; revision: number } };
+  addMessage: { input: { resourceId: string; role: 'user' | 'assistant'; content: string; sensitivity?: Sensitivity; expectedRevision: number; commandId?: string }; output: Message & { resourceId: string; revision: number } };
   workspace: { input: { title: string; projectTitle?: string }; output: WorkspaceView };
   place: { input: { workspaceId: string; resourceId: string }; output: BlockView };
   move: { input: { blockId: string; workspaceId: string; expectedVersion: number }; output: BlockView };
   branch: { input: { resourceId: string; messageId: string; includeMessageIds: string[]; providerId: string; title: string; commandId: string; tokenBudget: number; workspaceId?: string; bounds?: {x:number;y:number;width:number;height:number} }; output: { conversation: ConversationView; handoff: HandoffReview; context: ContextPackage; mode: 'application_continuation' } };
   review: { input: { handoffId: string; fingerprint: string; approve: boolean }; output: HandoffReview };
-  execute: { input: { resourceId: string; handoffId?: string; prompt: string; commandId: string; model?: string; authorized: boolean }; output: Execution };
+  execute: { input: { resourceId: string; handoffId?: string; prompt: string; commandId: string; model?: string; authorized: boolean; expectedRevision?: number }; output: Execution };
   reconcile: { input: { resourceId: string }; output: { resourceId: string; providerThreadAvailable: boolean; executionOutcome: 'unchanged'; nativeStatus?: string; syntheticTurnReceipt?: { completePage: boolean; exactMarker: boolean; itemTypes: string[] } } };
   interrupt: { input: { executionId: string }; output: { requested: true; confirmed: false } };
   capabilities: { input: Record<string, never>; output: Capability };
@@ -80,7 +80,7 @@ export interface CommandMap {
   replay: { input: { after?: number; limit?: number }; output: { events: StreamEvent[]; earliest: number | null; latest: number; truncated: boolean } };
   close: { input: Record<string, never>; output: null };
 }
-export interface ConversationView { resourceId: string; revision: number; title: string; providerId: string; kind: 'ordinary' | 'codex'; taskId: null; projectId: null }
+export interface ConversationView { resourceId: string; revision: number; title: string; providerId: string; kind: 'ordinary' | 'codex'; taskId: null; projectId: string | null }
 export interface WorkspaceView { id: string; project_id: string | null; title: string; version: number; state: string; created_at: string; updated_at: string }
 export interface BlockView { id: string; resource_id: string; workspace_id: string; version: number; x: number; y: number; z: number; width: number; height: number }
 export interface Snapshot {

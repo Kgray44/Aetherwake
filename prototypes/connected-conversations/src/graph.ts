@@ -133,6 +133,12 @@ export class ConversationGraph {
     this.remember(key, id);
     return copy(c);
   }
+  renameConversation(conversationId: string, title: string): Conversation {
+    assert(typeof title === 'string' && title.trim().length > 0 && title.length <= 200, 'invalid conversation title');
+    const conversation = this.conversation(conversationId);
+    conversation.title = title.trim();
+    return copy(conversation);
+  }
   addMessage(conversationId: string, role: Role, content: string,
     options: { key?: string; provenance?: Provenance; referenceIds?: string[]; constraint?: boolean; sensitivity?: Sensitivity; providerTurnId?: string } = {}): Message {
     const previous = this.once(options.key);
