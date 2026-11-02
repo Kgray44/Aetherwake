@@ -26,9 +26,10 @@ function observe(id,after=-1,atRest=false){
 }
 const body=fn=>fn.toString();
 const expressions={...common,
+  viewport:()=>`({width:innerWidth,height:innerHeight})`,
   glide:(id,after=-1,rest=false)=>`(${body(observe)})(${q(id)},${q(after)},${q(rest)})`,
   glideReady:(id,after=-1,rest=false)=>`(${expressions.glide(id,after,rest)}).ready`,
   glideConverged:id=>`(()=>{const f=${expressions.glide(id)};return f.ready&&f.lag<=0.15})()`,
 };
 exports.expressions=expressions;
-exports.preflight=()=>{const inherited=commonPreflight(),cases=[expressions.glide('quote"\n'),expressions.glideReady('quote"\n',8,false),expressions.glideReady('quote"\n',8,true),expressions.glideConverged('quote"\n')];for(const code of cases)compileExpression(code);return {factories:4,cases:cases.length,sha256:createHash('sha256').update(inherited.sha256+cases.join('\n')).digest('hex')};};
+exports.preflight=()=>{const inherited=commonPreflight(),cases=[expressions.viewport(),expressions.glide('quote"\n'),expressions.glideReady('quote"\n',8,false),expressions.glideReady('quote"\n',8,true),expressions.glideConverged('quote"\n')];for(const code of cases)compileExpression(code);return {factories:5,cases:cases.length,sha256:createHash('sha256').update(inherited.sha256+cases.join('\n')).digest('hex')};};

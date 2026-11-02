@@ -22,12 +22,12 @@ export async function prepareDragGlide(profile: string) {
     let desktop = await core.command('desktop',{type:'snapshot'});
     const note = desktop.resources.find(value => value.kind === 'note')!;
     const movingBlockId = desktop.blocks.find(value => value.resource_id === note.id)!.id;
-    for (const [kind,x,y,width,height] of [['note',128,272,420,360],['conversation',700,250,360,420],['task',1100,320,320,260]] as const) {
+    for (const [kind,x,y,width,height] of [['note',128,272,420,360],['conversation',700,250,360,420],['task',1100,480,320,260]] as const) {
       const resource = desktop.resources.find(value => value.kind === kind)!;
       const block = desktop.blocks.find(value => value.resource_id === resource.id)!;
       desktop = await core.command('desktop',{type:'geometry',blockId:block.id,expectedVersion:block.version,shape:'rounded',rotation:0,placement:{x,y,width,height,z:block.z}});
     }
-    desktop = await core.command('desktop',{type:'setPresence',workspaceId:initial.workspaceId,expectedVersion:desktop.presence!.version,placement:{x:1505,y:150}});
+    desktop = await core.command('desktop',{type:'setPresence',workspaceId:initial.workspaceId,expectedVersion:desktop.presence!.version,placement:{x:1340,y:170}});
     desktop = await core.command('desktop',{type:'setViewport',workspaceId:initial.workspaceId,viewport:{x:0,y:0,zoom:1}});
     const settings = (await core.command('library',{name:'getBlockSettings',input:movingBlockId})).result as BlockInstanceSettings;
     await core.command('library',{name:'configureBlock',input:{placementId:movingBlockId,expectedVersion:settings.version,configuration:{schemaVersion:1,textScale:1,contentMode:'auto'}}});
@@ -36,12 +36,14 @@ export async function prepareDragGlide(profile: string) {
     const document = (await core.command('notes',{name:'readNote',input:note.id})).result as NoteDocument;
     assert(document.draft && document.draft.content !== document.resource.content);
     desktop = await core.command('desktop',{type:'snapshot'});
+    const bounds = {x:20,y:170,width:1560,height:680};
+    for (const item of [...desktop.blocks,desktop.presence!]) assert(item.x>=bounds.x && item.y>=bounds.y && item.x+item.width<=bounds.x+bounds.width && item.y+item.height<=bounds.y+bounds.height,'Known fixture must fit the real1600x1000 application work area');
     const configurations = Object.fromEntries(await Promise.all(desktop.blocks.map(async block => [block.id,(await core.command('library',{name:'getBlockSettings',input:block.id})).result])));
     assert.equal(Object.keys((await core.command('snapshot',{})).executions).length,0);
     const hashes = Object.fromEntries(['prototypes/block-library/prepare-drag-glide-native.mts','prototypes/block-library/prepare-native-scale.mts','prototypes/block-library/direct-manipulation.ts','prototypes/block-library/service.mts','prototypes/integrated-backend/src/core.mts','prototypes/workspace-engine/engine.mts','prototypes/workspace-engine/organization.mts','prototypes/workspace-engine/structured-grid.mts'].map(name => [name,digest(readFileSync(join(root,name)))]));
     const validation = { preflightSha256:require('./tests/drag-glide-expressions.cjs').preflight().sha256,
-      ...Object.fromEntries(['drag-glide-native.cjs','drag-glide-expressions.cjs','workspace-approach-expressions.cjs','library-native.cjs','native-console.cjs'].map(name => [name,digest(readFileSync(join(root,'prototypes/block-library/tests',name)))])) };
-    const seed = {contract:'aerynth.drag-glide-seed@1',syntheticOnly:true,workspaceId:initial.workspaceId,movingBlockId,document,configurations,expected:desktop,hashes,validation,delta:{x:96,y:48},preparation:'Actual Core/library/engine; no native content creation or provider operation'};
+      ...Object.fromEntries(['drag-glide-native.cjs','drag-glide-expressions.cjs','workspace-approach-expressions.cjs','library-native-expressions.cjs','library-native.cjs','native-console.cjs'].map(name => [name,digest(readFileSync(join(root,'prototypes/block-library/tests',name)))])) };
+    const seed = {contract:'aerynth.drag-glide-seed@1',syntheticOnly:true,workspaceId:initial.workspaceId,movingBlockId,document,configurations,expected:desktop,hashes,validation,bounds,minimumViewport:{width:1600,height:1000},delta:{x:96,y:48},preparation:'Actual Core/library/engine; no native content creation or provider operation'};
     const bytes = Buffer.from(JSON.stringify(seed)); assert(bytes.length <= 262144); assert(statSync(path).size < 32*1024*1024);
     await core.command('close',{});
     assert(statSync(path).size < 32*1024*1024);
