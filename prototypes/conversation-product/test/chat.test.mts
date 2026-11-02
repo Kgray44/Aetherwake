@@ -28,6 +28,28 @@ function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativ
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
 
+test('linked checklist is an explicit contextual single-flight action for the current canonical conversation without replacing its editor',async()=>{
+ const f=fixture();let manager,finish!:()=>void;const created:string[]=[];
+ try{manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId,onCreateChecklist:id=>{created.push(id);return new Promise<void>(resolve=>{finish=resolve;});}});await manager.ready;
+  const editor=f.view.root.querySelector('textarea'),messages=f.view.root.querySelector('.cp-messages');editor.value='Exact unsent checklist-adjacent draft';editor.fire('input');editor.focus();editor.setSelectionRange(3,9);messages.scrollTop=17;await manager.flush();const draft=f.draft,before=f.calls.length;
+  const options=f.view.root.querySelector('.cp-chat-options');assert.equal(options.open,false);assert.equal(created.length,0);options.open=true;options.fire('toggle');const create=named(options,'Create linked checklist');assert.equal(create.dataset.cpControl,'action');assert.equal(create.dataset.aerynthMotionControl,'true');create.fire('click');create.fire('click');assert.deepEqual(created,[f.detail.conversation.resourceId]);assert.notEqual(created[0],f.detail.conversation.conversationId);assert.equal(create.disabled,true);
+  assert.equal(f.view.root.querySelector('textarea'),editor);assert.equal(f.view.doc.activeElement,editor);assert.equal(editor.selectionStart,3);assert.equal(editor.selectionEnd,9);assert.equal(messages.scrollTop,17);assert.deepEqual(f.draft,draft);assert.equal(f.calls.length,before,'Creation delegates only to the supplied creator, with no product command or refresh');
+  await manager.refresh();const replacement=named(f.view.root.querySelector('.cp-chat-options'),'Create linked checklist');assert.equal(replacement.disabled,true);replacement.fire('click');assert.equal(created.length,1);finish();await until(()=>!replacement.disabled);assert.equal(f.view.root.querySelector('textarea'),editor);assert.deepEqual(f.draft,draft);assert.equal(f.calls.slice(before).some(c=>['create','organize','send','branch'].includes(c.name)),false);
+ }finally{finish?.();await manager?.dispose();f.restore();}
+});
+
+test('linked checklist is omitted when the host has no creator or no conversation is selected',async()=>{
+ const f=fixture();let manager;
+ try{manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;assert.equal(f.view.root.querySelectorAll('button').some((node:any)=>node.textContent==='Create linked checklist'),false);await manager.dispose();manager=mountConversationManager(f.view.root,f.port,{onCreateChecklist:()=>{throw new Error('must not run');}});await manager.ready;assert.equal(f.view.root.querySelectorAll('button').some((node:any)=>node.textContent==='Create linked checklist'),false);
+ }finally{await manager?.dispose();f.restore();}
+});
+
+test('linked checklist rejection reports an honest failure without retrying or changing the current draft and view',async()=>{
+ const f=fixture();let manager,calls=0;
+ try{manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId,onCreateChecklist:async()=>{calls++;throw new Error('synthetic_creator_denied');}});await manager.ready;const editor=f.view.root.querySelector('textarea'),draft=f.draft,before=f.calls.length,create=named(f.view.root.querySelector('.cp-chat-options'),'Create linked checklist');create.fire('click');await until(()=>f.view.root.querySelector('.cp-status').textContent.includes('synthetic_creator_denied'));assert.equal(calls,1);assert.equal(create.disabled,false);assert.equal(f.view.root.querySelector('.cp-status').textContent,'Could not create linked checklist: synthetic_creator_denied');assert.equal(f.view.root.querySelector('textarea'),editor);assert.deepEqual(f.draft,draft);assert.equal(manager.state.selectedResourceId,f.draft.resourceId);assert.equal(f.calls.length,before);
+ }finally{await manager?.dispose();f.restore();}
+});
+
 test('manager honors a ready ordinary default until explicit provider choice and preserves unavailable choice without sending',async()=>{
  const f=fixture(),plan={id:'chatgpt-plan-responses',label:'ChatGPT plan · local history',available:true,record:true,execute:true,nativeFork:false,history:'local' as const,simulated:false,models:['synthetic-model'],default:true};f.detail.providers.push(plan);let manager;
  try{manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;const editor=f.view.root.querySelector('textarea'),picker=f.view.root.querySelector('select[aria-label="New conversation provider"]');assert.equal(picker.value,plan.id);
