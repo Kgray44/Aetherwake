@@ -23,8 +23,9 @@ exports.loadPreparedWorkspaces = async (privateRoot, source, actual) => {
   const raw = await fs.readFile(file, "utf8"), manifest = JSON.parse(raw);
   assert.equal(manifest.schema, "aerynth.expanded-setup@1");
   assert.equal(manifest.syntheticData, true);
-  assert.equal(await fs.realpath(manifest.profile), await fs.realpath(privateRoot));
-  assert.equal(path.resolve(manifest.database), path.join(await fs.realpath(privateRoot), "aerynth.sqlite"));
+  const physicalProfile = await fs.realpath(privateRoot);
+  assert.equal(await fs.realpath(manifest.profile), physicalProfile);
+  assert.equal(await fs.realpath(manifest.database), path.join(physicalProfile, "aerynth.sqlite"), "prepared database stays physically inside its profile");
   assert.deepEqual(Object.keys(manifest.sourceHashes).sort(), [...canonicalPaths].sort());
   for (const [file, hash] of Object.entries(manifest.sourceHashes))
     assert.equal(source.hashes[file], hash, "prepared canonical source: " + file);

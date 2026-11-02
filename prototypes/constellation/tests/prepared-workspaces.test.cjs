@@ -41,6 +41,7 @@ async function fixture(t) {
   const manifest = { schema: "aerynth.expanded-setup@1", syntheticData: true, profile: await fs.realpath(profile), database: path.join(await fs.realpath(profile), "aerynth.sqlite"), sourceHashes,
     projects: snapshot.projects.map((p) => p.id), workspaces: snapshot.workspaces.map((w) => w.id), records, taskGroups, snapshot, preparation: {} };
   const save = () => fs.writeFile(path.join(profile, "expanded-setup.json"), JSON.stringify(manifest));
+  await fs.writeFile(manifest.database, "Synthetic path-identity test placeholder");
   await save();
   return { profile, manifest, snapshot: structuredClone(snapshot), source: { hashes: { ...sourceHashes } }, save };
 }
@@ -71,4 +72,29 @@ test("prepared validation rejects incorrect task-member and block identity mappi
   f.manifest.records[0].items.note.blockId = f.manifest.records[0].items.reference.blockId;
   await f.save();
   await assert.rejects(loadPreparedWorkspaces(f.profile, f.source, f.snapshot));
+});
+
+test("equivalent junction profiles resolve to the same physically contained database", async (t) => {
+  const f = await fixture(t), alias = f.profile + "-alias";
+  try {
+    await fs.symlink(f.profile, alias, "junction");
+  } catch (error) {
+    if (["EPERM", "EACCES", "ENOTSUP"].includes(error.code)) {
+      t.skip("Host does not permit directory junction creation"); return;
+    }
+    throw error;
+  }
+  t.after(() => fs.unlink(alias));
+  f.manifest.profile = alias;
+  f.manifest.database = path.join(alias, "aerynth.sqlite");
+  await f.save();
+  const result = await loadPreparedWorkspaces(alias, f.source, f.snapshot);
+  assert.equal(result.records.length, 6);
+});
+
+test("a database outside the physical profile is rejected even with equivalent fixture contents", async (t) => {
+  const f = await fixture(t), other = await fixture(t);
+  f.manifest.database = other.manifest.database;
+  await f.save();
+  await assert.rejects(loadPreparedWorkspaces(f.profile, f.source, f.snapshot), /physically inside its profile/);
 });
