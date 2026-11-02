@@ -191,6 +191,8 @@ test("normal project keeps workspace navigation and secondary disclosures stable
   const row = view.root.querySelector("[data-workspace-id]"),
     button = row.querySelector("button"),
     more = view.root.querySelector(".aw-project-details");
+  const metrics = view.root.querySelector(".aw-project-metrics");
+  assert.deepEqual(metrics.querySelectorAll("dd").map((node: any) => node.textContent), ["1", "3+"], "Resource count remains visibly bounded");
   more.open = true;
   button.focus();
   overview.tasks.open = 5;
@@ -201,6 +203,7 @@ test("normal project keeps workspace navigation and secondary disclosures stable
   assert.equal(view.root.querySelector(".aw-project-details"), more);
   assert.equal(more.open, true);
   assert.equal(view.doc.activeElement, button);
+  assert.equal(view.root.querySelector(".aw-project-metrics"), metrics, "Canonical refresh keeps the metric nodes and workspace navigation mounted");
   assert.match(
     view.root.querySelector(".aw-project-summary").textContent,
     /5 open · 1 done · partial counts/,

@@ -219,6 +219,10 @@ test("normal stream exposes search and real metadata details while preserving fo
   assert.equal(view.doc.activeElement, query);
   assert.deepEqual([query.selectionStart, query.selectionEnd], [2, 6]);
   assert.match(row.textContent, /simulated/);
+  assert.equal(row.querySelector(".aw-event-time").getAttribute("datetime"), "2026-11-01T12:00:00.000Z");
+  assert.equal(row.querySelector(".aw-event-type").textContent, "turn.completed");
+  assert.equal(row.querySelector(".aw-event-evidence").textContent, "simulated");
+  assert.match(row.querySelector("summary").getAttribute("aria-label"), /received 2026-11-01T12:00:00.000Z/);
   open.onclick();
   assert.deepEqual(opened, ["resource-b"]);
   assert.equal(view.root.querySelector(".aw-event-advanced").open, false);

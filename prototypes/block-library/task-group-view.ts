@@ -30,6 +30,7 @@ export function mountTaskGroupExperience(
 ) {
   const section = node("section", "", "aw-task-group"),
     summary = node("p", "", "aw-task-group-summary"),
+    completion = node("meter", "", "aw-task-group-completion"),
     tools = node("div", "", "aw-task-group-tools"),
     search = node("input"),
     filter = node("select"),
@@ -39,6 +40,8 @@ export function mountTaskGroupExperience(
   section.setAttribute("aria-label", "Task group checklist");
   section.dataset.presentation = options.presentation ?? "focused";
   section.dataset.noCardDrag = "true";
+  completion.min = 0;
+  completion.setAttribute("aria-label", "Completed tasks in this group");
   search.type = "search";
   search.maxLength = 500;
   search.placeholder = "Find a task";
@@ -58,7 +61,7 @@ export function mountTaskGroupExperience(
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
   tools.append(search, filter);
-  section.append(summary, tools, list, manage, status);
+  section.append(summary, completion, tools, list, manage, status);
   root.append(section);
   let latest = options.members,
     active = options.active ?? true,
@@ -110,6 +113,11 @@ export function mountTaskGroupExperience(
       " of " +
       latest.length +
       " done";
+    const completed = latest.filter((member) => member.status === "done").length;
+    completion.hidden = latest.length === 0;
+    completion.max = Math.max(1, latest.length);
+    completion.value = completed;
+    completion.setAttribute("aria-valuetext", `${completed} of ${latest.length} completed locally`);
     for (const [id, item] of rows)
       if (!ids.has(id)) {
         item.row.remove();

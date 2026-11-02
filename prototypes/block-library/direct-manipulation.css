@@ -14,52 +14,52 @@
 }
 .aw-card-edge--n,
 .aw-card-edge--s {
-  left: 16px;
-  right: 16px;
-  height: 10px;
+  left: 24px;
+  right: 24px;
+  height: 14px;
   cursor: ns-resize;
 }
 .aw-card-edge--n {
-  top: -3px;
+  top: 0;
 }
 .aw-card-edge--s {
-  bottom: -3px;
+  bottom: 0;
 }
 .aw-card-edge--e,
 .aw-card-edge--w {
-  top: 16px;
-  bottom: 16px;
-  width: 10px;
+  top: 24px;
+  bottom: 24px;
+  width: 14px;
   cursor: ew-resize;
 }
 .aw-card-edge--e {
-  right: -3px;
+  right: 0;
 }
 .aw-card-edge--w {
-  left: -3px;
+  left: 0;
 }
 .aw-card-edge--ne,
 .aw-card-edge--nw,
 .aw-card-edge--se,
 .aw-card-edge--sw {
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
 }
 .aw-card-edge--ne,
 .aw-card-edge--nw {
-  top: calc(var(--aw-resize-radius-y, 18px) * 0.2928932188134524 - 8px);
+  top: calc(var(--aw-resize-radius-y, 18px) * 0.2928932188134524 - 12px);
 }
 .aw-card-edge--se,
 .aw-card-edge--sw {
-  bottom: calc(var(--aw-resize-radius-y, 18px) * 0.2928932188134524 - 8px);
+  bottom: calc(var(--aw-resize-radius-y, 18px) * 0.2928932188134524 - 12px);
 }
 .aw-card-edge--ne,
 .aw-card-edge--se {
-  right: calc(var(--aw-resize-radius-x, 18px) * 0.2928932188134524 - 8px);
+  right: calc(var(--aw-resize-radius-x, 18px) * 0.2928932188134524 - 12px);
 }
 .aw-card-edge--nw,
 .aw-card-edge--sw {
-  left: calc(var(--aw-resize-radius-x, 18px) * 0.2928932188134524 - 8px);
+  left: calc(var(--aw-resize-radius-x, 18px) * 0.2928932188134524 - 12px);
 }
 .aw-card-edge--ne,
 .aw-card-edge--sw {
@@ -92,6 +92,13 @@
 [data-direct-manipulation="true"]:focus-visible {
   outline: 1px solid #dccbf6;
   outline-offset: 4px;
+}
+/* Short cards use the existing eight-pixel top inset. Their resize band must
+   end before the actual Open/Return controls, rather than intercepting them. */
+@container (max-height: 210px) {
+  .aw-card-edge--n, .aw-card-edge--s { height: 10px; }
+  .aw-card-edge--n { top: -2px; }
+  .aw-card-edge--s { bottom: -2px; }
 }
 .aw-workspace-layout {
   display: inline-flex;

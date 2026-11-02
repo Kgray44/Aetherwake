@@ -96,3 +96,32 @@
   outline: 2px solid #c4e2e5;
   outline-offset: 2px;
 }
+
+/* The event's received time is an actual timestamp; evidence stays explicit.
+   A temporal rail makes this a readable feed rather than a metadata paragraph. */
+.aw-event-view > ol > li { position: relative; padding: 0.3rem 0 0.7rem 0.55rem; }
+.aw-event-view > ol > li:not(.aw-event-empty)::before {
+  content: "";
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  top: 0.75rem;
+  left: -0.9rem;
+  border: 1px solid #a7c8cb;
+  border-radius: 50%;
+  background: #243238;
+}
+.aw-event-entry {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 0.6rem;
+  row-gap: 0.2rem;
+  cursor: pointer;
+}
+.aw-event-time { grid-column: 1 / -1; color: #a7c8cb; font: 0.8em/1.5 Consolas, monospace; }
+.aw-event-type { min-width: 0; overflow-wrap: anywhere; font-weight: 550; }
+.aw-event-evidence { font-size: 0.8em; align-self: baseline; color: #bfd0d1; }
+.aw-event-recorded-status { grid-column: 1 / -1; font-size: 0.8em; color: #b6b8c6; }
+.aw-event-view > ol > li[data-evidence-class="inferred"]::before { background: transparent; }
+.aw-event-view .aw-event-entry::after { content: "Details ›"; grid-column: 2; font-size: 0.75em; color: #b6b8c6; }
+.aw-event-view details[open] > .aw-event-entry::after { content: "Details ⌄"; }

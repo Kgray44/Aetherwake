@@ -131,6 +131,7 @@ export function mountSubjectExperience(
       title: HTMLElement;
       metadata: HTMLElement;
       address: HTMLElement;
+      kind: HTMLElement;
       resource: ResourceCandidate;
       attach?: HTMLButtonElement;
       related?: HTMLButtonElement;
@@ -140,7 +141,9 @@ export function mountSubjectExperience(
     string,
     { row: HTMLLIElement; title: HTMLElement; workspaceId: string }
   >();
-  const projectSummary = node("p", "", "aw-project-summary"),
+  const projectMetrics = node("dl", "", "aw-project-metrics"),
+    workspaceCount = node("dd"), resourceCount = node("dd"),
+    projectSummary = node("p", "", "aw-project-summary"),
     projectCounts = node("p", "", "aw-project-counts"),
     projectHint = node("p", "", "aw-subject-hint"),
     workspaces = node("ul", "", "aw-project-workspaces"),
@@ -148,6 +151,12 @@ export function mountSubjectExperience(
     events = node("ol"),
     scopeTitle = node("p", "", "aw-subject-scope");
   if (subject.kind === "project") {
+    for (const [title, value] of [["Workspaces", workspaceCount], ["Resources", resourceCount]] as const) {
+      const metric = node("div");
+      metric.append(value, node("dt", title));
+      projectMetrics.append(metric);
+    }
+    projectMetrics.hidden = true;
     projectMore.append(
       node("summary", "Resources and recent changes"),
       projectCounts,
@@ -158,6 +167,7 @@ export function mountSubjectExperience(
       results,
     );
     body.append(
+      projectMetrics,
       projectSummary,
       node("h4", "Workspaces"),
       workspaces,
@@ -181,6 +191,8 @@ export function mountSubjectExperience(
         workspaces.replaceChildren();
         events.replaceChildren();
         projectSummary.textContent = "Project unavailable";
+        projectMetrics.hidden = true;
+        workspaceCount.textContent = resourceCount.textContent = "";
         projectCounts.textContent = "";
         projectHint.textContent = "";
       }
@@ -214,14 +226,16 @@ export function mountSubjectExperience(
               })
             : node("strong", resource.title),
           metadata = node("small"),
+          kind = node("span", "", "aw-subject-kind"),
           address = node("code"),
           details = node("details", "", "aw-subject-resource-details"),
           actions = node("div", "", "aw-subject-actions");
         title.className = "aw-subject-resource-title";
         row.dataset.resourceId = resource.id;
         details.append(node("summary", "Details"), address);
-        row.append(title, metadata, actions, details);
-        item = { row, title, metadata, address, resource };
+        kind.setAttribute("aria-hidden", "true");
+        row.append(kind, title, metadata, actions, details);
+        item = { row, title, metadata, address, kind, resource };
         rows.set(resource.id, item);
         if (options.attachResource) {
           const attach = button("Attach", () => {
@@ -270,6 +284,8 @@ export function mountSubjectExperience(
         }
       }
       item.resource = resource;
+      item.row.dataset.resourceKind = resource.kind;
+      item.kind.textContent = ({ conversation: "CHAT", note: "NOTE", task: "TASK", task_group: "LIST", stream: "FEED", research: "STUDY", reference: "REF" } as const)[resource.kind];
       item.title.textContent = resource.title;
       if (options.openResource)
         item.title.setAttribute("aria-label", "Open " + resource.title);
@@ -321,6 +337,11 @@ export function mountSubjectExperience(
         if (disposed || (!active && !visible) || request !== sequence) return;
         options.onProjection?.({ phase: "ready", kind: "project", overview });
         if (!active) return;
+        projectMetrics.hidden = false;
+        workspaceCount.textContent = String(overview.workspaces.length) + (overview.workspaceListComplete ? "" : "+");
+        resourceCount.textContent = String(Object.values(overview.resourcesByKind).reduce((sum, value) => sum + (value ?? 0), 0)) + (overview.resourceCountsComplete ? "" : "+");
+        workspaceCount.setAttribute("aria-label", `${overview.workspaces.length}${overview.workspaceListComplete ? "" : " or more"} accessible workspaces`);
+        resourceCount.setAttribute("aria-label", `${resourceCount.textContent!.replace("+", " or more")} accessible resources`);
         projectSummary.textContent =
           overview.tasks.open +
           " open · " +

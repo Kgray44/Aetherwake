@@ -905,3 +905,130 @@
     line-height: 1;
   }
 }
+
+/* A common optical shell does not impose a common document hierarchy.
+   These styles use the existing working controllers in both workspace and
+   focused poses. They never replace editors, add material layers or move data. */
+.folio[data-block-kind]:is([data-shape="rounded"], [data-shape="folio"], [data-shape="rectangle"]) {
+  border-radius: 18px;
+}
+.folio[data-block-kind] .folio-inner { border-radius: inherit; }
+.folio[data-block-kind] :is(.move-controls, .block-tools) { display: none; }
+.folio[data-block-kind] .card-kind-label > span {
+  font-size: calc(10px * var(--aw-block-text-scale, 1));
+  letter-spacing: 0.13em;
+}
+
+/* A conversation has a transcript and a composer, with a quiet title above it.
+   Codex retains its actual execution/provider controls in the same controller. */
+.folio[data-block-kind="conversation"]:not(.expanded) .title-select h2 {
+  font-size: calc(17px * var(--aw-block-text-scale, 1));
+  letter-spacing: -0.015em;
+  margin-block: 0.65rem 0.2rem;
+}
+.folio[data-block-kind="conversation"] .cp-messages { flex: 1; min-height: 0; }
+.folio[data-block-kind="conversation"] .cp-composer { border-radius: 16px; }
+.folio[data-block-variant="execution"] .card-kind-label,
+.folio[data-block-variant="execution"] .cp-message-role {
+  font-family: Consolas, monospace;
+}
+.folio[data-block-variant="execution"] .cp-composer { border-left: 2px solid #b8c4ef4d; }
+
+/* Notes are an editorial writing surface. No inset application panel surrounds
+   the actual retained textarea or the reading document. */
+.folio[data-block-kind="note"]:not(.expanded) .title-select h2 {
+  font: calc(24px * var(--aw-block-text-scale, 1)) / 1.25 Georgia, "Times New Roman", serif;
+  letter-spacing: -0.025em;
+  margin-block: 0.6rem;
+}
+.folio[data-block-kind="note"] .working-content { border-top: 1px solid #c9c4d32b; padding-top: 0.5rem; }
+.folio[data-block-kind="note"] .working-content :is(textarea, .aw-note-reading) {
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1.7;
+}
+.folio[data-block-kind="note"] .aw-note-tools { justify-content: flex-end; }
+
+/* A single task is an action; its status controls get the space that a document
+   gives to prose. A group is instead a checklist with its actual completion. */
+.folio[data-block-kind="task"]:not(.expanded) .title-select h2 {
+  font-size: calc(23px * var(--aw-block-text-scale, 1));
+  line-height: 1.25;
+  margin-block: 0.7rem;
+}
+.folio[data-block-kind="task"] .local-task-state {
+  padding: 0.65rem 0;
+  gap: 0.7rem;
+  border-block: 1px solid #acc3d72b;
+}
+.folio[data-block-kind="task"] .local-task-state input[type="checkbox"] { width: 24px; height: 24px; flex: none; accent-color: #b3cfca; }
+.folio[data-block-kind="task_group"]:not(.expanded) .title-select h2 { font-weight: 550; }
+.folio[data-block-kind="task_group"] .aw-task-group-tools :is(input, select) {
+  border-inline: 0;
+  border-top: 0;
+  border-radius: 0;
+  background: none;
+}
+
+/* The feed reads down a timeline, the project out toward workspaces, and the
+   browser across resource rows. Their own content supplies the distinction. */
+.folio[data-block-kind="stream"]:not(.expanded) .title-select h2 {
+  font: calc(17px * var(--aw-block-text-scale, 1)) / 1.4 Consolas, monospace;
+  margin-block: 0.6rem;
+}
+.folio[data-block-kind="stream"] .aw-event-tools { align-items: center; }
+.folio[data-block-kind="stream"] .aw-event-tools > button { border: 0; background: none; padding-inline: 0; }
+.folio[data-block-kind="project_overview"]:not(.expanded) .title-select h2 {
+  font-size: calc(23px * var(--aw-block-text-scale, 1));
+  letter-spacing: -0.04em;
+  margin-block: 0.6rem;
+}
+.folio[data-block-kind="resource_browser"]:not(.expanded) .title-select h2 {
+  font-size: calc(16px * var(--aw-block-text-scale, 1));
+  font-weight: 550;
+}
+.folio[data-block-kind="collection_browser"]:not(.expanded) .title-select h2 {
+  font-size: calc(22px * var(--aw-block-text-scale, 1));
+  font-weight: 450;
+  margin-block: 0.65rem;
+}
+
+/* Research keeps findings beside a source rail; references put their actual
+   citations before the annotation. Source availability is still stated by the
+   canonical document view and no source is fetched by presentation. */
+.folio[data-block-kind="research"] .aw-note-reading {
+  padding-left: 0.8rem;
+  border-left: 1px solid #9fc9d34d;
+}
+.folio[data-block-kind="research"] .aw-note-sources h3 {
+  font: 0.85em/1.5 Consolas, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.folio[data-block-kind="reference"] [data-document-kind="reference"] .aw-note-sources {
+  order: -1;
+  border: 0;
+  border-bottom: 1px solid #cabbac40;
+  padding: 0 0 0.75rem;
+  margin-bottom: 0.5rem;
+}
+.folio[data-block-kind="reference"] .aw-note-sources code {
+  display: block;
+  font-size: 1.05em;
+  color: #e0d4c8;
+  overflow-wrap: anywhere;
+}
+.folio[data-block-kind="reference"] .aw-note-reading {
+  font-size: 0.95em;
+  line-height: 1.7;
+  color: #cec5c0;
+}
+
+@container (max-height: 280px) {
+  .folio[data-block-kind]:not(.expanded) .title-select h2 {
+    font-size: calc(17px * var(--aw-block-text-scale, 1));
+    margin-block: 0.3rem;
+  }
+  .folio[data-block-kind="note"] .working-content { padding-top: 0.25rem; }
+  .folio[data-block-kind="task_group"] .aw-task-group-summary { font-size: 1.3em; }
+  .folio[data-block-kind="project_overview"] .aw-project-metrics dd { font-size: 2em; }
+}

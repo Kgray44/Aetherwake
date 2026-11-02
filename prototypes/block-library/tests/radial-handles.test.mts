@@ -143,6 +143,7 @@ test("pose radius variables follow supplied uniform radii without retaining a pr
   assert.equal(
     REGISTERED_BLOCKS.find((block) => block.kind === "research")!
       .defaultPresentation.shape,
-    "rounded",
+    "lens",
   );
+  assert.equal(REGISTERED_BLOCKS.find((block) => block.kind === "note")!.defaultPresentation.shape, "rounded");
 });

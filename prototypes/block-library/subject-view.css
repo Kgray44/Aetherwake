@@ -173,3 +173,61 @@ button.aw-subject-resource-title {
   align-self: flex-end;
   padding-block: 0.2rem;
 }
+
+.aw-project-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  padding: 0.3rem 0 0.8rem;
+  margin: 0;
+  border-bottom: 1px solid #bcb2dc24;
+}
+.aw-project-metrics[hidden] { display: none; }
+.aw-project-metrics dd { margin: 0; color: #e4def0; font-size: 2.6em; font-weight: 350; letter-spacing: -0.06em; line-height: 1.1; }
+.aw-project-metrics dt { margin-top: 0.35rem; font-size: 0.78em; color: #bcb2dc; }
+.aw-subject-view[data-subject-kind="project"] .aw-project-summary { margin: 0.65rem 0; font-size: 0.95em; }
+.aw-project-workspaces li { border-bottom: 1px solid #bcb2dc20; padding: 0.35rem 0; }
+.aw-project-workspaces .aw-subject-action {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+  border: 0;
+  background: none;
+  text-align: left;
+}
+.aw-project-workspaces .aw-subject-action::after { content: "↗"; flex: none; color: #bcb2dc; }
+.aw-subject-kind {
+  display: inline-flex;
+  width: 3rem;
+  min-height: 2.8rem;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #b9c6d42b;
+  border-radius: 8px;
+  color: #c3ccdc;
+  font: 10px/1.2 Consolas, monospace;
+  letter-spacing: 0.025em;
+}
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-resources li:not(.aw-subject-empty) {
+  grid-template-columns: 3rem minmax(0, 1fr) auto;
+  column-gap: 0.7rem;
+}
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-kind { grid-column: 1; grid-row: 1 / 4; }
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-resource-title,
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-resources small,
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-resource-details { grid-column: 2; }
+.aw-subject-view[data-subject-kind="resource-query"] .aw-subject-actions { grid-column: 3; }
+.aw-subject-view[data-subject-kind="collection"] .aw-subject-resources li:not(.aw-subject-empty) {
+  border: 0;
+  border-left: 2px solid #c2b2d059;
+  border-radius: 12px;
+  background: linear-gradient(90deg, #c2b2d00a, transparent);
+  padding: 0.8rem 0.9rem;
+  margin-bottom: 0.8rem;
+}
+.aw-subject-view[data-subject-kind="collection"] .aw-subject-kind { width: auto; min-height: 0; border: 0; margin-bottom: 0.4rem; color: #c2b2d0; }
+.aw-subject-view[data-subject-kind="collection"] .aw-subject-resource-title { display: block; font-size: 1.15em; }
+.aw-subject-view[data-subject-kind="project"] .aw-subject-kind { display: none; }

@@ -24,3 +24,29 @@ The Note controller adds `initialMode` and `setPresentation`. Set the initial mo
 `BLOCK_DEFAULT_SIZES` in the registry is exhaustive for all ten kinds and is consumed by both resource and subject manifest factories. Its distinct dimensions apply to new placements. Explicit placement geometry, restored layouts, user resizes and saved template geometry are preserved.
 
 CPU component tests cover direct note editing/recovery persistence, Read/Edit ordering, same-ID browser actions, project navigation, actual event metadata, checklist success/failure and stable nodes/focus/selection through presentation changes. Canonical-host tests create all ten types with the real workspace engine and check that new defaults preserve resized and explicit geometry. These tests do not qualify native layout, pointer input, motion, performance or owner acceptance; the parent must collect those after integrating its App/Main hooks.
+
+## Distinct working identities and direct manipulation
+
+The product owner's latest correction is that the workspace still looks like repeated cards. The shared glass contour stays under the existing renderer; type identity now receives more of the normal working view's hierarchy:
+
+| Kind | Working identity |
+|---|---|
+| Local conversation | Quiet title, actual transcript, retained composer |
+| Codex conversation | Same canonical conversation experience, execution typography and actual provider/turn controls |
+| Note | Editorial heading and writing/reading typography, open writing area |
+| Task | Prominent task title and direct completion control |
+| Task group | Checklist with actual membership completion meter, independent of search/filter results |
+| Intelligence Stream | Received timestamp, event type, explicit evidence class and status along a temporal rail; original metadata stays in Details |
+| Project | Accessible workspace/resource counts, visible partial-count suffixes, workspace navigation rows |
+| Resource browser | Type-led searchable rows with existing attach and Details operations |
+| Collection browser | Grouped resource shelf with title and type hierarchy |
+| Research | Findings and user-authored sources with a source rail; new placements use the optical lens |
+| Reference | User-authored source links lead the reading view, followed by the annotation |
+
+No new live activity, source fetching, progress or provider access is implied by presentation. The task meter is hidden for an empty group; project counts remain hidden until an authorized overview arrives and are cleared on denial. Refreshing views retains their keyed rows, disclosures, actual editor nodes, focus and selection.
+
+New Note placements use the common rounded contour. Existing persisted shapes, sizes, positions, workspace policies and templates are preserved. Registered rectangular/folio fallback DOM frames use the same 18px round as the current shared contour; lens/circle/pill remain deliberate curved shapes. This is not a DB migration or a new GPU material.
+
+Moving has no toolbar, grab widget or mode switch. The existing card surface drag, invisible edges, keyboard movement/resizing, Escape, lock and undo paths remain authoritative. Invisible side targets are 14px and corner targets 28px; short-card top/bottom bands stop before the existing Open/Return controls. Release coordinates pass through the same `LayoutGesture` as move samples, so a fast release commits its final position as one versioned command. Workspace mode selection remains in the existing small Fluid/Freeform/Structured plus Add/actions section.
+
+Source verification covers membership-based completion after filters/failure, bounded project counts and keyed navigation, explicit event timestamp/evidence, actual shared contour diagonal centers, and final pointer release/stale revision cancellation. No native window was opened by this worker. Parent integration must use fresh source-bound profiles and check all registered kinds in normal/focused/small states, real edge/corner/keyboard behavior, retained editor selection/IME, all three organization modes, restart, reduced motion, text scaling and painted readability. The retained earlier B diagnostic image is only a before reference, not an after receipt or artistic acceptance.

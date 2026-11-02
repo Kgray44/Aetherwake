@@ -362,12 +362,25 @@ export function mountEventExperience(
       if (!row) {
         row = node("li");
         const details = node("details"),
-          summary = node(
-            "summary",
-            `${event.classification} · ${event.type} · ${event.status ?? "status unavailable"} · ${event.receivedAt}`,
-          ),
+          summary = node("summary"),
           metadata = node("dl");
+        summary.className = "aw-event-entry";
+        const received = node("time"), heading = node("span", event.type),
+          evidence = node("span", event.classification),
+          recorded = node("span", event.status ?? "Status unavailable");
+        received.className = "aw-event-time";
+        received.setAttribute("datetime", event.receivedAt);
+        received.title = "Received " + event.receivedAt;
+        const date = new Date(event.receivedAt);
+        received.textContent = Number.isFinite(date.getTime())
+          ? date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "Time unavailable";
+        heading.className = "aw-event-type";
+        evidence.className = "aw-event-evidence";
+        recorded.className = "aw-event-recorded-status";
+        summary.setAttribute("aria-label", `${event.type} · ${event.classification} · ${event.status ?? "status unavailable"} · received ${event.receivedAt}`);
+        summary.append(received, heading, evidence, recorded);
         row.dataset.eventId = event.eventId;
+        row.dataset.evidenceClass = event.classification;
         for (const [key, value] of Object.entries(eventMetadata(event)))
           metadata.append(node("dt", key), node("dd", value));
         details.append(summary, metadata);

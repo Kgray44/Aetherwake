@@ -165,12 +165,16 @@ test("normal task-group checklist updates real member IDs, preserves search/focu
       view.root.querySelector("input"),
     row = view.root.querySelector('[data-task-id="task:a"]'),
     checkbox = row.querySelector("input");
+  const completion = view.root.querySelector(".aw-task-group-completion");
+  assert.equal(completion.hidden, false);
+  assert.deepEqual([completion.value, completion.max], [1, 2]);
   checkbox.focus();
   checkbox.checked = true;
   checkbox.onchange();
   await until(() => calls.length === 1 && !checkbox.disabled);
   assert.deepEqual(calls, [{ resourceId: "task:a", status: "done" }]);
   assert.equal(checkbox.checked, true);
+  assert.deepEqual([completion.value, completion.max], [2, 2]);
   assert.equal(view.root.querySelector('[data-task-id="task:a"]'), row);
   controller.setPresentation("focused");
   controller.setPresentation("workspace");
@@ -180,6 +184,7 @@ test("normal task-group checklist updates real member IDs, preserves search/focu
   checkbox.onchange();
   await until(() => calls.length === 2 && !checkbox.disabled);
   assert.equal(checkbox.checked, true);
+  assert.equal(completion.getAttribute("aria-valuetext"), "2 of 2 completed locally", "Failure cannot advance completion independently of canonical membership");
   assert.match(
     view.root.querySelector(".aw-task-group-status").textContent,
     /version conflict/,
@@ -192,6 +197,7 @@ test("normal task-group checklist updates real member IDs, preserves search/focu
   controller.setPresentation("focused");
   assert.equal(view.root.querySelector("input"), search);
   assert.equal(view.root.querySelectorAll("[data-task-id]").length, 1);
+  assert.deepEqual([completion.value, completion.max], [2, 2], "Filtering never substitutes the visible subset for group completion");
   assert.deepEqual([search.selectionStart, search.selectionEnd], [1, 4]);
   view.root.querySelector(".aw-task-group-title").onclick();
   assert.deepEqual(opens, ["task:a"]);
@@ -209,4 +215,5 @@ test("normal task-group checklist updates real member IDs, preserves search/focu
   );
   controller.setActive(true);
   assert.equal(view.root.querySelectorAll("[data-task-id]").length, 0);
+  assert.equal(completion.hidden, true, "An empty group has no implied progress percentage");
 });

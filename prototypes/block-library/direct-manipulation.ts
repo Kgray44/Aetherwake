@@ -190,6 +190,20 @@ export function mountDirectManipulation(
         cancel();
         return;
       }
+      // A release can carry the last pointer position without a matching move
+      // event. Commit that position through the same engine gesture, so fast
+      // edge resizing does not spring back to the penultimate sample.
+      try {
+        const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
+        if (gesture.active || Math.hypot(dx, dy) >= 4) {
+          gesture.active = true;
+          options.preview(gesture.value.update(dx, dy, 0, event.shiftKey), gesture.intent);
+        }
+      } catch (error) {
+        options.failed(error);
+        cancel();
+        return;
+      }
       const current = release()!;
       if (!current.active) {
         options.cancel();
