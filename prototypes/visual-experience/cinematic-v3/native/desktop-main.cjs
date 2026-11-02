@@ -85,6 +85,7 @@ const source = {
   ),
 };
 const verify =
+  process.argv.includes("--integration-checklists") ||
   process.argv.includes("--integration-agents") ||
   process.argv.includes("--integration-desktop-basics") ||
   process.argv.includes("--integration-environments") ||
@@ -566,6 +567,19 @@ app.whenReady().then(async () => {
   }, 240000);
   reserveTimer.unref();
   if (verify) {
+    if (process.argv.includes("--integration-checklists")) {
+      await require("./integration-checklists.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        call,
+        source,
+        startupErrors,
+        moduleStartedMonotonicMs,
+        observeProviderActivity: () => call("providerActivity", {}),
+      });
+      return;
+    }
     if (process.argv.includes("--integration-agents")) {
       await require("./integration-agents.cjs").verify({
         win,

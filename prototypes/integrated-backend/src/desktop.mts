@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { BUILTIN_BLOCKS } from "../../block-library/registry.ts";
 import type { DatabaseSync } from "node:sqlite";
 import { WorkspaceEngine, type EngineOptions } from "../../workspace-engine/engine.mts";
 import type { Command as EngineCommand, WorkspaceProjection } from "../../workspace-engine/contracts.mts";
@@ -349,7 +350,9 @@ export class DesktopState {
   private attach(workspaceId: string, resourceId: string) {
     const data = this.workspace(workspaceId);
     this.kernel.getResource(resourceId);
-    check(this.resourceKind(resourceId)!=='agent', 'resource_presenter_unavailable');
+    const resource=this.kernel.getResource(resourceId).resource;
+    const definition=BUILTIN_BLOCKS.find(item=>item.kind===(this.resourceKind(resourceId)??resource.kind));
+    check(definition,'resource_presenter_unavailable');
     const n = data.blocks.length;
     return this.engineCommand(workspaceId, {
       type: "attachResource",
@@ -357,10 +360,10 @@ export class DesktopState {
       presentation: {
         x: 70 + (n % 3) * 440,
         y: 260 + Math.floor(n / 3) * 300,
-        width: 400,
-        height: 250,
+        width: definition!.defaultPresentation.width,
+        height: definition!.defaultPresentation.height,
         zIndex: n,
-        shape: "rectangle",
+        shape: definition!.defaultPresentation.shape,
       },
     });
   }

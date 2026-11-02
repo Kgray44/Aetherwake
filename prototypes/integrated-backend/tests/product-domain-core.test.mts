@@ -43,7 +43,10 @@ test('real Core commands preserve standalone agent identity, versions, archive r
     const expected=(await f.core.command('agents',{name:'inspect',input:{resourceId:original.resource.id}})).result;
     const opened=await f.core.command('openResource',{resourceId:original.resource.id});assert.equal(opened.status,'ready');if(opened.status==='ready')assert.deepEqual(opened.presentation,{kind:'agent',mode:'direct'});
     const w=await f.core.command('workspace',{title:'Synthetic explicit workspace'});
-    await assert.rejects(f.core.command('desktop',{type:'attach',resourceId:original.resource.id,workspaceId:w.id}),/resource_presenter_unavailable/);
+    await f.core.command('desktop',{type:'attach',resourceId:original.resource.id,workspaceId:w.id});
+    const placement=f.owner.db.prepare('SELECT * FROM blocks WHERE resource_id=?').get(original.resource.id);assert.equal(placement.width,400);assert.equal(placement.height,460);
+    await f.core.command('desktop',{type:'detach',blockId:placement.id,expectedVersion:placement.version});
+    assert.deepEqual((await f.core.command('agents',{name:'inspect',input:{resourceId:original.resource.id}})).result,expected);
     await f.reopen();assert.deepEqual((await f.core.command('agents',{name:'inspect',input:{resourceId:original.resource.id}})).result,expected);
     assert.deepEqual(await f.core.command('providerActivity',{}),{codexConnections:0,providerRequests:0,systemMemoryReads:0,scope:'process-session-native-attempts'});
   }finally{await f.close();}

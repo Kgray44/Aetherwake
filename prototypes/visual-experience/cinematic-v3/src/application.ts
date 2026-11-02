@@ -92,6 +92,11 @@ import { mountChecklistExperience } from "../../../checklist-product/view.ts";
 import { mountChecklistCreator } from "../../../checklist-product/creator.ts";
 import "../../../checklist-product/view.css";
 import "../../../checklist-product/creator.css";
+import {
+  mountAgentBlockExperience,
+  type AgentBlockProjection,
+} from "../../../block-library/agent-view.ts";
+import "../../../block-library/agent-view.css";
 import type { ProviderConnectionStatus } from "../../../application-contract/provider-connections.ts";
 import { mountDirectResourceExperience } from "../../../block-library/direct-resource-view.ts";
 import "../../../block-library/direct-resource-view.css";
@@ -348,6 +353,15 @@ export function installApplication(hooks: Hooks) {
       width: number;
     }
   >();
+  const agentBlockViews = new Map<
+    string,
+    {
+      view: ReturnType<typeof mountAgentBlockExperience>;
+      version: number;
+      width: number;
+    }
+  >();
+  const agentProjections = new Map<string, AgentBlockProjection>();
   const noteSessions = new Map<string, NoteSession>();
   const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
   const groupViews = new Map<
@@ -628,6 +642,9 @@ export function installApplication(hooks: Hooks) {
       checklistCreator?.dispose();
       for (const entry of checklistViews.values()) entry.view.dispose();
       checklistViews.clear();
+      for (const entry of agentBlockViews.values()) entry.view.dispose();
+      agentBlockViews.clear();
+      agentProjections.clear();
       controlMotion.dispose();
       resourceOpener.cancel();
       directResources.dispose();
@@ -883,6 +900,12 @@ export function installApplication(hooks: Hooks) {
       if (!next.blocks.some((block) => block.id === id)) {
         entry.view.dispose();
         checklistViews.delete(id);
+      }
+    for (const [id, entry] of agentBlockViews)
+      if (!next.blocks.some((block) => block.id === id)) {
+        entry.view.dispose();
+        agentBlockViews.delete(id);
+        agentProjections.delete(id);
       }
     for (const [id, view] of groupViews)
       if (!next.blocks.some((b) => b.id === id)) {
@@ -2053,7 +2076,6 @@ export function installApplication(hooks: Hooks) {
               if (
                 !resource ||
                 !workspaceId ||
-                resource.kind === "agent" ||
                 !REGISTERED_BLOCKS.some((def) => def.kind === resource.kind)
               )
                 throw Error(
@@ -2934,6 +2956,7 @@ export function installApplication(hooks: Hooks) {
       resource?.messages.slice(-2),
       events,
       eventDisconnected,
+      agentProjections.get(id),
     ]);
     const cached = identityModels.get(id);
     const model =
@@ -2949,6 +2972,7 @@ export function installApplication(hooks: Hooks) {
             subject: projection,
             events,
             disconnected: eventDisconnected,
+            agent: agentProjections.get(id),
           });
     identityModels.set(id, { key, content, projection, model });
     view.update(model);
@@ -3204,6 +3228,41 @@ export function installApplication(hooks: Hooks) {
         void view.refresh({ latest: true }).catch(report);
       }
       view?.setActive(activeBlocks.get(b.id) ?? false);
+    } else if (r.kind === "agent") {
+      const content = el(".working-content", article);
+      let entry = agentBlockViews.get(id);
+      if (!entry && activeBlocks.get(id)) {
+        content.replaceChildren();
+        entry = {
+          view: mountAgentBlockExperience(content, r.id, {
+            client: productClients.agents,
+            motion: experienceMotion,
+            viewId: "block:" + id,
+            active: true,
+            presentation: blockPresentation(id),
+            onOpenAgent: showAgents,
+            onOpenResource: openCanonicalResource,
+            resourceTitle: (resourceId) =>
+              state?.resources.find(
+                (resource) =>
+                  resource.id === resourceId &&
+                  resource.available !== false &&
+                  resource.visible !== false,
+              )?.title,
+            onProjection: (projection) => {
+              agentProjections.set(id, projection);
+              identityModels.delete(id);
+              if (article.isConnected) refreshBlockIdentity(article, id);
+            },
+          }),
+          version: r.version,
+          width: content.clientWidth,
+        };
+        agentBlockViews.set(id, entry);
+      } else if (entry && entry.version !== r.version) {
+        entry.version = r.version;
+        void entry.view.refresh().catch(report);
+      }
     } else if (r.kind === "checklist") {
       const content = el(".working-content", article);
       let entry = checklistViews.get(id);
@@ -3719,7 +3778,7 @@ export function installApplication(hooks: Hooks) {
         state?.resources.find(
           (resource) => resource.id === block.resource_id,
         ) &&
-        ["conversation", "task_group", "stream", "checklist"].includes(
+        ["conversation", "task_group", "stream", "checklist", "agent"].includes(
           resource?.kind ?? "",
         )
       ) {
@@ -3736,12 +3795,14 @@ export function installApplication(hooks: Hooks) {
     eventViews.get(id)?.setPresentation(presentation);
     groupViews.get(id)?.setPresentation(presentation);
     checklistViews.get(id)?.view.setPresentation(presentation);
+    agentBlockViews.get(id)?.view.setPresentation(presentation);
     chatViews.get(id)?.setActive(active);
     noteViews.get(id)?.setActive(active);
     subjectViews.get(id)?.setActive(active);
     eventViews.get(id)?.setActive(active);
     groupViews.get(id)?.setActive(active);
     checklistViews.get(id)?.view.setActive(active);
+    agentBlockViews.get(id)?.view.setActive(active);
   }
   return {
     frame(now: number, policy: Policy) {
@@ -3779,6 +3840,17 @@ export function installApplication(hooks: Hooks) {
       environmentNavigator?.frame();
       workspaceActions?.frame();
       agentLibrary?.frame();
+      for (const [id, entry] of agentBlockViews) {
+        const width =
+          document.querySelector<HTMLElement>(
+            `[data-block="${id}"] .working-content`,
+          )?.clientWidth ?? 0;
+        if (width !== entry.width) {
+          entry.width = width;
+          entry.view.reflow();
+        }
+        entry.view.frame();
+      }
       checklistCreator?.frame();
       directResources.frame();
       for (const [id, entry] of checklistViews) {
