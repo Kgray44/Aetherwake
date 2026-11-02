@@ -7,6 +7,10 @@ export type Presentation = Geometry & {
   materialVariant: string;
 };
 export type Viewport = { x: number; y: number; zoom: number; displayId?: string };
+/** System presence is a layout participant, never a duplicate assistant resource. */
+export type PresencePlacement = Geometry & {
+  id: 'system:vela'; kind: 'vela'; workspaceId: string; version: number; scale: 0.65; locked: boolean;
+};
 export type BlockProjection = Presentation & {
   blockId: string; resourceId: string; workspaceId: string; version: number;
   resourceState: 'active' | 'archived'; contentMode: 'summary' | 'reading';
@@ -14,7 +18,7 @@ export type BlockProjection = Presentation & {
 export type WorkspaceProjection = {
   contract: typeof CONTRACT; workspaceId: string; projectId: string | null; title: string;
   workspaceVersion: number; layoutId: string; revision: number; viewport: Viewport;
-  blocks: BlockProjection[]; canUndo: boolean; canRedo: boolean;
+  blocks: BlockProjection[]; presence: PresencePlacement; canUndo: boolean; canRedo: boolean;
 };
 export type WorkspaceSummary = { workspaceId: string; projectId: string | null; title: string; version: number; state: string };
 export type Preset = 'freeform' | 'focus' | 'columns' | 'research' | 'development';
@@ -32,12 +36,14 @@ type Action =
   | { type: 'setBlockLayer'; blockId: string; zIndex: number }
   | { type: 'setBlockLock'; blockId: string; locked: boolean }
   | { type: 'setBlockPresentation'; blockId: string; patch: Partial<Presentation> }
+  | { type: 'setPresence'; expectedVersion: number; presentation: Partial<Geometry & { locked: boolean }> }
+  | { type: 'resolveLayout' }
   | { type: 'saveLayout'; placements: PlacementUpdate[]; viewport?: Viewport }
   | { type: 'applyPreset'; preset: Preset; width: number; height: number }
   | { type: 'undoLayout' | 'redoLayout' }
   | { type: 'checkpoint'; name: string }
   | { type: 'restoreCheckpoint'; checkpointId: string };
-export type Command = Action & { commandId: string; workspaceId: string; expectedRevision: number };
+export type Command = Action & { commandId: string; workspaceId: string; expectedRevision: number; bounds?: Geometry };
 export type CommandResult = WorkspaceProjection & { checkpointId?: string };
 export interface WorkspacePort {
   project(workspaceId: string): Promise<WorkspaceProjection>;

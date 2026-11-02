@@ -2,20 +2,26 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { WorkspaceKernel } from '../workspace-kernel/kernel.mts';
-import { CONTRACT, type Command, type CommandResult, type WorkspaceProjection, type Presentation, type Viewport, type BlockTemplate, type WorkspaceSummary } from './contracts.mts';
+import { CONTRACT, type Command, type CommandResult, type WorkspaceProjection, type Presentation, type Viewport, type BlockTemplate, type WorkspaceSummary, type PresencePlacement, type Geometry } from './contracts.mts';
 import { ensure, WorkspaceError, defaults, presentation, resize, snapValue, presetGeometry } from './geometry.mts';
+import { resolveCollisions, validateBounds } from './collisions.mts';
 export { WorkspaceError } from './geometry.mts';
 export type * from './contracts.mts';
 
 type StoredBlock = Presentation & { blockId: string; resourceId: string };
-type Snapshot = { viewport: Viewport; blocks: StoredBlock[] };
+type StoredPresence = Omit<PresencePlacement, 'version'>;
+type Snapshot = { viewport: Viewport; blocks: StoredBlock[]; presence: StoredPresence };
 type Entry = { before: Snapshot; after: Snapshot };
 type History = { undo: Entry[]; redo: Entry[] };
-const files = ['001-presentation.sql', '002-history.sql'];
+const files = ['001-presentation.sql', '002-history.sql', '003-presence.sql'];
 const now = () => new Date().toISOString();
 const stable = (v: any): string => JSON.stringify(v, (_key, value) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.keys(value).sort().map(k => [k, value[k]])) : value);
 const hash = (v: unknown) => createHash('sha256').update(stable(v)).digest('hex');
 const text = (v: unknown): v is string => typeof v === 'string' && !!v.trim() && v.length <= 512;
+export const defaultPresence = (workspaceId: string): PresencePlacement => ({
+  id: 'system:vela', kind: 'vela', workspaceId, version: 1, scale: 0.65, locked: false,
+  x: 480, y: 64, width: 208, height: 260,
+});
 export const templates: readonly BlockTemplate[] = [
   { id: 'note', title: 'Reading note', presentation: { shape: 'folio', width: 400, height: 320 } },
   { id: 'conversation', title: 'Conversation', presentation: { shape: 'rounded', width: 480, height: 360 } },
@@ -43,12 +49,20 @@ export class WorkspaceEngine {
         version = Number(rows[0].version);
       }
       ensure(version >= 0 && version <= files.length, 'UNSUPPORTED_SCHEMA');
+      const upgradePresence = version < 3;
       while (version < files.length) {
         db.exec(readFileSync(new URL(`./migrations/${files[version]}`, import.meta.url), 'utf8'));
         version++;
         db.prepare('UPDATE workspace_engine_schema SET version=?').run(version);
       }
-      for (const w of db.prepare('SELECT id FROM workspaces').all()) this.layout(String(w.id));
+      for (const w of db.prepare('SELECT id FROM workspaces').all()) {
+        const workspaceId = String(w.id); this.layout(workspaceId);
+        if (upgradePresence) {
+          this.writeHistory(workspaceId, this.history(workspaceId));
+          for (const cp of db.prepare('SELECT id,snapshot_json FROM workspace_engine_checkpoints WHERE workspace_id=?').all(workspaceId))
+            db.prepare('UPDATE workspace_engine_checkpoints SET snapshot_json=? WHERE id=?').run(JSON.stringify(this.normalizeSnapshot(workspaceId, JSON.parse(String(cp.snapshot_json)))), cp.id);
+        }
+      }
     });
   }
   private atomic<T>(fn: () => T): T {
@@ -59,13 +73,40 @@ export class WorkspaceEngine {
     }
   }
   private layout(workspaceId: string): any {
-    this.kernel.openWorkspace(workspaceId);
     let row = this.db.prepare('SELECT * FROM workspace_engine_layouts WHERE workspace_id=?').get(workspaceId);
     if (!row) {
+      this.kernel.openWorkspace(workspaceId);
       this.db.prepare('INSERT INTO workspace_engine_layouts(id,workspace_id) VALUES(?,?)').run(randomUUID(), workspaceId);
       row = this.db.prepare('SELECT * FROM workspace_engine_layouts WHERE workspace_id=?').get(workspaceId);
     }
+    if (!row!.presence_json) {
+      const presence = JSON.stringify(defaultPresence(workspaceId));
+      this.db.prepare('UPDATE workspace_engine_layouts SET presence_json=?,legacy_presence_json=? WHERE workspace_id=?').run(presence, presence, workspaceId);
+      row = this.db.prepare('SELECT * FROM workspace_engine_layouts WHERE workspace_id=?').get(workspaceId);
+    }
     return row;
+  }
+  private readPresence(workspaceId: string): PresencePlacement {
+    const p = JSON.parse(this.layout(workspaceId).presence_json) as PresencePlacement;
+    ensure(p.id === 'system:vela' && p.kind === 'vela' && p.workspaceId === workspaceId && p.scale === 0.65
+      && Number.isSafeInteger(p.version) && p.version > 0, 'INTEGRITY');
+    this.presencePatch(p, {}); return p;
+  }
+  private presencePatch(base: PresencePlacement, patch: Partial<Geometry & { locked: boolean }>): PresencePlacement {
+    ensure(patch && typeof patch === 'object' && !Array.isArray(patch) && Object.keys(patch).every(k => ['x', 'y', 'width', 'height', 'locked'].includes(k)));
+    const p = { ...base, ...patch };
+    ensure([p.x, p.y, p.width, p.height].every(Number.isFinite) && Math.abs(p.x) <= 1e6 && Math.abs(p.y) <= 1e6
+      && p.width >= 128 && p.height >= 96 && p.width <= 4096 && p.height <= 4096 && typeof p.locked === 'boolean');
+    return p;
+  }
+  private writePresence(workspaceId: string, p: PresencePlacement) {
+    this.db.prepare('UPDATE workspace_engine_layouts SET presence_json=? WHERE workspace_id=?').run(JSON.stringify(p), workspaceId);
+  }
+  /** Compatibility for old imported desktop histories written after constructor migration. */
+  private normalizeSnapshot(workspaceId: string, snapshot: any, baseline?: PresencePlacement): Snapshot {
+    ensure(snapshot && Array.isArray(snapshot.blocks) && snapshot.viewport, 'INTEGRITY');
+    const { version, ...presence } = snapshot.presence ?? baseline ?? JSON.parse(this.layout(workspaceId).legacy_presence_json);
+    return { ...snapshot, presence };
   }
   private viewport(v: any): Viewport {
     ensure(v && typeof v === 'object' && !Array.isArray(v));
@@ -84,11 +125,16 @@ export class WorkspaceEngine {
   }
   private snapshot(workspaceId: string): Snapshot {
     const state = this.kernel.openWorkspace(workspaceId);
-    return { viewport: this.viewport(state.layout.viewport), blocks: state.blocks.map(row => this.block(row)).sort((a, b) => a.blockId.localeCompare(b.blockId)) };
+    const { version, ...presence } = this.readPresence(workspaceId);
+    return { viewport: this.viewport(state.layout.viewport), presence, blocks: state.blocks.map(row => this.block(row)).sort((a, b) => a.blockId.localeCompare(b.blockId)) };
   }
   private history(workspaceId: string): History {
     const h = JSON.parse(this.layout(workspaceId).history_json);
     ensure(h && Array.isArray(h.undo) && Array.isArray(h.redo), 'INTEGRITY');
+    const baseline = JSON.parse(this.layout(workspaceId).legacy_presence_json);
+    for (const stack of [h.undo, h.redo]) for (const entry of stack) {
+      entry.before = this.normalizeSnapshot(workspaceId, entry.before, baseline); entry.after = this.normalizeSnapshot(workspaceId, entry.after, baseline);
+    }
     return h;
   }
   private writeHistory(workspaceId: string, h: History) {
@@ -102,7 +148,7 @@ export class WorkspaceEngine {
       return {
         contract: CONTRACT, workspaceId, projectId: state.workspace.project_id, title: state.workspace.title,
         workspaceVersion: state.workspace.version, layoutId: l.id, revision: state.layout.version,
-        viewport: this.viewport(state.layout.viewport),
+        viewport: this.viewport(state.layout.viewport), presence: this.readPresence(workspaceId),
         blocks: state.blocks.map(row => {
           const b = this.block(row);
           return { ...b, workspaceId, version: row.version, resourceState: this.kernel.getResource(b.resourceId).resource.state,
@@ -170,21 +216,48 @@ export class WorkspaceEngine {
         .run(b.blockId, workspaceId, b.resourceId, b.x, b.y, b.width, b.height, b.zIndex, (old?.version ?? 0) + 1);
       this.writePresentation(b.blockId, b);
     }
+    const oldPresence = this.readPresence(workspaceId);
+    const presence = this.presencePatch(oldPresence, { x: target.presence.x, y: target.presence.y, width: target.presence.width, height: target.presence.height, locked: target.presence.locked });
+    this.writePresence(workspaceId, { ...presence, version: oldPresence.version + 1 });
     this.kernel.saveLayout(workspaceId, 'freeform', this.viewport(target.viewport), [], revision);
+  }
+  private resolve(workspaceId: string, targets: string[], bounds?: Geometry): string[] {
+    const state = this.kernel.openWorkspace(workspaceId), presence = this.readPresence(workspaceId);
+    const blocks = state.blocks.map(row => this.block(row));
+    const inputs = blocks.map(b => ({ ...b, id: b.blockId }));
+    const resolved = resolveCollisions([...inputs, { ...presence, keepVisible: true }], targets, bounds);
+    const changed: string[] = [];
+    for (const p of resolved) {
+      if (p.id === presence.id) {
+        if (p.x === presence.x && p.y === presence.y) continue;
+        this.writePresence(workspaceId, { ...presence, x: p.x, y: p.y, version: presence.version + 1 });
+      } else {
+        const old = blocks.find(b => b.blockId === p.id)!;
+        if (p.x === old.x && p.y === old.y) continue;
+        this.db.prepare('UPDATE blocks SET x=?,y=?,version=version+1 WHERE id=?').run(p.x, p.y, p.id);
+      }
+      changed.push(p.id);
+    }
+    return changed;
   }
   execute(command: Command): CommandResult {
     ensure(command && text(command.commandId) && text(command.workspaceId));
     ensure(Number.isSafeInteger(command.expectedRevision) && command.expectedRevision > 0);
     ensure(Buffer.byteLength(JSON.stringify(command)) <= 262144, 'INPUT_TOO_LARGE');
+    if (command.bounds) validateBounds(command.bounds);
     const fingerprint = hash(command);
     return this.atomic(() => {
       const receipt = this.db.prepare('SELECT * FROM workspace_engine_receipts WHERE command_id=?').get(command.commandId);
-      if (receipt) { ensure(receipt.fingerprint === fingerprint, 'COMMAND_ID_REUSED'); return JSON.parse(String(receipt.result_json)); }
+      if (receipt) {
+        ensure(receipt.fingerprint === fingerprint, 'COMMAND_ID_REUSED'); const result = JSON.parse(String(receipt.result_json));
+        return { ...result, presence: result.presence ?? defaultPresence(command.workspaceId) };
+      }
       const state = this.project(command.workspaceId); ensure(state.revision === command.expectedRevision, 'CONFLICT');
       const workspaceId = state.workspaceId, before = this.snapshot(workspaceId), h = this.history(workspaceId);
       let checkpointId: string | undefined;
+      const targets: string[] = [];
       const find = (blockId: string) => { const b = state.blocks.find(b => b.blockId === blockId); ensure(b, 'NOT_FOUND'); return b; };
-      const patch = (blockId: string, p: Partial<Presentation>) => this.apply(workspaceId, [{ blockId, expectedVersion: find(blockId).version, presentation: p }], state.revision, state.viewport);
+      const patch = (blockId: string, p: Partial<Presentation>) => { targets.push(blockId); return this.apply(workspaceId, [{ blockId, expectedVersion: find(blockId).version, presentation: p }], state.revision, state.viewport); };
       const newPresentation = (c: { templateId?: string; presentation?: Partial<Presentation> }) => {
         const t = c.templateId ? templates.find(t => t.id === c.templateId) : undefined;
         ensure(!c.templateId || t, 'UNKNOWN_TEMPLATE');
@@ -196,12 +269,12 @@ export class WorkspaceEngine {
           const r = command.resource.kind === 'note'
             ? this.kernel.createNote(command.resource.title, command.resource.content, state.projectId)
             : this.kernel.createConversationRef(command.resource.title, state.projectId);
-          this.attach(workspaceId, r.id, newPresentation(command)); break;
+          targets.push(this.attach(workspaceId, r.id, newPresentation(command))); break;
         }
-        case 'attachResource': this.attach(workspaceId, command.resourceId, newPresentation(command)); break;
+        case 'attachResource': targets.push(this.attach(workspaceId, command.resourceId, newPresentation(command))); break;
         case 'duplicateBlock': {
           const { blockId, resourceId, workspaceId: _w, version, resourceState, contentMode, ...p } = find(command.blockId);
-          this.attach(workspaceId, resourceId, presentation({ x: p.x + 24, y: p.y + 24, locked: false }, p)); break;
+          targets.push(this.attach(workspaceId, resourceId, presentation({ x: p.x + 24, y: p.y + 24, locked: false }, p))); break;
         }
         case 'detachBlock': ensure(!find(command.blockId).locked, 'LOCKED'); this.kernel.detachBlock(command.blockId); break;
         case 'moveBlock': patch(command.blockId, { x: snapValue(command.x, command.snap), y: snapValue(command.y, command.snap) }); break;
@@ -213,7 +286,14 @@ export class WorkspaceEngine {
         case 'setBlockLayer': patch(command.blockId, { zIndex: command.zIndex }); break;
         case 'setBlockLock': patch(command.blockId, { locked: command.locked }); break;
         case 'setBlockPresentation': patch(command.blockId, command.patch); break;
-        case 'saveLayout': ensure(Array.isArray(command.placements)); this.apply(workspaceId, command.placements, state.revision, this.viewport(command.viewport ?? state.viewport)); break;
+        case 'setPresence': {
+          ensure(command.expectedVersion === state.presence.version, 'CONFLICT');
+          const next = this.presencePatch(state.presence, command.presentation);
+          ensure(!state.presence.locked || (Object.keys(command.presentation).length === 1 && command.presentation.locked === false), 'LOCKED');
+          this.writePresence(workspaceId, { ...next, version: state.presence.version + 1 }); targets.push(next.id); break;
+        }
+        case 'resolveLayout': break;
+        case 'saveLayout': ensure(Array.isArray(command.placements)); this.apply(workspaceId, command.placements, state.revision, this.viewport(command.viewport ?? state.viewport)); targets.push(...command.placements.map(p => p.blockId)); break;
         case 'applyPreset': {
           const ps = presetGeometry(command.preset, state.blocks, command.width, command.height);
           this.apply(workspaceId, state.blocks.filter(b => !b.locked).map(b => {
@@ -235,13 +315,16 @@ export class WorkspaceEngine {
           this.db.prepare('INSERT INTO workspace_engine_checkpoints VALUES(?,?,?,?,?)').run(checkpointId, workspaceId, command.name.trim(), JSON.stringify(before), now()); break;
         case 'restoreCheckpoint': {
           const row = this.db.prepare('SELECT snapshot_json FROM workspace_engine_checkpoints WHERE id=? AND workspace_id=?').get(command.checkpointId, workspaceId);
-          ensure(row, 'NOT_FOUND'); this.restore(workspaceId, JSON.parse(String(row.snapshot_json)), state.revision); break;
+          ensure(row, 'NOT_FOUND'); this.restore(workspaceId, this.normalizeSnapshot(workspaceId, JSON.parse(String(row.snapshot_json))), state.revision); break;
         }
         default: throw new WorkspaceError('UNKNOWN_COMMAND');
       }
-      if (this.kernel.openWorkspace(workspaceId).layout.version === state.revision)
+      const resolve = ['createBlock', 'attachResource', 'duplicateBlock', 'moveBlock', 'resizeBlock', 'setBlockShape', 'setBlockPresentation', 'setPresence', 'saveLayout', 'applyPreset', 'resolveLayout', 'restoreCheckpoint'].includes(command.type);
+      const rearrangedPlacementIds = resolve ? this.resolve(workspaceId, targets, command.bounds) : [];
+      const noOp = command.type === 'resolveLayout' && !rearrangedPlacementIds.length;
+      if (!noOp && this.kernel.openWorkspace(workspaceId).layout.version === state.revision)
         this.kernel.saveLayout(workspaceId, 'freeform', state.viewport, [], state.revision);
-      if (!['undoLayout', 'redoLayout', 'checkpoint'].includes(command.type)) {
+      if (!noOp && !['undoLayout', 'redoLayout', 'checkpoint'].includes(command.type)) {
         const after = this.snapshot(workspaceId);
         h.undo.push({ before, after }); h.redo = []; this.writeHistory(workspaceId, h);
       }
@@ -249,8 +332,8 @@ export class WorkspaceEngine {
       this.db.prepare('INSERT INTO workspace_engine_receipts VALUES(?,?,?)').run(command.commandId, fingerprint, JSON.stringify(result));
       // Retried commands outside this bounded receipt window fail revision checks.
       this.db.exec('DELETE FROM workspace_engine_receipts WHERE rowid NOT IN (SELECT rowid FROM workspace_engine_receipts ORDER BY rowid DESC LIMIT 256)');
-      this.db.prepare(`INSERT INTO change_events(id,entity_kind,entity_id,resource_version,occurred_at,origin,correlation_id,type,detail_json)
-        VALUES(?,'workspace',?,?,?,'user',?,?,?)`).run(randomUUID(), workspaceId, result.revision, now(), command.commandId, `engine.${command.type}`, JSON.stringify({ layoutId: result.layoutId }));
+      if (!noOp) this.db.prepare(`INSERT INTO change_events(id,entity_kind,entity_id,resource_version,occurred_at,origin,correlation_id,type,detail_json)
+        VALUES(?,'workspace',?,?,?,'user',?,?,?)`).run(randomUUID(), workspaceId, result.revision, now(), command.commandId, `engine.${command.type}`, JSON.stringify({ layoutId: result.layoutId, rearrangedPlacementIds }));
       return result;
     });
   }
@@ -264,7 +347,7 @@ export class WorkspaceEngine {
     ensure(text(approvalId) && this.options.allowResourceDeletion?.({ resourceId, expectedVersion, approvalId }) === true, 'DELETE_POLICY_REQUIRED');
     this.atomic(() => {
       // Keep history/checkpoints recoverable; forgetting recovery data is a separate policy decision.
-      const history = this.db.prepare('SELECT history_json AS json FROM workspace_engine_layouts UNION ALL SELECT snapshot_json AS json FROM workspace_engine_checkpoints').all();
+      const history = this.db.prepare('SELECT history_json AS json FROM workspace_engine_layouts UNION ALL SELECT snapshot_json AS json FROM workspace_engine_checkpoints UNION ALL SELECT json FROM workspace_engine_v2_recovery_archive').all();
       ensure(!history.some(row => String(row.json).includes(resourceId)), 'RECOVERY_REFERENCE');
       this.kernel.deleteResource(resourceId, expectedVersion, { correlationId: approvalId });
     });

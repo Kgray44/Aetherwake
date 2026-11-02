@@ -1,5 +1,5 @@
-import type { BlockProjection, Presentation, WorkspaceProjection, WorkspacePort, Command } from './contracts.mts';
-import { presentation, resizeFromHandle, snapValue, type Handle, ensure, reachable } from './geometry.mts';
+import type { BlockProjection, Presentation, WorkspaceProjection, WorkspacePort, Command, Geometry } from './contracts.mts';
+import { presentation, resizeFromHandle, snapValue, type Handle, ensure, reachable, defaults } from './geometry.mts';
 import { MotionCoordinator, type Pose } from '../visual-experience/cinematic-v3/src/motion.ts';
 
 export function asPresentation(b: BlockProjection): Presentation {
@@ -28,6 +28,29 @@ export class LayoutGesture {
   command(commandId: string): Command {
     return { type: 'saveLayout', commandId, workspaceId: this.state.workspaceId, expectedRevision: this.state.revision,
       placements: [{ blockId: this.block.blockId, expectedVersion: this.block.version, presentation: this.current }] };
+  }
+}
+/** Presence uses the same geometry math but keeps its separate system identity. */
+export class PresenceGesture {
+  readonly state: WorkspaceProjection;
+  readonly handle: Handle | 'move';
+  readonly bounds?: Geometry;
+  current: Geometry;
+  constructor(state: WorkspaceProjection, handle: Handle | 'move' = 'move', bounds?: Geometry) {
+    ensure(!state.presence.locked, 'LOCKED');
+    this.state = state; this.handle = handle; this.bounds = bounds;
+    const p = state.presence; this.current = { x: p.x, y: p.y, width: p.width, height: p.height };
+  }
+  update(screenDx: number, screenDy: number, grid = 0, keepAspect = false): Geometry {
+    const p = this.state.presence, dx = screenDx / this.state.viewport.zoom, dy = screenDy / this.state.viewport.zoom;
+    const next = this.handle === 'move'
+      ? presentation({ x: snapValue(p.x + dx, grid), y: snapValue(p.y + dy, grid), width: p.width, height: p.height })
+      : resizeFromHandle({ ...defaults, ...p, shape: 'rectangle', rotation: 0 }, this.handle, dx, dy, keepAspect ? p.width / p.height : undefined, grid);
+    this.current = { x: next.x, y: next.y, width: next.width, height: next.height }; return this.current;
+  }
+  command(commandId: string): Command {
+    return { type: 'setPresence', commandId, workspaceId: this.state.workspaceId, expectedRevision: this.state.revision,
+      expectedVersion: this.state.presence.version, presentation: this.current, ...(this.bounds ? { bounds: this.bounds } : {}) };
   }
 }
 /** Uses the same coordinator instance as the host. Keys are block IDs, never resource IDs. */
