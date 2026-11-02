@@ -42,12 +42,12 @@ async function child(){
  const custody=relative(OUTPUT_ROOT,dirname(profile));assert(!isAbsolute(custody)&&/^metadata-profile-\d+-[a-f0-9]{8}$/.test(custody)&&basename(profile)===mode+'-'+operation,'unowned_profile');
  const ownerMarker=JSON.parse(readFileSync(join(dirname(profile),'owner.json'),'utf8'));assert.equal(ownerMarker.contract,'aerynth.metadata-profile-owner@1');assert.equal(ownerMarker.binding.candidate,args.get('candidate'));
  assert.equal(digest(readFileSync(join(profile,'canonical.sqlite'))),ownerMarker.original.fileSha256,'fresh_byte_exact_clone_required');
- const work={hostAccess:0,canonicalAccess:0,uniqueHostAccess:0,uniqueCanonicalAccess:0,metadataCalls:0,metadataAllow:0,uniqueMetadataAllow:0,sqlPrepare:0,sqlGet:0,sqlAll:0,sqlRun:0,graphSnapshot:0,visibleMessages:0,providerCalls:0};
+ const work={hostAccess:0,canonicalAccess:0,uniqueHostAccess:0,uniqueCanonicalAccess:0,metadataCalls:0,metadataAllow:0,uniqueMetadataAllow:0,sqlPrepare:0,sqlGet:0,sqlAll:0,sqlRun:0,graphSnapshot:0,visibleMessages:0,graphMessageLookups:0,graphConversationLookups:0,graphMessageIdReads:0,graphConversationIdReads:0,graphEdgeChildReads:0,stateMessageIdReads:0,stateConversationIdReads:0,stateEdgeChildReads:0,providerCalls:0};
  const sets={host:new Set<string>(),canonical:new Set<string>(),metadata:new Set<string>()},restores:(()=>void)[]=[];
  let core:BackendCore|undefined,lastProgress=0;const start=performance.now(),receipt:Record<string,unknown>={mode,operation,passed:false,work};
  const progress=(force=false)=>{const now=performance.now();if(!force&&now-lastProgress<200)return;lastProgress=now;work.uniqueHostAccess=sets.host.size;work.uniqueCanonicalAccess=sets.canonical.size;work.uniqueMetadataAllow=sets.metadata.size;process.send?.({elapsedMs:now-start,work:{...work},rss:process.memoryUsage().rss});};
  try{
-  core=new BackendCore({path:join(profile,'canonical.sqlite'),privateRoot:profile,contentPolicy:'synthetic-only',provider:'fixture'});const o=core as unknown as Owner;
+  core=new BackendCore({path:join(profile,'canonical.sqlite'),privateRoot:profile,contentPolicy:'synthetic-only',provider:'fixture'});receipt.coreStartupMs=performance.now()-start;const o=core as unknown as Owner;
   const host=(o.conversations as unknown as {host:CanonicalConversationHost}).host,deniedGraphId=o.state.graph.conversations[3].id,deniedResourceId=Object.entries(o.state.resources).find(([,gid])=>gid===deniedGraphId)![0],originalAccess=host.access!;
   host.access=(id,messageId)=>id!==deniedResourceId&&originalAccess(id,messageId);
   for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])o.port[key]=async()=>{work.providerCalls++;throw Error('provider_forbidden');};
@@ -61,6 +61,14 @@ async function child(){
    const metadata=o.graph.visibleMessageMetadata.bind(o.graph);o.graph.visibleMessageMetadata=(id,options)=>{work.metadataCalls++;progress();return metadata(id,{...options,allow:m=>{work.metadataAllow++;sets.metadata.add(m.conversationId+'\0'+m.id);return options.allow(m);}});};restores.push(()=>{o.graph.visibleMessageMetadata=metadata;});
    const snapshot=o.graph.snapshot.bind(o.graph);o.graph.snapshot=()=>{work.graphSnapshot++;return snapshot();};restores.push(()=>{o.graph.snapshot=snapshot;});
    const visible=o.graph.visibleMessages.bind(o.graph);o.graph.visibleMessages=id=>{work.visibleMessages++;progress();return visible(id);};restores.push(()=>{o.graph.visibleMessages=visible;});
+   // Observe ID resolution work separately from body/privacy counters. These
+   // diagnostic getters retain the SAME canonical objects and values. They are
+   // restored before close; timing workers never install them.
+   const privateGraph=o.graph as unknown as {data:GraphData;message(id:string):unknown;conversation(id:string):unknown};
+   for(const [name,counter] of [['message','graphMessageLookups'],['conversation','graphConversationLookups']] as const){const original=privateGraph[name];privateGraph[name]=function(id){work[counter]++;return original.call(this,id);};restores.push(()=>{privateGraph[name]=original;});}
+   const seen=new Set<object>();for(const [data,label] of [[privateGraph.data,'graph'],[o.state.graph,'state']] as const){
+    for(const [rows,field,counter] of [[data.messages,'id',label==='graph'?'graphMessageIdReads':'stateMessageIdReads'],[data.conversations,'id',label==='graph'?'graphConversationIdReads':'stateConversationIdReads'],[data.edges,'childId',label==='graph'?'graphEdgeChildReads':'stateEdgeChildReads']] as const)for(const row of rows){if(seen.has(row))continue;seen.add(row);const descriptor=Object.getOwnPropertyDescriptor(row,field)!;assert(Object.hasOwn(descriptor,'value'));Object.defineProperty(row,field,{enumerable:descriptor.enumerable,configurable:descriptor.configurable,get(){work[counter]++;return descriptor.value;}});restores.push(()=>Object.defineProperty(row,field,descriptor));}
+   }
   }
   const samples:number[]=[],count=mode==='work'?1:4;let value:unknown;
   for(let n=0;n<count;n++){const t=performance.now();value=operation==='list'?await core.command('conversation',{name:'list',input:{limit:50,sort:'activity'}}):await core.command('conversation',{name:'collections',input:{}});const elapsed=performance.now()-t;if(mode==='work'||n>0)samples.push(elapsed);assert(process.memoryUsage().rss<=LIMITS.rss,'sampled_rss_admission_exceeded');}
