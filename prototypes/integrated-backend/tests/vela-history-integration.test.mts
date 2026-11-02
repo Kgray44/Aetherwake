@@ -15,7 +15,7 @@ import type { VelaRequest } from "../../vela-core/src/contracts.ts";
 import { planningDigest } from "../../vela-core/src/codex-planning-adapter.mts";
 
 /** Actual Core/SQLite with an explicit local stdio protocol double. No Codex/account/model connection. */
-function fixture(history = true, mode = "answer-catalog") {
+function fixture(history = true, mode = "answer-catalog", discovery = true) {
   const dir = mkdtempSync(join(tmpdir(), "aerynth-frozen-history-")),
     path = join(dir, "canonical.sqlite");
   const options = {
@@ -29,7 +29,7 @@ function fixture(history = true, mode = "answer-catalog") {
       ),
       mode,
     ],
-    velaCatalogDiscovery: true,
+    velaCatalogDiscovery: discovery,
     velaHistoryContext: history,
   };
   let core = new BackendCore(options),
@@ -333,6 +333,369 @@ test("private native review binds exact semantic egress and canonical whole-pair
     await f.close();
   }
 });
+for (const existing of [false, true])
+  test(`native review retains exact approved context with history/catalog OFF and ${existing ? "an existing" : "an initially absent"} canonical Vela root through dispatch and restart`, async () => {
+    const f = fixture(false, "answer", false);
+    try {
+      if (existing) {
+        await f.vela("open");
+        (f.core as any).velaHost.appendMessage(
+          (await f.state()).conversation!.resourceId,
+          {
+            role: "user",
+            content: "SYNTHETIC_PRIOR_BODY_NEVER_SELECTED",
+            source: "user",
+            classification: "observed",
+          },
+        );
+      }
+      const projectState = await f.core.command("desktop", {
+          type: "createProject",
+          title: "Synthetic frozen approval project",
+        }),
+        projectId = projectState.projects[0].id,
+        workspaceState = await f.core.command("desktop", {
+          type: "createWorkspace",
+          title: "Synthetic frozen approval workspace",
+          projectId,
+        }),
+        workspaceId = workspaceState.activeWorkspaceId!,
+        sourceState = await f.core.command("desktop", {
+          type: "createResource",
+          kind: "note",
+          title: "Synthetic exact approved source",
+          workspaceId,
+        }),
+        source = sourceState.resources.find((value) => value.kind === "note")!;
+      await f.core.command("desktop", {
+        type: "content",
+        resourceId: source.id,
+        expectedVersion: source.version,
+        content: "Synthetic full approved source body",
+      });
+      const chatState = await f.core.command("desktop", {
+          type: "createResource",
+          kind: "conversation",
+          title: "Synthetic full approved local chat",
+          provider: "local",
+          workspaceId,
+        }),
+        chat = chatState.resources.find(
+          (value) => value.kind === "conversation",
+        )!;
+      await f.core.command("addMessage", {
+        resourceId: chat.id,
+        role: "user",
+        content: "Synthetic exact approved local chat source",
+        expectedRevision: 1,
+      });
+      const core = f.core as any,
+        beforeConversation = (await f.state()).conversation,
+        beforeDesktop = await f.core.command("desktop", { type: "snapshot" });
+      for (const name of [
+        "velaHistorySnapshot",
+        "velaHistoryMessage",
+        "velaHistoryContent",
+      ])
+        core[name] = () => {
+          throw new Error("Default-off must not retrieve implicit history");
+        };
+      const selected = await f.review(
+          "Synthetic exact approved native context",
+          [chat.id, source.id],
+        ),
+        approvedContext = structuredClone(selected.native.context);
+      assert.equal(selected.preview.nativeReviewRequired, undefined);
+      assert.equal(selected.native.history, undefined);
+      assert(
+        !selected.native.prompt.includes("SYNTHETIC_PRIOR_BODY_NEVER_SELECTED"),
+      );
+      assert.equal(
+        (await f.state()).conversation?.resourceId ?? null,
+        beforeConversation?.resourceId ?? null,
+        "Review never creates a Vela identity",
+      );
+      const append = core.velaHost.appendMessage;
+      let actualBase: { conversationId: string; revision: number } | undefined;
+      core.velaHost.appendMessage = (id: string, message: any) => {
+        if (
+          message.source === "user" &&
+          message.content === selected.preview.intent
+        )
+          actualBase = {
+            conversationId: id,
+            revision: core.velaHost.conversationRevision(id),
+          };
+        return append(id, message);
+      };
+      const input = await f.approve(selected),
+        request = (await f.vela("request", {
+          ...input,
+          context: { id: "FORGED-RENDERER-CONTEXT", createdAt: "forged" },
+          historyFence: { baseRevision: 999 },
+        })) as VelaRequest;
+      assert.equal(request.state, "responded", request.errorCode);
+      assert.deepEqual(request.context, approvedContext);
+      assert.equal(request.context.id, selected.preview.context.id);
+      assert.equal(
+        request.context.createdAt,
+        selected.preview.context.createdAt,
+      );
+      const preview = core.velaPreviews.get(selected.preview.id);
+      assert.deepEqual(preview.acceptedInputBase, actualBase);
+      assert.equal(preview.acceptedAppend.revision, actualBase!.revision + 1);
+      assert.equal(actualBase!.conversationId, request.conversationId);
+      if (existing)
+        assert.equal(actualBase!.revision, beforeConversation!.revision);
+      else
+        assert.equal(
+          core.velaHistoryMessageMetadata(
+            request.conversationId,
+            request.inputMessageId,
+          ).ordinal,
+          1,
+        );
+      const snapshot = await f.core.command("snapshot", {}),
+        execution = Object.values(snapshot.executions).find((value) =>
+          value.commandId.includes(planningDigest(request.id).slice(0, 32)),
+        )!,
+        user = snapshot.graph.messages.find(
+          (value) =>
+            value.conversationId ===
+              snapshot.resourceMap[execution.resourceId] &&
+            value.role === "user",
+        )!;
+      assert.equal(user.content, selected.native.prompt);
+      const data = JSON.parse(user.content.split("\n").at(-1)!);
+      assert.deepEqual(data.context, approvedContext);
+      assert(!data.capabilityDiscovery);
+      assert(!data.context.history);
+      assert.deepEqual(
+        (await f.core.command("desktop", { type: "snapshot" })).blocks,
+        beforeDesktop.blocks,
+      );
+      assert.equal(
+        (await f.core.command("desktop", { type: "snapshot" })).resources.find(
+          (value) => value.id === source.id,
+        )!.content,
+        "Synthetic full approved source body",
+      );
+      assert.deepEqual(
+        JSON.parse(
+          String(
+            f.db().prepare("SELECT json FROM vela_state WHERE id=1").get()!
+              .json,
+          ),
+        ).requests.find((value: any) => value.id === request.id).context,
+        approvedContext,
+      );
+      await assert.rejects(
+        f.vela("request", input),
+        /native_vela_grant_required/,
+      );
+      await f.reopen();
+      assert.deepEqual(
+        (await f.state()).requests.find((value) => value.id === request.id)!
+          .context,
+        approvedContext,
+      );
+      assert.equal(
+        Object.keys((await f.core.command("snapshot", {})).executions).length,
+        1,
+      );
+      await assert.rejects(
+        f.vela("request", input),
+        /native_vela_grant_required/,
+      );
+    } finally {
+      await f.close();
+    }
+  });
+
+test("history/catalog OFF native approval refuses independent roots, extra input, forged accepted proof and revoked sources before any new provider/native effect", async () => {
+  for (const failure of [
+    "created-root",
+    "replaced-root",
+    "extra-before",
+    "extra-after",
+    "forged-proof",
+    "forged-base",
+    "stale-source",
+    "revoked-source",
+    "scope",
+    "expired-grant",
+    "forged-review",
+  ] as const) {
+    const f = fixture(false, "answer", false);
+    try {
+      if (failure !== "created-root") await f.vela("open");
+      const workspace = await f.core.command("desktop", {
+          type: "createWorkspace",
+          title: "Synthetic rejection workspace",
+          projectId: null,
+        }),
+        sourceState = await f.core.command("desktop", {
+          type: "createResource",
+          kind: "note",
+          title: "Synthetic rejection source",
+          workspaceId: workspace.activeWorkspaceId,
+        }),
+        source = sourceState.resources.find((value) => value.kind === "note")!;
+      const selected = await f.review(
+          "Synthetic history-off rejected request",
+          [source.id],
+        ),
+        core = f.core as any;
+      if (failure === "forged-review") {
+        const before = String(
+          f.db().prepare("SELECT json FROM vela_state WHERE id=1").get()!.json,
+        );
+        await assert.rejects(
+          f.core.command("authorizeVelaRequest", {
+            previewId: selected.preview.id,
+            signature: selected.preview.signature,
+            reviewDigest: "forged",
+          }),
+          /vela_native_review_required/,
+        );
+        assert.equal(
+          String(
+            f.db().prepare("SELECT json FROM vela_state WHERE id=1").get()!
+              .json,
+          ),
+          before,
+        );
+        assert.equal(core.velaGrants.size, 0);
+        continue;
+      }
+      const input = await f.approve(selected);
+      if (failure === "created-root") await f.vela("open");
+      if (failure === "replaced-root") {
+        const other = await f.core.command("createConversation", {
+          title: "Synthetic independent replacement",
+          providerId: "local",
+          commandId: "synthetic-root-replacement",
+        });
+        core.state.vela.conversationId = other.resourceId;
+      }
+      if (failure === "extra-before")
+        core.velaHost.appendMessage(core.state.vela.conversationId, {
+          role: "user",
+          content: "Synthetic independent append",
+          source: "user",
+          classification: "observed",
+        });
+      if (failure === "stale-source")
+        await f.core.command("desktop", {
+          type: "content",
+          resourceId: source.id,
+          expectedVersion: source.version,
+          content: "Synthetic concurrent canonical change",
+        });
+      if (failure === "revoked-source") {
+        const read = core.conversationAccess.resource;
+        core.conversationAccess.resource = (id: string, ...rest: unknown[]) =>
+          id !== source.id && read(id, ...rest);
+      }
+      if (failure === "scope")
+        await f.core.command("desktop", {
+          type: "navigate",
+          target: { kind: "constellation", projectId: null },
+        });
+      if (["extra-after", "forged-proof", "forged-base"].includes(failure)) {
+        const bridge = core.frozenVelaProviderContext.bind(core);
+        core.frozenVelaProviderContext = (id: string) => {
+          const value = bridge(id);
+          return {
+            ...value,
+            onAcceptedAppend: (accepted: any, base: any) => {
+              value.onAcceptedAppend(
+                failure === "forged-proof"
+                  ? { ...accepted, contentDigest: "0".repeat(64) }
+                  : accepted,
+                failure === "forged-base"
+                  ? { ...base, revision: base.revision + 1 }
+                  : base,
+              );
+              if (failure === "extra-after")
+                core.velaHost.appendMessage(core.state.vela.conversationId, {
+                  role: "user",
+                  content: "Synthetic extra append after accepted input",
+                  source: "user",
+                  classification: "observed",
+                });
+            },
+          };
+        };
+      }
+      const before = await f.core.command("desktop", { type: "snapshot" }),
+        stored = String(
+          f.db().prepare("SELECT json FROM vela_state WHERE id=1").get()!.json,
+        ),
+        integrationStored = String(
+          f.db().prepare("SELECT json FROM integration_state WHERE id=1").get()!
+            .json,
+        ),
+        clock = Date.now;
+      try {
+        if (failure === "expired-grant") Date.now = () => clock() + 61000;
+        if (failure === "extra-after") {
+          const rejected = (await f.vela("request", input)) as VelaRequest;
+          assert.equal(rejected.state, "failed");
+          assert.equal(rejected.errorCode, "planning_failed");
+          assert.throws(
+            () =>
+              core.validateVelaInputAnchor(
+                core.velaPreviews.get(selected.preview.id),
+              ),
+            /stale_vela_input_revision/,
+          );
+        } else {
+          await assert.rejects(
+            f.vela("request", input),
+            /stale_vela_input|invalid_history_append|stale_vela_preview|native_vela_grant_expired/,
+          );
+          assert.equal(
+            String(
+              f.db().prepare("SELECT json FROM vela_state WHERE id=1").get()!
+                .json,
+            ),
+            stored,
+            "Rejected pre-dispatch request must not append canonical input or change Vela state: " +
+              failure,
+          );
+          assert.equal(
+            String(
+              f
+                .db()
+                .prepare("SELECT json FROM integration_state WHERE id=1")
+                .get()!.json,
+            ),
+            integrationStored,
+            "Rejected canonical append must also roll back Core graph/identity storage",
+          );
+        }
+      } finally {
+        Date.now = clock;
+      }
+      const after = await f.core.command("desktop", { type: "snapshot" });
+      assert.deepEqual(after.blocks, before.blocks);
+      assert.deepEqual(after.workspaces, before.workspaces);
+      assert.deepEqual(
+        after.resources.filter((value) => value.id === source.id),
+        before.resources.filter((value) => value.id === source.id),
+      );
+      assert.equal(
+        Object.keys((await f.core.command("snapshot", {})).executions).length,
+        0,
+        failure + " starts no provider turn",
+      );
+    } finally {
+      await f.close();
+    }
+  }
+});
+
 test("default-false history never selects or materializes previous bodies; host review remains private and byte-exact", async () => {
   const f = fixture(false);
   try {
@@ -400,8 +763,8 @@ test("an extra canonical append or changed source invalidates a frozen window in
       const value = bridge(id);
       return {
         ...value,
-        onAcceptedAppend: (append: unknown) => {
-          value.onAcceptedAppend(append);
+        onAcceptedAppend: (append: unknown, base: unknown) => {
+          value.onAcceptedAppend(append, base);
           core.velaHost.appendMessage(core.state.vela.conversationId, {
             role: "user",
             content: "Synthetic unauthorized extra append",

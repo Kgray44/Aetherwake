@@ -49,6 +49,8 @@ interface State {
 interface PrivateVelaPreview extends VelaRequestPreview {
   frozenContext:ContextManifest;historyFence?:HistoryFence;origin:HistoryOrigin;historyOmissions:readonly HistoryOmission[];
   catalog:CapabilityCatalogSnapshot;prompt:string;nativeReviewed:boolean;reviewDigest?:string;acceptedAppend?:AcceptedHistoryAppend;
+  inputAnchor:{conversationId:string|null;revision:number|null};inputDigest:string;
+  acceptedInputBase?:{conversationId:string;revision:number};
 }
 
 export class BackendCore {
@@ -472,12 +474,21 @@ export class BackendCore {
   private velaScopeStamp() {
     const c=this.velaContext();return planningDigest({principalId:c.principalId,policyVersion:c.policyVersion,currentProjectId:c.currentProjectId,currentWorkspaceId:c.currentWorkspaceId,projectVersion:c.currentProjectId?this.db.prepare('SELECT version FROM projects WHERE id=?').get(c.currentProjectId)?.version:null,workspaceVersion:c.currentWorkspaceId?this.db.prepare('SELECT version FROM workspaces WHERE id=?').get(c.currentWorkspaceId)?.version:null,workspaceRevision:c.currentWorkspaceId?(this.velaNative?.workspaceRevision?.(c.currentWorkspaceId)??this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(c.currentWorkspaceId)?.version):null});
   }
-  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery'],review?:PrivateVelaPreview) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:this.velaPlanner.providerId,instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{}),...(review?{catalogDigest:review.catalog.projection.digest,promptDigest:planningDigest(review.prompt),historyFenceDigest:review.historyFence?.digest??null,origin:review.origin}:{})}); }
+  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery'],review?:PrivateVelaPreview) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:this.velaPlanner.providerId,instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{}),...(review?{catalogDigest:review.catalog.projection.digest,promptDigest:planningDigest(review.prompt),historyFenceDigest:review.historyFence?.digest??null,origin:review.origin,inputAnchor:review.inputAnchor,inputDigest:review.inputDigest}:{})}); }
   private velaSemanticPrompt(intent:string,context:ContextManifest,catalog:CapabilityCatalogSnapshot,discovery?:VelaRequestPreview['discovery']) {
     return buildCodexPlanningPrompt({intent,context,capabilities:catalog.descriptors,instruction:VELA_PLANNING_INSTRUCTION},discovery?{projection:catalog.projection,declaration:discovery}:undefined);
   }
+  /** Ephemeral native-review fence; independent of whether implicit history is enabled. */
+  private validateVelaInputAnchor(preview:PrivateVelaPreview,metadataOnly=false) {
+    const id=this.state.vela!.conversationId,anchor=preview.inputAnchor,append=preview.acceptedAppend,base=preview.acceptedInputBase;
+    if(!append){ensure(!base&&id===anchor.conversationId,'stale_vela_input_identity');if(id!==null)ensure(anchor.revision!==null&&this.velaHost.conversationRevision?.(id)===anchor.revision,'stale_vela_input_revision');return;}
+    ensure(base&&id===base.conversationId&&(anchor.conversationId===null||id===anchor.conversationId&&base.revision===anchor.revision)&&append.revision===base.revision+1&&this.velaHost.conversationRevision?.(id!)===append.revision,'stale_vela_input_revision');
+    const meta=this.velaHistoryMessageMetadata(id!,append.messageId),request=this.vela.historyRequestMetadata(append.requestId);
+    ensure(meta?.role==='user'&&meta.source==='user'&&meta.classification==='observed'&&meta.requestId===append.requestId&&request?.conversationId===id&&request.inputMessageId===append.messageId&&request.inputContentDigest===append.contentDigest&&append.contentDigest===preview.inputDigest,'invalid_history_append');
+    if(!metadataOnly)ensure(this.state.graph.messages.find(value=>value.id===append.messageId)?.content===preview.intent,'invalid_history_append');
+  }
   /** Validates reviewed sources in place; never reselects history/resources after the initiating append. */
-  private validateFrozenVelaPreview(preview:PrivateVelaPreview,options:{metadataOnly?:boolean}={}) {
+  private validateFrozenVelaPreview(preview:PrivateVelaPreview,options:{metadataOnly?:boolean;nativeReview?:boolean}={}) {
     ensure(preview&&Date.parse(preview.expiresAt)>Date.now()&&preview.scopeStamp===this.velaScopeStamp(),'stale_vela_preview');
     const scope=this.velaHost.scope();
     for(const ref of preview.context.discovered){const current=this.velaHost.resolve(ref,scope);ensure(current&&current.version===ref.version,'stale_vela_preview');}
@@ -485,6 +496,7 @@ export class BackendCore {
     const currentCatalog=createCapabilityCatalog(this.velaCapabilities(CAPABILITIES));ensure(currentCatalog.projection.digest===preview.catalog.projection.digest,'stale_capability_catalog');
     if(preview.discovery){ensure(this.port.catalogDiscovery&&this.port.catalogDiscovery.available!==false,'capability_discovery_unavailable');validateCatalogDeclaration(currentCatalog,preview.discovery);}
     this.vela.validateProviderHistory({context:preview.frozenContext,...(preview.historyFence?{historyFence:preview.historyFence}:{})},{...options,...(preview.acceptedAppend?{acceptedAppend:preview.acceptedAppend}:{})});
+    if((preview.nativeReviewed||options.nativeReview)&&!preview.historyFence)this.validateVelaInputAnchor(preview,options.metadataOnly===true);
     // The schema tool validates immutable proof metadata only; it never serializes cached source/history bodies.
     if(!options.metadataOnly)ensure(this.velaEgress(preview.intent,preview.frozenContext,preview.discovery,preview)===preview.signature&&this.velaSemanticPrompt(preview.intent,preview.frozenContext,preview.catalog,preview.discovery)===preview.prompt,'stale_vela_preview');
   }
@@ -502,11 +514,12 @@ export class BackendCore {
     const selected=this.vela.previewProviderContext(input.resourceIds,{includeHistory:this.historyContextEnabled,fits:context=>{try{this.velaSemanticPrompt(input.intent,context,catalog,discovery);return true;}catch(error){if((error as {code?:string}).code==='planning_prompt_capacity_exceeded')return false;throw error;}}});
     const {history,...context}=selected.context,summary=history?{messageCount:history.messages.length,encodedBytes:Buffer.byteLength(JSON.stringify(history)),digest:historyDigest(history)}:undefined;
     const publicPreview:VelaRequestPreview={id:randomUUID(),intent:input.intent,resourceIds:[...input.resourceIds],context,providerId:this.velaPlanner.providerId,signature:'',scopeStamp:this.velaScopeStamp(),expiresAt:new Date(Date.now()+300000).toISOString(),...(discovery?{discovery}:{}),...(summary?{history:summary}:{}),...(this.historyContextEnabled?{nativeReviewRequired:true}:{})};
-    const preview:PrivateVelaPreview={...publicPreview,frozenContext:structuredClone(selected.context),origin:selected.origin,...(selected.historyFence?{historyFence:selected.historyFence}:{}),historyOmissions:selected.historyOmissions,catalog,prompt:this.velaSemanticPrompt(input.intent,selected.context,catalog,discovery),nativeReviewed:false};
+    const conversationId=this.state.vela!.conversationId,inputAnchor={conversationId,revision:conversationId?this.velaHost.conversationRevision?.(conversationId)??null:null};
+    const preview:PrivateVelaPreview={...publicPreview,frozenContext:structuredClone(selected.context),origin:selected.origin,...(selected.historyFence?{historyFence:selected.historyFence}:{}),historyOmissions:selected.historyOmissions,catalog,prompt:this.velaSemanticPrompt(input.intent,selected.context,catalog,discovery),nativeReviewed:false,inputAnchor,inputDigest:historyDigest(input.intent)};
     preview.signature=this.velaEgress(input.intent,preview.frozenContext,discovery,preview);publicPreview.signature=preview.signature;this.velaPreviews.set(preview.id,preview);return structuredClone(publicPreview);
   }
   private nativeVelaReview(input:CommandMap['velaNativeReview']['input']):VelaNativeReview {
-    const preview=this.velaPreviews.get(input?.previewId);ensure(preview&&input.signature===preview.signature,'approval_scope_mismatch');this.validateFrozenVelaPreview(preview);
+    const preview=this.velaPreviews.get(input?.previewId);ensure(preview&&input.signature===preview.signature,'approval_scope_mismatch');this.validateFrozenVelaPreview(preview,{nativeReview:true});
     const {history}=preview.frozenContext,review={previewId:preview.id,signature:preview.signature,providerId:preview.providerId,prompt:preview.prompt,promptDigest:planningDigest(preview.prompt),context:preview.context,...(history?{history}:{}),historyOmissions:preview.historyOmissions.map(item=>({reason:item.reason,...(item.count!==undefined?{count:item.count}:item.messageIds?{count:item.messageIds.length}:{})}))};
     const reviewDigest=planningDigest(review),result={...review,reviewDigest};ensure(Buffer.byteLength(JSON.stringify(result))<=65536,'vela_native_review_too_large');preview.nativeReviewed=true;preview.reviewDigest=reviewDigest;return structuredClone(result);
   }
@@ -519,7 +532,7 @@ export class BackendCore {
   private validateVelaGrant(id:string) {const g=this.velaGrants.get(id);ensure(g&&!g.consumed,'native_vela_grant_required');ensure(Date.parse(g.expiresAt)>Date.now()&&this.velaPreviews.has(g.previewId),'native_vela_grant_expired');if(g.reviewDigest)ensure(this.velaPreviews.get(g.previewId)!.reviewDigest===g.reviewDigest,'native_vela_review_mismatch');return g;}
   private frozenVelaProviderContext(grantId:string):PrivateFrozenProviderContext {
     const grant=this.validateVelaGrant(grantId),preview=this.velaPreviews.get(grant.previewId)!;
-    ensure(preview.nativeReviewRequired&&preview.nativeReviewed&&grant.reviewDigest===preview.reviewDigest,'vela_native_review_required');
+    ensure(preview.nativeReviewed&&typeof preview.reviewDigest==='string'&&preview.reviewDigest.length>0&&grant.reviewDigest===preview.reviewDigest,'vela_native_review_required');
     return {context:preview.frozenContext,...(preview.historyFence?{historyFence:preview.historyFence}:{}),
       validate:(phase,append)=>{
         ensure(this.velaGrants.get(grantId)===grant&&Date.parse(grant.expiresAt)>Date.now(),'native_vela_grant_expired');
@@ -527,9 +540,12 @@ export class BackendCore {
         else ensure(preview.acceptedAppend&&append&&planningDigest(append)===planningDigest(preview.acceptedAppend)&&(!grant.requestId||grant.requestId===append.requestId),'invalid_history_append');
         if(phase==='before-response')ensure(grant.requestId===append?.requestId,'native_vela_grant_mismatch');
         this.validateFrozenVelaPreview(preview);
-      },onAcceptedAppend:value=>{
+      },onAcceptedAppend:(value,base)=>{
         const id=this.state.vela!.conversationId,meta=this.state.vela!.messages[value.messageId];
-        ensure(!preview.acceptedAppend&&id&&this.state.revisions[id]===value.revision&&meta?.source==='user'&&meta.classification==='observed'&&meta.requestId===value.requestId&&value.contentDigest===historyDigest(preview.intent),'invalid_history_append');
+        ensure(!preview.acceptedAppend&&id&&base&&base.conversationId===id&&Number.isSafeInteger(base.revision)&&base.revision>=1&&base.revision<Number.MAX_SAFE_INTEGER&&value.revision===base.revision+1&&this.state.revisions[id]===value.revision&&meta?.source==='user'&&meta.classification==='observed'&&meta.requestId===value.requestId&&value.contentDigest===preview.inputDigest,'invalid_history_append');
+        if(preview.inputAnchor.conversationId!==null)ensure(id===preview.inputAnchor.conversationId&&base.revision===preview.inputAnchor.revision,'stale_vela_input_revision');
+        else {const gid=this.gid(id),root=this.state.graph.conversations.find(value=>value.id===gid);ensure(root?.ownMessageIds.length===1&&root.ownMessageIds[0]===value.messageId&&!this.state.graph.edges.some(edge=>edge.childId===gid),'invalid_history_append');}
+        preview.acceptedInputBase=Object.freeze(structuredClone(base));
         preview.acceptedAppend=Object.freeze(structuredClone(value));
       }};
   }
@@ -608,7 +624,7 @@ export class BackendCore {
       case 'explicitPreference':return this.vela.explicitPreference(input);case 'reviewPreference':return this.vela.reviewPreference(input);case 'resetPreferences':return this.vela.resetPreferences(input);
       case 'request': {
         if(input?.authorizeProvider===true){ensure(input.grantId&&input.previewId,'native_vela_grant_required');const grant=this.validateVelaGrant(input.grantId),preview=this.velaPreviews.get(grant.previewId)!;ensure(!grant.requestId,'native_vela_grant_consumed');ensure(grant.previewId===input.previewId&&input.intent===preview.intent&&planningDigest(input.resourceIds)===planningDigest(preview.resourceIds),'native_vela_grant_mismatch');}
-        const frozen=this.historyContextEnabled&&input?.authorizeProvider===true?this.frozenVelaProviderContext(input.grantId):undefined;
+        const frozen=input?.authorizeProvider===true&&this.velaGrants.get(input.grantId)?.reviewDigest!==undefined?this.frozenVelaProviderContext(input.grantId):undefined;
         this.pendingVelaGrant=input?.grantId??null;try{return await this.vela.request({intent:input.intent,resourceIds:input.resourceIds,authorizeProvider:input.authorizeProvider},frozen);}finally{this.pendingVelaGrant=null;}
       }
       default:throw new ServiceError('unsupported_vela_command');

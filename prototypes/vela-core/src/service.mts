@@ -364,7 +364,9 @@ export class VelaService {
       check(providerContext.policyVersion === scope.policyVersion, 'stale_policy_version');
       // The exact private reviewed egress is used in memory; canonical history bodies are never duplicated in request storage.
       const { history: _history, ...storedContext } = providerContext;
-      const r: VelaRequest = { id: randomUUID(), conversationId: this.conversationId(), intent: input.intent,
+      const conversationId=this.conversationId(),baseRevision=frozen?this.opts.host.conversationRevision?.(conversationId):undefined;
+      if(frozen)check(Number.isSafeInteger(baseRevision)&&Number(baseRevision)>=1&&Number(baseRevision)<Number.MAX_SAFE_INTEGER,'canonical_history_revision_required');
+      const r: VelaRequest = { id: randomUUID(), conversationId, intent: input.intent,
         state: 'planning', createdAt: this.now(), updatedAt: this.now(), providerId: this.opts.planner?.providerId ?? null,
         context: storedContext, origin: this.historyOrigin(scope), inputContentDigest: historyDigest(input.intent),
         ...(reviewed?.historyFence ? { history: { schemaVersion: 1, fenceDigest: reviewed.historyFence.digest, historyDigest: reviewed.historyFence.historyDigest, messages: reviewed.historyFence.messages } } : {}) };
@@ -376,9 +378,10 @@ export class VelaService {
       catch (error) { if (reviewed?.historyFence || !(error instanceof HistorySelectionError)) throw error; }
       if (frozen) {
         const revision = this.opts.host.conversationRevision?.(r.conversationId); check(Number.isSafeInteger(revision) && Number(revision) >= 1, 'canonical_history_revision_required');
+        check(revision===baseRevision!+1,'invalid_history_append');
         if (reviewed?.historyFence) check(revision === reviewed.historyFence.baseRevision + 1, 'invalid_history_append');
         acceptedAppend = { requestId: r.id, messageId: message.id, contentDigest: r.inputContentDigest!, revision: revision! };
-        frozen.onAcceptedAppend(structuredClone(acceptedAppend));
+        frozen.onAcceptedAppend(structuredClone(acceptedAppend),{conversationId,revision:baseRevision!});
       }
       return r;
     });

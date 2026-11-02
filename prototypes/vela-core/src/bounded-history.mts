@@ -52,7 +52,8 @@ export interface PrivateFrozenProviderContext {
   context: Readonly<ContextManifest & { history?: ProviderHistory }>;
   historyFence?: HistoryFence;
   validate(phase: 'before-append' | 'before-provider' | 'before-response', acceptedAppend?: AcceptedHistoryAppend): void;
-  onAcceptedAppend(value: AcceptedHistoryAppend): void;
+  /** Actual host metadata observed after ensure, before append; optional for older one-argument handlers. */
+  onAcceptedAppend(value: AcceptedHistoryAppend, canonicalBase?: { conversationId: string; revision: number }): void;
 }
 export class HistorySelectionError extends Error {
   readonly code: string;
