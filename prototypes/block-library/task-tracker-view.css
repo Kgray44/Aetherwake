@@ -1,0 +1,13 @@
+.aw-task-tracker { display:flex; flex-direction:column; gap:.7rem; min-width:0; color:inherit; }
+.aw-task-tracker h3,.aw-task-tracker h4,.aw-task-tracker p { margin:0; }.aw-task-tracker h4 { font-size:.8rem; letter-spacing:.04em; }
+.aw-task-objective { font:500 1.2rem/1.55 Georgia,serif; white-space:pre-wrap; }.aw-task-outcome-states { display:flex; flex-wrap:wrap; gap:1rem; margin:0; border-bottom:1px solid #b8cbb92e; padding-bottom:.7rem; }
+.aw-task-outcome-states dt { font-size:.68rem; opacity:.65; }.aw-task-outcome-states dd { margin:.2rem 0 0; font-size:.85rem; text-transform:capitalize; }
+.aw-task-requirements { margin:0; padding-left:1.3rem; }.aw-task-requirements li { padding:.35rem 0; line-height:1.55; font-size:.85rem; }
+.aw-task-actions,.aw-task-binding { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; }.aw-task-binding { padding:.3rem 0; font-size:.8rem; }.aw-task-binding small { opacity:.6; }
+.aw-task-tracker button,.aw-task-tracker input,.aw-task-tracker textarea,.aw-task-tracker select { box-sizing:border-box; border:1px solid #b8cbb941; border-radius:.6rem; padding:.4rem .6rem; min-height:32px; font:inherit; font-size:.8rem; background:#b8cbb908; color:inherit; }
+.aw-task-tracker button { cursor:pointer; }.aw-task-tracker :disabled { opacity:.45; cursor:default; }.aw-task-tracker :focus-visible { outline:2px solid #c6d7c4; outline-offset:3px; }
+.aw-task-panel { overflow:hidden; display:flex; flex-direction:column; gap:.5rem; border-left:2px solid #b8cbb92e; padding-left:.6rem; box-sizing:border-box; }
+.aw-task-panel label { display:flex; align-items:center; gap:.4rem; font-size:.8rem; }.aw-task-panel label:has(textarea) { display:block; }.aw-task-panel textarea { display:block; width:100%; min-width:0; resize:vertical; }.aw-task-panel input:not([type=checkbox]) { min-width:0; flex:1; }
+.aw-task-panel input[type=checkbox] { width:18px; height:18px; min-height:18px; padding:0; accent-color:#b8cbb9; }.aw-task-panel ol { margin:0; padding-left:1.2rem; }.aw-task-panel li { display:flex; flex-wrap:wrap; gap:.4rem; margin:.35rem 0; }
+.aw-task-attempt,.aw-task-reviews article { display:flex; flex-direction:column; align-items:start; gap:.35rem; padding:.65rem 0; border-bottom:1px solid #b8cbb925; font-size:.85rem; }.aw-task-attempt small,.aw-task-reviews small { opacity:.65; font-size:.7rem; }
+.aw-task-caveat,.aw-task-status,.aw-task-draft-status,.aw-task-panel > p { font-size:.75rem; line-height:1.5; }.aw-task-tracker [hidden] { display:none; }
