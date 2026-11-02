@@ -23,7 +23,18 @@ test('combined workspace factories compile every added/inherited expression and 
   assert.doesNotMatch(source, /\.dispatchEvent\(|\.click\(\)|\.focus\(\)|\.value\s*=/);
   assert.match(source, /driver\.js\(compileExpression\(code\)\)/);
   assert.doesNotMatch(source, /x\.host\(['"](?:execute|createConversation|authorizeConversationSend|conversationSend|connect|capabilities)['"]/);
+  assert.doesNotMatch(source, /x\.host\(['"]snapshot['"]/);
   assert.match(readFileSync(new URL('./workspace-native.cjs', import.meta.url), 'utf8'), /includes\('--verify-functional-workspace'\)/);
+});
+
+test('functional private provider observer exposes only guarded zero counts and rejects missing, malformed, nonzero or owner-lost observations', async () => {
+  let active = true, reads = 0;
+  const guard = { async around(work: () => Promise<unknown>) { assert(active, 'owner-lost'); reads++; const result = await work(); assert(active, 'owner-lost'); return result; } };
+  const zero = { executionCount: 0, bindingCount: 0, assistantMessageCount: 0 };
+  assert.deepEqual(await helper.inspectProviderCounts(guard, async () => zero), zero);
+  await assert.rejects(helper.inspectProviderCounts(guard, undefined), /observer_required/); assert.equal(reads, 1);
+  for (const counts of [null, [], {}, { executionCount: 0, bindingCount: 0 }, { ...zero, graph: {} }, { ...zero, executionCount: 1 }, { ...zero, bindingCount: 1 }, { ...zero, assistantMessageCount: 1 }, { ...zero, bindingCount: NaN }, { ...zero, executionCount: -1 }]) await assert.rejects(helper.inspectProviderCounts(guard, async () => counts));
+  await assert.rejects(helper.inspectProviderCounts(guard, async () => { active = false; return zero; }), /owner-lost/);
 });
 
 test('functional Note observations distinguish canonical save from separate recovery and group observations require the exact member ID', async () => {

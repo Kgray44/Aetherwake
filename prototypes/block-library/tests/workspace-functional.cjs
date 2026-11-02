@@ -75,10 +75,21 @@ exports.assertNoProviderExecution = integration => {
   assert.equal(Object.keys(integration.executions).length, 0); assert.equal(Object.values(integration.bindings).flat().length, 0, 'Identity staging must not establish a native provider session');
   assert(integration.graph.messages.every(message => message.role === 'user'), 'No synthetic or provider assistant output is permitted');
 };
+exports.inspectProviderCounts = async (guard, inspectProviderState) => {
+  assert.equal(typeof inspectProviderState, 'function', 'functional_private_provider_observer_required');
+  const counts = await guard.around(() => inspectProviderState());
+  assert(counts && typeof counts === 'object' && !Array.isArray(counts));
+  assert.deepEqual(Object.keys(counts).sort(), ['assistantMessageCount', 'bindingCount', 'executionCount']);
+  for (const value of Object.values(counts)) assert(Number.isSafeInteger(value) && value >= 0, 'Provider observer must return bounded integer counts');
+  assert.equal(counts.executionCount, 0, 'Identity-only native fixture must not execute a provider');
+  assert.equal(counts.bindingCount, 0, 'Identity staging must not establish a native provider session');
+  assert.equal(counts.assistantMessageCount, 0, 'No synthetic or provider assistant output is permitted');
+  return counts;
+};
 
 /** Parent-owned native phase only. The Codex block is inspected without Send,
  * connect, capability probes or execution. A genuine turn remains separate. */
-exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupErrors = [] }) => {
+exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupErrors = [], inspectProviderState }) => {
   const output = path.resolve(__dirname, '../../visual-experience/cinematic-v3/.runtime/application-evidence/workspace-functional-' + Date.now() + '-' + randomUUID().slice(0, 8));
   const receipt = { contract: 'aerynth.functional-workspace-evidence@1', syntheticOnly: true, source, passed: false, journeyBComplete: false, codexExecution: 'not requested; identity-only inspection', actions: [], checks: [], screenshots: [], errors: [], limitations: ['Offline canonical preparation is not native creation of the initial six block surfaces.', 'Actual native local recording, Note review/save/edit/recovery, new Task creation/membership/status, retained-event inspection and Project overview navigation are distinct from preparation.', 'Codex is a distinct prepared identity with an untouched unsent draft. No capability probe, connection, native session or turn is requested; this alone cannot complete journey B.', 'Canonical application events expose only their actual stored attribution; a provider association is not evidence of provider execution or per-resource causality.', 'No real native IME, mixed-card scale, sustained performance, wider D/E/F or owner artistic acceptance.'] };
   let guard, limits, consoleSource, probe, failureShot, comparisonForCapture;
@@ -111,6 +122,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
       const marker = Buffer.from(JSON.stringify({ contract: 'aerynth.functional-workspace-initial-started@1', startedAt: new Date().toISOString(), sourceSha256: digest(Buffer.from(JSON.stringify(source.hashes))) }));
       assert(marker.length <= 1024); await guard.around(() => fs.writeFile(path.join(privateRoot, startedName), marker, { flag: 'wx' }));
     }
+    assert.equal(typeof inspectProviderState, 'function', 'functional_private_provider_observer_required');
     const driver = await guard.around(() => createDriver(win, { assertActive: guard.check }));
     const js = code => guard.around(() => driver.js(compileExpression(code))), wait = code => guard.around(() => driver.wait(compileExpression(code), Math.min(8000, Math.max(1, limits.deadlineAt - Date.now()))));
     const snapshot = () => guard.around(() => driver.snapshot());
@@ -124,7 +136,12 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
     const document = async id => (await js(x.host('notes', { name: 'readNote', input: id }))).result;
     const draft = id => js(x.host('conversation', { name: 'readDraft', input: { resourceId: id } }));
     const detail = id => js(x.host('conversation', { name: 'detail', input: { resourceId: id, limit: 50 } }));
-    const noExecution = async () => exports.assertNoProviderExecution(await js(x.host('snapshot', {})));
+    const noExecution = async () => {
+      assert.deepEqual(await js(x.host('executionStatus', {})), []);
+      const counts = await exports.inspectProviderCounts(guard, inspectProviderState);
+      receipt.providerStateObservations ??= []; assert(receipt.providerStateObservations.length < 32);
+      receipt.providerStateObservations.push({ observedAt: new Date().toISOString(), ...counts });
+    };
     const unchangedRecovery = async () => { assert.deepEqual(await document(seed.recoveryTaskId), seed.documents[seed.recoveryTaskId]); assert.deepEqual(await draft(roles.codex.resourceId), seed.drafts[roles.codex.resourceId]); const codex = await detail(roles.codex.resourceId); assert.equal(codex.conversation.providerId, 'codex-app-server'); assert.equal(codex.messages.total, 0); await noExecution(); };
     const shot = async (name, comparison) => {
       assert(receipt.screenshots.length < limits.maxScreenshots); const before = await js(x.graphics()); await wait(x.drawsAfter(before.draws)); const health = await js(x.graphics()); assert(captureAllowed(health));
