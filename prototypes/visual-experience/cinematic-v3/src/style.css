@@ -164,6 +164,10 @@ body.application-ready #vela.vela-card {
   color: #bab3d1;
   pointer-events: none;
 }
+/* Keep decorative study labeling in the standalone visual fixtures. */
+body.application-ready .study-caption {
+  display: none;
+}
 .study-caption small {
   display: block;
   letter-spacing: 0.08em;
