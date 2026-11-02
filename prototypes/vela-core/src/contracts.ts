@@ -88,6 +88,36 @@ export interface ProviderProposal {
   contribution: ProviderContribution;
 }
 export type ProviderReplyKind = 'answer' | 'clarification' | 'inability';
+export type VelaLocalCapabilityId = 'local.time' | 'local.date' | 'local.workspace-status' | 'local.project-count' | 'local.execution-status';
+export type VelaLocalFacts =
+  | { kind: 'time' | 'date'; epochMs: number; utc: string; timeZone: string; locale: string; utcOffsetMinutes: number; calendarDate: string; formatted: string }
+  | { kind: 'workspace-status'; workspace: ResourceRef | null; persistence: 'persisted' | 'pending' | 'unknown'; coverage: 'canonical-workspace-layout' }
+  | { kind: 'project-count'; count: number; coverage: 'authorized-active-projects' }
+  | { kind: 'execution-status'; running: number; unknown: number; coverage: 'aerynth-owned-executions' }
+  | { kind: 'unavailable'; code: string };
+/** Facts/provenance only. Answer content lives exclusively in the canonical message. */
+export interface VelaLocalRecord {
+  schemaVersion: 1; commandId: string; capabilityId: VelaLocalCapabilityId;
+  classification: 'observed'; providerId: null; observedAt: string; facts: VelaLocalFacts;
+}
+/** Ephemeral first-useful-output DTO, including actual post-commit measurements; never a second transcript store. */
+export interface VelaLocalResult extends VelaLocalRecord {
+  messageId: string; content: string; replayed: boolean;
+  timing: { classificationMs: number; capabilityMs: number; persistenceMs: number; totalMs: number };
+}
+export type VelaLocalDispatch = { matched: false } | { matched: true; request: VelaRequest; result: VelaLocalResult };
+/** Trusted native callbacks only; no renderer facts, provider access, selection or arbitrary resource retrieval. */
+export interface VelaLocalHost {
+  identity(): { principalId: string; policyVersion: string };
+  clock(): { epochMs: number; timeZone: string; locale: string };
+  /** SAME canonical graph/DB, with targeted system:vela access checks; must not call the general metadata/context view. */
+  ensureConversation(): string;
+  appendMessage(conversationId: string, message: Omit<VelaMessage, 'id'>): VelaMessage;
+  readMessage(conversationId: string, messageId: string): VelaMessage | null;
+  workspaceStatus?(): { workspace: ResourceRef | null; persistence: 'persisted' | 'pending' | 'unknown' } | null;
+  projectCount?(): { count: number; coverage: 'authorized-active-projects' } | null;
+  executionStatus?(): { running: number; unknown: number; coverage: 'aerynth-owned-executions' } | null;
+}
 export type ProviderResult =
   | { schemaVersion: 2; kind: 'plan'; summary: string; steps: PlanStep[]; contribution: ProviderContribution }
   | { schemaVersion: 2; kind: ProviderReplyKind; content: string; contribution: ProviderContribution };
@@ -109,6 +139,7 @@ export interface VelaRequest {
   context: ContextManifest; planId?: string; errorCode?: string;
   /** Reference only: content lives in the SAME canonical conversation, never a second transcript. */
   response?: { kind: ProviderReplyKind; messageId: string; contentDigest?: string };
+  local?: VelaLocalRecord;
   /** Schema-3 provenance is absent on legacy requests; unavailable origin is never inferred as known-null. */
   origin?: HistoryOrigin; inputMessageId?: string; inputContentDigest?: string; provenance?: HistoryProvenance;
   /** References/proofs only; actual history text remains in the canonical conversation. */
@@ -260,7 +291,8 @@ export interface VelaClient {
   state(): Promise<VelaState>;
   open(): Promise<VelaState>;
   search(query: string): Promise<ResourceRef[]>;
-  request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean }): Promise<VelaRequest>;
+  request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean; commandId?: string }): Promise<VelaRequest>;
+  local?(input: { intent: string; commandId: string }): Promise<VelaLocalDispatch>;
   native(input: { intent: string; action: VelaNativeAction }): Promise<VelaPlan>;
   review(input: { planId: string; fingerprint: string; decision: 'approve' | 'reject' }): Promise<VelaPlan>;
   apply(planId: string): Promise<VelaPlan>;

@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { CAPABILITIES, VelaError, check, identifier, isRecord, text, validateAction, validateProviderResult } from './capabilities.ts';
 import { defaultAdaptation, effectivePreference, observePreference, preferenceCategory, samePreferenceScope, setExplicitPreference, validatePreference } from './adaptation.ts';
 import { VELA_CONTRACT } from './contracts.ts';
+import { classifyVelaLocalIntent, evaluateLocalCapability, validateLocalRecord } from './local-capabilities.mts';
 import { HISTORY_LIMITS, HistorySelectionError, createHistoryProvenance, historyDependenciesFromContext, historyDigest, selectBoundedHistory, unionHistoryDependencies, validateFrozenHistory, validateFrozenHistoryMetadata } from './bounded-history.mts';
 import type { AcceptedHistoryAppend, HistoryFence, HistoryMessageMetadata, HistoryMetadataReader, HistoryOmission, HistoryOrigin, HistoryProofReader, HistoryRequestRecord, HistorySnapshot, PrivateFrozenProviderContext } from './bounded-history.mts';
 import type {
@@ -11,6 +12,7 @@ import type {
   VelaNativeAction, VelaPlan, VelaPlanningPort, VelaRequest, VelaScope, VelaState,
   AdaptationPolicy, AdaptationState, ExplicitPreference, PreferenceHypothesis, PreferenceKey,
   PreferenceScope, PreferenceValue, AdaptationReceipt, ProviderContribution, ProviderReplyKind,
+  VelaLocalDispatch, VelaLocalHost, VelaLocalRecord, VelaLocalResult,
 } from './contracts.ts';
 
 interface StoredState {
@@ -27,6 +29,8 @@ export interface VelaServiceOptions {
   /** Optional SAME-connection read boundary; never the Core mutation/snapshot/save path. */
   readTransaction?<T>(work: (db: DatabaseSync) => T): T;
   host: VelaHostPort; planner?: VelaPlanningPort;
+  /** Cheap trusted local metadata/system clock and one-message recovery. Never provider context or model access. */
+  local?: VelaLocalHost;
   /** Explicit bounded canonical projections. Absent means no implicit conversational history. */
   history?: {
     snapshot(conversationId: string, limit: number): HistorySnapshot | null;
@@ -73,6 +77,12 @@ export class VelaService {
           allowedEventTypes: [], minimumSeverity: 'warning', maxInterruptionsPerHour: 3,
           source: 'default', updatedAt: this.now(), learning: 'disabled' } };
       this.data.adaptation ??= defaultAdaptation(this.now(), !!options.host.applyPreference);
+      const localCommands = new Set<string>();
+      for (const request of this.data.requests) if (request.local !== undefined) {
+        validateLocalRecord(request.local);
+        check(!localCommands.has(request.local.commandId), 'corrupt_vela_local_state'); localCommands.add(request.local.commandId);
+        check(request.providerId === null && request.state === 'responded' && request.response && ['answer', 'inability'].includes(request.response.kind), 'corrupt_vela_local_state');
+      }
       this.data.adaptation.applicationAvailable = !!options.host.applyPreference;
       // Restart does not replay a plan, start inference, mark attention reviewed, or claim interrupted effects failed.
       for (const request of this.data.requests) if (request.state === 'planning') {
@@ -348,8 +358,45 @@ export class VelaService {
     this.data.plans.push(plan); request.planId = plan.id; request.state = 'awaiting-review'; request.updatedAt = this.now();
     return plan;
   }
-  async request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean }, frozen?: PrivateFrozenProviderContext): Promise<VelaRequest> {
+  /** Finite local grammar; unknown queries perform no clock/status/context reads or writes. Native broker must route here before provider review. */
+  local(input: { intent: string; commandId: string }, signal?: AbortSignal): VelaLocalDispatch {
+    const started = performance.now();
+    check(isRecord(input) && Object.keys(input).every(key => ['intent', 'commandId'].includes(key)) && text(input.intent, 16000) && identifier(input.commandId), 'invalid_local_request');
+    const capabilityId = classifyVelaLocalIntent(input.intent), classified = performance.now();
+    const previous = this.data.requests.find(request => request.local?.commandId === input.commandId);
+    if (previous) check(previous.intent === input.intent && previous.local?.capabilityId === capabilityId, 'local_command_id_conflict');
+    if (!capabilityId) return { matched: false };
+    check(!signal?.aborted, 'local_request_cancelled'); const host = this.opts.local; check(host, 'local_capability_host_unavailable');
+    const identity = host.identity(); check(identifier(identity.principalId) && identifier(identity.policyVersion), 'invalid_local_identity');
+    if (previous) {
+      check(previous.origin?.principalId === identity.principalId && previous.origin.policyVersion === identity.policyVersion, 'local_response_unavailable');
+      const message = this.read(() => host.readMessage(previous.conversationId, previous.response!.messageId));
+      check(message && message.id === previous.response!.messageId && message.requestId === previous.id && message.role === 'assistant' && message.source === 'vela-native' && message.classification === 'observed' && message.providerId === undefined && message.providerContribution === undefined && message.planId === undefined && message.responseKind === previous.response!.kind && digest(message.content) === previous.response!.contentDigest, 'local_response_unavailable');
+      const ended = performance.now(); return { matched: true, request: structuredClone(previous), result: { ...structuredClone(previous.local!), messageId: message.id, content: message.content, replayed: true, timing: { classificationMs: classified - started, capabilityMs: ended - classified, persistenceMs: 0, totalMs: ended - started } } };
+    }
+    const answer = evaluateLocalCapability(capabilityId, host), recordedAt = this.now(), observedAt = answer.facts.kind === 'time' || answer.facts.kind === 'date' ? answer.facts.utc : recordedAt; check(!signal?.aborted, 'local_request_cancelled');
+    const record: VelaLocalRecord = { schemaVersion: 1, commandId: input.commandId, capabilityId, classification: 'observed', providerId: null, observedAt, facts: answer.facts }; validateLocalRecord(record);
+    const committing = performance.now();
+    const value = this.atomic(() => {
+      check(!signal?.aborted, 'local_request_cancelled');
+      const conversationId = host.ensureConversation(); check(identifier(conversationId) && (this.data.conversationId === null || this.data.conversationId === conversationId), 'canonical_local_conversation_mismatch'); this.data.conversationId = conversationId;
+      const request: VelaRequest = { id: randomUUID(), conversationId, intent: input.intent, state: 'responded', createdAt: recordedAt, updatedAt: recordedAt, providerId: null,
+        context: { id: randomUUID(), createdAt: recordedAt, policyVersion: identity.policyVersion, discovered: [], included: [], omitted: [], contentBytes: 0, coverage: 'explicit-resources-only' },
+        origin: { ...identity, navigation: { kind: 'unknown' } }, inputContentDigest: digest(input.intent), local: record };
+      const user = host.appendMessage(conversationId, { role: 'user', content: input.intent, source: 'user', classification: 'observed', requestId: request.id }); check(identifier(user.id) && user.requestId === request.id && user.role === 'user' && user.classification === 'observed' && user.content === input.intent && user.source === 'user' && user.providerId === undefined, 'invalid_canonical_request'); request.inputMessageId = user.id;
+      check(!signal?.aborted, 'local_request_cancelled');
+      const message = host.appendMessage(conversationId, { role: 'assistant', content: answer.content, source: 'vela-native', classification: 'observed', requestId: request.id, responseKind: answer.kind });
+      check(identifier(message.id) && message.role === 'assistant' && message.requestId === request.id && message.content === answer.content && message.source === 'vela-native' && message.classification === 'observed' && message.providerId === undefined && message.providerContribution === undefined && message.planId === undefined && message.responseKind === answer.kind, 'invalid_canonical_local_response');
+      check(!signal?.aborted, 'local_request_cancelled'); request.response = { kind: answer.kind, messageId: message.id, contentDigest: digest(message.content) }; this.data.requests.push(request);
+      return { request: structuredClone(request), message };
+    });
+    const ended = performance.now(); const result: VelaLocalResult = { ...structuredClone(record), messageId: value.message.id, content: value.message.content, replayed: false,
+      timing: { classificationMs: classified - started, capabilityMs: committing - classified, persistenceMs: ended - committing, totalMs: ended - started } };
+    return { matched: true, request: value.request, result };
+  }
+  async request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean; commandId?: string }, frozen?: PrivateFrozenProviderContext): Promise<VelaRequest> {
     check(text(input.intent, 16000) && typeof input.authorizeProvider === 'boolean', 'invalid_request');
+    if (input.commandId !== undefined || classifyVelaLocalIntent(input.intent)) { const local = this.local({ intent: input.intent, commandId: input.commandId ?? randomUUID() }); if (local.matched) return local.request; }
     const scope = this.scope(), navigation = this.contextIdentity();
     if (frozen) check(typeof frozen.validate === 'function' && typeof frozen.onAcceptedAppend === 'function', 'private_provider_context_required');
     const reviewed = frozen ? freeze(structuredClone({ context: frozen.context, ...(frozen.historyFence ? { historyFence: frozen.historyFence } : {}) })) : undefined;
