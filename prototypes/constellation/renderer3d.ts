@@ -7,6 +7,7 @@ import type {
   Vector3,
 } from "./spatial-types.ts";
 import type { Node } from "./types.ts";
+import { createPlanet } from "./planets.ts";
 
 export type ProjectedNode = {
   node: Node;
@@ -23,10 +24,10 @@ export class ConstellationScene implements SpatialRenderLayer {
   readonly camera = new THREE.PerspectiveCamera(43, 1, 1, 180000);
   readonly objects = new Map<string, THREE.Group>();
   private primitives = {
-    torus: new THREE.TorusGeometry(1, 0.028, 6, 72),
-    crystal: new THREE.OctahedronGeometry(1, 0),
-    globe: new THREE.IcosahedronGeometry(1, 1),
-    slab: new THREE.BoxGeometry(1, 1, 1),
+    low: new THREE.SphereGeometry(1, 16, 10),
+    medium: new THREE.SphereGeometry(1, 28, 18),
+    high: new THREE.SphereGeometry(1, 48, 32),
+    ring: new THREE.RingGeometry(0.63, 1, 72),
     spike: new THREE.ConeGeometry(1, 1, 6),
   };
   private materials = new Set<THREE.Material>();
@@ -86,136 +87,15 @@ export class ConstellationScene implements SpatialRenderLayer {
       ["project", "universe"].includes(this.controller.location.kind)
     );
   }
-  private material(
-    color: THREE.ColorRepresentation,
-    emissive = 0x000000,
-    wire = false,
-  ) {
-    const m = new THREE.MeshPhysicalMaterial({
-      color,
-      metalness: 0.68,
-      roughness: 0.25,
-      clearcoat: 0.8,
-      clearcoatRoughness: 0.22,
-      emissive,
-      emissiveIntensity: 0.45,
-      iridescence: 0.3,
-      iridescenceIOR: 1.3,
-      wireframe: wire,
-    });
-    this.materials.add(m);
-    return m;
-  }
-  private add(
-    root: THREE.Group,
-    shape: keyof ConstellationScene["primitives"],
-    m: THREE.Material,
-    scale: Vector3,
-    position: Vector3 = { x: 0, y: 0, z: 0 },
-  ) {
-    const mesh = new THREE.Mesh(this.primitives[shape], m);
-    mesh.scale.set(scale.x, scale.y, scale.z);
-    mesh.position.set(position.x, position.y, position.z);
-    root.add(mesh);
-    return mesh;
-  }
   private create(n: Node) {
-    const root = new THREE.Group(),
-      h = hash(n.id),
-      color = new THREE.Color().setHSL(0.72 + h * 0.065, 0.25, 0.45);
-    const body = this.material(color, 0x261834),
-      light = this.material(0xd9c6f1, 0x70508c),
-      dark = this.material(0x171221, 0x0c0716);
+    const root = createPlanet(n.id, n.kind, this.primitives);
     root.userData.key = n.key;
-    if (n.kind === "project") {
-      const variant = Math.floor(h * 3);
-      const core = this.add(root, variant === 1 ? "globe" : "crystal", body, {
-        x: 90,
-        y: variant === 2 ? 155 : 110,
-        z: 90,
-      });
-      core.rotation.z = 0.3;
-      this.add(root, "crystal", light, { x: 25, y: 85, z: 25 });
-      for (let i = 0; i < 3; i++) {
-        const ring = this.add(root, "torus", i === 1 ? body : light, {
-          x: 170 + i * 33,
-          y: 170 + i * 33,
-          z: 170 + i * 33,
-        });
-        ring.rotation.x = 0.5 + i * 0.72;
-        ring.rotation.z = h * 2 + i * 0.48;
-      }
-      for (let i = 0; i < (variant === 0 ? 7 : 4); i++) {
-        const a = (i * Math.PI * 2) / (variant === 0 ? 7 : 4),
-          spike = this.add(
-            root,
-            "slab",
-            dark,
-            { x: 12, y: 80 + (i % 2) * 35, z: 22 },
-            {
-              x: Math.cos(a) * 125,
-              y: ((i % 2) - 0.5) * 80,
-              z: Math.sin(a) * 125,
-            },
-          );
-        spike.lookAt(0, 0, 0);
-      }
-    } else if (n.kind === "workspace") {
-      const ring = this.add(root, "torus", light, { x: 80, y: 80, z: 80 });
-      ring.rotation.x = Math.PI * 0.62;
-      this.add(root, "crystal", body, { x: 38, y: 60, z: 38 });
-      for (let i = 0; i < 3; i++) {
-        const slab = this.add(
-          root,
-          "slab",
-          dark,
-          { x: 90 - i * 15, y: 6, z: 50 - i * 5 },
-          { x: 0, y: (i - 1) * 22, z: 0 },
-        );
-        slab.rotation.y = 0.35;
-      }
-    } else {
-      const kind = this.resourceKinds.get(n.id) ?? "reference";
-      if (kind === "conversation") {
-        this.add(root, "slab", body, { x: 45, y: 30, z: 11 });
-        this.add(
-          root,
-          "slab",
-          light,
-          { x: 33, y: 3, z: 13 },
-          { x: 0, y: 8, z: 3 },
-        );
-        this.add(
-          root,
-          "spike",
-          body,
-          { x: 10, y: 17, z: 9 },
-          { x: -13, y: -20, z: 0 },
-        );
-      } else if (kind === "task") {
-        this.add(root, "crystal", body, { x: 27, y: 36, z: 27 });
-        const ring = this.add(root, "torus", light, { x: 37, y: 37, z: 37 });
-        ring.rotation.x = Math.PI / 2;
-      } else if (kind === "note" || kind === "research") {
-        for (let i = 0; i < 3; i++) {
-          const slab = this.add(
-            root,
-            "slab",
-            i === 2 ? light : body,
-            { x: 37, y: 3, z: 48 },
-            { x: 0, y: i * 8, z: i * 3 },
-          );
-          slab.rotation.y = 0.18 * i;
-        }
-      } else if (kind === "agent" || kind === "execution") {
-        this.add(root, "globe", body, { x: 25, y: 25, z: 25 });
-        this.add(root, "torus", light, { x: 38, y: 38, z: 38 });
-      } else this.add(root, "crystal", body, { x: 26, y: 30, z: 26 });
-    }
     root.traverse((o) => {
       o.userData.key = n.key;
+      if (o instanceof THREE.Mesh)
+        for (const m of Array.isArray(o.material) ? o.material : [o.material])
+          this.materials.add(m);
     });
-    root.rotation.y = h * Math.PI;
     return root;
   }
   private release(root: THREE.Group) {

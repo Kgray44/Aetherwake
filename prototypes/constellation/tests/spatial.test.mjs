@@ -5,6 +5,7 @@ import { ConstellationController } from "../controller.ts";
 import { SpatialNavigator, edges, validSpatialCamera } from "../spatial.ts";
 import { ConstellationScene } from "../renderer3d.ts";
 import { randomUUID } from "node:crypto";
+import { planetAppearance } from "../planets.ts";
 
 const fixture = (count = 18) => ({
   projects: [{ id: "p", title: "Synthetic project" }],
@@ -160,7 +161,7 @@ test("canonical relationships, placements and branch lineage preserve distinct t
   );
 });
 
-test("3D scene has actual heterogeneous geometry, perspective picking and graphics-loss recovery", () => {
+test("3D scene has real planetary geometry, perspective picking and graphics-loss recovery", () => {
   const { c, motion, navigation: n } = setup();
   c.select("workspace:w");
   n.fit("workspace:w");
@@ -178,7 +179,7 @@ test("3D scene has actual heterogeneous geometry, perspective picking and graphi
   layer.scene.traverse((o) => {
     if (o.isMesh) shapes.add(o.geometry.type);
   });
-  assert.ok(shapes.size >= 4);
+  assert.ok(shapes.has("SphereGeometry"));
   const point = layer.project("workspace:w", 1440, 900);
   assert.equal(layer.pick(point.x, point.y, 1440, 900)?.key, "workspace:w");
   layer.contextLost();
@@ -187,6 +188,40 @@ test("3D scene has actual heterogeneous geometry, perspective picking and graphi
   assert.equal(layer.active, true);
   layer.dispose();
   assert.equal(layer.objects.size, 0);
+});
+
+test("planet and moon appearances are stable per canonical identity, varied and texture-free", () => {
+  const a = planetAppearance("canonical-conversation", "resource");
+  assert.deepEqual(a, planetAppearance("canonical-conversation", "resource"));
+  const signatures = new Set();
+  const types = new Set();
+  for (let i = 0; i < 10000; i++) {
+    const p = planetAppearance(
+      "canonical-object-" + i,
+      i % 3 === 0 ? "project" : i % 3 === 1 ? "workspace" : "resource",
+    );
+    signatures.add(JSON.stringify(p));
+    types.add(p.type);
+    assert.ok(p.palette.flat().every(Number.isFinite));
+  }
+  assert.equal(signatures.size, 10000);
+  assert.equal(types.size, 5);
+  const { c, navigation } = setup(),
+    scene = new ConstellationScene(c, navigation, () => ({
+      left: 0,
+      top: 0,
+      bottom: 900,
+      width: 1440,
+      height: 900,
+    }));
+  scene.update(1440, 900);
+  for (const object of scene.objects.values()) {
+    assert.ok(object.children.length <= 3);
+    object.traverse((o) => {
+      if (o.isMesh) assert.equal(o.material.map, undefined);
+    });
+  }
+  scene.dispose();
 });
 
 test("actual scene object/label/edge allocations stay bounded with 10000 canonical resources", () => {

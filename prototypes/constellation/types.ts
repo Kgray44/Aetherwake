@@ -79,6 +79,7 @@ export type Node = {
   available: boolean;
   point: Point;
   resourceId?: string;
+  resourceKind?: string;
   workspaceId?: string;
 };
 export type Bookmark = {
