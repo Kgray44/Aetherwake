@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CodexPlanningAdapter, CodexPlanningError, buildCodexPlanningPrompt, parseCodexPlanningOutput, planningDigest } from '../src/codex-planning-adapter.mts';
 import { CAPABILITIES } from '../src/capabilities.ts';
+import { createCapabilityCatalog } from '../src/capability-catalog.mts';
 import type { CodexPlanningAdapterOptions, PlanningInput, PlanningObservation } from '../src/codex-planning-adapter.mts';
 import type { Execution, Snapshot } from '../../integrated-backend/src/contracts.mts';
 
@@ -108,6 +109,29 @@ test('bounded prompt and complete-manifest host authorization fail before any pr
   await assert.rejects(f.adapter().propose(input(), new AbortController().signal), /host_planning_authorization_required/);
   assert.equal(f.counts().turns, 0); assert.equal(f.counts().opens, 0);
   assert.notEqual(planningDigest(input().context), planningDigest(tooLarge.context));
+});
+
+test('discovery prompt retains a representative source manifest and exact digest-bound index without embedding full action schemas',()=>{
+  const request=input(),catalog=createCapabilityCatalog(request.capabilities);
+  request.context.included[0].content='Synthetic reviewed source with exact provenance. '.repeat(140);
+  request.context.contentBytes=Buffer.byteLength(request.context.included[0].content);
+  const prompt=buildCodexPlanningPrompt(request,{projection:catalog.projection,declaration:catalog.declaration}),payload=JSON.parse(prompt.split('\n').at(-1)!);
+  assert.deepEqual(payload.context,request.context);assert.deepEqual(payload.capabilityCatalog,catalog.projection);assert.deepEqual(payload.capabilityDiscovery,catalog.declaration);
+  assert.equal(payload.schemaAvailability,'fetch-before-proposing');assert(!Object.hasOwn(payload,'capabilities'));assert(Buffer.byteLength(prompt)<16384);
+  assert.throws(()=>buildCodexPlanningPrompt(request),/planning_prompt_capacity_exceeded/,'Legacy fallback never silently truncates the same sources');
+  request.context.included[0].content='x'.repeat(17000);assert.throws(()=>buildCodexPlanningPrompt(request,{projection:catalog.projection,declaration:catalog.declaration}),/planning_prompt_capacity_exceeded/);
+});
+
+test('discovery grants bind the exact declaration and every proposed action passes the same-turn fetched-schema guard',async()=>{
+  const catalog=createCapabilityCatalog(CAPABILITIES),f=fixture();let finished=0,checks=0;
+  f.options.discovery={forRequest:()=>({projection:catalog.projection,declaration:catalog.declaration}),assertFetched:(requestId,ids,declaration)=>{checks++;assert.deepEqual(ids,['workspaceFromResources']);assert.deepEqual(declaration,catalog.declaration);},finish:()=>{finished++;}};
+  const authorize=f.options.authorizePlanning;f.options.authorizePlanning=async request=>({...await authorize(request),discovery:request.discovery});
+  await f.adapter().propose(input(),new AbortController().signal);assert.equal(checks,1);assert.equal(finished,1);
+  const h=fixture();h.options.discovery={...f.options.discovery,assertFetched:()=>{throw Object.assign(new Error('Schema not fetched'),{code:'planning_capability_schema_not_discovered'});}};
+  const authorizeH=h.options.authorizePlanning;h.options.authorizePlanning=async request=>({...await authorizeH(request),discovery:request.discovery});
+  await assert.rejects(h.adapter().propose(input(),new AbortController().signal),/planning_capability_schema_not_discovered/);assert.equal(finished,2);
+  const g=fixture();g.options.discovery={...f.options.discovery};
+  await assert.rejects(g.adapter().propose(input(),new AbortController().signal),/capability_discovery_grant_mismatch/);assert.equal(g.counts().turns,0);assert.equal(g.counts().opens,0);
 });
 
 test('one-active-turn capacity and fixture provider identity block planning rather than simulating intelligence', async () => {

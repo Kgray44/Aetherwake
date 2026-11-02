@@ -1,14 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import { CodexAdapter, type EventEnvelope } from '../../codex-bridge/src/adapter.ts';
+import { BridgeError } from '../../codex-bridge/src/transport.ts';
 import type { Options, ProviderPort } from './contracts.mts';
+import { capabilitySchemaTool, capabilityToolFailure } from '../../vela-core/src/capability-catalog.mts';
+import type { CapabilityNativeCall, CapabilityToolReply } from '../../vela-core/src/capability-catalog.mts';
 
 /** Thin wrapper deliberately leaves native identity, base instructions, developer
  * instructions, model defaults and configuration loading to installed Codex. */
 export function nativeProvider(options: Options): ProviderPort {
-  const bridge = new CodexAdapter(options.codexExecutable, options.codexArgs);
+  const bridge = new CodexAdapter(options.codexExecutable, options.codexArgs,{experimentalApi:options.velaCatalogDiscovery===true});
   const mock = options.provider === 'bridge-fixture';
   const id = mock ? 'codex-app-server-fixture' : 'codex-app-server';
   let connected = false;
+  let catalogAvailable=options.velaCatalogDiscovery===true;
+  const catalogHandlers=new Map<string,(call:CapabilityNativeCall)=>Promise<CapabilityToolReply>>();
+  if(options.velaCatalogDiscovery===true)bridge.setDynamicToolHandler(async call=>catalogHandlers.get(call.threadId)?.(call)??capabilityToolFailure('capability_discovery_not_authorized'));
   return {
     id, mock,
     instanceId: options.instanceId ?? 'local-codex', accountScope: options.accountScope ?? 'local-configured-account',
@@ -22,7 +28,16 @@ export function nativeProvider(options: Options): ProviderPort {
     terminal: (threadId, turnId) => bridge.waitForTerminal(threadId, turnId, 60000),
     interrupt: (threadId, turnId) => bridge.interrupt({ threadId, turnId }),
     onEvent(listener) { bridge.on('event', listener); return () => bridge.off('event', listener); },
-    close() { bridge.close(); connected = false; }
+    ...(options.velaCatalogDiscovery===true?{catalogDiscovery:{
+      get available(){return catalogAvailable;},
+      async open(projection,onCall){
+        if(!catalogAvailable)throw new BridgeError('catalog-discovery-unavailable','Catalog discovery is unavailable');if(catalogHandlers.size)throw new Error('catalog_discovery_busy');
+        let threadId:string;try{threadId=await bridge.startDynamicToolThread({cwd:options.cwd??process.cwd(),sandbox:'read-only',approvalPolicy:'never',serviceName:'aerynth_integration_prototype'},capabilitySchemaTool(projection));}
+        catch(error){if(error instanceof BridgeError&&(error.kind==='unsupported'||error.code===-32602&&/dynamictools|experimentalapi/i.test(error.message))){catalogAvailable=false;throw new BridgeError('catalog-discovery-unavailable','Installed provider rejected catalog discovery');}throw error;}
+        catalogHandlers.set(threadId,onCall);return threadId;
+      },release(threadId){catalogHandlers.delete(threadId);}
+    } satisfies NonNullable<ProviderPort['catalogDiscovery']>} :{}),
+    close() { catalogHandlers.clear();bridge.close(); connected = false; }
   };
 }
 

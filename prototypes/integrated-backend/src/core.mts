@@ -16,6 +16,9 @@ import type { ProductCommandMap } from '../../conversation-product/src/contracts
 import { VelaService } from '../../vela-core/src/service.mts';
 import { createCanonicalVelaHost, type CanonicalVelaHost, type CanonicalVelaMetadata } from '../../vela-core/src/canonical-host.mts';
 import { CodexPlanningAdapter, planningDigest, type CodexPlanningGrant, type PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
+import { CAPABILITIES } from '../../vela-core/src/capabilities.ts';
+import { CapabilityCatalogLease, createCapabilityCatalog, validateCatalogDeclaration, capabilityToolFailure } from '../../vela-core/src/capability-catalog.mts';
+import type { CapabilityCatalogSnapshot, CapabilityNativeCall, CapabilityToolReply } from '../../vela-core/src/capability-catalog.mts';
 import type { VelaMessage, ContextManifest, AuthorizationRequest, AuthorizationDecision, VelaPlanningPort, ResourceRef, VelaPlan, HostActionResult, CapabilityDescriptor, VelaScopePurpose } from '../../vela-core/src/contracts.ts';
 import type { VelaRequestPreview, VelaNativeCapabilities, VelaBackendState } from './contracts.mts';
 import { TemplateService } from '../../block-library/service.mts';
@@ -76,6 +79,7 @@ export class BackendCore {
   private velaPresentations=new Map<string,WorkspacePresentationContext|null>();
   private velaPreviews=new Map<string,VelaRequestPreview>();
   private velaGrants=new Map<string,{previewId:string;expiresAt:string;requestId?:string;consumed:boolean;planning?:CodexPlanningGrant}>();
+  private velaCatalogLeases=new Map<string,{catalog:CapabilityCatalogSnapshot;lease:CapabilityCatalogLease;previewId:string;executionId:string;sourceConversationId:string;expiresAt:string;revoked:boolean;threadId?:string;ready:Promise<void>;resolveReady():void}>();
   private velaPolicyGrants=new Map<string,{requestId:string;planId?:string;fingerprint?:string;phase:string;expiresAt:string}>();
   private velaDelegationGrants=new Map<string,{planId:string;stepId:string;fingerprint:string;actionDigest:string;contextDigest:string;expiresAt:string;consumed:boolean}>();
   private pendingVelaGrant:string|null=null;
@@ -344,18 +348,28 @@ export class BackendCore {
       const cap=this.capabilityCache.snapshot();return {available:!!cap&&!cap.mock&&cap.providerId==='codex-app-server'&&cap.authentication==='available',busy:!!this.active,reason:cap?'Codex must be a real authenticated observed provider':'Provider capability has not been observed; native actions remain available'};
     },authorizePlanning:input=>{
       const pair=[...this.velaGrants.entries()].find(([,g])=>g.requestId===input.requestId);ensure(pair,'native_vela_grant_required');const [id,g]=pair;this.validateVelaGrant(id);ensure(!g.planning,'native_vela_grant_already_bound');
-      const preview=this.velaPreviews.get(g.previewId)!;ensure(preview.intent===this.vela.state().requests.find(r=>r.id===input.requestId)?.intent&&this.velaEgress(preview.intent,input.context)===preview.signature,'stale_vela_preview');
-      const grant:CodexPlanningGrant={authorizationRef:id,requestId:input.requestId,providerId:'codex-app-server',sourceConversationId:input.sourceConversationId,contextDigest:input.contextDigest,promptDigest:input.promptDigest,expiresAt:g.expiresAt};g.planning=grant;return grant;
+      const preview=this.velaPreviews.get(g.previewId)!;this.validateFrozenVelaPreview(preview);ensure(preview.intent===this.vela.state().requests.find(r=>r.id===input.requestId)?.intent&&this.velaEgress(preview.intent,input.context,preview.discovery)===preview.signature,'stale_vela_preview');
+      ensure(planningDigest(input.discovery??null)===planningDigest(preview.discovery??null),'capability_discovery_grant_mismatch');
+      const grant:CodexPlanningGrant={authorizationRef:id,requestId:input.requestId,providerId:'codex-app-server',sourceConversationId:input.sourceConversationId,contextDigest:input.contextDigest,promptDigest:input.promptDigest,expiresAt:g.expiresAt,...(preview.discovery?{discovery:structuredClone(preview.discovery)}:{})};g.planning=grant;return grant;
     },openPlanningConversation:async input=>this.atomic(()=>{
       const grant=this.validateVelaGrant(input.grant.authorizationRef);ensure(grant.requestId===input.requestId&&grant.planning?.promptDigest===input.grant.promptDigest,'native_vela_grant_mismatch');
       return this.once(input.commandId,{type:'velaPlanning',requestId:input.requestId},()=>{const c=this.create(input.title,this.port.id,this.velaContext().currentProjectId);this.kernel.relate(input.sourceConversationId,c.resourceId,'vela_planning','user');return c;});
     }),executePlanning:async input=>{
       const grant=this.validateVelaGrant(input.grant.authorizationRef);ensure(grant.planning&&planningDigest(input.prompt)===grant.planning.promptDigest&&grant.requestId===input.requestId,'native_vela_grant_mismatch');
-      const preview=this.velaPreviews.get(grant.previewId)!;ensure(this.velaEgress(preview.intent,this.vela.previewContext(preview.resourceIds))===preview.signature,'stale_vela_preview');grant.consumed=true;
-      return this.runExecution({resourceId:input.resourceId,prompt:input.prompt,commandId:input.commandId,authorized:true,expectedRevision:this.state.revisions[input.resourceId],...(input.model?{model:input.model}:{})});
-    },observe:observation=>this.atomic(()=>{const {executionState:_state,...references}=observation;this.state.vela!.planning[observation.requestId]=references;this.record('vela.planning.'+observation.stage,'observed');})});
+      const preview=this.velaPreviews.get(grant.previewId)!;this.validateFrozenVelaPreview(preview);ensure(planningDigest(input.grant.discovery??null)===planningDigest(preview.discovery??null),'capability_discovery_grant_mismatch');grant.consumed=true;
+      return this.runExecution({resourceId:input.resourceId,prompt:input.prompt,commandId:input.commandId,authorized:true,expectedRevision:this.state.revisions[input.resourceId],...(input.model?{model:input.model}:{})},undefined,preview.discovery?{requestId:input.requestId,previewId:preview.id,expiresAt:grant.expiresAt,sourceConversationId:grant.planning.sourceConversationId}:undefined);
+    },discovery:{forRequest:(requestId,capabilities)=>{
+      const grant=[...this.velaGrants.values()].find(item=>item.requestId===requestId);ensure(grant,'native_vela_grant_required');const preview=this.velaPreviews.get(grant.previewId)!;
+      if(!preview.discovery)return undefined;this.validateFrozenVelaPreview(preview);const catalog=createCapabilityCatalog(capabilities);validateCatalogDeclaration(catalog,preview.discovery);return {projection:catalog.projection,declaration:catalog.declaration};
+    },assertFetched:(requestId,ids,declaration)=>{
+      const entry=this.velaCatalogLeases.get(requestId);ensure(entry,'capability_discovery_lease_unavailable');validateCatalogDeclaration(entry.catalog,declaration);
+      this.validateFrozenVelaPreview(this.velaPreviews.get(entry.previewId)!);ensure(!entry.revoked&&Date.parse(entry.expiresAt)>Date.now()&&entry.sourceConversationId===this.state.vela!.conversationId&&this.velaHost.resolve({id:entry.sourceConversationId,kind:'resource'},this.velaHost.scope()),'capability_discovery_source_unavailable');ensure(this.state.executions[entry.executionId]?.state==='provider_completed'&&ids.every(id=>entry.lease.fetchedIds().includes(id)),'planning_capability_schema_not_discovered');
+    },finish:requestId=>this.finishVelaCatalog(requestId)},observe:observation=>this.atomic(()=>{const {executionState:_state,...references}=observation;this.state.vela!.planning[observation.requestId]=references;this.record('vela.planning.'+observation.stage,'observed');})});
     const selected=testPlanner??adapter;
-    this.velaPlanner={providerId:selected.providerId,availability:()=>selected.availability(),propose:(input,signal)=>selected.propose({...input,capabilities:this.velaCapabilities(input.capabilities)},signal)};
+    this.velaPlanner={providerId:selected.providerId,availability:()=>selected.availability(),propose:(input,signal)=>{
+      const grant=[...this.velaGrants.values()].find(item=>item.requestId===input.requestId),preview=grant&&this.velaPreviews.get(grant.previewId);ensure(preview,'native_vela_grant_required');
+      this.validateFrozenVelaPreview(preview);return selected.propose({...input,context:structuredClone(preview.context),capabilities:this.velaCapabilities(input.capabilities)},signal);
+    }};
     this.vela=new VelaService({db:this.db,transaction:work=>this.atomic(work),host:this.velaHost,planner:this.velaPlanner});
   }
   private velaCapability(id:string) {
@@ -379,16 +393,32 @@ export class BackendCore {
   private velaScopeStamp() {
     const c=this.velaContext();return planningDigest({principalId:c.principalId,policyVersion:c.policyVersion,currentProjectId:c.currentProjectId,currentWorkspaceId:c.currentWorkspaceId,projectVersion:c.currentProjectId?this.db.prepare('SELECT version FROM projects WHERE id=?').get(c.currentProjectId)?.version:null,workspaceVersion:c.currentWorkspaceId?this.db.prepare('SELECT version FROM workspaces WHERE id=?').get(c.currentWorkspaceId)?.version:null,workspaceRevision:c.currentWorkspaceId?(this.velaNative?.workspaceRevision?.(c.currentWorkspaceId)??this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(c.currentWorkspaceId)?.version):null});
   }
-  private velaEgress(intent:string,context:ContextManifest) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:this.velaPlanner.providerId,instanceId:this.port.instanceId,accountScope:this.port.accountScope}); }
+  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery']) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:this.velaPlanner.providerId,instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{})}); }
+  /** Validates reviewed sources in place; never reselects history/resources after the initiating append. */
+  private validateFrozenVelaPreview(preview:VelaRequestPreview,options:{metadataOnly?:boolean}={}) {
+    ensure(preview&&Date.parse(preview.expiresAt)>Date.now()&&preview.scopeStamp===this.velaScopeStamp(),'stale_vela_preview');
+    const scope=this.velaHost.scope();
+    for(const ref of preview.context.discovered){const current=this.velaHost.resolve(ref,scope);ensure(current&&current.version===ref.version,'stale_vela_preview');}
+    for(const ref of preview.context.included){ensure(this.conversationAccess.resource(ref.id,'read'),'stale_vela_preview');if(!options.metadataOnly){const current=this.velaHost.readContent(ref.id,scope);ensure(current&&current.ref.version===ref.version&&planningDigest(current.content)===ref.contentDigest&&current.source===ref.source,'stale_vela_preview');}}
+    if(preview.discovery){ensure(this.port.catalogDiscovery&&this.port.catalogDiscovery.available!==false,'capability_discovery_unavailable');validateCatalogDeclaration(createCapabilityCatalog(this.velaCapabilities(CAPABILITIES)),preview.discovery);}
+    ensure(this.velaEgress(preview.intent,preview.context,preview.discovery)===preview.signature,'stale_vela_preview');
+  }
+  private finishVelaCatalog(requestId:string) {const entry=this.velaCatalogLeases.get(requestId);if(!entry)return;entry.lease.close();entry.resolveReady();if(entry.threadId)this.port.catalogDiscovery?.release(entry.threadId);this.velaCatalogLeases.delete(requestId);}
+  private async readVelaCatalog(requestId:string,call:CapabilityNativeCall):Promise<CapabilityToolReply> {
+    const entry=this.velaCatalogLeases.get(requestId);if(!entry)return capabilityToolFailure('capability_discovery_lease_unavailable');
+    // A request may arrive before turn/start's response. Only the actual returned identity can bind authority.
+    let timer:ReturnType<typeof setTimeout>|undefined;try{await Promise.race([entry.ready,new Promise<void>(resolve=>{timer=setTimeout(resolve,1000);})]);}finally{if(timer)clearTimeout(timer);}
+    return entry.lease.read(call);
+  }
   private pruneVelaGrants() {const time=Date.now();for(const [id,p] of this.velaPreviews)if(Date.parse(p.expiresAt)<=time)this.velaPreviews.delete(id);for(const map of [this.velaGrants,this.velaPolicyGrants,this.velaDelegationGrants])for(const [id,g] of map)if(Date.parse(g.expiresAt)<=time)map.delete(id);}
   private previewVelaRequest(input:CommandMap['velaRequestPreview']['input']):VelaRequestPreview {
     this.pruneVelaGrants();ensure(typeof input.intent==='string'&&input.intent.trim()&&input.intent.length<=16000,'invalid_vela_intent');ensure(this.velaPreviews.size<64,'approval_backpressure');
-    const context=this.vela.previewContext(input.resourceIds),preview:VelaRequestPreview={id:randomUUID(),intent:input.intent,resourceIds:[...input.resourceIds],context,providerId:this.velaPlanner.providerId,signature:this.velaEgress(input.intent,context),scopeStamp:this.velaScopeStamp(),expiresAt:new Date(Date.now()+300000).toISOString()};
+    const context=this.vela.previewContext(input.resourceIds),discovery=this.port.catalogDiscovery&&this.port.catalogDiscovery.available!==false?createCapabilityCatalog(this.velaCapabilities(CAPABILITIES)).declaration:undefined,preview:VelaRequestPreview={id:randomUUID(),intent:input.intent,resourceIds:[...input.resourceIds],context,providerId:this.velaPlanner.providerId,signature:this.velaEgress(input.intent,context,discovery),scopeStamp:this.velaScopeStamp(),expiresAt:new Date(Date.now()+300000).toISOString(),...(discovery?{discovery}:{})};
     this.velaPreviews.set(preview.id,preview);return structuredClone(preview);
   }
   private authorizeVelaRequest(input:CommandMap['authorizeVelaRequest']['input']) {
     this.pruneVelaGrants();const preview=this.velaPreviews.get(input.previewId);ensure(preview,'vela_preview_expired');ensure(preview.signature===input.signature,'approval_scope_mismatch');
-    ensure(this.velaEgress(preview.intent,this.vela.previewContext(preview.resourceIds))===preview.signature,'stale_vela_preview');ensure(this.velaGrants.size<64,'approval_backpressure');
+    this.validateFrozenVelaPreview(preview);ensure(this.velaGrants.size<64,'approval_backpressure');
     const grantId=randomUUID(),expiresAt=new Date(Math.min(Date.now()+60000,Date.parse(preview.expiresAt))).toISOString();this.velaGrants.set(grantId,{previewId:preview.id,expiresAt,consumed:false});return {grantId,expiresAt};
   }
   private validateVelaGrant(id:string) {const g=this.velaGrants.get(id);ensure(g&&!g.consumed,'native_vela_grant_required');ensure(Date.parse(g.expiresAt)>Date.now()&&this.velaPreviews.has(g.previewId),'native_vela_grant_expired');return g;}
@@ -399,7 +429,7 @@ export class BackendCore {
     if(request.actions.some(a=>a.type==='createResource'&&a.workspaceId!==null&&!this.velaNative?.supportedActions.includes('createResource')))return {decision:'deny',reason:'Placement capability is unavailable',policyVersion:request.scope.policyVersion};
     if(request.phase==='provider-context') {
       ensure(this.pendingVelaGrant,'native_vela_grant_required');const grant=this.validateVelaGrant(this.pendingVelaGrant),preview=this.velaPreviews.get(grant.previewId)!;
-      ensure(!grant.requestId&&request.contextManifest&&this.velaEgress(request.intent,request.contextManifest)===preview.signature,'stale_vela_preview');grant.requestId=request.requestId;
+      this.validateFrozenVelaPreview(preview);ensure(!grant.requestId&&request.contextManifest&&this.velaEgress(request.intent,request.contextManifest,preview.discovery)===preview.signature,'stale_vela_preview');grant.requestId=request.requestId;
     }
     if(request.phase==='delegate') {
       const action=request.actions[0],grant=[...this.velaDelegationGrants.values()].find(g=>!g.consumed&&g.planId===request.planId&&g.fingerprint===request.fingerprint&&g.actionDigest===planningDigest(action));
@@ -444,7 +474,7 @@ export class BackendCore {
     const input=operation?.input;
     switch(operation?.name) {
       case 'state':return this.velaState();case 'open':this.vela.open();return this.velaState();case 'search':return this.vela.search(input);
-      case 'native':return this.vela.native(input);case 'review':return this.vela.review(input);case 'cancel':return this.vela.cancel(input);
+      case 'native':return this.vela.native(input);case 'review':return this.vela.review(input);case 'cancel':{const result=this.vela.cancel(input),entry=this.velaCatalogLeases.get(input);if(entry){entry.revoked=true;entry.lease.close();entry.resolveReady();}return result;}
       case 'apply': {
         ensure(typeof input==='string'&&input.length>0&&input.length<=200,'invalid_vela_plan');
         ensure(!this.velaPresentations.has(input),'vela_apply_in_progress');
@@ -683,7 +713,7 @@ export class BackendCore {
     return h;
   }
   async execute(input: CommandMap['execute']['input']): Promise<Execution> { return this.runExecution(input); }
-  private async runExecution(input: CommandMap['execute']['input'],managed?:{input:ConversationSendInput;preview:Omit<ConversationSendPreview,'id'|'expiresAt'>}): Promise<Execution> {
+  private async runExecution(input: CommandMap['execute']['input'],managed?:{input:ConversationSendInput;preview:Omit<ConversationSendPreview,'id'|'expiresAt'>},discovery?:{requestId:string;previewId:string;expiresAt:string;sourceConversationId:string}): Promise<Execution> {
     ensure(!this.active, 'execution_busy');
     ensure(this.kernel.getResource(input.resourceId).resource.state === 'active', 'resource_archived');
     ensure(input.authorized === true, 'authorization_required');
@@ -718,6 +748,18 @@ export class BackendCore {
     this.active = e; this.assistantText = ''; this.assistantCursor=0; this.streamFailure = false;
     let remoteDispatched = false;
     try {
+      if(discovery) {
+        const preview=this.velaPreviews.get(discovery.previewId)!;this.validateFrozenVelaPreview(preview);ensure(preview.discovery&&this.port.catalogDiscovery&&!this.velaCatalogLeases.has(discovery.requestId),'capability_discovery_unavailable');
+        const catalog=createCapabilityCatalog(this.velaCapabilities(CAPABILITIES));validateCatalogDeclaration(catalog,preview.discovery);
+        let resolveReady!:()=>void;const ready=new Promise<void>(resolve=>{resolveReady=resolve;});
+        const lease=new CapabilityCatalogLease({catalog,expiresAt:discovery.expiresAt,authorize:()=>{
+          ensure(this.active?.id===e.id&&this.active.state==='running'&&this.state.executions[e.id]===this.active,'capability_discovery_execution_inactive');
+          // The tool checks current canonical revisions/read policy, never reads note or chat content.
+          this.validateFrozenVelaPreview(preview,{metadataOnly:true});
+          ensure(discovery.sourceConversationId===this.state.vela!.conversationId&&this.velaHost.resolve({id:discovery.sourceConversationId,kind:'resource'},this.velaHost.scope()),'capability_discovery_source_unavailable');
+        }});
+        this.velaCatalogLeases.set(discovery.requestId,{catalog,lease,previewId:discovery.previewId,executionId:e.id,sourceConversationId:discovery.sourceConversationId,expiresAt:discovery.expiresAt,revoked:false,ready,resolveReady});
+      }
       await this.port.connect();
       const cap = await this.port.capabilities();
       this.capabilityCache.observe(cap);
@@ -728,10 +770,13 @@ export class BackendCore {
       if (!binding) {
         ensure(bindings.length === 0, 'invalid_cross_provider_reference');
         remoteDispatched = true;
-        const threadId = await this.port.open(); ensure(typeof threadId === 'string' && threadId.length > 0, 'invalid_provider_response');
+        let threadId:string;try{threadId=discovery?await this.port.catalogDiscovery!.open(this.velaCatalogLeases.get(discovery.requestId)!.catalog.projection,call=>this.readVelaCatalog(discovery.requestId,call)):await this.port.open();}
+        catch(error){if((error as {kind?:string}).kind==='catalog-discovery-unavailable')remoteDispatched=false;throw error;}ensure(typeof threadId === 'string' && threadId.length > 0, 'invalid_provider_response');
+        if(discovery)this.velaCatalogLeases.get(discovery.requestId)!.threadId=threadId;
         binding = { providerId: this.port.id, instanceId: this.port.instanceId, accountScope: this.port.accountScope, nativeThreadId: threadId, nativeSessionId: null };
         this.atomic(() => { this.state.bindings[e.resourceId] = [binding!]; e.binding = binding!; this.kernel.addExternalRef(e.resourceId, this.port.id, 'thread', threadId); });
       } else {
+        ensure(!discovery,'capability_discovery_requires_fresh_thread');
         e.binding = binding;
         remoteDispatched = true;
         ensure(await this.port.resume(binding.nativeThreadId) === binding.nativeThreadId, 'invalid_provider_response');
@@ -744,6 +789,7 @@ export class BackendCore {
       this.atomic(() => { e.turnId = turnId;
         if(managed)this.state.contextSupplies![e.id]={resourceId:e.resourceId,turnId,suppliedAt:now(),items:managed.preview.context.map(i=>({shareId:i.shareId,digest:i.digest,sourceResourceId:i.sourceResourceId,sourceMessageId:i.sourceMessageId}))};
       });
+      if(discovery){const entry=this.velaCatalogLeases.get(discovery.requestId)!;if(!entry.revoked)entry.lease.bind(binding.nativeThreadId,turnId);entry.resolveReady();}
       if(managed)for(const item of managed.preview.context)await this.conversations.confirmSupplied(e.resourceId,item.shareId,e.id);
       const terminal = await this.port.terminal(binding.nativeThreadId, turnId);
       ensure(terminal && terminal.providerTurnId === turnId && terminal.providerThreadId === binding.nativeThreadId && ['completed','interrupted','failed'].includes(terminal.terminalStatus ?? ''), 'invalid_provider_response');
@@ -764,7 +810,7 @@ export class BackendCore {
       e = this.state.executions[e.id]; r = input.handoffId ? this.package(input.handoffId) : null;
       this.atomic(() => { e.state = remoteDispatched ? 'unknown' : 'failed'; e.errorCode = code; e.endedAt = now(); if (r) r.state = e.state === 'unknown' ? 'unknown' : 'failed'; });
       this.record('execution/' + e.state, 'inferred');
-    } finally { this.active = null; }
+    } finally { if(discovery){const entry=this.velaCatalogLeases.get(discovery.requestId);if(entry){entry.lease.close();entry.resolveReady();if(entry.threadId)this.port.catalogDiscovery?.release(entry.threadId);}}this.active = null; }
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
@@ -870,7 +916,7 @@ export class BackendCore {
         r.state = 'applied'; this.state.revisions[r.resourceId]++; return { ...response, resourceId: r.resourceId, classification: 'simulated' };
       })) as any;
       case 'execute': return this.execute(a) as any;
-      case 'interrupt': { const e = this.state.executions[a.executionId]; ensure(e && this.active?.id === e.id && e.binding && e.turnId, 'execution_not_interruptible'); await this.port.interrupt(e.binding.nativeThreadId, e.turnId); return { requested: true, confirmed: false } as any; }
+      case 'interrupt': { const e = this.state.executions[a.executionId]; ensure(e && this.active?.id === e.id && e.binding && e.turnId, 'execution_not_interruptible');for(const entry of this.velaCatalogLeases.values())if(entry.executionId===e.id){entry.revoked=true;entry.lease.close();entry.resolveReady();} await this.port.interrupt(e.binding.nativeThreadId, e.turnId); return { requested: true, confirmed: false } as any; }
       case 'capabilities': try{await this.port.connect();const capability=await this.port.capabilities();this.capabilityCache.observe(capability);return capability as any;}catch(error){this.capabilityCache.clear();throw error;}
       case 'reconcile': {
         this.gid(a.resourceId); const b = this.state.bindings[a.resourceId]?.[0]; ensure(b, 'provider_thread_unavailable');
@@ -899,7 +945,7 @@ export class BackendCore {
         const latest = Number(this.db.prepare('SELECT latest FROM integration_meta WHERE id=1').get()!.latest);
         return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;
       }
-      case 'close': this.stopEvents(); this.port.close(); this.kernel.close(); this.closed = true; return null as any;
+      case 'close': for(const id of this.velaCatalogLeases.keys())this.finishVelaCatalog(id);this.stopEvents(); this.port.close(); this.kernel.close(); this.closed = true; return null as any;
       default: throw new ServiceError('unsupported_command');
     }
   }

@@ -136,3 +136,25 @@ test('call, argument and output bounds are enforced without partial descriptors 
   assert(Buffer.byteLength(JSON.stringify(reply)) < 8192);
   assert.deepEqual(lease.fetchedIds(), []);
 });
+
+test('aggregate metadata output is bounded across distinct calls, including recorded failures', () => {
+  const descriptors = structuredClone(CAPABILITIES.slice(0, 1));
+  descriptors[0].scope = 'x'.repeat(6000);
+  const catalog = createCapabilityCatalog(descriptors),
+    lease = new CapabilityCatalogLease({ catalog, expiresAt: new Date(Date.now() + 60000).toISOString(), authorize() {} });
+  lease.bind('t', 'r');
+  const replies = Array.from({ length: 8 }, (_, index) =>
+    lease.read({
+      threadId: 't',
+      turnId: 'r',
+      namespace: null,
+      tool: CAPABILITY_SCHEMA_TOOL,
+      callId: 'call:' + index,
+      arguments: { catalogDigest: catalog.projection.digest, ids: [descriptors[0].id] },
+    }),
+  );
+  assert(replies.some((reply) => reply.success));
+  assert(replies.some((reply) => !reply.success));
+  assert(replies.every((reply) => Buffer.byteLength(JSON.stringify(reply)) <= 8192));
+  assert(replies.reduce((total, reply) => total + Buffer.byteLength(JSON.stringify(reply)), 0) <= 32768);
+});

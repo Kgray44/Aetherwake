@@ -9,6 +9,9 @@ import type { TurnInterruptParams } from "../protocol-generated/v2/TurnInterrupt
 import type { ThreadListParams } from "../protocol-generated/v2/ThreadListParams.ts";
 import type { ThreadTurnsListParams } from "../protocol-generated/v2/ThreadTurnsListParams.ts";
 import type { ThreadItemsListParams } from "../protocol-generated/v2/ThreadItemsListParams.ts";
+import type { DynamicToolSpec } from "../protocol-generated/v2/DynamicToolSpec.ts";
+import type { DynamicToolCallParams } from "../protocol-generated/v2/DynamicToolCallParams.ts";
+import type { DynamicToolCallResponse } from "../protocol-generated/v2/DynamicToolCallResponse.ts";
 
 export interface ProviderAdapter {
   readonly provider: string;
@@ -97,15 +100,18 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
   private readonly maxEvents = 512;
   private readonly executable: string;
   private readonly args: string[];
-  constructor(executable = "codex", args = ["app-server", "--listen", "stdio://"]) { super(); this.executable = executable; this.args = args; }
+  private readonly experimentalApi:boolean;
+  private dynamicToolHandler?: (call:DynamicToolCallParams)=>Promise<DynamicToolCallResponse>;
+  constructor(executable = "codex", args = ["app-server", "--listen", "stdio://"],options:{experimentalApi?:boolean}={}) { super(); this.executable = executable; this.args = args; this.experimentalApi=options.experimentalApi===true; }
 
   setServerRequestHandler(handler: ServerRequestHandler): void { this.approvalHandler = handler; }
+  setDynamicToolHandler(handler:(call:DynamicToolCallParams)=>Promise<DynamicToolCallResponse>):void { this.dynamicToolHandler=handler; }
   recentEvents(): readonly EventEnvelope[] { return this.events; }
   droppedEventCount(): number { return this.droppedEvents; }
 
   async connect(): Promise<Wire> {
     if (this.transport) throw new BridgeError("state", "Adapter already connected");
-    const transport = new JsonlTransport(this.executable, this.args);
+    const transport = new JsonlTransport(this.executable, this.args,{experimentalApi:this.experimentalApi});
     this.transport = transport;
     transport.on("notification", (message: Wire) => this.record(message));
     transport.on("serverRequest", (message: Wire) => { void this.handleRequest(message); });
@@ -159,6 +165,11 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
   }
   async startThread(params: ThreadStartParams = {}): Promise<NativeThreadSession> {
     return this.session(await this.rpc("thread/start", params as Wire));
+  }
+  /** Installed 0.153.3 experimental ThreadStartParams.dynamicTools; stable callers remain unchanged. */
+  async startDynamicToolThread(params:ThreadStartParams,tool:DynamicToolSpec):Promise<string> {
+    if(!this.experimentalApi||!this.dynamicToolHandler)throw new BridgeError('unsupported','Dynamic tool discovery is not enabled');
+    return this.session(await this.rpc('thread/start',{...params,dynamicTools:[tool]})).threadId;
   }
   async resumeThreadSession(params: ThreadResumeParams): Promise<NativeThreadSession> {
     return this.session(await this.rpc("thread/resume", { ...params, excludeTurns: true }));
@@ -313,6 +324,13 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
     if (!transport) return;
     const method = String(message.method);
     try {
+      if(method==='item/tool/call'&&this.experimentalApi&&this.dynamicToolHandler) {
+        const params=message.params as DynamicToolCallParams;
+        if(!params||typeof params.threadId!=='string'||typeof params.turnId!=='string'||typeof params.callId!=='string'||typeof params.tool!=='string'||!(params.namespace===null||typeof params.namespace==='string')||!Object.hasOwn(params,'arguments')){transport.respondError(message.id,-32602,'Invalid dynamic tool request');return;}
+        const response=await this.dynamicToolHandler(params);
+        transport.respond(message.id,response as unknown as Wire);
+        this.record({method:'bridge/dynamicToolResponse',params:{threadId:params.threadId,turnId:params.turnId,callId:params.callId,success:response.success}});return;
+      }
       // No approval is granted without an explicit caller-supplied handler.
       let response = this.approvalHandler ? await this.approvalHandler(message) : approvals.has(method) ? { decision: "decline" } : null;
       if (approvals.has(method) && (!response || !["decline", "cancel", "accept", "acceptForSession"].includes(String(response.decision)))) {

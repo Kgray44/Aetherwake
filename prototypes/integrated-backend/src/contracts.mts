@@ -8,6 +8,7 @@ import type { VelaClient, VelaState, ContextManifest, VelaPlanningPort, VelaNati
 import type { PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
 import type { TemplateService } from '../../block-library/service.mts';
 import type { NoteExperienceService } from '../../block-library/note-service.mts';
+import type { CapabilityCatalogProjection, CapabilityDiscoveryDeclaration, CapabilityNativeCall, CapabilityToolReply } from '../../vela-core/src/capability-catalog.mts';
 export type NoteMethod = 'readNote'|'saveNoteDraft'|'commitNote'|'discardNoteDraft'|'renameNote';
 export type NoteRequest = { [K in NoteMethod]: {name:K;input:Parameters<NoteExperienceService[K]>[0]} }[NoteMethod];
 export type LibraryMethod = 'capabilities'|'preferences'|'setFavorite'|'getBlockSettings'|'configureBlock'|'findResources'|'attachBlock'|'createBlock'|'listTemplates'|'getTemplate'|'saveTemplate'|'renameTemplate'|'archiveTemplate'|'previewTemplate'|'applyTemplate'|'previewWorkspaceFromResources'|'workspaceFromResources'|'requestVelaTemplate'|'subjectTargets'|'createSubjectBlock'|'projectOverview'|'browseResources';
@@ -16,7 +17,7 @@ export type LibraryResponse = {result:unknown;desktop?:DesktopSnapshot};
 export type VelaOperationName = keyof VelaClient;
 export type VelaRequestInput = Parameters<VelaClient['request']>[0] & { previewId?:string;grantId?:string };
 export type VelaOperation = { [K in VelaOperationName]: { name: K; input: K extends 'request' ? VelaRequestInput : Parameters<NonNullable<VelaClient[K]>>[0] extends undefined ? Record<string,never> : Parameters<NonNullable<VelaClient[K]>>[0] } & (K extends 'apply' ? { presentation?:WorkspacePresentationContext } : {}) }[VelaOperationName];
-export interface VelaRequestPreview { id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string }
+export interface VelaRequestPreview { id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration }
 export interface VelaNativeCapabilities {
   supportedActions: VelaNativeAction['type'][];
   /** Registered released Universal Block/application capability; no fallback implementation is supplied by Vela. */
@@ -60,6 +61,8 @@ export interface ProviderPort {
   interrupt(threadId: string, turnId: string): Promise<void>;
   onEvent(listener: (event: EventEnvelope) => void): () => void;
   close(): void;
+  /** Trusted optional read-only planning transport; never exposed as an RPC or ordinary chat tool. */
+  catalogDiscovery?: {readonly available?:boolean;open(projection:CapabilityCatalogProjection,onCall:(call:CapabilityNativeCall)=>Promise<CapabilityToolReply>):Promise<string>;release(threadId:string):void};
 }
 export interface StreamEvent {
   schemaVersion: 1; eventId: string; cursor: number;
@@ -82,6 +85,8 @@ export interface HandoffReview {
 export interface Options {
   path: string; provider?: 'fixture' | 'codex' | 'bridge-fixture'; fixtureMode?: string;
   codexExecutable?: string; codexArgs?: string[]; cwd?: string;
+  /** Trusted host opt-in only. Experimental wire fields remain disabled by default. */
+  velaCatalogDiscovery?:boolean;
   instanceId?: string; accountScope?: string;
   retention?: { maxEvents: number };
   contentPolicy: 'synthetic-only' | 'local-private';
