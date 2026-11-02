@@ -1608,6 +1608,8 @@ export class Environment {
       maskWidth: width,
       maskHeight: height,
       maskBytes: pixels.byteLength,
+      shaderPhase: this.ribbons[0].material.uniforms.uTime.value as number,
+      ambientGain: this.ribbons[0].material.uniforms.uAmbient.value as number,
       meaning:
         "Independent raster mask from current production GPU vertex shader, active LOD, uniforms, world matrix and camera; CPU bounds and DOM are not used to generate pixels.",
     };

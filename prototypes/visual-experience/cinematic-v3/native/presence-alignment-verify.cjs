@@ -110,6 +110,15 @@ async function run(win) {
     const b = a.snapshot.gpu.presenceBounds,
       f = a.snapshot.gpu.presenceProjection.fit;
     const c = a.card;
+    if ((await state()).navigation.kind === "workspace")
+      check(
+        name + " rendered card center equals sculptural target",
+        Math.hypot(
+          c.x + c.w / 2 - f.target.x - f.target.w / 2,
+          c.y + c.h / 2 - f.target.y - f.target.h / 2,
+        ) < 0.1,
+        { card: c, target: f.target },
+      );
     check(
       name + " actual deformed vertex center/containment",
       f && f.centerErrorCssPx < 0.05 && f.overflowCssPx < 0.05,
@@ -131,6 +140,12 @@ async function run(win) {
         { card: c, children: a.children },
       );
     if (m) {
+      if (a.snapshot.presenceReviewPhase !== null && !a.snapshot.reduced)
+        check(
+          name + " actual GPU phase is the requested phase",
+          Math.abs(m.shaderPhase - a.snapshot.presenceReviewPhase) < 0.001,
+          { requested: a.snapshot.presenceReviewPhase, actual: m.shaderPhase },
+        );
       const p = m.bounds,
         t = f.target;
       check(
@@ -185,7 +200,7 @@ async function run(win) {
       await execute({
         type: "setViewport",
         workspaceId: workspace,
-        viewport: { x: 350 - 754 * zoom, y: 430 - 410 * zoom, zoom },
+        viewport: { x: 754 - 350 / zoom, y: 410 - 430 / zoom, zoom },
       });
       await pause(850);
       for (const phase of [0, 2.7, 6.1, 11.3, 18.8, 30.2]) {
@@ -248,6 +263,12 @@ async function run(win) {
   await gather("reduced motion");
   await shot("reduced-motion");
   await js("window.__aerynth.setReduced(false)");
+  await execute({
+    type: "setViewport",
+    workspaceId: workspace,
+    viewport: { x: 280, y: 0, zoom: 1 },
+  });
+  await pause(850);
   win.setContentSize(1050, 800);
   await pause(900);
   await gather("native resized viewport");

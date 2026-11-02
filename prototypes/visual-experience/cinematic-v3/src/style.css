@@ -114,6 +114,10 @@ body[data-study="architecture"] .scene-vignette {
   position: absolute;
   pointer-events: none;
 }
+body.application-ready #vela.vela-card {
+  min-width: 0;
+  min-height: 0;
+}
 .brand > span {
   font-size: 17px;
   letter-spacing: 0.32em;
