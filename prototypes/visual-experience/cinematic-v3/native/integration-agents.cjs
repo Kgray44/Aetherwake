@@ -220,6 +220,17 @@ async function readJson(file) {
   );
   return JSON.parse(await fs.readFile(file, "utf8"));
 }
+/** Native input delivery is asynchronous. A click/keypress post is not focus,
+ * selection or text acceptance; observe each before sending the next action. */
+async function fillNative({ click, key, js, wait, insertText }, query, text) {
+  await click(query);
+  const target = JSON.stringify(query);
+  await wait("Actual input focus " + query, () => js(`(()=>{const n=document.querySelector(${target});return !!n&&document.activeElement===n})()`));
+  key("A", ["control"]);
+  await wait("Actual full input selection " + query, () => js(`(()=>{const n=document.querySelector(${target});return !!n&&document.activeElement===n&&n.selectionStart===0&&n.selectionEnd===n.value.length})()`));
+  await insertText(text);
+  await wait("Exact native input accepted " + query, () => js(`(()=>{const n=document.querySelector(${target});return !!n&&n.value===${JSON.stringify(text)}})()`));
+}
 exports.assertOwnedProfile = assertOwnedProfile;
 exports.assertProfile = assertProfile;
 exports.assertEffective = assertEffective;
@@ -228,6 +239,7 @@ exports.assertNoExecution = assertNoExecution;
 exports.assertNoPlacements = assertNoPlacements;
 exports.passingCheckpoint = passingCheckpoint;
 exports.FIXTURE = FIXTURE;
+exports.fillNative = fillNative;
 
 exports.verify = async function verify({
   win,
@@ -444,7 +456,11 @@ exports.verify = async function verify({
       let previous, point;
       await wait("Visible stable actual agent control " + query, async () => {
         const value = await js(targetScript(query, "inspect"));
-        if (!value.ready) return false;
+        if (!value.ready) {
+          await js(`(()=>{const n=document.querySelector(${JSON.stringify(query)});if(!n||n.closest('[hidden],[inert]'))return;const r=n.getBoundingClientRect();let clipped=r.left<0||r.top<0||r.right>innerWidth||r.bottom>innerHeight;for(let p=n.parentElement;p&&!clipped;p=p.parentElement){const s=getComputedStyle(p),b=p.getBoundingClientRect();clipped=(s.overflowX!=='visible'&&(r.left<b.left||r.right>b.right))||(s.overflowY!=='visible'&&(r.top<b.top||r.bottom>b.bottom));}if(clipped)n.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'});})()`);
+          previous = undefined;
+          return false;
+        }
         point = {
           x: Math.round(value.rect.x + value.rect.width / 2),
           y: Math.round(value.rect.y + value.rect.height / 2),
@@ -477,13 +493,7 @@ exports.verify = async function verify({
       }
     };
     const fill = async (query, text) => {
-      await click(query);
-      key("A", ["control"]);
-      await bounded(
-        win.webContents.insertText(text),
-        slot.workRemaining(),
-        "agents_text_input_deadline",
-      );
+      await fillNative({click,key,js,wait,insertText:text=>bounded(win.webContents.insertText(text),slot.workRemaining(),"agents_text_input_deadline")},query,text);
       slot.check();
       receipt.actions.push({
         method: "software-native-window-insertText",
@@ -501,6 +511,7 @@ exports.verify = async function verify({
       });
       assert(index <= 32, "actual_bounded_agent_option_required");
       await click(query);
+      await wait("Actual native select focus", () => js(`(()=>{const n=document.querySelector(${JSON.stringify(query)});return !!n&&document.activeElement===n})()`));
       key("Home");
       for (let i = 0; i < index; i++) key("Down");
       key("Return");
