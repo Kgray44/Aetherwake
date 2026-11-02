@@ -348,7 +348,7 @@ export class WorkspaceEngine {
           const next = updateOrganization(state.organization, { mode: 'structured', structured: { preset: command.preset } });
           this.writeOrganization(workspaceId, { ...next, revision: state.organization.revision + 1 }); policy.intent = 'mode'; policy.preset = command.preset; break;
         }
-        case 'reorderPlacements': ensure(state.organization.mode === 'structured', 'UNSUPPORTED_POLICY'); policy.order = command.order; policy.intent = 'reorder'; break;
+        case 'reorderPlacements': ensure(state.organization.mode === 'structured', 'UNSUPPORTED_POLICY'); ensure(Array.isArray(command.order), 'INVALID_ORDER'); policy.order = command.order; policy.intent = 'reorder'; break;
         case 'bringAllIntoView': policy.intent = 'recover'; break;
         case 'saveLayout': {
           ensure(Array.isArray(command.placements)); this.apply(workspaceId, command.placements, state.revision, this.viewport(command.viewport ?? state.viewport));

@@ -17,7 +17,7 @@ export type StructuredOrganization = {
 export type WorkspaceOrganization = {
   schemaVersion: 1; mode: OrganizationMode; gap: number; revision: number; structured: StructuredOrganization;
 };
-export type OrganizationUpdate = { mode?: OrganizationMode; gap?: number; structured?: Partial<StructuredOrganization> };
+export type OrganizationUpdate = { mode?: OrganizationMode; gap?: number; structured?: Omit<Partial<StructuredOrganization>, 'columnCount'> & { columnCount?: number | null } };
 /** System presence is a layout participant, never a duplicate assistant resource. */
 export type PresencePlacement = Geometry & {
   id: 'system:vela'; kind: 'vela'; workspaceId: string; version: number; scale: 0.65; locked: boolean;

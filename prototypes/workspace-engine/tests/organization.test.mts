@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { WorkspaceEngine } from '../engine.mts';
 import { previewLayout, defaultOrganization } from '../organization.mts';
@@ -139,6 +140,15 @@ test('explicit Structured spans survive setOrganization, resolve and restart', t
   try { assert.deepEqual(new WorkspaceEngine(reopened).project(s.workspaceId), s); } finally { reopened.close(); }
 });
 
+test('explicit column preference can be reset to automatic without replacing the workspace', t => {
+  const { engine: e, state } = fixture(t); let s = add(e, state);
+  s = run(e, s, { type: 'setOrganization', organization: { mode: 'structured', structured: { columnCount: 4 } } });
+  const id = s.blocks[0].blockId;
+  s = run(e, s, { type: 'setOrganization', organization: { structured: { columnCount: null } } });
+  assert.equal(s.organization.structured.columnCount, undefined); assert.equal(s.blocks[0].blockId, id);
+  s = run(e, s, { type: 'undoLayout' }); assert.equal(s.organization.structured.columnCount, 4);
+});
+
 test('mode changes undo mode/config/geometry durably and keep canonical drafts intact', t => {
   const { engine: e, kernel: k, path, state } = fixture(t, true); let s = run(e, state, { type: 'setOrganization', organization: { mode: 'freeform' } });
   s = add(e, s, { x: 77, y: 303, width: 367, height: 291 }); s = add(e, s, { x: 85, y: 311, width: 501, height: 307 });
@@ -216,4 +226,74 @@ test('schema3 migration preserves raw geometry/history, defaults Fluid and honor
     reopened.withTransaction(db => assert.equal(db.prepare("SELECT json FROM workspace_engine_v3_recovery_archive WHERE kind='history'").get()!.json, raw));
     const restored = run(e2, migrated, { type: 'undoLayout' }); assert.notEqual(restored.blocks[0].x, 999);
   } finally { reopened.close(); }
+});
+
+test('Vela previews match commits in all modes and Structured circular resize preserves its shape', t => {
+  const { engine: e, kernel: k, state } = fixture(t); let s = add(e, state, { x: 50, y: 400 });
+  for (const mode of ['fluid', 'freeform', 'structured']) {
+    s = run(e, s, { type: 'setOrganization', organization: { mode } }); const b = s.blocks[0];
+    const update = { expectedVersion: s.presence.version, presentation: { x: b.x + 20, y: b.y + 20 } };
+    const predicted = previewLayout(s, { presence: update, bounds });
+    s = run(e, s, { type: 'setPresence', ...update }); assert.deepEqual(layouts(s), layouts(predicted));
+    assert.equal(s.presence.id, 'system:vela'); assert.equal(k.searchResources().length, 1);
+  }
+  const b = s.blocks[0], predicted = previewLayout(s, { bounds, placements: [{ blockId: b.blockId, expectedVersion: b.version, presentation: { shape: 'circle' } }] });
+  s = run(e, s, { type: 'setBlockShape', blockId: b.blockId, shape: 'circle' });
+  assert.deepEqual(layouts(s), layouts(predicted)); assert.equal(s.blocks[0].height, s.blocks[0].width); assert.equal(s.blocks[0].contentMode, 'summary');
+});
+
+test('a named checkpoint restores mode, variable geometry, overlap and identity after restart', t => {
+  const { engine: e, path, state } = fixture(t, true); let s = run(e, state, { type: 'setOrganization', organization: { mode: 'freeform' } });
+  s = add(e, s, { x: 80, y: 220, width: 333, height: 277 }); s = add(e, s, { x: 95, y: 235, width: 450, height: 300 });
+  const before = layouts(s), saved = run(e, s, { type: 'checkpoint', name: 'Custom Freeform' });
+  s = run(e, saved, { type: 'applyStructuredPreset', preset: 'development' });
+  const other = WorkspaceKernel.open(path);
+  try {
+    const e2 = new WorkspaceEngine(other);
+    const restored = run(e2, e2.project(s.workspaceId), { type: 'restoreCheckpoint', checkpointId: saved.checkpointId });
+    assert.equal(restored.organization.mode, 'freeform'); assert.deepEqual(layouts(restored), before);
+  } finally { other.close(); }
+});
+
+test('a stale mode-change preview cannot overwrite a newer policy in another window', t => {
+  const { engine: e, path, state } = fixture(t, true); const other = WorkspaceKernel.open(path);
+  try {
+    const e2 = new WorkspaceEngine(other), stale = e2.project(state.workspaceId);
+    const result = run(e, state, { type: 'setOrganization', organization: { mode: 'freeform' } });
+    assert.throws(() => run(e2, stale, { type: 'setOrganization', organization: { mode: 'structured' }, expectedOrganizationRevision: stale.organization.revision }), code('CONFLICT'));
+    assert.deepEqual(e2.project(result.workspaceId), result);
+  } finally { other.close(); }
+});
+
+test('failed schema4 migration rolls back columns/archive and preserves exact prior history', t => {
+  const { engine: e, kernel: k, state } = fixture(t); const s = add(e, state); let raw = '';
+  k.withTransaction(db => {
+    raw = String(db.prepare('SELECT history_json FROM workspace_engine_layouts').get()!.history_json);
+    db.exec(`DROP TABLE workspace_engine_v3_recovery_archive; ALTER TABLE workspace_engine_layouts DROP COLUMN organization_json;
+      ALTER TABLE workspace_engine_layouts DROP COLUMN legacy_organization_json; UPDATE workspace_engine_schema SET version=3;
+      CREATE TRIGGER reject_organization_upgrade BEFORE UPDATE ON workspace_engine_schema WHEN NEW.version=4
+      BEGIN SELECT RAISE(ABORT,'Synthetic organization migration interruption'); END;`);
+  });
+  assert.throws(() => new WorkspaceEngine(k), /Synthetic organization migration interruption/);
+  k.withTransaction(db => {
+    assert.equal(db.prepare('SELECT version FROM workspace_engine_schema').get()!.version, 3);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM pragma_table_info('workspace_engine_layouts') WHERE name='organization_json'").get()!.n, 0);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='workspace_engine_v3_recovery_archive'").get()!.n, 0);
+    assert.equal(db.prepare('SELECT history_json FROM workspace_engine_layouts').get()!.history_json, raw);
+    db.exec('DROP TRIGGER reject_organization_upgrade');
+  });
+  const recovered = new WorkspaceEngine(k).project(s.workspaceId); assert.equal(recovered.blocks[0].resourceId, s.blocks[0].resourceId);
+});
+
+test('interrupted mode transformation recovers prior policy, geometry, presence and history', t => {
+  const { engine: e, path, state } = fixture(t, true); let s = add(e, state); s = add(e, s);
+  const child = spawnSync(process.execPath, ['--input-type=module', '-e', `
+    import { WorkspaceKernel } from ${JSON.stringify(new URL('../../workspace-kernel/kernel.mts', import.meta.url).href)};
+    import { WorkspaceEngine } from ${JSON.stringify(new URL('../engine.mts', import.meta.url).href)};
+    const k=WorkspaceKernel.open(process.argv[1]),e=new WorkspaceEngine(k),s=e.project(process.argv[2]);
+    k.withTransaction(()=>{e.execute({type:'setOrganization',commandId:'interrupted-mode',workspaceId:s.workspaceId,expectedRevision:s.revision,organization:{mode:'structured'},bounds:{x:20,y:170,width:1240,height:650}});process.exit(37)});
+  `, path, s.workspaceId], { encoding: 'utf8' });
+  assert.equal(child.status, 37, child.stderr);
+  const other = WorkspaceKernel.open(path);
+  try { assert.deepEqual(new WorkspaceEngine(other).project(s.workspaceId), s); other.assertIntegrity(); } finally { other.close(); }
 });

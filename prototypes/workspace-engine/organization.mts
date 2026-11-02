@@ -15,7 +15,8 @@ export function updateOrganization(base: WorkspaceOrganization, patch: Organizat
   ensure(u && typeof u === 'object' && !Array.isArray(u) && Object.keys(u).every(k => ['columnCount', 'rowHeight', 'rowGap', 'columnGap', 'margin', 'preset', 'order', 'spans'].includes(k)));
   ensure(u.order === undefined || Array.isArray(u.order));
   ensure(u.spans === undefined || (u.spans && typeof u.spans === 'object' && !Array.isArray(u.spans)));
-  const s = { ...base.structured, ...u, order: [...(u.order ?? base.structured.order)], spans: { ...base.structured.spans, ...u.spans } };
+  const s = { ...base.structured, ...u, columnCount: u.columnCount === null ? undefined : u.columnCount ?? base.structured.columnCount,
+    order: [...(u.order ?? base.structured.order)], spans: { ...base.structured.spans, ...u.spans } };
   ensure(s.columnCount === undefined || (Number.isInteger(s.columnCount) && s.columnCount >= 1 && s.columnCount <= 12));
   ensure(Number.isFinite(s.rowHeight) && s.rowHeight >= 32 && s.rowHeight <= 512);
   for (const n of [s.rowGap, s.columnGap, s.margin]) ensure(Number.isFinite(n) && n >= 0 && n <= 256);
@@ -45,6 +46,7 @@ function structured(state: LayoutState, input: CollisionPlacement[], options: Po
   const remaining = input.filter(p => !existing.includes(p.id)).toSorted((a, b) => a.y - b.y || a.x - b.x || idOrder(a.id, b.id));
   let order = [...existing, ...remaining.map(p => p.id)];
   if (options.order) {
+    ensure(Array.isArray(options.order), 'INVALID_ORDER');
     ensure(options.order.length === input.length && new Set(options.order).size === input.length && options.order.every(id => ids.has(id)), 'INVALID_ORDER');
     order = [...options.order];
   } else if (options.intent === 'move') {
@@ -164,6 +166,7 @@ export function previewLayout(state: LayoutState, request: LayoutPreviewRequest 
     targets.push(p.id); if (resized) resizeIds.push(p.id);
   }
   if (request.structuredPreset) next.organization = updateOrganization(next.organization, { mode: 'structured', structured: { preset: request.structuredPreset } });
+  if (request.order) ensure(next.organization.mode === 'structured', 'UNSUPPORTED_POLICY');
   const intent = request.intent ?? (request.organization || request.structuredPreset ? 'mode' : resizeIds.length ? 'resize' : targets.length ? 'move' : request.viewport ? 'view' : 'resolve');
   const result = applyOrganizationPolicy(next, { targets, resizeIds, bounds: request.bounds, intent, order: request.order, preset: request.structuredPreset, spanOverrides: Object.keys(request.organization?.structured?.spans ?? {}) });
   const old = entries(state), output = [...result.blocks.map(b => ({ ...b, id: b.blockId })), result.presence];

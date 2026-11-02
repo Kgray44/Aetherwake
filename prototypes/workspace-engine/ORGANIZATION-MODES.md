@@ -21,6 +21,8 @@ engine.execute({ type: 'setOrganization', commandId, workspaceId,
 
 Additional actions: `applyStructuredPreset {preset:'balanced'|'focus'|'development'|'research'}`, `reorderPlacements {order:string[]}` (full set including Vela), `bringAllIntoView`, and `layerBlock {blockId,direction:'front'|'back'|'raise'|'lower'}`. Existing block, presence, checkpoint, undoLayout and redoLayout actions remain. Mode/config changes and all resulting geometry changes share one transaction and one history entry. Undo/redo/checkpoint snapshots include the organization policy and configuration as well as geometry/presence. Resource content and editor instances are outside layout storage.
 
+`structured.columnCount:null` explicitly resets a prior fixed column count to automatic. Omitting columnCount preserves the current preference. The canonical projection remains `number | undefined`.
+
 ## Predictive preview contract
 
 Import `previewLayout` from browser-safe `organization.mts`. It does not import engine/SQLite/Node, read provider data, own animation, or persist anything.
@@ -67,7 +69,21 @@ Legacy snapshots missing organization are normalized against each workspace's mi
 
 ## Verification and full-goal acceptance ledger
 
-Initial engine checkpoint: 38 retained regressions plus 16 mode-policy tests pass; strict TypeScript and whitespace checks pass. Coverage includes new/inherited defaults; independent modes/restart; exact Freeform overlap/layers/presence persistence; predictive read-only preview/commit equality; local yielding; Structured 0/3/10/25/50 blocks, sizes/spans/reorder/presets; explicit span overrides; all six transitions; durable undo of mode/config/geometry; view-only saves and safe recovery; locks, invalid policies and stale revisions; raw legacy geometry/history and explicit preference migration. New performance/adversarial checks are recorded as they are collected.
+Engine checkpoint: 38 retained regressions plus 22 mode-policy tests pass (60 total); strict TypeScript and whitespace checks pass. The integration base's 31 backend and 12 kernel regressions also pass. Coverage includes new/inherited defaults; independent modes/restart; exact Freeform overlap/layers/presence persistence; predictive read-only preview/commit equality; local yielding; Structured 0/3/10/25/50 blocks, sizes/spans/reorder/presets; explicit span overrides and reset-to-automatic; all six transitions; durable undo and checkpoint restore of mode/config/geometry; view-only saves and safe recovery; locks, invalid policies and two-window stale revisions; raw legacy geometry/history and explicit preference migration; Vela preview/commit equality across all modes; circular shape validity; failed schema4 migration rollback; and interrupted process mode-change recovery.
+
+### Pure preview performance
+
+Run `npm run benchmark:modes` (or `node benchmark-modes.mts --output` to save a fresh receipt). [The recorded measurement](evidence/mode-preview-benchmark.json) binds SHA-256 hashes of the policy/contracts/resolver/benchmark source. The plan covers 3, 10, 25 and 50 blocks, all three modes, both drag and resize preview; 3 warm-ups then 20 samples for each combination, no removed outliers, no acceptance threshold. Twenty samples mean floor(n*p) p95 and p99 both select the maximum. Fixture construction/persistence is outside the measured interval.
+
+On Windows 10.0.26300 / Node v24.18.0 / Ryzen AI 7 350, the saved 50-block results were:
+
+| Mode | Drag p50 / p95 ms | Resize p50 / p95 ms |
+|---|---|---|
+| Fluid | 0.463 / 1.868 | 0.397 / 0.587 |
+| Freeform | 0.030 / 0.078 | 0.028 / 0.050 |
+| Structured | 0.727 / 1.997 | 0.426 / 0.679 |
+
+These are synchronous pure layout calculations. They exclude rendering, displayed frame timing, IPC, SQLite/history serialization, native input latency and GPU work. Concurrent local workloads were not sampled or attributed. Actual rendering measurements and native visual experience remain separate milestone requirements, not implied by this table.
 
 | Directive scope | Authoritative completion evidence | Current engine checkpoint / remaining owner evidence |
 |---|---|---|
@@ -80,7 +96,7 @@ Initial engine checkpoint: 38 retained regressions plus 16 mode-policy tests pas
 | 7 geometry/organization contracts | Typed organization projection and exact preview/commit comparison | Implemented/tested; trusted desktop adapter owned by lead |
 | 8 shared motion domains/reduced motion/quality/scenes | Current Motion Coordinator + native cancellation/retarget/scene/recovery tests | No new scheduler; native combined evidence pending |
 | 9 glass continuity | New native captures/video at exact integrated mode candidate | Renderer-owned; older material matrix cannot prove this candidate |
-| 10 solver invariants/performance | Deterministic/minimal-neighbor/lock/no-op/invalid/identity tests and mode preview benchmarks | Functional checks passing; current-mode timing/evidence pending |
+| 10 solver invariants/performance | Deterministic/minimal-neighbor/lock/no-op/invalid/identity tests and mode preview benchmarks | Functional checks and source-bound pure timing recorded; native rendering still pending |
 | 11 concurrency | Scoped engine-only branch and exact API handoff | Active coordinated work with integration lead and visual worker |
 | 12 required mixed native demonstrations | 3 conversations, 2 notes, 2 tasks, research, Intelligence Stream, Vela; Fluid/Freeform/Structured/transitions/cross-workspace + Constellation journeys | Pending integration/native owner; isolated geometry cannot substitute |
 | 13 regressions | Engine/backend/kernel tests plus native graphics recovery, reduced motion, duplicate-label and glass checks at 3/10/25/50 | Engine checkpoint only; full native matrix pending |
