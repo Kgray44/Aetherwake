@@ -15,6 +15,7 @@ const {
   verifyWorkspaceGuide,
 } = require("./native-labels.cjs");
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const monotonicNow = () => performance.now();
 const JOURNEY_LIMITS = Object.freeze({
   receiptBytes: 2 * 1024 * 1024,
   journalBytes: 256 * 1024,
@@ -25,14 +26,32 @@ const JOURNEY_LIMITS = Object.freeze({
 });
 
 /** Same absolute budget as the host; no separate timer extends its slot. */
-function journeyDeadline(argv, startedAt, now = Date.now()) {
+function journeyDeadline(
+  argv,
+  startedAt,
+  moduleStartedMonotonicMs,
+  nowMonotonicMs = monotonicNow(),
+  nowWallMs = Date.now(),
+) {
   const { verificationDeadline } = require(
     native + "integration-spatial-benchmark.cjs",
   );
-  return verificationDeadline(argv, Date.parse(startedAt), now);
+  return verificationDeadline(
+    argv,
+    Date.parse(startedAt),
+    moduleStartedMonotonicMs,
+    nowMonotonicMs,
+    nowWallMs,
+  );
 }
 
-function createJourneyGuard(win, expiresAt, now = Date.now, sleep = pause) {
+function createJourneyGuard(
+  win,
+  expiresAt,
+  now = monotonicNow,
+  sleep = pause,
+  wallNow = Date.now,
+) {
   assert.ok(
     Number.isFinite(expiresAt) && expiresAt > now(),
     "live absolute journey deadline required",
@@ -61,7 +80,8 @@ function createJourneyGuard(win, expiresAt, now = Date.now, sleep = pause) {
       return;
     }
     aborted = Error("native_expanded_operator_escape");
-    status.operatorEscapeAt = new Date(now()).toISOString();
+    status.operatorEscapeAt = new Date(wallNow()).toISOString();
+    status.operatorEscapeMonotonicMs = now();
     event?.preventDefault?.();
   };
   const input = (event) => {
@@ -86,11 +106,13 @@ function createJourneyGuard(win, expiresAt, now = Date.now, sleep = pause) {
     const until = now() + ms;
     do {
       guard();
-      await sleep(Math.min(50, Math.max(1, until - now())));
+      const remaining = expiresAt - now();
+      if (remaining <= 0) guard();
+      await sleep(Math.min(50, Math.max(1, until - now()), remaining));
     } while (now() < until);
     guard();
   };
-  // The existing driver and label/guide checks use these exact methods. They
+  // The label/guide checks use these exact methods. They
   // retain real window state and input, with no show/focus/reclaim capability.
   const owner = {
     isDestroyed: () => win.isDestroyed(),
@@ -336,6 +358,7 @@ async function verifyJourney({
   session,
   localURL,
   startupErrors,
+  moduleStartedMonotonicMs,
 }) {
   assert.ok(
     process.argv.includes("--integration-expanded"),
@@ -368,12 +391,16 @@ async function verifyJourney({
     rendererErrorScope:
       "Window error events and caught graphics construction/recovery exceptions; console-message errors are recorded separately.",
     limits: JOURNEY_LIMITS,
-    timing: { helperStartedAt: new Date().toISOString() },
+    timing: {
+      helperStartedAt: new Date().toISOString(),
+      helperStartedMonotonicMs: monotonicNow(),
+    },
     limitations: [
       "Window recordings and callback statistics do not measure monitor-presented frames.",
       "Ordinary conversation branching is an app-level continuation with reviewed source context; no provider fork, inference or model response is claimed.",
       "This journey does not replace rendered-scale performance measurements or owner artistic acceptance.",
       "Injected and physical window Escape events have no source identifier. Only one explicitly injected non-repeat Escape has a 250 ms allowance; unmatched or repeating Escape aborts.",
+      "UTC timestamps and deadlineAt are wall-clock evidence and may reverse; only the explicit host monotonic start drives expiry and elapsed durations.",
     ],
   };
   let recorder, run, ownerContents, wait, click, fill, snapshot, consoleMonitor;
@@ -488,12 +515,12 @@ async function verifyJourney({
     for (const x of [3, 1]) send({ type: "mouseMove", x, y: 1 });
     const fresh = `window.__aerynth.snapshot().metrics.draws>${before}`;
     if (failureOnly) {
-      // Initialization can fail before the shared driver exists. Keep this
+      // Initialization can fail before navigation controls exist. Keep this
       // diagnostic read under the same admitted owner/deadline, without a
       // console-health gate preventing capture of the actual error state.
-      const end = Date.now() + 8000;
+      const end = monotonicNow() + 8000;
       while (!(await js(fresh))) {
-        if (Date.now() >= end)
+        if (monotonicNow() >= end)
           throw Error("failure capture GPU draw timed out");
         await pause(80);
       }
@@ -728,7 +755,7 @@ async function verifyJourney({
   const cardPoint = async (id, edge) => {
     const selector = `[data-block="${id}"] ${edge ? ".aw-card-edge--" + edge : ".folio-top"}`;
     let last, point;
-    const deadline = Date.now() + 3000;
+    const deadline = monotonicNow() + 3000;
     do {
       await pause(80);
       point = await js(
@@ -742,7 +769,7 @@ async function verifyJourney({
       )
         return point;
       last = point;
-    } while (Date.now() < deadline);
+    } while (monotonicNow() < deadline);
     throw Error(point?.error ?? "Moving direct card target");
   };
   const cardGesture = async (id, edge, dx, dy) => {
@@ -935,19 +962,33 @@ async function verifyJourney({
     await mark("Native pointer drag " + selector + " " + modifiers.join("+"));
   };
   try {
-    const budget = journeyDeadline(process.argv, source.startedAt);
+    const budget = journeyDeadline(
+      process.argv,
+      source.startedAt,
+      moduleStartedMonotonicMs,
+    );
     receipt.timing.moduleStartedAt = source.startedAt;
-    receipt.timing.deadlineAt = new Date(budget.expiresAt).toISOString();
+    receipt.timing.deadlineAt = new Date(
+      Date.parse(source.startedAt) + budget.durationMs,
+    ).toISOString();
+    receipt.timing.deadlineAtMonotonicMs = budget.expiresAtMonotonicMs;
+    receipt.timing.clock = budget.clock;
     receipt.timing.deadlineMs = budget.durationMs;
-    run = createJourneyGuard(win, budget.expiresAt);
+    run = createJourneyGuard(win, budget.expiresAtMonotonicMs);
     receipt.inputGuard = run.status;
     ownerContents = win.webContents;
     ownerContents.on("before-input-event", run.beforeInput);
     consoleMonitor = createNativeConsoleMonitor(ownerContents, startupErrors);
     consoleMonitor.assertClean();
     await evidence.record({ phase: "hydrating" });
-    const { createDriver } = require(native + "desktop-verify.cjs");
-    ({ wait, click, fill, snapshot } = await createDriver(run.owner));
+    const { benchmarkControls } = require(
+      native + "integration-spatial-benchmark.cjs",
+    );
+    const controls = benchmarkControls(win, js, run.guard, run.pause);
+    ({ click, fill, snapshot } = controls);
+    // Preserve the journey driver's previous local wait allowance.
+    wait = (expression, timeout = 30000) => controls.wait(expression, timeout);
+    await wait('document.body.dataset.applicationHydrated === "true"', 30000);
     run.guard();
     receipt.state = "running";
     await evidence.record({
@@ -1890,6 +1931,15 @@ async function verifyJourney({
         }
       }
       receipt.timing.finishedAt = new Date().toISOString();
+      receipt.timing.finishedMonotonicMs = monotonicNow();
+      receipt.helperElapsedMs =
+        receipt.timing.finishedMonotonicMs -
+        receipt.timing.helperStartedMonotonicMs;
+      if (receipt.timing.clock)
+        receipt.timing.endClockDiscontinuityMs =
+          Date.parse(receipt.timing.finishedAt) -
+          Date.parse(source.startedAt) -
+          (receipt.timing.finishedMonotonicMs - moduleStartedMonotonicMs);
       try {
         await evidence.checkpoint();
       } catch (error) {

@@ -62,13 +62,18 @@ function owner() {
 }
 
 test("journey admits exactly the existing host's absolute deadline, without resetting its startup clock", () => {
-  const started = 1000000;
+  const started = 1000000,
+    startedMonotonic = 100;
   const budget = journeyDeadline(
     ["--verification-deadline-ms=90000"],
     new Date(started).toISOString(),
+    startedMonotonic,
+    startedMonotonic + 3000,
     started + 3000,
   );
-  assert.equal(budget.expiresAt, started + 90000);
+  assert.equal(budget.expiresAtMonotonicMs, startedMonotonic + 90000);
+  assert.equal(budget.clock.moduleStartedWallMs, started);
+  assert.equal(budget.clock.startupElapsedMs, 3000);
   for (const args of [
     [],
     ["--verification-deadline-ms=0"],
@@ -76,10 +81,33 @@ test("journey admits exactly the existing host's absolute deadline, without rese
     ["--verification-deadline-ms=1000", "--verification-deadline-ms=90000"],
   ])
     assert.throws(() =>
-      journeyDeadline(args, new Date(started).toISOString(), started + 3000),
+      journeyDeadline(
+        args,
+        new Date(started).toISOString(),
+        startedMonotonic,
+        startedMonotonic + 3000,
+        started + 3000,
+      ),
     );
   assert.throws(() =>
-    journeyDeadline(["--verification-deadline-ms=90000"], "invalid", started),
+    journeyDeadline(
+      ["--verification-deadline-ms=90000"],
+      "invalid",
+      startedMonotonic,
+      startedMonotonic + 3000,
+      started + 3000,
+    ),
+  );
+  assert.throws(
+    () =>
+      journeyDeadline(
+        ["--verification-deadline-ms=90000"],
+        new Date(started).toISOString(),
+        undefined,
+        startedMonotonic + 3000,
+        started + 3000,
+      ),
+    /actual host monotonic start/,
   );
 });
 

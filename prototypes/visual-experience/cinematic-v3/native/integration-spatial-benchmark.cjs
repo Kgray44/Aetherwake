@@ -38,6 +38,7 @@ const LIMITS = Object.freeze({
   toolBytes: 64 * 1024 * 1024,
 });
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const monotonicNow = () => performance.now();
 
 /** Supplemental diagnostics, not a responsiveness acceptance threshold. Every
  * finite value, including long gaps and zeros, participates in this summary. */
@@ -222,7 +223,7 @@ async function collectPresentationTail({
   mark,
   record = async () => {},
   deadlineAt,
-  now = Date.now,
+  now = monotonicNow,
   elapsedNow = () => performance.now(),
 }) {
   const result = {
@@ -259,7 +260,13 @@ async function collectPresentationTail({
   return result;
 }
 
-function verificationDeadline(argv, moduleStarted, now = Date.now()) {
+function verificationDeadline(
+  argv,
+  moduleStarted,
+  moduleStartedMonotonicMs,
+  nowMonotonicMs = monotonicNow(),
+  nowWallMs = Date.now(),
+) {
   const args = argv.filter((arg) =>
     arg.startsWith("--verification-deadline-ms="),
   );
@@ -276,14 +283,47 @@ function verificationDeadline(argv, moduleStarted, now = Date.now()) {
     "verification deadline must be between 1000 and 180000 ms",
   );
   assert(
-    Number.isFinite(moduleStarted) && moduleStarted > 0 && moduleStarted <= now,
-    "actual host module start time required",
+    Number.isFinite(moduleStarted) &&
+      moduleStarted > 0 &&
+      Number.isFinite(new Date(moduleStarted).getTime()),
+    "actual host wall-clock start time required",
   );
   assert(
-    moduleStarted + durationMs > now,
+    Number.isFinite(nowMonotonicMs) &&
+      nowMonotonicMs >= 0 &&
+      Number.isFinite(nowWallMs),
+    "actual admission clock samples required",
+  );
+  assert(
+    Number.isFinite(moduleStartedMonotonicMs) &&
+      moduleStartedMonotonicMs >= 0 &&
+      moduleStartedMonotonicMs <= nowMonotonicMs,
+    "actual host monotonic start time required",
+  );
+  const expiresAtMonotonicMs = moduleStartedMonotonicMs + durationMs;
+  assert(
+    expiresAtMonotonicMs > nowMonotonicMs,
     "verification deadline already expired",
   );
-  return { durationMs, expiresAt: moduleStarted + durationMs };
+  const startupElapsedMs = nowMonotonicMs - moduleStartedMonotonicMs;
+  const wallElapsedMs = nowWallMs - moduleStarted;
+  return {
+    durationMs,
+    expiresAtMonotonicMs,
+    clock: {
+      basis: "performance.now() in the same Electron main process",
+      moduleStartedWallMs: moduleStarted,
+      moduleStartedMonotonicMs,
+      admissionWallMs: nowWallMs,
+      admissionMonotonicMs: nowMonotonicMs,
+      startupElapsedMs,
+      wallElapsedMs,
+      discontinuityMs: wallElapsedMs - startupElapsedMs,
+      wallReversed: nowWallMs < moduleStarted,
+      deadlineAtMeaning:
+        "Module-start wall-clock reference only; expiry is monotonic.",
+    },
+  };
 }
 
 /** Standalone browser-side projection. Never transfer per-body geometry/IDs or
@@ -588,7 +628,7 @@ function startPresentationCapture(
 
 /** Every awaited UI lookup is followed by a fresh deadline/operator/owner check
  * before input. The shared desktop driver does not accept that run guard. */
-function benchmarkControls(win, js, guard, ownedPause) {
+function benchmarkControls(win, js, guard, ownedPause, now = monotonicNow) {
   const read = async (code) => {
     guard();
     const value = await js(code);
@@ -596,18 +636,18 @@ function benchmarkControls(win, js, guard, ownedPause) {
     return value;
   };
   const wait = async (expression, timeout = 20000) => {
-    const end = Date.now() + timeout;
+    const end = now() + timeout;
     do {
       if (
         await read(`(()=>{try{return (${expression})}catch{return false}})()`)
       )
         return;
       await ownedPause(80);
-    } while (Date.now() < end);
+    } while (now() < end);
     throw Error("Timed out " + expression);
   };
   const click = async (selector) => {
-    const end = Date.now() + 2000;
+    const end = now() + 2000;
     let point, previous;
     do {
       await ownedPause(80);
@@ -628,7 +668,7 @@ function benchmarkControls(win, js, guard, ownedPause) {
         return;
       }
       previous = point;
-    } while (Date.now() < end);
+    } while (now() < end);
     throw Error(
       (point?.error ?? "Moving native click target") + ": " + selector,
     );
@@ -714,6 +754,7 @@ exports.verify = async ({
   source,
   privateRoot,
   moduleStarted,
+  moduleStartedMonotonicMs,
   startupErrors,
 }) => {
   const base = path.resolve(__dirname, "../.runtime/application-evidence");
@@ -722,6 +763,7 @@ exports.verify = async ({
     path.join(base, "spatial-scale-" + Date.now() + "-"),
   );
   const helperStarted = Date.now();
+  const helperStartedMonotonicMs = monotonicNow();
   const receipt = {
     contract: "aerynth.spatial-scale@3",
     diagnosticsVersion: 1,
@@ -733,7 +775,10 @@ exports.verify = async ({
     requiredSeparateRuns: REQUIRED_MATRIX,
     matrixComplete: false,
     limits: LIMITS,
-    timing: { helperStartedAt: new Date(helperStarted).toISOString() },
+    timing: {
+      helperStartedAt: new Date(helperStarted).toISOString(),
+      helperStartedMonotonicMs,
+    },
     captures: [],
     consoleDiagnostics: null,
     rendererErrorScope:
@@ -752,6 +797,7 @@ exports.verify = async ({
       "Universe body counts identify actual canonical stars, not the total stored resource count.",
       "No-input tail observations and phase markers add bounded measurement overhead; they do not establish a cause for presentation gaps.",
       "Post-capture callback statistics cover reset before tool launch through a read after capture closure, a wider window than ETW. UTC/host monotonic clocks are not exact ETW/QPC alignment.",
+      "UTC timestamps and deadlineAt are wall-clock evidence and may reverse; only the explicit host monotonic start drives expiry and elapsed durations.",
     ],
   };
   let present,
@@ -768,7 +814,7 @@ exports.verify = async ({
   };
   function guard(ownership = true) {
     if (abort) throw abort;
-    if (budget && Date.now() >= budget.expiresAt)
+    if (budget && monotonicNow() >= budget.expiresAtMonotonicMs)
       throw Error("native_spatial_deadline");
     if (ownership) assertNativeOwner(win);
   }
@@ -783,10 +829,14 @@ exports.verify = async ({
     return marker;
   }
   async function ownedPause(ms, ownership = true) {
-    const end = Date.now() + ms;
+    const end = monotonicNow() + ms;
     do {
       guard(ownership);
-      await pause(Math.min(50, Math.max(1, end - Date.now())));
+      const remaining = budget
+        ? budget.expiresAtMonotonicMs - monotonicNow()
+        : Infinity;
+      if (remaining <= 0) guard(ownership);
+      await pause(Math.min(50, Math.max(1, end - monotonicNow()), remaining));
       if (present)
         try {
           assert(
@@ -799,7 +849,7 @@ exports.verify = async ({
             throw error;
           }
         }
-    } while (Date.now() < end);
+    } while (monotonicNow() < end);
     guard(ownership);
   }
   async function progress(event) {
@@ -859,9 +909,17 @@ exports.verify = async ({
     markPhase(target, "png-" + name + "-end");
   }
   try {
-    budget = verificationDeadline(process.argv, moduleStarted);
+    budget = verificationDeadline(
+      process.argv,
+      moduleStarted,
+      moduleStartedMonotonicMs,
+    );
     receipt.timing.moduleStartedAt = new Date(moduleStarted).toISOString();
-    receipt.timing.deadlineAt = new Date(budget.expiresAt).toISOString();
+    receipt.timing.deadlineAt = new Date(
+      moduleStarted + budget.durationMs,
+    ).toISOString();
+    receipt.timing.deadlineAtMonotonicMs = budget.expiresAtMonotonicMs;
+    receipt.timing.clock = budget.clock;
     receipt.timing.deadlineMs = budget.durationMs;
     assert(
       source?.hashes && source?.buildAssets,
@@ -927,7 +985,7 @@ exports.verify = async ({
       guard();
       await wait(
         code,
-        Math.max(1, Math.min(ms, budget.expiresAt - Date.now())),
+        Math.max(1, Math.min(ms, budget.expiresAtMonotonicMs - monotonicNow())),
       );
       guard();
     };
@@ -936,7 +994,7 @@ exports.verify = async ({
       read(
         "(" + spatialObservation.toString() + ")(window.__aerynth.snapshot())",
       );
-    receipt.startupToInteractiveMs = Date.now() - moduleStarted;
+    receipt.startupToInteractiveMs = monotonicNow() - moduleStartedMonotonicMs;
     let s = await snapshot();
     guard();
     assert.equal(s.resources.length, seed.resourceCount);
@@ -1039,7 +1097,7 @@ exports.verify = async ({
         return;
       }
       markPhase(target, "capture-wait-start");
-      const end = Math.min(budget.expiresAt, Date.now() + 16000);
+      const end = Math.min(budget.expiresAtMonotonicMs, monotonicNow() + 16000);
       target.measurementTail = await collectPresentationTail({
         closed: () => !!started.result,
         observe: () => tailObservation(observePhase),
@@ -1064,8 +1122,11 @@ exports.verify = async ({
         new Date().toISOString();
       if (result.error && running(started.child)) {
         started.child.kill();
-        const drain = Math.min(budget.expiresAt, Date.now() + 2000);
-        while (running(started.child) && Date.now() < drain)
+        const drain = Math.min(
+          budget.expiresAtMonotonicMs,
+          monotonicNow() + 2000,
+        );
+        while (running(started.child) && monotonicNow() < drain)
           await ownedPause(50);
         assert(
           !running(started.child),
@@ -1160,7 +1221,7 @@ exports.verify = async ({
       );
       const sample = {
         at: new Date().toISOString(),
-        moduleElapsedMs: Date.now() - moduleStarted,
+        moduleElapsedMs: monotonicNow() - moduleStartedMonotonicMs,
         ...observation,
         focused: win.isFocused(),
         minimized: win.isMinimized(),
@@ -1467,7 +1528,7 @@ exports.verify = async ({
       );
       const sample = {
         at: new Date().toISOString(),
-        moduleElapsedMs: Date.now() - moduleStarted,
+        moduleElapsedMs: monotonicNow() - moduleStartedMonotonicMs,
         ...observation,
         focused: win.isFocused(),
         minimized: win.isMinimized(),
@@ -1637,7 +1698,14 @@ exports.verify = async ({
         }
       }
       receipt.timing.finishedAt = new Date().toISOString();
-      receipt.helperElapsedMs = Date.now() - helperStarted;
+      receipt.timing.finishedMonotonicMs = monotonicNow();
+      receipt.helperElapsedMs =
+        receipt.timing.finishedMonotonicMs - helperStartedMonotonicMs;
+      if (budget)
+        receipt.timing.endClockDiscontinuityMs =
+          Date.parse(receipt.timing.finishedAt) -
+          moduleStarted -
+          (receipt.timing.finishedMonotonicMs - moduleStartedMonotonicMs);
       try {
         await checkpoint();
       } catch (error) {

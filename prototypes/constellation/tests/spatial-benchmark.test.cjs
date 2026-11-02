@@ -98,11 +98,18 @@ test("the actual observation function runs in an isolated browser-style realm wi
 
 test("the real host deadline flag is explicit, bounded, singular and still live after startup", () => {
   const started = 1000000,
-    now = started + 500;
-  assert.deepEqual(
-    verificationDeadline(["--verification-deadline-ms=90000"], started, now),
-    { durationMs: 90000, expiresAt: started + 90000 },
+    startedMonotonic = 100,
+    now = startedMonotonic + 500;
+  const budget = verificationDeadline(
+    ["--verification-deadline-ms=90000"],
+    started,
+    startedMonotonic,
+    now,
+    started + 500,
   );
+  assert.equal(budget.durationMs, 90000);
+  assert.equal(budget.expiresAtMonotonicMs, startedMonotonic + 90000);
+  assert.equal(budget.clock.startupElapsedMs, 500);
   for (const argv of [
     [],
     ["--verification-deadline-ms="],
@@ -111,17 +118,39 @@ test("the real host deadline flag is explicit, bounded, singular and still live 
     ["--verification-deadline-ms=999"],
     ["--verification-deadline-ms=1000", "--verification-deadline-ms=2000"],
   ])
-    assert.throws(() => verificationDeadline(argv, started, now));
+    assert.throws(() =>
+      verificationDeadline(argv, started, startedMonotonic, now, started + 500),
+    );
   assert.throws(() =>
     verificationDeadline(
       ["--verification-deadline-ms=1000"],
       started,
-      started + 1001,
+      startedMonotonic,
+      startedMonotonic + 1000,
+      started + 1000,
     ),
   );
   assert.throws(() =>
-    verificationDeadline(["--verification-deadline-ms=90000"], undefined, now),
+    verificationDeadline(
+      ["--verification-deadline-ms=90000"],
+      undefined,
+      startedMonotonic,
+      now,
+      started + 500,
+    ),
   );
+  for (const missingOrFuture of [undefined, NaN, Infinity, -1, now + 1])
+    assert.throws(
+      () =>
+        verificationDeadline(
+          ["--verification-deadline-ms=90000"],
+          started,
+          missingOrFuture,
+          now,
+          started + 500,
+        ),
+      /actual host monotonic start/,
+    );
 });
 
 test("quality limits detailed geometry while all visible instanced bodies remain counted", () => {
