@@ -63,10 +63,18 @@ export class BodySpace {
       this.buckets.set(c, list);
     }
   }
-  private near(a: Vector3, b: Vector3, r: number, ignore: ReadonlySet<string>) {
+  private near(
+    a: Vector3,
+    b: Vector3,
+    r: number,
+    ignore: ReadonlySet<string>,
+    fallback?: readonly SpaceBody[],
+  ) {
     const cells = this.cells(a, b, r + BODY_GAP + epsilon);
     if (!cells)
-      return [...this.bodies.values()].filter((e) => !ignore.has(e.key));
+      return (
+        fallback ?? [...this.bodies.values()].filter((e) => !ignore.has(e.key))
+      );
     const found = new Set<string>();
     for (const c of cells)
       for (const key of this.buckets.get(c) ?? [])
@@ -140,14 +148,26 @@ export class BodySpace {
     const ignore = new Set(moving.map((b) => b.key)),
       a = delta.x ** 2 + delta.y ** 2 + delta.z ** 2;
     if (a < 1e-12) return 1;
+    // A rigid cluster cannot hit itself. Cache the fixed set once instead of
+    // repeatedly filtering thousands of moving bodies for every long sweep.
+    const fixed =
+      moving.length > 32
+        ? [...this.bodies.values()].filter((body) => !ignore.has(body.key))
+        : undefined;
+    if (fixed && !fixed.length) return 1;
     let fraction = 1;
     for (const body of moving) {
+      if (fraction === 0) return 0;
       const to = {
-        x: body.point.x + delta.x,
-        y: body.point.y + delta.y,
-        z: body.point.z + delta.z,
+        x: body.point.x + delta.x * fraction,
+        y: body.point.y + delta.y * fraction,
+        z: body.point.z + delta.z * fraction,
       };
-      for (const other of this.near(body.point, to, body.radius, ignore)) {
+      const candidates =
+        fixed && fixed.length <= 16
+          ? fixed
+          : this.near(body.point, to, body.radius, ignore, fixed);
+      for (const other of candidates) {
         const x = body.point.x - other.point.x,
           y = body.point.y - other.point.y,
           z = body.point.z - other.point.z,

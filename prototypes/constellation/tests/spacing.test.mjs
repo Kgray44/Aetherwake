@@ -254,6 +254,72 @@ test("continuous sweeps catch crossing an obstacle even when the endpoint is cle
   assert.equal(space.fraction([moving], { x: -600, y: 0, z: 0 }), 1);
 });
 
+test("a large rigid cluster does not repeatedly rescan its own bodies as obstacles", () => {
+  const space = new BodySpace(),
+    count = 1000;
+  for (let i = 0; i < count; i++)
+    space.set({
+      key: `moving:${i}`,
+      point: { x: 0, y: i * 1000, z: 0 },
+      radius: 20,
+    });
+  const moving = [...space.bodies.values()];
+  let reads = 0;
+  for (const body of moving) {
+    const key = body.key;
+    Object.defineProperty(body, "key", {
+      get() {
+        assert.ok(
+          ++reads <= count * 32,
+          "rigid-cluster broad phase must avoid quadratic self scans",
+        );
+        return key;
+      },
+    });
+  }
+  assert.equal(space.fraction(moving, { x: 100000, y: 100000, z: 100000 }), 1);
+  assert.ok(
+    reads <= count * 32,
+    "deterministic work bound, independent of host timing",
+  );
+});
+
+test("large-cluster fallback reuse still stops at the earliest fixed neighbor", () => {
+  const space = new BodySpace(),
+    count = 1000;
+  for (let i = 0; i < count; i++)
+    space.set({
+      key: `moving:${i}`,
+      point: { x: 0, y: i * 1000, z: 0 },
+      radius: 20,
+    });
+  const moving = [...space.bodies.values()];
+  space.set({ key: "pinned", point: { x: 500, y: 500, z: 500 }, radius: 20 });
+  for (let i = 0; i < 64; i++)
+    space.set({
+      key: `distant:${i}`,
+      point: { x: 1000000 + i * 1000, y: 0, z: 0 },
+      radius: 20,
+    });
+  let reads = 0;
+  for (const body of space.bodies.values()) {
+    const key = body.key;
+    Object.defineProperty(body, "key", {
+      get() {
+        assert.ok(
+          ++reads <= count * 32,
+          "long sweeps must reuse their fixed fallback",
+        );
+        return key;
+      },
+    });
+  }
+  const fraction = space.fraction(moving, { x: 100000, y: 100000, z: 100000 }),
+    expected = (500 - (40 + BODY_GAP + 0.04) / Math.sqrt(3)) / 100000 - 1e-5;
+  assert.ok(Math.abs(fraction - expected) < 1e-12);
+  assert.ok(Math.sqrt(3) * (500 - 100000 * fraction) >= 40 + BODY_GAP);
+});
+
 test("every camera pose keeps rendered silhouettes apart and the projected bounds contain actual mesh vertices", async () => {
   const { c, n, motion } = setup(fixture(120)),
     layer = new ConstellationScene(c, n, () => ({}));

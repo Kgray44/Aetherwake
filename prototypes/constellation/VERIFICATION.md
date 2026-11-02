@@ -2,6 +2,8 @@
 
 ## Clearance and gesture-first controls follow-up
 
+A deterministic large-cluster sweep diagnostic exposed repeated scans of the moving cluster itself: a 1,000-body unobstructed long sweep exceeded 32,000 key reads before the diagnostic stopped it. The broad phase now builds its fixed-obstacle fallback once, skips empty fixed sets, directly checks small fixed sets and shortens later queries to the earliest known stop. Regressions bound source work independently of host timing and verify the same analytic stop at a fixed neighbor. The spatial/clearance suite passes 38 tests; this is not native drag-latency or presented-frame evidence.
+
 The legacy restore audit reproduced 1,552 world units of project/camera framing drift: a clear saved project root was widened to the new grid while its old camera target restored unchanged. The fix preserves clear saved roots and all saved coordinate precision; crowded child orbits still migrate and actual conflicts still separate. New regressions restore a legacy profile and verify the real perspective project center, plus full-precision pins across graph refreshes. These are source regressions; the integrated candidate still requires its native walkthrough.
 
 The latest full source run passed **57** tests, strict TypeScript and the fixture build. The keyboard follow-up captures overview Ctrl K before host bubble handlers and respects open dialogs; working-workspace Ctrl K remains with the shell. Camera/selection changes queue one existing private-view save after shared camera movement settles. The native quick smoke explicitly checks keyboard-camera autosave without a Save button or an explicit flush; it remains unexecuted until Integration runs it.
