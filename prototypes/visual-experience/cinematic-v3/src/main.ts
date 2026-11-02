@@ -3,15 +3,18 @@ import {
   targetResourceMaterial,
   resourceUnfold,
   resourceDock,
+  resourceSelection,
   materialMotionKey,
 } from "./resource-material-motion.ts";
 import { installApplication, type Application } from "./application";
+import { targetDirectCard, directCardLayer } from "./direct-card-motion.ts";
 import type {
   DesktopSnapshot,
   DesktopCommand,
 } from "../../../application-contract/contracts.ts";
 import type { Resource } from "./store";
 import "./style.css";
+import "./card-selection.css";
 import {
   motionPolicy,
   nextDrawDeadline,
@@ -58,6 +61,8 @@ const $ = <T extends HTMLElement = HTMLElement>(s: string) =>
   document.querySelector<T>(s)!;
 const app = $("#app");
 const renderWhileVisible = window.aerynthHost?.renderWhileVisible ?? false;
+const observeGeometry = window.aerynthHost?.geometryObservation ?? false;
+let dragGlideFrame: Record<string, unknown> | null = null;
 app.innerHTML = `
   <canvas id="world" aria-hidden="true"></canvas>
   <div class="scene-vignette" aria-hidden="true"></div>
@@ -357,6 +362,7 @@ function restAt(id: string, slot: number) {
 }
 function layout(cause: string) {
   for (const id of order) {
+    const directGesture = application?.directGesture(id);
     let p = base(id);
     if (expanded === id) {
       p = {
@@ -385,7 +391,7 @@ function layout(cause: string) {
         yaw: 0,
         opacity: 0.8,
       };
-    } else if (selected === id) {
+    } else if (selected === id && directGesture?.intent !== "move") {
       p = { ...p, y: p.y - 12, lift: 30, yaw: 0 };
     }
     if (drag) {
@@ -405,21 +411,23 @@ function layout(cause: string) {
         };
       }
     }
-    motion.target(id, p, cause);
-    if (elements.get(id)?.classList.contains("direct-manipulating"))
-      motion.snap(id);
+    targetDirectCard(motion, id, p, cause, directGesture);
     targetResourceMaterial(
       motion,
       id,
       expanded === id,
       cause,
       !!expanded && expanded !== id,
+      selected === id,
     );
     const el = elements.get(id)!;
     el.classList.toggle("selected", selected === id);
     el.classList.toggle("expanded", expanded === id);
     el.classList.toggle("receded", !!expanded && expanded !== id);
-    el.classList.toggle("dragging", drag?.id === id);
+    el.classList.toggle(
+      "dragging",
+      drag?.id === id || directGesture?.intent === "move",
+    );
     const receded = !!expanded && expanded !== id;
     (el.querySelector(".folio-inner") as HTMLElement).inert = receded;
     el.querySelector(".folio-inner")!.setAttribute(
@@ -447,7 +455,10 @@ function layout(cause: string) {
   }
   document.body.classList.toggle("focused", !!expanded);
   $("#home").setAttribute("aria-current", expanded ? "false" : "page");
-  document.body.classList.toggle("drag-active", !!drag);
+  document.body.classList.toggle(
+    "drag-active",
+    !!drag || !!application?.directDragging(),
+  );
   if (!nativeActive || document.hidden) {
     for (const id of order) {
       motion.snap(id);
@@ -574,6 +585,10 @@ function mountResource(id: string, r: Resource) {
   const presentation = document.createElement("div");
   presentation.className = "resource-presentation";
   while (article.firstChild) presentation.append(article.firstChild);
+  const selectionRim = document.createElement("div");
+  selectionRim.className = "card-selection-rim";
+  selectionRim.setAttribute("aria-hidden", "true");
+  presentation.append(selectionRim);
   article.append(presentation);
   article.querySelector(".anchor-label b")!.textContent = r.title;
   article
@@ -1163,6 +1178,7 @@ declare global {
   interface Window {
     aerynthHost?: {
       renderWhileVisible?: boolean;
+      geometryObservation?: boolean;
       onActive: (listener: (active: boolean) => void) => void;
       command?: (name: string, input: unknown) => Promise<unknown>;
       onEvent?: (listener: (event: unknown) => void) => () => void;
@@ -1193,7 +1209,7 @@ function renderDOM() {
         expanded === id
           ? 200000
           : desktopMode
-            ? (block?.z ?? 0)
+            ? directCardLayer(block?.z ?? 0, application?.directGesture(id))
             : drag?.id === id
               ? 150000
               : selected === id
@@ -1221,6 +1237,10 @@ function renderDOM() {
       el.dataset.materialCovered = String(compositing.covered);
     const unfold = resourceUnfold(motion, id);
     const dock = resourceDock(motion, id);
+    presentation.style.setProperty(
+      "--card-selection",
+      String(resourceSelection(motion, id)),
+    );
     el.hidden =
       p.x + p.w < 0 ||
       p.y + p.h < 120 ||
@@ -1355,7 +1375,7 @@ function tick(now: number) {
       hidden: !nativeActive || document.hidden,
       graphicsAvailable: !graphicsFailed,
     });
-    const targetFocus = expanded ? 1 : selected ? 0.13 : 0;
+    const targetFocus = expanded ? 1 : 0;
     focus = motion.reduced
       ? targetFocus
       : focus + (targetFocus - focus) * (1 - Math.exp(-dt * 10));
@@ -1422,13 +1442,17 @@ function tick(now: number) {
                 expanded === id
                   ? 200000
                   : desktopMode
-                    ? (block?.z ?? 0)
+                    ? directCardLayer(
+                        block?.z ?? 0,
+                        application?.directGesture(id),
+                      )
                     : drag?.id === id
                       ? 150000
                       : selected === id
                         ? 100000
                         : 3,
               selected: id === selected,
+              selection: resourceSelection(motion, id),
               unfold: resourceUnfold(motion, id),
             };
           });
@@ -1438,7 +1462,7 @@ function tick(now: number) {
           related: ["idle", "unavailable"].includes(vela)
             ? null
             : (document.body.dataset.related ?? null),
-          dragging: !!drag,
+          dragging: !!drag || !!application?.directDragging(),
           focus,
           attention,
           ambient,
@@ -1551,6 +1575,45 @@ function tick(now: number) {
         lastDraw = now;
         metrics.draws++;
         metrics.lastDraw = now;
+        if (observeGeometry) {
+          const submitted = new Map(
+            environment
+              .surfaceSubmissionGeometry()
+              .map((item) => [item.id, item]),
+          );
+          dragGlideFrame = {
+            drawSequence: metrics.draws,
+            rendererNowMs: now,
+            reduced: motion.reduced,
+            cards: surfaces.slice(0, 50).map((surface) => {
+              const node = elements.get(surface.id)!,
+                rect = node.getBoundingClientRect(),
+                body = motion.bodies.get(surface.id)!;
+              return {
+                id: surface.id,
+                gesture: application?.directGesture(surface.id) ?? null,
+                selection: resourceSelection(motion, surface.id),
+                pose: motion.pose(surface.id),
+                target: Object.fromEntries(
+                  Object.entries(body.channels).map(([key, channel]) => [
+                    key,
+                    channel.target,
+                  ]),
+                ),
+                outline: application?.directOutline(surface.id) ?? null,
+                gpuProjection: submitted.get(surface.id) ?? null,
+                domRect: {
+                  x: rect.x,
+                  y: rect.y,
+                  width: rect.width,
+                  height: rect.height,
+                },
+                domTransform: getComputedStyle(node).transform,
+              };
+            }),
+            grid: application?.workspaceGrid() ?? null,
+          };
+        }
       }
       nextDraw = nextDrawDeadline(now, nextDraw, cadence, dirty);
       dirty = false;
@@ -1612,6 +1675,10 @@ function controller() {
       events: [...events],
       receipts: [...motion.receipts],
       poses: Object.fromEntries(order.map((id) => [id, motion.pose(id)])),
+      dragGlideFrame:
+        observeGeometry && dragGlideFrame
+          ? structuredClone(dragGlideFrame)
+          : null,
       materialUnfold: Object.fromEntries(
         order.map((id) => [id, resourceUnfold(motion, id)]),
       ),

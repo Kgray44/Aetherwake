@@ -3,6 +3,9 @@ contextBridge.exposeInMainWorld(
   "aerynthHost",
   Object.freeze({
     renderWhileVisible: process.argv.includes("--aerynth-capture-visible"),
+    geometryObservation: process.argv.includes(
+      "--aerynth-geometry-observation",
+    ),
     onActive(listener) {
       if (typeof listener === "function")
         ipcRenderer.on("host-active", (_e, active) => {

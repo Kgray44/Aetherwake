@@ -350,12 +350,6 @@ body.focused .scene-navigation {
   color: #a8a1b8;
   padding: 4px 8px;
 }
-.selected {
-  border-color: #b5c6d579;
-  box-shadow:
-    0 3px 0 #05080e,
-    inset 0 1px 0 #e5eef12b;
-}
 .note {
   background: #11151b;
   border-radius: 4px 18px 4px 4px;

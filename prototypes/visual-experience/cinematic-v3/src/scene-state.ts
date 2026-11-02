@@ -19,7 +19,8 @@ export function deriveSceneState(input: {
   width: number;
   height: number;
 }) {
-  const activeResource = input.related ?? input.expanded ?? input.selected;
+  const activeResource =
+    input.related ?? input.expanded ?? (input.dragging ? input.selected : null);
   const anchor = input.surfaces.find(
     (surface) => surface.id === activeResource,
   );
@@ -39,7 +40,7 @@ export function deriveSceneState(input: {
     activeResource,
     focus: input.focus,
     attention: input.attention,
-    interaction: input.dragging ? 1 : input.selected ? 0.25 : 0,
+    interaction: input.dragging ? 1 : input.expanded ? 0.25 : 0,
     pointer: input.reduced ? { x: 0, y: 0 } : point,
     ambientStrength:
       autonomous && input.ambient

@@ -55,6 +55,7 @@ export interface SurfacePose {
   lift: number;
   yaw: number;
   selected: boolean;
+  selection?: number;
   unfold: number;
   opacity?: number;
   kind?: "conversation" | "research" | "note";
@@ -74,7 +75,7 @@ export interface EnvironmentFrame {
   pointer: { x: number; y: number };
   /** Real input, separate from the shared resource/semantic anchor in pointer. */
   inputPointer?: { x: number; y: number };
-  /** Local interaction salience, e.g. dragging=1 or selected=.25. */
+  /** Explicit environmental salience, e.g. dragging=1. Plain selection is local. */
   interaction?: number;
   vela: VelaState;
   study: Study;
@@ -1349,7 +1350,11 @@ export class Environment {
       visual.contact.material.uniforms.uSize.value.set(contactW, contactH);
       visual.contact.material.uniforms.uRect.value.set(pose.w + 6, pose.h + 6);
       visual.contact.material.uniforms.uLift.value = Math.max(0, pose.lift);
-      visual.contact.material.uniforms.uSelected.value = pose.selected ? 1 : 0;
+      visual.contact.material.uniforms.uSelected.value = Number.isFinite(
+        pose.selection,
+      )
+        ? THREE.MathUtils.clamp(pose.selection!, 0, 1)
+        : 0;
       visual.contact.material.uniforms.uOpacity.value = opacity * livingWeight;
       visual.contact.material.uniforms.uRound.value =
         kind === "research" ? 1 - unfold : 0;
@@ -1404,7 +1409,8 @@ export class Environment {
       }
     }
     // Attributed activity can illuminate its shared anchor without selecting it.
-    let illuminated = selected;
+    let illuminated =
+      (frame.interaction ?? 0) > 0 || focus > 0 ? selected : undefined;
     if (frame.attention > 0 && frame.surfaces) {
       let nearest = 0.0025;
       for (const surface of frame.surfaces) {
@@ -1418,7 +1424,7 @@ export class Environment {
         }
       }
     }
-    const requestedInteraction = frame.interaction ?? (selected ? 0.25 : 0);
+    const requestedInteraction = frame.interaction ?? 0;
     const interaction = Number.isFinite(requestedInteraction)
       ? THREE.MathUtils.clamp(requestedInteraction, 0, 1)
       : 0;
@@ -1954,6 +1960,47 @@ export class Environment {
     }
   }
 
+  /** Verification-only caller: actual submitted scene transforms, not copied
+   * input poses, pixel readback, GPU completion or monitor presentation. */
+  surfaceSubmissionGeometry() {
+    return this.folios
+      .filter((folio) => folio.id !== null && folio.root.visible)
+      .slice(0, 50)
+      .map((folio) => {
+        const corners = [
+          [-1, 1],
+          [1, 1],
+          [1, -1],
+          [-1, -1],
+        ].map(([x, y]) => {
+          const point = new THREE.Vector3(
+            (x * folio.width) / 2,
+            (y * folio.height) / 2,
+            0,
+          )
+            .applyMatrix4(folio.root.matrixWorld)
+            .project(this.camera);
+          return {
+            x: ((point.x + 1) * this.width) / 2,
+            y: ((1 - point.y) * this.height) / 2,
+          };
+        });
+        const x = Math.min(...corners.map((point) => point.x)),
+          y = Math.min(...corners.map((point) => point.y));
+        return {
+          id: folio.id,
+          corners,
+          bounds: {
+            x,
+            y,
+            width: Math.max(...corners.map((point) => point.x)) - x,
+            height: Math.max(...corners.map((point) => point.y)) - y,
+          },
+          matrix: [...folio.root.matrixWorld.elements],
+          selection: folio.contact.material.uniforms.uSelected.value as number,
+        };
+      });
+  }
   stats() {
     const instrumentResources = this.disposed ? [] : this.folios;
     const structures = instrumentResources.map((folio) => ({

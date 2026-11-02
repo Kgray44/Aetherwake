@@ -7,7 +7,8 @@ async function startWindowRecording(win, session, localURL) {
     !process.argv.includes("--integration-constellation") &&
     !process.argv.includes("--integration-organization") &&
     !process.argv.includes("--integration-expanded") &&
-    !process.argv.includes("--integration-product-ui")
+    !process.argv.includes("--integration-product-ui") &&
+    !process.argv.includes("--integration-drag-glide")
   )
     throw new Error("recording_mode_required");
   const sourceId = win.getMediaSourceId(),

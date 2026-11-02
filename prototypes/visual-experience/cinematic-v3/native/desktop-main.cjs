@@ -84,6 +84,7 @@ const verify =
   process.argv.includes("--integration-constellation") ||
   process.argv.includes("--integration-organization") ||
   process.argv.includes("--integration-direct") ||
+  process.argv.includes("--integration-drag-glide") ||
   process.argv.includes("--integration-conversation-product") ||
   process.argv.includes("--integration-vela") ||
   process.argv.includes("--integration-vela-live") ||
@@ -256,6 +257,7 @@ app.whenReady().then(async () => {
   win = new BrowserWindow({
     width: 1600,
     height: 1000,
+    useContentSize: process.argv.includes("--integration-drag-glide"),
     minWidth: 800,
     minHeight: 650,
     show: true,
@@ -271,6 +273,9 @@ app.whenReady().then(async () => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      additionalArguments: process.argv.includes("--integration-drag-glide")
+        ? ["--aerynth-geometry-observation"]
+        : [],
     },
   });
   const startupErrors = [];
@@ -588,6 +593,22 @@ app.whenReady().then(async () => {
           app,
           privateRoot,
           source,
+        },
+      );
+      return;
+    }
+    if (process.argv.includes("--integration-drag-glide")) {
+      await require("../../../block-library/tests/drag-glide-native.cjs").verify(
+        {
+          win,
+          app,
+          privateRoot,
+          call,
+          source,
+          moduleStarted,
+          startupErrors,
+          session: session.defaultSession,
+          localURL,
         },
       );
       return;

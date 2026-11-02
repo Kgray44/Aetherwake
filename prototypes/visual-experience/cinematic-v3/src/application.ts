@@ -20,9 +20,12 @@ import {
   previewBlock as desktopPreviewBlock,
 } from "./organization-preview";
 import "./application.css";
+import "./workspace-grid.css";
+import { createWorkspaceGrid } from "./workspace-grid.ts";
 import {
   mountDirectManipulation,
   mountWorkspaceLayoutControls,
+  type DirectGesturePresentation,
 } from "../../../block-library/direct-manipulation.ts";
 import "../../../block-library/direct-manipulation.css";
 import {
@@ -328,10 +331,31 @@ export function installApplication(hooks: Hooks) {
     string,
     ReturnType<typeof mountDirectManipulation>
   >();
+  const directGestures = new Map<string, DirectGesturePresentation>();
   const previewGuides = document.createElement("div");
   previewGuides.className = "layout-preview-guides";
   previewGuides.setAttribute("aria-hidden", "true");
   el("#stage").append(previewGuides);
+  const previewGuideId = "application:preview-guides";
+  const previewGuidePose = {
+    x: 0,
+    y: 0,
+    w: 0,
+    h: 0,
+    lift: 0,
+    yaw: 0,
+    opacity: 0,
+  };
+  hooks.motion.add(previewGuideId, previewGuidePose);
+  previewGuides.style.opacity = "0";
+  const gridRoot = document.createElement("div");
+  gridRoot.className = "workspace-grid-host";
+  el("#stage").prepend(gridRoot);
+  const workspaceGrid = createWorkspaceGrid({
+    root: gridRoot,
+    motion: hooks.motion,
+    wake: hooks.wake,
+  });
   let tail = Promise.resolve();
   const drafts = new Map<
     string,
@@ -584,6 +608,7 @@ export function installApplication(hooks: Hooks) {
       focusedBlocks,
       blockFootprints,
       footprintFocus,
+      directGestures,
     ])
       for (const id of map.keys())
         if (!next.blocks.some((block) => block.id === id)) map.delete(id);
@@ -880,7 +905,10 @@ export function installApplication(hooks: Hooks) {
     try {
       preview = previewLayout(previewBase, request);
       const { zoom, offset } = camera();
-      const guides = preview.guides.map(
+      const gridOnly =
+        preview.organization.mode === "structured" &&
+        ["mode", "move", "resize"].includes(request.intent ?? "");
+      const guides = (gridOnly ? [] : preview.guides).map(
         (g) =>
           `<i class="alignment-guide" style="left:${(g.axis === "x" ? g.position : g.from) * zoom + offset.x}px;top:${(g.axis === "y" ? g.position : g.from) * zoom + offset.y}px;width:${g.axis === "x" ? 1 : (g.to - g.from) * zoom}px;height:${g.axis === "y" ? 1 : (g.to - g.from) * zoom}px"></i>`,
       );
@@ -889,6 +917,11 @@ export function installApplication(hooks: Hooks) {
           `<i class="placement-area" style="left:${a.x * zoom + offset.x}px;top:${a.y * zoom + offset.y}px;width:${a.width * zoom}px;height:${a.height * zoom}px"></i>`,
       );
       previewGuides.innerHTML = [...guides, ...areas].join("");
+      hooks.motion.target(
+        previewGuideId,
+        { ...previewGuidePose, opacity: guides.length || areas.length ? 1 : 0 },
+        "placement guide reveal",
+      );
       document.body.dataset.layoutPreview = preview.organization.mode;
       hooks.layout();
     } catch (error) {
@@ -901,7 +934,11 @@ export function installApplication(hooks: Hooks) {
     previewRequest = undefined;
     preview = undefined;
     previewBase = undefined;
-    previewGuides.replaceChildren();
+    hooks.motion.target(
+      previewGuideId,
+      previewGuidePose,
+      "placement guide dismissal",
+    );
     delete document.body.dataset.layoutPreview;
     hooks.layout();
     hooks.wake();
@@ -2674,6 +2711,12 @@ export function installApplication(hooks: Hooks) {
         id,
         mountDirectManipulation(article, {
           blockId: id,
+          onGestureChange: (gesture) => {
+            if (gesture) directGestures.set(id, gesture);
+            else directGestures.delete(id);
+            hooks.layout();
+            hooks.wake();
+          },
           state: () => {
             const current = state && layoutState(state);
             return current && state?.activeWorkspaceId
@@ -3314,6 +3357,35 @@ export function installApplication(hooks: Hooks) {
       surfaces.frame(now);
       velaExperience.frame(policy);
       paintPreview();
+      const gridCamera = camera();
+      workspaceGrid.update({
+        visible:
+          state?.navigation.kind === "workspace" &&
+          (preview?.organization ?? state?.organization)?.mode === "structured",
+        zoom: gridCamera.zoom,
+        offset: gridCamera.offset,
+      });
+      workspaceGrid.frame(policy);
+      if (
+        policy.reduced ||
+        policy.quiet ||
+        policy.hidden ||
+        !policy.graphicsAvailable
+      )
+        hooks.motion.snap(previewGuideId);
+      const guideReveal = Math.max(
+        0,
+        Math.min(1, hooks.motion.pose(previewGuideId).opacity),
+      );
+      if (previewGuides.style.opacity !== String(guideReveal))
+        previewGuides.style.opacity = String(guideReveal);
+      if (
+        !preview &&
+        !previewRequest &&
+        guideReveal === 0 &&
+        previewGuides.childElementCount
+      )
+        previewGuides.replaceChildren();
       const target = presenceTarget();
       if (target && !presenceDrag)
         hooks.motion.target(presenceId, target, "Vela workspace view");
@@ -3420,6 +3492,22 @@ export function installApplication(hooks: Hooks) {
     manager,
     conversations,
     block: (id: string) => state?.blocks.find((b) => b.id === id),
+    directGesture: (id: string) => directGestures.get(id) ?? null,
+    directOutline: (id: string) => {
+      if (!directGestures.has(id) || preview?.placementAreas.length !== 1)
+        return null;
+      const area = previewGuides.querySelector<HTMLElement>(".placement-area");
+      const opacity =
+        area && area.getClientRects().length
+          ? Number(getComputedStyle(previewGuides).opacity) *
+            Number(getComputedStyle(area).opacity) *
+            Number(getComputedStyle(el("#stage")).opacity)
+          : 0;
+      return { ...preview.placementAreas[0], opacity };
+    },
+    workspaceGrid: () => workspaceGrid.diagnostics(),
+    directDragging: () =>
+      [...directGestures.values()].some((gesture) => gesture.intent === "move"),
     saveContent,
     blockMinimized: (id: string) =>
       identityViews.get(id)?.minimizedPresentation().effectiveMinimized ??

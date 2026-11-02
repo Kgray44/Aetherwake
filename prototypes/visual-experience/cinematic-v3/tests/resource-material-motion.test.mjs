@@ -6,8 +6,45 @@ import {
   targetResourceMaterial,
   resourceUnfold,
   resourceDock,
+  resourceSelection,
   materialMotionKey,
 } from "../src/resource-material-motion.ts";
+
+test("selection and deselection glide on one local material body without touching neighboring cards", () => {
+  const motion = new MotionCoordinator();
+  for (const id of ["selected", "neighbor"])
+    registerResourceMaterial(motion, id);
+  const bodies = motion.bodies.size,
+    neighbor = structuredClone(motion.pose(materialMotionKey("neighbor")));
+  targetResourceMaterial(motion, "selected", false, "select", false, true);
+  assert.equal(resourceSelection(motion, "selected"), 0);
+  motion.step(1 / 60);
+  const cue = resourceSelection(motion, "selected"),
+    velocity = motion.bodies.get(materialMotionKey("selected")).channels.w
+      .velocity;
+  assert(cue > 0 && cue < 1);
+  assert(velocity > 0);
+  targetResourceMaterial(motion, "selected", false, "deselect", false, false);
+  assert.equal(resourceSelection(motion, "selected"), cue);
+  assert.equal(
+    motion.bodies.get(materialMotionKey("selected")).channels.w.velocity,
+    velocity,
+  );
+  for (let i = 0; i < 180; i++) motion.step(1 / 60);
+  assert.equal(resourceSelection(motion, "selected"), 0);
+  assert.deepEqual(motion.pose(materialMotionKey("neighbor")), neighbor);
+  assert.equal(motion.bodies.size, bodies);
+  motion.reduced = true;
+  targetResourceMaterial(
+    motion,
+    "selected",
+    false,
+    "reducedselect",
+    false,
+    true,
+  );
+  assert.equal(resourceSelection(motion, "selected"), 1);
+});
 test("ordinary drag/resize/rotation pose changes cannot activate focused reading materials", () => {
   const m = new MotionCoordinator(),
     id = "arbitrary-block";

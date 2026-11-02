@@ -50,6 +50,15 @@ test("absence of availability, visibility or motion permission never invents aut
   ])
     assert.equal(deriveSceneState({ ...base, ...setting }).ambientStrength, 0);
 });
+
+test("plain card selection stays local instead of retargeting environmental pointer, illumination or focus", () => {
+  const before = deriveSceneState(base);
+  const selected = deriveSceneState({ ...base, selected: "folio" });
+  assert.deepEqual(selected, before);
+  assert.equal(selected.activeResource, null);
+  assert.equal(selected.interaction, 0);
+  assert.equal(selected.focus, 0);
+});
 test("local history rejects oversized, duplicate and malformed entries without accepting corrupt persistence", () => {
   const message = {
     id: "local-1",
