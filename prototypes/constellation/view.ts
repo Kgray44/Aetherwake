@@ -8,6 +8,7 @@ import { SpatialNavigator, edges } from "./spatial.ts";
 import { ConstellationScene } from "./renderer3d.ts";
 import { graphControls } from "./graph-controls.ts";
 import type { Vector3 } from "./spatial-types.ts";
+import { spatialControls, type SpatialCommand } from "./controls.ts";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -63,78 +64,32 @@ export function mountConstellation(
   });
   const root = el("section", "", "aw-constellation");
   root.setAttribute("aria-label", "Constellation navigation");
-  const bar = el("nav", "", "aw-constellation-bar");
-  bar.setAttribute("aria-label", "Project and workspace navigation");
-  const back = button("← Back", () => controller.back()),
-    out = button("Zoom out", () => controller.zoomOut()),
-    universe = button("Universe", () => controller.go({ kind: "universe" }));
-  const breadcrumb = el("span", "", "aw-location");
-  breadcrumb.setAttribute("aria-live", "polite");
-  let historyView = false;
-  const toggle = button("Destinations", () => {
-    historyView = false;
-    drawer.hidden = !drawer.hidden;
-    if (!drawer.hidden) search.focus();
-  });
-  toggle.setAttribute("aria-expanded", "false");
-  bar.append(back, out, universe, breadcrumb, toggle);
-  bar.append(
-    button("History", () => {
-      historyView = true;
-      drawer.hidden = false;
-      invalidate();
-    }),
-  );
   field = el("div", "", "aw-spatial-field");
   field.tabIndex = 0;
   field.setAttribute("role", "region");
   field.setAttribute(
     "aria-label",
-    "Spatial overview. Drag to orbit; Shift-drag or arrow keys pan. Alt-drag moves and pins a body. Plus and minus zoom. Escape stops camera.",
+    "Spatial overview. Drag to orbit; Shift-drag or middle-drag to pan. Alt-drag moves and pins a body. Scroll to zoom. Double-click to enter. Ctrl K finds destinations and commands. F1 opens navigation guide.",
   );
   const world = el("div", "", "aw-spatial-world"),
     lines = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   lines.classList.add("aw-connections");
   lines.setAttribute("aria-hidden", "true");
   field.append(lines, world);
-  const tools = el("div", "", "aw-camera-tools");
-  tools.append(
-    button("+", () => controller.zoom(1.3)),
-    button("−", () => controller.zoom(1 / 1.3)),
-    button("Recenter", () => controller.recenter()),
-    button("Fit selection", () => controller.fit()),
-    button("Approach", () => controller.approach()),
-    button("Save view", () => controller.persist()),
-  );
-  const detail = el("div", "", "aw-spatial-detail");
+  const detail = el("aside", "", "aw-spatial-detail aw-glass");
+  detail.hidden = true;
+  detail.setAttribute("aria-label", "Selection information");
   detail.setAttribute("aria-live", "polite");
   const status = el("p", "", "aw-spatial-status");
   status.setAttribute("role", "status");
-  const drawer = el("aside", "", "aw-destinations");
-  drawer.hidden = true;
-  drawer.setAttribute("aria-label", "Direct destinations");
-  const search = el("input");
-  search.type = "search";
-  search.placeholder = "Find project, workspace, or resource";
-  search.setAttribute("aria-label", "Search destinations");
-  const results = el("div", "", "aw-destination-results");
-  drawer.append(
-    el("h2", "Destinations"),
-    search,
-    results,
-    button("Close destinations", () => {
-      drawer.hidden = true;
-      toggle.focus();
-    }),
-  );
-  root.append(bar, field, tools, detail, status, drawer);
+  root.append(field, detail, status);
   container.append(root);
   let disposed = false,
     lastFrame = -Infinity,
     dirty = true,
-    lastResultKey = "",
     lastDetailKey = "",
-    lastExclusionKey = "";
+    lastExclusionKey = "",
+    inspectorOpen = false;
   const invalidate = () => {
     dirty = true;
     options.onDirty?.();
@@ -145,13 +100,11 @@ export function mountConstellation(
     const bounds = field.getBoundingClientRect();
     return [
       bar,
-      tools,
       detail,
       status,
       drawer,
-      ...root.querySelectorAll<HTMLElement>(
-        ".aw-camera-settings[open] > div, .aw-graph-dialog[open]",
-      ),
+      controls.guide,
+      ...root.querySelectorAll<HTMLElement>(".aw-graph-dialog[open]"),
       ...root.ownerDocument.querySelectorAll<HTMLElement>(
         "#vela, #vela .vela-label, #vela .vela-grip",
       ),
@@ -182,56 +135,6 @@ export function mountConstellation(
     lastDetailKey = "";
     invalidate();
   });
-  tools.append(button("Arrange", () => graph.arrange()));
-  const mode = el("select");
-  mode.setAttribute("aria-label", "Spatial pointer mode");
-  for (const value of ["orbit", "pan"]) {
-    const o = el("option", value);
-    o.value = value;
-    mode.append(o);
-  }
-  mode.onchange = () => {
-    spatial.mode = mode.value as "orbit" | "pan";
-    void controller.persist();
-  };
-  const sensitivity = el("input");
-  sensitivity.type = "range";
-  sensitivity.min = ".1";
-  sensitivity.max = "3";
-  sensitivity.step = ".1";
-  sensitivity.value = "1";
-  sensitivity.setAttribute("aria-label", "Orbit sensitivity");
-  sensitivity.oninput = () => {
-    spatial.sensitivity = Number(sensitivity.value);
-  };
-  sensitivity.onchange = () => void controller.persist();
-  const settings = el("details", "", "aw-camera-settings"),
-    summary = el("summary", "Camera & layout"),
-    settingsBody = el("div");
-  settings.append(summary, settingsBody);
-  settings.addEventListener("toggle", invalidate);
-  tools.append(settings);
-  settingsBody.append(
-    mode,
-    sensitivity,
-    button("Orbit left", () => spatial.orbit(-70, 0)),
-    button("Orbit right", () => spatial.orbit(70, 0)),
-    button("Orbit up", () => spatial.orbit(0, -60)),
-    button("Orbit down", () => spatial.orbit(0, 60)),
-    button("Undo position", () => spatial.undoPosition()),
-    button("3D / List", () => {
-      spatial.presentation =
-        spatial.presentation === "spatial" ? "list" : "spatial";
-      drawer.hidden = spatial.presentation !== "list";
-      if (!drawer.hidden) search.focus();
-      invalidate();
-      void controller.persist();
-    }),
-  );
-  bar.append(
-    button("Create", () => graph.create()),
-    button("Link resources", () => graph.relate()),
-  );
   const views = new Map<string, HTMLButtonElement>();
   const report = (error: unknown) => {
     controller.error =
@@ -251,80 +154,222 @@ export function mountConstellation(
       report(e);
     }
   };
-  const paintResults = () => {
-    if (historyView) {
-      results.replaceChildren();
-      for (const [index, h] of controller.state.history.entries()) {
-        const n =
-          h.location.kind === "project"
-            ? controller.nodes.get("project:" + h.location.projectId)
-            : h.location.kind === "workspace"
-              ? controller.nodes.get("workspace:" + h.location.workspaceId)
-              : h.location.kind === "surface"
-                ? controller.nodes.get("resource:" + h.location.blockId)
-                : undefined;
-        const row = el("div", "", "aw-destination-row");
-        row.append(
-          el("span", n?.title ?? "Universe"),
-          button("Return here", () =>
-            invoke(() => controller.returnHistory(index)),
-          ),
-        );
-        results.prepend(row);
-      }
-      if (!controller.state.history.length)
-        results.append(el("p", "No previous destinations yet."));
-      return;
-    }
-    const nodes = controller.search(search.value, 40),
-      key =
-        nodes.map((n) => `${n.key}:${n.title}:${n.available}`).join("|") +
-        search.value;
-    if (key === lastResultKey) return;
-    lastResultKey = key;
-    results.replaceChildren();
-    if (!nodes.length) results.append(el("p", "No accessible destinations."));
-    for (const n of nodes) {
-      const row = el("div", "", "aw-destination-row"),
-        label = el(
-          "span",
-          `${n.title} · ${n.kind}${n.available ? "" : " · unavailable"}`,
-        );
-      const open = button("Open", () =>
-        invoke(() => controller.approach(n.key)),
-      );
-      open.disabled = !n.available || (n.kind === "resource" && !n.workspaceId);
-      open.setAttribute("aria-label", `Open ${n.title}`);
-      const locate = button("Locate", () =>
-        invoke(() => controller.locate(n.key)),
-      );
-      locate.setAttribute("aria-label", `Locate ${n.title}`);
-      row.append(label, open, locate);
-      results.append(row);
-    }
+  const inspect = () => {
+    inspectorOpen = !inspectorOpen;
+    controls.close();
+    lastDetailKey = "";
+    invalidate();
   };
-  search.oninput = () => {
-    historyView = false;
-    lastResultKey = "";
-    paintResults();
+  const commands = (): SpatialCommand[] => {
+    const n = controller.nodes.get(controller.selected ?? ""),
+      resource = n?.kind === "resource";
+    return [
+      {
+        id: "create",
+        title: "Create",
+        hint: "New project, workspace or resource",
+        run: () => graph.create(),
+      },
+      {
+        id: "link",
+        title: "Link resources",
+        hint: "Review a typed connection",
+        run: () => graph.relate(),
+        enabled: controller.can("relate"),
+      },
+      {
+        id: "inspect",
+        title: "Inspect selection",
+        hint: "Position and information · I",
+        run: inspect,
+        enabled: !!n,
+      },
+      {
+        id: "open",
+        title: "Open destination",
+        hint: "Enter · double-click",
+        run: () => controller.approach(),
+        enabled:
+          !!n && n.available && (n.kind !== "resource" || !!n.workspaceId),
+      },
+      {
+        id: "explore",
+        title: "Explore neighborhood",
+        hint: "Connections around this resource",
+        run: () => spatial.explore(n!.key),
+        enabled: resource,
+      },
+      {
+        id: "relationships",
+        title: "Inspect relationships",
+        hint: "Connection type and provenance",
+        run: () => graph.inspectRelationships(),
+        enabled: resource || !!layer.selectedEdge,
+      },
+      {
+        id: "branch",
+        title: "Branch conversation",
+        hint: "Review source context first",
+        run: () => graph.branch(),
+        enabled:
+          resource &&
+          controller.snapshot.resources.find((r) => r.id === n.id)?.kind ===
+            "conversation" &&
+          controller.can("branch"),
+      },
+      {
+        id: "place",
+        title: "Place in workspace",
+        hint: "Attach this canonical resource",
+        run: () => graph.place(),
+        enabled: resource && !n.workspaceId && controller.can("attach"),
+      },
+      {
+        id: "remove",
+        title:
+          resource && n.workspaceId
+            ? "Remove visual block"
+            : "Archive destination",
+        hint: "Review before applying",
+        run: () => graph.remove(),
+        enabled:
+          !!n &&
+          controller.can(resource && n.workspaceId ? "detach" : "archive"),
+      },
+      {
+        id: "arrange",
+        title: "Arrange",
+        hint: "Preview a new layout",
+        run: () => graph.arrange(),
+      },
+      {
+        id: "undo",
+        title: "Undo position",
+        hint: "Ctrl Z",
+        run: () => spatial.undoPosition(),
+      },
+      {
+        id: "out",
+        title: "Zoom out",
+        hint: "Alt ↑ · move to the parent",
+        run: () => controller.zoomOut(),
+        enabled: controller.location.kind !== "universe",
+      },
+      {
+        id: "universe",
+        title: "Universe",
+        hint: "All your projects",
+        run: () => controller.go({ kind: "universe" }),
+      },
+      {
+        id: "back",
+        title: "Back",
+        hint: "Backspace · Alt ←",
+        run: () => controller.back(),
+        enabled: controller.state.history.length > 0,
+      },
+      {
+        id: "fit",
+        title: "Fit selection",
+        hint: "F",
+        run: () => controller.fit(),
+        enabled: !!n,
+      },
+      {
+        id: "home",
+        title: "Recenter",
+        hint: "Home",
+        run: () => controller.recenter(),
+      },
+      {
+        id: "history",
+        title: "History",
+        hint: "Return to a previous place",
+        run: () => controls.history(),
+      },
+      {
+        id: "list",
+        title: "3D / List",
+        hint: "Accessible destination view",
+        run: () => {
+          spatial.presentation =
+            spatial.presentation === "spatial" ? "list" : "spatial";
+          invalidate();
+          void controller.persist();
+        },
+      },
+      {
+        id: "camera",
+        title: "Camera preferences",
+        hint: "Pointer mode and sensitivity",
+        run: () => {
+          inspectorOpen = true;
+          controller.selected = null;
+          lastDetailKey = "";
+          invalidate();
+        },
+      },
+      {
+        id: "help",
+        title: "Navigation guide",
+        hint: "F1 · ?",
+        run: () => controls.openGuide(),
+      },
+    ];
   };
-  search.onkeydown = (e) => {
-    if (e.key === "Enter") {
-      const n = controller.search(search.value, 1)[0];
-      if (n) void invoke(() => controller.approach(n.key));
-    }
-    if (e.key === "Escape") {
-      drawer.hidden = true;
-      toggle.focus();
-    }
-  };
+  const controls = spatialControls(root, {
+    commands,
+    destinations: (query) =>
+      controller.search(query, 6).map((n) => ({
+        id: n.key,
+        title: n.title,
+        hint: `${n.resourceKind ?? n.kind}${n.available ? "" : " · unavailable"} · locate`,
+        run: () => controller.locate(n.key),
+      })),
+    history: () =>
+      controller.state.history
+        .map((h, index) => ({
+          id: `history:${index}`,
+          title:
+            (h.bookmark.selected
+              ? controller.nodes.get(h.bookmark.selected)?.title
+              : null) ??
+            (h.location.kind === "project"
+              ? controller.nodes.get("project:" + h.location.projectId)?.title
+              : h.location.kind === "workspace" || h.location.kind === "surface"
+                ? controller.nodes.get("workspace:" + h.location.workspaceId)
+                    ?.title
+                : "Universe") ??
+            "Unavailable destination",
+          hint: "Return with saved camera",
+          run: () => controller.returnHistory(index),
+        }))
+        .reverse(),
+    dirty: invalidate,
+    report,
+    onOpen: () => {
+      inspectorOpen = false;
+      detail.hidden = true;
+    },
+  });
+  const { bar, breadcrumb, drawer } = controls;
   const paintDetail = () => {
+    if (!inspectorOpen) return;
     const n = controller.nodes.get(controller.selected ?? "");
     const position = n ? spatial.position(n.key) : null;
     const key = `${n?.key}:${controller.snapshot.relationships.length}:${controller.snapshot.conversationBranches?.length}:${n?.title}:${JSON.stringify(position)}:${layer.selectedEdge}`;
     if (key === lastDetailKey) return;
     lastDetailKey = key;
     detail.replaceChildren();
+    const close = button("×", () => {
+      inspectorOpen = false;
+      detail.hidden = true;
+      field.focus();
+      invalidate();
+    });
+    close.className = "aw-quiet-control";
+    close.setAttribute("aria-label", "Close information");
+    detail.append(close);
     if (layer.selectedEdge) {
       const edge = edges(controller).find((e) => e.id === layer.selectedEdge);
       if (edge) {
@@ -338,20 +383,46 @@ export function mountConstellation(
       layer.selectedEdge = null;
     }
     if (!n) {
-      detail.append(
-        el("p", "Select a destination. Enter or double-click to approach."),
-      );
+      detail.append(el("h2", "Camera preferences"));
+      const mode = el("select"),
+        sensitivity = el("input"),
+        modeLabel = el("label", "Drag mode"),
+        sensitivityLabel = el("label", "Sensitivity");
+      for (const value of ["orbit", "pan"]) {
+        const option = el("option", value);
+        option.value = value;
+        mode.append(option);
+      }
+      mode.value = spatial.mode;
+      mode.onchange = () => {
+        spatial.mode = mode.value as "orbit" | "pan";
+        void controller.persist();
+      };
+      sensitivity.type = "range";
+      sensitivity.min = ".1";
+      sensitivity.max = "3";
+      sensitivity.step = ".1";
+      sensitivity.value = String(spatial.sensitivity);
+      sensitivity.oninput = () => {
+        spatial.sensitivity = Number(sensitivity.value);
+      };
+      sensitivity.onchange = () => void controller.persist();
+      modeLabel.append(mode);
+      sensitivityLabel.append(sensitivity);
+      detail.append(modeLabel, sensitivityLabel);
       return;
     }
     detail.append(
       el("strong", n.title),
       el("span", ` ${n.kind} · ${n.available ? "available" : "unavailable"}`),
     );
-    const open = button("Open destination", () =>
-      invoke(() => controller.approach(n.key)),
+    detail.append(
+      el(
+        "p",
+        "Alt-drag to move. Use exact coordinates when you need them.",
+        "aw-panel-hint",
+      ),
     );
-    open.disabled = !n.available || (n.kind === "resource" && !n.workspaceId);
-    detail.append(open);
     {
       const x = el("input"),
         y = el("input"),
@@ -368,12 +439,21 @@ export function mountConstellation(
       pinned.type = "checkbox";
       pinned.checked = controller.state.anchors[n.key]?.pinned === true;
       pinned.setAttribute("aria-label", "Pin spatial position");
+      const coordinates = el("div", "", "aw-coordinates");
+      for (const [name, input] of [
+        ["X", x],
+        ["Y", y],
+        ["Z", z],
+      ] as const) {
+        const label = el("label", name);
+        label.append(input);
+        coordinates.append(label);
+      }
+      const pinLabel = el("label", "Keep position pinned");
+      pinLabel.append(pinned);
       detail.append(
-        x,
-        y,
-        z,
-        pinned,
-        el("span", "Pin"),
+        coordinates,
+        pinLabel,
         button("Save position", () =>
           invoke(() =>
             spatial.place(
@@ -386,21 +466,6 @@ export function mountConstellation(
       );
     }
     if (n.kind === "resource") {
-      if (!n.workspaceId) {
-        const place = button("Place in workspace", () => graph.place());
-        place.disabled = !controller.can("attach");
-        detail.append(place);
-      }
-      detail.append(
-        button("Explore neighborhood", () => spatial.explore(n.key)),
-        button("Inspect relationships", () => graph.inspectRelationships()),
-      );
-      const r = controller.snapshot.resources.find((r) => r.id === n.id);
-      if (r?.kind === "conversation") {
-        const branch = button("Branch conversation", () => graph.branch());
-        branch.disabled = !controller.can("branch");
-        detail.append(branch);
-      }
       const allowed = new Set(
         [...controller.nodes.values()]
           .filter((x) => x.kind === "resource")
@@ -414,7 +479,7 @@ export function mountConstellation(
             allowed.has(e.target_id) &&
             (e.source_id === n.id || e.target_id === n.id),
         )
-        .slice(0, 12);
+        .slice(0, 3);
       for (const e of edges)
         detail.append(
           el(
@@ -423,18 +488,6 @@ export function mountConstellation(
           ),
         );
     }
-    const remove = button(
-      n.kind === "resource"
-        ? n.workspaceId
-          ? "Remove visual block"
-          : "Archive resource"
-        : "Archive destination",
-      () => graph.remove(),
-    );
-    remove.disabled = !controller.can(
-      n.kind === "resource" && n.workspaceId ? "detach" : "archive",
-    );
-    detail.append(remove);
   };
   function paint() {
     const l = controller.location,
@@ -444,8 +497,6 @@ export function mountConstellation(
       spatial.presentation === "spatial" && controller.policy.graphicsAvailable;
     root.classList.toggle("aw-spatial-mode", spatialMode);
     layer.enabled = spatialMode;
-    mode.value = spatial.mode;
-    sensitivity.value = String(spatial.sensitivity);
     root.classList.toggle(
       "aw-efficient",
       controller.policy.tier === "efficient",
@@ -470,9 +521,7 @@ export function mountConstellation(
       : l.kind === "project"
         ? `${p?.title ?? "Project"} / ${spatial.neighborhood ? "Resource neighborhood" : "Constellation"}`
         : "Universe / Projects";
-    back.disabled = controller.state.history.length === 0;
-    out.disabled = l.kind === "universe";
-    toggle.setAttribute("aria-expanded", String(!drawer.hidden));
+    breadcrumb.title = breadcrumb.textContent;
     status.textContent =
       controller.error ||
       spatial.notice ||
@@ -484,9 +533,7 @@ export function mountConstellation(
             ? "Graphics unavailable. Direct navigation remains available."
             : "");
     field.hidden = working;
-    tools.hidden = working;
-    detail.hidden = working;
-    if (!drawer.hidden) paintResults();
+    detail.hidden = working || !inspectorOpen;
     paintDetail();
     const { width, height } = field.getBoundingClientRect(),
       c = controller.camera;
@@ -615,10 +662,9 @@ export function mountConstellation(
   for (const node of [
     container,
     bar,
-    tools,
     detail,
     drawer,
-    settingsBody,
+    controls.guide,
     ...root.querySelectorAll(".aw-graph-dialog"),
   ])
     resize.observe(node);
@@ -629,21 +675,33 @@ export function mountConstellation(
     pan: boolean;
     key?: string;
     before?: Vector3;
+    grabOffset?: Vector3;
     preview?: Vector3;
   } | null = null;
   field.onpointerdown = (e) => {
-    if (e.target !== field && e.target !== world) return;
+    if (e.button !== 0 && e.button !== 1) return;
+    const label = (e.target as HTMLElement).closest<HTMLElement>(".aw-anchor");
+    if (
+      e.target !== field &&
+      e.target !== world &&
+      !(label && (e.altKey || e.button === 1))
+    )
+      return;
+    inspectorOpen = false;
+    if (e.button === 1 || e.altKey) e.preventDefault();
     controller.interrupt();
     field.focus();
     const rect = field.getBoundingClientRect(),
-      hit = layer.enabled
-        ? layer.pick(
-            e.clientX - rect.left,
-            e.clientY - rect.top,
-            rect.width,
-            rect.height,
-          )
-        : null;
+      hit = label?.dataset.key
+        ? { key: label.dataset.key }
+        : layer.enabled
+          ? layer.pick(
+              e.clientX - rect.left,
+              e.clientY - rect.top,
+              rect.width,
+              rect.height,
+            )
+          : null;
     if (hit?.key) {
       controller.select(hit.key);
       layer.selectedEdge = null;
@@ -659,13 +717,36 @@ export function mountConstellation(
       lastDetailKey = "";
       invalidate();
     }
+    const grab =
+        e.altKey && hit?.key
+          ? layer.dragPosition(
+              e.clientX - rect.left,
+              e.clientY - rect.top,
+              rect.width,
+              rect.height,
+              hit.key,
+            )
+          : null,
+      before = e.altKey && hit?.key ? spatial.position(hit.key) : null;
     pointer = {
       x: e.clientX,
       y: e.clientY,
       id: e.pointerId,
-      pan: e.shiftKey || spatial.mode === "pan",
+      pan: e.button === 1 || e.shiftKey || spatial.mode === "pan",
       ...(e.altKey && hit?.key
-        ? { key: hit.key, before: { ...spatial.position(hit.key) } }
+        ? {
+            key: hit.key,
+            before: { ...before! },
+            ...(grab
+              ? {
+                  grabOffset: {
+                    x: before!.x - grab.x,
+                    y: before!.y - grab.y,
+                    z: before!.z - grab.z,
+                  },
+                }
+              : {}),
+          }
         : {}),
     };
     field.setPointerCapture(e.pointerId);
@@ -682,12 +763,21 @@ export function mountConstellation(
           pointer.key,
         );
       if (p) {
-        pointer.preview = spatial.previewMove(pointer.key, p);
+        const offset = pointer.grabOffset ?? { x: 0, y: 0, z: 0 };
+        pointer.preview = spatial.previewMove(pointer.key, {
+          x: p.x + offset.x,
+          y: p.y + offset.y,
+          z: p.z + offset.z,
+        });
         invalidate();
       }
     } else if (layer.enabled) {
       if (pointer.pan)
-        spatial.pan(pointer.x - e.clientX, e.clientY - pointer.y);
+        spatial.pan(
+          pointer.x - e.clientX,
+          e.clientY - pointer.y,
+          field.clientHeight,
+        );
       else spatial.orbit(e.clientX - pointer.x, e.clientY - pointer.y);
     } else
       controller.pan(
@@ -718,6 +808,22 @@ export function mountConstellation(
     invalidate();
   };
   field.onpointercancel = cancel;
+  field.oncontextmenu = (e) => {
+    e.preventDefault();
+    cancel();
+    const label = (e.target as HTMLElement).closest<HTMLElement>(".aw-anchor"),
+      rect = field.getBoundingClientRect(),
+      key =
+        label?.dataset.key ??
+        layer.pick(
+          e.clientX - rect.left,
+          e.clientY - rect.top,
+          rect.width,
+          rect.height,
+        )?.key;
+    if (key) controller.select(key);
+    controls.openPalette("", true);
+  };
   field.ondblclick = (e) => {
     if (e.target !== field && e.target !== world) return;
     const rect = field.getBoundingClientRect(),
@@ -733,36 +839,82 @@ export function mountConstellation(
     "wheel",
     (e) => {
       e.preventDefault();
-      controller.zoom(
-        Math.exp(-Math.max(-150, Math.min(150, e.deltaY)) * 0.003),
-      );
+      const unit =
+          e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? field.clientHeight : 1,
+        dx = e.deltaX * unit,
+        dy = e.deltaY * unit;
+      if (e.shiftKey && !e.ctrlKey)
+        spatial.pan(dx || dy, dx ? dy : 0, field.clientHeight);
+      else
+        controller.zoom(
+          Math.exp(
+            -Math.max(-150, Math.min(150, dy)) * (e.ctrlKey ? 0.008 : 0.003),
+          ),
+        );
     },
     { passive: false },
   );
   field.onkeydown = (e) => {
-    if (e.target !== field) return;
-    const d = 70 / controller.camera.zoom;
+    if (
+      e.defaultPrevented ||
+      (e.target !== field && !(e.target as HTMLElement).closest(".aw-anchor"))
+    )
+      return;
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      void invoke(() => spatial.undoPosition());
+      return;
+    }
+    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowLeft")) {
+      e.preventDefault();
+      void invoke(() =>
+        e.key === "ArrowUp" ? controller.zoomOut() : controller.back(),
+      );
+      return;
+    }
+    const pan = (x: number, y: number) =>
+      layer.enabled
+        ? spatial.pan(x, y, field.clientHeight)
+        : controller.pan(
+            x / controller.camera.zoom,
+            -y / controller.camera.zoom,
+          );
     const actions: Record<string, () => unknown> = {
-      ArrowLeft: () => controller.pan(-d, 0),
-      ArrowRight: () => controller.pan(d, 0),
-      ArrowUp: () => controller.pan(0, -d),
-      ArrowDown: () => controller.pan(0, d),
+      ArrowLeft: () => (e.shiftKey ? spatial.orbit(-40, 0) : pan(-70, 0)),
+      ArrowRight: () => (e.shiftKey ? spatial.orbit(40, 0) : pan(70, 0)),
+      ArrowUp: () => (e.shiftKey ? spatial.orbit(0, -40) : pan(0, 70)),
+      ArrowDown: () => (e.shiftKey ? spatial.orbit(0, 40) : pan(0, -70)),
       "+": () => controller.zoom(1.3),
       "=": () => controller.zoom(1.3),
       "-": () => controller.zoom(1 / 1.3),
       Home: () => controller.recenter(),
       Escape: () => {
         cancel();
+        inspectorOpen = false;
         controller.interrupt();
       },
       Enter: () => controller.approach(),
       Backspace: () => controller.back(),
+      f: () => controller.fit(),
+      F: () => controller.fit(),
+      i: inspect,
+      I: inspect,
+      "?": () => controls.openGuide(),
     };
     if (actions[e.key]) {
       e.preventDefault();
       void invoke(actions[e.key]);
     }
   };
+  const closeInformation = (e: KeyboardEvent) => {
+    if (e.key === "Escape" && inspectorOpen) {
+      inspectorOpen = false;
+      invalidate();
+      field.focus();
+      e.preventDefault();
+    }
+  };
+  root.addEventListener("keydown", closeInformation);
   const media = matchMedia("(prefers-reduced-motion: reduce)"),
     mediaChange = () =>
       controller.setPolicy({
@@ -809,7 +961,7 @@ export function mountConstellation(
     frame,
     update(snapshot: Snapshot) {
       controller.update(snapshot);
-      lastResultKey = "";
+      controls.refresh();
       lastDetailKey = "";
     },
     setPolicy(policy: Partial<Policy>) {
@@ -824,6 +976,7 @@ export function mountConstellation(
       document.removeEventListener("visibilitychange", visibility);
       controller.dispose();
       layer.dispose();
+      controls.dispose();
       graph.dispose();
       root.remove();
     },

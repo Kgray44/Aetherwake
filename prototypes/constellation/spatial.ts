@@ -451,15 +451,21 @@ export class SpatialNavigator {
       "orbit",
     );
   }
-  pan(dx: number, dy: number) {
+  pan(dx: number, dy: number, viewportHeight = 1100) {
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
     this.manualRevision++;
     const p = this.bookmark(),
-      scale = p.distance / 1400;
+      scale =
+        (2 * p.distance * Math.tan((43 * Math.PI) / 360)) /
+        Math.max(1, viewportHeight),
+      sy = Math.sin(p.yaw),
+      cy = Math.cos(p.yaw),
+      sp = Math.sin(p.pitch),
+      cp = Math.cos(p.pitch);
     p.target = {
-      x: p.target.x + dx * Math.cos(p.yaw) * scale,
-      y: p.target.y + dy * scale,
-      z: p.target.z - dx * Math.sin(p.yaw) * scale,
+      x: p.target.x + (dx * cy - dy * sy * sp) * scale,
+      y: p.target.y + dy * cp * scale,
+      z: p.target.z + (-dx * sy - dy * cy * sp) * scale,
     };
     this.target(p, "spatial pan");
   }

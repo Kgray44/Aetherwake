@@ -6,6 +6,7 @@ import { SpatialNavigator, edges, validSpatialCamera } from "../spatial.ts";
 import { ConstellationScene } from "../renderer3d.ts";
 import { randomUUID } from "node:crypto";
 import { planetAppearance } from "../planets.ts";
+import * as THREE from "three";
 
 const fixture = (count = 18) => ({
   projects: [{ id: "p", title: "Synthetic project" }],
@@ -206,6 +207,41 @@ test("orbit is damped, bounded, interruptible and reduced-motion compatible with
   assert.ok(validSpatialCamera(n.camera));
   c.dispose();
   assert.equal(motion.bodies.has(n.id), false);
+});
+
+test("panning follows the perspective camera plane with the same pixel scale at different viewport heights", () => {
+  const { c, navigation: n } = setup();
+  c.setPolicy({ reduced: true });
+  const start = { ...n.camera, yaw: 0.7, pitch: 0.8 };
+  n.target(start);
+  const camera = new THREE.PerspectiveCamera(43, 1, 1, 100000),
+    cp = Math.cos(start.pitch);
+  camera.position.set(
+    start.target.x + Math.sin(start.yaw) * cp * start.distance,
+    start.target.y + Math.sin(start.pitch) * start.distance,
+    start.target.z + Math.cos(start.yaw) * cp * start.distance,
+  );
+  camera.lookAt(start.target.x, start.target.y, start.target.z);
+  camera.updateMatrixWorld();
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0),
+    up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1),
+    forward = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2);
+  n.pan(70, 40, 900);
+  const actual = n.bookmark().target,
+    delta = new THREE.Vector3(
+      actual.x - start.target.x,
+      actual.y - start.target.y,
+      actual.z - start.target.z,
+    ),
+    scale = (2 * start.distance * Math.tan((43 * Math.PI) / 360)) / 900;
+  assert.ok(Math.abs(delta.dot(right) - 70 * scale) < 1e-8);
+  assert.ok(Math.abs(delta.dot(up) - 40 * scale) < 1e-8);
+  assert.ok(Math.abs(delta.dot(forward)) < 1e-8);
+  n.target(start);
+  n.pan(70, 40, 1800);
+  const smaller = n.bookmark().target;
+  assert.ok(Math.abs(smaller.x - start.target.x - delta.x * 0.5) < 1e-8);
+  c.dispose();
 });
 
 test("3D node positions and pins survive new graph objects, resource removal and undo", async () => {

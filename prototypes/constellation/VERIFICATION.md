@@ -1,5 +1,15 @@
 # Constellation verification and integration handoff
 
+## Clearance and gesture-first controls follow-up
+
+The current source removes permanent Constellation navigation/camera/selection button banks. Only a small glass location capsule with commands and information controls remains. Searchable commands, native mouse/keyboard gestures and an on-demand selection inspector preserve the underlying operations. A compact glass navigation guide opens from i, F1 or ?, with Escape/outside dismissal. Panning now follows the real perspective camera plane and viewport pixel scale; Alt-drag retains the grabbed point instead of jumping the body center under the cursor.
+
+The renderer and layout share full body footprints including tilted rings, atmosphere and maximum emphasis, with a 28-world-unit gap and varied sibling parent distances. Existing clear positions remain stable. Conflicting legacy positions are repaired explicitly; continuous drag constraints, arrangement previews/apply and undo preserve clearance. Perspective decluttering keeps rendered body silhouettes apart while retaining canonical search and semantic labels.
+
+Source regressions independently check all body pairs in a 1,000-resource fixture, incremental/branch insertion, deterministic legacy repair, pins, preview/commit/undo and actual projected mesh vertices over 16 camera poses. `tests/profile-spacing.mjs` provides bounded CPU-only projection/packing/refresh/frame-update diagnostics, distinct from native GPU/presented timing. No source check establishes the artistic quality of the current native motion.
+
+The expanded native helper now operates through the compact controls and records actual screen-gap, two-control capsule, glass-guide and native keyboard dismissal assertions. Its guide screenshot replaces the existing orbit/pan screenshot, preserving capture bounds. **The updated helper has not yet been executed on the integrated candidate.** Integration owns the real-window run and source/build fingerprint, including new `controls.ts`, `body-metrics.ts`, `identity.ts` and `spacing.ts` modules. Earlier receipts below do not qualify these later changes.
+
 ## Current 3D follow-up
 
 The current source adds a real perspective scene in the host's existing graphics context, persistent XYZ positions/pins/orbit cameras, typed graph operations, neighborhood traversal, reversible arrangements, app-level branch previews and deterministic procedural planets/moons. Strict TypeScript and all **47** navigation/spatial tests pass. Regressions include manual camera interruption during awaited navigation, continuous wheel scope transitions, spring-driven body emphasis, geometry/detail LOD, bounded 10,000-object allocations, graph mutation routing, label discoverability, and host renderer-state restoration. Graph metadata is cached between canonical refreshes; regressions verify that provenance edits and revocations invalidate it, and distance-culled resources remain searchable and become visible when fitted.
