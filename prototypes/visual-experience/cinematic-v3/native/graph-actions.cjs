@@ -69,7 +69,7 @@ async function graphAction(action, call) {
       command = { type: "unrelate", relationshipId: action.relationshipId };
       break;
     case "branch": {
-      if (!["local", "mock-ordinary"].includes(action.providerId))
+      if (action.providerId !== "local")
         throw new Error("provider_branch_handoff_unavailable");
       if (
         typeof action.title !== "string" ||
@@ -95,7 +95,7 @@ async function graphAction(action, call) {
         messageId: action.messageId,
         includeMessageIds: action.includeMessageIds,
         title: action.title,
-        providerId: "mock-ordinary",
+        providerId: "local",
         tokenBudget: action.tokenBudget,
         commandId: randomUUID(),
         ...(action.workspaceId ? { workspaceId: action.workspaceId } : {}),
