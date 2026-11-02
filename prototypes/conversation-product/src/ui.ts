@@ -40,14 +40,16 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  let chat:ConversationChat|null=null,chatResource:string|null=null;
  const draftSessions=new Map<string,ConversationDraftSession>();
  const ownedDraftSessions=new Set<ConversationDraftSession>();
+ const detachedSubmissions=new Set<Promise<void>>();
  const call=<K extends keyof ProductCommandMap>(name:K,input:ProductCommandMap[K]['input'])=>port.command(name,input);
  const save=()=>{if(!disposed)options.onState?.(state);};
  const flush=async()=>{if(disposed)return;await chat?.flush();await flushConversationDraftSessions(()=>draftSessions.values(),save);};
+ const detachChat=async()=>{if(!chat)return;const previous=chat,pending=previous.whenSubmissionSettled();await previous.dispose();chat=null;chatResource=null;detachedSubmissions.add(pending);void pending.finally(()=>detachedSubmissions.delete(pending)).catch(()=>{});};
  async function closeManager(){if(closing||disposed)return;closing=true;close.disabled=true;try{await flush();options.onClose?.();}catch(error){status.textContent='Draft recovery needs attention before closing: '+(error instanceof Error?error.message:String(error));}finally{closing=false;close.disabled=false;}}
  const run=async(action:()=>Promise<void>)=>{if(busy||disposed)return;busy=true;root.setAttribute('aria-busy','true');try{status.textContent='';await action();}catch(error){status.textContent=error instanceof Error?error.message:String(error);}finally{busy=false;root.removeAttribute('aria-busy');save();}};
  const bindChat=async(resourceId:string,aroundMessageId?:string)=>{
   if(chatResource===resourceId&&chat){await chat.refresh(aroundMessageId?{aroundMessageId}:{});return;}
-  await chat?.dispose();chat=null;chatResource=null;
+  await detachChat();
   let session=draftSessions.get(resourceId);
   if(!session){if(options.draftSession)session=options.draftSession(resourceId);else{session=new ConversationDraftSession({resourceId,port,...(Object.hasOwn(state.drafts,resourceId)?{initialContent:state.drafts[resourceId]}:{})});ownedDraftSessions.add(session);}if(session.resourceId!==resourceId)throw new Error('draft_resource_mismatch');draftSessions.set(resourceId,session);}else await session.reload();
   chatResource=resourceId;chat=mountConversationChat(chatHost,{port,resourceId,draftSession:session,execution:options.execution,copy:options.copy,initialScroll:state.scroll[resourceId],initialOffset:state.messageOffset[resourceId],
@@ -105,5 +107,8 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   const target=event.target as HTMLElement,active=target.closest<HTMLDetailsElement>('details[open]')??[...root.querySelectorAll<HTMLDetailsElement>('details[open]')].at(-1);
   event.preventDefault();event.stopPropagation();if(active){active.open=false;active.querySelector('summary')?.focus();return;}void closeManager();
  }});
- const ready=run(refresh);return {ready,state,flush,refresh:()=>run(refresh),open:(id:string,messageId?:string)=>run(()=>open(id,messageId)),async dispose(){if(disposed)return;await flush();await chat?.dispose();await Promise.all([...ownedDraftSessions].map(session=>session.dispose()));disposed=true;request++;clearTimeout(searchTimer);root.remove();}};
+ const ready=run(refresh);return {ready,state,flush,refresh:()=>run(refresh),open:(id:string,messageId?:string)=>run(()=>open(id,messageId)),async dispose(){if(disposed)return;await flush();await detachChat();disposed=true;request++;clearTimeout(searchTimer);root.remove();
+  if(detachedSubmissions.size)void Promise.allSettled([...detachedSubmissions]).then(()=>Promise.allSettled([...ownedDraftSessions].map(session=>session.dispose()))).catch(()=>{});
+  else await Promise.all([...ownedDraftSessions].map(session=>session.dispose()));
+ }};
 }

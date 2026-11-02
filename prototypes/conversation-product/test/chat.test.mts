@@ -18,7 +18,7 @@ function fixture(providerId='local') {
     if(name==='detail')return structuredClone(detail);if(name==='send')return new Promise((resolve,reject)=>{pending={input,resolve,reject};}).finally(()=>{pending=null;});
     if(name==='providers')return detail.providers;if(name==='collections'||name==='projects')return [];if(name==='search')return {items:[],total:0,offset:0,limit:50,hasMore:false};throw new Error('Unexpected command '+name);
   }} as ConversationProductPort;
-  const accept=()=>{assert.ok(pending);const item={...detail.messages.items[0],id:'message:sent:'+detail.conversation.revision,content:pending.input.content};detail.messages.items.push(item);detail.messages.total++;detail.conversation.messageCount++;detail.conversation.revision++;const p=pending;pending=null;p.resolve({...item,revision:detail.conversation.revision});};
+  const accept=(execution=false)=>{assert.ok(pending);const item={...detail.messages.items[0],id:'message:sent:'+detail.conversation.revision,content:pending.input.content};detail.messages.items.push(item);detail.messages.total++;detail.conversation.messageCount++;detail.conversation.revision++;const p=pending;pending=null;p.resolve(execution?{id:'execution:synthetic',resourceId:draft.resourceId,providerId,commandId:p.input.commandId,state:'provider_completed',taskVerified:false}:{...item,revision:detail.conversation.revision});};
   return {view,port,calls,detail,restore,accept,get pending(){return pending;},get draft(){return {...draft};},deny(){denied=true;},external(content:string){draft={...draft,version:draft.version+1,content};}};
 }
 
@@ -39,20 +39,20 @@ test('mounted canonical chat reads only; refresh preserves composer, caret, keye
   }finally{await chat?.dispose();f.restore();}
 });
 
-test('Enter submits once; Shift+Enter and IME do not submit; before-close draining retains later in-flight edits',async()=>{
+test('Enter submits once; Shift+Enter and IME do not submit; draft draining is independent of a pending send',async()=>{
   const f=fixture();let chat;try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;const editor=f.view.root.querySelector('textarea');
     editor.fire('keydown',{key:'Enter',shiftKey:true});editor.fire('compositionstart');editor.fire('keydown',{key:'Enter'});assert.equal(f.pending,null);editor.fire('compositionend');
     editor.value='Exact submitted text';editor.fire('input');const entered=editor.fire('keydown',{key:'Enter'});assert.equal(entered.defaultPrevented,true);await until(()=>!!f.pending);assert.equal(f.pending!.input.content,'Exact submitted text');assert.equal(f.draft.content,'Exact submitted text');
-    editor.value='Later typing while native approval waits';editor.fire('input');let drained=false;const drain=chat.flush().then(()=>{drained=true;});await new Promise(resolve=>setImmediate(resolve));assert.equal(drained,false);f.accept();await drain;
+    editor.value='Later typing while native approval waits';editor.fire('input');let drained=false;const drain=chat.flush().then(()=>{drained=true;});await until(()=>drained);assert.ok(f.pending,'Provider/native send is still pending after draft drain');assert.equal(f.draft.content,editor.value);f.accept();await drain;await chat.whenSubmissionSettled();
     assert.equal(editor.value,'Later typing while native approval waits');assert.equal(f.draft.content,editor.value);assert.equal(f.calls.filter(c=>c.name==='send').length,1);assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/Later draft edits/);
   }finally{await chat?.dispose();f.restore();}
 });
 
 test('accepted local send clears only its captured CAS draft; unknown and native-cancelled sends retain recovery',async()=>{
   const f=fixture();let chat;try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;const editor=f.view.root.querySelector('textarea'),form=f.view.root.querySelector('.cp-composer');
-    form.fire('submit');await until(()=>!!f.pending);f.accept();await chat.flush();assert.equal(editor.value,'');assert.equal(f.draft.content,'');assert.ok(f.draft.version>3);
-    editor.value='Native cancelled request';editor.fire('input');form.fire('submit');await until(()=>!!f.pending);f.pending!.reject(new Error('authorization_cancelled'));await chat.flush();assert.equal(editor.value,'Native cancelled request');assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/cancelled/);
-    form.fire('submit');await until(()=>!!f.pending);f.pending!.resolve({id:'execution:unknown',resourceId:f.draft.resourceId,state:'unknown'});await chat.flush();assert.equal(editor.value,'Native cancelled request');assert.equal(named(form,'Record message').disabled,true);const sends=f.calls.filter(c=>c.name==='send').length;named(f.view.root,'I reviewed the send outcome').fire('click');assert.equal(f.calls.filter(c=>c.name==='send').length,sends);
+    form.fire('submit');await until(()=>!!f.pending);f.accept();await chat.whenSubmissionSettled();assert.equal(editor.value,'');assert.equal(f.draft.content,'');assert.ok(f.draft.version>3);
+    editor.value='Native cancelled request';editor.fire('input');form.fire('submit');await until(()=>!!f.pending);f.pending!.reject(new Error('authorization_cancelled'));await chat.whenSubmissionSettled();assert.equal(editor.value,'Native cancelled request');assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/cancelled/);
+    form.fire('submit');await until(()=>!!f.pending);f.pending!.resolve({id:'execution:unknown',resourceId:f.draft.resourceId,state:'unknown'});await chat.whenSubmissionSettled();assert.equal(editor.value,'Native cancelled request');assert.equal(named(form,'Record message').disabled,true);const sends=f.calls.filter(c=>c.name==='send').length;named(f.view.root,'I reviewed the send outcome').fire('click');assert.equal(f.calls.filter(c=>c.name==='send').length,sends);
   }finally{await chat?.dispose();f.restore();}
 });
 
@@ -99,8 +99,41 @@ test('manager and inline component share one externally owned draft, with indepe
 });
 
 test('provider failure remains visible and never clears or automatically replays a submission',async()=>{
-  const f=fixture('codex:native');let chat;try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;const form=f.view.root.querySelector('.cp-composer');form.fire('submit');await until(()=>!!f.pending);assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/native send review/);f.pending!.reject(new Error('provider_unavailable'));await chat.flush();assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/provider_unavailable/);assert.equal(f.draft.content,'Saved unsent text');assert.equal(f.calls.filter(c=>c.name==='send').length,1);assert.equal(named(form,'Send').disabled,true);}
+  const f=fixture('codex:native');let chat;try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;const form=f.view.root.querySelector('.cp-composer');form.fire('submit');await until(()=>!!f.pending);assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/native send review/);f.pending!.reject(new Error('provider_unavailable'));await chat.whenSubmissionSettled();assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/provider_unavailable/);assert.equal(f.draft.content,'Saved unsent text');assert.equal(f.calls.filter(c=>c.name==='send').length,1);assert.equal(named(form,'Send').disabled,true);}
   finally{await chat?.dispose();f.restore();}
+});
+
+test('closing an internally owned chat promptly detaches during a deferred provider turn; later typing and eventual canonical acceptance stay durable',async()=>{
+  const f=fixture('codex:native');let chat,changed=0,released=0,interrupts=0,unsubscribed=false;
+  const originalDispose=ConversationDraftSession.prototype.dispose;
+  ConversationDraftSession.prototype.dispose=async function(){released++;await originalDispose.call(this);};
+  try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,onChanged:()=>{changed++;},execution:{observe(){return()=>{unsubscribed=true;};},async cancel(){interrupts++;}}});await chat.ready;
+    const editor=f.view.root.querySelector('textarea');editor.value='Submitted before a long provider turn';editor.fire('input');f.view.root.querySelector('.cp-composer').fire('submit');await until(()=>!!f.pending);
+    const settled=chat.whenSubmissionSettled();editor.value='Exact later 🧭 typing while turn runs';editor.fire('input');let flushed=false;void chat.flush().then(()=>{flushed=true;});await until(()=>flushed);const saved=f.draft;assert.equal(saved.content,editor.value);
+    let closed=false;void chat.dispose().then(()=>{closed=true;});await until(()=>closed);assert.equal(released,0,'The pending internally owned session remains alive for exact acceptance work');assert.ok(f.pending,'Closing did not wait for or cancel the provider');assert.equal(unsubscribed,true);assert.equal(f.view.root.querySelector('.cp-chat'),null);assert.equal(interrupts,0);assert.equal(f.calls.filter(c=>c.name==='send').length,1);
+    f.accept(true);await settled;await until(()=>released===1);assert.equal(changed,0,'Detached acceptance must not refresh or re-open its closed host view');assert.deepEqual(f.draft,saved,'Later durable text and its revision survive the captured submission acknowledgement');assert.equal(f.detail.messages.items.at(-1)?.content,'Submitted before a long provider turn');assert.equal(interrupts,0);assert.equal(f.calls.filter(c=>c.name==='send').length,1);
+  }finally{f.pending?.reject(new Error('synthetic cleanup'));await chat?.whenSubmissionSettled();await chat?.dispose();ConversationDraftSession.prototype.dispose=originalDispose;f.restore();}
+});
+
+test('standalone manager closes during a pending turn, retains its owned coordinator until settlement, and clears only an exact accepted draft',async()=>{
+  const f=fixture('codex:native');let manager;
+  try{manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;f.view.root.querySelector('.cp-composer').fire('submit');await until(()=>!!f.pending);const saved=f.draft;
+    let closed=false;void manager.dispose().then(()=>{closed=true;});await until(()=>closed);assert.ok(f.pending);assert.equal(f.view.root.querySelector('.cp-manager'),null);assert.equal(f.draft.content,saved.content);
+    f.accept(true);await until(()=>f.draft.content==='');assert.equal(f.draft.version,saved.version+1);assert.equal(f.calls.filter(c=>c.name==='send').length,1);assert.equal(f.calls.some(c=>c.name==='interrupt'),false);
+  }finally{f.pending?.reject(new Error('synthetic cleanup'));await manager?.dispose();f.restore();}
+});
+
+test('closing a shared view during a deferred turn never disposes its external session or clears later owner edits',async()=>{
+  const f=fixture('codex:native'),shared=new ConversationDraftSession({port:f.port,resourceId:f.draft.resourceId});let chat;
+  try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,draftSession:shared});await chat.ready;f.view.root.querySelector('.cp-composer').fire('submit');await until(()=>!!f.pending);const settled=chat.whenSubmissionSettled();
+    let closed=false;void chat.dispose().then(()=>{closed=true;});await until(()=>closed);assert.ok(f.pending);shared.update('Owner editing after pane close');await shared.flush();f.accept(true);await settled;assert.equal(f.draft.content,'Owner editing after pane close');shared.update('Owner editing after receipt');await shared.flush();assert.equal(f.draft.content,'Owner editing after receipt');assert.equal(f.calls.filter(c=>c.name==='send').length,1);
+  }finally{f.pending?.reject(new Error('synthetic cleanup'));await chat?.whenSubmissionSettled();await chat?.dispose();await shared.dispose();f.restore();}
+});
+
+test('a detached send rejection is caught and leaves exact durable recovery without replay',async()=>{
+  const f=fixture('codex:native');let chat;
+  try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;f.view.root.querySelector('.cp-composer').fire('submit');await until(()=>!!f.pending);const settled=chat.whenSubmissionSettled();await chat.dispose();const saved=f.draft;f.pending!.reject(new Error('provider_unavailable'));await settled;await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(f.draft,saved);assert.equal(f.calls.filter(c=>c.name==='send').length,1);assert.equal(f.view.root.querySelector('.cp-chat'),null);}
+  finally{f.pending?.reject(new Error('synthetic cleanup'));await chat?.whenSubmissionSettled();await chat?.dispose();f.restore();}
 });
 
 test('composer keyboard policy keeps newline and composition distinct from submit',()=>{
