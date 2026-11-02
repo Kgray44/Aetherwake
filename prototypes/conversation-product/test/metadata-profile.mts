@@ -41,8 +41,8 @@ async function child(){
  const ownerMarker=JSON.parse(readFileSync(join(dirname(profile),'owner.json'),'utf8'));assert.equal(ownerMarker.contract,'aerynth.metadata-profile-owner@1');assert.equal(ownerMarker.binding.candidate,args.get('candidate'));
  const work={hostAccess:0,canonicalAccess:0,uniqueHostAccess:0,uniqueCanonicalAccess:0,metadataCalls:0,metadataAllow:0,uniqueMetadataAllow:0,sqlPrepare:0,sqlGet:0,sqlAll:0,sqlRun:0,graphSnapshot:0,visibleMessages:0,providerCalls:0};
  const sets={host:new Set<string>(),canonical:new Set<string>(),metadata:new Set<string>()},restores:(()=>void)[]=[];
- let core:BackendCore|undefined;const start=performance.now(),receipt:Record<string,unknown>={mode,operation,passed:false,work};
- const progress=()=>{work.uniqueHostAccess=sets.host.size;work.uniqueCanonicalAccess=sets.canonical.size;work.uniqueMetadataAllow=sets.metadata.size;process.send?.({elapsedMs:performance.now()-start,work:{...work},rss:process.memoryUsage().rss});};
+ let core:BackendCore|undefined,lastProgress=0;const start=performance.now(),receipt:Record<string,unknown>={mode,operation,passed:false,work};
+ const progress=(force=false)=>{const now=performance.now();if(!force&&now-lastProgress<200)return;lastProgress=now;work.uniqueHostAccess=sets.host.size;work.uniqueCanonicalAccess=sets.canonical.size;work.uniqueMetadataAllow=sets.metadata.size;process.send?.({elapsedMs:now-start,work:{...work},rss:process.memoryUsage().rss});};
  try{
   core=new BackendCore({path:join(profile,'canonical.sqlite'),privateRoot:profile,contentPolicy:'synthetic-only',provider:'fixture'});const o=core as unknown as Owner;
   for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])o.port[key]=async()=>{work.providerCalls++;throw Error('provider_forbidden');};
@@ -51,12 +51,12 @@ async function child(){
    const host=(o.conversations as unknown as {host:CanonicalConversationHost}).host;
    for(const [target,key,label] of [[host,'access','host'],[o.conversationAccess,'access','canonical']] as const){
     const object=target as {access?:(id:string,messageId?:string)=>boolean},original=object[key]!;
-    object[key]=function(id,messageId){work[label==='host'?'hostAccess':'canonicalAccess']++;sets[label].add(id+'\0'+(messageId??''));if((work.canonicalAccess&16383)===0)progress();return original.call(this,id,messageId);};restores.push(()=>{object[key]=original;});
+    object[key]=function(id,messageId){work[label==='host'?'hostAccess':'canonicalAccess']++;sets[label].add(id+'\0'+(messageId??''));if(((work.canonicalAccess+work.hostAccess)&255)===0)progress();return original.call(this,id,messageId);};restores.push(()=>{object[key]=original;});
    }
    const prepare=o.db.prepare.bind(o.db);o.db.prepare=((sql:string)=>{work.sqlPrepare++;const statement=prepare(sql);return new Proxy(statement,{get(target,key){const value=Reflect.get(target,key,target);if(typeof value!=='function')return value;return (...params:unknown[])=>{if(key==='get')work.sqlGet++;if(key==='all')work.sqlAll++;if(key==='run')work.sqlRun++;return value.apply(target,params);};}});}) as typeof o.db.prepare;restores.push(()=>{o.db.prepare=prepare;});
-   const metadata=o.graph.visibleMessageMetadata.bind(o.graph);o.graph.visibleMessageMetadata=(id,options)=>{work.metadataCalls++;return metadata(id,{...options,allow:m=>{work.metadataAllow++;sets.metadata.add(m.conversationId+'\0'+m.id);return options.allow(m);}});};restores.push(()=>{o.graph.visibleMessageMetadata=metadata;});
+   const metadata=o.graph.visibleMessageMetadata.bind(o.graph);o.graph.visibleMessageMetadata=(id,options)=>{work.metadataCalls++;progress();return metadata(id,{...options,allow:m=>{work.metadataAllow++;sets.metadata.add(m.conversationId+'\0'+m.id);return options.allow(m);}});};restores.push(()=>{o.graph.visibleMessageMetadata=metadata;});
    const snapshot=o.graph.snapshot.bind(o.graph);o.graph.snapshot=()=>{work.graphSnapshot++;return snapshot();};restores.push(()=>{o.graph.snapshot=snapshot;});
-   const visible=o.graph.visibleMessages.bind(o.graph);o.graph.visibleMessages=id=>{work.visibleMessages++;return visible(id);};restores.push(()=>{o.graph.visibleMessages=visible;});
+   const visible=o.graph.visibleMessages.bind(o.graph);o.graph.visibleMessages=id=>{work.visibleMessages++;progress();return visible(id);};restores.push(()=>{o.graph.visibleMessages=visible;});
   }
   const samples:number[]=[],count=mode==='work'?1:4;let value:unknown;
   for(let n=0;n<count;n++){const t=performance.now();value=operation==='list'?await core.command('conversation',{name:'list',input:{limit:50,sort:'activity'}}):await core.command('conversation',{name:'collections',input:{}});const elapsed=performance.now()-t;if(mode==='work'||n>0)samples.push(elapsed);assert(process.memoryUsage().rss<=LIMITS.rss,'sampled_rss_admission_exceeded');}
@@ -64,7 +64,7 @@ async function child(){
   assert.equal(Number(o.db.prepare('SELECT total_changes() AS n').get()!.n)-before,0,'read_mutated_sql');assert.equal(work.providerCalls,0);
   receipt.samplesMs=samples;receipt.warmups=mode==='timing'?1:0;receipt.responseBytes=Buffer.byteLength(JSON.stringify(value));receipt.resultDigest=digest(JSON.stringify(value));receipt.passed=true;
  }catch(error){receipt.error=String(error instanceof Error?error.message:error).slice(0,400);}
- finally{restores.reverse().forEach(fn=>fn());progress();if(core)await core.command('close',{});receipt.elapsedMs=performance.now()-start;receipt.rss=process.memoryUsage().rss;process.send?.({terminal:receipt});}
+ finally{restores.reverse().forEach(fn=>fn());progress(true);if(core)await core.command('close',{});receipt.elapsedMs=performance.now()-start;receipt.rss=process.memoryUsage().rss;process.send?.({terminal:receipt});}if(receipt.passed!==true)process.exitCode=1;
 }
 async function main(){
  for(const key of args.keys())assert(['candidate','source','worker','mode','operation','profile','describe'].includes(key),'unknown_argument');
