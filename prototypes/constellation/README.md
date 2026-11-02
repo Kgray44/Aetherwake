@@ -79,3 +79,10 @@ node --experimental-strip-types prototypes/constellation/tests/benchmark.mjs
 On Windows, launch the native harness with `Start-Process -WindowStyle Hidden -PassThru` and wait for its exit to collect its result. The harness uses a nonvisible offscreen compositor and a temporary synthetic SQLite database. It emits five screenshots and `evidence/native-verification.json`. The CPU benchmark emits `evidence/cpu-benchmark.json`; it measures projection/search/culling, **not presented frames or GPU performance**.
 
 See [VERIFICATION.md](VERIFICATION.md) for evidence, requirements, and remaining acceptance boundaries.
+### Body clearance
+
+Planet geometry and spatial layout share one conservative size contract, including rings, atmosphere and maximum selection enlargement. Automatic placement leaves 28 world units between those envelopes and varies siblings' distance and elevation. Clear saved positions and pins remain authoritative; conflicting legacy positions are repaired deterministically with a visible notice. Drag previews stop before fixed neighbors, and arrangements/undo are validated against the current graph.
+
+Perspective can align separated 3D bodies. The renderer reserves an additional screen gap and suppresses an obscured body while retaining semantic destination labels, canonical search and selection. Selecting an obscured destination reveals its body. This presentation does not change its canonical position or ownership.
+
+`node --experimental-strip-types prototypes/constellation/tests/profile-spacing.mjs` is a bounded CPU-only source diagnostic for 50/250/2,000/10,000 resources. It reports projection, packing, refresh and scene-update costs separately; it does not establish native motion, GPU performance or product acceptance. Native verification belongs to the integration host and must be repeated on the actual candidate.

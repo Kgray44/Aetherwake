@@ -475,6 +475,7 @@ export function mountConstellation(
     toggle.setAttribute("aria-expanded", String(!drawer.hidden));
     status.textContent =
       controller.error ||
+      spatial.notice ||
       (controller.pending
         ? "Opening destination…"
         : controller.nodes.size === 0
@@ -539,12 +540,14 @@ export function mountConstellation(
         views.set(n.key, v);
       }
       v.querySelector("strong")!.textContent = n.title;
-      v.querySelector("small")!.textContent = (
-        n.resourceKind ?? n.kind
-      ).replaceAll("_", " ");
+      const obscured =
+        spatialMode && labelMap.get(n.key)?.bodyVisible === false;
+      v.querySelector("small")!.textContent =
+        (n.resourceKind ?? n.kind).replaceAll("_", " ") +
+        (obscured ? " · obscured" : "");
       v.setAttribute(
         "aria-label",
-        `${n.title}, ${n.kind}${n.available ? "" : ", unavailable"}`,
+        `${n.title}, ${n.kind}${n.available ? "" : ", unavailable"}${obscured ? ", body obscured; select to reveal" : ""}`,
       );
       v.setAttribute("aria-pressed", String(controller.selected === n.key));
       v.classList.toggle("aw-selected", controller.selected === n.key);
@@ -679,8 +682,7 @@ export function mountConstellation(
           pointer.key,
         );
       if (p) {
-        pointer.preview = p;
-        spatial.previewMove(pointer.key, p);
+        pointer.preview = spatial.previewMove(pointer.key, p);
         invalidate();
       }
     } else if (layer.enabled) {

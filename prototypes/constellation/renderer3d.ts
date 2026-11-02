@@ -8,6 +8,7 @@ import type {
 } from "./spatial-types.ts";
 import type { Node } from "./types.ts";
 import { createPlanet } from "./planets.ts";
+import { BODY_MAX_SCALE } from "./body-metrics.ts";
 
 export type ProjectedNode = {
   node: Node;
@@ -17,6 +18,7 @@ export type ProjectedNode = {
   radius: number;
   anchorX: number;
   anchorY: number;
+  bodyVisible: boolean;
 };
 /** Field-local CSS-pixel bounds occupied by real foreground controls. */
 export type LabelExclusion = {
@@ -43,9 +45,12 @@ export class ConstellationScene implements SpatialRenderLayer {
   private raycaster = new THREE.Raycaster();
   private candidates: Node[] = [];
   private shown: Node[] = [];
+  private labelNodes: Node[] = [];
   private dataNodes: Map<string, Node> | null = null;
   private edgeData: SpatialEdge[] = [];
   private candidateScope = "";
+  private orderKey = "";
+  private orderedCandidates: Node[] = [];
   private linkKey = "";
   private lost = false;
   private disposed = false;
@@ -60,6 +65,13 @@ export class ConstellationScene implements SpatialRenderLayer {
     edges: 0,
     culled: 0,
     cpuSubmitMs: 0,
+    overlapCulled: 0,
+    projectedBodies: [] as {
+      key: string;
+      x: number;
+      y: number;
+      radius: number;
+    }[],
     meaning:
       "Last active Constellation pass: CPU submission and geometry counts; not presented FPS or GPU timing",
   };
@@ -172,6 +184,7 @@ export class ConstellationScene implements SpatialRenderLayer {
       this.selectedEdge,
       this.controller.policy.tier,
       positionKey,
+      this.navigation.layoutRevision,
     ]);
     if (
       this.dataNodes === this.controller.nodes &&
@@ -183,6 +196,7 @@ export class ConstellationScene implements SpatialRenderLayer {
       this.dataNodes = this.controller.nodes;
       this.edgeData = edges(this.controller);
       this.candidateScope = "";
+      this.orderKey = "";
       this.linkKey = "";
     }
     const scope = JSON.stringify([
@@ -192,6 +206,7 @@ export class ConstellationScene implements SpatialRenderLayer {
     if (this.candidateScope !== scope) {
       this.candidateScope = scope;
       this.candidates = this.navigation.candidateNodes();
+      this.orderKey = "";
     }
     const frustum = new THREE.Frustum().setFromProjectionMatrix(
       new THREE.Matrix4().multiplyMatrices(
@@ -206,49 +221,93 @@ export class ConstellationScene implements SpatialRenderLayer {
           ? 160
           : 280;
     const target = this.navigation.camera.target;
+    // Orbiting changes the frustum, not distance-to-target ordering. Cache that
+    // metadata sort so even a 10k-resource project avoids sorting every frame.
+    const orderKey = JSON.stringify([
+      target.x,
+      target.z,
+      this.controller.selected,
+      this.navigation.layoutRevision,
+    ]);
+    if (orderKey !== this.orderKey) {
+      this.orderKey = orderKey;
+      this.orderedCandidates = this.candidates
+        .map((n) => {
+          const p = this.navigation.position(n.key);
+          return {
+            n,
+            priority:
+              n.key === this.controller.selected
+                ? -1
+                : n.kind === "project"
+                  ? 0
+                  : n.kind === "workspace"
+                    ? 1
+                    : 2,
+            distance: (p.x - target.x) ** 2 + (p.z - target.z) ** 2,
+          };
+        })
+        .sort((a, b) => a.priority - b.priority || a.distance - b.distance)
+        .map(({ n }) => n);
+    }
     const sphere = new THREE.Sphere();
     const resourceRangeSquared = Math.max(1800, pose.distance * 2) ** 2;
-    this.shown = this.candidates
-      .filter((n) => {
-        const p = this.navigation.position(n.key);
-        if (
-          n.kind === "resource" &&
-          n.key !== this.controller.selected &&
-          (p.x - target.x) ** 2 +
-            (p.y - target.y) ** 2 +
-            (p.z - target.z) ** 2 >
-            resourceRangeSquared
-        )
-          return false;
-        sphere.center.set(p.x, p.y, p.z);
-        sphere.radius =
-          n.kind === "project" ? 260 : n.kind === "workspace" ? 100 : 50;
-        return frustum.intersectsSphere(sphere);
-      })
-      .sort((a, b) =>
-        a.key === this.controller.selected
-          ? -1
-          : b.key === this.controller.selected
-            ? 1
-            : a.kind !== b.kind
-              ? a.kind === "project"
-                ? -1
-                : b.kind === "project"
-                  ? 1
-                  : a.kind === "workspace"
-                    ? -1
-                    : 1
-              : Math.hypot(
-                  this.navigation.position(a.key).x - target.x,
-                  this.navigation.position(a.key).z - target.z,
-                ) -
-                Math.hypot(
-                  this.navigation.position(b.key).x - target.x,
-                  this.navigation.position(b.key).z - target.z,
-                ),
+    const ordered = this.orderedCandidates.filter((n) => {
+      const p = this.navigation.position(n.key);
+      if (
+        n.kind === "resource" &&
+        n.key !== this.controller.selected &&
+        (p.x - target.x) ** 2 + (p.y - target.y) ** 2 + (p.z - target.z) ** 2 >
+          resourceRangeSquared
       )
-      .slice(0, max);
+        return false;
+      sphere.center.set(p.x, p.y, p.z);
+      sphere.radius = this.navigation.radius(n.key);
+      return frustum.intersectsSphere(sphere);
+    });
+    // A true 3D scene can align distant objects along one sightline. Keep a
+    // screen gap as well: declutter the farther presentation, never its data.
+    const discs: { key: string; x: number; y: number; radius: number }[] = [],
+      focal = height / (2 * Math.tan((43 * Math.PI) / 360));
+    this.shown = [];
+    this.diagnostics.overlapCulled = 0;
+    for (const n of ordered) {
+      const p = this.navigation.position(n.key),
+        view = new THREE.Vector3(p.x, p.y, p.z).applyMatrix4(
+          this.camera.matrixWorldInverse,
+        ),
+        worldRadius = this.navigation.radius(n.key),
+        at = this.projectPrepared(n.key, width, height),
+        depth = Math.max(1, -view.z),
+        // Perspective also stretches the silhouette away from the optical axis.
+        // This bound contains the entire projected sphere, including tilted rings.
+        radius =
+          (focal *
+            worldRadius *
+            Math.sqrt(1 + (view.x ** 2 + view.y ** 2) / depth ** 2)) /
+          Math.max(1, depth - worldRadius),
+        gap = this.objects.has(n.key) ? 8 : 14;
+      if (
+        discs.some(
+          (d) =>
+            (d.x - at.x) ** 2 + (d.y - at.y) ** 2 <
+            (d.radius + radius + gap) ** 2,
+        )
+      ) {
+        this.diagnostics.overlapCulled++;
+        continue;
+      }
+      discs.push({ key: n.key, x: at.x, y: at.y, radius });
+      this.shown.push(n);
+      if (this.shown.length >= max) break;
+    }
+    this.diagnostics.projectedBodies = discs;
     const visible = new Set(this.shown.map((n) => n.key));
+    // Semantic destinations remain selectable when a sightline hides their body.
+    // Selection promotes that body on the next frame without moving its anchor.
+    this.labelNodes = ordered.filter(
+      (n) => n.kind !== "resource" || visible.has(n.key),
+    );
     for (const [key, root] of this.objects)
       if (!visible.has(key)) {
         this.release(root);
@@ -290,7 +349,9 @@ export class ConstellationScene implements SpatialRenderLayer {
         this.controller.policy.hidden
       )
         this.controller.motion.snap(motionId);
-      root.scale.setScalar(this.controller.motion.pose(motionId).x);
+      root.scale.setScalar(
+        Math.min(BODY_MAX_SCALE, this.controller.motion.pose(motionId).x),
+      );
       const body = root.userData.body as THREE.Mesh<
           THREE.BufferGeometry,
           THREE.ShaderMaterial
@@ -443,7 +504,7 @@ export class ConstellationScene implements SpatialRenderLayer {
           y + halfHeight + 8 > r.top &&
           y - halfHeight - 8 < r.bottom,
       );
-    for (const n of this.shown) {
+    for (const n of this.labelNodes) {
       const p = this.projectPrepared(n.key, width, height);
       if (p.depth < -1 || p.depth > 1) continue;
       const essential =
@@ -496,6 +557,7 @@ export class ConstellationScene implements SpatialRenderLayer {
           y,
           anchorX: p.x,
           anchorY: p.y,
+          bodyVisible: this.objects.has(n.key),
           depth: p.depth,
           radius: n.kind === "project" ? 90 : n.kind === "workspace" ? 55 : 25,
         });
@@ -542,6 +604,7 @@ export class ConstellationScene implements SpatialRenderLayer {
                 y,
                 anchorX: p.x,
                 anchorY: p.y,
+                bodyVisible: this.objects.has(n.key),
                 depth: p.depth,
                 radius: 30,
               });

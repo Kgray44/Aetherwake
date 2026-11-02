@@ -2,12 +2,11 @@ import type { ConstellationController } from "./controller.ts";
 import { keyOf, locationNode } from "./projection.ts";
 import type { Anchor, Node } from "./types.ts";
 import type { SpatialCamera, Vector3 } from "./spatial-types.ts";
+import { hash } from "./identity.ts";
+export { hash } from "./identity.ts";
+import { BODY_GAP, bodyEnvelope } from "./body-metrics.ts";
+import { BodySpace } from "./spacing.ts";
 
-export const hash = (text: string) => {
-  let h = 2166136261;
-  for (const c of text) h = Math.imul(h ^ c.charCodeAt(0), 16777619);
-  return (h >>> 0) / 4294967296;
-};
 const clamp = (x: number, a: number, b: number) => Math.max(a, Math.min(b, x));
 const rounded = (p: Vector3): Vector3 => ({
   x: Math.round(p.x * 1000) / 1000,
@@ -140,9 +139,13 @@ export class SpatialNavigator {
   sensitivity = 1;
   neighborhood: string | undefined;
   manualRevision = 0;
+  layoutRevision = 0;
   private semanticPending = false;
   private undo: { key: string; position: Vector3; pinned: boolean }[][] = [];
   private preview = new Map<string, Vector3>();
+  private space = new BodySpace();
+  private radii = new Map<string, { identity: string; radius: number }>();
+  notice = "";
   readonly controller: ConstellationController;
   private dirty: () => void;
   constructor(controller: ConstellationController, dirty: () => void) {
@@ -197,63 +200,165 @@ export class SpatialNavigator {
       this.preview.get(key) ?? this.controller.state.anchors[key]?.spatial;
     return p ?? { x: n.point.x, y: 0, z: n.point.y };
   }
+  radius(key: string) {
+    const n = this.controller.nodes.get(key);
+    if (!n) throw Error("Object unavailable");
+    const identity = n.kind + ":" + n.id,
+      old = this.radii.get(key);
+    if (old?.identity === identity) return old.radius;
+    const radius = bodyEnvelope(n.id, n.kind);
+    this.radii.set(key, { identity, radius });
+    return radius;
+  }
   updateGraph() {
     const c = this.controller,
       nodes = [...c.nodes.values()];
-    const ordinals = new Map<string, number>(),
-      added = new Set<string>();
     for (const key of this.preview.keys())
       if (!c.nodes.has(key)) this.preview.delete(key);
+    for (const key of this.radii.keys())
+      if (!c.nodes.has(key)) {
+        this.radii.delete(key);
+        this.space.remove(key);
+      }
+    if (
+      nodes.some((n) => {
+        const old = this.space.bodies.get(n.key),
+          p = c.state.anchors[n.key]?.spatial;
+        return (
+          old &&
+          (!validVector(p) ||
+            old.radius !== this.radius(n.key) ||
+            old.point.x !== p.x ||
+            old.point.y !== p.y ||
+            old.point.z !== p.z)
+        );
+      })
+    )
+      this.space.clear();
+    const pending = nodes.filter((n) => !this.space.bodies.has(n.key));
+    if (!pending.length) {
+      if (this.neighborhood && !c.nodes.has(this.neighborhood))
+        this.neighborhood = undefined;
+      return;
+    }
+    // A canonical refresh can add an obstacle while a layout is being previewed.
+    // Cancel that transient presentation before packing the new graph.
+    this.preview.clear();
+    this.layoutRevision++;
+    const oldPositions = new Map(
+      nodes
+        .filter((n) => validVector(c.state.anchors[n.key]?.spatial))
+        .map((n) => [n.key, { ...c.state.anchors[n.key].spatial! }]),
+    );
+    const ordinals = new Map<string, number>(),
+      ranks = new Map<string, number>();
     for (const n of nodes) {
-      const base: Anchor = c.state.anchors[n.key] ?? { ...n.point };
-      if (!validVector(base.spatial)) {
-        added.add(n.key);
-        const h = hash(n.key),
-          parent = n.parent ? c.state.anchors[n.parent]?.spatial : undefined;
-        if (n.kind === "project" || !parent)
-          base.spatial = {
-            x: n.point.x,
-            y: (h - 0.5) * 240,
-            z: n.point.y * 0.8,
-          };
-        else {
-          const i = ordinals.get(n.parent!) ?? 0,
-            angle = h * Math.PI * 2;
-          ordinals.set(n.parent!, i + 1);
-          const radius =
-            n.kind === "workspace" ? 520 : 145 + Math.floor(i / 12) * 70;
-          base.spatial = {
-            x: parent.x + Math.cos(angle) * radius,
-            y: parent.y + (h - 0.5) * (n.kind === "workspace" ? 280 : 190),
-            z: parent.z + Math.sin(angle) * radius,
-          };
-        }
-        base.spatial = rounded(base.spatial);
-        c.state.anchors[n.key] = base;
-      }
+      const parent = n.parent ?? "universe",
+        rank = ordinals.get(parent) ?? 0;
+      ranks.set(n.key, rank);
+      ordinals.set(parent, rank + 1);
     }
-    // Place newly created branch nodes near their real source without moving pins.
-    for (const b of c.snapshot.conversationBranches ?? []) {
-      if (b.visible === false) continue;
-      const source = nodes.find(
-        (n) => n.kind === "resource" && n.id === b.parentResourceId,
-      );
-      if (!source) continue;
-      for (const child of nodes.filter(
-        (n) => n.kind === "resource" && n.id === b.childResourceId,
-      )) {
-        const a = c.state.anchors[child.key];
-        if (a && !a.pinned && added.has(child.key)) {
-          const p = this.position(source.key),
-            h = hash(child.key);
-          a.spatial = rounded({
-            x: p.x + 130,
-            y: p.y + 70,
-            z: p.z + (h - 0.5) * 180,
-          });
+    const byResource = new Map(
+      nodes.filter((n) => n.kind === "resource").map((n) => [n.id, n]),
+    );
+    const branchSources = new Map<string, string>();
+    for (const b of c.snapshot.conversationBranches ?? [])
+      if (
+        b.visible !== false &&
+        byResource.has(b.parentResourceId) &&
+        byResource.has(b.childResourceId)
+      )
+        branchSources.set(
+          b.childResourceId,
+          byResource.get(b.parentResourceId)!.key,
+        );
+    const pinned = pending
+      .filter((n) => c.state.anchors[n.key]?.pinned && oldPositions.has(n.key))
+      .sort((a, b) => a.key.localeCompare(b.key));
+    const pinnedKeys = new Set(pinned.map((n) => n.key)),
+      order = [...pinned, ...pending.filter((n) => !pinnedKeys.has(n.key))];
+    let repaired = 0,
+      pinRepairs = 0;
+    for (const n of order) {
+      const base: Anchor = c.state.anchors[n.key] ?? { ...n.point },
+        old = oldPositions.get(n.key),
+        r = this.radius(n.key),
+        parent = n.parent ? c.state.anchors[n.parent]?.spatial : undefined,
+        h = hash(n.key),
+        rank = ranks.get(n.key) ?? 0;
+      let legacy = false;
+      if (
+        old &&
+        !base.pinned &&
+        n.kind === "project" &&
+        Math.abs(old.x - n.point.x) < 0.01 &&
+        Math.abs(old.z - n.point.y * 0.8) < 0.01 &&
+        Math.abs(old.y - (h - 0.5) * 240) < 0.01
+      )
+        legacy = true;
+      if (old && !base.pinned && n.kind !== "project")
+        for (const parentKey of new Set([
+          n.parent,
+          n.workspaceId ? keyOf("workspace", n.workspaceId) : null,
+        ])) {
+          const p = parentKey ? oldPositions.get(parentKey) : undefined;
+          if (!p) continue;
+          const distance = Math.hypot(old.x - p.x, old.z - p.z),
+            shell = (distance - 145) / 70,
+            oldRadius =
+              n.kind === "workspace" ? 520 : 145 + Math.round(shell) * 70;
+          if (
+            (n.kind === "workspace" || shell >= -0.001) &&
+            Math.abs(old.x - p.x - Math.cos(h * Math.PI * 2) * oldRadius) <
+              0.01 &&
+            Math.abs(old.z - p.z - Math.sin(h * Math.PI * 2) * oldRadius) <
+              0.01 &&
+            Math.abs(
+              old.y - p.y - (h - 0.5) * (n.kind === "workspace" ? 280 : 190),
+            ) < 0.01
+          )
+            legacy = true;
         }
+      let preferred =
+        old && !legacy
+          ? old
+          : { x: n.point.x * 2, y: (h - 0.5) * 240, z: n.point.y * 1.6 };
+      if ((!old || legacy) && parent) {
+        const centerKey = branchSources.get(n.id) ?? n.parent!,
+          center = c.state.anchors[centerKey]?.spatial ?? parent,
+          pr = this.radius(centerKey),
+          distance =
+            pr +
+            r +
+            BODY_GAP +
+            (n.kind === "workspace" ? 160 : 65) +
+            hash("distance:" + n.key) * (n.kind === "workspace" ? 420 : 170) +
+            (Math.cbrt(rank + 1) - 1) * (r * 2 + BODY_GAP) * 1.3,
+          elevation = (hash("elevation:" + n.key) - 0.5) * 1.1,
+          angle = hash("azimuth:" + n.key) * Math.PI * 2,
+          flat = Math.sqrt(1 - elevation * elevation);
+        preferred = {
+          x: center.x + Math.cos(angle) * distance * flat,
+          y: center.y + elevation * distance,
+          z: center.z + Math.sin(angle) * distance * flat,
+        };
       }
+      const point = this.space.find(n.key, preferred, r);
+      if (
+        old &&
+        (point.x !== old.x || point.y !== old.y || point.z !== old.z)
+      ) {
+        repaired++;
+        if (base.pinned) pinRepairs++;
+      }
+      base.spatial = point;
+      c.state.anchors[n.key] = base;
+      this.space.set({ key: n.key, point, radius: r });
     }
+    if (repaired)
+      this.notice = pinRepairs
+        ? "Conflicting saved pins were moved to the nearest clear positions."
+        : "Existing crowded positions were separated with a clear gap.";
     if (this.neighborhood && !c.nodes.has(this.neighborhood))
       this.neighborhood = undefined;
   }
@@ -263,6 +368,7 @@ export class SpatialNavigator {
     let target = n ? this.position(n.key) : { x: 0, y: 0, z: 0 },
       distance =
         l.kind === "project" ? 1450 : l.kind === "universe" ? 2800 : 800;
+    if (l.kind === "project" && n) distance = this.projectDistance(n);
     if (l.kind === "universe") {
       const roots = [...this.controller.nodes.values()].filter(
         (n) => n.parent === null,
@@ -275,7 +381,7 @@ export class SpatialNavigator {
           z: ps.reduce((s, p) => s + p.z, 0) / ps.length,
         };
         distance = Math.max(
-          2200,
+          3300,
           ...ps.map(
             (p) => Math.hypot(p.x - target.x, p.z - target.z) * 1.6 + 900,
           ),
@@ -290,6 +396,20 @@ export class SpatialNavigator {
       mode: this.mode,
       sensitivity: this.sensitivity,
     };
+  }
+  private projectDistance(n: Node) {
+    const target = this.position(n.key);
+    let distance = 1800;
+    for (const child of this.controller.nodes.values())
+      if (child.kind === "workspace" && child.parent === n.key) {
+        const p = this.position(child.key);
+        distance = Math.max(
+          distance,
+          Math.hypot(p.x - target.x, p.y - target.y, p.z - target.z) * 2 +
+            this.radius(child.key),
+        );
+      }
+    return Math.min(3000, distance);
   }
   target(camera: SpatialCamera, cause = "spatial navigation") {
     if (!validSpatialCamera(camera)) throw Error("Invalid spatial camera");
@@ -361,9 +481,19 @@ export class SpatialNavigator {
     }
     if (this.semanticPending || c.pending) return;
     let destination: import("./types.ts").Location | undefined;
-    if (c.location.kind === "project" && p.distance > 3300)
+    if (
+      c.location.kind === "project" &&
+      factor < 1 &&
+      p.distance >
+        Math.max(
+          3300,
+          this.projectDistance(
+            c.nodes.get(keyOf("project", c.location.projectId))!,
+          ) * 1.5,
+        )
+    )
       destination = { kind: "universe" };
-    else if (c.location.kind === "universe" && p.distance < 1900) {
+    else if (c.location.kind === "universe" && factor > 1) {
       const nearest = [...c.nodes.values()]
         .filter((n) => n.kind === "project")
         .sort((a, b) => {
@@ -377,8 +507,9 @@ export class SpatialNavigator {
       if (nearest) {
         const at = this.position(nearest.key);
         if (
+          p.distance < Math.max(1900, this.projectDistance(nearest) * 1.2) &&
           Math.hypot(at.x - p.target.x, at.y - p.target.y, at.z - p.target.z) <
-          900
+            900
         )
           destination = { kind: "project", projectId: nearest.id };
       }
@@ -405,7 +536,11 @@ export class SpatialNavigator {
         ...this.bookmark(),
         target: this.position(key),
         distance:
-          n.kind === "project" ? 1450 : n.kind === "workspace" ? 850 : 550,
+          n.kind === "project"
+            ? this.projectDistance(n)
+            : n.kind === "workspace"
+              ? 850
+              : 550,
       },
       "approach selection",
     );
@@ -426,60 +561,126 @@ export class SpatialNavigator {
     this.neighborhood = undefined;
     this.target(this.defaultCamera(), "recenter spatial view");
   }
-  async place(key: string, position: Vector3, pinned = true) {
-    if (!validVector(position) || !this.controller.nodes.has(key))
-      throw Error("Invalid spatial position");
-    const a = this.controller.state.anchors[key] ?? {
-      ...this.controller.nodes.get(key)!.point,
-    };
-    const before = { ...this.position(key) },
-      changes = [{ key, position: before, pinned: a.pinned === true }];
-    const delta = {
-      x: position.x - before.x,
-      y: position.y - before.y,
-      z: position.z - before.z,
-    };
+  private cluster(key: string) {
     const moved = new Set([key]);
-    // Move a cluster coherently, retaining absolute positions of pinned children.
     for (const n of this.controller.nodes.values())
       if (
         n.parent &&
         moved.has(n.parent) &&
         !this.controller.state.anchors[n.key]?.pinned
-      ) {
-        const p = this.position(n.key);
-        changes.push({ key: n.key, position: { ...p }, pinned: false });
-        this.controller.state.anchors[n.key].spatial = rounded({
-          x: p.x + delta.x,
-          y: p.y + delta.y,
-          z: p.z + delta.z,
-        });
+      )
         moved.add(n.key);
-      }
+    return [...moved].map((key) => ({
+      key,
+      point: { ...this.controller.state.anchors[key].spatial! },
+      radius: this.radius(key),
+    }));
+  }
+  private clearPlan(targets: Map<string, Vector3>) {
+    const test = new BodySpace();
+    for (const entry of this.space.bodies.values())
+      if (!targets.has(entry.key)) test.set(entry);
+    for (const [key, point] of targets) {
+      if (!test.free(key, point, this.radius(key))) return false;
+      test.set({ key, point, radius: this.radius(key) });
+    }
+    return true;
+  }
+  async place(key: string, position: Vector3, pinned = true) {
+    if (!validVector(position) || !this.controller.nodes.has(key))
+      throw Error("Invalid spatial position");
+    const moving = this.cluster(key),
+      before = moving[0].point;
+    const delta = {
+      x: position.x - before.x,
+      y: position.y - before.y,
+      z: position.z - before.z,
+    };
+    const requested = new Map(
+      moving.map((b) => [
+        b.key,
+        rounded({
+          x: b.point.x + delta.x,
+          y: b.point.y + delta.y,
+          z: b.point.z + delta.z,
+        }),
+      ]),
+    );
+    const fraction = this.clearPlan(requested)
+        ? 1
+        : this.space.fraction(moving, delta),
+      changes = moving.map((b) => ({
+        key: b.key,
+        position: b.point,
+        pinned: this.controller.state.anchors[b.key].pinned === true,
+      }));
+    for (const body of moving) {
+      const point = rounded({
+        x: body.point.x + delta.x * fraction,
+        y: body.point.y + delta.y * fraction,
+        z: body.point.z + delta.z * fraction,
+      });
+      this.controller.state.anchors[body.key].spatial = point;
+      this.space.set({ key: body.key, point, radius: body.radius });
+    }
     this.undo.push(changes);
     this.undo = this.undo.slice(-32);
-    a.spatial = rounded(position);
-    a.pinned = pinned;
-    this.controller.state.anchors[key] = a;
+    this.controller.state.anchors[key].pinned = pinned;
+    this.layoutRevision++;
+    this.notice =
+      fraction < 0.99999
+        ? "Movement stopped with a clear gap from neighboring bodies."
+        : "";
     this.dirty();
     await this.controller.persist();
+    return this.controller.state.anchors[key].spatial!;
   }
   async undoPosition() {
-    const changes = this.undo.pop();
+    const changes = this.undo.at(-1);
     if (!changes) return;
+    const targets = new Map(
+      changes
+        .filter((u) => this.controller.nodes.has(u.key))
+        .map((u) => [u.key, u.position]),
+    );
+    if (!this.clearPlan(targets)) {
+      this.controller.error =
+        "The previous position is now occupied. Move the newer body first.";
+      this.dirty();
+      return;
+    }
+    this.undo.pop();
+    this.layoutRevision++;
     for (const u of changes)
-      if (this.controller.nodes.has(u.key))
+      if (this.controller.nodes.has(u.key)) {
         Object.assign(this.controller.state.anchors[u.key], {
           spatial: u.position,
           pinned: u.pinned,
         });
+        this.space.set({
+          key: u.key,
+          point: u.position,
+          radius: this.radius(u.key),
+        });
+      }
     this.dirty();
     await this.controller.persist();
   }
   previewLayout(strategy: "radial" | "hierarchical") {
+    this.layoutRevision++;
     this.preview.clear();
-    const nodes = this.candidateNodes(),
-      center = this.defaultCamera().target,
+    let nodes = this.candidateNodes();
+    if (this.controller.location.kind === "universe") {
+      const keys = new Set(
+        nodes
+          .filter((n) => !this.controller.state.anchors[n.key]?.pinned)
+          .flatMap((n) => this.cluster(n.key).map((b) => b.key)),
+      );
+      nodes = [...this.controller.nodes.values()].filter(
+        (n) => keys.has(n.key) || this.controller.state.anchors[n.key]?.pinned,
+      );
+    }
+    const center = this.defaultCamera().target,
       groups = new Map<string, Node[]>();
     for (const n of nodes) {
       const key = n.parent ?? "universe";
@@ -487,6 +688,19 @@ export class SpatialNavigator {
       list.push(n);
       groups.set(key, list);
     }
+    const movable = new Set(
+        nodes
+          .filter(
+            (n) =>
+              !this.controller.state.anchors[n.key]?.pinned &&
+              (n.kind !== "project" ||
+                this.controller.location.kind === "universe"),
+          )
+          .map((n) => n.key),
+      ),
+      test = new BodySpace();
+    for (const entry of this.space.bodies.values())
+      if (!movable.has(entry.key)) test.set(entry);
     for (const [parent, group] of groups)
       for (const [i, n] of group.entries()) {
         if (
@@ -495,57 +709,85 @@ export class SpatialNavigator {
         )
           continue;
         const p = parent === "universe" ? center : this.position(parent),
-          a = (i * Math.PI * 2) / group.length,
-          r = n.kind === "resource" ? 190 + Math.floor(i / 16) * 65 : 650;
-        this.preview.set(
+          a =
+            (i * Math.PI * 2) / group.length +
+            hash("arrange-angle:" + n.key) * 0.35,
+          radius = this.radius(n.key),
+          parentRadius = parent === "universe" ? 0 : this.radius(parent),
+          r =
+            parentRadius +
+            radius +
+            BODY_GAP +
+            100 +
+            hash("arrange-distance:" + n.key) * 240 +
+            Math.cbrt(i + 1) * (radius * 2 + BODY_GAP),
+          spacing = radius * 2 + BODY_GAP + 100;
+        const point = test.find(
           n.key,
-          rounded(
-            strategy === "radial"
-              ? {
-                  x: p.x + Math.cos(a) * r,
-                  y: p.y + Math.sin(a * 2) * 80,
-                  z: p.z + Math.sin(a) * r,
-                }
-              : {
-                  x: p.x + ((i % 5) - 2) * (n.kind === "resource" ? 125 : 450),
-                  y: p.y - Math.floor(i / 5) * 75,
-                  z: p.z + 200 + Math.floor(i / 5) * 130,
-                },
-          ),
+          strategy === "radial"
+            ? {
+                x: p.x + Math.cos(a) * r,
+                y: p.y + Math.sin(a * 2) * 80,
+                z: p.z + Math.sin(a) * r,
+              }
+            : {
+                x: p.x + ((i % 5) - 2) * spacing,
+                y: p.y - Math.floor(i / 5) * spacing * 0.4,
+                z:
+                  p.z +
+                  parentRadius +
+                  radius +
+                  BODY_GAP +
+                  100 +
+                  Math.floor(i / 5) * spacing * 1.3 +
+                  hash("arrange-depth:" + n.key) * 130,
+              },
+          radius,
         );
+        this.preview.set(n.key, point);
+        test.set({ key: n.key, point, radius });
       }
     this.dirty();
     return this.preview.size;
   }
   cancelLayout() {
+    if (this.preview.size) this.layoutRevision++;
     this.preview.clear();
     this.dirty();
   }
   previewMove(key: string, position: Vector3) {
     if (!validVector(position) || !this.controller.nodes.has(key)) return;
     this.preview.clear();
-    const a = this.controller.state.anchors[key].spatial!,
+    this.layoutRevision++;
+    const moving = this.cluster(key),
+      a = moving[0].point,
       delta = { x: position.x - a.x, y: position.y - a.y, z: position.z - a.z },
-      moved = new Set([key]);
-    this.preview.set(key, position);
-    for (const n of this.controller.nodes.values())
-      if (
-        n.parent &&
-        moved.has(n.parent) &&
-        !this.controller.state.anchors[n.key]?.pinned
-      ) {
-        const p = this.controller.state.anchors[n.key].spatial!;
-        this.preview.set(n.key, {
-          x: p.x + delta.x,
-          y: p.y + delta.y,
-          z: p.z + delta.z,
-        });
-        moved.add(n.key);
-      }
+      fraction = this.space.fraction(moving, delta);
+    for (const body of moving)
+      this.preview.set(
+        body.key,
+        rounded({
+          x: body.point.x + delta.x * fraction,
+          y: body.point.y + delta.y * fraction,
+          z: body.point.z + delta.z * fraction,
+        }),
+      );
+    this.notice =
+      fraction < 0.99999
+        ? "Movement stopped with a clear gap from neighboring bodies."
+        : "";
     this.dirty();
+    return this.preview.get(key);
   }
   async applyLayout() {
+    if (!this.clearPlan(this.preview)) {
+      this.controller.error =
+        "The layout changed during preview. Preview the arrangement again.";
+      this.dirty();
+      throw Error(this.controller.error);
+    }
     const changes = [];
+    this.layoutRevision++;
     for (const [key, p] of this.preview)
       if (
         this.controller.nodes.has(key) &&
@@ -558,6 +800,7 @@ export class SpatialNavigator {
           pinned: a.pinned === true,
         });
         a.spatial = p;
+        this.space.set({ key, point: p, radius: this.radius(key) });
       }
     if (changes.length) {
       this.undo.push(changes);
