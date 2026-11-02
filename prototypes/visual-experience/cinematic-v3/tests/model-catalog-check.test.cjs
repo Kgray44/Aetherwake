@@ -86,8 +86,16 @@ test("safe catalog projection rejects raw fields, unknown codes, getters and fal
     safeStatus({ ...base, modelCatalog: catalog }).modelCatalog,
     catalog,
   );
+  assert.equal(
+    safeStatus({
+      ...base,
+      modelCatalog: { ...catalog, failureCode: "response_capacity_exceeded" },
+    }).modelCatalog.failureCode,
+    "response_capacity_exceeded",
+  );
   for (const invalid of [
     { ...catalog, token: "SYNTHETIC_SECRET" },
+    { ...catalog, failureCode: "SYNTHETIC_SECRET" },
     {
       ...catalog,
       diagnostic: { ...catalog.diagnostic, body: "SYNTHETIC_SECRET" },

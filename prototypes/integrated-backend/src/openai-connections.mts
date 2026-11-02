@@ -107,6 +107,9 @@ const safeCodes = new Set([
   "refresh_token_reused",
   "model_catalog_unavailable",
   "invalid_model_catalog",
+  "response_capacity_exceeded",
+  "invalid_json_response",
+  "response_body_unavailable",
   "ambiguous_model_catalog",
   "credential_boundary_mismatch",
   "credential_expired",
@@ -173,6 +176,10 @@ export class OpenAIConnections {
     version: number;
     state: "ready" | "unavailable";
     diagnostic: ModelCatalogDiagnostic;
+    failureCode?:
+      | "response_capacity_exceeded"
+      | "invalid_json_response"
+      | "response_body_unavailable";
   } | null = null;
   private pending: Flight | null = null;
   private mutation: Operation | null = null;
@@ -476,6 +483,9 @@ export class OpenAIConnections {
               modelCatalog: {
                 state: this.catalogObservation.state,
                 diagnostic: structuredClone(this.catalogObservation.diagnostic),
+                ...(this.catalogObservation.failureCode
+                  ? { failureCode: this.catalogObservation.failureCode }
+                  : {}),
               },
             }
           : {}),
@@ -694,6 +704,16 @@ export class OpenAIConnections {
     if (this.catalogObservation?.version === expectedVersion)
       this.catalogObservation.state = "ready";
   }
+  private rejectCatalogObservation(expectedVersion: number, error: unknown) {
+    const failureCode = code(error);
+    if (
+      this.catalogObservation?.version === expectedVersion &&
+      (failureCode === "response_capacity_exceeded" ||
+        failureCode === "invalid_json_response" ||
+        failureCode === "response_body_unavailable")
+    )
+      this.catalogObservation.failureCode = failureCode;
+  }
   async modelCatalog(expectedVersion: number): Promise<PlanModelCatalog> {
     check(
       Number.isSafeInteger(expectedVersion) && expectedVersion >= 1,
@@ -701,28 +721,33 @@ export class OpenAIConnections {
     );
     return this.mutate(async (runtime) => {
       this.catalogObservation = null;
-      const result = await runtime.models({
-        providerId: "chatgpt-plan-responses",
-        configurationId: CHATGPT_PLAN_REGISTRATION,
-        resolveCredential: () =>
-          runtime.manager.resolvePlanCredential(
-            CHATGPT_PLAN_REGISTRATION,
-            expectedVersion,
-          ),
-        fetch: (input, init) => this.nativeFetch(input, init),
-        now: this.options.now,
-        onDiagnostic: (diagnostic) => {
-          if (
-            !this.closed &&
-            !this.operation.getStore()?.controller.signal.aborted
-          )
-            this.catalogObservation = {
-              version: expectedVersion,
-              state: "unavailable",
-              diagnostic: structuredClone(diagnostic),
-            };
-        },
-      });
+      const result = await runtime
+        .models({
+          providerId: "chatgpt-plan-responses",
+          configurationId: CHATGPT_PLAN_REGISTRATION,
+          resolveCredential: () =>
+            runtime.manager.resolvePlanCredential(
+              CHATGPT_PLAN_REGISTRATION,
+              expectedVersion,
+            ),
+          fetch: (input, init) => this.nativeFetch(input, init),
+          now: this.options.now,
+          onDiagnostic: (diagnostic) => {
+            if (
+              !this.closed &&
+              !this.operation.getStore()?.controller.signal.aborted
+            )
+              this.catalogObservation = {
+                version: expectedVersion,
+                state: "unavailable",
+                diagnostic: structuredClone(diagnostic),
+              };
+          },
+        })
+        .catch((error: unknown) => {
+          this.rejectCatalogObservation(expectedVersion, error);
+          throw error;
+        });
       this.assert();
       await this.revalidateCredential(expectedVersion, result.boundaryDigest);
       if (result.models.length > 0)

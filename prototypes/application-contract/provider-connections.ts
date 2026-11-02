@@ -28,6 +28,10 @@ export interface ProviderConnectionStatus {
   modelCatalog?: {
     state: "ready" | "unavailable";
     diagnostic: ModelCatalogDiagnostic;
+    failureCode?:
+      | "response_capacity_exceeded"
+      | "invalid_json_response"
+      | "response_body_unavailable";
   };
 }
 export type ProviderConnectionRequest = {

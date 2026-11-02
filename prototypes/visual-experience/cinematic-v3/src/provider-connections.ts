@@ -96,7 +96,9 @@ export function mountProviderConnections(
 
   const modelsReady = () => current?.state === "ready" &&
     current.planUsageEnabled === true && current.modelCatalog?.state === "ready" && !catalogRecoveryUnconfirmed;
-  const modelFailureLabel = () => current?.modelCatalog?.diagnostic.httpStatus === 403
+  const modelFailureLabel = () => current?.modelCatalog?.failureCode === "response_capacity_exceeded"
+    ? "Signed in. The model catalog exceeds this build’s size limit."
+    : current?.modelCatalog?.diagnostic.httpStatus === 403
     ? "Signed in. Model discovery was not permitted."
     : current?.modelCatalog?.diagnostic.outcome === "invalid-catalog"
       ? "Signed in. Model discovery returned an unsupported response."

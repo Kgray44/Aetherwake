@@ -57,7 +57,18 @@ function safeCatalog(value) {
   const count = (n) =>
     n === null || (Number.isSafeInteger(n) && n >= 0 && n <= 2048);
   if (
-    !exact(value, ["state", "diagnostic"]) ||
+    !(
+      exact(value, ["state", "diagnostic"]) ||
+      exact(value, ["state", "diagnostic", "failureCode"])
+    ) ||
+    !(
+      value.failureCode === undefined ||
+      [
+        "response_capacity_exceeded",
+        "invalid_json_response",
+        "response_body_unavailable",
+      ].includes(value.failureCode)
+    ) ||
     !["ready", "unavailable"].includes(value.state) ||
     !exact(diagnostic, keys) ||
     diagnostic.contract !== "aerynth.model-catalog-diagnostic@1" ||
@@ -98,6 +109,7 @@ function safeCatalog(value) {
   return {
     state: value.state,
     diagnostic: Object.fromEntries(keys.map((key) => [key, diagnostic[key]])),
+    ...(value.failureCode ? { failureCode: value.failureCode } : {}),
   };
 }
 

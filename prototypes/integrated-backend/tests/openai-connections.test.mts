@@ -583,6 +583,28 @@ test("model discovery failure preserves ready identity and publishes only versio
     await f.close();
   }
 });
+test("catalog byte-limit failure is safely distinguished from authorization and raw response data", async () => {
+  const f = fixture();
+  try {
+    await f.connect();
+    f.setModelResponse(() => new Response("x".repeat(262145)));
+    await assert.rejects(
+      f.coordinator.modelCatalog(2),
+      /response_capacity_exceeded/,
+    );
+    const status = await f.coordinator.status();
+    assert.equal(status.state, "ready");
+    assert.equal(
+      status.modelCatalog?.failureCode,
+      "response_capacity_exceeded",
+    );
+    assert.equal(status.modelCatalog?.diagnostic.httpStatus, 200);
+    assertSafe(status);
+  } finally {
+    await f.close();
+  }
+});
+
 test("future/partial schema and wrong same-db transaction fail without reset or source writes", async () => {
   const f = fixture();
   try {
