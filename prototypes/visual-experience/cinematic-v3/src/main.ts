@@ -1165,7 +1165,10 @@ function renderDOM() {
       p.y > innerHeight - 100;
     const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateZ(${p.rotation}deg) rotateY(${p.yaw}deg);z-index:${compositing.rank + 3};border-radius:${surfaceBorderRadius(p.shape, p.w, p.h, unfold)};clip-path:inset(0 round ${surfaceBorderRadius(p.shape, p.w, p.h, unfold)});--resource-content-clip:${compositing.clipPath || "none"};`;
     if (poseStyleCache.get(id) !== style) {
+      // Placement typography belongs to configuration, not the animated pose.
+      const textScale = el.style.getPropertyValue("--aw-block-text-scale");
       el.style.cssText = style;
+      if (textScale) el.style.setProperty("--aw-block-text-scale", textScale);
       poseStyleCache.set(id, style);
     }
   }
