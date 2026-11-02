@@ -601,8 +601,8 @@ export function installApplication(hooks: Hooks) {
   }
   async function flushDrafts() {
     await conversationDisposing;
-    await conversationManager?.flush();
     for (;;) {
+      await conversationManager?.flush();
       const ids = new Set([
         ...drafts.keys(),
         ...[...noteSessions]

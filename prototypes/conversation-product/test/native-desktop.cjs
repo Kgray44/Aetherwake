@@ -95,7 +95,15 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
       return selector;
     };
     const key = (keyCode,modifiers=[]) => {for(const type of ['keyDown','keyUp'])win.webContents.sendInputEvent({type,keyCode,modifiers});};
-    const type = async (selector,value) => {await click(selector);key('A',['control']);await win.webContents.insertText(String(value));receipt.actions.push({type:'native-keyboard-select-and-insert',selector,characters:String(value).length});await pause(100);};
+    const type = async (selector,value) => {
+      await click(selector);
+      await wait(`document.activeElement===document.querySelector(${JSON.stringify(selector)})`);
+      key('A',['control']);
+      await wait(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});return document.activeElement===e&&e.selectionStart===0&&e.selectionEnd===e.value.length})()`);
+      await win.webContents.insertText(String(value));
+      await wait(`document.querySelector(${JSON.stringify(selector)}).value===${JSON.stringify(String(value))}`);
+      receipt.actions.push({type:'native-keyboard-select-and-insert',selector,characters:String(value).length});
+    };
     const choose = async (selector,value) => {
       const index=await js(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});return [...e.options].findIndex(o=>o.value===${JSON.stringify(value)}&&!o.disabled)})()`);assert(index>=0,'Unavailable option '+value);await click(selector);key('Home');for(let i=0;i<index;i++)key('Down');key('Return');await pause(140);assert.equal(await js(`document.querySelector(${JSON.stringify(selector)}).value`),value,'Native select applied');
     };
