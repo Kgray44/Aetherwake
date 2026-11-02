@@ -8,6 +8,13 @@ const { compileExpression } = require('./library-native-expressions.cjs');
 const { expressions: x, preflight, panel } = require('./workspace-resource-links-expressions.cjs');
 const q = JSON.stringify, digest = value => createHash('sha256').update(value).digest('hex');
 exports.preflight = preflight;
+/** SUMMARY's native Enter activation consumes the character/keypress phase.
+ * Keep this complete gesture separate from native SELECT popup key handling. */
+exports.activateDisclosure = guard => {
+  const events = [{ type: 'keyDown', keyCode: 'Enter', modifiers: [] }, { type: 'char', keyCode: '\r', modifiers: [] }, { type: 'keyUp', keyCode: 'Enter', modifiers: [] }];
+  for (const event of events) guard.input(event);
+  return events;
+};
 exports.workspace = s => ({ blocks: s.blocks, viewport: s.viewport, organization: s.organization, presence: s.presence });
 exports.canonical = s => ({ projects: s.projects, workspaces: s.workspaces, resources: s.resources });
 exports.edges = edges => [...edges].sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
@@ -85,7 +92,8 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
     };
     const add = async typeName => {
       const disclosure = panel + ' .aw-resource-links-create-toggle', summary = disclosure + ' > summary';
-      await js(x.rememberNode(search)); key('Tab'); await wait(x.focused(summary)); key('Enter'); await wait(x.exists(disclosure + '[open]'));
+      await js(x.rememberNode(search)); key('Tab'); await wait(x.focused(summary));
+      receipt.actions.push({ action: 'native disclosure Enter', selector: summary, events: exports.activateDisclosure(guard) }); await wait(x.exists(disclosure + '[open]'));
       key('Tab'); await wait(x.focused(target)); key('Tab', ['shift']); await wait(x.focused(summary)); key('Tab', ['shift']); await wait(x.focused(search));
       await type(search, fixture.task.title); assert.equal(await js(x.sameNode(search)), true, 'Search render retains the focused search node'); assert.equal(await js(x.focused(search)), true);
       await select(target, fixture.task.resourceId); await select(kind, typeName); await button(panel + ' form', 'Add link'); await wait(x.edgeExists(fixture.note.resourceId, fixture.task.resourceId, typeName)); await wait(x.relatedReady(fixture.note.resourceId));

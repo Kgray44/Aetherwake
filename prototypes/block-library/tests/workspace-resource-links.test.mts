@@ -21,6 +21,16 @@ test('Related native expressions exhaust all user link kinds and inherited branc
   assert.match(source, /driver\.js\(compileExpression\(code\)\)/);
 });
 
+test('disclosure Enter includes guarded native carriage-return char between key down/up and stops on guard rejection', () => {
+  const events: object[] = [];
+  const sequence = helper.activateDisclosure({ input(event: object) { events.push(event); } });
+  assert.deepEqual(events, [{ type: 'keyDown', keyCode: 'Enter', modifiers: [] }, { type: 'char', keyCode: '\r', modifiers: [] }, { type: 'keyUp', keyCode: 'Enter', modifiers: [] }]);
+  assert.deepEqual(sequence, events);
+  const interrupted: object[] = [];
+  assert.throws(() => helper.activateDisclosure({ input(event: object) { if (interrupted.length === 1) throw Error('native owner lost'); interrupted.push(event); } }), /native owner lost/);
+  assert.equal(interrupted.length, 1, 'No character/up event bypasses the per-event owner guard');
+});
+
 test('Related readiness requires exact canonical source identity and settled busy state; edge observations retain exact direction/type/provenance', () => {
   const panel = { dataset: { resourceId: 'source' }, getAttribute: () => 'true' }, state = { relationships: [{ id: 'real-edge', source_id: 'source', target_id: 'task', kind: 'references', provenance: 'user' }] };
   const context = { document: { querySelector: () => panel }, window: { __aerynth: { application: () => state } } };
