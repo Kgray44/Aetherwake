@@ -31,3 +31,5 @@ The parent may run the separate `tests/radial-handles-dom.cjs` runner from the c
 ```
 
 The runner is capped at 30 seconds and 64 MiB estimated source/output allocation. It builds only the component fixture, disables hardware acceleration, creates a hidden sandboxed 1200 × 900 window, denies external networking and permissions, performs no native input and opens no backend or provider. It writes a bounded source-hashed receipt under `.runtime/radial-handles/` and exits its own process. The worker has source-bundled and syntax-checked this fixture; its actual browser result must be recorded by the parent. This fixture establishes DOM clipping/hit testing, not a GPU/native/motion or artistic result.
+
+The fixture uses finite synchronous layout reads, with no animation-frame or timer dependency in the hidden page. The runner records stage checkpoints after reserve admission, uses one 27-second deadline across build/load/hit testing, and retains a bounded failure receipt plus a short last-fixture progress probe before its 30-second hard exit. A deadline failure never counts as a successful DOM check.

@@ -13,7 +13,8 @@ export async function run() {
   const checks = [];
   let handlePoints = 0,
     contentPoints = 0;
-  const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+  // Hidden pages need not schedule frames or timers. This finite fixture uses
+  // synchronous layout reads/hit testing, with no paint/scheduling claim.
   for (const shape of [
     "rectangle",
     "rounded",
@@ -29,6 +30,16 @@ export async function run() {
       [900, 640],
     ])
       for (const unfold of [0, 0.4, 1]) {
+        globalThis.__radialProgress = {
+          stage: "fixture",
+          shape,
+          width,
+          height,
+          unfold,
+          completed: checks.length,
+          handlePoints,
+          contentPoints,
+        };
         const article = document.createElement("article"),
           presentation = document.createElement("div"),
           inner = document.createElement("div"),
@@ -72,7 +83,6 @@ export async function run() {
         const failures = [];
         for (const edge of edges.children) {
           edge.scrollIntoView({ block: "center", inline: "center" });
-          await frame();
           const r = edge.getBoundingClientRect(),
             x = Math.round(r.x + r.width / 2),
             y = Math.round(r.y + r.height / 2),
@@ -100,7 +110,6 @@ export async function run() {
               [r.left + 2, r.bottom - 2],
             ]) {
               window.scrollBy(cx - innerWidth / 2, cy - innerHeight / 2);
-              await frame();
               const moved = editor.getBoundingClientRect(),
                 x = cx - r.left + moved.left,
                 y = cy - r.top + moved.top,
@@ -126,6 +135,12 @@ export async function run() {
         article.remove();
       }
   base.remove();
+  globalThis.__radialProgress = {
+    stage: "complete",
+    completed: checks.length,
+    handlePoints,
+    contentPoints,
+  };
   return {
     contract: "aerynth.curved-card-dom@1",
     checks,
