@@ -807,6 +807,7 @@ export function installApplication(hooks: Hooks) {
     }
     if (!velaPanel)
       velaPanel = mountVelaPanel(velaContent, velaClient, {
+        onConnectProvider: () => host.command!("capabilities", {}),
         onOpenSubject: (subject) => {
           surfaces.close("vela");
           if (subject.kind === "workspace") {

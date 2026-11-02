@@ -72,3 +72,24 @@ test('consent includes actual project/workspace/owner metadata before binding an
   const after=await f.core.command('desktop',{type:'snapshot'});assert.equal(after.workspaces.find(w=>w.id===after.activeWorkspaceId)!.project_id,project.id);assert.equal(after.blocks[0].resource_id,created.result.resourceId);
  }finally{await f.close();}
 });
+
+
+test('subject metadata RPC reads canonical objects without advertising an unmounted renderer or fabricating resource IDs',async()=>{
+ const f=fixture();try{
+  const project=(await f.core.command('desktop',{type:'createProject',title:'Actual overview project'})).projects[0];
+  const desktop=await f.core.command('desktop',{type:'createWorkspace',title:'Actual overview workspace',projectId:project.id}),workspace=desktop.workspaces[0];
+  const note=(await library(f.core,'createBlock',{commandId:randomUUID(),workspaceId:workspace.id,expectedLayoutVersion:desktop.layoutVersion,kind:'note',title:'Canonical browser note'})).result;
+  const before=await f.core.command('desktop',{type:'snapshot'}),targets=(await library(f.core,'subjectTargets',workspace.id)).result;
+  assert.ok(targets.projects.some((p:any)=>p.id===project.id&&p.title===project.title));
+  const overview=(await library(f.core,'projectOverview',project.id)).result;
+  assert.equal(overview.project.id,project.id);assert.ok(overview.workspaces.some((w:any)=>w.id===workspace.id));assert.equal(overview.resourcesByKind.note,1);
+  const page=(await library(f.core,'browseResources',{subject:{kind:'project',projectId:project.id},query:'Canonical browser note'})).result;
+  assert.deepEqual(page.resources.map((r:any)=>r.id),[note.resourceId]);
+  const capabilities=(await library(f.core,'capabilities')).result;
+  assert.equal(capabilities.subjects,undefined,'Subject views stay unavailable until their actual renderer is integrated');
+  await assert.rejects(library(f.core,'createSubjectBlock',{commandId:randomUUID(),workspaceId:workspace.id,expectedLayoutVersion:before.layoutVersion,kind:'project_overview',subject:{kind:'project',projectId:project.id}}));
+  assert.deepEqual((await f.core.command('desktop',{type:'snapshot'})).resources.map(r=>r.id),before.resources.map(r=>r.id));
+  await f.core.command('desktop',{type:'archiveSubject',kind:'project',id:project.id,expectedVersion:project.version,archived:true});
+  await assert.rejects(library(f.core,'projectOverview',project.id));
+ }finally{await f.close();}
+});

@@ -41,6 +41,7 @@ lines.on("line", async (line) => {
         "conversationSend",
         "vela",
         "library",
+        "notes",
         "velaRequestPreview",
         "authorizeVelaRequest",
         "authorizeVelaDelegation",

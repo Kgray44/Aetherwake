@@ -36,7 +36,7 @@ function bridge() {
 }
 test("desktop preload admits only public product families through the native command channel", async () => {
   const { host, calls } = bridge();
-  for (const name of ["conversation", "vela", "library"]) {
+  for (const name of ["conversation", "vela", "library", "notes"]) {
     assert.equal(
       await host.command(name, { name: "state", input: {} }),
       "canonical-result",
@@ -48,6 +48,7 @@ test("desktop preload admits only public product families through the native com
       ["application-command", "conversation"],
       ["application-command", "vela"],
       ["application-command", "library"],
+      ["application-command", "notes"],
     ],
   );
   assert.equal(Object.isFrozen(host), true);

@@ -46,3 +46,7 @@ The typed optional `VelaHostPort.contextReferences(selectedResourceIds)` hook no
 Backend state exposes authorized `applicationContext` metadata for native controls. The Vela panel's explicit workspace-project selector defaults to the current project until the user chooses; a user's choice survives refresh. A previously selected project outside current scope remains visibly unavailable and disables creation. Reviewed `projectId:null` is still never rewritten.
 
 Context follow-up verification: **13/13** focused library/Vela backend tests passed, **34/34** Vela module tests passed, and the Vela module TypeScript check passed with zero diagnostics. The new integration regression submits a clearly synthetic planning-port proposal using the supplied canonical project ID, then applies it through the actual released library and verifies the resulting project/placements. This is not real model qualification or native panel visual acceptance.
+
+## Subject view integration seam
+
+The explicit public family additionally supports `subjectTargets(workspaceId)`, `createSubjectBlock(input)`, `projectOverview(projectId)` and `browseResources(input)`, with the released typed DTOs. Reads apply the existing canonical subject grants. Subject creation returns the exact released receipt and canonical desktop snapshot. The browser transport exposes these methods; subject capabilities remain absent until the actual typed subject renderer is integrated. Metadata reads never create substitute resource IDs.

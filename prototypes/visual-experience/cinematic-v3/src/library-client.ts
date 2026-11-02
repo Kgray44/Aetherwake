@@ -1,6 +1,7 @@
 import type {
   BlockLibraryHostPort,
   WorkspaceTemplatePort,
+  SubjectExperiencePort,
 } from "../../../block-library/contracts.ts";
 import type { DesktopSnapshot } from "../../../application-contract/contracts.ts";
 
@@ -8,7 +9,7 @@ import type { DesktopSnapshot } from "../../../application-contract/contracts.ts
 export function createLibraryClient(options: {
   command(name: string, input: unknown): Promise<unknown>;
   apply(snapshot: DesktopSnapshot): void;
-}): BlockLibraryHostPort & WorkspaceTemplatePort {
+}): BlockLibraryHostPort & WorkspaceTemplatePort & SubjectExperiencePort {
   const invoke = async <T>(name: string, input: unknown = {}): Promise<T> => {
     const response = (await options.command("library", { name, input })) as {
       result: T;
@@ -26,6 +27,10 @@ export function createLibraryClient(options: {
     findResources: (input) => invoke("findResources", input),
     attachBlock: (input) => invoke("attachBlock", input),
     createBlock: (input) => invoke("createBlock", input),
+    subjectTargets: (input) => invoke("subjectTargets", input),
+    createSubjectBlock: (input) => invoke("createSubjectBlock", input),
+    projectOverview: (input) => invoke("projectOverview", input),
+    browseResources: (input) => invoke("browseResources", input),
     listTemplates: (input) => invoke("listTemplates", input),
     getTemplate: (input) => invoke("getTemplate", input),
     saveTemplate: (input) => invoke("saveTemplate", input),

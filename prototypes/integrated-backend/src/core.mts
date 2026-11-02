@@ -201,7 +201,7 @@ export class BackendCore {
   }
   private async libraryCommand(operation:LibraryRequest):Promise<LibraryResponse> {
     const input:any=operation?.input;
-    const mutation=['setFavorite','configureBlock','attachBlock','createBlock','saveTemplate','renameTemplate','archiveTemplate','applyTemplate','workspaceFromResources'].includes(operation?.name);
+    const mutation=['setFavorite','configureBlock','attachBlock','createBlock','saveTemplate','renameTemplate','archiveTemplate','applyTemplate','workspaceFromResources','createSubjectBlock'].includes(operation?.name);
     const execute=()=>{switch(operation?.name){
       case 'capabilities':return this.library.capabilities();case 'preferences':return this.library.preferences();case 'setFavorite':return this.library.setFavorite(input);
       case 'getBlockSettings':return this.library.getBlockSettings(input);case 'configureBlock':return this.library.configureBlock(input);case 'findResources':return this.library.findResources(input);
@@ -209,9 +209,10 @@ export class BackendCore {
       case 'saveTemplate':ensure(input.source!=='vela'&&input.provenance===undefined,'native_template_provenance_required');return this.library.saveTemplate(input);
       case 'renameTemplate':return this.library.renameTemplate(input);case 'archiveTemplate':return this.library.archiveTemplate(input);case 'previewTemplate':return this.library.previewTemplate(input);case 'applyTemplate':return this.library.applyTemplate(input);
       case 'previewWorkspaceFromResources':return this.library.previewWorkspaceFromResources(input);case 'workspaceFromResources':return this.library.workspaceFromResources(input);case 'requestVelaTemplate':return this.library.requestVelaTemplate(input);
+      case 'subjectTargets':return this.library.subjectTargets(input);case 'createSubjectBlock':return this.library.createSubjectBlock(input);case 'projectOverview':return this.library.projectOverview(input);case 'browseResources':return this.library.browseResources(input);
       default:throw new ServiceError('unsupported_library_command');
     }};
-    const result=mutation?this.atomic(()=>{const value=execute();if((operation.name==='createBlock'||operation.name==='attachBlock')&&input.workspaceId)this.desktop.nativeBlockServices().navigateWorkspace(input.workspaceId);return value;}):await execute();
+    const result=mutation?this.atomic(()=>{const value=execute();if((operation.name==='createBlock'||operation.name==='attachBlock'||operation.name==='createSubjectBlock')&&input.workspaceId)this.desktop.nativeBlockServices().navigateWorkspace(input.workspaceId);return value;}):await execute();
     if(mutation){this.record('application/library.'+operation.name,'observed');return {result,desktop:await this.command('desktop',{type:'snapshot'})};}return {result};
   }
   private async noteCommand(operation:NoteRequest):Promise<LibraryResponse> {

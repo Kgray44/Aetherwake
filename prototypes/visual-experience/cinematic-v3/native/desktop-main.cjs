@@ -243,6 +243,7 @@ app.whenReady().then(async () => {
         !["replay", "executionStatus", "interrupt"].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "vela" && isVelaRead(input)) &&
+        !(command === "notes" && input?.name === "readNote") &&
         !(
           command === "library" &&
           [
@@ -254,6 +255,9 @@ app.whenReady().then(async () => {
             "getBlockSettings",
             "previewTemplate",
             "previewWorkspaceFromResources",
+            "subjectTargets",
+            "projectOverview",
+            "browseResources",
           ].includes(input?.name)
         ) &&
         !(command === "desktop" && input?.type === "snapshot")
@@ -334,6 +338,8 @@ app.whenReady().then(async () => {
         result = await velaCommand({ win, dialog, call, input });
       } else if (command === "library") {
         result = await call("library", input);
+      } else if (command === "notes") {
+        result = await call("notes", input);
       } else throw new Error("unsupported_command");
       return { ok: true, result };
     } catch (e) {
