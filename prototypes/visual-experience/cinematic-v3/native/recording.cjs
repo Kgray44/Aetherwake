@@ -178,6 +178,7 @@ async function recordNative(win, session, localURL, outputPath) {
       frameRate: FPS_REQUESTED,
       videoBitsPerSecond: VIDEO_BITS_PER_SECOND,
       ambientStudy: process.argv.includes("--ambient-study"),
+      materialContinuity: process.argv.includes("--material-continuity-study"),
       celestialStudy,
       instrumentStudy,
       verificationColors: Array.from(
@@ -561,7 +562,15 @@ async function recordJourney(configuration) {
     // Normal application visibility policy is unchanged.
     activityKeeper = setInterval(() => api.setActive(true), 250);
 
-    if (configuration.ambientStudy) {
+    if (configuration.materialContinuity) {
+      window.__aerynthMaterialRecordingReady = true;
+      mark(
+        "Exact-window material continuity / native pointer inputs supplied by dedicated synthetic review",
+      );
+      await sleep(24000);
+      mark("Continuous overlap journey complete / actual recorder wall clock");
+      window.__aerynthMaterialRecordingReady = false;
+    } else if (configuration.ambientStudy) {
       mark(
         "Celestial sky / fixed-light ring rotation and physical specular response / autonomous Vela / no pointer input or phase override",
       );
