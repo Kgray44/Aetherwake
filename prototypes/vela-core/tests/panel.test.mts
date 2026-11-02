@@ -252,3 +252,31 @@ test('collection review labels retain distinct collection and resource identitie
   assert.equal(root.find(node => node.className === 'vela-core-effects')!.textContent, 'Add Authorized chat to Work collection');
   panel.dispose();
 });
+
+test('SYNTHETIC hidden-DOM prepared long-request/open-evidence fixture preserves reading and pending review without executing anything', async () => {
+  // Structural CPU regression only. This harness has no layout engine and cannot qualify pixels/native/provider behavior.
+  const doc = new Document(), root = doc.createElement('main'), canonical = state(); let writes = 0;
+  const long = ('Synthetic long request for the prepared-review DOM fixture. ').repeat(48);
+  const plan: VelaPlan = { id: 'plan:synthetic-long-review', requestId: 'request:synthetic', version: 1, fingerprint: 'synthetic:long-review',
+    summary: 'Synthetic proposed workspace using two existing synthetic resources',
+    steps: [{ id: 'one', explanation: 'Synthetic typed evidence only', action: { type: 'workspaceFromResources', title: 'Synthetic proposed workspace', projectId: null, resourceIds: ['synthetic:chat', 'synthetic:note'] } }],
+    targets: [{ id: 'synthetic:chat', kind: 'resource', resourceKind: 'conversation', title: 'Synthetic chat', version: 1 }, { id: 'synthetic:note', kind: 'resource', resourceKind: 'note', title: 'Synthetic note', version: 1 }],
+    scope: { principalId: 'synthetic', policyVersion: 'synthetic', resourceIds: ['synthetic:chat', 'synthetic:note'], workspaceIds: [], projectIds: [] }, contribution: null,
+    state: 'prepared', createdAt: manifest.createdAt, expiresAt: manifest.createdAt };
+  canonical.requests = [request({ intent: long, state: 'awaiting-review', planId: plan.id })]; canonical.plans = [plan];
+  canonical.conversation = { resourceId: 'conversation:synthetic', revision: 3, messages: [
+    { id: 'synthetic:long-message', role: 'user', content: long, source: 'user', classification: 'observed' },
+    { id: 'synthetic:proposal-message', role: 'assistant', content: plan.summary, source: 'provider', providerId: 'synthetic-fixture-only', classification: 'reported' },
+  ] };
+  const unexpected = async (): Promise<never> => { writes++; throw new Error('Synthetic read-only fixture executed a command'); };
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => structuredClone(canonical), { request: unexpected, review: unexpected, apply: unexpected, native: unexpected }));
+  await settles(() => !!root.find(node => node.dataset.planId === plan.id));
+  const editor = root.find(node => node.tagName === 'textarea')!, message = root.find(node => node.dataset.messageId === 'synthetic:long-message')!, card = root.find(node => node.dataset.planId === plan.id)!, evidence = card.find(node => node.className === 'vela-core-plan-details')!, approve = named(root, 'Approve and apply'), reject = named(root, 'Reject plan');
+  editor.value = 'Synthetic unsent recovery text'; editor.selectionStart = 4; editor.selectionEnd = 12; editor.fire('input'); evidence.open = true; evidence.fire('toggle'); evidence.children[0].focus();
+  const typed = JSON.parse(evidence.find(node => node.tagName === 'pre')!.textContent); assert.deepEqual(typed.actions, plan.steps); assert.deepEqual(typed.targets, plan.targets); assert.deepEqual(typed.receipts, []);
+  assert.equal(message.children[1].textContent, long); assert.equal(displayed(approve), true); assert.equal(displayed(reject), true);
+  await panel.refresh(); await panel.refresh();
+  assert.equal(root.find(node => node.dataset.messageId === 'synthetic:long-message'), message); assert.equal(root.find(node => node.dataset.planId === plan.id), card); assert.equal(evidence.open, true); assert.equal(doc.activeElement, evidence.children[0]);
+  assert.equal(named(root, 'Approve and apply'), approve); assert.equal(named(root, 'Reject plan'), reject); assert.equal(approve.disabled, false);
+  assert.equal(root.find(node => node.tagName === 'textarea'), editor); assert.equal(editor.value, 'Synthetic unsent recovery text'); assert.equal(editor.selectionStart, 4); assert.equal(editor.selectionEnd, 12); assert.equal(writes, 0); panel.dispose();
+});
