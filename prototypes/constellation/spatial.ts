@@ -109,12 +109,18 @@ export function edges(controller: ConstellationController): SpatialEdge[] {
         sourceKey: n.key,
         targetKey: parent.key,
         kind:
-          n.kind === "workspace" ? "project_membership" : "workspace_placement",
+          n.kind === "workspace"
+            ? "project_membership"
+            : parent.kind === "project"
+              ? "resource_project_membership"
+              : "workspace_placement",
         provenance: "canonical application fields",
         evidenceRef:
           n.kind === "workspace"
             ? "workspace.project_id"
-            : "block.workspace_id / block.resource_id",
+            : parent.kind === "project"
+              ? "resource.project_id"
+              : "block.workspace_id / block.resource_id",
         freshness: "current projection",
       });
   }
@@ -128,7 +134,8 @@ export class SpatialNavigator {
   presentation: "spatial" | "list" = "spatial";
   sensitivity = 1;
   neighborhood: string | undefined;
-  private undo: { key: string; position: Vector3; pinned: boolean }[] = [];
+  private undo: { key: string; position: Vector3; pinned: boolean }[][] = [];
+  private preview = new Map<string, Vector3>();
   readonly controller: ConstellationController;
   private dirty: () => void;
   constructor(controller: ConstellationController, dirty: () => void) {
@@ -179,7 +186,8 @@ export class SpatialNavigator {
   position(key: string): Vector3 {
     const n = this.controller.nodes.get(key);
     if (!n) throw Error("Object unavailable");
-    const p = this.controller.state.anchors[key]?.spatial;
+    const p =
+      this.preview.get(key) ?? this.controller.state.anchors[key]?.spatial;
     return p ?? { x: n.point.x, y: 0, z: n.point.y };
   }
   updateGraph() {
@@ -187,6 +195,8 @@ export class SpatialNavigator {
       nodes = [...c.nodes.values()];
     const ordinals = new Map<string, number>(),
       added = new Set<string>();
+    for (const key of this.preview.keys())
+      if (!c.nodes.has(key)) this.preview.delete(key);
     for (const n of nodes) {
       const base: Anchor = c.state.anchors[n.key] ?? { ...n.point };
       if (!validVector(base.spatial)) {
@@ -365,11 +375,31 @@ export class SpatialNavigator {
     const a = this.controller.state.anchors[key] ?? {
       ...this.controller.nodes.get(key)!.point,
     };
-    this.undo.push({
-      key,
-      position: { ...this.position(key) },
-      pinned: a.pinned === true,
-    });
+    const before = { ...this.position(key) },
+      changes = [{ key, position: before, pinned: a.pinned === true }];
+    const delta = {
+      x: position.x - before.x,
+      y: position.y - before.y,
+      z: position.z - before.z,
+    };
+    const moved = new Set([key]);
+    // Move a cluster coherently, retaining absolute positions of pinned children.
+    for (const n of this.controller.nodes.values())
+      if (
+        n.parent &&
+        moved.has(n.parent) &&
+        !this.controller.state.anchors[n.key]?.pinned
+      ) {
+        const p = this.position(n.key);
+        changes.push({ key: n.key, position: { ...p }, pinned: false });
+        this.controller.state.anchors[n.key].spatial = rounded({
+          x: p.x + delta.x,
+          y: p.y + delta.y,
+          z: p.z + delta.z,
+        });
+        moved.add(n.key);
+      }
+    this.undo.push(changes);
     this.undo = this.undo.slice(-32);
     a.spatial = rounded(position);
     a.pinned = pinned;
@@ -378,12 +408,105 @@ export class SpatialNavigator {
     await this.controller.persist();
   }
   async undoPosition() {
-    const u = this.undo.pop();
-    if (!u || !this.controller.nodes.has(u.key)) return;
-    Object.assign(this.controller.state.anchors[u.key], {
-      spatial: u.position,
-      pinned: u.pinned,
-    });
+    const changes = this.undo.pop();
+    if (!changes) return;
+    for (const u of changes)
+      if (this.controller.nodes.has(u.key))
+        Object.assign(this.controller.state.anchors[u.key], {
+          spatial: u.position,
+          pinned: u.pinned,
+        });
+    this.dirty();
+    await this.controller.persist();
+  }
+  previewLayout(strategy: "radial" | "hierarchical") {
+    this.preview.clear();
+    const nodes = this.candidateNodes(),
+      center = this.defaultCamera().target,
+      groups = new Map<string, Node[]>();
+    for (const n of nodes) {
+      const key = n.parent ?? "universe";
+      const list = groups.get(key) ?? [];
+      list.push(n);
+      groups.set(key, list);
+    }
+    for (const [parent, group] of groups)
+      for (const [i, n] of group.entries()) {
+        if (
+          this.controller.state.anchors[n.key]?.pinned ||
+          (n.kind === "project" && this.controller.location.kind !== "universe")
+        )
+          continue;
+        const p = parent === "universe" ? center : this.position(parent),
+          a = (i * Math.PI * 2) / group.length,
+          r = n.kind === "resource" ? 190 + Math.floor(i / 16) * 65 : 650;
+        this.preview.set(
+          n.key,
+          rounded(
+            strategy === "radial"
+              ? {
+                  x: p.x + Math.cos(a) * r,
+                  y: p.y + Math.sin(a * 2) * 80,
+                  z: p.z + Math.sin(a) * r,
+                }
+              : {
+                  x: p.x + ((i % 5) - 2) * (n.kind === "resource" ? 125 : 450),
+                  y: p.y - Math.floor(i / 5) * 75,
+                  z: p.z + 200 + Math.floor(i / 5) * 130,
+                },
+          ),
+        );
+      }
+    this.dirty();
+    return this.preview.size;
+  }
+  cancelLayout() {
+    this.preview.clear();
+    this.dirty();
+  }
+  previewMove(key: string, position: Vector3) {
+    if (!validVector(position) || !this.controller.nodes.has(key)) return;
+    this.preview.clear();
+    const a = this.controller.state.anchors[key].spatial!,
+      delta = { x: position.x - a.x, y: position.y - a.y, z: position.z - a.z },
+      moved = new Set([key]);
+    this.preview.set(key, position);
+    for (const n of this.controller.nodes.values())
+      if (
+        n.parent &&
+        moved.has(n.parent) &&
+        !this.controller.state.anchors[n.key]?.pinned
+      ) {
+        const p = this.controller.state.anchors[n.key].spatial!;
+        this.preview.set(n.key, {
+          x: p.x + delta.x,
+          y: p.y + delta.y,
+          z: p.z + delta.z,
+        });
+        moved.add(n.key);
+      }
+    this.dirty();
+  }
+  async applyLayout() {
+    const changes = [];
+    for (const [key, p] of this.preview)
+      if (
+        this.controller.nodes.has(key) &&
+        !this.controller.state.anchors[key]?.pinned
+      ) {
+        const a = this.controller.state.anchors[key];
+        changes.push({
+          key,
+          position: { ...a.spatial! },
+          pinned: a.pinned === true,
+        });
+        a.spatial = p;
+      }
+    if (changes.length) {
+      this.undo.push(changes);
+      this.undo = this.undo.slice(-32);
+    }
+    this.preview.clear();
     this.dirty();
     await this.controller.persist();
   }
@@ -411,6 +534,7 @@ export class SpatialNavigator {
       (n) => n.key === p || n.parent === p || workspaces.has(n.parent ?? ""),
     );
     if (this.neighborhood) {
+      all = [...c.nodes.values()];
       const focus = c.nodes.get(this.neighborhood),
         ids = new Set(focus ? [focus.id] : []);
       for (const e of edges(c))
@@ -418,7 +542,15 @@ export class SpatialNavigator {
           ids.add(e.sourceId);
           ids.add(e.targetId);
         }
-      all = all.filter((n) => n.kind !== "resource" || ids.has(n.id));
+      const related = all.filter((n) => n.kind === "resource" && ids.has(n.id)),
+        parents = new Set(related.map((n) => n.parent));
+      for (const parent of [...parents]) {
+        const p = parent ? c.nodes.get(parent)?.parent : null;
+        if (p) parents.add(p);
+      }
+      all = all.filter((n) =>
+        n.kind === "resource" ? ids.has(n.id) : parents.has(n.key),
+      );
     }
     return all;
   }

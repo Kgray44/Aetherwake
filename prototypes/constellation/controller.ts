@@ -245,6 +245,12 @@ export class ConstellationController {
               },
             }))
         : [];
+      for (const [key, b] of Object.entries(this.state.bookmarks))
+        this.state.bookmarks[key] = this.cleanBookmark(b);
+      this.state.history = this.state.history.map((h) => ({
+        ...h,
+        bookmark: this.cleanBookmark(h.bookmark),
+      }));
       this.applyBookmark(this.state.bookmarks[scopeOf(this.location)]);
       this.motion.snap(this.motionId);
       if (this.spatial) this.motion.snap(this.spatial.id);
@@ -300,6 +306,12 @@ export class ConstellationController {
       this.followCanonical(nextCanonical, previous, bookmark);
     }
     if (!this.nodes.has(this.selected ?? "")) this.selected = null;
+    for (const [key, b] of Object.entries(this.state.bookmarks))
+      this.state.bookmarks[key] = this.cleanBookmark(b);
+    this.state.history = this.state.history.map((h) => ({
+      ...h,
+      bookmark: this.cleanBookmark(h.bookmark),
+    }));
     if (notify) {
       this.changed();
       void this.persist();
@@ -322,6 +334,24 @@ export class ConstellationController {
         ...this.state.history,
         { location, bookmark: retained },
       ].slice(-32);
+  }
+  private cleanBookmark(bookmark: Bookmark): Bookmark {
+    const spatial = validSpatialCamera(bookmark.spatial)
+      ? structuredClone(bookmark.spatial)
+      : undefined;
+    if (spatial?.neighborhood && !this.nodes.has(spatial.neighborhood))
+      delete spatial.neighborhood;
+    return {
+      camera: {
+        x: bookmark.camera.x,
+        y: bookmark.camera.y,
+        zoom: bookmark.camera.zoom,
+      },
+      selected: this.nodes.has(bookmark.selected ?? "")
+        ? bookmark.selected
+        : null,
+      ...(spatial ? { spatial } : {}),
+    };
   }
   private followCanonical(
     location: Location,
@@ -413,9 +443,10 @@ export class ConstellationController {
   async locate(key: string) {
     const n = this.nodes.get(key);
     if (!n) throw new Error("Destination unavailable");
-    const projectId = this.snapshot.workspaces.find(
-      (w) => w.id === n.workspaceId,
-    )?.project_id;
+    const projectId =
+      this.snapshot.workspaces.find((w) => w.id === n.workspaceId)
+        ?.project_id ??
+      this.snapshot.resources.find((r) => r.id === n.resourceId)?.project_id;
     const parent: Location =
       n.kind === "project"
         ? { kind: "universe" }
@@ -433,6 +464,10 @@ export class ConstellationController {
   async approach(key = this.selected) {
     const n = this.nodes.get(key ?? "");
     if (!n || !n.available) throw new Error("Destination unavailable");
+    if (n.kind === "resource" && !n.workspaceId)
+      throw Error(
+        "This resource is unplaced. Add a workspace placement to open its editor.",
+      );
     return this.go(
       n.kind === "project"
         ? { kind: "project", projectId: n.id }
@@ -544,6 +579,17 @@ export class ConstellationController {
     this.state.history.pop();
     await this.persist();
     this.changed();
+  }
+  async returnHistory(index: number) {
+    const history = [...this.state.history],
+      h = history[index];
+    if (!h) return;
+    await this.go(h.location, h.bookmark);
+    if (JSON.stringify(this.location) === JSON.stringify(h.location)) {
+      this.state.history = history.slice(0, index);
+      await this.persist();
+      this.changed();
+    }
   }
   async persist() {
     if (this.destroyed) return;

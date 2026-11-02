@@ -113,6 +113,23 @@ export function project(
       point: { x: center.x + b.x * 0.6, y: center.y + 160 + b.y * 0.6 },
     });
   }
+  const placed = new Set(blocks.map((b) => b.resource_id));
+  for (const r of resources.values())
+    if (!placed.has(r.id) && r.project_id && projectIds.has(r.project_id)) {
+      const key = keyOf("resource", "unplaced:" + r.id),
+        parent = keyOf("project", r.project_id),
+        center = nodes.get(parent)!.point;
+      nodes.set(key, {
+        key,
+        id: r.id,
+        resourceId: r.id,
+        title: r.title,
+        kind: "resource",
+        parent,
+        available: r.available !== false,
+        point: { x: center.x + 200, y: center.y + 200 },
+      });
+    }
   return nodes;
 }
 

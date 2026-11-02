@@ -297,7 +297,21 @@ export function graphControls(
     if (!n) return;
     open("Preview removal");
     let action: GraphAction;
-    if (n.kind === "resource") {
+    if (n.kind === "resource" && !n.workspaceId) {
+      const r = c.snapshot.resources.find((r) => r.id === n.id);
+      action = {
+        type: "archive",
+        kind: "resource",
+        id: n.id,
+        expectedVersion: r?.version ?? 1,
+      };
+      dialog.append(
+        el(
+          "p",
+          `Archive the canonical resource “${n.title}”. This affects its availability throughout the application.`,
+        ),
+      );
+    } else if (n.kind === "resource") {
       const block = c.snapshot.blocks.find((b) => "resource:" + b.id === n.key);
       if (!block) return;
       action = {
@@ -396,8 +410,70 @@ export function graphControls(
         el("p", "No available canonical relationships in this scope."),
       );
   }
+  function arrange() {
+    open("Preview spatial arrangement");
+    dialog.append(
+      el(
+        "p",
+        "Pinned objects remain fixed. Preview changes only presentation; Apply saves this view, and Undo position restores the previous arrangement.",
+      ),
+    );
+    dialog.append(
+      button("Preview radial", () => c.spatial?.previewLayout("radial")),
+      button("Preview hierarchy", () =>
+        c.spatial?.previewLayout("hierarchical"),
+      ),
+      button("Apply arrangement", async () => {
+        await c.spatial?.applyLayout();
+        close();
+        onChange();
+      }),
+      button("Cancel preview", () => {
+        c.spatial?.cancelLayout();
+        close();
+      }),
+    );
+    const cancel = () => {
+      c.spatial?.cancelLayout();
+      dialog.removeEventListener("close", cancel);
+    };
+    dialog.addEventListener("close", cancel);
+  }
+  function place() {
+    const n = selected();
+    if (!n?.resourceId) return;
+    open("Add a workspace placement");
+    let workspace: HTMLSelectElement;
+    const f = form(() => ({
+      type: "attach",
+      resourceId: n.resourceId!,
+      workspaceId: workspace.value,
+    }));
+    workspace = select(
+      f,
+      "Workspace",
+      c.snapshot.workspaces.filter((w) => c.nodes.has("workspace:" + w.id)),
+    );
+    f.append(
+      el(
+        "p",
+        "This adds a visual block referring to the same canonical resource. It does not clone content or change ownership.",
+      ),
+    );
+    if (!c.can("attach"))
+      f.querySelector("button")!.setAttribute("disabled", "");
+  }
   function dispose() {
     dialog.remove();
   }
-  return { create, relate, branch, remove, inspectRelationships, dispose };
+  return {
+    create,
+    relate,
+    branch,
+    remove,
+    inspectRelationships,
+    arrange,
+    place,
+    dispose,
+  };
 }

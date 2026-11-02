@@ -4,6 +4,7 @@ import { MotionCoordinator } from "../../visual-experience/cinematic-v3/src/moti
 import { ConstellationController } from "../controller.ts";
 import { SpatialNavigator, edges, validSpatialCamera } from "../spatial.ts";
 import { ConstellationScene } from "../renderer3d.ts";
+import { randomUUID } from "node:crypto";
 
 const fixture = (count = 18) => ({
   projects: [{ id: "p", title: "Synthetic project" }],
@@ -239,4 +240,130 @@ test("graph mutation dispatch uses only supported typed service operations and r
     /unavailable/,
   );
   assert.equal(calls.length, 1);
+});
+
+test("moving a workspace carries its unpinned resource cluster and undo restores the whole operation", async () => {
+  const { c, navigation: n } = setup();
+  const original = structuredClone(c.snapshot);
+  await n.place("resource:b1", { x: 111, y: 222, z: 333 }, true);
+  const fixed = n.position("resource:b1"),
+    old = n.position("resource:b3"),
+    w = n.position("workspace:w");
+  await n.place("workspace:w", { x: w.x + 100, y: w.y + 20, z: w.z + 30 });
+  assert.deepEqual(n.position("resource:b1"), fixed);
+  assert.deepEqual(n.position("resource:b3"), {
+    x: Math.round((old.x + 100) * 1000) / 1000,
+    y: Math.round((old.y + 20) * 1000) / 1000,
+    z: Math.round((old.z + 30) * 1000) / 1000,
+  });
+  await n.undoPosition();
+  assert.deepEqual(n.position("workspace:w"), w);
+  assert.deepEqual(n.position("resource:b3"), old);
+  assert.deepEqual(c.snapshot, original);
+});
+
+test("automatic arrangements are previewable, cancelable and undoable while respecting pins", async () => {
+  let saves = 0;
+  const { c, navigation: n } = setup(fixture(), {
+    persistence: {
+      load: async () => null,
+      save: async () => {
+        saves++;
+      },
+    },
+  });
+  await n.place("workspace:w", { x: 900, y: 100, z: 300 }, true);
+  const before = structuredClone(c.state.anchors),
+    count = saves;
+  n.previewLayout("radial");
+  assert.equal(saves, count);
+  assert.deepEqual(c.state.anchors, before);
+  assert.deepEqual(n.position("workspace:w"), before["workspace:w"].spatial);
+  n.cancelLayout();
+  assert.deepEqual(n.position("workspace:w2"), before["workspace:w2"].spatial);
+  n.previewLayout("hierarchical");
+  await n.applyLayout();
+  assert.notDeepEqual(
+    n.position("workspace:w2"),
+    before["workspace:w2"].spatial,
+  );
+  await n.undoPosition();
+  for (const [key, a] of Object.entries(before))
+    assert.deepEqual(c.state.anchors[key].spatial, a.spatial);
+});
+
+test("authorized cross-project links appear in a resource neighborhood without inventing ownership", async () => {
+  const s = fixture();
+  s.projects.push({ id: "other", title: "Other synthetic project" });
+  s.workspaces.push({
+    id: "other-w",
+    project_id: "other",
+    title: "Other workspace",
+  });
+  s.resources.push({ id: "other-r", kind: "note", title: "Other resource" });
+  s.blocks.push({
+    id: "other-b",
+    resource_id: "other-r",
+    workspace_id: "other-w",
+    x: 0,
+    y: 0,
+    width: 300,
+    height: 200,
+    z: 0,
+  });
+  s.relationships.push({
+    id: "cross",
+    source_id: "r0",
+    target_id: "other-r",
+    kind: "references",
+    provenance: "user",
+  });
+  const { c, navigation: n } = setup(s);
+  await n.explore("resource:b0");
+  const keys = new Set(n.candidateNodes().map((n) => n.key));
+  assert.ok(keys.has("resource:other-b"));
+  assert.ok(keys.has("project:other"));
+  assert.equal(
+    c.snapshot.workspaces.find((w) => w.id === "other-w").project_id,
+    "other",
+  );
+});
+
+test("unplaced canonical resources remain in their project graph and cannot fabricate an editor placement", async () => {
+  const s = fixture();
+  s.resources[0].project_id = "p";
+  s.blocks = s.blocks.filter((b) => b.resource_id !== "r0");
+  const { c } = setup(s);
+  assert.ok(c.nodes.has("resource:unplaced:r0"));
+  assert.ok(edges(c).some((e) => e.id === "edge1"));
+  assert.ok(
+    edges(c).some(
+      (e) => e.sourceId === "r0" && e.kind === "resource_project_membership",
+    ),
+  );
+  await assert.rejects(c.approach("resource:unplaced:r0"), /unplaced/);
+  assert.equal(c.snapshot.resources.length, 18);
+});
+
+test("revoked resource focus is pruned from spatial bookmarks and camera history", async () => {
+  const { c, navigation: n } = setup();
+  await n.explore("resource:b0");
+  await c.persist();
+  const s = fixture();
+  s.resources = s.resources.filter((r) => r.id !== "r0");
+  c.update(s);
+  await c.persist();
+  assert.equal(JSON.stringify(c.state).includes("resource:b0"), false);
+  assert.equal(n.neighborhood, undefined);
+});
+
+test("10000 UUID placement positions fit the private 2MiB view-state bound without content", async () => {
+  const s = fixture(10000);
+  for (const b of s.blocks) b.id = randomUUID();
+  const { c } = setup(s);
+  await c.persist();
+  const json = JSON.stringify(c.state);
+  assert.ok(Buffer.byteLength(json) < 2 * 1024 * 1024);
+  assert.equal(json.includes("Synthetic project"), false);
+  assert.equal(json.includes("conversation"), false);
 });

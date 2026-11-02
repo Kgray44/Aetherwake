@@ -29,6 +29,7 @@ export interface SpatialRenderLayer {
   dispose?(): void;
 }
 export type GraphAction =
+  | { type: "attach"; workspaceId: string; resourceId: string }
   | { type: "createProject"; title: string }
   | { type: "createWorkspace"; title: string; projectId: string | null }
   | {
