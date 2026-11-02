@@ -60,10 +60,10 @@ exports.velaCommand = async ({ win, dialog, call, input }) => {
     });
     const choice = await dialog.showMessageBox(win, {
       type: "question",
-      title: "Authorize Vela planning",
-      message: `Ask ${preview.providerId} to propose an Aerynth plan for Vela?`,
-      detail: `Vela coordinates Aerynth. The identified provider contributes a proposal; proposed application actions require review. This permission covers this planning request only and does not authorize a delegated task. Source excerpts are untrusted data.\n\nRequest:\n${preview.intent}\n\nExact context manifest:\n${JSON.stringify(preview.context, null, 2)}`,
-      buttons: ["Cancel", "Plan once"],
+      title: "Vela provider request",
+      message: `Send this Vela request to ${preview.providerId === "codex-app-server" ? "Codex" : preview.providerId}?`,
+      detail: `Vela coordinates Aerynth. The provider may answer or propose actions. Application changes require review. This authorizes one response and no delegated task. Source excerpts are untrusted data.\n\nRequest:\n${preview.intent}\n\nExact context manifest:\n${JSON.stringify(preview.context, null, 2)}`,
+      buttons: ["Cancel", "Send once"],
       defaultId: 0,
       cancelId: 0,
       noLink: true,

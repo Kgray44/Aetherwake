@@ -21,9 +21,9 @@ export function velaPanelStatus(state: Pick<VelaState, 'requests' | 'plans' | 'r
   if (request.state === 'cancelled' || plan?.state === 'cancelled') return result('This request was cancelled. Review any earlier changes in the details.' + priorEffects);
   if (request.state === 'invalid-plan') return result('The provider response could not be used. No proposed changes were applied.');
   if (request.state === 'provider-unavailable') {
-    if (request.errorCode === 'provider_authorization_required') return result('Planning was not enabled for this request. Local tools are still available.');
-    if (request.errorCode === 'provider_busy') return result('The planning provider is busy. This request did not start a planning turn. Local actions remain available.');
-    return result('Planning is unavailable for this request. Local tools are still available.');
+    if (request.errorCode === 'provider_authorization_required') return result('Provider access was not enabled. Local tools are available.');
+    if (request.errorCode === 'provider_busy') return result('The provider is busy. This request did not start.');
+    return result('Provider unavailable. Local tools are available.');
   }
   if (request.state === 'responded') {
     if (request.planId || plan || state.receipts.some(receipt => receipt.requestId === request.id) || !request.response?.messageId) return result('The response record needs review. No applied result is confirmed.');
@@ -39,5 +39,5 @@ export function velaPanelStatus(state: Pick<VelaState, 'requests' | 'plans' | 'r
   if (plan?.state === 'approved') return result('Approved and ready to apply. No changes have run yet.');
   if (request.state === 'awaiting-review') return result('The plan is ready for review. Its proposed actions have not been applied.');
   if (request.state === 'native-ready') return result('The local action is ready to apply.');
-  return result('The planning request is running' + (request.providerId ? ' with ' + (request.providerId === 'codex-app-server' ? 'Codex' : request.providerId) : '') + '. Proposed actions have not been applied.');
+  return result('Request in progress' + (request.providerId ? ' with ' + (request.providerId === 'codex-app-server' ? 'Codex' : request.providerId) : '') + '.');
 }

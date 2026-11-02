@@ -14,7 +14,7 @@ export interface VelaPanelOptions {
   /** Observational only. The first hydrated value is a baseline, not a history-arrival event. */
   onPresentation?: (value: VelaPanelPresentation) => void;
 }
-const providerName = (id: string | null | undefined) => id === 'codex-app-server' ? 'Codex' : id || 'Planning provider';
+const providerName = (id: string | null | undefined) => id === 'codex-app-server' ? 'Codex' : id || 'Provider';
 let panelSequence = 0;
 /** Content for the existing host-anchored surface. Mount/open never starts inference or applies actions. */
 export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: VelaPanelOptions = {}) {
@@ -36,10 +36,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const disclosure = (text: string, className: string) => { const node = el('details', className), summary = el('summary', undefined, text), body = el('div', 'vela-core-disclosure-body'); node.append(summary, body); node.addEventListener('toggle', () => { if (node.open) lastDisclosure = node; }); return { node, summary, body }; };
   const shell = el('section', 'vela-core'); shell.setAttribute('aria-label', 'Vela application assistant');
   shell.dataset.view = 'empty'; shell.dataset.context = 'none'; shell.dataset.phase = 'idle';
-  const connection = disclosure('Planning connection', 'vela-core-provider-controls'), provider = el('span', 'vela-core-provider'), providerHint = el('p', 'vela-core-secondary');
+  const connection = disclosure('Provider connection', 'vela-core-provider-controls'), provider = el('span', 'vela-core-provider'), providerHint = el('p', 'vela-core-secondary');
   connection.summary.replaceChildren(provider); connection.body.append(providerHint);
   if (options.onConnectProvider) {
-    const connect = button('Check planning connection', async () => { if (connect.disabled) return; connect.disabled = true; try { await options.onConnectProvider!(); await refresh(); } finally { connect.disabled = false; } }); connection.body.append(connect);
+    const connect = button('Check connection', async () => { if (connect.disabled) return; connect.disabled = true; try { await options.onConnectProvider!(); await refresh(); } finally { connect.disabled = false; } }); connection.body.append(connect);
   }
   const flow = el('div', 'vela-core-scroll'); flow.setAttribute('aria-label', 'Conversation and plans'); flow.hidden = true;
   const conversation = el('div', 'vela-core-conversation'); conversation.setAttribute('aria-label', 'Vela conversation');
@@ -95,8 +95,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   allowProvider.addEventListener('change', () => { chosenProviderId = allowProvider.checked ? current?.planner.providerId ?? null : null; renderProviderChoice(); });
   const selection = el('div', 'vela-core-selection'); selection.setAttribute('aria-label', 'Selected sources'); selection.hidden = true;
   const send = markIcon(el('button', 'vela-core-button vela-core-primary'), 'Send to Vela', '↑', 'send'); send.type = 'submit'; send.disabled = true;
-  const stop = icon('Stop planning', '■', 'stop', async () => { const state = await client.state(), pending = state.requests.findLast(request => request.state === 'planning'); if (pending) { await client.cancel(pending.id); await refresh(); } else { status.textContent = 'Planning has not started. You can cancel in the approval window if one is open.'; } }); stop.hidden = true;
-  const sourcesControl = icon('Add sources', '+', 'sources', () => reveal('sources', search)), toolsControl = icon('Local tools', '⋯', 'tools', () => reveal('tools', nativeTitle)), preferencesControl = icon('Vela preferences', '⚙', 'preferences', () => reveal('preferences')), providerControl = icon('Planning provider', '◇', 'provider', () => reveal('provider', allowProvider)), attentionControl = icon('Attention', '·', 'attention', () => reveal('attention'));
+  const stop = icon('Stop', '■', 'stop', async () => { const state = await client.state(), pending = state.requests.findLast(request => request.state === 'planning'); if (pending) { await client.cancel(pending.id); await refresh(); } else { status.textContent = 'No response is running. An open approval can be cancelled there.'; } }); stop.hidden = true;
+  const sourcesControl = icon('Add sources', '+', 'sources', () => reveal('sources', search)), toolsControl = icon('Local tools', '⋯', 'tools', () => reveal('tools', nativeTitle)), preferencesControl = icon('Vela preferences', '⚙', 'preferences', () => reveal('preferences')), providerControl = icon('Provider', '◇', 'provider', () => reveal('provider', allowProvider)), attentionControl = icon('Attention', '·', 'attention', () => reveal('attention'));
   const contextPanels = new Map([
     ['sources', { panel: sourcePanel, trigger: sourcesControl }], ['tools', { panel: native, trigger: toolsControl }], ['preferences', { panel: preferencesPanel, trigger: preferencesControl }], ['provider', { panel: connection, trigger: providerControl }], ['attention', { panel: attentionPanel, trigger: attentionControl }],
   ]);
@@ -212,8 +212,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function reconcile(parent: HTMLElement, children: HTMLElement[]) { for (const child of Array.from(parent.children)) if (!children.includes(child as HTMLElement)) child.remove(); children.forEach((node, index) => { if (parent.children[index] !== node) parent.insertBefore(node, parent.children[index] ?? null); }); }
   function render(state: VelaState) {
     if (disposed) return; current = state;
-    provider.textContent = state.planner.available ? providerName(state.planner.providerId) + (state.planner.busy ? ' · busy' : ' · available') : 'Planning unavailable';
-    providerHint.textContent = state.planner.available ? 'Planning only. Sharing selected context requires native approval.' : 'Planning is unavailable.';
+    provider.textContent = state.planner.available ? providerName(state.planner.providerId) + (state.planner.busy ? ' · busy' : ' · available') : 'Provider unavailable';
+    providerHint.textContent = state.planner.available ? 'Context sharing needs approval.' : 'Provider unavailable.';
     providerConsent.firstElementChild!.textContent = 'Use ' + providerName(state.planner.providerId) + ' for this request';
     allowProvider.disabled = !state.planner.available || state.planner.busy; if (chosenProviderId !== state.planner.providerId) { allowProvider.checked = false; chosenProviderId = null; } renderProviderChoice();
     const chosen = projectChosen ? nativeProject.value : state.applicationContext?.currentProjectId ?? ''; nativeProject.replaceChildren(); const global = el('option', undefined, 'No project'); global.value = ''; nativeProject.append(global);

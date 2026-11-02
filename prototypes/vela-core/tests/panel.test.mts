@@ -71,9 +71,9 @@ test('terminal status survives request completion and refresh; connection probe 
   const composer = root.find(node => node.tagName === 'textarea')!; composer.value = 'Synthetic request'; composer.fire('input');
   form.fire('submit'); assert.equal(status.dataset.requestState, 'submitting'); assert.doesNotMatch(status.textContent, /provider.*running|Waiting for the identified planning provider/);
   canonical = { ...canonical, requests: [request({ errorCode: 'provider_authorization_required' })] }; resolveRequest(canonical.requests[0]);
-  await settles(() => status.dataset.requestState === 'provider-unavailable'); assert.match(status.textContent, /Planning was not enabled/); assert.equal(status.dataset.requestId, 'request:synthetic');
+  await settles(() => status.dataset.requestState === 'provider-unavailable'); assert.match(status.textContent, /Provider access was not enabled/); assert.equal(status.dataset.requestId, 'request:synthetic');
   const terminal = status.textContent; await panel.refresh(); await panel.refresh(); assert.equal(status.textContent, terminal); assert.doesNotMatch(status.textContent, /^Ready|Request:/);
-  named(root, 'Planning provider').fire('click'); assert.equal(displayed(named(root, 'Check planning connection')), true); named(root, 'Check planning connection').fire('click');
+  named(root, 'Provider').fire('click'); assert.equal(displayed(named(root, 'Check connection')), true); named(root, 'Check connection').fire('click');
   await settles(() => connections === 1 && root.find(node => node.className === 'vela-core-provider')!.textContent.includes('· available'));
   assert.equal(status.dataset.requestState, 'provider-unavailable'); assert.equal(status.textContent, terminal, 'connecting does not rewrite a historical request outcome');
   client.request = async () => { canonical = { ...canonical, requests: [request({ state: 'unknown' })] }; throw new Error('Synthetic lost command response'); };
@@ -210,7 +210,7 @@ test('provider opt-in is contextual, one-shot, identified and cannot silently mo
   const doc = new Document(), root = doc.createElement('main'), canonical = state(); canonical.planner = { providerId: 'codex-app-server', available: true, busy: false };
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical)); await settles(() => root.find(node => node.className === 'vela-core-status')!.dataset.requestState === 'idle');
   const consent = root.find(node => node.tagName === 'input' && !!node.parent?.className.includes('vela-core-consent'))!; assert.equal(displayed(consent), false); assert.equal(consent.checked, false);
-  named(root, 'Planning provider').fire('click'); assert.equal(displayed(consent), true); assert.match(consent.parent!.textContent, /Use Codex for this request/); consent.checked = true; consent.fire('change');
+  named(root, 'Provider').fire('click'); assert.equal(displayed(consent), true); assert.match(consent.parent!.textContent, /Use Codex for this request/); consent.checked = true; consent.fire('change');
   const choice = root.find(node => node.className.includes('vela-core-provider-choice'))!; assert.equal(choice.hidden, false); assert.match(choice.textContent, /Codex/); named(root, 'Close Vela controls').fire('click'); assert.equal(displayed(choice), true);
   canonical.planner.providerId = 'other-identified-provider'; await panel.refresh(); assert.equal(consent.checked, false); assert.equal(choice.hidden, true); assert.match(consent.parent!.textContent, /other-identified-provider/); panel.dispose();
 });
@@ -221,7 +221,7 @@ test('responded conversational outcomes show one attributed message without plan
     canonical.planner = { providerId: 'codex-app-server', available: true, busy: false }; canonical.conversation = { resourceId: 'chat:vela', revision: 1, messages: [] };
     const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, { request: async input => { calls++; assert.equal(input.authorizeProvider, true); return new Promise(resolve => { finish = resolve; }); } }), { onPresentation: value => observed.push(value) });
     await settles(() => observed.length === 1); const input = root.find(node => node.tagName === 'textarea')!;
-    named(root, 'Planning provider').fire('click'); const consent = root.find(node => node.tagName === 'input' && !!node.parent?.className.includes('vela-core-consent'))!; consent.checked = true; consent.fire('change'); named(root, 'Close Vela controls').fire('click');
+    named(root, 'Provider').fire('click'); const consent = root.find(node => node.tagName === 'input' && !!node.parent?.className.includes('vela-core-consent'))!; consent.checked = true; consent.fire('change'); named(root, 'Close Vela controls').fire('click');
     input.value = 'An ordinary conversational question'; input.fire('input'); input.fire('keydown', { key: 'Enter' }); assert.equal(calls, 1); assert.equal(consent.checked, false);
     input.value = 'Later unsent text'; input.selectionStart = 2; input.selectionEnd = 7; input.fire('input');
     canonical.requests = [request({ state: 'responded', response: { kind, messageId: 'message:actual-response' } })];
