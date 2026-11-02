@@ -3,11 +3,12 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -44,8 +45,14 @@ export async function prepareNativeScale(profile: string, count: number) {
     "Profile must not exist: never overwrite an existing application profile",
   );
   if (process.platform === "win32") {
-    const onC = /^C:/i.test(profile),
-      onD = /^D:/i.test(profile);
+    // The new directory does not exist yet. Resolve its existing parent so a
+    // junction/alias cannot charge a D: write to the wrong physical drive.
+    const physicalProfile = join(
+      realpathSync(dirname(profile)),
+      basename(profile),
+    );
+    const onC = /^C:/i.test(physicalProfile),
+      onD = /^D:/i.test(physicalProfile);
     assert.ok(
       onC || onD,
       "Reserve admission supports explicitly bounded C: or D: profiles",
