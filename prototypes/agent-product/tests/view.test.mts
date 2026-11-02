@@ -276,6 +276,88 @@ test("shared motion has intermediate reveal, interrupted retarget and immediate 
   assert.deepEqual([...view.coordinator.bodies.keys()], ["unrelated-parent"]);
   assert(view.wakes > 0);
 });
+
+test("all preference controls fit the full shared-MC disclosure and remain reachable by the inspector alone", async () => {
+  const f = canonicalFixture(),
+    view = viewFixture(f);
+  await view.controller.refresh();
+  view.click("create");
+  const panel = view.root.querySelector(".agent-preferences"),
+    inner = view.root.querySelector(".agent-preferences-inner"),
+    inspector = view.root.querySelector(".agent-inspector");
+  // CPU layout/bounds fixture for the native defect: the fourth/fifth controls
+  // lie below460px. These are explicit synthetic bounds, not browser evidence.
+  let intrinsic = 1040.4;
+  Object.defineProperty(inner, "scrollHeight", {
+    configurable: true,
+    get: () => Math.floor(intrinsic),
+  });
+  inner.getBoundingClientRect = () => ({ height: intrinsic });
+  const lowerField = view.action("source-additionalInstructions"),
+    lastField = view.action("source-requiredCapabilities");
+  const top = 120,
+    lowerTop = 680,
+    lastTop = 930,
+    controlHeight = 38;
+  lowerField.getBoundingClientRect = () => ({
+    top: top + lowerTop - inspector.scrollTop,
+    bottom: top + lowerTop + controlHeight - inspector.scrollTop,
+  });
+  lastField.getBoundingClientRect = () => ({
+    top: top + lastTop - inspector.scrollTop,
+    bottom: top + lastTop + controlHeight - inspector.scrollTop,
+  });
+  inspector.clientHeight = 260;
+  view.coordinator.reduced = true;
+  view.click("preferences-toggle");
+  view.frame();
+  assert.equal(
+    Number.parseFloat(panel.style.height),
+    1041,
+    "fractional intrinsic bottom must not be rounded down or capped",
+  );
+  assert(
+    lastTop + controlHeight <= Number.parseFloat(panel.style.height),
+    "last control lies inside the fully revealed wrapper",
+  );
+  for (const [field, offset] of [
+    [lowerField, lowerTop],
+    [lastField, lastTop],
+  ] as const) {
+    inspector.scrollTop = top + offset + controlHeight - inspector.clientHeight;
+    const bounds = field.getBoundingClientRect();
+    assert(
+      bounds.top >= 0 && bounds.bottom <= inspector.clientHeight,
+      "one outer inspector scroll exposes the whole control",
+    );
+  }
+  intrinsic = 1490.75;
+  view.frame();
+  view.frame();
+  assert.equal(
+    Number.parseFloat(panel.style.height),
+    1491,
+    "content growth remains uncapped through the shared resize path",
+  );
+  view.coordinator.reduced = false;
+  intrinsic = 1820.5;
+  view.frame();
+  view.frame(0.04);
+  assert(
+    Number.parseFloat(panel.style.height) > 1491 &&
+      Number.parseFloat(panel.style.height) < 1821,
+    "growth uses existing MC interpolation",
+  );
+  for (let i = 0; i < 80; i++) view.frame(0.04);
+  assert.equal(Number.parseFloat(panel.style.height), 1821);
+  const css = readFileSync(new URL("../view.css", import.meta.url), "utf8");
+  assert.match(css, /\.agent-inspector\s*\{\s*overflow:\s*auto/);
+  assert.match(
+    css,
+    /\.agent-preferences,\s*\.agent-references\s*\{[^}]*overflow:\s*clip/s,
+  );
+  view.controller.dispose();
+});
 test("all explicit controls participate in Root feedback and no component scheduler/CSS transition replaces shared motion", async () => {
   const f = canonicalFixture(),
     view = viewFixture(f);

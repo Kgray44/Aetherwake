@@ -225,7 +225,8 @@
 }
 .agent-preferences,
 .agent-references {
-  overflow: hidden;
+  /* Clip shared-MC reveal frames without creating a second scroll container. */
+  overflow: clip;
   min-height: 0;
 }
 .agent-preferences-inner {

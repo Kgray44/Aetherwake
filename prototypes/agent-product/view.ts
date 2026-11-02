@@ -158,12 +158,20 @@ export function mountAgentLibrary(
     disclosures.push(entry);
     return entry;
   }
+  function disclosureHeight(inner: HTMLElement) {
+    // Reveal the complete intrinsic content. A viewport-height cap here traps
+    // lower controls inside the clipping wrapper; the inspector owns scrolling.
+    const height = Math.ceil(
+      Math.max(inner.scrollHeight, inner.getBoundingClientRect().height),
+    );
+    return Number.isFinite(height) ? Math.max(1, height) : 1;
+  }
   function reveal(entry: (typeof disclosures)[number], open: boolean) {
     entry.open = open;
     if (open) entry.node.hidden = false;
     entry.node.inert = !open;
     entry.node.setAttribute("aria-hidden", String(!open));
-    entry.height = Math.min(460, Math.max(1, entry.inner.scrollHeight));
+    entry.height = disclosureHeight(entry.inner);
     motion.target(
       entry.key,
       { ...neutral, h: open ? entry.height : 0, opacity: open ? 1 : 0 },
@@ -1289,7 +1297,7 @@ export function mountAgentLibrary(
       if (!entry.open && pose.h < 0.5 && pose.opacity < 0.001)
         entry.node.hidden = true;
       if (entry.open) {
-        const height = Math.min(460, Math.max(1, entry.inner.scrollHeight));
+        const height = disclosureHeight(entry.inner);
         if (height !== entry.height) {
           entry.height = height;
           motion.target(
