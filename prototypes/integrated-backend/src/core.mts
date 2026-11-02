@@ -1473,7 +1473,7 @@ export class BackendCore {
         ensure(a.providerId === this.port.id || ['local','mock-ordinary',CHATGPT_PLAN_PROVIDER].includes(a.providerId), 'provider_unavailable');if(a.providerId===CHATGPT_PLAN_PROVIDER)ensure(this.ordinaryAuthorized(),'ordinary_provider_unavailable');
         ensure(!Object.values(this.state.executions).some(e => e.resourceId === a.resourceId && ['unknown','running','dispatching'].includes(e.state)), 'reconciliation_required');
         const data = this.graph.snapshot(); const c = data.conversations.find(c => c.id === this.gid(a.resourceId))!;
-        if(c.providerId!==a.providerId)ensure(!this.state.bindings[a.resourceId]?.length,'provider_change_requires_branch');
+        if(c.providerId!==a.providerId)ensure(!this.state.bindings[a.resourceId]?.length&&c.ownMessageIds.length===0&&!data.edges.some(edge=>edge.childId===c.id),'provider_change_requires_branch');
         c.providerId = a.providerId; c.kind = ['local','mock-ordinary',CHATGPT_PLAN_PROVIDER].includes(a.providerId) ? 'ordinary' : 'codex'; c.providerSessionId = null;
         this.graph = this.createGraph(data); this.state.revisions[a.resourceId]++; return this.conv(a.resourceId);
       }) as any;

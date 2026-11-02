@@ -10,11 +10,11 @@
   --control-press: 0;
   --control-disabled: 0;
   border-color: rgb(
-    218 226 239 /
+    var(--control-edge-rgb, 218 226 239) /
       calc(0.12 + var(--control-hover) * 0.16 + var(--control-focus) * 0.22)
   );
   background: rgb(
-    217 226 240 /
+    var(--control-film-rgb, 217 226 240) /
       calc(
         0.025 + var(--control-hover) * 0.06 + var(--control-focus) * 0.03 +
           var(--control-press) * 0.07
@@ -22,7 +22,7 @@
   );
   box-shadow: inset 0 0 0 1px
     rgb(
-      234 240 250 /
+      var(--control-sheen-rgb, 234 240 250) /
         calc(
           var(--control-hover) * 0.035 + var(--control-focus) * 0.06 +
             var(--control-press) * 0.08
@@ -36,7 +36,7 @@
     [data-native-copy-control],
     [data-aerynth-motion-control]
   ).aw-control-motion:focus-visible {
-  outline: 2px solid #dbe5f3;
+  outline: 2px solid var(--control-focus-color, #dbe5f3);
   outline-offset: 2px;
 }
 @media (forced-colors: active) {
