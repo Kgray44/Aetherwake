@@ -140,8 +140,11 @@ export function mountConstellation(
   };
   const spatial = new SpatialNavigator(controller, invalidate);
   controller.spatial = spatial;
-  layer = new ConstellationScene(controller, spatial, () =>
-    field.getBoundingClientRect(),
+  layer = new ConstellationScene(
+    controller,
+    spatial,
+    () => field.getBoundingClientRect(),
+    invalidate,
   );
   const graph = graphControls(root, controller, () => {
     lastDetailKey = "";

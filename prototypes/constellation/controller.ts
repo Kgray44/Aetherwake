@@ -30,6 +30,7 @@ import {
   type SpatialNavigator,
 } from "./spatial.ts";
 import type { GraphActions, GraphAction } from "./spatial-types.ts";
+import type { SpatialCamera } from "./spatial-types.ts";
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 const finite = (n: unknown): n is number =>
@@ -367,8 +368,8 @@ export class ConstellationController {
     this.state.location = location;
     this.applyBookmark(this.state.bookmarks[scopeOf(location)]);
   }
-  private applyBookmark(bookmark?: Bookmark) {
-    this.spatial?.restore(bookmark?.spatial);
+  private applyBookmark(bookmark?: Bookmark, preserveSpatial = false) {
+    if (!preserveSpatial) this.spatial?.restore(bookmark?.spatial);
     this.selected = bookmark?.selected ?? null;
     this.move(bookmark?.camera ?? this.defaultCamera(), "navigation");
   }
@@ -383,7 +384,9 @@ export class ConstellationController {
     this.policy = { ...this.policy, ...policy };
     if (this.policy.reduced || this.policy.quiet || this.policy.hidden) {
       this.motion.snap(this.motionId);
-      this.spatial?.interrupt();
+      this.spatial?.interrupt(false);
+      for (const id of this.motion.bodies.keys())
+        if (id.startsWith(this.motionId + ":body:")) this.motion.snap(id);
     }
     this.changed();
   }
@@ -495,12 +498,17 @@ export class ConstellationController {
     }
     return this.go({ kind: "universe" });
   }
-  async go(location: Location, returning?: Bookmark) {
+  async go(
+    location: Location,
+    returning?: Bookmark,
+    spatialOverride?: SpatialCamera,
+  ) {
     if (!allowedLocation(location, this.nodes))
       throw new Error("Destination unavailable");
     if (location.kind === "surface" && !this.options.openResource)
       throw new Error("Resource editor is unavailable in this host");
     const generation = ++this.generation;
+    const spatialRevision = this.spatial?.manualRevision;
     const from = this.location,
       origin = locationNode(location, this.nodes)?.point ?? this.camera;
     const beforeCanonical = canonicalLocation(this.snapshot);
@@ -542,7 +550,17 @@ export class ConstellationController {
         !returning && JSON.stringify(from) !== JSON.stringify(location),
       );
       this.state.location = location;
-      this.applyBookmark(returning ?? this.state.bookmarks[scopeOf(location)]);
+      const bookmark = returning ?? this.state.bookmarks[scopeOf(location)];
+      this.applyBookmark(
+        spatialOverride
+          ? {
+              camera: bookmark?.camera ?? this.defaultCamera(),
+              selected: bookmark?.selected ?? this.selected,
+              spatial: spatialOverride,
+            }
+          : bookmark,
+        spatialRevision !== this.spatial?.manualRevision,
+      );
       this.options.onTransition?.({
         from,
         to: location,

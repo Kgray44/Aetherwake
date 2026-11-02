@@ -1,5 +1,15 @@
 # Constellation verification and integration handoff
 
+## Current 3D follow-up
+
+The current source adds a real perspective scene in the host's existing graphics context, persistent XYZ positions/pins/orbit cameras, typed graph operations, neighborhood traversal, reversible arrangements, app-level branch previews and deterministic procedural planets/moons. Strict TypeScript and all **39** navigation/spatial tests pass. Regressions include manual camera interruption during awaited navigation, continuous wheel scope transitions, spring-driven body emphasis, geometry/detail LOD, bounded 10,000-object allocations, graph mutation routing, label discoverability, and host renderer-state restoration.
+
+The integration lead's native candidate `1843b6c` includes planet appearance `cced68a` and label/renderer fixes `74b1256`. Its real-window baseline and restart passed project round trips, exact original geometry/content, new-workspace discovery/archive, reduced-motion interruption and actual WebGL loss/recovery. I inspected its `03-universe.png` and `04-other-project.png`; real planet surfaces, rings and moons are present. The receipt is local at `cinematic-v3/.runtime/application-evidence/constellation-1793580264450` in the integration checkout. It predates the motion/LOD/ice-palette follow-up, so it does not verify those later changes.
+
+The expanded three-project native journey, pin/branch/typed relationship persistence and actual rendered scale measurements remain with the integration lead. No current unit test or baseline screenshot establishes presented-frame smoothness, sustained GPU cost or final artistic acceptance. The older committed fixture evidence below remains bound to its original, earlier navigation source.
+
+## Earlier fixture evidence
+
 Status: implemented and locally demonstrated as a navigation subsystem. The integration lead owns the combined application's V3.5 scene, stage transition, Vela, canonical service, native host, and final application acceptance. Local evidence is not owner artistic acceptance or a release qualification.
 
 ## Executed checks

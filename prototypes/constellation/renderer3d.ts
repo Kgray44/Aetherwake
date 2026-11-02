@@ -59,21 +59,17 @@ export class ConstellationScene implements SpatialRenderLayer {
   readonly controller: ConstellationController;
   readonly navigation: SpatialNavigator;
   private bounds: () => DOMRect;
+  private wake: () => void;
   constructor(
     controller: ConstellationController,
     navigation: SpatialNavigator,
     bounds: () => DOMRect,
+    wake: () => void = () => {},
   ) {
     this.controller = controller;
     this.navigation = navigation;
     this.bounds = bounds;
-    this.scene.add(new THREE.HemisphereLight(0xc9c0ec, 0x171021, 2.2));
-    const key = new THREE.DirectionalLight(0xf2e5ff, 4.4);
-    key.position.set(-600, 1000, 800);
-    this.scene.add(key);
-    const rim = new THREE.DirectionalLight(0x9477db, 3);
-    rim.position.set(900, -100, -700);
-    this.scene.add(rim);
+    this.wake = wake;
     this.scene.add(this.links);
     this.raycaster.params.Line = { threshold: 12 };
   }
@@ -99,6 +95,9 @@ export class ConstellationScene implements SpatialRenderLayer {
     return root;
   }
   private release(root: THREE.Group) {
+    this.controller.motion.bodies.delete(
+      this.controller.motionId + ":body:" + root.userData.key,
+    );
     const used = new Set<THREE.Material>();
     root.traverse((o) => {
       if (o instanceof THREE.Mesh) {
@@ -144,7 +143,11 @@ export class ConstellationScene implements SpatialRenderLayer {
       .map((key) => {
         if (!this.controller.nodes.has(key)) return "removed:" + key;
         const p = this.navigation.position(key);
-        return `${p.x},${p.y},${p.z}`;
+        const scale =
+          this.controller.motion.bodies.get(
+            this.controller.motionId + ":body:" + key,
+          )?.channels.x.value ?? 1;
+        return `${p.x},${p.y},${p.z},${scale}`;
       })
       .join(";");
     const preparedKey = JSON.stringify([
@@ -228,10 +231,67 @@ export class ConstellationScene implements SpatialRenderLayer {
         root = this.create(n);
         this.objects.set(n.key, root);
         this.scene.add(root);
+        const id = this.controller.motionId + ":body:" + n.key;
+        this.controller.motion.add(id, {
+          x: 0.94,
+          y: 0,
+          w: 0,
+          h: 0,
+          lift: 0,
+          yaw: 0,
+          opacity: 1,
+        });
       }
       const p = this.navigation.position(n.key);
       root.position.set(p.x, p.y, p.z);
-      root.scale.setScalar(n.key === this.controller.selected ? 1.18 : 1);
+      const motionId = this.controller.motionId + ":body:" + n.key,
+        bodyMotion = this.controller.motion.bodies.get(motionId)!,
+        targetScale = n.key === this.controller.selected ? 1.08 : 1;
+      if (bodyMotion.channels.x.target !== targetScale) {
+        this.controller.motion.target(
+          motionId,
+          { x: targetScale, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity: 1 },
+          "spatial body emphasis",
+        );
+        this.wake();
+      }
+      if (
+        this.controller.policy.reduced ||
+        this.controller.policy.quiet ||
+        this.controller.policy.hidden
+      )
+        this.controller.motion.snap(motionId);
+      root.scale.setScalar(this.controller.motion.pose(motionId).x);
+      const body = root.userData.body as THREE.Mesh<
+          THREE.BufferGeometry,
+          THREE.ShaderMaterial
+        >,
+        radius = root.userData.appearance.radius as number,
+        distance = this.camera.position.distanceTo(root.position),
+        pixels =
+          (radius * height) /
+          (2 * Math.tan((43 * Math.PI) / 360) * Math.max(1, distance));
+      const level =
+        pixels > 75 && this.controller.policy.tier !== "efficient"
+          ? this.primitives.high
+          : pixels > 20
+            ? this.primitives.medium
+            : this.primitives.low;
+      body.geometry = level;
+      body.material.uniforms.uDetail.value = Math.max(
+        0,
+        Math.min(1, (pixels - 5) / 24),
+      );
+      const air = root.getObjectByName("atmosphere") as THREE.Mesh | undefined;
+      if (air) air.geometry = level;
+      const ring = root.getObjectByName("planet-ring") as
+        | THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>
+        | undefined;
+      if (ring)
+        ring.material.uniforms.uDetail.value = Math.max(
+          0,
+          Math.min(1, (pixels - 9) / 30),
+        );
       root.rotation.y =
         this.controller.state.anchors[n.key]?.rotation ?? hash(n.id) * Math.PI;
     }

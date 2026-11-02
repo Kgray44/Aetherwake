@@ -63,6 +63,102 @@ const settle = (m) => {
   for (let i = 0; i < 180; i++) m.step(1 / 60);
 };
 
+test("manual camera input during a pending destination keeps its new pose on arrival", async () => {
+  let release;
+  const {
+    c,
+    motion,
+    navigation: n,
+  } = setup(fixture(), {
+    navigate: () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  });
+  const travel = c.go({ kind: "universe" });
+  await new Promise(setImmediate);
+  n.orbit(90, -30);
+  n.pan(80, 20);
+  const desired = n.bookmark();
+  release();
+  await travel;
+  settle(motion);
+  assert.equal(c.location.kind, "universe");
+  assert.deepEqual(n.camera, desired);
+  c.dispose();
+});
+
+test("wheel zoom crosses project and universe scope without resetting the continuous camera", async () => {
+  const visits = [];
+  const {
+    c,
+    motion,
+    navigation: n,
+  } = setup(fixture(), {
+    navigate: async (destination) => {
+      visits.push(destination);
+    },
+  });
+  n.zoom(0.4);
+  const outer = n.bookmark();
+  await new Promise(setImmediate);
+  settle(motion);
+  assert.equal(c.location.kind, "universe");
+  assert.deepEqual(n.camera, outer);
+  c.select("project:p");
+  n.zoom(3);
+  const inner = n.bookmark();
+  await new Promise(setImmediate);
+  settle(motion);
+  assert.deepEqual(c.location, { kind: "project", projectId: "p" });
+  assert.deepEqual(n.camera, inner);
+  assert.deepEqual(visits, [
+    { kind: "constellation", projectId: null },
+    { kind: "constellation", projectId: "p" },
+  ]);
+  c.dispose();
+});
+
+test("body emphasis shares the host spring and small bodies lose detail, with no orphaned motion", () => {
+  const { c, motion, navigation: n } = setup();
+  let wakes = 0;
+  const scene = new ConstellationScene(
+    c,
+    n,
+    () => ({}),
+    () => {
+      wakes++;
+    },
+  );
+  scene.update(1440, 900);
+  const key = "project:p",
+    root = scene.objects.get(key);
+  assert.ok(root);
+  settle(motion);
+  scene.update(1440, 900);
+  c.select(key);
+  scene.update(1440, 900);
+  assert.equal(root.scale.x, 1);
+  motion.step(0.04);
+  scene.update(1440, 900);
+  assert.ok(root.scale.x > 1 && root.scale.x < 1.08);
+  c.setPolicy({ reduced: true });
+  scene.update(1440, 900);
+  assert.equal(root.scale.x, 1.08);
+  const closeCount = root.userData.body.geometry.attributes.position.count;
+  n.target({ ...n.camera, distance: 40000 });
+  scene.update(1440, 900);
+  assert.ok(root.userData.body.geometry.attributes.position.count < closeCount);
+  assert.equal(root.userData.body.material.uniforms.uDetail.value, 0);
+  assert.ok(wakes > 0);
+  scene.dispose();
+  assert.equal(
+    [...motion.bodies.keys()].some((id) => id.includes(":body:")),
+    false,
+  );
+  c.dispose();
+});
+
 test("orbit is damped, bounded, interruptible and reduced-motion compatible without a private RAF", () => {
   const { c, motion, navigation: n } = setup();
   const start = n.camera;

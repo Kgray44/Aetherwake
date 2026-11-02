@@ -28,9 +28,9 @@ export function planetAppearance(
           ]
         : type === 3
           ? [
-              [0.48 + b * 0.13, 0.16, 0.48],
-              [0.5 + b * 0.15, 0.24, 0.72],
-              [0.12, 0.12, 0.91],
+              [hue, 0.3 + c * 0.22, 0.19 + b * 0.1],
+              [(hue + 0.035) % 1, 0.25 + c * 0.2, 0.42 + b * 0.13],
+              [(hue + 0.08) % 1, 0.1 + c * 0.12, 0.76 + b * 0.08],
             ]
           : type === 4
             ? [
@@ -79,7 +79,7 @@ ${noise}
 void main(){
  vec3 p=normalize(vLocal),N=normalize(vNormal),V=normalize(cameraPosition-vWorld),L=normalize(uLight);
  float broad=field(p*(3.+uSeed.y*3.)+uSeed.z*12.);
- float fine=field(p*(13.+uSeed.w*9.));
+ float fine=uDetail>.02?field(p*(13.+uSeed.w*9.)):.5;
  vec3 color=mix(uLow,uMid,broad);float relief=1.;float water=0.;float lava=0.;
  if(uType<.5){
    color=mix(uLow,uMid,smoothstep(.23,.8,broad));color=mix(color,uHigh,fine*.25*uDetail);
@@ -98,7 +98,7 @@ void main(){
    float longitude=atan(p.z,p.x),delta=atan(sin(longitude-uSeed.y*6.28),cos(longitude-uSeed.y*6.28));
    float storm=1.-smoothstep(.06,.20,length(vec2(delta*.55,(p.y-(uSeed.z-.5)) *2.8)));color=mix(color,uHigh,storm*.65);
  }else if(uType<3.5){
-   float cracks=1.-smoothstep(.015,.08,abs(fine-.51));color=mix(uMid,uHigh,broad);color=mix(color,uLow,cracks*.45*uDetail);
+   float cracks=1.-smoothstep(.015,.08,abs(fine-.51));color=mix(uLow,uMid,smoothstep(.2,.76,broad));color=mix(color,uHigh,smoothstep(.78,.97,abs(p.y)));color=mix(color,uLow,cracks*.45*uDetail);
  }else{
    float fissure=1.-smoothstep(.01,.045,abs(fine-.5));color=mix(uLow,uMid,broad*.32);lava=fissure*uDetail*.6;color=mix(color,uHigh,lava);
  }
@@ -119,8 +119,8 @@ void main(){vec3 N=normalize(vNormal),V=normalize(cameraPosition-vWorld);float r
 }
 `;
 const rings = /*glsl*/ `
-uniform vec3 uColor;uniform vec4 uSeed;varying vec3 vLocal;
-void main(){float r=length(vLocal.xy);float band=.48+.35*sin(r*(90.+uSeed.z*50.))+.12*sin(r*310.);float gap=1.-smoothstep(.006,.015,abs(r-(.76+uSeed.x*.08)));float alpha=smoothstep(.63,.66,r)*(1.-smoothstep(.98,1.,r))*band*(1.-gap*.8);gl_FragColor=vec4(uColor,alpha*.72);
+uniform vec3 uColor;uniform vec4 uSeed;uniform float uDetail;varying vec3 vLocal;
+void main(){float r=length(vLocal.xy);float band=.48+uDetail*(.35*sin(r*(90.+uSeed.z*50.))+.12*sin(r*310.));float gap=1.-smoothstep(.006,.015,abs(r-(.76+uSeed.x*.08)));float alpha=smoothstep(.63,.66,r)*(1.-smoothstep(.98,1.,r))*band*(1.-gap*.8*uDetail);gl_FragColor=vec4(uColor,alpha*.72);
 #include <tonemapping_fragment>
 #include <colorspace_fragment>
 }
@@ -191,6 +191,7 @@ export function createPlanet(
         blending: THREE.AdditiveBlending,
       }),
     );
+    air.name = "atmosphere";
     air.scale.setScalar(appearance.radius * 1.055);
     group.add(air);
   }
@@ -202,6 +203,7 @@ export function createPlanet(
         fragmentShader: rings,
         uniforms: {
           uColor: { value: color(2) },
+          uDetail: { value: 1 },
           uSeed: {
             value: new THREE.Vector4(
               ...(appearance.seeds as [number, number, number, number]),
@@ -213,6 +215,7 @@ export function createPlanet(
         depthWrite: false,
       }),
     );
+    ring.name = "planet-ring";
     ring.scale.setScalar(appearance.radius * (1.8 + appearance.seeds[2] * 0.7));
     ring.rotation.x = 0.65 + appearance.seeds[1] * 0.75;
     ring.rotation.z = appearance.seeds[3] * 2;

@@ -34,7 +34,7 @@ await navigation.ready;
 navigation.frame(performance.now());
 ```
 
-The subsystem creates no animation loop or graphics context. The transparent overlay keeps the existing celestial environment and Vela intact. Working workspace and resource surfaces are host-owned. `onTransition` supplies the destination world anchor and camera; map them using `.aw-spatial-field`'s screen rectangle for the host's arrival motion. Keep input available immediately. Reduced motion, Quiet, and hidden policy should also settle the host's stage transition.
+The subsystem creates no animation loop or graphics context. Render its `layer` through the host's existing Three.js renderer, between the environment background and foreground Vela. The transparent overlay and host-owned glass work surfaces stay in place. `onTransition.screenOrigin` supplies the real projected destination in client pixels for the host's arrival motion. Keep input available immediately. Reduced motion, Quiet, and hidden policy should also settle the host's stage transition.
 
 `update(snapshot)` reconciles canonical direct navigation, permission changes, and newly created objects. `setPolicy({tier,reduced,quiet,hidden,graphicsAvailable})` shares host policy. Call `dispose()` before tearing down the surface and explicitly flush persistence before closing the native host. Optional resource opening must be idempotent focus, not a toggle that can close the editor.
 
@@ -45,12 +45,14 @@ External canonical switches retain the previous available location and camera in
 ## Behavior
 
 - Universe shows project anchors and standalone workspaces. Project overview shows workspaces; close zoom reveals resource proxies. Working scale delegates to actual workspace panels and editor identities.
-- Direct destinations, search/Open/Locate, keyboard Enter, Back, and conventional controls remain available. Empty-space drag/arrows pan; wheel/plus/minus zoom; Home recenters; Escape stops camera motion. No flight controls or rotation are required.
-- Incremental positions retain existing anchors. Selected project/workspace anchors can be positioned numerically. Resources derive from canonical block geometry. Position never creates ownership or relationships.
+- Direct destinations, search/Open/Locate, keyboard Enter, Back, history, and list presentation remain available. Drag orbits; Shift-drag/arrows pan; wheel/plus/minus zoom; Home recenters; Escape stops camera motion. Wheel zoom crosses project/Universe scope continuously. Manual camera input during an awaited navigation remains authoritative on arrival.
+- Incremental 3D positions retain existing anchors. Alt-drag or numeric controls move and pin bodies; workspace movement carries unpinned descendants. Radial/hierarchical arrangements have preview, cancel, apply and undo. Position never creates ownership or relationships.
 - View state contains only IDs, anchor coordinates, camera bookmarks, and bounded history. Persist it privately through the application service, with a 2 MiB payload bound. It is not a second content database.
-- Screen-space collision culling, distance culling, 40/80/120 proxy caps, two-line labels, and selected-only bounded edges limit visual density. All authorized destinations remain searchable when labels are culled. Shared resources retain distinct block IDs and the same canonical resource ID.
+- Screen-space label packing, frustum/distance culling, 70/160/280 body caps and 40 relationship curves limit visual density. All authorized destinations remain searchable when labels are culled. Shared resources retain distinct block IDs and the same canonical resource ID.
+- Every planet and moon gets deterministic colors, terrain, craters, bands, ice, oceans or volcanic detail from its canonical ID. New objects automatically receive their own appearance; shared placements and restarts retain it. These are texture-free shaders over three shared sphere meshes. Screen-size geometry/detail reduction keeps distant bodies cheap and reduces fine-pattern shimmer. Optional thin atmosphere and rings add at most two meshes per body.
 - Relationships are taken from typed canonical edges. Inferred links use dashed strokes and explicit suggestion text. There is no fabricated activity or resource-content interpretation.
-- Camera retargeting preserves spring velocity. Async destination requests are serialized so the latest request becomes the final canonical destination. Navigation errors and failed view persistence remain visible.
+- Camera and selection emphasis use the host's spring coordinator. Retargeting preserves velocity; reduced motion/Quiet settle immediately. Async destination requests are serialized so the latest request becomes the final canonical destination. Navigation errors and failed view persistence remain visible.
+- Optional typed `graphAction`/capabilities connect Create, placement, archive, explicit relationships and app-level conversation continuation to the existing canonical service. The module never substitutes a content database or claims native provider branching. Ordinary branch context is explicitly previewed and selected by the user.
 
 ## Reproduce the synthetic demonstration
 

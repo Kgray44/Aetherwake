@@ -134,6 +134,8 @@ export class SpatialNavigator {
   presentation: "spatial" | "list" = "spatial";
   sensitivity = 1;
   neighborhood: string | undefined;
+  manualRevision = 0;
+  private semanticPending = false;
   private undo: { key: string; position: Vector3; pinned: boolean }[][] = [];
   private preview = new Map<string, Vector3>();
   readonly controller: ConstellationController;
@@ -309,6 +311,7 @@ export class SpatialNavigator {
   }
   orbit(dx: number, dy: number) {
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+    this.manualRevision++;
     const p = this.bookmark();
     this.target(
       {
@@ -325,6 +328,7 @@ export class SpatialNavigator {
   }
   pan(dx: number, dy: number) {
     if (!Number.isFinite(dx) || !Number.isFinite(dy)) return;
+    this.manualRevision++;
     const p = this.bookmark(),
       scale = p.distance / 1400;
     p.target = {
@@ -336,14 +340,60 @@ export class SpatialNavigator {
   }
   zoom(factor: number) {
     if (!Number.isFinite(factor) || factor <= 0) return;
+    this.manualRevision++;
     const p = this.bookmark();
-    this.target(
-      { ...p, distance: clamp(p.distance / factor, 180, 100000) },
-      "dolly",
-    );
+    p.distance = clamp(p.distance / factor, 180, 100000);
+    const c = this.controller;
+    if (c.location.kind === "universe" && factor > 1) {
+      const selected = c.nodes.get(c.selected ?? "");
+      if (selected?.kind === "project")
+        p.target = { ...this.position(selected.key) };
+    }
+    this.target(p, "dolly");
+    if (this.neighborhood && p.distance > 2200) {
+      this.neighborhood = undefined;
+      delete p.neighborhood;
+    }
+    if (this.semanticPending || c.pending) return;
+    let destination: import("./types.ts").Location | undefined;
+    if (c.location.kind === "project" && p.distance > 3300)
+      destination = { kind: "universe" };
+    else if (c.location.kind === "universe" && p.distance < 1900) {
+      const nearest = [...c.nodes.values()]
+        .filter((n) => n.kind === "project")
+        .sort((a, b) => {
+          const ap = this.position(a.key),
+            bp = this.position(b.key);
+          return (
+            Math.hypot(ap.x - p.target.x, ap.z - p.target.z) -
+            Math.hypot(bp.x - p.target.x, bp.z - p.target.z)
+          );
+        })[0];
+      if (nearest) {
+        const at = this.position(nearest.key);
+        if (
+          Math.hypot(at.x - p.target.x, at.y - p.target.y, at.z - p.target.z) <
+          900
+        )
+          destination = { kind: "project", projectId: nearest.id };
+      }
+    }
+    if (destination) {
+      this.semanticPending = true;
+      void c
+        .go(destination, undefined, p)
+        .catch((e) => {
+          c.error = e instanceof Error ? e.message : "Navigation unavailable";
+          this.dirty();
+        })
+        .finally(() => {
+          this.semanticPending = false;
+        });
+    }
   }
   fit(key = this.controller.selected) {
     if (!key || !this.controller.nodes.has(key)) return;
+    this.manualRevision++;
     const n = this.controller.nodes.get(key)!;
     this.target(
       {
@@ -355,7 +405,8 @@ export class SpatialNavigator {
       "approach selection",
     );
   }
-  interrupt() {
+  interrupt(manual = true) {
+    if (manual) this.manualRevision++;
     this.controller.motion.target(
       this.id,
       this.pose(this.camera),
@@ -366,6 +417,7 @@ export class SpatialNavigator {
     this.dirty();
   }
   recenter() {
+    this.manualRevision++;
     this.neighborhood = undefined;
     this.target(this.defaultCamera(), "recenter spatial view");
   }
