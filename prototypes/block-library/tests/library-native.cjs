@@ -130,7 +130,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
       receipt.actions.push({ action: 'native drag', selector, dx, dy });
     };
     const graphics = () => js(x.graphics());
-    inspectFailure = async () => ({ graphics: await graphics(), context: await js(x.failureContext()), target: await js(x.targetDiagnostics(receipt.lastIntent?.selector ?? '')) });
+    inspectFailure = async () => ({ graphics: await graphics(), context: await js(x.failureContext()), target: await js(x.targetDiagnostics(receipt.lastIntent?.selector ?? '')), wheel: await js(x.wheelContext(receipt.lastIntent?.point ?? null)) });
     const shot = async (name, diagnostic = false) => {
       assert(receipt.screenshots.length < limits.maxScreenshots, 'native_capture_count_exceeded');
       const before = await graphics(); if (!diagnostic) await wait(x.drawsAfter(before.draws));
@@ -252,10 +252,21 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
       const serialized = JSON.stringify(template); for (const privateText of [noteText, message, oldDraft]) assert(!serialized.includes(JSON.stringify(privateText).slice(1, -1)), 'Template must not copy source content/drafts');
       assert.equal(await js(x.previewTiles()), 3, 'Actual template layout preview');
       await shot('native-saved-template-preview'); await click('.aw-library__header button');
-      const leave = await js(x.emptyBackground()); assert(leave, 'Actual empty background for workspace departure');
+      // Closing surfaces intentionally block workspace wheel until actual disposal.
+      await wait(x.absent('.aw-contextual-surface, dialog[open], .floating-dialog:not([hidden]), .folio.dragging'));
+      let leave = await js(x.emptyBackground()); assert(leave, 'Actual empty background for workspace departure');
+      receipt.lastIntent = { action: 'native background click leaves editing', point: leave };
+      for (const type of ['mouseMove', 'mouseDown', 'mouseUp']) guard.input({ type, ...leave, button: 'left', clickCount: 1 });
+      receipt.actions.push(receipt.lastIntent); await guard.pause(80);
       const dpi = await js(x.dpi()); assert(Number.isFinite(dpi) && dpi > 0 && dpi <= 16);
+      leave = await js(x.emptyBackground()); assert(leave, 'Actual background for native wheel departure');
+      const admission = await js(x.wheelContext(leave));
+      receipt.lastIntent = { action: 'native wheel leaves source workspace', point: leave, domDeltaY: 120, nativeDeltaY: -120 * dpi, dpi, before: admission };
+      assert.equal(admission.ready, true, 'Actual wheel admission requires closed surfaces and native background focus');
+      receipt.actions.push(receipt.lastIntent);
       guard.input({ type: 'mouseMove', ...leave }); guard.input({ type: 'mouseWheel', ...leave, deltaX: 0, deltaY: -120 * dpi, canScroll: true });
-      receipt.actions.push({ action: 'native wheel leaves source workspace', domDeltaY: 120 }); await wait(x.navigationIs('constellation'));
+      await guard.pause(160); receipt.lastIntent.after = await js(x.wheelContext(leave));
+      await wait(x.navigationIs('constellation'));
       await openTemplates(project.id); await type('.aw-library input[aria-label="Search workspace templates"]', labels.template); await button('.aw-library__list', labels.template + ' ·', true);
       await type(await field('.aw-library__detail > form', 'Workspace name'), labels.instance); await button('.aw-library__detail > form', 'Check template');
       await wait(x.containsText('.aw-library__detail', '1 new resources, 2 references, 3 placements'));

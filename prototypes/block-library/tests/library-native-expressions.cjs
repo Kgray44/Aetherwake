@@ -42,6 +42,7 @@ const expressions = {
   templateNamed: name => `window.aerynthHost.command('library',${q({ name: 'listTemplates', input: { query: name } })}).then(r=>r.result.some(t=>t.name===${q(name)}))`,
   previewTiles: () => `document.querySelector('.aw-library__layout')?.children.length`,
   emptyBackground: () => `(()=>{for(let y=150;y<innerHeight-80;y+=45)for(let x=45;x<innerWidth-40;x+=55){const e=document.elementFromPoint(x,y);if(e&&['world','stage','app'].includes(e.id))return{x,y}}return null})()`,
+  wheelContext: point => `(()=>{const a=document.activeElement,blocked=!!document.querySelector('.aw-contextual-surface, dialog[open], .floating-dialog:not([hidden]), .folio.dragging'),editing=!!a?.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])'),point=${q(point)},hit=point?document.elementFromPoint(point.x,point.y):null,background=!!hit&&['world','stage','app'].includes(hit.id),application=${app};return {ready:application.navigation.kind==='workspace'&&background&&!blocked&&!editing&&!document.hidden&&document.hasFocus(),navigation:application.navigation,viewport:application.viewport,blocked,editing,hidden:document.hidden,focused:document.hasFocus(),activeElement:a?{tag:a.tagName,id:a.id,className:typeof a.className==='string'?a.className:''}:null,point,hit:hit?{tag:hit.tagName,id:hit.id,className:typeof hit.className==='string'?hit.className:''}:null,surfaces:[...document.querySelectorAll('.aw-contextual-surface,dialog[open],.floating-dialog:not([hidden])')].slice(0,8).map(n=>({tag:n.tagName,id:n.id,className:n.className,ariaLabel:n.getAttribute('aria-label')}))}})()`,
   dpi: () => 'devicePixelRatio',
   navigationIs: kind => `${app}.navigation.kind===${q(kind)}`,
   containsText: (selector, text) => `document.querySelector(${q(selector)}).textContent.includes(${q(text)})`,
@@ -65,7 +66,7 @@ exports.preflight = () => {
     graphics: [[]], failureContext: [[]], drawsAfter: [[17]], exists: [[selector], ['.aw-library input[aria-label="Search blocks"]']], absent: [[selector]], enabled: [[selector]], activeWorkspace: [[id]],
     textMetrics: [[selector]], fontSize: [[selector]], fontCloseTo: [[selector, 24]], settingScale: [[id, 1.5]], projectNamed: [[label]], workspaceNamed: [[label]], organizationIs: [['freeform']], taskStatusIs: [[id, 'done']],
     conversationHasUser: [[id, label]], resourceTextIs: [[id, label]], noteAndEditorText: [[selector, id, label]], blockAbsent: [['id', id], ['resource_id', id]], layoutAfter: [[23]], templateNamed: [[label]],
-    previewTiles: [[]], emptyBackground: [[]], dpi: [[]], navigationIs: [['constellation']], containsText: [[selector, label]], draftIs: [[id, label]],
+    previewTiles: [[]], emptyBackground: [[]], wheelContext: [[{ x: 45, y: 220 }]], dpi: [[]], navigationIs: [['constellation']], containsText: [[selector, label]], draftIs: [[id, label]],
   };
   const names = Object.keys(expressions).sort();
   if (JSON.stringify(names) !== JSON.stringify(Object.keys(inputs).sort())) throw Error('uncovered_renderer_expression_factory');

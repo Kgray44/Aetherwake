@@ -9,7 +9,7 @@ const { captureAllowed } = require('./library-native.cjs');
 
 test('every A/C renderer factory and branch compiles in direct and actual guarded wait contexts', () => {
   const result = preflight();
-  assert.equal(result.factories, 38); assert.equal(result.cases, 44);
+  assert.equal(result.factories, 39); assert.equal(result.cases, 45);
   assert.deepEqual(result.names, Object.keys(expressions).sort());
   assert.match(result.sha256, /^[a-f0-9]{64}$/);
   assert.deepEqual(result, preflight(), 'source preparation and native execution bind the same deterministic preflight');
@@ -66,4 +66,19 @@ test('native header coordinates admit pointer-transparent label fallthrough only
   assert.deepEqual(JSON.parse(JSON.stringify(runInNewContext(expressions.surfacePoint('.label', '.card'), context))), { x: 140, y: 212 });
   interactive = true; assert.equal(runInNewContext(expressions.surfacePoint('.label', '.card'), context), null, 'a real input/button is never treated as draggable card surface');
   interactive = false; hitCard = otherCard; assert.equal(runInNewContext(expressions.surfacePoint('.label', '.card'), context), null, 'overlapping foreign cards remain failures');
+});
+
+test('wheel admission observes real closing surfaces, active editing and exact background hit without changing focus', () => {
+  let blocked = true, editing = false, focused = true, hitId = 'world';
+  const context = { window: { __aerynth: { application: () => ({ navigation: { kind: 'workspace' }, viewport: { x: 4, y: -8, zoom: 1 } }) } }, document: {
+    activeElement: { tagName: 'BUTTON', id: 'workspace-manager', className: '', closest: () => editing ? {} : null },
+    hidden: false, hasFocus: () => focused, querySelector: () => blocked ? {} : null, querySelectorAll: () => [], elementFromPoint: () => ({ tagName: 'CANVAS', id: hitId, className: '' }),
+  } };
+  const observe = () => JSON.parse(JSON.stringify(runInNewContext(expressions.wheelContext({ x: 45, y: 220 }), context)));
+  assert.equal(observe().ready, false, 'closing surface remains a blocker even after its Close button was clicked');
+  blocked = false; assert.equal(observe().ready, true);
+  editing = true; assert.equal(observe().ready, false, 'editor focus must be left through native input');
+  editing = false; hitId = 'card'; assert.equal(observe().ready, false, 'a card is not empty background');
+  hitId = 'world'; focused = false; assert.equal(observe().ready, false);
+  focused = true; const ready = observe(); assert.deepEqual(ready.point, { x: 45, y: 220 }); assert.deepEqual(ready.viewport, { x: 4, y: -8, zoom: 1 });
 });
