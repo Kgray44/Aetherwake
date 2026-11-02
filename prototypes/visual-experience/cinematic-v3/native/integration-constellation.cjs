@@ -194,8 +194,11 @@ exports.verify = async ({
       const beforeMove = (await snapshot()).blocks.find(
         (b) => b.id === otherBlock,
       );
+      await js(
+        `window.__nativePointerEvents=[];for(const type of ['pointerdown','pointermove','pointerup','pointercancel'])document.addEventListener(type,event=>{if(window.__nativePointerEvents.length<60)window.__nativePointerEvents.push({type,x:event.clientX,y:event.clientY,buttons:event.buttons,target:event.target.className,block:event.target.closest?.('[data-block]')?.dataset.block,trusted:event.isTrusted})},true)`,
+      );
       const p = await js(
-        `(()=>{const e=document.querySelector('[data-block="${otherBlock}"] .grip'),r=e.getBoundingClientRect();return {x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`,
+        `(()=>{const e=document.querySelector('[data-block="${otherBlock}"] .grip'),r=e.getBoundingClientRect(),x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2),h=document.elementFromPoint(x,y);if(!h||!(h===e||e.contains(h)))throw Error('Grip hit target occluded: '+h?.className);return {x,y}})()`,
       );
       win.webContents.sendInputEvent({ type: "mouseMove", ...p });
       win.webContents.sendInputEvent({
@@ -204,12 +207,14 @@ exports.verify = async ({
         clickCount: 1,
         ...p,
       });
+      await pause(60);
       for (let i = 1; i <= 12; i++) {
         win.webContents.sendInputEvent({
           type: "mouseMove",
-          x: p.x - (20 * i) / 12,
-          y: p.y + (90 * i) / 12,
+          x: Math.round(p.x - (20 * i) / 12),
+          y: Math.round(p.y + (90 * i) / 12),
           button: "left",
+          modifiers: ["leftbuttondown"],
         });
         await pause(25);
       }
@@ -222,6 +227,7 @@ exports.verify = async ({
       });
       await wait(
         `window.__aerynth.application().blocks.find(b=>b.id===${JSON.stringify(otherBlock)}).version>${beforeMove.version}`,
+        8000,
       );
       await click(`[data-block="${otherBlock}"] .unfold`);
       await fill(
@@ -326,6 +332,11 @@ exports.verify = async ({
     receipt.passed = true;
   } catch (error) {
     receipt.error = error.stack;
+    try {
+      receipt.pointerEvents = await win.webContents.executeJavaScript(
+        "window.__nativePointerEvents",
+      );
+    } catch {}
     try {
       await fs.writeFile(
         path.join(out, "failure.png"),

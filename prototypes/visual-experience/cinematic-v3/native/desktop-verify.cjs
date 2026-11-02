@@ -320,7 +320,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted }) => {
 
 async function driver(win) {
   const js = (code) => win.webContents.executeJavaScript(code, true);
-  const wait = async (expr, timeout = 90000) => {
+  const wait = async (expr, timeout = 30000) => {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
       if (await js(`(()=>{try{return (${expr})}catch{return false}})()`))

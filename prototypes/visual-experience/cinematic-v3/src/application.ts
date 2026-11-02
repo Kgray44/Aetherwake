@@ -876,9 +876,7 @@ export function installApplication(hooks: Hooks) {
         mode: String(data.get("mode")) as OrganizationMode,
         gap: Number(data.get("gap")),
         structured: {
-          ...(data.get("columns")
-            ? { columnCount: Number(data.get("columns")) }
-            : {}),
+          columnCount: data.get("columns") ? Number(data.get("columns")) : null,
           rowHeight: Number(data.get("rowHeight")),
         },
       };

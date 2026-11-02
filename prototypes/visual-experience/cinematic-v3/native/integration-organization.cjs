@@ -122,12 +122,14 @@ exports.verify = async ({
         button: "left",
         clickCount: 1,
       });
+      await pause(60);
       for (let i = 1; i <= 14; i++) {
         win.webContents.sendInputEvent({
           type: "mouseMove",
           x: Math.round(p.x + (dx * i) / 14),
           y: Math.round(p.y + (dy * i) / 14),
           button: "left",
+          modifiers: ["leftbuttondown"],
         });
         await pause(18);
       }
