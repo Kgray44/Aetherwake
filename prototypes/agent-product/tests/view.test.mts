@@ -466,3 +466,149 @@ test("new profile project association uses an actual authorized canonical choice
   assert.equal(f.db.prepare("SELECT count(*) n FROM workspaces").get()!.n, 0);
   view.controller.dispose();
 });
+
+test("direct canonical open works during initial refresh and outside current list/search without mutating the profile", async () => {
+  const f = canonicalFixture(),
+    a = f.create("Synthetic direct profile");
+  let reads = 0;
+  const view = viewFixture(f, {
+    async inspect(id) {
+      reads++;
+      return f.service.inspect(id);
+    },
+  });
+  assert.equal(await view.controller.open(a.agent.resourceId), "opened");
+  assert(reads >= 1);
+  assert.equal(
+    view.root.querySelector(".agent-inspector").dataset.resourceId,
+    a.agent.resourceId,
+  );
+  view.input("search", "Does not match");
+  await until(
+    () => view.root.querySelector(".agent-list").children.length === 0,
+  );
+  const before = f.service.inspect(a.agent.resourceId);
+  assert.equal(await view.controller.open(a.agent.resourceId), "opened");
+  assert.equal(view.action("search").value, "Does not match");
+  assert.deepEqual(f.service.inspect(a.agent.resourceId), before);
+  view.controller.dispose();
+});
+
+test("direct open retains dirty draft until explicit discard and never uses a DOM click macro", async () => {
+  const f = canonicalFixture(),
+    a = f.create("Synthetic guarded profile"),
+    b = f.create("Synthetic target profile"),
+    inspected: string[] = [];
+  const view = viewFixture(f, {
+    async inspect(id) {
+      inspected.push(id);
+      return f.service.inspect(id);
+    },
+  });
+  await view.controller.open(a.agent.resourceId);
+  view.click("edit");
+  const input = view.input("purpose", "Keep exact guarded draft");
+  input.focus();
+  input.setSelectionRange(2, 7);
+  assert.equal(await view.controller.open(b.agent.resourceId), "draft-review");
+  assert(!inspected.includes(b.agent.resourceId));
+  assert.equal(view.action("purpose").value, "Keep exact guarded draft");
+  assert.equal(view.doc.activeElement, input);
+  assert.equal(input.selectionStart, 2);
+  view.click("keep-draft");
+  assert.equal(view.controller.hasUnsavedChanges(), true);
+  assert.equal(await view.controller.open(b.agent.resourceId), "draft-review");
+  view.click("discard-draft");
+  await until(
+    () =>
+      view.root.querySelector(".agent-inspector").dataset.resourceId ===
+      b.agent.resourceId,
+  );
+  assert(inspected.includes(b.agent.resourceId));
+  view.controller.dispose();
+});
+
+test("direct open preserves unconfirmed mutation retry intent and cannot reinterpret archive metadata as authorized opened content", async () => {
+  const f = canonicalFixture(),
+    target = f.create("Synthetic other profile");
+  let first = true;
+  const commands: string[] = [];
+  const view = viewFixture(f, {
+    async create(input) {
+      commands.push(input.commandId);
+      const receipt = f.service.create(input);
+      if (first) {
+        first = false;
+        throw Error("synthetic lost reply");
+      }
+      return receipt;
+    },
+  });
+  await view.controller.refresh();
+  view.click("create");
+  view.input("title", "Synthetic unconfirmed profile");
+  view.input("purpose", "Synthetic unconfirmed draft");
+  view.submit();
+  await until(() => !view.action("retry").hidden);
+  assert.equal(
+    await view.controller.open(target.agent.resourceId),
+    "draft-review",
+  );
+  view.click("keep-draft");
+  assert.equal(view.action("retry").hidden, false);
+  view.click("retry");
+  await until(() => !view.controller.hasUnsavedChanges());
+  assert.equal(commands[0], commands[1]);
+  assert.equal(f.service.list().items.length, 2);
+  const current = f.service.inspect(target.agent.resourceId);
+  f.service.archive({
+    commandId: "archive-direct-target",
+    agent: current.ref,
+    archived: true,
+  });
+  view.click("toggle-archived");
+  await until(
+    () =>
+      !!view.root.querySelector(
+        `[data-resource-id="${target.agent.resourceId}"]`,
+      ),
+  );
+  assert.equal(
+    await view.controller.open(target.agent.resourceId),
+    "unavailable",
+  );
+  assert.match(
+    view.root.querySelector(".agent-availability").textContent,
+    /unavailable/,
+  );
+  view.controller.dispose();
+});
+
+test("direct-open result follows actual latest authorization, cancellation and disposal, never a retained previous profile", async () => {
+  const f = canonicalFixture(),
+    a = f.create("Synthetic delayed direct"),
+    b = f.create("Synthetic newest direct"),
+    gate = deferred<ReturnType<typeof f.service.inspect>>();
+  const view = viewFixture(f, {
+    async inspect(id) {
+      return id === a.agent.resourceId ? gate.promise : f.service.inspect(id);
+    },
+  });
+  const older = view.controller.open(a.agent.resourceId);
+  assert.equal(await view.controller.open(b.agent.resourceId), "opened");
+  gate.resolve(f.service.inspect(a.agent.resourceId));
+  assert.equal(await older, "unavailable");
+  assert.equal(
+    view.root.querySelector(".agent-inspector").dataset.resourceId,
+    b.agent.resourceId,
+  );
+  f.allow(false);
+  assert.equal(await view.controller.open(b.agent.resourceId), "unavailable");
+  f.allow(true);
+  assert.equal(
+    await view.controller.open("synthetic-missing-resource"),
+    "unavailable",
+  );
+  view.controller.dispose();
+  assert.equal(await view.controller.open(b.agent.resourceId), "unavailable");
+});

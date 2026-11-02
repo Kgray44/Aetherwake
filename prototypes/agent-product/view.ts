@@ -22,6 +22,7 @@ export interface AgentLibraryViewOptions {
   onOpenResource?(resourceId: string): void | Promise<void>;
 }
 export interface AgentLibraryView {
+  open(resourceId: string): Promise<"opened" | "draft-review" | "unavailable">;
   refresh(): Promise<void>;
   frame(): void;
   hasUnsavedChanges(): boolean;
@@ -88,6 +89,7 @@ export function mountAgentLibrary(
     archived: AgentSummary | null = null,
     effective: EffectiveAgentConfiguration | null = null;
   let selectedId: string | null = null,
+    detailPending = false,
     editing = false,
     creating = false,
     dirty = false,
@@ -859,15 +861,21 @@ export function mountAgentLibrary(
     }
     motion.wake();
   }
-  async function loadDetail(id: string, force = false) {
+  async function loadDetail(
+    id: string,
+    force = false,
+    allowArchivedSummary = true,
+  ): Promise<boolean> {
     const epoch = ++detailEpoch;
     selectedId = id;
     selectRows();
     const summary = rows.get(id)?.summary;
-    if (summary?.resource.state === "archived") {
+    if (allowArchivedSummary && summary?.resource.state === "archived") {
+      detailPending = false;
       showArchived(summary);
-      return;
+      return true;
     }
+    detailPending = true;
     inspector.setAttribute("aria-busy", "true");
     if (current?.resource.id !== id && archived?.resource.id !== id) {
       current = null;
@@ -888,7 +896,7 @@ export function mountAgentLibrary(
     }
     try {
       const value = await client.inspect(id);
-      if (disposed || epoch !== detailEpoch || selectedId !== id) return;
+      if (disposed || epoch !== detailEpoch || selectedId !== id) return false;
       if (editing && editBase?.resource.id === id && !force) {
         if (!sameRef(value.ref, editBase.ref)) {
           stale = true;
@@ -896,10 +904,11 @@ export function mountAgentLibrary(
           message("Profile changed. Reload before saving this draft.");
           updateControls();
         }
-        return;
+        return true;
       }
       showProfile(value);
       await loadEffective(value);
+      return !disposed && epoch === detailEpoch && selectedId === id;
     } catch {
       if (!disposed && epoch === detailEpoch && selectedId === id) {
         stale = true;
@@ -912,9 +921,12 @@ export function mountAgentLibrary(
         message("Profile unavailable. Your draft is retained.", true);
         updateControls();
       }
+      return false;
     } finally {
-      if (!disposed && epoch === detailEpoch)
+      if (!disposed && epoch === detailEpoch) {
+        detailPending = false;
         inspector.setAttribute("aria-busy", "false");
+      }
     }
   }
   async function loadList() {
@@ -1231,7 +1243,37 @@ export function mountAgentLibrary(
   async function refresh() {
     if (disposed) return;
     await Promise.allSettled([loadMetadata(), loadList()]);
-    if (!disposed && selectedId && !creating) await loadDetail(selectedId);
+    if (!disposed && selectedId && !creating && !detailPending)
+      await loadDetail(selectedId);
+  }
+  async function open(
+    resourceId: string,
+  ): Promise<"opened" | "draft-review" | "unavailable"> {
+    if (
+      disposed ||
+      typeof resourceId !== "string" ||
+      !resourceId.trim() ||
+      resourceId.length > 200 ||
+      /[\x00-\x1f]/.test(resourceId)
+    )
+      return "unavailable";
+    if (pending) {
+      message("Wait for the current save to finish.");
+      return "draft-review";
+    }
+    if (dirty || lastAttempt) {
+      pendingNavigation = () => {
+        void open(resourceId);
+      };
+      navigationReview.hidden = false;
+      return "draft-review";
+    }
+    creating = editing = false;
+    // Central/direct opening always performs an authorized body read. Cached
+    // archive-list restoration metadata is never proof of an opened profile.
+    return (await loadDetail(resourceId, false, false))
+      ? "opened"
+      : "unavailable";
   }
   function frame() {
     if (disposed) return;
@@ -1264,6 +1306,7 @@ export function mountAgentLibrary(
   projectOptions();
   void refresh();
   return {
+    open,
     refresh,
     frame,
     hasUnsavedChanges: () => dirty || pending || !!lastAttempt,
