@@ -56,6 +56,14 @@ exports.verify = async ({
     );
     win.show();
     win.focus();
+    await click("#settings-button");
+    await fill("#quality", "balanced");
+    for (const selector of ["#quiet", "#reduced"])
+      if (
+        await js(`document.querySelector(${JSON.stringify(selector)}).checked`)
+      )
+        await click(selector);
+    await click("#settings-close");
     await pause(1200);
     receipt.foreground = win.isFocused();
     await fs.writeFile(

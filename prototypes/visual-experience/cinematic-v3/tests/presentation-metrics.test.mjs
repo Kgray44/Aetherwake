@@ -28,7 +28,10 @@ test("display qualification keeps swap chains separate, ignores dropped/foreign 
   assert.equal(result.swapchains[0].displayIntervalsMs.p95, 16.67);
   assert.equal(result.swapchains[1].presentToDisplayMs.count, 0);
   assert.deepEqual(
-    summarizePresentMon([header.replaceAll("ms", "Ms"), ...rows].join("\n"), 123),
+    summarizePresentMon(
+      [header.replaceAll("ms", "Ms"), ...rows].join("\n"),
+      123,
+    ),
     result,
   );
   assert.equal(
