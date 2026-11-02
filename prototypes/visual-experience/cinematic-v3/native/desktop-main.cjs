@@ -463,6 +463,8 @@ app.whenReady().then(async () => {
         privateRoot,
         source,
         startupErrors,
+        session: session.defaultSession,
+        localURL,
       });
       return;
     }

@@ -1,4 +1,4 @@
-/* Bounded actual Vela/chat appearance check. No model, edits, refocus or recording. */
+/* Bounded actual Vela/chat appearance and motion check. No model, edits or refocus. */
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const assert = require('node:assert/strict');
@@ -16,13 +16,13 @@ const freshGraphics = (prior, current) => healthyGraphics(prior) && healthyGraph
   && current.frames > prior.frames && current.draws > prior.draws;
 exports.freshGraphics = freshGraphics;
 
-exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) => {
+exports.verify = async ({ win, app, privateRoot, source, startupErrors = [], session, localURL }) => {
   const started = Date.now(), deadline = started + 15000;
   const out = path.resolve(__dirname, '../.runtime/application-evidence/product-ui-' + started);
   const receipt = { contract: 'aerynth.actual-product-ui@1', source, passed: false, actions: [], captures: [], checks: [],
-    limits: { milliseconds: 15000, pngs: 2, pngBytes: 8388608 },
-    scope: 'Actual integrated Vela and full conversation UI geometry/type/graphics stills; no inline-block, live-provider, artistic, motion or presentation-performance qualification.' };
-  let expired = false, timer, totalBytes = 0, driver;
+    limits: { milliseconds: 15000, pngs: 2, pngBytes: 8388608, videos: 1, videoBytes: 50331648 },
+    scope: 'Actual integrated Vela and full conversation UI stills and one exact-window motion recording; no inline-block, live-provider, owner artistic or presentation-performance qualification.' };
+  let expired = false, timer, totalBytes = 0, driver, recorder;
   const foreground = () => assert(!expired && Date.now() < deadline && !win.isDestroyed() && win.isVisible() && !win.isMinimized() && win.isFocused(), 'native_product_ui_focus_or_deadline');
   const graphics = `(()=>{const s=window.__aerynth.snapshot();return {active:s.active,failed:s.graphicsFailed,errors:s.metrics.errors,draws:s.metrics.draws,frames:s.gpu?.framesRendered,contextLost:s.gpu?.contextLost}})()`;
   const inspect = selector => `(${function (selector) {
@@ -51,13 +51,16 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
     const setup = JSON.parse(await fs.readFile(path.join(privateRoot, 'ui-polish-setup.json'), 'utf8'));
     assert.equal(setup.contract, 'aerynth.product-ui-setup@1'); assert.equal(setup.syntheticOnly, true);
     await fs.mkdir(out, { recursive: true });
-    driver = await createDriver(win); foreground();
+    driver = await createDriver(win, { assertActive: foreground }); foreground();
     const js = code => { foreground(); return driver.js(code); };
     const click = async selector => { receipt.phase = 'Click ' + selector; foreground(); await driver.click(selector); receipt.actions.push({ type: 'native-mouse', selector }); foreground(); };
+    const key = async keyCode => { for (const type of ['keyDown','keyUp']) { foreground(); win.webContents.sendInputEvent({type,keyCode}); } receipt.actions.push({type:'native-keyboard',key:keyCode}); };
     const wait = async (phase, expression) => { receipt.phase = phase; await driver.wait(expression, Math.max(1, deadline - Date.now() - 1200)); foreground(); };
     const desktop = () => js("window.aerynthHost.command('desktop',{type:'snapshot'})");
     const noExecution = async () => assert.deepEqual(await js("window.aerynthHost.command('executionStatus',{})"), [], 'No provider execution authorized');
     await noExecution(); const before = await desktop();
+    const { startWindowRecording } = require('./application-recording.cjs');
+    recorder = await startWindowRecording(win, session, localURL); foreground();
     // Bounded diagnostics of the actual synthetic note's presentation layers.
     // Text stays in private evidence and never enters a public source receipt.
     receipt.noteLayers = await js(`(()=>[...document.querySelectorAll('.folio[data-block-kind="note"]')].slice(0,10).map(root=>({
@@ -102,9 +105,19 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
     await wait('Located Vela retains deliberate focus', "document.body.classList.contains('vela-access')");
     await click('#vela');
     await wait('Vela composer mounted', "!!document.querySelector('.vela-core-compose textarea')");
-    await click('[data-surface-id="vela"] .aw-contextual-heading');
+    await js("window.__velaPolishEditor=document.querySelector('.vela-core-compose textarea')");
+    await key('Tab');
     await capture('.vela-core', '01-vela');
-    await click('[data-surface-id="vela"] .aw-contextual-dismiss');
+    const initial = await js(inspect('.vela-core'));
+    await click('.vela-core-compose-actions button[aria-label="Add sources"]');
+    await wait('Actual source context opens', "document.querySelector('.vela-core').dataset.context==='sources'");
+    receipt.morph = { initial, samples: [] };
+    for (let i = 0; i < 18; i++) { foreground(); receipt.morph.samples.push(await js(inspect('.vela-core'))); await pause(40); }
+    assert(receipt.morph.samples.some(value => value && value.height > initial.height + 2 && value.height < 578), 'No actual intermediate Vela size was painted');
+    assert(await js("document.querySelector('.vela-core-compose textarea')===window.__velaPolishEditor"), 'Context morph replaced the composer');
+    await key('Escape');
+    await wait('Source context closes without closing Vela', "document.querySelector('.vela-core')?.dataset.context==='none'");
+    await key('Escape');
     await wait('Vela surface closed', "!document.querySelector('[data-surface-id=vela]')");
     await click('#workspace-manager'); await click('#conversation-manager');
     await wait('Actual conversation search ready', "!!document.querySelector('.cp-results button')&&!document.querySelector('.cp-manager').hasAttribute('aria-busy')");
@@ -114,12 +127,14 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
     await wait('Canonical conversation rendered', "!!document.querySelector('.cp-composer textarea')&&!!document.querySelector('.cp-message')");
     await click('[data-surface-id="conversations"] .aw-contextual-heading');
     await capture('.cp-manager', '02-conversation');
+    const recording = recorder; recorder = null;
+    receipt.video = await recording.stop(path.join(out, 'product-motion.webm')); foreground();
     await noExecution(); const after = await desktop();
     for (const resource of before.resources) assert.deepEqual(after.resources.find(value => value.id === resource.id), resource, 'Opening UI changed existing canonical resource');
     assert.deepEqual(after.blocks, before.blocks, 'Opening UI changed canonical placement geometry');
     assert.deepEqual(after.presence, before.presence, 'Opening UI changed saved Vela position');
     assert.equal(startupErrors.length, 0, 'Observed startup graphics/console error');
-    receipt.checks.push('same existing canonical resources and placements', 'zero provider execution', 'measured bounded surfaces and stable composers', 'fresh actual GPU draws');
+    receipt.checks.push('same existing canonical resources and placements', 'zero provider execution', 'measured bounded surfaces and stable composers', 'fresh actual GPU draws', 'actual intermediate context morph preserves composer', 'one exact-window motion recording');
     receipt.passed = true;
   };
   try {
@@ -139,6 +154,11 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
     } catch { /* A lost focus/deadline does not authorize another capture. */ }
   }
   finally {
+    if (recorder) {
+      try { receipt.partialVideo = await recorder.stop(path.join(out, 'partial-product-motion.webm')); }
+      catch (error) { receipt.recordingError = String(error.message).slice(0, 1000); }
+      recorder = null;
+    }
     expired = true; clearTimeout(timer); receipt.elapsedMs = Date.now() - started;
     receipt.startupErrors = startupErrors.slice(0, 16); if (startupErrors.length) receipt.passed = false;
     try { await fs.mkdir(out, { recursive: true }); const json = JSON.stringify(receipt, null, 2); assert(Buffer.byteLength(json) < 1048576); await fs.writeFile(path.join(out, 'ui.json'), json); console.log(JSON.stringify({ passed: receipt.passed, error: receipt.error?.message, evidence: out, captures: receipt.captures.length })); }
