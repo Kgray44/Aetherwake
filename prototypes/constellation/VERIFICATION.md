@@ -2,6 +2,8 @@
 
 ## Clearance and gesture-first controls follow-up
 
+The legacy restore audit reproduced 1,552 world units of project/camera framing drift: a clear saved project root was widened to the new grid while its old camera target restored unchanged. The fix preserves clear saved roots and all saved coordinate precision; crowded child orbits still migrate and actual conflicts still separate. New regressions restore a legacy profile and verify the real perspective project center, plus full-precision pins across graph refreshes. These are source regressions; the integrated candidate still requires its native walkthrough.
+
 Strict TypeScript, the production fixture build and all **55** current source tests pass. The keyboard follow-up captures overview Ctrl K before host bubble handlers and respects open dialogs; working-workspace Ctrl K remains with the shell. Camera/selection changes queue one existing private-view save after shared camera movement settles. The native quick smoke explicitly checks keyboard-camera autosave without a Save button or an explicit flush; it remains unexecuted until Integration runs it.
 
 The current source removes permanent Constellation navigation/camera/selection button banks. Only a small glass location capsule with commands and information controls remains. Searchable commands, native mouse/keyboard gestures and an on-demand selection inspector preserve the underlying operations. A compact glass navigation guide opens from i, F1 or ?, with Escape/outside dismissal. Panning now follows the real perspective camera plane and viewport pixel scale; Alt-drag retains the grabbed point instead of jumping the body center under the cursor.
