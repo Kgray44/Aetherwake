@@ -458,9 +458,16 @@ app.whenReady().then(async () => {
   reserveTimer.unref();
   if (verify) {
     if (process.argv.includes("--integration-workspace-views")) {
-      await require("../../../block-library/tests/workspace-native.cjs").verify({
-        win, app, privateRoot, source, moduleStarted, startupErrors,
-      });
+      await require("../../../block-library/tests/workspace-native.cjs").verify(
+        {
+          win,
+          app,
+          privateRoot,
+          source,
+          moduleStarted,
+          startupErrors,
+        },
+      );
       return;
     }
     if (process.argv.includes("--integration-product-ui")) {

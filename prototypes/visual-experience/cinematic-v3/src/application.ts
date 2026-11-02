@@ -2122,17 +2122,25 @@ export function installApplication(hooks: Hooks) {
           });
         },
         openResource: openCanonicalResource,
-        attachResource: async (resource) => {
-          if (!state?.activeWorkspaceId || !libraryClient.attachBlock)
-            throw new Error("attachment_unavailable");
-          await flush();
-          await libraryClient.attachBlock({
-            commandId: crypto.randomUUID(),
-            workspaceId: state.activeWorkspaceId,
-            expectedLayoutVersion: state.layoutVersion,
-            resourceId: resource.id,
-            kind: resource.kind,
-            expectedResourceVersion: resource.version,
+        attachResource: (resource) => {
+          const workspaceId = block.workspace_id;
+          return enqueueResult(async () => {
+            await flush();
+            if (
+              state?.navigation.kind !== "workspace" ||
+              state.activeWorkspaceId !== workspaceId
+            )
+              throw new Error("workspace_changed");
+            if (!libraryClient.attachBlock)
+              throw new Error("attachment_unavailable");
+            await libraryClient.attachBlock({
+              commandId: crypto.randomUUID(),
+              workspaceId,
+              expectedLayoutVersion: state.layoutVersion,
+              resourceId: resource.id,
+              kind: resource.kind,
+              expectedResourceVersion: resource.version,
+            });
           });
         },
       },
