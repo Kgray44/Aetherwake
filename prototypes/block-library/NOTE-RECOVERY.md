@@ -1,0 +1,11 @@
+# Note recovery port
+
+`NoteExperienceService` retains unsaved note/research/reference/task text on the same canonical SQLite connection. It opens no database and does not replace the canonical note service. `createCanonicalNoteHost` validates the actual kernel connection, reuses the template host's effective resource grants, delegates content writes to the existing DesktopState command, and accepts an optional parent-owned canonical rename callback.
+
+Release these methods through the trusted native boundary: `readNote(resourceId)`, `saveNoteDraft({resourceId,expectedDraftVersion,baseResourceVersion,content})`, `commitNote({resourceId,expectedResourceVersion,expectedDraftVersion,content})`, `discardNoteDraft({resourceId,expectedDraftVersion})`, and `renameNote({resourceId,expectedResourceVersion,title})` when available. DTOs are in `note-contracts.ts`.
+
+The editor should recover `draft.content` when present, show a conflict when its base resource version is stale, and retain that text until the user resolves or discards it. Serialize draft writes using the returned revision, persist recovery text before committing it, and await pending writes before a workspace transition. `commitNote` atomically fences both canonical resource and draft revisions. Failure rolls back canonical content and retains recovery text. It never silently rebases a stale draft or overwrites a newer editor's draft.
+
+`draftRevision` is monotonic even after commit/discard. This prevents an older tab's revision from matching a newly created draft after a clear-and-recreate cycle. Archived/revoked resources deny access without destroying their recovery data. Drafts use the existing 100,000-byte note-content limit, an explicit 8,192-resource retention bound, and a 32 MiB aggregate text bound. Reaching a bound fails without deleting other work.
+
+Four focused actual SQLite/DesktopState tests pass for restart recovery, conflict handling, competing editors, failed canonical commit rollback, monotonic revisions, and revoked/archived content. Strict TypeScript checking passes. Native editor wiring and an actual interrupted-save desktop journey remain integration work; these tests do not claim that unsubmitted keystrokes survive a process kill before the host receives them.

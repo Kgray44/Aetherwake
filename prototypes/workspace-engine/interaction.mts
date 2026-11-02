@@ -6,13 +6,14 @@ export function asPresentation(b: BlockProjection): Presentation {
   return { x: b.x, y: b.y, width: b.width, height: b.height, zIndex: b.zIndex, rotation: b.rotation, shape: b.shape, locked: b.locked, minimized: b.minimized, materialVariant: b.materialVariant };
 }
 export const pose = (p: Presentation): Pose => ({ x: p.x, y: p.y, w: p.width, h: p.height, yaw: 0, lift: 0, opacity: p.minimized ? 0.8 : 1 });
+export type GestureState=Pick<WorkspaceProjection,'blocks'|'viewport'|'workspaceId'|'revision'>;
 /** One gesture = one atomic history entry. No pointermove writes or resource edits. */
 export class LayoutGesture {
   readonly block: BlockProjection;
-  readonly state: WorkspaceProjection;
+  readonly state: GestureState;
   readonly handle: Handle | 'move';
   current: Presentation;
-  constructor(state: WorkspaceProjection, blockId: string, handle: Handle | 'move') {
+  constructor(state: GestureState, blockId: string, handle: Handle | 'move') {
     const b = state.blocks.find(b => b.blockId === blockId); ensure(b, 'NOT_FOUND'); ensure(!b.locked, 'LOCKED');
     this.state = state; this.block = b; this.handle = handle; this.current = asPresentation(b);
   }

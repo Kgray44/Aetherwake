@@ -6,6 +6,7 @@ import { SpatialNavigator, edges, validSpatialCamera } from "../spatial.ts";
 import { ConstellationScene } from "../renderer3d.ts";
 import { randomUUID } from "node:crypto";
 import { planetAppearance } from "../planets.ts";
+import * as THREE from "three";
 
 const fixture = (count = 18) => ({
   projects: [{ id: "p", title: "Synthetic project" }],
@@ -206,6 +207,41 @@ test("orbit is damped, bounded, interruptible and reduced-motion compatible with
   assert.ok(validSpatialCamera(n.camera));
   c.dispose();
   assert.equal(motion.bodies.has(n.id), false);
+});
+
+test("panning follows the perspective camera plane with the same pixel scale at different viewport heights", () => {
+  const { c, navigation: n } = setup();
+  c.setPolicy({ reduced: true });
+  const start = { ...n.camera, yaw: 0.7, pitch: 0.8 };
+  n.target(start);
+  const camera = new THREE.PerspectiveCamera(43, 1, 1, 100000),
+    cp = Math.cos(start.pitch);
+  camera.position.set(
+    start.target.x + Math.sin(start.yaw) * cp * start.distance,
+    start.target.y + Math.sin(start.pitch) * start.distance,
+    start.target.z + Math.cos(start.yaw) * cp * start.distance,
+  );
+  camera.lookAt(start.target.x, start.target.y, start.target.z);
+  camera.updateMatrixWorld();
+  const right = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 0),
+    up = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 1),
+    forward = new THREE.Vector3().setFromMatrixColumn(camera.matrixWorld, 2);
+  n.pan(70, 40, 900);
+  const actual = n.bookmark().target,
+    delta = new THREE.Vector3(
+      actual.x - start.target.x,
+      actual.y - start.target.y,
+      actual.z - start.target.z,
+    ),
+    scale = (2 * start.distance * Math.tan((43 * Math.PI) / 360)) / 900;
+  assert.ok(Math.abs(delta.dot(right) - 70 * scale) < 1e-8);
+  assert.ok(Math.abs(delta.dot(up) - 40 * scale) < 1e-8);
+  assert.ok(Math.abs(delta.dot(forward)) < 1e-8);
+  n.target(start);
+  n.pan(70, 40, 1800);
+  const smaller = n.bookmark().target;
+  assert.ok(Math.abs(smaller.x - start.target.x - delta.x * 0.5) < 1e-8);
+  c.dispose();
 });
 
 test("3D node positions and pins survive new graph objects, resource removal and undo", async () => {
@@ -532,13 +568,20 @@ test("moving a workspace carries its unpinned resource cluster and undo restores
   const fixed = n.position("resource:b1"),
     old = n.position("resource:b3"),
     w = n.position("workspace:w");
-  await n.place("workspace:w", { x: w.x + 100, y: w.y + 20, z: w.z + 30 });
-  assert.deepEqual(n.position("resource:b1"), fixed);
-  assert.deepEqual(n.position("resource:b3"), {
-    x: Math.round((old.x + 100) * 1000) / 1000,
-    y: Math.round((old.y + 20) * 1000) / 1000,
-    z: Math.round((old.z + 30) * 1000) / 1000,
+  const applied = await n.place("workspace:w", {
+    x: w.x + 100,
+    y: w.y + 20,
+    z: w.z + 30,
   });
+  assert.deepEqual(n.position("resource:b1"), fixed);
+  // A pinned neighbor may constrain the requested move; the whole unpinned
+  // cluster must still follow the same applied translation.
+  for (const axis of ["x", "y", "z"])
+    assert.ok(
+      Math.abs(
+        n.position("resource:b3")[axis] - old[axis] - applied[axis] + w[axis],
+      ) < 0.002,
+    );
   await n.undoPosition();
   assert.deepEqual(n.position("workspace:w"), w);
   assert.deepEqual(n.position("resource:b3"), old);
@@ -727,16 +770,26 @@ test("a visible scene object can be archived or detached without stale picking/c
   layer.dispose();
 });
 
-test("a canonical refresh changes a cached connection's provenance and removes revoked edges", () => {
-  const { c, navigation } = setup(),
+test("a canonical refresh changes a cached connection's provenance and removes revoked edges", async () => {
+  const { c, motion, navigation } = setup(fixture(2)),
     layer = new ConstellationScene(c, navigation, () => ({}));
+  await navigation.place("resource:b0", { x: 10000, y: 0, z: 0 });
+  await navigation.place("resource:b1", { x: 12000, y: 0, z: 0 });
+  navigation.target({
+    ...navigation.camera,
+    target: { x: 11000, y: 0, z: 0 },
+    distance: 4000,
+    yaw: 0,
+    pitch: 0,
+  });
+  settle(motion);
   layer.update(1440, 900);
   const line = () =>
     layer.scene.children
       .flatMap((group) => group.children)
       .find((o) => o.userData.edge === "edge1");
   assert.equal(line().material.type, "LineBasicMaterial");
-  const next = fixture();
+  const next = fixture(2);
   next.relationships[0].provenance = "inferred";
   c.update(next);
   layer.update(1440, 900);

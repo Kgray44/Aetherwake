@@ -3,9 +3,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
+import { validateSubjectRef, type BlockSubjectRef, type NonResourceSubjectRef, type SubjectState } from './subjects.ts';
+export type { BlockSubjectRef, NonResourceSubjectRef, SubjectState } from './subjects.ts';
 
 const migrationDir = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
-const migrations = ['001-initial.sql', '002-external-refs.sql'];
+const migrations = ['001-initial.sql', '002-external-refs.sql', '003-block-subjects.sql'];
 const stamp = () => new Date().toISOString();
 const id = () => randomUUID();
 const required = (value: string, label: string) => {
@@ -105,7 +107,14 @@ export class WorkspaceKernel {
     }
     while (version < migrations.length) {
       const script = readFileSync(join(migrationDir, migrations[version]), 'utf8');
-      this.tx(() => this.db.exec(script));
+      if(version===2){
+        // SQLite ignores foreign_keys changes inside a transaction. Rebuild only
+        // at the owning startup boundary, retaining extension rows and FK names.
+        this.db.exec('PRAGMA foreign_keys=OFF');
+        if(this.db.prepare('PRAGMA foreign_keys').get()!.foreign_keys!==0)throw new KernelError('INTEGRITY','Subject migration requires the owning startup boundary');
+        try{this.tx(()=>{this.db.exec(script);const foreign=this.db.prepare('PRAGMA foreign_key_check').all();if(foreign.length)throw new KernelError('INTEGRITY','Subject migration foreign-key validation failed');});}
+        finally{this.db.exec('PRAGMA foreign_keys=ON');}
+      }else this.tx(() => this.db.exec(script));
       version++;
       if (this.schemaVersion() !== version) throw new KernelError('INTEGRITY', `Migration ${version} did not set schema version`);
     }
@@ -122,6 +131,7 @@ export class WorkspaceKernel {
     if (quick.length !== 1 || quick[0].quick_check !== 'ok' || foreign.length || missingNote || missingConversation || wrongNote || wrongConversation || missingLayout) {
       throw new KernelError('INTEGRITY', `Database integrity failure: ${JSON.stringify({ quick, foreign, missingNote: !!missingNote, missingConversation: !!missingConversation, wrongNote: !!wrongNote, wrongConversation: !!wrongConversation, missingLayout: !!missingLayout })}`);
     }
+    if(this.schemaVersion()>=3){try{for(const row of this.db.prepare('SELECT id FROM block_subject_refs').all())this.readSubjectBinding(String(row.id));}catch{throw new KernelError('INTEGRITY','Invalid retained block subject binding');}}
   }
 
   private get(table: 'projects' | 'workspaces' | 'resources' | 'blocks' | 'collections', key: string): any {
@@ -316,11 +326,23 @@ export class WorkspaceKernel {
     return this.tx(() => {
       this.get('workspaces', workspaceId); const resource = this.get('resources', resourceId);
       const block = { id: id(), workspace_id: workspaceId, resource_id: resourceId, ...this.placement(placement), version: 1 };
-      this.db.prepare('INSERT INTO blocks VALUES(?,?,?,?,?,?,?,?,?)').run(...Object.values(block));
+      this.db.prepare('INSERT INTO blocks(id,workspace_id,resource_id,x,y,width,height,z,version) VALUES(?,?,?,?,?,?,?,?,?)').run(...Object.values(block));
       this.event('resource', resourceId, resource.version, 'block.attached', mutation, { blockId: block.id, workspaceId });
       return block;
     });
   }
+
+  /** Typed binding metadata. This never creates a resource, note, project or collection. */
+  attachSubjectBlock(workspaceId:string,subjectInput:NonResourceSubjectRef,placement:Placement,mutation:Mutation={}):any{
+    return this.tx(()=>{this.get('workspaces',workspaceId);const subject=validateSubjectRef(subjectInput);if(subject.kind==='resource')throw new KernelError('INVALID','Use attachBlock for resources');if(this.subjectState(subject)!=='active')throw new KernelError('INVALID','Subject is unavailable');
+      if(Number(this.db.prepare('SELECT count(*) AS n FROM block_subject_refs').get()!.n)>=32768)throw new KernelError('STORAGE','Block subject retention capacity reached');
+      const subjectId=id();this.db.prepare('INSERT INTO block_subject_refs VALUES(?,?,?,?,?)').run(subjectId,subject.kind,subject.kind==='project'?subject.projectId:subject.kind==='resource-query'?subject.projectId:null,subject.kind==='collection'?subject.collectionId:subject.kind==='resource-query'?subject.collectionId??null:null,subject.kind==='resource-query'?JSON.stringify(subject):null);
+      const block={id:id(),workspace_id:workspaceId,resource_id:null,...this.placement(placement),version:1,subject_ref_id:subjectId};this.db.prepare('INSERT INTO blocks(id,workspace_id,resource_id,x,y,width,height,z,version,subject_ref_id) VALUES(?,?,?,?,?,?,?,?,?,?)').run(...Object.values(block));this.event('workspace',workspaceId,this.get('workspaces',workspaceId).version,'block.subject_attached',mutation,{blockId:block.id,subject});return block;});
+  }
+  readBlockSubject(blockId:string):BlockSubjectRef{const block=this.get('blocks',blockId);return block.resource_id?{kind:'resource',resourceId:String(block.resource_id)}:this.readSubjectBinding(String(block.subject_ref_id));}
+  readSubjectBinding(subjectId:string):NonResourceSubjectRef{const row=this.db.prepare('SELECT * FROM block_subject_refs WHERE id=?').get(subjectId);if(!row)throw new KernelError('NOT_FOUND','Block subject binding missing');const value=row.kind==='project'?{kind:'project',projectId:row.project_id}:row.kind==='collection'?{kind:'collection',collectionId:row.collection_id}:JSON.parse(String(row.query_json));const subject=validateSubjectRef(value);if(subject.kind==='resource'||subject.kind!==row.kind||subject.kind==='resource-query'&&(subject.projectId!==row.project_id||(subject.collectionId??null)!==row.collection_id))throw new KernelError('INTEGRITY','Invalid subject binding');return subject;}
+  subjectState(subjectInput:BlockSubjectRef):SubjectState{const subject=validateSubjectRef(subjectInput);const state=(table:'projects'|'collections'|'resources',subjectId:string):SubjectState=>{const row=this.db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(subjectId);if(!row)return 'unavailable';if(row.state==='archived')return 'archived';if(row.project_id){const project=this.db.prepare('SELECT state FROM projects WHERE id=?').get(String(row.project_id));if(!project)return 'unavailable';if(project.state==='archived')return 'archived';}return 'active';};
+    if(subject.kind==='resource')return state('resources',subject.resourceId);if(subject.kind==='project')return state('projects',subject.projectId);if(subject.kind==='collection')return state('collections',subject.collectionId);const project=subject.projectId===null?'active':state('projects',subject.projectId);return project!=='active'?project:subject.collectionId?state('collections',subject.collectionId):'active';}
 
   private placement(p: Placement): Placement {
     if (!p || typeof p !== 'object') throw new KernelError('INVALID', 'Placement required');
@@ -335,7 +357,8 @@ export class WorkspaceKernel {
       this.get('workspaces', destinationWorkspaceId);
       if (block.version !== expectedVersion) throw new KernelError('CONFLICT', 'Block version changed');
       this.db.prepare('UPDATE blocks SET workspace_id=?,version=version+1 WHERE id=?').run(destinationWorkspaceId, blockId);
-      this.event('resource', block.resource_id, this.get('resources', block.resource_id).version, 'block.moved', mutation, { blockId, from: block.workspace_id, to: destinationWorkspaceId });
+      if(block.resource_id)this.event('resource', block.resource_id, this.get('resources', block.resource_id).version, 'block.moved', mutation, { blockId, from: block.workspace_id, to: destinationWorkspaceId });
+      else this.event('workspace',destinationWorkspaceId,this.get('workspaces',destinationWorkspaceId).version,'block.subject_moved',mutation,{blockId,from:block.workspace_id,to:destinationWorkspaceId});
       return this.get('blocks', blockId);
     });
   }
@@ -476,7 +499,7 @@ export class WorkspaceKernel {
   }
 
   detachBlock(blockId: string, mutation: Mutation = {}): void {
-    this.tx(() => { const block = this.get('blocks', blockId); this.db.prepare('DELETE FROM blocks WHERE id=?').run(blockId); this.event('resource', block.resource_id, this.get('resources', block.resource_id).version, 'block.detached', mutation, { blockId }); });
+    this.tx(() => { const block = this.get('blocks', blockId); this.db.prepare('DELETE FROM blocks WHERE id=?').run(blockId);if(block.resource_id)this.event('resource', block.resource_id, this.get('resources', block.resource_id).version, 'block.detached', mutation, { blockId });else this.event('workspace',block.workspace_id,this.get('workspaces',block.workspace_id).version,'block.subject_detached',mutation,{blockId}); });
   }
   unlinkRelationship(edgeId: string, mutation: Mutation = {}): void {
     this.tx(() => { const edge = this.db.prepare('SELECT * FROM relationships WHERE id=?').get(edgeId) as any; if (!edge) throw new KernelError('NOT_FOUND', 'Relationship not found'); this.db.prepare('DELETE FROM relationships WHERE id=?').run(edgeId); this.event('resource', edge.source_id, this.get('resources', edge.source_id).version, 'relationship.removed', mutation, { edgeId }); });

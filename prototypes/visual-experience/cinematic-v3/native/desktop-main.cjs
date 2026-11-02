@@ -17,6 +17,7 @@ const {
   conversationCommand,
   isConversationRead,
 } = require("./conversation-broker.cjs");
+const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const root = path.resolve(__dirname, "..");
 const moduleStarted = Date.now();
 const repository = path.resolve(root, "../../..");
@@ -69,11 +70,15 @@ const verify =
   process.argv.includes("--integration-benchmark") ||
   process.argv.includes("--integration-constellation") ||
   process.argv.includes("--integration-organization") ||
+  process.argv.includes("--integration-direct") ||
+  process.argv.includes("--integration-conversation-product") ||
   process.argv.includes("--integration-expanded") ||
   process.argv.includes("--integration-spatial-benchmark");
 const captureReview =
   process.argv.includes("--integration-constellation") ||
   process.argv.includes("--integration-organization") ||
+  process.argv.includes("--integration-direct") ||
+  process.argv.includes("--integration-conversation-product") ||
   process.argv.includes("--integration-expanded") ||
   process.argv.includes("--integration-spatial-benchmark");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
@@ -235,6 +240,7 @@ app.whenReady().then(async () => {
         !admitted &&
         !["replay", "executionStatus", "interrupt"].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
+        !(command === "vela" && isVelaRead(input)) &&
         !(command === "desktop" && input?.type === "snapshot")
       )
         throw new Error("storage_reserve_admission_denied");
@@ -309,6 +315,8 @@ app.whenReady().then(async () => {
         }
       } else if (command === "conversation") {
         result = await conversationCommand({ win, dialog, call, input });
+      } else if (command === "vela") {
+        result = await velaCommand({ win, dialog, call, input });
       } else throw new Error("unsupported_command");
       return { ok: true, result };
     } catch (e) {
@@ -360,6 +368,30 @@ app.whenReady().then(async () => {
   }, 240000);
   reserveTimer.unref();
   if (verify) {
+    if (process.argv.includes("--integration-conversation-product")) {
+      await require("../../../conversation-product/test/native-desktop.cjs").verify(
+        {
+          win,
+          app,
+          privateRoot,
+          source,
+        },
+      );
+      return;
+    }
+    if (process.argv.includes("--integration-direct")) {
+      await require("./integration-direct.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        call,
+        source,
+        moduleStarted,
+        session: session.defaultSession,
+        localURL,
+      });
+      return;
+    }
     if (process.argv.includes("--integration-spatial-benchmark")) {
       await require("./integration-spatial-benchmark.cjs").verify({
         win,

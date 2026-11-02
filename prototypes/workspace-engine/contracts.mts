@@ -1,4 +1,6 @@
 export const CONTRACT = 'aetherwake.workspace/1' as const;
+import type { BlockSubjectRef, NonResourceSubjectRef, SubjectState } from '../workspace-kernel/subjects.ts';
+export type { BlockSubjectRef, NonResourceSubjectRef, SubjectState } from '../workspace-kernel/subjects.ts';
 export const shapes = ['rectangle', 'rounded', 'circle', 'pill', 'folio', 'lens'] as const;
 export type Shape = typeof shapes[number];
 export type Geometry = { x: number; y: number; width: number; height: number };
@@ -23,9 +25,10 @@ export type PresencePlacement = Geometry & {
   id: 'system:vela'; kind: 'vela'; workspaceId: string; version: number; scale: 0.65; locked: boolean;
 };
 export type BlockProjection = Presentation & {
-  blockId: string; resourceId: string; workspaceId: string; version: number;
-  resourceState: 'active' | 'archived'; contentMode: 'summary' | 'reading';
-};
+  blockId: string; workspaceId: string; version: number;
+  /** Legacy status field; subjectState also names it explicitly for every family. */
+  resourceState: SubjectState; subjectState?: SubjectState; contentMode: 'summary' | 'reading';
+} & ({ resourceId: string; subject?: Extract<BlockSubjectRef,{kind:'resource'}> } | { resourceId?: never; subject: NonResourceSubjectRef });
 export type WorkspaceProjection = {
   contract: typeof CONTRACT; workspaceId: string; projectId: string | null; title: string;
   workspaceVersion: number; layoutId: string; revision: number; viewport: Viewport;
@@ -38,6 +41,7 @@ export type BlockTemplate = { id: string; title: string; presentation: Partial<P
 export type PlacementUpdate = { blockId: string; expectedVersion: number; presentation: Partial<Presentation> };
 type Action =
   | { type: 'attachResource'; resourceId: string; presentation?: Partial<Presentation>; templateId?: string }
+  | { type: 'attachSubject'; subject: NonResourceSubjectRef; presentation?: Partial<Presentation>; templateId?: string }
   | { type: 'createBlock'; resource: NewResource; presentation?: Partial<Presentation>; templateId?: string }
   | { type: 'duplicateBlock'; blockId: string }
   | { type: 'detachBlock'; blockId: string }

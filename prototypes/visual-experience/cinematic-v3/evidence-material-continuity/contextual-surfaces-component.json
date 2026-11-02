@@ -1,0 +1,68 @@
+{
+  "checks": [
+    {
+      "name": "content and input identities remain mounted with their state",
+      "passed": true
+    },
+    {
+      "name": "nonmodal surface is bounded and focuses its actual control",
+      "passed": true
+    },
+    {
+      "name": "measured content settles without a repeating ResizeObserver wake loop",
+      "passed": true
+    },
+    {
+      "name": "an inner component can consume Escape without dismissing its host",
+      "passed": true
+    },
+    {
+      "name": "Escape closes and returns focus while restoring the original content slot",
+      "passed": true
+    },
+    {
+      "name": "outside-pointer dismissal does not steal focus from the new target",
+      "passed": true
+    },
+    {
+      "name": "explicit modal uses native modality and accessible dialog semantics",
+      "passed": true
+    },
+    {
+      "name": "modal Tab wraps to the first control",
+      "passed": true
+    },
+    {
+      "name": "modal Shift-Tab wraps back to the last control",
+      "passed": true
+    },
+    {
+      "name": "a viewport below the minimum gets real reflow and scrolling, never a scale",
+      "passed": true
+    },
+    {
+      "name": "interrupted close reverses through the same dialog and editor identity",
+      "passed": true
+    },
+    {
+      "name": "removing the anchor releases its UI and motion body without deleting content",
+      "passed": true
+    },
+    {
+      "name": "invalid size limits leave no mounted UI or leaked motion body",
+      "passed": true
+    },
+    {
+      "name": "disposal is idempotent and preserves the caller's existing motion body",
+      "passed": true
+    }
+  ],
+  "limitations": [
+    "Hidden Electron DOM/component validation with scripted DOM events; no native foreground, screenshot, shared-host integration or performance qualification claimed."
+  ],
+  "sources": {
+    "src/contextual-surfaces.ts": "902da5c490fec96ed549fda4d741093fcc4932937cd949616f9b52cfa91cd82d",
+    "src/contextual-surfaces.css": "72fdbfc6a140992e63278d38f90fed763dc9985b8a6a425ecbd444d82ab2ab8f",
+    "tests/contextual-surfaces.browser.mjs": "ad783bc5c8d5ac7adcafeec68c32b673ed02c7f8617f14f076133698b7888660"
+  }
+}

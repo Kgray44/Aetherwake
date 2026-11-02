@@ -22,32 +22,46 @@ export function layoutState(
     viewport: snapshot.viewport ?? { x: 0, y: 0, zoom: 1 },
     organization: snapshot.organization,
     presence: snapshot.presence,
-    blocks: snapshot.blocks.map((b) => ({
-      blockId: b.id,
-      resourceId: b.resource_id,
-      workspaceId: b.workspace_id,
-      version: b.version,
-      x: b.x,
-      y: b.y,
-      width: b.width,
-      height: b.height,
-      zIndex: b.z,
-      shape: b.shape,
-      rotation: b.rotation ?? 0,
-      minimized: b.minimized ?? false,
-      locked: b.locked ?? false,
-      materialVariant: b.materialVariant ?? "default",
-      contentMode: b.contentMode ?? "reading",
-      resourceState:
-        snapshot.resources.find((r) => r.id === b.resource_id)?.state ??
-        "active",
-    })),
+    blocks: snapshot.blocks.map(
+      (b): BlockProjection => ({
+        blockId: b.id,
+        ...(typeof b.resource_id === "string"
+          ? {
+              resourceId: b.resource_id,
+              subject: { kind: "resource" as const, resourceId: b.resource_id },
+            }
+          : { subject: b.subject }),
+        workspaceId: b.workspace_id,
+        version: b.version,
+        x: b.x,
+        y: b.y,
+        width: b.width,
+        height: b.height,
+        zIndex: b.z,
+        shape: b.shape,
+        rotation: b.rotation ?? 0,
+        minimized: b.minimized ?? false,
+        locked: b.locked ?? false,
+        materialVariant: b.materialVariant ?? "default",
+        contentMode: b.contentMode ?? "reading",
+        resourceState:
+          b.subjectState ??
+          snapshot.resources.find((r) => r.id === b.resource_id)?.state ??
+          "active",
+        subjectState: b.subjectState,
+      }),
+    ),
   };
 }
 export function previewBlock(block: BlockProjection): Block {
   return {
     id: block.blockId,
-    resource_id: block.resourceId,
+    ...(typeof block.resourceId === "string"
+      ? {
+          resource_id: block.resourceId,
+          subject: { kind: "resource" as const, resourceId: block.resourceId },
+        }
+      : { subject: block.subject }),
     workspace_id: block.workspaceId,
     version: block.version,
     x: block.x,
@@ -61,5 +75,6 @@ export function previewBlock(block: BlockProjection): Block {
     locked: block.locked,
     materialVariant: block.materialVariant,
     contentMode: block.contentMode,
+    subjectState: block.subjectState,
   };
 }

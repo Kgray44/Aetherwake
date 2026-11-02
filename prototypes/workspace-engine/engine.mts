@@ -2,6 +2,7 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { WorkspaceKernel } from '../workspace-kernel/kernel.mts';
+import { validateSubjectRef, type BlockSubjectRef, type NonResourceSubjectRef } from '../workspace-kernel/subjects.ts';
 import { CONTRACT, type Command, type CommandResult, type WorkspaceProjection, type Presentation, type Viewport, type BlockTemplate, type WorkspaceSummary, type PresencePlacement, type Geometry, type WorkspaceOrganization, type OrganizationUpdate, type LayoutPreviewRequest } from './contracts.mts';
 import { ensure, WorkspaceError, defaults, presentation, resize, snapValue, presetGeometry } from './geometry.mts';
 import { validateBounds } from './collisions.mts';
@@ -9,7 +10,7 @@ import { defaultOrganization, updateOrganization, applyOrganizationPolicy, previ
 export { WorkspaceError } from './geometry.mts';
 export type * from './contracts.mts';
 
-type StoredBlock = Presentation & { blockId: string; resourceId: string };
+type StoredBlock = Presentation & { blockId: string } & ({ resourceId: string; subject?: never; subjectBindingId?: never } | { resourceId?: never; subject: NonResourceSubjectRef; subjectBindingId: string });
 type StoredPresence = Omit<PresencePlacement, 'version'>;
 type StoredOrganization = Omit<WorkspaceOrganization, 'revision'>;
 type Snapshot = { viewport: Viewport; blocks: StoredBlock[]; presence: StoredPresence; organization: StoredOrganization };
@@ -34,6 +35,8 @@ export interface EngineOptions {
   /** Host-owned retention/approval policy. Default is fail closed. Never deletes provider data. */
   allowResourceDeletion?: (request: { resourceId: string; expectedVersion: number; approvalId: string }) => boolean;
   defaultOrganization?: OrganizationUpdate;
+  /** Trusted host policy. Non-resource attachment fails closed without this grant. */
+  allowSubjectAttachment?: (subject: NonResourceSubjectRef, workspaceId: string) => boolean;
 }
 /** Main-process service. Owns no database connection and never stores resource content. */
 export class WorkspaceEngine {
@@ -130,7 +133,8 @@ export class WorkspaceEngine {
     ensure(snapshot && Array.isArray(snapshot.blocks) && snapshot.viewport, 'INTEGRITY');
     const { version, ...presence } = snapshot.presence ?? baseline ?? JSON.parse(this.layout(workspaceId).legacy_presence_json);
     const { revision, ...organization } = snapshot.organization ?? organizationBaseline ?? JSON.parse(this.layout(workspaceId).legacy_organization_json);
-    return { ...snapshot, presence, organization };
+    const blocks=snapshot.blocks.map((b:any)=>{if(b.resourceId){ensure(!b.subject || b.subject.kind==='resource'&&b.subject.resourceId===b.resourceId,'INTEGRITY');const {subject,...legacy}=b;return legacy;}ensure(b.subject&&text(b.subjectBindingId),'INTEGRITY');const subject=validateSubjectRef(b.subject);ensure(subject.kind!=='resource','INTEGRITY');return {...b,subject};});
+    return { ...snapshot, blocks, presence, organization };
   }
   private viewport(v: any): Viewport {
     ensure(v && typeof v === 'object' && !Array.isArray(v));
@@ -145,7 +149,8 @@ export class WorkspaceEngine {
     // Legacy geometry is preserved exactly, even if smaller than new interaction minima.
     const p = extra ? JSON.parse(String(extra.json)) : {};
     const valid = presentation(p);
-    return { ...valid, x: row.x, y: row.y, width: row.width, height: row.height, zIndex: row.z, blockId: row.id, resourceId: row.resource_id };
+    const geometry={ ...valid, x: row.x, y: row.y, width: row.width, height: row.height, zIndex: row.z, blockId: row.id };
+    return row.resource_id?{...geometry,resourceId:String(row.resource_id)}:{...geometry,subject:this.kernel.readSubjectBinding(String(row.subject_ref_id)),subjectBindingId:String(row.subject_ref_id)};
   }
   private snapshot(workspaceId: string): Snapshot {
     const state = this.kernel.openWorkspace(workspaceId);
@@ -177,8 +182,9 @@ export class WorkspaceEngine {
         viewport: this.viewport(state.layout.viewport), presence: this.readPresence(workspaceId), organization: this.readOrganization(workspaceId),
         blocks: state.blocks.map(row => {
           const b = this.block(row);
-          return { ...b, workspaceId, version: row.version, resourceState: this.kernel.getResource(b.resourceId).resource.state,
-            contentMode: b.minimized || ['circle', 'pill', 'lens'].includes(b.shape) ? 'summary' as const : 'reading' as const };
+          const subject=this.subject(b),subjectState=this.kernel.subjectState(subject),projected={...this.presentationOf(b),blockId:b.blockId};
+          const common={workspaceId,version:row.version,resourceState:subjectState,subjectState,contentMode:b.minimized || ['circle','pill','lens'].includes(b.shape)?'summary' as const:'reading' as const};
+          return b.resourceId?{...projected,...common,resourceId:b.resourceId,subject:{kind:'resource' as const,resourceId:b.resourceId}}:{...projected,...common,subject:b.subject!};
         }), canUndo: h.undo.length > 0, canRedo: h.redo.length > 0,
       };
     });
@@ -217,6 +223,12 @@ export class WorkspaceEngine {
     const b = this.kernel.attachBlock(workspaceId, resourceId, { x: p.x, y: p.y, width: p.width, height: p.height, z: p.zIndex });
     this.writePresentation(b.id, p); return b.id;
   }
+  private subject(block:{resourceId?:string;subject?:BlockSubjectRef}):BlockSubjectRef{if(block.resourceId)return {kind:'resource',resourceId:block.resourceId};ensure(block.subject,'INTEGRITY');return validateSubjectRef(block.subject);}
+  private presentationOf(block:Presentation):Presentation{return Object.fromEntries(Object.keys(defaults).map(key=>[key,block[key as keyof Presentation]])) as Presentation;}
+  private attachSubject(workspaceId:string,subject:NonResourceSubjectRef,p:Presentation):string{
+    ensure(this.options.allowSubjectAttachment?.(subject,workspaceId)===true,'SUBJECT_POLICY_REQUIRED');
+    const b=this.kernel.attachSubjectBlock(workspaceId,subject,{x:p.x,y:p.y,width:p.width,height:p.height,z:p.zIndex});this.writePresentation(b.id,p);return b.id;
+  }
   private apply(workspaceId: string, updates: { blockId: string; expectedVersion: number; presentation: Partial<Presentation> }[], revision: number, viewport: Viewport) {
     const state = this.project(workspaceId), seen = new Set();
     const placements = updates.map(u => {
@@ -224,9 +236,8 @@ export class WorkspaceEngine {
       const b = state.blocks.find(b => b.blockId === u.blockId); ensure(b, 'NOT_FOUND');
       ensure(b.version === u.expectedVersion, 'CONFLICT');
       ensure(!b.locked || (Object.keys(u.presentation).length === 1 && u.presentation.locked === false), 'LOCKED');
-      const { blockId, resourceId, workspaceId: _workspaceId, version, resourceState, contentMode, ...base } = b;
-      const p = presentation(u.presentation, base); this.writePresentation(blockId, p);
-      return { blockId, expectedVersion: b.version, placement: { x: p.x, y: p.y, width: p.width, height: p.height, z: p.zIndex } };
+      const p = presentation(u.presentation, this.presentationOf(b)); this.writePresentation(u.blockId, p);
+      return { blockId:u.blockId, expectedVersion: b.version, placement: { x: p.x, y: p.y, width: p.width, height: p.height, z: p.zIndex } };
     });
     return this.kernel.saveLayout(workspaceId, state.organization.mode === 'structured' ? 'structured' : 'freeform', viewport, placements, revision);
   }
@@ -235,15 +246,15 @@ export class WorkspaceEngine {
     const seen = new Set();
     for (const b of target.blocks) {
       ensure(text(b.blockId) && !seen.has(b.blockId), 'DUPLICATE_ID'); seen.add(b.blockId);
-      this.kernel.getResource(b.resourceId);
+      const subject=this.subject(b);if(subject.kind==='resource')this.kernel.getResource(subject.resourceId);else ensure(hash(this.kernel.readSubjectBinding(b.subjectBindingId!))===hash(subject),'INTEGRITY');
       const other = this.db.prepare('SELECT workspace_id FROM blocks WHERE id=?').get(b.blockId);
       ensure(!other || other.workspace_id === workspaceId, 'CONFLICT');
     }
     for (const b of current.blocks) this.kernel.detachBlock(b.id);
     for (const b of target.blocks) {
       const old = current.blocks.find(row => row.id === b.blockId);
-      this.db.prepare('INSERT INTO blocks(id,workspace_id,resource_id,x,y,width,height,z,version) VALUES(?,?,?,?,?,?,?,?,?)')
-        .run(b.blockId, workspaceId, b.resourceId, b.x, b.y, b.width, b.height, b.zIndex, (old?.version ?? 0) + 1);
+      this.db.prepare('INSERT INTO blocks(id,workspace_id,resource_id,x,y,width,height,z,version,subject_ref_id) VALUES(?,?,?,?,?,?,?,?,?,?)')
+        .run(b.blockId, workspaceId, b.resourceId??null, b.x, b.y, b.width, b.height, b.zIndex, (old?.version ?? 0) + 1,b.subjectBindingId??null);
       this.writePresentation(b.blockId, b);
     }
     const oldPresence = this.readPresence(workspaceId);
@@ -311,9 +322,10 @@ export class WorkspaceEngine {
           targets.push(this.attach(workspaceId, r.id, newPresentation(command))); break;
         }
         case 'attachResource': targets.push(this.attach(workspaceId, command.resourceId, newPresentation(command))); break;
+        case 'attachSubject': {const subject=validateSubjectRef(command.subject);ensure(subject.kind!=='resource','INVALID');targets.push(this.attachSubject(workspaceId,subject,newPresentation(command)));break;}
         case 'duplicateBlock': {
-          const { blockId, resourceId, workspaceId: _w, version, resourceState, contentMode, ...p } = find(command.blockId);
-          targets.push(this.attach(workspaceId, resourceId, presentation({ x: p.x + 24, y: p.y + 24, locked: false }, p))); break;
+          const b=find(command.blockId),p=this.presentationOf(b),next=presentation({x:p.x+24,y:p.y+24,locked:false},p),subject=this.subject(b);
+          targets.push(subject.kind==='resource'?this.attach(workspaceId,subject.resourceId,next):this.attachSubject(workspaceId,subject,next));break;
         }
         case 'detachBlock': ensure(!find(command.blockId).locked, 'LOCKED'); this.kernel.detachBlock(command.blockId); break;
         case 'moveBlock': patch(command.blockId, { x: snapValue(command.x, command.snap), y: snapValue(command.y, command.snap) }); break;
@@ -382,7 +394,7 @@ export class WorkspaceEngine {
         default: throw new WorkspaceError('UNKNOWN_COMMAND');
       }
       policy.targets = targets; policy.resizeIds = resizeIds; policy.intent ??= resizeIds.length ? 'resize' : targets.length ? 'move' : 'resolve';
-      const resolve = ['createBlock', 'attachResource', 'duplicateBlock', 'moveBlock', 'resizeBlock', 'setBlockShape', 'setBlockPresentation', 'setPresence', 'saveLayout', 'applyPreset', 'resolveLayout', 'restoreCheckpoint', 'setOrganization', 'applyStructuredPreset', 'reorderPlacements', 'bringAllIntoView'].includes(command.type);
+      const resolve = ['createBlock', 'attachResource', 'attachSubject', 'duplicateBlock', 'moveBlock', 'resizeBlock', 'setBlockShape', 'setBlockPresentation', 'setPresence', 'saveLayout', 'applyPreset', 'resolveLayout', 'restoreCheckpoint', 'setOrganization', 'applyStructuredPreset', 'reorderPlacements', 'bringAllIntoView'].includes(command.type);
       const resolved = resolve ? this.resolve(workspaceId, policy, state.organization.revision) : { changed: [], viewport: state.viewport };
       const rearrangedPlacementIds = resolved.changed;
       const noOp = ['resolveLayout', 'setOrganization', 'bringAllIntoView', 'reorderPlacements'].includes(command.type) && hash(before) === hash(this.snapshot(workspaceId)) && hash(state.viewport) === hash(resolved.viewport);

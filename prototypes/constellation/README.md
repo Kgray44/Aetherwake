@@ -45,7 +45,9 @@ External canonical switches retain the previous available location and camera in
 ## Behavior
 
 - Universe shows project anchors and standalone workspaces. Project overview shows workspaces; close zoom reveals resource proxies. Working scale delegates to actual workspace panels and editor identities.
-- Direct destinations, search/Open/Locate, keyboard Enter, Back, history, and list presentation remain available. Drag orbits; Shift-drag/arrows pan; wheel/plus/minus zoom; Home recenters; Escape stops camera motion. Wheel zoom crosses project/Universe scope continuously. Manual camera input during an awaited navigation remains authoritative on arrival.
+- A small glass location capsule holds only commands (⋯) and an information control (i). Ctrl K or right-click opens a compact searchable command/destination panel; selection information appears only on request. The i control, F1 or ? opens a small glass navigation guide. Escape or an outside click dismisses it.
+- Drag orbits; Shift-drag/middle-drag pans in the actual camera plane; wheel/plus/minus zoom; F fits selection; Home recenters; Enter/double-click enters; Backspace returns and Alt Up moves out. Shift-arrows orbit and arrows pan. Alt-drag preserves the initial grab point while moving and pinning a body. Exact coordinates, camera preferences, creation, typed relationships, history and list presentation remain available through command search. Editor shortcuts keep their own scope.
+- Wheel zoom crosses project/Universe scope continuously. Camera retargeting shares the host spring, and manual input during awaited navigation remains authoritative on arrival. Panning uses the viewport's perspective pixel scale so it feels consistent as the window changes size.
 - Incremental 3D positions retain existing anchors. Alt-drag or numeric controls move and pin bodies; workspace movement carries unpinned descendants. Radial/hierarchical arrangements have preview, cancel, apply and undo. Position never creates ownership or relationships.
 - View state contains only IDs, anchor coordinates, camera bookmarks, and bounded history. Persist it privately through the application service, with a 2 MiB payload bound. It is not a second content database.
 - Screen-space label packing, frustum/distance culling, 70/160/280 body caps and 40 relationship curves limit visual density. All authorized destinations remain searchable when labels are culled. Shared resources retain distinct block IDs and the same canonical resource ID.
@@ -79,3 +81,11 @@ node --experimental-strip-types prototypes/constellation/tests/benchmark.mjs
 On Windows, launch the native harness with `Start-Process -WindowStyle Hidden -PassThru` and wait for its exit to collect its result. The harness uses a nonvisible offscreen compositor and a temporary synthetic SQLite database. It emits five screenshots and `evidence/native-verification.json`. The CPU benchmark emits `evidence/cpu-benchmark.json`; it measures projection/search/culling, **not presented frames or GPU performance**.
 
 See [VERIFICATION.md](VERIFICATION.md) for evidence, requirements, and remaining acceptance boundaries.
+
+### Body clearance
+
+Planet geometry and spatial layout share one conservative size contract, including rings, atmosphere and maximum selection enlargement. Automatic placement leaves 28 world units between those envelopes and varies siblings' distance and elevation. Clear saved positions and pins remain authoritative; conflicting legacy positions are repaired deterministically with a visible notice. Drag previews stop before fixed neighbors, and arrangements/undo are validated against the current graph.
+
+Perspective can align separated 3D bodies. The renderer reserves an additional screen gap and suppresses an obscured body while retaining semantic destination labels, canonical search and selection. Selecting an obscured destination reveals its body. This presentation does not change its canonical position or ownership.
+
+`node --experimental-strip-types prototypes/constellation/tests/profile-spacing.mjs` is a bounded CPU-only source diagnostic for 50/250/2,000/10,000 resources. It reports projection, packing, refresh and scene-update costs separately; it does not establish native motion, GPU performance or product acceptance. Native verification belongs to the integration host and must be repeated on the actual candidate.

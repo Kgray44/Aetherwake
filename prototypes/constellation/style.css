@@ -1,7 +1,6 @@
 .aw-constellation {
   --aw-ink: #eeeaf9;
-  --aw-muted: #b8b0c9;
-  --aw-violet: #bb9deb;
+  --aw-muted: #c0b7d0;
   position: absolute;
   inset: 0;
   color: var(--aw-ink);
@@ -11,56 +10,96 @@
   pointer-events: none;
   isolation: isolate;
 }
-.aw-constellation button,
-.aw-constellation input {
+.aw-constellation :is(button, input, select) {
   font: inherit;
   color: inherit;
-  background: #20192ee8;
+  background: #20192ebf;
   border: 1px solid #bda3db5c;
   border-radius: 9px;
   padding: 8px 12px;
-  cursor: pointer;
   pointer-events: auto;
+}
+.aw-constellation button {
+  cursor: pointer;
+}
+.aw-constellation input {
+  cursor: text;
 }
 .aw-constellation button:disabled {
   opacity: 0.5;
   cursor: default;
 }
 .aw-constellation :focus-visible {
-  outline: 3px solid #e3d6ff;
-  outline-offset: 4px;
+  outline: 2px solid #e3d6ff;
+  outline-offset: 3px;
 }
 .aw-constellation [hidden] {
   display: none !important;
 }
-.aw-constellation .aw-position {
-  width: 75px;
-  padding: 4px;
-  cursor: text;
-  margin-left: 8px;
+.aw-glass {
+  background: linear-gradient(135deg, #393044ba, #161321e8 65%, #282033d9);
+  border: 1px solid #d6bff041;
+  box-shadow:
+    inset 0 1px 0 #fff2,
+    inset 1px 0 0 #d7b4ff0d,
+    0 12px 36px #07050c66;
+  backdrop-filter: blur(22px) saturate(1.18);
+  -webkit-backdrop-filter: blur(22px) saturate(1.18);
+  border-radius: 18px;
+  pointer-events: auto;
 }
 .aw-constellation-bar {
   position: absolute;
-  z-index: 5;
-  inset: 18px 24px auto;
+  z-index: 6;
+  bottom: 22px;
+  left: 24px;
   display: flex;
-  gap: 9px;
   align-items: center;
-  pointer-events: auto;
+  gap: 4px;
+  padding: 5px;
+  max-width: min(370px, calc(100% - 48px));
 }
 .aw-location {
-  margin-left: 12px;
-  flex: 1;
-  text-shadow: 0 2px 8px #000;
+  padding: 0 10px;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  min-width: 0;
+  color: #e6dfef;
+}
+.aw-constellation .aw-quiet-control {
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-color: transparent;
+  border-radius: 12px;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+}
+.aw-constellation .aw-quiet-control:hover,
+.aw-constellation .aw-quiet-control[aria-expanded="true"] {
+  background: #e6d5ff18;
+  border-color: #ead5ff26;
+}
+.aw-constellation .aw-info-control {
+  font:
+    italic 17px Georgia,
+    serif;
 }
 .aw-spatial-field {
   position: absolute;
-  inset: 90px 0 160px;
-  pointer-events: auto;
+  inset: 0;
   overflow: hidden;
+  pointer-events: auto;
   touch-action: none;
-  perspective: 1200px;
   outline-offset: -4px;
+  cursor: grab;
+}
+.aw-spatial-field:active {
+  cursor: grabbing;
 }
 .aw-spatial-world,
 .aw-connections {
@@ -79,22 +118,22 @@
   position: absolute;
   left: 0;
   top: 0;
-  width: 194px;
-  min-height: 132px;
+  width: 180px;
+  min-height: 90px;
   display: flex;
   align-items: center;
   flex-direction: column;
   justify-content: center;
   gap: 6px;
-  background: linear-gradient(155deg, #342b4466, #13111f99) !important;
+  background: linear-gradient(155deg, #342b4477, #13111fbb) !important;
   border: 1px solid #c3a4ed44 !important;
   box-shadow:
-    0 24px 40px #0006,
-    inset 0 1px 0 #f2dfff33;
+    0 16px 32px #0004,
+    inset 0 1px 0 #f2dfff22;
   pointer-events: auto;
-  will-change: transform;
   text-align: center;
   overflow: hidden;
+  will-change: transform;
 }
 .aw-anchor strong {
   display: -webkit-box;
@@ -108,157 +147,20 @@
 }
 .aw-anchor small {
   color: var(--aw-muted);
-  font-size: 11px;
-  letter-spacing: 0.16em;
+  font-size: 10px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 .aw-anchor-sculpture {
-  display: block;
-  width: 46px;
-  height: 46px;
-  border: 1px solid #d7b9ffb0;
-  border-radius: 50%;
-  box-shadow:
-    0 0 22px #a071d13d,
-    inset 0 0 14px #ba98df4d;
-  position: relative;
-  transform: rotateX(30deg) rotate(-25deg);
-}
-.aw-anchor-sculpture:after {
-  content: "";
-  position: absolute;
-  inset: 10px -13px;
-  border: 1px solid #eee3ff9c;
-  border-radius: 50%;
-  transform: rotate(-22deg);
-}
-.aw-workspace .aw-anchor-sculpture {
-  width: 45px;
-  height: 28px;
-  border-radius: 8px;
-  transform: skewY(-8deg);
-}
-.aw-resource {
-  width: 160px;
-  min-height: 85px;
-}
-.aw-resource .aw-anchor-sculpture {
   display: none;
 }
 .aw-selected {
   outline: 2px solid #dfc5ff;
-  outline-offset: 5px;
+  outline-offset: 4px;
 }
 .aw-unavailable {
   border-style: dashed !important;
   opacity: 0.65;
-}
-.aw-camera-tools {
-  position: absolute;
-  bottom: 108px;
-  left: 24px;
-  display: flex;
-  gap: 8px;
-  pointer-events: auto;
-}
-.aw-spatial-detail {
-  position: absolute;
-  bottom: 20px;
-  left: 24px;
-  max-width: min(720px, 65vw);
-  max-height: 85px;
-  overflow: auto;
-  background: #171321d9;
-  padding: 10px 15px;
-  border-left: 2px solid #ba9bdb;
-  pointer-events: auto;
-}
-.aw-spatial-detail p {
-  margin: 4px 0;
-}
-.aw-spatial-detail button {
-  margin-left: 12px;
-}
-.aw-spatial-status {
-  position: absolute;
-  right: 24px;
-  bottom: 30px;
-  max-width: 320px;
-  text-shadow: 0 2px 6px #000;
-}
-.aw-destinations {
-  position: absolute;
-  z-index: 6;
-  right: 24px;
-  top: 78px;
-  bottom: 24px;
-  width: min(440px, calc(100vw - 48px));
-  overflow: auto;
-  padding: 20px;
-  background: #16121ff5;
-  border: 1px solid #c8abe36b;
-  border-radius: 14px;
-  box-shadow: 0 20px 80px #0009;
-  pointer-events: auto;
-}
-.aw-destinations h2 {
-  font-size: 19px;
-  font-weight: 500;
-  margin: 0 0 14px;
-}
-.aw-destinations input {
-  width: 100%;
-  box-sizing: border-box;
-  cursor: text;
-}
-.aw-destination-row {
-  display: flex;
-  gap: 6px;
-  align-items: center;
-  border-bottom: 1px solid #d1b4ed22;
-  padding: 10px 0;
-}
-.aw-destination-row span {
-  flex: 1;
-  min-width: 0;
-}
-.aw-efficient .aw-anchor {
-  box-shadow: none;
-}
-.aw-working .aw-spatial-status:empty {
-  display: none;
-}
-@media (max-width: 700px) {
-  .aw-constellation-bar {
-    inset: 10px;
-    flex-wrap: wrap;
-  }
-  .aw-location {
-    order: 2;
-    flex-basis: 100%;
-    margin: 0;
-  }
-  .aw-camera-tools {
-    left: 10px;
-    right: 10px;
-    flex-wrap: wrap;
-    bottom: 105px;
-  }
-  .aw-camera-tools button {
-    padding: 6px 8px;
-  }
-  .aw-spatial-detail {
-    left: 10px;
-    max-width: 85vw;
-    font-size: 12px;
-  }
-  .aw-anchor {
-    width: 160px;
-  }
-  .aw-spatial-status {
-    bottom: 0;
-    font-size: 12px;
-  }
 }
 .aw-spatial-label {
   min-height: 0 !important;
@@ -275,53 +177,199 @@
   ) !important;
   text-shadow: 0 1px 5px #000;
   gap: 1px !important;
-  will-change: transform;
-}
-.aw-spatial-label .aw-anchor-sculpture {
-  display: none;
 }
 .aw-spatial-label strong {
-  font-size: 13px !important;
+  font-size: 13px;
 }
 .aw-spatial-label small {
-  font-size: 9px !important;
+  font-size: 9px;
 }
-.aw-spatial-mode .aw-camera-tools {
-  max-width: 80%;
-  flex-wrap: wrap;
+.aw-spatial-status {
+  position: absolute;
+  right: 24px;
+  bottom: 24px;
+  max-width: min(320px, 40vw);
+  font-size: 12px;
+  text-shadow: 0 2px 6px #000;
+  pointer-events: none;
 }
-.aw-camera-tools input[type="range"] {
-  width: 60px;
-  padding: 0;
+.aw-spatial-status:empty {
+  display: none;
 }
-.aw-camera-tools select {
-  background: #211a2c;
-  color: #eeeaf9;
-  border: 1px solid #bda3db5c;
-  border-radius: 7px;
+.aw-destinations,
+.aw-navigation-guide,
+.aw-spatial-detail {
+  position: absolute;
+  z-index: 7;
+  bottom: 80px;
+  left: 24px;
+  width: min(340px, calc(100% - 48px));
+  box-sizing: border-box;
+  max-height: calc(100% - 110px);
+  overflow: auto;
+  padding: 19px;
+  overscroll-behavior: contain;
 }
-.aw-spatial-mode .aw-spatial-detail {
-  max-height: 130px;
-  max-width: 67vw;
-  bottom: 14px;
+.aw-constellation
+  :is(.aw-destinations, .aw-navigation-guide, .aw-spatial-detail)
+  h2 {
+  margin: 0 0 14px;
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+.aw-destinations input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #0e0b175c;
+  padding: 10px 11px;
+  font-size: 12px;
+}
+.aw-destination-results {
+  margin-top: 10px;
+}
+.aw-constellation .aw-command-row {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 8px 9px;
+  min-height: 48px;
+}
+.aw-command-row span,
+.aw-command-row small {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.aw-command-row span {
+  font-size: 13px;
+}
+.aw-command-row small {
+  color: var(--aw-muted);
+  font-size: 10px;
+}
+.aw-constellation .aw-command-row:hover,
+.aw-constellation .aw-command-row[aria-selected="true"] {
+  background: #cfb5ef17;
+  border-color: #cdb3e926;
+}
+.aw-panel-hint {
+  margin: 14px 0 0;
+  font-size: 10px;
+  color: var(--aw-muted);
+  line-height: 1.6;
+}
+.aw-empty-results {
+  font-size: 12px;
+  color: var(--aw-muted);
+}
+.aw-panel-eyebrow {
+  display: block;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: #ccbbdf;
+  margin-bottom: 7px;
+}
+.aw-navigation-guide h2 {
+  margin-bottom: 6px !important;
+  font-size: 23px !important;
+}
+.aw-guide-intro {
+  font-size: 12px;
+  color: var(--aw-muted);
+  margin: 0 0 18px;
+}
+.aw-navigation-guide dl {
+  margin: 0;
+}
+.aw-navigation-guide dl > div {
+  padding: 8px 0;
+  border-top: 1px solid #d8bff012;
+}
+.aw-navigation-guide dt {
+  font-size: 12px;
+  color: #f4edf9;
+}
+.aw-navigation-guide dd {
+  margin: 2px 0 0;
+  color: var(--aw-muted);
+  font-size: 11px;
+}
+.aw-guide-footnote {
+  margin: 14px 0 0;
+  font-size: 10px;
+  color: var(--aw-muted);
+  line-height: 1.7;
+}
+.aw-spatial-detail > .aw-quiet-control {
+  float: right;
+  margin: -7px -8px 0 0;
+}
+.aw-spatial-detail > strong {
+  display: block;
+  padding-right: 26px;
+  font-size: 16px;
+  font-weight: 500;
+}
+.aw-spatial-detail > span {
+  font-size: 11px;
+  color: var(--aw-muted);
+}
+.aw-spatial-detail > p {
+  font-size: 12px;
+}
+.aw-spatial-detail label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  margin: 12px 0;
+}
+.aw-coordinates {
+  display: flex;
+  gap: 10px;
+}
+.aw-coordinates label {
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
+  font-size: 10px;
+}
+.aw-constellation .aw-position {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px;
+  font-size: 12px;
 }
 .aw-spatial-detail input[type="checkbox"] {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
 }
 .aw-graph-dialog {
   pointer-events: auto;
   color: #eeeaf9;
-  background: #15111fed;
-  border: 1px solid #9e82be88;
-  border-radius: 16px;
-  max-width: min(660px, 85vw);
+  background: linear-gradient(135deg, #33293fe8, #15111ff5);
+  backdrop-filter: blur(24px);
+  border: 1px solid #c6a4e65c;
+  border-radius: 18px;
+  max-width: min(560px, 85vw);
   max-height: 80vh;
   overflow: auto;
   padding: 24px;
+  box-shadow:
+    inset 0 1px 0 #ffffff1c,
+    0 20px 70px #0008;
 }
 .aw-graph-dialog::backdrop {
-  background: #08060cb0;
+  background: #08060c77;
 }
 .aw-graph-dialog form {
   display: flex;
@@ -335,8 +383,7 @@
   flex-wrap: wrap;
   align-items: center;
 }
-.aw-graph-dialog input,
-.aw-graph-dialog select {
+.aw-graph-dialog :is(input, select) {
   background: #261d32;
   color: #eeeaf9;
   padding: 7px;
@@ -362,68 +409,30 @@
 .aw-graph-dialog button {
   margin: 5px 6px 0 0;
 }
-.aw-camera-settings {
-  position: relative;
-  pointer-events: auto;
+.aw-efficient .aw-anchor {
+  box-shadow: none;
 }
-.aw-camera-settings summary {
-  list-style: none;
-  background: #21192ee8;
-  border: 1px solid #bda3db5c;
-  border-radius: 9px;
-  padding: 8px 12px;
-  cursor: pointer;
+.aw-efficient .aw-glass {
+  backdrop-filter: blur(10px);
 }
-.aw-camera-settings > div {
-  display: none;
-}
-.aw-camera-settings[open] > div {
-  position: absolute;
-  bottom: calc(100% + 12px);
-  left: 0;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  width: 320px;
-  padding: 14px;
-  background: #171220f5;
-  border: 1px solid #a78abd77;
-  border-radius: 12px;
-  box-shadow: 0 12px 40px #0009;
-}
-.aw-spatial-mode .aw-camera-tools {
-  bottom: 168px;
-}
-.aw-spatial-mode .aw-spatial-detail {
-  max-height: 125px;
-}
-.aw-camera-settings input[type="range"] {
-  width: 100px;
-}
-@media (max-width: 900px) {
+@media (max-width: 600px) {
   .aw-constellation-bar {
-    flex-wrap: wrap;
+    left: 14px;
+    bottom: 14px;
+    max-width: calc(100% - 28px);
   }
-  .aw-location {
-    order: 2;
-    flex-basis: 100%;
-    margin: 0;
+  .aw-destinations,
+  .aw-navigation-guide,
+  .aw-spatial-detail {
+    left: 14px;
+    bottom: 70px;
+    width: min(340px, calc(100% - 28px));
+    max-height: calc(100% - 90px);
+    padding: 16px;
   }
-  .aw-spatial-field {
-    top: 120px;
-  }
-  .aw-spatial-mode .aw-spatial-detail {
-    max-width: 90vw;
-  }
-  .aw-spatial-mode .aw-camera-tools {
-    max-width: 95vw;
-    bottom: 160px;
-    gap: 5px;
-  }
-  .aw-camera-tools button,
-  .aw-camera-settings summary {
-    font-size: 12px;
-    padding: 6px 8px;
+  .aw-spatial-status {
+    right: 14px;
+    bottom: 70px;
+    max-width: calc(100% - 28px);
   }
 }

@@ -1,0 +1,141 @@
+.aw-card-edges {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+  border-radius: inherit;
+}
+.aw-card-edge {
+  position: absolute;
+  display: block;
+  pointer-events: auto;
+  touch-action: none;
+  background: transparent;
+}
+.aw-card-edge--n,
+.aw-card-edge--s {
+  left: 16px;
+  right: 16px;
+  height: 10px;
+  cursor: ns-resize;
+}
+.aw-card-edge--n {
+  top: -3px;
+}
+.aw-card-edge--s {
+  bottom: -3px;
+}
+.aw-card-edge--e,
+.aw-card-edge--w {
+  top: 16px;
+  bottom: 16px;
+  width: 10px;
+  cursor: ew-resize;
+}
+.aw-card-edge--e {
+  right: -3px;
+}
+.aw-card-edge--w {
+  left: -3px;
+}
+.aw-card-edge--ne,
+.aw-card-edge--nw,
+.aw-card-edge--se,
+.aw-card-edge--sw {
+  width: 20px;
+  height: 20px;
+}
+.aw-card-edge--ne,
+.aw-card-edge--nw {
+  top: -3px;
+}
+.aw-card-edge--se,
+.aw-card-edge--sw {
+  bottom: -3px;
+}
+.aw-card-edge--ne,
+.aw-card-edge--se {
+  right: -3px;
+}
+.aw-card-edge--nw,
+.aw-card-edge--sw {
+  left: -3px;
+}
+.aw-card-edge--ne,
+.aw-card-edge--sw {
+  cursor: nesw-resize;
+}
+.aw-card-edge--nw,
+.aw-card-edge--se {
+  cursor: nwse-resize;
+}
+[data-direct-manipulation="true"] {
+  touch-action: none;
+}
+[data-direct-manipulation="true"] .card-kind-label {
+  cursor: inherit;
+  pointer-events: none;
+}
+[data-direct-manipulation="true"]:not(.expanded) {
+  cursor: grab;
+}
+[data-direct-manipulation="true"] :is(textarea, input, pre, [role="log"]) {
+  cursor: text;
+}
+[data-direct-manipulation="true"].direct-manipulating {
+  cursor: grabbing;
+}
+.expanded > .aw-card-edges,
+[data-locked="true"] > .aw-card-edges {
+  display: none;
+}
+[data-direct-manipulation="true"]:focus-visible {
+  outline: 1px solid #dccbf6;
+  outline-offset: 4px;
+}
+.aw-workspace-layout {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid #d3c9e52e;
+  border-radius: 14px;
+  background: linear-gradient(145deg, #1f2032d9, #0c1020c9);
+  box-shadow: inset 0 1px 0 #e9e2ff12;
+}
+.aw-workspace-layout button {
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.2;
+  color: #b8b0cc;
+  border: 0;
+  border-radius: 10px;
+  padding: 9px 11px;
+  background: transparent;
+  cursor: pointer;
+}
+.aw-workspace-layout button[aria-pressed="true"] {
+  color: #f0ebfa;
+  background: #cbb6ee15;
+  box-shadow: inset 0 0 0 1px #dbcef126;
+}
+.aw-workspace-layout button:focus-visible {
+  outline: 2px solid #dccbf6;
+  outline-offset: 2px;
+}
+.aw-workspace-layout .aw-workspace-add {
+  margin-left: 5px;
+  border-left: 1px solid #d3c9e52e;
+  font-size: 16px;
+  padding: 6px 10px;
+}
+.aw-workspace-layout button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+@media (max-width: 600px) {
+  .aw-workspace-layout button {
+    padding: 8px 7px;
+    font-size: 10px;
+  }
+}

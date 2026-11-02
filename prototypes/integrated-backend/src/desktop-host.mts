@@ -39,6 +39,10 @@ lines.on("line", async (line) => {
         "conversationSendPreview",
         "authorizeConversationSend",
         "conversationSend",
+        "vela",
+        "velaRequestPreview",
+        "authorizeVelaRequest",
+        "authorizeVelaDelegation",
       ].includes(request.command)
     )
       throw new Error("unsupported_command");

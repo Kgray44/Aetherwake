@@ -133,6 +133,10 @@ export function applyOrganizationPolicy(state: LayoutState, options: PolicyOptio
     // Camera-only operations cannot reinterpret or repair legacy/manual geometry.
   } else if (organization.mode === 'fluid') {
     items = resolveCollisions(input, options.targets ?? [], options.bounds, { gap: organization.gap, yieldVisible: true, protectNeighbors: true });
+    // World-space overflow must stay visible when Fluid displaces a card.
+    // Unchanged offscreen/manual positions and camera-only operations stay exact.
+    if(options.intent==='mode'&&options.bounds&&items.some(item=>{const box=footprint(item);return (box.x<options.bounds!.x||box.y<options.bounds!.y||box.x+box.width>options.bounds!.x+options.bounds!.width||box.y+box.height>options.bounds!.y+options.bounds!.height);})){const boxes=items.map(footprint),left=Math.min(...boxes.map(box=>box.x)),top=Math.min(...boxes.map(box=>box.y)),width=Math.max(...boxes.map(box=>box.x+box.width))-left+32,height=Math.max(...boxes.map(box=>box.y+box.height))-top+32;
+      const nextZoom=Math.min(state.viewport.zoom,options.bounds.width*state.viewport.zoom/width,options.bounds.height*state.viewport.zoom/height);ensure(Number.isFinite(nextZoom)&&nextZoom>0,'INVALID_VIEWPORT');const safeX=(options.bounds.x-state.viewport.x)*state.viewport.zoom,safeY=(options.bounds.y-state.viewport.y)*state.viewport.zoom;viewport={...viewport,x:left-16-safeX/nextZoom,y:top-16-safeY/nextZoom,zoom:nextZoom};}
   } else if (organization.mode === 'structured') {
     const result = structured(state, input, options); items = result.items; organization = result.organization; guides = result.guides;
   }

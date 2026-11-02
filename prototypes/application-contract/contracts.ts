@@ -3,6 +3,15 @@ import type {
   WorkspaceOrganization,
   StructuredPreset,
 } from "../workspace-engine/contracts.mts";
+import type {
+  BlockSubjectRef,
+  NonResourceSubjectRef,
+  SubjectState,
+} from "../workspace-kernel/subjects.ts";
+export type {
+  BlockSubjectRef,
+  NonResourceSubjectRef,
+} from "../workspace-kernel/subjects.ts";
 export type {
   OrganizationMode,
   OrganizationUpdate,
@@ -34,7 +43,6 @@ export type Geometry = {
 };
 export type Block = Geometry & {
   id: string;
-  resource_id: string;
   workspace_id: string;
   version: number;
   shape: Shape;
@@ -44,8 +52,16 @@ export type Block = Geometry & {
   locked?: boolean;
   materialVariant?: string;
   contentMode?: "summary" | "reading";
-};
+  subjectState?: SubjectState;
+} & (
+    | {
+        resource_id: string;
+        subject?: Extract<BlockSubjectRef, { kind: "resource" }>;
+      }
+    | { resource_id?: never; subject: NonResourceSubjectRef }
+  );
 export type Project = { id: string; title: string; version: number };
+export type TaskPriority = "low" | "normal" | "high" | "urgent";
 export type Workspace = {
   id: string;
   project_id: string | null;
@@ -59,6 +75,7 @@ export type Resource = {
   version: number;
   content: string;
   taskStatus?: "open" | "done";
+  taskPriority?: TaskPriority;
   taskMembers?: { id: string; title: string; status: "open" | "done" }[];
   execution?: {
     id: string;
@@ -231,6 +248,12 @@ type DesktopAction =
       resourceId: string;
       expectedVersion: number;
       status: "open" | "done";
+    }
+  | {
+      type: "taskPriority";
+      resourceId: string;
+      expectedVersion: number;
+      priority: TaskPriority;
     }
   | { type: "undo" }
   | { type: "redo" }

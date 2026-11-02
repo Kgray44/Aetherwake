@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
-import { WorkspaceEngine } from "../../workspace-engine/engine.mts";
+import { WorkspaceEngine, type EngineOptions } from "../../workspace-engine/engine.mts";
 import type { Command as EngineCommand } from "../../workspace-engine/contracts.mts";
 import type { WorkspaceKernel } from "../../workspace-kernel/kernel.mts";
 import type {
@@ -51,7 +51,7 @@ export class DesktopState {
     width: number;
     height: number;
   };
-  constructor(kernel: WorkspaceKernel, db: DatabaseSync) {
+  constructor(kernel: WorkspaceKernel, db: DatabaseSync, blockOptions:EngineOptions={}) {
     this.kernel = kernel;
     this.db = db;
     kernel.withTransaction(() => {
@@ -71,7 +71,7 @@ export class DesktopState {
             [1, 2, 3].includes(Number(versions[0].version)),
           "unsupported_desktop_schema",
         );
-      this.engine = new WorkspaceEngine(kernel);
+      this.engine = new WorkspaceEngine(kernel,blockOptions);
       const existing = db
         .prepare("SELECT id FROM workspaces ORDER BY created_at LIMIT 1")
         .get();
@@ -176,6 +176,10 @@ export class DesktopState {
         );
       db.exec("UPDATE desktop_schema SET version=3");
     });
+  }
+  /** Trusted in-process bridge only. Never expose the engine or callbacks through renderer IPC. */
+  nativeBlockServices():Readonly<{engine:WorkspaceEngine;navigateWorkspace(workspaceId:string):void}>{
+    return Object.freeze({engine:this.engine,navigateWorkspace:(workspaceId:string)=>{this.apply({type:'navigate',target:{kind:'workspace',workspaceId}},()=>{throw new Error('unexpected_block_bridge_conversation_creation');});}});
   }
   private engineCommand(workspaceId: string, action: Record<string, unknown>) {
     return this.engine.execute({
@@ -654,12 +658,14 @@ export class DesktopState {
         );
         this.kernel.updateNote(a.resourceId, a.content, a.expectedVersion);
         break;
-      case "taskStatus": {
+      case "taskStatus":
+      case "taskPriority": {
         const row = this.db
-          .prepare("SELECT kind FROM desktop_resources WHERE resource_id=?")
+          .prepare("SELECT kind,metadata_json FROM desktop_resources WHERE resource_id=?")
           .get(a.resourceId);
-        check(row?.kind === "task" && ["open", "done"].includes(a.status));
+        check(row?.kind === "task" && (a.type==='taskStatus'?["open", "done"].includes(a.status):['low','normal','high','urgent'].includes(a.priority)));
         const current = this.kernel.getResource(a.resourceId);
+        check(current.resource.state==='active','resource_archived');
         this.kernel.updateNote(
           a.resourceId,
           current.note.content,
@@ -669,7 +675,7 @@ export class DesktopState {
           .prepare(
             "UPDATE desktop_resources SET metadata_json=? WHERE resource_id=?",
           )
-          .run(JSON.stringify({ taskStatus: a.status }), a.resourceId);
+          .run(JSON.stringify({...JSON.parse(String(row!.metadata_json??'{}')),...(a.type==='taskStatus'?{taskStatus:a.status}:{taskPriority:a.priority})}), a.resourceId);
         break;
       }
       case "checkpoint":
@@ -784,6 +790,7 @@ export class DesktopState {
                 taskStatus:
                   JSON.parse(String(metadata?.metadata_json ?? "{}"))
                     .taskStatus ?? "open",
+                taskPriority:JSON.parse(String(metadata?.metadata_json??'{}')).taskPriority??'normal',
               }
             : {}),
           provider: "local" as const,

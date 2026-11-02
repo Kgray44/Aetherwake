@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { hash } from "./spatial.ts";
+import { hash } from "./identity.ts";
+import { planetDimensions } from "./body-metrics.ts";
 
 /** Appearance v1: canonical identity determines geology; content is never read. */
 export function planetAppearance(
@@ -10,8 +11,8 @@ export function planetAppearance(
     b = hash("climate:" + id.split("").reverse().join("")),
     c = hash("light:" + id),
     d = hash("orbit:" + id);
-  const type =
-    role === "resource" ? (a < 0.6 ? 0 : a < 0.85 ? 3 : 1) : Math.floor(a * 5);
+  const dimensions = planetDimensions(id, role),
+    type = dimensions.type;
   const hue = (b + 0.11 * c) % 1;
   const palette =
     type === 1
@@ -45,18 +46,9 @@ export function planetAppearance(
               ];
   return {
     version: 1,
-    type,
     seeds: [a, b, c, d],
     palette,
-    rings:
-      role === "project" ? d > 0.46 : role === "workspace" ? d > 0.8 : d > 0.98,
-    atmosphere: type === 1 || type === 2 || type === 3 || role === "project",
-    radius:
-      role === "project"
-        ? 148
-        : role === "workspace"
-          ? 62
-          : 23 + (c - 0.5) * 10,
+    ...dimensions,
   };
 }
 
@@ -216,7 +208,7 @@ export function createPlanet(
       }),
     );
     ring.name = "planet-ring";
-    ring.scale.setScalar(appearance.radius * (1.8 + appearance.seeds[2] * 0.7));
+    ring.scale.setScalar(appearance.radius * appearance.ringScale);
     ring.rotation.x = 0.65 + appearance.seeds[1] * 0.75;
     ring.rotation.z = appearance.seeds[3] * 2;
     group.add(ring);
