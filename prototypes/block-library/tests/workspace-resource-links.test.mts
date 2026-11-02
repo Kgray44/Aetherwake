@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'node:crypto';
@@ -49,6 +49,22 @@ test('explicit Related mode rejects startup errors before native operations and 
     const receipt = await require('./workspace-native.cjs').verify({ win, app: { exit(code: number) { exit = code; } }, privateRoot: join(tmpdir(), 'review-workspace-native-links-rejected'), source: {}, moduleStarted: Date.now(), startupErrors: ['Synthetic observed error'] });
     assert.equal(receipt.contract, 'aerynth.workspace-resource-links-evidence@1'); assert.equal(receipt.passed, false); assert.equal(receipt.actions.length + receipt.screenshots.length, 0); assert.equal(exit, 1);
     assert.equal(contents.listenerCount('before-input-event'), 0); assert.equal(contents.listenerCount('console-message'), 0);
+  } finally { process.argv = argv; }
+});
+
+test('a consumed initial Related profile is rejected before JS or native input rather than replaying link changes before a late checkpoint collision', async () => {
+  const profile = mkdtempSync(join(tmpdir(), 'review-workspace-native-consumed-source-'));
+  writeFileSync(join(profile, 'workspace-resource-links-expected.json'), JSON.stringify({ cpuOnlyRejectionMarker: true }), { flag: 'wx' });
+  const argv = process.argv; process.argv = [...argv, '--verify-resource-links', '--verification-deadline-ms=30000'];
+  const contents: any = new EventEmitter(); contents.isDestroyed = () => false;
+  const forbidden = () => { throw Error('Consumed profiles cannot trigger JS or native actions'); };
+  for (const key of ['executeJavaScript', 'sendInputEvent', 'capturePage', 'insertText']) contents[key] = forbidden;
+  const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => true, focus: forbidden, webContents: contents }; let exit = -1;
+  try {
+    const receipt = await helper.verify({ win, app: { exit(code: number) { exit = code; } }, privateRoot: profile, source: {}, moduleStarted: Date.now(), startupErrors: [] });
+    assert.equal(receipt.passed, false); assert.match(receipt.error, /consumed_initial_profile_must_be_preserved/); assert.equal(receipt.actions.length, 0); assert.equal(receipt.screenshots.length, 0); assert.equal(exit, 1);
+    assert.equal(contents.listenerCount('before-input-event'), 0); assert.equal(contents.listenerCount('console-message'), 0);
+    assert.deepEqual(JSON.parse(readFileSync(join(profile, 'workspace-resource-links-expected.json'), 'utf8')), { cpuOnlyRejectionMarker: true });
   } finally { process.argv = argv; }
 });
 

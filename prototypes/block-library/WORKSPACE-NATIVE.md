@@ -48,6 +48,8 @@ Actual Note actions open Related resources. The helper requires real search focu
 
 The existing graphAction broker, queue and contextual surface remain authoritative. Host RPCs only read assertions; they never create/remove a link or focus a control in place of user input. The original owner/focus/Escape/host-started ninety-second deadline, two-PNG/eight-MiB cap, 512-KiB JSON receipt and 128-KiB checkpoint bounds apply per process. Source/Core readiness is not a native pass or completion of combined B/Codex, D/E/F, performance, artistic or accessibility acceptance. The parent owns any App/Main/surface integration fix and the actual foreground slot.
 
+An initial invocation refuses an already checkpointed profile before creating the driver or performing JS/native input. It cannot replay link mutations and discover the consumed profile only at the final exclusive checkpoint write. Use the explicit separate restore phase; the preparer still refuses every existing profile, including failed ones.
+
 ## Hidden DOM contour fixture
 
 `radial-handles.browser.mjs` imports the actual interaction/content CSS, pose writer and shared surface-contour function. It measures `getBoundingClientRect` and `elementFromPoint` for all eight invisible resize handles across six shapes, four aspect/size pairs and three morph positions. Reasonable working sizes also test the actual editor rectangle's corners. CPU tests independently compare the CSS's real grip-center formula with polygons sampled from the shared contour, including native integer pixel rounding. These are distinct evidence tiers.

@@ -38,6 +38,12 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
     limits = options(process.argv, moduleStarted); receipt.limits = limits; guard = createGuard(win, limits);
     assert(/^review-workspace-native-/.test(path.basename(privateRoot)), 'dedicated_synthetic_profile_required'); startup(); assert.equal(receipt.startupErrorCount, 0, 'Observed startup graphics/console error');
     consoleSource = win.webContents; consoleSource.on('console-message', consoleError);
+    if (!limits.restore) {
+      let consumed = false;
+      try { await guard.around(() => fs.stat(path.join(privateRoot, 'workspace-resource-links-expected.json'))); consumed = true; }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+      assert(!consumed, 'consumed_initial_profile_must_be_preserved_use_separate_restore');
+    }
     const readJson = async (name, bound) => { const file = path.join(privateRoot, name), stat = await guard.around(() => fs.stat(file)); assert(stat.size <= bound, 'resource_links_json_bound_exceeded'); return JSON.parse(await guard.around(() => fs.readFile(file, 'utf8'))); };
     const seed = await readJson('workspace-native-seed.json', 262144), fixture = exports.fixture(seed);
     assert.equal(seed.contract, 'aerynth.workspace-native@1'); assert.equal(seed.syntheticOnly, true); assert.equal(seed.cases.length, 10); assert.equal(seed.shapeCases.length, 3);
