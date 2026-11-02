@@ -4,7 +4,8 @@ import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import type { DatabaseSync } from 'node:sqlite';
-import type { ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
+import type { Resource as PublicResource, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
+import { RESOURCE_OPENING_CONTRACT, parseResourceOpeningInput, type ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { ConversationGraph, type GraphData, type MessageMetadata, type ProviderAdapter as GraphAdapter } from '../../connected-conversations/src/graph.ts';
 import { localConversationAdapter, mockOrdinaryAdapter } from '../../connected-conversations/src/adapters.ts';
@@ -772,6 +773,63 @@ export class BackendCore {
       };
     });
   }
+  private resourceOpeningSelection(resourceId:string,graphId:string,messageId:string):boolean {
+    const message=this.state.graph.messages.find(m=>m.id===messageId),source=message&&this.state.graph.conversations.find(c=>c.id===message.conversationId);
+    if(!message||!source?.ownMessageIds.includes(messageId)||this.state.graph.unavailableMessageIds.includes(messageId))return false;
+    const sourceId=Object.entries(this.state.resources).find(([,gid])=>gid===message.conversationId)?.[0];
+    if(!sourceId||!this.libraryAuthorized({kind:'resource',id:sourceId})||!this.conversationReadAccess(sourceId,messageId))return false;
+    if(sourceId===resourceId&&message.conversationId===graphId)return true;
+    // Trusted visibility-only lookup: project NO headers, counts or bodies.
+    // Only the exact requested source can escape, after current authorization.
+    let visible=false;
+    try{this.graph.visibleMessageMetadata(graphId,{limit:0,maxScan:4096,maxBodyBytes:0,allow:meta=>{
+      if(meta.id!==messageId)return true;
+      visible=!meta.unavailable&&meta.conversationId===message.conversationId;return false;
+    }});}catch{return false;}
+    return visible;
+  }
+  /** Canonical identity read, independent from presentation placement. Never
+   * invokes Desktop.snapshot/engine projection (which may normalize navigation). */
+  private openResource(input:unknown):ResourceOpeningResult {
+    const request=parseResourceOpeningInput(input),resourceId=request.resourceId,base={contract:RESOURCE_OPENING_CONTRACT,resourceId};
+    const unavailable=(reason:'resource-unavailable'|'selection-unavailable'='resource-unavailable'):ResourceOpeningResult=>({...base,status:'unavailable',reason});
+    return this.kernel.withTransaction(()=>{
+      const row=this.db.prepare('SELECT r.*,d.kind AS desktop_kind,d.metadata_json FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=?').get(resourceId);
+      if(!row||row.state!=='active'||!this.libraryAuthorized({kind:'resource',id:resourceId})||!this.conversationReadAccess(resourceId))return unavailable();
+      const actualKind=row.kind==='conversation'?'conversation':row.desktop_kind??(row.kind==='generic'?'reference':row.kind),kinds:BlockKind[]=['conversation','note','research','task','task_group','reference','stream'];
+      if(!kinds.includes(actualKind as BlockKind)||actualKind==='conversation'&&row.kind!=='conversation')return {...base,status:'unsupported',reason:'resource-kind-unsupported',kind:String(actualKind).slice(0,64)};
+      const kind=actualKind as BlockKind;
+      if(request.selection&&kind!=='conversation')return {...base,status:'unsupported',reason:'message-selection-unsupported',kind};
+      const conversation=kind==='conversation'?this.state.graph.conversations.find(c=>c.id===this.state.resources[resourceId]):undefined;
+      if(kind==='conversation'&&!conversation)return unavailable();
+      if(request.selection&&!this.resourceOpeningSelection(resourceId,conversation!.id,request.selection.messageId))return unavailable('selection-unavailable');
+      // Conversation history/drafts retain their existing canonical ports; this
+      // is an opening projection, not a second transcript or a guessed count.
+      const resource:PublicResource={id:resourceId,title:String(row.title),kind,version:Number(row.version),project_id:row.project_id===null?null:String(row.project_id),state:'active',visible:true,available:true,content:'',provider:conversation?.kind==='codex'?'codex':'local',messages:[],...(conversation?{providerId:conversation.providerId,conversationRevision:this.state.revisions[resourceId]}:{})};
+      if(kind!=='conversation')resource.content=this.kernel.getResource(resourceId).note?.content??'';
+      if(kind==='task'||kind==='task_group'){
+        let metadata:Record<string,unknown>;try{metadata=JSON.parse(String(row.metadata_json??'{}'));if(!metadata||typeof metadata!=='object'||Array.isArray(metadata))return unavailable();}catch{return unavailable();}
+        if(kind==='task'){
+          const status=metadata.taskStatus??'open',priority=metadata.taskPriority??'normal';
+          if(!['open','done'].includes(String(status))||!['low','normal','high','urgent'].includes(String(priority)))return unavailable();
+          resource.taskStatus=status as PublicResource['taskStatus'];resource.taskPriority=priority as PublicResource['taskPriority'];
+        }else{
+          resource.taskMembers=[];
+          for(const member of this.db.prepare("SELECT r.id,r.title,d.metadata_json FROM relationships e JOIN resources r ON r.id=e.target_id JOIN desktop_resources d ON d.resource_id=r.id WHERE e.source_id=? AND e.kind='contains_task' AND r.state='active' AND d.kind='task' ORDER BY r.id").all(resourceId)){
+            const id=String(member.id);if(!this.libraryAuthorized({kind:'resource',id})||!this.conversationReadAccess(id))continue;
+            let status:unknown;try{status=JSON.parse(String(member.metadata_json??'{}')).taskStatus??'open';}catch{continue;}
+            if(status==='open'||status==='done')resource.taskMembers.push({id,title:String(member.title),status});
+          }
+        }
+      }
+      let placement:{workspaceId:string;blockId:string}|undefined;
+      if(request.preferredPresentation==='existing-placement'&&request.preferredPlacement){
+        const hint=request.preferredPlacement,block=this.db.prepare('SELECT id FROM blocks WHERE id=? AND workspace_id=? AND resource_id=?').get(hint.blockId,hint.workspaceId,resourceId);
+        if(block&&this.libraryAuthorized({kind:'workspace',id:hint.workspaceId}))placement={workspaceId:hint.workspaceId,blockId:hint.blockId};
+      }
+      return {...base,status:'ready',resource,presentation:{kind,mode:placement?'existing-placement':'direct'},...(placement?{placement}:{}),...(request.preferredPresentation==='existing-placement'?{placementStatus:placement?'verified' as const:'unavailable' as const}:{}),...(request.selection?{selection:{messageId:request.selection.messageId}}:{})};
+    });
+  }
   private pruneSendApprovals() {
     const time=Date.now();for(const [id,value] of this.sendPreviews)if(Date.parse(value.preview.expiresAt)<=time)this.sendPreviews.delete(id);
     for(const [id,value] of this.sendGrants)if(Date.parse(value.expiresAt)<=time)this.sendGrants.delete(id);
@@ -1084,8 +1142,9 @@ export class BackendCore {
     // Reads, interruption and durable draft recovery remain available during
     // execution. Canonical mutations retain source/approval fences.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft'];
-    if (!(name==='conversation'&&a?.name==='saveDraft')&&!['snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
+    if (!(name==='conversation'&&a?.name==='saveDraft')&&!['openResource','snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {
+      case 'openResource':return this.openResource(a) as CommandMap[K]['output'];
       case 'notes':return this.noteCommand(a) as any;
       case 'library':return this.libraryCommand(a) as any;
       case 'vela':return this.velaCommand(a) as any;
