@@ -76,6 +76,7 @@ test("desktop preload admits only public product families through the native com
 test("renderer cannot invoke private grant creation, raw provider execution or handler registration", async () => {
   const { host, calls } = bridge();
   for (const name of [
+    "snapshot",
     "authorizeVelaRequest",
     "authorizeVelaDelegation",
     "authorizeConversationSend",

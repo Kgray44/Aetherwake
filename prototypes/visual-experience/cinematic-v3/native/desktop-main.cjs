@@ -493,6 +493,20 @@ app.whenReady().then(async () => {
           source,
           moduleStarted,
           startupErrors,
+          inspectProviderState: process.argv.includes(
+            "--verify-functional-workspace",
+          )
+            ? async () => {
+                const snapshot = await call("snapshot", {});
+                return {
+                  executionCount: Object.keys(snapshot.executions).length,
+                  bindingCount: Object.values(snapshot.bindings).flat().length,
+                  assistantMessageCount: snapshot.graph.messages.filter(
+                    (message) => message.role === "assistant",
+                  ).length,
+                };
+              }
+            : undefined,
         },
       );
       return;
