@@ -1,5 +1,7 @@
 const { createHash, randomUUID } = require("node:crypto");
 const path = require("node:path");
+const reviewPreload = path.join(__dirname, "vela-review-preload.cjs");
+const ownedReviews = new WeakMap();
 const escape = (value) =>
   String(value).replace(
     /[&<>"']/g,
@@ -134,7 +136,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime }) {
     title: "Vela · Review sharing",
     minimizable: false,
     webPreferences: {
-      preload: path.join(__dirname, "vela-review-preload.cjs"),
+      preload: reviewPreload,
       additionalArguments: ["--vela-review-token=" + token],
       session: partition,
       contextIsolation: true,
@@ -143,8 +145,17 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime }) {
       devTools: false,
     },
   });
+  const ownership = {
+    parent,
+    url,
+    preload: reviewPreload,
+    ready: false,
+    shown: false,
+  };
+  ownedReviews.set(child, ownership);
   return new Promise((resolve) => {
-    let done = false;
+    let done = false,
+      painted = false;
     const listeners = [];
     const listen = (emitter, name, handler) => {
       emitter.on(name, handler);
@@ -153,6 +164,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime }) {
     const finish = (approved) => {
       if (done) return;
       done = true;
+      ownedReviews.delete(child);
       clearTimeout(timer);
       for (const [emitter, name, handler] of listeners)
         emitter.removeListener(name, handler);
@@ -169,17 +181,43 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime }) {
     listen(child, "closed", () => finish(false));
     listen(child, "blur", () => finish(false));
     listen(child.webContents, "render-process-gone", () => finish(false));
+    listen(child.webContents, "preload-error", () => finish(false));
     listen(child.webContents, "will-navigate", (event) =>
       event.preventDefault(),
     );
     child.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    const validChildEvent = (event, value) =>
+      !done &&
+      event.sender === child.webContents &&
+      event.senderFrame === child.webContents.mainFrame &&
+      event.senderFrame.url === url &&
+      value?.token === token;
+    const showWhenReady = () => {
+      if (done || ownership.shown || !painted || !ownership.ready) return;
+      if (
+        !ownerAlive(parent) ||
+        !parent.isVisible() ||
+        parent.isMinimized() ||
+        !parent.isFocused()
+      )
+        return finish(false);
+      ownership.shown = true;
+      try {
+        child.show();
+      } catch {
+        finish(false);
+      }
+    };
+    listen(ipcMain, "vela-review-ready", (event, value) => {
+      if (!validChildEvent(event, value)) return;
+      ownership.ready = true;
+      showWhenReady();
+    });
     listen(ipcMain, channel, (event, value) => {
       if (
-        done ||
-        event.sender !== child.webContents ||
-        event.senderFrame !== child.webContents.mainFrame ||
-        event.senderFrame.url !== url ||
-        value?.token !== token ||
+        !validChildEvent(event, value) ||
+        !ownership.ready ||
+        !ownership.shown ||
         !["approve", "cancel"].includes(value?.decision)
       )
         return;
@@ -190,14 +228,8 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime }) {
       );
     });
     listen(child, "ready-to-show", () => {
-      if (
-        !ownerAlive(parent) ||
-        !parent.isVisible() ||
-        parent.isMinimized() ||
-        !parent.isFocused()
-      )
-        finish(false);
-      else child.show();
+      painted = true;
+      showWhenReady();
     });
     try {
       child.loadURL(url).catch(() => finish(false));
@@ -210,3 +242,22 @@ exports.validateReview = validateReview;
 exports.reviewPage = reviewPage;
 exports.showVelaReview = showVelaReview;
 exports.isReviewOwnerAlive = ownerAlive;
+/** Private native ownership only. This exposes no token, prompt, grant or IPC capability. */
+exports.isOwnedVelaReviewWindow = (child, parent) => {
+  try {
+    const entry = ownedReviews.get(child);
+    return (
+      !!entry &&
+      entry.parent === parent &&
+      entry.preload === reviewPreload &&
+      entry.ready === true &&
+      entry.shown === true &&
+      ownerAlive(parent) &&
+      ownerAlive(child) &&
+      child.getParentWindow() === parent &&
+      child.webContents.getURL() === entry.url
+    );
+  } catch {
+    return false;
+  }
+};

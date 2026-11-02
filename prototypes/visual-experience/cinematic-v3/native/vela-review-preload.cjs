@@ -24,6 +24,7 @@ addEventListener(
         decide("cancel");
       }
     });
+    if (token) ipcRenderer.send("vela-review-ready", { token });
   },
   { once: true },
 );

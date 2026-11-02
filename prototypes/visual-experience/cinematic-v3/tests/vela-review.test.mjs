@@ -3,9 +3,8 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-const { validateReview, reviewPage, showVelaReview } = createRequire(
-  import.meta.url,
-)("../native/vela-review.cjs");
+const { validateReview, reviewPage, showVelaReview, isOwnedVelaReviewWindow } =
+  createRequire(import.meta.url)("../native/vela-review.cjs");
 const digest = (text) =>
   createHash("sha256").update(JSON.stringify(text)).digest("hex");
 function disclosure() {
@@ -114,7 +113,7 @@ test("resource metadata is disclosed even when its body was not selected", () =>
   assert(html.includes('id="review-title"'));
 });
 
-function runtime() {
+function runtime({ autoReady = true, autoPaint = true } = {}) {
   const parent = new EventEmitter(),
     ipcMain = new EventEmitter(),
     children = [];
@@ -136,6 +135,8 @@ function runtime() {
       this.shown = false;
       this.webContents = new EventEmitter();
       this.webContents.mainFrame = { url: "" };
+      this.webContents.isDestroyed = () => this.destroyed;
+      this.webContents.getURL = () => this.url;
       this.webContents.setWindowOpenHandler = (handler) => {
         this.openHandler = handler;
       };
@@ -143,6 +144,9 @@ function runtime() {
     }
     isDestroyed() {
       return this.destroyed;
+    }
+    getParentWindow() {
+      return this.options.parent;
     }
     destroy() {
       this.destroyed = true;
@@ -154,7 +158,21 @@ function runtime() {
     loadURL(url) {
       this.url = url;
       this.webContents.mainFrame.url = url;
-      queueMicrotask(() => this.emit("ready-to-show"));
+      queueMicrotask(() => {
+        if (autoPaint) this.emit("ready-to-show");
+        if (autoReady)
+          ipcMain.emit(
+            "vela-review-ready",
+            {
+              sender: this.webContents,
+              senderFrame: this.webContents.mainFrame,
+            },
+            {
+              token:
+                this.options.webPreferences.additionalArguments[0].slice(20),
+            },
+          );
+      });
       return Promise.resolve();
     }
   }
@@ -188,6 +206,20 @@ function runtime() {
     defocus: () => {
       focused = false;
     },
+    preloadReady: (
+      child,
+      extra = {},
+      token = child.options.webPreferences.additionalArguments[0].slice(20),
+    ) =>
+      ipcMain.emit(
+        "vela-review-ready",
+        {
+          sender: child.webContents,
+          senderFrame: child.webContents.mainFrame,
+          ...extra,
+        },
+        { token },
+      ),
     decide: (child, decision, extra = {}) =>
       ipcMain.emit(
         "vela-review-decision",
@@ -277,4 +309,57 @@ test("expiry and lost parent ownership cannot create or show a focus-taking appr
   assert.equal(await open(f), false);
   assert(!f.children[0].shown);
   assert(f.children[0].destroyed);
+});
+
+test("native ownership requires exact authenticated preload readiness and is revoked at close", async () => {
+  const f = runtime({ autoReady: false }),
+    pending = open(f),
+    child = f.children[0];
+  await Promise.resolve();
+  assert.equal(child.shown, false);
+  assert.equal(isOwnedVelaReviewWindow(child, f.parent), false);
+  f.preloadReady(child, { sender: f.parent.webContents });
+  f.preloadReady(child, { senderFrame: { url: child.url } });
+  f.preloadReady(child, {}, "wrong-token");
+  f.decide(child, "approve");
+  assert.equal(child.shown, false);
+  assert.equal(
+    child.destroyed,
+    false,
+    "readiness and painted UI are required before any decision",
+  );
+  f.preloadReady(child);
+  assert.equal(child.shown, true);
+  assert.equal(isOwnedVelaReviewWindow(child, f.parent), true);
+  assert.equal(isOwnedVelaReviewWindow(child, {}), false);
+  assert.equal(isOwnedVelaReviewWindow({}, f.parent), false);
+  f.decide(child, "cancel");
+  assert.equal(await pending, false);
+  assert.equal(isOwnedVelaReviewWindow(child, f.parent), false);
+  assert.equal(f.ipcMain.listenerCount("vela-review-ready"), 0);
+  assert.equal(f.ipcMain.listenerCount("vela-review-decision"), 0);
+});
+
+test("a missing preload or lost owner cannot show a ready-looking window", async () => {
+  const missing = runtime({ autoReady: false }),
+    pending = open(missing),
+    child = missing.children[0];
+  await Promise.resolve();
+  child.webContents.emit("preload-error");
+  assert.equal(await pending, false);
+  assert.equal(child.shown, false);
+  assert.equal(isOwnedVelaReviewWindow(child, missing.parent), false);
+  const late = runtime({ autoPaint: false }),
+    waiting = open(late),
+    other = late.children[0];
+  await Promise.resolve();
+  assert.equal(
+    other.shown,
+    false,
+    "preload readiness alone cannot show before paint",
+  );
+  late.defocus();
+  other.emit("ready-to-show");
+  assert.equal(await waiting, false);
+  assert.equal(other.shown, false);
 });

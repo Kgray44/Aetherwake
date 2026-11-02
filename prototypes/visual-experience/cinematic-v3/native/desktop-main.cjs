@@ -525,6 +525,8 @@ app.whenReady().then(async () => {
         startupErrors,
         getNativeRequestDiagnostics: () =>
           velaRequestDiagnostics.map((event) => ({ ...event })),
+        ownsNativeReviewWindow:
+          require("./vela-review.cjs").isOwnedVelaReviewWindow,
         slotStartedAt: moduleStartedMonotonicMs,
         deadlineMs: 85000,
         cancelOwnedPlanning: async ({ requestId }) => {
