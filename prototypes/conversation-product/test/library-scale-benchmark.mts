@@ -21,6 +21,9 @@ import type { ConversationProduct, CanonicalConversationHost } from '../src/serv
 
 const MiB=1024*1024,DISK_BOUND=64*MiB,DB_BOUND=15*MiB,STATE_BOUND=6*MiB;
 const OUTPUT_BOUND=256*1024,MAX_DATASET_MS=90_000,SLOW_SAMPLE_MS=2_000,RSS_CHECKPOINT_BOUND=256*MiB;
+// Keep the V8 heap below the separate RSS admission ceiling. These are not
+// explicit collections and do not turn RSS checkpoints into an OS quota.
+const WORKER_HEAP_FLAGS=['--max-old-space-size=128','--max-semi-space-size=8'];
 const HERE=fileURLToPath(import.meta.url),REPO=resolve(dirname(HERE),'../../..');
 const OUTPUT_ROOT=join(REPO,'prototypes/visual-experience/cinematic-v3/.runtime/application-evidence');
 const SOURCE_FILES=[
@@ -82,7 +85,7 @@ async function worker(dataset:Dataset,session:string,candidate:string){
  const file=join(profile,'canonical.sqlite'),requested=DATASETS[dataset];let core:BackendCore|undefined,providerCalls=0;
  const receipt:Record<string,unknown>={contract:'aerynth.library-scale@1',synthetic:true,binding,dataset:{name:dataset,requested},passed:false,
   tiers:{structural:'instrumented canonical reads; excluded from timing',timing:'in-process Core/conversation service only; excludes Electron/IPC/render/presentation'},
-  bounds:{ownedDiskBytes:DISK_BOUND,databaseBytes:DB_BOUND,canonicalStateBytes:STATE_BOUND,deadlineMs:MAX_DATASET_MS,sampledRssBytes:RSS_CHECKPOINT_BOUND},
+  bounds:{ownedDiskBytes:DISK_BOUND,databaseBytes:DB_BOUND,canonicalStateBytes:STATE_BOUND,deadlineMs:MAX_DATASET_MS,sampledRssBytes:RSS_CHECKPOINT_BOUND,workerHeapFlags:WORKER_HEAP_FLAGS},
   limitations:['Fresh synthetic local messages, not model output or account history.','Old-heap flag and RSS checkpoints are not an OS total-memory quota.','Counts/data sizes and work are measured separately from timing.','No native input/paint/presentation latency, accessibility or artistic acceptance.']};
  try{
   core=new BackendCore({path:file,privateRoot:profile,contentPolicy:'synthetic-only',provider:'fixture'});
@@ -210,7 +213,7 @@ async function main(){
  for(const dataset of names){
   guard();assert(directoryBytes(session)<DISK_BOUND-DB_BOUND*2-OUTPUT_BOUND,'insufficient_owned_envelope');
   const result=await new Promise<{dataset:string;code:number|null;signal:string|null;deadline:boolean}>((done,reject)=>{
-   const child=fork(HERE,['--worker','--candidate='+candidate,'--session='+session,'--dataset='+dataset],{cwd:REPO,execArgv:['--max-old-space-size=256'],env:{...process.env,NODE_DISABLE_COMPILE_CACHE:'1'},silent:true,windowsHide:true});let deadline=false,output=0;
+   const child=fork(HERE,['--worker','--candidate='+candidate,'--session='+session,'--dataset='+dataset],{cwd:REPO,execArgv:WORKER_HEAP_FLAGS,env:{...process.env,NODE_DISABLE_COMPILE_CACHE:'1'},silent:true,windowsHide:true});let deadline=false,output=0;
    const timer=setTimeout(()=>{deadline=true;child.kill();},MAX_DATASET_MS+3000);
    for(const stream of [child.stdout,child.stderr])stream?.on('data',(data:Buffer)=>{output+=data.length;if(output>65536){deadline=true;child.kill();}});
    child.once('error',error=>{clearTimeout(timer);reject(error);});child.once('exit',(code,signal)=>{clearTimeout(timer);done({dataset,code,signal,deadline});});
