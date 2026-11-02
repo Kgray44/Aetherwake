@@ -15,6 +15,38 @@ function fixture(mode='normal'){
 async function product<K extends keyof ProductCommandMap>(core:BackendCore,name:K,input:ProductCommandMap[K]['input']):Promise<ProductCommandMap[K]['output']>{return core.command('conversation',{name,input} as ConversationProductRequest) as Promise<ProductCommandMap[K]['output']>;}
 async function approved(core:BackendCore,input:ConversationSendInput){const preview=await core.command('conversationSendPreview',input),grant=await core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:input.commandId});return {preview,dispatch:{previewId:preview.id,fingerprint:preview.fingerprint,commandId:input.commandId,grantId:grant.grantId}};}
 
+test('canonical read batches memoize only this synchronous authority check and fence every escaped lazy read',async()=>{
+ const f=fixture();try{
+  const c=await f.core.command('createConversation',{title:'Synthetic read-batch chat',providerId:'local',commandId:crypto.randomUUID()}),m=await f.core.command('addMessage',{resourceId:c.resourceId,role:'user',content:'Synthetic exact authorized body',expectedRevision:1});
+  const core=f.core as any,access=core.conversationAccess.access;let checks=0,escaped!:ConversationReadView;
+  core.conversationAccess.access=(...args:any[])=>{checks++;return access(...args);};
+  const result=core.canonicalConversationReadBatch((v:ConversationReadView)=>{
+   escaped=v;const gid=v.resourceMap[c.resourceId];
+   assert.equal(v.messageMetadata(m.id)?.id,m.id);assert.equal(v.messageMetadata(m.id)?.id,m.id);
+   assert.equal(v.graph.visibleMessages(gid)[0].content,'Synthetic exact authorized body');
+   assert.throws(()=>core.canonicalConversationReadBatch(()=>null),/conversation_read_batch_active/);
+   return m.id;
+  });
+  assert.equal(result,m.id);assert.equal(checks,2,'one resource and one message decision, shared by graph and CP host paths');
+  assert.throws(()=>escaped.messageMetadata(m.id),/conversation_read_batch_closed/);
+  assert.throws(()=>escaped.graph.visibleMessages(escaped.resourceMap[c.resourceId]),/conversation_read_batch_closed/);
+  assert.throws(()=>escaped.resourceContent(c.resourceId),/conversation_read_batch_closed/);
+  core.conversationAccess.access=()=>false;
+  assert.equal(core.canonicalConversationReadBatch((v:ConversationReadView)=>v.messageMetadata(m.id)),null,'a later batch never reuses a prior grant');
+  core.conversationAccess.access=access;
+  assert.throws(()=>core.canonicalConversationReadBatch((v:ConversationReadView)=>{escaped=v;throw Error('synthetic callback failure');}),/synthetic callback failure/);
+  assert.throws(()=>escaped.messageMetadata(m.id),/conversation_read_batch_closed/);
+  let asyncCalled=false;
+  assert.throws(()=>core.canonicalConversationReadBatch(async()=>{asyncCalled=true;}),/synchronous_conversation_read_required/);assert.equal(asyncCalled,false);
+  assert.throws(()=>core.canonicalConversationReadBatch((v:ConversationReadView)=>{escaped=v;return Promise.resolve('unaccepted async result');}),/synchronous_conversation_read_required/);
+  assert.throws(()=>escaped.messageMetadata(m.id),/conversation_read_batch_closed/);
+  assert.equal(core.conversationBatch,null);
+  core.atomic(()=>core.graph.markUnavailable(m.id));
+  assert.equal(core.canonicalConversationReadBatch((v:ConversationReadView)=>v.messageMetadata(m.id)),null);
+  assert.equal(Object.keys((await f.core.command('snapshot',{})).executions).length,0);
+ }finally{await f.close();}
+});
+
 test('real Core browse uses bodyless canonical metadata and retained lazy reads recheck current revocation and access',async()=>{
  const f=fixture();try{
   const conversation=await f.core.command('createConversation',{title:'Metadata-only synthetic chat',providerId:'local',commandId:crypto.randomUUID()});
