@@ -1,6 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
+const vm = require("node:vm");
 const {
   assertOwnedProfile,
   parseCim,
@@ -10,6 +11,11 @@ const {
   validateBudget,
   admitPNG,
   CIM_SCRIPT,
+  CLIPBOARD_FIXTURE,
+  resourceInformation,
+  namedControlScript,
+  assertSyntheticClipboard,
+  passingCheckpoint,
 } = require("../native/integration-desktop-basics.cjs");
 const { createSlot } = require("../native/integration-resource-opening.cjs");
 const GiB = 1073741824,
@@ -299,7 +305,7 @@ test("focus loss/deadline are sticky and the 45/12s slots reserve cleanup rather
   assert.throws(() => restore.check());
   assert.equal(restore.remaining(), 2500);
 });
-test("helper never grants renderer activation or reads original clipboard; partial coverage cannot pass full mode", () => {
+test("helper never grants renderer activation; all clipboard reads follow explicit synthetic copying and all seven contexts are required", () => {
   const source = fs.readFileSync(
     require.resolve("../native/integration-desktop-basics.cjs"),
     "utf8",
@@ -311,12 +317,160 @@ test("helper never grants renderer activation or reads original clipboard; parti
       source,
     ),
   );
-  assert(
-    !/clipboard\.readText\(/.test(source),
-    "memory checkpoint makes no clipboard reads",
+  assert.equal(
+    (source.match(/clipboard\.readText\(/g) ?? []).length,
+    1,
+    "one awaited readback boundary, no original clipboard capture",
   );
-  assert.match(source, /seven_context_clipboard_journey_not_released/);
+  assert(
+    source.indexOf("clipboardReadback =") >
+      source.indexOf("scripted_copy_must_not_gain_activation"),
+  );
+  assert(
+    source.indexOf("await clipboardReadback(context") >
+      source.indexOf("Actual copy success for"),
+  );
+  assert.match(source, /all_seven_clipboard_contexts_required/);
+  assert.match(source, /actual-provider|providerActivityInterpretation/);
+  assert(!/addMessage.*assistant/.test(source));
   assert.match(source, /desktop-basics-memory-only/);
   assert.match(source, /maxBuffer: 16384/);
   assert.match(source, /Math\.min\(10000, slot\.workRemaining\(\)\)/);
+});
+
+test("copy comparison never prints an unexpected clipboard value, and resource information has exactly five canonical lines", () => {
+  assert.doesNotThrow(() =>
+    assertSyntheticClipboard("SYNTHETIC copy", "SYNTHETIC copy"),
+  );
+  let message = "";
+  try {
+    assertSyntheticClipboard("PRIVATE_ORIGINAL_MUST_NOT_LOG", "SYNTHETIC copy");
+  } catch (error) {
+    message = error.message;
+  }
+  assert(message.includes("native_clipboard_exact_synthetic_copy_mismatch"));
+  assert(!message.includes("PRIVATE_ORIGINAL_MUST_NOT_LOG"));
+  assert.equal(
+    resourceInformation({
+      title: "SYNTHETIC note",
+      kind: "note",
+      id: "r:canonical",
+      version: 3,
+      project_id: null,
+    }),
+    "Title: SYNTHETIC note\nType: note\nResource ID: r:canonical\nVersion: 3\nProject ID: Unassigned",
+  );
+  assert.equal(
+    resourceInformation({
+      title: "SYNTHETIC note",
+      kind: "note",
+      id: "r:canonical",
+      version: 4,
+      project_id: "p:canonical",
+    })
+      .split("\n")
+      .at(-1),
+    "Project ID: p:canonical",
+  );
+});
+
+test("synthetic URLs match the released normalizer and fenced code keeps CRLF plus final EOL without fake model output", async () => {
+  const { sourceLinks } = await import(
+    "../../../block-library/source-links.ts"
+  );
+  assert.deepEqual(sourceLinks(CLIPBOARD_FIXTURE.reference), [
+    CLIPBOARD_FIXTURE.referenceURL,
+  ]);
+  assert.deepEqual(sourceLinks(CLIPBOARD_FIXTURE.research), [
+    CLIPBOARD_FIXTURE.researchURL,
+  ]);
+  assert(CLIPBOARD_FIXTURE.code.endsWith("\r\n"));
+  assert(
+    CLIPBOARD_FIXTURE.note.includes(
+      "```text\r\n" + CLIPBOARD_FIXTURE.code + "```",
+    ),
+  );
+  assert(CLIPBOARD_FIXTURE.message.includes("No provider turn was requested."));
+});
+
+test("named target discovery reads actual semantic controls without click, focus, DOM mutation or activation", () => {
+  let actions = 0;
+  const root = { children: [], querySelectorAll: () => [node] },
+    node = {
+      parentElement: root,
+      tagName: "BUTTON",
+      closest: () => null,
+      getClientRects: () => [{}],
+      getAttribute: () => "Copy link",
+      textContent: "Copy link",
+      click() {
+        actions++;
+      },
+      focus() {
+        actions++;
+      },
+    };
+  root.children = [node];
+  const result = vm.runInNewContext(
+    namedControlScript("#actual", "Copy link"),
+    { document: { querySelector: () => root } },
+  );
+  assert.equal(result, "#actual > button:nth-of-type(1)");
+  assert.equal(actions, 0);
+});
+
+test("restore requires the exact original passing scoped receipt; a failed/partial/late-aborted run cannot qualify a checkpoint", () => {
+  const checkpoint = {
+    contract: "aerynth.desktop-basics-checkpoint@1",
+    scope: "all-seven-clipboard-contexts-and-memory",
+    source: { hashes: { a: "synthetic" }, buildAssets: { b: "synthetic" } },
+    helperSha256: "synthetic-helper",
+    memory: { id: "actual-canonical-fixture" },
+  };
+  const initial = {
+    contract: "aerynth.desktop-basics-integration@1",
+    restore: false,
+    passed: true,
+    nativeCloseConfirmed: true,
+    scope: checkpoint.scope,
+    source: checkpoint.source,
+    helperSha256: checkpoint.helperSha256,
+    memory: checkpoint.memory,
+    coverage: {
+      clipboardContexts: Object.fromEntries(
+        [
+          "reference-link",
+          "research-link",
+          "conversation-message",
+          "code-block",
+          "note-text",
+          "resource-info",
+          "selected-text",
+        ].map((k) => [k, "actual-observed"]),
+      ),
+    },
+  };
+  assert.doesNotThrow(() => passingCheckpoint(checkpoint, initial));
+  for (const change of [
+    (v) => (v.passed = false),
+    (v) => (v.restore = true),
+    (v) => (v.nativeCloseConfirmed = false),
+    (v) => (v.scope = "memory-only"),
+    (v) => (v.helperSha256 = "another-source"),
+    (v) => (v.coverage.clipboardContexts["research-link"] = "unverified"),
+  ]) {
+    const invalid = structuredClone(initial);
+    change(invalid);
+    assert.throws(() => passingCheckpoint(checkpoint, invalid));
+  }
+  const source = fs.readFileSync(
+    require.resolve("../native/integration-desktop-basics.cjs"),
+    "utf8",
+  );
+  assert(
+    source.lastIndexOf('win.removeListener("blur"') >
+      source.lastIndexOf('call("close"'),
+  );
+  assert(source.includes("passingCheckpoint(expected"));
+  assert(!source.includes('rpc("executionStatus"'));
 });

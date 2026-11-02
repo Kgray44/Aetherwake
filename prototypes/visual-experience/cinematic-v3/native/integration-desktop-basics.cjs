@@ -1,8 +1,7 @@
 /* Actual owned desktop acceptance; no launch, OS hooks, refocus or provider.
  * --integration-desktop-basics --profile=<absolute review-desktop-basics-DIGITS>
  * --desktop-basics-memory-only explicitly qualifies RAM + copy-denial preflight
- * ONLY until the seven real clipboard UI journeys are released. Default full
- * coverage fails closed rather than treating that checkpoint as all P0 done.
+ * ONLY. Default full mode also verifies all seven released clipboard contexts.
  * --verify-restore reuses that exact profile/source/assets; no RAM resampling.
  * All renderer evaluation is executeJavaScript(code, FALSE), including reads.
  * App-window sendInputEvent is software native-window input, not OS physical.
@@ -30,6 +29,60 @@ const CONTEXTS = [
   "resource-info",
   "selected-text",
 ];
+const CLIPBOARD_FIXTURE = {
+  noteTitle: "SYNTHETIC native clipboard note",
+  referenceTitle: "SYNTHETIC native clipboard reference",
+  researchTitle: "SYNTHETIC native clipboard research",
+  code: "SYNTHETIC code Ω\r\nreturn 'clipboard';\r\n",
+  note: "SYNTHETIC_SELECTION\r\nNative clipboard note Ω 🚀.\r\n```text\r\nSYNTHETIC code Ω\r\nreturn 'clipboard';\r\n```\r\n",
+  editedNote:
+    "SYNTHETIC_SELECTION\nExact current editor text Ω 🚀.\nUnsent text must copy exactly.\n",
+  reference:
+    "Synthetic source only: https://EXAMPLE.COM:443/native-clipboard/reference?marker=SYNTHETIC#source.\n",
+  referenceURL:
+    "https://example.com/native-clipboard/reference?marker=SYNTHETIC#source",
+  research:
+    "Synthetic research only: https://EXAMPLE.ORG:443/research?q=SYNTHETIC%20only.\n",
+  researchURL: "https://example.org/research?q=SYNTHETIC%20only",
+  message:
+    "SYNTHETIC desktop clipboard message Ω 🚀\nNo provider turn was requested.",
+  selected: "SYNTHETIC_SELECTION",
+};
+function resourceInformation(resource) {
+  return `Title: ${resource.title}\nType: ${resource.kind}\nResource ID: ${resource.id}\nVersion: ${resource.version}\nProject ID: ${resource.project_id ?? "Unassigned"}`;
+}
+function namedControlScript(scope, label) {
+  return `(()=>{const root=document.querySelector(${JSON.stringify(scope)});if(!root)return null;const node=[...root.querySelectorAll('button')].find(n=>!n.closest('[hidden],[inert]')&&n.getClientRects().length&&(n.getAttribute('aria-label')===${JSON.stringify(label)}||n.textContent.trim()===${JSON.stringify(label)}));if(!node)return null;const parts=[];for(let n=node;n!==root;n=n.parentElement){const peers=[...n.parentElement.children].filter(p=>p.tagName===n.tagName);parts.unshift(n.tagName.toLowerCase()+':nth-of-type('+(peers.indexOf(n)+1)+')')}return ${JSON.stringify(scope)}+' > '+parts.join(' > ')})()`;
+}
+function assertSyntheticClipboard(actual, expected) {
+  assert(
+    typeof actual === "string" && actual === expected,
+    "native_clipboard_exact_synthetic_copy_mismatch",
+  );
+}
+function passingCheckpoint(checkpoint, initial) {
+  assert(
+    checkpoint?.contract === "aerynth.desktop-basics-checkpoint@1" &&
+      initial?.contract === "aerynth.desktop-basics-integration@1" &&
+      initial.passed === true &&
+      initial.restore === false &&
+      initial.nativeCloseConfirmed === true &&
+      initial.scope === checkpoint.scope,
+    "original_passing_receipt_required",
+  );
+  assert.deepEqual(sourceIdentity(initial.source), checkpoint.source);
+  assert.equal(initial.helperSha256, checkpoint.helperSha256);
+  assert.deepEqual(initial.memory, checkpoint.memory);
+  if (checkpoint.scope === "all-seven-clipboard-contexts-and-memory")
+    assert(
+      CONTEXTS.every(
+        (key) =>
+          typeof initial.coverage?.clipboardContexts?.[key] === "string" &&
+          initial.coverage.clipboardContexts[key] !== "unverified",
+      ),
+      "original_seven_context_receipt_required",
+    );
+}
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const encode = (value) => {
   const text = JSON.stringify(value, null, 2);
@@ -341,6 +394,11 @@ exports.assertNoProviders = assertNoProviders;
 exports.validateBudget = validateBudget;
 exports.admitPNG = admitPNG;
 exports.CIM_SCRIPT = CIM_SCRIPT;
+exports.CLIPBOARD_FIXTURE = CLIPBOARD_FIXTURE;
+exports.resourceInformation = resourceInformation;
+exports.namedControlScript = namedControlScript;
+exports.assertSyntheticClipboard = assertSyntheticClipboard;
+exports.passingCheckpoint = passingCheckpoint;
 
 exports.verify = async function verify({
   win,
@@ -481,6 +539,18 @@ exports.verify = async function verify({
       assert.equal(expected.contract, "aerynth.desktop-basics-checkpoint@1");
       assert.equal(expected.scope, receipt.scope);
       assert.deepEqual(expected.source, sourceIdentity(source));
+      assert(
+        typeof expected.initialReceipt === "string" &&
+          expected.initialReceipt.length <= 512,
+        "original_receipt_path_required",
+      );
+      const originalReceipt = path.resolve(root, expected.initialReceipt),
+        relative = path.relative(root, originalReceipt);
+      assert(
+        relative && !relative.startsWith("..") && !path.isAbsolute(relative),
+        "owned_original_receipt_required",
+      );
+      passingCheckpoint(expected, await readJson(originalReceipt));
       budget = validateBudget(await readJson(budgetFile));
       budgetWritable = true;
     } else {
@@ -513,10 +583,21 @@ exports.verify = async function verify({
     };
     const rpc = async (name, input) => {
       assert(
-        ["vela", "snapshot", "replay", "executionStatus"].includes(name),
+        [
+          "vela",
+          "snapshot",
+          "replay",
+          "desktop",
+          "notes",
+          "conversation",
+        ].includes(name),
         "desktop_basics_readonly_rpc_required",
       );
       if (name === "vela") assert.equal(input.name, "state");
+      if (name === "desktop") assert.equal(input.type, "snapshot");
+      if (name === "notes") assert.equal(input.name, "readNote");
+      if (name === "conversation")
+        assert(["detail", "readDraft"].includes(input.name));
       slot.check();
       const value = await bounded(
         call(name, input),
@@ -533,10 +614,13 @@ exports.verify = async function verify({
         check,
         diagnose: () =>
           js(
-            "({status:document.querySelector('.vela-core-status')?.textContent,requestState:document.querySelector('.vela-core-status')?.dataset.requestState,answer:document.querySelector('.vela-manifestation')?.dataset.currentMessageId})",
+            "({status:document.querySelector('.vela-core-status')?.textContent,requestState:document.querySelector('.vela-core-status')?.dataset.requestState,answer:document.querySelector('.vela-manifestation')?.dataset.currentMessageId,copy:[...document.querySelectorAll('.aw-note-copy-status,.cp-chat-status')].filter(n=>n.getClientRects().length).map(n=>n.textContent),documents:[...document.querySelectorAll('.aw-note-status')].filter(n=>n.getClientRects().length).map(n=>n.textContent)})",
           ),
       });
     const click = async (query) => {
+      await js(
+        `document.querySelector(${JSON.stringify(query)})?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`,
+      );
       let previous, point;
       await wait("Stable actual input target " + query, async () => {
         const v = await js(targetScript(query, "inspect"));
@@ -631,7 +715,10 @@ exports.verify = async function verify({
       const core = await rpc("snapshot", {}),
         vela = await rpc("vela", { name: "state", input: {} }),
         events = await rpc("replay", { after: 0 });
-      assert.deepEqual(await rpc("executionStatus", {}), []);
+      assert.deepEqual(
+        await js("window.aerynthHost.command('executionStatus',{})"),
+        [],
+      );
       assert.equal(
         typeof observeProviderActivity,
         "function",
@@ -747,8 +834,422 @@ exports.verify = async function verify({
     receipt.providerActivityInterpretation =
       "Registered native/provider boundary invocation attempts in this process session; not remote success or a global network monitor.";
     await capture(restore ? "02-memory-restored" : "01-native-memory-answer");
-    if (!memoryOnly)
-      throw Error("seven_context_clipboard_journey_not_released");
+    let finalProof = proof,
+      clipboardFixture;
+    if (!memoryOnly) {
+      assert(
+        clipboard && typeof clipboard.readText === "function",
+        "trusted_test_clipboard_reader_required",
+      );
+      receipt.clipboardCopies = [];
+      receipt.clipboardInputBoundary =
+        "Every Copy uses software native-window sendInputEvent; all inspection executeJavaScript calls use false. Main readback is awaited only after that explicit synthetic copy. No original clipboard is read or retained.";
+      await click("[data-surface-id=vela] .aw-contextual-dismiss");
+      await wait("Vela closes through actual shared surface motion", () =>
+        js("!document.querySelector('[data-surface-id=vela]')"),
+      );
+      const named = async (scope, label) => {
+        let query;
+        await wait("Actual released " + label, async () => {
+          query = await js(namedControlScript(scope, label));
+          return !!query;
+        });
+        return query;
+      };
+      const openResource = async (id) => {
+        receipt.actions.push({
+          method: "canonical-App-direct-open",
+          resourceId: id,
+        });
+        const result = await js(
+          `window.__aerynth.openResource(${JSON.stringify({ resourceId: id, origin: { source: "application" } })})`,
+        );
+        assert.equal(result.status, "ready");
+        assert.equal(result.resourceId, id);
+      };
+      const noteScope = (id) =>
+        `.aw-direct-resource[data-resource-id=${JSON.stringify(id)}]`;
+      const clipboardReadback = async (context, expectedText, resourceId) => {
+        let matched = false;
+        await wait(
+          "Exact synthetic native clipboard readback: " + context,
+          async () => {
+            slot.check();
+            const actual = await bounded(
+              clipboard.readText(),
+              slot.workRemaining(),
+              "native_clipboard_readback_deadline",
+            );
+            slot.check();
+            matched = typeof actual === "string" && actual === expectedText;
+            return matched;
+          },
+        );
+        assert(matched, "native_clipboard_exact_synthetic_copy_mismatch");
+        receipt.clipboardCopies.push({
+          context,
+          resourceId,
+          text: expectedText,
+          bytes: Buffer.byteLength(expectedText),
+          sha256: hash(expectedText),
+          at: new Date().toISOString(),
+          evidence:
+            "Exact awaited Electron Main clipboard.readText after this explicit synthetic native-window copy",
+        });
+        receipt.lastSyntheticClipboard = expectedText;
+      };
+      const copy = async (
+        context,
+        scope,
+        label,
+        expectedText,
+        success,
+        resourceId,
+        statusSelector = ".aw-note-copy-status",
+      ) => {
+        await click(await named(scope, label));
+        await wait("Actual copy success for " + context, () =>
+          js(
+            `document.querySelector(${JSON.stringify(scope)})?.querySelector(${JSON.stringify(statusSelector)})?.textContent===${JSON.stringify(success)}`,
+          ),
+        );
+        await clipboardReadback(context, expectedText, resourceId);
+        assert(
+          !(await js(
+            `document.querySelector(${JSON.stringify(scope)})?.querySelector('.aw-note-status')?.textContent.includes('Save failed')??false`,
+          )),
+          "copy_must_not_be_document_save_failure",
+        );
+      };
+      const noteDocument = async (id) =>
+        (await rpc("notes", { name: "readNote", input: id })).result;
+      const chatDocument = async (id) => {
+        const detail = await rpc("conversation", {
+          name: "detail",
+          input: { resourceId: id },
+        });
+        assert.equal(
+          detail.conversation.providerId,
+          "local",
+          "fresh_manual_chat_must_stay_true_local",
+        );
+        return {
+          conversation: detail.conversation,
+          messages: detail.messages.items,
+          draft: await rpc("conversation", {
+            name: "readDraft",
+            input: { resourceId: id },
+          }),
+        };
+      };
+      const canonicalClipboard = async (fixture) => {
+        await js("window.__aerynth.flush()");
+        const desktop = await rpc("desktop", { type: "snapshot" });
+        assert(
+          desktop.resources.length <= 5 &&
+            desktop.blocks.length === 0 &&
+            desktop.workspaces.length === 0 &&
+            desktop.projects.length === 0,
+          "bounded_unplaced_clipboard_fixture_required",
+        );
+        const documents = {};
+        for (const id of [
+          fixture.noteId,
+          fixture.referenceId,
+          fixture.researchId,
+        ])
+          documents[id] = await noteDocument(id);
+        return {
+          documents,
+          chat: await chatDocument(fixture.chatId),
+          resourceIds: desktop.resources.map((r) => r.id).sort(),
+        };
+      };
+      const actionsMenu = async (scope) => {
+        if (
+          !(await js(
+            `document.querySelector(${JSON.stringify(scope)})?.querySelector('.aw-note-actions')?.open`,
+          ))
+        )
+          await click(scope + " .aw-note-actions > summary");
+      };
+      const selectedPrefix = async (scope, text) => {
+        const query = scope + " textarea.aw-direct-editor";
+        await click(query);
+        key("Home", ["control"]);
+        for (let i = 0; i < text.length; i++) key("Right", ["shift"]);
+        assert.equal(
+          await js(
+            `(()=>{const e=document.querySelector(${JSON.stringify(query)});return e.value.slice(e.selectionStart,e.selectionEnd)})()`,
+          ),
+          text,
+        );
+      };
+      if (restore) {
+        clipboardFixture = expected.clipboardFixture;
+        assert(
+          clipboardFixture?.canonical,
+          "passing_clipboard_checkpoint_required",
+        );
+        const actual = await canonicalClipboard(clipboardFixture);
+        assert.deepEqual(
+          actual,
+          clipboardFixture.canonical,
+          "exact_clipboard_resources_notes_recovery_chat_ids_after_restart",
+        );
+        await openResource(clipboardFixture.noteId);
+        const scope = noteScope(clipboardFixture.noteId);
+        await wait("Restored current note text", () =>
+          js(
+            `document.querySelector(${JSON.stringify(scope + " textarea.aw-direct-editor")})?.value===${JSON.stringify(CLIPBOARD_FIXTURE.editedNote)}`,
+          ),
+        );
+        await actionsMenu(scope);
+        await copy(
+          "note-text-restored",
+          scope,
+          "Copy text",
+          CLIPBOARD_FIXTURE.editedNote,
+          "Text copied.",
+          clipboardFixture.noteId,
+        );
+        await openResource(clipboardFixture.chatId);
+        await wait("Exact restored canonical user message", () =>
+          js(
+            `document.querySelector(${JSON.stringify(`.cp-chat[data-resource-id=${JSON.stringify(clipboardFixture.chatId)}] .cp-message[data-message-id=${JSON.stringify(clipboardFixture.messageId)}] .cp-message-content`)})?.textContent===${JSON.stringify(CLIPBOARD_FIXTURE.message)}`,
+          ),
+        );
+        assert.deepEqual(
+          await canonicalClipboard(clipboardFixture),
+          clipboardFixture.canonical,
+          "restore_open_copy_reads_do_not_edit_or_replay",
+        );
+        for (const context of CONTEXTS)
+          receipt.coverage.clipboardContexts[context] =
+            "initial-passing-receipt-and-exact-canonical-restart";
+      } else {
+        const appFixture = async (command) => {
+          receipt.actions.push({
+            method: "explicit-synthetic-canonical-App-fixture",
+            type: command.type,
+            kind: command.kind,
+            resourceId: command.resourceId,
+          });
+          await js(`window.__aerynth.execute(${JSON.stringify(command)})`);
+        };
+        const createDocument = async (kind, title, content) => {
+          const beforeIds = new Set(
+            (await rpc("desktop", { type: "snapshot" })).resources.map(
+              (r) => r.id,
+            ),
+          );
+          await appFixture({
+            type: "createResource",
+            kind,
+            title,
+            workspaceId: null,
+          });
+          const created = (
+            await rpc("desktop", { type: "snapshot" })
+          ).resources.filter((r) => !beforeIds.has(r.id));
+          assert.equal(created.length, 1);
+          const resource = created[0];
+          assert.equal(resource.kind, kind);
+          await appFixture({
+            type: "content",
+            resourceId: resource.id,
+            content,
+            expectedVersion: resource.version,
+          });
+          assert.equal(
+            (await noteDocument(resource.id)).resource.content,
+            content,
+          );
+          return resource.id;
+        };
+        const referenceId = await createDocument(
+            "reference",
+            CLIPBOARD_FIXTURE.referenceTitle,
+            CLIPBOARD_FIXTURE.reference,
+          ),
+          researchId = await createDocument(
+            "research",
+            CLIPBOARD_FIXTURE.researchTitle,
+            CLIPBOARD_FIXTURE.research,
+          ),
+          noteId = await createDocument(
+            "note",
+            CLIPBOARD_FIXTURE.noteTitle,
+            CLIPBOARD_FIXTURE.note,
+          );
+        for (const [context, id, url] of [
+          ["reference-link", referenceId, CLIPBOARD_FIXTURE.referenceURL],
+          ["research-link", researchId, CLIPBOARD_FIXTURE.researchURL],
+        ]) {
+          await openResource(id);
+          const scope = noteScope(id);
+          await copy(
+            context,
+            scope,
+            "Copy link",
+            url,
+            "Source link copied.",
+            id,
+          );
+          receipt.coverage.clipboardContexts[context] =
+            "actual-native-input-exact-OS-readback";
+        }
+        await openResource(noteId);
+        const scope = noteScope(noteId);
+        await click(await named(scope, "Read document"));
+        await copy(
+          "code-block",
+          scope,
+          "Copy code",
+          CLIPBOARD_FIXTURE.code,
+          "Code copied.",
+          noteId,
+        );
+        receipt.coverage.clipboardContexts["code-block"] =
+          "actual-Note-fenced-code-body-CRLF-and-final-EOL-native-copy";
+        receipt.conversationCodeCopy =
+          "Unverified separately: no fake assistant/model response was injected to manufacture a CP Markdown code block.";
+        await click(await named(scope, "Edit document"));
+        await fill(
+          scope + " textarea.aw-direct-editor",
+          CLIPBOARD_FIXTURE.editedNote,
+        );
+        assert.equal(
+          await js(
+            `document.querySelector(${JSON.stringify(scope + " textarea.aw-direct-editor")}).value`,
+          ),
+          CLIPBOARD_FIXTURE.editedNote,
+        );
+        await actionsMenu(scope);
+        await copy(
+          "note-text",
+          scope,
+          "Copy text",
+          CLIPBOARD_FIXTURE.editedNote,
+          "Text copied.",
+          noteId,
+        );
+        receipt.coverage.clipboardContexts["note-text"] =
+          "actual-current-editor-native-copy";
+        await selectedPrefix(scope, CLIPBOARD_FIXTURE.selected);
+        await actionsMenu(scope);
+        await copy(
+          "note-selection-button",
+          scope,
+          "Copy selection",
+          CLIPBOARD_FIXTURE.selected,
+          "Selected text copied.",
+          noteId,
+        );
+        await js("window.__aerynth.flush()");
+        const document = await noteDocument(noteId);
+        await actionsMenu(scope);
+        await copy(
+          "resource-info",
+          scope,
+          "Copy resource information",
+          resourceInformation(document.resource),
+          "Resource information copied.",
+          noteId,
+        );
+        receipt.coverage.clipboardContexts["resource-info"] =
+          "actual-canonical-five-line-resource-information-native-copy";
+        await selectedPrefix(scope, CLIPBOARD_FIXTURE.selected);
+        key("C", ["control"]);
+        receipt.actions.push({
+          method: "software-native-window-keyboard-Ctrl+C",
+          resourceId: noteId,
+          selectionCharacters: CLIPBOARD_FIXTURE.selected.length,
+        });
+        await clipboardReadback(
+          "selected-text",
+          CLIPBOARD_FIXTURE.selected,
+          noteId,
+        );
+        receipt.coverage.clipboardContexts["selected-text"] =
+          "actual-textarea-native-selection-and-Ctrl+C-no-global-hook";
+        const chatIds = new Set(
+          (await rpc("snapshot", {})).conversations.map((c) => c.resourceId),
+        );
+        await click("#application-new-chat");
+        let chatId;
+        await wait("Actual title-optional local New chat", async () => {
+          const next = (await rpc("snapshot", {})).conversations.filter(
+            (c) => !chatIds.has(c.resourceId),
+          );
+          if (!next.length) return false;
+          assert.equal(next.length, 1);
+          assert.equal(next[0].providerId, "local");
+          chatId = next[0].resourceId;
+          return true;
+        });
+        const chatScope = `.cp-chat[data-resource-id=${JSON.stringify(chatId)}]`;
+        await fill(
+          chatScope + " .cp-composer textarea",
+          CLIPBOARD_FIXTURE.message,
+        );
+        await click(chatScope + ' button[aria-label="Send message"]');
+        let chat;
+        await wait(
+          "Durable exact user message without a provider turn",
+          async () => {
+            chat = await chatDocument(chatId);
+            return (
+              chat.messages.length === 1 &&
+              chat.messages[0].role === "user" &&
+              chat.messages[0].content === CLIPBOARD_FIXTURE.message &&
+              chat.draft.content === ""
+            );
+          },
+        );
+        const messageId = chat.messages[0].id;
+        await wait("Actual canonical conversation message rendered", () =>
+          js(
+            `document.querySelector(${JSON.stringify(chatScope + ` .cp-message[data-message-id=${JSON.stringify(messageId)}] .cp-message-content`)})?.textContent===${JSON.stringify(CLIPBOARD_FIXTURE.message)}`,
+          ),
+        );
+        await click(
+          chatScope +
+            ` .cp-message[data-message-id=${JSON.stringify(messageId)}] .cp-message-actions > summary`,
+        );
+        await copy(
+          "conversation-message",
+          chatScope,
+          "Copy",
+          CLIPBOARD_FIXTURE.message,
+          "Copied",
+          chatId,
+          ".cp-chat-status",
+        );
+        receipt.coverage.clipboardContexts["conversation-message"] =
+          "actual-user-Send-and-message-Copy-native-readback-no-model";
+        clipboardFixture = {
+          noteId,
+          referenceId,
+          researchId,
+          chatId,
+          messageId,
+        };
+        clipboardFixture.canonical = await canonicalClipboard(clipboardFixture);
+        assert(
+          Object.values(receipt.coverage.clipboardContexts).every(
+            (v) => v !== "unverified",
+          ),
+          "all_seven_clipboard_contexts_required",
+        );
+        await capture("03-native-clipboard-copy");
+      }
+      finalProof = await readProof();
+      assert.equal(finalProof.activity.systemMemoryReads, restore ? 0 : 1);
+      receipt.providerActivity = finalProof.activity;
+      receipt.clipboardDisposition =
+        "Left the last explicitly copied synthetic value shown in lastSyntheticClipboard; no original user clipboard read, log or restore.";
+    }
     assert.equal(startupErrors.length, 0);
     assert.equal(receipt.errors.length, 0);
     slot.check();
@@ -759,8 +1260,10 @@ exports.verify = async function verify({
         scope: receipt.scope,
         source: sourceIdentity(source),
         helperSha256: receipt.helperSha256,
+        initialReceipt: path.relative(root, path.join(out, "journey.json")),
         memory,
-        graph: proof.core.graph,
+        graph: finalProof.core.graph,
+        ...(clipboardFixture ? { clipboardFixture } : {}),
       };
   };
   try {
@@ -772,11 +1275,6 @@ exports.verify = async function verify({
     };
   } finally {
     clearTimeout(workTimer);
-    win.removeListener("blur", blur);
-    win.removeListener("hide", blur);
-    win.removeListener("minimize", blur);
-    win.webContents.removeListener("before-input-event", escape);
-    win.webContents.removeListener("console-message", consoleError);
     try {
       if (!owned) {
         console.log(
@@ -826,6 +1324,16 @@ exports.verify = async function verify({
           encode(receipt),
           { flag: "wx" },
         );
+        // A late blur/Escape during close or disk persistence invalidates the
+        // original receipt too; restore requires that exact passing receipt.
+        if (slot?.failure() || receipt.errors.length || startupErrors.length) {
+          receipt.passed = false;
+          receipt.slotFailure = slot?.failure() ?? null;
+          await fs.writeFile(
+            path.join(out, restore ? "restore.json" : "journey.json"),
+            encode(receipt),
+          );
+        }
       }
       console.log(
         JSON.stringify({
@@ -845,6 +1353,11 @@ exports.verify = async function verify({
         }),
       );
     } finally {
+      win.removeListener("blur", blur);
+      win.removeListener("hide", blur);
+      win.removeListener("minimize", blur);
+      win.webContents.removeListener("before-input-event", escape);
+      win.webContents.removeListener("console-message", consoleError);
       clearTimeout(hardTimer);
       if (owned) app.exit(receipt.passed ? 0 : 1);
     }
