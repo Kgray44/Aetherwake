@@ -2,7 +2,7 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const {reviewDeadline,assertCheckpoint,assertGeometry,assertRetained,assertEventScope,recordVisibleLines,measureTextLines,durableIdentity}=require('./native-review-ui.cjs')._offline;
+const {reviewDeadline,assertCheckpoint,assertGeometry,assertRetained,assertEventScope,recordVisibleLines,revealReadingControl,measureTextLines,durableIdentity}=require('./native-review-ui.cjs')._offline;
 const rect=(left,top,width,height)=>({left,top,right:left+width,bottom:top+height,width,height});
 function frame(){return {effectiveOpacity:1,view:{width:400,height:500},shell:{nodeId:1,rect:rect(0,0,400,500)},flow:{nodeId:2,rect:rect(0,0,400,360),overflowY:'auto',scrollTop:0},compose:{nodeId:3,rect:rect(0,380,400,120)},editor:{nodeId:4,rect:rect(10,390,380,60),name:'Message Vela',hitTest:true,disabled:false,value:'',selectionStart:0,selectionEnd:0},groups:[{key:'message:synthetic:content',nodeId:5,rect:rect(10,10,380,100),ownerRect:rect(5,5,390,110),scrollOwner:'flow',lines:[{rect:rect(10,10,200,20),visible:rect(10,10,200,20)}]},{key:'plan:0',nodeId:6,rect:rect(10,130,380,40),ownerRect:rect(5,120,390,200),scrollOwner:'flow',lines:[{rect:rect(10,130,200,20),visible:rect(10,130,200,20)}]}],controls:[{key:0,nodeId:7,name:'Plan details and evidence',disabled:false,insideFlow:true,hitTest:true,rect:rect(10,300,240,36)}]};}
 test('review mode shortens but cannot extend the one global native slot',()=>{
@@ -39,6 +39,20 @@ test('same-state native reading must retain editor, key nodes, controls, caret a
 test('every actual text line needs a fully visible native-scroll observation, not merely a clipped sliver',()=>{
   const f=frame(),seen=new Set(),required=new Set();f.groups[0].lines[0].visible.height=2;recordVisibleLines(f,seen,required);assert.equal(required.size,2);assert.equal(seen.size,1);f.groups[0].lines[0].visible.height=20;recordVisibleLines(f,seen,required);assert.equal(seen.size,required.size);
   const translucent=frame();translucent.effectiveOpacity=.4;assert.throws(()=>assertGeometry(translucent),/not opaque/);
+});
+test('offscreen summary requires one observed outer wheel before the sole legal native click; actual occlusion never permits a click',async()=>{
+  const {createSlot}=require('./native-live.cjs')._offline;let clock=0,focused=true;
+  const win={isDestroyed:()=>false,isVisible:()=>true,isMinimized:()=>false,isFocused:()=>focused,isEnabled:()=>true,webContents:{isDestroyed:()=>false}},slot=createSlot({win,now:()=>clock,slotStartedAt:0,deadlineMs:25000,windows:()=>[]});
+  const clip=rect(371.05,278.613,468,253);let target=rect(401.65,210.313,411.2,36.8);const actions=[];
+  const result=await revealReadingControl({slot,sample:async()=>({available:true,target,clip,hitTest:target.top>=clip.top}),scroll:async(direction,amount)=>{actions.push({type:'native-wheel',direction,amount});assert.equal(direction,'up');target=rect(target.left,target.top+amount,target.width,target.height);},wait:async ms=>{clock+=ms;}});actions.push({type:'native-click'});
+  assert.equal(result.wheels,1);assert.equal(actions[0].amount,177);assert(target.top>=clip.top&&target.bottom<=clip.bottom);assert.deepEqual(actions.map(item=>item.type),['native-wheel','native-click']);
+  let inputs=0;await assert.rejects(revealReadingControl({slot,sample:async()=>({available:true,target,clip,hitTest:false}),scroll:async()=>{inputs++;}}),/control occluded/);assert.equal(inputs,0);
+  focused=false;await assert.rejects(revealReadingControl({slot,sample:async()=>{inputs++;return{};},scroll:async()=>{inputs++;}}),/focus_lost/);assert.equal(inputs,0);
+});
+test('missing or persistently clipped reading controls remain bounded without force-clicking or normal renderer probe errors',async()=>{
+  let clock=0,scrolls=0;const slot={workDeadline:10000,now:()=>clock,check(){},bound:async work=>work()};
+  await assert.rejects(revealReadingControl({slot,sample:async()=>({available:false}),scroll:async()=>{scrolls++;},wait:async ms=>{clock+=ms;}}),/bounded reveal/);assert.equal(scrolls,0);assert(clock<=2040);
+  clock=0;const target=rect(10,-50,100,20),clip=rect(0,0,200,200);await assert.rejects(revealReadingControl({slot,sample:async()=>({available:true,target,clip,hitTest:false}),scroll:async()=>{scrolls++;},wait:async ms=>{clock+=ms;}}),/did not enter/);assert.equal(scrolls,4);
 });
 const event=(cursor,type='item/agentMessage/delta')=>({cursor,eventId:'synthetic:'+cursor,type,nativeSequence:cursor,executionId:'synthetic-execution',classification:'reported'});
 test('historical provider scope remains exact while bounded genuine app-only UI records are recorded explicitly',()=>{

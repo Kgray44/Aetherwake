@@ -114,6 +114,17 @@ function recordVisibleLines(frame,seen,required) {
     if(line.visible&&line.visible.width>=line.rect.width-1.5&&line.visible.height>=line.rect.height-1.5)seen.add(key);
   }
 }
+async function revealReadingControl({slot,sample,scroll,wait=pause}) {
+  const end=Math.min(slot.workDeadline,slot.now()+2000);let wheels=0;
+  while(slot.now()<end){
+    slot.check();const value=await slot.bound(sample);
+    if(!value?.available){await slot.bound(()=>wait(60));continue;}
+    const {target,clip}=value;assert(rectValid(target)&&rectValid(clip),'Unknown reading-control geometry');assert(target.left>=clip.left&&target.right<=clip.right&&target.height<=clip.height,'Reading control cannot fit its native scroll clip');
+    if(target.top>=clip.top&&target.bottom<=clip.bottom){assert.equal(value.hitTest,true,'Historical reading control occluded');return {wheels,target,clip};}
+    assert(wheels++<4,'Reading control did not enter its native scroll clip');const direction=target.top<clip.top?'up':'down',amount=Math.max(1,Math.ceil(Math.min(clip.height*.7,Math.abs((target.top+target.bottom-clip.top-clip.bottom)/2))));await slot.bound(()=>scroll(direction,amount));await slot.bound(()=>wait(60));
+  }
+  slot.check();throw Error('Reading control unavailable within bounded reveal');
+}
 /** Range advances for preserved wrapping spaces are not painted glyphs. Keep all real runs, without clipping their boxes. */
 function measureTextLines(document,node) {
   const fragments=[],walker=document.createTreeWalker(node,document.defaultView.NodeFilter.SHOW_TEXT);let text,runs=0;
@@ -217,7 +228,9 @@ async function verifyReviewUi({win,privateRoot,source,startupErrors=[],getNative
       let acknowledgement;await until(async()=>{const next=await draw();if(next.active&&!next.failed&&next.frames>before.frames&&next.draws>before.draws){acknowledgement=next;return true;}return false;},'fresh draw after actual review interaction');
       const frame=await settled();remember(frame);const png=(await slot.bound(()=>win.webContents.capturePage())).toPNG();slot.check();assert(receipt.captures.reduce((n,x)=>n+x.bytes,0)+png.length<=8*1024*1024,'Review PNG bound');const file=path.join(out,name+'.png');await fs.writeFile(file,png);receipt.captures.push({file,bytes:png.length,sha256:hash(png),focused:true,before,acknowledgement});await fs.writeFile(budgetFile,encoded({count:receipt.captures.length,bytes:receipt.captures.reduce((n,x)=>n+x.bytes,0),files:receipt.captures}));};
     await capture('01-historical-long-request-collapsed');await toEdge(flow,'down');const atSummary=await measure();remember(atSummary);captureBefore=await draw();await click(details+' > summary');await until(async()=> (await measure()).evidence.open,'actual technical evidence open');
-    await toEdge(flow,'down');await toEdge(pre,'down');await capture('02-historical-applied-plan-open-evidence');await click(details+' > summary');await until(async()=>!(await measure()).evidence.open,'actual technical evidence closed');remember(await settled());
+    await toEdge(flow,'down');await toEdge(pre,'down');await capture('02-historical-applied-plan-open-evidence');
+    receipt.closingEvidenceReveal=await revealReadingControl({slot,sample:()=>js(`(()=>{const node=document.querySelector(${JSON.stringify(details+' > summary')}),outer=document.querySelector(${JSON.stringify(flow)});if(!node||!outer||!node.getClientRects().length)return{available:false};const r=node.getBoundingClientRect(),f=outer.getBoundingClientRect(),left=f.left+outer.clientLeft,top=f.top+outer.clientTop,hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return{available:true,target:{left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height},clip:{left,top,right:left+outer.clientWidth,bottom:top+outer.clientHeight,width:outer.clientWidth,height:outer.clientHeight},hitTest:hit===node||node.contains(hit)}})()`),scroll:async(direction,amount)=>{const result=await wheel(flow,direction,amount);assert(direction==='up'?result.after.flow.scrollTop<result.before.flow.scrollTop:result.after.flow.scrollTop>result.before.flow.scrollTop,'Native outer reveal did not move its owner');remember(result.after);}});
+    await click(details+' > summary');await until(async()=>!(await measure()).evidence.open,'actual technical evidence closed');remember(await settled());
     assert(receipt.frames.some(frame=>frame.groups.some(group=>group.key==='message:'+baseline.vela.requests[0].inputMessageId+':content'&&group.lines.some(line=>line.visible))),'Long original request was not actually visible');
     assert(receipt.frames.some(frame=>frame.groups.some(group=>group.key==='plan:evidence'&&group.lines.some(line=>line.visible))),'Technical evidence was not actually visible');
     receipt.textReachability={requiredLines:required.size,fullyVisibleLines:seen.size,missing:[...required].filter(key=>!seen.has(key))};assert.deepEqual(receipt.textReachability.missing,[],'Actual historical text must be reachable through native scroll');
@@ -233,4 +246,4 @@ async function verifyReviewUi({win,privateRoot,source,startupErrors=[],getNative
   receipt.slot.elapsedMs=slot.now()-slot.started;await fs.writeFile(path.join(out,'review-ui.json'),encoded(receipt));console.log(JSON.stringify({status:'vela-review-ui-terminal',passed:receipt.passed,evidence:out,captures:receipt.captures.length,error:receipt.error?.message,scope:'historical applied-plan rendering only; zero new provider turns/grants/actions'}));process.exitCode=receipt.passed?0:1;return receipt;
 }
 exports.reviewDeadline=reviewDeadline;exports.verifyReviewUi=verifyReviewUi;
-exports._offline={reviewDeadline,durableIdentity,assertCheckpoint,canonicalProjection,assertGeometry,assertRetained,assertEventScope,recordVisibleLines,measureTextLines,collectGeometry};
+exports._offline={reviewDeadline,durableIdentity,assertCheckpoint,canonicalProjection,assertGeometry,assertRetained,assertEventScope,recordVisibleLines,revealReadingControl,measureTextLines,collectGeometry};
