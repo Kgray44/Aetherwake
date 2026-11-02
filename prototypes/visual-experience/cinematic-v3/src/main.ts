@@ -471,6 +471,22 @@ function select(id: string) {
 }
 function expand(id: string) {
   if (drag) return;
+  if (expanded !== id && application?.block(id)?.minimized === true) {
+    const workspaceId = application.snapshot()?.activeWorkspaceId;
+    const requestedAt = inputAt;
+    void application
+      .setBlockMinimized(id, false)
+      .then(() => {
+        if (
+          elements.has(id) &&
+          application?.snapshot()?.activeWorkspaceId === workspaceId &&
+          inputAt === requestedAt
+        )
+          expand(id);
+      })
+      .catch((error) => status(String(error.message ?? error)));
+    return;
+  }
   const closing = expanded === id;
   expanded = closing ? null : id;
   selected = id;
@@ -1730,7 +1746,8 @@ if (desktopMode)
             ?.querySelector<HTMLTextAreaElement>("textarea")
             ?.focus();
       };
-      if (application?.blockMinimized(id))
+      // Opening expresses Restore even while IME still defers physical shrink.
+      if (application?.block(id)?.minimized === true)
         void application
           .setBlockMinimized(id, false)
           .then(focus)
