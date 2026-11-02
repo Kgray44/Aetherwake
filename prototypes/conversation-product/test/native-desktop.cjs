@@ -118,7 +118,7 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
       await manager();await type('.cp-create input[aria-label="New conversation title"]',parentTitle);await choose('.cp-create select[aria-label="New conversation provider"]','local');await clickText('New conversation');await idle();
       let parent=(await read('list',{text:parentTitle})).items.find(c=>c.title===parentTitle);assert(parent,'Real canonical conversation exists');assert.equal(parent.providerId,'local');receipt.partial.parentResourceId=parent.resourceId;
       await send(origin);await send(parentOnly);let parentDetail=await read('detail',{resourceId:parent.resourceId});assert.deepEqual(parentDetail.messages.items.map(m=>m.content),[origin,parentOnly]);await capture('01-local-history');
-      await type('input[aria-label="Folder title"]',folderTitle);await clickText('New folder');await idle();let folder=(await read('collections')).find(c=>c.title===folderTitle);assert(folder,'Real canonical folder exists');
+      await type('.cp-manager input[aria-label="New folder title"]',folderTitle);await clickText('New folder');await idle();let folder=(await read('collections')).find(c=>c.title===folderTitle);assert(folder,'Real canonical folder exists');
       await choose('.cp-detail > div:first-child > select',folder.id);await clickText('Add to folder');await idle();await clickText('Favorite');await idle();
       await type('input[aria-label="Conversation title"]',renamedTitle);await clickText('Rename','.cp-detail > div:first-child');await idle();
       if(projectId){await choose(await fieldOf('.cp-detail > div:first-child','Project association','select'),projectId);await clickText('Associate project');await idle();}
