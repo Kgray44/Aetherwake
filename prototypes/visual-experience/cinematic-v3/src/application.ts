@@ -48,6 +48,7 @@ import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
 import { createConversationExecutionPort } from "./conversation-execution";
 import { workspaceWheelFactor } from "./workspace-wheel";
+import { returnFocusAfterDialogClose } from "./focus-return";
 import {
   createContextualSurfaces,
   type ContextualSurfaceRequest,
@@ -1111,7 +1112,7 @@ export function installApplication(hooks: Hooks) {
   }
   dialog.addEventListener(
     "close",
-    () => lastTrigger?.isConnected && lastTrigger.focus(),
+    () => returnFocusAfterDialogClose(dialog, lastTrigger),
   );
   function form(action: (data: FormData) => Promise<unknown>) {
     el<HTMLFormElement>("form", dialog).onsubmit = async (event) => {
