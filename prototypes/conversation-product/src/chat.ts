@@ -61,7 +61,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const keep = el('button', 'Keep this editor’s draft'), useStored = el('button', 'Use the stored draft'), retry = el('button', 'Retry draft recovery'), reviewed = el('button', 'I reviewed the send outcome');
   for (const b of [keep,useStored,retry,reviewed]) b.type = 'button';
   recoveryDetails.append(recoverySummary, el('p','This editor'),localText,el('p','Stored draft'),storedText,keep,useStored);
-  root.append(messages,paging,stream,status,composer,capabilityNote,contextNote,draftStatus,recovery); container.append(root);
+  const feedback=el('div',undefined,'cp-chat-feedback');feedback.append(status,capabilityNote,contextNote,draftStatus,recovery);
+  root.append(messages,paging,stream,feedback,composer); container.append(root);
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
   let sendTask: Promise<void>|null = null, cancelPending = false, streamLimited = false, accessRevoked = false;
   let execution: ConversationExecution|null = null, unsubscribeExecution: (()=>void)|undefined, streamExecution = '', lastCursor = -1, connection: 'available'|'unavailable' = 'available';
@@ -71,7 +72,17 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const report = (text: string) => { if (!disposed) status.textContent = text; };
   const active = () => execution && ['dispatching','running'].includes(execution.state);
   const viewState = () => options.onViewState?.({resourceId,content:textarea.value,scroll:messages.scrollTop,offset:current?.messages.offset??offset??0});
-  const resize = () => { textarea.style.height = 'auto'; textarea.style.height = Math.min(200,Math.max(56,textarea.scrollHeight))+'px'; };
+  let measuredHeight=0;
+  const resize = () => {
+    const height=measuredHeight||root.clientHeight,managerHeight=root.closest<HTMLElement>('.cp-manager')?.clientHeight;
+    const compact=(managerHeight?managerHeight<420:height>0&&height<280);
+    if(compact)root.classList.add('cp-chat-compact');else root.classList.remove('cp-chat-compact');
+    textarea.rows=compact?1:2;
+    const minimum=compact?34:56,maximum=height>0?Math.max(minimum,Math.min(compact?96:200,height*(compact ? .25 : .35))):200;
+    textarea.style.height='auto';textarea.style.height=Math.min(maximum,Math.max(minimum,textarea.scrollHeight))+'px';
+  };
+  const resizeObserver=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(entries=>{const entry=entries.find(value=>value.target===root);if(!disposed&&entry&&entry.contentRect.height>0){measuredHeight=entry.contentRect.height;resize();}});
+  resizeObserver?.observe(root);
   function revokeView() {
     const notify=!accessRevoked;accessRevoked=true;generation++;root.dataset.resourceAvailable='false';current=null;cache.clear();messages.replaceChildren();
     streamText.textContent='';stream.hidden=true;paging.hidden=true;capabilityNote.textContent=contextNote.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;
@@ -209,7 +220,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   // must be independent so a pane can close and the host can offer interruption on quit.
   const flush=async()=>{await session.flush();viewState();};
   return {ready,refresh,focusComposer:()=>textarea.focus(),flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
-    if(disposed)return;await flush();disposed=true;generation++;unsubscribeDraft();unsubscribeExecution?.();viewState();root.remove();
+    if(disposed)return;await flush();disposed=true;generation++;unsubscribeDraft();unsubscribeExecution?.();resizeObserver?.disconnect();viewState();root.remove();
     if(!options.draftSession){
       if(sendTask){void sendTask.then(()=>session.dispose(),()=>session.dispose()).catch(()=>{/* Existing durable recovery is untouched; never overwrite or replay a conflict. */});}
       else await session.dispose();
