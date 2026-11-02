@@ -2,7 +2,9 @@
 
 ## Current source checkpoint
 
-The latest full source run passes **64 tests**, strict TypeScript, the fixture build and diff checks. This is source evidence, not completion of the owner's native gates A–J.
+The latest full source run passes **66 tests**, strict TypeScript, the fixture build and diff checks. This is source evidence, not completion of the owner's native gates A–J.
+
+Back and History returns now check that their awaited travel still owns the navigation generation before changing history. A deferred-service reproduction showed a cancelled Back deleting its old history entry; the regression covers both Back and a return to the current location's earlier history entry. A separate case revokes a project during a pending History return and verifies that the captured history cannot reintroduce that destination or its stale bookmark.
 
 Actual scene-submission regressions now verify that Explore frames two pinned related resources 6,000 units apart, submits both body objects and their typed curve, retains the related label and leaves every anchor unchanged at field widths 420 and 1,440 pixels. Small inward/outward wheel gestures retain the wide neighborhood. Deferred-navigation regressions verify that Locate/Explore preserve newer manual camera input and that superseded Locate cannot select or fit its old destination.
 

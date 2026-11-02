@@ -599,7 +599,10 @@ export class ConstellationController {
   async back() {
     const h = this.state.history.at(-1);
     if (!h) return;
-    await this.go(h.location, h.bookmark);
+    const travel = this.go(h.location, h.bookmark),
+      generation = this.generation;
+    await travel;
+    if (generation !== this.generation || this.destroyed) return;
     this.state.history.pop();
     await this.persist();
     this.changed();
@@ -608,9 +611,18 @@ export class ConstellationController {
     const history = [...this.state.history],
       h = history[index];
     if (!h) return;
-    await this.go(h.location, h.bookmark);
+    const travel = this.go(h.location, h.bookmark),
+      generation = this.generation;
+    await travel;
+    if (generation !== this.generation || this.destroyed) return;
     if (JSON.stringify(this.location) === JSON.stringify(h.location)) {
-      this.state.history = history.slice(0, index);
+      this.state.history = history
+        .slice(0, index)
+        .filter((h) => allowedLocation(h.location, this.nodes))
+        .map((h) => ({
+          location: h.location,
+          bookmark: this.cleanBookmark(h.bookmark),
+        }));
       await this.persist();
       this.changed();
     }

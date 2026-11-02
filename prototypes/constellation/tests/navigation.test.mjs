@@ -459,6 +459,65 @@ test("overlapping async navigation is serialized and the latest destination wins
   assert.equal(c.pending, false);
 });
 
+test("cancelled Back and History travel retain the history needed by newer navigation", async () => {
+  for (const operation of ["back", "history"]) {
+    const s = empty(), releases = [];
+    let delayed = false;
+    s.projects.push({ id: "p", title: "Synthetic project" });
+    s.workspaces.push({ id: "w", title: "Synthetic workspace", project_id: "p" });
+    s.navigation = { kind: "constellation", projectId: "p" };
+    const c = new ConstellationController({
+      snapshot: s,
+      motion: new MotionCoordinator(),
+      navigate: () => delayed
+        ? new Promise((resolve) => releases.push(resolve)) : Promise.resolve(),
+    });
+    await c.go({ kind: "universe" });
+    await c.go({ kind: "project", projectId: "p" });
+    await c.go({ kind: "universe" });
+    const history = structuredClone(c.state.history);
+    delayed = true;
+    const old = operation === "back" ? c.back() : c.returnHistory(1);
+    await new Promise(setImmediate);
+    const newer = c.go({ kind: "workspace", workspaceId: "w" });
+    releases.shift()();
+    await old;
+    assert.deepEqual(c.state.history, history, operation);
+    await new Promise(setImmediate);
+    releases.shift()();
+    await newer;
+    assert.deepEqual(c.location, { kind: "workspace", workspaceId: "w" });
+    assert.deepEqual(c.state.history.slice(0, -1), history, operation);
+    c.dispose();
+  }
+});
+
+test("History return cannot reintroduce destinations revoked during awaited navigation", async () => {
+  const s = empty();
+  let delayed = false, release;
+  s.projects.push({ id: "p", title: "Synthetic current" }, { id: "gone", title: "Synthetic revoked" });
+  s.navigation = { kind: "constellation", projectId: "p" };
+  const c = new ConstellationController({
+    snapshot: s,
+    motion: new MotionCoordinator(),
+    navigate: () => delayed
+      ? new Promise((resolve) => { release = resolve; }) : Promise.resolve(),
+  });
+  await c.go({ kind: "project", projectId: "gone" });
+  await c.go({ kind: "universe" });
+  await c.go({ kind: "project", projectId: "p" });
+  delayed = true;
+  const travel = c.returnHistory(2);
+  await new Promise(setImmediate);
+  c.update({ ...s, projects: s.projects.filter((p) => p.id !== "gone") });
+  release();
+  await travel;
+  assert.deepEqual(c.location, { kind: "universe" });
+  assert.deepEqual(c.state.history.map((h) => h.location), [{ kind: "project", projectId: "p" }]);
+  assert.equal(JSON.stringify(c.state).includes('"gone"'), false);
+  c.dispose();
+});
+
 test("failed service navigation preserves location/history; unavailable editor never changes canonical navigation", async (t) => {
   const { service } = setup(t),
     motion = new MotionCoordinator();
