@@ -69,6 +69,7 @@ for (const folder of [
   "prototypes/agent-product",
   "prototypes/checklist-product",
   "prototypes/timeline-product",
+  "prototypes/task-product",
   "prototypes/visual-experience/cinematic-v3/src",
   "prototypes/visual-experience/cinematic-v3/native",
 ])
@@ -527,7 +528,8 @@ app.whenReady().then(async () => {
       } else if (
         command === "agents" ||
         command === "checklists" ||
-        command === "timelines"
+        command === "timelines" ||
+        command === "taskObjectives"
       ) {
         result = await productCommand({ family: command, input, call });
       } else throw new Error("unsupported_command");

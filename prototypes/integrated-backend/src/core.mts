@@ -7,6 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
 import { compositeTimelineDomain,isTimelineRead,type TimelineRequest } from './timeline-domain.mts';
+import { createTaskObjectiveCommands,isTaskObjectiveRead,type TaskObjectiveRequest } from './task-objectives.mts';
 import { RESOURCE_OPENING_CONTRACT, parseResourceOpeningInput, type ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
 import { CHATGPT_PLAN_PROVIDER,PROVIDER_CONNECTION_CONTRACT,type ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
 import { ResponsesTransport,prepareResponsesTurn } from '../../openai-provider/responses.mts';
@@ -219,6 +220,30 @@ export class BackendCore {
   private async productCommand(family:'agents'|'checklists',operation:AgentRequest|ChecklistRequest) {
     const read=family==='agents'?isAgentRead(operation):isChecklistRead(operation);
     const execute=()=>{const domains=this.productDomains();return family==='agents'?domains.agent(operation as AgentRequest):domains.checklist(operation as ChecklistRequest);};
+    const result=read?execute():this.atomic(execute);
+    return read?{result}:{result,desktop:await this.command('desktop',{type:'snapshot'})};
+  }
+  private taskObjectiveDomain() {
+    const policyVersion='aerynth.local-owner-task-policy@1';
+    return createTaskObjectiveCommands({kernel:this.kernel,db:this.db,
+      identity:()=>({principalId:'local-owner',actorKind:'user',authority:'manual',policyVersion}),now,
+      authorize:input=>({decision:(!input.projectId||this.libraryAuthorized({kind:'project',id:input.projectId}))&&input.resourceIds.every(id=>this.productResourceAccess(id))?'allow':'deny',authorizationRef:'task-manual:'+input.requestDigest,policyVersion}),
+      projectAccess:id=>this.libraryAuthorized({kind:'project',id}),resourceAccess:(id,messageId)=>this.productResourceAccess(id,messageId),
+      sourceRevision:(id,messageId)=>{
+        if(!this.productResourceAccess(id,messageId))return null;
+        if(messageId){const message=this.state.graph.messages.find(m=>m.id===messageId);return message?hash({resourceId:id,message}):null;}
+        const row=this.db.prepare('SELECT r.version,coalesce(n.revision,0) AS content_revision FROM resources r LEFT JOIN notes n ON n.resource_id=r.id WHERE r.id=?').get(id);return row?'resource:'+row.version+':content:'+row.content_revision+':conversation:'+(this.state.revisions[id]??0):null;
+      },
+      agentProfile:id=>{try{const profile=this.productDomains().agent({name:'inspect',input:{resourceId:id}});return {resourceVersion:profile.ref.resourceVersion,profileVersion:profile.ref.profileVersion};}catch{return null;}},
+      execution:id=>{
+        const e=this.state.executions[id];if(!e||!this.productResourceAccess(e.resourceId))return null;
+        return {id:e.id,revision:hash({id:e.id,resourceId:e.resourceId,commandId:e.commandId,state:e.state,startedAt:e.startedAt,endedAt:e.endedAt,threadId:e.binding?.nativeThreadId??null,turnId:e.turnId??null,responseId:e.responseId??null}),resourceId:e.resourceId,providerId:e.providerId,commandId:e.commandId,state:e.state,nativeThreadId:e.binding?.nativeThreadId??null,nativeTurnId:e.turnId??null,nativeResponseId:e.responseId??null};
+      },
+      recordEvent:event=>this.record(event.type,'observed',undefined,'task-objective:'+event.commandId+':'+event.type,{providerId:'aerynth-native',detached:true,resourceId:event.resourceId,correlationId:event.commandId,payload:{redacted:true,application:{resourceVersion:event.resourceVersion,commandId:event.commandId,detail:event.detail}}}),
+    });
+  }
+  private async taskObjectiveCommand(operation:TaskObjectiveRequest) {
+    const read=isTaskObjectiveRead(operation),execute=()=>this.taskObjectiveDomain().dispatch(operation);
     const result=read?execute():this.atomic(execute);
     return read?{result}:{result,desktop:await this.command('desktop',{type:'snapshot'})};
   }
@@ -1372,6 +1397,7 @@ export class BackendCore {
     // execution. Canonical mutations retain source/approval fences.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft'];
     if(name==='timelines'){ensure(isTimelineRead(a)||!this.active,'execution_busy');return this.timelineCommand(a) as any;}
+    if(name==='taskObjectives'){ensure(isTaskObjectiveRead(a)||!this.active,'execution_busy');return this.taskObjectiveCommand(a) as any;}
     if(name==='agents'||name==='checklists'){
       ensure((name==='agents'?isAgentRead(a):isChecklistRead(a))||!this.active,'execution_busy');
       return this.productCommand(name,a) as any;

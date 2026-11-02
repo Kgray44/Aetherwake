@@ -62,6 +62,7 @@ lines.on("line", async (line) => {
         "agents",
         "checklists",
         "timelines",
+        "taskObjectives",
         "velaRequestPreview",
         "velaNativeReview",
         "authorizeVelaRequest",

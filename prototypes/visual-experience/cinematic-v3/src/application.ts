@@ -125,7 +125,10 @@ import {
   approachWorkspaceCard,
   type WorkspaceView,
 } from "./workspace-approach";
-import { REGISTERED_BLOCKS } from "../../../block-library/registry.ts";
+import {
+  BUILTIN_BLOCKS,
+  REGISTERED_BLOCKS,
+} from "../../../block-library/registry.ts";
 import "../../../block-library/identity-view.css";
 import { mountSubjectExperience } from "../../../block-library/subject-view.ts";
 import "../../../block-library/subject-view.css";
@@ -2174,11 +2177,10 @@ export function installApplication(hooks: Hooks) {
                   (r) => r.id === b.dataset.attach,
                 ),
                 workspaceId = state?.activeWorkspaceId;
-              if (
-                !resource ||
-                !workspaceId ||
-                !REGISTERED_BLOCKS.some((def) => def.kind === resource.kind)
-              )
+              const presentation =
+                resource &&
+                BUILTIN_BLOCKS.find((def) => def.kind === resource.kind);
+              if (!resource || !workspaceId || !presentation)
                 throw Error(
                   "Resource has no available workspace presentation.",
                 );
@@ -2190,7 +2192,7 @@ export function installApplication(hooks: Hooks) {
                 expectedLayoutVersion: state!.layoutVersion,
                 resourceId: resource.id,
                 expectedResourceVersion: resource.version,
-                kind: resource.kind,
+                kind: presentation.kind,
               });
             }).catch(report);
           }),

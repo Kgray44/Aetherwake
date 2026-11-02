@@ -34,7 +34,7 @@ export type BlockKind =
   | "file"
   | "link";
 /** Canonical domains can exist before a workspace presenter is registered. */
-export type CanonicalResourceKind = BlockKind | "timeline";
+export type CanonicalResourceKind = BlockKind | "timeline" | "task_objective";
 export type Shape =
   | "rectangle"
   | "rounded"
