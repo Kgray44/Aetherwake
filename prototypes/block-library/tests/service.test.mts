@@ -836,3 +836,17 @@ test("schema upgrade, per-placement preferences, recents and favorites survive S
   );
   host.kernel.assertIntegrity();
 });
+
+test('template capture rejects a canonical domain with no registered resource presentation and preserves its snapshot', t => {
+  const { host, service } = fixture(t), workspace = host.engine.createWorkspace('Synthetic domain capture boundary');
+  const created = service.createBlock({ commandId: 'capture:registered', workspaceId: workspace.workspaceId, expectedLayoutVersion: workspace.revision, kind: 'note', title: 'Existing supported note' });
+  host.desktop.apply({ type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.workspaceId } }, () => { throw new Error('No provider creation'); });
+  const snapshot = host.desktop.snapshot(() => ({ provider: 'local', messages: [] }));
+  assert.equal(captureWorkspaceTemplate(snapshot, { [created.resourceId]: 'reference' }).resources[0].source.kind, 'note');
+  for (const kind of ['agent', 'checklist'] as const) {
+    const foreign = structuredClone(snapshot); (foreign.resources.find(resource => resource.id === created.resourceId)! as any).kind = kind;
+    const retained = structuredClone(foreign);
+    assert.throws(() => captureWorkspaceTemplate(foreign, { [created.resourceId]: 'reference' }), /unsupported_resource_presentation/);
+    assert.deepEqual(foreign, retained);
+  }
+});

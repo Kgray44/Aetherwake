@@ -18,7 +18,7 @@ import {
   validateSubjectRef,
   type NonResourceSubjectRef,
 } from "../workspace-kernel/subjects.ts";
-import { blockDefinition, validateConfiguration } from "./registry.ts";
+import { blockDefinition, validateConfiguration, BUILTIN_BLOCKS } from "./registry.ts";
 
 export const TEMPLATE_LIMITS = {
   templates: 256,
@@ -370,6 +370,9 @@ export function captureWorkspaceTemplate(
         r.state !== "archived",
       "resource_unavailable",
     );
+    const manifest = BUILTIN_BLOCKS.find(definition => definition.kind === r.kind);
+    check(manifest, 'unsupported_resource_presentation');
+    const kind = manifest.kind;
     check(
       choices[id] === "reference" || choices[id] === "new",
       "binding_choice_required",
@@ -381,13 +384,13 @@ export function captureWorkspaceTemplate(
         choices[id] === "reference"
           ? {
               mode: "reference",
-              kind: r.kind,
+              kind,
               resourceId: r.id,
               expectedVersion: r.version,
             }
           : {
               mode: "new",
-              kind: r.kind,
+              kind,
               title: r.title,
               ...(r.kind === "conversation" ? { provider: r.provider } : {}),
             },
