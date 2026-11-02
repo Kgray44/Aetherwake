@@ -165,6 +165,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       case 'renameConversation': return 'Rename ' + name(action.resourceId) + ' to “' + action.title + '”';
       case 'associateConversationProject': return 'Associate ' + name(action.resourceId) + ' with ' + (action.projectId ? name(action.projectId) : 'No project');
       case 'createProject': return 'Create project “' + action.title + '”';
+      case 'renameProject': return 'Rename project ' + name(action.projectId, 'project') + ' to “' + action.title + '”';
+      case 'renameResource': return 'Rename ' + name(action.resourceId, 'resource') + ' to “' + action.title + '”';
+      case 'associateResourceProject': return 'Change ' + name(action.resourceId, 'resource') + ' project to ' + (action.projectId ? name(action.projectId, 'project') : 'No project');
       case 'createWorkspace': return 'Create workspace “' + action.title + '”' + (action.projectId ? ' in ' + name(action.projectId) : '');
       case 'renameWorkspace': return 'Rename ' + name(action.workspaceId) + ' to “' + action.title + '”';
       case 'taskPriority': return 'Set ' + name(action.resourceId) + ' priority to ' + action.priority;
