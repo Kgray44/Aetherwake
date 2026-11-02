@@ -777,7 +777,7 @@ export function installApplication(hooks: Hooks) {
       const ids = new Set([
         ...drafts.keys(),
         ...[...noteSessions]
-          .filter(([, session]) => session.snapshot().dirty)
+          .filter(([, session]) => session.hasPendingEdits)
           .map(([id]) => id),
       ]);
       if (!ids.size) {
@@ -794,7 +794,7 @@ export function installApplication(hooks: Hooks) {
         clearTimeout(draft?.timer);
         const session = noteSessions.get(resourceId);
         if (!session) throw new Error("draft_resource_unavailable");
-        await session.flush();
+        await session.flushEdits();
         if (drafts.get(resourceId) === draft) drafts.delete(resourceId);
       }
     }
@@ -2891,7 +2891,7 @@ export function installApplication(hooks: Hooks) {
   addEventListener("beforeunload", (event) => {
     if (
       drafts.size ||
-      [...noteSessions.values()].some((session) => session.snapshot().dirty) ||
+      [...noteSessions.values()].some((session) => session.hasPendingEdits) ||
       [...composerSessions.values()].some(
         (session) =>
           ["dirty", "saving", "conflict"].includes(session.snapshot().phase) ||

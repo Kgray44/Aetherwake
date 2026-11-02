@@ -59,6 +59,13 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [], ses
     const desktop = () => js("window.aerynthHost.command('desktop',{type:'snapshot'})");
     const noExecution = async () => assert.deepEqual(await js("window.aerynthHost.command('executionStatus',{})"), [], 'No provider execution authorized');
     await noExecution(); const before = await desktop();
+    const readNotes = async snapshot => {
+      const ids = snapshot.resources.filter(resource => resource.kind === 'note' && resource.available !== false).map(resource => resource.id);
+      assert(ids.length > 0 && ids.length <= 10, 'Bounded canonical note fixture required');
+      return js(`Promise.all(${JSON.stringify(ids)}.map(resourceId=>window.aerynthHost.command('notes',{name:'readNote',input:{resourceId}})))`);
+    };
+    const beforeNotes = await readNotes(before);
+    assert(beforeNotes.some(value => value.result?.draft && value.result.draft.content !== value.result.resource.content), 'Separate untouched note recovery draft required for this check');
     const { startWindowRecording } = require('./application-recording.cjs');
     recorder = await startWindowRecording(win, session, localURL); foreground();
     // Bounded diagnostics of the actual synthetic note's presentation layers.
@@ -133,8 +140,9 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [], ses
     for (const resource of before.resources) assert.deepEqual(after.resources.find(value => value.id === resource.id), resource, 'Opening UI changed existing canonical resource');
     assert.deepEqual(after.blocks, before.blocks, 'Opening UI changed canonical placement geometry');
     assert.deepEqual(after.presence, before.presence, 'Opening UI changed saved Vela position');
+    assert.deepEqual(await readNotes(after), beforeNotes, 'Opening UI changed canonical notes or separate recovery drafts');
     assert.equal(startupErrors.length, 0, 'Observed startup graphics/console error');
-    receipt.checks.push('same existing canonical resources and placements', 'zero provider execution', 'measured bounded surfaces and stable composers', 'fresh actual GPU draws', 'actual intermediate context morph preserves composer', 'one exact-window motion recording');
+    receipt.checks.push('same existing canonical resources and placements', 'untouched canonical note and separate recovery draft preserved', 'zero provider execution', 'measured bounded surfaces and stable composers', 'fresh actual GPU draws', 'actual intermediate context morph preserves composer', 'one exact-window motion recording');
     receipt.passed = true;
   };
   try {
