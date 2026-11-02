@@ -90,6 +90,15 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
     originalActionsParent = openActions?.parentElement;
   if (openActions) top.append(openActions);
   (openActions ?? overview).append(approach);
+  const openControl = article.querySelector<HTMLButtonElement>('.unfold');
+  let heldOpenName: { previous: string | null; assigned: string } | undefined;
+  const releaseOpenName = () => {
+    if (openControl && heldOpenName && openControl.getAttribute('aria-label') === heldOpenName.assigned) {
+      if (heldOpenName.previous === null) openControl.removeAttribute('aria-label');
+      else openControl.setAttribute('aria-label', heldOpenName.previous);
+    }
+    heldOpenName = undefined;
+  };
   let model: BlockIdentityModel | null = null,
     fingerprint = "",
     disposed = false;
@@ -114,11 +123,15 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
     overview.hidden = next !== 'overview';
     approach.hidden = next !== 'overview';
     if (next === 'overview') {
+      if (openControl && !heldOpenName) {
+        heldOpenName = { previous: openControl.getAttribute('aria-label'), assigned: 'Open ' + model!.label.toLowerCase() + ' in focused view' };
+        openControl.setAttribute('aria-label', heldOpenName.assigned);
+      }
       for (const child of Array.from(working.children)) if (child instanceof HTMLElement && child !== overview && !heldInert.has(child)) {
         heldInert.set(child, child.hasAttribute('inert'));
         child.setAttribute('inert', '');
       }
-    } else releaseWorking();
+    } else { releaseWorking(); releaseOpenName(); }
   };
   const focusChanged = () => queueMicrotask(() => reconcileComposition());
   const compositionStarted = (event: Event) => {
@@ -143,6 +156,7 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
     overview.dataset.layout = value.layout;
     overview.setAttribute('aria-label', value.label + ' overview');
     approach.setAttribute('aria-label', 'Approach ' + value.label.toLowerCase());
+    approach.title = 'Approach ' + value.label.toLowerCase();
     const content: HTMLElement[] = [], paragraph = (text: string, className = '') => { if (text) content.push(element('p', className, text)); };
     if (value.phase !== 'ready') paragraph(value.empty || value.subtitle);
     else if (value.kind === 'conversation') {
@@ -447,6 +461,7 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
       article.removeEventListener('compositionstart', compositionStarted, true);
       article.removeEventListener('compositionend', compositionEnded, true);
       releaseWorking();
+      releaseOpenName();
       overview.remove();
       approach.remove();
       delete article.dataset.blockComposition;

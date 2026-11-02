@@ -101,3 +101,20 @@ test('a disposed overview never starts a queued camera approach or leaves listen
   assert.equal(view.root.querySelector('.aw-block-approach'), null);
   for (const listeners of (f.article as any).listeners.values()) assert.equal(listeners.length, 0);
 });
+test('overview retains explicit accessible Open and its original handler when camera approach cannot fit', async t => {
+  const view = blockDocument(), restore = view.install(), f = card(view);
+  let opened = 0;
+  const original = () => { opened++; };
+  f.open.onclick = original; f.open.setAttribute('aria-label', 'Original Open action');
+  const identity = mountBlockIdentity(f.article, { approach() { throw Error('card_approach_needs_more_room'); } });
+  t.after(() => { identity.dispose(); restore(); });
+  identity.update(blockIdentity({ kind: 'conversation', resource: chat }));
+  identity.setFootprint({ ...small, bodyHeight: 0 });
+  assert.match(f.open.getAttribute('aria-label')!, /Open local chat in focused view/);
+  assert.equal(f.open.parentElement, f.actions); assert.equal(f.open.hidden, false); assert.equal(f.open.hasAttribute('inert'), false);
+  view.root.querySelector('.aw-block-approach').onclick(); await new Promise(resolve => setImmediate(resolve));
+  assert.equal(opened, 0, 'A refused camera approach never silently expands');
+  assert.equal(f.open.onclick, original); f.open.onclick(); assert.equal(opened, 1);
+  identity.setFootprint({ width: 500, height: 400, bodyWidth: 420, bodyHeight: 250, textScale: 1 });
+  assert.equal(f.open.getAttribute('aria-label'), 'Original Open action');
+});

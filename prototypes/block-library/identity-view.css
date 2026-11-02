@@ -745,8 +745,23 @@
   visibility: hidden;
   pointer-events: none;
 }
-.folio[data-block-composition="overview"] .folio-actions > :not(.aw-block-approach) {
+.folio[data-block-composition="overview"] .folio-actions > :not(.aw-block-approach):not(.unfold) {
   display: none;
+}
+.folio[data-block-composition="overview"]:not(.expanded) .folio-top .unfold {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  font-size: 0;
+}
+.folio[data-block-composition="overview"] .unfold::after {
+  content: "↗";
+  font-size: 16px;
+  line-height: 1;
 }
 .folio[data-block-composition="overview"] .title-select h2 {
   display: -webkit-box;
@@ -854,5 +869,22 @@
 @container (max-width: 220px) {
   .folio[data-block-composition="overview"] .card-kind-label > span {
     display: none;
+  }
+  .folio[data-block-composition="overview"]:not(.expanded) .folio-top {
+    gap: 4px;
+  }
+  .folio[data-block-composition="overview"]:not(.expanded) .folio-top .folio-actions {
+    gap: 3px;
+  }
+  .folio[data-block-composition="overview"] .aw-block-approach[aria-label^="Approach "] {
+    width: 28px;
+    min-height: 28px;
+    padding: 0;
+    font-size: 0;
+  }
+  .folio[data-block-composition="overview"] .aw-block-approach[aria-label^="Approach "]::before {
+    content: "⊕";
+    font-size: 18px;
+    line-height: 1;
   }
 }
