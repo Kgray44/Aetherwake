@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const fs = require('node:fs');
-const { assertOwnedProfile, validateBudget, admitPNG, organizationInvariant, layoutGeometry, localEventScript, assertOptics, verify } = require('../native/integration-environments.cjs');
+const { assertOwnedProfile, validateBudget, admitPNG, organizationInvariant, layoutGeometry, presenceCentered, localEventScript, assertOptics, verify } = require('../native/integration-environments.cjs');
 const { createSlot, waitForCondition, sourceIdentity } = require('../native/integration-resource-opening.cjs');
 const MiB = 1024 * 1024;
 const budget = () => ({ count: 0, bytes: 0, videos: 0, videoBytes: 0, files: [] });
@@ -72,6 +72,20 @@ test('history comparisons retain every canonical placement/presence field except
   const newer = structuredClone(a); newer.blocks[0].version++; newer.presence.version++; assert.deepEqual(layoutGeometry(a), layoutGeometry(newer));
   for (const change of [x => x.blocks[0].resourceId = 'copy', x => x.blocks[0].x++, x => x.blocks[0].shape = 'circle', x => x.blocks[0].rotation++, x => x.blocks[0].locked = true, x => x.presence.x++, x => x.presence.locked = true]) { const value = structuredClone(a); change(value); assert.notDeepEqual(layoutGeometry(a), layoutGeometry(value)); }
   assert.equal(a.blocks[0].version, 1);
+});
+
+test('Find Vela uses canonical world camera origin, not visual offset, on both axes', () => {
+  const presence = { x: 500, y: 300, width: 160, height: 200 }, size = { width: 1280, height: 900 };
+  // Root's visual offset is (+60,+50). saveView persists its NEGATIVE at zoom1.
+  const viewport = { x: -60, y: -50, zoom: 1 };
+  assert.equal(presenceCentered(presence, viewport, size), true);
+  assert.equal(presenceCentered(presence, { x: 60, y: 50, zoom: 1 }, size), false, 'old offset-addition equation would incorrectly accept this');
+  assert.equal(presenceCentered(presence, { ...viewport, x: viewport.x + 2 }, size), false);
+  assert.equal(presenceCentered(presence, { ...viewport, y: viewport.y - 2 }, size), false);
+  assert.equal(presenceCentered({ x: 900, y: 600, width: 160, height: 200 }, { x: 340, y: 250, zoom: 1 }, size), true, 'positive world camera origins also center correctly');
+  assert.equal(presenceCentered(presence, { ...viewport, zoom: 2 }, size), false, 'actual Find Vela callback must restore zoom1');
+  assert.equal(presenceCentered(presence, { ...viewport, x: NaN }, size), false);
+  assert.equal(presenceCentered(null, viewport, size), false);
 });
 
 test('same-source restart binding includes every build/source digest and excludes process start time only', () => {

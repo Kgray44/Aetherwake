@@ -58,6 +58,12 @@ function layoutGeometry(value) {
   delete result.presence.version;
   return result;
 }
+function presenceCentered(presence, viewport, size) {
+  if (!presence || !viewport || !size || viewport.zoom !== 1 || ![presence.x, presence.y, presence.width, presence.height, viewport.x, viewport.y, size.width, size.height].every(Number.isFinite)) return false;
+  // Canonical viewport is the world-space camera origin: saveView stores
+  // -offset/zoom, so screen = (world - viewport) * zoom.
+  return Math.abs((presence.x + presence.width / 2 - viewport.x) * viewport.zoom - size.width / 2) < 1 && Math.abs((presence.y + presence.height / 2 - viewport.y) * viewport.zoom - size.height / 2) < 1;
+}
 /** Reuse the exact visibility/hit-test gate before local form/key events. These
  * are renderer events, never a native keyboard or trusted physical-input claim. */
 function localEventScript(query, kind, value) {
@@ -80,6 +86,7 @@ exports.validateBudget = validateBudget;
 exports.admitPNG = admitPNG;
 exports.organizationInvariant = organizationInvariant;
 exports.layoutGeometry = layoutGeometry;
+exports.presenceCentered = presenceCentered;
 exports.localEventScript = localEventScript;
 exports.assertOptics = assertOptics;
 
@@ -169,7 +176,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       await action(control('redo')); await ready('fluid'); assert.deepEqual(layoutGeometry(await inspect()), layoutGeometry(edited), 'Actual Redo restores edited canonical placement');
       await action(control('restore')); await ready('fluid'); assert.deepEqual(layoutGeometry(await inspect()), initialGeometry, 'Actual checkpoint Restore preserves original resource identities/geometry');
       await action(control('find-toggle')); await action(control('find-vela')); await flush();
-      await wait('Find Vela callback centers actual canonical presence', async () => { const d = await desktop(), size = await js('({width:innerWidth,height:innerHeight})'), p = d.presence, v = d.viewport; return v?.zoom === 1 && p && Math.abs(v.x + p.x + p.width / 2 - size.width / 2) < 1 && Math.abs(v.y + p.y + p.height / 2 - size.height / 2) < 1; });
+      await wait('Find Vela callback centers actual canonical presence', async () => { const d = await desktop(), size = await js('({width:innerWidth,height:innerHeight})'); return presenceCentered(d.presence, d.viewport, size); });
       await dismiss(); await show();
       if (!(await js(`document.querySelector(${JSON.stringify(control('find-toggle'))})?.getAttribute('aria-expanded')==='true'`))) await action(control('find-toggle'));
       await action(`${control('find-block')}[data-block-id=${JSON.stringify(block.id)}]`); await expression('Find block callback opens exact canonical card', `window.__aerynth.snapshot().expanded===${JSON.stringify(block.id)}`); await dismiss();
