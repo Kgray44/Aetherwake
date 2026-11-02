@@ -33,6 +33,7 @@ import {
 } from "./spatial.ts";
 import type { GraphActions, GraphAction } from "./spatial-types.ts";
 import type { SpatialCamera } from "./spatial-types.ts";
+import type { ResourceOpeningInput } from "../application-contract/resource-opening.ts";
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 const viewSaveError = "View could not be saved. Retry before closing.";
@@ -76,11 +77,7 @@ export type ControllerOptions = GraphActions & {
   motion: MotionCoordinator;
   navigate(target: Destination): Promise<unknown>;
   persistence?: ViewPersistence;
-  openResource?(target: {
-    workspaceId: string;
-    resourceId: string;
-    blockId: string;
-  }): Promise<unknown>;
+  openResource?(target: ResourceOpeningInput): Promise<unknown>;
   onTransition?(transition: Transition): void;
   onDirty?(): void;
   policy?: Partial<Policy>;
@@ -98,6 +95,7 @@ export class ConstellationController {
   error = "";
   pending = false;
   private generation = 0;
+  private resourceOpeningGeneration = 0;
   private listeners = new Set<() => void>();
   private saveChain = Promise.resolve();
   private destroyed = false;
@@ -314,7 +312,12 @@ export class ConstellationController {
         (h): h is HistoryEntry =>
           !!h &&
           isLocation(h.location) &&
-          allowedLocation(h.location, this.nodes) &&
+          allowedLocation(
+            h.location.kind === "surface"
+              ? { kind: "workspace", workspaceId: h.location.workspaceId }
+              : h.location,
+            this.nodes,
+          ) &&
           h.bookmark &&
           validCamera(h.bookmark.camera),
       )
@@ -324,14 +327,7 @@ export class ConstellationController {
             ? { kind: l.kind }
             : l.kind === "project"
               ? { kind: l.kind, projectId: l.projectId }
-              : l.kind === "workspace"
-                ? { kind: l.kind, workspaceId: l.workspaceId }
-                : {
-                    kind: l.kind,
-                    workspaceId: l.workspaceId,
-                    resourceId: l.resourceId,
-                    blockId: l.blockId,
-                  },
+              : { kind: "workspace", workspaceId: l.workspaceId },
         bookmark: this.cleanBookmark(bookmark),
       }));
   }
@@ -570,23 +566,123 @@ export class ConstellationController {
   }
   async approach(key = this.selected) {
     const n = this.nodes.get(key ?? "");
-    if (!n || !n.available) throw new Error("Destination unavailable");
-    if (n.kind === "resource" && !n.workspaceId)
-      throw Error(
-        "This resource is unplaced. Add a workspace placement to open its editor.",
-      );
+    if (!n) throw new Error("Destination unavailable");
+    if (n.kind === "resource")
+      return this.openResource(n.resourceId ?? n.id, { nodeKey: n.key });
+    if (!n.available) throw new Error("Destination unavailable");
     return this.go(
       n.kind === "project"
         ? { kind: "project", projectId: n.id }
-        : n.kind === "workspace"
-          ? { kind: "workspace", workspaceId: n.id }
-          : {
-              kind: "surface",
-              workspaceId: n.workspaceId!,
-              resourceId: n.resourceId!,
-              blockId: n.key.slice("resource:".length),
-            },
+        : { kind: "workspace", workspaceId: n.id },
     );
+  }
+  /** Open canonical content; placement and camera navigation are independent. */
+  openResource(
+    resourceId: string,
+    hints: {
+      nodeKey?: string;
+      selection?: ResourceOpeningInput["selection"];
+    } = {},
+  ) {
+    return this.dispatchResource({
+      resourceId,
+      preferredPresentation: "direct",
+      origin: {
+        source: "constellation",
+        ...(hints.nodeKey ? { nodeKey: hints.nodeKey } : {}),
+      },
+      ...(hints.selection
+        ? { selection: { messageId: hints.selection.messageId } }
+        : {}),
+    });
+  }
+  /** Explicitly request this placement, never an arbitrary workspace fallback. */
+  async focusExistingPlacement(key = this.selected) {
+    const node = this.nodes.get(key ?? "");
+    if (!node || node.kind !== "resource" || !node.workspaceId)
+      throw new Error("Select an existing workspace placement");
+    return this.dispatchResource({
+      resourceId: node.resourceId ?? node.id,
+      preferredPresentation: "existing-placement",
+      preferredPlacement: {
+        workspaceId: node.workspaceId,
+        blockId: node.key.slice("resource:".length),
+      },
+      origin: { source: "constellation", nodeKey: node.key },
+    });
+  }
+  private availableResource(resourceId: string) {
+    if (
+      this.destroyed ||
+      !this.snapshot.resources.some(
+        (resource) =>
+          resource.id === resourceId &&
+          resource.visible !== false &&
+          resource.available !== false,
+      )
+    )
+      throw new Error("Destination unavailable");
+  }
+  private validateResourceRequest(request: ResourceOpeningInput) {
+    this.availableResource(request.resourceId);
+    if (request.preferredPresentation !== "existing-placement") return;
+    const placement = request.preferredPlacement,
+      node = placement && this.nodes.get(keyOf("resource", placement.blockId)),
+      workspace =
+        placement && this.nodes.get(keyOf("workspace", placement.workspaceId));
+    if (
+      !placement ||
+      !node?.available ||
+      !workspace?.available ||
+      node.resourceId !== request.resourceId ||
+      node.workspaceId !== placement.workspaceId
+    )
+      throw new Error("Destination unavailable");
+  }
+  private async dispatchResource(request: ResourceOpeningInput) {
+    this.validateResourceRequest(request);
+    const open = this.options.openResource;
+    if (!open) throw new Error("Resource editor is unavailable in this host");
+    const generation = ++this.resourceOpeningGeneration;
+    this.error = "";
+    this.changed();
+    // Wait for real navigation already in flight without changing its state.
+    // Viewer requests reach the host independently, so its latest-intent guard
+    // can supersede an older load instead of waiting for that viewer to finish.
+    const operation = this.navigationChain
+      .catch(() => {})
+      .then(async () => {
+        if (generation !== this.resourceOpeningGeneration || this.destroyed)
+          return;
+        this.validateResourceRequest(request);
+        const key = request.origin?.nodeKey,
+          node = key ? this.nodes.get(key) : undefined,
+          origin = {
+            source: "constellation" as const,
+            ...(node?.kind === "resource" &&
+            node.id === request.resourceId &&
+            node.available &&
+            node.key.length <= 256
+              ? { nodeKey: node.key }
+              : {}),
+          };
+        const result = await open.call(this.options, { ...request, origin });
+        if (generation !== this.resourceOpeningGeneration || this.destroyed)
+          return;
+        this.validateResourceRequest(request);
+        return result;
+      });
+    try {
+      return await operation;
+    } catch (error) {
+      if (generation === this.resourceOpeningGeneration && !this.destroyed) {
+        this.error =
+          error instanceof Error ? error.message : "Resource opening failed";
+        throw error;
+      }
+    } finally {
+      if (generation === this.resourceOpeningGeneration) this.changed();
+    }
   }
   async zoomOut() {
     const l = this.location;
@@ -608,10 +704,18 @@ export class ConstellationController {
     spatialOverride?: SpatialCamera,
     historyTravel?: { history: HistoryEntry[]; future: HistoryEntry[] },
   ) {
+    if (location.kind === "surface") {
+      if (!returning && !historyTravel)
+        return this.openResource(location.resourceId, {
+          nodeKey: keyOf("resource", location.blockId),
+        });
+      // Legacy history represents navigation to its containing workspace, not
+      // permission to reopen an editor as a side effect of restoring a view.
+      location = { kind: "workspace", workspaceId: location.workspaceId };
+    }
     if (!allowedLocation(location, this.nodes))
       throw new Error("Destination unavailable");
-    if (location.kind === "surface" && !this.options.openResource)
-      throw new Error("Resource editor is unavailable in this host");
+    this.resourceOpeningGeneration++;
     const generation = ++this.generation;
     const spatialRevision = this.spatial?.manualRevision;
     const from = this.location,
@@ -637,12 +741,6 @@ export class ConstellationController {
           if (generation !== this.generation || this.destroyed) return;
           if (!allowedLocation(location, this.nodes))
             throw new Error("Destination unavailable");
-          if (
-            generation === this.generation &&
-            !this.destroyed &&
-            location.kind === "surface"
-          )
-            await this.options.openResource!(location);
         });
       this.navigationChain = navigation;
       await navigation;
@@ -843,6 +941,7 @@ export class ConstellationController {
     this.spatial?.dispose();
     this.destroyed = true;
     this.generation++;
+    this.resourceOpeningGeneration++;
     this.listeners.clear();
     this.motion.bodies.delete(this.motionId);
   }

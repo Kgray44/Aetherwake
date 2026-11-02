@@ -644,7 +644,8 @@ export class SpatialNavigator {
     }
     this.target(p, "dolly");
     if (this.semanticPending || c.pending) return;
-    let destination: import("./types.ts").Location | undefined;
+    let destination: import("./types.ts").Location | undefined,
+      resourceKey: string | undefined;
     if (working && factor < 1) {
       const projectId = c.snapshot.workspaces.find(
         (w) => w.id === location.workspaceId,
@@ -672,17 +673,8 @@ export class SpatialNavigator {
     ) {
       if (focus.kind === "workspace" && p.distance < 700)
         destination = { kind: "workspace", workspaceId: focus.id };
-      else if (
-        focus.kind === "resource" &&
-        focus.workspaceId &&
-        p.distance < 350
-      )
-        destination = {
-          kind: "surface",
-          workspaceId: focus.workspaceId,
-          resourceId: focus.id,
-          blockId: focus.key.slice("resource:".length),
-        };
+      else if (focus.kind === "resource" && p.distance < 350)
+        resourceKey = focus.key;
       if (destination) delete p.neighborhood;
     } else if (c.location.kind === "universe" && factor > 1) {
       const nearest = [...c.nodes.values()]
@@ -705,10 +697,11 @@ export class SpatialNavigator {
           destination = { kind: "project", projectId: nearest.id };
       }
     }
-    if (destination) {
+    if (destination || resourceKey) {
       this.semanticPending = true;
-      void c
-        .go(destination, undefined, p)
+      void (
+        resourceKey ? c.approach(resourceKey) : c.go(destination!, undefined, p)
+      )
         .catch((e) => {
           c.error = e instanceof Error ? e.message : "Navigation unavailable";
           this.dirty();

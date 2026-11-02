@@ -785,7 +785,8 @@ test("unplaced canonical resources remain in their project graph and cannot fabr
   const s = fixture();
   s.resources[0].project_id = "p";
   s.blocks = s.blocks.filter((b) => b.resource_id !== "r0");
-  const { c } = setup(s);
+  const opened = [],
+    { c } = setup(s, { openResource: async (request) => opened.push(request) });
   assert.ok(c.nodes.has("resource:unplaced:r0"));
   assert.ok(edges(c).some((e) => e.id === "edge1"));
   assert.ok(
@@ -793,7 +794,12 @@ test("unplaced canonical resources remain in their project graph and cannot fabr
       (e) => e.sourceId === "r0" && e.kind === "resource_project_membership",
     ),
   );
-  await assert.rejects(c.approach("resource:unplaced:r0"), /unplaced/);
+  const before = structuredClone(c.snapshot);
+  await c.approach("resource:unplaced:r0");
+  assert.equal(opened[0].resourceId, "r0");
+  assert.equal(opened[0].preferredPresentation, "direct");
+  assert.equal(opened[0].preferredPlacement, undefined);
+  assert.deepEqual(c.snapshot, before);
   assert.equal(c.snapshot.resources.length, 18);
 });
 

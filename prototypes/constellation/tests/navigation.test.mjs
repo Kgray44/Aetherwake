@@ -39,7 +39,8 @@ const setup = (t) => {
   };
 };
 const create = (service) => {
-  const motion = new MotionCoordinator();
+  const motion = new MotionCoordinator(),
+    opened = [];
   const c = new ConstellationController({
     snapshot: service.snapshot(),
     motion,
@@ -48,9 +49,9 @@ const create = (service) => {
       load: async () => service.load(),
       save: async (s) => service.save(s),
     },
-    openResource: async () => {},
+    openResource: async (request) => opened.push(request),
   });
-  return { c, motion };
+  return { c, motion, opened };
 };
 
 test("zero, one and many projects; standalone workspaces remain direct destinations", () => {
@@ -81,7 +82,7 @@ test("zero, one and many projects; standalone workspaces remain direct destinati
 
 test("persisted workspace → project → universe → other project → editor → back preserves identities and layouts", async (t) => {
   const { service } = setup(t),
-    { c, motion } = create(service);
+    { c, motion, opened } = create(service);
   await c.restore();
   const before = service.snapshot();
   const a = before.workspaces.find((w) => w.title === "Development"),
@@ -96,14 +97,18 @@ test("persisted workspace → project → universe → other project → editor 
   await c.approach(`workspace:${b.id}`);
   assert.equal(service.snapshot().activeWorkspaceId, b.id);
   const block = before.blocks.find((x) => x.workspace_id === b.id);
+  const viewBeforeOpen = structuredClone(c.state),
+    cameraBeforeOpen = c.camera;
   await c.approach(`resource:${block.id}`);
-  assert.equal(c.location.resourceId, block.resource_id);
-  assert.equal(c.location.kind, "surface");
+  assert.deepEqual(c.location, { kind: "workspace", workspaceId: b.id });
+  assert.deepEqual(c.state, viewBeforeOpen);
+  assert.deepEqual(c.camera, cameraBeforeOpen);
+  assert.equal(opened.at(-1).resourceId, block.resource_id);
+  assert.equal(opened.at(-1).preferredPresentation, "direct");
   const r = service
     .snapshot()
     .resources.find((r) => r.id === block.resource_id);
   service.content(r.id, "Edited through the real canonical kernel.", r.version);
-  await c.zoomOut();
   await c.go({ kind: "workspace", workspaceId: a.id });
   step(motion);
   await c.persist();
@@ -356,7 +361,7 @@ test("an unavailable previous workspace is not reintroduced into direct-switch h
   assert.deepEqual(c.location, { kind: "workspace", workspaceId: next.id });
 });
 
-test("a block removed during awaited navigation cannot open an editor; completed canonical workspace navigation is retained", async (t) => {
+test("direct opening survives placement removal without navigating or fabricating a replacement", async (t) => {
   const { service } = setup(t);
   const target = service
     .snapshot()
@@ -365,32 +370,32 @@ test("a block removed during awaited navigation cannot open an editor; completed
     .snapshot()
     .blocks.find((b) => b.workspace_id === target.id);
   let opened = 0,
+    navigated = 0,
     c;
   c = new ConstellationController({
     snapshot: service.snapshot(),
     motion: new MotionCoordinator(),
-    navigate: async (destination) => {
-      const next = service.navigate(destination);
-      c.update({
-        ...next,
-        blocks: next.blocks.filter((b) => b.id !== block.id),
-      });
+    navigate: async () => {
+      navigated++;
     },
     openResource: async () => {
       opened++;
+      const next = service.snapshot();
+      c.update({ ...next, blocks: next.blocks.filter((b) => b.id !== block.id) });
     },
   });
-  await assert.rejects(
-    c.go({
-      kind: "surface",
-      workspaceId: target.id,
-      resourceId: block.resource_id,
-      blockId: block.id,
-    }),
-    /Destination unavailable/,
-  );
-  assert.equal(opened, 0);
-  assert.deepEqual(c.location, { kind: "workspace", workspaceId: target.id });
+  const before = c.location;
+  await c.go({
+    kind: "surface",
+    workspaceId: target.id,
+    resourceId: block.resource_id,
+    blockId: block.id,
+  });
+  assert.equal(opened, 1);
+  assert.equal(navigated, 0);
+  assert.deepEqual(c.location, before);
+  assert.equal(c.snapshot.blocks.some((b) => b.id === block.id), false);
+  assert.ok(c.snapshot.resources.some((r) => r.id === block.resource_id));
   assert.equal(c.pending, false);
 });
 
@@ -410,6 +415,15 @@ test("a saved surface explicitly restores as its workspace with bookmark and sel
   c.move({ x: 570, y: 210, zoom: 1.7 });
   step(motion);
   await c.persist();
+  service.save({
+    ...structuredClone(c.state),
+    location: {
+      kind: "surface",
+      workspaceId: block.workspace_id,
+      resourceId: block.resource_id,
+      blockId: block.id,
+    },
+  });
   let opened = 0;
   const restored = new ConstellationController({
     snapshot: service.snapshot(),

@@ -146,14 +146,13 @@ test("inward zoom can open a placed resource through the actual host editor cont
   c.zoom(1.3, "resource:b");
   const desired = n.bookmark();
   await finish(motion);
-  assert.deepEqual(c.location, {
-    kind: "surface",
-    workspaceId: "w",
-    resourceId: "r",
-    blockId: "b",
-  });
+  assert.deepEqual(c.location, { kind: "project", projectId: "p" });
   assert.deepEqual(opened, [
-    { kind: "surface", resourceId: "r", workspaceId: "w", blockId: "b" },
+    {
+      resourceId: "r",
+      preferredPresentation: "direct",
+      origin: { source: "constellation", nodeKey: "resource:b" },
+    },
   ]);
   assert.deepEqual(n.camera, desired);
   c.zoom(0.9);
