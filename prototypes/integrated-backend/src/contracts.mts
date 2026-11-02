@@ -141,6 +141,8 @@ export interface CommandMap {
   ordinaryProviderStatus:{input:Record<string,never>;output:ProviderConnectionStatus};
   /** TRUSTED Main/native only; MUST NOT be exposed in renderer/tool allowlists. */
   providerAuth:{input:ProviderAuthRequest;output:NativeAuthorizationStart|ProviderConnectionStatus};
+  /** Trusted host diagnostics only: volatile registered provider-port attempts, no user content. */
+  providerActivity:{input:Record<string,never>;output:{codexConnections:number;providerRequests:number;systemMemoryReads:number;scope:'process-session-native-attempts'}};
   /** Read-only canonical resource resolution; no workspace placement required. */
   openResource: {input:ResourceOpeningInput;output:ResourceOpeningResult};
   conversationActivity: { input: { resourceIds: string[] }; output: ConversationActivitySnapshot };

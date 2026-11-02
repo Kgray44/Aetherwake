@@ -21,6 +21,7 @@ import type { NativeHostServices } from './native-host.mts';
 import { createCanonicalOrganizationAdapter, createCanonicalAccessHelper, createObservedCapabilityCache } from '../../conversation-product/src/canonical-host.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import { VelaService, VELA_PLANNING_INSTRUCTION } from '../../vela-core/src/service.mts';
+import { readSystemMemory } from '../../vela-core/src/system-memory.mts';
 import { readSystemClock } from '../../vela-core/src/local-capabilities.mts';
 import { createCanonicalVelaHost, type CanonicalVelaHost, type CanonicalVelaMetadata } from '../../vela-core/src/canonical-host.mts';
 import { CodexPlanningAdapter, planningDigest, buildCodexPlanningPrompt, type CodexPlanningGrant, type PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
@@ -69,6 +70,7 @@ export class BackendCore {
   private storedJson: string | null = null;
   private mutationDepth = 0;
   private port: ProviderPort;
+  private providerActivity = {codexConnections:0,providerRequests:0,systemMemoryReads:0,scope:'process-session-native-attempts' as const};
   private connectionId = randomUUID();
   private sequence = 0;
   private active: Execution | null = null;
@@ -131,6 +133,9 @@ export class BackendCore {
     ensure(Number.isInteger(this.maxEvents) && this.maxEvents >= 4 && this.maxEvents <= 100000, 'invalid_retention');
     this.emit = emit;
     this.port = options.provider === 'codex' || options.provider === 'bridge-fixture' ? nativeProvider(options) : fixtureProvider(options.fixtureMode);
+    const connect=this.port.connect.bind(this.port),turn=this.port.turn.bind(this.port);
+    this.port.connect=()=>{this.providerActivity.codexConnections=Math.min(Number.MAX_SAFE_INTEGER,this.providerActivity.codexConnections+1);return connect();};
+    this.port.turn=(...args)=>{this.providerActivity.providerRequests=Math.min(Number.MAX_SAFE_INTEGER,this.providerActivity.providerRequests+1);return turn(...args);};
     this.kernel = WorkspaceKernel.open(options.path);
     try {
       this.kernel.withTransaction(db => {
@@ -391,6 +396,7 @@ export class BackendCore {
     return {
       identity:()=>({principalId:'local-owner',policyVersion:'aerynth.local-owner@1'}),
       clock:readSystemClock,
+      system:{memory:()=>{this.providerActivity.systemMemoryReads=Math.min(Number.MAX_SAFE_INTEGER,this.providerActivity.systemMemoryReads+1);return readSystemMemory();}},
       ensureConversation:()=>this.ensureVelaConversation(),
       appendMessage:(id,message)=>this.appendVelaMessage(id,message),
       readMessage:(id,messageId)=>{
@@ -1172,6 +1178,7 @@ export class BackendCore {
         resolveCatalog:async()=>({boundaryDigest:catalog.boundaryDigest,expiresAt:catalog.expiresAt,models:catalog.models.map(m=>m.id)}),
         revalidate:async(review,boundary)=>{ensure(review.bodyDigest===p.bodyDigest&&boundary===catalog.boundaryDigest,'approval_scope_mismatch');await fence();},
       }});
+      this.providerActivity.providerRequests=Math.min(Number.MAX_SAFE_INTEGER,this.providerActivity.providerRequests+1);
       result=await transport.turn({executionId:e.id,requestId:input.commandId,configurationId:p.configurationId,providerId:CHATGPT_PLAN_PROVIDER,assistant:'ordinary',model:p.model,instructions:p.instructions,messages:p.messages,contextDigest:p.contextDigest},controller.signal);
       let valid=true;try{await fence();}catch{valid=false;}
       if(result.responseId&&!e.responseId&&valid)await supply(result.responseId);
@@ -1300,7 +1307,7 @@ export class BackendCore {
     // Reads, interruption and durable draft recovery remain available during
     // execution. Canonical mutations retain source/approval fences.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft'];
-    if (!(name==='close'&&this.active?.providerId===CHATGPT_PLAN_PROVIDER)&&!(name==='conversation'&&a?.name==='saveDraft')&&!['providerConnection','providerAuth','ordinaryProviderStatus','ordinaryProviderCheck','openResource','snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['inspectWorkspace','capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
+    if (!(name==='close'&&this.active?.providerId===CHATGPT_PLAN_PROVIDER)&&!(name==='conversation'&&a?.name==='saveDraft')&&!['providerActivity','providerConnection','providerAuth','ordinaryProviderStatus','ordinaryProviderCheck','openResource','snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['inspectWorkspace','capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {
       case 'providerAuth':return this.providerAuth(a) as any;
       case 'providerConnection':{
@@ -1311,6 +1318,7 @@ export class BackendCore {
       case 'openResource':return this.openResource(a) as CommandMap[K]['output'];
       case 'notes':return this.noteCommand(a) as any;
       case 'library':return this.libraryCommand(a) as any;
+      case 'providerActivity':ensure(a&&typeof a==='object'&&!Array.isArray(a)&&Object.keys(a).length===0,'invalid_provider_activity_request');return {...this.providerActivity} as any;
       case 'vela':return this.velaCommand(a) as any;
       case 'velaRequestPreview':return this.previewVelaRequest(a) as any;
       case 'velaNativeReview':return this.nativeVelaReview(a) as any;

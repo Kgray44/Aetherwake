@@ -20,6 +20,27 @@ function fixture(t:any) {
 }
 const local=(core:BackendCore,intent:string,commandId:string)=>core.command('vela',{name:'local',input:{intent,commandId}} as any) as Promise<VelaLocalDispatch>;
 
+test('native memory reader is registered through actual Core and volatile observations distinguish reads, provider attempts and restart replay',async t=>{
+  const f=fixture(t),before=Date.now();
+  assert.deepEqual(await f.core.command('providerActivity',{}),{codexConnections:0,providerRequests:0,systemMemoryReads:0,scope:'process-session-native-attempts'});
+  const answer=await local(f.core,'What is my current RAM usage?','native-memory-one');
+  assert(answer.matched);assert.equal(answer.request.providerId,null);assert.equal(answer.result.facts.kind,'system-memory');
+  if(answer.result.facts.kind==='system-memory'){
+    const measurement=answer.result.facts.measurement;
+    assert(measurement.totalBytes>0);assert.equal(measurement.usedBytes,measurement.totalBytes-measurement.availableBytes);
+    assert(Date.parse(measurement.measuredAt)>=before&&Date.parse(measurement.measuredAt)<=Date.now());
+    assert.equal(measurement.source.platform,process.platform);assert.equal(measurement.source.scope,'host-physical-memory');
+  }
+  assert.deepEqual(await f.core.command('providerActivity',{}),{codexConnections:0,providerRequests:0,systemMemoryReads:1,scope:'process-session-native-attempts'});
+  await f.reopen();const replay=await local(f.core,'What is my current RAM usage?','native-memory-one');assert(replay.matched);
+  assert.deepEqual(replay.request,answer.request);
+  assert.deepEqual(await f.core.command('providerActivity',{}),{codexConnections:0,providerRequests:0,systemMemoryReads:0,scope:'process-session-native-attempts'});
+  await f.core.command('capabilities',{});
+  assert.equal((await f.core.command('providerActivity',{})).codexConnections,1);
+  await (f.core as any).port.turn('synthetic-counter-thread','synthetic counter turn');
+  assert.equal((await f.core.command('providerActivity',{})).providerRequests,1);
+});
+
 test('actual Core persists presentation references with CAS during unrelated execution without changing canonical history',async t=>{
   const f=fixture(t),answer=await local(f.core,'What time is it?','presentation-clock');assert(answer.matched);
   const before=await f.core.command('snapshot',{}),state=await f.core.command('vela',{name:'state',input:{}}) as VelaBackendState;

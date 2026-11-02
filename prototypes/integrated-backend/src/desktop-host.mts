@@ -37,6 +37,7 @@ lines.on("line", async (line) => {
       ![
         "desktop",
         "snapshot",
+        "providerActivity",
         "addMessage",
         "execute",
         "interrupt",
