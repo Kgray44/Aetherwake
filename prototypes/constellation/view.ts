@@ -100,7 +100,11 @@ export function mountConstellation(
     pendingViewSave = true;
     invalidate();
   };
-  const spatial = new SpatialNavigator(controller, invalidate);
+  const spatial = new SpatialNavigator(
+    controller,
+    invalidate,
+    container.getBoundingClientRect(),
+  );
   controller.spatial = spatial;
   const uiExclusions = () => {
     const bounds = field.getBoundingClientRect();
@@ -723,6 +727,8 @@ export function mountConstellation(
     options.onDirty?.();
   });
   const resize = new ResizeObserver(() => {
+    const bounds = container.getBoundingClientRect();
+    spatial.setViewport(bounds.width, bounds.height);
     dirty = true;
     options.onDirty?.();
   });

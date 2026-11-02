@@ -134,6 +134,9 @@ test("wheel zoom crosses project and universe scope without resetting the contin
   assert.equal(c.location.kind, "universe");
   assert.deepEqual(n.camera, outer);
   c.select("project:p");
+  // Enter from a known star-approach pose; overview framing may be much wider.
+  n.target({ ...n.camera, distance: 3000 });
+  settle(motion);
   n.zoom(3);
   const inner = n.bookmark();
   await new Promise(setImmediate);

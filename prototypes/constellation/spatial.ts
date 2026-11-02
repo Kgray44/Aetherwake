@@ -146,6 +146,13 @@ export class SpatialNavigator {
   private space = new BodySpace();
   private radii = new Map<string, { identity: string; radius: number }>();
   private viewportAspect = 1.6;
+  private projectFrameCache?: {
+    nodes: Map<string, Node>;
+    revision: number;
+    key: string;
+    aspect: number;
+    distance: number;
+  };
   private neighborhoodFrameCache?: {
     nodes: Map<string, Node>;
     revision: number;
@@ -157,10 +164,15 @@ export class SpatialNavigator {
   notice = "";
   readonly controller: ConstellationController;
   private dirty: () => void;
-  constructor(controller: ConstellationController, dirty: () => void) {
+  constructor(
+    controller: ConstellationController,
+    dirty: () => void,
+    viewport?: { width: number; height: number },
+  ) {
     this.controller = controller;
     this.dirty = dirty;
     this.id = controller.motionId + ":orbit";
+    if (viewport) this.setViewport(viewport.width, viewport.height);
     this.updateGraph();
     const p = this.defaultCamera();
     controller.motion.add(this.id, this.pose(p));
@@ -449,7 +461,7 @@ export class SpatialNavigator {
     let target = n ? this.position(n.key) : { x: 0, y: 0, z: 0 },
       distance =
         l.kind === "project" ? 1450 : l.kind === "universe" ? 2800 : 800;
-    if (l.kind === "project" && n) distance = this.projectDistance(n);
+    if (l.kind === "project" && n) distance = this.projectOverviewDistance(n);
     if (l.kind === "universe") {
       const roots = [...this.controller.nodes.values()].filter(
         (n) => n.parent === null,
@@ -491,6 +503,47 @@ export class SpatialNavigator {
         );
       }
     return Math.min(3000, distance);
+  }
+  private projectOverviewDistance(n: Node) {
+    const cached = this.projectFrameCache;
+    if (
+      cached?.key === n.key &&
+      cached.nodes === this.controller.nodes &&
+      cached.revision === this.layoutRevision &&
+      cached.aspect === this.viewportAspect
+    )
+      return cached.distance;
+    const target = this.position(n.key);
+    let radius = this.radius(n.key);
+    for (const body of this.projectNodes(n.key)) {
+      const p = this.position(body.key);
+      radius = Math.max(
+        radius,
+        Math.hypot(p.x - target.x, p.y - target.y, p.z - target.z) +
+          this.radius(body.key),
+      );
+    }
+    const halfFov = Math.atan(
+      Math.tan((43 * Math.PI) / 360) * Math.min(1, this.viewportAspect),
+    );
+    const distance = Math.min(
+      100000,
+      Math.max(
+        this.projectDistance(n),
+        ((radius + 80) * 1.12) / Math.sin(halfFov),
+      ),
+    );
+    this.projectFrameCache = {
+      nodes: this.controller.nodes,
+      revision: this.layoutRevision,
+      key: n.key,
+      aspect: this.viewportAspect,
+      distance,
+    };
+    return distance;
+  }
+  private projectExitDistance(n: Node) {
+    return Math.max(3300, this.projectOverviewDistance(n) * 1.5);
   }
   target(camera: SpatialCamera, cause = "spatial navigation") {
     if (!validSpatialCamera(camera)) throw Error("Invalid spatial camera");
@@ -604,13 +657,11 @@ export class SpatialNavigator {
       c.location.kind === "project" &&
       !this.neighborhood &&
       factor < 1 &&
-      p.distance >
-        Math.max(
-          3300,
-          this.projectDistance(
-            c.nodes.get(keyOf("project", c.location.projectId))!,
-          ) * 1.5,
-        )
+      (p.distance >
+        this.projectExitDistance(
+          c.nodes.get(keyOf("project", c.location.projectId))!,
+        ) ||
+        p.distance === 100000)
     )
       destination = { kind: "universe" };
     else if (
@@ -973,6 +1024,22 @@ export class SpatialNavigator {
     await this.controller.persist();
     this.dirty();
   }
+  private projectNodes(
+    project: string,
+    all = [...this.controller.nodes.values()],
+  ) {
+    const children = new Set(
+      all.filter((n) => n.parent === project).map((n) => n.key),
+    );
+    return all.filter(
+      (n) =>
+        n.key === project ||
+        n.parent === project ||
+        children.has(n.parent ?? "") ||
+        (n.workspaceId !== undefined &&
+          children.has(keyOf("workspace", n.workspaceId))),
+    );
+  }
   candidateNodes(): Node[] {
     const c = this.controller,
       l = c.location;
@@ -982,16 +1049,7 @@ export class SpatialNavigator {
       return all.filter(
         (n) => n.kind === "project" || (n.kind === "workspace" && !n.parent),
       );
-    const p = keyOf("project", l.projectId),
-      workspaces = new Set(all.filter((n) => n.parent === p).map((n) => n.key));
-    all = all.filter(
-      (n) =>
-        n.key === p ||
-        n.parent === p ||
-        workspaces.has(n.parent ?? "") ||
-        (n.workspaceId !== undefined &&
-          workspaces.has(keyOf("workspace", n.workspaceId))),
-    );
+    all = this.projectNodes(keyOf("project", l.projectId), all);
     if (this.neighborhood) {
       const keys = new Set(all.map((n) => n.key));
       for (const n of this.relatedNodes()) if (!keys.has(n.key)) all.push(n);
