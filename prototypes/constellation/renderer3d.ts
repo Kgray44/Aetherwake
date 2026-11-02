@@ -239,12 +239,10 @@ export class ConstellationScene implements SpatialRenderLayer {
   }
   prepareCelestialCamera(width: number, height: number) {
     if (
-      !this.enabled ||
       this.lost ||
       this.disposed ||
       this.controller.policy.hidden ||
       !this.controller.policy.graphicsAvailable ||
-      this.navigation.presentation !== "spatial" ||
       !Number.isFinite(width) ||
       !Number.isFinite(height) ||
       width <= 0 ||
@@ -1077,7 +1075,7 @@ export class ConstellationScene implements SpatialRenderLayer {
         rect.height,
       );
       renderer.setScissorTest(true);
-      renderer.clearDepth();
+      if (!frame.preserveWorldDepth) renderer.clearDepth();
       renderer.render(this.scene, this.camera);
       this.renderedProjection = {
         left: rect.left,

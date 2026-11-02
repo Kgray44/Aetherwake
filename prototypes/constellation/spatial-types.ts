@@ -19,6 +19,9 @@ export type SpatialRenderFrame = {
   quality: "cinematic" | "balanced" | "efficient";
   reduced: boolean;
   quiet: boolean;
+  /** Opt in only after a world pass used the exact same camera and viewport.
+   * The default clears prior depth for legacy/foreground-independent passes. */
+  preserveWorldDepth?: boolean;
 };
 export type SpatialScreenBounds = {
   left: number;
@@ -40,8 +43,8 @@ export type SpatialBodyProjection = {
 /** Host renders between celestial background and foreground Vela, one context/RAF. */
 export interface SpatialRenderLayer {
   readonly active: boolean;
-  /** Borrow the existing current camera before world passes, including working
-   * views where graph bodies are inactive. Width/height are CSS pixels. The
+  /** Borrow the existing current camera before world passes, including working,
+   * list and body-disabled views. Width/height are CSS pixels. The
    * caller reads this object; it must not mutate its pose or own another clock. */
   prepareCelestialCamera?(
     width: number,

@@ -62,8 +62,9 @@ function setup() {
     },
   };
 }
-function submit(scene) {
+function submit(scene, preserveWorldDepth) {
   const renderer = {
+    depthClears: 0,
     autoClear: true,
     info: { autoReset: false, render: { calls: 0, triangles: 0 } },
     getViewport: (target) => target.set(0, 0, 1600, 1000),
@@ -72,7 +73,9 @@ function submit(scene) {
     setViewport() {},
     setScissor() {},
     setScissorTest() {},
-    clearDepth() {},
+    clearDepth() {
+      this.depthClears++;
+    },
     render() {
       this.info.render.calls++;
     },
@@ -84,7 +87,9 @@ function submit(scene) {
     quality: "balanced",
     reduced: false,
     quiet: false,
+    ...(preserveWorldDepth === undefined ? {} : { preserveWorldDepth }),
   });
+  return renderer;
 }
 function assertPose(camera, pose) {
   const cp = Math.cos(pose.pitch),
@@ -200,7 +205,7 @@ test("resize and full azimuth use the shared perspective without changing naviga
   dispose();
 });
 
-test("disabled, hidden, list and lost graphics return no borrowed camera, then recover the same pose and object", () => {
+test("list and body-disabled views retain the camera; hidden/lost graphics and invalid viewports do not expose it", () => {
   const { c, n, scene, settle, dispose } = setup();
   n.target({ ...n.camera, distance: 2300, yaw: 1.1, pitch: -0.5 });
   settle();
@@ -214,10 +219,14 @@ test("disabled, hidden, list and lost graphics return no borrowed camera, then r
   ])
     assert.equal(scene.prepareCelestialCamera(width, height), null);
   scene.enabled = false;
-  assert.equal(scene.prepareCelestialCamera(1600, 1000), null);
+  assert.equal(scene.active, false);
+  assert.equal(scene.prepareCelestialCamera(1600, 1000), camera);
+  assertPose(camera, pose);
   scene.enabled = true;
   n.presentation = "list";
-  assert.equal(scene.prepareCelestialCamera(1600, 1000), null);
+  assert.equal(scene.active, false);
+  assert.equal(scene.prepareCelestialCamera(1600, 1000), camera);
+  assertPose(camera, pose);
   n.presentation = "spatial";
   c.setPolicy({ hidden: true });
   assert.equal(scene.prepareCelestialCamera(1600, 1000), null);
@@ -233,6 +242,14 @@ test("disabled, hidden, list and lost graphics return no borrowed camera, then r
   scene.dispose();
   assert.equal(scene.prepareCelestialCamera(1600, 1000), null);
   c.dispose();
+});
+
+test("world depth is preserved only with explicit host opt-in; existing callers keep their reset", () => {
+  const { scene, dispose } = setup();
+  assert.equal(submit(scene).depthClears, 1);
+  assert.equal(submit(scene, false).depthClears, 1);
+  assert.equal(submit(scene, true).depthClears, 0);
+  dispose();
 });
 
 test("focused entry obtains cached drawn body geometry in client pixels after the field hides or camera changes", async () => {
