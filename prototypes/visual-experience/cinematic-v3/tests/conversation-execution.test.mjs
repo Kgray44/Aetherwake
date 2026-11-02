@@ -26,6 +26,28 @@ const delta = (extra = {}) => ({
   ...extra,
 });
 const drain = () => new Promise((resolve) => setImmediate(resolve));
+const activity = (
+  ids,
+  rows = [execution()],
+  preview = null,
+  unavailable = [],
+) => ({
+  contract: "aerynth.conversation-activity@1",
+  resources: ids.map((resourceId) => ({
+    resourceId,
+    available: !unavailable.includes(resourceId),
+  })),
+  executions: rows.filter(
+    (row) =>
+      ids.includes(row.resourceId) && !unavailable.includes(row.resourceId),
+  ),
+  preview:
+    preview &&
+    ids.includes(preview.resourceId) &&
+    !unavailable.includes(preview.resourceId)
+      ? preview
+      : null,
+});
 function setup(command) {
   let event,
     tick,
@@ -37,7 +59,10 @@ function setup(command) {
   const port = createConversationExecutionPort({
     command: async (name, input) => {
       calls.push({ name, input });
-      return command ? command(name, input) : [execution()];
+      const result = command ? await command(name, input) : [execution()];
+      return name === "conversationActivity" && Array.isArray(result)
+        ? activity(input.resourceIds, result)
+        : result;
     },
     onEvent: (listener) => {
       event = listener;
@@ -92,7 +117,7 @@ test("native chat observations strip private bindings and only forward exact rep
     received.filter((value) => value.delta).map((value) => value.delta.text),
     ["Actual observed assistant text"],
   );
-  assert.ok(f.calls.every((call) => call.name === "executionStatus"));
+  assert.ok(f.calls.every((call) => call.name === "conversationActivity"));
   off();
   off();
   assert.deepEqual(f.counts(), { stopped: 1, unscheduled: 1 });
@@ -171,5 +196,128 @@ test("known backend disconnection fences a pending old read without inventing an
     false,
   );
   off();
+  f.port.dispose();
+});
+
+test("reopening and returning from a hidden view read the full existing backend preview without replaying a provider request", async () => {
+  let preview = {
+    resourceId: "r",
+    executionId: "e",
+    providerId: "codex-app-server",
+    cursor: 1,
+    text: "Observed prefix",
+    classification: "reported",
+  };
+  const f = setup((_name, input) =>
+      activity(input.resourceIds, [execution()], preview),
+    ),
+    first = [];
+  const off = f.port.observe("r", (value) => first.push(value));
+  await drain();
+  assert.equal(
+    first.find((value) => value.preview).preview.text,
+    "Observed prefix",
+  );
+  off();
+  preview = {
+    ...preview,
+    cursor: 3,
+    text: "Observed prefix while view was closed",
+  };
+  const reopened = [],
+    offAgain = f.port.observe("r", (value) => reopened.push(value));
+  await drain();
+  assert.equal(
+    reopened.find((value) => value.preview).preview.text,
+    preview.text,
+  );
+  f.setVisible(false);
+  const count = reopened.length,
+    reads = f.calls.length;
+  preview = { ...preview, cursor: 5, text: preview.text + " and hidden" };
+  f.emit(
+    delta({
+      eventId: "hidden",
+      cursor: 5,
+      payload: { redacted: true, delta: " and hidden" },
+    }),
+  );
+  f.poll();
+  await drain();
+  assert.equal(reopened.length, count);
+  assert.equal(f.calls.length, reads);
+  f.setVisible(true);
+  f.poll();
+  await drain();
+  assert.equal(
+    reopened.filter((value) => value.preview).at(-1).preview.text,
+    preview.text,
+  );
+  f.emit(
+    delta({
+      eventId: "later",
+      cursor: 6,
+      payload: { redacted: true, delta: " then continued" },
+    }),
+  );
+  assert.equal(
+    reopened.filter((value) => value.delta).at(-1).delta.text,
+    " then continued",
+  );
+  assert.ok(f.calls.every((call) => call.name === "conversationActivity"));
+  offAgain();
+  f.port.dispose();
+});
+
+test("canonical access loss clears activity and rejects later stale live output", async () => {
+  let denied = false;
+  const preview = {
+    resourceId: "r",
+    executionId: "e",
+    providerId: "codex-app-server",
+    cursor: 1,
+    text: "Authorized preview",
+    classification: "reported",
+  };
+  const f = setup((_name, input) =>
+      activity(input.resourceIds, [execution()], preview, denied ? ["r"] : []),
+    ),
+    received = [];
+  const off = f.port.observe("r", (value) => received.push(value));
+  await drain();
+  denied = true;
+  f.poll();
+  await drain();
+  assert.equal(received.at(-1).resourceAvailable, false);
+  const count = received.filter((value) => value.delta).length;
+  f.emit(delta({ eventId: "after-denial", cursor: 2 }));
+  await drain();
+  assert.equal(received.filter((value) => value.delta).length, count);
+  await assert.rejects(f.port.cancel("e"), /No observed active/);
+  assert.equal(
+    f.calls.some((call) => call.name === "interrupt"),
+    false,
+  );
+  off();
+  f.port.dispose();
+});
+
+test("more than one activity batch stays scoped and bounded instead of polling all application executions", async () => {
+  const f = setup(),
+    off = [];
+  for (let index = 0; index < 65; index++)
+    off.push(f.port.observe("r" + index, () => {}));
+  await drain();
+  assert.ok(f.calls.length >= 3);
+  assert.ok(
+    f.calls.every(
+      (call) =>
+        call.name === "conversationActivity" &&
+        call.input.resourceIds.length <= 64,
+    ),
+  );
+  assert.ok(f.calls.some((call) => call.input.resourceIds.includes("r64")));
+  for (const stop of off) stop();
+  assert.deepEqual(f.counts(), { stopped: 1, unscheduled: 1 });
   f.port.dispose();
 });

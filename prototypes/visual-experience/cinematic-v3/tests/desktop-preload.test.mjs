@@ -88,3 +88,25 @@ test("renderer cannot invoke private grant creation, raw provider execution or h
     await assert.rejects(host.command(name, {}), /unsupported_command/);
   assert.equal(calls.length, 0);
 });
+
+test("scoped conversation activity remains a public read without exposing execution authorization", async () => {
+  const { host, calls } = bridge();
+  assert.equal(
+    await host.command("conversationActivity", {
+      resourceIds: ["canonical-conversation"],
+    }),
+    "canonical-result",
+  );
+  assert.deepEqual(calls, [
+    [
+      "application-command",
+      "conversationActivity",
+      { resourceIds: ["canonical-conversation"] },
+    ],
+  ]);
+  await assert.rejects(
+    host.command("authorizeConversationSend", {}),
+    /unsupported_command/,
+  );
+  assert.equal(calls.length, 1);
+});

@@ -6,7 +6,7 @@ import type {
 
 type Host = {
   command(
-    name: "executionStatus" | "interrupt",
+    name: "conversationActivity" | "interrupt",
     input: Record<string, unknown>,
   ): Promise<unknown>;
   onEvent(listener: (event: unknown) => void): () => void;
@@ -74,6 +74,9 @@ export function createConversationExecutionPort(
     Set<(value: ConversationExecutionObservation) => void>
   >();
   const latest = new Map<string, ConversationExecution>();
+  const availability = new Map<string, boolean>();
+  const signatures = new Map<string, string>();
+  const forceSnapshot = new Set<string>();
   const pending: Delta[] = [];
   const seen = new Set<string>();
   let pendingBytes = 0,
@@ -96,6 +99,7 @@ export function createConversationExecutionPort(
     const execution = latest.get(delta.resourceId);
     if (
       !execution ||
+      availability.get(delta.resourceId) !== true ||
       execution.id !== delta.executionId ||
       execution.providerId !== delta.providerId
     )
@@ -118,39 +122,152 @@ export function createConversationExecutionPort(
       return reading;
     }
     const epoch = connectionEpoch;
+    const scopes = new Map(watchers);
     reading = (async () => {
       try {
-        const result = await host.command("executionStatus", {});
-        if (stopped || !watchers.size || epoch !== connectionEpoch) return;
-        if (!Array.isArray(result))
-          throw new Error("Invalid native execution status");
-        const rows = result
-          .map(publicExecution)
-          .filter((item): item is ConversationExecution => !!item);
-        connection(true);
-        for (const id of watchers.keys()) {
-          const next = rows
-            .filter((row) => row.resourceId === id)
-            .reverse()
-            .sort(
-              (a, b) =>
-                Number(active(b)) - Number(active(a)) ||
-                b.startedAt.localeCompare(a.startedAt),
-            )[0];
-          if (!next) {
-            latest.delete(id);
-            continue;
-          }
-          const previous = latest.get(id);
-          latest.set(id, next);
-          if (JSON.stringify(previous) !== JSON.stringify(next))
-            notify(id, { execution: next, connection: "available" });
+        const ids = [...scopes.keys()];
+        const results: {
+          resources: { resourceId: string; available: boolean }[];
+          executions: ConversationExecution[];
+          preview: {
+            resourceId: string;
+            executionId: string;
+            providerId: string;
+            cursor: number;
+            text: string;
+            classification: string;
+          } | null;
+        }[] = [];
+        for (let offset = 0; offset < ids.length; offset += 64) {
+          const requested = ids.slice(offset, offset + 64);
+          const value = (await host.command("conversationActivity", {
+            resourceIds: requested,
+          })) as any;
+          const invalid = () => {
+            throw new Error("Invalid scoped conversation activity");
+          };
+          if (
+            value?.contract !== "aerynth.conversation-activity@1" ||
+            !Array.isArray(value.resources) ||
+            !Array.isArray(value.executions) ||
+            value.resources.length !== requested.length ||
+            value.executions.length > requested.length
+          )
+            invalid();
+          const resources = value.resources as {
+            resourceId: string;
+            available: boolean;
+          }[];
+          if (
+            new Set(resources.map((item) => item?.resourceId)).size !==
+              requested.length ||
+            resources.some(
+              (item) =>
+                !requested.includes(item?.resourceId) ||
+                typeof item?.available !== "boolean",
+            )
+          )
+            invalid();
+          const executions = value.executions.map(
+            publicExecution,
+          ) as (ConversationExecution | null)[];
+          if (
+            executions.some(
+              (item) =>
+                !item ||
+                !resources.some(
+                  (resource) =>
+                    resource.resourceId === item.resourceId &&
+                    resource.available,
+                ),
+            ) ||
+            new Set(executions.map((item) => item?.resourceId)).size !==
+              executions.length
+          )
+            invalid();
+          const preview = value.preview;
+          if (
+            preview !== null &&
+            (!preview ||
+              !text(preview.resourceId) ||
+              !text(preview.executionId) ||
+              !text(preview.providerId) ||
+              !Number.isSafeInteger(preview.cursor) ||
+              preview.cursor < 0 ||
+              typeof preview.text !== "string" ||
+              new TextEncoder().encode(preview.text).byteLength > 65536 ||
+              !["reported", "simulated"].includes(preview.classification) ||
+              !executions.some(
+                (item) =>
+                  item !== null &&
+                  item.id === preview.executionId &&
+                  item.resourceId === preview.resourceId &&
+                  item.providerId === preview.providerId &&
+                  active(item),
+              ))
+          )
+            invalid();
+          results.push({
+            resources,
+            executions: executions as ConversationExecution[],
+            preview,
+          });
         }
-        for (const delta of pending.splice(0)) deliver(delta);
+        if (
+          stopped ||
+          !watchers.size ||
+          epoch !== connectionEpoch ||
+          !host.visible()
+        )
+          return;
+        connection(true);
+        for (const result of results)
+          for (const resource of result.resources) {
+            const id = resource.resourceId;
+            if (watchers.get(id) !== scopes.get(id)) continue;
+            availability.set(id, resource.available);
+            const next = result.executions.find(
+              (item) => item.resourceId === id,
+            );
+            if (next) latest.set(id, next);
+            else latest.delete(id);
+            const preview =
+              result.preview?.resourceId === id &&
+              result.preview.classification === "reported"
+                ? result.preview
+                : null;
+            const signature = JSON.stringify({
+              available: resource.available,
+              execution: next,
+              preview,
+            });
+            if (signature !== signatures.get(id) || forceSnapshot.has(id)) {
+              signatures.set(id, signature);
+              forceSnapshot.delete(id);
+              notify(id, {
+                resourceAvailable: resource.available,
+                connection: "available",
+                ...(next ? { execution: next } : {}),
+                ...(preview
+                  ? {
+                      preview: {
+                        executionId: preview.executionId,
+                        cursor: preview.cursor,
+                        text: preview.text,
+                      },
+                    }
+                  : {}),
+              });
+            }
+          }
+        for (const delta of pending.splice(0))
+          if (watchers.get(delta.resourceId) === scopes.get(delta.resourceId))
+            deliver(delta);
         pendingBytes = 0;
       } catch (error) {
         if (!stopped && watchers.size && epoch === connectionEpoch) {
           connection(false);
+          availability.clear();
           host.onError?.(error);
         }
       }
@@ -169,9 +286,10 @@ export function createConversationExecutionPort(
     if (event.type === "backend/disconnected") {
       connectionEpoch++;
       connection(false);
+      availability.clear();
       return;
     }
-    if (!watchers.has(event.resourceId)) return;
+    if (!watchers.has(event.resourceId) || !host.visible()) return;
     if (
       event.type === "item/agentMessage/delta" &&
       event.payload?.redacted === true &&
@@ -214,10 +332,14 @@ export function createConversationExecutionPort(
   }
   function stopIdle() {
     if (watchers.size) return;
+    connectionEpoch++;
     stopEvents?.();
     stopTimer?.();
     stopEvents = stopTimer = undefined;
     latest.clear();
+    availability.clear();
+    signatures.clear();
+    forceSnapshot.clear();
     pending.length = 0;
     pendingBytes = 0;
     seen.clear();
@@ -230,6 +352,7 @@ export function createConversationExecutionPort(
       const listeners = watchers.get(resourceId) ?? new Set();
       watchers.set(resourceId, listeners);
       listeners.add(listener);
+      forceSnapshot.add(resourceId);
       if (!stopEvents) {
         stopEvents = host.onEvent(observeEvent);
         stopTimer = (
@@ -242,15 +365,7 @@ export function createConversationExecutionPort(
           void refresh();
         }, 1000);
       }
-      const execution = latest.get(resourceId);
-      if (execution)
-        listener({
-          execution,
-          ...(connected === undefined
-            ? {}
-            : { connection: connected ? "available" : "unavailable" }),
-        });
-      else if (connected !== undefined)
+      if (connected === false)
         listener({ connection: connected ? "available" : "unavailable" });
       void refresh();
       let unsubscribed = false;
@@ -261,6 +376,9 @@ export function createConversationExecutionPort(
         if (!listeners.size) {
           watchers.delete(resourceId);
           latest.delete(resourceId);
+          availability.delete(resourceId);
+          signatures.delete(resourceId);
+          forceSnapshot.delete(resourceId);
         }
         stopIdle();
       };
