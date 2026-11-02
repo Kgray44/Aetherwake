@@ -2,6 +2,17 @@ import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
 import type { GraphData, Message, ContextPackage, Sensitivity } from '../../connected-conversations/src/graph.ts';
 import type { Resource } from '../../workspace-kernel/kernel.mts';
 import type { DesktopCommand, DesktopSnapshot } from '../../application-contract/contracts.ts';
+import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
+import type { AttachedContext } from '../../conversation-product/src/service.mts';
+export type ConversationProductRequest = { [K in keyof ProductCommandMap]: { name: K; input: ProductCommandMap[K]['input'] } }[keyof ProductCommandMap];
+export type ConversationProductOutput = ProductCommandMap[keyof ProductCommandMap]['output'];
+export type ConversationSendInput = ProductCommandMap['send']['input'];
+export interface ConversationSendPreview {
+ id: string; commandId: string; resourceId: string; providerId: string; expectedRevision: number;
+ prompt: string; model?: string; context: AttachedContext[];
+ handoff?: { id:string; fingerprint:string; sourceResourceId:string; items:ContextPackage['items'] };
+ executionText: string; fingerprint: string; expiresAt: string;
+}
 export const CONTRACT = 'aerynth.integration@0.1' as const;
 export type Classification = 'observed' | 'reported' | 'inferred' | 'simulated';
 export type ExecutionState = 'dispatching' | 'running' | 'provider_completed' | 'failed' | 'interrupted' | 'unknown';
@@ -60,6 +71,11 @@ export interface Options {
   privateRoot?: string;
 }
 export interface CommandMap {
+  conversation: { input: ConversationProductRequest; output: ConversationProductOutput };
+  conversationSendPreview: { input: ConversationSendInput; output: ConversationSendPreview };
+  /** Trusted native host only; MUST NOT be exposed to a renderer or tool caller. */
+  authorizeConversationSend: { input: { previewId:string; fingerprint:string; commandId:string }; output: { grantId:string; expiresAt:string } };
+  conversationSend: { input: { previewId:string; grantId:string; fingerprint:string; commandId:string }; output: Execution };
   desktop: { input: DesktopCommand; output: DesktopSnapshot };
   viewState: { input: { state?: unknown }; output: unknown };
   openWorkspace: { input: { workspaceId: string }; output: { workspace: Record<string, unknown>; layout: Record<string, unknown>; blocks: Array<Record<string, unknown>> } };
