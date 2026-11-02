@@ -19,6 +19,15 @@ import {
 } from "./organization-preview";
 import "./application.css";
 import { sculptureRegion, overviewPresence } from "./presence-layout";
+import {
+  createManagerState,
+  mountConversationManager,
+} from "../../../conversation-product/src/ui.ts";
+import type {
+  ConversationProductPort,
+  ProductCommandMap,
+} from "../../../conversation-product/src/contracts.ts";
+import "../../../conversation-product/src/style.css";
 import type {
   Block,
   BlockKind,
@@ -88,6 +97,9 @@ export function installApplication(hooks: Hooks) {
   const localEvents: Activity[] = [];
   const seenEvents = new Set<string>();
   let lastTrigger: HTMLElement | null = null;
+  const conversationView = createManagerState();
+  let conversationManager: ReturnType<typeof mountConversationManager> | null =
+    null;
   let constellation: ReturnType<typeof mountConstellation> | null = null;
   let policyKey = "";
   const arrivalId = "application:arrival";
@@ -631,11 +643,91 @@ export function installApplication(hooks: Hooks) {
     });
   });
   function open(title: string, body: string) {
+    conversationManager?.dispose();
+    conversationManager = null;
+    dialog.classList.remove("conversation-surface");
     lastTrigger = document.activeElement as HTMLElement;
     dialog.innerHTML = `<div class="command-heading"><h2>${title}</h2><button data-close aria-label="Close panel">×</button></div>${body}<p id="command-error" role="status"></p>`;
     el("[data-close]", dialog).onclick = () => dialog.close();
     if (!dialog.open) dialog.showModal();
     el<HTMLInputElement>("input,select,button", dialog)?.focus();
+  }
+  function conversations(resourceId?: string) {
+    open("Conversations", '<div id="conversation-product"></div>');
+    dialog.classList.add("conversation-surface");
+    const port: ConversationProductPort = {
+      async command<K extends keyof ProductCommandMap>(
+        name: K,
+        input: ProductCommandMap[K]["input"],
+      ): Promise<ProductCommandMap[K]["output"]> {
+        const result = (await host.command!("conversation", {
+          name,
+          input,
+        })) as ProductCommandMap[K]["output"];
+        if (
+          [
+            "create",
+            "organize",
+            "archive",
+            "send",
+            "branch",
+            "selectProvider",
+          ].includes(name)
+        )
+          apply(
+            (await host.command!("desktop", {
+              type: "snapshot",
+            })) as DesktopSnapshot,
+          );
+        return result;
+      },
+    };
+    conversationManager = mountConversationManager(
+      el("#conversation-product", dialog),
+      port,
+      {
+        state: conversationView,
+        ...(resourceId ? { resourceId } : {}),
+        onClose: () => dialog.close(),
+        onResource: (id, messageId) => {
+          const resource = state?.resources.find((r) => r.id === id);
+          if (resource?.kind === "conversation") {
+            if (conversationView.selectedResourceId !== id)
+              void conversationManager?.open(id, messageId);
+            else
+              hooks.status(
+                `${resource.title}${messageId ? " · canonical source message" : " · conversation history"}`,
+              );
+            return;
+          }
+          const placement = (
+            state?.navigationBlocks ??
+            state?.blocks ??
+            []
+          ).find((b) => b.resource_id === id);
+          if (!placement) {
+            hooks.status(
+              "This source has no workspace placement. It remains available in Resources.",
+            );
+            return;
+          }
+          dialog.close();
+          void enqueue(async () => {
+            await flush();
+            await command({
+              type: "navigate",
+              target: {
+                kind: "workspace",
+                workspaceId: placement.workspace_id,
+              },
+            });
+            reveal(placement.id);
+            hooks.focus(placement.id);
+          });
+        },
+      },
+    );
+    void conversationManager.ready.catch(report);
   }
   dialog.addEventListener(
     "close",
@@ -663,6 +755,11 @@ export function installApplication(hooks: Hooks) {
       "Your working environments",
       `<div class="command-grid"><section><h3>Projects</h3>${state.projects.map((p) => `<p>${escape(p.title)}</p>`).join("")}<button id="new-project">＋ Create project</button></section><section><h3>Workspaces</h3>${state.workspaces.map((w) => `<div class="workspace-row"><button data-workspace="${w.id}">${escape(w.title)}<small>${escape(state!.projects.find((p) => p.id === w.project_id)?.title ?? "Independent workspace")}</small></button><button data-rename="${w.id}" aria-label="Rename ${escape(w.title)}">✎</button><button data-archive="${w.id}" title="Archive workspace; retain resources and layout">Archive</button></div>`).join("") || "<p>No workspaces yet.</p>"}<button id="new-workspace">＋ Create workspace</button></section></div><button id="standalone-chat">New conversation without a project</button>${state.archivedWorkspaces?.length ? `<details><summary>Archived workspaces</summary>${state.archivedWorkspaces.map((w) => `<div class="workspace-row"><span>${escape(w.title)}</span><button data-restore-workspace="${w.id}">Restore</button></div>`).join("")}</details>` : ""}`,
     );
+    el(".command-grid", dialog).insertAdjacentHTML(
+      "beforebegin",
+      '<button id="conversation-manager">Conversations and history</button>',
+    );
+    el("#conversation-manager", dialog).onclick = () => conversations();
     el("#new-project", dialog).onclick = () => {
       open(
         "Create project",
@@ -1693,6 +1790,7 @@ export function installApplication(hooks: Hooks) {
       await constellation?.controller.persist();
     },
     manager,
+    conversations,
     block: (id: string) => state?.blocks.find((b) => b.id === id),
     saveContent(resourceId: string, content: string, article: HTMLElement) {
       const previous = drafts.get(resourceId);
