@@ -43,7 +43,8 @@ a requested interrupt remains unconfirmed until a terminal observed record. A
 completed provider turn is never presented as a verified task. Without this port
 there is no streaming/cancel claim; canonical history/send still work.
 
-Assistant Markdown supports paragraphs, headings, flat lists, quotes, fenced code,
+Assistant Markdown supports paragraphs, headings, flat lists (including ordered-list
+continuation start numbers), quotes, fenced code,
 inline emphasis/code and safe http(s)/mailto links. HTML is literal; no remote
 media is loaded, no highlighting code executes. Copy uses exact stored source.
 Per-message provider bindings are absent from `MessageView`, so historical messages
@@ -56,10 +57,16 @@ refer to the original message even when Markdown presentation omits syntax. The
 component emits a reviewed selection callback; it never grants sharing access.
 
 Embedded manager chrome is transparent; `embedded:false` opts into the standalone
-frame. Transcript and history occupy flexible panes without nested viewport-height
+frame. The embedded root fills its host's finite flex height; only the standalone
+frame uses a viewport default. Transcript and history occupy flexible panes without nested viewport-height
 scroll limits. The composer stays outside transcript scrolling. Organization,
 lineage and sharing are contextual disclosures. Narrow views expose History as a
 separate view, keeping the chat readable.
+
+The shared `.cp-chat` root consumes `--aw-block-text-scale` once against its 16px
+baseline, defaulting to 1 outside block hosts. The composer inherits that resolved
+font; Markdown headings and code use relative sizes. Block hosts set the numeric
+token and must not also multiply an already scaled inherited size.
 
 Validation: CPU-only DOM/event-adapter tests cover canonical identity, keyed refresh,
 caret/scroll retention, safe Markdown/code copying, Enter/IME, pending-send drain,

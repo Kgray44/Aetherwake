@@ -39,6 +39,15 @@ test('mounted canonical chat reads only; refresh preserves composer, caret, keye
   }finally{await chat?.dispose();f.restore();}
 });
 
+test('continued ordered Markdown lists preserve their actual starting number and text',()=>{
+  const view=componentDocument(),restore=view.install();try{
+    const source='Earlier steps remain in history.\n\n4. Inspect the canonical source\n5. Continue after review\n\nNext section.\n\n9. Preserve this continuation';
+    const blocks=markdownBlocks(source),ordered=blocks.filter(block=>block.kind==='list');assert.deepEqual(ordered.map(block=>block.start),[4,9]);assert.deepEqual(ordered[0].items,['Inspect the canonical source','Continue after review']);
+    const rendered=renderMarkdown(source,async()=>{},()=>{}),lists=rendered.querySelectorAll('ol');assert.equal(lists[0].getAttribute('start'),'4');assert.equal(lists[0].querySelectorAll('li').length,2);assert.equal(lists[1].getAttribute('start'),'9');assert.equal(lists[1].textContent,'Preserve this continuation');
+    const unsupported='999999999999999999999. Keep the unsupported number literal';assert.deepEqual(markdownBlocks(unsupported),[{kind:'paragraph',text:unsupported}]);assert.equal(renderMarkdown(unsupported,async()=>{},()=>{}).querySelector('ol'),null);
+  }finally{restore();}
+});
+
 test('Enter submits once; Shift+Enter and IME do not submit; draft draining is independent of a pending send',async()=>{
   const f=fixture();let chat;try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;const editor=f.view.root.querySelector('textarea');
     editor.fire('keydown',{key:'Enter',shiftKey:true});editor.fire('compositionstart');editor.fire('keydown',{key:'Enter'});assert.equal(f.pending,null);editor.fire('compositionend');
