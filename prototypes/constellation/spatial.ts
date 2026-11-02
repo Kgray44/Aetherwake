@@ -287,15 +287,6 @@ export class SpatialNavigator {
         h = hash(n.key),
         rank = ranks.get(n.key) ?? 0;
       let legacy = false;
-      if (
-        old &&
-        !base.pinned &&
-        n.kind === "project" &&
-        Math.abs(old.x - n.point.x) < 0.01 &&
-        Math.abs(old.z - n.point.y * 0.8) < 0.01 &&
-        Math.abs(old.y - (h - 0.5) * 240) < 0.01
-      )
-        legacy = true;
       if (old && !base.pinned && n.kind !== "project")
         for (const parentKey of new Set([
           n.parent,
@@ -343,7 +334,13 @@ export class SpatialNavigator {
           z: center.z + Math.sin(angle) * distance * flat,
         };
       }
-      const point = this.space.find(n.key, preferred, r);
+      // A clear saved anchor is authoritative, including its original precision.
+      // In particular, retain legacy project centers so their saved cameras do
+      // not drift when the surrounding equal-distance orbits are upgraded.
+      const point =
+        old && !legacy && this.space.free(n.key, old, r)
+          ? { ...old }
+          : this.space.find(n.key, preferred, r);
       if (
         old &&
         (point.x !== old.x || point.y !== old.y || point.z !== old.z)

@@ -18,6 +18,7 @@ import {
   blockCapabilities,
   resolveBlockType,
   validateConfiguration,
+  REGISTERED_BLOCKS,
 } from "../registry.ts";
 import type {
   BlockKind,
@@ -28,7 +29,9 @@ import type {
 function fixture(t: any) {
   const kernel = WorkspaceKernel.open(":memory:"),
     db = kernel.withTransaction((db) => db),
-    desktop = new DesktopState(kernel, db,{allowSubjectAttachment:()=>true}),
+    desktop = new DesktopState(kernel, db, {
+      allowSubjectAttachment: () => true,
+    }),
     engine = desktop.nativeBlockServices().engine;
   t.after(() => kernel.close());
   const revoked = new Set<string>(),
@@ -274,6 +277,7 @@ test("Freeform overlap, presentation, viewport and same-ID shared placements sur
     ...p,
     key: "placement" + i,
     resourceKey: "shared",
+    subjectBinding: undefined,
     presentation: {
       ...p.presentation,
       x: 120,
@@ -1012,4 +1016,290 @@ test("schema2 templates bind project context explicitly and preserve subject set
     /project_unavailable/,
   );
   f.kernel.assertIntegrity();
+});
+
+test("registered project/browser views have live capability states and create only canonical subject placements", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic subject library"),
+    workspace = f.engine.createWorkspace(
+      "Synthetic view workspace",
+      project.id,
+    );
+  assert.equal(REGISTERED_BLOCKS.length, 10);
+  assert.equal(
+    f.service
+      .discoverBlocks()
+      .find((entry) => entry.manifest.kind === "project_overview")?.availability
+      .state,
+    "unknown",
+  );
+  const input = {
+    commandId: "library-project-view",
+    workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: workspace.revision,
+    kind: "project_overview" as const,
+    subject: { kind: "project" as const, projectId: project.id },
+    configuration: {
+      schemaVersion: 1 as const,
+      textScale: 1.25,
+      contentMode: "reading" as const,
+    },
+  };
+  assert.throws(() => f.service.createSubjectBlock(input), /block_unavailable/);
+  f.options.capabilities().subjects = {
+    project_overview: { state: "available" },
+    resource_browser: { state: "available" },
+    collection_browser: { state: "available" },
+  };
+  const before = count(f.db, "resources"),
+    result = f.service.createSubjectBlock(input);
+  assert.equal(count(f.db, "resources"), before);
+  assert.deepEqual(result.subject, { kind: "project", projectId: project.id });
+  assert.equal(
+    f.engine.project(workspace.workspaceId).blocks[0].resourceId,
+    undefined,
+  );
+  assert.deepEqual(f.service.createSubjectBlock(input), result);
+  assert.equal(
+    f.service.getBlockSettings(result.placementId).configuration.textScale,
+    1.25,
+  );
+  const preferences = f.service.preferences();
+  assert.deepEqual(preferences.recent, ["project_overview"]);
+  assert.ok(
+    f.service
+      .setFavorite({
+        kind: "project_overview",
+        favorite: true,
+        expectedVersion: preferences.version,
+      })
+      .favorites.includes("project_overview"),
+  );
+  f.revoked.add(project.id);
+  assert.throws(
+    () => f.service.subjectTargets(workspace.workspaceId),
+    /workspace_unavailable/,
+  );
+  const standalone = f.engine.createWorkspace("Synthetic unassigned view");
+  assert.equal(
+    f.service
+      .subjectTargets(standalone.workspaceId)
+      .projects.some((item) => item.id === project.id),
+    false,
+  );
+  assert.throws(
+    () => f.service.projectOverview(project.id),
+    /subject_unavailable/,
+  );
+  f.kernel.assertIntegrity();
+});
+
+test("project overview and collection/resource browsing read actual authorized canonical state without copying contents", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic overview project"),
+    other = f.kernel.createProject("Synthetic unrelated project"),
+    workspace = f.engine.createWorkspace(
+      "Synthetic project workspace",
+      project.id,
+    ),
+    note = f.options.createResource(
+      "note",
+      "Synthetic research note",
+      undefined,
+      project.id,
+    ),
+    task = f.options.createResource(
+      "task",
+      "Synthetic review task",
+      undefined,
+      project.id,
+    ),
+    global = f.options.createResource(
+      "note",
+      "Synthetic unassigned note",
+      undefined,
+      null,
+    ),
+    foreign = f.options.createResource(
+      "note",
+      "Synthetic other project note",
+      undefined,
+      other.id,
+    ),
+    hidden = f.options.createResource(
+      "note",
+      "Synthetic revoked note",
+      undefined,
+      project.id,
+    ),
+    collection = f.kernel.createCollection(
+      "Synthetic canonical reading list",
+      project.id,
+    );
+  f.kernel.addToCollection(collection.id, note);
+  f.kernel.addToCollection(collection.id, global);
+  f.revoked.add(hidden);
+  f.desktop.apply(
+    {
+      type: "taskStatus",
+      resourceId: task,
+      expectedVersion: 1,
+      status: "done",
+    },
+    () => {
+      throw new Error("unexpected");
+    },
+  );
+  const before = ["workspaces", "resources", "blocks", "relationships"].map(
+      (table) => count(f.db, table),
+    ),
+    overview = f.service.projectOverview(project.id);
+  assert.equal(overview.project.id, project.id);
+  assert.deepEqual(
+    overview.workspaces.map((item) => item.id),
+    [workspace.workspaceId],
+  );
+  assert.equal(overview.resourcesByKind.note, 1);
+  assert.deepEqual(overview.tasks, { open: 0, done: 1 });
+  assert.ok(overview.recentEvents.length > 0);
+  for (const event of overview.recentEvents)
+    assert.ok(
+      f.db.prepare("SELECT 1 FROM change_events WHERE id=?").get(event.id),
+    );
+  const scoped = f.service.browseResources({
+    subject: { kind: "resource-query", projectId: project.id, query: "" },
+  });
+  assert.deepEqual(
+    new Set(scoped.resources.map((item) => item.id)),
+    new Set([note, task]),
+  );
+  assert.equal(
+    scoped.resources.some(
+      (item) => item.id === hidden || item.id === foreign || item.id === global,
+    ),
+    false,
+  );
+  assert.deepEqual(
+    new Set(
+      f.service
+        .browseResources({
+          subject: { kind: "collection", collectionId: collection.id },
+        })
+        .resources.map((item) => item.id),
+    ),
+    new Set([note, global]),
+  );
+  assert.deepEqual(
+    f.service
+      .browseResources({
+        subject: { kind: "resource-query", projectId: null, query: "review" },
+        kind: "task",
+      })
+      .resources.map((item) => item.id),
+    [task],
+  );
+  assert.deepEqual(
+    ["workspaces", "resources", "blocks", "relationships"].map((table) =>
+      count(f.db, table),
+    ),
+    before,
+  );
+  const attached = f.service.attachBlock({
+    commandId: "browser-attach-note",
+    workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: f.engine.project(workspace.workspaceId).revision,
+    kind: "note",
+    resourceId: note,
+    expectedResourceVersion: 1,
+  });
+  assert.equal(
+    f.service
+      .browseResources({
+        subject: { kind: "project", projectId: project.id },
+        unplacedOnly: true,
+      })
+      .resources.some((item) => item.id === note),
+    false,
+  );
+  const current = f.engine.project(workspace.workspaceId);
+  f.engine.execute({
+    type: "detachBlock",
+    commandId: "browser-detach-note",
+    workspaceId: workspace.workspaceId,
+    expectedRevision: current.revision,
+    blockId: attached.placementId,
+  });
+  assert.equal(
+    f.service
+      .browseResources({
+        subject: { kind: "project", projectId: project.id },
+        unplacedOnly: true,
+      })
+      .resources.some((item) => item.id === note),
+    true,
+  );
+  f.kernel.setCollectionArchived(collection.id, true, 1);
+  assert.throws(
+    () =>
+      f.service.browseResources({
+        subject: { kind: "collection", collectionId: collection.id },
+      }),
+    /subject_unavailable/,
+  );
+  assert.equal(f.kernel.getResource(note).resource.id, note);
+  f.kernel.assertIntegrity();
+});
+
+test("browser keyset pages are bounded, distinct and do not infer permissions from project context", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic page project"),
+    workspace = f.engine.createWorkspace(
+      "Synthetic paging workspace",
+      project.id,
+    );
+  const ids = Array.from({ length: 3 }, (_, index) =>
+    f.options.createResource(
+      "note",
+      "Synthetic page " + index,
+      undefined,
+      project.id,
+    ),
+  );
+  const subject = {
+    kind: "resource-query" as const,
+    projectId: project.id,
+    query: "",
+  };
+  const first = f.service.browseResources({ subject, limit: 1 }),
+    second = f.service.browseResources({
+      subject,
+      limit: 1,
+      afterId: first.nextCursor!,
+    });
+  assert.equal(first.resources.length, 1);
+  assert.equal(second.resources.length, 1);
+  assert.notEqual(first.resources[0].id, second.resources[0].id);
+  assert.ok(ids.includes(first.resources[0].id));
+  f.revoked.add(first.resources[0].id);
+  assert.equal(
+    f.service
+      .browseResources({ subject })
+      .resources.some((item) => item.id === first.resources[0].id),
+    false,
+  );
+  assert.throws(
+    () => f.service.browseResources({ subject, limit: 101 }),
+    /invalid_resource_query/,
+  );
+  assert.throws(
+    () =>
+      f.service.browseResources({
+        subject: { ...subject, kinds: ["future-unavailable"] },
+      }),
+    /unsupported_resource_filter/,
+  );
+  assert.equal(
+    f.service.subjectTargets(workspace.workspaceId).projectId,
+    project.id,
+  );
 });

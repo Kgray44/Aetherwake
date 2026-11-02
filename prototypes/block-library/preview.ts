@@ -1,7 +1,7 @@
-import type { BlockKind } from "./contracts.ts";
+import type { BlockInstanceKind } from "./contracts.ts";
 
 /** Deterministic, inert examples. No canonical data, provider calls, timers or live-event claims. */
-export function blockPreview(kind: BlockKind): HTMLElement {
+export function blockPreview(kind: BlockInstanceKind): HTMLElement {
   const root = document.createElement("figure");
   root.className = "aw-library__sample";
   root.dataset.kind = kind;
@@ -15,7 +15,34 @@ export function blockPreview(kind: BlockKind): HTMLElement {
     root.append(element);
     return element;
   };
-  if (kind === "conversation") {
+  if (kind === "project_overview") {
+    line("small", "PROJECT OVERVIEW · EXAMPLE");
+    line("h4", "A project and its work");
+    line("p", "Workspaces → Development · Research");
+    line("p", "Local tasks → 2 open · 1 done");
+    line(
+      "div",
+      "Open canonical workspaces and resources",
+      "aw-library__sample-input",
+    );
+  } else if (kind === "resource_browser" || kind === "collection_browser") {
+    line(
+      "small",
+      kind === "resource_browser"
+        ? "RESOURCE BROWSER · EXAMPLE"
+        : "COLLECTION BROWSER · EXAMPLE",
+    );
+    line("div", "Search authorized resources…", "aw-library__sample-input");
+    line(
+      "p",
+      "▤ Working notes    · note\n○ Review milestone · task\n≋ Planning chat    · conversation",
+    );
+    line(
+      "p",
+      "Open or attach an existing canonical subject.",
+      "aw-library__hint",
+    );
+  } else if (kind === "conversation") {
     line("small", "CONVERSATION · LOCAL HISTORY");
     line("p", "What should we work on?", "aw-library__bubble");
     line(

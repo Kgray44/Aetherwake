@@ -196,6 +196,19 @@
 .aw-spatial-status:empty {
   display: none;
 }
+.aw-spatial-status.aw-status-away {
+  left: 24px;
+  right: auto;
+  bottom: 80px;
+}
+/* Preserve live-region access when both visual hint positions are occupied. */
+.aw-spatial-status.aw-status-quiet {
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .aw-destinations,
 .aw-navigation-guide,
 .aw-spatial-detail {

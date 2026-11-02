@@ -37,12 +37,13 @@ const fixture = (count = 80) => ({
   activeWorkspaceId: null,
   navigation: { kind: "constellation", projectId: "p0" },
 });
-const setup = (snapshot = fixture()) => {
+const setup = (snapshot = fixture(), options = {}) => {
   const motion = new MotionCoordinator(),
     c = new ConstellationController({
       snapshot,
       motion,
       navigate: async () => {},
+      ...options,
     }),
     n = new SpatialNavigator(c, () => {});
   c.spatial = n;
@@ -68,6 +69,77 @@ function clear(c, n) {
 const settle = (m) => {
   for (let i = 0; i < 180; i++) m.step(1 / 60);
 };
+
+test("upgrading legacy orbits keeps a clear saved project centered in its restored camera", async () => {
+  const snapshot = fixture(0);
+  snapshot.projects = snapshot.projects.slice(0, 1);
+  snapshot.workspaces = snapshot.workspaces.filter(
+    (w) => w.project_id === "p0",
+  );
+  let saved;
+  const { c, n, motion } = setup(snapshot, {
+    persistence: {
+      load: async () => structuredClone(saved),
+      save: async () => {},
+    },
+  });
+  saved = structuredClone(c.state);
+  const project = c.nodes.get("project:p0"),
+    h = hash(project.key),
+    old = { x: project.point.x, y: (h - 0.5) * 240, z: project.point.y * 0.8 };
+  saved.anchors[project.key].spatial = old;
+  for (const node of c.nodes.values())
+    if (node.kind === "workspace") {
+      const h = hash(node.key);
+      saved.anchors[node.key].spatial = {
+        x: old.x + Math.cos(h * Math.PI * 2) * 520,
+        y: old.y + (h - 0.5) * 280,
+        z: old.z + Math.sin(h * Math.PI * 2) * 520,
+      };
+    }
+  saved.bookmarks[project.key] = {
+    camera: c.camera,
+    selected: project.key,
+    spatial: { ...n.camera, target: old, distance: 1450 },
+  };
+  await c.restore();
+  settle(motion);
+  assert.deepEqual(
+    n.position(project.key),
+    old,
+    "clear project centers never migrate merely to widen the grid",
+  );
+  assert.deepEqual(
+    n.camera.target,
+    old,
+    "restored framing retains the original center",
+  );
+  clear(c, n);
+  const scene = new ConstellationScene(c, n, () => ({}));
+  scene.update(1440, 900);
+  const screen = scene.project(project.key, 1440, 900);
+  assert.ok(
+    Math.abs(screen.x - 720) < 1e-7 && Math.abs(screen.y - 450) < 1e-7,
+    "actual perspective projection stays centered",
+  );
+  assert.ok(scene.objects.has(project.key));
+  scene.dispose();
+  c.dispose();
+});
+
+test("clear saved pins keep full coordinate precision through graph refreshes", () => {
+  const { c, n } = setup(),
+    key = "resource:b0",
+    point = { x: 30333.123456789, y: 0.333333333333, z: 9999.987654321 };
+  c.state.anchors[key].spatial = { ...point };
+  c.state.anchors[key].pinned = true;
+  n.updateGraph();
+  assert.deepEqual(n.position(key), point);
+  c.update(fixture(81));
+  assert.deepEqual(n.position(key), point);
+  clear(c, n);
+  c.dispose();
+});
 
 test("automatic positions leave a full geometry gap, vary parent distances, and stay stable as objects arrive", () => {
   const { c, n } = setup(fixture(1000));

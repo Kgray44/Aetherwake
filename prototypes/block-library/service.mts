@@ -24,6 +24,13 @@ import type {
   WorkspaceFromResourcesInput,
   WorkspaceConstructionPreview,
   ConstructedWorkspace,
+  BlockInstanceKind,
+  CreateSubjectBlockInput,
+  CreatedSubjectBlock,
+  SubjectTargets,
+  BrowseResourcesInput,
+  BrowseResourcesPage,
+  ProjectOverview,
 } from "./contracts.ts";
 import {
   TEMPLATE_LIMITS,
@@ -47,8 +54,14 @@ import {
   blockDefinition,
   validateConfiguration,
   subjectBlockKind,
+  catalogDefinition,
+  REGISTERED_BLOCKS,
+  blockAvailability,
 } from "./registry.ts";
-import type { NonResourceSubjectRef } from "../workspace-kernel/subjects.ts";
+import {
+  validateSubjectRef,
+  type NonResourceSubjectRef,
+} from "../workspace-kernel/subjects.ts";
 import { presentation } from "../workspace-engine/geometry.mts";
 
 /** Extension metadata only; the injected host owns all resources, placements, events and execution. */
@@ -116,6 +129,331 @@ export class TemplateService {
   capabilities() {
     return structuredClone(this.host.capabilities());
   }
+  discoverBlocks() {
+    const capabilities = this.capabilities();
+    return REGISTERED_BLOCKS.map((manifest) => ({
+      manifest: structuredClone(manifest),
+      availability: blockAvailability(manifest.kind, capabilities),
+    }));
+  }
+  subjectTargets(workspaceId: string): SubjectTargets {
+    const workspace = this.host.readWorkspace(identifier(workspaceId));
+    check(
+      workspace?.authorized && workspace.state === "active",
+      "workspace_unavailable",
+    );
+    check(this.host.subjectTargets, "subject_targets_unavailable");
+    return this.host.subjectTargets(workspaceId);
+  }
+  private availableSubject(
+    input: NonResourceSubjectRef,
+  ): NonResourceSubjectRef {
+    const subject = validateSubjectRef(input);
+    check(subject.kind !== "resource", "non_resource_subject_required");
+    check(this.host.readSubject, "subject_blocks_unavailable");
+    const result = this.host.readSubject(subject);
+    check(
+      result.authorized && result.state === "active",
+      "subject_unavailable",
+    );
+    return subject;
+  }
+  createSubjectBlock(input: CreateSubjectBlockInput): CreatedSubjectBlock {
+    check(
+      input &&
+        typeof input === "object" &&
+        Object.keys(input).every((k) =>
+          [
+            "commandId",
+            "workspaceId",
+            "expectedLayoutVersion",
+            "kind",
+            "subject",
+            "presentation",
+            "configuration",
+          ].includes(k),
+        ),
+      "invalid_subject_block",
+    );
+    this.commandId(input.commandId);
+    identifier(input.workspaceId);
+    version(input.expectedLayoutVersion);
+    const subject = validateSubjectRef(input.subject);
+    check(
+      subject.kind !== "resource" && subjectBlockKind(subject) === input.kind,
+      "subject_block_kind_mismatch",
+    );
+    const manifest = catalogDefinition(input.kind),
+      geometry = presentation(
+        input.presentation ?? {},
+        manifest.defaultPresentation,
+      ),
+      configuration = validateConfiguration(input.configuration);
+    return this.host.atomic(() =>
+      this.once(
+        input.commandId,
+        { operation: "createSubjectBlock", input },
+        () => {
+          check(
+            blockAvailability(input.kind, this.host.capabilities()).state ===
+              "available",
+            "block_unavailable",
+          );
+          const workspace = this.host.readWorkspace(input.workspaceId);
+          check(
+            workspace?.authorized && workspace.state === "active",
+            "workspace_unavailable",
+          );
+          check(
+            workspace.layoutVersion === input.expectedLayoutVersion,
+            "layout_version_conflict",
+          );
+          const valid = this.availableSubject(subject);
+          check(this.host.placeSubject, "subject_blocks_unavailable");
+          const placed = this.host.placeSubject({
+            workspaceId: workspace.id,
+            subject: valid,
+            presentation: geometry,
+          });
+          this.writeSubjectSettings(placed.id, valid, configuration);
+          this.used(input.kind);
+          this.event(placed.id, "block.subject_created");
+          return {
+            workspaceId: workspace.id,
+            placementId: placed.id,
+            subject: valid,
+          };
+        },
+      ),
+    );
+  }
+  private visiblePlacements(resourceId: string) {
+    const rows = this.db
+      .prepare("SELECT workspace_id FROM blocks WHERE resource_id=? LIMIT 257")
+      .all(resourceId);
+    return {
+      placementCount: rows.slice(0, 256).filter((row) => {
+        const workspace = this.host.readWorkspace(String(row.workspace_id));
+        return workspace?.authorized && workspace.state === "active";
+      }).length,
+      placementCountComplete: rows.length <= 256,
+    };
+  }
+  browseResources(input: BrowseResourcesInput): BrowseResourcesPage {
+    check(
+      input &&
+        typeof input === "object" &&
+        Object.keys(input).every((k) =>
+          [
+            "subject",
+            "query",
+            "kind",
+            "unplacedOnly",
+            "afterId",
+            "limit",
+          ].includes(k),
+        ),
+      "invalid_resource_query",
+    );
+    const subject = this.availableSubject(input.subject),
+      limit = input.limit ?? 30;
+    check(
+      typeof (input.query ?? "") === "string" &&
+        (input.query?.length ?? 0) <= 500 &&
+        Number.isInteger(limit) &&
+        limit >= 1 &&
+        limit <= 100 &&
+        (input.unplacedOnly === undefined ||
+          typeof input.unplacedOnly === "boolean"),
+      "invalid_resource_query",
+    );
+    if (input.kind !== undefined) blockDefinition(input.kind);
+    if (input.afterId !== undefined) identifier(input.afterId);
+    const predicates = ["r.id>?", "r.state='active'"],
+      parameters: (string | number | null)[] = [input.afterId ?? ""];
+    const projectId =
+        subject.kind === "project"
+          ? subject.projectId
+          : subject.kind === "resource-query"
+            ? subject.projectId
+            : null,
+      collectionId =
+        subject.kind === "collection"
+          ? subject.collectionId
+          : subject.kind === "resource-query"
+            ? subject.collectionId
+            : undefined;
+    if (projectId !== null) {
+      predicates.push("r.project_id=?");
+      parameters.push(projectId);
+    }
+    if (collectionId) {
+      predicates.push(
+        "EXISTS(SELECT 1 FROM collection_members m WHERE m.collection_id=? AND m.resource_id=r.id)",
+      );
+      parameters.push(collectionId);
+    }
+    if (input.kind) {
+      predicates.push("coalesce(d.kind,r.kind)=?");
+      parameters.push(input.kind);
+    }
+    if (subject.kind === "resource-query" && subject.kinds?.length) {
+      for (const kind of subject.kinds)
+        check(
+          BUILTIN_BLOCKS.some((definition) => definition.kind === kind),
+          "unsupported_resource_filter",
+        );
+      predicates.push(
+        "coalesce(d.kind,r.kind) IN (" +
+          subject.kinds.map(() => "?").join(",") +
+          ")",
+      );
+      parameters.push(...subject.kinds);
+    }
+    const query = [
+        subject.kind === "resource-query" ? subject.query : "",
+        input.query ?? "",
+      ]
+        .join(" ")
+        .trim()
+        .toLocaleLowerCase()
+        .split(/\s+/)
+        .filter(Boolean),
+      rows = this.db
+        .prepare(
+          "SELECT r.id,r.title,r.version,r.project_id,coalesce(d.kind,r.kind) AS block_kind FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE " +
+            predicates.join(" AND ") +
+            " ORDER BY r.id LIMIT 256",
+        )
+        .all(...parameters),
+      resources: BrowseResourcesPage["resources"] = [];
+    let consumed = 0,
+      cursor = input.afterId ?? "";
+    for (const row of rows) {
+      cursor = String(row.id);
+      consumed++;
+      if (
+        !BUILTIN_BLOCKS.some(
+          (definition) => definition.kind === row.block_kind,
+        ) ||
+        !query.every((term) =>
+          (String(row.title) + " " + cursor).toLocaleLowerCase().includes(term),
+        )
+      )
+        continue;
+      const resource = this.host.readResource(cursor);
+      if (!resource?.authorized || resource.state !== "active") continue;
+      const placements = this.visiblePlacements(resource.id);
+      if (
+        input.unplacedOnly &&
+        (placements.placementCount > 0 || !placements.placementCountComplete)
+      )
+        continue;
+      resources.push({
+        id: resource.id,
+        title: String(row.title),
+        kind: resource.kind,
+        projectId: resource.projectId,
+        version: resource.version,
+        ...placements,
+      });
+      if (resources.length === limit) break;
+    }
+    return {
+      resources,
+      nextCursor: consumed < rows.length || rows.length === 256 ? cursor : null,
+    };
+  }
+  projectOverview(projectId: string): ProjectOverview {
+    this.availableSubject({
+      kind: "project",
+      projectId: identifier(projectId),
+    });
+    const project = this.host.readProject(projectId);
+    check(
+      project?.authorized && project.state === "active",
+      "project_unavailable",
+    );
+    const titleRow = this.db
+      .prepare("SELECT title FROM projects WHERE id=?")
+      .get(projectId)!;
+    const rows = this.db
+        .prepare(
+          "SELECT id,title,version FROM workspaces WHERE project_id=? AND state='active' ORDER BY title,id LIMIT 101",
+        )
+        .all(projectId),
+      workspaces = rows
+        .slice(0, 100)
+        .filter((row) => this.host.readWorkspace(String(row.id))?.authorized)
+        .map((row) => ({
+          id: String(row.id),
+          title: String(row.title),
+          version: Number(row.version),
+        }));
+    const candidates = this.db
+        .prepare(
+          "SELECT r.id,coalesce(d.kind,r.kind) AS block_kind,d.metadata_json FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE r.project_id=? AND r.state='active' ORDER BY r.id LIMIT 10001",
+        )
+        .all(projectId),
+      resourcesByKind: ProjectOverview["resourcesByKind"] = {},
+      tasks = { open: 0, done: 0 };
+    for (const row of candidates.slice(0, 10000)) {
+      if (
+        !BUILTIN_BLOCKS.some((definition) => definition.kind === row.block_kind)
+      )
+        continue;
+      const resource = this.host.readResource(String(row.id));
+      if (!resource?.authorized) continue;
+      resourcesByKind[resource.kind] =
+        (resourcesByKind[resource.kind] ?? 0) + 1;
+      if (resource.kind === "task") {
+        const status =
+          JSON.parse(String(row.metadata_json ?? "{}")).taskStatus ?? "open";
+        if (status === "done") tasks.done++;
+        else if (status === "open") tasks.open++;
+      }
+    }
+    const recentEvents: ProjectOverview["recentEvents"] = [];
+    for (const row of this.db
+      .prepare(
+        "SELECT id,entity_kind,entity_id,type,occurred_at FROM change_events ORDER BY rowid DESC LIMIT 500",
+      )
+      .all()) {
+      let visible = false;
+      if (row.entity_kind === "project") visible = row.entity_id === projectId;
+      else if (row.entity_kind === "workspace") {
+        const workspace = this.host.readWorkspace(String(row.entity_id));
+        visible =
+          workspace?.authorized === true && workspace.projectId === projectId;
+      } else if (row.entity_kind === "resource") {
+        const resource = this.host.readResource(String(row.entity_id));
+        visible =
+          resource?.authorized === true && resource.projectId === projectId;
+      }
+      if (visible)
+        recentEvents.push({
+          id: String(row.id),
+          type: String(row.type),
+          occurredAt: String(row.occurred_at),
+          entityKind: String(row.entity_kind),
+          entityId: String(row.entity_id),
+        });
+      if (recentEvents.length === 10) break;
+    }
+    return {
+      project: {
+        id: project.id,
+        title: String(titleRow.title),
+        version: project.version,
+      },
+      workspaces,
+      workspaceListComplete: rows.length <= 100,
+      resourcesByKind,
+      tasks,
+      resourceCountsComplete: candidates.length <= 10000,
+      recentEvents,
+    };
+  }
   preferences(): LibraryPreferences {
     const result = JSON.parse(
       String(
@@ -142,7 +480,7 @@ export class TemplateService {
     return value;
   }
   setFavorite(input: {
-    kind: BlockKind;
+    kind: BlockInstanceKind;
     favorite: boolean;
     expectedVersion: number;
   }): LibraryPreferences {
@@ -154,7 +492,7 @@ export class TemplateService {
         typeof input.favorite === "boolean",
       "invalid_favorite",
     );
-    blockDefinition(input.kind);
+    catalogDefinition(input.kind);
     return this.host.atomic(() => {
       const previous = this.preferences();
       check(
@@ -173,7 +511,7 @@ export class TemplateService {
       });
     });
   }
-  private used(kind: BlockKind) {
+  private used(kind: BlockInstanceKind) {
     const previous = this.preferences();
     this.writePreferences({
       ...previous,

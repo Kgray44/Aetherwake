@@ -29,22 +29,24 @@ export type LibraryCapabilities = {
   kinds: Partial<Record<BlockKind, Availability>>;
   providers: Partial<Record<"local" | "codex", Availability>>;
   velaPlanning: Availability;
+  subjects?: Partial<Record<SubjectBlockKind, Availability>>;
 };
 export type BlockCategory =
   | "conversation"
   | "knowledge"
   | "planning"
-  | "observability";
+  | "observability"
+  | "organization";
 export type SubjectBlockKind =
   | "project_overview"
   | "resource_browser"
   | "collection_browser";
 export type BlockInstanceKind = BlockKind | SubjectBlockKind;
-export type BlockDefinition = {
+export type BlockDefinition<K extends BlockInstanceKind = BlockKind> = {
   id: string;
   version: 1;
   iconId: string;
-  kind: BlockKind;
+  kind: K;
   title: string;
   category: BlockCategory;
   description: string;
@@ -62,6 +64,7 @@ export type BlockDefinition = {
   requiredServices: readonly string[];
   configurationSchema: { version: 1; fields: readonly string[] };
   defaultConfiguration: BlockConfiguration;
+  compatibleSubjectKinds?: readonly NonResourceSubjectRef["kind"][];
 };
 /** Presentation preferences only. Canonical text, messages, credentials and provider settings are excluded. */
 export type BlockConfiguration = {
@@ -72,8 +75,8 @@ export type BlockConfiguration = {
 export type BlockCapabilityState = { id: string; availability: Availability };
 export type LibraryPreferences = {
   version: number;
-  favorites: BlockKind[];
-  recent: BlockKind[];
+  favorites: BlockInstanceKind[];
+  recent: BlockInstanceKind[];
 };
 export type ResourceDiscoveryInput = {
   workspaceId: string;
@@ -139,7 +142,7 @@ export interface BlockLibraryHostPort {
   attachBlock?(input: AttachBlockInput): Promise<CreatedBlock>;
   preferences?(): Promise<LibraryPreferences>;
   setFavorite?(input: {
-    kind: BlockKind;
+    kind: BlockInstanceKind;
     favorite: boolean;
     expectedVersion: number;
   }): Promise<LibraryPreferences>;
@@ -149,6 +152,70 @@ export interface BlockLibraryHostPort {
     expectedVersion: number;
     configuration: BlockConfiguration;
   }): Promise<BlockInstanceSettings>;
+  subjectTargets?(workspaceId: string): Promise<SubjectTargets>;
+  createSubjectBlock?(
+    input: CreateSubjectBlockInput,
+  ): Promise<CreatedSubjectBlock>;
+}
+export type SubjectTargets = {
+  projectId: string | null;
+  projects: { id: string; title: string; version: number }[];
+  collections: {
+    id: string;
+    title: string;
+    projectId: string | null;
+    version: number;
+  }[];
+  globalQueryAllowed: boolean;
+  truncated: boolean;
+};
+export type CreateSubjectBlockInput = {
+  commandId: string;
+  workspaceId: string;
+  expectedLayoutVersion: number;
+  kind: SubjectBlockKind;
+  subject: NonResourceSubjectRef;
+  presentation?: Partial<Presentation>;
+  configuration?: BlockConfiguration;
+};
+export type CreatedSubjectBlock = {
+  workspaceId: string;
+  placementId: string;
+  subject: NonResourceSubjectRef;
+};
+export type BrowseResourcesInput = {
+  subject: NonResourceSubjectRef;
+  query?: string;
+  kind?: BlockKind;
+  unplacedOnly?: boolean;
+  afterId?: string;
+  limit?: number;
+};
+export type BrowseResourcesPage = {
+  resources: (ResourceCandidate & {
+    placementCount: number;
+    placementCountComplete: boolean;
+  })[];
+  nextCursor: string | null;
+};
+export type ProjectOverview = {
+  project: { id: string; title: string; version: number };
+  workspaces: { id: string; title: string; version: number }[];
+  workspaceListComplete: boolean;
+  resourcesByKind: Partial<Record<BlockKind, number>>;
+  tasks: { open: number; done: number };
+  resourceCountsComplete: boolean;
+  recentEvents: {
+    id: string;
+    type: string;
+    occurredAt: string;
+    entityKind: string;
+    entityId: string;
+  }[];
+};
+export interface SubjectExperiencePort {
+  projectOverview(projectId: string): Promise<ProjectOverview>;
+  browseResources(input: BrowseResourcesInput): Promise<BrowseResourcesPage>;
 }
 
 export type TemplateResourceRole = {
@@ -361,6 +428,7 @@ export interface CanonicalTemplateHost<Database = unknown> {
     subject: NonResourceSubjectRef;
     presentation: Presentation;
   }): { id: string };
+  subjectTargets?(workspaceId: string): SubjectTargets;
   createWorkspace(input: {
     title: string;
     projectId: string | null;

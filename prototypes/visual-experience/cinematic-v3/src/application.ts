@@ -23,7 +23,11 @@ import {
   mountWorkspaceLayoutControls,
 } from "../../../block-library/direct-manipulation.ts";
 import "../../../block-library/direct-manipulation.css";
-import { sculptureRegion, overviewPresence } from "./presence-layout";
+import {
+  sculptureRegion,
+  overviewPresence,
+  overviewChromeBottom,
+} from "./presence-layout";
 import {
   createManagerState,
   mountConversationManager,
@@ -38,6 +42,19 @@ import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
 import { createContextualSurfaces } from "./contextual-surfaces";
 import "./contextual-surfaces.css";
+import {
+  mountBlockLibrary,
+  mountWorkspaceTemplates,
+} from "../../../block-library/view.ts";
+import "../../../block-library/style.css";
+import { createLibraryClient } from "./library-client";
+import { createNotesClient } from "./notes-client";
+import { NoteSession } from "../../../block-library/note-session.ts";
+import { mountNoteExperience } from "../../../block-library/note-view.ts";
+import "../../../block-library/note-view.css";
+import { mountSubjectExperience } from "../../../block-library/subject-view.ts";
+import "../../../block-library/subject-view.css";
+import type { SubjectExperiencePort } from "../../../block-library/contracts.ts";
 import type {
   Block,
   BlockKind,
@@ -81,7 +98,15 @@ export function installApplication(hooks: Hooks) {
     motion: hooks.motion,
     wake: hooks.wake,
     viewport: () => ({ width: innerWidth, height: innerHeight }),
-    safeInsets: { top: 96, left: 16, right: 16, bottom: 24 },
+    safeInsets: () => ({
+      top: 96,
+      left: 16,
+      right: 16,
+      bottom: Math.max(
+        24,
+        innerHeight - el(".provenance").getBoundingClientRect().top + 12,
+      ),
+    }),
   });
   addEventListener("resize", surfaces.viewportChanged);
   let velaPanel: ReturnType<typeof mountVelaPanel> | null = null;
@@ -115,6 +140,20 @@ export function installApplication(hooks: Hooks) {
       else hooks.vela("idle");
     },
   });
+  const libraryClient = createLibraryClient({
+    command: (name, input) => host.command!(name, input),
+    apply: (snapshot) => apply(snapshot),
+  });
+  const notesClient = createNotesClient({
+    command: (name, input) => host.command!(name, input),
+    apply: (snapshot) => apply(snapshot),
+  });
+  const noteSessions = new Map<string, NoteSession>();
+  const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
+  const subjectViews = new Map<
+    string,
+    ReturnType<typeof mountSubjectExperience>
+  >();
   let state: DesktopSnapshot | null = null;
   let offset = { x: 0, y: 0 };
   let zoom = 1;
@@ -311,11 +350,28 @@ export function installApplication(hooks: Hooks) {
     )
       cancelPreview();
     state = next;
+    for (const [id, view] of noteViews)
+      if (!next.blocks.some((b) => b.id === id)) {
+        view.dispose();
+        noteViews.delete(id);
+      }
+    for (const [id, view] of subjectViews)
+      if (!next.blocks.some((b) => b.id === id)) {
+        view.dispose();
+        subjectViews.delete(id);
+      }
     for (const [id, binding] of directBindings)
       if (!next.blocks.some((block) => block.id === id)) {
         binding.dispose();
         directBindings.delete(id);
       }
+    for (const [id, session] of noteSessions)
+      if (
+        !session.hasObservers &&
+        !session.snapshot().dirty &&
+        !next.blocks.some((block) => block.resource_id === id)
+      )
+        noteSessions.delete(id);
     layoutControls.refresh();
     zoom = next.viewport?.zoom ?? 1;
     offset = {
@@ -457,13 +513,15 @@ export function installApplication(hooks: Hooks) {
       };
       constellation = mountConstellation(universe, options);
       const bar = universe.querySelector<HTMLElement>(".aw-constellation-bar")!;
-      new ResizeObserver(() => {
+      const updateOverviewChrome = () => {
         const r = bar.getBoundingClientRect();
         if (r.height > 0) {
-          overviewBarBottom = r.bottom;
+          overviewBarBottom = overviewChromeBottom(innerWidth, innerHeight, r);
           hooks.wake();
         }
-      }).observe(bar);
+      };
+      new ResizeObserver(updateOverviewChrome).observe(bar);
+      addEventListener("resize", updateOverviewChrome);
       void constellation.ready.then(hooks.wake);
     } else constellation.update(navigationSnapshot);
     for (const block of next.blocks)
@@ -480,17 +538,22 @@ export function installApplication(hooks: Hooks) {
     return flushInFlight;
   }
   async function flushDrafts() {
-    for (const [resourceId, draft] of [...drafts]) {
-      clearTimeout(draft.timer);
-      const r = state?.resources.find((r) => r.id === resourceId);
-      if (!r) throw new Error("draft_resource_unavailable");
-      await command({
-        type: "content",
-        resourceId,
-        content: draft.content,
-        expectedVersion: r.version,
-      });
-      if (drafts.get(resourceId) === draft) drafts.delete(resourceId);
+    for (;;) {
+      const ids = new Set([
+        ...drafts.keys(),
+        ...[...noteSessions]
+          .filter(([, session]) => session.snapshot().dirty)
+          .map(([id]) => id),
+      ]);
+      if (!ids.size) break;
+      for (const resourceId of ids) {
+        const draft = drafts.get(resourceId);
+        clearTimeout(draft?.timer);
+        const session = noteSessions.get(resourceId);
+        if (!session) throw new Error("draft_resource_unavailable");
+        await session.flush();
+        if (drafts.get(resourceId) === draft) drafts.delete(resourceId);
+      }
     }
   }
   function run(a: DesktopCommand) {
@@ -571,12 +634,8 @@ export function installApplication(hooks: Hooks) {
   velaCard.addEventListener("focusout", () =>
     document.body.classList.remove("vela-access"),
   );
-  const velaGrip = document.createElement("span");
-  velaGrip.className = "vela-grip";
-  velaGrip.textContent = "⠿ Move Vela";
-  velaCard.prepend(velaGrip);
   velaCard.title =
-    "Drag by Move Vela, or Alt+arrow keys to move. Enter opens Vela.";
+    "Drag Vela directly, or use Alt+arrow keys. Click or Enter opens Vela.";
   velaCard.addEventListener(
     "click",
     (event) => {
@@ -588,7 +647,7 @@ export function installApplication(hooks: Hooks) {
     },
     true,
   );
-  velaGrip.addEventListener("pointerdown", (event) => {
+  velaCard.addEventListener("pointerdown", (event) => {
     const p = state?.presence;
     if (!p || !presenceCard() || p.locked || event.button !== 0) return;
     event.preventDefault();
@@ -787,6 +846,7 @@ export function installApplication(hooks: Hooks) {
     }
     if (!velaPanel)
       velaPanel = mountVelaPanel(velaContent, velaClient, {
+        onConnectProvider: () => host.command!("capabilities", {}),
         onOpenSubject: (subject) => {
           surfaces.close("vela");
           if (subject.kind === "workspace") {
@@ -916,6 +976,36 @@ export function installApplication(hooks: Hooks) {
           projectId: String(f.get("projectId")) || null,
         });
       });
+      dialog.insertAdjacentHTML(
+        "beforeend",
+        '<p>Start blank, reuse a saved template or preset, or ask Vela to help compose a workspace.</p><button id="workspace-templates">Browse templates and presets</button><button id="workspace-ask-vela">Ask Vela</button>',
+      );
+      el("#workspace-templates", dialog).onclick = () => {
+        const projectId =
+          el<HTMLSelectElement>('select[name="projectId"]', dialog).value ||
+          null;
+        dialog.close();
+        templates(projectId);
+      };
+      el("#workspace-ask-vela", dialog).onclick = () => {
+        const title = el<HTMLInputElement>(
+          "#workspace-title",
+          dialog,
+        ).value.trim();
+        const projectId =
+          el<HTMLSelectElement>('select[name="projectId"]', dialog).value ||
+          null;
+        const project = state?.projects.find((p) => p.id === projectId);
+        dialog.close();
+        openVela();
+        const composer = el<HTMLTextAreaElement>(
+          ".vela-core-compose textarea",
+          velaContent,
+        );
+        if (!composer.value.trim())
+          composer.value = `Help me create ${title ? `a workspace named “${title}”` : "a workspace"}${project ? ` in project “${project.title}” (${project.id})` : ""} from available resources. Prepare a plan for my review.`;
+        composer.focus();
+      };
     };
     dialog.querySelectorAll<HTMLElement>("[data-workspace]").forEach(
       (b) =>
@@ -1000,24 +1090,62 @@ export function installApplication(hooks: Hooks) {
       manager();
       return;
     }
-    open(
-      "Give an idea a place",
-      '<form><label>Block type<select id="block-kind" name="kind"><option value="conversation">Conversation</option><option value="note">Note</option><option value="research">Research / document</option><option value="task">Task</option><option value="reference">Resource reference</option><option value="stream">Intelligence Stream</option></select></label><label>Title<input name="title" id="block-title" value="Untitled" required maxlength="200"></label><label>Conversation provider<select name="provider"><option value="local">Local conversation · no model response</option><option value="codex">Codex App Server · explicit authorization on Send</option></select></label><p>Notes, documents, tasks and references work locally. Task automation and file execution are unavailable.</p><button type="submit">Add block</button></form>',
-    );
-    el<HTMLSelectElement>("#block-kind", dialog).insertAdjacentHTML(
-      "beforeend",
-      '<option value="task_group">Task group</option>',
-    );
-    form(async (f) => {
-      const next = await command({
-        type: "createResource",
-        kind: String(f.get("kind")) as BlockKind,
-        title: String(f.get("title")),
-        provider: String(f.get("provider")) as "local" | "codex",
-        workspaceId: state!.activeWorkspaceId,
-      });
-      const b = next.blocks.at(-1);
-      if (b) reveal(b.id);
+    const workspaceId = state.activeWorkspaceId;
+    const content = document.createElement("div");
+    content.className = "application-library-content";
+    let controller: ReturnType<typeof mountBlockLibrary> | undefined;
+    surfaces.open({
+      id: "block-library",
+      anchor: el(".aw-workspace-add"),
+      content,
+      label: "Add to workspace",
+      minSize: { width: 480, height: 300 },
+      maxSize: { width: 960, height: 740 },
+      onClose: () => controller?.dispose(),
+    });
+    controller = mountBlockLibrary(content, libraryClient, {
+      workspaceId,
+      expectedLayoutVersion: () => {
+        if (state?.activeWorkspaceId !== workspaceId)
+          throw Error("workspace_changed");
+        return state.layoutVersion;
+      },
+      onClose: () => surfaces.close("block-library"),
+      onCreated: (result) => {
+        surfaces.close("block-library");
+        reveal(result.placementId);
+        hooks.focus(result.placementId);
+      },
+      onSubjectCreated: (result) => {
+        surfaces.close("block-library");
+        reveal(result.placementId);
+        hooks.focus(result.placementId);
+      },
+    });
+  }
+  function templates(projectId: string | null) {
+    const content = document.createElement("div");
+    content.className = "application-library-content";
+    let controller: ReturnType<typeof mountWorkspaceTemplates> | undefined;
+    surfaces.open({
+      id: "workspace-templates",
+      anchor: el("#workspace-manager"),
+      content,
+      label: "Workspace templates",
+      minSize: { width: 480, height: 300 },
+      maxSize: { width: 980, height: 760 },
+      onClose: () => controller?.dispose(),
+    });
+    controller = mountWorkspaceTemplates(content, libraryClient, {
+      projectId,
+      expectedProjectVersion: state?.projects.find((p) => p.id === projectId)
+        ?.version,
+      currentWorkspace: () => state,
+      onApplied: () => {
+        surfaces.close("workspace-templates");
+        hooks.home();
+      },
+      onClose: () => surfaces.close("workspace-templates"),
     });
   }
   function picker() {
@@ -1346,11 +1474,193 @@ export function installApplication(hooks: Hooks) {
         })
       : Promise.resolve();
   }
+  function noteSession(resourceId: string) {
+    let session = noteSessions.get(resourceId);
+    if (!session) {
+      const resource = state?.resources.find((r) => r.id === resourceId);
+      if (
+        !resource ||
+        resource.available === false ||
+        !["note", "research", "reference", "task", "task_group"].includes(
+          resource.kind,
+        )
+      )
+        throw new Error("note_resource_unavailable");
+      session = new NoteSession(resourceId, notesClient, resource);
+      noteSessions.set(resourceId, session);
+    }
+    return session;
+  }
+  function ensureNoteView(id: string) {
+    if (noteViews.has(id)) return;
+    const block = state?.blocks.find((b) => b.id === id),
+      article = document.querySelector<HTMLElement>(`[data-block="${id}"]`),
+      resource = block?.resource_id
+        ? state?.resources.find((r) => r.id === block.resource_id)
+        : undefined;
+    const editor = article?.querySelector<HTMLTextAreaElement>("textarea");
+    if (
+      !article ||
+      !editor ||
+      !resource ||
+      resource.available === false ||
+      !["note", "research", "reference", "task", "task_group"].includes(
+        resource.kind,
+      )
+    )
+      return;
+    const session = noteSession(resource.id),
+      view = mountNoteExperience(
+        el(".working-content", article),
+        editor,
+        session,
+        notesClient,
+        { kind: resource.kind, active: true },
+      );
+    noteViews.set(id, view);
+  }
+  function saveContent(
+    resourceId: string,
+    content: string,
+    article: HTMLElement,
+  ) {
+    const previous = drafts.get(resourceId);
+    clearTimeout(previous?.timer);
+    const draft: { content: string; timer?: ReturnType<typeof setTimeout> } = {
+      content,
+    };
+    drafts.set(resourceId, draft);
+    const session = noteSession(resourceId);
+    el(".saved", article).textContent = "Saving recovery draft…";
+    void session.edit(content).catch(report);
+    draft.timer = setTimeout(() => {
+      void enqueue(async () => {
+        await flush();
+        el(".saved", article).textContent = "Saved in local SQLite";
+      });
+    }, 350);
+  }
+  function openCanonicalResource(resourceId: string) {
+    const resource = state?.resources.find((r) => r.id === resourceId);
+    if (resource?.kind === "conversation") {
+      conversations(resourceId);
+      return;
+    }
+    const placement = (state?.navigationBlocks ?? state?.blocks ?? []).find(
+      (b) => b.resource_id === resourceId,
+    );
+    if (placement) {
+      void enqueue(async () => {
+        await flush();
+        await command({
+          type: "navigate",
+          target: { kind: "workspace", workspaceId: placement.workspace_id },
+        });
+        reveal(placement.id);
+        hooks.focus(placement.id);
+      });
+      return;
+    }
+    if (
+      !resource ||
+      resource.available === false ||
+      resource.kind === "stream"
+    ) {
+      hooks.status(
+        "This canonical resource is unavailable here. Attach an available resource to inspect it in the workspace.",
+      );
+      return;
+    }
+    const content = document.createElement("div"),
+      heading = document.createElement("h3"),
+      editor = document.createElement("textarea"),
+      saved = document.createElement("p");
+    heading.textContent = resource.title;
+    editor.value = resource.content;
+    editor.maxLength = 100000;
+    editor.rows = 12;
+    editor.style.width = "100%";
+    saved.className = "saved";
+    content.append(heading, editor, saved);
+    const session = noteSession(resourceId),
+      view = mountNoteExperience(content, editor, session, notesClient, {
+        kind: resource.kind,
+      });
+    editor.setAttribute("aria-label", resource.title + " content");
+    editor.oninput = () => saveContent(resourceId, editor.value, content);
+    surfaces.open({
+      id: "canonical-resource",
+      anchor: el(".aw-workspace-add"),
+      content,
+      label: resource.title,
+      minSize: { width: 360, height: 300 },
+      maxSize: { width: 720, height: 680 },
+      onClose: () => view.dispose(),
+    });
+  }
+  function decorateSubject(article: HTMLElement, block: Block) {
+    if (!block.subject || block.subject.kind === "resource") return;
+    article.dataset.shape = block.shape;
+    const surface = el(".working-content", article);
+    el(".grip span", article).textContent =
+      block.subject.kind === "project"
+        ? "PROJECT"
+        : block.subject.kind === "collection"
+          ? "COLLECTION"
+          : "RESOURCES";
+    if (block.subjectState && block.subjectState !== "active") {
+      subjectViews.get(block.id)?.dispose();
+      subjectViews.delete(block.id);
+      surface.textContent =
+        "This canonical subject is archived or unavailable. Its view placement is retained.";
+      return;
+    }
+    if (subjectViews.has(block.id)) {
+      void subjectViews.get(block.id)!.refresh();
+      return;
+    }
+    surface.replaceChildren();
+    const client = libraryClient as typeof libraryClient &
+      Partial<SubjectExperiencePort>;
+    const unavailable = () =>
+      Promise.reject(new Error("subject_view_native_service_unavailable"));
+    const view = mountSubjectExperience(
+      surface,
+      block.subject,
+      {
+        projectOverview: client.projectOverview?.bind(client) ?? unavailable,
+        browseResources: client.browseResources?.bind(client) ?? unavailable,
+      },
+      {
+        active: article.classList.contains("expanded") && !document.hidden,
+        openWorkspace: (workspaceId) => {
+          void run({
+            type: "navigate",
+            target: { kind: "workspace", workspaceId },
+          });
+        },
+        openResource: openCanonicalResource,
+        attachResource: async (resource) => {
+          if (!state?.activeWorkspaceId || !libraryClient.attachBlock)
+            throw new Error("attachment_unavailable");
+          await flush();
+          await libraryClient.attachBlock({
+            commandId: crypto.randomUUID(),
+            workspaceId: state.activeWorkspaceId,
+            expectedLayoutVersion: state.layoutVersion,
+            resourceId: resource.id,
+            kind: resource.kind,
+            expectedResourceVersion: resource.version,
+          });
+        },
+      },
+    );
+    subjectViews.set(block.id, view);
+  }
   function decorate(article: HTMLElement, id: string) {
     if (!article) return;
     const b = state?.blocks.find((b) => b.id === id);
     if (!b) return;
-    const r = state!.resources.find((r) => r.id === b.resource_id)!;
     article.dataset.locked = String(!!b.locked);
     if (!directBindings.has(id))
       directBindings.set(
@@ -1409,6 +1719,12 @@ export function installApplication(hooks: Hooks) {
           context: () => geometry(id),
         }),
       );
+    if (b.subject && b.subject.kind !== "resource") {
+      decorateSubject(article, b);
+      return;
+    }
+    const r = state!.resources.find((r) => r.id === b.resource_id);
+    if (!r) return;
     if (r.available === false) {
       article.querySelector(".task-group-summary")?.remove();
       article.querySelector(".conversation-transcript")?.replaceChildren();
@@ -1427,6 +1743,15 @@ export function installApplication(hooks: Hooks) {
       return;
     }
     article.querySelector(".resource-unavailable")?.remove();
+    const session = noteSessions.get(r.id),
+      loaded = session?.snapshot();
+    if (
+      loaded?.document &&
+      !loaded.dirty &&
+      loaded.document.resource.version !== r.version
+    )
+      void session!.refresh().catch(report);
+
     const restoredEditor =
       article.querySelector<HTMLTextAreaElement>("textarea");
     if (restoredEditor) restoredEditor.disabled = false;
@@ -1588,7 +1913,10 @@ export function installApplication(hooks: Hooks) {
         "LOCAL TASK GROUP · NO AUTOMATIC EXECUTION";
       const editor = article.querySelector<HTMLTextAreaElement>("textarea");
       if (editor && document.activeElement !== editor) {
-        const content = drafts.get(r.id)?.content ?? r.content;
+        const content =
+          noteSessions.get(r.id)?.snapshot().content ??
+          drafts.get(r.id)?.content ??
+          r.content;
         if (editor.value !== content) editor.value = content;
       }
     } else if (r.kind === "stream") {
@@ -1606,7 +1934,10 @@ export function installApplication(hooks: Hooks) {
       const editor = article.querySelector<HTMLTextAreaElement>("textarea");
       if (editor) editor.setAttribute("aria-label", `${r.title} content`);
       if (editor && document.activeElement !== editor) {
-        const content = drafts.get(r.id)?.content ?? r.content;
+        const content =
+          noteSessions.get(r.id)?.snapshot().content ??
+          drafts.get(r.id)?.content ??
+          r.content;
         if (editor.value !== content) editor.value = content;
       }
       if (r.kind === "task") {
@@ -1625,15 +1956,21 @@ export function installApplication(hooks: Hooks) {
           label.append(priority);
           el(".working-content", article).prepend(label);
           priority.onchange = () => {
-            const current = state!.resources.find(
-              (resource) => resource.id === r.id,
-            )!;
+            const selectedPriority = priority.value as NonNullable<
+              Resource["taskPriority"]
+            >;
             priority.disabled = true;
-            void run({
-              type: "taskPriority",
-              resourceId: r.id,
-              expectedVersion: current.version,
-              priority: priority.value as NonNullable<Resource["taskPriority"]>,
+            void enqueue(async () => {
+              await flush();
+              const current = state!.resources.find(
+                (resource) => resource.id === r.id,
+              )!;
+              await command({
+                type: "taskPriority",
+                resourceId: r.id,
+                expectedVersion: current.version,
+                priority: selectedPriority,
+              });
             }).finally(() => {
               priority.disabled = false;
               priority.value =
@@ -1653,16 +1990,20 @@ export function installApplication(hooks: Hooks) {
           el<HTMLInputElement>(".task-completed", article).onchange = (
             event,
           ) => {
-            const current = state!.resources.find(
-              (resource) => resource.id === r.id,
-            )!;
-            void run({
-              type: "taskStatus",
-              resourceId: r.id,
-              expectedVersion: current.version,
-              status: (event.target as HTMLInputElement).checked
-                ? "done"
-                : "open",
+            const status = (event.target as HTMLInputElement).checked
+              ? "done"
+              : "open";
+            void enqueue(async () => {
+              await flush();
+              const current = state!.resources.find(
+                (resource) => resource.id === r.id,
+              )!;
+              await command({
+                type: "taskStatus",
+                resourceId: r.id,
+                expectedVersion: current.version,
+                status,
+              });
             });
           };
         }
@@ -1781,7 +2122,10 @@ export function installApplication(hooks: Hooks) {
     }
   });
   addEventListener("beforeunload", (event) => {
-    if (drafts.size) {
+    if (
+      drafts.size ||
+      [...noteSessions.values()].some((session) => session.snapshot().dirty)
+    ) {
       event.preventDefault();
       event.returnValue = "";
     }
@@ -1825,7 +2169,6 @@ export function installApplication(hooks: Hooks) {
         const scale = Math.min(1, card.w / 208, card.h / 260);
         velaCard.style.setProperty("--vela-ui-scale", String(scale));
         velaCard.style.setProperty("--vela-ui-inset", `${28 * scale}px`);
-        velaGrip.textContent = card.w < 110 ? "⠿" : "⠿ Move Vela";
       }
       const key = JSON.stringify(policy);
       if (key !== policyKey) {
@@ -1916,19 +2259,11 @@ export function installApplication(hooks: Hooks) {
     manager,
     conversations,
     block: (id: string) => state?.blocks.find((b) => b.id === id),
-    saveContent(resourceId: string, content: string, article: HTMLElement) {
-      const previous = drafts.get(resourceId);
-      clearTimeout(previous?.timer);
-      const draft: { content: string; timer?: ReturnType<typeof setTimeout> } =
-        { content };
-      drafts.set(resourceId, draft);
-      el(".saved", article).textContent = "Saving…";
-      draft.timer = setTimeout(() => {
-        void enqueue(async () => {
-          await flush();
-          el(".saved", article).textContent = "Saved in local SQLite";
-        });
-      }, 350);
+    saveContent,
+    setBlockActive(id: string, active: boolean) {
+      if (active) ensureNoteView(id);
+      noteViews.get(id)?.setActive(active);
+      subjectViews.get(id)?.setActive(active);
     },
     move(id: string, dx: number, dy: number) {
       const b = state?.blocks.find((b) => b.id === id);

@@ -12,6 +12,11 @@ import { presentation, limits } from "../workspace-engine/geometry.mts";
 import { shapes } from "../workspace-engine/contracts.mts";
 import type { NonResourceSubjectRef } from "../workspace-kernel/subjects.ts";
 import type { SubjectBlockKind } from "./contracts.ts";
+import type { BlockInstanceKind } from "./contracts.ts";
+export const isSubjectBlockKind = (
+  kind: BlockInstanceKind,
+): kind is SubjectBlockKind =>
+  ["project_overview", "resource_browser", "collection_browser"].includes(kind);
 export const subjectBlockKind = (
   subject: NonResourceSubjectRef,
 ): SubjectBlockKind =>
@@ -139,6 +144,78 @@ function deepFreeze<T>(value: T): T {
   }
   return value;
 }
+const subjectDefinition = (
+  kind: SubjectBlockKind,
+  title: string,
+  description: string,
+  controls: string[],
+  subjectKind: NonResourceSubjectRef["kind"],
+): BlockDefinition<SubjectBlockKind> => ({
+  ...define(
+    "reference",
+    title,
+    "organization",
+    description,
+    controls,
+    "An inert example of the canonical view. No resources or provider requests are created by this preview.",
+  ),
+  id: "aerynth." + kind,
+  kind,
+  keywords: [kind, title, subjectKind, "organization", ...controls],
+  compatibleResourceKinds: [],
+  compatibleSubjectKinds: [subjectKind],
+  requiredServices: [
+    "canonical-resources",
+    "canonical-projects",
+    "workspace-engine",
+  ],
+  defaultPresentation: presentation({
+    shape: "rounded",
+    width: 440,
+    height: 340,
+  }),
+});
+export const SUBJECT_BLOCKS: readonly BlockDefinition<SubjectBlockKind>[] =
+  deepFreeze([
+    subjectDefinition(
+      "project_overview",
+      "Project Overview",
+      "Canonical project workspaces, resource counts, local task status and recorded changes.",
+      ["Read project", "Open workspace", "Browse project resources"],
+      "project",
+    ),
+    subjectDefinition(
+      "resource_browser",
+      "Resource Browser",
+      "Search authorized canonical resources, including resources without a current placement.",
+      [
+        "Search resources",
+        "Filter by kind",
+        "Find unplaced resources",
+        "Attach existing resource",
+      ],
+      "resource-query",
+    ),
+    subjectDefinition(
+      "collection_browser",
+      "Collection Browser",
+      "Browse a canonical collection without cloning its members.",
+      ["Browse collection", "Open resource", "Attach existing resource"],
+      "collection",
+    ),
+  ]);
+export const REGISTERED_BLOCKS: readonly BlockDefinition<BlockInstanceKind>[] =
+  deepFreeze([...BUILTIN_BLOCKS, ...SUBJECT_BLOCKS]);
+export function catalogDefinition(
+  kind: BlockInstanceKind,
+): BlockDefinition<BlockInstanceKind> {
+  const definition = REGISTERED_BLOCKS.find((item) => item.kind === kind);
+  if (!definition)
+    throw Object.assign(new Error("unsupported_block_type"), {
+      code: "unsupported_block_type",
+    });
+  return definition;
+}
 export const blockDefinition = (kind: BlockKind): BlockDefinition => {
   const found = BUILTIN_BLOCKS.find((item) => item.kind === kind);
   if (!found)
@@ -148,10 +225,12 @@ export const blockDefinition = (kind: BlockKind): BlockDefinition => {
   return found;
 };
 export const blockAvailability = (
-  kind: BlockKind,
+  kind: BlockInstanceKind,
   capabilities: LibraryCapabilities,
 ): Availability =>
-  capabilities.kinds[kind] ?? {
+  (isSubjectBlockKind(kind)
+    ? capabilities.subjects?.[kind]
+    : capabilities.kinds[kind]) ?? {
     state: "unknown",
     reason: "The host has not advertised this block capability.",
   };
@@ -217,7 +296,7 @@ export function validateConfiguration(
 }
 /** Unknown versions retain their original metadata for a later compatible renderer. */
 export function resolveBlockType(id: string, version: number) {
-  const manifest = BUILTIN_BLOCKS.find((item) => item.id === id);
+  const manifest = REGISTERED_BLOCKS.find((item) => item.id === id);
   return manifest && manifest.version === version
     ? { state: "available" as const, manifest }
     : {
@@ -255,6 +334,40 @@ export function searchBlocks(
     .filter(
       (item) => includeUnavailable || item.availability.state === "available",
     );
+}
+export function searchBlockCatalog(
+  query: string,
+  capabilities: LibraryCapabilities,
+  category?: BlockDefinition["category"],
+) {
+  const terms = query
+    .trim()
+    .toLocaleLowerCase()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 16);
+  return REGISTERED_BLOCKS.filter(
+    (item) =>
+      (!category || item.category === category) &&
+      terms.every((term) =>
+        (
+          item.title +
+          " " +
+          item.description +
+          " " +
+          item.keywords.join(" ") +
+          " " +
+          item.compatibleResourceKinds.join(" ") +
+          " " +
+          (item.compatibleSubjectKinds ?? []).join(" ")
+        )
+          .toLocaleLowerCase()
+          .includes(term),
+      ),
+  ).map((item) => ({
+    ...item,
+    availability: blockAvailability(item.kind, capabilities),
+  }));
 }
 export function assertBlockAvailable(
   kind: BlockKind,

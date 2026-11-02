@@ -10,7 +10,7 @@ import type { TemplateService } from '../../block-library/service.mts';
 import type { NoteExperienceService } from '../../block-library/note-service.mts';
 export type NoteMethod = 'readNote'|'saveNoteDraft'|'commitNote'|'discardNoteDraft'|'renameNote';
 export type NoteRequest = { [K in NoteMethod]: {name:K;input:Parameters<NoteExperienceService[K]>[0]} }[NoteMethod];
-export type LibraryMethod = 'capabilities'|'preferences'|'setFavorite'|'getBlockSettings'|'configureBlock'|'findResources'|'attachBlock'|'createBlock'|'listTemplates'|'getTemplate'|'saveTemplate'|'renameTemplate'|'archiveTemplate'|'previewTemplate'|'applyTemplate'|'previewWorkspaceFromResources'|'workspaceFromResources'|'requestVelaTemplate';
+export type LibraryMethod = 'capabilities'|'preferences'|'setFavorite'|'getBlockSettings'|'configureBlock'|'findResources'|'attachBlock'|'createBlock'|'listTemplates'|'getTemplate'|'saveTemplate'|'renameTemplate'|'archiveTemplate'|'previewTemplate'|'applyTemplate'|'previewWorkspaceFromResources'|'workspaceFromResources'|'requestVelaTemplate'|'subjectTargets'|'createSubjectBlock'|'projectOverview'|'browseResources';
 export type LibraryRequest = { [K in LibraryMethod]: {name:K;input:Parameters<TemplateService[K]>[0] extends undefined?Record<string,never>:Parameters<TemplateService[K]>[0]} }[LibraryMethod];
 export type LibraryResponse = {result:unknown;desktop?:DesktopSnapshot};
 export type VelaOperationName = keyof VelaClient;

@@ -21,7 +21,7 @@ import { TemplateService } from '../../block-library/service.mts';
 import { createCanonicalTemplateHost } from '../../block-library/canonical-host.mts';
 import { NoteExperienceService } from '../../block-library/note-service.mts';
 import { createCanonicalNoteHost } from '../../block-library/note-host.mts';
-import { BUILTIN_BLOCKS } from '../../block-library/registry.ts';
+import { BUILTIN_BLOCKS, SUBJECT_BLOCKS } from '../../block-library/registry.ts';
 import type { LibraryCapabilities, BlockKind } from '../../block-library/contracts.ts';
 import { validateSubjectRef, type NonResourceSubjectRef } from '../../workspace-kernel/subjects.ts';
 import type { LibraryRequest, LibraryResponse, NoteRequest } from './contracts.mts';
@@ -164,7 +164,7 @@ export class BackendCore {
   }
   private libraryCapabilities():LibraryCapabilities {
     const cap=this.capabilityCache.snapshot(),codex=!!cap&&!cap.mock&&cap.authentication==='available'&&cap.providerId===this.port.id;
-    return {revision:1,kinds:Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'unsupported',reason:'A typed template planning port is not registered; reviewed Vela native workspace proposals remain separate'}};
+    return {revision:1,kinds:Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),subjects:Object.fromEntries(SUBJECT_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'unsupported',reason:'A typed template planning port is not registered; reviewed Vela native workspace proposals remain separate'}};
   }
   private createLibraryResource(kind:BlockKind,title:string,provider:'local'|'codex'|undefined,projectId:string|null):string {
     if(kind==='conversation')return this.create(title,provider==='codex'?this.port.id:'local',projectId).resourceId;
@@ -201,7 +201,7 @@ export class BackendCore {
   }
   private async libraryCommand(operation:LibraryRequest):Promise<LibraryResponse> {
     const input:any=operation?.input;
-    const mutation=['setFavorite','configureBlock','attachBlock','createBlock','saveTemplate','renameTemplate','archiveTemplate','applyTemplate','workspaceFromResources'].includes(operation?.name);
+    const mutation=['setFavorite','configureBlock','attachBlock','createBlock','saveTemplate','renameTemplate','archiveTemplate','applyTemplate','workspaceFromResources','createSubjectBlock'].includes(operation?.name);
     const execute=()=>{switch(operation?.name){
       case 'capabilities':return this.library.capabilities();case 'preferences':return this.library.preferences();case 'setFavorite':return this.library.setFavorite(input);
       case 'getBlockSettings':return this.library.getBlockSettings(input);case 'configureBlock':return this.library.configureBlock(input);case 'findResources':return this.library.findResources(input);
@@ -209,9 +209,10 @@ export class BackendCore {
       case 'saveTemplate':ensure(input.source!=='vela'&&input.provenance===undefined,'native_template_provenance_required');return this.library.saveTemplate(input);
       case 'renameTemplate':return this.library.renameTemplate(input);case 'archiveTemplate':return this.library.archiveTemplate(input);case 'previewTemplate':return this.library.previewTemplate(input);case 'applyTemplate':return this.library.applyTemplate(input);
       case 'previewWorkspaceFromResources':return this.library.previewWorkspaceFromResources(input);case 'workspaceFromResources':return this.library.workspaceFromResources(input);case 'requestVelaTemplate':return this.library.requestVelaTemplate(input);
+      case 'subjectTargets':return this.library.subjectTargets(input);case 'createSubjectBlock':return this.library.createSubjectBlock(input);case 'projectOverview':return this.library.projectOverview(input);case 'browseResources':return this.library.browseResources(input);
       default:throw new ServiceError('unsupported_library_command');
     }};
-    const result=mutation?this.atomic(()=>{const value=execute();if((operation.name==='createBlock'||operation.name==='attachBlock')&&input.workspaceId)this.desktop.nativeBlockServices().navigateWorkspace(input.workspaceId);return value;}):await execute();
+    const result=mutation?this.atomic(()=>{const value=execute();if((operation.name==='createBlock'||operation.name==='attachBlock'||operation.name==='createSubjectBlock')&&input.workspaceId)this.desktop.nativeBlockServices().navigateWorkspace(input.workspaceId);return value;}):await execute();
     if(mutation){this.record('application/library.'+operation.name,'observed');return {result,desktop:await this.command('desktop',{type:'snapshot'})};}return {result};
   }
   private async noteCommand(operation:NoteRequest):Promise<LibraryResponse> {

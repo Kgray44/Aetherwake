@@ -41,9 +41,9 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
         true,
         "Native evidence requires foreground",
       );
-      const before = await js("window.__aerynth.state().metrics.draws");
+      const before = await js("window.__aerynth.snapshot().metrics.draws");
       await js('window.dispatchEvent(new Event("resize"))');
-      await wait(`window.__aerynth.state().metrics.draws>${before}`, 8000);
+      await wait(`window.__aerynth.snapshot().metrics.draws>${before}`, 8000);
       await pause(150);
       assert.equal(win.isFocused(), true);
       await fs.writeFile(
@@ -116,6 +116,8 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
           });
       }
       state = await snapshot();
+      await execute({type:"setPresence",workspaceId:state.activeWorkspaceId,expectedVersion:state.presence.version,placement:{x:1180,y:170}});
+      state = await snapshot();
       const block = state.blocks.find(
           (b) =>
             state.resources.find((r) => r.id === b.resource_id)?.title ===
@@ -128,7 +130,7 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
       );
       assert.equal(
         await js(
-          'document.querySelectorAll(".move-controls,.block-tools,button.grip,.canvas-tools").length',
+          'document.querySelectorAll(".move-controls,.block-tools,button.grip,.canvas-tools,.vela-grip").length',
         ),
         0,
       );

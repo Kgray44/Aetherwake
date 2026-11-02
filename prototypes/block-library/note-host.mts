@@ -26,7 +26,7 @@ export function createCanonicalNoteHost(options: {
   );
   return {
     db: options.db,
-    atomic: options.atomic,
+    atomic: (work) => options.atomic(work),
     readResource(resourceId) {
       const metadata = options.templateHost.readResource(resourceId);
       if (!metadata?.authorized || metadata.state !== "active") return null;
@@ -57,6 +57,8 @@ export function createCanonicalNoteHost(options: {
         content: input.content,
       });
     },
-    ...(options.renameResource ? { renameNote: options.renameResource } : {}),
+    ...(options.renameResource
+      ? { renameNote: (input) => options.renameResource!(input) }
+      : {}),
   };
 }

@@ -22,7 +22,7 @@ import { blockDefinition, validateConfiguration } from "./registry.ts";
 
 export const TEMPLATE_LIMITS = {
   templates: 256,
-  resources: 32,
+  resources: 64,
   placements: 64,
   bodyBytes: 65536,
   receipts: 4096,

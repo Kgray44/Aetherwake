@@ -72,6 +72,7 @@ const verify =
   process.argv.includes("--integration-organization") ||
   process.argv.includes("--integration-direct") ||
   process.argv.includes("--integration-conversation-product") ||
+  process.argv.includes("--integration-vela") ||
   process.argv.includes("--integration-expanded") ||
   process.argv.includes("--integration-spatial-benchmark");
 const captureReview =
@@ -79,6 +80,7 @@ const captureReview =
   process.argv.includes("--integration-organization") ||
   process.argv.includes("--integration-direct") ||
   process.argv.includes("--integration-conversation-product") ||
+  process.argv.includes("--integration-vela") ||
   process.argv.includes("--integration-expanded") ||
   process.argv.includes("--integration-spatial-benchmark");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
@@ -241,6 +243,23 @@ app.whenReady().then(async () => {
         !["replay", "executionStatus", "interrupt"].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "vela" && isVelaRead(input)) &&
+        !(command === "notes" && input?.name === "readNote") &&
+        !(
+          command === "library" &&
+          [
+            "capabilities",
+            "preferences",
+            "findResources",
+            "listTemplates",
+            "getTemplate",
+            "getBlockSettings",
+            "previewTemplate",
+            "previewWorkspaceFromResources",
+            "subjectTargets",
+            "projectOverview",
+            "browseResources",
+          ].includes(input?.name)
+        ) &&
         !(command === "desktop" && input?.type === "snapshot")
       )
         throw new Error("storage_reserve_admission_denied");
@@ -317,6 +336,10 @@ app.whenReady().then(async () => {
         result = await conversationCommand({ win, dialog, call, input });
       } else if (command === "vela") {
         result = await velaCommand({ win, dialog, call, input });
+      } else if (command === "library") {
+        result = await call("library", input);
+      } else if (command === "notes") {
+        result = await call("notes", input);
       } else throw new Error("unsupported_command");
       return { ok: true, result };
     } catch (e) {
@@ -368,6 +391,15 @@ app.whenReady().then(async () => {
   }, 240000);
   reserveTimer.unref();
   if (verify) {
+    if (process.argv.includes("--integration-vela")) {
+      await require("../../../vela-core/test/native-desktop.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        source,
+      });
+      return;
+    }
     if (process.argv.includes("--integration-conversation-product")) {
       await require("../../../conversation-product/test/native-desktop.cjs").verify(
         {
