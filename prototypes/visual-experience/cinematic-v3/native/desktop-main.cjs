@@ -269,6 +269,7 @@ app.whenReady().then(async () => {
   });
   const startupErrors = [];
   if (
+    process.argv.includes("--integration-workspace-views") ||
     process.argv.includes("--integration-visual-smoke") ||
     process.argv.includes("--integration-product-ui")
   )
