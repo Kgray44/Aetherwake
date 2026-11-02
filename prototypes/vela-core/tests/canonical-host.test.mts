@@ -150,6 +150,35 @@ test('same-connection identity and mandatory policy callbacks prevent alternativ
   } finally { other.close(); f.close(); }
 });
 
+test('optional read boundary avoids mutation snapshots/saves while every mutation keeps its original rollback boundary', () => {
+  const f = fixture(); let reads = 0, mutations = 0;
+  try {
+    const host = createCanonicalVelaHost({ ...f.options,
+      transaction: work => { mutations++; return f.options.transaction(work); },
+      readTransaction: work => { reads++; return f.kernel.withTransaction(work); },
+    });
+    const before = f.db.prepare('SELECT total_changes() AS n').get()!.n, scope = host.scope(), note = host.resolve({ id: f.note.id, kind: 'resource' }, scope)!, conversation = host.resolve({ id: f.conversation.id, kind: 'resource' }, scope)!;
+    host.context(); host.search('', scope, 30); assert.equal(host.canReadContent!(note, scope), true); assert.equal(host.conversationRevision!(conversation.id), 1); assert.equal(host.canInspectCollectionArchiveReceipt!(note, scope), false);
+    assert(reads > 0); assert.equal(mutations, 0, 'Metadata APIs never enter the mutation/snapshot/save callback'); assert.equal(f.counts().graphReads, 0); assert.equal(f.db.prepare('SELECT total_changes() AS n').get()!.n, before);
+    assert.equal(host.readContent(note.id, scope)!.content, 'Actual canonical note text.'); assert.equal(host.readConversation(conversation.id).messages.length, 0); assert.equal(mutations, 0, 'Explicit reads also retain the read boundary');
+    const id = host.ensureConversation('system:vela'); host.appendMessage(id, { role: 'user', content: 'Mutation through original boundary', source: 'user', classification: 'observed' });
+    const grant = host.authorize({ phase: 'review', requestId: 'synthetic:read-boundary', intent: 'Actual explicit host authorization', scope: host.scope(), targets: [note], actions: [] }); assert.equal(grant.decision, 'allow');
+    assert(mutations >= 3, 'Ensure, append and authorization retain the mutation boundary');
+    f.throwAfterWrite(); const original = f.kernel.getResource(f.note.id).note.content;
+    assert.throws(() => host.applyNative({ action: { type: 'content', resourceId: note.id, expectedVersion: 1, content: 'Rollback' }, commandId: 'synthetic:rollback-read-boundary', requestId: 'synthetic:read-boundary', planId: 'synthetic:plan', intent: 'Rollback proof', expectedVersions: [note], authorizationRef: grant.decision === 'allow' ? grant.authorizationRef : '' }), /Synthetic dispatch failure/);
+    assert.equal(f.kernel.getResource(f.note.id).note.content, original); assert(mutations >= 4);
+  } finally { f.close(); }
+});
+
+test('optional read boundary denies a different SQLite connection before any callback body runs', () => {
+  const f = fixture(), other = new DatabaseSync(':memory:');
+  try {
+    const host = createCanonicalVelaHost({ ...f.options, readTransaction: work => work(other) });
+    assert.throws(() => host.scope(), /canonical_database_connection_mismatch/); assert.throws(() => host.readConversation(f.conversation.id), /canonical_database_connection_mismatch/); assert.equal(f.counts().graphReads, 0);
+    assert.throws(() => createCanonicalVelaHost({ ...f.options, readTransaction: null as any }), /canonical_host_callback_required/);
+  } finally { other.close(); f.close(); }
+});
+
 test('native composite forwarding requires fresh exact target manifest and actual parent grant; helper creates no blocks/layout', () => {
   const f = fixture();
   try {
