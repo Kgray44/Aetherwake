@@ -2543,6 +2543,7 @@ export function installApplication(hooks: Hooks) {
     flush: async () => {
       await flush();
       await constellation?.controller.persist();
+      await flush();
     },
     manager,
     conversations,

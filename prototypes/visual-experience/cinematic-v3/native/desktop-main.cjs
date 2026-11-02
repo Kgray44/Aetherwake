@@ -493,13 +493,22 @@ app.whenReady().then(async () => {
     )({ win, app, privateRoot, call, source, moduleStarted });
   }
 });
+async function unlockEditingAfterKeptOpen() {
+  if (win && !win.isDestroyed())
+    await win.webContents
+      .executeJavaScript("document.documentElement.inert = false")
+      .catch(() => {});
+  closing = false;
+}
 app.on("before-quit", (event) => {
   if (!child || closing) return;
   event.preventDefault();
   closing = true;
   const flush =
     win && !win.isDestroyed()
-      ? win.webContents.executeJavaScript("window.__aerynth?.flush()")
+      ? win.webContents.executeJavaScript(
+          "(async()=>{document.documentElement.inert=true;await window.__aerynth?.flush()})()",
+        )
       : Promise.resolve();
   flush
     .then(async () => {
@@ -518,7 +527,7 @@ app.on("before-quit", (event) => {
           cancelId: 0,
         });
         if (choice.response !== 1) {
-          closing = false;
+          await unlockEditingAfterKeptOpen();
           return;
         }
         for (const e of active)
@@ -542,7 +551,7 @@ app.on("before-quit", (event) => {
       if (choice.response === 1) {
         child.kill();
         app.quit();
-      } else closing = false;
+      } else await unlockEditingAfterKeptOpen();
     });
 });
 app.on("window-all-closed", () => app.quit());
