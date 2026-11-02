@@ -146,6 +146,86 @@ exports.journeyDeadline = journeyDeadline;
 exports.createJourneyGuard = createJourneyGuard;
 exports.createJourneyEvidence = createJourneyEvidence;
 
+/** Standalone browser-side hit test; do not assume a fixed pixel misses labels. */
+function spatialDragPoint(selector, bodyKey, dx, dy) {
+  const surface = document.querySelector(selector),
+    r = surface?.getBoundingClientRect();
+  if (
+    !r ||
+    !r.width ||
+    !r.height ||
+    surface.hidden ||
+    surface.closest("[inert]")
+  )
+    return { error: "Missing or inactive spatial drag surface" };
+  const exposed = (x, y) => {
+    const hit = document.elementFromPoint(x, y);
+    return (
+      hit === surface ||
+      (hit?.classList?.contains("aw-spatial-world") && surface.contains(hit))
+    );
+  };
+  const inside = (x, y) =>
+    x >= Math.max(1, r.left) &&
+    y >= Math.max(1, r.top) &&
+    x + Math.min(0, dx) >= Math.max(1, r.left) &&
+    y + Math.min(0, dy) >= Math.max(1, r.top) &&
+    x + Math.max(0, dx) < Math.min(innerWidth, r.right) &&
+    y + Math.max(0, dy) < Math.min(innerHeight, r.bottom);
+  if (bodyKey) {
+    const label = [...surface.querySelectorAll(".aw-anchor[data-key]")].find(
+        (e) => e.dataset.key === bodyKey,
+      ),
+      lr = label?.getBoundingClientRect();
+    if (!lr) return { error: "Body label missing", bodyKey };
+    const lx = lr.left + lr.width / 2 - r.left,
+      ly = lr.top + lr.height / 2 - r.top;
+    const line = [...surface.querySelectorAll(".aw-connections line")].find(
+      (l) =>
+        Math.abs(Number(l.getAttribute("x2")) - lx) < 4 &&
+        Math.abs(Number(l.getAttribute("y2")) + 15 - ly) < 4,
+    );
+    if (!line) return { error: "Projected body leader missing", bodyKey };
+    const x = Math.round(r.left + Number(line.getAttribute("x1"))),
+      y = Math.round(r.top + Number(line.getAttribute("y1")));
+    if (!inside(x, y))
+      return { error: "Projected body drag path outside field", bodyKey, x, y };
+    if (!exposed(x, y))
+      return { error: "Projected body drag target occluded", bodyKey, x, y };
+    return { point: { x, y }, method: "actual-body-leader", attempts: 1 };
+  }
+  const candidates = [
+    [0.2, 0.7],
+    ...[0.45, 0.2, 0.75, 0.9, 0.1].flatMap((y) =>
+      [0.5, 0.15, 0.85, 0.3, 0.7].map((x) => [x, y]),
+    ),
+  ];
+  const blockers = [];
+  for (let i = 0; i < candidates.length; i++) {
+    const [fx, fy] = candidates[i],
+      x = Math.round(r.left + r.width * fx),
+      y = Math.round(r.top + r.height * fy);
+    if (!inside(x, y)) continue;
+    if (exposed(x, y))
+      return {
+        point: { x, y },
+        method: "hit-tested-spatial-background",
+        attempts: i + 1,
+      };
+    const hit = document.elementFromPoint(x, y);
+    if (blockers.length < 4)
+      blockers.push(
+        String(hit?.className ?? hit?.id ?? "no element").slice(0, 160),
+      );
+  }
+  return {
+    error: "No exposed spatial background for native drag",
+    attempts: candidates.length,
+    blockers,
+  };
+}
+exports.spatialDragPoint = spatialDragPoint;
+
 const geometry = (s) =>
   s.blocks
     .map(
@@ -686,9 +766,26 @@ async function verifyJourney({
     run.guard();
   };
   const drag = async (selector, dx, dy, modifiers = [], bodyKey) => {
-    const p = await js(
-      `(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e?.getBoundingClientRect();if(!r)throw Error('Missing drag surface');let x=Math.round(r.x+r.width*.2),y=Math.round(r.y+r.height*.7);const key=${JSON.stringify(bodyKey ?? null)};if(key){const label=document.querySelector('[data-key="'+key+'"]'),lr=label?.getBoundingClientRect();if(!lr)throw Error('Body label missing');const lx=lr.x+lr.width/2-r.x,ly=lr.y+lr.height/2-r.y,lines=[...document.querySelectorAll('.aw-connections line')];const line=lines.find(l=>Math.abs(Number(l.getAttribute('x2'))-lx)<4&&Math.abs(Number(l.getAttribute('y2'))+15-ly)<4);if(!line)throw Error('Projected body leader missing');x=Math.round(r.x+Number(line.getAttribute('x1')));y=Math.round(r.y+Number(line.getAttribute('y1')));}const h=document.elementFromPoint(x,y);if(h!==e&&!h?.classList.contains('aw-spatial-world'))throw Error('Drag target occluded: '+h?.className);return {x,y}})()`,
+    const target = await js(
+      `(${spatialDragPoint.toString()})(${JSON.stringify(selector)},${JSON.stringify(bodyKey ?? null)},${JSON.stringify(dx)},${JSON.stringify(dy)})`,
     );
+    receipt.lastSpatialGesture = {
+      selector,
+      dx,
+      dy,
+      modifiers,
+      bodyKey: bodyKey ?? null,
+      target,
+    };
+    await evidence.record({
+      phase: "spatial-gesture-start",
+      ...receipt.lastSpatialGesture,
+    });
+    assert.ok(
+      target.point && !target.error,
+      "Native spatial drag target: " + JSON.stringify(target),
+    );
+    const p = target.point;
     send({ type: "mouseMove", ...p, modifiers });
     send({
       type: "mouseDown",
