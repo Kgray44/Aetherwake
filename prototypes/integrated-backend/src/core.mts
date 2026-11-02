@@ -114,14 +114,14 @@ export class BackendCore {
         const row = db.prepare('SELECT json FROM integration_state WHERE id=1').get();
         this.storedJson = row ? String(row.json) : null;
         if (row) this.state = JSON.parse(String(row.json));
-        else this.state = { schemaVersion: 1, graph: new ConversationGraph(this.localAdapters()).snapshot(), resources: {}, revisions: {}, bindings: {}, reviews: {}, executions: {}, messageEvidence: {}, receipts: {} };
+        else this.state = { schemaVersion: 1, graph: this.createGraph().snapshot(), resources: {}, revisions: {}, bindings: {}, reviews: {}, executions: {}, messageEvidence: {}, receipts: {} };
         // Additive optional metadata within experimental schema 1.
         this.state.messageEvidence ??= {};
         this.state.contextSupplies ??= {};
         this.state.vela ??= {conversationId:null,messages:{},planning:{},delegations:{}};
         ensure(this.state.schemaVersion === 1, 'unsupported_schema');
-        this.graph = new ConversationGraph(this.localAdapters(), this.state.graph);
-        if(!this.graph.snapshot().providers.some(p=>p.id==='local')){const graph=this.graph.snapshot();graph.providers.push(localConversationAdapter().snapshot);this.graph=new ConversationGraph(this.localAdapters(),graph);}
+        this.graph = this.createGraph(this.state.graph);
+        if(!this.graph.snapshot().providers.some(p=>p.id==='local')){const graph=this.graph.snapshot();graph.providers.push(localConversationAdapter().snapshot);this.graph=this.createGraph(graph);}
         this.validateState();
         for (const e of Object.values(this.state.executions)) {
           if (e.state === 'dispatching' || e.state === 'running') {
@@ -461,6 +461,9 @@ export class BackendCore {
     const current=await this.prepareConversationSend(entry.input);ensure(current.fingerprint===input.fingerprint,'stale_send_preview');ensure(!this.active,'execution_busy');ensure(!grant.consumed,'native_send_grant_consumed');grant.consumed=true;
     return this.runExecution({resourceId:entry.input.resourceId,prompt:entry.input.content,commandId:entry.input.commandId,expectedRevision:entry.input.expectedRevision,authorized:true,...(entry.input.model?{model:entry.input.model}:{}),...(current.handoff?{handoffId:current.handoff.id}:{})},{input:entry.input,preview:current});
   }
+  private createGraph(imported?: GraphData): ConversationGraph {
+    return new ConversationGraph(this.localAdapters(), imported, {clock:{now}});
+  }
   private localAdapters(): GraphAdapter[] {
     const ordinary = mockOrdinaryAdapter();
     const staging: GraphAdapter = { snapshot: { ...ordinary.snapshot, id: this.port.id, label: this.port.mock ? 'SIMULATED Codex fixture' : 'Codex local identity staging (execution not established)', mock: this.port.mock, nativeFork: { supported: false, authorized: false, availability: 'unsupported' } }, open: () => ({ providerSessionId: null }) };
@@ -507,7 +510,7 @@ export class BackendCore {
     const graphBefore = this.graph.snapshot();
     const storedBefore = this.storedJson;
     try { return this.kernel.withTransaction(() => { const result = fn(); this.save(); return result; }); }
-    catch (error) { this.state = before; this.storedJson = storedBefore; this.graph = new ConversationGraph(this.localAdapters(), graphBefore); throw error; }
+    catch (error) { this.state = before; this.storedJson = storedBefore; this.graph = this.createGraph(graphBefore); throw error; }
   }
   private gid(resourceId: string) { ensure(typeof resourceId === 'string' && Object.hasOwn(this.state.resources, resourceId), 'resource_not_found'); return this.state.resources[resourceId]; }
   private publicId(graphId: string) { const id = Object.keys(this.state.resources).find(id => this.state.resources[id] === graphId); ensure(id, 'resource_not_found'); return id; }
@@ -761,7 +764,7 @@ export class BackendCore {
         ensure(!Object.values(this.state.executions).some(e => e.resourceId === a.resourceId && ['unknown','running','dispatching'].includes(e.state)), 'reconciliation_required');
         const data = this.graph.snapshot(); const c = data.conversations.find(c => c.id === this.gid(a.resourceId))!;
         c.providerId = a.providerId; c.kind = ['local','mock-ordinary'].includes(a.providerId) ? 'ordinary' : 'codex'; c.providerSessionId = null;
-        this.graph = new ConversationGraph(this.localAdapters(), data); this.state.revisions[a.resourceId]++; return this.conv(a.resourceId);
+        this.graph = this.createGraph(data); this.state.revisions[a.resourceId]++; return this.conv(a.resourceId);
       }) as any;
       case 'applyOrdinary': return this.atomic(() => this.once(a.commandId, { name, ...a }, () => {
         const r = this.package(a.handoffId); ensure(r.targetProviderId === 'mock-ordinary', 'invalid_cross_provider_reference'); ensure(r.state === 'approved', 'handoff_not_approved');

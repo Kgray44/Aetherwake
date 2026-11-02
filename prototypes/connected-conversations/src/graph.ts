@@ -66,6 +66,10 @@ export interface ProviderAdapter {
   fork?(request: SessionRequest): { providerSessionId: string | null };
   respond?(conversation: Conversation, prompt: string): string;
 }
+/** The sequence is the existing persisted observation counter, not elapsed time. */
+export interface ConversationClock { now(sequence: number): string }
+export interface ConversationGraphOptions { clock?: ConversationClock }
+const wallClock: ConversationClock = { now: () => new Date().toISOString() };
 const digest = (content: string) => createHash('sha256').update(content).digest('hex');
 function assert(condition: unknown, reason: string): asserts condition {
   if (!condition) throw new Error(reason);
@@ -74,7 +78,10 @@ const copy = <T>(value: T): T => structuredClone(value);
 export class ConversationGraph {
   private data: GraphData;
   private adapters: Map<string, ProviderAdapter>;
-  constructor(adapters: ProviderAdapter[], imported?: GraphData) {
+  private readonly clock: ConversationClock;
+  constructor(adapters: ProviderAdapter[], imported?: GraphData, options: ConversationGraphOptions = {}) {
+    this.clock = options.clock ?? wallClock;
+    assert(typeof this.clock.now === 'function', 'invalid conversation clock');
     this.adapters = new Map(adapters.map(a => [a.snapshot.id, a]));
     assert(this.adapters.size === adapters.length, 'duplicate adapter');
     this.data = imported ? copy(imported) : {
@@ -89,8 +96,11 @@ export class ConversationGraph {
     return prefix + '-' + String(this.data.counter).padStart(5, '0');
   }
   private now(): string {
-    const time = new Date(Date.UTC(2026, 0, 1, 0, 0, this.data.tick++));
-    return time.toISOString();
+    const value = this.clock.now(this.data.tick);
+    assert(typeof value === 'string' && Number.isFinite(Date.parse(value)), 'invalid conversation clock time');
+    const time = new Date(value).toISOString();
+    this.data.tick++;
+    return time;
   }
   private adapter(id: string): ProviderAdapter {
     const adapter = this.adapters.get(id);
@@ -292,8 +302,8 @@ export class ConversationGraph {
   }
   snapshot(): GraphData { return copy(this.data); }
   exportJson(): string { this.validate(); return JSON.stringify(this.data, null, 2); }
-  static importJson(json: string, adapters: ProviderAdapter[]): ConversationGraph {
-    return new ConversationGraph(adapters, JSON.parse(json) as GraphData);
+  static importJson(json: string, adapters: ProviderAdapter[], options: ConversationGraphOptions = {}): ConversationGraph {
+    return new ConversationGraph(adapters, JSON.parse(json) as GraphData, options);
   }
   validate(): void {
     const d = this.data;
