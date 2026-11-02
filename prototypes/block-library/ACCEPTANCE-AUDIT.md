@@ -1,0 +1,61 @@
+# Universal Block System acceptance audit
+
+Snapshot: 2026-11-02 UTC, worker source `cafcba5`. The original Universal Block System request remains active. This audit records evidence and remaining work; it creates no new requirement, approval, framework decision or product acceptance.
+
+The latest source regression run passed **211 tests** across workspace-engine, block-library and the selected real backend Library/Note integration suites, with strict block-library TypeScript checking. CPU/component/Core checks establish their exercised behavior, not native interaction, motion, displayed frame rate or artistic acceptance.
+
+## Evidence boundaries
+
+| Evidence | What it establishes | Limit |
+| --- | --- | --- |
+| Actual normal ten-kind/three-shape initial and separate restart at parent `d2f3d0b` | Meaningful native primary actions, direct corner resize, retained editor nodes/selection/scroll, saved lens/circle/pill geometry, complete painted short-Chat line, two exact local user messages across restart and zero provider execution | Each type uses its synthetic workspace. Later source review invalidated independent startup/console-error absence claims because capture wiring/signature were wrong. Graphics checks and canonical data audits remain distinct valid observations. |
+| Independent source/SQLite audit of that run | 209 source hashes bound to both receipts; 13 workspaces, 15 placements, exact IDs/shapes/geometry, Note content and Chat message/draft state | Read-only data/source audit, not a substitute for native image, motion or current-source execution. Private evidence stays outside public source. |
+| Parent-reported expanded 25-step Constellation journey plus separate restart at `03ccd51` | Combined desktop spatial travel, relationships, geometry/content preservation and restart for that candidate | Does not automatically close every original Block Library, template or Vela journey. See the integration lead's current status. |
+| Actual native A/C retry at parent `088bda4` | Native project/Blank creation, real Chat/Note/Task creation, local Chat Send/acknowledgement and independent draft, Task completion and saved Note edit | **Failed** at its first Note context target; detach/reattach and named-template steps were not reached. Correct actual-signature console/startup capture reported no observed errors. Preserve the failed profile and receipt. |
+| A/C correction `6ca8b76` | Source/CPU correction for intentionally pointer-transparent kind labels, strict same-card surface hits, bounded target/ancestor diagnostics and retained-frame failure PNGs | Fresh native initial/restart are still required. A failure diagnostic can never turn a receipt into a pass. |
+| Approach mode `cafcba5` | Source readiness for actual tiny Research, saved-pill Task and saved-circle Reference Approach/Return and Open/Back, with exact camera/geometry/editor-state assertions and fresh-process recovery | Native run pending. Its fixture navigation/camera setup is explicitly canonical preparation; primary interactions must be native input. It does not replace the normal ten-kind journey. |
+| Real hidden-browser contour fixture | 72 shape/size/morph cases, 576 grip centers and 144 editor corners, with zero hit-test failures | DOM/software fixture, not native GPU or monitor-presented motion. |
+
+The capture fixes are additive next-candidate work. Frozen review C remains immutable. A later source fix does not retroactively qualify an earlier run's unobserved behavior.
+
+## Original twenty criteria
+
+| Criterion | Current evidence and remaining qualification |
+| --- | --- |
+| 1. Functioning Block Registry | Ten typed manifests, validation, honest capability discovery and exhaustive per-kind new-placement defaults are implemented and source tested. |
+| 2. Beautiful, searchable Block Library | Search, details, inert previews, recommendations and native creation are implemented. Actual A/C retry reached real search/details/create. Beauty and the full current journey remain open. |
+| 3. Add New and Attach Existing | Canonical factories, project/collection-scoped discovery, same-ID attachment and stale/denied handling are source tested. Actual normal browser attachment exists; the new A/C attach/edit/detach/reattach lifecycle remains incomplete. |
+| 4. Specialized meaningful interfaces | Shared Chat; writing Note; findings/sources Research; source-first Reference; Task; checklist Task group; recorded-event Stream; Project Overview; Resource Browser; Collection Browser. Normal primary actions have candidate-bound native evidence. Related resources is still an unwired App callback; full combined journey B is open. |
+| 5. Persistent configuration | Per-placement text scale/content presentation, capture/apply/undo/restart are source tested. The new A/C native 125%/150% configuration and actual font checks are pending. |
+| 6. Stable multi-placement resource identity | Real SQLite/Core capture/reuse/attach/detach/undo/restart tests preserve canonical IDs and histories; saved curved placements reference original resources. A/C provides the remaining explicit native lifecycle. |
+| 7. Compact/focused behavior | Functional ordinary cards retain the same controllers/editors; measured per-kind overview and explicit Approach/Open fallback are integrated next-candidate source. Native Approach/Return, constrained space and all identity states remain open. |
+| 8. Provider capability states | Unsupported, disconnected, unknown and denied states fail honestly; opening or creating a provider identity does not imply a turn. Current live-provider/native inference evidence belongs to its actual provider owner/candidate, not these local-recording tests. |
+| 9. Usable Template Library | Search, built-in/custom details and layout preview are implemented and component tested. New actual A/C lifecycle has not reached its template phase. |
+| 10. Named custom templates | Explicit capture bindings, save/rename/archive/restore/versioning and SQLite persistence are tested. Native capture/find/preview/restart remain open. |
+| 11. Safe instantiation | Native grants, current project/resource/layout fences, atomic rollback, persistent idempotent receipts, no content/history cloning and explicit new/reference semantics are source tested. Current native A/C instantiation remains open. |
+| 12. Blank or Template creation | Blank defaults to Fluid; supported built-ins create canonical roles and real task membership. The actual A/C retry created Blank through UI. Named-template native creation remains open. |
+| 13. Typed Vela construction | Typed preview/apply/resource construction ports exist; missing planner/provider reports unavailable. Full current model-powered discovery/plan/review/apply/restart journey D remains with Vela/Core/App integration. No synthetic plan is claimed as model interpretation. |
+| 14. Three layout modes | Canonical Fluid/Freeform/Structured policies, collision resolution, explicit geometry preservation, history and camera behavior have real engine/backend tests. New Library placement avoids occupied space without rewriting deliberate saved Freeform overlaps. Full native mode/mixed-scale qualification remains open. |
+| 15. Constellation compatibility | Parent's combined 25-step/restart evidence supports that exact integration. Original journey E and later candidate changes remain the integration/Constellation owners' acceptance responsibility. |
+| 16. Glass and motion preservation | Block modules retain the shared material renderer and single Motion Coordinator; no replacement optical asset or per-block renderer loop was introduced. Actual stills and sampled motion have bounded review. Whole-product artistic/motion acceptance remains open. |
+| 17. Keyboard interaction | Semantic controls, native typing/selection and direct-card keyboard commands are implemented; source/native checks cover exercised paths. Full tab order, assistive use and reduced-motion coverage remain open. |
+| 18. Restart recovery | Actual normal-card and spatial restarts preserve their recorded identities/content/layout/drafts. New A/C template/configuration and Approach checkpoints require separate successful native processes. |
+| 19. No critical regressions | Latest selected source suite passes 211 checks. This is not proof of all native flows, long-run stability or absence of untested failures. |
+| 20. Actual native visual/functional evidence | Exists for the specific normal/spatial/short-Chat runs above. Full original journeys, current captures, native scale and owner review are incomplete. |
+
+## Original journeys and immediate work
+
+| Journey | Status and next concrete action |
+| --- | --- |
+| A: Block Library | Fresh A/C retry with the corrected surface-target helper; finish native resize, attach/edit/detach/reattach and a separate restart. Preserve all failed profiles and receipts. |
+| B: Different functional blocks | Existing isolated-kind native actions are partial evidence. Collect the required combined ordinary/Codex/Note/Task/Stream/Project workspace flow, using only genuinely supported authorized provider turns. |
+| C: Workspace templates | Current A/C helper contains actual Blank/create/arrange/mode/capture/leave/find/preview/instantiate/modify/immutable-original/restart assertions. It must complete through real UI; source readiness is insufficient. |
+| D: Vela construction | Coordinate the genuine typed native plan flow and separately qualify supported model-powered interpretation. Template orchestration and conversational acceptance remain open. |
+| E: Projects and Constellation | Reuse exact candidate-bound combined spatial proof where it actually matches each required step. Close remaining native project/template creation and current-source return/restart gaps with the owners. |
+| F: Failure/recovery | Real Core/component suites cover missing/unknown manifests, unavailable resources/providers, invalid/outdated bindings, stale revisions, atomic rollback, competing drafts, workspace departure, repeated create/apply and closed-view lifetime. Actual interrupted-save, graphics-context-loss/recovery and combined failure matrix remain open. |
+
+The Note Related resources release `46fe965` supplies the optional `openRelated` callback, typed view and six actual graphAction/Core/component checks. It remains separate from the integrated App until its owner wires the canonical broker, queue and surface lifecycle described in [NATIVE-INTEGRATION.md](NATIVE-INTEGRATION.md). There is no new relationship store or RPC family. Do not describe that source-only menu path as native functionality.
+
+The required native **0/1/3/10/25/50** mixed-block matrix remains open. [SCALE-EVIDENCE.md](SCALE-EVIDENCE.md) records real backend operation samples and bounded native preparation/readiness, including the adverse 50-card baseline. Neither callback counts, backend timings nor submitted GPU draws establish effortless resizing, OS-presented frame rate, idle/hidden suspension, sustained memory behavior or graphics restoration.
+
+Complete actual A/C and Approach initial/restart first, wire the remaining related-resource callback, then close the remaining coordinated B/D/E/F and native scale evidence. Continue preserving saved geometry, original assets, private histories and unrelated work throughout. The objective must remain open until the original required deliverables and applicable acceptance are actually handled.
