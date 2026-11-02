@@ -64,6 +64,10 @@ export class ConstellationScene implements SpatialRenderLayer {
     { identity: string; appearance: ReturnType<typeof planetAppearance> }
   >();
   private dataNodes: Map<string, Node> | null = null;
+  private observedNodes: Map<string, Node>;
+  private pendingArrivals = new Set<string>();
+  private arriving = new Set<string>();
+  private unsubscribe: () => void;
   private edgeData: SpatialEdge[] = [];
   private candidateScope = "";
   private orderKey = "";
@@ -89,6 +93,7 @@ export class ConstellationScene implements SpatialRenderLayer {
     detailedBodies: 0,
     instancedBodies: 0,
     instanceDrawCount: 0,
+    arrivingBodies: 0,
     projectedBodies: [] as {
       key: string;
       x: number;
@@ -117,14 +122,17 @@ export class ConstellationScene implements SpatialRenderLayer {
     this.bounds = bounds;
     this.wake = wake;
     this.exclusions = exclusions;
+    this.observedNodes = controller.nodes;
     const rect = bounds();
     navigation.setViewport(rect.width, rect.height);
     this.scene.add(this.links);
     this.raycaster.params.Line = { threshold: 12 };
+    this.unsubscribe = controller.subscribe(() => this.observeGraph());
   }
   get active() {
     return (
       this.enabled &&
+      this.navigation.presentation === "spatial" &&
       !this.disposed &&
       !this.lost &&
       !this.controller.policy.hidden &&
@@ -135,6 +143,7 @@ export class ConstellationScene implements SpatialRenderLayer {
   private create(n: Node) {
     const root = createPlanet(n.id, n.kind, this.primitives);
     root.userData.key = n.key;
+    root.userData.identity = n.kind + ":" + n.id;
     root.traverse((o) => {
       o.userData.key = n.key;
       if (o instanceof THREE.Mesh)
@@ -144,9 +153,17 @@ export class ConstellationScene implements SpatialRenderLayer {
     return root;
   }
   private release(root: THREE.Group) {
-    this.controller.motion.bodies.delete(
-      this.controller.motionId + ":body:" + root.userData.key,
-    );
+    this.arriving.delete(root.userData.key);
+    const id = this.controller.motionId + ":body:" + root.userData.key,
+      body = this.controller.motion.bodies.get(id);
+    if (body?.transitioning)
+      this.controller.motion.record(
+        id,
+        "spatial body released",
+        "cancelled",
+        body.transition,
+      );
+    this.controller.motion.bodies.delete(id);
     const used = new Set<THREE.Material>();
     root.traverse((o) => {
       if (o instanceof THREE.Mesh) {
@@ -159,6 +176,53 @@ export class ConstellationScene implements SpatialRenderLayer {
       this.materials.delete(m);
     }
     root.removeFromParent();
+  }
+  private get arrivalLimit() {
+    return this.controller.policy.tier === "efficient"
+      ? 8
+      : this.controller.policy.tier === "balanced"
+        ? 12
+        : 24;
+  }
+  private get arrivalMotionAllowed() {
+    return (
+      this.active &&
+      !this.controller.policy.reduced &&
+      !this.controller.policy.quiet &&
+      !this.controller.motion.reduced
+    );
+  }
+  private observeGraph() {
+    if (!this.arrivalMotionAllowed) this.pendingArrivals.clear();
+    const current = this.controller.nodes;
+    if (current === this.observedNodes) return;
+    const previous = this.observedNodes;
+    this.observedNodes = current;
+    for (const key of this.pendingArrivals)
+      if (!current.has(key)) this.pendingArrivals.delete(key);
+    for (const [key, root] of this.objects) {
+      const node = current.get(key);
+      if (!node || root.userData.identity !== node.kind + ":" + node.id) {
+        this.release(root);
+        this.objects.delete(key);
+      }
+    }
+    for (const key of this.labelOffsets.keys())
+      if (!current.has(key)) this.labelOffsets.delete(key);
+    if (!this.arrivalMotionAllowed) {
+      this.pendingArrivals.clear();
+      return;
+    }
+    // Only observed additions to the authorized graph can request an arrival.
+    // Queue bounds also cover a large imported batch before the next host frame.
+    for (const node of current.values()) {
+      const old = previous.get(node.key);
+      if (
+        (!old || old.id !== node.id || old.kind !== node.kind) &&
+        this.pendingArrivals.size < this.arrivalLimit
+      )
+        this.pendingArrivals.add(node.key);
+    }
   }
   private configure(width: number, height: number) {
     this.navigation.setViewport(width, height);
@@ -191,6 +255,13 @@ export class ConstellationScene implements SpatialRenderLayer {
   }
   update(width: number, height: number) {
     this.configure(width, height);
+    for (const key of this.arriving)
+      if (
+        !this.controller.motion.bodies.get(
+          this.controller.motionId + ":body:" + key,
+        )?.transitioning
+      )
+        this.arriving.delete(key);
     const pose = this.navigation.camera;
     const positionKey = [...this.objects.keys()]
       .map((key) => {
@@ -257,6 +328,22 @@ export class ConstellationScene implements SpatialRenderLayer {
         this.camera.matrixWorldInverse,
       ),
     );
+    if (this.pendingArrivals.size) {
+      if (this.arrivalMotionAllowed) {
+        const candidates = new Set(this.candidates.map((n) => n.key)),
+          sphere = new THREE.Sphere();
+        for (const key of this.pendingArrivals) {
+          if (!candidates.has(key) || this.arriving.size >= this.arrivalLimit)
+            continue;
+          const p = this.navigation.position(key);
+          sphere.center.set(p.x, p.y, p.z);
+          sphere.radius = this.navigation.radius(key);
+          if (frustum.intersectsSphere(sphere)) this.arriving.add(key);
+        }
+      }
+      // Off-screen/inactive additions never replay when the camera returns.
+      this.pendingArrivals.clear();
+    }
     const max =
       this.controller.policy.tier === "efficient"
         ? 70
@@ -284,6 +371,7 @@ export class ConstellationScene implements SpatialRenderLayer {
       sortTarget.z,
       this.controller.selected,
       this.navigation.layoutRevision,
+      [...this.arriving],
     ]);
     if (orderKey !== this.orderKey) {
       this.orderKey = orderKey;
@@ -296,14 +384,16 @@ export class ConstellationScene implements SpatialRenderLayer {
             radius: this.navigation.radius(n.key),
             priority:
               n.key === this.controller.selected
-                ? -1
-                : this.relatedKeys.has(n.key) && n.kind === "resource"
-                  ? 0
-                  : n.kind === "project"
-                    ? 1
-                    : n.kind === "workspace"
-                      ? 2
-                      : 3,
+                ? -2
+                : this.arriving.has(n.key)
+                  ? -1
+                  : this.relatedKeys.has(n.key) && n.kind === "resource"
+                    ? 0
+                    : n.kind === "project"
+                      ? 1
+                      : n.kind === "workspace"
+                        ? 2
+                        : 3,
             distance:
               (p.x - sortTarget.x) ** 2 +
               (p.y - sortTarget.y) ** 2 +
@@ -379,7 +469,7 @@ export class ConstellationScene implements SpatialRenderLayer {
         this.scene.add(root);
         const id = this.controller.motionId + ":body:" + n.key;
         this.controller.motion.add(id, {
-          x: 1,
+          x: this.arriving.has(n.key) ? 0.88 : 1,
           y: 0,
           w: 0,
           h: 0,
@@ -397,7 +487,9 @@ export class ConstellationScene implements SpatialRenderLayer {
         this.controller.motion.target(
           motionId,
           { x: targetScale, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity: 1 },
-          "spatial body emphasis",
+          this.arriving.has(n.key)
+            ? "authorized graph addition"
+            : "spatial body emphasis",
         );
         this.wake();
       }
@@ -459,6 +551,7 @@ export class ConstellationScene implements SpatialRenderLayer {
     this.diagnostics.detailedBodies = detailed.length;
     this.diagnostics.instancedBodies = this.shown.length - detailed.length;
     this.diagnostics.instanceDrawCount = this.distantKeys.length;
+    this.diagnostics.arrivingBodies = this.arriving.size;
     this.diagnostics.culled = this.candidates.length - this.shown.length;
   }
   private updateDistant() {
@@ -885,6 +978,7 @@ export class ConstellationScene implements SpatialRenderLayer {
   }
   contextLost() {
     this.lost = true;
+    this.pendingArrivals.clear();
   }
   contextRestored() {
     this.lost = false;
@@ -892,6 +986,9 @@ export class ConstellationScene implements SpatialRenderLayer {
   }
   dispose() {
     this.disposed = true;
+    this.unsubscribe();
+    this.pendingArrivals.clear();
+    this.arriving.clear();
     for (const root of this.objects.values()) this.release(root);
     this.objects.clear();
     this.releaseDistant();

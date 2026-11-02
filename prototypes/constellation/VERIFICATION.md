@@ -2,7 +2,9 @@
 
 ## Current source checkpoint
 
-The latest full source run passes **94 tests** and strict TypeScript. This is source evidence, not completion of the owner's native gates A–J.
+The latest full source run passes **98 tests** and strict TypeScript. This is source evidence, not completion of the owner's native gates A–J.
+
+The arrival follow-up is separate from Integration's frozen review B (`f896560`). Live authorized graph additions now request a bounded, one-time 0.88→1 scale arrival through the existing Motion Coordinator; selection keeps priority. Four new scene regressions cover project/workspace/resource additions, no replay after frustum re-entry or metadata updates, suppression across hidden/reduced/Quiet/list/graphics states, and bounded dense-batch allocations with immediate revoked-motion cleanup. Existing anchors/pins and GPU instance position buffers stay fixed. No new animation loop, renderer, persistence field or provider operation is added. This source follow-up has no new native motion/artistic receipt and should enter a later integrated candidate.
 
 Explicit named views now retain independent camera, selection, neighborhood and navigation/presentation modes through the existing private view-state service. The command palette opens only a compact save/picker panel; no persistent controls were added. Eight regressions cover exact return/Back/Forward, restart and legacy omission, name/cap validation, malformed input and permission pruning, awaited supersession/manual input, persistence failure/retry, and actual form routing without graph mutation. A full 10,000-UUID placement state plus 32 entries each of history, Forward and named views fits the host's 2 MiB ceiling. Bookmark arrival revalidates focus IDs after awaited navigation, preventing revoked selection/neighborhood IDs from reappearing.
 
