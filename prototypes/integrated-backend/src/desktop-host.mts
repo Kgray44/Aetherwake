@@ -59,6 +59,8 @@ lines.on("line", async (line) => {
         "vela",
         "library",
         "notes",
+        "agents",
+        "checklists",
         "velaRequestPreview",
         "velaNativeReview",
         "authorizeVelaRequest",
