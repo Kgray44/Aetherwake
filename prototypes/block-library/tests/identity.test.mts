@@ -78,7 +78,9 @@ test("all registered kinds project a distinct useful structure; Codex has observ
     }),
   );
   assert.equal(new Set(models.map((model) => model.layout)).size, 10);
-  assert.equal(new Set(models.map((model) => model.label)).size, 10);
+  assert.equal(new Set(models.map((model) => model.label)).size, 9);
+  assert.equal(models.find(model => model.kind === 'resource_browser')!.label, 'Resource Explorer');
+  assert.equal(models.find(model => model.kind === 'collection_browser')!.label, 'Resource Explorer');
   assert.equal(models[0].rows.length, 0, "No invented assistant response");
   assert.equal(models[4].rows.length, 0, "No invented activity");
   assert.equal(models[5].phase, "loading");
@@ -229,11 +231,11 @@ test("resource search retains its input/caret; refreshed rows use real canonical
   );
   assert.equal(
     f.article.querySelector(".anchor-label small")!.textContent,
-    "Resources",
+    "Resource Explorer",
   );
   assert.equal(
     f.article.querySelector(".resource-anchor")!.getAttribute("aria-label"),
-    "Open Resources · Synthetic title",
+    "Open Resource Explorer · Synthetic title",
   );
 });
 

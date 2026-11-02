@@ -122,6 +122,8 @@ const define = (
       ? ["chat", "codex", "messages", "local"]
       : kind === "note"
         ? ["notes", "markdown", "writing"]
+        : kind === 'task' || kind === 'task_group'
+          ? ['manual', 'to-do', 'local task', 'canonical task']
         : []),
   ],
   defaultPresentation: presentation({
@@ -164,25 +166,25 @@ export const BUILTIN_BLOCKS: readonly BlockDefinition[] = deepFreeze([
   ),
   define(
     "research",
-    "Research",
+    "Research Notebook",
     "knowledge",
-    "A research note for sources, findings and unresolved questions.",
-    ["Edit research", "Link resources", "Open note"],
-    "A blank research note. It does not perform an automatic investigation.",
+    "Record findings, source links and unresolved questions in a research notebook.",
+    ["Edit notebook", "Link resources", "Open notebook"],
+    "A notebook for your findings and sources. Research agent execution is a separate capability.",
   ),
   define(
     "task",
-    "Task",
+    "Manual Task",
     "planning",
-    "A persistent task with canonical open and done controls.",
+    "A manually managed to-do with a description, priority and completion state.",
     ["Edit task", "Set open or done", "Open task"],
     "An open task. Status records your change; it does not claim verified agent execution.",
   ),
   define(
     "task_group",
-    "Task group",
+    "Manual Task Group",
     "planning",
-    "A collection of canonical task references, with membership managed by the host.",
+    "Group your existing manual tasks. Their checkmarks record manual completion.",
     ["Manage task members", "Inspect member status", "Open task"],
     "An empty group. Adding a task references the existing task identity.",
   ),
@@ -252,8 +254,8 @@ export const SUBJECT_BLOCKS: readonly BlockDefinition<SubjectBlockKind>[] =
     ),
     subjectDefinition(
       "resource_browser",
-      "Resource Browser",
-      "Search authorized canonical resources, including resources without a current placement.",
+      "Resource Explorer — Resources",
+      "Explore all permitted resources or a saved project/search scope. Open a resource without attaching it.",
       [
         "Search resources",
         "Filter by kind",
@@ -264,8 +266,8 @@ export const SUBJECT_BLOCKS: readonly BlockDefinition<SubjectBlockKind>[] =
     ),
     subjectDefinition(
       "collection_browser",
-      "Collection Browser",
-      "Browse a canonical collection without cloning its members.",
+      "Resource Explorer — Collection",
+      "Explore an existing collection's members without changing membership or duplicating resources.",
       ["Browse collection", "Open resource", "Attach existing resource"],
       "collection",
     ),

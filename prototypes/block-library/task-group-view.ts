@@ -37,7 +37,7 @@ export function mountTaskGroupExperience(
     list = node("ul", "", "aw-task-group-list"),
     status = node("p", "", "aw-task-group-status"),
     manage = node("button", "Manage tasks");
-  section.setAttribute("aria-label", "Task group checklist");
+  section.setAttribute("aria-label", "Manual task group");
   section.dataset.presentation = options.presentation ?? "focused";
   section.dataset.noCardDrag = "true";
   completion.min = 0;

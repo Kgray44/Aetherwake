@@ -79,8 +79,8 @@ const placementLabel = (
       : placement.subjectBinding.subject.kind === "project"
         ? "Project overview"
         : placement.subjectBinding.subject.kind === "collection"
-          ? "Collection browser"
-          : "Resource browser";
+          ? "Resource Explorer — Collection"
+          : "Resource Explorer — Resources";
 const kindTitle = (kind: BlockInstanceKind) => REGISTERED_BLOCKS.find(definition => definition.kind === kind)?.title ?? 'Unavailable block';
 const placementKind = (template: WorkspaceTemplate, placement: TemplatePlacementRole): BlockInstanceKind | undefined =>
   placement.resourceKey !== undefined

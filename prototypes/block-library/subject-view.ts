@@ -60,8 +60,8 @@ export function mountSubjectExperience(
     subject.kind === "project"
       ? "Project overview"
       : subject.kind === "collection"
-        ? "Collection browser"
-        : "Resource browser",
+        ? "Resource Explorer — Collection"
+        : "Resource Explorer — Resources",
   );
   section.append(refresh, status, body);
   root.append(section);
@@ -81,11 +81,16 @@ export function mountSubjectExperience(
     });
   search.type = "search";
   search.maxLength = 500;
-  search.placeholder = "Search resource titles and IDs";
-  search.setAttribute("aria-label", "Search canonical resources");
+  search.placeholder = "Search resources";
+  search.setAttribute("aria-label", "Search resources");
   kind.setAttribute("aria-label", "Resource kind");
   unplaced.type = "checkbox";
   if (subject.kind !== "project") {
+    const scope = subject.kind === 'collection' ? 'Collection membership'
+      : subject.collectionId ? 'Saved search within a collection'
+      : subject.projectId ? 'Project resources' : 'All authorized resources';
+    section.dataset.explorerScope = subject.kind === 'collection' ? 'collection' : subject.collectionId ? 'collection-query' : subject.projectId ? 'project' : 'all';
+    body.append(node('p', scope, 'aw-subject-hint'));
     const all = node("option", "All resource kinds");
     all.value = "";
     kind.append(all);
@@ -285,7 +290,8 @@ export function mountSubjectExperience(
       }
       item.resource = resource;
       item.row.dataset.resourceKind = resource.kind;
-      item.kind.textContent = ({ conversation: "CHAT", note: "NOTE", task: "TASK", task_group: "LIST", stream: "FEED", research: "STUDY", reference: "REF", file: 'FILE', link: 'LINK' } as const)[resource.kind];
+      item.kind.textContent = ({ conversation: "CHAT", note: "NOTE", task: "MANUAL", task_group: "MANUAL GROUP", stream: "FEED", research: "NOTEBOOK", reference: "REF", file: 'FILE', link: 'LINK' } as const)[resource.kind];
+      item.kind.setAttribute('aria-label', BUILTIN_BLOCKS.find(definition => definition.kind === resource.kind)?.title ?? resource.kind);
       item.title.textContent = resource.title;
       if (options.openResource)
         item.title.setAttribute("aria-label", "Open " + resource.title);

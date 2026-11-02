@@ -75,13 +75,13 @@ const document = (content: string) => {
 const typeLabel = {
   conversation: "Conversation",
   note: "Note",
-  task: "Task",
-  task_group: "Task group",
+  task: "Manual Task",
+  task_group: "Manual Task Group",
   stream: "Activity",
   project_overview: "Project",
-  resource_browser: "Resources",
-  collection_browser: "Collection",
-  research: "Research",
+  resource_browser: "Resource Explorer",
+  collection_browser: "Resource Explorer",
+  research: "Research Notebook",
   reference: "Reference",
   file: 'File',
   link: 'Link',
@@ -170,7 +170,7 @@ export function blockIdentity(input: {
   } else if (kind === "task") {
     model.layout = "task";
     model.subtitle =
-      "Local task · " + (resource?.taskPriority ?? "priority not set");
+      "Manual task · " + (resource?.taskPriority ?? "priority not set");
     model.rows = resource
       ? [
           {
@@ -287,8 +287,8 @@ export function blockIdentity(input: {
       model.heading = page.scopeTitle ?? "";
       model.subtitle =
         kind === "collection_browser"
-          ? "Items in this collection"
-          : "Your resources";
+          ? "Collection membership"
+          : "Resources in this saved scope";
       model.rows = page.resources.slice(0, 4).map((resource) => ({
         id: resource.id,
         title: resource.title,

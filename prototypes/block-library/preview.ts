@@ -29,8 +29,8 @@ export function blockPreview(kind: BlockInstanceKind): HTMLElement {
     line(
       "small",
       kind === "resource_browser"
-        ? "RESOURCE BROWSER · EXAMPLE"
-        : "COLLECTION BROWSER · EXAMPLE",
+        ? "RESOURCE EXPLORER · RESOURCE SCOPE · EXAMPLE"
+        : "RESOURCE EXPLORER · COLLECTION SCOPE · EXAMPLE",
     );
     line("div", "Search authorized resources…", "aw-library__sample-input");
     line(
@@ -52,7 +52,7 @@ export function blockPreview(kind: BlockInstanceKind): HTMLElement {
     );
     line("div", "Write a message…", "aw-library__sample-input");
   } else if (kind === "task") {
-    line("small", "TASK · OPEN");
+    line("small", "MANUAL TASK · OPEN");
     line("h4", "Review the next milestone");
     line(
       "p",
@@ -60,7 +60,7 @@ export function blockPreview(kind: BlockInstanceKind): HTMLElement {
     );
     line("div", "○ Open    →    ✓ Done", "aw-library__sample-input");
   } else if (kind === "task_group") {
-    line("small", "TASK GROUP · 2 EXAMPLE MEMBERS");
+    line("small", "MANUAL TASK GROUP · 2 EXAMPLE MEMBERS");
     line("p", "○ Review implementation");
     line("p", "✓ Record decisions");
     line("div", "Manage canonical task references", "aw-library__sample-input");
@@ -70,13 +70,13 @@ export function blockPreview(kind: BlockInstanceKind): HTMLElement {
     line("p", "10:25  provider.disconnected · observed");
     line("p", "Source and classification stay visible.", "aw-library__hint");
   } else if (kind === "research") {
-    line("small", "RESEARCH NOTE");
+    line("small", "RESEARCH NOTEBOOK");
     line("h4", "A question worth exploring");
     line(
       "p",
       "Findings\n• Record what a source supports\n• Link the original reference",
     );
-    line("p", "Retrieval is unavailable until connected.", "aw-library__hint");
+    line("p", "Record findings, sources and unresolved questions.", "aw-library__hint");
   } else if (kind === "reference") {
     line("small", "REFERENCE");
     line("h4", "A source and its context");
