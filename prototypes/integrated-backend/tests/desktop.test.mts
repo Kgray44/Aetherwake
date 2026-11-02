@@ -5,11 +5,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Backend } from "../src/service.mts";
 import { WorkspaceKernel } from "../../workspace-kernel/kernel.mts";
+import { DesktopState } from '../src/desktop.mts';
 import { createRequire } from "node:module";
 const { graphAction } = createRequire(import.meta.url)(
   "../../visual-experience/cinematic-v3/native/graph-actions.cjs",
 );
 import type { DesktopCommand } from "../../application-contract/contracts.ts";
+
+test('trusted block bridge projects nonresource subjects through desktop and navigation without inventing resource IDs',()=>{
+  const kernel=WorkspaceKernel.open(':memory:');try{const db=kernel.withTransaction(db=>db),desktop=new DesktopState(kernel,db,{allowSubjectAttachment:()=>true}),bridge=desktop.nativeBlockServices();assert.equal(bridge.engine,desktop.nativeBlockServices().engine);assert.equal(bridge.engine.kernel,kernel);const project=kernel.createProject('Synthetic subject projection');let workspace=bridge.engine.createWorkspace('Synthetic subject view');bridge.navigateWorkspace(workspace.workspaceId);workspace=bridge.engine.execute({type:'attachSubject',subject:{kind:'project',projectId:project.id},workspaceId:workspace.workspaceId,expectedRevision:workspace.revision,commandId:'synthetic-project-view'});let snapshot=desktop.snapshot(()=>({provider:'local',messages:[]}));assert.equal(snapshot.resources.length,0);assert.equal(snapshot.projects.length,1);assert.equal(snapshot.blocks[0].resource_id,undefined);assert.deepEqual(snapshot.blocks[0].subject,{kind:'project',projectId:project.id});assert.deepEqual(snapshot.navigationBlocks?.find(b=>b.id===snapshot.blocks[0].id)?.subject,snapshot.blocks[0].subject);const block=snapshot.blocks[0];desktop.apply({type:'detach',blockId:block.id,expectedVersion:block.version},()=>{throw new Error('unexpected');});desktop.apply({type:'undo'},()=>{throw new Error('unexpected');});snapshot=desktop.snapshot(()=>({provider:'local',messages:[]}));assert.deepEqual(snapshot.blocks[0].subject,block.subject);assert.equal(snapshot.blocks[0].resource_id,undefined);kernel.setProjectArchived(project.id,true,1);snapshot=desktop.snapshot(()=>({provider:'local',messages:[]}));assert.equal(snapshot.blocks[0].subjectState,'archived');assert.equal(snapshot.navigationBlocks?.some(b=>b.id===block.id),false);kernel.assertIntegrity();}finally{kernel.close();}
+});
 
 test("desktop journey persists real resources, two workspaces, shapes, geometry, detach, reattach and history", async () => {
   const dir = mkdtempSync(join(tmpdir(), "aerynth-desktop-test-")),
@@ -133,6 +138,7 @@ test("desktop checkpoints, undo, invalid geometry and failed commands preserve r
       workspaceId: s.activeWorkspaceId,
     });
     const first = s.blocks[0];
+    assert.ok(typeof first.resource_id==='string');
     await call({ type: "checkpoint" });
     for (const p of [
       { ...first, width: -10 },
