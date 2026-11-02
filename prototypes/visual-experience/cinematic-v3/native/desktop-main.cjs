@@ -17,6 +17,7 @@ const {
   conversationCommand,
   isConversationRead,
 } = require("./conversation-broker.cjs");
+const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const root = path.resolve(__dirname, "..");
 const moduleStarted = Date.now();
 const repository = path.resolve(root, "../../..");
@@ -239,6 +240,7 @@ app.whenReady().then(async () => {
         !admitted &&
         !["replay", "executionStatus", "interrupt"].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
+        !(command === "vela" && isVelaRead(input)) &&
         !(command === "desktop" && input?.type === "snapshot")
       )
         throw new Error("storage_reserve_admission_denied");
@@ -313,6 +315,8 @@ app.whenReady().then(async () => {
         }
       } else if (command === "conversation") {
         result = await conversationCommand({ win, dialog, call, input });
+      } else if (command === "vela") {
+        result = await velaCommand({ win, dialog, call, input });
       } else throw new Error("unsupported_command");
       return { ok: true, result };
     } catch (e) {
@@ -365,12 +369,14 @@ app.whenReady().then(async () => {
   reserveTimer.unref();
   if (verify) {
     if (process.argv.includes("--integration-conversation-product")) {
-      await require("../../../conversation-product/test/native-desktop.cjs").verify({
-        win,
-        app,
-        privateRoot,
-        source,
-      });
+      await require("../../../conversation-product/test/native-desktop.cjs").verify(
+        {
+          win,
+          app,
+          privateRoot,
+          source,
+        },
+      );
       return;
     }
     if (process.argv.includes("--integration-direct")) {
