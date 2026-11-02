@@ -631,6 +631,15 @@ exports.verify = async ({
       receipt.checks.push(
         "compact-glass-info-guide-with-native-keyboard-opening-and-dismissal",
       );
+      await key("k", ["control"]);
+      await wait('!document.querySelector(".aw-destinations").hidden');
+      assert.equal(
+        await js('document.querySelector("#command-surface").open'),
+        false,
+        "overview Ctrl K opens only the spatial palette",
+      );
+      await key("Escape");
+      await wait('document.querySelector(".aw-destinations").hidden');
       receipt.checks.push(
         "native-pointer-orbit-and-shift-pan-change-real-perspective-camera",
       );

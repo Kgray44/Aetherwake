@@ -64,6 +64,17 @@ async function until(code) {
   }
   throw Error("Timed out: " + code);
 }
+async function command(id, title) {
+  await js(
+    "document.querySelector('.aw-quiet-control[aria-label=\"Commands and destinations\"]').click()",
+  );
+  await js(
+    `(()=>{const input=document.querySelector('.aw-destinations input');input.value=${JSON.stringify(title)};input.dispatchEvent(new Event('input'));})()`,
+  );
+  await js(
+    `document.querySelector('.aw-command-row[data-command="${id}"]').click()`,
+  );
+}
 async function capture(name) {
   await wait(100);
   const png = (await win.webContents.capturePage()).toPNG();
@@ -113,15 +124,11 @@ app
       "workspace",
     );
     await capture("01-development-workspace");
-    // User-visible Zoom out button, followed by Universe.
-    await js(
-      "[...document.querySelectorAll('button')].find(b=>b.textContent==='Zoom out').click()",
-    );
+    // Small on-demand command surface; no permanent navigation toolbar.
+    await command("out", "Zoom out");
     await until("constellationDemo.view.controller.location.kind==='project'");
     await capture("02-project-overview");
-    await js(
-      "[...document.querySelectorAll('button')].find(b=>b.textContent==='Universe').click()",
-    );
+    await command("universe", "Universe");
     await until("constellationDemo.view.controller.location.kind==='universe'");
     await wait(1100);
     await capture("03-universe");
@@ -170,10 +177,18 @@ app
     );
     // Direct search by keyboard, pan, reversal, reduced motion and context fallback.
     await js(
-      "[...document.querySelectorAll('button')].find(b=>b.textContent==='Destinations').click()",
+      "document.querySelector('.aw-quiet-control[aria-label=\"Commands and destinations\"]').click()",
     );
     await js(
       "(()=>{let s=document.querySelector('input[type=search]');s.value='Engineering';s.dispatchEvent(new Event('input'));s.focus();})()",
+    );
+    win.webContents.sendInputEvent({ type: "keyDown", keyCode: "Return" });
+    win.webContents.sendInputEvent({ type: "keyUp", keyCode: "Return" });
+    await until(
+      `constellationDemo.view.controller.selected==='workspace:${b.id}'`,
+    );
+    await js(
+      `document.querySelector('[data-key="workspace:${b.id}"]').focus()`,
     );
     win.webContents.sendInputEvent({ type: "keyDown", keyCode: "Return" });
     win.webContents.sendInputEvent({ type: "keyUp", keyCode: "Return" });
@@ -184,17 +199,19 @@ app
       "(async()=>{await constellationDemo.view.controller.zoomOut();document.querySelector('.aw-destinations').hidden=true;})()",
     );
     await js(
-      "(()=>{constellationDemo.view.setPolicy({reduced:true});let c=constellationDemo.view.controller,p=c.nodes.get('project:'+c.location.projectId).point;c.move({x:p.x+50,y:p.y+40,zoom:1.25});return c.persist();})()",
+      "(()=>{constellationDemo.view.setPolicy({reduced:true});let c=constellationDemo.view.controller;c.spatial.orbit(60,-20);c.spatial.pan(50,40);return c.persist();})()",
     );
     const saved = await js(
-      "JSON.stringify(constellationDemo.view.controller.camera)",
+      "JSON.stringify(constellationDemo.view.controller.spatial.camera)",
     );
     await js(
       "constellationDemo.view.setPolicy({graphicsAvailable:false});constellationDemo.wake()",
     );
     await wait(70);
     assert.equal(
-      await js("document.querySelector('.aw-spatial-field').hidden"),
+      await js(
+        "document.querySelector('.aw-constellation').classList.contains('aw-graphics-fallback')&&document.querySelectorAll('.aw-anchor').length>0",
+      ),
       true,
     );
     await js(
@@ -207,7 +224,9 @@ app
     await startServer();
     await open();
     assert.equal(
-      await js("JSON.stringify(constellationDemo.view.controller.camera)"),
+      await js(
+        "JSON.stringify(constellationDemo.view.controller.spatial.camera)",
+      ),
       saved,
     );
     assert.equal(
@@ -244,6 +263,16 @@ app
       sourceSha256: Object.fromEntries(
         [
           "controller.ts",
+          "types.ts",
+          "spatial-types.ts",
+          "spatial.ts",
+          "body-metrics.ts",
+          "identity.ts",
+          "spacing.ts",
+          "renderer3d.ts",
+          "planets.ts",
+          "controls.ts",
+          "graph-controls.ts",
           "projection.ts",
           "view.ts",
           "style.css",

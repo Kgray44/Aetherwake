@@ -17,6 +17,7 @@ export function spatialControls(
     dirty: () => void;
     report: (error: unknown) => void;
     onOpen?: () => void;
+    overview: () => boolean;
   },
 ) {
   const element = <K extends keyof HTMLElementTagNameMap>(
@@ -251,13 +252,16 @@ export function spatialControls(
     }
   };
   const keydown = (e: KeyboardEvent) => {
-    if (e.defaultPrevented || root.querySelector("dialog[open]")) return;
+    if (e.defaultPrevented || root.ownerDocument.querySelector("dialog[open]"))
+      return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+      if (!options.overview() && drawer.hidden) return;
       e.preventDefault();
       e.stopPropagation();
       openPalette();
     } else if (e.key === "F1") {
       e.preventDefault();
+      e.stopPropagation();
       openGuide();
     } else if (e.key === "Escape" && (!drawer.hidden || !guide.hidden)) {
       e.preventDefault();
@@ -271,7 +275,9 @@ export function spatialControls(
     )
       close();
   };
-  root.ownerDocument.addEventListener("keydown", keydown);
+  // Capture before the host's global bubble shortcuts. In working workspaces
+  // those shortcuts remain with the application shell and its editors.
+  root.ownerDocument.addEventListener("keydown", keydown, true);
   root.ownerDocument.addEventListener("pointerdown", outside);
   sync();
   return {
@@ -293,7 +299,7 @@ export function spatialControls(
       refresh();
     },
     dispose() {
-      root.ownerDocument.removeEventListener("keydown", keydown);
+      root.ownerDocument.removeEventListener("keydown", keydown, true);
       root.ownerDocument.removeEventListener("pointerdown", outside);
       bar.remove();
       drawer.remove();

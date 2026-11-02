@@ -169,6 +169,9 @@ export function mountConstellation(
         title: "Create",
         hint: "New project, workspace or resource",
         run: () => graph.create(),
+        enabled: (
+          ["createProject", "createWorkspace", "createResource"] as const
+        ).some((type) => controller.can(type)),
       },
       {
         id: "link",
@@ -229,7 +232,9 @@ export function mountConstellation(
         title:
           resource && n.workspaceId
             ? "Remove visual block"
-            : "Archive destination",
+            : resource
+              ? "Archive resource"
+              : "Archive destination",
         hint: "Review before applying",
         run: () => graph.remove(),
         enabled:
@@ -351,6 +356,7 @@ export function mountConstellation(
       inspectorOpen = false;
       detail.hidden = true;
     },
+    overview: () => ["project", "universe"].includes(controller.location.kind),
   });
   const { bar, breadcrumb, drawer } = controls;
   const paintDetail = () => {
