@@ -2,35 +2,58 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
-  gap: 0.65rem;
+  gap: 0.6rem;
   color: inherit;
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.45;
 }
 .aw-resource-links h3,
 .aw-resource-links p {
   margin: 0;
   overflow-wrap: anywhere;
 }
-.aw-resource-links > p {
+.aw-resource-links :is(.aw-resource-links-status, .aw-resource-links-capacity, .aw-resource-links-help p) {
   font-size: 12px;
   color: #bdc6d9;
 }
-.aw-resource-links :is(input, select, button) {
+.aw-resource-links :is(input, select, button, summary) {
   font: inherit;
   color: inherit;
+  min-width: 0;
+}
+.aw-resource-links :is(input, select, .aw-resource-links-create button) {
   border: 1px solid #b5c8e32b;
   border-radius: 0.6rem;
   padding: 0.4rem 0.6rem;
   background: #b5c8e309;
-  min-width: 0;
 }
 .aw-resource-links option {
   background: #172131;
   color: #e8edf5;
 }
-.aw-resource-links > button {
-  align-self: flex-end;
+.aw-resource-links-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.aw-resource-links h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.aw-resource-links :is(.aw-resource-links-refresh, .aw-resource-links-target, .aw-resource-links-remove) {
+  border: 0;
+  background: none;
+  cursor: pointer;
+}
+.aw-resource-links :is(.aw-resource-links-refresh, .aw-resource-links-remove) {
+  padding: 0.25rem 0;
+  font-size: 12px;
+  color: #bdc6d9;
+}
+.aw-resource-links :is(.aw-resource-links-refresh, .aw-resource-links-target, .aw-resource-links-remove):hover {
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
 }
 .aw-resource-links input {
   width: 100%;
@@ -41,46 +64,85 @@
 }
 .aw-resource-links button:disabled {
   opacity: 0.5;
+  cursor: default;
 }
 .aw-resource-links-list {
   list-style: none;
   padding: 0;
   margin: 0;
-  max-height: 19rem;
-  overflow: auto;
 }
 .aw-resource-links-list li {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  padding: 0.6rem 0;
+  gap: 0.15rem 0.6rem;
+  padding: 0.65rem 0;
   border-bottom: 1px solid #b5c8e31a;
 }
-.aw-resource-links-list li > :first-child {
-  flex: 1 1 100%;
+.aw-resource-links-target {
+  grid-column: 1;
+  grid-row: 1;
+  padding: 0.1rem 0;
+  font-weight: 600;
   text-align: left;
   overflow-wrap: anywhere;
 }
 .aw-resource-links-list small {
-  flex: 1;
+  grid-column: 1 / -1;
+  grid-row: 2;
   font-size: 12px;
   color: #bcc6d7;
+  overflow-wrap: anywhere;
 }
-.aw-resource-links-list button {
-  background: none;
+.aw-resource-links-remove {
+  grid-column: 2;
+  grid-row: 1;
+}
+.aw-resource-links-list .aw-resource-links-empty {
+  display: block;
+  color: #bdc6d9;
+  font-size: 12px;
+  border: 0;
+  padding: 0.25rem 0;
+}
+.aw-resource-links details > summary {
+  cursor: pointer;
+  width: fit-content;
+  padding: 0.25rem 0;
+}
+.aw-resource-links-create-toggle > summary {
+  font-weight: 600;
+}
+.aw-resource-links-help {
+  font-size: 12px;
+  color: #bdc6d9;
+}
+.aw-resource-links-help p {
+  margin-top: 0.35rem;
 }
 .aw-resource-links-create {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+  padding-top: 0.5rem;
 }
 .aw-resource-links-create select:first-child {
   flex: 1 1 100%;
 }
-.aw-resource-links-create[hidden] {
+.aw-resource-links [hidden] {
   display: none;
 }
-.aw-resource-links-status:empty {
+.aw-resource-links-status:empty,
+.aw-resource-links-capacity:empty {
   display: none;
+}
+.aw-resource-links-status[data-state="success"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }

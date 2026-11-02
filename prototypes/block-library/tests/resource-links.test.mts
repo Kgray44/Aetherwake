@@ -423,3 +423,147 @@ test("a reply after the related-resource surface closes cannot remount content",
   await controller.ready;
   assert.equal(view.root.children.length, 0);
 });
+
+test("compact links retain keyed rows, options, selected relationship and focused search across metadata refresh/filter changes", async t => {
+  const f = fixture(t), controller = mountResourceLinks(f.view.root, f.source.id, f.port);
+  t.after(() => controller.dispose());
+  await controller.ready;
+  const root = f.view.root, search = root.querySelector("input"),
+    creation = root.querySelector(".aw-resource-links-create-toggle"),
+    help = root.querySelector(".aw-resource-links-help"),
+    form = root.querySelector("form"), [target, kind] = form.querySelectorAll("select"),
+    row = root.querySelector("[data-relationship-id]"), title = row.querySelector("button");
+  assert.equal(root.querySelector("h3").textContent, f.source.title);
+  assert.equal(creation.open, false);
+  assert.equal(help.open, false);
+  assert.match(help.textContent, /without copying content or changing permissions/);
+  assert.equal(form.parentElement, creation);
+  const selectedOption = target.options.find((option: any) => option.value === f.target.id);
+  target.value = f.target.id;
+  target.onchange();
+  kind.value = "depends_on";
+  title.focus();
+  await controller.refresh();
+  assert.equal(root.querySelector("[data-relationship-id]"), row);
+  assert.equal(row.querySelector("button"), title);
+  assert.equal(f.view.doc.activeElement, title);
+  assert.equal(target.options.find((option: any) => option.value === f.target.id), selectedOption);
+  search.value = "imported";
+  search.focus();
+  search.setSelectionRange(2, 5);
+  search.oninput();
+  await controller.refresh();
+  assert.equal(root.querySelector("input"), search);
+  assert.equal(f.view.doc.activeElement, search);
+  assert.deepEqual([search.selectionStart, search.selectionEnd], [2, 5]);
+  assert.equal(root.querySelector("[data-relationship-id]"), row);
+  assert.equal(target.value, f.target.id, "A selected authorized target survives another search");
+  assert.equal(kind.value, "depends_on");
+  assert.equal(f.actions.length, 0);
+});
+
+test("only confirmed creation quiets success and returns its own submit focus to the collapsed Add link disclosure", async t => {
+  const f = fixture(t), controller = mountResourceLinks(f.view.root, f.source.id, f.port);
+  t.after(() => controller.dispose());
+  await controller.ready;
+  const root = f.view.root, creation = root.querySelector(".aw-resource-links-create-toggle"),
+    form = root.querySelector("form"), [target, kind] = form.querySelectorAll("select"),
+    add = form.querySelector("button"), status = root.querySelector(".aw-resource-links-status");
+  creation.open = true;
+  target.value = f.target.id;
+  kind.value = "references";
+  target.onchange();
+  add.focus();
+  submit(form);
+  await until(() => status.dataset.state === "success");
+  assert.equal(status.textContent, "Link change saved.", "The live success announcement remains available");
+  assert.equal(creation.open, false);
+  assert.equal(f.view.doc.activeElement, creation.querySelector("summary"));
+  assert.equal(target.value, f.target.id);
+  assert.equal(kind.value, "references");
+  creation.open = true;
+  kind.value = "depends_on";
+  f.ignore();
+  add.focus();
+  submit(form);
+  await until(() => status.dataset.state === "uncertain");
+  assert.equal(creation.open, true);
+  assert.equal(f.view.doc.activeElement, add);
+  assert.match(status.textContent, /not visible yet/);
+  assert.equal(target.disabled, true);
+  submit(form);
+  assert.equal(f.actions.length, 2, "Uncertain changes cannot be replayed");
+});
+
+test("a delayed confirmed reply cannot collapse creation or move focus during another edit or search composition", async t => {
+  const f = fixture(t);
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const controller = mountResourceLinks(f.view.root, f.source.id, {
+    ...f.port,
+    async change(action) { await gate; return f.port.change!(action); },
+  });
+  t.after(() => controller.dispose());
+  await controller.ready;
+  const root = f.view.root, search = root.querySelector("input"),
+    creation = root.querySelector(".aw-resource-links-create-toggle"), form = root.querySelector("form"),
+    [target, kind] = form.querySelectorAll("select"), add = form.querySelector("button"),
+    imported = root.querySelector("[data-relationship-id]"), status = root.querySelector(".aw-resource-links-status");
+  creation.open = true;
+  target.value = f.target.id;
+  kind.value = "references";
+  target.onchange();
+  add.focus();
+  submit(form);
+  assert.equal(status.dataset.state, "progress");
+  search.focus();
+  search.fire("compositionstart");
+  search.value = "target task";
+  search.setSelectionRange(2, 6);
+  search.oninput();
+  assert.equal(root.querySelector("[data-relationship-id]"), imported, "Incomplete composition does not refilter rows");
+  release();
+  await until(() => status.dataset.state === "success");
+  assert.equal(creation.open, true);
+  assert.equal(f.view.doc.activeElement, search);
+  assert.equal(root.querySelector("input"), search);
+  assert.equal(search.value, "target task");
+  assert.deepEqual([search.selectionStart, search.selectionEnd], [2, 6]);
+  assert.equal(target.value, f.target.id);
+  assert.equal(kind.value, "references");
+  assert.equal(root.querySelectorAll("[data-relationship-id]").includes(imported), true);
+  search.fire("compositionend");
+  assert.equal(root.querySelectorAll("[data-relationship-id]").includes(imported), false);
+  assert.equal(root.querySelectorAll("[data-remove-link]").length, 1);
+  assert.equal(f.view.doc.activeElement, search);
+  assert.deepEqual([search.selectionStart, search.selectionEnd], [2, 6]);
+});
+
+test("revoked metadata is removed during composition while the search node and uncommitted text remain intact", async t => {
+  const f = fixture(t);
+  let hidden = false;
+  const controller = mountResourceLinks(f.view.root, f.source.id, {
+    ...f.port,
+    async read() {
+      const snapshot = await f.port.read();
+      return hidden ? { ...snapshot, resources: snapshot.resources.map(resource => ({ ...resource, visible: false })) } : snapshot;
+    },
+  });
+  t.after(() => controller.dispose());
+  await controller.ready;
+  const root = f.view.root, search = root.querySelector("input");
+  search.focus();
+  search.fire("compositionstart");
+  search.value = "uncommitted input";
+  search.setSelectionRange(3, 8);
+  search.oninput();
+  hidden = true;
+  await controller.refresh();
+  assert.equal(root.querySelectorAll("[data-relationship-id]").length, 0);
+  assert.equal(root.querySelector("form").querySelector("select").options.length, 1);
+  assert.equal(root.querySelector("input"), search);
+  assert.equal(search.value, "uncommitted input");
+  assert.deepEqual([search.selectionStart, search.selectionEnd], [3, 8]);
+  assert.equal(f.view.doc.activeElement, search);
+  assert.match(root.querySelector(".aw-resource-links-status").textContent, /unavailable/);
+});

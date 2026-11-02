@@ -84,7 +84,9 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
       const retained = await js(x.retainedEditor(noteInput)); assert(retained.sameNode && retained.sameText && retained.sameSelection && retained.scrollDelta <= 1, 'Read-only panel opening retains the recovered Note editor'); receipt.noteEditorOnOpen = retained; await recovery();
     };
     const add = async typeName => {
-      await js(x.rememberNode(search)); key('Tab'); await wait(x.focused(target)); key('Tab', ['shift']); await wait(x.focused(search));
+      const disclosure = panel + ' .aw-resource-links-create-toggle', summary = disclosure + ' > summary';
+      await js(x.rememberNode(search)); key('Tab'); await wait(x.focused(summary)); key('Enter'); await wait(x.exists(disclosure + '[open]'));
+      key('Tab'); await wait(x.focused(target)); key('Tab', ['shift']); await wait(x.focused(summary)); key('Tab', ['shift']); await wait(x.focused(search));
       await type(search, fixture.task.title); assert.equal(await js(x.sameNode(search)), true, 'Search render retains the focused search node'); assert.equal(await js(x.focused(search)), true);
       await select(target, fixture.task.resourceId); await select(kind, typeName); await button(panel + ' form', 'Add link'); await wait(x.edgeExists(fixture.note.resourceId, fixture.task.resourceId, typeName)); await wait(x.relatedReady(fixture.note.resourceId));
       const edge = (await snapshot()).relationships.find(e => e.source_id === fixture.note.resourceId && e.target_id === fixture.task.resourceId && e.kind === typeName && e.provenance === 'user'); assert(edge);
