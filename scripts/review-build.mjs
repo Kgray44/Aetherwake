@@ -10,9 +10,12 @@ import { execFileSync, spawn } from 'node:child_process';
 
 export const LIMITS = Object.freeze({ totalBytes:1024*1024*1024, fileBytes:512*1024*1024, files:4096, manifestBytes:2*1024*1024, metadataBytes:8*1024*1024, reserveBytes:32212254720 });
 const APP = 'prototypes/visual-experience/cinematic-v3';
+// BrowserWindow preload paths are loaded by Electron, not Node imports. Keep
+// both trusted preload entry points explicit in the runtime dependency closure.
+export const NATIVE_RUNTIME_ENTRIES = Object.freeze([APP+'/native/desktop-main.cjs', APP+'/native/desktop-preload.cjs', APP+'/native/vela-review-preload.cjs', 'prototypes/integrated-backend/src/desktop-host.mts', 'prototypes/integrated-backend/src/worker.mts']);
 const REQUIRED_FOLDERS = ['prototypes/integrated-backend/src','prototypes/connected-conversations/src','prototypes/codex-bridge/src','prototypes/workspace-kernel','prototypes/workspace-engine','prototypes/constellation','prototypes/application-contract','prototypes/vela-core/src','prototypes/conversation-product/src','prototypes/block-library',APP+'/src',APP+'/native'];
 const OMITTED = /(?:^|\/)(?:node_modules|\.runtime|\.local-data|profiles?|test|tests|fixtures?|demo|evidence[^/]*|protocol-generated)(?:\/|$)/i;
-const NON_RUNTIME_FILE = /(?:^|\/)(?:benchmark[^/]*|demo|journey|reopen|cli)\.[cm]?[jt]s$/i;
+const NON_RUNTIME_FILE = /(?:^|\/)(?:benchmark[^/]*|prepare-[^/]*native[^/]*|demo|journey|reopen|cli)\.[cm]?[jt]s$/i;
 const OPTIONAL_NATIVE = /(?:^|\/)(?:integration-[^/]+|desktop-verify|application-recording|recording|presentation-metrics)\.cjs$|\/(?:test|tests)\//;
 const BUILTINS = new Set([...builtinModules,...builtinModules.map(name=>'node:'+name)]);
 const ELECTRON_FILES = new Set(['chrome_100_percent.pak','chrome_200_percent.pak','d3dcompiler_47.dll','dxcompiler.dll','electron.exe','electron_wer.dll','ffmpeg.dll','icudtl.dat','LICENSE','LICENSES.chromium.html','resources.pak','snapshot_blob.bin','v8_context_snapshot.bin','version','vk_swiftshader.dll','vk_swiftshader_icd.json','vulkan-1.dll']);
@@ -73,7 +76,7 @@ export async function nodeClosure(root, tracked, entries) {
     const imports=patterns.flatMap(pattern=>[...text.matchAll(pattern)].map(match=>match[1]));
     for(const spec of imports){if(spec.startsWith('node:')||BUILTINS.has(spec)||spec==='electron'&&name.startsWith(APP+'/native/'))continue;check(spec.startsWith('.'),'unbundled_runtime_dependency',spec);
       const resolved=slash(path.posix.normalize(path.posix.join(path.posix.dirname(name),spec)));check(!resolved.startsWith('../')&&!path.posix.isAbsolute(resolved),'runtime_import_escapes_repository',spec);
-      if(OPTIONAL_NATIVE.test(resolved)){optional.push(resolved);continue;}check(!OMITTED.test(resolved),'fixture_or_private_runtime_import',resolved);pending.push(resolved);
+      if(OPTIONAL_NATIVE.test(resolved)){optional.push(resolved);continue;}check(!OMITTED.test(resolved)&&!NON_RUNTIME_FILE.test(resolved),'fixture_or_private_runtime_import',resolved);pending.push(resolved);
     }
   }
   return {files:[...selected].sort(),excludedVerificationImports:[...new Set(optional)].sort()};
@@ -115,7 +118,7 @@ export async function plan(options={}) {
   await peX64(node);await peX64(path.join(electronRoot,'electron.exe'));
   const output=await destination(options.output,sourceRoot,[electronRoot,nodeRoot]);check(/^[CD]:\\/i.test(output),'private_output_must_be_on_C_or_D');
   const files=[],targets=new Set(),selected=[...tracked].filter(runtimeSource);
-  const closure=await nodeClosure(sourceRoot,tracked,[APP+'/native/desktop-main.cjs',APP+'/native/desktop-preload.cjs','prototypes/integrated-backend/src/desktop-host.mts','prototypes/integrated-backend/src/worker.mts']);
+  const closure=await nodeClosure(sourceRoot,tracked,NATIVE_RUNTIME_ENTRIES);
   for(const file of closure.files)if(!selected.includes(file))selected.push(file);
   const packages=new Set(REQUIRED_FOLDERS.map(folder=>folder.endsWith('/src')?folder.slice(0,-4):folder));
   for(const folder of packages)for(const name of ['package.json','package-lock.json'])if(tracked.has(folder+'/'+name))selected.push(folder+'/'+name);

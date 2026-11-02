@@ -4,7 +4,9 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
 import vm from 'node:vm';
-import { LIMITS, contained, runtimeSource, electronRuntimeFile, allocation, destination, nodeClosure, bootstrap, readme, argumentsFor } from './review-build.mjs';
+import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { LIMITS, NATIVE_RUNTIME_ENTRIES, contained, runtimeSource, electronRuntimeFile, allocation, destination, nodeClosure, bootstrap, readme, argumentsFor } from './review-build.mjs';
 
 async function fixture(work){const dir=await fs.mkdtemp(path.join(tmpdir(),'aerynth-review-packager-'));try{return await work(dir);}finally{const rel=path.relative(path.resolve(tmpdir()),path.resolve(dir));assert(rel&&!rel.startsWith('..')&&!path.isAbsolute(rel)&&path.basename(dir).startsWith('aerynth-review-packager-'));await fs.rm(dir,{recursive:true,force:true});}}
 
@@ -15,6 +17,22 @@ test('runtime selection excludes profiles, historical evidence, synthetic setup 
 test('allocation is bounded before any copy and stored ZIP accounts for both directory and archive',()=>{
  const files=[{target:'a.exe',bytes:374000000},{target:'vendor/node.exe',bytes:93000000}];const plan=allocation(files,true,4096);assert(plan.copyBound>467000000);assert(plan.totalBound>plan.copyBound+467000000);assert(plan.totalBound<LIMITS.totalBytes);assert.equal(allocation(files,false).zipBound,0);
  assert.throws(()=>allocation([{target:'unknown',bytes:undefined}],true),/unknown/);assert.throws(()=>allocation([{target:'large',bytes:LIMITS.fileBytes+1}],false),/excessive/);assert.throws(()=>allocation([{target:'a',bytes:LIMITS.fileBytes},{target:'b',bytes:LIMITS.fileBytes}],true),/1GiB/);
+});
+
+test('actual native closure retains the Electron decision preload and fails if it is missing',async()=>{
+ const root=fileURLToPath(new URL('../',import.meta.url)),tracked=new Set(execFileSync('git',['-C',root,'ls-files','-z'],{encoding:'utf8',windowsHide:true}).split('\0').filter(Boolean));
+ const result=await nodeClosure(root,tracked,NATIVE_RUNTIME_ENTRIES),preload='prototypes/visual-experience/cinematic-v3/native/vela-review-preload.cjs';
+ assert(result.files.includes(preload),'the actual sharing dialog loads a preload outside the Node import graph');
+ for(const name of ['vela-review.cjs','vela-broker.cjs','desktop-preload.cjs'])assert(result.files.includes('prototypes/visual-experience/cinematic-v3/native/'+name),name);
+ const missing=new Set(tracked);missing.delete(preload);await assert.rejects(nodeClosure(root,missing,NATIVE_RUNTIME_ENTRIES),/untracked_or_missing_runtime_import/);
+});
+
+test('native synthetic preparation writers are excluded and cannot become a runtime dependency',async()=>{
+ for(const name of ['prepare-library-native.mts','prepare-native-scale.mts','prepare-workspace-native.mts','prepare-functional-workspace-native.mts'])assert.equal(runtimeSource('prototypes/block-library/'+name),false,name);
+ await fixture(async root=>{
+  const entry='prototypes/block-library/view.ts',seed='prototypes/block-library/prepare-workspace-native.mts';await fs.mkdir(path.dirname(path.join(root,entry)),{recursive:true});await fs.writeFile(path.join(root,entry),"import './prepare-workspace-native.mts';");await fs.writeFile(path.join(root,seed),'export const synthetic=true;');
+  await assert.rejects(nodeClosure(root,new Set([entry,seed]),[entry]),/fixture_or_private_runtime_import/);
+ });
 });
 test('locked Electron runtime inventory cannot silently pick up local data or a developer default app',()=>{
  for(const file of ['electron.exe','LICENSE','LICENSES.chromium.html','locales/en-US.pak'])assert(electronRuntimeFile(file));assert.equal(electronRuntimeFile('resources/default_app.asar'),false);for(const file of ['resources/private.sqlite','profile.json','.runtime/trace.log','credentials.txt'])assert.throws(()=>electronRuntimeFile(file),/unexpected_Electron_runtime_file/);
