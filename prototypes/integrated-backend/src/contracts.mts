@@ -6,6 +6,10 @@ import type { ProductCommandMap } from '../../conversation-product/src/contracts
 import type { AttachedContext } from '../../conversation-product/src/service.mts';
 import type { VelaClient, VelaState, ContextManifest, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
 import type { PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
+import type { TemplateService } from '../../block-library/service.mts';
+export type LibraryMethod = 'capabilities'|'preferences'|'setFavorite'|'getBlockSettings'|'configureBlock'|'findResources'|'attachBlock'|'createBlock'|'listTemplates'|'getTemplate'|'saveTemplate'|'renameTemplate'|'archiveTemplate'|'previewTemplate'|'applyTemplate'|'previewWorkspaceFromResources'|'workspaceFromResources'|'requestVelaTemplate';
+export type LibraryRequest = { [K in LibraryMethod]: {name:K;input:Parameters<TemplateService[K]>[0] extends undefined?Record<string,never>:Parameters<TemplateService[K]>[0]} }[LibraryMethod];
+export type LibraryResponse = {result:unknown;desktop?:DesktopSnapshot};
 export type VelaOperationName = keyof VelaClient;
 export type VelaRequestInput = Parameters<VelaClient['request']>[0] & { previewId?:string;grantId?:string };
 export type VelaOperation = { [K in VelaOperationName]: { name: K; input: K extends 'request' ? VelaRequestInput : Parameters<NonNullable<VelaClient[K]>>[0] extends undefined ? Record<string,never> : Parameters<NonNullable<VelaClient[K]>>[0] } }[VelaOperationName];
@@ -87,6 +91,7 @@ export interface Options {
   velaPlanningPort?: VelaPlanningPort;
 }
 export interface CommandMap {
+  library: {input:LibraryRequest;output:LibraryResponse};
   vela: { input: VelaOperation; output: unknown };
   velaRequestPreview: { input: {intent:string;resourceIds:string[]}; output: VelaRequestPreview };
   /** TRUSTED NATIVE HOST ONLY. Renderer/tool allow-lists MUST exclude this authorization command. */
