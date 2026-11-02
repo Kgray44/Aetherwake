@@ -114,8 +114,29 @@ function recordVisibleLines(frame,seen,required) {
     if(line.visible&&line.visible.width>=line.rect.width-1.5&&line.visible.height>=line.rect.height-1.5)seen.add(key);
   }
 }
+/** Range advances for preserved wrapping spaces are not painted glyphs. Keep all real runs, without clipping their boxes. */
+function measureTextLines(document,node) {
+  const fragments=[],walker=document.createTreeWalker(node,document.defaultView.NodeFilter.SHOW_TEXT);let text,runs=0;
+  while((text=walker.nextNode()))for(const match of text.textContent.matchAll(/\S+/gu)){
+    if(++runs>8192)throw Error('Historical glyph-run measurement exceeds bound');
+    const range=document.createRange();range.setStart(text,match.index);range.setEnd(text,match.index+match[0].length);
+    for(const r of range.getClientRects()){
+      if(!['left','top','right','bottom','width','height'].every(key=>Number.isFinite(r[key])))throw Error('Unknown glyph-run rectangle');
+      if(r.width<=0||r.height<=0)continue;
+      fragments.push({left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height});if(fragments.length>8192)throw Error('Historical glyph-fragment measurement exceeds bound');
+    }
+  }
+  const lines=[];
+  for(const r of fragments.sort((a,b)=>a.top-b.top||a.left-b.left)){
+    const row=lines.find(line=>Math.min(line.bottom,r.bottom)-Math.max(line.top,r.top)>=Math.min(line.height,r.height)*.8);
+    if(row){row.left=Math.min(row.left,r.left);row.top=Math.min(row.top,r.top);row.right=Math.max(row.right,r.right);row.bottom=Math.max(row.bottom,r.bottom);row.width=row.right-row.left;row.height=row.bottom-row.top;}
+    else lines.push({...r});
+    if(lines.length>2048)throw Error('Historical glyph-line measurement exceeds bound');
+  }
+  return {lines,runs,fragments:fragments.length};
+}
 /** Browser-only OBSERVATION. A WeakMap tags references in memory; no DOM attributes/content/styles are changed. */
-function collectGeometry(document,expected) {
+function collectGeometry(document,expected,measureTextLines) {
   const win=document.defaultView,key=Symbol.for('aerynth.review-ui.readonly-node-probe');
   const registry=win[key]??(win[key]={nodes:new WeakMap(),next:1});
   const id=node=>{if(!registry.nodes.has(node))registry.nodes.set(node,registry.next++);return registry.nodes.get(node);};
@@ -130,9 +151,8 @@ function collectGeometry(document,expected) {
   const group=(node,key,owner)=>{
     if(!visible(node)||!node.textContent.trim())return;
     let scrollOwner='flow';for(let n=node;n&&n!==flow;n=n.parentElement){const s=win.getComputedStyle(n);if(/auto|scroll|hidden|clip/.test(s.overflowY)&&n.scrollHeight>n.clientHeight+1){scrollOwner=n.tagName==='PRE'?'evidence':'unexpected';break;}}
-    const lines=[],walker=document.createTreeWalker(node,win.NodeFilter.SHOW_TEXT);let text;
-    while((text=walker.nextNode())){if(!text.textContent.trim())continue;const range=document.createRange();range.selectNodeContents(text);for(const r of range.getClientRects()){if(r.width<=0||r.height<=0)continue;const box={left:r.left,top:r.top,right:r.right,bottom:r.bottom,width:r.width,height:r.height};let shown=clip(box,flowRect);for(let n=node;n&&n!==flow&&shown;n=n.parentElement){const s=win.getComputedStyle(n);if(/auto|scroll|hidden|clip/.test(s.overflowY))shown=clip(shown,scrollPort(n));}lines.push({rect:box,visible:shown});}}
-    groups.push({key,nodeId:id(node),rect:rect(node),ownerRect:rect(owner),scrollOwner,lines,textLength:node.textContent.length});
+    const glyphs=measureTextLines(document,node),lines=glyphs.lines.map(box=>{let shown=clip(box,flowRect);for(let n=node;n&&n!==flow&&shown;n=n.parentElement){const s=win.getComputedStyle(n);if(/auto|scroll|hidden|clip/.test(s.overflowY))shown=clip(shown,scrollPort(n));}return {rect:box,visible:shown};});
+    groups.push({key,nodeId:id(node),rect:rect(node),ownerRect:rect(owner),scrollOwner,lines,textLength:node.textContent.length,measurement:'non-whitespace-range-runs-coalesced',glyphRuns:glyphs.runs,glyphFragments:glyphs.fragments});
   };
   const articles=[...shell.querySelectorAll('.vela-core-message')];
   if(JSON.stringify(articles.map(n=>n.dataset.messageId))!==JSON.stringify(expected.messageIds))throw Error('Historical message IDs are not rendered exactly');
@@ -180,7 +200,7 @@ async function verifyReviewUi({win,privateRoot,source,startupErrors=[],getNative
     const click=async selector=>{assert(baseline,'No input before clone proof');await visible(selector);receipt.actions.push({type:'native-mouse',selector});await slot.bound(()=>driver.click(selector));};
     captureBefore=await draw();await click('#vela');await until(()=>js(`!!document.querySelector('#vela-assistant-surface[open] .vela-core-scroll')`),'actual Vela surface');
     const spec={planId:expected.value.planId,summary:baseline.vela.plans[0].summary,messageIds:expected.value.vela.conversation.messages.map(message=>message.id),messages:expected.value.vela.conversation.messages.map(({id,content})=>({id,content}))};
-    const measureRaw=async()=>{const value=await js(`(${collectGeometry.toString()})(document,${JSON.stringify(spec)})`);assert(Buffer.byteLength(JSON.stringify(value))<=512*1024,'Raw review geometry exceeds diagnostic bound');receipt.lastMeasuredGeometry=value;receipt.lastMeasuredAtMs=slot.now()-slot.started;return value;},measure=async()=>assertGeometry(await measureRaw());
+    const measureRaw=async()=>{const value=await js(`(${collectGeometry.toString()})(document,${JSON.stringify(spec)},(${measureTextLines.toString()}))`);assert(Buffer.byteLength(JSON.stringify(value))<=512*1024,'Raw review geometry exceeds diagnostic bound');receipt.lastMeasuredGeometry=value;receipt.lastMeasuredAtMs=slot.now()-slot.started;return value;},measure=async()=>assertGeometry(await measureRaw());
     const settled=async()=>{let previous,current,count=0;await until(async()=>{current=await measureRaw();assert(Number.isFinite(current.effectiveOpacity),'Unknown reading opacity');if(current.effectiveOpacity<.99){count=0;return false;}assertGeometry(current);const signature=digest({bounds:['shell','flow','compose','editor'].map(key=>current[key].rect),scroll:[current.flow.scrollTop,current.evidence.scrollTop],groups:current.groups.map(group=>group.rect)});count=signature===previous?count+1:0;previous=signature;return count>=2;},'opaque stable reading geometry');return current;};
     const first=await settled();assert.equal(first.evidence.open,false,'Historical evidence must start collapsed');
     const expectedEvidence={actions:baseline.vela.plans[0].steps,targets:baseline.vela.plans[0].targets,provider:baseline.vela.plans[0].contribution,receipts:baseline.vela.receipts};assert.deepEqual(JSON.parse(first.evidence.text),expectedEvidence,'Actual evidence content mismatch');
@@ -213,4 +233,4 @@ async function verifyReviewUi({win,privateRoot,source,startupErrors=[],getNative
   receipt.slot.elapsedMs=slot.now()-slot.started;await fs.writeFile(path.join(out,'review-ui.json'),encoded(receipt));console.log(JSON.stringify({status:'vela-review-ui-terminal',passed:receipt.passed,evidence:out,captures:receipt.captures.length,error:receipt.error?.message,scope:'historical applied-plan rendering only; zero new provider turns/grants/actions'}));process.exitCode=receipt.passed?0:1;return receipt;
 }
 exports.reviewDeadline=reviewDeadline;exports.verifyReviewUi=verifyReviewUi;
-exports._offline={reviewDeadline,durableIdentity,assertCheckpoint,canonicalProjection,assertGeometry,assertRetained,assertEventScope,recordVisibleLines,collectGeometry};
+exports._offline={reviewDeadline,durableIdentity,assertCheckpoint,canonicalProjection,assertGeometry,assertRetained,assertEventScope,recordVisibleLines,measureTextLines,collectGeometry};
