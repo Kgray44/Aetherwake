@@ -89,7 +89,9 @@
 .vela-core-effects > li {
   flex-shrink: 0;
 }
-.vela-core[data-view="empty"][data-context="none"]
+.vela-core:not(
+    [data-manifestation-kind]
+  )[data-view="empty"][data-context="none"]
   .vela-core-scroll:not(:has(.vela-core-plan)) {
   display: none;
 }
@@ -524,6 +526,198 @@
   font: 14px/1.6 var(--font-ui, system-ui, sans-serif) !important;
   white-space: pre-wrap;
 }
+
+/* Current responses, invoked history and the existing composer share one skin.
+   The host owns their geometry and visibility. Ready content never depends on
+   decorative formation, opacity, a CSS animation or an additional scheduler. */
+.vela-core[data-manifestation-kind] {
+  --vela-surface-ink: linear-gradient(110deg, #0c0c18, #10111d 58%, #0c0e19);
+  position: relative;
+  isolation: isolate;
+  gap: 0;
+  border-radius: 30px 30px 32px 42px;
+}
+.vela-core[data-manifestation-kind]::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -1px;
+  border: 1px solid #dbc7ef24;
+  border-radius: inherit;
+  background:
+    linear-gradient(125deg, #dfc7fa14, transparent 46%, #ac8ac609),
+    linear-gradient(115deg, #171426c9, #0c0d18b3 60%, #151322cc);
+  box-shadow:
+    inset 0 1px 0 #f0ddff14,
+    inset -1px -1px 0 #ab8dce08,
+    0 16px 38px #02030a24;
+  pointer-events: none;
+}
+.vela-core[data-manifestation-kind]:focus-within::before {
+  border-color: #dcc5f247;
+}
+.vela-core[data-manifestation-kind] > .vela-core-scroll {
+  gap: 20px;
+  padding: 20px 22px 12px;
+  border: 0;
+  border-radius: 30px 30px 0 0;
+  /* Unknown and bright/dense backdrops use the same absorbing reading core.
+     The shared curved perimeter and bridge carry translucency, not rear text. */
+  background: var(--vela-surface-ink);
+  box-shadow: none;
+}
+.vela-core[data-manifestation-kind] > .vela-core-compose {
+  padding: 12px 18px 12px;
+  border: 0;
+  border-radius: 0 0 32px 42px;
+  background:
+    linear-gradient(125deg, #dfc7fa08, transparent 52%, #ac8ac604),
+    var(--vela-surface-ink);
+  backdrop-filter: none;
+  box-shadow: inset 0 1px 0 #e8d6f60c;
+}
+.vela-core[data-manifestation-kind] > .vela-core-compose:focus-within {
+  box-shadow: inset 0 1px 0 #e8d6f626;
+}
+.vela-core[data-manifestation-kind] > .vela-core-status,
+.vela-core[data-manifestation-kind] > .vela-core-error {
+  margin: 0;
+  padding: 8px 22px;
+  background: var(--vela-surface-ink);
+}
+.vela-core[data-manifestation-kind]
+  > :nth-child(
+    1
+      of
+      :is(
+        .vela-core-scroll,
+        .vela-core-error,
+        .vela-core-status,
+        .vela-core-compose
+      ):not([hidden])
+  ) {
+  border-top-left-radius: 30px;
+  border-top-right-radius: 30px;
+}
+.vela-core[data-manifestation-kind] .vela-core-compose-actions {
+  flex-wrap: wrap;
+}
+.vela-manifestation,
+.vela-manifestation-content,
+.vela-core-history {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  max-width: 100%;
+}
+.vela-manifestation > *,
+.vela-manifestation-content > *,
+.vela-core-history > * {
+  flex-shrink: 0;
+}
+.vela-manifestation {
+  align-items: stretch;
+  overflow-wrap: anywhere;
+}
+.vela-manifestation-kicker {
+  color: #c6b9d9;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.vela-manifestation-value {
+  color: #f2ebfb;
+  font-size: clamp(24px, 2.2vw, 34px);
+  font-weight: 450;
+  line-height: 1.25;
+  letter-spacing: -0.035em;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.vela-manifestation-content {
+  max-width: 65ch;
+  font-size: 16px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+.vela-manifestation-content :is(ul, ol) {
+  margin: 0;
+  padding-left: 24px;
+  white-space: normal;
+}
+.vela-manifestation-content li + li {
+  margin-top: 8px;
+}
+.vela-manifestation-sources,
+.vela-manifestation-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  max-width: 100%;
+}
+.vela-manifestation-sources {
+  color: var(--vela-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.vela-manifestation a {
+  color: #ddc8f2;
+  text-decoration-color: #ddc8f28c;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
+.vela-manifestation a:hover {
+  color: #fff2ff;
+  text-decoration-color: currentColor;
+}
+.vela-core[data-manifestation-kind="whisper"] .vela-manifestation {
+  gap: 8px;
+}
+.vela-core[data-manifestation-kind="whisper"] > .vela-core-scroll {
+  padding-top: 18px;
+}
+.vela-core[data-manifestation-kind="action"]
+  .vela-manifestation
+  .vela-core-plan {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.vela-core-history {
+  gap: 24px;
+}
+.vela-core-history .vela-core-message {
+  padding-inline: 0;
+}
+.vela-core-history .vela-core-message[data-source="user"] {
+  margin-left: 16px;
+  padding: 8px 12px;
+}
+/* The root host supplies bounded SVG geometry after its existing MC frame.
+   This decorative connection has no hit targets and carries no status meaning. */
+.vela-manifestation-bridge {
+  position: absolute;
+  display: block;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: var(--vela-bridge-opacity, 0.6);
+}
+.vela-manifestation-bridge[hidden] {
+  display: none;
+}
+.vela-manifestation-bridge path {
+  fill: #12111bd9;
+  stroke: #d5b9ee29;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.vela-manifestation-bridge .vela-manifestation-bridge-line {
+  fill: none;
+  stroke: #dec2f33b;
+  stroke-width: 0.75;
+}
 @media (max-width: 440px) {
   .vela-core {
     gap: 8px;
@@ -549,6 +743,12 @@
     height: 32px;
     min-height: 32px;
   }
+  .vela-core[data-manifestation-kind] > .vela-core-scroll {
+    padding-inline: 14px;
+  }
+  .vela-core[data-manifestation-kind] > .vela-core-compose {
+    padding-inline: 12px;
+  }
 }
 @media (forced-colors: active) {
   .vela-core-compose {
@@ -570,6 +770,25 @@
   }
   .vela-core :focus-visible {
     outline-color: Highlight;
+  }
+  .vela-core[data-manifestation-kind]::before {
+    border-color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+  .vela-core[data-manifestation-kind]
+    > :is(
+      .vela-core-scroll,
+      .vela-core-compose,
+      .vela-core-status,
+      .vela-core-error
+    ) {
+    background: Canvas;
+    border: 0;
+    box-shadow: none;
+  }
+  .vela-manifestation-bridge {
+    display: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {
