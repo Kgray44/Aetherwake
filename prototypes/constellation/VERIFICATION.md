@@ -2,9 +2,31 @@
 
 ## Current source checkpoint
 
-The latest full source run passes **98 tests** and strict TypeScript. This is source evidence, not completion of the owner's native gates A–J.
+The full runtime suite passed **104 tests** and strict TypeScript at `af22180`. The later, separately held project-star material refinement passed **39 targeted scene tests** at `915f3d8`. These are source checkpoints, not completion of the owner's native gates A–J.
 
-Native harness source checks now pass **31 focused CJS tests**, including seven journey-guard/evidence tests, twelve scalar/Universe benchmark tests and four spatial-gesture tests. The expanded helper admits the existing absolute host deadline, initializes its driver within receipt cleanup, fences input and awaited UI reads against ownership/deadline/Escape, and checkpoints each completed step in bounded private output. One explicitly injected non-repeat Escape has a documented 250 ms allowance; other Escape events abort. Initialization/finalization errors still close the owned host. The current helper retains all 106 acceptance assertions, including the full ordered journey, exact source/profile/restart checks, registered task-group controls and real recordings. Source tests do not establish native acceptance.
+Native harness source checks pass **62 focused CJS tests** at `d37b06c`, including monotonic deadlines, console monitoring and three recovery tests with adversarial failures. The existing absolute deadline includes startup and uses the Electron main process's monotonic clock; wall timestamps remain diagnostic evidence. Input and awaited reads retain ownership/deadline/Escape fences and bounded checkpoints. One explicitly injected non-repeat Escape has a 250 ms allowance; other Escape events abort. Initialization/finalization errors still close the owned host. Recovery additions preserve all 90 prior benchmark assertion calls in order, both 40-sample phases, capture calls, limits and PresentMon launch behavior. Source tests do not establish native acceptance.
+
+## Updated integrated evidence — 2026-11-02
+
+This section supersedes older waiting-status statements below without changing historical receipts or failures. The later complete ordered journey/restart is bound to integration candidate `03ccd51`, receipts `expanded-1793609861727-gpPAFl` and `expanded-1793609918477-o06D0q`. Independent audit verified their 210 source blobs, identical build envelopes, 15 PNGs, two native-window recordings and persisted canonical identities/content/layouts. Recordings are motion evidence, not presented-FPS measurements or owner artistic acceptance.
+
+All five separate rendered matrix cases now have source-bound native measurements and independent raw-CSV audits. Receipts remain in the integration checkout's private `.runtime/application-evidence/` directory. Each has 40 project and 40 Universe samples and separate OS captures; zero dropped flags were observed in these captures. These are separate candidate-bound runs, not a single-current-build matrix or production qualification. Display-interval P95/maximum values below are milliseconds and retain outliers.
+
+| Projects/resources | Integration candidate | Receipt directory | Project P95 / max | Universe P95 / max |
+| --- | --- | --- | --- | --- |
+| 1 / 50 | `d2f3d0ba32b920b31b95cc96dc0664819523ce45` | `spatial-scale-1793608543469-Y7tnDJ` | 6.2147 / 12.2486 | 6.2071 / 12.1925 |
+| 3 / 250 | `844cf1c3e313e0a3a38200779dfe6cb3dd765c2b` | `spatial-scale-1793614036346-HA9MNl` | 6.1888 / 12.2558 | 6.1963 / 18.2206 |
+| 10 / 2,000 | `5b2af123afb113eadfa6291c951db4c325f99ee5` | `spatial-scale-1793620094415-Ibrjiu` | 6.1857 / 18.2471 | 6.1752 / 18.1977 |
+| 10 / 10,000 | `5b2af123afb113eadfa6291c951db4c325f99ee5` | `spatial-scale-1793620603201-nDbOMG` | 12.1574 / 30.3624 | 6.1785 / 24.3033 |
+| 1 / 10,000 | `336558eabf6617112832b3a737208c5f2c164779` | `spatial-scale-1793622721167-isuwyp` | 12.1159 / 42.4005 | 6.1759 / 18.2288 |
+
+Source blobs, screenshots, CSVs and canonical SQLite data were independently checked. The 10-project/10,000-resource original JS bundle was replaced before its independent byte audit. Its recorded digest matches the earlier byte-audited 2,000-resource bundle and an independently hashed deterministic reconstruction from exact `5b2af12` source. Reconstructed bytes are **not retained original capture files**. The final single-project run retains all three actual pre-launch bundles and the copied operator; their hashes match the native receipt and exact candidate. Older wall-clock-only admissions are not retroactively promoted to monotonic evidence.
+
+The final dense run also executed all nine optional idle/quality/Quiet/reduced/resize/WebGL/scene/minimize checks within the original 90-second host ceiling: startup spent 2,710.8615 ms and helper elapsed time was 64,034.3506 ms. Its real context recovery preserves the exact camera and all 10,003 candidates: 4,874 visible bodies, comprising 280 detailed and 4,594 instanced bodies, with 5,129 offscreen. The old Environment counter was 3,145; the recreated Environment rendered frame 1. Candidate/visible counts, cap, healthy layer and positive instances are checked explicitly. The existing `project-after.png` visibly shows the recovered body batch after recovery/minimize; no extra capture was added. First recovered CPU submission was 23.6 ms, a separate measurement from OS display intervals.
+
+The measured balanced project phase used 160 detailed and 4,695–4,959 instanced bodies; this is not 10,000 simultaneous full-detail objects or editors. One project display interval exceeded 33.333 ms (42.4005 ms); none exceeded 50 ms. Startup/runtime console error records and malformed-event counts were zero, while 252 non-error events were ignored under the monitor contract and their contents were not retained. This is not a claim that no warnings occurred.
+
+The matrix establishes bounded measurement and the stated lifecycle behavior. Dense asteroid-field clutter, weak baseline stellar color, matched visual review of the held palette, transition motion review and owner artistic acceptance remain distinct concerns. Sustained soak, input latency, VRAM, mixed-DPI/multimonitor and gaming qualification are not established by these captures.
 
 ## Executed combined native journey and restart
 
@@ -136,8 +158,8 @@ Advisory context was routed from charters 01/02/03/13/14/15. These documents hav
 
 - Review the integrated workspace arrival motion and reversal with the real V3.5 environment and sculptural Vela. The isolated fixture provides a navigation harness, not a replacement art direction or final shell.
 - Preserve the complete source-bound `9288f6a` walkthrough/restart result above and revalidate relevant behavior after candidate changes. It does not substitute for final owner motion/artistic review.
-- Actual WebGL context loss/restoration, minimization, prolonged idle/soak, mixed DPI, resize/monitor topology, and high-load gaming effects belong to combined-host qualification. This module's graphics policy injection is not proof of driver recovery.
-- Measure presented transition frame distributions, input latency, native process memory, GPU/VRAM and sustained representative loads. Current CPU-only and nonvisible compositor evidence does not establish these results.
+- Actual WebGL restoration, idle policy, all three quality caps, Quiet, reduced-motion navigation, resize, scene switching and minimize/restore are now exercised at the exact dense candidate above. Prolonged soak, mixed DPI, monitor topology and high-load gaming remain outside that bounded result.
+- The OS captures above measure two orbit phases. Presented transition distributions, input latency, GPU/VRAM and sustained representative loads still need their own qualification; callback and CPU-submission summaries do not replace them.
 - Production permission policy is enforced by the service. The fixture is single-owner synthetic data, not a multi-user authorization implementation. Future permissioned adapters must provide filtered snapshots and exercise revocation at their authoritative boundary.
 - Owner artistic acceptance and production/release approval remain explicit future decisions. No host, graphics stack, or governance status is finalized here.
 
