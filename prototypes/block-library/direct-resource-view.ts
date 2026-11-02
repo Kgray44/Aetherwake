@@ -52,6 +52,7 @@ export function mountDirectResourceExperience(
   let group: ReturnType<typeof mountTaskGroupExperience> | undefined;
   let events: ReturnType<typeof mountEventExperience> | undefined;
   let session: NoteSession | undefined;
+  let refreshVersion: number | undefined;
   let editor: HTMLTextAreaElement | undefined;
   let taskStatus: HTMLInputElement | undefined, taskPriority: HTMLSelectElement | undefined;
   let pendingStatus = false, pendingPriority = false;
@@ -103,6 +104,7 @@ export function mountDirectResourceExperience(
       const requested = taskStatus!.checked ? 'done' : 'open';
       pendingStatus = true; paintTask();
       void Promise.resolve().then(async () => {
+        if (disposed || !active || !available(resource)) return;
         currentTask(resourceId);
         await session!.flushEdits();
         if (disposed || !active || !available(resource)) return;
@@ -117,6 +119,7 @@ export function mountDirectResourceExperience(
       if (!['low', 'normal', 'high', 'urgent'].includes(requested)) return;
       pendingPriority = true; paintTask();
       void Promise.resolve().then(async () => {
+        if (disposed || !active || !available(resource)) return;
         currentTask(resourceId);
         await session!.flushEdits();
         if (disposed || !active || !available(resource)) return;
@@ -190,9 +193,23 @@ export function mountDirectResourceExperience(
       : 'This resource is unavailable or no longer accessible.';
     else {
       if (mounted) status.textContent = '';
-      try { mount(); } catch (error) { fail(error); }
+      try { mount(); } catch (error) {
+        note?.dispose(); group?.dispose(); events?.dispose();
+        note = undefined; group = undefined; events = undefined;
+        session = undefined; editor = undefined; taskStatus = undefined; taskPriority = undefined;
+        body.replaceChildren(); body.inert = true;
+        fail(error);
+        return;
+      }
     }
     note?.setActive(active && available(resource));
+    const document = session?.snapshot().document?.resource;
+    if (session && document && active && available(resource) && document.version < resource.version && refreshVersion !== resource.version) {
+      refreshVersion = resource.version;
+      // The existing session preserves dirty/recovered text and fences a
+      // competing canonical revision. A clean session adopts fresh metadata.
+      void session.refresh().catch(fail);
+    }
     group?.setActive(active && available(resource));
     group?.update(resource.taskMembers ?? []);
     events?.setActive(active && available(resource));
