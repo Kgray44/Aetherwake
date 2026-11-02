@@ -84,6 +84,7 @@ export function createResourceSurface(options: {
           label: resource.title,
           minSize: { width: 360, height: 300 },
           maxSize: { width: 900, height: 740 },
+          placement: "left",
           preferredSize: {
             width: resource.kind === "stream" ? 780 : 600,
             height: 600,

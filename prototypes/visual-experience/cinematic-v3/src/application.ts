@@ -76,6 +76,8 @@ import { createRelatedResourcesPort } from "./related-resources";
 import { createResourceOpener } from "./resource-opening.ts";
 import { createResourceSurface } from "./resource-surface.ts";
 import { mountProviderConnections } from "./provider-connections.ts";
+import { mountEnvironmentNavigator } from "./environment-navigator.ts";
+import "./environment-navigator.css";
 import type { ProviderConnectionStatus } from "../../../application-contract/provider-connections.ts";
 import { mountDirectResourceExperience } from "../../../block-library/direct-resource-view.ts";
 import "../../../block-library/direct-resource-view.css";
@@ -345,6 +347,10 @@ export function installApplication(hooks: Hooks) {
   let cardConfiguration: ReturnType<typeof mountBlockConfiguration> | null =
     null;
   let state: DesktopSnapshot | null = null;
+  let environmentNavigator: ReturnType<
+    typeof mountEnvironmentNavigator
+  > | null = null;
+  let environmentSurface: ContextualSurfaceRequest | null = null;
   let offset = { x: 0, y: 0 };
   let zoom = 1;
   let previewBase: LayoutState | undefined;
@@ -421,7 +427,7 @@ export function installApplication(hooks: Hooks) {
   const directResources = createResourceSurface({
     surfaces,
     anchor: () => ({
-      x: innerWidth / 2 - 8,
+      x: Math.min(innerWidth - 16, innerWidth / 2 + 300),
       y: Math.max(120, innerHeight / 5),
       width: 16,
       height: 16,
@@ -541,6 +547,7 @@ export function installApplication(hooks: Hooks) {
   addEventListener(
     "pagehide",
     () => {
+      environmentNavigator?.dispose();
       resourceOpener.cancel();
       directResources.dispose();
     },
@@ -742,6 +749,7 @@ export function installApplication(hooks: Hooks) {
     )
       cancelPreview();
     state = next;
+    environmentNavigator?.update(next);
     subjectDataKey = JSON.stringify([
       next.revision,
       subjectDataEpoch,
@@ -880,7 +888,7 @@ export function installApplication(hooks: Hooks) {
         hostUiElements: () =>
           [
             ...document.querySelectorAll<HTMLElement>(
-              ".topbar,.brand,.place,.aw-workspace-layout,.scene-navigation,#settings-button,.dock,.canvas-tools,#status,.keys,.provenance,.window-drag",
+              ".topbar,.brand,.place,.aw-workspace-layout,.scene-navigation,#settings-button,.dock,.canvas-tools,#status,.keys,.provenance,.window-drag,#vela",
             ),
           ].slice(0, 32),
         snapshot: navigationSnapshot,
@@ -1480,123 +1488,103 @@ export function installApplication(hooks: Hooks) {
   }
   function manager() {
     if (!state) return;
-    open(
-      "Your working environments",
-      `<div class="command-grid"><section><h3>Projects</h3>${state.projects.map((p) => `<p>${escape(p.title)}</p>`).join("")}<button id="new-project">＋ Create project</button></section><section><h3>Workspaces</h3>${state.workspaces.map((w) => `<div class="workspace-row"><button data-workspace="${w.id}">${escape(w.title)}<small>${escape(state!.projects.find((p) => p.id === w.project_id)?.title ?? "Independent workspace")}</small></button><button data-rename="${w.id}" aria-label="Rename ${escape(w.title)}">✎</button><button data-archive="${w.id}" title="Archive workspace; retain resources and layout">Archive</button></div>`).join("") || "<p>No workspaces yet.</p>"}<button id="new-workspace">＋ Create workspace</button></section></div><button id="standalone-chat">New conversation without a project</button>${state.archivedWorkspaces?.length ? `<details><summary>Archived workspaces</summary>${state.archivedWorkspaces.map((w) => `<div class="workspace-row"><span>${escape(w.title)}</span><button data-restore-workspace="${w.id}">Restore</button></div>`).join("")}</details>` : ""}`,
-    );
-    el(".command-grid", dialog).insertAdjacentHTML(
-      "beforebegin",
-      '<button id="conversation-manager">Conversations and history</button>',
-    );
-    el("#conversation-manager", dialog).onclick = () => conversations();
-    el("#new-project", dialog).onclick = () => {
-      open(
-        "Create project",
-        '<form><label>Project name<input name="title" id="project-title" required maxlength="200" autofocus></label><button type="submit">Create project</button></form>',
-      );
-      form(async (f) => {
-        await command({ type: "createProject", title: String(f.get("title")) });
+    dialog.close();
+    if (environmentNavigator && environmentSurface) {
+      environmentNavigator.update(state);
+      surfaces
+        .open(environmentSurface)
+        .classList.add("application-environments");
+      environmentNavigator.focusSearch();
+      return;
+    }
+    const content = document.createElement("div");
+    const mutate = (action: DesktopCommand) =>
+      enqueueResult(async () => {
+        await flush();
+        return command(action);
       });
-    };
-    el("#new-workspace", dialog).onclick = () => {
-      open(
-        "Create workspace",
-        `<form><label>Workspace name<input id="workspace-title" name="title" required maxlength="200"></label><label>Project<select name="projectId"><option value="">Independent</option>${state!.projects.map((p) => `<option value="${p.id}">${escape(p.title)}</option>`).join("")}</select></label><button type="submit">Create workspace</button></form>`,
-      );
-      form(async (f) => {
-        await command({
-          type: "createWorkspace",
-          title: String(f.get("title")),
-          projectId: String(f.get("projectId")) || null,
+    environmentNavigator = mountEnvironmentNavigator(content, {
+      snapshot: state,
+      motion: hooks.motion,
+      wake: hooks.wake,
+      openWorkspace: async (workspaceId) => {
+        await mutate({
+          type: "navigate",
+          target: { kind: "workspace", workspaceId },
         });
-      });
-      dialog.insertAdjacentHTML(
-        "beforeend",
-        '<p>Start blank, reuse a saved template or preset, or ask Vela to help compose a workspace.</p><button id="workspace-templates">Browse templates and presets</button><button id="workspace-ask-vela">Ask Vela</button>',
-      );
-      el("#workspace-templates", dialog).onclick = () => {
-        const projectId =
-          el<HTMLSelectElement>('select[name="projectId"]', dialog).value ||
-          null;
-        dialog.close();
+        surfaces.close("environments");
+      },
+      openProject: async (projectId) => {
+        await mutate({
+          type: "navigate",
+          target: { kind: "constellation", projectId },
+        });
+        surfaces.close("environments");
+      },
+      createProject: (title) => mutate({ type: "createProject", title }),
+      createWorkspace: async ({ title, projectId }) => {
+        const next = await mutate({
+          type: "createWorkspace",
+          title,
+          projectId,
+        });
+        surfaces.close("environments");
+        return next;
+      },
+      renameWorkspace: ({ id, title, expectedVersion }) =>
+        mutate({
+          type: "renameWorkspace",
+          workspaceId: id,
+          title,
+          expectedVersion,
+        }),
+      archiveWorkspace: ({ id, expectedVersion, archived }) =>
+        mutate({
+          type: "archiveWorkspace",
+          workspaceId: id,
+          expectedVersion,
+          archived,
+        }),
+      templates: async (projectId) => {
+        surfaces.close("environments");
         templates(projectId);
-      };
-      el("#workspace-ask-vela", dialog).onclick = () => {
-        const title = el<HTMLInputElement>(
-          "#workspace-title",
-          dialog,
-        ).value.trim();
-        const projectId =
-          el<HTMLSelectElement>('select[name="projectId"]', dialog).value ||
-          null;
-        const project = state?.projects.find((p) => p.id === projectId);
-        dialog.close();
+      },
+      askVela: async (projectId) => {
+        surfaces.close("environments");
         openVela();
+        const project = state?.projects.find((p) => p.id === projectId);
         const composer = el<HTMLTextAreaElement>(
           ".vela-core-compose textarea",
           velaContent,
         );
         if (!composer.value.trim())
-          composer.value = `Help me create ${title ? `a workspace named “${title}”` : "a workspace"}${project ? ` in project “${project.title}” (${project.id})` : ""} from available resources. Prepare a plan for my review.`;
+          composer.value = `Help me create a workspace${project ? ` in project “${project.title}” (${project.id})` : ""} from available resources. Prepare a plan for my review.`;
         composer.focus();
-      };
+      },
+      newConversation: async () => {
+        await newConversation();
+        surfaces.close("environments");
+      },
+      conversations: async () => {
+        await showConversations();
+        surfaces.close("environments");
+      },
+      resources: async () => {
+        surfaces.close("environments");
+        picker();
+      },
+    });
+    environmentSurface = {
+      id: "environments",
+      anchor: el("#workspace-manager"),
+      content,
+      label: "Environments",
+      minSize: { width: 340, height: 240 },
+      maxSize: { width: 520, height: 700 },
+      placement: "bottom",
+      initialFocus: 'input[type="search"]',
     };
-    dialog.querySelectorAll<HTMLElement>("[data-workspace]").forEach(
-      (b) =>
-        (b.onclick = () => {
-          dialog.close();
-          void run({
-            type: "navigate",
-            target: { kind: "workspace", workspaceId: b.dataset.workspace! },
-          });
-        }),
-    );
-    dialog.querySelectorAll<HTMLElement>("[data-rename]").forEach(
-      (b) =>
-        (b.onclick = () => {
-          const w = state!.workspaces.find((w) => w.id === b.dataset.rename)!;
-          open(
-            "Rename workspace",
-            `<form><label>Name<input name="title" value="${escape(w.title)}" required maxlength="200"></label><button type="submit">Save name</button></form>`,
-          );
-          form(async (f) =>
-            command({
-              type: "renameWorkspace",
-              workspaceId: w.id,
-              expectedVersion: w.version,
-              title: String(f.get("title")),
-            }),
-          );
-        }),
-    );
-    for (const [selector, archived] of [
-      ["[data-archive]", true],
-      ["[data-restore-workspace]", false],
-    ] as const)
-      dialog.querySelectorAll<HTMLElement>(selector).forEach(
-        (button) =>
-          (button.onclick = () => {
-            const workspaceId =
-              button.dataset.archive ?? button.dataset.restoreWorkspace!;
-            const workspace = [
-              ...state!.workspaces,
-              ...(state!.archivedWorkspaces ?? []),
-            ].find((w) => w.id === workspaceId)!;
-            void enqueue(async () => {
-              await flush();
-              await command({
-                type: "archiveWorkspace",
-                workspaceId,
-                expectedVersion: workspace.version,
-                archived,
-              });
-              manager();
-            });
-          }),
-      );
-    el("#standalone-chat", dialog).onclick = () => {
-      void newConversation().catch(report);
-    };
+    surfaces.open(environmentSurface).classList.add("application-environments");
   }
   async function newConversation() {
     const created = await composerPort.command("create", {
@@ -3463,6 +3451,7 @@ export function installApplication(hooks: Hooks) {
         }
       }
       surfaces.frame(now);
+      environmentNavigator?.frame();
       velaExperience.frame(policy);
       velaManifestation.frame(policy);
       paintPreview();
