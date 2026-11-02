@@ -226,6 +226,72 @@ function spatialDragPoint(selector, bodyKey, dx, dy) {
 }
 exports.spatialDragPoint = spatialDragPoint;
 
+/** Standalone browser read: an expanded host can precede its resource mount. */
+function taskGroupChecklistReady(blockId, expected) {
+  if (!Array.isArray(expected) || !expected.length || expected.length > 64)
+    return false;
+  const members = new Map();
+  for (const member of expected) {
+    if (
+      typeof member?.id !== "string" ||
+      typeof member.checked !== "boolean" ||
+      members.has(member.id)
+    )
+      return false;
+    members.set(member.id, member.checked);
+  }
+  const root = document.querySelector(
+    '[data-block="' +
+      CSS.escape(blockId) +
+      '"] .aw-task-group[aria-label="Task group checklist"]',
+  );
+  if (
+    !root ||
+    !root.getClientRects().length ||
+    root.closest("[hidden],[inert]")
+  )
+    return false;
+  const rows = [...root.querySelectorAll("[data-task-id]")];
+  if (rows.length !== members.size) return false;
+  const seen = new Set();
+  for (const row of rows) {
+    const id = row.dataset.taskId,
+      input = row.querySelector('input[type="checkbox"]');
+    if (
+      !members.has(id) ||
+      seen.has(id) ||
+      !input ||
+      input.disabled ||
+      input.checked !== members.get(id) ||
+      !input.getClientRects().length ||
+      input.closest("[hidden],[inert]") ||
+      !input.getAttribute("aria-label")?.startsWith("Mark ")
+    )
+      return false;
+    seen.add(id);
+  }
+  return true;
+}
+
+function waitForTaskGroupChecklist(wait, blockId, canonicalMembers) {
+  const expected = canonicalMembers.map((member) => ({
+    id: member.id,
+    checked: member.status === "done",
+  }));
+  return wait(
+    "(" +
+      taskGroupChecklistReady.toString() +
+      ")(" +
+      JSON.stringify(blockId) +
+      "," +
+      JSON.stringify(expected) +
+      ")",
+    5000,
+  );
+}
+exports.taskGroupChecklistReady = taskGroupChecklistReady;
+exports.waitForTaskGroupChecklist = waitForTaskGroupChecklist;
+
 const geometry = (s) =>
   s.blocks
     .map(
@@ -1135,6 +1201,11 @@ async function verifyJourney({
       await openBlock(receipt.taskGroups[2].blockId);
       const observedGroup = (await snapshot()).resources.find(
         (r) => r.id === receipt.taskGroups[2].resourceId,
+      );
+      await waitForTaskGroupChecklist(
+        wait,
+        receipt.taskGroups[2].blockId,
+        observedGroup.taskMembers,
       );
       const renderedMembers = await js(
         `(()=>{const root=document.querySelector('[data-block="${receipt.taskGroups[2].blockId}"] .aw-task-group[aria-label="Task group checklist"]');if(!root||!root.getClientRects().length)return null;return [...root.querySelectorAll('[data-task-id]')].map(row=>{const input=row.querySelector('input[type="checkbox"]');return{id:row.dataset.taskId,checked:input?.checked??null,label:input?.getAttribute('aria-label')??null,visible:!!input?.getClientRects().length}})})()`,
