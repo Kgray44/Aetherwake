@@ -20,6 +20,7 @@ import type {
 import type { DesktopSnapshot } from "../application-contract/contracts.ts";
 import type {
   WorkspaceTemplate,
+  AppliedTemplate,
   TemplatePreview,
 } from "./contracts.ts";
 import { captureWorkspaceTemplate } from "./model.ts";
@@ -49,6 +50,8 @@ const sourceFiles = [
   "model.ts",
   "registry.ts",
   "canonical-host.mts",
+  "../integrated-backend/src/desktop.mts",
+  "../integrated-backend/src/core.mts",
 ];
 const hashes = Object.fromEntries(
   sourceFiles.map((name) => [
@@ -99,6 +102,7 @@ for (const count of [0, 1, 3, 10, 25, 50])
       provider: "fixture",
       contentPolicy: "synthetic-only",
     });
+    let coreOpen = true;
     const invoke = async <T,>(name: LibraryMethod, input: unknown = {}) =>
       (await core.command("library", { name, input } as LibraryRequest))
         .result as T;
@@ -256,23 +260,33 @@ for (const count of [0, 1, 3, 10, 25, 50])
       }
       checkpoint(path);
       const expected = digest(desktop),
-        expectedViewport = desktop.viewport;
-      assert.equal(Object.keys((await core.command("snapshot", {})).executions).length, 0);
+        expectedViewport = desktop.viewport,
+        expectedOrganization = desktop.organization,
+        expectedPresence = desktop.presence;
+      assert.equal(
+        Object.keys((await core.command("snapshot", {})).executions).length,
+        0,
+      );
       await core.command("close", {});
+      coreOpen = false;
       const restoration = await measure(async () => {
         core = new BackendCore({
           path,
           provider: "fixture",
           contentPolicy: "synthetic-only",
         });
+        coreOpen = true;
         return core.command("desktop", { type: "snapshot" });
       });
       metrics.sqliteReopenAndProjectionMs = restoration.ms;
       assert.deepEqual(digest(restoration.value), expected);
       assert.deepEqual(restoration.value.viewport, expectedViewport);
-      for (const block of restoration.value.blocks) {
-        const config = await invoke<any>("getBlockSettings", block.id);
-        assert.ok([1, 1.25].includes(config.configuration.textScale));
+      assert.deepEqual(restoration.value.organization, expectedOrganization);
+      assert.deepEqual(restoration.value.presence, expectedPresence);
+      const ids = (applied.value.result as AppliedTemplate).placementIds;
+      for (const role of capture.value.placements) {
+        const config = await invoke<any>("getBlockSettings", ids[role.key]);
+        assert.deepEqual(config.configuration, role.configuration);
       }
       const after = process.memoryUsage();
       samples.push({
@@ -286,14 +300,16 @@ for (const count of [0, 1, 3, 10, 25, 50])
         checks: {
           resourceIdentity: true,
           placementCount: true,
-          templatePreferences: true,
+          exactTemplatePreferences: true,
+          exactOrganization: true,
+          exactPresence: true,
           exactRestoredGeometry: true,
           exactRestoredViewport: true,
           noProviderExecution: true,
         },
       });
     } finally {
-      await core.command("close", {});
+      if (coreOpen) await core.command("close", {});
     }
     samples.at(-1).fixtureBytes = bytes(path);
   }

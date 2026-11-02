@@ -20,3 +20,22 @@ Median elapsed milliseconds from three baseline samples:
 The50-card baseline exposes material committed-operation latency. It is not passed off as effortless interaction or renderer acceptance. Registry lookup and library search also run1000 iterations per sample and are recorded as total elapsed milliseconds, never frame rate. Native0–50 mixed-block rendering, resize/focus/input behavior, idle/hidden suspension, process memory and graphics restoration remain required in the integrated desktop.
 
 The executed benchmark file was hashed with the runtime modules before the run and committed unchanged with this report. The `source` field identifies the existing source commit; `sourceHashes` binds the exact executed benchmark and library files.
+
+## One-projection desktop publication
+
+Commit79f5d2e reuses one canonical WorkspaceEngine projection for the blocks, viewport, organization, presence and undo/redo fields of one synchronous DesktopState snapshot. Previously the same method rebuilt that projection six times, repeatedly normalizing identical history. There is no persistent cache across revisions, change to permissions/history policy, Core command change or renderer change. The existing27 actual DesktopState/canonical adapter regression tests pass; the candidate repeats all18 operation samples with the same workloads.
+
+The candidate additionally checks exact captured placement configuration, organization and presence after SQLite reopen. This strengthens functional checking outside the timed operations. It does not alter the timed command counts. Both raw reports retain their own source hashes and environment/limitations.
+
+Median elapsed milliseconds after projection reuse:
+
+|Note cards|Template apply|10 workspace navigation commands|10 geometry commits|SQLite reopen/projection|
+|---:|---:|---:|---:|---:|
+|0|19.22|133.26|Unavailable (no card)|12.86|
+|1|21.79|133.19|166.04|14.30|
+|3|44.35|217.27|266.38|24.74|
+|10|102.89|290.75|465.86|41.19|
+|25|418.54|610.80|866.53|47.07|
+|50|1308.93|1478.86|2243.83|130.50|
+
+These short sequential runs show a useful reduction in committed backend latency at higher counts. Host conditions were not exclusive and no native renderer ran, so this is not a displayed-frame comparison, a definitive performance ratio or product acceptance. Retained candidate fixtures total28,381,184 bytes. Both runs' fixtures and raw paths remain in their private `.runtime` indices.
