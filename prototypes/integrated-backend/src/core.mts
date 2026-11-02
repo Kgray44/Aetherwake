@@ -209,9 +209,11 @@ export class BackendCore {
   }
   private libraryCapabilities():LibraryCapabilities {
     const cap=this.capabilityCache.snapshot(),codex=!!cap&&!cap.mock&&cap.authentication==='available'&&cap.providerId===this.port.id;
-    return {revision:1,kinds:Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),subjects:Object.fromEntries(SUBJECT_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'unsupported',reason:'A typed template planning port is not registered; reviewed Vela native workspace proposals remain separate'}};
+    const mediaUnavailable={state:'unsupported' as const,reason:'File and link access is not available in this build.'};
+    return {revision:1,kinds:{...Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),file:mediaUnavailable,link:mediaUnavailable},subjects:Object.fromEntries(SUBJECT_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{automatic:this.ordinaryAuthorized()?{state:'available'}:{state:'setup_required',reason:'Connect ChatGPT to start an AI conversation.'},local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'unsupported',reason:'A typed template planning port is not registered; reviewed Vela native workspace proposals remain separate'}};
   }
   private createLibraryResource(kind:BlockKind,title:string,provider:'local'|'codex'|undefined,projectId:string|null):string {
+    ensure(!['file','link'].includes(kind),'media_import_required');
     if(kind==='conversation')return this.create(title,provider==='codex'?this.port.id:provider==='local'?'local':this.defaultOrdinaryProvider(),projectId).resourceId;
     const resource=this.kernel.createNote(title,'',projectId);this.db.prepare('INSERT INTO desktop_resources(resource_id,kind) VALUES(?,?)').run(resource.id,kind);return resource.id;
   }
@@ -314,6 +316,7 @@ export class BackendCore {
     }});
   }
   private async libraryCommand(operation:LibraryRequest):Promise<LibraryResponse> {
+    if(operation.name==='capabilities')await this.refreshOrdinaryStatus();
     const input:any=operation?.input;
     if(operation?.name==='createBlock'&&input?.kind==='conversation'&&input.provider===undefined)await this.refreshOrdinaryStatus();
     const mutation=['setFavorite','configureBlock','attachBlock','createBlock','saveTemplate','renameTemplate','archiveTemplate','applyTemplate','workspaceFromResources','createSubjectBlock'].includes(operation?.name);
@@ -1325,6 +1328,7 @@ export class BackendCore {
       case 'conversationActivity': return this.conversationActivity(a) as any;
       case 'viewState': return this.desktop.viewState(a) as any;
       case 'desktop': {
+        if(a.type==='createResource')ensure(!['file','link'].includes(a.kind),'media_import_required');
         if(a.type==='createResource'&&a.kind==='conversation'&&a.provider===undefined)await this.refreshOrdinaryStatus();
         if (a.type !== 'snapshot') {
           if(['createResource','content','archiveSubject','relate','unrelate','setTaskGroupMembers'].includes(a.type))ensure(!this.active,'execution_busy');
