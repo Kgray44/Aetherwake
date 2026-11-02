@@ -43,18 +43,18 @@ const originalEvidence = async file => {assert(file&&path.isAbsolute(file)&&insi
 const SLOT_LIMIT_MS = 85000;
 const CLEANUP_RESERVE_MS = 1500;
 const reviewPreload = path.resolve(__dirname, '../../visual-experience/cinematic-v3/native/vela-review-preload.cjs');
-function trustedReviewWindow(win, windows) {
+function trustedReviewWindow(win, windows, ownsNativeReviewWindow) {
   const matches = windows.filter(child => {
     try {
       if (child === win || child.isDestroyed() || child.webContents.isDestroyed() || child.getParentWindow() !== win || !child.isModal() || !child.isVisible() || child.isMinimized() || !child.isFocused() || win.isEnabled()) return false;
       const prefs = child.webContents.getLastWebPreferences(), url = child.webContents.getURL();
-      return prefs.contextIsolation === true && prefs.sandbox === true && prefs.nodeIntegration === false && path.resolve(prefs.preload ?? '') === reviewPreload && prefs.additionalArguments?.some(v => /^--vela-review-token=[a-f0-9-]{36}$/.test(v)) && url.startsWith('data:text/html;charset=utf-8,') && decodeURIComponent(url.slice(url.indexOf(',') + 1)).includes('<title>Vela · Review sharing</title>');
+      return typeof ownsNativeReviewWindow === 'function' && ownsNativeReviewWindow(child,win) === true && prefs.contextIsolation === true && prefs.sandbox === true && prefs.nodeIntegration === false && url.startsWith('data:text/html;charset=utf-8,') && decodeURIComponent(url.slice(url.indexOf(',') + 1)).includes('<title>Vela · Review sharing</title>');
     } catch { return false; }
   });
   assert(matches.length <= 1, 'ambiguous_native_review_owner'); return matches[0] ?? null;
 }
 /** Failure-only native properties. No IDs, URLs, paths, tokens, page text or error strings leave this projection. */
-function nativeFocusSnapshot(win, enumerate) {
+function nativeFocusSnapshot(win, enumerate, ownsNativeReviewWindow) {
   const bool=read=>{try{const value=read();return typeof value==='boolean'?value:null;}catch{return null;}};
   const basics=window=>({destroyed:bool(()=>window.isDestroyed()),contentsDestroyed:bool(()=>window.webContents.isDestroyed()),visible:bool(()=>window.isVisible()),minimized:bool(()=>window.isMinimized()),focused:bool(()=>window.isFocused()),enabled:bool(()=>window.isEnabled()),loading:bool(()=>window.webContents.isLoading())});
   const parent=basics(win);let values;try{values=enumerate();}catch{return {parent,enumerationAvailable:false,truncated:false,windows:[]};}
@@ -62,12 +62,13 @@ function nativeFocusSnapshot(win, enumerate) {
   return {parent,enumerationAvailable:true,truncated:values.length>8,windows:values.slice(0,8).map(child=>{
     const facts={...basics(child),isParent:child===win,sameParent:bool(()=>child.getParentWindow()===win),modal:bool(()=>child.isModal()),parentDisabled:parent.enabled===null?null:!parent.enabled};
     let prefs,url;try{prefs=child.webContents.getLastWebPreferences();}catch{}try{url=child.webContents.getURL();}catch{}
-    const trust={contextIsolation:prefs?prefs.contextIsolation===true:null,sandbox:prefs?prefs.sandbox===true:null,nodeIntegrationDisabled:prefs?prefs.nodeIntegration===false:null,preloadMatches:bool(()=>path.resolve(prefs.preload??'')===reviewPreload),tokenArgumentPresent:bool(()=>prefs.additionalArguments.some(v=>/^--vela-review-token=[a-f0-9-]{36}$/.test(v))),reviewDataUrlShape:typeof url==='string'?url.startsWith('data:text/html;charset=utf-8,'):null,reviewTitleMatches:bool(()=>typeof url==='string'&&url.startsWith('data:text/html;charset=utf-8,')&&decodeURIComponent(url.slice(url.indexOf(',')+1)).includes('<title>Vela · Review sharing</title>'))};
-    return {...facts,trust,trustedByCurrentPredicate:!facts.isParent&&facts.destroyed===false&&facts.contentsDestroyed===false&&facts.visible===true&&facts.minimized===false&&facts.focused===true&&facts.sameParent===true&&facts.modal===true&&facts.parentDisabled===true&&Object.values(trust).every(value=>value===true)};
+    const metadata={preloadMetadataPresent:prefs?typeof prefs.preload==='string':null,tokenArgumentsMetadataPresent:prefs?Array.isArray(prefs.additionalArguments):null,preloadMatches:prefs&&typeof prefs.preload==='string'?bool(()=>path.resolve(prefs.preload)===reviewPreload):null,tokenArgumentPresent:prefs&&Array.isArray(prefs.additionalArguments)?bool(()=>prefs.additionalArguments.some(v=>/^--vela-review-token=[a-f0-9-]{36}$/.test(v))):null};
+    const trust={hostAttested:typeof ownsNativeReviewWindow==='function'?bool(()=>ownsNativeReviewWindow(child,win)):false,contextIsolation:prefs?prefs.contextIsolation===true:null,sandbox:prefs?prefs.sandbox===true:null,nodeIntegrationDisabled:prefs?prefs.nodeIntegration===false:null,reviewDataUrlShape:typeof url==='string'?url.startsWith('data:text/html;charset=utf-8,'):null,reviewTitleMatches:bool(()=>typeof url==='string'&&url.startsWith('data:text/html;charset=utf-8,')&&decodeURIComponent(url.slice(url.indexOf(',')+1)).includes('<title>Vela · Review sharing</title>'))};
+    return {...facts,metadata,trust,trustedByCurrentPredicate:!facts.isParent&&facts.destroyed===false&&facts.contentsDestroyed===false&&facts.visible===true&&facts.minimized===false&&facts.focused===true&&facts.sameParent===true&&facts.modal===true&&facts.parentDisabled===true&&Object.values(trust).every(value=>value===true)};
   })};
 }
 /** Pure lifecycle guard. It never focuses a window, sends input, calls a provider or grants consent. */
-function createSlot({win, slotStartedAt, deadlineMs = SLOT_LIMIT_MS, now = () => performance.now(), windows = () => require('electron').BrowserWindow.getAllWindows()}) {
+function createSlot({win, slotStartedAt, deadlineMs = SLOT_LIMIT_MS, ownsNativeReviewWindow, now = () => performance.now(), windows = () => require('electron').BrowserWindow.getAllWindows()}) {
   assert(Number.isFinite(deadlineMs) && deadlineMs > CLEANUP_RESERVE_MS && deadlineMs <= SLOT_LIMIT_MS, 'invalid_vela_live_deadline');
   const started = slotStartedAt ?? now(); assert(Number.isFinite(started) && started <= now(), 'invalid_vela_live_slot_start');
   const deadline = started + deadlineMs, workDeadline = deadline - CLEANUP_RESERVE_MS;
@@ -80,11 +81,11 @@ function createSlot({win, slotStartedAt, deadlineMs = SLOT_LIMIT_MS, now = () =>
     try {
       assert(!win.isDestroyed() && !win.webContents.isDestroyed() && win.isVisible() && !win.isMinimized(), 'native_verification_focus_lost');
       if (win.isFocused() && win.isEnabled()) return {kind:'parent'};
-      const child = allowReview && consentPending ? trustedReviewWindow(win, windows()) : null;
+      const child = allowReview && consentPending ? trustedReviewWindow(win, windows(),ownsNativeReviewWindow) : null;
       if (child) return {kind:'native-review', child};
       throw Error('native_verification_focus_lost');
     } catch (error) {
-      if(focusFailure===undefined)try{focusFailure={allowReview,consentPending,...nativeFocusSnapshot(win,windows)};}catch{focusFailure={allowReview,consentPending,enumerationAvailable:false,truncated:false,windows:[]};}
+      if(focusFailure===undefined)try{focusFailure={allowReview,consentPending,...nativeFocusSnapshot(win,windows,ownsNativeReviewWindow)};}catch{focusFailure={allowReview,consentPending,enumerationAvailable:false,truncated:false,windows:[]};}
       throw abort(error);
     }
   };
@@ -240,7 +241,7 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
             const promptDigest=digest(shown.prompt);assert.equal(shown.digest,'Request digest: '+promptDigest);const semantic=JSON.parse(shown.prompt.trim().split('\n').at(-1));assert.equal(semantic.intent,expected.intent);assert.equal(semantic.schemaAvailability,'complete-approved-catalog','This acceptance keeps optional discovery OFF');assert.equal(semantic.context.history,undefined,'This fresh-profile acceptance keeps optional history OFF');
             assert.deepEqual(semantic.context.included.map(r=>r.id).sort(),expected.resourceIds.slice().sort());assert(semantic.context.discovered.some(r=>r.id===expected.projectId&&r.kind==='project'));assert.equal(semantic.context.included.find(r=>r.id===expected.noteId).content,expected.noteContent);assert(semantic.context.included.find(r=>r.id===expected.chatId).content.includes(expected.chatContent));
             for(const entry of semantic.context.included)assert.equal(entry.contentDigest,digest(entry.content),'Displayed source content digest');
-            receipt.nativeReview={windowId:mode.child.id,providerId:'codex-app-server',intent:shown.intent,prompt:shown.prompt,promptDigest,context:semantic.context,contextDigest:digest(semantic.context),observed:true,approvalObserved:false};observed=true;
+            receipt.nativeReview={windowId:mode.child.id,hostAttested:true,providerId:'codex-app-server',intent:shown.intent,prompt:shown.prompt,promptDigest,context:semantic.context,contextDigest:digest(semantic.context),observed:true,approvalObserved:false};observed=true;
             console.log(JSON.stringify({status:'vela-live-native-review-observed',providerId:'codex-app-server',promptDigest,promptBytes:Buffer.byteLength(shown.prompt),resourceIds:expected.resourceIds,instruction:'Parent may inspect the actual focused sharing review and choose Send once. The helper does not send consent.'}));
           }
         }else if(observed){slot.consent(false);return;}

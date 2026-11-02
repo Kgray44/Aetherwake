@@ -8,9 +8,10 @@ const {createSlot,trustedReviewWindow,nativeFocusSnapshot,consoleRecord,cancelOb
 function fixture(){
   let clock=100, focused=true, enabled=true; const windows=[];
   const win={isDestroyed:()=>false,isVisible:()=>true,isMinimized:()=>false,isFocused:()=>focused,isEnabled:()=>enabled,webContents:{isDestroyed:()=>false}};
-  const child={id:7,isDestroyed:()=>false,isVisible:()=>true,isMinimized:()=>false,isFocused:()=>true,isModal:()=>true,getParentWindow:()=>win,webContents:{isDestroyed:()=>false,getLastWebPreferences:()=>({contextIsolation:true,sandbox:true,nodeIntegration:false,preload:path.resolve(__dirname,'../../visual-experience/cinematic-v3/native/vela-review-preload.cjs'),additionalArguments:['--vela-review-token=12345678-1234-1234-1234-123456789abc']}),getURL:()=> 'data:text/html;charset=utf-8,'+encodeURIComponent('<title>Vela · Review sharing</title>')}};
-  const slot=createSlot({win,slotStartedAt:100,deadlineMs:85000,now:()=>clock,windows:()=>windows});
-  return {win,child,slot,windows,advance:value=>{clock+=value;},focus:value=>{focused=value;},enable:value=>{enabled=value;}};
+  const child={id:7,isDestroyed:()=>false,isVisible:()=>true,isMinimized:()=>false,isFocused:()=>true,isModal:()=>true,getParentWindow:()=>win,webContents:{isDestroyed:()=>false,getLastWebPreferences:()=>({contextIsolation:true,sandbox:true,nodeIntegration:false}),getURL:()=> 'data:text/html;charset=utf-8,'+encodeURIComponent('<title>Vela · Review sharing</title>')}};
+  const ownsNativeReviewWindow=(candidate,parent)=>candidate===child&&parent===win;
+  const slot=createSlot({win,slotStartedAt:100,deadlineMs:85000,ownsNativeReviewWindow,now:()=>clock,windows:()=>windows});
+  return {win,child,slot,windows,ownsNativeReviewWindow,advance:value=>{clock+=value;},focus:value=>{focused=value;},enable:value=>{enabled=value;}};
 }
 
 test('one monotonic slot includes startup and cleanup; invalid/extended budgets fail closed',()=>{
@@ -24,17 +25,33 @@ test('real focus loss aborts immediately without refocus, renderer calls or a re
 
 test('only the focused actual parent-disabled review child permits observational suspension',()=>{
   const f=fixture();f.windows.push(f.child);f.enable(false);f.focus(false);f.slot.consent(true);assert.equal(f.slot.check(true).child,f.child);assert.throws(()=>f.slot.check(),/focus_lost/,'Parent input/RPC guard remains closed during review');
-  for(const change of [c=>{c.isModal=()=>false;},c=>{c.getParentWindow=()=>({});},c=>{c.isFocused=()=>false;},c=>{c.webContents.getURL=()=> 'https://example.invalid/';},c=>{c.webContents.getLastWebPreferences=()=>({sandbox:true,contextIsolation:true,nodeIntegration:false,preload:'untrusted.cjs'});}]){
-    const v=fixture();v.enable(false);v.focus(false);change(v.child);assert.equal(trustedReviewWindow(v.win,[v.child]),null);
+  for(const change of [c=>{c.isModal=()=>false;},c=>{c.getParentWindow=()=>({});},c=>{c.isFocused=()=>false;},c=>{c.webContents.getURL=()=> 'https://example.invalid/';},c=>{c.webContents.getLastWebPreferences=()=>({sandbox:true,contextIsolation:false,nodeIntegration:false});},c=>{c.webContents.getLastWebPreferences=()=>({sandbox:false,contextIsolation:true,nodeIntegration:false});},c=>{c.webContents.getLastWebPreferences=()=>({sandbox:true,contextIsolation:true,nodeIntegration:true});}]){
+    const v=fixture();v.enable(false);v.focus(false);change(v.child);assert.equal(trustedReviewWindow(v.win,[v.child],v.ownsNativeReviewWindow),null);
   }
-  const enabled=fixture();assert.equal(trustedReviewWindow(enabled.win,[enabled.child]),null,'A matching title or child alone never authorizes the modal exception');
+  const enabled=fixture();assert.equal(trustedReviewWindow(enabled.win,[enabled.child],enabled.ownsNativeReviewWindow),null,'A matching title or child alone never authorizes the modal exception');
+});
+
+test('positive exact host ownership attestation accepts exposed security fields without undocumented preload metadata',()=>{
+  const f=fixture();f.enable(false);f.focus(false);let attestations=0;
+  assert.equal(trustedReviewWindow(f.win,[f.child],(child,parent)=>{attestations++;assert.equal(child,f.child);assert.equal(parent,f.win);return f.ownsNativeReviewWindow(child,parent);}),f.child);assert.equal(attestations,1);
+  const snapshot=nativeFocusSnapshot(f.win,()=>[f.child],f.ownsNativeReviewWindow);assert.equal(snapshot.windows[0].trust.hostAttested,true);assert.equal(snapshot.windows[0].metadata.preloadMetadataPresent,false);assert.equal(snapshot.windows[0].metadata.tokenArgumentsMetadataPresent,false);assert.equal(snapshot.windows[0].trustedByCurrentPredicate,true);
+});
+
+test('absent, false, throwing, nonboolean and wrong-window host attestations remain fail closed without fallback or grace',()=>{
+  for(const mode of ['absent','false','throw','nonboolean','wrong-window']){
+    const f=fixture();f.enable(false);f.focus(false);const candidate=mode==='wrong-window'?{...f.child}:f.child;
+    const checked=mode==='absent'?undefined:mode==='false'?()=>false:mode==='throw'?()=>{throw Error('private host failure');}:mode==='nonboolean'?()=>1:f.ownsNativeReviewWindow;
+    assert.equal(trustedReviewWindow(f.win,[candidate],checked),null);
+    const slot=createSlot({win:f.win,slotStartedAt:100,deadlineMs:85000,now:()=>100,windows:()=>[candidate],ownsNativeReviewWindow:checked});slot.consent(true);assert.throws(()=>slot.check(true),/focus_lost/);assert.equal(slot.focusFailureSnapshot().windows[0].trust.hostAttested,['throw','nonboolean'].includes(mode)?null:false);f.focus(true);f.enable(true);assert.throws(()=>slot.check(true),/focus_lost/);
+  }
+  const f=fixture();f.enable(false);assert.equal(f.ownsNativeReviewWindow(f.child,{}),false);const other={...f.child};assert.equal(f.ownsNativeReviewWindow(other,f.win),false);
 });
 
 test('first focus failure distinguishes hidden/loading, disabled-parent gap and visible-unfocused child without waiting or changing abort',()=>{
   const hidden=fixture();hidden.enable(false);hidden.focus(false);hidden.windows.push(hidden.child);hidden.child.isVisible=()=>false;hidden.child.webContents.isLoading=()=>true;hidden.child.webContents.getURL=()=>'';hidden.slot.consent(true);
   assert.throws(()=>hidden.slot.check(true),/focus_lost/);const loading=hidden.slot.focusFailureSnapshot();assert.equal(loading.parent.enabled,false);assert.equal(loading.windows[0].visible,false);assert.equal(loading.windows[0].loading,true);assert.equal(loading.windows[0].trust.reviewDataUrlShape,false);assert.equal(loading.windows[0].trustedByCurrentPredicate,false);
   const gap=fixture();gap.enable(false);gap.focus(false);gap.slot.consent(true);assert.throws(()=>gap.slot.check(true),/focus_lost/);assert.equal(gap.slot.focusFailureSnapshot().parent.enabled,false);assert.deepEqual(gap.slot.focusFailureSnapshot().windows,[]);
-  const unfocused=fixture();unfocused.enable(false);unfocused.focus(false);unfocused.windows.push(unfocused.child);unfocused.child.isFocused=()=>false;unfocused.slot.consent(true);assert.throws(()=>unfocused.slot.check(true),/focus_lost/);const snapshot=unfocused.slot.focusFailureSnapshot();assert.equal(snapshot.windows[0].visible,true);assert.equal(snapshot.windows[0].focused,false);assert.equal(snapshot.windows[0].trust.preloadMatches,true);assert.equal(snapshot.windows[0].trustedByCurrentPredicate,false);
+  const unfocused=fixture();unfocused.enable(false);unfocused.focus(false);unfocused.windows.push(unfocused.child);unfocused.child.isFocused=()=>false;unfocused.slot.consent(true);assert.throws(()=>unfocused.slot.check(true),/focus_lost/);const snapshot=unfocused.slot.focusFailureSnapshot();assert.equal(snapshot.windows[0].visible,true);assert.equal(snapshot.windows[0].focused,false);assert.equal(snapshot.windows[0].trust.hostAttested,true);assert.equal(snapshot.windows[0].metadata.preloadMetadataPresent,false);assert.equal(snapshot.windows[0].metadata.tokenArgumentsMetadataPresent,false);assert.equal(snapshot.windows[0].metadata.preloadMatches,null);assert.equal(snapshot.windows[0].trustedByCurrentPredicate,false);
   unfocused.child.isFocused=()=>true;unfocused.focus(true);assert.throws(()=>unfocused.slot.check(true),/focus_lost/);assert.deepEqual(unfocused.slot.focusFailureSnapshot(),snapshot,'Later window recovery never overwrites the first failure or clears abort');
 });
 
@@ -45,7 +62,7 @@ test('focused trusted child stays accepted only in the existing modal phase; dia
 });
 
 test('native window diagnostics return at most eight boolean-only projections with no URL, token, path, ID or page content',()=>{
-  const f=fixture();f.enable(false);const snapshot=nativeFocusSnapshot(f.win,()=>Array(10).fill(f.child));assert.equal(snapshot.windows.length,8);assert.equal(snapshot.truncated,true);
+  const f=fixture();f.enable(false);const snapshot=nativeFocusSnapshot(f.win,()=>Array(10).fill(f.child),f.ownsNativeReviewWindow);assert.equal(snapshot.windows.length,8);assert.equal(snapshot.truncated,true);
   const leaves=value=>{if(value&&typeof value==='object')Object.values(value).forEach(leaves);else assert(value===null||typeof value==='boolean');};leaves(snapshot);
   const raw=JSON.stringify(snapshot);assert(!raw.includes('data:text'));assert(!raw.includes('12345678-'));assert(!raw.includes('Review sharing'));assert(!raw.includes('vela-review-preload'));assert(!raw.includes('PRIVATE'));
   const unavailable=nativeFocusSnapshot(f.win,()=>{throw Error('PRIVATE');});assert.equal(unavailable.enumerationAvailable,false);assert.deepEqual(unavailable.windows,[]);leaves(unavailable);
