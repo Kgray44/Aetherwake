@@ -10,7 +10,7 @@ This module is an integration component, not a separate application or database.
 import { VelaService } from './src/service.mts';
 const vela = new VelaService({
   db: canonicalDatabase,
-  transaction: work => canonicalKernel.withTransaction(work),
+  transaction: work => canonicalBackend.atomic(work),
   host: canonicalVelaAdapter,
   planner: optionalAttributedPlanner,
 });
@@ -28,7 +28,7 @@ The host's `authorize()` issues opaque authorization references and evaluates ac
 
 `VelaPlanningPort.availability()` exposes observed availability/busy state. `propose()` receives one bounded request, explicitly selected content, capability schemas, provenance and an `AbortSignal`. Its result must satisfy `ProviderProposal` and name the actual provider. The host planner adapter is responsible for its supported provider protocol and identity, model selection, provider lifecycle and trusted instruction channels. Use the existing real Codex bridge when appropriate; do not replace Codex's identity, native instructions, or ordinary conversation controls.
 
-Metadata search and content inclusion are distinct. Search returns at most 30 permitted metadata references without reading content. A request may read at most 12 selected sources, 12,000 UTF-8 bytes each and 32,000 bytes total. Oversized sources are omitted with a reason rather than truncated. Every included source has a version, content digest and source link. Data is labeled untrusted. The manifest does not claim to expose provider-managed hidden context or private reasoning. Provider-context permission is checked before `propose()`.
+Metadata search and content inclusion are distinct. Search returns at most 30 permitted metadata references without reading content. A request may read at most 12 selected sources, 12,000 UTF-8 bytes each and 32,000 bytes total. Oversized sources are omitted with a reason rather than truncated. Every included source has a version, content digest and source link. Data is labeled untrusted. The manifest does not claim to expose provider-managed hidden context or private reasoning. Provider-context permission is checked before `propose()` against all discovered selected metadata, including omitted-source names/IDs, and the full prospective `contextManifest` is supplied to the host authorization policy so it can distinguish metadata from content egress.
 
 Proposals are validated as data, never evaluated as code. Unknown capabilities/fields, invalid IDs, wrong attribution and duplicate step IDs fail closed. Rejected provider output up to 64 KiB is preserved in private local state for inspection; larger/nonserializable output gets an explicit omission record. Plans expire after 15 minutes, bind exact target versions and policy, and are revalidated after inference, review, and before every action. Dependent mutations to the same versioned target need a fresh plan: this first slice deliberately does not invent refreshed versions or auto-expand a reviewed plan.
 

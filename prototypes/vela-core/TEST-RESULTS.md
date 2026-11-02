@@ -8,4 +8,6 @@ Typecheck — **passed with zero diagnostics** using the shared `cinematic-v3/no
 
 All SQLite tests use synthetic records, a real in-memory SQLite database and a canonical test host on the exact injected connection. Planner ports are explicitly synthetic test doubles; they are not real model intelligence evidence. No inference, provider turn, native application window, network call, install, build or cache fill was launched by this worker. The CPU slot was released immediately after the short batch.
 
+Subsequent source review added full-manifest provider-egress authorization and preservation of semantically rejected proposals, plus one focused regression. The resulting 16-test suite and final panel typecheck are queued until the integration owner releases the shared native/performance reservation again; the last executed result remains 15/15, not an unexecuted 16-test claim.
+
 Actual integrated desktop, genuine provider planning, cinematic experience, accessibility, performance and owner acceptance remain unverified by this module checkpoint.

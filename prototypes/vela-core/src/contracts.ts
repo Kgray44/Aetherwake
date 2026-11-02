@@ -93,6 +93,8 @@ export interface AuthorizationRequest {
   requestId: string; planId?: string; fingerprint?: string;
   intent: string; scope: VelaScope; targets: ResourceRef[];
   actions: (VelaNativeAction | DelegateTaskAction | VelaPreferenceAction)[]; providerId?: string;
+  /** Full prospective egress manifest: metadata discovery and read content remain distinct. */
+  contextManifest?: ContextManifest;
   /** Only populated from already-recorded host-issued review authorization. */
   priorAuthorizationRef?: string;
 }
