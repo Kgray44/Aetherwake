@@ -97,7 +97,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const seenEvents = new Set<string>(), cache = new Map<string,{signature:string;node:HTMLElement}>();
   const session = options.draftSession ?? new ConversationDraftSession({ resourceId, port, ...(options.initialDraft === undefined ? {} : { initialContent: options.initialDraft }) });
   const copy = options.copy ?? (text => navigator.clipboard.writeText(text));
-  const report = (text: string) => { if (!disposed) status.textContent = text; };
+  const report = (text: string,kind:'notice'|'send-accepted'='notice') => { if (!disposed){status.textContent=text;status.dataset.statusKind=kind;} };
   const active = () => execution && ['dispatching','running'].includes(execution.state);
   const viewState = () => options.onViewState?.({resourceId,content:textarea.value,scroll:messages.scrollTop,offset:current?.messages.offset??offset??0});
   let measuredHeight=layoutHost?.clientHeight??0,measuredWidth=layoutHost?.clientWidth??0,layoutHidden=!!layoutHost&&measuredHeight===0;
@@ -155,7 +155,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   useStored.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote) void recover(()=>session.resolve('use-stored',remote.version)); });
   retry.addEventListener('click', () => { void recover(async()=>{await session.reload();await session.flush();}); });
   reviewed.addEventListener('click', () => { uncertain = false; recovery.replaceChildren(); renderDraft(); });
-  textarea.addEventListener('input', () => { session.update(textarea.value); resize(); });
+  textarea.addEventListener('input', () => { if(status.dataset.statusKind==='send-accepted'&&textarea.value!==session.snapshot().content)report('');session.update(textarea.value);resize(); });
   textarea.addEventListener('compositionstart',()=>{composing=true;});textarea.addEventListener('compositionend',()=>{composing=false;});
   textarea.addEventListener('keydown', event => { if (!composing && composerShouldSubmit(event)) { event.preventDefault(); if (!send.disabled) composer.requestSubmit(); } });
   messages.addEventListener('scroll', viewState, {passive:true});
@@ -202,7 +202,9 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     provider.dataset.providerId=detail.conversation.providerId;
     const local=['local','mock-ordinary'].includes(detail.conversation.providerId);textarea.placeholder=local?'Write a message…':'Ask Codex anything…';setConversationControlLabel(send,local?'Record message':'Send');
     provider.title=detail.providers.find(p=>p.id===detail.conversation.providerId)?.reason??(local?'Local recording · no model execution':'Native approval is required before a provider turn');
-    capabilityNote.textContent=detail.providers.find(p=>p.id===detail.conversation.providerId)?.reason??(local?'Local recording · no model responses':'Each send requires native approval.');
+    const capability=detail.providers.find(p=>p.id===detail.conversation.providerId),normalLocal=detail.conversation.providerId==='local'&&capability?.available&&capability.record&&!capability.execute&&!capability.simulated;
+    capabilityNote.dataset.capabilityKind=normalLocal?'local-recording':capability?.reason||capability?.available===false?'provider-reason':local?'local-compatibility':'native-approval';
+    capabilityNote.textContent=capability?.reason??(capability?.available===false?'This provider is unavailable for new turns.':local?'Local recording · no model responses':'Each send requires native approval.');
     const attached=detail.shares.filter(s=>s.attached&&s.status==='current').length;contextNote.textContent=attached?`${attached} source excerpt${attached===1?'':'s'} attached for send review. Attachment is not proof of model supply.`:'';
     const before=el('button','Earlier messages'),after=el('button','Later messages');before.type=after.type='button';before.disabled=detail.messages.offset===0;after.disabled=!detail.messages.hasMore;
     decorateConversationControl(before,{identity:'previous'});decorateConversationControl(after,{identity:'next'});paging.dataset.cpGroup='transcript-navigation';
@@ -229,7 +231,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
       if(!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
-      if(acceptedConversationSubmission(input,result,evidence)) { const cleared=await session.acknowledgeSent(checkpoint);report(cleared?'Message accepted.':'Message accepted. Later draft edits were retained.'); }
+      if(acceptedConversationSubmission(input,result,evidence)) { const cleared=await session.acknowledgeSent(checkpoint);report(cleared?'Message accepted.':'Message accepted. Later draft edits were retained.','send-accepted'); }
       else { uncertain=true;report('Send acceptance is not confirmed. Inspect the chat before retrying.'); }
       if(!disposed){await refresh({latest:true});if(!disposed)await options.onChanged?.();}
     })().catch(error=>{if(errorText(error)==='authorization_cancelled')report('Send cancelled. Your saved draft was retained.');else{uncertain=true;report('Send could not be confirmed: '+errorText(error));}}).finally(()=>{sending=false;sendTask=null;renderDraft();});
