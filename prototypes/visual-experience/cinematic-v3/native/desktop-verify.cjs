@@ -316,10 +316,12 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted }) => {
   app.exit(receipt.passed ? 0 : 1);
 };
 
-async function driver(win) {
+async function driver(win, options = {}) {
   const foreground = () => {
+    options.assertActive?.();
     if (
       win.isDestroyed() ||
+      win.webContents.isDestroyed?.() ||
       !win.isVisible() ||
       win.isMinimized() ||
       !win.isFocused()
@@ -329,7 +331,12 @@ async function driver(win) {
       );
   };
   foreground();
-  const js = (code) => win.webContents.executeJavaScript(code, true);
+  const js = async (code) => {
+    foreground();
+    const value = await win.webContents.executeJavaScript(code, true);
+    foreground();
+    return value;
+  };
   const wait = async (expr, timeout = 30000) => {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
@@ -372,14 +379,17 @@ async function driver(win) {
     if (!settled) throw Error("Moving native click target " + selector);
     foreground();
     const inputAt = Date.now();
-    for (const type of ["mouseMove", "mouseDown", "mouseUp"])
+    for (const type of ["mouseMove", "mouseDown", "mouseUp"]) {
+      foreground();
       win.webContents.sendInputEvent({
         type,
         ...p,
         button: "left",
         clickCount: 1,
       });
+    }
     await pause(50);
+    foreground();
     return inputAt;
   };
   const fill = async (selector, value) => {

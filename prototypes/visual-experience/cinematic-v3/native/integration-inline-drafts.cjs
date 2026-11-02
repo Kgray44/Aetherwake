@@ -2,10 +2,13 @@ const fs = require("node:fs/promises");
 const path = require("node:path");
 const assert = require("node:assert/strict");
 const { createDriver } = require("./desktop-verify.cjs");
-const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const {
+  verificationOptions,
+  createInlineDraftGuard,
+} = require("./inline-draft-guard.cjs");
 
 /** Parent-owned native slot only. No provider is connected or executed. */
-exports.verify = async ({ win, app, privateRoot, source }) => {
+exports.verify = async ({ win, app, privateRoot, source, moduleStarted }) => {
   const output = path.resolve(
     __dirname,
     "../.runtime/application-evidence",
@@ -28,13 +31,18 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
     ],
   };
   win.webContents.on("console-message", (_event, details) => {
-    if (details.level === "error") receipt.errors.push(details.message);
+    if (details.level === "error" && receipt.errors.length < 20)
+      receipt.errors.push(String(details.message).slice(0, 1000));
   });
   try {
-    win.setSize(1440, 960);
-    win.show();
-    win.focus();
-    const { js, wait, click, snapshot } = await createDriver(win),
+    const limits = verificationOptions(process.argv, moduleStarted),
+      guard = createInlineDraftGuard(win, limits),
+      pause = guard.pause;
+    receipt.bounds = limits;
+    guard.check();
+    const { js, wait, click, snapshot } = await guard.around(() =>
+        createDriver(win, { assertActive: guard.check }),
+      ),
       cp = (name, input) =>
         js(
           `window.aerynthHost.command('conversation',${JSON.stringify({ name, input })})`,
@@ -43,17 +51,17 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
         js(`window.__aerynth.execute(${JSON.stringify(command)})`);
     const type = async (selector, text) => {
       await click(selector);
-      win.webContents.sendInputEvent({
+      guard.input({
         type: "keyDown",
         keyCode: "A",
         modifiers: ["control"],
       });
-      win.webContents.sendInputEvent({
+      guard.input({
         type: "keyUp",
         keyCode: "A",
         modifiers: ["control"],
       });
-      await win.webContents.insertText(text);
+      await guard.insertText(text);
       await pause(30);
       receipt.actions.push({
         action: "type",
@@ -63,24 +71,38 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
       });
     };
     const shot = async (name) => {
-      assert.equal(win.isFocused(), true);
+      guard.check();
+      assert(
+        receipt.screenshots.length < limits.maxScreenshots,
+        "inline_draft_capture_count_exceeded",
+      );
       const before = await js("window.__aerynth.snapshot().metrics.draws");
       await js('window.dispatchEvent(new Event("resize"))');
       await wait(`window.__aerynth.snapshot().metrics.draws>${before}`, 8000);
-      assert.equal(win.isFocused(), true);
-      await fs.writeFile(
-        path.join(output, name + ".png"),
-        (await win.webContents.capturePage()).toPNG(),
+      const png = (await guard.capture()).toPNG();
+      receipt.pngBytes = (receipt.pngBytes ?? 0) + png.length;
+      assert(
+        receipt.pngBytes <= limits.maxPngBytes,
+        "inline_draft_capture_bytes_exceeded",
+      );
+      await guard.around(() =>
+        fs.writeFile(path.join(output, name + ".png"), png, { flag: "wx" }),
       );
       receipt.screenshots.push(name + ".png");
     };
     let state, resourceId, blockId, expected;
     if (process.argv.includes("--verify-restore")) {
+      const checkpointPath = path.join(
+        privateRoot,
+        "inline-draft-expected.json",
+      );
+      const checkpoint = await guard.around(() => fs.stat(checkpointPath));
+      assert(
+        checkpoint.size <= limits.maxCheckpointBytes,
+        "inline_draft_checkpoint_too_large",
+      );
       expected = JSON.parse(
-        await fs.readFile(
-          path.join(privateRoot, "inline-draft-expected.json"),
-          "utf8",
-        ),
+        await guard.around(() => fs.readFile(checkpointPath, "utf8")),
       );
       state = await snapshot();
       resourceId = expected.resourceId;
@@ -249,9 +271,9 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
         { type: "mouseMove", ...edge },
         { type: "mouseDown", ...edge, button: "left", clickCount: 1 },
       ])
-        win.webContents.sendInputEvent(event);
+        guard.input(event);
       for (let i = 1; i <= 10; i++) {
-        win.webContents.sendInputEvent({
+        guard.input({
           type: "mouseMove",
           x: edge.x + i * 2,
           y: edge.y + i * 2,
@@ -259,7 +281,7 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
         });
         await pause(14);
       }
-      win.webContents.sendInputEvent({
+      guard.input({
         type: "mouseUp",
         x: edge.x + 20,
         y: edge.y + 20,
@@ -284,19 +306,27 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
         detail = await cp("detail", { resourceId, limit: 50 });
       assert.equal(detail.messages.total, 0);
       assert.equal(draft.content, local);
-      await fs.writeFile(
-        path.join(privateRoot, "inline-draft-expected.json"),
-        JSON.stringify(
-          {
-            resourceId,
-            blockId,
-            workspaceId: state.activeWorkspaceId,
-            content: draft.content,
-            version: draft.version,
-            blocks: final.blocks,
-          },
-          null,
-          2,
+      const expectedCheckpoint = JSON.stringify(
+        {
+          resourceId,
+          blockId,
+          workspaceId: state.activeWorkspaceId,
+          content: draft.content,
+          version: draft.version,
+          blocks: final.blocks,
+        },
+        null,
+        2,
+      );
+      assert(
+        Buffer.byteLength(expectedCheckpoint) <= limits.maxCheckpointBytes,
+        "inline_draft_checkpoint_too_large",
+      );
+      await guard.around(() =>
+        fs.writeFile(
+          path.join(privateRoot, "inline-draft-expected.json"),
+          expectedCheckpoint,
+          { flag: "wx" },
         ),
       );
       await shot("retained-draft-before-process-exit");
@@ -305,14 +335,19 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
       );
     }
     assert.deepEqual(receipt.errors, []);
+    guard.check();
     receipt.passed = true;
   } catch (error) {
-    receipt.error = error.stack;
+    receipt.error = String(error.stack ?? error).slice(0, 4000);
   }
-  await fs.writeFile(
-    path.join(output, "inline-draft.json"),
-    JSON.stringify(receipt, null, 2),
+  // Failure receipts may be saved after ownership is lost; no input or capture
+  // is attempted on this path. The host's mandatory deadline closes its process.
+  const receiptJson = JSON.stringify(receipt, null, 2);
+  assert(
+    Buffer.byteLength(receiptJson) <= 512 * 1024,
+    "inline_draft_receipt_too_large",
   );
+  await fs.writeFile(path.join(output, "inline-draft.json"), receiptJson);
   process.stdout.write(
     JSON.stringify({
       passed: receipt.passed,

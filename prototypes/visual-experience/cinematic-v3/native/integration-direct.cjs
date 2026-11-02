@@ -5,13 +5,14 @@ const { createDriver } = require("./desktop-verify.cjs");
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Actual desktop/native-input journey. No provider execution; all seeded content is synthetic. */
-exports.verify = async ({ win, app, privateRoot, source }) => {
+exports.verify = async ({ win, app, privateRoot, source, moduleStarted }) => {
   if (process.argv.includes("--verify-inline-drafts"))
     return require("./integration-inline-drafts.cjs").verify({
       win,
       app,
       privateRoot,
       source,
+      moduleStarted,
     });
   const output = path.resolve(
     __dirname,
