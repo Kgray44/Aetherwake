@@ -7,6 +7,7 @@ const {
   nativeTheme,
   shell,
   safeStorage,
+  clipboard,
 } = require("electron");
 const { spawn, execFileSync } = require("node:child_process");
 const { createInterface } = require("node:readline");
@@ -28,6 +29,7 @@ const {
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
 const { createProtectedStorageBroker } = require("./protected-storage.cjs");
+const { createClipboardCapability } = require("./clipboard-capability.cjs");
 const {
   createProviderConnectionBroker,
 } = require("./provider-connections.cjs");
@@ -80,6 +82,8 @@ const source = {
   ),
 };
 const verify =
+  process.argv.includes("--integration-desktop-basics") ||
+  process.argv.includes("--integration-environments") ||
   process.argv.includes("--integration-resource-opening") ||
   process.argv.includes("--integration-native-review") ||
   process.argv.includes("--integration-workspace-views") ||
@@ -190,6 +194,7 @@ if (deadlineArgument) {
 const pending = new Map();
 let nativeSecretBroker;
 let providerConnections;
+let nativeClipboard;
 function call(command, input) {
   if (!child || child.killed || !child.stdin.writable)
     return Promise.reject(new Error("backend_disconnected"));
@@ -332,6 +337,33 @@ app.whenReady().then(async () => {
   win.webContents.on("will-navigate", (event, url) => {
     if (url !== localURL) event.preventDefault();
   });
+  const trustedCopyFrame = (event) =>
+    !win.isDestroyed() &&
+    !win.webContents.isDestroyed() &&
+    win.isVisible() &&
+    !win.isMinimized() &&
+    win.isFocused() &&
+    event.sender === win.webContents &&
+    event.senderFrame === win.webContents.mainFrame &&
+    event.senderFrame.url === localURL;
+  nativeClipboard = createClipboardCapability({
+    writeText: (text) => clipboard.writeText(text),
+    isTrustedApplicationFrame: trustedCopyFrame,
+    authorizeUserCopy: async (event) => {
+      if (!trustedCopyFrame(event)) return false;
+      // Observe Blink's existing activation; never synthesize a user gesture.
+      return (
+        (await event.senderFrame.executeJavaScript(
+          "navigator.userActivation.isActive && document.hasFocus()",
+          false,
+        )) === true
+      );
+    },
+  });
+  ipcMain.handle("application-copy-text", (event, input) =>
+    nativeClipboard.copy(event, input),
+  );
+  win.on("closed", () => nativeClipboard?.close());
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
       if (
@@ -362,6 +394,7 @@ app.whenReady().then(async () => {
         !(
           command === "library" &&
           [
+            "inspectWorkspace",
             "capabilities",
             "preferences",
             "findResources",
@@ -522,6 +555,34 @@ app.whenReady().then(async () => {
   }, 240000);
   reserveTimer.unref();
   if (verify) {
+    if (process.argv.includes("--integration-desktop-basics")) {
+      await require("./integration-desktop-basics.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        call,
+        source,
+        startupErrors,
+        moduleStartedMonotonicMs,
+        clipboard: { readText: () => clipboard.readText() },
+        observeProviderActivity: () => call("providerActivity", {}),
+      });
+      return;
+    }
+    if (process.argv.includes("--integration-environments")) {
+      await require("./integration-environments.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        call,
+        source,
+        startupErrors,
+        session: session.defaultSession,
+        localURL,
+        moduleStartedMonotonicMs,
+      });
+      return;
+    }
     if (process.argv.includes("--integration-native-review")) {
       await require("./integration-native-review.cjs").verify({
         win,

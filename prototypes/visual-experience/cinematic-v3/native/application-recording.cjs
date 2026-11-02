@@ -4,6 +4,7 @@ const { createHash } = require("node:crypto");
 /** Bounded, video-only capture of this exact synthetic verification window. */
 async function startWindowRecording(win, session, localURL) {
   if (
+    !process.argv.includes("--integration-environments") &&
     !process.argv.includes("--integration-resource-opening") &&
     !process.argv.includes("--integration-constellation") &&
     !process.argv.includes("--integration-organization") &&
@@ -12,6 +13,10 @@ async function startWindowRecording(win, session, localURL) {
     !process.argv.includes("--integration-drag-glide")
   )
     throw new Error("recording_mode_required");
+  const maxBytes =
+    (process.argv.includes("--integration-environments") ? 32 : 48) *
+    1024 *
+    1024;
   const sourceId = win.getMediaSourceId(),
     title = win.getTitle(),
     frame = win.webContents.mainFrame;
@@ -73,7 +78,7 @@ async function startWindowRecording(win, session, localURL) {
     const chunks=[];let bytes=0,problem=null,started=0,firstChunkResolve;
     const firstChunk=new Promise(resolve=>{firstChunkResolve=resolve;});
     const recorder=new MediaRecorder(stream,{mimeType,videoBitsPerSecond:6000000});
-    const done=new Promise((resolve,reject)=>{recorder.ondataavailable=e=>{bytes+=e.data.size;if(e.data.size)firstChunkResolve();if(bytes>48*1024*1024){problem='capture_size_limit';recorder.stop();}else chunks.push(e.data);};recorder.onerror=()=>{problem='capture_failed';};recorder.onstop=()=>{stream.getTracks().forEach(t=>t.stop());if(problem){reject(Error(problem));return;}const reader=new FileReader();reader.onload=()=>resolve({dataURL:reader.result,bytes,durationMs:performance.now()-started,mimeType});reader.onerror=()=>reject(Error('capture_read_failed'));reader.readAsDataURL(new Blob(chunks,{type:mimeType}));};});
+    const done=new Promise((resolve,reject)=>{recorder.ondataavailable=e=>{bytes+=e.data.size;if(e.data.size)firstChunkResolve();if(bytes>${maxBytes}){problem='capture_size_limit';recorder.stop();}else chunks.push(e.data);};recorder.onerror=()=>{problem='capture_failed';};recorder.onstop=()=>{stream.getTracks().forEach(t=>t.stop());if(problem){reject(Error(problem));return;}const reader=new FileReader();reader.onload=()=>resolve({dataURL:reader.result,bytes,durationMs:performance.now()-started,mimeType});reader.onerror=()=>reject(Error('capture_read_failed'));reader.readAsDataURL(new Blob(chunks,{type:mimeType}));};});
     done.catch(()=>{});recorder.start(500);started=performance.now();const timer=setTimeout(()=>{if(recorder.state!=='inactive')recorder.stop();},60000);
     window.__aerynthVerificationCaptureStop=async()=>{clearTimeout(timer);if(recorder.state!=='inactive')recorder.stop();return done;};
     let warmTimer;try{await Promise.race([firstChunk,new Promise((_,reject)=>{warmTimer=setTimeout(()=>reject(Error('capture_warmup_timeout')),5000);})]);}catch(error){clearTimeout(timer);if(recorder.state!=='inactive')recorder.stop();stream.getTracks().forEach(t=>t.stop());throw error;}finally{clearTimeout(warmTimer);}return {startedAt:performance.timeOrigin+started,readyAt:Date.now()};
@@ -93,7 +98,7 @@ async function startWindowRecording(win, session, localURL) {
         const bytes = Buffer.from(result.dataURL.split(",")[1], "base64");
         if (
           !bytes.length ||
-          bytes.length > 48 * 1024 * 1024 ||
+          bytes.length > maxBytes ||
           bytes.readUInt32BE(0) !== 0x1a45dfa3
         )
           throw new Error("invalid_webm");

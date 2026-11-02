@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { EventEmitter } from "node:events";
-function bridge() {
+function bridge(active = false) {
   let exposed;
   const calls = [];
   const events = new EventEmitter();
@@ -14,6 +14,7 @@ function bridge() {
     ),
     {
       process: { argv: [] },
+      navigator: { userActivation: { isActive: active } },
       require(name) {
         assert.equal(name, "electron");
         return {
@@ -28,6 +29,8 @@ function bridge() {
             removeListener: (...args) => events.removeListener(...args),
             async invoke(...args) {
               calls.push(args);
+              if (args[0] === "application-copy-text")
+                return { contract: "aerynth.clipboard@1", status: "copied" };
               return { ok: true, result: "canonical-result" };
             },
           },
@@ -54,6 +57,37 @@ test("closing a chat observer removes only its own native IPC listener", () => {
   stopOther();
   assert.equal(events.listenerCount("application-event"), 0);
 });
+
+test("explicit native Copy requires current isolated-world activation and never exposes reads or generic clipboard commands", async () => {
+  const denied = bridge();
+  assert.equal(
+    (await denied.host.copyText("Synthetic copy")).code,
+    "clipboard_user_gesture_required",
+  );
+  assert.equal(denied.calls.length, 0);
+  const allowed = bridge(true);
+  assert.equal(
+    (await allowed.host.copyText("Synthetic Ω\ncopy")).status,
+    "copied",
+  );
+  assert.deepEqual(
+    allowed.calls.map((call) => [call[0], JSON.parse(JSON.stringify(call[1]))]),
+    [
+      [
+        "application-copy-text",
+        { type: "copyText", text: "Synthetic Ω\ncopy" },
+      ],
+    ],
+  );
+  assert.equal(allowed.host.readText, undefined);
+  assert.equal(
+    (await allowed.host.copyText("x".repeat(262145))).code,
+    "clipboard_invalid_request",
+  );
+  for (const name of ["clipboard", "copyText", "readText"])
+    await assert.rejects(allowed.host.command(name, {}), /unsupported_command/);
+  assert.equal(allowed.calls.length, 1);
+});
 test("desktop preload admits only public product families through the native command channel", async () => {
   const { host, calls } = bridge();
   for (const name of ["conversation", "vela", "library", "notes"]) {
@@ -77,6 +111,7 @@ test("renderer cannot invoke private grant creation, raw provider execution or h
   const { host, calls } = bridge();
   for (const name of [
     "snapshot",
+    "providerActivity",
     "authorizeVelaRequest",
     "authorizeVelaDelegation",
     "authorizeConversationSend",

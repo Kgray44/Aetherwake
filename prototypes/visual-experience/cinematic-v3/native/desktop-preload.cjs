@@ -18,6 +18,29 @@ contextBridge.exposeInMainWorld(
       ipcRenderer.on("application-event", handler);
       return () => ipcRenderer.removeListener("application-event", handler);
     },
+    async copyText(text) {
+      // The isolated preload observes current Blink activation synchronously.
+      // A renderer/model DTO cannot provide a gesture flag or native grant.
+      if (
+        typeof navigator === "undefined" ||
+        navigator.userActivation?.isActive !== true
+      )
+        return {
+          contract: "aerynth.clipboard@1",
+          status: "denied",
+          code: "clipboard_user_gesture_required",
+        };
+      if (typeof text !== "string" || text.length > 256 * 1024)
+        return {
+          contract: "aerynth.clipboard@1",
+          status: "denied",
+          code: "clipboard_invalid_request",
+        };
+      return ipcRenderer.invoke("application-copy-text", {
+        type: "copyText",
+        text,
+      });
+    },
     async command(name, input) {
       if (
         ![

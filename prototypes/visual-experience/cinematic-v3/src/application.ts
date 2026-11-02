@@ -78,6 +78,9 @@ import { createResourceSurface } from "./resource-surface.ts";
 import { mountProviderConnections } from "./provider-connections.ts";
 import { mountEnvironmentNavigator } from "./environment-navigator.ts";
 import "./environment-navigator.css";
+import { mountWorkspaceActions } from "./workspace-actions.ts";
+import "./workspace-actions.css";
+import { createClipboardClient } from "../../../application-contract/clipboard.ts";
 import type { ProviderConnectionStatus } from "../../../application-contract/provider-connections.ts";
 import { mountDirectResourceExperience } from "../../../block-library/direct-resource-view.ts";
 import "../../../block-library/direct-resource-view.css";
@@ -166,6 +169,20 @@ const escape = (s: string) =>
 
 export function installApplication(hooks: Hooks) {
   const host = window.aerynthHost!;
+  const clipboardClient = createClipboardClient(
+    host.copyText ? { copyText: (text) => host.copyText!(text) } : null,
+  );
+  const copyText = async (text: string) => {
+    const result = await clipboardClient.copyText(text);
+    if (result.status !== "copied")
+      throw Error(
+        result.status === "unknown"
+          ? "Copy could not be confirmed."
+          : result.status === "denied"
+            ? "Use Copy from the active application window."
+            : "Copy is unavailable right now.",
+      );
+  };
   const conversationExecution = createConversationExecutionPort({
     command: (name, input) => host.command!(name, input),
     onEvent: (listener) => host.onEvent?.(listener) ?? (() => {}),
@@ -351,6 +368,8 @@ export function installApplication(hooks: Hooks) {
     typeof mountEnvironmentNavigator
   > | null = null;
   let environmentSurface: ContextualSurfaceRequest | null = null;
+  let workspaceActions: ReturnType<typeof mountWorkspaceActions> | null = null;
+  let workspaceActionsSurface: ContextualSurfaceRequest | null = null;
   let offset = { x: 0, y: 0 };
   let zoom = 1;
   let previewBase: LayoutState | undefined;
@@ -436,6 +455,7 @@ export function installApplication(hooks: Hooks) {
     mount: (root, resource) =>
       mountDirectResourceExperience(root, resource, {
         notes: notesClient,
+        copyText,
         noteSession,
         saveContent,
         readResource: (id) =>
@@ -548,6 +568,7 @@ export function installApplication(hooks: Hooks) {
     "pagehide",
     () => {
       environmentNavigator?.dispose();
+      workspaceActions?.dispose();
       resourceOpener.cancel();
       directResources.dispose();
     },
@@ -750,6 +771,7 @@ export function installApplication(hooks: Hooks) {
       cancelPreview();
     state = next;
     environmentNavigator?.update(next);
+    workspaceActions?.update(next);
     subjectDataKey = JSON.stringify([
       next.revision,
       subjectDataEpoch,
@@ -1362,6 +1384,7 @@ export function installApplication(hooks: Hooks) {
     };
     controller = conversationManager = mountConversationManager(content, port, {
       embedded: true,
+      copy: copyText,
       onOpenChatGPT: async (reference) => {
         const receipt = (await host.command!(
           "firstPartyChat",
@@ -1892,188 +1915,155 @@ export function installApplication(hooks: Hooks) {
       }),
     );
   }
-  const modeDescriptions = {
-    fluid: "Resources intelligently make room for one another.",
-    freeform: "Position and overlap resources however you want.",
-    structured: "Organize resources using grids and alignment.",
-  } as const;
-  function organizationControls() {
-    if (!state?.organization || !state.activeWorkspaceId) return;
-    const current = state.organization,
-      workspaceId = state.activeWorkspaceId;
-    open(
-      "Workspace organization",
-      `<form id="organization-form"><label>Organization<select id="organization-mode" name="mode">${(["fluid", "freeform", "structured"] as const).map((mode) => `<option value="${mode}" ${current.mode === mode ? "selected" : ""}>${mode[0].toUpperCase() + mode.slice(1)}</option>`).join("")}</select></label><p id="organization-description"></p><details id="structured-options"><summary>Grid and spacing</summary><div class="geometry-grid"><label>Minimum gap<input name="gap" type="number" min="0" max="256" value="${current.gap}"></label><label>Columns · blank for automatic<input name="columns" type="number" min="1" max="12" value="${current.structured.columnCount ?? ""}"></label><label>Row height<input name="rowHeight" type="number" min="32" max="512" value="${current.structured.rowHeight}"></label></div></details><p>Preview changes below. Apply records one undoable transformation. Saved checkpoints also retain the organization mode.</p><button type="submit">Apply organization</button><button id="cancel-organization" type="button">Cancel preview</button></form><details><summary>Structured arrangements</summary><div class="layout-actions">${(
-        [
-          ["balanced", "Balanced grid"],
-          ["focus", "Focus and companions"],
-          ["development", "Development"],
-          ["research", "Research"],
-        ] as const
-      )
-        .map(
-          ([preset, title]) =>
-            `<button type="button" data-grid-preset="${preset}">${title}</button>`,
-        )
-        .join("")}</div></details>`,
-    );
-    const read = (): OrganizationUpdate => {
-      const data = new FormData(
-        el<HTMLFormElement>("#organization-form", dialog),
-      );
-      return {
-        mode: String(data.get("mode")) as OrganizationMode,
-        gap: Number(data.get("gap")),
-        structured: {
-          columnCount: data.get("columns") ? Number(data.get("columns")) : null,
-          rowHeight: Number(data.get("rowHeight")),
-          rowGap: Number(data.get("rowGap")),
-          columnGap: Number(data.get("columnGap")),
-          margin: Number(data.get("margin")),
-        },
-      };
-    };
-    el("#structured-options .geometry-grid", dialog).insertAdjacentHTML(
-      "beforeend",
-      (["rowGap", "columnGap", "margin"] as const)
-        .map(
-          (name) =>
-            `<label>${name === "rowGap" ? "Row spacing" : name === "columnGap" ? "Column spacing" : "Margin"}<input name="${name}" type="number" min="0" max="256" value="${current.structured[name]}"></label>`,
-        )
-        .join(""),
-    );
-    el<HTMLInputElement>(
-      '[name="gap"]',
-      dialog,
-    ).parentElement!.firstChild!.textContent = "Fluid minimum gap";
-    const update = () => {
-      const organization = read();
-      el("#organization-description", dialog).textContent =
-        modeDescriptions[organization.mode!];
-      queuePreview({ organization, intent: "mode" });
-    };
-    el<HTMLFormElement>("#organization-form", dialog).oninput = update;
-    el<HTMLFormElement>("#organization-form", dialog).onchange = update;
-    el("#organization-description", dialog).textContent =
-      modeDescriptions[current.mode];
-    el("#cancel-organization", dialog).onclick = () => dialog.close();
-    form(async () =>
-      commitLayout({
-        type: "setOrganization",
-        workspaceId,
-        expectedOrganizationRevision: current.revision,
-        organization: read(),
-      }),
-    );
-    dialog.querySelectorAll<HTMLButtonElement>("[data-grid-preset]").forEach(
-      (button) =>
-        (button.onclick = () => {
-          const preset = button.dataset.gridPreset as StructuredPreset;
-          queuePreview({ structuredPreset: preset, intent: "mode" });
-          void commitLayout({
-            type: "applyStructuredPreset",
-            workspaceId,
-            preset,
-          }).then(() => dialog.close());
-        }),
-    );
-  }
   function layouts() {
-    if (!state?.activeWorkspaceId) {
+    if (!state?.activeWorkspaceId || state.navigation.kind !== "workspace") {
       manager();
       return;
     }
-    open(
-      "Workspace actions",
-      `<div class="layout-actions"><button id="save-layout">Save layout checkpoint</button><button id="restore-layout" ${state.hasCheckpoint ? "" : "disabled"}>Restore checkpoint</button><button id="undo-layout" ${state.canUndo ? "" : "disabled"}>Undo layout</button><button id="redo-layout" ${state.canRedo ? "" : "disabled"}>Redo layout</button><button id="resolve-layout">Make room · undoable</button></div><p>Saved geometry remains unchanged until you edit or organize it. Checkpoints and history restore placements, shapes and geometry. Resource text remains independent.</p><button id="locate-vela">Locate Vela</button>${state.blocks.map((b) => `<div class="workspace-row"><button data-locate="${b.id}">${escape(state!.resources.find((r) => r.id === b.resource_id)?.title ?? "Resource")}</button></div>`).join("")}`,
-    );
-    dialog.insertAdjacentHTML(
-      "afterbegin",
-      `<div class="organization-summary"><button id="organization-settings">Organization · ${state.organization?.mode ?? "fluid"}</button><button id="bring-all">Bring All Into View</button></div>`,
-    );
-    el("#organization-settings", dialog).onclick = organizationControls;
-    dialog.insertAdjacentHTML(
-      "beforeend",
-      '<div class="layout-actions"><button id="workspace-resources">Resources</button><button id="workspace-constellation">Constellation</button><button id="workspace-stream">Intelligence Stream</button><button id="workspace-connections">Connections</button></div>',
-    );
-    for (const [source, target] of [
-      ["workspace-resources", "resource-picker"],
-      ["workspace-constellation", "zoom-out"],
-      ["workspace-stream", "stream-button"],
-      ["workspace-connections", "connections"],
-    ])
-      el("#" + source, dialog).onclick = () => {
-        dialog.close();
-        el("#" + target).click();
-      };
-    dialog.insertAdjacentHTML(
-      "beforeend",
-      `<label><input id="presence-lock" type="checkbox" ${state.presence?.locked ? "checked" : ""}> Lock Vela placement</label>`,
-    );
-    el<HTMLInputElement>("#presence-lock", dialog).onchange = (event) => {
-      const p = state?.presence;
-      if (!p) return;
-      const locked = (event.target as HTMLInputElement).checked;
-      dialog.close();
-      void run({
-        type: "setPresence",
-        workspaceId: p.workspaceId,
-        expectedVersion: p.version,
-        placement: { locked },
+    dialog.close();
+    if (workspaceActions && workspaceActionsSurface) {
+      workspaceActions.update(state);
+      surfaces
+        .open(workspaceActionsSurface)
+        .classList.add("application-workspace-actions");
+      return;
+    }
+    const content = document.createElement("section");
+    const mutate = (action: DesktopCommand) => {
+      const workspaceId = state?.activeWorkspaceId;
+      const expectedLayoutVersion = state?.layoutVersion;
+      return enqueueResult(async () => {
+        await flush();
+        if (
+          !workspaceId ||
+          state?.activeWorkspaceId !== workspaceId ||
+          state.navigation.kind !== "workspace"
+        )
+          throw Error("workspace_changed");
+        return command({ ...action, expectedLayoutVersion });
       });
     };
-    el("#bring-all", dialog).onclick = () => {
-      const workspaceId = state!.activeWorkspaceId!;
-      queuePreview({ intent: "recover" });
-      void commitLayout({ type: "bringAllIntoView", workspaceId }).then(() =>
-        dialog.close(),
-      );
-    };
-    for (const [id, type] of [
-      ["save-layout", "checkpoint"],
-      ["restore-layout", "restore"],
-      ["undo-layout", "undo"],
-      ["redo-layout", "redo"],
-    ] as const)
-      el("#" + id, dialog).onclick = () => {
-        dialog.close();
-        void run({ type });
-      };
-    el("#resolve-layout", dialog).onclick = () => {
-      dialog.close();
-      void run({
-        type: "resolveLayout",
-        workspaceId: state!.activeWorkspaceId!,
+    const organize = (
+      organization: OrganizationUpdate,
+      expectedRevision: number,
+    ) => {
+      if (!state?.activeWorkspaceId)
+        return Promise.reject(Error("workspace_unavailable"));
+      const workspaceId = state.activeWorkspaceId;
+      queuePreview({ organization, intent: "mode" });
+      paintPreview();
+      previewCommitting = true;
+      return mutate({
+        type: "setOrganization",
+        workspaceId,
+        organization,
+        expectedOrganizationRevision: expectedRevision,
+      }).finally(() => {
+        previewCommitting = false;
+        cancelPreview();
       });
     };
-    el("#locate-vela", dialog).onclick = () => {
-      dialog.close();
-      const p = state?.presence;
-      if (!p) return;
-      hooks.home();
-      zoom = 1;
-      offset = {
-        x: innerWidth / 2 - (p.x + p.width / 2) * zoom,
-        y: innerHeight / 2 - (p.y + p.height / 2) * zoom,
-      };
-      presenceTarget();
-      hooks.layout();
-      hooks.wake();
-      void saveView();
-      document.body.classList.add("vela-access");
-      velaCard.focus();
+    workspaceActions = mountWorkspaceActions(content, {
+      snapshot: state,
+      motion: hooks.motion,
+      wake: hooks.wake,
+      act: async (action) => {
+        if (!state?.activeWorkspaceId) throw Error("workspace_unavailable");
+        const workspaceId = state.activeWorkspaceId;
+        if (action === "bring-all")
+          return mutate({ type: "bringAllIntoView", workspaceId });
+        if (action === "resolve")
+          return mutate({ type: "resolveLayout", workspaceId });
+        return mutate({ type: action });
+      },
+      changeMode: async (mode) => {
+        if (!state?.organization) throw Error("organization_unavailable");
+        return organize({ mode }, state.organization.revision);
+      },
+      configureOrganization: ({ organization, expectedRevision }) =>
+        organize(organization, expectedRevision),
+      applyStructuredPreset: (preset) => {
+        if (!state?.activeWorkspaceId)
+          return Promise.reject(Error("workspace_unavailable"));
+        const workspaceId = state.activeWorkspaceId;
+        queuePreview({ structuredPreset: preset, intent: "mode" });
+        paintPreview();
+        previewCommitting = true;
+        return mutate({
+          type: "applyStructuredPreset",
+          workspaceId,
+          preset,
+        }).finally(() => {
+          previewCommitting = false;
+          cancelPreview();
+        });
+      },
+      locateBlock: async (id) => {
+        if (!state?.blocks.some((block) => block.id === id))
+          throw Error("block_unavailable");
+        surfaces.close("workspace-actions");
+        reveal(id);
+        hooks.focus(id);
+      },
+      locateVela: async () => {
+        const p = state?.presence;
+        if (!p) throw Error("vela_placement_unavailable");
+        surfaces.close("workspace-actions");
+        hooks.home();
+        zoom = 1;
+        offset = {
+          x: innerWidth / 2 - (p.x + p.width / 2),
+          y: innerHeight / 2 - (p.y + p.height / 2),
+        };
+        presenceTarget();
+        hooks.layout();
+        hooks.wake();
+        await saveView();
+        document.body.classList.add("vela-access");
+        velaCard.focus();
+      },
+      lockVela: ({ expectedVersion, locked }) => {
+        const p = state?.presence;
+        if (!p) return Promise.reject(Error("vela_placement_unavailable"));
+        return mutate({
+          type: "setPresence",
+          workspaceId: p.workspaceId,
+          expectedVersion,
+          placement: { locked },
+        });
+      },
+      resources: async () => {
+        surfaces.close("workspace-actions");
+        picker();
+      },
+      constellation: async () => {
+        await constellation?.controller.zoomOut();
+        surfaces.close("workspace-actions");
+      },
+      stream: async () => {
+        surfaces.close("workspace-actions");
+        el("#stream-button").click();
+      },
+      connections: async () => {
+        surfaces.close("workspace-actions");
+        connections();
+      },
+    });
+    workspaceActionsSurface = {
+      id: "workspace-actions",
+      anchor:
+        document.querySelector<HTMLElement>(
+          '.aw-workspace-layout button[aria-label="Workspace actions"]',
+        ) ?? el("#layout-manager"),
+      content,
+      label: "Workspace",
+      minSize: { width: 340, height: 240 },
+      maxSize: { width: 520, height: 700 },
+      placement: "bottom",
     };
-    dialog
-      .querySelectorAll<HTMLElement>("[data-properties]")
-      .forEach((b) => (b.onclick = () => geometry(b.dataset.properties!)));
-    dialog.querySelectorAll<HTMLElement>("[data-locate]").forEach(
-      (b) =>
-        (b.onclick = () => {
-          dialog.close();
-          reveal(b.dataset.locate!);
-          hooks.focus(b.dataset.locate!);
-        }),
-    );
+    surfaces
+      .open(workspaceActionsSurface)
+      .classList.add("application-workspace-actions");
   }
   function reveal(id: string) {
     const b = state?.blocks.find((b) => b.id === id);
@@ -2330,6 +2320,7 @@ export function installApplication(hooks: Hooks) {
     }
     const session = noteSession(resource.id),
       view = mountNoteExperience(documentRoot, editor, session, notesClient, {
+        copyText,
         kind: resource.kind,
         active: true,
         presentation: blockPresentation(id),
@@ -2598,7 +2589,7 @@ export function installApplication(hooks: Hooks) {
           if (!subject) throw Error("resource_view_unavailable");
           await subject.attach(resourceId);
         },
-        copy: (value) => navigator.clipboard.writeText(value),
+        copy: copyText,
       });
       identityViews.set(id, view);
     }
@@ -2883,6 +2874,7 @@ export function installApplication(hooks: Hooks) {
       if (!view && activeBlocks.get(b.id)) {
         const session = composerSession(r.id);
         view = mountBlockChat(surface, {
+          copy: copyText,
           resourceId: r.id,
           port: composerPort,
           draftSession: session,
@@ -3452,6 +3444,7 @@ export function installApplication(hooks: Hooks) {
       }
       surfaces.frame(now);
       environmentNavigator?.frame();
+      workspaceActions?.frame();
       velaExperience.frame(policy);
       velaManifestation.frame(policy);
       paintPreview();
