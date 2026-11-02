@@ -8,6 +8,19 @@
   max-height: 82vh;
   box-shadow: 0 30px 120px #000c;
 }
+.command-surface.conversation-surface {
+  width: min(1140px, 94vw);
+  max-height: 88vh;
+  padding: 20px;
+}
+.conversation-surface .cp-manager {
+  width: 100%;
+  max-height: 75vh;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
 .command-surface::backdrop {
   background: #02030b70;
   backdrop-filter: blur(8px);

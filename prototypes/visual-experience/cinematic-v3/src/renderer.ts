@@ -214,11 +214,13 @@ const ribbonFragment = /* glsl */ `
     float silk = pow(max(0., dot(n, halfVector)), 26.) * grain;
     float edge = smoothstep(.94, 1., abs(vAcross));
     float rim = pow(max(0., dot(n, normalize(vec3(-.9, -.1, .5)))), 16.);
-    vec3 body = mix(vec3(.015, .011, .041), uTint * .32, diffuse * .48 + broad * .21);
+    vec3 body = mix(vec3(.015, .011, .041), uTint * .32, diffuse * .43 + broad * .21);
     body *= .88 + .12 * abs(vAcross);
     vec3 pearl = vec3(.74, .72, 1.);
     vec3 optical = mix(vec3(.35,.28,.55), vec3(.39,.48,.59), pow(1. - facing, 2.));
-    vec3 color = body + pearl * (spec * .86 + broad * .27 + silk * .15 + fresnel * .19 + rim * .24);
+    // A modest polished pearl coat, preserving the purple body and filtered
+    // soft lobes. Geometry, optical fit and semantic energy stay unchanged.
+    vec3 color = body + pearl * (spec * 1.02 + broad * .29 + silk * .17 + fresnel * .20 + rim * .24);
     color += optical * fresnel * .13 + pearl * edge * diffuse * .045;
     color += uTint * uEnergy * (.035 + .045 * sin(vAlong * 2. - uTime * .5));
     color = mix(color, vec3(dot(color, vec3(.2126,.7152,.0722))) * .43, uUnavailable);

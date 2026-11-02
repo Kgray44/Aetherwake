@@ -279,6 +279,29 @@ export class WorkspaceKernel {
     });
   }
 
+  renameResource(resourceId: string, title: string, expectedVersion: number, mutation: Mutation = {}): Resource {
+    return this.tx(() => {
+      const resource = this.get('resources', resourceId) as Resource;
+      if (resource.version !== expectedVersion) throw new KernelError('CONFLICT', 'Resource version changed');
+      if (resource.state !== 'active') throw new KernelError('INVALID', 'Resource is archived');
+      this.db.prepare('UPDATE resources SET title=?,version=version+1,updated_at=? WHERE id=?').run(required(title, 'resource title'), stamp(), resourceId);
+      this.event('resource', resourceId, expectedVersion + 1, 'resource.renamed', mutation);
+      return this.get('resources', resourceId);
+    });
+  }
+
+  assignResourceProject(resourceId: string, projectId: string | null, expectedVersion: number, mutation: Mutation = {}): Resource {
+    return this.tx(() => {
+      const resource = this.get('resources', resourceId) as Resource;
+      if (resource.version !== expectedVersion) throw new KernelError('CONFLICT', 'Resource version changed');
+      if (resource.state !== 'active') throw new KernelError('INVALID', 'Resource is archived');
+      if (projectId !== null && (typeof projectId !== 'string' || this.get('projects', projectId).state !== 'active')) throw new KernelError('INVALID', 'Destination project is unavailable');
+      this.db.prepare('UPDATE resources SET project_id=?,version=version+1,updated_at=? WHERE id=?').run(projectId, stamp(), resourceId);
+      this.event('resource', resourceId, expectedVersion + 1, 'resource.project_assigned', mutation, { projectId });
+      return this.get('resources', resourceId);
+    });
+  }
+
   addExternalRef(resourceId: string, provider: string, namespace: string, externalId: string, mutation: Mutation = {}): any {
     return this.tx(() => {
       const resource = this.get('resources', resourceId);
@@ -371,6 +394,18 @@ export class WorkspaceKernel {
       if (collection.version !== expectedVersion) throw new KernelError('CONFLICT', 'Collection version changed');
       this.db.prepare('UPDATE collections SET title=?,version=version+1,updated_at=? WHERE id=?').run(required(title, 'collection title'),stamp(),collectionId);
       this.event('collection', collectionId, expectedVersion + 1, 'collection.renamed', mutation);
+      return this.get('collections', collectionId);
+    });
+  }
+
+  /** Advances the canonical collection fence after a composed membership change. */
+  touchCollection(collectionId: string, expectedVersion: number, mutation: Mutation = {}): any {
+    return this.tx(() => {
+      const collection = this.get('collections', collectionId);
+      if (collection.version !== expectedVersion) throw new KernelError('CONFLICT', 'Collection version changed');
+      if (collection.state !== 'active') throw new KernelError('INVALID', 'Collection is archived');
+      this.db.prepare('UPDATE collections SET version=version+1,updated_at=? WHERE id=?').run(stamp(), collectionId);
+      this.event('collection', collectionId, expectedVersion + 1, 'collection.membership_changed', mutation);
       return this.get('collections', collectionId);
     });
   }

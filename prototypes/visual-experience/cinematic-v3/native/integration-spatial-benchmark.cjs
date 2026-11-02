@@ -139,12 +139,18 @@ exports.verify = async ({
               : "Orbit left",
       );
       await pause(70);
-      samples.push(
-        await js(
-          "(()=>{const s=window.__aerynth.snapshot();return{renderer:s.spatial.renderer,gpu:s.gpu,quality:s.quality,camera:s.spatial.camera}})()",
-        ),
+      const observation = await js(
+        "(()=>{const s=window.__aerynth.snapshot();return{renderer:s.spatial.renderer,gpu:s.gpu,quality:s.quality,camera:s.spatial.camera}})()",
       );
+      samples.push({
+        ...observation,
+        focused: win.isFocused(),
+        minimized: win.isMinimized(),
+      });
     }
+    receipt.foregroundThroughoutSamples = samples.every(
+      (s) => s.focused && !s.minimized,
+    );
     receipt.callbackMetrics = await js("window.__aerynth.snapshot().metrics");
     receipt.callbackIntervalsMs = percentiles(
       receipt.callbackMetrics.intervals,

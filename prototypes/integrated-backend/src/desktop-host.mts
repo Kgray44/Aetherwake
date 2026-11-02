@@ -35,6 +35,10 @@ lines.on("line", async (line) => {
         "close",
         "viewState",
         "branch",
+        "conversation",
+        "conversationSendPreview",
+        "authorizeConversationSend",
+        "conversationSend",
       ].includes(request.command)
     )
       throw new Error("unsupported_command");

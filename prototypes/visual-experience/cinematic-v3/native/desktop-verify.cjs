@@ -319,10 +319,15 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted }) => {
 };
 
 async function driver(win) {
+  const foreground = () => {
+    if (!win.isMinimized() && !win.isFocused()) win.focus();
+  };
+  foreground();
   const js = (code) => win.webContents.executeJavaScript(code, true);
   const wait = async (expr, timeout = 30000) => {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
+      foreground();
       if (await js(`(()=>{try{return (${expr})}catch{return false}})()`))
         return;
       await pause(80);
@@ -335,6 +340,7 @@ async function driver(win) {
     );
   };
   const click = async (selector) => {
+    foreground();
     const deadline = Date.now() + 2000;
     let p,
       previous,
