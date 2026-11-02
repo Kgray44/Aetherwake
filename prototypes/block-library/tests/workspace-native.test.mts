@@ -84,6 +84,59 @@ test("normal-card helper immediately stops on lost ownership, saves only a bound
   }
 });
 
+test("observed host startup shader/console errors fail before interaction and retain a bounded copy", async () => {
+  const argv = process.argv;
+  process.argv = [...argv, "--verification-deadline-ms=30000"];
+  let exitCode: number | undefined;
+  const fail = () => {
+      throw Error("Startup failure cannot perform UI work");
+    },
+    win = {
+      isDestroyed: () => false,
+      isVisible: () => true,
+      isMinimized: () => false,
+      isFocused: () => true,
+      webContents: {
+        on() {},
+        removeListener() {},
+        isDestroyed: () => false,
+        executeJavaScript: fail,
+        sendInputEvent: fail,
+        capturePage: fail,
+        insertText: fail,
+      },
+    },
+    startupErrors = Array.from(
+      { length: 25 },
+      () => "Synthetic observed shader error " + "x".repeat(2000),
+    );
+  try {
+    const receipt = await verify({
+      win,
+      app: {
+        exit(code: number) {
+          exitCode = code;
+        },
+      },
+      privateRoot: join(tmpdir(), "review-workspace-native-never-open"),
+      source: {},
+      moduleStarted: Date.now(),
+      startupErrors,
+    });
+    assert.equal(receipt.passed, false);
+    assert.equal(exitCode, 1);
+    assert.equal(receipt.startupErrorCount, 25);
+    assert.equal(receipt.startupErrors.length, 20);
+    assert.ok(
+      receipt.startupErrors.every((value: string) => value.length <= 1000),
+    );
+    assert.match(receipt.error, /Observed startup graphics\/console error/);
+    assert.equal(receipt.actions.length + receipt.screenshots.length, 0);
+  } finally {
+    process.argv = argv;
+  }
+});
+
 test("offline normal-card preparation and fresh Core restore use canonical kinds, distinct defaults and actual subject membership with no execution", async (t) => {
   const profile = join(
       tmpdir(),

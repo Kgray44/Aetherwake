@@ -38,7 +38,14 @@ const q = JSON.stringify;
 /** Run ONLY in a parent-owned native slot. Preparation/navigation commands are
  * recorded fixture actions. User-facing controls use native input, never JS
  * click(), dispatchEvent(), value assignment or forced focus acquisition. */
-exports.verify = async ({ win, app, privateRoot, source, moduleStarted }) => {
+exports.verify = async ({
+  win,
+  app,
+  privateRoot,
+  source,
+  moduleStarted,
+  startupErrors = [],
+}) => {
   const output = path.resolve(
     __dirname,
     "../../visual-experience/cinematic-v3/.runtime/application-evidence/workspace-normal-" +
@@ -67,12 +74,28 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted }) => {
       receipt.errors.push(String(details.message).slice(0, 1000));
   };
   win.webContents.on("console-message", consoleError);
+  const recordStartupErrors = () => {
+    receipt.startupErrorCount = Array.isArray(startupErrors)
+      ? startupErrors.length
+      : -1;
+    receipt.startupErrors = Array.isArray(startupErrors)
+      ? startupErrors
+          .slice(0, 20)
+          .map((error) => String(error?.message ?? error).slice(0, 1000))
+      : ["Invalid host startup error collection"];
+  };
   let limits, guard;
   try {
     limits = exports.options(process.argv, moduleStarted);
     guard = createInlineDraftGuard(win, limits);
     guard.check();
     receipt.bounds = limits;
+    recordStartupErrors();
+    assert.equal(
+      receipt.startupErrorCount,
+      0,
+      "Observed startup graphics/console error",
+    );
     assert(
       /^review-workspace-native-/.test(path.basename(privateRoot)),
       "dedicated_synthetic_profile_required",
@@ -617,6 +640,12 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted }) => {
     }
     await noExecution();
     assert.deepEqual(receipt.errors, []);
+    recordStartupErrors();
+    assert.equal(
+      receipt.startupErrorCount,
+      0,
+      "Observed startup graphics/console error",
+    );
     guard.check();
     receipt.passed = true;
   } catch (error) {
@@ -625,6 +654,8 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted }) => {
     // After custody loss, only a bounded failure receipt may be written. No
     // recovery input, capture, focus acquisition or observer is left behind.
     try {
+      recordStartupErrors();
+      if (receipt.startupErrorCount !== 0) receipt.passed = false;
       win.webContents.removeListener("console-message", consoleError);
       const json = JSON.stringify(receipt, null, 2);
       assert(
