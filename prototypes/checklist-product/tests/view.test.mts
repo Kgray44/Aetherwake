@@ -96,11 +96,14 @@ test('filters and closing disclosures become inert immediately, animate only on 
 });
 test('concurrent edits preserve local text, require explicit conflict choice and never replace the retained editor during refresh', async t => {
   const s = await setup(t); await s.add('Saved original'); const entry = s.f.service.read(s.created.resourceId).entries[0], row = s.row(entry.id), input = inputNamed(row, 'Checklist item text');
+  assert.equal(button(row, 'Use saved').hidden, true); assert.equal(button(row, 'Keep my edits').hidden, true);
   input.value = 'My local edit'; input.oninput(); input.setSelectionRange(3, 8);
   s.f.mutate(s.created.resourceId, [{ type: 'editEntry', entryId: entry.id, patch: { text: 'Other view edit' } }]); await s.controller.refresh();
   assert.equal(s.row(entry.id), row); assert.equal(input.value, 'My local edit'); assert.deepEqual([input.selectionStart, input.selectionEnd], [3, 8]); assert.match(row.querySelector('.aw-checklist-conflict').textContent, /changed elsewhere/);
+  assert.equal(button(row, 'Use saved').hidden, false); assert.equal(button(row, 'Keep my edits').hidden, false);
   button(row, 'Save changes').onclick(); await new Promise(resolve => setImmediate(resolve)); assert.equal(s.f.service.read(s.created.resourceId).entries[0].text, 'Other view edit');
-  button(row, 'Keep my edits').onclick(); button(row, 'Save changes').onclick(); await until(() => s.f.service.read(s.created.resourceId).entries[0].text === 'My local edit');
+  button(row, 'Keep my edits').onclick(); assert.equal(button(row, 'Use saved').hidden, true); assert.equal(button(row, 'Keep my edits').hidden, true);
+  button(row, 'Save changes').onclick(); await until(() => s.f.service.read(s.created.resourceId).entries[0].text === 'My local edit');
 });
 test('read-only/denied source capability and stale checkbox failures stay honest without losing local drafts', async t => {
   const s = await setup(t); await s.add('Saved text'); const entry = s.f.service.read(s.created.resourceId).entries[0], row = s.row(entry.id), input = inputNamed(row, 'Checklist item text');

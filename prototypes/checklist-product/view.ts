@@ -13,7 +13,7 @@ type Row = {
   element: HTMLLIElement; core: HTMLElement; panel: HTMLElement; checkbox: HTMLInputElement; text: HTMLInputElement;
   description: HTMLTextAreaElement; priority: HTMLSelectElement; due: HTMLInputElement; group: HTMLSelectElement;
   metadata: HTMLElement; references: HTMLElement; disclosure: HTMLButtonElement; conflict: HTMLElement;
-  controls: HTMLButtonElement[]; reference: HTMLButtonElement; key: string; baseHeight: number; open: boolean; visible: boolean; draft?: { base: Values; values: Values };
+  controls: HTMLButtonElement[]; conflictControls: HTMLButtonElement[]; reference: HTMLButtonElement; key: string; baseHeight: number; open: boolean; visible: boolean; draft?: { base: Values; values: Values }; submitted?: Values;
 };
 export interface ChecklistExperience {
   update(document: ChecklistDocument): void;
@@ -66,6 +66,8 @@ export function mountChecklistExperience(root: HTMLElement, resourceId: string, 
   const field = (label: string, input: HTMLElement) => { const wrapper = node('label', label); wrapper.append(input); return wrapper; };
   const canEdit = () => !!current?.canEdit && active && !pending && !unavailable && !needsRefresh && !retryRequest && !disposed;
   const currentEntry = (entryId: string) => current?.entries.find(entry => entry.id === entryId);
+  const rowConflict = (row: Row, entry: ChecklistEntry) => !!row.draft && JSON.stringify(row.draft.base) !== JSON.stringify(editable(entry)) &&
+    (!row.submitted || JSON.stringify(row.submitted) !== JSON.stringify(editable(entry)));
   const setDisabled = () => {
     addText.disabled = add.disabled = !canEdit(); groupTitle.disabled = addGroup.disabled = !canEdit();
     section.setAttribute('aria-busy', String(pending));
@@ -105,7 +107,7 @@ export function mountChecklistExperience(root: HTMLElement, resourceId: string, 
   };
   const refresh = async () => {
     const token = ++sequence;
-    try { const value = await port.read(resourceId); if (disposed || !active || token !== sequence) return; needsRefresh = false; update(value); setDisabled(); status.textContent = retryRequest ? 'An earlier change is unconfirmed. Use Retry save to check the same attempt.' : current?.canEdit ? 'Manual checklist. Changes are saved locally.' : 'This checklist is read-only.'; }
+    try { const value = await port.read(resourceId); if (disposed || !active || token !== sequence) return; needsRefresh = false; update(value); setDisabled(); status.textContent = pending ? 'Saving checklist change…' : retryRequest ? 'An earlier change is unconfirmed. Use Retry save to check the same attempt.' : current?.canEdit ? 'Manual checklist. Changes are saved locally.' : 'This checklist is read-only.'; }
     catch { if (!disposed && active && token === sequence) { unavailable = true; list.inert = true; list.hidden = true; sources.replaceChildren(); delete sources.dataset.referenceSignature; status.textContent = 'This checklist is unavailable. Its saved data is retained.'; setDisabled(); } }
   };
   const send = (request: { input: MutateChecklist; done?: () => void }): Promise<void> => {
@@ -139,7 +141,14 @@ export function mountChecklistExperience(root: HTMLElement, resourceId: string, 
       row.conflict.textContent = 'This item changed elsewhere. Choose Use saved or Keep my edits before saving.'; return Promise.reject(new Error('checklist_entry_conflict'));
     }
     const values = { ...row.draft.values };
-    return mutate([{ type: 'editEntry', entryId, patch: values }], () => { if (row.draft && JSON.stringify(row.draft.values) === JSON.stringify(values)) row.draft = undefined; });
+    row.submitted = values;
+    return mutate([{ type: 'editEntry', entryId, patch: values }], () => {
+      if (row.draft) {
+        if (JSON.stringify(row.draft.values) === JSON.stringify(values)) row.draft = undefined;
+        else row.draft.base = { ...values };
+      }
+      row.submitted = undefined;
+    }).catch(error => { if (!retryRequest) row.submitted = undefined; if (!disposed) paint(); throw error; });
   };
   const rowFor = (entry: ChecklistEntry): Row => {
     const element = node('li', '', 'aw-checklist-entry'), core = node('div', '', 'aw-checklist-entry-core'), checkbox = node('input'), input = node('input');
@@ -149,7 +158,7 @@ export function mountChecklistExperience(root: HTMLElement, resourceId: string, 
     for (const value of ['low', 'normal', 'high', 'urgent']) { const option = node('option', value); option.value = value; priority.append(option); }
     const key = prefix + ':entry:' + entry.id; addMotion(key, pose({ opacity: 0, h: 76 }));
     element.style.opacity = '0';
-    const row: Row = { element, core, panel, checkbox, text: input, description, priority, due, group, metadata, references, disclosure: null!, reference: null!, conflict, controls: [], key, baseHeight: 76, open: false, visible: true };
+    const row: Row = { element, core, panel, checkbox, text: input, description, priority, due, group, metadata, references, disclosure: null!, reference: null!, conflict, controls: [], conflictControls: [], key, baseHeight: 76, open: false, visible: true };
     const draft = () => {
       const source = currentEntry(entry.id); if (!source) return;
       row.draft ??= { base: editable(source), values: editable(source) };
@@ -165,7 +174,15 @@ export function mountChecklistExperience(root: HTMLElement, resourceId: string, 
       if (next >= 0 && next < order.length) { [order[index], order[next]] = [order[next], order[index]]; return mutate([{ type: 'reorderEntries', entryIds: order }]); }
     };
     const up = action('Move item up', () => move(-1)), down = action('Move item down', () => move(1)), remove = action('Remove item', () => mutate([{ type: 'removeEntry', entryId: entry.id }]));
-    const save = action('Save changes', () => saveRow(entry.id)), useSaved = action('Use saved', () => { row.draft = undefined; paint(); }), keep = action('Keep my edits', () => { const source = currentEntry(entry.id); if (source && row.draft) { row.draft.base = editable(source); row.conflict.textContent = 'Your edits are retained. Save changes to apply them.'; } });
+    const save = action('Save changes', () => saveRow(entry.id)), useSaved = action('Use saved', () => {
+      const source = currentEntry(entry.id); if (!source || !canEdit() || !rowConflict(row, source)) return;
+      row.draft = undefined; row.submitted = undefined; paint();
+    }), keep = action('Keep my edits', () => {
+      const source = currentEntry(entry.id); if (source && row.draft && canEdit() && rowConflict(row, source)) {
+        row.draft.base = editable(source); paint(); status.textContent = 'Your edits are retained. Save changes to apply them.';
+      }
+    });
+    useSaved.hidden = keep.hidden = true; row.conflictControls.push(useSaved, keep);
     const reference = row.reference = action('Link source', () => newReference(entry.id)); reference.disabled = !options.chooseReference;
     if (!options.chooseReference) reference.title = 'Source selection is unavailable in this surface.';
     row.controls.push(up, down, remove, save, useSaved, keep, reference);
@@ -204,7 +221,9 @@ export function mountChecklistExperience(root: HTMLElement, resourceId: string, 
       if (row.group.dataset.optionSignature !== signature) { row.group.replaceChildren(); for (const [value, label] of options) { const option = node('option', label); option.value = value; row.group.append(option); } row.group.dataset.optionSignature = signature; }
       if (row.group.value !== selected) row.group.value = selected;
       row.metadata.textContent = [current.groups.find(group => group.id === entry.groupId)?.title, entry.priority !== 'normal' ? entry.priority : '', entry.dueDate ? 'Due ' + entry.dueDate : '', entry.completion ? 'Checked state: ' + entry.completion.basis : ''].filter(Boolean).join(' · ');
-      row.conflict.textContent = row.draft && JSON.stringify(row.draft.base) !== JSON.stringify(editable(entry)) ? 'This item changed elsewhere. Your local edits are retained.' : '';
+      const conflict = rowConflict(row, entry);
+      row.conflict.textContent = conflict ? 'This item changed elsewhere. Your local edits are retained.' : '';
+      for (const control of row.conflictControls) control.hidden = !conflict;
       renderReferences(row.references, entry.references, entry.id); list.append(row.element);
     }
     setDisabled(); layout();

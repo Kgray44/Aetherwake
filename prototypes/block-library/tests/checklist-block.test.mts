@@ -6,7 +6,7 @@ import type { ChecklistPort } from '../../application-contract/checklist.ts';
 import type { ExperienceMotionPort } from '../../application-contract/motion.ts';
 import { fixture } from '../../checklist-product/tests/fixture.mts';
 import { MotionCoordinator } from '../../visual-experience/cinematic-v3/src/motion.ts';
-import { mountDirectResourceExperience, type DirectResourcePorts } from '../direct-resource-view.ts';
+import { mountDirectResourceExperience, type DirectResourcePorts, type DirectResourceExperience } from '../direct-resource-view.ts';
 import { blockIdentity } from '../identity-model.ts';
 import { mountBlockIdentity } from '../identity-view.ts';
 import { blockAvailability, blockDefinition } from '../registry.ts';
@@ -76,4 +76,43 @@ test('Checklist compact identity projects real subordinate entries without invok
   const manifest = blockDefinition('checklist'); assert.equal(manifest.defaultPresentation.shape, 'rounded');
   const caps = { revision: 1, kinds: {}, providers: {}, velaPlanning: { state: 'unsupported' as const } };
   assert.equal(blockAvailability('checklist', caps).state, 'unknown');
+});
+
+test('own Desktop snapshot before Checklist mutation acknowledgment never exposes conflict controls or discards a newer local draft', async t => {
+  const f = fixture(t), created = f.service.create({ commandId: randomUUID(), title: 'Synthetic own-snapshot regression' });
+  f.mutate(created.resourceId, [{ type: 'addEntry', key: 'entry', entry: { text: 'Saved original' } }]);
+  const dom = blockDocument(), restore = dom.install(), coordinator = new MotionCoordinator();
+  const motion: ExperienceMotionPort = { get reduced() { return coordinator.reduced; }, add: (key, pose) => coordinator.add(key, pose), target: (key, pose, cause) => coordinator.target(key, pose, cause), pose: key => coordinator.pose(key), remove: key => { coordinator.bodies.delete(key); }, wake() {} };
+  const resource = (): Resource => { const r = f.service.read(created.resourceId).resource; return { id: r.id, kind: 'checklist', title: r.title, version: r.version, provider: 'local', content: '', messages: [] }; };
+  let controller: DirectResourceExperience, release!: () => void, echoed = false, hold = true;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const port: ChecklistPort = { create: async input => f.service.create(input), read: async id => f.service.read(id), mutate: async input => {
+    const result = f.service.mutate(input);
+    // Reproduce Root's real product client ordering: its Desktop snapshot is
+    // applied synchronously and refreshes the direct view BEFORE ACK returns.
+    controller.update(resource());
+    if (hold) { hold = false; await new Promise(resolve => setImmediate(resolve)); echoed = true; await gate; }
+    return result;
+  } };
+  const forbidden = () => { throw new Error('No Note, Task or workspace path'); };
+  controller = mountDirectResourceExperience(dom.root, resource(), { notes: {} as any, noteSession: forbidden, saveContent: forbidden,
+    setTaskStatus: forbidden, setTaskPriority: forbidden, manageMembers: forbidden, openResource: forbidden,
+    checklists: { port, motion, viewId: 'synthetic:own-snapshot' } });
+  t.after(() => { controller.dispose(); restore(); });
+  await until(() => dom.root.textContent.includes('Manual checklist.'));
+  const row = dom.root.querySelector('.aw-checklist-entry') as any, input = row.querySelectorAll('input').find((value: any) => value.getAttribute('aria-label') === 'Checklist item text');
+  const action = (text: string) => row.querySelectorAll('button').find((value: any) => value.textContent === text);
+  assert.equal(action('Use saved').hidden, true); assert.equal(action('Keep my edits').hidden, true);
+  input.value = 'Acknowledged submission'; input.oninput(); action('Save changes').onclick(); await until(() => echoed);
+  assert.equal(row.querySelector('.aw-checklist-conflict').textContent, ''); assert.equal(action('Use saved').hidden, true); assert.equal(action('Keep my edits').hidden, true);
+  assert.match(dom.root.querySelector('.aw-checklist-status').textContent, /^Saving/);
+  // Model a queued final input that arrives after submit; acknowledgment may
+  // clear only the exact submitted draft, never this newer retained input.
+  input.value = 'Newer local input'; input.oninput(); input.setSelectionRange(2, 7); release();
+  await until(() => dom.root.querySelector('.aw-checklist-status').textContent.startsWith('Checklist saved.'));
+  assert.equal(input.value, 'Newer local input'); assert.deepEqual([input.selectionStart, input.selectionEnd], [2, 7]);
+  assert.equal(f.service.read(created.resourceId).entries[0].text, 'Acknowledged submission');
+  assert.equal(action('Use saved').hidden, true); assert.equal(action('Keep my edits').hidden, true);
+  action('Save changes').onclick(); await until(() => f.service.read(created.resourceId).entries[0].text === 'Newer local input' && !input.disabled);
+  await controller.flush(); assert.equal(f.service.read(created.resourceId).entries.length, 1); assert.equal(f.count('notes'), 0); assert.equal(f.count('blocks'), 0); assert.equal(f.count('workspaces'), 0);
 });
