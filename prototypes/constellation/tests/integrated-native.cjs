@@ -241,12 +241,41 @@ exports.verify = async ({
           expected.view[key],
           "restart spatial " + key,
         );
+      const live = await spatial(),
+        scope = "workspace:" + actual.activeWorkspaceId;
+      assert.deepEqual(
+        live.anchors,
+        expected.view.anchors,
+        "rendered controller anchors restored",
+      );
+      assert.deepEqual(
+        live.location,
+        expected.view.location,
+        "rendered controller destination restored",
+      );
+      assert.deepEqual(
+        live.camera,
+        expected.view.bookmarks[scope].spatial,
+        "actual camera restored, beyond the stored receipt",
+      );
+      assert.equal(live.selected, expected.view.bookmarks[scope].selected);
       receipt.checks.push(
         "fresh-process-restart-keeps-canonical-identities-content-relationships-branch-ancestry-and-complete-spatial-view",
       );
       await shot("11-restored-workspace");
       await click("#zoom-out");
-      await pause(600);
+      const project = actual.workspaces.find(
+          (w) => w.id === actual.activeWorkspaceId,
+        ).project_id,
+        projectCamera = expected.view.bookmarks["project:" + project].spatial;
+      await wait(
+        `JSON.stringify(window.__aerynth.snapshot().spatial.camera)===${JSON.stringify(JSON.stringify(projectCamera))}`,
+      );
+      assert.deepEqual(
+        (await spatial()).camera,
+        projectCamera,
+        "saved project pose is visible after restart",
+      );
       await shot("12-restored-project");
     } else {
       const projects = [],
