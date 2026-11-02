@@ -1412,6 +1412,11 @@ export function installApplication(hooks: Hooks) {
     });
     controller = mountBlockLibrary(content, libraryClient, {
       workspaceId,
+      bounds: () =>
+        state?.navigation.kind === "workspace" &&
+        state.activeWorkspaceId === workspaceId
+          ? viewBounds()
+          : undefined,
       context: () =>
         state?.activeWorkspaceId === workspaceId
           ? {
@@ -2137,6 +2142,7 @@ export function installApplication(hooks: Hooks) {
               commandId: crypto.randomUUID(),
               workspaceId,
               expectedLayoutVersion: state.layoutVersion,
+              bounds: viewBounds(),
               resourceId: resource.id,
               kind: resource.kind,
               expectedResourceVersion: resource.version,
