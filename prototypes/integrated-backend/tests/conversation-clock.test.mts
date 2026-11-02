@@ -26,11 +26,13 @@ test('canonical fresh creation, branch, provider reconstruction, rollback and sa
     for (const item of [...snapshot.graph.conversations, ...snapshot.graph.messages, ...snapshot.graph.handoffs, ...snapshot.graph.edges]) current(item.createdAt, before, after);
     const originalGraph = persisted(snapshot.graph), originalMap = snapshot.resourceMap;
     await f.reopen(); snapshot = await f.core.command('snapshot', {}); assert.deepEqual(snapshot.graph, originalGraph); assert.deepEqual(snapshot.resourceMap, originalMap);
-    const selected = await f.core.command('selectProvider', { resourceId: chat.resourceId, providerId: 'mock-ordinary', expectedRevision: source.revision });
+    await assert.rejects(f.core.command('selectProvider', { resourceId: chat.resourceId, providerId: 'mock-ordinary', expectedRevision: source.revision }), /provider_change_requires_branch/);
+    const empty = await f.core.command('createConversation', { title: 'Synthetic empty provider choice', providerId: 'local', commandId: randomUUID() });
+    await f.core.command('selectProvider', { resourceId: empty.resourceId, providerId: 'mock-ordinary', expectedRevision: empty.revision });
     const beforeRollback = (await f.core.command('snapshot', {})).graph;
     await assert.rejects(f.core.command('branch', { resourceId: chat.resourceId, messageId: source.id, includeMessageIds: [source.id], providerId: 'local', title: 'Synthetic rolled-back branch', tokenBudget: 1, commandId: randomUUID() }), /context_budget_exceeded/);
     assert.deepEqual((await f.core.command('snapshot', {})).graph, beforeRollback);
-    const nextBefore = Date.now(), next = await f.core.command('addMessage', { resourceId: chat.resourceId, role: 'user', content: 'After provider reconstruction and rollback', expectedRevision: selected.revision }); current(next.createdAt, nextBefore, Date.now());
+    const nextBefore = Date.now(), next = await f.core.command('addMessage', { resourceId: chat.resourceId, role: 'user', content: 'After provider reconstruction and rollback', expectedRevision: source.revision }); current(next.createdAt, nextBefore, Date.now());
     snapshot = await f.core.command('snapshot', {}); assert.deepEqual(snapshot.graph.messages.find(m => m.id === source.id), sourceWithoutReceipt(source)); assert.equal(snapshot.resourceMap[branch.conversation.resourceId], originalMap[branch.conversation.resourceId]); assert.equal(Object.keys(snapshot.executions).length, 0);
   } finally { await f.close(); }
 });

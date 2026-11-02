@@ -27,6 +27,24 @@ function complete(id:string,text='Synthetic response'){return sse([{type:'respon
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}
 
+test('populated provider changes require a reviewed continuation and stale branch creation cannot relabel or clone history',async()=>{
+ const f=fixture();try{
+  await f.core.command('ordinaryProviderStatus',{});
+  const empty=await f.core.command('createConversation',{providerId:'local',commandId:randomUUID()});
+  const selected=await f.core.command('selectProvider',{resourceId:empty.resourceId,providerId,expectedRevision:1});assert.equal(selected.resourceId,empty.resourceId);assert.equal(selected.providerId,providerId);
+  const message=await f.core.command('addMessage',{resourceId:empty.resourceId,role:'user',content:'Exact source history must retain its provider.',expectedRevision:selected.revision});
+  const before=await f.core.command('snapshot',{});
+  await assert.rejects(f.core.command('selectProvider',{resourceId:empty.resourceId,providerId:'local',expectedRevision:message.revision}),/provider_change_requires_branch/);
+  await assert.rejects(f.core.command('branch',{resourceId:empty.resourceId,messageId:message.id,includeMessageIds:[message.id],providerId:'local',title:'Stale continuation',commandId:randomUUID(),tokenBudget:32768,expectedRevision:message.revision-1}),/stale_resource_version/);
+  assert.deepEqual(await f.core.command('snapshot',{}),before);
+  const branch=await f.core.command('branch',{resourceId:empty.resourceId,messageId:message.id,includeMessageIds:[message.id],providerId:'local',title:'Reviewed continuation',commandId:randomUUID(),tokenBudget:32768,expectedRevision:message.revision});
+  assert.equal(branch.mode,'application_continuation');assert.equal(branch.handoff.state,'prepared');assert.notEqual(branch.conversation.resourceId,empty.resourceId);
+  await assert.rejects(f.core.command('selectProvider',{resourceId:branch.conversation.resourceId,providerId,expectedRevision:1}),/provider_change_requires_branch/);
+  const detail=await f.core.command('conversation',{name:'detail',input:{resourceId:empty.resourceId}}) as any;assert.equal(detail.conversation.providerId,providerId);assert.equal(detail.messages.items[0].content,message.content);
+  assert.equal(f.requests.length,0);assert.equal(f.codexCalls,0);
+ }finally{await f.close();}
+});
+
 test('ordinary Responses uses canonical identity, exact grant and stateless local continuity across follow-up and SQLite restart',async()=>{
  const f=fixture();try{
   await f.core.command('ordinaryProviderCheck',{});const c=await f.core.command('createConversation',{commandId:randomUUID()});assert.equal(c.providerId,providerId);assert.equal(c.kind,'ordinary');assert.equal(c.title,'New conversation');assert.equal(f.owner.db.prepare('SELECT count(*) AS n FROM workspaces').get().n,0);

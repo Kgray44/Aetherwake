@@ -1450,6 +1450,7 @@ export class BackendCore {
       case 'place': return this.atomic(() => { this.gid(a.resourceId); return this.kernel.attachBlock(a.workspaceId, a.resourceId, { x: 0, y: 0, width: 320, height: 240, z: 0 }); }) as any;
       case 'move': return this.atomic(() => this.kernel.moveBlock(a.blockId, a.workspaceId, a.expectedVersion)) as any;
       case 'branch': return this.atomic(() => this.once(a.commandId, { name, ...a }, () => {
+        if(a.expectedRevision!==undefined)ensure(Number.isSafeInteger(a.expectedRevision)&&this.state.revisions[a.resourceId]===a.expectedRevision,'stale_resource_version');
         ensure(!this.privateMode || a.providerId !== 'mock-ordinary', 'synthetic_provider_forbidden');
         ensure(Number.isInteger(a.tokenBudget) && a.tokenBudget > 0 && a.tokenBudget <= 32768, 'invalid_token_budget');
         ensure(Array.isArray(a.includeMessageIds) && a.includeMessageIds.length > 0 && a.includeMessageIds.length <= 100, 'explicit_source_selection_required');
