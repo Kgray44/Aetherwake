@@ -506,7 +506,9 @@ export function mountConstellation(
         views.set(n.key, v);
       }
       v.querySelector("strong")!.textContent = n.title;
-      v.querySelector("small")!.textContent = n.resourceKind ?? n.kind;
+      v.querySelector("small")!.textContent = (
+        n.resourceKind ?? n.kind
+      ).replaceAll("_", " ");
       v.setAttribute(
         "aria-label",
         `${n.title}, ${n.kind}${n.available ? "" : ", unavailable"}`,

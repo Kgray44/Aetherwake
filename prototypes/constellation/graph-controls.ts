@@ -167,9 +167,16 @@ export function graphControls(
       kind = select(
         f,
         "Resource type",
-        ["note", "conversation", "task", "research", "reference"].map((id) => ({
+        [
+          "note",
+          "conversation",
+          "task",
+          "task_group",
+          "research",
+          "reference",
+        ].map((id) => ({
           id,
-          title: id,
+          title: id.replaceAll("_", " "),
         })),
       );
       if (!c.snapshot.workspaces.length)

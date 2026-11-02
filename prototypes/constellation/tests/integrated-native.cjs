@@ -70,7 +70,6 @@ exports.verify = async ({
     limitations: [
       "Window recordings and callback statistics do not measure monitor-presented frames.",
       "Ordinary conversation branching is an app-level continuation with reviewed source context; no provider fork, inference or model response is claimed.",
-      "Tasks, notes, research and references use existing canonical resource types; a dedicated task-group resource type is unavailable.",
       "This journey does not replace rendered-scale performance measurements or owner artistic acceptance.",
     ],
   };
@@ -345,11 +344,57 @@ exports.verify = async ({
       assert.equal(workspaces.length, 6);
       const originalRow = records[0],
         other = records[2];
+      await selectWorkspace(other.workspaceId);
+      const extraTask = await add("task", "Engineering verification task"),
+        taskGroup = await add("task_group", "Engineering local task group");
+      await click(`[data-block="${taskGroup.block.id}"] .unfold`);
+      await click(`[data-block="${taskGroup.block.id}"] .manage-task-members`);
+      for (const taskId of [other.task.resource.id, extraTask.resource.id])
+        await click(
+          `#task-group-members input[name="taskId"][value="${taskId}"]`,
+        );
+      await click('#task-group-members button[type="submit"]');
+      await wait('!document.querySelector("#command-surface").open');
+      await wait(
+        `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(taskGroup.resource.id)}).taskMembers.length===2`,
+      );
+      await click(
+        `[data-block="${taskGroup.block.id}"] .group-task[data-task-id="${extraTask.resource.id}"]`,
+      );
+      await wait(
+        `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(extraTask.resource.id)}).taskStatus==='done'`,
+      );
+      const grouped = (await snapshot()).resources.find(
+        (r) => r.id === taskGroup.resource.id,
+      );
+      assert.equal(
+        grouped.taskMembers.filter((t) => t.status === "done").length,
+        1,
+      );
+      for (const taskId of [other.task.resource.id, extraTask.resource.id])
+        assert.ok(
+          (await snapshot()).relationships.some(
+            (e) =>
+              e.kind === "contains_task" &&
+              e.source_id === taskGroup.resource.id &&
+              e.target_id === taskId,
+          ),
+        );
+      receipt.taskGroup = {
+        resourceId: taskGroup.resource.id,
+        blockId: taskGroup.block.id,
+        memberResourceIds: [other.task.resource.id, extraTask.resource.id],
+      };
+      await shot("00-real-local-task-group");
+      receipt.checks.push(
+        "native-canonical-task-group-creation-membership-and-real-local-member-status-update-without-execution",
+      );
+      await click("#home");
       await selectWorkspace(originalRow.workspaceId);
       const original = await snapshot();
       await shot("01-original-working-workspace");
       receipt.checks.push(
-        "three-named-projects-six-distinct-workspaces-thirty-real-typed-resources-and-durable-note-content",
+        "three-named-projects-six-distinct-workspaces-thirty-two-real-typed-resources-and-durable-note-content",
       );
       await startSegment("orbit, pan, inspect and reviewed branch");
       await click("#zoom-out");
