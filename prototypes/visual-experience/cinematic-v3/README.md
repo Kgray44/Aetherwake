@@ -2,6 +2,8 @@
 
 An isolated, executable visual experiment. **Synthetic content; no AI backend connected.** The owner positively reviewed the celestial background; whole-experience artistic acceptance remains open. Neither Electron nor Tauri is selected as the production host.
 
+The current [material continuity correction](MATERIAL-CONTINUITY-V3.5.md) keeps glass visible through overlap and selection and removes the logo's dark raster background. Review the [native workspace](evidence-material-continuity/review-final/01-unselected-three.png), [overlap recording](evidence-material-continuity/review-final/continuous-overlap.webm), and [47-check native receipt](evidence-material-continuity/review-final/verification.json). `npx --no-install electron native/material-preview.cjs` opens the canonical application in a fresh synthetic Freeform workspace for interactive review.
+
 V3 is preserved at `9c8df82` on `codex/cinematic-experience-v3`. V3.5 extends it on `codex/cinematic-experience-v3-5`, retaining this directory and its renderer, Motion Coordinator, resources and studies. V3 evidence remains under `evidence/`; pre-celestial V3.5 is under `evidence-v3-5/`, celestial refinement under `evidence-celestial/`, and glass-instrument integration under `evidence-instruments/`. Runtime profiles remain separate.
 
 ## Run
@@ -63,6 +65,6 @@ The recording command captures only its exact application window, with no audio,
 
 ## Scope and ownership
 
-All implementation is under this directory on `codex/cinematic-experience-v3-5`. Other prototypes and governance are untouched. The exact master PNG is preserved without alteration; SHA-256 remains `89bd614656667f1178603afa3a23debc5a4e96fe61ccfbb957d7ef27cbf76658`.
+The material correction is developed on `codex/glass-continuity`. It consumes coordinated application, workspace-engine and Constellation integration while keeping rendering ownership here. Governance is unchanged. The exact master PNG is preserved without alteration; SHA-256 remains `89bd614656667f1178603afa3a23debc5a4e96fe61ccfbb957d7ef27cbf76658`.
 
 GPU geometry/shaders, accessible DOM content, canonical resources/events, coordinator, native adapter, and verification are separate. There is no backend lock-in in the scene. A real Codex path, complete application architecture, production security review, detached displays, and owner artistic acceptance remain outside this experiment's demonstrated scope.

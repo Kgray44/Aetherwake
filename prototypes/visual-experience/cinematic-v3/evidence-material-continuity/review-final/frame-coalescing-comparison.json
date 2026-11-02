@@ -1,0 +1,35 @@
+{
+  "meaning": "Single native before/after diagnostic snapshots, not repeated host, energy or monitor-presentation qualification",
+  "beforeRevision": "8718aa9d133626e595563dd2fb6ee9598bbb49d7",
+  "afterRevision": "9618c1dfc5b3753f48596530a2d2ae4ff0c3c247",
+  "rows": [
+    {
+      "count": 3,
+      "beforeCallbacks": 1550,
+      "beforeDuplicateTimestamps": 1033,
+      "afterCallbacks": 517,
+      "afterDuplicateTimestamps": 0
+    },
+    {
+      "count": 10,
+      "beforeCallbacks": 1551,
+      "beforeDuplicateTimestamps": 1034,
+      "afterCallbacks": 517,
+      "afterDuplicateTimestamps": 0
+    },
+    {
+      "count": 25,
+      "beforeCallbacks": 1518,
+      "beforeDuplicateTimestamps": 1012,
+      "afterCallbacks": 520,
+      "afterDuplicateTimestamps": 0
+    },
+    {
+      "count": 50,
+      "beforeCallbacks": 1197,
+      "beforeDuplicateTimestamps": 798,
+      "afterCallbacks": 449,
+      "afterDuplicateTimestamps": 0
+    }
+  ]
+}

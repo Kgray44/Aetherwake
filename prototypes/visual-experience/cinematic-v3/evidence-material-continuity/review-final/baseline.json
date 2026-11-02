@@ -1,0 +1,133 @@
+{
+  "kind": "Actual native material continuity diagnosis",
+  "at": "2026-11-02T00:06:47.704Z",
+  "sourceHashes": {
+    "src/application.ts": "ce3ae22ea46d4a43707a13c4cf9496a1bd2e1d375aa31cfe852ab41b79ee524c",
+    "src/celestial-environment.ts": "49eb62df7944c2796f51ef45080c830c1e7b72776fd7d4aeb23e6ee9bd73ad07",
+    "src/conversation.ts": "63a1a6bbd4224401ca36ab4cc0b912d6a18ffda6eef2c69404f48b04eb5ff542",
+    "src/instrument-geometry.ts": "8f7fa68f57f13936b4a4b46de7809737a02291fdaa6b4223106b92034d7425b9",
+    "src/instrument-materials.ts": "a131d182d18a6970824234995281d97e1810a2fc1846b9a456100d4b53ebe5b8",
+    "src/main.ts": "4d52899684e3c464dd636441f9158751ac542a7668846aca958e8313d8c02cae",
+    "src/material-compositing.ts": "38e05385fe4503c5e990a07333e218e696ec9f577c3673fe8a6eaa55684e3be9",
+    "src/material-occlusion.ts": "ef8a435868dd7d04939b42c8588a84315d5b2b07877c15c1fc265d656cd4a682",
+    "src/motion.ts": "70996a0131dfddfa4e0c430a6b05652802cd24a74d6de86cab622a5f65a44519",
+    "src/orbital-architecture.ts": "18931b7bfb79a92b3957222c9ce09076d1402969c3c3d2908ef85c1f7d70815a",
+    "src/policy.ts": "f3f868b5d6e3936ed338f05460c1d36aa7c665909bbc2329e2cef9eb47211f86",
+    "src/renderer.ts": "50b8078a25bf00bb9a2b4d8ff894efa2f622606fa0722d10c3cac0c20866bd90",
+    "src/scene-state.ts": "b0e1964628f0e3744fa75487b328e3b883aedf5f73e7a8b4467b1bf698060dfe",
+    "src/scene-transition.ts": "55f7b5c04b094f9d9bbfa6ce8983c91b6c53ec41d77b39b6ba0bea6e6385a711",
+    "src/store.ts": "62da4efc0d815cca0194e6b3fb94a42f3d7fbd32aabc86baef231c846c881c9b",
+    "src/surface-contour.ts": "e2e4bbe40967946ba00e5fdf305b276973ec4d8065c0f358b672703016c4512c",
+    "src/workloads.ts": "d8233b60e6028383c444144e371bb6a480da16866b4daf0f167a653e3bbcac40",
+    "src/application.css": "fbc756dc3dbdde03aa398c9477d3d149c24563e56c84ccc11a320c839773c2ee",
+    "src/style.css": "2627427c938da519fbabd9e4b3c5e3a5395e2f7e3b0842b2aa806078dfe6b01e"
+  },
+  "buildAssets": {
+    "graphics-CQNxUdO7.js": "80d90f539b905184d8b7e24f486700e1f697ac7bfb48248d9c2d1b585151ea7d",
+    "index-B-o6x3Xy.css": "d32880b9dd610c5b0999a3eff3329640aa8861c7f15b744c00b086826353c957",
+    "index-CgUr80Hh.js": "2ae6eccfb36ada12f396fa3052b2d31fca52592f300f3a08e06051b3466e7687"
+  },
+  "samples": [
+    {
+      "name": "separated-unselected",
+      "cards": [
+        {
+          "id": "2dd43b88-fa3d-4df5-8b1e-042eea4365a7",
+          "overlap": "false",
+          "background": "rgba(8, 13, 21, 0.12)",
+          "clipPath": "none",
+          "z": "20001",
+          "transform": "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -0.000666667, 0, 0, 0, 1)",
+          "opacity": "1"
+        },
+        {
+          "id": "6066a394-d4c6-40fc-9405-785662907c10",
+          "overlap": "true",
+          "background": "rgb(13, 16, 21)",
+          "clipPath": "none",
+          "z": "20002",
+          "transform": "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -0.000666667, 0, 0, 0, 1)",
+          "opacity": "1"
+        },
+        {
+          "id": "bd3b57d1-6f1c-419b-bb12-6e0959049b18",
+          "overlap": "true",
+          "background": "rgb(13, 16, 21)",
+          "clipPath": "none",
+          "z": "20003",
+          "transform": "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -0.000666667, 0, 0, 0, 1)",
+          "opacity": "1"
+        }
+      ],
+      "materialMode": "physical"
+    },
+    {
+      "name": "overlap-unselected",
+      "cards": [
+        {
+          "id": "2dd43b88-fa3d-4df5-8b1e-042eea4365a7",
+          "overlap": "true",
+          "background": "rgb(8, 13, 21)",
+          "clipPath": "none",
+          "z": "20004",
+          "transform": "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -0.000666667, 0, 0, 0, 1)",
+          "opacity": "1"
+        },
+        {
+          "id": "6066a394-d4c6-40fc-9405-785662907c10",
+          "overlap": "true",
+          "background": "rgb(13, 16, 21)",
+          "clipPath": "none",
+          "z": "20002",
+          "transform": "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -0.000666667, 0, 0, 0, 1)",
+          "opacity": "1"
+        },
+        {
+          "id": "bd3b57d1-6f1c-419b-bb12-6e0959049b18",
+          "overlap": "true",
+          "background": "rgb(13, 16, 21)",
+          "clipPath": "none",
+          "z": "20003",
+          "transform": "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -0.000666667, 0, 0, 0, 1)",
+          "opacity": "1"
+        }
+      ],
+      "materialMode": "physical"
+    },
+    {
+      "name": "overlap-selected",
+      "cards": [
+        {
+          "id": "2dd43b88-fa3d-4df5-8b1e-042eea4365a7",
+          "overlap": "true",
+          "background": "rgb(8, 13, 21)",
+          "clipPath": "none",
+          "z": "100000",
+          "transform": "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -0.000666667, 0, 0, 29.9896, 0.980007)",
+          "opacity": "1"
+        },
+        {
+          "id": "6066a394-d4c6-40fc-9405-785662907c10",
+          "overlap": "true",
+          "background": "rgb(13, 16, 21)",
+          "clipPath": "none",
+          "z": "20002",
+          "transform": "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -0.000666667, 0, 0, 0, 1)",
+          "opacity": "1"
+        },
+        {
+          "id": "bd3b57d1-6f1c-419b-bb12-6e0959049b18",
+          "overlap": "true",
+          "background": "rgb(13, 16, 21)",
+          "clipPath": "none",
+          "z": "20003",
+          "transform": "matrix3d(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, -0.000666667, 0, 0, 0, 1)",
+          "opacity": "1"
+        }
+      ],
+      "materialMode": "physical"
+    }
+  ],
+  "limitation": "The original separated-unselected fixture has a minor lens/note intersection. It is not a strict no-overlap baseline. Source/build hashes were bound before frontend correction; there is no launch revision receipt.",
+  "rawReceiptSHA256": "9cb476c031342b35c7075f9b2b48b329805c0b224bc5b71bc30d86b92dff69a8"
+}

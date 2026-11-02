@@ -1,5 +1,7 @@
 # Cinematic V3.5 — celestial instrument integration
 
+Historical milestone record. Its whole-card overlap-to-opaque policy is superseded by the [material continuity correction](MATERIAL-CONTINUITY-V3.5.md), including native overlap video and the transparent logo treatment. The earlier receipts below retain their original source and scope.
+
 Status: resize-corrected thin-glass candidate `831aadb`; 54 source tests and 57 native checks pass across 44 measured scenarios, with no renderer errors. The preceding thin-lens checkpoint `7598227` passed 56 native checks. The owner positively reviewed the celestial environment, then identified the purple gradient resources as visually disconnected. Later feedback prioritizes modern glass over visible metal and a circular resource with the same quiet perimeter as the others. The background direction, larger rotating ring, Vela, Living Intelligence, Motion Coordinator and resource functionality are preserved. No whole-product artistic acceptance is claimed.
 
 ## Material and spatial contract
