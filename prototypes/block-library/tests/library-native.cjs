@@ -4,6 +4,8 @@ const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { createDriver } = require('../../visual-experience/cinematic-v3/native/desktop-verify.cjs');
 const { verificationOptions, createInlineDraftGuard } = require('../../visual-experience/cinematic-v3/native/inline-draft-guard.cjs');
+const { consoleErrorHandler } = require('./native-console.cjs');
+exports.consoleHandler = consoleErrorHandler;
 const q = JSON.stringify, digest = value => createHash('sha256').update(value).digest('hex');
 
 exports.options = (argv, started) => ({ ...verificationOptions(argv, started), restore: argv.includes('--verify-restore') });
@@ -36,7 +38,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
   const output = path.resolve(__dirname, '../../visual-experience/cinematic-v3/.runtime/application-evidence/library-templates-' + Date.now() + '-' + randomUUID().slice(0, 8));
   const receipt = { contract: 'aerynth.library-template-evidence@1', syntheticOnly: true, passed: false, source, actions: [], checks: [], screenshots: [], errors: [], limitations: ['Schema preparation creates no ordinary identities.', 'Read-only RPC checks are not substitutes for native creation or form interaction.', 'No provider connection, authentication probe, model turn or synthetic assistant response is requested.', 'This covers journeys A/C; it does not qualify full B/D/E/F, performance or owner artistic acceptance.'] };
   let guard, limits, driver, captureFailure, inspectFailure, consoleSource;
-  const consoleError = (_event, details) => { if (details.level === 'error' && receipt.errors.length < 20) receipt.errors.push(String(details.message).slice(0, 1000)); };
+  const consoleError = consoleErrorHandler(receipt);
   let observingConsole = false;
   const startup = () => {
     receipt.startupErrorCount = Array.isArray(startupErrors) ? startupErrors.length : 1;
@@ -67,6 +69,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
     }
     receipt.preparationHashes = seed.hashes;
     receipt.helperSha256 = digest(await guard.around(() => fs.readFile(__filename)));
+    receipt.consoleHandlerSha256 = digest(await guard.around(() => fs.readFile(require.resolve('./native-console.cjs'))));
     driver = await guard.around(() => createDriver(win, { assertActive: guard.check }));
     const js = code => guard.around(() => driver.js(code));
     const wait = expression => guard.around(() => driver.wait(expression, Math.min(8000, Math.max(1, limits.deadlineAt - Date.now()))));

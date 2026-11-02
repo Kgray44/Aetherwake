@@ -34,6 +34,8 @@ exports.workspaceState = (state) => ({
 });
 const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const q = JSON.stringify;
+const { consoleErrorHandler } = require('./native-console.cjs');
+exports.consoleHandler = consoleErrorHandler;
 
 /** Run ONLY in a parent-owned native slot. Preparation/navigation commands are
  * recorded fixture actions. User-facing controls use native input, never JS
@@ -72,10 +74,7 @@ exports.verify = async ({
       "This is functional evidence; artistic acceptance and performance remain separate.",
     ],
   };
-  const consoleError = (_event, details) => {
-    if (details.level === "error" && receipt.errors.length < 20)
-      receipt.errors.push(String(details.message).slice(0, 1000));
-  };
+  const consoleError = consoleErrorHandler(receipt);
   win.webContents.on("console-message", consoleError);
   const recordStartupErrors = () => {
     receipt.startupErrorCount = Array.isArray(startupErrors)
@@ -152,6 +151,7 @@ exports.verify = async ({
     receipt.helperSha256 = digest(
       await guard.around(() => fs.readFile(__filename)),
     );
+    receipt.consoleHandlerSha256 = digest(await guard.around(() => fs.readFile(require.resolve('./native-console.cjs'))));
     const driver = await guard.around(() =>
       createDriver(win, { assertActive: guard.check }),
     );
