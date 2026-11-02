@@ -65,16 +65,49 @@ The smart-collection timing process also timed out. SQL counts localize repeated
 source authorization as material work; they do not establish a hard latency
 guarantee for the subsequent host implementation.
 
+## Paired result with the canonical host boundary
+
+Isolated source `1efe71d` applies the integration owner's `fda8ec8` host
+dependency to the product changes. The same corrected-policy original fixture
+was copied again, with identical source DB SHA-256 and unchanged budgets. All
+four diagnostic workers completed inside their 10-second deadlines. The
+original source file remained unchanged.
+
+| Read | Instrumented post-integration result | Separate raw samples (ms) |
+| --- | --- | --- |
+| Activity list | 5,984 SQL prepares; 1,578 actual underlying canonical access calls, each unique; 166 metadata calls; zero transcript projections, snapshots, provider calls or SQL changes | 112.6, 105.3, 99.9 |
+| Smart collections | 8,263 SQL prepares; 20,163 product access invocations reduced to 2,148 underlying canonical checks, each unique; 166 transcript projections; zero activity/count metadata calls, snapshots, provider calls or SQL changes | 170.8, 179.7, 165.9 |
+
+The activity-list response digest exactly matched the corrected baseline
+(`429a62e2cb6861c2c5711534969f1925cd6807f191a81473c118262521d5f872`).
+The collections result digest matched between the post-integration work and
+timing copies. Its baseline was incomplete, so there is no complete before-work
+count or exact speedup ratio for collections. The raw samples have one warmup
+and three observations each; they are not percentile qualification or a fresh
+benchmark setup pass.
+
+This paired result covers the host batch and current public-ID lookup together;
+it does not isolate a single optimization's timing effect. The remaining
+5,984/8,263 SQL prepares show that unique source checks still perform resource,
+project and message ownership work. No deeper permission cache or graph index
+was added, and no budget was raised. This does not establish large-library,
+concurrent, Electron, IPC, paint or native presentation performance.
+
 ## Verification and remaining work
 
 Product source `51f9071` passed 102 focused component/service/adapter tests,
 including real SQLite smart-rule compatibility, exact manual/derived IDs,
 next-call inherited-source denial, withheld count/activity, detached result
 mutation, fresh metadata after favorite changes, and failed/closed read scope.
-Strict CP source/test type checking passed after the installed-Node-type-only
-benchmark options correction. The test host demonstrates the required batch
-lifetime contract; the actual Core host lifetime/revocation/rollback tests and
-paired post-integration measurements belong to the integration owner.
+The follow-up conversation-only search filters authorized matching IDs before
+summarizing; it passed a real SQLite regression for non-match metadata work and
+new message denial. The combined product has 103 passing focused tests plus
+four selected durable-draft tests. After applying the host dependency, all seven
+Core conversation-product integration tests and 13 product SQLite tests passed,
+including actual batch lifetime/current-revocation and independent source
+permissions. Strict CP source/test plus Core integration-test type checking
+passed. The fresh full setup benchmark and combined native journeys remain the
+integration owner's separate acceptance work.
 
 The following remain uncapped or separately limited scenarios:
 
