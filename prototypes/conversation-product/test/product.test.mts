@@ -111,6 +111,25 @@ test('provider absence, stale commands, unrelated branches and policy restrictio
  }finally{await f.close();removeFixture(dir);}
 });
 
+test('native ChatGPT fidelity metadata cannot promote account history, inference or catalog availability',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-chatgpt-fidelity-')),f=fixture(join(dir,'canonical.sqlite'));
+ try{
+  let capabilityRequests=0;const original=f.host.command;
+  f.host.command=async(name,input)=>{if(name==='capabilities')capabilityRequests++;return original(name,input);};
+  f.host.capabilitySnapshot=()=>({providerId:'fixture-codex',mock:true,authentication:'available',models:['synthetic-model'],catalogOnly:true,nativeFork:false,chatgptHistory:false});
+  const providers=await f.product.command('providers',{}),chatgpt=providers.find(provider=>provider.id==='chatgpt')!;
+  assert.deepEqual({available:chatgpt.available,record:chatgpt.record,execute:chatgpt.execute,history:chatgpt.history,models:chatgpt.models},{available:false,record:false,execute:false,history:'unavailable',models:[]});
+  assert.equal(chatgpt.accountFidelity!.id,'openai.native-chatgpt-account-fidelity');assert.equal(chatgpt.accountFidelity!.aims.length,13);
+  assert.equal(chatgpt.reasonCode,chatgpt.accountFidelity!.reasonCode);assert.equal(chatgpt.reason,chatgpt.accountFidelity!.reason);
+  const local=await create(f);await assert.rejects(f.product.command('selectProvider',{resourceId:local.resourceId,providerId:'chatgpt',expectedRevision:1}),/provider_unavailable/);
+  await assert.rejects(f.product.command('create',{title:'Unavailable native account',providerId:'chatgpt',commandId:crypto.randomUUID()}),/provider_unavailable/);
+  const detail=await f.product.command('detail',{resourceId:local.resourceId});assert.deepEqual(detail.providers.find(provider=>provider.id==='chatgpt')!.accountFidelity,chatgpt.accountFidelity);
+  (chatgpt.accountFidelity!.aims[0] as unknown as {status:string}).status='Supported';
+  assert.equal((await f.product.command('providers',{})).find(provider=>provider.id==='chatgpt')!.accountFidelity!.aims[0].status,'RequiresAdditionalAuthorization');
+  assert.equal(capabilityRequests,0,'metadata/history reads must not initiate a provider connection when cached observations are supplied');
+ }finally{await f.close();removeFixture(dir);}
+});
+
 test('paged message navigation includes exact hit; resource search honors collection and archive filters',async()=>{
  const dir=mkdtempSync(join(tmpdir(),'aerynth-paging-product-')),f=fixture(join(dir,'canonical.sqlite'));
  try{

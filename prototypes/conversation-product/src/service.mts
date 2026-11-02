@@ -5,6 +5,7 @@ import type { Snapshot, CommandMap } from '../../integrated-backend/src/contract
 import type { DesktopSnapshot } from '../../application-contract/contracts.ts';
 import type { BranchPolicy, CanonicalOrganizationCommand, Collection, ConversationProductPort, ConversationSummary, Detail, Evidence, MessageView, Page, ProductCommandMap, ProviderCapability, SearchHit, SearchQuery, Share } from './contracts.ts';
 import { CONVERSATION_DRAFT_LIMITS, type ConversationDraft } from './contracts.ts';
+import { createNativeChatGPTFidelityDescriptor } from './native-chatgpt-fidelity.ts';
 
 export interface CanonicalConversationHost {
  snapshot(): Promise<Snapshot>;
@@ -197,7 +198,8 @@ export class ConversationProduct implements ConversationProductPort {
   const codex = v.snapshot.graph.providers.find(p => p.id !== local?.id && p.id!=='mock-ordinary' && p.id!=='local');
   const authenticated=live?.authentication==='available';
   if (codex) items.push({id:codex.id,label:live?.mock ? 'Codex fixture (simulated)' : 'Codex',available:authenticated,record:true,execute:authenticated,nativeFork:false,history:'local',simulated:live?.mock ?? codex.mock,models:live?.models ?? [],reason:authenticated?'Connected and authenticated; model catalog only. Execution outcomes are recorded per turn.':'Provider disconnected or authentication unavailable'});
-  items.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:'No supported account-history connector is installed',simulated:false,models:[]});
+  const accountFidelity=createNativeChatGPTFidelityDescriptor();
+  items.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:accountFidelity.reason,reasonCode:accountFidelity.reasonCode,accountFidelity,simulated:false,models:[]});
   return items;
  }
  async attachedContext(resourceId: string): Promise<AttachedContext[]> {
