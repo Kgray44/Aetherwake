@@ -1214,8 +1214,21 @@ details[data-active="true"] > .cp-control .cp-control-glyph {
   display: none;
 }
 .cp-manager .cp-toolbar > input[data-cp-control="search"] {
-  flex: 1 1 140px;
-  width: 0;
+  flex: 1 1 100%;
+  width: 100%;
+}
+.cp-manager .cp-toolbar > .cp-filters {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+.cp-manager .cp-toolbar > .cp-filters > .cp-control {
+  flex-wrap: nowrap;
+  white-space: nowrap;
+}
+.cp-manager .cp-toolbar > .cp-filters > .cp-control > .cp-control-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 .cp-manager .cp-control[data-cp-control="clear-search"] {
   position: relative;
