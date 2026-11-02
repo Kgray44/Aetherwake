@@ -648,3 +648,18 @@
     font-size: 8px;
   }
 }
+
+/* The existing frame coordinator supplies a free footer slot or chrome slot.
+   Active placement uses viewport pixels and a left edge, without centering. */
+.application-ready[data-status-placement] #status {
+  left: var(--status-left, 24px);
+  max-width: var(--status-max-width, min(32rem, calc(100vw - 48px)));
+  bottom: var(--status-bottom, 14px);
+  transform: none;
+}
+.application-ready[data-status-placement="chrome"] #status {
+  z-index: 101;
+}
+.application-ready[data-status-placement="chrome"] .window-drag > span {
+  visibility: hidden;
+}
