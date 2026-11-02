@@ -21,6 +21,7 @@ export function componentDocument() {
     querySelectorAll(selector:string):any[]{return this.children.flatMap(child=>[...(child.matches(selector)?[child]:[]),...child.querySelectorAll(selector)]);}
     querySelector(selector:string):any{return this.querySelectorAll(selector)[0]??null;} closest(selector:string):any{return this.matches(selector)?this:this.parentElement?.closest(selector)??null;}
     focus(){doc.activeElement=this;} setSelectionRange(start:number,end:number){this.selectionStart=start;this.selectionEnd=end;} scrollIntoView(){}
+    getBoundingClientRect(){return {x:0,y:0,top:0,left:0,bottom:this.clientHeight,right:400,width:400,height:this.clientHeight,toJSON(){return {};}};}
     requestSubmit(){return this.fire('submit');}
     fire(type:string,extra:Record<string,unknown>={}){const event={type,target:this,key:'',shiftKey:false,isComposing:false,altKey:false,ctrlKey:false,metaKey:false,defaultPrevented:false,stopped:false,preventDefault(){this.defaultPrevented=true;},stopPropagation(){this.stopped=true;},...extra};for(let node:any=this;node;node=node.parentElement){for(const listener of node.listeners.get(type)??[])listener(event);if(event.stopped)break;}return event;}
   }

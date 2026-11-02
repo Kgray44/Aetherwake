@@ -190,6 +190,22 @@ test('workspace/focused presentation switches preserve one canonical chat, draft
   }finally{await chat?.dispose();await session.dispose();f.restore();}
 });
 
+test('short workspace follows canonical text above its in-flow action footer, preserves reading/around targets and never scrolls its page',async()=>{
+  const f=fixture();let chat,around=0;const copies:string[]=[];f.detail.messages.items=f.detail.messages.items.filter(message=>message.role==='user');f.detail.messages.total=f.detail.conversation.messageCount=1;
+  const geometry=()=>{const messages=f.view.root.querySelector('.cp-messages'),content=messages.querySelector('.cp-message-content'),article=messages.querySelector('.cp-message');messages.clientHeight=messages.offsetHeight=50;messages.scrollHeight=164;messages.getBoundingClientRect=()=>({top:200,bottom:250,height:50});content.getBoundingClientRect=()=>({top:140-(messages.scrollTop-96),bottom:210-(messages.scrollTop-96),height:70});article.scrollIntoView=()=>{around++;};};
+  try{f.view.root.scrollTop=71;chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,presentation:'workspace',onDetail:geometry,copy:async text=>{copies.push(text);}});await chat.ready;const messages=f.view.root.querySelector('.cp-messages'),editor=f.view.root.querySelector('textarea');assert.equal(messages.scrollTop,56,'Content end, not the 64px trailing action/footer region, is followed');const lastLine={top:176-(messages.scrollTop-96),bottom:198-(messages.scrollTop-96)};assert.ok(lastLine.top>=200&&lastLine.bottom<=250,'The complete modelled text line is inside the real scroller bounds');assert.equal(around,0);assert.equal(f.view.root.scrollTop,71);
+    editor.focus();editor.setSelectionRange(2,6);messages.scrollTop=10;await chat.refresh();assert.equal(messages.scrollTop,10,'A reader above the follow region retains their position');assert.equal(f.view.root.querySelector('textarea'),editor);assert.equal(f.view.doc.activeElement,editor);assert.deepEqual([editor.selectionStart,editor.selectionEnd],[2,6]);await chat.refresh({aroundMessageId:'message:user'});assert.equal(around,1,'Explicit source navigation retains its existing around-message path');assert.equal(messages.scrollTop,10);
+    const actions=f.view.root.querySelector('.cp-message-actions');actions.open=true;actions.fire('toggle');named(actions,'Copy').fire('click');await until(()=>copies.length===1);assert.equal(copies[0],f.detail.messages.items[0].content);assert.equal(f.view.root.scrollTop,71);assert.ok(f.calls.every(call=>['readDraft','detail'].includes(call.name)));
+  }finally{await chat?.dispose();f.restore();}
+});
+
+test('workspace content following accounts for a scaled scroller and respects an explicit restored scroll offset',async()=>{
+  const f=fixture();let chat;f.detail.messages.items=f.detail.messages.items.filter(message=>message.role==='user');f.detail.messages.total=f.detail.conversation.messageCount=1;
+  const geometry=()=>{const messages=f.view.root.querySelector('.cp-messages'),content=messages.querySelector('.cp-message-content');messages.clientHeight=messages.offsetHeight=50;messages.scrollHeight=164;messages.getBoundingClientRect=()=>({top:200,bottom:225,height:25});content.getBoundingClientRect=()=>({top:170-(messages.scrollTop-96)*.5,bottom:205-(messages.scrollTop-96)*.5,height:35});};
+  try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,presentation:'workspace',onDetail:geometry});await chat.ready;assert.equal(f.view.root.querySelector('.cp-messages').scrollTop,56);await chat.dispose();chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,presentation:'workspace',initialScroll:12,onDetail:geometry});await chat.ready;assert.equal(f.view.root.querySelector('.cp-messages').scrollTop,12);}
+  finally{await chat?.dispose();f.restore();}
+});
+
 test('filter and clear-search changes made during an existing read drain to the latest actual query without replaying actions',async()=>{
   const f=fixture();let manager,release!:()=>void;
   try{manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;const priorDetails=f.calls.filter(call=>call.name==='detail').length;f.gateDetail(new Promise<void>(resolve=>{release=resolve;}));const reading=manager.refresh();await until(()=>f.calls.filter(call=>call.name==='detail').length>priorDetails);

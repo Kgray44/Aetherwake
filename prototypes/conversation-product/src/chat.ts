@@ -191,6 +191,16 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     }
     article.append(by,content,actions); cache.set(message.id,{signature,node:article});return article;
   }
+  function followLatestContent() {
+    if(presentation!=='workspace'){messages.scrollTop=messages.scrollHeight;return;}
+    const content=[...messages.querySelectorAll<HTMLElement>('.cp-message-content')].at(-1);if(!content)return;
+    const viewport=messages.getBoundingClientRect(),box=content.getBoundingClientRect(),scale=viewport.height/(messages.offsetHeight||messages.clientHeight);
+    if(!Number.isFinite(scale)||scale<=0)return;
+    // Action summaries/margins follow the text in flow. Following scrollHeight can show only
+    // that footer in a short card. Move this scroller alone to the canonical content's end.
+    const bottom=viewport.top+((messages.clientTop||0)+messages.clientHeight)*scale;
+    messages.scrollTop=Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(box.bottom-bottom)/scale));
+  }
   function render(detail: Detail, around?:string) {
     const nearBottom = messages.scrollHeight-messages.scrollTop-messages.clientHeight < 80, scroll = messages.scrollTop;
     current=detail; const nodes=detail.messages.items.map(messageNode);
@@ -212,7 +222,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     paging.replaceChildren(before,el('span',`${detail.messages.total?detail.messages.offset+1:0}–${detail.messages.offset+detail.messages.items.length} of ${detail.messages.total}`),after);paging.hidden=detail.messages.total<=detail.messages.limit;
     renderDraft();options.onDetail?.(detail);
     if(around){messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(around)}"]`)?.scrollIntoView({block:'center'});}
-    else messages.scrollTop=nearBottom?messages.scrollHeight:scroll;
+    else if(nearBottom)followLatestContent();else messages.scrollTop=scroll;
   }
   async function refresh(input: {aroundMessageId?:string;latest?:boolean}={}) {
     const request=++generation;
@@ -265,7 +275,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
     if(!active())void refresh({latest:true}).catch(error=>report(errorText(error)));
   });
-  const ready=(async()=>{await session.ready;renderDraft();await refresh();messages.scrollTop=options.initialScroll??messages.scrollHeight;resize();})().catch(error=>{report(errorText(error));throw error;});
+  const ready=(async()=>{await session.ready;renderDraft();await refresh();resize();if(options.initialScroll!==undefined)messages.scrollTop=options.initialScroll;else followLatestContent();})().catch(error=>{report(errorText(error));throw error;});
   root.addEventListener('keydown',event=>{if(event.key!=='Escape')return;const details=(event.target as HTMLElement).closest<HTMLDetailsElement>('details[open]');if(details&&root.contains(details)){event.preventDefault();event.stopPropagation();details.open=false;details.querySelector('summary')?.focus();}});
   // The send RPC can remain pending through the entire native provider turn. Draft durability
   // must be independent so a pane can close and the host can offer interruption on quit.
