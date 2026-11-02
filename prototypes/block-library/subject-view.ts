@@ -153,7 +153,7 @@ export function mountSubjectExperience(
   if (subject.kind === "project") {
     for (const [title, value] of [["Workspaces", workspaceCount], ["Resources", resourceCount]] as const) {
       const metric = node("div");
-      metric.append(value, node("dt", title));
+      metric.append(node("dt", title), value);
       projectMetrics.append(metric);
     }
     projectMetrics.hidden = true;

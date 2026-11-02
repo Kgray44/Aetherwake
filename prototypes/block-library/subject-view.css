@@ -183,8 +183,9 @@ button.aw-subject-resource-title {
   border-bottom: 1px solid #bcb2dc24;
 }
 .aw-project-metrics[hidden] { display: none; }
+.aw-project-metrics > div { display: flex; flex-direction: column; }
 .aw-project-metrics dd { margin: 0; color: #e4def0; font-size: 2.6em; font-weight: 350; letter-spacing: -0.06em; line-height: 1.1; }
-.aw-project-metrics dt { margin-top: 0.35rem; font-size: 0.78em; color: #bcb2dc; }
+.aw-project-metrics dt { order: 1; margin-top: 0.35rem; font-size: 0.78em; color: #bcb2dc; }
 .aw-subject-view[data-subject-kind="project"] .aw-project-summary { margin: 0.65rem 0; font-size: 0.95em; }
 .aw-project-workspaces li { border-bottom: 1px solid #bcb2dc20; padding: 0.35rem 0; }
 .aw-project-workspaces .aw-subject-action {
