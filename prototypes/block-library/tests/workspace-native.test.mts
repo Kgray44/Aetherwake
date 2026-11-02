@@ -153,6 +153,7 @@ test("offline normal-card preparation and fresh Core restore use canonical kinds
     });
   t.after(() => core.command("close", {}));
   assert.equal(seed.cases.length, REGISTERED_BLOCKS.length);
+  assert.equal(seed.relatedCase, undefined); assert.equal(seed.relatedValidation, undefined, 'Ordinary fixture does not silently acquire recovery specialization');
   const approach = require('./workspace-approach.cjs'), expressions = require('./workspace-approach-expressions.cjs');
   assert.equal(seed.approachValidation.preflightSha256, expressions.preflight().sha256);
   assert.match(seed.approachValidation.expressionHelperSha256, /^[a-f0-9]{64}$/);

@@ -54,6 +54,7 @@ export function mountResourceLinks(
       void refresh();
     });
   section.setAttribute("aria-label", "Related resources");
+  section.dataset.resourceId = resourceId;
   section.setAttribute("data-no-card-drag", "");
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");

@@ -27,6 +27,7 @@ import type {
 } from "./contracts.ts";
 import type { DesktopSnapshot } from "../application-contract/contracts.ts";
 import type { Collection } from "../conversation-product/src/contracts.ts";
+import type { NoteDocument } from './note-contracts.ts';
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(import.meta.url);
@@ -55,13 +56,23 @@ export type WorkspaceNativeSeed = {
   expected: DesktopSnapshot;
   approachValidation: { preflightSha256: string; expressionHelperSha256: string; commonHelperSha256: string };
   minimizeValidation: { preflightSha256: string; helperSha256: string; expressionHelperSha256: string; commonHelperSha256: string };
+  relatedValidation?: { preflightSha256: string; helperSha256: string; expressionHelperSha256: string; commonHelperSha256: string };
+  relatedCase?: {
+    note: { workspaceId: string; blockId: string; resourceId: string; title: string };
+    task: { resourceId: string; title: string; placements: { workspaceId: string; blockId: string }[] };
+    browser: { workspaceId: string; blockId: string };
+    documents: Record<string, NoteDocument>;
+    workspaces: Record<string, Pick<DesktopSnapshot, 'blocks' | 'viewport' | 'organization' | 'presence'>>;
+  };
 };
 
 /** Bounded offline preparation using the actual canonical Core. No window,
  * provider turn, fixture transport or alternate resource/layout store. */
 export async function prepareWorkspaceNative(
   profile: string,
+  options: { relatedResources?: boolean } = {},
 ): Promise<WorkspaceNativeSeed> {
+  assert(options && typeof options === 'object' && Object.keys(options).every(key => key === 'relatedResources') && (options.relatedResources === undefined || typeof options.relatedResources === 'boolean'), 'invalid_preparation_options');
   assert(isAbsolute(profile), "absolute_new_profile_required");
   profile = resolve(profile);
   assert(
@@ -97,6 +108,7 @@ export async function prepareWorkspaceNative(
   const approachValidation = { preflightSha256: approachPreflight.sha256, expressionHelperSha256: expressionDigest('workspace-approach-expressions.cjs'), commonHelperSha256: expressionDigest('library-native-expressions.cjs') };
   const minimizePreflight = require('./tests/workspace-minimize-expressions.cjs').preflight();
   const minimizeValidation = { preflightSha256: minimizePreflight.sha256, helperSha256: expressionDigest('workspace-minimize.cjs'), expressionHelperSha256: expressionDigest('workspace-minimize-expressions.cjs'), commonHelperSha256: expressionDigest('workspace-approach-expressions.cjs') };
+  const relatedValidation = options.relatedResources ? { preflightSha256: require('./tests/workspace-resource-links-expressions.cjs').preflight().sha256, helperSha256: expressionDigest('workspace-resource-links.cjs'), expressionHelperSha256: expressionDigest('workspace-resource-links-expressions.cjs'), commonHelperSha256: expressionDigest('workspace-approach-expressions.cjs') } : undefined;
   mkdirSync(profile);
   const databasePath = join(profile, "aerynth.sqlite"),
     core = new BackendCore({
@@ -180,8 +192,9 @@ export async function prepareWorkspaceNative(
         defaultSize: { ...BLOCK_DEFAULT_SIZES[definition.kind] },
         defaultShape: definition.defaultPresentation.shape,
       };
-      // These two placements must be created by the real native Library form.
-      if (definition.kind !== "note" && definition.kind !== "conversation") {
+      // Ordinary modes create Note/Chat through the native Library. The explicit
+      // relationship fixture needs a preexisting Note recovery draft instead.
+      if (definition.kind !== "conversation" && (definition.kind !== "note" || options.relatedResources)) {
         const result = isSubjectBlockKind(definition.kind)
           ? await core.command("library", {
               name: "createSubjectBlock",
@@ -316,6 +329,29 @@ export async function prepareWorkspaceNative(
         "prepared_database_32MiB_checkpoint_exceeded",
       );
     }
+    let relatedCase: WorkspaceNativeSeed['relatedCase'];
+    if (options.relatedResources) {
+      const note = cases.find(entry => entry.kind === 'note')!, browser = cases.find(entry => entry.kind === 'resource_browser')!;
+      assert(note.blockId && note.resourceId && browser.blockId);
+      const documents: Record<string, NoteDocument> = {};
+      for (const [id, label] of [[note.resourceId, 'Note'], [taskId, 'Task']] as const) {
+        const current = desktop.resources.find(resource => resource.id === id)!;
+        desktop = await core.command('desktop', { type: 'content', resourceId: id, expectedVersion: current.version, content: 'Synthetic canonical ' + label + ' text. Related-resource reads must not change this.' });
+        const version = desktop.resources.find(resource => resource.id === id)!.version;
+        await core.command('notes', { name: 'saveNoteDraft', input: { resourceId: id, expectedDraftVersion: 0, baseResourceVersion: version, content: 'Synthetic separate unsaved ' + label + ' recovery. This is not canonical content.' } });
+        documents[id] = (await core.command('notes', { name: 'readNote', input: id })).result as NoteDocument;
+        assert(documents[id].draft && documents[id].draft!.content !== documents[id].resource.content);
+      }
+      const placements = (desktop.navigationBlocks ?? []).filter(block => block.resource_id === taskId).map(block => ({ workspaceId: block.workspace_id, blockId: block.id }));
+      assert.equal(placements.length, 2);
+      const workspaces: NonNullable<WorkspaceNativeSeed['relatedCase']>['workspaces'] = {};
+      for (const workspaceId of new Set([note.workspaceId, browser.workspaceId, ...placements.map(p => p.workspaceId)])) {
+        desktop = await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
+        desktop = await core.command('desktop', { type: 'setViewport', workspaceId, viewport: { x: 0, y: -100, zoom: 1 } });
+        workspaces[workspaceId] = { blocks: desktop.blocks, viewport: desktop.viewport, organization: desktop.organization, presence: desktop.presence };
+      }
+      relatedCase = { note: { workspaceId: note.workspaceId, blockId: note.blockId, resourceId: note.resourceId, title: note.title }, task: { resourceId: taskId, title: cases.find(entry => entry.kind === 'task')!.title, placements }, browser: { workspaceId: browser.workspaceId, blockId: browser.blockId }, documents, workspaces };
+    }
     desktop = await core.command("desktop", {
       type: "navigate",
       target: {
@@ -354,6 +390,7 @@ export async function prepareWorkspaceNative(
       expected: desktop,
       approachValidation,
       minimizeValidation,
+      ...(relatedValidation ? { relatedValidation, relatedCase } : {}),
     };
     const json = JSON.stringify(seed, null, 2);
     assert(
@@ -379,7 +416,7 @@ if (
     .find((arg) => arg.startsWith("--profile="))
     ?.slice(10);
   assert(profile, "pass_profile_with_new_absolute_path");
-  const seed = await prepareWorkspaceNative(profile);
+  const seed = await prepareWorkspaceNative(profile, { relatedResources: process.argv.includes('--related-resources') });
   process.stdout.write(
     JSON.stringify({
       prepared: true,
@@ -387,6 +424,7 @@ if (
       providerExecution: false,
       cases: seed.cases.length,
       explicitShapes: seed.shapeCases.length,
+      relatedResources: !!seed.relatedCase,
     }) + "\n",
   );
 }

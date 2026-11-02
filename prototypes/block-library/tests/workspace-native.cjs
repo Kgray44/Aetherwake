@@ -54,6 +54,8 @@ exports.verify = async ({
     return require('./workspace-approach.cjs').verify({ win, app, privateRoot, source, moduleStarted, startupErrors });
   if (process.argv.includes('--verify-minimize'))
     return require('./workspace-minimize.cjs').verify({ win, app, privateRoot, source, moduleStarted, startupErrors });
+  if (process.argv.includes('--verify-resource-links'))
+    return require('./workspace-resource-links.cjs').verify({ win, app, privateRoot, source, moduleStarted, startupErrors });
   const output = path.resolve(
     __dirname,
     "../../visual-experience/cinematic-v3/.runtime/application-evidence/workspace-normal-" +
@@ -113,6 +115,7 @@ exports.verify = async ({
       return JSON.parse(await guard.around(() => fs.readFile(file, "utf8")));
     };
     const seed = await readJson("workspace-native-seed.json", 256 * 1024);
+    assert(!seed.relatedCase, 'ordinary_fixture_required_not_recovery_specialization');
     assert.equal(seed.contract, "aerynth.workspace-native@1");
     assert.equal(seed.syntheticOnly, true);
     assert.equal(seed.cases.length, 10);
