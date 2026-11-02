@@ -46,6 +46,7 @@ import "../../../conversation-product/src/style.css";
 import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
+import { workspaceWheelFactor } from "./workspace-wheel";
 import {
   createContextualSurfaces,
   type ContextualSurfaceRequest,
@@ -2693,6 +2694,39 @@ export function installApplication(hooks: Hooks) {
       void constellation.controller.back().catch(report);
     else void run({ type: "back" });
   };
+  el("#app").addEventListener(
+    "wheel",
+    (event) => {
+      if (!constellation) return;
+      const target = event.target;
+      const active = document.activeElement;
+      const factor = workspaceWheelFactor(event, {
+        workspace: state?.navigation.kind === "workspace",
+        background: [el("#world"), el("#stage"), el("#app")].includes(
+          target as HTMLElement,
+        ),
+        blocked:
+          !!preview || previewCommitting || !!presenceDrag || !!cancelResize ||
+          !!document.querySelector(
+            '.aw-contextual-surface, dialog[open], .floating-dialog:not([hidden]), .folio.dragging',
+          ) ||
+          (active instanceof HTMLElement &&
+            !!active.closest(
+              'input, textarea, select, [contenteditable]:not([contenteditable="false"])',
+            )),
+        hidden: document.hidden || !document.hasFocus(),
+        pageHeight: innerHeight,
+      });
+      if (factor === null) return;
+      event.preventDefault();
+      try {
+        void Promise.resolve(constellation.controller.zoom(factor)).catch(report);
+      } catch (error) {
+        report(error);
+      }
+    },
+    { passive: false },
+  );
   el("#connections").onclick = () => {
     open(
       "Connections",
