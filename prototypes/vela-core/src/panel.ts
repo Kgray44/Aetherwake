@@ -1,43 +1,57 @@
 import type { ResourceRef, VelaClient, VelaNativeAction, VelaState, VelaPlan, PlanStep } from './contracts.ts';
 import { velaPanelStatus } from './panel-status.ts';
 
+export interface VelaPanelPresentation {
+  phase: 'idle' | 'receiving' | 'planning' | 'review' | 'applying' | 'attention' | 'error';
+  context: string | null;
+  messageIds: readonly string[];
+  planIds: readonly string[];
+}
 export interface VelaPanelOptions {
   onOpenSubject?: (subject: { id: string; kind: ResourceRef['kind'] }) => void;
   /** Explicit user action only; the host checks its actual planning connection. */
   onConnectProvider?: () => Promise<unknown>;
+  /** Observational only. The first hydrated value is a baseline, not a history-arrival event. */
+  onPresentation?: (value: VelaPanelPresentation) => void;
 }
 const providerName = (id: string | null | undefined) => id === 'codex-app-server' ? 'Codex' : id || 'Planning provider';
+let panelSequence = 0;
 /** Content for the existing host-anchored surface. Mount/open never starts inference or applies actions. */
 export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: VelaPanelOptions = {}) {
   const doc = root.ownerDocument;
   let current: VelaState | null = null, disposed = false, busy = false, nativeBusy = false, composing = false, draftRevision = 0, lastDisclosure: HTMLDetailsElement | null = null;
+  let activeContext: string | null = null, contextTrigger: HTMLButtonElement | null = null, chosenProviderId: string | null = null, presentationSignature = '';
+  const instanceId = 'vela-context-' + ++panelSequence;
   const selected = new Map<string, ResourceRef>(), sourceControls = new Map<string, HTMLInputElement>();
-  const messages = new Map<string, { node: HTMLElement; signature: string }>(), workingPlans = new Set<string>();
+  const messages = new Map<string, { node: HTMLElement; signature: string }>(), workingPlans = new Set<string>(), applyingPlans = new Set<string>();
+  let applyingLocally = false;
   const planCards = new Map<string, { node: HTMLElement; controls: HTMLElement; signature: string }>();
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string) => {
     const node = doc.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node;
   };
   const button = (text: string, action: () => unknown) => { const node = el('button', 'vela-core-button', text); node.type = 'button'; node.addEventListener('click', () => { if (!node.disabled) void run(action); }); return node; };
+  const markIcon = (node: HTMLButtonElement, name: string, glyph: string, key: string) => { node.className += ' vela-core-icon'; node.setAttribute('aria-label', name); node.title = name; const mark = el('span', 'vela-core-icon-mark', glyph); mark.setAttribute('aria-hidden', 'true'); mark.dataset.icon = key; node.append(mark); return node; };
+  const icon = (name: string, glyph: string, key: string, action: () => unknown) => markIcon(button('', action), name, glyph, key);
   const label = (text: string, control: HTMLElement) => { const node = el('label', 'vela-core-field'); node.append(el('span', undefined, text), control); return node; };
   const disclosure = (text: string, className: string) => { const node = el('details', className), summary = el('summary', undefined, text), body = el('div', 'vela-core-disclosure-body'); node.append(summary, body); node.addEventListener('toggle', () => { if (node.open) lastDisclosure = node; }); return { node, summary, body }; };
   const shell = el('section', 'vela-core'); shell.setAttribute('aria-label', 'Vela application assistant');
-  const header = el('header', 'vela-core-header'); header.append(el('h2', undefined, 'Vela'), el('p', undefined, 'Find, create, and plan.'));
+  shell.dataset.view = 'empty'; shell.dataset.context = 'none'; shell.dataset.phase = 'idle';
   const connection = disclosure('Planning connection', 'vela-core-provider-controls'), provider = el('span', 'vela-core-provider'), providerHint = el('p', 'vela-core-secondary');
   connection.summary.replaceChildren(provider); connection.body.append(providerHint);
   if (options.onConnectProvider) {
     const connect = button('Check planning connection', async () => { if (connect.disabled) return; connect.disabled = true; try { await options.onConnectProvider!(); await refresh(); } finally { connect.disabled = false; } }); connection.body.append(connect);
   }
-  header.append(connection.node);
-  const flow = el('div', 'vela-core-scroll'); flow.setAttribute('aria-label', 'Conversation and plans');
+  const flow = el('div', 'vela-core-scroll'); flow.setAttribute('aria-label', 'Conversation and plans'); flow.hidden = true;
   const conversation = el('div', 'vela-core-conversation'); conversation.setAttribute('aria-label', 'Vela conversation');
   const plans = el('section', 'vela-core-plans'); plans.setAttribute('aria-label', 'Plans to review');
   const planHistory = disclosure('Earlier plans', 'vela-core-plan-history');
-  const more = disclosure('Tools and preferences', 'vela-core-more');
+  const more = el('section', 'vela-core-contextual vela-core-more'); more.hidden = true; more.id = instanceId; more.setAttribute('aria-label', 'Vela controls');
+  const contextualClose = icon('Close Vela controls', '×', 'close', () => closeContext()); contextualClose.className += ' vela-core-contextual-close';
   const sourcePanel = disclosure('Find and add sources', 'vela-core-source-panel');
   const searchForm = el('form', 'vela-core-search'), search = el('input'), searchButton = el('button', 'vela-core-button', 'Search');
   search.type = 'search'; search.placeholder = 'Find a note, chat, task, or workspace'; search.maxLength = 200; search.setAttribute('aria-label', 'Search your work'); searchButton.type = 'submit';
   const searchResults = el('div', 'vela-core-results'); searchResults.setAttribute('aria-live', 'polite'); searchForm.append(search, searchButton);
-  sourcePanel.body.append(el('p', 'vela-core-secondary', 'Search stays in the app. Choose sources to include in a plan; you will review what is shared.'), searchForm, searchResults);
+  sourcePanel.body.append(searchForm, searchResults);
   searchForm.addEventListener('submit', event => { event.preventDefault(); void run(async () => {
     searchButton.disabled = true;
     try { const results = await client.search(search.value); if (disposed) return; sourceControls.clear(); searchResults.replaceChildren();
@@ -52,12 +66,12 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const native = disclosure('Create locally', 'vela-core-tools'), nativeTitle = el('input'), nativeProject = el('select'); let projectChosen = false;
   nativeTitle.maxLength = 200; nativeTitle.placeholder = 'Give it a name'; nativeProject.setAttribute('aria-label', 'New workspace project'); nativeProject.addEventListener('change', () => { projectChosen = true; updateWorkspaceAvailability(); });
   const nativeAvailability = el('p', 'vela-core-availability');
-  const act = async (action: VelaNativeAction, intent: string) => { if (nativeBusy) return; nativeBusy = true; updateWorkspaceAvailability(); try { const plan = await client.native({ action, intent }); await client.apply(plan.id); await refresh(); } finally { nativeBusy = false; updateWorkspaceAvailability(); } };
+  const act = async (action: VelaNativeAction, intent: string) => { if (nativeBusy) return; nativeBusy = true; updateWorkspaceAvailability(); present(); try { const plan = await client.native({ action, intent }); applyingLocally = true; present(); await client.apply(plan.id); await refresh(); } finally { nativeBusy = applyingLocally = false; updateWorkspaceAvailability(); present(); } };
   const createNote = button('Create note', () => act({ type: 'createResource', kind: 'note', title: nativeTitle.value.trim() || 'New note', workspaceId: null }, 'Create a new local note'));
   const createTask = button('Create task', () => act({ type: 'createResource', kind: 'task', title: nativeTitle.value.trim() || 'New task', workspaceId: null }, 'Create a new local task'));
   const workspaceCreate = button('Create workspace with selected resources', () => act({ type: 'workspaceFromResources', title: nativeTitle.value.trim() || 'New workspace', projectId: nativeProject.value || null, resourceIds: [...selected.keys()] }, 'Create a workspace in the explicitly chosen project containing the selected existing resources'));
   const localButtons = el('div', 'vela-core-actions'); localButtons.append(createNote, createTask);
-  native.body.append(el('p', 'vela-core-secondary', 'These tools work in the app without a planning provider.'), label('Name', nativeTitle), localButtons, label('New workspace project', nativeProject), workspaceCreate, nativeAvailability);
+  native.body.append(label('Name', nativeTitle), localButtons, label('New workspace project', nativeProject), workspaceCreate, nativeAvailability);
   const settings = disclosure('Attention preferences', 'vela-core-settings'), mode = el('select'), monitor = el('input'), delegation = el('input'), eventTypes = el('input'), severity = el('select'), budget = el('input');
   for (const value of ['normal', 'quiet', 'focused', 'collaborative', 'proactive']) { const option = el('option', undefined, value[0].toUpperCase() + value.slice(1)); option.value = value; mode.append(option); }
   monitor.type = 'checkbox'; delegation.type = 'checkbox'; eventTypes.placeholder = 'task.completed, approval.required'; budget.type = 'number'; budget.min = '0'; budget.max = '60';
@@ -68,42 +82,70 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const attentionPanel = disclosure('Attention', 'vela-core-attention'), attention = attentionPanel.body;
   const adaptationPanel = disclosure('Personalization', 'vela-core-adaptation'), adaptationBody = adaptationPanel.body;
   const contextPanel = disclosure('Request details and sources', 'vela-core-context'), contextBody = contextPanel.body;
-  more.body.append(sourcePanel.node, native.node, settings.node, adaptationPanel.node, contextPanel.node);
-  flow.append(conversation, plans, attentionPanel.node, more.node);
-  const status = el('p', 'vela-core-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
+  const preferencesPanel = disclosure('Preferences', 'vela-core-preferences'); preferencesPanel.body.append(settings.node, adaptationPanel.node, contextPanel.node);
+  more.append(contextualClose, sourcePanel.node, native.node, preferencesPanel.node, connection.node, attentionPanel.node);
+  flow.append(conversation, plans, more);
+  const status = el('p', 'vela-core-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); status.hidden = true;
   const errorBox = el('div', 'vela-core-error'); errorBox.setAttribute('role', 'alert'); errorBox.hidden = true;
   const form = el('form', 'vela-core-compose'), intent = el('textarea'), allowProvider = el('input');
-  intent.rows = 3; intent.maxLength = 16000; intent.required = true; intent.placeholder = 'Describe a change you would like to plan…'; intent.setAttribute('aria-label', 'Describe a change to plan');
+  intent.rows = 2; intent.maxLength = 16000; intent.required = true; intent.placeholder = 'Vela…'; intent.setAttribute('aria-label', 'Message Vela');
   allowProvider.type = 'checkbox'; const providerConsent = label('Use the planning provider for this request', allowProvider); providerConsent.className += ' vela-core-consent';
-  const selection = el('div', 'vela-core-selection'); selection.setAttribute('aria-label', 'Selected sources');
-  const send = el('button', 'vela-core-button vela-core-primary', 'Prepare plan'); send.type = 'submit';
-  const stop = button('Stop planning', async () => { const state = await client.state(), pending = state.requests.findLast(request => request.state === 'planning'); if (pending) { await client.cancel(pending.id); await refresh(); } else { status.textContent = 'Planning has not started. You can cancel in the approval window if one is open.'; } }); stop.hidden = true;
-  const composeActions = el('div', 'vela-core-compose-actions'); composeActions.append(send, button('Add sources', () => reveal(sourcePanel, search)), button('Local tools', () => reveal(native, nativeTitle)), stop);
-  form.append(label('Plan your next step', intent), selection, providerConsent, el('p', 'vela-core-compose-hint', 'Planning is optional. You will review proposed changes before they run.'), composeActions);
-  intent.addEventListener('input', () => { draftRevision++; }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
+  connection.body.prepend(providerConsent); const providerChoice = icon('Remove planning provider from next request', '×', 'close', () => { allowProvider.checked = false; chosenProviderId = null; renderProviderChoice(); intent.focus(); }); providerChoice.className += ' vela-core-provider-choice'; providerChoice.hidden = true;
+  const providerChoiceName = el('span', 'vela-core-provider-choice-name'); providerChoice.prepend(providerChoiceName);
+  allowProvider.addEventListener('change', () => { chosenProviderId = allowProvider.checked ? current?.planner.providerId ?? null : null; renderProviderChoice(); });
+  const selection = el('div', 'vela-core-selection'); selection.setAttribute('aria-label', 'Selected sources'); selection.hidden = true;
+  const send = markIcon(el('button', 'vela-core-button vela-core-primary'), 'Send to Vela', '↑', 'send'); send.type = 'submit'; send.disabled = true;
+  const stop = icon('Stop planning', '■', 'stop', async () => { const state = await client.state(), pending = state.requests.findLast(request => request.state === 'planning'); if (pending) { await client.cancel(pending.id); await refresh(); } else { status.textContent = 'Planning has not started. You can cancel in the approval window if one is open.'; } }); stop.hidden = true;
+  const sourcesControl = icon('Add sources', '+', 'sources', () => reveal('sources', search)), toolsControl = icon('Local tools', '⋯', 'tools', () => reveal('tools', nativeTitle)), preferencesControl = icon('Vela preferences', '⚙', 'preferences', () => reveal('preferences')), providerControl = icon('Planning provider', '◇', 'provider', () => reveal('provider', allowProvider)), attentionControl = icon('Attention', '·', 'attention', () => reveal('attention'));
+  const contextPanels = new Map([
+    ['sources', { panel: sourcePanel, trigger: sourcesControl }], ['tools', { panel: native, trigger: toolsControl }], ['preferences', { panel: preferencesPanel, trigger: preferencesControl }], ['provider', { panel: connection, trigger: providerControl }], ['attention', { panel: attentionPanel, trigger: attentionControl }],
+  ]);
+  for (const [key, entry] of contextPanels) { entry.panel.node.hidden = true; entry.panel.node.id = instanceId + '-' + key; entry.trigger.setAttribute('aria-controls', entry.panel.node.id); entry.trigger.setAttribute('aria-expanded', 'false'); entry.panel.node.addEventListener('toggle', () => { if (activeContext === key && !entry.panel.node.open) closeContext(); }); }
+  const composeActions = el('div', 'vela-core-compose-actions'); composeActions.append(sourcesControl, toolsControl, preferencesControl, providerControl, attentionControl, stop, send);
+  form.append(intent, selection, providerChoice, composeActions);
+  intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
-  form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return; const submitted = { intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: allowProvider.checked }, revision = draftRevision; allowProvider.checked = false;
-    void run(async () => { busy = true; send.disabled = true; stop.hidden = false; send.textContent = 'Preparing…'; errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Preparing your request. No changes are applied by submitting.';
+  form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return; const submitted = { intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: allowProvider.checked && chosenProviderId === current?.planner.providerId }, revision = draftRevision; allowProvider.checked = false; chosenProviderId = null; renderProviderChoice(); closeContext(false);
+    void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Sending…'; present();
       try { const recorded = await client.request(submitted); if (draftRevision === revision && intent.value === submitted.intent) intent.value = ''; busy = false; renderStatus({ requests: [recorded], plans: [], receipts: [] }); await refresh(); }
       catch (error) { busy = false; try { await refresh(); } catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; status.hidden = false; status.textContent = 'The request could not be checked. Its outcome is unknown; review the activity before trying again.'; } throw error; }
-      finally { busy = false; send.disabled = false; send.textContent = 'Prepare plan'; stop.hidden = !current?.requests.some(request => request.state === 'planning'); }
+      finally { busy = false; send.disabled = !intent.value.trim(); form.setAttribute('aria-busy', 'false'); stop.hidden = !current?.requests.some(request => request.state === 'planning'); present(); }
     });
   });
-  shell.append(header, flow, errorBox, status, form); root.append(shell);
-  function reveal(panel: ReturnType<typeof disclosure>, focus?: HTMLElement) { more.node.open = true; panel.node.open = true; lastDisclosure = panel.node; panel.node.scrollIntoView({ block: 'nearest' }); (focus ?? panel.summary).focus(); }
-  shell.addEventListener('keydown', event => { if (event.key !== 'Escape') return; const target = event.target as HTMLElement, opened = target.closest<HTMLDetailsElement>('details[open]') ?? (lastDisclosure?.open && shell.contains(lastDisclosure) ? lastDisclosure : null) ?? Array.from(shell.querySelectorAll<HTMLDetailsElement>('details[open]')).at(-1); if (opened) { event.preventDefault(); event.stopPropagation(); opened.open = false; opened.querySelector('summary')?.focus(); } });
+  shell.append(flow, errorBox, status, form); root.append(shell);
+  function reveal(key: string, focus?: HTMLElement) { const entry = contextPanels.get(key); if (!entry) return; for (const [name, item] of contextPanels) { item.panel.node.hidden = name !== key; item.trigger.setAttribute('aria-expanded', String(name === key)); } activeContext = key; contextTrigger = entry.trigger; more.hidden = false; more.setAttribute('aria-label', entry.trigger.getAttribute('aria-label')!); entry.panel.node.open = true; lastDisclosure = entry.panel.node; updatePresence(); entry.panel.node.scrollIntoView({ block: 'nearest' }); (focus && !(focus as HTMLInputElement).disabled ? focus : entry.panel.summary).focus(); present(); }
+  function closeContext(restoreFocus = true) { if (more.hidden) return; const previous = contextTrigger; for (const entry of contextPanels.values()) { entry.panel.node.hidden = true; entry.trigger.setAttribute('aria-expanded', 'false'); } activeContext = null; more.hidden = true; lastDisclosure = null; updatePresence(); if (restoreFocus) previous?.focus(); present(); }
+  shell.addEventListener('keydown', event => { if (event.key !== 'Escape') return; const target = event.target as HTMLElement, opened = target.closest<HTMLDetailsElement>('details[open]') ?? (lastDisclosure?.open && shell.contains(lastDisclosure) && !lastDisclosure.hidden ? lastDisclosure : null); if (!more.hidden && (!opened || opened === contextPanels.get(activeContext!)?.panel.node)) { event.preventDefault(); event.stopPropagation(); closeContext(); } else if (opened) { event.preventDefault(); event.stopPropagation(); opened.open = false; opened.querySelector('summary')?.focus(); } });
   function renderSelection() {
     selection.replaceChildren(); selection.hidden = !selected.size;
     if (selected.size) { selection.append(el('span', 'vela-core-meta', selected.size + (selected.size === 1 ? ' source' : ' sources'))); for (const ref of selected.values()) { const chip = button(ref.title + ' ×', () => { selected.delete(ref.id); const control = sourceControls.get(ref.id); if (control) control.checked = false; renderSelection(); intent.focus(); }); chip.className = 'vela-core-chip'; chip.setAttribute('aria-label', 'Remove source ' + ref.title); selection.append(chip); } }
     updateWorkspaceAvailability();
   }
-  async function run(action: () => unknown) { if (disposed) return; try { await action(); } catch (error) { if (!disposed) { status.dataset.actionState = 'failed'; errorBox.hidden = false; const details = disclosure('Error details', 'vela-core-error-details'); details.body.append(el('pre', undefined, error instanceof Error ? error.message : String(error))); errorBox.replaceChildren(el('p', undefined, 'That could not be completed. Your current text and selections are still here.'), details.node, button('Dismiss', () => { errorBox.hidden = true; })); } } }
+  function renderProviderChoice() { const chosen = allowProvider.checked && chosenProviderId && chosenProviderId === current?.planner.providerId; providerChoice.hidden = !chosen; providerChoiceName.textContent = chosen ? providerName(chosenProviderId) : ''; providerChoice.setAttribute('aria-label', 'Remove ' + providerName(chosenProviderId) + ' from next request'); providerControl.dataset.selected = String(!!chosen); }
+  function updatePresence() { shell.dataset.view = conversation.children.length || plans.children.length ? 'conversation' : 'empty'; shell.dataset.context = activeContext ?? 'none'; flow.hidden = !conversation.children.length && !plans.children.length && more.hidden; }
+  function present() {
+    if (!current || disposed) return;
+    const latest = current.requests.at(-1), pendingAttention = current.attention.some(item => !item.reviewedAt && !item.dismissedAt);
+    let phase: VelaPanelPresentation['phase'] = 'idle';
+    if (!errorBox.hidden) phase = 'error';
+    else if (applyingLocally || applyingPlans.size || current.plans.some(plan => plan.state === 'applying')) phase = 'applying';
+    else if (current.requests.some(request => request.state === 'planning')) phase = 'planning';
+    else if (busy) phase = 'receiving';
+    else if (latest && ['failed', 'unknown', 'invalid-plan', 'provider-unavailable'].includes(latest.state)) phase = 'error';
+    else if (current.plans.some(plan => ['prepared', 'approved'].includes(plan.state))) phase = 'review';
+    else if (activeContext === 'attention' && pendingAttention) phase = 'attention';
+    else if (nativeBusy || intent.value.length) phase = 'receiving';
+    shell.dataset.phase = phase;
+    const value: VelaPanelPresentation = Object.freeze({ phase, context: activeContext, messageIds: Object.freeze(current.conversation?.messages.slice(-80).map(message => message.id) ?? []), planIds: Object.freeze(current.plans.filter(plan => planCards.has(plan.id)).map(plan => plan.id)) });
+    const signature = JSON.stringify(value); if (signature === presentationSignature) return; presentationSignature = signature;
+    try { options.onPresentation?.(value); } catch { /* Presentation observers cannot fail a canonical request or editor action. */ }
+  }
+  async function run(action: () => unknown) { if (disposed) return; try { await action(); } catch (error) { if (!disposed) { status.dataset.actionState = 'failed'; errorBox.hidden = false; const details = disclosure('Error details', 'vela-core-error-details'); details.body.append(el('pre', undefined, error instanceof Error ? error.message : String(error))); errorBox.replaceChildren(el('p', undefined, 'That could not be completed. Your text is still here.'), details.node, button('Dismiss', () => { errorBox.hidden = true; present(); })); present(); } } }
   function available(action: VelaNativeAction['type']) { const advertised = (current as (VelaState & { nativeCapabilities?: Record<string, { available: boolean }> }) | null)?.nativeCapabilities; return advertised ? advertised[action]?.available === true : !!current?.capabilities.some(capability => capability.id === action); }
   function updateWorkspaceAvailability() { createNote.disabled = createTask.disabled = nativeBusy || !available('createResource'); workspaceCreate.disabled = nativeBusy || !available('workspaceFromResources') || !!nativeProject.selectedOptions[0]?.disabled || !selected.size; nativeAvailability.textContent = nativeBusy ? 'Completing the local action…' : (!available('createResource') ? 'Note and task creation is unavailable here. ' : '') + (!available('workspaceFromResources') ? 'Workspace organization is unavailable in this app.' : !selected.size ? 'Choose sources to organize them into a workspace.' : nativeProject.selectedOptions[0]?.disabled ? 'Choose an available project before creating the workspace.' : 'The selected sources keep their original identities.'); }
   function renderStatus(state: Pick<VelaState, 'requests' | 'plans' | 'receipts'>) { const recorded = velaPanelStatus(state); status.dataset.requestState = recorded.requestState; if (recorded.requestId) status.dataset.requestId = recorded.requestId; else delete status.dataset.requestId; if (recorded.planState) status.dataset.planState = recorded.planState; else delete status.dataset.planState; delete status.dataset.actionState; status.textContent = recorded.message; status.hidden = recorded.requestState === 'idle'; }
   function renderConversation(state: VelaState) {
     const items = state.conversation?.messages.slice(-80) ?? [], target: HTMLElement[] = [];
-    if (!items.length) { const empty = el('div', 'vela-core-empty'); empty.append(el('h3', undefined, 'Start with your work'), el('p', undefined, 'Find your work, create something locally, or prepare a plan for a larger change.')); target.push(empty); }
     for (const message of items) { const signature = JSON.stringify(message), cached = messages.get(message.id); if (cached?.signature === signature) { target.push(cached.node); continue; }
       const entry = el('article', 'vela-core-message'); entry.dataset.messageId = message.id; entry.dataset.source = message.source;
       entry.append(el('strong', 'vela-core-message-author', message.source === 'provider' ? providerName(message.providerId) + ' · contribution' : message.role === 'user' ? 'You' : 'Vela'), el('p', undefined, message.content)); messages.set(message.id, { node: entry, signature }); target.push(entry);
@@ -141,7 +183,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       const steps = el('ol', 'vela-core-effects'); for (const [index, step] of plan.steps.entries()) { const item = el('li'); item.append(el('p', undefined, effects[index])); if (step.action.type === 'content') item.append(el('pre', 'vela-core-change-preview', step.action.content)); if (step.action.type === 'delegateTask') item.append(el('p', undefined, step.action.objective), el('p', 'vela-core-secondary', 'Starting this work requires a separate execution approval. A finished provider turn does not verify the task.')); steps.append(item); } card.append(steps);
       if (plan.targets.length) card.append(el('p', 'vela-core-targets', 'Uses: ' + plan.targets.map(ref => ref.title).join(', ')));
       const controls = el('div', 'vela-core-actions');
-      const perform = async (approve: boolean) => { if (workingPlans.has(plan.id)) return; const previousFocus = doc.activeElement, returnFocus = controls.contains(previousFocus); workingPlans.add(plan.id); setPlanBusy(plan.id, true); try { if (approve) await client.review({ planId: plan.id, fingerprint: plan.fingerprint, decision: 'approve' }); await client.apply(plan.id); await refresh(); if (returnFocus && (doc.activeElement === previousFocus || doc.activeElement === doc.body)) plans.querySelector<HTMLElement>('[data-plan-id="' + plan.id + '"]')?.focus(); } finally { workingPlans.delete(plan.id); setPlanBusy(plan.id, false); } };
+      const perform = async (approve: boolean) => { if (workingPlans.has(plan.id)) return; const previousFocus = doc.activeElement, returnFocus = controls.contains(previousFocus); workingPlans.add(plan.id); setPlanBusy(plan.id, true); try { if (approve) await client.review({ planId: plan.id, fingerprint: plan.fingerprint, decision: 'approve' }); applyingPlans.add(plan.id); present(); await client.apply(plan.id); await refresh(); if (returnFocus && (doc.activeElement === previousFocus || doc.activeElement === doc.body)) plans.querySelector<HTMLElement>('[data-plan-id="' + plan.id + '"]')?.focus(); } finally { workingPlans.delete(plan.id); applyingPlans.delete(plan.id); setPlanBusy(plan.id, false); present(); } };
       if (plan.state === 'prepared') controls.append(button('Approve and apply', () => perform(true)), button('Reject plan', async () => { await client.review({ planId: plan.id, fingerprint: plan.fingerprint, decision: 'reject' }); await refresh(); }));
       if (plan.state === 'approved') controls.append(button('Apply approved plan', () => perform(false))); card.append(controls);
       if (receipts.length) card.append(el('p', 'vela-core-receipt', confirmed + ' of ' + plan.steps.length + ' steps confirmed' + (receipts.some(receipt => ['failed', 'unknown'].includes(receipt.state)) ? ' · review details before trying again' : '')));
@@ -156,8 +198,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function render(state: VelaState) {
     if (disposed) return; current = state;
     provider.textContent = state.planner.available ? providerName(state.planner.providerId) + (state.planner.busy ? ' · busy' : ' · available') : 'Planning unavailable';
-    providerHint.textContent = state.planner.available ? 'Vela can ask ' + providerName(state.planner.providerId) + ' to help prepare a plan. You approve any sharing and actions.' : 'You can still find sources and use local tools. Check the planning connection when you want a provider-assisted plan.';
+    providerHint.textContent = state.planner.available ? 'Planning only. Sharing selected context requires native approval.' : 'Planning is unavailable.';
     providerConsent.firstElementChild!.textContent = 'Use ' + providerName(state.planner.providerId) + ' for this request';
+    allowProvider.disabled = !state.planner.available || state.planner.busy; if (chosenProviderId !== state.planner.providerId) { allowProvider.checked = false; chosenProviderId = null; } renderProviderChoice();
     const chosen = projectChosen ? nativeProject.value : state.applicationContext?.currentProjectId ?? ''; nativeProject.replaceChildren(); const global = el('option', undefined, 'No project'); global.value = ''; nativeProject.append(global);
     for (const ref of state.applicationContext?.references.filter(ref => ref.kind === 'project') ?? []) { const option = el('option', undefined, ref.title); option.value = ref.id; nativeProject.append(option); }
     if (chosen && !Array.from(nativeProject.options).some(option => option.value === chosen)) { const unavailable = el('option', undefined, 'Previously selected project · unavailable'); unavailable.value = chosen; unavailable.disabled = true; nativeProject.append(unavailable); } nativeProject.value = chosen; updateWorkspaceAvailability();
@@ -166,9 +209,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     for (const request of state.requests.slice(-6).reverse()) { const item = disclosure(request.intent, 'vela-core-request-details'); item.body.append(el('p', undefined, velaPanelStatus({ requests: [request], plans: state.plans, receipts: state.receipts }).message), el('p', 'vela-core-meta', 'Included sources: ' + (request.context.included.map(ref => ref.title).join(', ') || 'none')), el('pre', undefined, JSON.stringify({ state: request.state, error: request.errorCode, manifest: request.context, invalidProposal: request.invalidProposal }, null, 2))); contextBody.append(item.node); }
     mode.value = state.preferences.mode; monitor.checked = state.preferences.monitoringEnabled; delegation.checked = state.preferences.delegationEnabled; eventTypes.value = state.preferences.allowedEventTypes.join(', '); severity.value = state.preferences.minimumSeverity; budget.value = String(state.preferences.maxInterruptionsPerHour); renderAdaptation(state);
     const pending = state.attention.filter(item => !item.reviewedAt && !item.dismissedAt); attentionPanel.summary.textContent = pending.length ? pending.length + (pending.length === 1 ? ' update to review' : ' updates to review') : state.preferences.monitoringEnabled ? 'No new updates in your digest' : 'Attention digest is paused'; attention.replaceChildren();
+    attentionControl.dataset.pendingCount = String(pending.length); attentionControl.setAttribute('aria-label', pending.length ? 'Attention, ' + pending.length + (pending.length === 1 ? ' update' : ' updates') : 'Attention');
     if (!state.preferences.monitoringEnabled) attention.append(el('p', 'vela-core-secondary', 'New app activity is paused. Saved updates remain until you review them.'));
     for (const item of pending.slice(-20).reverse()) { const row = el('article', 'vela-core-update'); row.append(el('p', undefined, item.summary)); if (item.subject && options.onOpenSubject) row.append(button('Open source', () => options.onOpenSubject?.(item.subject!))); row.append(button('Mark reviewed', async () => { await client.reviewAttention([item.id]); await refresh(); })); const evidence = disclosure('Why this update', 'vela-core-update-details'); evidence.body.append(el('p', undefined, item.reason), el('pre', undefined, JSON.stringify({ source: item.source, occurredAt: item.occurredAt, classification: item.classification, disposition: item.disposition, coverageGap: item.coverageGap }, null, 2))); row.append(evidence.node); attention.append(row); }
-    stop.hidden = !busy && !state.requests.some(request => request.state === 'planning'); if (!busy) renderStatus(state);
+    stop.hidden = !busy && !state.requests.some(request => request.state === 'planning'); if (!busy) renderStatus(state); updatePresence(); present();
   }
   function renderAdaptation(state: VelaState) {
     adaptationBody.replaceChildren();
