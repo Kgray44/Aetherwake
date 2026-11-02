@@ -58,14 +58,15 @@ The subsequent actual `d2f3d0b` 1-project/50-resource probe completed the same 4
 
 ## Frozen portable review builds
 
-A and B remain immutable and preserved. Their bundled Node/backend persistence checks passed; neither establishes a packaged native GUI, current source acceptance or live inference.
+A, B and C are immutable and preserved. Their bundled Node/backend persistence checks passed; these checks do not establish a packaged native GUI or live inference.
 
 | Artifact | Candidate | ZIP bytes | ZIP SHA256 |
 | --- | --- | --- | --- |
 | A | `262501a661dddfdb833b3fdd54a4c8632cdccbbd` | 471,335,398 | `a9ad3e3c33de7b57d854ea46305f1ed65c731f558c12e6d793066d866273ba0a` |
 | B | `f8965609e883219eb5190304f1d026342b786dd5` | 471,490,544 | `a2a48dd7ea2c9c33cc76e2461e138ba5a057cce1212273689b940d0c1d5eb95e` |
+| C | `7a5e3359cb9eb2f37869b7ce94fe898e9e7517c0` | 471,824,720 | `c909c07ed40d0489376aaba6df96803d581fabd600f5f7670a7bbd35aa8e2438` |
 
-B predates the minimal Vela presentation, direct normal-card updates, recovery correction and additional capabilities described above. A current C package has not yet been built. User profiles, private evidence, recordings and credentials are excluded from public artifacts and remain preserved privately.
+B predates the minimal Vela presentation, direct normal-card updates, recovery correction and additional capabilities described above. C includes them and the scheduler correction, binding 228 copied/generated files, 471,678,409 payload bytes and manifest SHA256 `1a3a77ebe606973779d390365820d3ff476a3f38d19433730613332df9da827a`. Packaging preserves exact bytes and does not infer native acceptance. The bundled Node and actual packaged canonical backend passed local message, geometry, committed note, separate recovery draft and exact close/reopen checks with zero provider connections. C's packaged native window has not been separately tested. The user-controlled current launcher now selects C; the existing review profile remains unchanged and has a verified private backup. No automatic user-review launch occurred. User profiles, private evidence, recordings and credentials are excluded from public artifacts and remain preserved privately.
 
 ## Acceptance still open
 
@@ -76,7 +77,7 @@ B predates the minimal Vela presentation, direct normal-card updates, recovery c
 | Verified in combined desktop | All 25 expanded spatial steps/restart pass again at `03ccd51`; all ten block types plus three saved shapes/restart and the stronger short-Chat visible-line gate pass at `d2f3d0b`. |
 | Visually reviewed | Actual stills and sampled motion frames reviewed with explicit limits; whole-app and owner artistic acceptance incomplete. |
 | Performance-qualified | No. The reproduced small-scale scheduler gap is corrected and the subsequent OS probe passed its measurement checks; larger datasets, recovery and production qualification remain open. |
-| Packaged current candidate | Pending; frozen A/B remain older review artifacts. |
+| Packaged current candidate | Frozen C built at `7a5e335`; bundled canonical backend/restart passed. A/B preserved; packaged native GUI remains unverified. |
 
 Required follow-up includes the complete native library/template creation lifecycle, additional branch policies, Vela plan/error/provider/attention states, useful saved-layout framing and readable distant-card approach, reduced motion, graphics recovery, navigation interruption, larger datasets and actual OS-presented performance in both dense projects and multi-project Universe. Renderer callbacks never substitute for monitor presentation. Earlier real authorized provider receipts remain bounded to their recorded sources; this continuation started no provider turn. Bounded Vela conversation history and native same-turn capability-schema discovery are isolated next-candidate work, not current integrated or live-provider claims.
 
