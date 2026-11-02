@@ -77,7 +77,7 @@ export async function prepareFunctionalWorkspaceNative(profile: string): Promise
     const workspaceId = desktop.activeWorkspaceId!;
     desktop = await core.command('desktop', { type: 'setOrganization', workspaceId, expectedOrganizationRevision: desktop.organization!.revision, organization: { mode: 'freeform' } });
     desktop = await core.command('desktop', { type: 'setPresence', workspaceId, expectedVersion: desktop.presence!.version, placement: { x: 1440, y: 170 } });
-    desktop = await core.command('desktop', { type: 'setViewport', workspaceId, viewport: { x: 0, y: -80, zoom: 0.9 } });
+    desktop = await core.command('desktop', { type: 'setViewport', workspaceId, viewport: { x: 0, y: -60, zoom: 0.9 } });
     const placements = {} as FunctionalWorkspaceSeed['placements'];
     const roles = ['local', 'codex', 'note', 'group', 'stream', 'project'] as const;
     for (const [index, role] of roles.entries()) {

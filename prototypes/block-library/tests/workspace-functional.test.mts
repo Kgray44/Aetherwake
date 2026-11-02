@@ -16,7 +16,7 @@ import type { Detail, ConversationDraft } from '../../conversation-product/src/c
 const require = createRequire(import.meta.url), helper = require('./workspace-functional.cjs'), { preflight, expressions: x } = require('./workspace-functional-expressions.cjs');
 
 test('combined workspace factories compile every added/inherited expression and helpers use genuine guarded native input', () => {
-  const p = preflight(); assert.equal(p.factories, 5); assert.equal(p.cases, 5); assert.deepEqual(p, preflight());
+  const p = preflight(); assert.equal(p.factories, 7); assert.equal(p.cases, 7); assert.deepEqual(p, preflight());
   assert.deepEqual(p.common, require('./workspace-approach-expressions.cjs').preflight());
   const source = readFileSync(new URL('./workspace-functional.cjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /\b(?:js|wait)\(\s*['"`]/);
@@ -32,6 +32,38 @@ test('functional Note observations distinguish canonical save from separate reco
   assert.equal(await runInNewContext(x.noteSavedIs('note', 'Separate recovery'), context), false);
   assert.equal(runInNewContext(x.groupHas('group', 'member'), context), true);
   assert.equal(runInNewContext(x.groupHas('group', 'another'), context), false);
+});
+
+test('normal comparison requires visible viewport/footer/Vela bounds, content/fonts, canonical rendered rest and coordinator settlement without new scheduling', () => {
+  const variants = { local: 'chat', codex: 'execution', note: 'document', group: 'checklist', stream: 'timeline', project: 'project' };
+  const input = { cards: Object.entries(variants).map(([role, variant], index) => ({ role, id: role, variant, x: 81 + index % 3 * 414, y: 198 + Math.floor(index / 3) * 378, width: 360, height: 306 })), vela: { x: 1296, y: 207, width: 187.2, height: 234 } };
+  const node = (bounds: object) => ({ bounds, style: { display: 'block', visibility: 'visible', opacity: '1' }, getBoundingClientRect() { return this.bounds; } });
+  const nodes: Record<string, any> = {}, snapshot: any = { expanded: null, receipts: [], poses: {} };
+  for (const card of input.cards) {
+    const compact = { busy: 'false', getAttribute() { return this.busy; } }, body = { textContent: 'Actual authorized canonical projection' };
+    nodes['[data-block=' + JSON.stringify(card.id) + ']'] = { ...node({ ...card }), dataset: { blockVariant: card.variant, resourceAvailability: 'available', blockComposition: 'working' }, compact, body, querySelector(selector: string) { return selector === '.aw-block-compact' ? compact : selector === '.aw-identity-body' ? body : null; } };
+    snapshot.poses[card.id] = { x: card.x, y: card.y, w: card.width, h: card.height, lift: 0, yaw: 0, opacity: 1 };
+    snapshot.receipts.push({ resource: card.id, status: 'settled' });
+  }
+  nodes['#vela'] = node({ ...input.vela }); nodes['.dock'] = node({ x: 400, y: 904, width: 800, height: 48 }); nodes['#stage'] = node({ x: 0, y: 0, width: 1600, height: 1000 });
+  nodes['#status'] = node({ x: 600, y: 80, width: 400, height: 28 });
+  const window = { innerWidth: 1600, innerHeight: 1000, devicePixelRatio: 1.25, __aerynth: { snapshot: () => snapshot } };
+  let overlay = false;
+  const document = { hidden: false, hasFocus: () => true, fonts: { status: 'loaded' }, querySelector: (selector: string) => selector.startsWith('.folio.expanded,') ? overlay ? {} : null : nodes[selector] ?? null };
+  const context = { window, document, getComputedStyle: (value: any) => value.style };
+  const probe = () => runInNewContext(x.comparisonProbe(input), context);
+  assert.equal(probe().ready, true); assert.equal(runInNewContext(x.comparisonReady(input), context), true);
+  window.innerWidth = 1450; assert.equal(probe().ready, false); assert.ok(probe().problems.includes('reference-window-too-small')); window.innerWidth = 1600;
+  nodes['.dock'].bounds.y = 870; assert.ok(probe().problems.includes('group:clipped')); nodes['.dock'].bounds.y = 904;
+  snapshot.receipts.push({ resource: 'local', status: 'retargeted' }); assert.ok(probe().problems.includes('local:unsettled')); snapshot.receipts.pop();
+  snapshot.receipts.push({ resource: 'application:arrival', status: 'started' }); assert.ok(probe().problems.includes('workspace-arrival-unsettled')); snapshot.receipts.pop();
+  nodes['#stage'].style.opacity = '0.5'; assert.ok(probe().problems.includes('workspace-arrival-unsettled')); nodes['#stage'].style.opacity = '1';
+  snapshot.poses.note.y += 2; assert.ok(probe().problems.includes('note:unsettled')); snapshot.poses.note.y -= 2;
+  nodes['[data-block="note"]'].compact.busy = 'true'; assert.ok(probe().problems.includes('note:content-not-ready')); nodes['[data-block="note"]'].compact.busy = 'false';
+  nodes['#vela'].bounds.x = 1200; assert.ok(probe().problems.includes('note:overlaps-vela')); nodes['#vela'].bounds.x = input.vela.x;
+  document.fonts.status = 'loading'; assert.ok(probe().problems.includes('fonts-loading')); document.fonts.status = 'loaded';
+  overlay = true; assert.ok(probe().problems.includes('expanded-or-overlay')); overlay = false;
+  assert.equal(probe().ready, true);
 });
 
 test('combined fixture and equivalent canonical operations preserve exact cross-block identities, unrelated recovery, project/task events and process reopen without a provider', async t => {

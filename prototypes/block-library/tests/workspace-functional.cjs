@@ -9,6 +9,11 @@ const { expressions: x, preflight } = require('./workspace-functional-expression
 const q = JSON.stringify, digest = value => createHash('sha256').update(value).digest('hex');
 const without = (value, keys) => Object.fromEntries(Object.entries(value).filter(([key]) => !keys.includes(key)));
 exports.preflight = preflight;
+exports.comparisonInput = seed => {
+  const view = seed.expected.viewport, project = block => ({ x: (block.x - view.x) * view.zoom, y: (block.y - view.y) * view.zoom, width: block.width * view.zoom, height: block.height * view.zoom });
+  const variants = { local: 'chat', codex: 'execution', note: 'document', group: 'checklist', stream: 'timeline', project: 'project' };
+  return { cards: Object.entries(seed.placements).map(([role, binding]) => ({ id: binding.blockId, role, variant: variants[role], ...project(seed.expected.blocks.find(block => block.id === binding.blockId)) })), vela: project(seed.expected.presence) };
+};
 exports.fixture = seed => {
   assert.equal(seed.contract, 'aerynth.functional-workspace-native@1'); assert.equal(seed.syntheticOnly, true);
   assert.equal(seed.codexScope, 'prepared identity only; no native session, capability probe or turn');
@@ -75,7 +80,7 @@ exports.assertNoProviderExecution = integration => {
 exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupErrors = [] }) => {
   const output = path.resolve(__dirname, '../../visual-experience/cinematic-v3/.runtime/application-evidence/workspace-functional-' + Date.now() + '-' + randomUUID().slice(0, 8));
   const receipt = { contract: 'aerynth.functional-workspace-evidence@1', syntheticOnly: true, source, passed: false, journeyBComplete: false, codexExecution: 'not requested; identity-only inspection', actions: [], checks: [], screenshots: [], errors: [], limitations: ['Offline canonical preparation is not native creation of the initial six block surfaces.', 'Actual native local recording, Note review/save/edit/recovery, new Task creation/membership/status, retained-event inspection and Project overview navigation are distinct from preparation.', 'Codex is a distinct prepared identity with an untouched unsent draft. No capability probe, connection, native session or turn is requested; this alone cannot complete journey B.', 'Canonical application events expose only their actual stored attribution; a provider association is not evidence of provider execution or per-resource causality.', 'No real native IME, mixed-card scale, sustained performance, wider D/E/F or owner artistic acceptance.'] };
-  let guard, limits, consoleSource, probe, failureShot;
+  let guard, limits, consoleSource, probe, failureShot, comparisonForCapture;
   const consoleError = consoleHandler(receipt);
   const startup = () => { receipt.startupErrorCount = Array.isArray(startupErrors) ? startupErrors.length : -1; receipt.startupErrors = Array.isArray(startupErrors) ? startupErrors.slice(0, 20).map(e => String(e?.message ?? e).slice(0, 1000)) : ['Invalid startup errors']; };
   try {
@@ -120,11 +125,12 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
     const detail = id => js(x.host('conversation', { name: 'detail', input: { resourceId: id, limit: 50 } }));
     const noExecution = async () => exports.assertNoProviderExecution(await js(x.host('snapshot', {})));
     const unchangedRecovery = async () => { assert.deepEqual(await document(seed.recoveryTaskId), seed.documents[seed.recoveryTaskId]); assert.deepEqual(await draft(roles.codex.resourceId), seed.drafts[roles.codex.resourceId]); const codex = await detail(roles.codex.resourceId); assert.equal(codex.conversation.providerId, 'codex-app-server'); assert.equal(codex.messages.total, 0); await noExecution(); };
-    const shot = async name => {
+    const shot = async (name, comparison) => {
       assert(receipt.screenshots.length < limits.maxScreenshots); const before = await js(x.graphics()); await wait(x.drawsAfter(before.draws)); const health = await js(x.graphics()); assert(captureAllowed(health));
+      if (comparison) { receipt.comparison = await js(x.comparisonProbe(comparison)); assert(receipt.comparison.ready, 'Settled, content-ready, fully visible normal six-card comparison required: ' + JSON.stringify(receipt.comparison.problems)); }
       const png = (await guard.capture()).toPNG(); receipt.pngBytes = (receipt.pngBytes ?? 0) + png.length; assert(receipt.pngBytes <= limits.maxPngBytes); await guard.around(() => fs.mkdir(output, { recursive: true })); await guard.around(() => fs.writeFile(path.join(output, name + '.png'), png, { flag: 'wx' })); receipt.screenshots.push({ file: name + '.png', bytes: png.length, sha256: digest(png), freshDraw: health.draws > before.draws, diagnostic: false, health });
     };
-    probe = async () => ({ graphics: await js(x.graphics()), context: await js(x.failureContext()), target: await js(x.targetDiagnostics(receipt.lastIntent?.selector ?? '')) });
+    probe = async () => ({ graphics: await js(x.graphics()), context: await js(x.failureContext()), target: await js(x.targetDiagnostics(receipt.lastIntent?.selector ?? '')), comparison: comparisonForCapture ? await js(x.comparisonProbe(comparisonForCapture)) : null });
     // Failure captures remain explicitly diagnostic, bounded and never count as a pass.
     failureShot = async () => {
       assert(receipt.screenshots.length < limits.maxScreenshots); const health = await js(x.graphics()); assert(captureAllowed(health, true)); const png = (await guard.capture()).toPNG(); receipt.pngBytes = (receipt.pngBytes ?? 0) + png.length; assert(receipt.pngBytes <= limits.maxPngBytes); await guard.around(() => fs.mkdir(output, { recursive: true })); const file = 'native-functional-failure.png'; await guard.around(() => fs.writeFile(path.join(output, file), png, { flag: 'wx' })); receipt.screenshots.push({ file, bytes: png.length, sha256: digest(png), freshDraw: false, diagnostic: true, health });
@@ -151,7 +157,10 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
     } else {
       receipt.phase = 'combined six-surface workspace'; assert.deepEqual(persistent(await snapshot()), persistent(seed.expected)); exports.assertBasePlacements(await snapshot(), seed);
       for (const binding of Object.values(roles)) await wait(x.exists(card(binding.blockId)));
-      await shot('combined-distinct-blocks-before-native-actions');
+      const comparison = exports.comparisonInput(seed), empty = await js(x.emptyBackground()); assert(empty, 'One unobscured empty background point is required');
+      comparisonForCapture = comparison;
+      guard.input({ type: 'mouseMove', ...empty }); receipt.actions.push({ action: 'native comparison pointer park', point: empty });
+      await wait(x.comparisonReady(comparison)); await shot('combined-distinct-blocks-before-native-actions', comparison);
       receipt.phase = 'actual native local message and independent unsent draft';
       const chat = await open(roles.local), chatInput = chat + ' .cp-composer textarea'; await wait(x.valueIs(chatInput, seed.drafts[roles.local.resourceId].content));
       await type(chatInput, seed.labels.message); await click(chat + ' .cp-composer button[type="submit"]'); await wait(x.conversationHasUser(roles.local.resourceId, seed.labels.message)); await wait(x.valueIs(chatInput, ''));
