@@ -79,11 +79,13 @@ On Windows 10.0.26300 / Node v24.18.0 / Ryzen AI 7 350, the saved 50-block resul
 
 | Mode | Drag p50 / p95 ms | Resize p50 / p95 ms |
 |---|---|---|
-| Fluid | 0.463 / 1.868 | 0.397 / 0.587 |
-| Freeform | 0.030 / 0.078 | 0.028 / 0.050 |
-| Structured | 0.727 / 1.997 | 0.426 / 0.679 |
+| Fluid | 0.424 / 2.668 | 0.400 / 0.659 |
+| Freeform | 0.034 / 0.076 | 0.032 / 0.054 |
+| Structured | 0.713 / 2.205 | 0.776 / 1.140 |
 
 These are synchronous pure layout calculations. They exclude rendering, displayed frame timing, IPC, SQLite/history serialization, native input latency and GPU work. Concurrent local workloads were not sampled or attributed. Actual rendering measurements and native visual experience remain separate milestone requirements, not implied by this table.
+
+The complete regression run caught a reset-to-automatic serialization mismatch: a fresh projection included `columnCount:undefined`, while its persisted retry receipt omitted the property. Canonical projections now omit unset columnCount, preserving exact idempotent replay. The retry tests remain unchanged and are rerun for the corrected candidate.
 
 | Directive scope | Authoritative completion evidence | Current engine checkpoint / remaining owner evidence |
 |---|---|---|

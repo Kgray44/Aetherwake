@@ -1,4 +1,4 @@
-import type { WorkspaceOrganization, OrganizationUpdate, LayoutState, LayoutPreview, LayoutPreviewRequest, Geometry, BlockProjection, GridSpan, StructuredPreset, LayoutIntent } from './contracts.mts';
+import type { WorkspaceOrganization, OrganizationUpdate, LayoutState, LayoutPreview, LayoutPreviewRequest, Geometry, BlockProjection, GridSpan, StructuredPreset, LayoutIntent, StructuredOrganization } from './contracts.mts';
 import { ensure, defaults, presentation } from './geometry.mts';
 import { footprint, resolveCollisions, validateBounds, type CollisionPlacement } from './collisions.mts';
 
@@ -15,8 +15,9 @@ export function updateOrganization(base: WorkspaceOrganization, patch: Organizat
   ensure(u && typeof u === 'object' && !Array.isArray(u) && Object.keys(u).every(k => ['columnCount', 'rowHeight', 'rowGap', 'columnGap', 'margin', 'preset', 'order', 'spans'].includes(k)));
   ensure(u.order === undefined || Array.isArray(u.order));
   ensure(u.spans === undefined || (u.spans && typeof u.spans === 'object' && !Array.isArray(u.spans)));
-  const s = { ...base.structured, ...u, columnCount: u.columnCount === null ? undefined : u.columnCount ?? base.structured.columnCount,
+  const s: StructuredOrganization = { ...base.structured, ...u, columnCount: u.columnCount === null ? undefined : u.columnCount ?? base.structured.columnCount,
     order: [...(u.order ?? base.structured.order)], spans: { ...base.structured.spans, ...u.spans } };
+  if (s.columnCount === undefined) delete s.columnCount;
   ensure(s.columnCount === undefined || (Number.isInteger(s.columnCount) && s.columnCount >= 1 && s.columnCount <= 12));
   ensure(Number.isFinite(s.rowHeight) && s.rowHeight >= 32 && s.rowHeight <= 512);
   for (const n of [s.rowGap, s.columnGap, s.margin]) ensure(Number.isFinite(n) && n >= 0 && n <= 256);
