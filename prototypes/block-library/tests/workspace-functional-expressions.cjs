@@ -29,15 +29,67 @@ function measureComparison(input) {
   if (snapshot.expanded !== null || document.querySelector('.folio.expanded, dialog[open], .aw-contextual-surface[open], .floating-dialog:not([hidden])')) problems.push('expanded-or-overlay');
   const stage = rect(document.querySelector('#stage'));
   if (!stage || stage.opacity < 0.995 || !settled('application:arrival')) problems.push('workspace-arrival-unsettled');
+  const painted = node => {
+    if (!node || node.closest('[hidden], [inert]')) return null;
+    let opacity = 1;
+    for (let ancestor = node; ancestor; ancestor = ancestor.parentElement) {
+      const style = getComputedStyle(ancestor);
+      if (style.display === 'none' || style.visibility !== 'visible') return null;
+      opacity *= Number(style.opacity);
+      if (!Number.isFinite(opacity) || opacity < 0.995) return null;
+    }
+    const bounds = rect(node); return bounds ? { ...bounds, opacity } : null;
+  };
+  const intersection = (a, b) => {
+    if (!a || !b) return null;
+    const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
+    return { x, y, width: Math.max(0, Math.min(a.x + a.width, b.x + b.width) - x), height: Math.max(0, Math.min(a.y + a.height, b.y + b.height) - y) };
+  };
   const cards = input.cards.map(expected => {
     const node = document.querySelector('[data-block=' + JSON.stringify(expected.id) + ']'), bounds = rect(node), pose = snapshot.poses[expected.id];
     const compact = node?.querySelector('.aw-block-compact'), content = node?.querySelector('.aw-identity-body');
     const poseMatches = !!pose && ['x', 'y', 'w', 'h', 'lift', 'yaw', 'opacity'].every(key => Number.isFinite(pose[key]) && Math.abs(pose[key] - ({ x: expected.x, y: expected.y, w: expected.width, h: expected.height, lift: 0, yaw: 0, opacity: 1 })[key]) <= 0.1);
-    const ready = !!node && node.dataset.blockVariant === expected.variant && node.dataset.resourceAvailability === 'available' && !!compact && compact.getAttribute('aria-busy') === 'false' && !!content?.textContent?.trim();
+    const metadataReady = !!node && node.dataset.blockVariant === expected.variant && node.dataset.resourceAvailability === 'available' && !!compact && compact.getAttribute('aria-busy') === 'false' && !!content?.textContent?.trim();
+    const wrapper = painted(node?.querySelector('.working-content'));
+    const clip = intersection(wrapper, bounds), withinClip = value => !!value && value.width >= 8 && value.height >= 8;
+    const surface = (selector, valid) => {
+      const element = node?.querySelector(selector), bounds = painted(element);
+      const visibleIntersection = intersection(bounds, clip);
+      return { selector, bounds, intersection: visibleIntersection, ready: !!bounds && withinClip(visibleIntersection) && !!valid(element), textCharacters: element?.textContent?.length ?? 0 };
+    };
+    let visible = { selector: null, bounds: null, intersection: null, ready: false, textCharacters: 0 };
+    const composition = node?.dataset.blockComposition;
+    if (composition === 'overview') {
+      visible = surface('.aw-block-overview-content', element => !!element.textContent?.trim() && (expected.role !== 'stream' || !expected.expectedOverviewEvent || element.textContent.includes(expected.expectedOverviewEvent.type)));
+    } else if (composition === 'working') {
+      if (expected.role === 'local' || expected.role === 'codex') {
+        const provider = node?.querySelector('.cp-composer-provider'), providerBounds = painted(provider);
+        visible = surface('.cp-composer textarea', element => element.value === expected.expectedText && !!providerBounds && withinClip(intersection(providerBounds, clip)) && provider.dataset.providerId === expected.providerId);
+      } else if (expected.role === 'note') {
+        const state = node?.querySelector('.working-content')?.dataset.noteState;
+        const editing = surface('textarea', element => element.value === expected.expectedText);
+        const reading = surface('.aw-note-reading', element => element.textContent?.includes(expected.expectedText));
+        visible = editing.ready ? editing : reading;
+        visible.ready &&= ['ready', 'saved', 'recovered'].includes(state);
+      } else if (expected.role === 'group') {
+        const manage = node?.querySelector('.aw-task-group > button');
+        visible = surface('.aw-task-group-summary', element => !!element.textContent?.trim() && !!painted(manage) && !manage.disabled);
+      } else if (expected.role === 'stream') {
+        const view = node?.querySelector('.aw-event-view'), refresh = node?.querySelector('.aw-event-tools > button'), status = view?.querySelector('[role="status"]');
+        const selector = expected.expectedEvent ? '.aw-event-view [data-event-id=' + JSON.stringify(expected.expectedEvent.eventId) + ']' : '.aw-event-view [data-event-id]';
+        const record = surface(selector, () => true), empty = surface('.aw-event-empty', element => !expected.expectedEvent && !!element.textContent?.trim());
+        visible = record.ready ? record : empty;
+        visible.ready &&= !!painted(view) && !!refresh && !refresh.disabled && !!status?.textContent?.trim();
+      } else if (expected.role === 'project') {
+        const view = node?.querySelector('.aw-subject-view');
+        visible = surface('.aw-project-summary', element => element.textContent === expected.expectedText && !!painted(view) && view.getAttribute('aria-busy') !== 'true');
+      }
+    }
+    const ready = metadataReady && !!wrapper && wrapper.opacity >= 0.995 && visible.ready;
     if (!fits(expected) || !fits(bounds)) problems.push(expected.role + ':clipped');
     if (!near(bounds, expected) || bounds.opacity < 0.995 || !poseMatches || !settled(expected.id)) problems.push(expected.role + ':unsettled');
     if (!ready) problems.push(expected.role + ':content-not-ready');
-    return { role: expected.role, id: expected.id, projected: expected, rendered: bounds, pose, transition: latest(expected.id) ?? null, contentReady: ready, composition: node?.dataset.blockComposition ?? null };
+    return { role: expected.role, id: expected.id, projected: expected, rendered: bounds, pose, transition: latest(expected.id) ?? null, contentReady: ready, metadataReady, workingClip: clip, visibleSurface: visible, composition: composition ?? null };
   });
   const vela = rect(document.querySelector('#vela'));
   if (!fits(input.vela) || !fits(vela)) problems.push('vela:clipped');

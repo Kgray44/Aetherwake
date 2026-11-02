@@ -12,7 +12,8 @@ exports.preflight = preflight;
 exports.comparisonInput = seed => {
   const view = seed.expected.viewport, project = block => ({ x: (block.x - view.x) * view.zoom, y: (block.y - view.y) * view.zoom, width: block.width * view.zoom, height: block.height * view.zoom });
   const variants = { local: 'chat', codex: 'execution', note: 'document', group: 'checklist', stream: 'timeline', project: 'project' };
-  return { cards: Object.entries(seed.placements).map(([role, binding]) => ({ id: binding.blockId, role, variant: variants[role], ...project(seed.expected.blocks.find(block => block.id === binding.blockId)) })), vela: project(seed.expected.presence) };
+  const tasks = seed.expected.resources.filter(resource => resource.kind === 'task' && resource.project_id === seed.projectId);
+  return { cards: Object.entries(seed.placements).map(([role, binding]) => ({ id: binding.blockId, role, variant: variants[role], ...(role === 'local' || role === 'codex' ? { expectedText: seed.drafts[binding.resourceId].content, providerId: role === 'local' ? 'local' : 'codex-app-server' } : role === 'note' ? { expectedText: seed.documents[binding.resourceId].draft.content } : role === 'project' ? { expectedText: tasks.filter(task => task.taskStatus === 'open').length + ' open · ' + tasks.filter(task => task.taskStatus === 'done').length + ' done' } : role === 'stream' ? { expectedEvent: seed.comparisonEvent } : {}), ...project(seed.expected.blocks.find(block => block.id === binding.blockId)) })), vela: project(seed.expected.presence) };
 };
 exports.fixture = seed => {
   assert.equal(seed.contract, 'aerynth.functional-workspace-native@1'); assert.equal(seed.syntheticOnly, true);
@@ -142,7 +143,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
       const metadata = await js(x.eventMetadata(row)); assert.equal(metadata['Event ID'], event.eventId); assert.equal(metadata.Cursor, String(event.cursor)); assert.equal(metadata.Type, event.type); assert.equal(metadata['Evidence class'], event.classification); assert.equal(metadata.Provider, event.providerId); assert.equal(metadata.Execution, 'Unavailable'); receipt.inspectedEvent = { eventId: event.eventId, cursor: event.cursor, type: event.type, classification: event.classification, resourceId: event.resourceId, executionId: event.executionId, providerId: event.providerId };
       return selector;
     };
-    await wait(x.ready()); await unchangedRecovery();
+    await wait(x.ready()); await wait(x.exists('body[data-application-hydrated="true"]')); await unchangedRecovery();
     if (limits.restore) {
       receipt.phase = 'fresh-process exact combined workspace and recovery'; const expected = await readJson(checkpointName, limits.maxCheckpointBytes);
       assert.equal(expected.contract, 'aerynth.functional-workspace-checkpoint@1'); assert.deepEqual(expected.sourceHashes, source.hashes); assert.deepEqual(expected.buildAssets, source.buildAssets); assert.deepEqual(persistent(await snapshot()), expected.canonical); assert.deepEqual(workspace(await snapshot()), expected.workspace);
@@ -158,6 +159,9 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
       receipt.phase = 'combined six-surface workspace'; assert.deepEqual(persistent(await snapshot()), persistent(seed.expected)); exports.assertBasePlacements(await snapshot(), seed);
       for (const binding of Object.values(roles)) await wait(x.exists(card(binding.blockId)));
       const comparison = exports.comparisonInput(seed), empty = await js(x.emptyBackground()); assert(empty, 'One unobscured empty background point is required');
+      const recent = await js(x.host('replay', { after: Math.max(0, seed.baselineEventCursor - 1), limit: 50 })), latest = recent.events.at(-1);
+      assert(latest, 'Actual retained event required for the visible Stream overview');
+      comparison.cards.find(card => card.role === 'stream').expectedOverviewEvent = { eventId: latest.eventId, cursor: latest.cursor, type: latest.type, classification: latest.classification };
       comparisonForCapture = comparison;
       guard.input({ type: 'mouseMove', ...empty }); receipt.actions.push({ action: 'native comparison pointer park', point: empty });
       await wait(x.comparisonReady(comparison)); await shot('combined-distinct-blocks-before-native-actions', comparison);

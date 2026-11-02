@@ -46,6 +46,7 @@ export type FunctionalWorkspaceSeed = {
   expected: DesktopSnapshot;
   alternate: Pick<DesktopSnapshot, 'blocks' | 'viewport' | 'organization' | 'presence'>;
   baselineEventCursor: number;
+  comparisonEvent: { eventId: string; cursor: number; type: string; classification: string };
   hashes: Record<string, string>;
   validation: { preflightSha256: string; helperSha256: string; expressionHelperSha256: string; commonHelperSha256: string };
   codexScope: 'prepared identity only; no native session, capability probe or turn';
@@ -141,7 +142,10 @@ export async function prepareFunctionalWorkspaceNative(profile: string): Promise
       'prototypes/integrated-backend/src/core.mts', 'prototypes/workspace-engine/engine.mts',
     ]) hashes[relative] = createHash('sha256').update(readFileSync(join(root, relative))).digest('hex');
     const digest = (name: string) => createHash('sha256').update(readFileSync(join(root, 'prototypes/block-library/tests', name))).digest('hex');
-    seed = { contract: 'aerynth.functional-workspace-native@1', syntheticOnly: true, labels: functionalLabels, projectId, workspaceId, alternateWorkspaceId, placements, recoveryTaskId: recoveryTask.id, documents, drafts, expected: desktop, alternate, baselineEventCursor: (await core.command('replay', { after: 0, limit: 1 })).latest, hashes, validation: { preflightSha256: compiled.sha256, helperSha256: digest('workspace-functional.cjs'), expressionHelperSha256: digest('workspace-functional-expressions.cjs'), commonHelperSha256: digest('workspace-approach-expressions.cjs') }, codexScope: 'prepared identity only; no native session, capability probe or turn' };
+    const baselineEventCursor = (await core.command('replay', { after: 0, limit: 1 })).latest;
+    const comparisonEvent = (await core.command('replay', { after: Math.max(0, baselineEventCursor - 10), limit: 10 })).events.at(-1)!;
+    assert(comparisonEvent && comparisonEvent.classification === 'observed' && comparisonEvent.type === 'application/navigate');
+    seed = { contract: 'aerynth.functional-workspace-native@1', syntheticOnly: true, labels: functionalLabels, projectId, workspaceId, alternateWorkspaceId, placements, recoveryTaskId: recoveryTask.id, documents, drafts, expected: desktop, alternate, baselineEventCursor, comparisonEvent: { eventId: comparisonEvent.eventId, cursor: comparisonEvent.cursor, type: comparisonEvent.type, classification: comparisonEvent.classification }, hashes, validation: { preflightSha256: compiled.sha256, helperSha256: digest('workspace-functional.cjs'), expressionHelperSha256: digest('workspace-functional-expressions.cjs'), commonHelperSha256: digest('workspace-approach-expressions.cjs') }, codexScope: 'prepared identity only; no native session, capability probe or turn' };
   } finally { await core.command('close', {}); }
   assert(statSync(database).size <= 33554432, 'functional_database_checkpoint_exceeded');
   const bytes = Buffer.from(JSON.stringify(seed, null, 2)); assert(bytes.length <= 262144, 'functional_seed_bytes_exceeded');
