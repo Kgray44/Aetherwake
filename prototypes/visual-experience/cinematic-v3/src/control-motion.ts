@@ -185,8 +185,10 @@ export function createControlMotion({
   function candidates(scope: HTMLElement) {
     const found = [...scope.querySelectorAll<HTMLElement>(selector)];
     if (scope.matches(selector)) found.push(scope);
-    return found.filter((node) =>
-      node.matches("[data-native-copy-control],[data-aerynth-motion-control]"),
+    return found.filter(
+      (node) =>
+        node.matches("[data-native-copy-control]") ||
+        node.matches("[data-aerynth-motion-control]"),
     );
   }
   const observer = new Observer((records) => {

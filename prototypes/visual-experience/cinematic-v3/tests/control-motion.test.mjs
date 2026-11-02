@@ -173,12 +173,13 @@ test("a generic experience control borrows the same shared feedback without clai
   const f = setup();
   try {
     const control = f.dom.doc.createElement("button");
+    control.setAttribute("data-aerynth-motion-control", "true");
     control.dataset.aerynthMotionControl = "true";
     control.textContent = "Add checklist item";
     f.dom.root.append(control);
     const view = f.mount();
-    assert.equal(f.motion.bodies.size, 1);
-    control.dispatchEvent({ type: "pointerenter" });
+    assert.equal(f.motion.bodies.size, 2);
+    control.fire("pointerenter");
     f.tick(view, 2);
     const energy = Number(control.style.getPropertyValue("--control-hover"));
     assert(energy > 0 && energy < 1);
