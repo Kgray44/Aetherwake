@@ -1,5 +1,7 @@
 /* Content inside Root's anchored optical glass, never a second modal shell. */
 .agent-library {
+  container-name: agent-library;
+  container-type: inline-size;
   --agent-ink: #ecf2f4;
   --agent-muted: #b9c4ce;
   color: var(--agent-ink);
@@ -7,6 +9,7 @@
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+  min-width: 0;
   height: 100%;
   font:
     14px/1.45 system-ui,
@@ -282,6 +285,25 @@
   color: var(--agent-muted);
   font-size: 11px;
   overflow-wrap: anywhere;
+}
+/* The glass host may be narrow inside a wide application window. Query this
+ * component's actual inline size; retain viewport fallback below. */
+@container agent-library (max-width: 640px) {
+  .agent-library-body {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .agent-list {
+    max-height: 170px;
+  }
+  .agent-inspector {
+    border-left: 0;
+    border-top: 1px solid #c7dae222;
+    padding: 12px 0 0;
+  }
+  .agent-project-filter {
+    max-width: none;
+    flex: 1 1 auto;
+  }
 }
 @media (max-width: 640px) {
   .agent-library-body {

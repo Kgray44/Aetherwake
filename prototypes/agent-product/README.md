@@ -1,7 +1,14 @@
 # Agent Library foundation
 
-This is a provisional service contract and same-database implementation. It is
-not yet an integrated Agent Library UI or an agent execution runner.
+This package contains the same-database `AgentLibraryService` and an Agent
+Library content component, `mountAgentLibrary`. The component consumes typed
+asynchronous client ports for persistent profile creation, editing, templates,
+search, archive/restore, and direct canonical profile opening. It borrows motion
+channels and the host frame; the application supplies its anchored glass surface.
+Its layout responds to the actual surface width, including a narrow panel inside
+a wide application window. This package supplies no agent execution runner.
+Desktop wiring and native/visual acceptance are tracked by the integration owner;
+source and CPU test results alone do not establish that acceptance.
 
 `AgentLibraryService` receives the **existing canonical** `DatabaseSync` and
 synchronous transaction/read boundaries. Root supplies `AgentHostPort`. No
@@ -54,6 +61,9 @@ Tests use real Kernel/DesktopState SQLite transactions with synthetic host polic
 and provider catalog metadata. They cover persistence/restart, canonical generic
 resource creation, actual manual-compatibility Task references, CAS/revocation, inheritance,
 reviewed configuration fences, final-write rollback, and schema/FK/digest checks.
-The execution reader is deliberately unavailable in these tests. Native UI,
-successful canonical execution linking, streaming, cancellation, orchestration,
-and artistic acceptance remain separate integration work.
+The execution reader is deliberately unavailable in these tests. UI event tests
+(`node --test prototypes/agent-product/tests/view.test.mts`) use a CPU DOM adapter
+and real SQLite service ports, covering draft/caret preservation, CAS conflicts,
+asynchronous result ordering, exact retry payloads, and shared motion state.
+Native desktop and artistic qualification, successful canonical execution
+linking, streaming, cancellation, and orchestration remain separate work.
