@@ -1,0 +1,86 @@
+.aw-resource-links {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 0.65rem;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.aw-resource-links h3,
+.aw-resource-links p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.aw-resource-links > p {
+  font-size: 12px;
+  color: #bdc6d9;
+}
+.aw-resource-links :is(input, select, button) {
+  font: inherit;
+  color: inherit;
+  border: 1px solid #b5c8e32b;
+  border-radius: 0.6rem;
+  padding: 0.4rem 0.6rem;
+  background: #b5c8e309;
+  min-width: 0;
+}
+.aw-resource-links option {
+  background: #172131;
+  color: #e8edf5;
+}
+.aw-resource-links > button {
+  align-self: flex-end;
+}
+.aw-resource-links input {
+  width: 100%;
+}
+.aw-resource-links :focus-visible {
+  outline: 2px solid #d8e6fc;
+  outline-offset: 3px;
+}
+.aw-resource-links button:disabled {
+  opacity: 0.5;
+}
+.aw-resource-links-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 19rem;
+  overflow: auto;
+}
+.aw-resource-links-list li {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0.6rem 0;
+  border-bottom: 1px solid #b5c8e31a;
+}
+.aw-resource-links-list li > :first-child {
+  flex: 1 1 100%;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.aw-resource-links-list small {
+  flex: 1;
+  font-size: 12px;
+  color: #bcc6d7;
+}
+.aw-resource-links-list button {
+  background: none;
+}
+.aw-resource-links-create {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.aw-resource-links-create select:first-child {
+  flex: 1 1 100%;
+}
+.aw-resource-links-create[hidden] {
+  display: none;
+}
+.aw-resource-links-status:empty {
+  display: none;
+}

@@ -82,6 +82,7 @@ export function mountNoteExperience(
     initialMode?: "write" | "read";
     presentation?: "workspace" | "focused";
     openExternal?(url: string): Promise<void>;
+    openRelated?(resourceId: string, anchor: HTMLElement): void | Promise<void>;
   },
 ) {
   const tools = element("div", "", "aw-note-tools"),
@@ -250,6 +251,15 @@ export function mountNoteExperience(
     }
   });
   menuPanel.append(showRename);
+  if (options.openRelated) {
+    const related = action("Related resources", () => {
+      menu.open = false;
+      run(async () => {
+        await options.openRelated!(session.resourceId, related);
+      });
+    });
+    menuPanel.append(related);
+  }
   const submit = element("button", "Save title");
   submit.type = "submit";
   rename.append(title, submit);
