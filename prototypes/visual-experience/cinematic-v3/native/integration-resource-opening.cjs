@@ -18,6 +18,30 @@ const hash = value => createHash('sha256').update(value).digest('hex');
 const json = value => JSON.stringify(value, null, 2);
 const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])])) : value;
 const sorted = values => [...values].sort((a, b) => String(a.id ?? a.resourceId).localeCompare(String(b.id ?? b.resourceId)));
+const unplacedSelector = resourceId => `[data-key=${JSON.stringify('resource:unplaced:' + resourceId)}]`;
+async function remainingRace(promise, milliseconds, error) {
+  assert(milliseconds > 0, String(error)); let timer;
+  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(error instanceof Error ? error : Error(error)), milliseconds); })]); }
+  finally { clearTimeout(timer); }
+}
+/** Each observed condition is bounded independently of the single global slot.
+ * A timeout never sends input, retries an action, or bypasses sticky focus loss. */
+async function waitForCondition({ slot, label, check, diagnose, timeoutMs = 4000, now = () => performance.now(), sleep = pause }) {
+  assert(timeoutMs > 0 && timeoutMs <= 4000, 'bounded_condition_required');
+  const until = now() + Math.min(timeoutMs, slot.workRemaining()), timeout = Error('resource_opening_condition_timeout: ' + String(label).slice(0, 160));
+  while (now() < until) {
+    slot.check(); const available = Math.min(until - now(), slot.workRemaining()); if (available <= 0) break;
+    try { const value = await remainingRace(Promise.resolve().then(check), available, timeout); slot.check(); if (value && now() < until) return value; }
+    catch (error) { if (error !== timeout) throw error; break; }
+    const remaining = Math.min(until - now(), slot.workRemaining()); if (remaining > 0) await sleep(Math.min(35, remaining));
+  }
+  slot.check();
+  if (diagnose) {
+    try { timeout.diagnostics = await remainingRace(Promise.resolve().then(diagnose), Math.min(300, slot.workRemaining()), 'condition_diagnostics_deadline'); slot.check(); }
+    catch { slot.check(); timeout.diagnostics = { unavailable: true }; }
+  }
+  throw timeout;
+}
 
 function createSlot({ win, startedAt, limitMs, now = () => performance.now(), cleanupMs = 3500 }) {
   assert(Number.isFinite(startedAt) && startedAt <= now() && now() - startedAt < limitMs, 'valid_monotonic_slot_required');
@@ -53,7 +77,7 @@ function targetScript(selector, action, value) {
     return { ready: true, rect: { x: r.x, y: r.y, width: r.width, height: r.height } };
   }.toString()})(${JSON.stringify(selector)},${JSON.stringify(action)},${JSON.stringify(value)})`;
 }
-exports.createSlot = createSlot; exports.canonicalProjection = canonicalProjection; exports.sourceIdentity = sourceIdentity; exports.targetScript = targetScript;
+exports.createSlot = createSlot; exports.canonicalProjection = canonicalProjection; exports.sourceIdentity = sourceIdentity; exports.targetScript = targetScript; exports.unplacedSelector = unplacedSelector; exports.waitForCondition = waitForCondition;
 
 exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], session, localURL, moduleStartedMonotonicMs }) {
   const restore = process.argv.includes('--verify-restore'), limitMs = restore ? 12000 : 45000, started = performance.now(), root = path.resolve(privateRoot), out = path.join(root, 'resource-opening-evidence', (restore ? 'restore-' : 'initial-') + Date.now());
@@ -65,7 +89,6 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
   const blur = () => abort('resource_opening_focus_lost');
   const escape = (_event, input) => { if (input?.type === 'keyDown' && input.key === 'Escape') abort('resource_opening_operator_escape'); };
   const consoleError = (_event, details) => { if (details?.level === 'error' || details?.level === 3) { if (receipt.errors.length < 24) receipt.errors.push(String(details.message).slice(0, 1000)); } };
-  const remainingRace = async (promise, milliseconds, code) => { assert(milliseconds > 0, code); let timer; try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Error(code)), milliseconds); })]); } finally { clearTimeout(timer); } };
   const run = async () => {
     assert(path.isAbsolute(privateRoot) && /^review-resource-opening-\d+$/.test(path.basename(root)) && path.parse(root).root.toLowerCase() === 'c:\\', 'fresh_owned_resource_profile_required');
     sourceIdentity(source); assert.match(win.getTitle(), /Automated check/i, 'owned_automated_window_required');
@@ -79,8 +102,8 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     if (!restore) { await assert.rejects(fs.stat(expectedFile), { code: 'ENOENT' }); await assert.rejects(fs.stat(budgetFile), { code: 'ENOENT' }); }
     else { budget = JSON.parse(await fs.readFile(budgetFile, 'utf8')); assert(Number.isSafeInteger(budget.count) && budget.count >= 0 && budget.count <= 4 && Number.isSafeInteger(budget.bytes) && budget.bytes >= 0 && budget.bytes <= receipt.limits.combinedPNGBytes && budget.videos <= 1 && Array.isArray(budget.files), 'invalid_combined_evidence_budget'); }
     await fs.mkdir(out, { recursive: true });
-    driver = await createDriver(win, { assertActive: () => slot.check() });
-    const connection = await remainingRace(driver.js("window.aerynthHost.command('providerConnection',{type:'status',providerId:'chatgpt-plan-responses'})"), slot.workRemaining(), 'native_connection_status_deadline');
+    driver = await remainingRace(createDriver(win, { assertActive: () => slot.check() }), Math.min(4000, slot.workRemaining()), 'resource_opening_driver_ready_deadline');
+    const connection = await remainingRace(driver.js("window.aerynthHost.command('providerConnection',{type:'status',providerId:'chatgpt-plan-responses'})"), Math.min(4000, slot.workRemaining()), 'native_connection_status_deadline');
     assert.equal(connection.contract, 'aerynth.provider-connection@1');
     assert.equal(connection.storageAvailable, true, 'Actual native protected-storage hop must be available');
     assert.equal(connection.state, 'disconnected', 'Fresh synthetic profile must not contain an account');
@@ -90,7 +113,8 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     receipt.checks.push('Actual renderer/Main/desktop/worker/Core/native-secret status hop; OS protection available, no account or inference');
     const js = code => { slot.check(); return remainingRace(driver.js(code), slot.workRemaining(), 'resource_opening_renderer_deadline'); };
     const rpc = async (name, input) => { slot.check(); const value = await remainingRace(call(name, input), slot.workRemaining(), 'resource_opening_backend_deadline'); slot.check(); return value; };
-    const wait = async (label, check) => { receipt.phase = label; while (slot.workRemaining() > 0) { slot.check(); const value = await check(); if (value) return value; await pause(35); } slot.check(); throw Error('resource_opening_condition_timeout'); };
+    const diagnose = () => js("(()=>{const a=window.__aerynth?.application?.(),s=window.__aerynth?.snapshot?.(),where=s?.spatial?.location??a?.navigation;return{status:(document.querySelector('#status')?.textContent??'').slice(0,240),location:where?{kind:where.kind,projectId:where.projectId,workspaceId:where.workspaceId,blockId:where.blockId}:null,anchors:[...document.querySelectorAll('.aw-anchor[data-key]')].slice(0,16).map(e=>({key:e.dataset.key.slice(0,160),label:(e.querySelector('strong')?.textContent??'').slice(0,80),visible:!!e.getClientRects().length&&!e.closest('[hidden],[inert]')&&getComputedStyle(e).visibility!=='hidden'}))}})()");
+    const wait = async (label, check) => { receipt.phase = label; try { return await waitForCondition({ slot, label, check, diagnose }); } catch (error) { if (error.diagnostics) receipt.conditionFailure = { label, diagnostics: error.diagnostics }; throw error; } };
     const expression = (label, code) => wait(label, () => js(`(()=>{try{return (${code})}catch{return false}})()`));
     const action = async (selector, kind = 'click', value) => { await wait('Visible renderer target ' + selector, async () => { const result = await js(targetScript(selector, 'inspect')); return result.ready; }); const result = await js(targetScript(selector, kind, value)); assert.equal(result.ready, true, 'renderer_target_changed'); receipt.actions.push({ method: 'renderer-DOM-' + kind, selector, ...(kind === 'input' ? { characters: value.length } : {}) }); };
     const application = async input => { receipt.actions.push({ method: 'application-capability-fixture', type: input.type }); return js(`window.__aerynth.execute(${JSON.stringify(input)})`); };
@@ -154,7 +178,8 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       await viewOnly('A/Resources Open creates no workspace or placement', async () => { const prior = await graphics(); await action('#application-resources'); await action(`[data-open-resource="${fixture.noteId}"]`); await waitNote(fixture.noteId); await capture('01-unplaced-note', directSelector(fixture.noteId), prior); await close('canonical-resource'); });
       let d = await desktop(); assert.equal(d.workspaces.length, 0); assert.equal(d.projects.length, 0); assert.equal(d.blocks.length, 0);
       // B: actual Constellation selected-resource Open command; unchanged camera/nav.
-      await expression('Unplaced Constellation label', `!!document.querySelector('[data-key="resource:${fixture.noteId}"]')`); await action(`[data-key="resource:${fixture.noteId}"]`); await action('.aw-constellation-bar button[aria-label="Commands and destinations"]'); await action('.aw-destinations input', 'input', 'Open destination');
+      const unplaced = unplacedSelector(fixture.noteId);
+      await expression('Unplaced Constellation label', `!!document.querySelector(${JSON.stringify(unplaced)})`); await action(unplaced); await action('.aw-constellation-bar button[aria-label="Commands and destinations"]'); await action('.aw-destinations input', 'input', 'Open destination');
       const camera = await js('window.__aerynth.snapshot().spatial.camera');
       await viewOnly('B/Constellation Open preserves exact prior camera and canonical navigation', async () => { const prior = await graphics(); await action('.aw-command-row[data-command="open"]'); await waitNote(fixture.noteId); await capture('02-constellation-direct-note', directSelector(fixture.noteId), prior); await close('canonical-resource'); assert.deepEqual(await js('window.__aerynth.snapshot().spatial.camera'), camera); });
       // C: real default local chat, one recorded user message, then durable unsent draft.
