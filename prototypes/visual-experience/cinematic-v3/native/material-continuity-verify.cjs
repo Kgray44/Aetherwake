@@ -668,6 +668,9 @@ async function run(win) {
     `document.querySelector('.brand img').parentElement.style.background='';document.querySelector('.brand img').style.mixBlendMode=''`,
   );
   await sample("23-logo-direct-on-scene");
+  // A geometry commit reconciles every card to canonical poses. Separate the
+  // actual placements before testing this action, rather than a transient mask.
+  await nativeReset();
   await geometry(
     ids[1],
     { x: 1030, y: 405, w: 350, h: 164, z: 20 },

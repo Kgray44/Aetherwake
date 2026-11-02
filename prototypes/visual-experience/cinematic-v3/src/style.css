@@ -1237,6 +1237,10 @@ body[data-study="architecture"] .folio.expanded {
 .folio .title-select h2 {
   color: #d6e0eb;
 }
+.folio .title-select {
+  background: rgba(4, 7, 14, calc(var(--unfold, 0) * 0.82));
+  border-radius: 5px;
+}
 .folio .folio-top,
 .folio .grip {
   color: #a9b7c8;
