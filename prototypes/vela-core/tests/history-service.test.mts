@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import type { DatabaseSync } from 'node:sqlite';
+import { DatabaseSync } from 'node:sqlite';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { createCanonicalVelaHost } from '../src/canonical-host.mts';
 import type { CanonicalVelaContext, CanonicalVelaMetadata } from '../src/canonical-host.mts';
@@ -14,17 +14,19 @@ import type { AcceptedHistoryAppend, HistoryMessageMetadata, HistorySnapshot, Pr
 import type { ProviderContribution, ProviderReplyKind, VelaMessage, VelaPlanningPort } from '../src/contracts.ts';
 
 /** Real canonical SQLite resource schema and production permission adapter. Graph/evidence callbacks and provider are explicitly synthetic test ports, not native/model acceptance. */
-function fixture() {
+function fixture(options: { readTransactions?: boolean } = {}) {
   const kernel = WorkspaceKernel.open(':memory:'); let db!: DatabaseSync; kernel.withTransaction(value => { db = value; });
   const project = kernel.createProject('History service fixture'), other = kernel.createProject('Excluded fixture project'), workspace = kernel.createWorkspace('History fixture workspace', project.id), note = kernel.createNote('History fixture note', 'Canonical source before review.', project.id);
   db.exec(`CREATE TABLE fixture_conversations(id TEXT PRIMARY KEY,revision INTEGER); CREATE TABLE fixture_messages(id TEXT PRIMARY KEY,conversation_id TEXT,ordinal INTEGER,bytes INTEGER,json TEXT); CREATE TABLE fixture_evidence(id TEXT PRIMARY KEY,json TEXT);`);
   let context: CanonicalVelaContext = { principalId: 'synthetic:owner', policyVersion: 'policy:1', currentProjectId: project.id, currentWorkspaceId: workspace.id, selectedResourceIds: [] };
   let systemId: string | null = null, service!: VelaService, calls = 0, sourceReads = 0, messageReads = 0, snapshots = 0, nativeCalls = 0, bodyReadForbidden = false;
   const deniedContent = new Set<string>(), deniedMetadata = new Set<string>(), deniedMessages = new Set<string>(), submitted: Parameters<VelaPlanningPort['propose']>[0][] = [];
+  const boundaries = { hostMutation: 0, hostRead: 0, serviceMutation: 0, serviceRead: 0 };
   const revision = (id: string) => { const row = db.prepare('SELECT revision FROM fixture_conversations WHERE id=?').get(id); return row ? Number(row.revision) : null; };
   const metadata = (): CanonicalVelaMetadata => ({ contract: 'aerynth.desktop@1', projects: db.prepare("SELECT id,title,version FROM projects WHERE state='active'").all() as any[], workspaces: db.prepare("SELECT * FROM workspaces WHERE state='active'").all() as any[], blocks: [], navigationBlocks: [], activeWorkspaceId: context.currentWorkspaceId,
     resources: db.prepare('SELECT * FROM resources').all().map(r => ({ ...r, visible: r.state === 'active', available: true, conversationRevision: r.kind === 'conversation' ? revision(String(r.id)) ?? undefined : undefined })) as any[] });
-  const host = createCanonicalVelaHost({ db, transaction: work => kernel.withTransaction(work), metadata, currentContext: () => context,
+  const host = createCanonicalVelaHost({ db, transaction: work => { boundaries.hostMutation++; return kernel.withTransaction(work); },
+    ...(options.readTransactions ? { readTransaction: <T,>(work: (db: DatabaseSync) => T): T => { boundaries.hostRead++; return kernel.withTransaction(work); } } : {}), metadata, currentContext: () => context,
     revisions: { conversation: id => revision(id), workspace: () => 1 }, permissions: {
       scope: (c, m) => ({ principalId: c.principalId, policyVersion: c.policyVersion, projectIds: m.projects.filter(p => p.id === c.currentProjectId).map(p => p.id), workspaceIds: m.workspaces.filter(w => w.project_id === c.currentProjectId).map(w => w.id), resourceIds: m.resources.filter(r => r.id === systemId || r.project_id === c.currentProjectId).map(r => r.id) }),
       metadata: r => !deniedMetadata.has(r.id), content: r => !deniedContent.has(r.id),
@@ -51,7 +53,8 @@ function fixture() {
   const reply = (content = 'Exact first reported answer.', kind: ProviderReplyKind = 'answer') => { const contribution: ProviderContribution = { providerId: 'synthetic:history-service', classification: 'reported', executionId: randomUUID(), planningConversationId: randomUUID(), sourceMessageId: randomUUID(), nativeThreadId: randomUUID(), nativeTurnId: randomUUID() }; db.prepare('INSERT INTO fixture_evidence VALUES(?,?)').run(contribution.sourceMessageId!, JSON.stringify(contribution)); return { schemaVersion: 2, kind, content, contribution }; };
   let responder = async () => reply();
   const planner: VelaPlanningPort = { providerId: 'synthetic:history-service', availability: () => ({ available: true, busy: false }), propose: async input => { calls++; submitted.push(structuredClone(input)); return responder(); } };
-  const makeService = () => new VelaService({ db, transaction: work => kernel.withTransaction(work), host, history, planner }); service = makeService();
+  const makeService = () => new VelaService({ db, transaction: work => { boundaries.serviceMutation++; return kernel.withTransaction(work); },
+    ...(options.readTransactions ? { readTransaction: <T,>(work: (db: DatabaseSync) => T): T => { boundaries.serviceRead++; return kernel.withTransaction(work); } } : {}), host, history, planner }); service = makeService();
   const preview = (includeHistory = true, fits = () => true) => service.previewProviderContext([], { includeHistory, fits });
   const bind = (value: ReturnType<typeof preview>) => {
     const reviewed = structuredClone(value), phases: string[] = []; let acceptedAppend: AcceptedHistoryAppend | undefined;
@@ -62,7 +65,7 @@ function fixture() {
     return { frozen, phases, accepted: () => acceptedAppend, metadataGate: () => service.validateProviderHistory(reviewed, { metadataOnly: true, ...(acceptedAppend ? { acceptedAppend } : {}) }) };
   };
   const send = (intent = 'Explain the canonical source.', resourceIds = [note.id], frozen?: PrivateFrozenProviderContext) => service.request({ intent, resourceIds, authorizeProvider: true }, frozen);
-  return { kernel, db, host, note, project, other, workspace, history, reply, planner, preview, bind, send, submitted, deniedContent, deniedMetadata, deniedMessages,
+  return { kernel, db, host, note, project, other, workspace, history, reply, planner, preview, bind, send, submitted, deniedContent, deniedMetadata, deniedMessages, boundaries,
     service: () => service, reopen: () => { service = makeService(); return service; }, counts: () => ({ calls, snapshots, messageReads, sourceReads, nativeCalls }),
     respond: (value: () => Promise<ReturnType<typeof reply>>) => { responder = value; }, forbidBodyReads: (v: boolean) => { bodyReadForbidden = v; },
     changeContext: (value: Partial<CanonicalVelaContext>) => { context = { ...context, ...value }; }, close: () => kernel.close() };
@@ -75,6 +78,30 @@ test('read-only history preview never opens Vela or reads implicit messages when
     await f.send(); const before = f.counts(), off = f.preview(false); assert.equal(off.context.history, undefined); assert.equal(off.historyOmissions[0].reason, 'disabled'); assert.deepEqual(f.counts(), before);
     assert.equal(f.submitted[0].context.history, undefined); assert.equal(f.counts().nativeCalls, 0);
   } finally { f.close(); }
+});
+
+test('read transactions bypass both service and host mutation snapshot/save callbacks without changing writes or rollback', async () => {
+  const f = fixture({ readTransactions: true }); try {
+    await f.send(); const before = { ...f.boundaries }, changes = f.db.prepare('SELECT total_changes() AS n').get()!.n;
+    f.service().previewContext([]); const preview = f.preview(), binding = f.bind(preview); f.service().historyRequestMetadata(f.submitted[0].requestId); f.service().validateProviderHistory(preview);
+    f.forbidBodyReads(true); binding.metadataGate(); f.forbidBodyReads(false);
+    assert.equal(f.boundaries.serviceMutation, before.serviceMutation); assert.equal(f.boundaries.hostMutation, before.hostMutation); assert(f.boundaries.serviceRead > before.serviceRead); assert(f.boundaries.hostRead > before.hostRead); assert.equal(f.db.prepare('SELECT total_changes() AS n').get()!.n, changes);
+    const state = f.service().state(); binding.frozen.onAcceptedAppend = () => { throw new Error('Synthetic bind failure with read boundary'); };
+    await assert.rejects(f.send('Must still roll back.', [], binding.frozen), /bind failure with read boundary/); assert.deepEqual(f.service().state(), state);
+    assert(f.boundaries.serviceMutation > before.serviceMutation); assert(f.boundaries.hostMutation > before.hostMutation); assert.equal(f.counts().calls, 1);
+  } finally { f.close(); }
+});
+
+test('service read transaction rejects another SQLite connection before preview, validation or metadata projection', async () => {
+  const f = fixture({ readTransactions: true }), other = new DatabaseSync(':memory:');
+  try {
+    const request = await f.send(), preview = f.preview(); const service = new VelaService({ db: f.db, transaction: work => f.kernel.withTransaction(work), readTransaction: work => work(other), host: f.host, history: f.history });
+    const before = { ...f.boundaries }, changes = f.db.prepare('SELECT total_changes() AS n').get()!.n;
+    assert.throws(() => service.previewContext([]), /canonical_database_connection_mismatch/); assert.throws(() => service.previewProviderContext([], { includeHistory: true, fits: () => true }), /canonical_database_connection_mismatch/);
+    assert.throws(() => service.validateProviderHistory(preview, { metadataOnly: true }), /canonical_database_connection_mismatch/); assert.throws(() => service.historyRequestMetadata(request.id), /canonical_database_connection_mismatch/);
+    assert.deepEqual(f.boundaries, before); assert.equal(f.db.prepare('SELECT total_changes() AS n').get()!.n, changes);
+    assert.throws(() => new VelaService({ db: f.db, transaction: work => f.kernel.withTransaction(work), readTransaction: null as any, host: f.host }), /canonical_read_transaction_required/);
+  } finally { other.close(); f.close(); }
 });
 
 test('unavailable bounded metadata scan preserves the existing conversation and reports unavailable history', async () => {

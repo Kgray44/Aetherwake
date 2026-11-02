@@ -16,6 +16,8 @@ export interface CanonicalVelaHostOptions {
   db: DatabaseSync;
   /** The actual SAME connection is supplied by the kernel/backend boundary, and checked by identity. */
   transaction<T>(work: (db: DatabaseSync) => T): T;
+  /** Optional SAME-connection read boundary. Must not clone/save graph or invoke the mutation transaction. */
+  readTransaction?<T>(work: (db: DatabaseSync) => T): T;
   metadata(purpose?:VelaScopePurpose): CanonicalVelaMetadata;
   currentContext(): CanonicalVelaContext;
   permissions: {
@@ -101,6 +103,11 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
   check(Number.isSafeInteger(contentLimit) && contentLimit >= 1 && contentLimit <= 1024 * 1024, 'invalid_canonical_content_limit');
   for (const callback of [options.transaction, options.metadata, options.currentContext, options.permissions?.scope, options.permissions?.metadata, options.permissions?.content, options.permissions?.authorize, options.conversations?.ensure, options.conversations?.read, options.conversations?.append, options.revisions?.conversation, options.revisions?.workspace, options.dispatch?.native]) check(typeof callback === 'function', 'canonical_host_callback_required');
   const within = <T,>(work: () => T): T => options.transaction(db => { check(db === options.db, 'canonical_database_connection_mismatch'); return work(); });
+  if (options.readTransaction !== undefined) check(typeof options.readTransaction === 'function', 'canonical_host_callback_required');
+  const readWithin = <T,>(work: () => T): T => {
+    const guarded = (db: DatabaseSync) => { check(db === options.db, 'canonical_database_connection_mismatch'); return work(); };
+    return options.readTransaction ? options.readTransaction(guarded) : options.transaction(guarded);
+  };
   const row = (table: 'resources' | 'workspaces' | 'projects' | 'collections', id: string) => options.db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(id);
   function view(restoreIds:readonly string[]=[]): View {
     check(Array.isArray(restoreIds)&&restoreIds.length<=100&&restoreIds.every(identifier)&&new Set(restoreIds).size===restoreIds.length,'invalid_collection_restoration_purpose');
@@ -199,8 +206,8 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
     return { ref, content: String(note.content), source: 'aerynth://resource/' + encodeURIComponent(id) + '?version=' + entity.version };
   }
   const host: CanonicalVelaHost = {
-    scope: purpose => within(() => structuredClone(view(purpose?.restoreCollectionIds).scope)),
-    context: () => within(() => {
+    scope: purpose => readWithin(() => structuredClone(view(purpose?.restoreCollectionIds).scope)),
+    context: () => readWithin(() => {
       const current = view(); return { ...current.context,
         currentProjectId: current.context.currentProjectId && current.scope.projectIds.includes(current.context.currentProjectId) ? current.context.currentProjectId : null,
         currentWorkspaceId: current.context.currentWorkspaceId && current.scope.workspaceIds.includes(current.context.currentWorkspaceId) ? current.context.currentWorkspaceId : null,
@@ -211,15 +218,15 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
       check(name === 'system:vela', 'invalid_canonical_assistant_key'); const id = options.conversations.ensure(name);
       check(identifier(id), 'invalid_canonical_conversation'); requireConversation(id, view()); return id;
     }),
-    readConversation: id => within(() => structuredClone(readConversation(id, view()))),
-    conversationRevision: id => within(() => { const current = view();
+    readConversation: id => readWithin(() => structuredClone(readConversation(id, view()))),
+    conversationRevision: id => readWithin(() => { const current = view();
       const ref = resolve({ id, kind: 'resource' }, current.scope, current);
       if (!ref || ref.resourceKind !== 'conversation' || options.permissions.content(ref, current.context, current.metadata) !== true) return null;
       const revision = options.revisions.conversation(id, current.metadata); return validVersion(revision) ? revision : null;
     }),
     appendMessage: (id, message) => within(() => { const current = view(); requireConversation(id, current); return options.conversations.append(id, structuredClone(message)); }),
-    resolve: (ref, scope,purpose) => within(() => structuredClone(resolve(ref, scope, view(purpose?.restoreCollection===true&&ref.kind==='collection'?[ref.id]:[])))),
-    canInspectCollectionArchiveReceipt:(ref,scope)=>within(()=>{
+    resolve: (ref, scope,purpose) => readWithin(() => structuredClone(resolve(ref, scope, view(purpose?.restoreCollection===true&&ref.kind==='collection'?[ref.id]:[])))),
+    canInspectCollectionArchiveReceipt:(ref,scope)=>readWithin(()=>{
       if(ref.kind!=='collection'||!identifier(ref.id)||!scope.collectionIds?.includes(ref.id))return false;
       const current=view();selectedScope(scope,current);
       // Historical target title/version come from the existing receipt. Read
@@ -230,15 +237,15 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
       if(projectId!==(ref.projectId??null)||projectId!==null&&!current.scope.projectIds.includes(projectId))return false;
       return options.permissions.inspectCollectionArchiveReceipt?.(ref,current.context,current.metadata)===true;
     }),
-    search: (query, scope, limit) => within(() => {
+    search: (query, scope, limit) => readWithin(() => {
       check(typeof query === 'string' && query.length <= 200 && Number.isInteger(limit) && limit > 0 && limit <= 1000, 'invalid_canonical_search');
       const current = view(); selectedScope(scope, current); const search = query.normalize('NFKC').toLocaleLowerCase();
       const priority = (ref: ResourceRef) => ref.kind === 'resource' && current.context.selectedResourceIds.includes(ref.id) ? 0 : ref.kind === 'workspace' && ref.id === current.context.currentWorkspaceId ? 1 : ref.kind === 'project' && ref.id === current.context.currentProjectId ? 2 : 3;
       return [...current.refs.values()].filter(ref => permitted(scope, ref) && (ref.title.normalize('NFKC').toLocaleLowerCase().includes(search) || ref.id.toLocaleLowerCase().includes(search) || ref.resourceKind?.includes(search)))
         .sort((a, b) => priority(a) - priority(b) || a.title.localeCompare(b.title) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id)).slice(0, limit).map(ref => structuredClone(ref));
     }),
-    readContent: (id, scope) => within(() => structuredClone(readContent(id, scope, view()))),
-    canReadContent: (ref, scope) => within(() => { const current = view(), actual = resolve(ref, scope, current);
+    readContent: (id, scope) => readWithin(() => structuredClone(readContent(id, scope, view()))),
+    canReadContent: (ref, scope) => readWithin(() => { const current = view(), actual = resolve(ref, scope, current);
       return !!actual && actual.version === ref.version && options.permissions.content(actual, current.context, current.metadata) === true;
     }),
     authorize: request => within(() => {

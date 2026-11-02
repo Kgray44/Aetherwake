@@ -24,6 +24,8 @@ export interface VelaServiceOptions {
   db: DatabaseSync;
   /** Host transaction boundary must include canonical conversation writes. Supports nesting if host APIs need it. */
   transaction<T>(work: () => T): T;
+  /** Optional SAME-connection read boundary; never the Core mutation/snapshot/save path. */
+  readTransaction?<T>(work: (db: DatabaseSync) => T): T;
   host: VelaHostPort; planner?: VelaPlanningPort;
   /** Explicit bounded canonical projections. Absent means no implicit conversational history. */
   history?: {
@@ -54,6 +56,7 @@ export class VelaService {
   private opts: VelaServiceOptions;
   constructor(options: VelaServiceOptions) {
     this.opts = options;
+    if (options.readTransaction !== undefined) check(typeof options.readTransaction === 'function', 'canonical_read_transaction_required');
     options.transaction(() => {
       options.db.exec(`CREATE TABLE IF NOT EXISTS vela_state (
         id INTEGER PRIMARY KEY CHECK(id=1), schema_version INTEGER NOT NULL, json TEXT NOT NULL
@@ -91,6 +94,10 @@ export class VelaService {
     });
   }
   private now() { return this.opts.now?.() ?? new Date().toISOString(); }
+  private read<T>(work: () => T): T {
+    if (!this.opts.readTransaction) return this.opts.transaction(work);
+    return this.opts.readTransaction(db => { check(db === this.opts.db, 'canonical_database_connection_mismatch'); return work(); });
+  }
   private save() {
     const json = JSON.stringify(this.data);
     check(byteLength(json) <= 4 * 1024 * 1024, 'vela_state_capacity_reached');
@@ -196,7 +203,7 @@ export class VelaService {
   }
   /** Exact prospective context for native consent. No conversation/message/request/provider side effects. */
   previewContext(resourceIds: string[]): ContextManifest {
-    return this.opts.transaction(() => structuredClone(this.context(resourceIds, this.scope())));
+    return this.read(() => structuredClone(this.context(resourceIds, this.scope())));
   }
   private historyOrigin(scope = this.scope()): HistoryOrigin {
     const navigation = this.contextIdentity(); return { principalId: scope.principalId, policyVersion: scope.policyVersion,
@@ -204,13 +211,15 @@ export class VelaService {
   }
   /** Trusted metadata projection only; never RPC or a second transcript/body store. */
   historyRequestMetadata(id: string): HistoryRequestRecord | null {
-    const r = this.data.requests.find(value => value.id === id); if (!r) return null;
-    const scope = this.scope(), ref = this.opts.host.resolve({ id: r.conversationId, kind: 'resource' }, scope);
-    if (!ref || this.opts.host.canReadContent?.(ref, scope) !== true) return null;
-    let sourceDependencies; try { sourceDependencies = historyDependenciesFromContext(r.context, r.conversationId); } catch { return null; }
-    return structuredClone({ id: r.id, conversationId: r.conversationId, state: r.state, providerId: r.providerId,
-      ...(r.origin ? { origin: r.origin } : {}), ...(r.inputMessageId ? { inputMessageId: r.inputMessageId } : {}), ...(r.inputContentDigest ? { inputContentDigest: r.inputContentDigest } : {}),
-      ...(r.response ? { response: r.response } : {}), ...(r.provenance ? { provenance: r.provenance } : {}), sourcePolicyVersion: r.context.policyVersion, sourceDependencies });
+    return this.read(() => {
+      const r = this.data.requests.find(value => value.id === id); if (!r) return null;
+      const scope = this.scope(), ref = this.opts.host.resolve({ id: r.conversationId, kind: 'resource' }, scope);
+      if (!ref || this.opts.host.canReadContent?.(ref, scope) !== true) return null;
+      let sourceDependencies; try { sourceDependencies = historyDependenciesFromContext(r.context, r.conversationId); } catch { return null; }
+      return structuredClone({ id: r.id, conversationId: r.conversationId, state: r.state, providerId: r.providerId,
+        ...(r.origin ? { origin: r.origin } : {}), ...(r.inputMessageId ? { inputMessageId: r.inputMessageId } : {}), ...(r.inputContentDigest ? { inputContentDigest: r.inputContentDigest } : {}),
+        ...(r.response ? { response: r.response } : {}), ...(r.provenance ? { provenance: r.provenance } : {}), sourcePolicyVersion: r.context.policyVersion, sourceDependencies });
+    });
   }
   private historyReaders(): { full: HistoryProofReader; metadata: HistoryMetadataReader } {
     const callbacks = this.opts.history; check(callbacks && this.opts.host.conversationRevision && this.opts.host.canReadContent, 'canonical_history_unavailable');
@@ -231,7 +240,7 @@ export class VelaService {
   }
   /** Core-only prospective egress. Opening/selection never appends, creates a conversation or invokes a provider. */
   previewProviderContext(resourceIds: string[], options: { includeHistory: boolean; fits(context: ContextManifest): boolean }): { context: ContextManifest; origin: HistoryOrigin; historyFence?: HistoryFence; historyOmissions: readonly HistoryOmission[] } {
-    return this.opts.transaction(() => {
+    return this.read(() => {
       const scope = this.scope(), origin = this.historyOrigin(scope), context = this.context(resourceIds, scope);
       check(typeof options.includeHistory === 'boolean' && typeof options.fits === 'function', 'invalid_history_preview');
       check(options.fits(context), 'planning_prompt_capacity_exceeded');
@@ -253,7 +262,7 @@ export class VelaService {
   }
   /** Validates the exact private reviewed window; metadataOnly is safe for schema tools and never reselects. */
   validateProviderHistory(preview: { context: ContextManifest; historyFence?: HistoryFence }, options: { metadataOnly?: boolean; acceptedAppend?: AcceptedHistoryAppend } = {}): void {
-    this.opts.transaction(() => {
+    this.read(() => {
       if (!preview.historyFence) { check(!preview.context.history, 'invalid_history_fence'); return; }
       check(preview.context.history && this.data.conversationId === preview.historyFence.conversationId, 'invalid_history_fence');
       const readers = this.historyReaders(), revision = this.opts.host.conversationRevision!(preview.historyFence.conversationId);
