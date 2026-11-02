@@ -140,6 +140,34 @@ test('explicit Structured spans survive setOrganization, resolve and restart', t
   try { assert.deepEqual(new WorkspaceEngine(reopened).project(s.workspaceId), s); } finally { reopened.close(); }
 });
 
+test('Structured reading order does not backfill Vela before wide resources; drag preview and commit agree', t => {
+  const { engine: e, path, state } = fixture(t, true);
+  let s = run(e, state, { type: 'setOrganization', organization: { mode: 'freeform' } });
+  for (let i = 0; i < 3; i++) s = add(e, s, { width: 650, height: 300 });
+  const ids = s.blocks.map(b => b.blockId), order = [...ids, 'system:vela'];
+  const spans = Object.fromEntries(ids.map(id => [id, { columns: 2, rows: 4 }]));
+  s = run(e, s, { type: 'setOrganization', organization: { mode: 'structured', structured: { columnCount: 3, order, spans } } });
+  const items = [...s.blocks.map(b => ({ ...b, id: b.blockId })), s.presence];
+  const visualOrder = items.toSorted((a, b) => a.y - b.y || a.x - b.x).map(b => b.id);
+  assert.deepEqual(visualOrder, order); disjoint(s);
+  assert.ok(s.presence.y >= s.blocks.find(b => b.blockId === ids.at(-1))!.y);
+  const first = s.blocks.find(b => b.blockId === ids[0])!, before = s;
+  const presence = { expectedVersion: s.presence.version, presentation: { x: first.x, y: first.y - s.presence.height } };
+  const predicted = previewLayout(s, { presence, bounds });
+  assert.equal(predicted.organization.structured.order[0], 'system:vela');
+  assert.notDeepEqual(geometry(predicted.presence), geometry(s.presence));
+  s = run(e, s, { type: 'setPresence', ...presence });
+  assert.deepEqual(layouts(s), layouts(predicted)); disjoint(s);
+  const reopened = WorkspaceKernel.open(path);
+  try {
+    const e2 = new WorkspaceEngine(reopened);
+    assert.deepEqual(e2.project(s.workspaceId), s);
+    const restored = run(e2, s, { type: 'undoLayout' });
+    assert.deepEqual(layouts(restored), layouts(before));
+    assert.deepEqual(restored.organization.structured.order, before.organization.structured.order);
+  } finally { reopened.close(); }
+});
+
 test('explicit column preference can be reset to automatic without replacing the workspace', t => {
   const { engine: e, state } = fixture(t); let s = add(e, state);
   s = run(e, s, { type: 'setOrganization', organization: { mode: 'structured', structured: { columnCount: 4 } } });

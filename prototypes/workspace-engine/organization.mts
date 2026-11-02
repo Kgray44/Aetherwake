@@ -70,6 +70,11 @@ function structured(state: LayoutState, input: CollisionPlacement[], options: Po
   const derivedSpan = (p: CollisionPlacement): GridSpan => {
     const f = footprint(p); return { columns: Math.max(1, Math.ceil((f.width + cfg.columnGap - 1e-7) / stepX)), rows: Math.max(1, Math.ceil((f.height + cfg.rowGap - 1e-7) / stepY)) };
   };
+  // Keep visible reading order consistent with the persistent order. Restarting
+  // first-fit at row zero let a late small placement backfill an earlier gap,
+  // so dragging it after a visibly later card could appear to do nothing.
+  // Locked placements remain exact reservations rather than ordering anchors.
+  let cursor = 0;
   for (const id of order) {
     const p = input.find(p => p.id === id)!;
     let span = options.spanOverrides?.includes(id) ? cfg.spans[id] : options.intent === 'mode' || options.resizeIds?.includes(id) ? derivedSpan(p) : cfg.spans[id] ?? derivedSpan(p);
@@ -89,14 +94,15 @@ function structured(state: LayoutState, input: CollisionPlacement[], options: Po
     span = derivedSpan(next); spans[id] = span;
     const box = footprint(next), dx = box.x - next.x, dy = box.y - next.y;
     let found = false;
-    for (let row = 0; !found && origin.y + row * stepY <= 1e6; row++) {
+    for (let row = Math.floor(cursor / columns); !found && origin.y + row * stepY <= 1e6; row++) {
       const lastColumn = span.columns > columns ? 0 : columns - span.columns;
-      for (let col = 0; col <= lastColumn; col++) {
+      const firstColumn = row === Math.floor(cursor / columns) ? cursor % columns : 0;
+      for (let col = firstColumn; col <= lastColumn; col++) {
         const candidate = { ...box, x: origin.x + col * stepX, y: origin.y + row * stepY };
         if (occupied.some(b => overlaps(candidate, b))) continue;
         const result = { ...next, x: candidate.x - dx, y: candidate.y - dy };
         ensure(Math.abs(result.x) <= 1e6 && Math.abs(result.y) <= 1e6, 'LAYOUT_SPACE_EXHAUSTED');
-        placed.set(id, result); occupied.push(candidate); found = true; break;
+        placed.set(id, result); occupied.push(candidate); cursor = row * columns + col + 1; found = true; break;
       }
     }
     ensure(found, 'LAYOUT_SPACE_EXHAUSTED');

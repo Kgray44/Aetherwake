@@ -53,6 +53,8 @@ Integration must retain the original committed state throughout a gesture, coale
 
 Fluid→Freeform and Structured→Freeform preserve current geometry. Freeform→Fluid resolves overlaps as one explicit undoable action. Entering Structured is a single reversible arrangement transformation. Structured→Fluid preserves clean geometry where possible. Active mode persists independently per workspace and survives restart.
 
+Unlocked Structured placements follow a monotonic row-major cursor, so their visible reading order matches the persisted placement order. A later small placement cannot backfill a gap above an earlier wide resource. This corrects the native finding where Vela was last in order but appeared near the top, making a drag after the final resource seem ignored. Locked placements remain exact reservations and may depart from reading order. Existing stored geometry is unchanged on load; the corrected policy applies to explicit organization operations.
+
 ## Camera and recovery
 
 Viewport uses the application's full-window convention: `screen = (world - viewportOrigin) * zoom`; safe editable `bounds` are supplied in workspace units. Camera-only `saveLayout {placements:[],viewport}` and matching preview intent `view` skip organization resolution, including unresolved legacy Fluid geometry. Panning is not an implicit Make Room operation.
@@ -69,7 +71,7 @@ Legacy snapshots missing organization are normalized against each workspace's mi
 
 ## Verification and full-goal acceptance ledger
 
-Engine checkpoint: 38 retained regressions plus 22 mode-policy tests pass (60 total); strict TypeScript and whitespace checks pass. The integration base's 31 backend and 12 kernel regressions also pass. Coverage includes new/inherited defaults; independent modes/restart; exact Freeform overlap/layers/presence persistence; predictive read-only preview/commit equality; local yielding; Structured 0/3/10/25/50 blocks, sizes/spans/reorder/presets; explicit span overrides and reset-to-automatic; all six transitions; durable undo and checkpoint restore of mode/config/geometry; view-only saves and safe recovery; locks, invalid policies and two-window stale revisions; raw legacy geometry/history and explicit preference migration; Vela preview/commit equality across all modes; circular shape validity; failed schema4 migration rollback; and interrupted process mode-change recovery.
+Engine checkpoint: 38 retained regressions plus 23 mode-policy tests pass (61 total); strict TypeScript and whitespace checks pass. The integration base's 31 backend and 12 kernel regressions also pass. Coverage includes new/inherited defaults; independent modes/restart; exact Freeform overlap/layers/presence persistence; predictive read-only preview/commit equality; local yielding; Structured 0/3/10/25/50 blocks, sizes/spans/reorder/presets; explicit span overrides and reset-to-automatic; all six transitions; durable undo and checkpoint restore of mode/config/geometry; view-only saves and safe recovery; locks, invalid policies and two-window stale revisions; raw legacy geometry/history and explicit preference migration; Vela preview/commit equality across all modes; circular shape validity; failed schema4 migration rollback; and interrupted process mode-change recovery.
 
 ### Pure preview performance
 
@@ -79,9 +81,9 @@ On Windows 10.0.26300 / Node v24.18.0 / Ryzen AI 7 350, the saved 50-block resul
 
 | Mode | Drag p50 / p95 ms | Resize p50 / p95 ms |
 |---|---|---|
-| Fluid | 0.424 / 2.668 | 0.400 / 0.659 |
-| Freeform | 0.034 / 0.076 | 0.032 / 0.054 |
-| Structured | 0.713 / 2.205 | 0.776 / 1.140 |
+| Fluid | 0.405 / 3.214 | 0.399 / 0.944 |
+| Freeform | 0.033 / 0.072 | 0.032 / 0.058 |
+| Structured | 0.144 / 0.187 | 0.136 / 0.154 |
 
 These are synchronous pure layout calculations. They exclude rendering, displayed frame timing, IPC, SQLite/history serialization, native input latency and GPU work. Concurrent local workloads were not sampled or attributed. Actual rendering measurements and native visual experience remain separate milestone requirements, not implied by this table.
 
