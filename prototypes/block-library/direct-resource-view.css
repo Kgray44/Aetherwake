@@ -1,0 +1,10 @@
+.aw-direct-resource { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.aw-direct-resource-body { min-height: 0; overflow: auto; flex: 1; }
+.aw-direct-resource-body[hidden] { display: none; }
+.aw-direct-resource-status:empty { display: none; }
+.aw-direct-document { display: flex; flex-direction: column; gap: .65rem; min-height: 0; }
+.aw-direct-editor { width: 100%; min-height: 12rem; box-sizing: border-box; resize: vertical; }
+.aw-direct-document[data-document-kind="note"] .aw-direct-editor { font-family: Georgia, "Times New Roman", serif; font-size: 1.1rem; line-height: 1.7; }
+.aw-direct-task-controls { display: flex; flex-wrap: wrap; gap: 1rem; margin-block: .75rem; }
+.aw-direct-task-controls label { display: flex; align-items: center; gap: .45rem; }
+.aw-direct-resource .task-group-description { margin-top: .8rem; }
