@@ -326,13 +326,13 @@ exports.verify = async ({
         targetSize,
       });
     };
-    const shortChatReady = async (entry) => {
+    const shortChatReady = async (entry, expectedMessage) => {
       const card = await normal(entry),
         input = card + " .cp-composer textarea",
         send = card + ' .cp-composer button[type="submit"]';
       await click(input);
       const bounds = await js(
-        `(()=>{const card=document.querySelector(${q(card)}),body=card.querySelector('.working-content'),input=card.querySelector('.cp-composer textarea'),send=card.querySelector('.cp-composer button[type="submit"]'),b=body.getBoundingClientRect(),c=card.getBoundingClientRect();const inspect=e=>{const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,h=document.elementFromPoint(x,y);return {visible:r.width>0&&r.height>0&&r.top>=Math.max(b.top,c.top)-1&&r.bottom<=Math.min(b.bottom,c.bottom)+1&&r.left>=c.left-1&&r.right<=c.right+1,hit:e===h||e.contains(h),font:parseFloat(getComputedStyle(e).fontSize)}};return {input:inspect(input),send:inspect(send)}})()`,
+        `(()=>{const card=document.querySelector(${q(card)}),body=card.querySelector('.working-content'),input=card.querySelector('.cp-composer textarea'),send=card.querySelector('.cp-composer button[type="submit"]'),b=body.getBoundingClientRect(),c=card.getBoundingClientRect();const inspect=e=>{const r=e.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,h=document.elementFromPoint(x,y);return {visible:r.width>0&&r.height>0&&r.top>=Math.max(b.top,c.top)-1&&r.bottom<=Math.min(b.bottom,c.bottom)+1&&r.left>=c.left-1&&r.right<=c.right+1,hit:e===h||e.contains(h),font:parseFloat(getComputedStyle(e).fontSize)}};const messages=card.querySelector('.cp-messages'),m=messages.getBoundingClientRect(),clip={left:Math.max(m.left,b.left,c.left),right:Math.min(m.right,b.right,c.right),top:Math.max(m.top,b.top,c.top),bottom:Math.min(m.bottom,b.bottom,c.bottom)},expected=${q(expectedMessage ?? null)};let userLineVisible=false;if(expected!==null){for(const content of messages.querySelectorAll('.cp-message-user .cp-message-content')){if(content.textContent!==expected||getComputedStyle(content).visibility==='hidden')continue;const range=document.createRange();range.selectNodeContents(content);userLineVisible=[...range.getClientRects()].some(r=>r.width>0&&r.height>0&&r.top>=clip.top-.01&&r.bottom<=clip.bottom+.01&&r.right>clip.left&&r.left<clip.right);if(userLineVisible)break;}}return {input:inspect(input),send:inspect(send),messages:{height:Math.max(0,clip.bottom-clip.top),userLineVisible,canonicalLineRequired:expected!==null}}})()`,
       );
       assert(
         bounds.input.visible &&
@@ -345,6 +345,8 @@ exports.verify = async ({
         bounds.input.font >= 15.95,
         "Short normal Chat retains readable 16px input",
       );
+      assert(bounds.messages.height >= 39.99, "Short normal Chat retains at least 40px of visible transcript");
+      if (expectedMessage !== undefined) assert(bounds.messages.userLineVisible, "Short normal Chat exposes at least one complete line of the exact canonical user message");
       receipt.shortChat = bounds;
       return { input, send };
     };
@@ -428,6 +430,7 @@ exports.verify = async ({
         (await cp("readDraft", { resourceId: chat.resourceId })).content,
         "",
       );
+      await shortChatReady(chat, expected.chatDraft);
       await shot("restored-short-normal-local-send");
       await navigate(expected.cases.find((entry) => entry.kind === "note"));
       await wait(
@@ -590,7 +593,7 @@ exports.verify = async ({
             "",
           );
           await type(controls.input, chatDraft);
-          await shortChatReady(entry);
+          await shortChatReady(entry, localMessage);
           await noExecution();
           receipt.checks.push(
             "Native normal-card Send at 408×257 records one exact local user message, clears its acknowledged draft and accepts later unsent text without execution",
