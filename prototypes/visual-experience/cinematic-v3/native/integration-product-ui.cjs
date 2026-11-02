@@ -24,11 +24,13 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
     await fs.mkdir(out, { recursive: true });
     driver = await createDriver(win); foreground();
     const js = code => { foreground(); return driver.js(code); };
-    const click = async selector => { foreground(); await driver.click(selector); receipt.actions.push({ type: 'native-mouse', selector }); foreground(); };
+    const click = async selector => { receipt.phase = 'Click ' + selector; foreground(); await driver.click(selector); receipt.actions.push({ type: 'native-mouse', selector }); foreground(); };
+    const wait = async (phase, expression) => { receipt.phase = phase; await driver.wait(expression, Math.max(1, deadline - Date.now() - 1200)); foreground(); };
     const desktop = () => js("window.aerynthHost.command('desktop',{type:'snapshot'})");
     const noExecution = async () => assert.deepEqual(await js("window.aerynthHost.command('executionStatus',{})"), [], 'No provider execution authorized');
     await noExecution(); const before = await desktop();
     const capture = async (selector, name) => {
+      receipt.phase = 'Inspect ' + selector;
       const prior = await js(graphics); let bounds, acknowledgement;
       for (let sample = 0; sample < 70; sample++) {
         foreground(); bounds = await js(inspect(selector)); const current = await js(graphics);
@@ -51,19 +53,19 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
     // viewport-only recovery instead of moving Vela or bypassing hit testing.
     await click('.aw-workspace-layout button[aria-label="Workspace actions"]');
     await click('#locate-vela');
-    await driver.wait("document.body.classList.contains('vela-access')");
+    await wait('Located Vela retains deliberate focus', "document.body.classList.contains('vela-access')");
     await click('#vela');
-    await driver.wait("!!document.querySelector('.vela-core-compose textarea')");
+    await wait('Vela composer mounted', "!!document.querySelector('.vela-core-compose textarea')");
     await click('[data-surface-id="vela"] .aw-contextual-heading');
     await capture('.vela-core', '01-vela');
     await click('[data-surface-id="vela"] .aw-contextual-dismiss');
-    await driver.wait("!document.querySelector('[data-surface-id=vela]')");
+    await wait('Vela surface closed', "!document.querySelector('[data-surface-id=vela]')");
     await click('#workspace-manager'); await click('#conversation-manager');
-    await driver.wait("!!document.querySelector('.cp-results button')&&!document.querySelector('.cp-manager').hasAttribute('aria-busy')");
+    await wait('Actual conversation search ready', "!!document.querySelector('.cp-results button')&&!document.querySelector('.cp-manager').hasAttribute('aria-busy')");
     const index = await js("[...document.querySelectorAll('.cp-results button')].findIndex(e=>e.textContent.includes('Synthetic package local chat'))");
     assert(index >= 0, 'Expected actual synthetic local chat');
     await click('.cp-results button:nth-of-type(' + (index + 1) + ')');
-    await driver.wait("!!document.querySelector('.cp-composer textarea')&&!!document.querySelector('.cp-message')");
+    await wait('Canonical conversation rendered', "!!document.querySelector('.cp-composer textarea')&&!!document.querySelector('.cp-message')");
     await click('[data-surface-id="conversations"] .aw-contextual-heading');
     await capture('.cp-manager', '02-conversation');
     await noExecution(); const after = await desktop();
