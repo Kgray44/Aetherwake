@@ -91,6 +91,7 @@ export function installApplication(hooks: Hooks) {
   let constellation: ReturnType<typeof mountConstellation> | null = null;
   let policyKey = "";
   const arrivalId = "application:arrival";
+  let departingWorkspace = false;
   let arrivalOrigin = { x: innerWidth / 2, y: innerHeight / 2 };
   const arrivalPose = { x: 1, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity: 1 };
   hooks.motion.add(arrivalId, arrivalPose);
@@ -235,6 +236,9 @@ export function installApplication(hooks: Hooks) {
   }
   function apply(next: DesktopSnapshot) {
     const changed = state?.activeWorkspaceId !== next.activeWorkspaceId;
+    const leavingWorkspace =
+      state?.navigation.kind === "workspace" &&
+      next.navigation.kind === "constellation";
     const navigated =
       JSON.stringify(state?.navigation) !== JSON.stringify(next.navigation);
     if (navigated) {
@@ -279,7 +283,21 @@ export function installApplication(hooks: Hooks) {
     document.body.classList.toggle("constellation-overview", overview);
     universe.classList.toggle("overview", overview);
     el("#stage").inert = overview;
-    el("#stage").style.visibility = overview ? "hidden" : "";
+    if (leavingWorkspace) {
+      departingWorkspace = true;
+      arrivalOrigin = { x: innerWidth / 2, y: innerHeight / 2 };
+      el("#stage").style.transformOrigin =
+        `${arrivalOrigin.x}px ${arrivalOrigin.y}px`;
+      hooks.motion.target(
+        arrivalId,
+        { ...arrivalPose, x: 0.78, opacity: 0 },
+        "workspace departure to celestial overview",
+      );
+      if (hooks.motion.reduced || constellation?.controller.policy.quiet)
+        hooks.motion.snap(arrivalId);
+    } else if (!overview) departingWorkspace = false;
+    el("#stage").style.visibility =
+      !overview || departingWorkspace ? "" : "hidden";
     const navigationSnapshot = {
       ...next,
       blocks: next.navigationBlocks ?? next.blocks,
@@ -753,6 +771,10 @@ export function installApplication(hooks: Hooks) {
       "Give an idea a place",
       '<form><label>Block type<select id="block-kind" name="kind"><option value="conversation">Conversation</option><option value="note">Note</option><option value="research">Research / document</option><option value="task">Task</option><option value="reference">Resource reference</option><option value="stream">Intelligence Stream</option></select></label><label>Title<input name="title" id="block-title" value="Untitled" required maxlength="200"></label><label>Conversation provider<select name="provider"><option value="local">Local conversation · no model response</option><option value="codex">Codex App Server · explicit authorization on Send</option></select></label><p>Notes, documents, tasks and references work locally. Task automation and file execution are unavailable.</p><button type="submit">Add block</button></form>',
     );
+    el<HTMLSelectElement>("#block-kind", dialog).insertAdjacentHTML(
+      "beforeend",
+      '<option value="task_group">Task group</option>',
+    );
     form(async (f) => {
       const next = await command({
         type: "createResource",
@@ -804,6 +826,31 @@ export function installApplication(hooks: Hooks) {
     };
     el("#resource-search", dialog).oninput = draw;
     draw();
+  }
+  function taskGroupMembers(groupId: string) {
+    const group = state?.resources.find((r) => r.id === groupId);
+    if (!group || group.kind !== "task_group") return;
+    const selected = new Set(group.taskMembers?.map((t) => t.id));
+    open(
+      "Tasks in " + escape(group.title),
+      `<form id="task-group-members"><p>Choose existing local tasks. Membership references the same tasks and never starts an execution.</p>${
+        state!.resources
+          .filter((r) => r.kind === "task" && r.available !== false)
+          .map(
+            (task) =>
+              `<label class="task-member-choice"><input type="checkbox" name="taskId" value="${task.id}" ${selected.has(task.id) ? "checked" : ""}>${escape(task.title)}</label>`,
+          )
+          .join("") || "<p>Create a task first, then add it here.</p>"
+      }<button type="submit">Save task membership</button></form>`,
+    );
+    form(async (data) =>
+      command({
+        type: "setTaskGroupMembers",
+        groupId,
+        expectedVersion: group.version,
+        taskIds: data.getAll("taskId").map(String),
+      }),
+    );
   }
   function geometry(blockId: string) {
     const b = state!.blocks.find((b) => b.id === blockId);
@@ -1191,6 +1238,8 @@ export function installApplication(hooks: Hooks) {
       };
     }
     if (r.available === false) {
+      article.querySelector(".task-group-summary")?.remove();
+      article.querySelector(".conversation-transcript")?.replaceChildren();
       if (!article.querySelector(".resource-unavailable")) {
         const notice = document.createElement("p");
         notice.className = "resource-unavailable";
@@ -1210,7 +1259,8 @@ export function installApplication(hooks: Hooks) {
       article.querySelector<HTMLTextAreaElement>("textarea");
     if (restoredEditor) restoredEditor.disabled = false;
     article.dataset.shape = b.shape;
-    el(".grip span", article).textContent = r.kind.toUpperCase();
+    el(".grip span", article).textContent =
+      r.kind === "task_group" ? "TASK GROUP" : r.kind.toUpperCase();
     if (r.kind === "conversation") {
       const surface = el(".working-content", article);
       if (!surface.querySelector(".conversation-compose")) {
@@ -1309,6 +1359,57 @@ export function installApplication(hooks: Hooks) {
         p.textContent = `Codex (streaming): ${streaming.get(r.id)}`;
         log.append(p);
       }
+    } else if (r.kind === "task_group") {
+      const surface = el(".working-content", article);
+      if (!surface.querySelector(".task-group-summary")) {
+        const group = document.createElement("section");
+        group.className = "task-group-summary";
+        group.innerHTML =
+          '<p>Local tasks · execution is separate</p><ul class="group-task-list"></ul><button type="button" class="manage-task-members">Manage tasks</button>';
+        surface.prepend(group);
+        el(".manage-task-members", group).onclick = () =>
+          void enqueue(async () => {
+            await flush();
+            taskGroupMembers(r.id);
+          });
+      }
+      const members = r.taskMembers ?? [],
+        list = el(".group-task-list", surface);
+      list.replaceChildren();
+      for (const task of members) {
+        const item = document.createElement("li"),
+          button = document.createElement("button");
+        button.type = "button";
+        button.className = "group-task";
+        button.dataset.taskId = task.id;
+        button.textContent = `${task.status === "done" ? "☑" : "☐"} ${task.title}`;
+        button.setAttribute("aria-pressed", String(task.status === "done"));
+        button.onclick = () =>
+          void enqueue(async () => {
+            await flush();
+            const current = state!.resources.find((r) => r.id === task.id)!;
+            await command({
+              type: "taskStatus",
+              resourceId: current.id,
+              expectedVersion: current.version,
+              status: current.taskStatus === "done" ? "open" : "done",
+            });
+          });
+        item.append(button);
+        list.append(item);
+      }
+      el(".folio-preview", article).textContent = members.length
+        ? members
+            .map((t) => `${t.status === "done" ? "✓" : "○"} ${t.title}`)
+            .join(" · ")
+        : "Add existing local tasks with Manage tasks.";
+      el(".folio-subtitle", article).textContent =
+        `${members.filter((t) => t.status === "done").length}/${members.length} completed locally`;
+      el(".synthetic", article).textContent =
+        "LOCAL TASK GROUP · NO AUTOMATIC EXECUTION";
+      const editor = article.querySelector<HTMLTextAreaElement>("textarea");
+      if (editor && document.activeElement !== editor)
+        editor.value = drafts.get(r.id)?.content ?? r.content;
     } else if (r.kind === "stream") {
       const content = el(".working-content", article);
       content.innerHTML =
@@ -1513,11 +1614,19 @@ export function installApplication(hooks: Hooks) {
       if (policy.reduced || policy.quiet || policy.hidden)
         hooks.motion.snap(arrivalId);
       const pose = hooks.motion.pose(arrivalId);
+      el("#stage").style.visibility =
+        state?.navigation.kind !== "constellation" ||
+        (departingWorkspace && pose.opacity > 0.003)
+          ? ""
+          : "hidden";
       el("#stage").style.transform = `scale(${pose.x})`;
       el("#stage").style.opacity = String(pose.opacity);
       constellation?.frame(now);
     },
     ready,
+    workspaceSurfacesVisible: () =>
+      state?.navigation.kind !== "constellation" ||
+      (departingWorkspace && hooks.motion.pose(arrivalId).opacity > 0.003),
     surfaceView: () => ({
       scale: hooks.motion.pose(arrivalId).x,
       opacity: hooks.motion.pose(arrivalId).opacity,

@@ -398,3 +398,31 @@
 .command-surface details {
   padding: 12px 0;
 }
+.task-member-choice {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 10px;
+}
+.task-member-choice input {
+  width: auto !important;
+}
+.group-task-list {
+  list-style: none;
+  padding: 0;
+  max-height: 200px;
+  overflow: auto;
+}
+.group-task {
+  padding: 6px 10px;
+  margin: 2px 0;
+  text-align: left;
+  width: 100%;
+  border: 1px solid #baa8dd33;
+  border-radius: 8px;
+}
+.task-group-summary {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+}

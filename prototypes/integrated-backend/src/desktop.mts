@@ -26,6 +26,7 @@ const kinds = [
   "note",
   "research",
   "task",
+  "task_group",
   "reference",
   "stream",
 ];
@@ -261,6 +262,33 @@ export class DesktopState {
       check(row!.version === expected, "stale_block_version");
     return row!;
   }
+  private resourceKind(id: string) {
+    return this.db
+      .prepare("SELECT kind FROM desktop_resources WHERE resource_id=?")
+      .get(id)?.kind;
+  }
+  private checkTaskMembership(groupId: string, taskId: string) {
+    check(
+      this.resourceKind(groupId) === "task_group" &&
+        this.resourceKind(taskId) === "task",
+      "invalid_task_membership",
+    );
+    for (const id of [groupId, taskId]) {
+      const r = this.kernel.getResource(id).resource;
+      check(r.state === "active", "resource_archived");
+      if (r.project_id)
+        check(
+          this.db
+            .prepare("SELECT id FROM projects WHERE id=? AND state='active'")
+            .get(r.project_id),
+          "project_archived",
+        );
+    }
+  }
+  private touchGroup(id: string) {
+    const group = this.kernel.getResource(id);
+    this.kernel.updateNote(id, group.note.content, group.resource.version);
+  }
   private blocks(id: string): Block[] {
     return this.engine
       .project(id)
@@ -419,13 +447,67 @@ export class DesktopState {
               "project_archived",
             );
         }
+        if (a.kind === "contains_task")
+          this.checkTaskMembership(a.sourceId, a.targetId);
         this.kernel.relate(a.sourceId, a.targetId, a.kind, "user");
+        if (a.kind === "contains_task") this.touchGroup(a.sourceId);
         break;
       }
-      case "unrelate":
+      case "unrelate": {
         check(typeof a.relationshipId === "string");
+        const edge = this.db
+          .prepare("SELECT * FROM relationships WHERE id=?")
+          .get(a.relationshipId);
+        if (edge?.kind === "contains_task")
+          this.checkTaskMembership(
+            String(edge.source_id),
+            String(edge.target_id),
+          );
         this.kernel.unlinkRelationship(a.relationshipId);
+        if (edge?.kind === "contains_task")
+          this.touchGroup(String(edge.source_id));
         break;
+      }
+      case "setTaskGroupMembers": {
+        const group = this.kernel.getResource(a.groupId);
+        check(
+          group.resource.version === a.expectedVersion,
+          "stale_resource_version",
+        );
+        check(
+          this.resourceKind(a.groupId) === "task_group" &&
+            group.resource.state === "active",
+          "task_group_required",
+        );
+        check(
+          Array.isArray(a.taskIds) &&
+            a.taskIds.length <= 500 &&
+            a.taskIds.every((id) => typeof id === "string") &&
+            new Set(a.taskIds).size === a.taskIds.length,
+          "invalid_task_members",
+        );
+        for (const id of a.taskIds) this.checkTaskMembership(a.groupId, id);
+        const old = this.db
+          .prepare(
+            "SELECT * FROM relationships WHERE source_id=? AND kind='contains_task'",
+          )
+          .all(a.groupId);
+        const desired = new Set(a.taskIds),
+          existing = new Set(old.map((e) => String(e.target_id)));
+        if (
+          desired.size === existing.size &&
+          a.taskIds.every((id) => existing.has(id))
+        )
+          return;
+        for (const edge of old)
+          if (!desired.has(String(edge.target_id)))
+            this.kernel.unlinkRelationship(String(edge.id));
+        for (const id of desired)
+          if (!existing.has(id))
+            this.kernel.relate(a.groupId, id, "contains_task", "user");
+        this.touchGroup(a.groupId);
+        break;
+      }
       case "navigate":
         this.navigate(s, a.target);
         break;
@@ -671,45 +753,70 @@ export class DesktopState {
       });
     // Keep truthful unavailable placeholders for surviving placements. Navigation never
     // exposes archived subjects, and the renderer never receives dangling references.
-    const resources = this.kernel.searchResources("", true).map((r) => {
-      const entry = this.kernel.getResource(r.id);
-      const kind = (this.db
-        .prepare("SELECT kind FROM desktop_resources WHERE resource_id=?")
-        .get(r.id)?.kind ??
-        (r.kind === "generic" ? "reference" : r.kind)) as BlockKind;
-      const visible =
-        r.state === "active" &&
-        (r.project_id === null || projectIds.has(r.project_id));
-      const metadata = this.db
-        .prepare(
-          "SELECT metadata_json FROM desktop_resources WHERE resource_id=?",
-        )
-        .get(r.id);
-      return {
-        id: r.id,
-        title: r.title,
-        kind,
-        project_id: r.project_id,
-        version: r.version,
-        state: r.state,
-        visible,
-        available: visible,
-        content: visible ? (entry.note?.content ?? "") : "",
-        ...(kind === "task"
-          ? {
-              taskStatus:
-                JSON.parse(String(metadata?.metadata_json ?? "{}"))
-                  .taskStatus ?? "open",
-            }
-          : {}),
-        provider: "local" as const,
-        messages: [],
-        ...(visible && r.kind === "conversation" ? conversations(r.id) : {}),
-      };
-    });
+    const resources: Resource[] = this.kernel
+      .searchResources("", true)
+      .map((r) => {
+        const entry = this.kernel.getResource(r.id);
+        const kind = (this.db
+          .prepare("SELECT kind FROM desktop_resources WHERE resource_id=?")
+          .get(r.id)?.kind ??
+          (r.kind === "generic" ? "reference" : r.kind)) as BlockKind;
+        const visible =
+          r.state === "active" &&
+          (r.project_id === null || projectIds.has(r.project_id));
+        const metadata = this.db
+          .prepare(
+            "SELECT metadata_json FROM desktop_resources WHERE resource_id=?",
+          )
+          .get(r.id);
+        return {
+          id: r.id,
+          title: r.title,
+          kind,
+          project_id: r.project_id,
+          version: r.version,
+          state: r.state,
+          visible,
+          available: visible,
+          content: visible ? (entry.note?.content ?? "") : "",
+          ...(kind === "task"
+            ? {
+                taskStatus:
+                  JSON.parse(String(metadata?.metadata_json ?? "{}"))
+                    .taskStatus ?? "open",
+              }
+            : {}),
+          provider: "local" as const,
+          messages: [],
+          ...(visible && r.kind === "conversation" ? conversations(r.id) : {}),
+        };
+      });
     const visibleIds = new Set(
       resources.filter((r) => r.visible).map((r) => r.id),
     );
+    const relationships = (
+      this.db
+        .prepare("SELECT * FROM relationships")
+        .all() as DesktopSnapshot["relationships"]
+    ).filter(
+      (edge) =>
+        visibleIds.has(edge.source_id) && visibleIds.has(edge.target_id),
+    );
+    const byResource = new Map(resources.map((r) => [r.id, r]));
+    for (const resource of resources)
+      if (resource.kind === "task_group" && resource.visible)
+        resource.taskMembers = [];
+    for (const edge of relationships)
+      if (edge.kind === "contains_task") {
+        const group = byResource.get(edge.source_id),
+          task = byResource.get(edge.target_id);
+        if (group?.taskMembers && task?.kind === "task")
+          group.taskMembers.push({
+            id: task.id,
+            title: task.title,
+            status: task.taskStatus ?? "open",
+          });
+      }
     const w = s.activeWorkspaceId ? this.workspace(s.activeWorkspaceId) : null;
     return {
       contract: "aerynth.desktop@1",
@@ -722,12 +829,7 @@ export class DesktopState {
         .all() as any,
       resources,
       blocks: s.activeWorkspaceId ? this.blocks(s.activeWorkspaceId) : [],
-      relationships: (
-        this.db.prepare("SELECT * FROM relationships").all() as any[]
-      ).filter(
-        (edge) =>
-          visibleIds.has(edge.source_id) && visibleIds.has(edge.target_id),
-      ),
+      relationships,
       ...s,
       navigationBlocks: this.db
         .prepare("SELECT * FROM blocks ORDER BY workspace_id,z,id")

@@ -15,6 +15,7 @@ export type BlockKind =
   | "note"
   | "research"
   | "task"
+  | "task_group"
   | "reference"
   | "stream";
 export type Shape =
@@ -58,6 +59,7 @@ export type Resource = {
   version: number;
   content: string;
   taskStatus?: "open" | "done";
+  taskMembers?: { id: string; title: string; status: "open" | "done" }[];
   execution?: {
     id: string;
     state: string;
@@ -151,6 +153,12 @@ type DesktopAction =
     }
   | { type: "relate"; sourceId: string; targetId: string; kind: string }
   | { type: "unrelate"; relationshipId: string }
+  | {
+      type: "setTaskGroupMembers";
+      groupId: string;
+      expectedVersion: number;
+      taskIds: string[];
+    }
   | { type: "navigate"; target: NavigationTarget }
   | { type: "back" }
   | {
