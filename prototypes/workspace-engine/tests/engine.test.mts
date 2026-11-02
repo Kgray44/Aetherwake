@@ -27,6 +27,27 @@ function run(e: WorkspaceEngine, s: WorkspaceProjection, action: object) {
 function add(e: WorkspaceEngine, s: WorkspaceProjection, presentation?: object) {
   return run(e, s, { type: 'createBlock', resource: { kind: 'note', title: 'Synthetic note', content: 'Synthetic fixture text' }, presentation });
 }
+test('a published projection remains correct after a nested command transaction rolls back', t => {
+  const {engine:e,kernel:k,state}=fixture(t);
+  const before=add(e,state,{x:80,y:120}),block=before.blocks[0];
+  assert.deepEqual(e.project(before.workspaceId),before);
+  assert.throws(()=>k.withTransaction(()=>{
+    const changed=run(e,before,{type:'moveBlock',blockId:block.blockId,expectedVersion:block.version,x:330,y:240});
+    assert.equal(e.project(before.workspaceId).revision,changed.revision);
+    throw new Error('synthetic_outer_transaction_failure');
+  }),/synthetic_outer_transaction_failure/);
+  assert.deepEqual(e.project(before.workspaceId),before);
+  const undone=run(e,before,{type:'undoLayout'});
+  assert.equal(undone.blocks.length,0);
+  const restored=run(e,undone,{type:'redoLayout'});
+  assert.deepEqual(restored.blocks,before.blocks.map(b=>({...b,version:restored.blocks[0].version})));
+});
+test('external history replacement after a successful read is revalidated and corruption stays explicit',t=>{
+  const {engine:e,kernel:k,state}=fixture(t),before=add(e,state);
+  e.project(before.workspaceId);
+  k.withTransaction(db=>db.prepare('UPDATE workspace_engine_layouts SET history_json=? WHERE workspace_id=?').run(JSON.stringify({undo:[{before:{},after:{}}],redo:[]}),before.workspaceId));
+  assert.throws(()=>e.project(before.workspaceId),code('INTEGRITY'));
+});
 for (const count of [0, 1, 3, 10, 25, 50]) test(`${count} real persisted placements, no fixed block count`, t => {
   const { engine: e, kernel: k, state: initial, path } = fixture(t, true);
   let s = initial;
@@ -40,7 +61,7 @@ for (const count of [0, 1, 3, 10, 25, 50]) test(`${count} real persisted placeme
 
 test('workspace selection/rename, shared resources and independent presentation survive reopening', t => {
   const { engine: e, kernel: k, state, path } = fixture(t, true);
-  let a = add(e, state); const id = a.blocks[0].resourceId;
+  let a = add(e, state); const id = a.blocks[0].resourceId; assert.ok(id);
   let b = e.createWorkspace('Second');
   b = run(e, b, { type: 'attachResource', resourceId: id, templateId: 'research' });
   a = run(e, a, { type: 'duplicateBlock', blockId: a.blocks[0].blockId });
@@ -63,21 +84,21 @@ test('workspace selection/rename, shared resources and independent presentation 
 
 test('detach/undo never deletes content; archive hides active discovery, restore recovers', t => {
   const { engine: e, kernel: k, state } = fixture(t);
-  let s = add(e, state); const b = s.blocks[0];
+  let s = add(e, state); const b = s.blocks[0]; const resourceId=b.resourceId; assert.ok(resourceId);
   s = run(e, s, { type: 'detachBlock', blockId: b.blockId });
-  assert.equal(s.blocks.length, 0); assert.ok(k.getResource(b.resourceId).note);
+  assert.equal(s.blocks.length, 0); assert.ok(k.getResource(resourceId).note);
   s = run(e, s, { type: 'undoLayout' }); assert.equal(s.blocks[0].blockId, b.blockId);
-  e.setResourceArchived(b.resourceId, true, 1);
+  e.setResourceArchived(resourceId, true, 1);
   assert.equal(k.searchResources().length, 0);
   assert.equal(e.project(s.workspaceId).blocks[0].resourceState, 'archived');
-  assert.throws(() => run(e, s, { type: 'attachResource', resourceId: b.resourceId }), code('RESOURCE_ARCHIVED'));
-  assert.throws(() => e.deleteResource(b.resourceId, 2, 'approval'), code('DELETE_POLICY_REQUIRED'));
+  assert.throws(() => run(e, s, { type: 'attachResource', resourceId: resourceId }), code('RESOURCE_ARCHIVED'));
+  assert.throws(() => e.deleteResource(resourceId, 2, 'approval'), code('DELETE_POLICY_REQUIRED'));
   const allowed = new WorkspaceEngine(k, { allowResourceDeletion: () => true });
-  assert.throws(() => allowed.deleteResource(b.resourceId, 2, 'approval'), code('RECOVERY_REFERENCE'));
+  assert.throws(() => allowed.deleteResource(resourceId, 2, 'approval'), code('RECOVERY_REFERENCE'));
   const free = k.createNote('Synthetic unreferenced', 'Delete fixture'); k.setResourceArchived(free.id, true, 1);
   allowed.deleteResource(free.id, 2, 'explicit-synthetic-approval');
   assert.throws(() => k.getResource(free.id), code('NOT_FOUND'));
-  e.setResourceArchived(b.resourceId, false, 2); assert.equal(k.searchResources().length, 1);
+  e.setResourceArchived(resourceId, false, 2); assert.equal(k.searchResources().length, 1);
 });
 
 test('atomic geometry + shape, circular constraint, minimized and lock semantics', t => {
@@ -109,6 +130,7 @@ test('undo/redo history persists; new action clears redo; checkpoints restore re
     s = run(e2, s, { type: 'restoreCheckpoint', checkpointId: cp.checkpointId }); assert.equal(s.blocks[0].x, b.x);
     s = run(e2, s, { type: 'undoLayout' }); assert.equal(s.blocks[0].x, 777);
     s = run(e2, s, { type: 'moveBlock', blockId: b.blockId, x: 90, y: 90 }); assert.equal(s.canRedo, false);
+    assert.ok(b.resourceId);
     assert.equal(k.getResource(b.resourceId).note.content, 'Synthetic fixture text');
   } finally { reopened.close(); }
 });

@@ -43,6 +43,9 @@ export class WorkspaceEngine {
   readonly kernel: WorkspaceKernel;
   private db!: DatabaseSync;
   private options: EngineOptions;
+  // Geometry/identity metadata only; one workspace and at most 4 MiB of encoded
+  // history are retained. Exact database strings fence every reuse, including rollback.
+  private historyMemo: {workspaceId:string;json:string;presence:string;organization:string;value:History}|null = null;
   constructor(kernel: WorkspaceKernel, options: EngineOptions = {}) {
     this.kernel = kernel; this.options = options;
     kernel.withTransaction(db => {
@@ -158,15 +161,24 @@ export class WorkspaceEngine {
     const { revision, ...organization } = this.readOrganization(workspaceId);
     return { viewport: this.viewport(state.layout.viewport), presence, organization, blocks: state.blocks.map(row => this.block(row)).sort((a, b) => a.blockId.localeCompare(b.blockId)) };
   }
-  private history(workspaceId: string): History {
-    const h = JSON.parse(this.layout(workspaceId).history_json);
+  private normalizedHistory(workspaceId: string): History {
+    const row=this.layout(workspaceId),json=String(row.history_json),presence=String(row.legacy_presence_json),organizationJson=String(row.legacy_organization_json),memo=this.historyMemo;
+    if(memo?.workspaceId===workspaceId&&memo.json===json&&memo.presence===presence&&memo.organization===organizationJson)return memo.value;
+    const h = JSON.parse(json);
     ensure(h && Array.isArray(h.undo) && Array.isArray(h.redo), 'INTEGRITY');
-    const baseline = JSON.parse(this.layout(workspaceId).legacy_presence_json);
-    const organization = JSON.parse(this.layout(workspaceId).legacy_organization_json);
+    const baseline = JSON.parse(presence);
+    const organization = JSON.parse(organizationJson);
     for (const stack of [h.undo, h.redo]) for (const entry of stack) {
       entry.before = this.normalizeSnapshot(workspaceId, entry.before, baseline, organization); entry.after = this.normalizeSnapshot(workspaceId, entry.after, baseline, organization);
     }
+    this.historyMemo=Buffer.byteLength(json)<=4*1024*1024?{workspaceId,json,presence,organization:organizationJson,value:h}:null;
     return h;
+  }
+  private history(workspaceId: string): History {
+    const history=this.normalizedHistory(workspaceId);
+    // Writers receive independent data. Cached validation must never be changed
+    // by an undo/redo pop, a new command, or a transaction that later rolls back.
+    return this.historyMemo?.value===history?structuredClone(history):history;
   }
   private writeHistory(workspaceId: string, h: History) {
     // Explicit finite recovery window: most recent 100 committed layout operations.
@@ -175,7 +187,7 @@ export class WorkspaceEngine {
   }
   project(workspaceId: string): WorkspaceProjection {
     return this.atomic(() => {
-      const state = this.kernel.openWorkspace(workspaceId), l = this.layout(workspaceId), h = this.history(workspaceId);
+      const state = this.kernel.openWorkspace(workspaceId), l = this.layout(workspaceId), h = this.normalizedHistory(workspaceId);
       return {
         contract: CONTRACT, workspaceId, projectId: state.workspace.project_id, title: state.workspace.title,
         workspaceVersion: state.workspace.version, layoutId: l.id, revision: state.layout.version,
