@@ -863,12 +863,12 @@ exports.verify = async ({
       }
       await workingHome();
       await projectView();
-      const source = (await snapshot()).resources.find(
+      const sourceConversation = (await snapshot()).resources.find(
         (r) => r.id === sourceRow.conversation.resource.id,
       );
-      assert.equal(source.provider, "local");
-      assert.equal(source.messages.length, 2);
-      await locate(source.title, "resource:" + sourceRow.conversation.block.id);
+      assert.equal(sourceConversation.provider, "local");
+      assert.equal(sourceConversation.messages.length, 2);
+      await locate(sourceConversation.title, "resource:" + sourceRow.conversation.block.id);
       await textButton("Explore neighborhood", ".aw-spatial-detail");
       await wait(
         `window.__aerynth.snapshot().spatial.camera.neighborhood===${JSON.stringify("resource:" + sourceRow.conversation.block.id)}`,
@@ -891,13 +891,13 @@ exports.verify = async ({
         '.aw-graph-dialog input[type="text"]',
         "Reviewed Development continuation",
       );
-      await fill(".aw-graph-dialog select", source.messages.at(-1).id);
+      await fill(".aw-graph-dialog select", sourceConversation.messages.at(-1).id);
       await click('.aw-graph-dialog fieldset input[type="checkbox"]');
       receipt.reviewedBranch = {
-        parentResourceId: source.id,
-        forkMessageId: source.messages.at(-1).id,
-        selectedMessageIds: [source.messages[0].id],
-        omittedMessageIds: [source.messages[1].id],
+        parentResourceId: sourceConversation.id,
+        forkMessageId: sourceConversation.messages.at(-1).id,
+        selectedMessageIds: [sourceConversation.messages[0].id],
+        omittedMessageIds: [sourceConversation.messages[1].id],
       };
       await shot("05-explicit-context-review");
       await click('.aw-graph-dialog button[type="submit"]');
@@ -910,12 +910,12 @@ exports.verify = async ({
           (b) => b.childResourceId === child?.id,
         );
       assert.ok(child && lineage);
-      assert.equal(lineage.parentResourceId, source.id);
-      assert.equal(lineage.sourceMessageId, source.messages.at(-1).id);
+      assert.equal(lineage.parentResourceId, sourceConversation.id);
+      assert.equal(lineage.sourceMessageId, sourceConversation.messages.at(-1).id);
       assert.equal(lineage.mode, "application_continuation");
       assert.deepEqual(
-        afterBranch.resources.find((r) => r.id === source.id).messages,
-        source.messages,
+        afterBranch.resources.find((r) => r.id === sourceConversation.id).messages,
+        sourceConversation.messages,
       );
       assert.ok(
         (afterBranch.navigationBlocks ?? afterBranch.blocks).some(
@@ -943,7 +943,7 @@ exports.verify = async ({
       await stopSegment("01-orbit-inspect-reviewed-branch.webm");
 
       await startSegment("pin, typed relationship and exact working return");
-      await locate(source.title, "resource:" + sourceRow.conversation.block.id);
+      await locate(sourceConversation.title, "resource:" + sourceRow.conversation.block.id);
       const beforeDrag = (await spatial()).anchors[
         "resource:" + sourceRow.conversation.block.id
       ].spatial;
@@ -1001,7 +1001,7 @@ exports.verify = async ({
       await shot("06-moved-and-pinned-moon");
       await textButton("Link resources", ".aw-constellation-bar");
       // Each select belongs to a label, so address the form's label order explicitly.
-      await fill(".aw-graph-dialog label:nth-of-type(1) select", source.id);
+      await fill(".aw-graph-dialog label:nth-of-type(1) select", sourceConversation.id);
       await fill(
         ".aw-graph-dialog label:nth-of-type(2) select",
         sourceRow.research.resource.id,
@@ -1011,7 +1011,7 @@ exports.verify = async ({
       await wait('!document.querySelector(".aw-graph-dialog").open');
       const relationship = (await snapshot()).relationships.find(
         (e) =>
-          e.source_id === source.id &&
+          e.source_id === sourceConversation.id &&
           e.target_id === sourceRow.research.resource.id &&
           e.kind === "references",
       );

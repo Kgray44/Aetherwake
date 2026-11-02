@@ -95,6 +95,8 @@ The CLI admits 1 GiB through the C:/D: reserve guard, requires a fresh private p
 
 The owner's existing desktop host can then add `--prepared-workspaces` to its `--integration-expanded --profile=...` launch. The helper checks canonical source hashes and the exact loaded resource identities, contents, relationships and placements before skipping only repetitive fixture construction. Every ordered native step, additional block creation, branch, drag/resize, graph edit, exact return, recording and fresh-process restart check remains. Default UI fixture construction is preserved. Native input stops when the operator leaves the window; the integration host owns the short deadline and immediate process cleanup. Offline preparation is not native acceptance evidence.
 
+Before a native launch, run `node prototypes/constellation/tests/check-native-helpers.cjs`. It uses the existing TypeScript toolchain to check the actual owned helpers for unbound names, temporal dead zones, unassigned reads and non-callable expressions. This source preflight opens no window and complements the runtime checks.
+
 ### Body clearance
 
 Planet geometry and spatial layout share one conservative size contract, including rings, atmosphere and maximum selection enlargement. Automatic placement leaves 28 world units between those envelopes and varies siblings' distance and elevation. Clear saved positions and pins remain authoritative; conflicting legacy positions are repaired deterministically with a visible notice. Drag previews stop before fixed neighbors, and arrangements/undo are validated against the current graph.
