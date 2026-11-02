@@ -129,6 +129,28 @@ test('opening has no inference/actions, canonical conversation survives service 
   } finally { f.close(); }
 });
 
+test('previewContext uses exact authorized builder without side effects and changed preview grants reject provider dispatch', async () => {
+  const p = planner(), f = fixture({ planner: p.port });
+  try {
+    const before = f.service.state(), first = f.service.previewContext(['note:a']), again = f.service.previewContext(['note:a']);
+    assert.deepEqual({ ...first, id: null, createdAt: null }, { ...again, id: null, createdAt: null });
+    assert.notEqual(first.id, again.id); assert.equal(first.included[0].content, 'A synthetic research note.');
+    assert.equal(f.service.state().conversation, null); assert.equal(f.service.state().requests.length, 0);
+    assert.equal(f.service.state().lastPresenceAt, before.lastPresenceAt); assert.equal(p.calls(), 0); assert.equal(f.counts().nativeCalls, 0);
+    assert.equal(f.db.prepare('SELECT count(*) AS count FROM canonical_messages').get()!.count, 0);
+    f.db.prepare("UPDATE canonical_resources SET version=2,content='Changed canonical source' WHERE id='note:a'").run();
+    const fresh = f.service.previewContext(['note:a']); assert.equal(fresh.included[0].version, 2); assert.notEqual(fresh.included[0].contentDigest, first.included[0].contentDigest);
+    assert.throws(() => f.service.previewContext(['note:private']), /resource_not_authorized/);
+    const signature = (manifest: typeof first) => JSON.stringify({ ...manifest, id: null, createdAt: null });
+    const authorize = f.host.authorize;
+    f.host.authorize = request => request.phase === 'provider-context' && request.contextManifest && signature(request.contextManifest) !== signature(first)
+      ? { decision: 'deny', reason: 'Native consent preview changed before dispatch', policyVersion: 'policy:1' }
+      : authorize(request);
+    const changed = await f.service.request({ intent: 'Use the earlier reviewed preview', resourceIds: ['note:a'], authorizeProvider: true });
+    assert.equal(changed.errorCode, 'host_policy_denied'); assert.equal(p.calls(), 0);
+  } finally { f.close(); }
+});
+
 test('native actions work without provider and apply an atomic canonical workspace with exact existing resource placements', async () => {
   const f = fixture();
   try {

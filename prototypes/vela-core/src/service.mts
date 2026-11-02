@@ -162,6 +162,10 @@ export class VelaService {
     const scope = this.scope();
     return this.opts.host.search(query, scope, 30).slice(0, 30).filter(ref => this.permitted(ref.id, ref.kind, scope)).map(ref => this.resolve(ref.id, ref.kind, scope));
   }
+  /** Exact prospective context for native consent. No conversation/message/request/provider side effects. */
+  previewContext(resourceIds: string[]): ContextManifest {
+    return this.opts.transaction(() => structuredClone(this.context(resourceIds, this.scope())));
+  }
   private context(ids: string[], scope: VelaScope): ContextManifest {
     check(Array.isArray(ids) && ids.length <= 12 && ids.every(identifier) && new Set(ids).size === ids.length, 'invalid_context_selection');
     const manifest: ContextManifest = { id: randomUUID(), createdAt: this.now(), policyVersion: scope.policyVersion,
