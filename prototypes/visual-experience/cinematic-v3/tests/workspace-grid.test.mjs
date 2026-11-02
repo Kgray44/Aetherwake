@@ -55,7 +55,7 @@ test("density transitions share the same dominant world line family on both side
   }
 });
 
-function fixture() {
+function fixture(paintInScene = false) {
   const motion = new MotionCoordinator();
   let wakes = 0,
     writes = 0;
@@ -78,6 +78,7 @@ function fixture() {
   const grid = createWorkspaceGrid({
     root,
     motion,
+    paintInScene,
     wake() {
       wakes++;
     },
@@ -145,6 +146,18 @@ test("reduced motion reconciles reveal immediately without changing paint spacin
   assert.equal(f.grid.diagnostics().reveal, 0);
   assert.equal(f.root.hidden, true);
   assert.deepEqual(f.grid.diagnostics().projection, projection);
+  assert.equal(f.motion.bodies.size, 1);
+  f.grid.dispose();
+});
+
+test("scene painting retains MC reveal and LOD without painting a DOM grid over physical surfaces", () => {
+  const f = fixture(true);
+  assert.match(f.root.style.cssText, /display:none/);
+  f.grid.update({ visible: true, zoom: 0.8, offset: { x: 12, y: 24 } });
+  f.motion.step(1 / 60);
+  f.grid.frame(policy);
+  assert(f.grid.diagnostics().reveal > 0 && f.grid.diagnostics().reveal < 1);
+  assert.equal(f.writes, 0);
   assert.equal(f.motion.bodies.size, 1);
   f.grid.dispose();
 });

@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import { WorkspaceGridField } from "./workspace-grid-field.ts";
+import type { WorkspaceGridFrame } from "./workspace-grid.ts";
 import { PresenceProjection } from "./presence-projection.ts";
 import {
   contourPoint,
@@ -95,6 +97,7 @@ export interface EnvironmentFrame {
   presencePhase?: number;
   surfaceView?: SurfaceView;
   quiet?: boolean;
+  workspaceGrid?: WorkspaceGridFrame | null;
 }
 
 // Openness, structural tension, directed flow. These are expression studies,
@@ -363,6 +366,7 @@ export class Environment {
   // continue serving Vela/resources without washing out architectural shadows.
   private readonly architecturalScene = new THREE.Scene();
   private readonly cosmos = new CelestialEnvironment();
+  private readonly workspaceGrid = new WorkspaceGridField();
   private readonly camera = new THREE.PerspectiveCamera(39, 1, 0.1, 100);
   private readonly architecture = new THREE.Group();
   private readonly living = new THREE.Group();
@@ -1915,6 +1919,7 @@ export class Environment {
         frame.sceneWeights?.architecture ??
         (frame.study === "architecture" ? 1 : 0),
     });
+    this.workspaceGrid.render(this.renderer, frame.workspaceGrid, width, height);
     this.renderer.clearDepth();
     if (this.architecture.visible)
       this.renderer.render(this.architecturalScene, this.camera);
@@ -2162,6 +2167,7 @@ export class Environment {
     this.environmentMap.dispose();
     this.stellarKey.shadow.dispose();
     this.cosmos.dispose();
+    this.workspaceGrid.dispose();
     this.renderer.dispose();
   }
 }

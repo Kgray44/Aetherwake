@@ -355,6 +355,7 @@ export function installApplication(hooks: Hooks) {
     root: gridRoot,
     motion: hooks.motion,
     wake: hooks.wake,
+    paintInScene: true,
   });
   let tail = Promise.resolve();
   const drafts = new Map<

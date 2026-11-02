@@ -7,6 +7,12 @@ const neutral = { x: 0, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity: 0 };
 const modulo = (value: number, interval: number) =>
   ((value % interval) + interval) % interval;
 
+export type WorkspaceGridFrame = {
+  visible: boolean;
+  reveal: number;
+  projection: ReturnType<typeof projectWorkspaceGrid>;
+};
+
 /** Paint-only LOD: every line is a multiple of the unchanged canonical grid.
  * Adjacent powers blend continuously, including through LOD boundaries. */
 export function projectWorkspaceGrid(
@@ -47,6 +53,8 @@ export function createWorkspaceGrid(options: {
   root: HTMLElement;
   motion: MotionCoordinator;
   wake(): void;
+  /** Physical scenes paint beneath their surfaces in the existing GPU pass. */
+  paintInScene?: boolean;
 }) {
   const key = "workspace-grid:" + ++sequence;
   const layers = [0, 1].map(() => {
@@ -58,7 +66,8 @@ export function createWorkspaceGrid(options: {
   });
   options.root.setAttribute("aria-hidden", "true");
   options.root.style.cssText =
-    "position:absolute;inset:0;pointer-events:none;z-index:-1";
+    "position:absolute;inset:0;pointer-events:none;z-index:-1" +
+    (options.paintInScene ? ";display:none" : "");
   options.motion.add(key, neutral);
   let projection = projectWorkspaceGrid(1, { x: 0, y: 0 }),
     visible = false,
@@ -99,16 +108,17 @@ export function createWorkspaceGrid(options: {
         next = JSON.stringify([projection, reveal]);
       if (next === signature) return;
       signature = next;
-      projection?.forEach((value, index) => {
-        const style = layers[index].style;
-        style.setProperty("--workspace-grid-spacing", value.spacing + "px");
-        style.setProperty("--workspace-grid-x", value.x + "px");
-        style.setProperty("--workspace-grid-y", value.y + "px");
-        style.setProperty(
-          "--workspace-grid-reveal",
-          String(reveal * value.weight),
-        );
-      });
+      if (!options.paintInScene)
+        projection?.forEach((value, index) => {
+          const style = layers[index].style;
+          style.setProperty("--workspace-grid-spacing", value.spacing + "px");
+          style.setProperty("--workspace-grid-x", value.x + "px");
+          style.setProperty("--workspace-grid-y", value.y + "px");
+          style.setProperty(
+            "--workspace-grid-reveal",
+            String(reveal * value.weight),
+          );
+        });
       options.root.hidden = !visible && reveal === 0;
     },
     diagnostics: () => ({

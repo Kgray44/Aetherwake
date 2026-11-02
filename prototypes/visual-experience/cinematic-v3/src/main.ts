@@ -187,6 +187,7 @@ const metrics = {
   lastDraw: 0,
 };
 const osReduced = matchMedia("(prefers-reduced-motion: reduce)");
+const forcedColors = matchMedia("(forced-colors: active)");
 let manualReduced = false;
 let frameRunning = false,
   wakeRequested = false;
@@ -1022,6 +1023,7 @@ $("#reduced").addEventListener("change", (e) => {
   reducedPolicy();
 });
 osReduced.addEventListener("change", reducedPolicy);
+forcedColors.addEventListener("change", () => wake());
 reducedPolicy();
 $("#quiet").addEventListener("change", (e) => {
   quiet = (e.target as HTMLInputElement).checked;
@@ -1509,6 +1511,9 @@ function tick(now: number) {
           surfaces,
           surfaceView,
           quiet,
+          workspaceGrid: forcedColors.matches
+            ? null
+            : application?.workspaceGrid(),
           presencePlacement:
             presenceReviewScale !== null
               ? undefined
