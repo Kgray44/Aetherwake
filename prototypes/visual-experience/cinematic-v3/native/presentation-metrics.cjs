@@ -17,7 +17,18 @@ function summarizePresentMon(csv, targetPid) {
       lines
         .shift()
         ?.replace(/^\uFEFF/, "")
-        .split(",") ?? [];
+        .split(",")
+        .map((name) => {
+          const canonical = {
+            processid: "ProcessID",
+            swapchainaddress: "SwapChainAddress",
+            dropped: "Dropped",
+            presentmode: "PresentMode",
+            msbetweendisplaychange: "MsBetweenDisplayChange",
+            msuntildisplayed: "MsUntilDisplayed",
+          };
+          return canonical[name.trim().toLowerCase()] ?? name.trim();
+        }) ?? [];
   if (
     ![
       "ProcessID",

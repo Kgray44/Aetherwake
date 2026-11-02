@@ -6,7 +6,7 @@ const { summarizePresentMon } = createRequire(import.meta.url)(
 );
 test("display qualification keeps swap chains separate, ignores dropped/foreign frames and requires actual display columns", () => {
   const header =
-    "Application,ProcessID,SwapChainAddress,Dropped,PresentMode,MsBetweenDisplayChange,MsUntilDisplayed";
+    "Application,ProcessID,SwapChainAddress,Dropped,PresentMode,msBetweenDisplayChange,msUntilDisplayed";
   const rows = [
     ...Array.from(
       { length: 32 },
@@ -27,6 +27,10 @@ test("display qualification keeps swap chains separate, ignores dropped/foreign 
   assert.equal(result.swapchains[0].droppedFrames, 10);
   assert.equal(result.swapchains[0].displayIntervalsMs.p95, 16.67);
   assert.equal(result.swapchains[1].presentToDisplayMs.count, 0);
+  assert.deepEqual(
+    summarizePresentMon([header.replaceAll("ms", "Ms"), ...rows].join("\n"), 123),
+    result,
+  );
   assert.equal(
     summarizePresentMon("Application,callbacks\nelectron.exe,500", 123)
       .qualified,
