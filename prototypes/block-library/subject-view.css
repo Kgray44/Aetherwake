@@ -126,6 +126,10 @@ button.aw-subject-resource-title {
 .aw-subject-resource-details summary {
   cursor: pointer;
 }
+.aw-subject-resource-details .aw-subject-related {
+  display: block;
+  margin-top: 6px;
+}
 .aw-subject-view[data-subject-kind="resource-query"] .aw-subject-resources li {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

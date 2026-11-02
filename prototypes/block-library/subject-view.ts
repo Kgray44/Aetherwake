@@ -41,6 +41,7 @@ export function mountSubjectExperience(
     onProjection?(projection: SubjectIdentity): void;
     openWorkspace?(workspaceId: string): void;
     openResource?(resourceId: string): void;
+    openRelated?(resourceId: string, anchor: HTMLElement): void | Promise<void>;
     attachResource?(resource: ResourceCandidate): Promise<void>;
   },
 ) {
@@ -131,6 +132,8 @@ export function mountSubjectExperience(
       metadata: HTMLElement;
       address: HTMLElement;
       resource: ResourceCandidate;
+      attach?: HTMLButtonElement;
+      related?: HTMLButtonElement;
     }
   >();
   const workspaceRows = new Map<
@@ -218,6 +221,8 @@ export function mountSubjectExperience(
         row.dataset.resourceId = resource.id;
         details.append(node("summary", "Details"), address);
         row.append(title, metadata, actions, details);
+        item = { row, title, metadata, address, resource };
+        rows.set(resource.id, item);
         if (options.attachResource) {
           const attach = button("Attach", () => {
             const current = rows.get(resource.id)?.resource;
@@ -238,9 +243,31 @@ export function mountSubjectExperience(
             "Attach " + resource.title + " to workspace",
           );
           actions.append(attach);
+          item.attach = attach;
         }
-        item = { row, title, metadata, address, resource };
-        rows.set(resource.id, item);
+        if (options.openRelated) {
+          const related = button("Related resources", () => {
+            const current = rows.get(resource.id);
+            if (!current || !active || disposed || related.disabled) return;
+            related.disabled = true;
+            void Promise.resolve()
+              .then(() => {
+                if (!disposed && active && rows.get(resource.id)?.related === related)
+                  return options.openRelated!(current.resource.id, related);
+              })
+              .catch(() => {
+                if (!disposed && active && rows.get(resource.id)?.related === related)
+                  status.textContent = "Related resources could not be opened. Your current view is retained.";
+              })
+              .finally(() => {
+                if (!disposed && rows.get(resource.id)?.related === related)
+                  related.disabled = false;
+              });
+          });
+          related.classList.add("aw-subject-related");
+          details.append(related);
+          item.related = related;
+        }
       }
       item.resource = resource;
       item.title.textContent = resource.title;
@@ -253,12 +280,8 @@ export function mountSubjectExperience(
         (resource.placementCountComplete ? "" : "+") +
         " placements";
       item.address.textContent = resource.id;
-      item.row
-        .querySelector(".aw-subject-action")
-        ?.setAttribute(
-          "aria-label",
-          "Attach " + resource.title + " to workspace",
-        );
+      item.attach?.setAttribute("aria-label", "Attach " + resource.title + " to workspace");
+      item.related?.setAttribute("aria-label", "Related resources for " + resource.title);
     }
     // Keep unchanged rows mounted (including an open Details disclosure and focus).
     const ordered = append

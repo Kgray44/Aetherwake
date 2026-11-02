@@ -71,6 +71,8 @@ CPU component regressions cover per-kind projections, real-ID actions, partial c
 
 ## Related resources callback (App hookup pending)
 
+`mountSubjectExperience` also accepts optional `openRelated(resourceId, anchor)`. Resource and Collection browser rows expose it inside their existing Details disclosure only when supplied. Project Overview's authorized resource rows use the same path. The host can reuse its Note callback and ResourceLinks surface; no extra RPC or relationship store is needed. Current row membership, activity and disposal are rechecked before queued dispatch. Labels follow canonical title refresh without rebuilding Details/search/actions; an opening failure retains the readable page and makes no saved/attached claim. App wiring and actual native row inspection remain pending.
+
 `mountNoteExperience` accepts optional `openRelated(resourceId, anchor): void | Promise<void>`. Only supplied callbacks add Related resources to the existing document menu; opening it does not save, replace or dispose the note editor. `mountResourceLinks(root, resourceId, port)` from `resource-links-view.ts` returns `ready`, `refresh` and `dispose`. Import `resource-links-view.css` once in the host.
 
 `ResourceLinksPort.read` returns current authorized `resources` and `relationships` from the canonical DesktopSnapshot. `change`, when supported, accepts only the existing graphAction `relate`/`unrelate` shape and returns its actual snapshot. Supply explicit `capabilities.relate`/`unrelate` booleans and optional canonical `openResource(id)` navigation. The host owns native policy, snapshot application and lifecycle; no new RPC family or relationship store is needed. Parent integration should use its existing graphAction broker, queue and surface manager.

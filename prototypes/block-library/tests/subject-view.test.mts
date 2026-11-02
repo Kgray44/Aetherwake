@@ -61,6 +61,7 @@ test("normal browser search and same-ID actions stay mounted across pose, refres
   const search = view.root.querySelector("input"),
     row = view.root.querySelector("[data-resource-id]"),
     details = row.querySelector("details");
+  assert.equal(row.querySelector('.aw-subject-related'), null, 'An absent native callback must not advertise relationship inspection');
   details.open = true;
   row.scrollTop = 17;
   search.value = "Synthetic";
@@ -103,6 +104,51 @@ test("normal browser search and same-ID actions stay mounted across pose, refres
   const paused = reads.length;
   await controller.refresh();
   assert.equal(reads.length, paused);
+});
+
+for (const collection of [false, true]) test((collection ? 'Collection' : 'Resource') + ' browser opens relationships for the same current resource from retained Details without touching attachment or search state', async t => {
+  const view = blockDocument(); t.after(view.install());
+  const current = page(), opened: { id: string; anchor: HTMLElement }[] = [], attached: string[] = [];
+  const controller = mountSubjectExperience(view.root, collection ? { kind: 'collection', collectionId: 'collection:actual' } : { kind: 'resource-query', projectId: null, query: '' }, {
+    async projectOverview() { throw Error('unexpected'); },
+    async browseResources() { return structuredClone(current); },
+  }, {
+    openRelated(id, anchor) { opened.push({ id, anchor }); },
+    ...(collection ? { attachResource: async (resource: ResourceCandidate) => { attached.push(resource.id); } } : {}),
+  });
+  t.after(() => controller.dispose());
+  await until(() => !!view.root.querySelector('.aw-subject-related'));
+  const row = view.root.querySelector('[data-resource-id]'), details = row.querySelector('details'), related = row.querySelector('.aw-subject-related'), search = view.root.querySelector('input');
+  details.open = true; search.value = 'Retained search'; search.focus(); search.setSelectionRange(2, 5);
+  current.resources[0].title = 'Renamed canonical note'; current.resources[0].version = 8;
+  await controller.refresh();
+  assert.equal(view.root.querySelector('.aw-subject-related'), related); assert.equal(row.querySelector('details'), details); assert.equal(details.open, true);
+  assert.equal(view.doc.activeElement, search); assert.deepEqual([search.value, search.selectionStart, search.selectionEnd], ['Retained search', 2, 5]);
+  assert.equal(related.getAttribute('aria-label'), 'Related resources for Renamed canonical note');
+  related.onclick(); await until(() => opened.length === 1 && !related.disabled);
+  assert.equal(opened[0].id, 'resource:actual'); assert.equal(opened[0].anchor, related); assert.deepEqual(attached, []);
+  if (collection) assert.equal(row.querySelector('.aw-subject-actions button').getAttribute('aria-label'), 'Attach Renamed canonical note to workspace');
+  controller.setActive(false); related.onclick(); await new Promise(resolve => setImmediate(resolve)); assert.equal(opened.length, 1, 'Hidden/nonworking controls cannot dispatch relationship inspection');
+});
+
+test('failed, denied, hidden and disposed relationship openings preserve honest browser state and cannot dispatch stale row authority', async t => {
+  const view = blockDocument(); t.after(view.install());
+  let denied = false, calls = 0;
+  const controller = mountSubjectExperience(view.root, { kind: 'collection', collectionId: 'collection:actual' }, {
+    async projectOverview() { throw Error('unexpected'); },
+    async browseResources() { if (denied) throw Error('subject_access_denied'); return page(); },
+  }, { async openRelated() { calls++; throw Error('native_relationship_surface_unavailable'); } });
+  t.after(() => controller.dispose());
+  await until(() => !!view.root.querySelector('.aw-subject-related'));
+  const row = view.root.querySelector('[data-resource-id]'), related = row.querySelector('.aw-subject-related');
+  related.onclick(); await until(() => calls === 1 && !related.disabled);
+  assert.equal(view.root.querySelector('[data-resource-id]'), row, 'Opening failure does not revoke an otherwise readable browser page');
+  assert.match(view.root.querySelector('.aw-subject-status').textContent, /could not be opened/);
+  assert.doesNotMatch(view.root.querySelector('.aw-subject-status').textContent, /Saved|Attached/);
+  related.onclick(); controller.setActive(false); await new Promise(resolve => setImmediate(resolve)); assert.equal(calls, 1, 'Departure before the queued dispatch cancels it');
+  denied = true; controller.setActive(true); await controller.refresh(); assert.equal(view.root.querySelector('[data-resource-id]'), null);
+  related.onclick(); await new Promise(resolve => setImmediate(resolve)); assert.equal(calls, 1, 'A retained detached button cannot reuse revoked row authority');
+  controller.dispose(); related.onclick(); await new Promise(resolve => setImmediate(resolve)); assert.equal(calls, 1); assert.equal(view.root.children.length, 0);
 });
 
 test("normal project keeps workspace navigation and secondary disclosures stable on canonical updates", async (t) => {
