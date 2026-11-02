@@ -69,6 +69,7 @@ export class BackendCore {
   private state!: State;
   private storedJson: string | null = null;
   private mutationDepth = 0;
+  private pendingEventDelivery: StreamEvent[] = [];
   private port: ProviderPort;
   private providerActivity = {codexConnections:0,providerRequests:0,systemMemoryReads:0,scope:'process-session-native-attempts' as const};
   private connectionId = randomUUID();
@@ -1036,9 +1037,12 @@ export class BackendCore {
     const before = structuredClone(this.state);
     const graphBefore = this.graph.snapshot();
     const storedBefore = this.storedJson;
+    const eventStart = this.pendingEventDelivery.length;
+    let committed = false;
     this.mutationDepth++;
-    try { return this.kernel.withTransaction(() => { const result = fn(); this.save(); return result; }); }
+    try { const result=this.kernel.withTransaction(() => { const value=fn(); this.save(); return value; });committed=true;return result; }
     catch (error) {
+      this.pendingEventDelivery.length=eventStart;
       // An awaiting execution retains its execution/review objects. Restore
       // their values in place so another command's rollback cannot detach the
       // live turn from the canonical records it must eventually complete.
@@ -1051,7 +1055,10 @@ export class BackendCore {
       };
       retain(this.state.executions, before.executions); retain(this.state.reviews, before.reviews);
       this.state = before; this.storedJson = storedBefore; this.graph = this.createGraph(graphBefore); throw error;
-    } finally { this.mutationDepth--; }
+    } finally {
+      this.mutationDepth--;
+      if(committed&&this.mutationDepth===0)for(const event of this.pendingEventDelivery.splice(0))this.publishRecordedEvent(event);
+    }
   }
   private gid(resourceId: string) { ensure(typeof resourceId === 'string' && Object.hasOwn(this.state.resources, resourceId), 'resource_not_found'); return this.state.resources[resourceId]; }
   private publicId(graphId: string) { const id = Object.keys(this.state.resources).find(id => this.state.resources[id] === graphId); ensure(id, 'resource_not_found'); return id; }
@@ -1072,11 +1079,11 @@ export class BackendCore {
     this.state.resources[resource.id] = c.id; this.state.revisions[resource.id] = 1;
     return this.conv(resource.id);
   }
-  private record(type: string, classification: StreamEvent['classification'], native?: EventEnvelope, dedupe: string = randomUUID(),override?:{providerId:string;detached?:boolean;payload?:StreamEvent['payload']}) {
-    const e: StreamEvent = { schemaVersion: 1, eventId: randomUUID(), cursor: 0, resourceId: override?.detached?null:this.active?.resourceId ?? null, executionId: override?.detached?null:this.active?.id ?? null,
-      providerId: override?.providerId??this.port.id, providerInstanceId: override?.providerId===CHATGPT_PLAN_PROVIDER?'aerynth.responses':this.port.instanceId, connectionId: this.connectionId,
-      nativeEventId: null, nativeSequence: native?.sequence ?? null, threadId: override?.providerId===CHATGPT_PLAN_PROVIDER?null:native?.providerThreadId ?? this.active?.binding?.nativeThreadId ?? null,
-      turnId: override?.providerId===CHATGPT_PLAN_PROVIDER?null:native?.providerTurnId ?? this.active?.turnId ?? null, correlationId: override?.detached?null:this.active?.commandId ?? null, causationId: override?.detached?null:this.active?.id ?? null,
+  private record(type: string, classification: StreamEvent['classification'], native?: EventEnvelope, dedupe: string = randomUUID(),override?:{providerId:string;detached?:boolean;resourceId?:string;correlationId?:string;payload?:StreamEvent['payload']}) {
+    const e: StreamEvent = { schemaVersion: 1, eventId: randomUUID(), cursor: 0, resourceId: override?.resourceId??(override?.detached?null:this.active?.resourceId ?? null), executionId: override?.detached?null:this.active?.id ?? null,
+      providerId: override?.providerId??this.port.id, providerInstanceId: override?.providerId===CHATGPT_PLAN_PROVIDER?'aerynth.responses':override?.providerId==='aerynth-native'?'aerynth.canonical':this.port.instanceId, connectionId: this.connectionId,
+      nativeEventId: null, nativeSequence: native?.sequence ?? null, threadId: override?.detached||override?.providerId===CHATGPT_PLAN_PROVIDER?null:native?.providerThreadId ?? this.active?.binding?.nativeThreadId ?? null,
+      turnId: override?.detached||override?.providerId===CHATGPT_PLAN_PROVIDER?null:native?.providerTurnId ?? this.active?.turnId ?? null, correlationId: override?.correlationId??(override?.detached?null:this.active?.commandId ?? null), causationId: override?.detached?null:this.active?.id ?? null,
       receivedAt: now(), providerTime: native?.providerTime ?? null, providerTimeSource: native?.providerTimeSource ?? null,
       type, classification, status: native?.terminalStatus ?? null, payload: { redacted: true, ...(typeof native?.payload.delta === 'string' ? { textBytes: Buffer.byteLength(native.payload.delta) } : {}), ...(native?.payload.item ? { itemType: itemType((native.payload.item as any).type) } : {}),...override?.payload } };
     let inserted = false;
@@ -1089,10 +1096,15 @@ export class BackendCore {
       this.db.prepare('DELETE FROM intelligence_events WHERE cursor NOT IN (SELECT cursor FROM intelligence_events ORDER BY cursor DESC LIMIT ?)').run(this.maxEvents);
     });
     if (inserted) {
-      this.emit(e);
-      if(this.vela&&classification!=='simulated'&&!type.startsWith('vela.'))try{this.vela.ingestAttention({id:e.eventId,type:type.replaceAll('/','.'),source:'aerynth.canonical-events',occurredAt:e.receivedAt,subject:e.resourceId?{id:e.resourceId,kind:'resource'}:null,severity:type.includes('failed')||type.includes('unknown')||type.includes('gap')?'warning':'info',classification,summary:'Recorded application event: '+type,correlationId:e.correlationId??e.eventId,...(type==='stream/reopened'?{coverageGap:'Collection resumed at this recorded event; offline activity is unavailable'}:{})});}catch{/* Event delivery cannot falsify or roll back an already committed canonical operation. */}
+      if(this.mutationDepth>0){ensure(this.pendingEventDelivery.length<this.maxEvents,'observation_backpressure');this.pendingEventDelivery.push(e);}
+      else this.publishRecordedEvent(e);
     }
     return inserted;
+  }
+  private publishRecordedEvent(e:StreamEvent) {
+    try{this.emit(e);}catch{/* Replay remains authoritative after a delivery failure. */}
+    const {type,classification}=e;
+    if(this.vela&&classification!=='simulated'&&!type.startsWith('vela.'))try{this.vela.ingestAttention({id:e.eventId,type:type.replaceAll('/','.'),source:'aerynth.canonical-events',occurredAt:e.receivedAt,subject:e.resourceId?{id:e.resourceId,kind:'resource'}:null,severity:type.includes('failed')||type.includes('unknown')||type.includes('gap')?'warning':'info',classification,summary:'Recorded application event: '+type,correlationId:e.correlationId??e.eventId,...(type==='stream/reopened'?{coverageGap:'Collection resumed at this recorded event; offline activity is unavailable'}:{})});}catch{/* Delivery cannot falsify a committed canonical operation. */}
   }
   private ingest(e: EventEnvelope) {
     try {
