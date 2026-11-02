@@ -2,7 +2,7 @@
 export type SharingMode = 'independent' | 'connected' | 'collaborative';
 export type Evidence = 'excerpt' | 'reported' | 'observed' | 'hypothesis' | 'decision' | 'disputed';
 export type SearchQuery = { text?: string; projectId?: string | null; collectionId?: string; familyOf?: string; providerId?: string; favorite?: boolean; archived?: boolean; after?: string; before?: string; offset?: number; limit?: number };
-export type ConversationSummary = { resourceId: string; conversationId: string; title: string; providerId: string; revision: number; version: number; projectId: string | null; state: 'active' | 'archived'; createdAt: string; favorite: boolean; messageCount: number; collectionIds: string[] };
+export type ConversationSummary = { resourceId: string; conversationId: string; title: string; providerId: string; revision: number; version: number; projectId: string | null; projectIds: string[]; state: 'active' | 'archived'; createdAt: string; favorite: boolean; messageCount: number; collectionIds: string[] };
 export type MessageView = { id: string; resourceId: string; role: string; content: string; createdAt: string; provenance: string; inherited: boolean; sensitivity: string };
 export type SearchHit = { kind: 'conversation' | 'message' | 'resource'; resourceId: string; messageId?: string; title: string; excerpt: string; sourceTime?: string };
 export type Page<T> = { items: T[]; total: number; offset: number; limit: number; hasMore: boolean };
@@ -23,6 +23,7 @@ export interface ProductCommandMap {
  search: { input: SearchQuery; output: Page<SearchHit> };
  detail: { input: { resourceId: string; offset?: number; limit?: number; aroundMessageId?: string }; output: Detail };
  collections: { input: Record<string, never>; output: Collection[] };
+ projects: { input: Record<string, never>; output: { id: string; title: string; version: number }[] };
  organize: { input: CanonicalOrganizationCommand; output: unknown };
  collectionRule: { input: { collectionId: string; parentId: string | null; rule: SearchQuery | null; expectedVersion: number; expectedRuleRevision: number }; output: Collection[] };
  favorite: { input: { resourceId: string; favorite: boolean }; output: boolean };
