@@ -100,6 +100,7 @@ export type Bookmark = {
   spatial?: SpatialCamera;
 };
 export type HistoryEntry = { location: Location; bookmark: Bookmark };
+export type SavedView = HistoryEntry & { id: string; name: string };
 export type ViewState = {
   schema: "aerynth.constellation@1";
   anchors: Record<string, Anchor>;
@@ -108,6 +109,8 @@ export type ViewState = {
   history: HistoryEntry[];
   /** Optional for existing @1 profiles. Last entry is the next Forward view. */
   future?: HistoryEntry[];
+  /** Optional for existing @1 profiles. Explicit user-defined camera views. */
+  savedViews?: SavedView[];
 };
 /** Save only view state; implement in the host's private, canonical persistence. */
 export type ViewPersistence = {

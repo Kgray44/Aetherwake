@@ -9,6 +9,7 @@ import { ConstellationScene } from "./renderer3d.ts";
 import { graphControls } from "./graph-controls.ts";
 import type { Vector3 } from "./spatial-types.ts";
 import { spatialControls, type SpatialCommand } from "./controls.ts";
+import { savedViewControls } from "./saved-view-controls.ts";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -140,6 +141,7 @@ export function mountConstellation(
     lastDetailKey = "";
     invalidate();
   });
+  const savedViews = savedViewControls(root, controller, invalidate);
   const views = new Map<string, HTMLButtonElement>();
   const report = (error: unknown) => {
     controller.error =
@@ -303,6 +305,19 @@ export function mountConstellation(
         title: "History",
         hint: "Return to a previous place",
         run: () => controls.history(),
+      },
+      {
+        id: "save-view",
+        title: "Save current view",
+        hint: "Keep this viewpoint",
+        run: () => savedViews.save(),
+        enabled: !controller.pending,
+      },
+      {
+        id: "saved-views",
+        title: "Saved views",
+        hint: "Return, rename or remove a viewpoint",
+        run: () => savedViews.open(),
       },
       {
         id: "list",
@@ -1058,6 +1073,7 @@ export function mountConstellation(
       layer.dispose();
       controls.dispose();
       graph.dispose();
+      savedViews.dispose();
       root.remove();
     },
   };

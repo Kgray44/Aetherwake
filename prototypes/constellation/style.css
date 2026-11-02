@@ -387,6 +387,18 @@
 .aw-graph-dialog::backdrop {
   background: #08060c77;
 }
+.aw-saved-views {
+  width: min(360px, calc(100vw - 80px));
+}
+.aw-saved-views > .aw-quiet-control {
+  float: right;
+  margin: -8px -10px 0 0;
+}
+.aw-saved-view-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
 .aw-graph-dialog form {
   display: flex;
   flex-direction: column;

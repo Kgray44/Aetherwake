@@ -20,6 +20,7 @@ import type {
   Node,
   Point,
   Policy,
+  SavedView,
   Snapshot,
   Transition,
   ViewPersistence,
@@ -34,6 +35,7 @@ import type { GraphActions, GraphAction } from "./spatial-types.ts";
 import type { SpatialCamera } from "./spatial-types.ts";
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
+const viewSaveError = "View could not be saved. Retry before closing.";
 const finite = (n: unknown): n is number =>
   typeof n === "number" && Number.isFinite(n) && Math.abs(n) < 1e8;
 const validCamera = (c: unknown): c is Camera =>
@@ -90,7 +92,7 @@ export class ConstellationController {
   readonly motionId = `constellation:camera:${++serial}`;
   snapshot: Snapshot;
   nodes = new Map<string, Node>();
-  state: ViewState & { future: HistoryEntry[] };
+  state: ViewState & { future: HistoryEntry[]; savedViews: SavedView[] };
   selected: string | null = null;
   policy: Policy;
   error = "";
@@ -112,6 +114,7 @@ export class ConstellationController {
       bookmarks: {},
       history: [],
       future: [],
+      savedViews: [],
       location: canonicalLocation(options.snapshot),
     };
     this.update(options.snapshot, false);
@@ -226,6 +229,7 @@ export class ConstellationController {
             : s.location;
       this.state.history = this.cleanEntries(s.history);
       this.state.future = this.cleanEntries(s.future);
+      this.state.savedViews = this.cleanSavedViews(s.savedViews);
       for (const [key, b] of Object.entries(this.state.bookmarks))
         this.state.bookmarks[key] = this.cleanBookmark(b);
       this.applyBookmark(this.state.bookmarks[scopeOf(this.location)]);
@@ -262,6 +266,7 @@ export class ConstellationController {
     );
     this.state.history = this.cleanEntries(this.state.history);
     this.state.future = this.cleanEntries(this.state.future);
+    this.state.savedViews = this.cleanSavedViews(this.state.savedViews);
     if (!allowedLocation(this.location, this.nodes))
       this.state.location = { kind: "universe" };
     const nextCanonical = canonicalLocation(snapshot);
@@ -329,6 +334,104 @@ export class ConstellationController {
                   },
         bookmark: this.cleanBookmark(bookmark),
       }));
+  }
+  private cleanSavedViews(value: unknown): SavedView[] {
+    if (!Array.isArray(value)) return [];
+    const ids = new Set<string>(),
+      names = new Set<string>(),
+      result: SavedView[] = [];
+    for (const raw of value.slice(0, 32)) {
+      if (!raw || typeof raw !== "object") continue;
+      const { id, name: input } = raw as Record<string, unknown>,
+        name = this.cleanViewName(input),
+        entry = this.cleanEntries([raw])[0];
+      if (
+        typeof id !== "string" ||
+        !id.length ||
+        id.length > 128 ||
+        /[\s\u0000-\u001f\u007f-\u009f]/.test(id) ||
+        !name ||
+        !entry ||
+        ids.has(id) ||
+        names.has(name.toLowerCase())
+      )
+        continue;
+      ids.add(id);
+      names.add(name.toLowerCase());
+      result.push({ id, name, ...entry });
+    }
+    return result;
+  }
+  private cleanViewName(value: unknown) {
+    if (typeof value !== "string") return undefined;
+    const name = value.trim();
+    return name.length > 0 &&
+      name.length <= 64 &&
+      !/[\u0000-\u001f\u007f-\u009f]/.test(name)
+      ? name
+      : undefined;
+  }
+  private viewName(value: string, id?: string) {
+    const name = this.cleanViewName(value);
+    if (!name) throw Error("Use a view name between 1 and 64 characters.");
+    if (
+      this.state.savedViews.some(
+        (view) =>
+          view.id !== id && view.name.toLowerCase() === name.toLowerCase(),
+      )
+    )
+      throw Error("A view with this name already exists.");
+    return name;
+  }
+  async saveView(input: string) {
+    if (this.destroyed || this.pending)
+      throw Error("Finish navigation before saving a view.");
+    const name = this.viewName(input),
+      entry = this.cleanEntries([
+        { location: this.location, bookmark: this.bookmark() },
+      ])[0];
+    if (!entry) throw Error("This view is unavailable.");
+    if (this.state.savedViews.length >= 32)
+      throw Error(
+        "You can keep up to 32 saved views. Remove one to save another.",
+      );
+    const id = "view:" + crypto.randomUUID();
+    this.state.savedViews.push({ id, name, ...structuredClone(entry) });
+    this.changed();
+    await this.persist();
+    return id;
+  }
+  async renameView(id: string, input: string) {
+    if (!this.state.savedViews.some((view) => view.id === id))
+      throw Error("Saved view is unavailable.");
+    const name = this.viewName(input, id);
+    this.state.savedViews = this.state.savedViews.map((view) =>
+      view.id === id ? { ...view, name } : view,
+    );
+    this.changed();
+    await this.persist();
+  }
+  async removeView(id: string) {
+    if (!this.state.savedViews.some((view) => view.id === id))
+      throw Error("Saved view is unavailable.");
+    this.state.savedViews = this.state.savedViews.filter(
+      (view) => view.id !== id,
+    );
+    this.changed();
+    await this.persist();
+  }
+  async returnView(id: string) {
+    const view = this.cleanSavedViews(this.state.savedViews).find(
+      (view) => view.id === id,
+    );
+    if (!view) throw Error("Saved view is unavailable.");
+    return this.go(view.location, view.bookmark, undefined, {
+      history: [
+        ...this.state.history,
+        { location: this.location, bookmark: this.bookmark() },
+      ],
+      future: [],
+    });
   }
   private cleanBookmark(bookmark: Bookmark): Bookmark {
     const spatial = validSpatialCamera(bookmark.spatial)
@@ -558,15 +661,16 @@ export class ConstellationController {
         this.state.future = [];
       }
       this.state.location = location;
-      const bookmark = returning ?? this.state.bookmarks[scopeOf(location)];
-      this.applyBookmark(
-        spatialOverride
+      const bookmark = returning ?? this.state.bookmarks[scopeOf(location)],
+        arrival = spatialOverride
           ? {
               camera: bookmark?.camera ?? this.defaultCamera(),
               selected: bookmark?.selected ?? this.selected,
               spatial: spatialOverride,
             }
-          : bookmark,
+          : bookmark;
+      this.applyBookmark(
+        arrival ? this.cleanBookmark(arrival) : undefined,
         spatialRevision !== this.spatial?.manualRevision,
       );
       this.options.onTransition?.({
@@ -642,8 +746,12 @@ export class ConstellationController {
       .then(async () => {
         try {
           await this.options.persistence?.save(copy);
+          if (this.error === viewSaveError) {
+            this.error = "";
+            this.changed();
+          }
         } catch {
-          this.error = "View could not be saved. Retry before closing.";
+          this.error = viewSaveError;
           this.changed();
         }
       });

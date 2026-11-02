@@ -167,6 +167,8 @@ exports.verify = async ({
     Universe: "universe",
     "Inspect selection": "inspect",
     Arrange: "arrange",
+    "Save current view": "save-view",
+    "Saved views": "saved-views",
   };
   const command = async (title) => {
     await click('.aw-quiet-control[aria-label="Commands and destinations"]');
@@ -561,7 +563,7 @@ exports.verify = async ({
           "restart canonical " + key,
         );
       const restored = await view();
-      for (const key of ["anchors", "bookmarks", "location", "history", "future"])
+      for (const key of ["anchors", "bookmarks", "location", "history", "future", "savedViews"])
         assert.deepEqual(
           restored[key],
           expected.view[key],
@@ -1080,6 +1082,16 @@ exports.verify = async ({
       };
       await shot("07b-working-reference-before-travel");
       await projectView();
+      await click(".aw-spatial-field");
+      await key("Home");
+      await textButton("Save current view");
+      await fill('.aw-saved-views input[name="viewName"]', "Synthetic original constellation");
+      await click('.aw-saved-views button[type="submit"]');
+      await wait('!document.querySelector(".aw-saved-views").open');
+      await flush();
+      const savedCameraView = (await view()).savedViews.find((v) => v.name === "Synthetic original constellation");
+      assert.ok(savedCameraView, "the actual named camera view was privately persisted");
+      receipt.savedCameraView = savedCameraView;
       await textButton("Universe", ".aw-constellation-bar");
       await pause(650);
       await checkOverviewPresence("universe");
@@ -1122,7 +1134,14 @@ exports.verify = async ({
       await textButton("Universe", ".aw-constellation-bar");
       await pause(500);
       step(20, "Return to Universe");
-      await node("project:" + originalRow.projectId);
+      await textButton("Saved views");
+      await fill('.aw-saved-views select[name="viewId"]', savedCameraView.id);
+      await textButton("Open view", ".aw-saved-views");
+      await wait('!document.querySelector(".aw-saved-views").open');
+      assert.equal((await snapshot()).navigation.projectId, originalRow.projectId);
+      assert.deepEqual((await spatial()).bookmark, savedCameraView.bookmark.spatial, "named view restores its exact camera and mode");
+      assert.equal((await spatial()).selected, savedCameraView.bookmark.selected, "named view restores the saved canonical selection");
+      receipt.checks.push("named-camera-view-save-and-return-with-identical-pose");
       step(21, "Navigate back to A World for Two");
       await node("workspace:" + originalRow.workspaceId);
       step(22, "Restore its Development working workspace");

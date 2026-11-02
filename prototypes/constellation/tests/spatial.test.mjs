@@ -806,10 +806,14 @@ test("revoked resource focus is pruned from spatial bookmarks and camera history
   assert.equal(n.neighborhood, undefined);
 });
 
-test("10000 UUID placement positions fit the private 2MiB view-state bound without content", async () => {
+test("10000 UUID placement positions and full history, Forward and saved views fit the private 2MiB bound", async () => {
   const s = fixture(10000);
   for (const b of s.blocks) b.id = randomUUID();
   const { c } = setup(s);
+  const entry = { location: c.location, bookmark: { camera: c.camera, selected: null, spatial: c.spatial.bookmark() } };
+  c.state.history = Array.from({ length: 32 }, () => structuredClone(entry));
+  c.state.future = Array.from({ length: 32 }, () => structuredClone(entry));
+  c.state.savedViews = Array.from({ length: 32 }, (_, i) => ({ id: (randomUUID().repeat(4) + i).slice(-128), name: String(i).padEnd(64, "x"), ...structuredClone(entry) }));
   await c.persist();
   const json = JSON.stringify(c.state);
   assert.ok(Buffer.byteLength(json) < 2 * 1024 * 1024);

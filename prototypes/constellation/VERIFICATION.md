@@ -2,7 +2,11 @@
 
 ## Current source checkpoint
 
-The latest full source run passes **86 tests** and strict TypeScript. This is source evidence, not completion of the owner's native gates A–J.
+The latest full source run passes **94 tests** and strict TypeScript. This is source evidence, not completion of the owner's native gates A–J.
+
+Explicit named views now retain independent camera, selection, neighborhood and navigation/presentation modes through the existing private view-state service. The command palette opens only a compact save/picker panel; no persistent controls were added. Eight regressions cover exact return/Back/Forward, restart and legacy omission, name/cap validation, malformed input and permission pruning, awaited supersession/manual input, persistence failure/retry, and actual form routing without graph mutation. A full 10,000-UUID placement state plus 32 entries each of history, Forward and named views fits the host's 2 MiB ceiling. Bookmark arrival revalidates focus IDs after awaited navigation, preventing revoked selection/neighborhood IDs from reappearing.
+
+The native helper now saves a named project view before cross-project travel and uses it for ordered step 21, checking the exact returned pose and the persisted `savedViews` array after restart. This helper is source-checked; that expanded native journey has not been executed on this candidate. Integration owns the optional schema admission and actual backend persistence tests, native run and rendered performance/visual acceptance.
 
 The latest owner correction removes screen-alignment suppression, resource distance gates and total-body budgets from project visibility. Every in-frustum authorized project body stays submitted, including during resource focus. Only detailed bodies have quality budgets; a shared coarse instance batch retains the remaining identities. Orbit and small pans reuse positions, geology, palette and ordering. Picking tests only geometry within conservative screen bounds. Five regressions cover 48 orbit/tier poses, far on-screen bodies, 1,000-body instance identity/picking/buffer stability, neighborhood permission revocation and distinct project stars. Project stars use self-lit photospheres/coronas rather than planetary lighting and rings; the shared physical envelope includes their corona.
 
