@@ -1182,15 +1182,14 @@ function renderDOM() {
       !el.hidden &&
       !el.classList.contains("receded") &&
       p.opacity > 0.01;
-    const usable =
-      visible &&
-      p.w >= (el.dataset.blockKind === "conversation" ? 360 : 280) &&
-      p.h >= (el.dataset.blockKind === "conversation" ? 360 : 220) &&
-      p.x >= 0 &&
-      p.y >= 104 &&
-      p.x + p.w <= innerWidth &&
-      p.y + p.h <= innerHeight - 56;
-    application?.setBlockPresentation(id, visible, usable);
+    // A visible normal card is a working surface, including partial cards and
+    // narrow layouts. Expansion changes available space, never permissions.
+    application?.setBlockPresentation(
+      id,
+      visible,
+      visible,
+      expanded === id ? "focused" : "workspace",
+    );
     const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateZ(${p.rotation}deg) rotateY(${p.yaw}deg);z-index:${compositing.rank + 3};border-radius:${surfaceBorderRadius(p.shape, p.w, p.h, unfold)};clip-path:inset(0 round ${surfaceBorderRadius(p.shape, p.w, p.h, unfold)});--resource-content-clip:${compositing.clipPath || "none"};`;
     if (poseStyleCache.get(id) !== style) {
       applyBlockPoseStyle(el.style, style);

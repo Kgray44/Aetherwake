@@ -79,6 +79,8 @@ import { REGISTERED_BLOCKS } from "../../../block-library/registry.ts";
 import "../../../block-library/identity-view.css";
 import { mountSubjectExperience } from "../../../block-library/subject-view.ts";
 import "../../../block-library/subject-view.css";
+import { mountTaskGroupExperience } from "../../../block-library/task-group-view.ts";
+import "../../../block-library/task-group-view.css";
 import {
   mountEventExperience,
   readRecentEvents,
@@ -238,6 +240,10 @@ export function installApplication(hooks: Hooks) {
   });
   const noteSessions = new Map<string, NoteSession>();
   const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
+  const groupViews = new Map<
+    string,
+    ReturnType<typeof mountTaskGroupExperience>
+  >();
   const subjectViews = new Map<
     string,
     ReturnType<typeof mountSubjectExperience>
@@ -263,7 +269,7 @@ export function installApplication(hooks: Hooks) {
   const subjectRefreshKeys = new Map<string, string>();
   const blockPresentations = new Map<
     string,
-    { visible: boolean; usable: boolean }
+    { visible: boolean; usable: boolean; presentation: "workspace" | "focused" }
   >();
   const focusedBlocks = new Map<string, boolean>();
   let subjectDataKey = "";
@@ -546,6 +552,11 @@ export function installApplication(hooks: Hooks) {
       if (!next.blocks.some((b) => b.id === id)) {
         view.dispose();
         noteViews.delete(id);
+      }
+    for (const [id, view] of groupViews)
+      if (!next.blocks.some((b) => b.id === id)) {
+        view.dispose();
+        groupViews.delete(id);
       }
     for (const [id, view] of subjectViews)
       if (!next.blocks.some((b) => b.id === id)) {
@@ -1918,14 +1929,37 @@ export function installApplication(hooks: Hooks) {
           : resource.kind === "research"
             ? "Questions, findings and sources…"
             : "Add your notes…";
-    const session = noteSession(resource.id),
-      view = mountNoteExperience(
-        el(".working-content", article),
-        editor,
-        session,
-        notesClient,
-        { kind: resource.kind, active: true },
+    let documentRoot = el(".working-content", article);
+    if (resource.kind === "task_group") {
+      let body = documentRoot.querySelector<HTMLElement>(
+        ".task-group-description-body",
       );
+      if (!body) {
+        const disclosure = document.createElement("details"),
+          summary = document.createElement("summary");
+        disclosure.className = "task-group-description";
+        disclosure.style.cssText =
+          "flex:0 1 auto;min-height:0;max-height:45%;overflow:auto";
+        summary.textContent = "Description";
+        body = document.createElement("div");
+        body.className = "task-group-description-body";
+        for (const child of [...documentRoot.children])
+          if (!child.classList.contains("task-group-primary"))
+            body.append(child);
+        disclosure.append(summary, body);
+        documentRoot.append(disclosure);
+      }
+      documentRoot = body;
+    }
+    const session = noteSession(resource.id),
+      view = mountNoteExperience(documentRoot, editor, session, notesClient, {
+        kind: resource.kind,
+        active: true,
+        presentation: blockPresentation(id),
+        initialMode: ["research", "reference"].includes(resource.kind)
+          ? "read"
+          : "write",
+      });
     noteViews.set(id, view);
   }
   function saveContent(
@@ -2058,7 +2092,8 @@ export function installApplication(hooks: Hooks) {
         browseResources: client.browseResources?.bind(client) ?? unavailable,
       },
       {
-        active: article.classList.contains("expanded") && !document.hidden,
+        active: activeBlocks.get(block.id) ?? false,
+        presentation: blockPresentation(block.id),
         visible: blockPresentations.get(block.id)?.visible ?? false,
         onProjection: (projection) => {
           if (
@@ -2432,6 +2467,7 @@ export function installApplication(hooks: Hooks) {
           draftSession: session,
           execution: conversationExecution,
           active: true,
+          presentation: blockPresentation(b.id),
           initialScroll: conversationView.scroll[r.id],
           initialOffset: conversationView.messageOffset[r.id],
           onChanged: async () => {
@@ -2458,50 +2494,42 @@ export function installApplication(hooks: Hooks) {
       view?.setActive(activeBlocks.get(b.id) ?? false);
     } else if (r.kind === "task_group") {
       const surface = el(".working-content", article);
-      if (!surface.querySelector(".task-group-summary")) {
-        const group = document.createElement("section");
-        group.className = "task-group-summary";
-        group.innerHTML =
-          '<p>Local tasks · execution is separate</p><label>Show tasks<select class="task-group-filter"><option value="all">All</option><option value="open">Open</option><option value="done">Done</option></select></label><ul class="group-task-list"></ul><button type="button" class="manage-task-members">Manage tasks</button>';
-        surface.prepend(group);
-        el(".manage-task-members", group).onclick = () =>
-          void enqueue(async () => {
-            await flush();
-            taskGroupMembers(r.id);
-          });
+      const members = r.taskMembers ?? [];
+      let group = groupViews.get(id);
+      if (!group) {
+        const primary = document.createElement("div");
+        primary.className = "task-group-primary";
+        primary.style.display = "contents";
+        surface.prepend(primary);
+        group = mountTaskGroupExperience(primary, {
+          members,
+          active: activeBlocks.get(id) ?? false,
+          presentation: blockPresentation(id),
+          setStatus: ({ resourceId, status }) =>
+            enqueueResult(async () => {
+              await flush();
+              const current = state?.resources.find(
+                (resource) => resource.id === resourceId,
+              );
+              if (!current || current.available === false)
+                throw new Error("task_unavailable");
+              await command({
+                type: "taskStatus",
+                resourceId,
+                expectedVersion: current.version,
+                status,
+              });
+            }),
+          manageMembers: () =>
+            enqueueResult(async () => {
+              await flush();
+              taskGroupMembers(r.id);
+            }),
+          openTask: openCanonicalResource,
+        });
+        groupViews.set(id, group);
       }
-      el<HTMLSelectElement>(".task-group-filter", surface).onchange = () =>
-        decorate(article, id);
-      const members = r.taskMembers ?? [],
-        list = el(".group-task-list", surface);
-      list.replaceChildren();
-      for (const task of members) {
-        const filter = el<HTMLSelectElement>(
-          ".task-group-filter",
-          surface,
-        ).value;
-        if (filter !== "all" && task.status !== filter) continue;
-        const item = document.createElement("li"),
-          button = document.createElement("button");
-        button.type = "button";
-        button.className = "group-task";
-        button.dataset.taskId = task.id;
-        button.textContent = `${task.status === "done" ? "☑" : "☐"} ${task.title}`;
-        button.setAttribute("aria-pressed", String(task.status === "done"));
-        button.onclick = () =>
-          void enqueue(async () => {
-            await flush();
-            const current = state!.resources.find((r) => r.id === task.id)!;
-            await command({
-              type: "taskStatus",
-              resourceId: current.id,
-              expectedVersion: current.version,
-              status: current.taskStatus === "done" ? "open" : "done",
-            });
-          });
-        item.append(button);
-        list.append(item);
-      }
+      group.update(members);
       el(".folio-preview", article).textContent = members.length
         ? members
             .map((t) => `${t.status === "done" ? "✓" : "○"} ${t.title}`)
@@ -2533,8 +2561,8 @@ export function installApplication(hooks: Hooks) {
               openResource: openCanonicalResource,
             },
             {
-              active:
-                article.classList.contains("expanded") && !document.hidden,
+              active: activeBlocks.get(id) ?? false,
+              presentation: blockPresentation(id),
             },
           ),
         );
@@ -2880,6 +2908,11 @@ export function installApplication(hooks: Hooks) {
         `Application service unavailable: ${(e as Error).message}. Restart to recover; no data was reset.`,
       );
     });
+  function blockPresentation(id: string): "workspace" | "focused" {
+    return focusedBlocks.get(id)
+      ? "focused"
+      : (blockPresentations.get(id)?.presentation ?? "workspace");
+  }
   function syncBlockActivity(id: string) {
     const block = state?.blocks.find((block) => block.id === id);
     const resource = block?.resource_id
@@ -2890,18 +2923,18 @@ export function installApplication(hooks: Hooks) {
       resource?.available !== false &&
       resource?.visible !== false &&
       ((focusedBlocks.get(id) ?? false) ||
-        (["note", "conversation"].includes(resource?.kind ?? "") &&
-          (blockPresentations.get(id)?.usable ?? false)));
+        (blockPresentations.get(id)?.usable ?? false));
     const previous = activeBlocks.get(id) ?? false;
     activeBlocks.set(id, active);
-    if (previous === active) return;
-    if (active) {
+    if (active && previous !== active) {
       ensureNoteView(id);
       const block = state?.blocks.find((block) => block.id === id);
       if (
         block?.resource_id &&
-        state?.resources.find((resource) => resource.id === block.resource_id)
-          ?.kind === "conversation"
+        state?.resources.find(
+          (resource) => resource.id === block.resource_id,
+        ) &&
+        ["conversation", "task_group", "stream"].includes(resource?.kind ?? "")
       ) {
         const article = document.querySelector<HTMLElement>(
           `[data-block="${id}"]`,
@@ -2909,10 +2942,17 @@ export function installApplication(hooks: Hooks) {
         if (article) decorate(article, id);
       }
     }
+    const presentation = blockPresentation(id);
+    chatViews.get(id)?.setPresentation(presentation);
+    noteViews.get(id)?.setPresentation(presentation);
+    subjectViews.get(id)?.setPresentation(presentation);
+    eventViews.get(id)?.setPresentation(presentation);
+    groupViews.get(id)?.setPresentation(presentation);
     chatViews.get(id)?.setActive(active);
     noteViews.get(id)?.setActive(active);
     subjectViews.get(id)?.setActive(active);
     eventViews.get(id)?.setActive(active);
+    groupViews.get(id)?.setActive(active);
   }
   return {
     frame(now: number, policy: Policy) {
@@ -3029,10 +3069,20 @@ export function installApplication(hooks: Hooks) {
       focusedBlocks.set(id, active);
       syncBlockActivity(id);
     },
-    setBlockPresentation(id: string, visible: boolean, usable: boolean) {
+    setBlockPresentation(
+      id: string,
+      visible: boolean,
+      usable: boolean,
+      presentation: "workspace" | "focused" = "workspace",
+    ) {
       const previous = blockPresentations.get(id);
-      if (previous?.visible === visible && previous.usable === usable) return;
-      blockPresentations.set(id, { visible, usable });
+      if (
+        previous?.visible === visible &&
+        previous.usable === usable &&
+        previous.presentation === presentation
+      )
+        return;
+      blockPresentations.set(id, { visible, usable, presentation });
       const article = document.querySelector<HTMLElement>(
         `[data-block="${id}"]`,
       );
