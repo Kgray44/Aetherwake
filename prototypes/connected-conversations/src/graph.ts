@@ -80,6 +80,11 @@ function assert(condition: unknown, reason: string): asserts condition {
 const copy = <T>(value: T): T => structuredClone(value);
 export class ConversationGraph {
   private data: GraphData;
+  // Shallow references only: canonical arrays retain persistence and order.
+  // No body, visibility, revocation or authorization result is cached here.
+  private conversationsById = new Map<string,Conversation>();
+  private messagesById = new Map<string,Message>();
+  private parentsByChildId = new Map<string,LineageEdge>();
   private adapters: Map<string, ProviderAdapter>;
   private readonly clock: ConversationClock;
   constructor(adapters: ProviderAdapter[], imported?: GraphData, options: ConversationGraphOptions = {}) {
@@ -93,6 +98,18 @@ export class ConversationGraph {
       artifacts: [], edges: [], handoffs: [], unavailableMessageIds: [], idempotency: {}
     };
     this.validate();
+  }
+  private reindex():void {
+    const first=<T,>(records:T[],key:(record:T)=>string):Map<string,T>=>{
+      const index=new Map<string,T>();for(const record of records){const id=key(record);
+        // `.find(x.id===id)` uses strict equality. Do not turn a formerly
+        // unresolved, untyped NaN import into a successful Map lookup.
+        if(id===id&&!index.has(id))index.set(id,record);
+      }return index;
+    };
+    this.conversationsById=first(this.data.conversations,c=>c.id);
+    this.messagesById=first(this.data.messages,m=>m.id);
+    this.parentsByChildId=first(this.data.edges,e=>e.childId);
   }
   private id(prefix: string): string {
     this.data.counter++;
@@ -114,12 +131,12 @@ export class ConversationGraph {
     return adapter;
   }
   private conversation(id: string): Conversation {
-    const value = this.data.conversations.find(c => c.id === id);
+    const value = this.conversationsById.get(id);
     assert(value, 'conversation missing: ' + id);
     return value;
   }
   private message(id: string): Message {
-    const value = this.data.messages.find(m => m.id === id);
+    const value = this.messagesById.get(id);
     assert(value, 'message missing: ' + id);
     return value;
   }
@@ -143,6 +160,7 @@ export class ConversationGraph {
       state: 'idle', ownMessageIds: []
     };
     this.data.conversations.push(c);
+    if(!this.conversationsById.has(id))this.conversationsById.set(id,c);
     this.remember(key, id);
     return copy(c);
   }
@@ -166,6 +184,7 @@ export class ConversationGraph {
       sensitivity: options.sensitivity ?? 'internal', providerTurnId: options.providerTurnId
     };
     this.data.messages.push(msg);
+    if(!this.messagesById.has(msg.id))this.messagesById.set(msg.id,msg);
     c.ownMessageIds.push(msg.id);
     this.remember(options.key, msg.id);
     return copy(msg);
@@ -183,7 +202,7 @@ export class ConversationGraph {
   private visibleMessageRecords(conversationId:string,budget?:{remaining:number}):Message[] {
     const c = this.conversation(conversationId);
     if(budget){const count=1+c.ownMessageIds.length;if(count>budget.remaining)throw new MetadataScanLimit();budget.remaining-=count;}
-    const edge = this.data.edges.find(e => e.childId === c.id);
+    const edge = this.parentsByChildId.get(c.id);
     let inherited: Message[] = [];
     if (edge) {
       const parent = this.visibleMessageRecords(edge.parentId,budget);
@@ -195,7 +214,8 @@ export class ConversationGraph {
   }
   visibleMessages(conversationId: string): Message[] {return this.visibleMessageRecords(conversationId).map(copy);}
   /** Bounded lineage projection only. Counts/bytes describe this window, never the entire history.
-   * maxScan counts ancestry nodes plus own-message refs before allocation; existing ID searches remain linear.
+   * maxScan counts ancestry nodes plus own-message refs before allocation.
+   * ID indices reference canonical objects; ancestry and policy checks are unchanged.
    * The mandatory host policy gates ALL contributing messages before anything escapes. */
   visibleMessageMetadata(conversationId:string,options:{limit:number;maxScan:number;maxBodyBytes:number;offset?:number;tail?:boolean;allow(meta:Readonly<Pick<MessageMetadata,'id'|'conversationId'|'sequence'|'role'|'sensitivity'|'unavailable'>>):boolean}):MessageMetadataWindow {
     const {limit,maxScan,maxBodyBytes}=options,offset=options.offset??0;
@@ -286,8 +306,10 @@ export class ConversationGraph {
       sourceMessageId: input.sourceMessageId, mode, handoffId: handoff.id, createdAt: this.now()
     };
     this.data.conversations.push(c);
+    if(!this.conversationsById.has(c.id))this.conversationsById.set(c.id,c);
     this.data.handoffs.push(handoff);
     this.data.edges.push(edge);
+    if(!this.parentsByChildId.has(edge.childId))this.parentsByChildId.set(edge.childId,edge);
     this.remember(input.key, c.id);
     return { conversation: copy(c), edge: copy(edge), handoff: copy(handoff) };
   }
@@ -298,7 +320,11 @@ export class ConversationGraph {
     const adapter = this.adapter(c.providerId);
     assert(adapter.snapshot.mock && adapter.respond, 'demo response requires a labeled mock adapter');
     this.addMessage(conversationId, 'user', prompt, { provenance: 'user' });
-    const response = adapter.respond(c, prompt);
+    let response:string;
+    // This mock-only adapter API receives a mutable canonical Conversation.
+    // Even a throwing adapter may have changed its fields; preserve subsequent
+    // strict first-match resolution without adding validation to this path.
+    try{response=adapter.respond(c,prompt);}finally{this.reindex();}
     const providerTurnId = c.providerId === 'mock-codex' ? 'mock-turn:' + c.id + ':' + c.ownMessageIds.length : undefined;
     return this.addMessage(conversationId, 'assistant', response,
       { provenance: 'mock_adapter', providerTurnId, key });
@@ -317,7 +343,7 @@ export class ConversationGraph {
     const h = this.data.handoffs.find(item => item.id === handoffId);
     assert(h, 'handoff missing');
     const staleMessageIds = h.items.filter(item => {
-      const source = this.data.messages.find(m => m.id === item.sourceMessageId);
+      const source = this.messagesById.get(item.sourceMessageId);
       return !source || this.data.unavailableMessageIds.includes(item.sourceMessageId) ||
         digest(source.content) !== item.digest;
     }).map(item => item.sourceMessageId);
@@ -373,5 +399,6 @@ export class ConversationGraph {
     for (const id of d.unavailableMessageIds) assert(messages.has(id), 'invalid unavailable message');
     for (const id of Object.values(d.idempotency))
       assert(all.some(item => item.id === id), 'invalid idempotency result');
+    this.reindex();
   }
 }

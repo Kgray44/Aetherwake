@@ -253,3 +253,17 @@ test('trusted same-graph metadata browse avoids snapshot/transcript cloning and 
   const current=await f.product.command('list',{});assert.equal(current.items.some(c=>c.resourceId===parent.resourceId),false);const visibleChild=current.items.find(c=>c.resourceId===child.resourceId)!;assert.equal(visibleChild.messageCount,null);assert.equal(visibleChild.lastActivityAt,null);assert.equal(visibleChild.historyMetadataStatus,'unavailable');assert.equal(bodyReads,0);assert.equal(clones,0);
  }finally{restore();await f.close();removeFixture(dir);}
 });
+
+test('canonical Core rollback and restart rebuild graph reference indices without retaining abandoned messages or revocation authority',async()=>{
+ const dir=mkdtempSync(join(tmpdir(),'aerynth-graph-index-recovery-')),path=join(dir,'canonical.sqlite');let f=fixture(path);
+ try{
+  const conversation=await create(f),message=await record(f,conversation.resourceId,'Synthetic durable indexed source');
+  const owner=f.core as unknown as {graph:ConversationGraph;atomic<T>(work:()=>T):T},old=owner.graph,before=old.snapshot(),gid=before.conversations[0].id;let abandoned='';
+  assert.throws(()=>owner.atomic(()=>{abandoned=owner.graph.addMessage(gid,'user','Synthetic rolled-back message').id;owner.graph.renameConversation(gid,'Synthetic rolled-back title');throw Error('Synthetic rollback');}),/Synthetic rollback/);
+  assert.notEqual(owner.graph,old);assert.deepEqual(owner.graph.snapshot(),before);
+  const current=owner.graph as unknown as {data:GraphData;message(id:string):unknown};assert.equal(current.message(message.id),current.data.messages[0]);assert.throws(()=>current.message(abandoned),/message missing/);
+  const accepted=await record(f,conversation.resourceId,'Synthetic accepted after rollback');owner.atomic(()=>owner.graph.markUnavailable(message.id));
+  assert.equal((await f.product.command('list',{})).items[0].messageCount,null);await f.close();f=fixture(path);
+  const detail=await f.product.command('detail',{resourceId:conversation.resourceId});assert.deepEqual(detail.messages.items.map(m=>m.id),[accepted.id]);assert.equal(detail.messages.items[0].content,'Synthetic accepted after rollback');assert.equal((await f.product.command('list',{})).items[0].historyMetadataStatus,'unavailable');
+ }finally{await f.close();removeFixture(dir);}
+});
