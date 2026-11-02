@@ -26,6 +26,7 @@ const {
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const root = path.resolve(__dirname, "..");
 const moduleStarted = Date.now();
+const moduleStartedMonotonicMs = performance.now();
 const repository = path.resolve(root, "../../..");
 const sourceHashes = {};
 function hashFolder(folder) {
@@ -508,6 +509,23 @@ app.whenReady().then(async () => {
         app,
         privateRoot,
         source,
+        startupErrors,
+        slotStartedAt: moduleStartedMonotonicMs,
+        deadlineMs: 85000,
+        cancelOwnedPlanning: async ({ requestId }) => {
+          const current = await call("vela", { name: "state", input: {} });
+          const request = current.requests.find(
+            (item) => item.id === requestId,
+          );
+          if (
+            !request ||
+            request.state !== "planning" ||
+            request.providerId !== "codex-app-server" ||
+            request.conversationId !== current.conversation?.id
+          )
+            throw Error("owned_planning_request_not_active");
+          return call("vela", { name: "cancel", input: requestId });
+        },
       });
       return;
     }
@@ -552,6 +570,7 @@ app.whenReady().then(async () => {
         call,
         source,
         moduleStarted,
+        moduleStartedMonotonicMs,
         startupErrors,
       });
       return;
@@ -563,6 +582,7 @@ app.whenReady().then(async () => {
           app,
           privateRoot,
           source,
+          moduleStartedMonotonicMs,
           startupErrors,
           session: session.defaultSession,
           localURL,
