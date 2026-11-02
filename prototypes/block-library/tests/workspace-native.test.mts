@@ -153,6 +153,10 @@ test("offline normal-card preparation and fresh Core restore use canonical kinds
     });
   t.after(() => core.command("close", {}));
   assert.equal(seed.cases.length, REGISTERED_BLOCKS.length);
+  assert.deepEqual(
+    new Set(seed.shapeCases.map((entry) => entry.shape)),
+    new Set(["lens", "circle", "pill"]),
+  );
   assert.equal(
     seed.cases.filter((entry) => !entry.blockId).length,
     2,
@@ -180,6 +184,7 @@ test("offline normal-card preparation and fresh Core restore use canonical kinds
     }
     const block = state.blocks.find((block) => block.id === entry.blockId)!;
     assert(block);
+    assert.equal(block.shape, entry.defaultShape);
     assert.deepEqual(
       { width: block.width, height: block.height },
       entry.defaultSize,
@@ -201,6 +206,20 @@ test("offline normal-card preparation and fresh Core restore use canonical kinds
       });
       assert.equal((page.result as any).resources[0].id, seed.memberId);
     }
+  }
+  for (const entry of seed.shapeCases) {
+    const state = await core.command("desktop", {
+        type: "navigate",
+        target: { kind: "workspace", workspaceId: entry.workspaceId },
+      }),
+      block = state.blocks.find((block) => block.id === entry.blockId)!;
+    assert.equal(block.shape, entry.shape);
+    assert.equal(block.resource_id, entry.resourceId);
+    assert.deepEqual({ width: block.width, height: block.height }, entry.size);
+    assert(
+      seed.cases.some((original) => original.resourceId === entry.resourceId),
+      "Saved shape references existing canonical resource",
+    );
   }
   assert.equal(
     Object.keys((await core.command("snapshot", {})).executions).length,

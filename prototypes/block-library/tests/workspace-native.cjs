@@ -59,6 +59,7 @@ exports.verify = async ({
     checks: [],
     actions: [],
     cases: [],
+    shapeCases: [],
     screenshots: [],
     errors: [],
     limits: [
@@ -110,6 +111,15 @@ exports.verify = async ({
     assert.equal(seed.contract, "aerynth.workspace-native@1");
     assert.equal(seed.syntheticOnly, true);
     assert.equal(seed.cases.length, 10);
+    assert.equal(
+      seed.shapeCases.length,
+      3,
+      "Explicit saved curved shapes are required",
+    );
+    assert.deepEqual(
+      new Set(seed.shapeCases.map((entry) => entry.shape)),
+      new Set(["lens", "circle", "pill"]),
+    );
     assert.deepEqual(
       new Set(seed.cases.map((item) => item.kind)),
       new Set(kinds),
@@ -345,7 +355,8 @@ exports.verify = async ({
         new Set(expected.cases.map((entry) => entry.kind)),
         new Set(kinds),
       );
-      for (const entry of expected.cases) {
+      assert.equal(expected.shapeCases.length, 3);
+      for (const entry of [...expected.cases, ...expected.shapeCases]) {
         await navigate(entry);
         await normal(entry);
         assert.deepEqual(
@@ -353,6 +364,14 @@ exports.verify = async ({
           expected.workspaces[entry.workspaceId],
           "Fresh-process geometry for " + entry.kind,
         );
+        if (entry.shape)
+          assert.equal(
+            (await snapshot()).blocks.find(
+              (block) => block.id === entry.blockId,
+            ).shape,
+            entry.shape,
+            "Explicit saved shape is preserved",
+          );
         if (entry.kind === "conversation") await shortChatReady(entry);
       }
       const state = await snapshot();
@@ -456,6 +475,11 @@ exports.verify = async ({
           { width: block.width, height: block.height },
           entry.defaultSize,
           "Distinct NEW default for " + entry.kind,
+        );
+        assert.equal(
+          block.shape,
+          entry.defaultShape,
+          "New default shape for " + entry.kind,
         );
         let input;
         if (["note", "research", "reference", "task"].includes(entry.kind)) {
@@ -577,6 +601,7 @@ exports.verify = async ({
           blockId: entry.blockId,
           resourceId: entry.resourceId,
           defaultSize: entry.defaultSize,
+          defaultShape: entry.defaultShape,
           bounds,
           method: ["note", "conversation"].includes(entry.kind)
             ? "native Library creation and native primary action"
@@ -602,12 +627,49 @@ exports.verify = async ({
         ).size,
         10,
       );
+      for (const entry of seed.shapeCases) {
+        await navigate(entry);
+        const card = await normal(entry),
+          before = await snapshot(),
+          saved = before.blocks.find((block) => block.id === entry.blockId);
+        assert.equal(saved.shape, entry.shape);
+        assert.equal(saved.resource_id, entry.resourceId);
+        assert.deepEqual(
+          { width: saved.width, height: saved.height },
+          entry.size,
+        );
+        if (["research", "reference"].includes(entry.kind))
+          await click(
+            card + ' .aw-note-tools button[aria-label="Edit document"]',
+          );
+        const input = card + " textarea";
+        await type(
+          input,
+          "Synthetic direct edit in explicit saved " + entry.shape,
+        );
+        await resize(entry, card, input);
+        const after = await snapshot();
+        assert.equal(
+          after.blocks.find((block) => block.id === entry.blockId).shape,
+          entry.shape,
+        );
+        workspaces[entry.workspaceId] = exports.workspaceState(after);
+        receipt.shapeCases.push({
+          shape: entry.shape,
+          kind: entry.kind,
+          blockId: entry.blockId,
+          resourceId: entry.resourceId,
+          method:
+            "Explicit canonical saved shape; actual native editing and corner resize",
+        });
+      }
       await navigate(cases.find((entry) => entry.kind === "note"));
       const canonical = await snapshot(),
         checkpoint = JSON.stringify(
           {
             contract: "aerynth.workspace-native-checkpoint@1",
             cases,
+            shapeCases: seed.shapeCases,
             workspaces,
             canonical: {
               resources: canonical.resources,

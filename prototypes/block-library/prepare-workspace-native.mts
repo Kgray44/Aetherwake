@@ -22,6 +22,7 @@ import type {
   BlockInstanceKind,
   CreatedBlock,
   CreatedSubjectBlock,
+  Presentation,
 } from "./contracts.ts";
 import type { DesktopSnapshot } from "../application-contract/contracts.ts";
 import type { Collection } from "../conversation-product/src/contracts.ts";
@@ -34,6 +35,7 @@ export type WorkspaceNativeCase = {
   resourceId?: string;
   title: string;
   defaultSize: { width: number; height: number };
+  defaultShape: Presentation["shape"];
 };
 export type WorkspaceNativeSeed = {
   contract: "aerynth.workspace-native@1";
@@ -43,6 +45,10 @@ export type WorkspaceNativeSeed = {
   memberId: string;
   taskId: string;
   cases: WorkspaceNativeCase[];
+  shapeCases: (Omit<WorkspaceNativeCase, "defaultSize" | "defaultShape"> & {
+    shape: "lens" | "circle" | "pill";
+    size: { width: number; height: number };
+  })[];
   hashes: Record<string, string>;
   expected: DesktopSnapshot;
 };
@@ -162,6 +168,7 @@ export async function prepareWorkspaceNative(
         workspaceId,
         title: "Synthetic direct " + definition.kind,
         defaultSize: { ...BLOCK_DEFAULT_SIZES[definition.kind] },
+        defaultShape: definition.defaultPresentation.shape,
       };
       // These two placements must be created by the real native Library form.
       if (definition.kind !== "note" && definition.kind !== "conversation") {
@@ -237,6 +244,68 @@ export async function prepareWorkspaceNative(
       expectedVersion: group.version,
       taskIds: [taskId],
     });
+    const shapeCases: WorkspaceNativeSeed["shapeCases"] = [];
+    for (const [shape, kind, width, height] of [
+      ["lens", "research", 420, 420],
+      ["circle", "reference", 420, 420],
+      ["pill", "task", 520, 320],
+    ] as const) {
+      const resourceId = cases.find(
+        (entry) => entry.kind === kind,
+      )!.resourceId!;
+      desktop = await core.command("desktop", {
+        type: "createWorkspace",
+        title: "Synthetic saved " + shape,
+        projectId,
+      });
+      const workspaceId = desktop.activeWorkspaceId!;
+      desktop = await core.command("desktop", {
+        type: "setOrganization",
+        workspaceId,
+        expectedOrganizationRevision: desktop.organization!.revision,
+        organization: { mode: "freeform" },
+      });
+      desktop = await core.command("desktop", {
+        type: "setPresence",
+        workspaceId,
+        expectedVersion: desktop.presence!.version,
+        placement: { x: 1120, y: 170 },
+      });
+      const current = desktop.resources.find(
+        (resource) => resource.id === resourceId,
+      )!;
+      const attached = await core.command("library", {
+        name: "attachBlock",
+        input: {
+          commandId: randomUUID(),
+          workspaceId,
+          expectedLayoutVersion: desktop.layoutVersion,
+          resourceId,
+          kind,
+          expectedResourceVersion: current.version,
+          presentation: { shape, width, height, x: 90, y: 160 },
+        },
+      });
+      const blockId = (attached.result as CreatedBlock).placementId;
+      desktop = attached.desktop!;
+      assert.equal(
+        desktop.blocks.find((block) => block.id === blockId)!.shape,
+        shape,
+      );
+      shapeCases.push({
+        kind,
+        shape,
+        size: { width, height },
+        workspaceId,
+        resourceId,
+        blockId,
+        title: "Synthetic explicit saved " + shape,
+      });
+      assert(
+        statSync(databasePath).size <= 32 * 1024 * 1024,
+        "prepared_database_32MiB_checkpoint_exceeded",
+      );
+    }
     desktop = await core.command("desktop", {
       type: "navigate",
       target: {
@@ -270,6 +339,7 @@ export async function prepareWorkspaceNative(
       memberId: member.resourceId,
       taskId,
       cases,
+      shapeCases,
       hashes,
       expected: desktop,
     };
@@ -304,6 +374,7 @@ if (
       nativeRun: false,
       providerExecution: false,
       cases: seed.cases.length,
+      explicitShapes: seed.shapeCases.length,
     }) + "\n",
   );
 }

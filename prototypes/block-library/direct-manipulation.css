@@ -47,19 +47,19 @@
 }
 .aw-card-edge--ne,
 .aw-card-edge--nw {
-  top: -3px;
+  top: calc(var(--aw-resize-radius-y, 18px) * 0.2928932188134524 - 8px);
 }
 .aw-card-edge--se,
 .aw-card-edge--sw {
-  bottom: -3px;
+  bottom: calc(var(--aw-resize-radius-y, 18px) * 0.2928932188134524 - 8px);
 }
 .aw-card-edge--ne,
 .aw-card-edge--se {
-  right: -3px;
+  right: calc(var(--aw-resize-radius-x, 18px) * 0.2928932188134524 - 8px);
 }
 .aw-card-edge--nw,
 .aw-card-edge--sw {
-  left: -3px;
+  left: calc(var(--aw-resize-radius-x, 18px) * 0.2928932188134524 - 8px);
 }
 .aw-card-edge--ne,
 .aw-card-edge--sw {

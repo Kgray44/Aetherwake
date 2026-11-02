@@ -712,3 +712,21 @@
     padding: 8px 12px;
   }
 }
+
+/* Explicit saved curved shapes remain curved. Their working rectangle lies
+   inside that SAME painted contour; geometry and canonical shape stay intact. */
+.folio[data-block-kind]:is(
+    [data-shape="lens"],
+    [data-shape="circle"],
+    [data-shape="pill"]
+  ):not(.expanded):not(.receded)
+  .folio-inner {
+  padding-block: max(
+    12px,
+    calc(var(--aw-resize-radius-y, 18px) * 0.2928932188134524 + 8px)
+  );
+  padding-inline: max(
+    16px,
+    calc(var(--aw-resize-radius-x, 18px) * 0.2928932188134524 + 8px)
+  );
+}

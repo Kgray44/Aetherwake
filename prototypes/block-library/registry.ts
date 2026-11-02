@@ -123,7 +123,7 @@ const define = (
         : []),
   ],
   defaultPresentation: presentation({
-    shape: kind === "note" ? "folio" : kind === "research" ? "lens" : "rounded",
+    shape: kind === "note" ? "folio" : "rounded",
     ...BLOCK_DEFAULT_SIZES[kind],
   }),
   compatibleResourceKinds: [kind],
