@@ -49,7 +49,7 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
       assert(receipt.captures.length < 2, 'PNG count exceeded'); const prior = await js(expressions.graphics); healthy(prior); let last, stable = panel ? 0 : 3, acknowledgement;
       while (Date.now() < end - 1500) {
         foreground(); const value = await js(expressions.graphics); healthy(value);
-        if (panel) { const current = await js(expressions.panel(block.id)); if (current?.opacity >= .995 && current.inBounds && current.state === 'clean' && last && ['x', 'y', 'width', 'height'].every(key => Math.abs(current[key] - last[key]) < .75)) stable++; else stable = 0; last = current; receipt.lastPanel = current; }
+        if (panel) { const current = await js(expressions.panel(block.id)); if (current?.opacity >= .995 && current.inBounds && ['ready', 'saved'].includes(current.state) && last && ['x', 'y', 'width', 'height'].every(key => Math.abs(current[key] - last[key]) < .75)) stable++; else stable = 0; last = current; receipt.lastPanel = current; }
         if (stable >= 3 && value.frames > prior.frames && value.draws > prior.draws) { acknowledgement = value; break; }
         if (!tabUsed && Date.now() - started > 800 && await js(expressions.writer)) { foreground(); for (const type of ['keyDown', 'keyUp']) win.webContents.sendInputEvent({ type, keyCode: 'Tab' }); tabUsed = true; receipt.actions.push({ type: 'native-keyboard', key: 'Tab', reason: 'Leave writing focus so production ambient policy can resume normally' }); }
         await pause(80);
