@@ -68,6 +68,8 @@ test('schema-only A/C preparation creates no project/workspace/resource; real Co
   const dir = mkdtempSync(join(tmpdir(), 'aerynth-library-empty-')), profile = join(dir, 'review-workspace-native-ac-source');
   t.after(() => { const part = relative(resolve(tmpdir()), resolve(dir)); assert(part.startsWith('aerynth-library-empty-') && !part.startsWith('..') && !isAbsolute(part)); rmSync(dir, { recursive: true, force: true }); });
   const seed = await prepareLibraryNative(profile); assert.deepEqual(seed.ordinaryCounts, { projects: 0, workspaces: 0, resources: 0 }); assert.equal(Object.keys(seed.hashes).length, 8);
+  assert.deepEqual(seed.preflight, require('./library-native-expressions.cjs').preflight());
+  assert.match(seed.expressionHelperSha256, /^[a-f0-9]{64}$/);
   await assert.rejects(prepareLibraryNative(profile), /existing_profiles_must_be_preserved/);
   const core = new BackendCore({ path: join(profile, 'aerynth.sqlite'), privateRoot: profile, provider: 'codex', contentPolicy: 'local-private' });
   try { const state = await core.command('desktop', { type: 'snapshot' }); assert.deepEqual([state.projects.length, state.workspaces.length, state.resources.length, state.blocks.length], [0, 0, 0, 0]); assert.equal(Object.keys((await core.command('snapshot', {})).executions).length, 0); }

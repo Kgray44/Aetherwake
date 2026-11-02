@@ -4,10 +4,14 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
 import { BackendCore } from '../integrated-backend/src/core.mts';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const require = createRequire(import.meta.url);
+type ExpressionPreflight = { factories: number; cases: number; names: string[]; sha256: string };
+const { preflight } = require('./tests/library-native-expressions.cjs') as { preflight(): ExpressionPreflight };
 export const libraryNativeLabels = Object.freeze({
   project: 'Synthetic Library AC project',
   workspace: 'Synthetic native Blank workspace',
@@ -22,6 +26,8 @@ export type LibraryNativeSeed = {
   syntheticOnly: true;
   labels: typeof libraryNativeLabels;
   hashes: Record<string, string>;
+  preflight: ExpressionPreflight;
+  expressionHelperSha256: string;
   ordinaryCounts: { projects: 0; workspaces: 0; resources: 0 };
 };
 
@@ -37,6 +43,9 @@ export async function prepareLibraryNative(profile: string): Promise<LibraryNati
     const guard = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-File', join(homedir(), 'AppData/Local/AeroStorageWatch/ReserveGuard.ps1'), '-EstimatedCBytes', String(onC ? 536870912 : 16777216), '-EstimatedDBytes', String(onD ? 536870912 : 0)], { encoding: 'utf8', windowsHide: true, timeout: 15000 }));
     assert.equal(guard.allowed, true, 'storage_reserve_denied');
   }
+  // Compile every expression factory in both driver contexts before allocating a profile.
+  const compiled = preflight();
+  const expressionHelperSha256 = createHash('sha256').update(readFileSync(join(root, 'prototypes/block-library/tests/library-native-expressions.cjs'))).digest('hex');
   mkdirSync(profile, { recursive: false });
   const database = join(profile, 'aerynth.sqlite'), core = new BackendCore({ path: database, privateRoot: profile, cwd: root, provider: 'codex', contentPolicy: 'local-private', retention: { maxEvents: 10000 } });
   try {
@@ -52,7 +61,7 @@ export async function prepareLibraryNative(profile: string): Promise<LibraryNati
   ]) {
     hashes[relative] = createHash('sha256').update(readFileSync(join(root, relative))).digest('hex');
   }
-  const seed: LibraryNativeSeed = { contract: 'aerynth.library-template-native@1', syntheticOnly: true, labels: libraryNativeLabels, hashes, ordinaryCounts: { projects: 0, workspaces: 0, resources: 0 } };
+  const seed: LibraryNativeSeed = { contract: 'aerynth.library-template-native@1', syntheticOnly: true, labels: libraryNativeLabels, hashes, preflight: compiled, expressionHelperSha256, ordinaryCounts: { projects: 0, workspaces: 0, resources: 0 } };
   const bytes = Buffer.from(JSON.stringify(seed, null, 2));
   assert(bytes.length <= 65536, 'library_seed_bytes_exceeded');
   writeFileSync(join(profile, 'library-native-seed.json'), bytes, { flag: 'wx' });
