@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { Backend } from "../src/service.mts";
 import type { DesktopCommand } from "../../application-contract/contracts.ts";
 
@@ -89,7 +89,7 @@ test("canonical task priority, local status and description retain each other ac
   } finally {
     await backend.close();
     const target = resolve(directory);
-    assert.ok(target.startsWith(resolve(tmpdir()) + "\\"));
+    assert.ok(target.startsWith(resolve(tmpdir()) + sep));
     rmSync(target, { recursive: true, force: true });
   }
 });
