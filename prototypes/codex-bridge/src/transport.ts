@@ -25,7 +25,8 @@ export class JsonlTransport extends EventEmitter {
   private readonly maxLineBytes = 4 * 1024 * 1024;
   private readonly executable: string;
   private readonly args: string[];
-  constructor(executable = "codex", args = ["app-server", "--listen", "stdio://"] ) { super(); this.executable = executable; this.args = args; }
+  private readonly experimentalApi:boolean;
+  constructor(executable = "codex", args = ["app-server", "--listen", "stdio://"], options:{experimentalApi?:boolean}={} ) { super(); this.executable = executable; this.args = args; this.experimentalApi=options.experimentalApi===true; }
 
   async start(): Promise<Wire> {
     if (!this.closed) throw new BridgeError("state", "Transport already started");
@@ -52,7 +53,7 @@ export class JsonlTransport extends EventEmitter {
       if (incoming.length > this.maxLineBytes) this.fail(new BridgeError("protocol", "JSONL line exceeds limit"));
     });
     try {
-      const initialized = await this.request("initialize", { clientInfo: { name: "aetherwake_codex_bridge", title: "Aetherwake Codex Bridge Prototype", version: "0.1.0" } });
+      const initialized = await this.request("initialize", { clientInfo: { name: "aetherwake_codex_bridge", title: "Aetherwake Codex Bridge Prototype", version: "0.1.0" },...(this.experimentalApi?{capabilities:{experimentalApi:true,requestAttestation:false}}:{}) });
       this.notify("initialized", {});
       return initialized;
     } catch (error) { this.close(); throw error; }

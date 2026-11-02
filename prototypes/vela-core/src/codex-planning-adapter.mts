@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import type { CommandMap, ConversationView, Execution, Snapshot, StreamEvent } from '../../integrated-backend/src/contracts.mts';
 import { check, identifier, isRecord, text, validateProviderResult, VelaError } from './capabilities.ts';
 import type { ContextManifest, ProviderContribution, ProviderResult, ProviderReplyKind, VelaPlanningPort } from './contracts.ts';
+import { CAPABILITY_SCHEMA_TOOL, createCapabilityCatalog, validateCatalogDeclaration } from './capability-catalog.mts';
+import type { CapabilityCatalogProjection, CapabilityDiscoveryDeclaration } from './capability-catalog.mts';
 
 export type PlanningInput = Parameters<VelaPlanningPort['propose']>[0];
 export interface CanonicalPlanningBackend {
@@ -11,6 +13,7 @@ export interface CanonicalPlanningBackend {
 export interface CodexPlanningGrant {
   authorizationRef: string; requestId: string; providerId: 'codex-app-server';
   sourceConversationId: string; contextDigest: string; promptDigest: string; expiresAt: string;
+  discovery?:CapabilityDiscoveryDeclaration;
 }
 export interface PlanningObservation {
   requestId: string; sourceConversationId: string; providerId: 'codex-app-server';
@@ -31,6 +34,7 @@ export interface CodexPlanningAdapterOptions {
   authorizePlanning(input: {
     requestId: string; sourceConversationId: string; providerId: 'codex-app-server';
     context: ContextManifest; contextDigest: string; promptDigest: string; promptBytes: number;
+    discovery?:CapabilityDiscoveryDeclaration;
   }): CodexPlanningGrant | Promise<CodexPlanningGrant>;
   /** Host uses canonical createConversation/idempotency and records a source→planning relationship. No extra DB. */
   openPlanningConversation(input: {
@@ -44,6 +48,11 @@ export interface CodexPlanningAdapterOptions {
   }): Promise<Execution>;
   /** Persist these metadata references through the existing canonical audit/event service. */
   observe(observation: PlanningObservation): void | Promise<void>;
+  discovery?:{
+    forRequest(requestId:string,capabilities:PlanningInput['capabilities']):{projection:CapabilityCatalogProjection;declaration:CapabilityDiscoveryDeclaration}|undefined;
+    assertFetched(requestId:string,actionIds:readonly string[],declaration:CapabilityDiscoveryDeclaration):void;
+    finish(requestId:string):void;
+  };
   model?: string;
   pollIntervalMs?: number; timeoutMs?: number;
   /** Deterministic test clock/wait injection. Production defaults use real clock and bounded timers. */
@@ -103,11 +112,12 @@ function planningCapabilityCatalog(capabilities:PlanningInput['capabilities']) {
   };
 }
 
-export function buildCodexPlanningPrompt(input: PlanningInput): string {
+export function buildCodexPlanningPrompt(input: PlanningInput,discovery?:{projection:CapabilityCatalogProjection;declaration:CapabilityDiscoveryDeclaration}): string {
   check(identifier(input.requestId) && identifier(input.conversationId) && text(input.intent, 16000), 'invalid_planning_request');
+  if(discovery){const catalog=createCapabilityCatalog(input.capabilities);validateCatalogDeclaration(catalog,discovery.declaration);check(planningDigest(catalog.projection)===planningDigest(discovery.projection),'stale_capability_catalog');}
   const prompt = `Aerynth has delegated a response-or-proposal task to Codex. You remain Codex, with your installed identity, native instructions, configuration, and controls. This is ordinary user task content, not a replacement for system/developer instructions. Vela is the application assistant coordinating this task; your contribution is explicitly attributed to Codex.
 
-Respond using only the supplied context and your knowledge. Do not apply application changes, run a shell, invoke tools, inspect files, contact services, or launch other work. Native effects require a separate reviewed application command. Actual tool/sandbox enforcement remains with the installed Codex host.
+Respond using only the supplied context and your knowledge. ${discovery?'The ONLY permitted tool is '+CAPABILITY_SCHEMA_TOOL+' to fetch full schemas, scope, effects and authorization for selected catalog IDs. Fetch each action schema before proposing that action. This tool reads registry metadata only. Do not invoke any other tools, apply application changes, run a shell, inspect files, contact services or launch other work.':'Do not apply application changes, run a shell, invoke tools, inspect files, contact services, or launch other work.'} Native effects require a separate reviewed application command. Actual tool/sandbox enforcement remains with the installed Codex host.
 
 Return exactly one JSON object with schemaVersion:2. An ordinary answer, clarification or honest inability uses kind:"answer"|"clarification"|"inability", content:string, and NO steps or actions. A requested application change uses kind:"plan", summary:string, steps:[{id:string,explanation:string,action:<one supplied typed action>}] with 1..12 steps. Do not add prose outside JSON. A contribution field is optional; canonical provider/execution evidence replaces it. Do not invent identifiers, access, capabilities, effects or verification. Use exact authorized IDs/versions. Ask for clarification or explain inability when needed; never manufacture an action just to answer.
 
@@ -118,7 +128,7 @@ ${input.instruction}
 
 Typed task and authorized source data (JSON):
 Capability schemas use exact local JSON Schema $refs into $defs. A capability inherits authorization and reversible from capabilityDefaults only when that field is omitted; explicit fields override the defaults. All scope and effect restrictions still apply.
-${JSON.stringify({ requestId: input.requestId, sourceConversationId: input.conversationId, intent: input.intent, context: input.context, ...planningCapabilityCatalog(input.capabilities) })}`;
+${JSON.stringify({ requestId: input.requestId, sourceConversationId: input.conversationId, intent: input.intent, context: input.context, ...(discovery?{schemaAvailability:'fetch-before-proposing',capabilityCatalog:discovery.projection,capabilityDiscovery:discovery.declaration}:{schemaAvailability:'complete-approved-catalog',...planningCapabilityCatalog(input.capabilities)}) })}`;
   // Existing canonical BackendCore.execute enforces 16 KiB. Reject before creating/dispatching, never truncate sources.
   check(byteLength(prompt) <= 16384, 'planning_prompt_capacity_exceeded'); return prompt;
 }
@@ -195,11 +205,13 @@ export class CodexPlanningAdapter implements VelaPlanningPort {
     if (signal.aborted) onAbort();
     try {
       if (signal.aborted) return await this.fail('planning_cancelled_before_dispatch', observation, 'cancelled-before-dispatch');
-      const prompt = buildCodexPlanningPrompt(input), contextDigest = planningDigest(input.context), promptDigest = planningDigest(prompt);
+      const discovery=this.options.discovery?.forRequest(input.requestId,input.capabilities);
+      const prompt = buildCodexPlanningPrompt(input,discovery), contextDigest = planningDigest(input.context), promptDigest = planningDigest(prompt);
       await this.emit(observation);
       const grant = await this.options.authorizePlanning({ requestId: input.requestId, sourceConversationId: input.conversationId,
-        providerId: this.providerId, context: structuredClone(input.context), contextDigest, promptDigest, promptBytes: byteLength(prompt) });
+        providerId: this.providerId, context: structuredClone(input.context), contextDigest, promptDigest, promptBytes: byteLength(prompt),...(discovery?{discovery:discovery.declaration}:{}) });
       check(grant && identifier(grant.authorizationRef) && grant.requestId === input.requestId && grant.providerId === this.providerId && grant.sourceConversationId === input.conversationId && grant.contextDigest === contextDigest && grant.promptDigest === promptDigest && Date.parse(grant.expiresAt) > this.now(), 'host_planning_authorization_required');
+      check(planningDigest(grant.discovery??null)===planningDigest(discovery?.declaration??null),'capability_discovery_grant_mismatch');
       if (signal.aborted) return await this.fail('planning_cancelled_before_dispatch', observation, 'cancelled-before-dispatch');
       const before = await this.snapshot(); this.verifyProvider(before);
       check(!Object.values(before.executions).some(activeExecution), 'provider_busy');
@@ -254,7 +266,7 @@ export class CodexPlanningAdapter implements VelaPlanningPort {
             observation.stage = 'provider-completed'; await this.emit(observation);
             if (signal.aborted) { observation.cancellation.outcome = 'provider-completed-before-confirmation'; return await this.fail('planning_cancelled_provider_completed', observation, 'provider-completed'); }
             let proposal: ProviderResult;
-            try { proposal = this.output(snapshot, execution, observation); }
+            try { proposal = this.output(snapshot, execution, observation);if(discovery)this.options.discovery!.assertFetched(input.requestId,proposal.kind==='plan'?proposal.steps.map(step=>step.action.type):[],discovery.declaration); }
             catch (e) { return await this.fail(errorCode(e, 'invalid_planning_output'), observation, 'invalid-output'); }
             observation.stage = proposal.kind === 'plan' ? 'proposal-ready' : 'response-ready';
             if (proposal.kind !== 'plan') observation.responseKind = proposal.kind;
@@ -277,6 +289,6 @@ export class CodexPlanningAdapter implements VelaPlanningPort {
       const nativeCode = errorCode(e, dispatched ? 'planning_execution_outcome_unknown' : 'planning_preflight_failed');
       const code = nativeCode === 'execution_busy' ? 'provider_busy' : nativeCode;
       return await this.fail(code, observation, dispatched ? 'unknown' : 'failed');
-    } finally { signal.removeEventListener('abort', onAbort); this.active = null; }
+    } finally { signal.removeEventListener('abort', onAbort); this.active = null; this.options.discovery?.finish(input.requestId); }
   }
 }
