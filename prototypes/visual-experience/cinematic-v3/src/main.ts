@@ -258,15 +258,19 @@ function interaction() {
 function base(id: string) {
   return restAt(id, order.indexOf(id));
 }
-function restAt(id: string, slot: number) {
-  const block =
+function presentationBlock(id: string) {
+  return (
     (
       application as
         | (Application & {
             previewBlock?: (id: string) => ReturnType<Application["block"]>;
           })
         | null
-    )?.previewBlock?.(id) ?? application?.block(id);
+    )?.previewBlock?.(id) ?? application?.block(id)
+  );
+}
+function restAt(id: string, slot: number) {
+  const block = presentationBlock(id);
   if (block) {
     const offset = application!.offset();
     const value =
@@ -687,8 +691,6 @@ function replaceWorkspace(state: DesktopSnapshot) {
   for (const block of state.blocks) {
     const resource = state.resources.find((r) => r.id === block.resource_id)!;
     const displayType: Resource["type"] =
-      block.shape === "circle" ||
-      block.shape === "lens" ||
       resource.kind === "research"
         ? "research"
         : resource.kind === "conversation"
@@ -1040,7 +1042,7 @@ function renderDOM() {
   const projected = order.map((id) => {
     const p = motion.pose(id),
       rest = base(id),
-      block = application?.block(id);
+      block = presentationBlock(id);
     const unfold = resourceUnfold(motion, id);
     return {
       id,
@@ -1184,7 +1186,8 @@ function tick(now: number) {
         )
         .map((id) => {
           const p = motion.pose(id),
-            rest = base(id);
+            rest = base(id),
+            block = presentationBlock(id);
           return {
             id,
             kind:
@@ -1192,19 +1195,15 @@ function tick(now: number) {
                 ? "conversation"
                 : resources.get(id)!.type,
             ...p,
-            shape:
-              application?.block(id)?.shape ??
-              defaultSurfaceShape(resources.get(id)?.type),
-            rotation:
-              (application?.block(id)?.rotation ?? 0) *
-              (1 - resourceUnfold(motion, id)),
+            shape: block?.shape ?? defaultSurfaceShape(resources.get(id)?.type),
+            rotation: (block?.rotation ?? 0) * (1 - resourceUnfold(motion, id)),
             presentationLayer:
               expanded === id || resourceUnfold(motion, id) > 0.001 ? 1 : 0,
             zIndex:
               expanded === id
                 ? 200000
                 : desktopMode
-                  ? (application?.block(id)?.z ?? 0)
+                  ? (block?.z ?? 0)
                   : drag?.id === id
                     ? 150000
                     : selected === id

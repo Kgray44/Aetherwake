@@ -47,6 +47,8 @@ test("resource faces and rims retain finite unit normals, valid indices and outw
   for (const kind of ["conversation", "research", "note"]) {
     for (const unfold of [0, 0.25, 0.6, 1]) {
       for (const [width, height] of [
+        [24, 16],
+        [8, 8],
         [180, 120],
         [280, 280],
         [840, 600],

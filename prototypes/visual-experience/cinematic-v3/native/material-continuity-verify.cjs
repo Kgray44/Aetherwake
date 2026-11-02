@@ -116,6 +116,13 @@ async function run(win) {
     projectId: null,
   });
   const workspace = (await state()).activeWorkspaceId;
+  const initialOrganization = (await state()).organization;
+  await execute({
+    type: "setOrganization",
+    workspaceId: workspace,
+    expectedOrganizationRevision: initialOrganization.revision,
+    organization: { mode: "freeform" },
+  });
   for (const [kind, title] of [
     ["conversation", "Light stays with the surface"],
     ["research", "An optical research lens"],
@@ -391,8 +398,23 @@ async function run(win) {
       (await state()).blocks.map((b) => [b.id, b.resource_id]).sort(),
     ) === JSON.stringify(baselineIds.sort()),
   );
-  // Native pointer input, while renderer callbacks collect actual delivered states.
-  await reset();
+  const nativeReset = async () => {
+    await js("window.__aerynth.home()");
+    await geometry(
+      ids[0],
+      { x: 100, y: 310, w: 440, h: 230, z: 30, rotation: 0 },
+      "folio",
+    );
+    await geometry(ids[1], { x: 1030, y: 405, w: 270, h: 270, z: 20 }, "lens");
+    await geometry(
+      ids[2],
+      { x: 620, y: 650, w: 330, h: 170, z: 10 },
+      "rounded",
+    );
+    await pause(800);
+  };
+  // Native pointer input starts from actual canonical Freeform placements.
+  await nativeReset();
   await pause(600);
   let pointerIndex = 0;
   await js(
@@ -400,7 +422,7 @@ async function run(win) {
   );
   const pointerDrag = async (selector, dx, dy, duration = 2200) => {
     const start = await js(
-      `(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`,
+      `(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e.getBoundingClientRect();const x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2),hit=document.elementFromPoint(x,y);if(!(e===hit||e.contains(hit)))throw Error('Native input target is occluded');return{x,y}})()`,
     );
     receipt.pointerInputs.push({
       selector,
@@ -416,6 +438,7 @@ async function run(win) {
       clickCount: 1,
       ...start,
     });
+    await pause(70);
     for (let i = 1; i <= 60; i++) {
       win.webContents.sendInputEvent({
         type: "mouseMove",
@@ -423,8 +446,9 @@ async function run(win) {
         y: Math.round(start.y + (dy * i) / 60),
         movementX: dx / 60,
         movementY: dy / 60,
+        modifiers: ["leftbuttondown"],
       });
-      if (i === 30)
+      if (i === (selector.includes("resize") ? 55 : 45))
         await sample(
           (selector.includes("resize")
             ? "18-native-resize-crossing-"
@@ -468,7 +492,7 @@ async function run(win) {
       await pause(80);
     }
     await pointerDrag(`[data-block="${ids[0]}"] .grip`, 850, 100, 4500);
-    await reset();
+    await nativeReset();
     await pointerDrag(
       `[data-block="${ids[0]}"] .resize-handle`,
       650,
@@ -477,7 +501,7 @@ async function run(win) {
     );
     await js('window.__aerynth.setStudy("living")');
     await pause(1000);
-    await reset();
+    await nativeReset();
     await pointerDrag(`[data-block="${ids[0]}"] .grip`, 750, 140, 3500);
     await js('window.__aerynth.setStudy("architecture")');
     await pause(900);
@@ -492,7 +516,7 @@ async function run(win) {
     );
   } else {
     await pointerDrag(`[data-block="${ids[0]}"] .grip`, 850, 100);
-    await reset();
+    await nativeReset();
     await pointerDrag(`[data-block="${ids[0]}"] .resize-handle`, 650, 140);
   }
   receipt.deliveredFrameTrace = await js(
