@@ -1,22 +1,13 @@
 import { createHash } from 'node:crypto';
 import type { ContextManifest, ProviderContribution, ProviderReplyKind, ResourceRef, VelaMessage, VelaRequest } from './contracts.ts';
+import type { HistoryOrigin, HistoryResourceDependency, HistoryMessageDependency, HistoryDependency, HistoryProvenance, ProviderHistoryMessage, ProviderHistory } from './history-contracts.ts';
+export type { HistoryOrigin, HistoryResourceDependency, HistoryMessageDependency, HistoryDependency, HistoryProvenance, ProviderHistoryMessage, ProviderHistory } from './history-contracts.ts';
 
 /** Unwired canonical history/proof primitives. Readers run in the caller's SAME canonical read transaction. */
 export const HISTORY_LIMITS = Object.freeze({ maxMessages: 4, maxEncodedBytes: 4096, lookbackMessages: 12, maxDependencies: 64, maxValidationBytes: 131072 });
-export interface HistoryOrigin {
-  principalId: string; policyVersion: string;
-  navigation: { kind: 'known'; projectId: string | null; workspaceId: string | null } | { kind: 'unknown' };
-}
-export interface HistoryResourceDependency { kind: 'resource'; ref: ResourceRef; content?: { source: string; digest: string } }
-export interface HistoryMessageDependency {
-  kind: 'message'; conversationId: string; messageId: string; requestId: string;
-  ordinal: number; contentDigest: string; provenanceDigest: string;
-}
-export type HistoryDependency = HistoryResourceDependency | HistoryMessageDependency;
-export interface HistoryProvenance { schemaVersion: 1; dependencies: readonly HistoryDependency[]; digest: string }
 /** Metadata projection of an actual persisted request; no history/source content is copied into this projection. */
-export interface HistoryRequestRecord extends Pick<VelaRequest, 'id' | 'conversationId' | 'intent' | 'state' | 'providerId'> {
-  origin?: HistoryOrigin; inputMessageId?: string;
+export interface HistoryRequestRecord extends Pick<VelaRequest, 'id' | 'conversationId' | 'state' | 'providerId'> {
+  origin?: HistoryOrigin; inputMessageId?: string; inputContentDigest?: string;
   response?: { kind: ProviderReplyKind; messageId: string; contentDigest?: string };
   provenance?: HistoryProvenance;
   sourcePolicyVersion: string; sourceDependencies: readonly HistoryResourceDependency[];
@@ -24,6 +15,15 @@ export interface HistoryRequestRecord extends Pick<VelaRequest, 'id' | 'conversa
 export interface HistoryHeader { id: string; requestId?: string; role: VelaMessage['role']; source: VelaMessage['source']; ordinal: number; contentBytes: number }
 export interface HistorySnapshot { conversationId: string; revision: number; headers: readonly HistoryHeader[]; hasEarlier: boolean }
 export interface CanonicalHistoryMessage { conversationId: string; ordinal: number; message: VelaMessage }
+/** Does not materialize or hash message bodies. The exact conversation revision fences body changes. */
+export interface HistoryMessageMetadata extends Pick<VelaMessage, 'id' | 'requestId' | 'role' | 'source' | 'classification' | 'providerId' | 'responseKind' | 'providerContribution'> { conversationId: string; ordinal: number }
+export interface HistoryMetadataReader {
+  request(requestId: string): HistoryRequestRecord | null;
+  message(conversationId: string, messageId: string): HistoryMessageMetadata | null;
+  resolve(ref: Pick<ResourceRef, 'id' | 'kind'>): ResourceRef | null;
+  canReadContent(ref: ResourceRef): boolean;
+  verifyProviderContribution(contribution: ProviderContribution, message: HistoryMessageMetadata, request: HistoryRequestRecord): boolean;
+}
 export interface HistoryReadLimit { overBudget: true }
 export interface HistoryProofReader {
   /** These reads enforce current metadata/message/content permission before returning canonical values. */
@@ -34,11 +34,6 @@ export interface HistoryProofReader {
   /** Actual canonical provider/execution evidence only; no provider invocation or model-written attribution. */
   verifyProviderContribution(contribution: ProviderContribution, message: VelaMessage, request: HistoryRequestRecord): boolean;
 }
-export interface ProviderHistoryMessage {
-  id: string; requestId: string; role: 'user' | 'assistant'; source: 'user' | 'provider';
-  providerId?: string; classification: 'observed' | 'reported'; content: string; contentDigest: string;
-}
-export interface ProviderHistory { schemaVersion: 1; messages: readonly ProviderHistoryMessage[]; coverage: 'bounded-authorized-whole-messages' }
 export type HistoryOmissionReason = 'disabled' | 'no-conversation' | 'no-history' | 'unknown-origin' | 'scope-mismatch' | 'unproven-request'
   | 'non-conversational' | 'missing-pair' | 'message-unavailable' | 'message-changed' | 'provider-evidence' | 'upstream-unavailable'
   | 'upstream-changed' | 'incomplete-proof' | 'dependency-conflict' | 'proof-limit' | 'validation-limit' | 'history-byte-limit'
@@ -52,6 +47,13 @@ export interface HistoryFence {
 }
 export interface HistorySelection { history?: ProviderHistory; fence: HistoryFence | null; omissions: readonly HistoryOmission[]; validationBytes: number }
 export interface AcceptedHistoryAppend { requestId: string; messageId: string; contentDigest: string; revision: number }
+/** Core-only, non-serializable bridge from its actual approved private preview/grant. Never renderer input. */
+export interface PrivateFrozenProviderContext {
+  context: Readonly<ContextManifest & { history?: ProviderHistory }>;
+  historyFence?: HistoryFence;
+  validate(phase: 'before-append' | 'before-provider' | 'before-response', acceptedAppend?: AcceptedHistoryAppend): void;
+  onAcceptedAppend(value: AcceptedHistoryAppend): void;
+}
 export class HistorySelectionError extends Error {
   readonly code: string;
   constructor(code: string) { super(code); this.code = code; }
@@ -109,11 +111,25 @@ export function historyDependenciesFromContext(context: ContextManifest, convers
   requireValue(!refs.some(dep => dep.ref.kind === 'resource' && dep.ref.id === conversationId), 'unproven-request');
   return unionHistoryDependencies(refs) as HistoryResourceDependency[];
 }
-export function createHistoryProvenance(input: { requestId: string; conversationId: string; origin: HistoryOrigin; inputMessageId: string; intent: string; dependencies: readonly HistoryDependency[] }): HistoryProvenance {
-  requireValue(identifier(input.requestId) && identifier(input.conversationId) && identifier(input.inputMessageId) && typeof input.intent === 'string' && input.intent.trim().length > 0 && input.intent.length <= 16000 && validOrigin(input.origin), 'unproven-request');
+export function createHistoryProvenance(input: { requestId: string; conversationId: string; origin: HistoryOrigin; inputMessageId: string; inputContentDigest: string; dependencies: readonly HistoryDependency[] }): HistoryProvenance {
+  requireValue(identifier(input.requestId) && identifier(input.conversationId) && identifier(input.inputMessageId) && hash(input.inputContentDigest) && validOrigin(input.origin), 'unproven-request');
   const dependencies = unionHistoryDependencies(input.dependencies);
   requireValue(!dependencies.some(dep => dep.kind === 'message' && (dep.requestId === input.requestId || dep.conversationId !== input.conversationId)), 'incomplete-proof');
-  return { schemaVersion: 1, dependencies, digest: historyDigest({ schemaVersion: 1, requestId: input.requestId, conversationId: input.conversationId, origin: input.origin, inputMessageId: input.inputMessageId, intentDigest: historyDigest(input.intent), dependencies }) };
+  return { schemaVersion: 1, dependencies, digest: historyDigest({ schemaVersion: 1, requestId: input.requestId, conversationId: input.conversationId, origin: input.origin, inputMessageId: input.inputMessageId, inputContentDigest: input.inputContentDigest, dependencies }) };
+}
+
+function containsDependency(actual: HistoryDependency, expected: HistoryDependency): boolean {
+  return historyDigest(actual) === historyDigest(expected) || actual.kind === 'resource' && expected.kind === 'resource' && !expected.content && historyDigest(actual.ref) === historyDigest(expected.ref);
+}
+function proveRequest(request: HistoryRequestRecord | null, id: string, origin: HistoryOrigin, conversationId: string, state: 'responded' | 'planning' = 'responded'): HistoryRequestRecord {
+  requireValue(request && request.id === id, 'unproven-request'); requireOrigin(request.origin, origin);
+  requireValue(request.conversationId === conversationId && request.state === state && identifier(request.providerId) && identifier(request.inputMessageId) && hash(request.inputContentDigest) && request.provenance?.schemaVersion === 1 && request.sourcePolicyVersion === request.origin!.policyVersion, 'unproven-request');
+  if (state === 'responded') requireValue(request.response && identifier(request.response.messageId) && hash(request.response.contentDigest) && ['answer', 'clarification', 'inability'].includes(request.response.kind), 'unproven-request');
+  const proof = createHistoryProvenance({ requestId: id, conversationId, origin: request.origin!, inputMessageId: request.inputMessageId, inputContentDigest: request.inputContentDigest, dependencies: request.provenance.dependencies });
+  requireValue(proof.digest === request.provenance.digest, 'unproven-request');
+  const complete = new Map(proof.dependencies.map(dep => [dependencyKey(dep), dep]));
+  for (const dep of unionHistoryDependencies(request.sourceDependencies)) requireValue(complete.has(dependencyKey(dep)) && containsDependency(complete.get(dependencyKey(dep))!, dep), 'incomplete-proof');
+  return request;
 }
 
 class Verifier {
@@ -125,18 +141,11 @@ class Verifier {
   constructor(reader: HistoryProofReader, origin: HistoryOrigin, conversationId: string) { this.reader = reader; this.origin = origin; this.conversationId = conversationId; }
   request(id: string): HistoryRequestRecord {
     if (this.requests.has(id)) return this.requests.get(id)!;
-    const request = this.reader.request(id); requireValue(request && request.id === id, 'unproven-request');
-    requireOrigin(request.origin, this.origin);
-    requireValue(request.conversationId === this.conversationId && request.state === 'responded' && identifier(request.providerId) && request.inputMessageId && request.response?.contentDigest && ['answer', 'clarification', 'inability'].includes(request.response.kind) && request.provenance?.schemaVersion === 1 && request.sourcePolicyVersion === request.origin!.policyVersion, 'unproven-request');
-    const proof = createHistoryProvenance({ requestId: id, conversationId: request.conversationId, origin: request.origin!, inputMessageId: request.inputMessageId, intent: request.intent, dependencies: request.provenance.dependencies });
-    requireValue(proof.digest === request.provenance.digest, 'unproven-request');
-    const complete = new Map(proof.dependencies.map(dep => [dependencyKey(dep), dep]));
-    for (const dep of unionHistoryDependencies(request.sourceDependencies)) requireValue(complete.has(dependencyKey(dep)) && this.contains(complete.get(dependencyKey(dep))!, dep), 'incomplete-proof');
+    const request = proveRequest(this.reader.request(id), id, this.origin, this.conversationId);
     this.requests.set(id, request); return request;
   }
   private contains(actual: HistoryDependency, expected: HistoryDependency): boolean {
-    if (historyDigest(actual) === historyDigest(expected)) return true;
-    return actual.kind === 'resource' && expected.kind === 'resource' && !expected.content && historyDigest(actual.ref) === historyDigest(expected.ref);
+    return containsDependency(actual, expected);
   }
   message(conversationId: string, messageId: string): CanonicalHistoryMessage {
     const key = conversationId + ':' + messageId; if (this.records.has(key)) return this.records.get(key)!;
@@ -151,7 +160,7 @@ class Verifier {
     requireValue(conversationId === this.conversationId, 'upstream-unavailable');
     const value = this.message(conversationId, messageId), message = value.message;
     requireValue(message.requestId === request.id, 'message-changed');
-    if (messageId === request.inputMessageId) requireValue(message.role === 'user' && message.source === 'user' && message.classification === 'observed' && message.content === request.intent, 'message-changed');
+    if (messageId === request.inputMessageId) requireValue(message.role === 'user' && message.source === 'user' && message.classification === 'observed' && historyDigest(message.content) === request.inputContentDigest, 'message-changed');
     else {
       requireValue(messageId === request.response?.messageId && message.role === 'assistant' && message.source === 'provider' && message.classification === 'reported' && message.responseKind === request.response.kind && message.content.trim().length > 0 && message.content.length <= 16000 && historyDigest(message.content) === request.response.contentDigest, 'message-changed');
       const c = message.providerContribution;
@@ -191,6 +200,52 @@ function providerMessage(message: VelaMessage, requestId: string): ProviderHisto
   return { id: message.id, requestId, role: message.role as 'user' | 'assistant', source: message.source as 'user' | 'provider', ...(message.providerId ? { providerId: message.providerId } : {}), classification: message.classification as 'observed' | 'reported', content: message.content, contentDigest: historyDigest(message.content) };
 }
 function fenceBody(fence: Omit<HistoryFence, 'digest'>) { return { ...fence }; }
+function validateFenceEnvelope(input: { fence: HistoryFence; origin: HistoryOrigin; current: { conversationId: string; revision: number }; acceptedAppend?: AcceptedHistoryAppend }) {
+  const { fence, acceptedAppend: append } = input, { digest, ...body } = fence;
+  requireValue(fence.schemaVersion === 1 && identifier(fence.conversationId) && integer(fence.baseRevision) && hash(digest) && hash(fence.historyDigest) && Array.isArray(fence.messages) && fence.messages.length > 0 && fence.messages.length <= HISTORY_LIMITS.maxMessages && fence.messages.length % 2 === 0 && Array.isArray(fence.dependencies) && fence.dependencies.length <= HISTORY_LIMITS.maxDependencies && historyDigest(fenceBody(body)) === digest, 'invalid-history-fence');
+  requireOrigin(fence.origin, input.origin);
+  requireValue(input.current.conversationId === fence.conversationId && input.current.revision === (append ? append.revision : fence.baseRevision), 'stale-history-revision');
+  if (append) requireValue(append.revision === fence.baseRevision + 1 && identifier(append.requestId) && identifier(append.messageId) && hash(append.contentDigest) && !fence.dependencies.some(m => m.kind === 'message' && m.messageId === append.messageId), 'invalid-history-append');
+  const declared = new Map(unionHistoryDependencies(fence.dependencies).map(dep => [dependencyKey(dep), historyDigest(dep)]));
+  requireValue(fence.messages.every((proof, i) => proof.kind === 'message' && proof.conversationId === fence.conversationId && declared.get(dependencyKey(proof)) === historyDigest(proof) && (i === 0 || proof.ordinal > fence.messages[i - 1].ordinal)), 'incomplete-proof');
+}
+
+/** Read-only catalog gate: checks canonical proof metadata and permission, NEVER bodies or a history payload. */
+export function validateFrozenHistoryMetadata(input: {
+  fence: HistoryFence; origin: HistoryOrigin; reader: HistoryMetadataReader;
+  current: { conversationId: string; revision: number }; acceptedAppend?: AcceptedHistoryAppend;
+}): { valid: true } {
+  validateFenceEnvelope(input);
+  const { fence, reader } = input, dependencies = unionHistoryDependencies(fence.dependencies), all = new Map(dependencies.map(dep => [dependencyKey(dep), dep]));
+  const requests = new Map<string, HistoryRequestRecord>();
+  const request = (id: string) => { let value = requests.get(id); if (!value) { value = proveRequest(reader.request(id), id, input.origin, fence.conversationId); requests.set(id, value); } return value; };
+  // Permission and revision gates for the COMPLETE flattened source set precede inspecting derived message metadata.
+  for (const dep of dependencies) if (dep.kind === 'resource') {
+    requireValue(!(dep.ref.kind === 'resource' && dep.ref.id === fence.conversationId), 'incomplete-proof');
+    const current = reader.resolve(dep.ref); requireValue(current, 'upstream-unavailable');
+    requireValue(historyDigest(resourceRef(current)) === historyDigest(dep.ref), 'upstream-changed');
+    if (dep.content) requireValue(reader.canReadContent(dep.ref) === true, 'upstream-unavailable');
+  }
+  for (const dep of dependencies) if (dep.kind === 'message') {
+    requireValue(dep.conversationId === fence.conversationId, 'upstream-unavailable');
+    const r = request(dep.requestId), m = reader.message(dep.conversationId, dep.messageId);
+    requireValue(m && m.id === dep.messageId && m.conversationId === dep.conversationId && m.ordinal === dep.ordinal && m.requestId === r.id && r.provenance!.digest === dep.provenanceDigest, 'message-unavailable');
+    if (m.id === r.inputMessageId) requireValue(m.role === 'user' && m.source === 'user' && m.classification === 'observed' && r.inputContentDigest === dep.contentDigest, 'message-changed');
+    else {
+      requireValue(m.id === r.response!.messageId && m.role === 'assistant' && m.source === 'provider' && m.classification === 'reported' && m.responseKind === r.response!.kind && r.response!.contentDigest === dep.contentDigest, 'message-changed');
+      const c = m.providerContribution; requireValue(c && c.classification === 'reported' && m.providerId === r.providerId && c.providerId === r.providerId && reader.verifyProviderContribution(c, m, r) === true, 'provider-evidence');
+    }
+    for (const ancestor of r.provenance!.dependencies) requireValue(all.has(dependencyKey(ancestor)) && containsDependency(all.get(dependencyKey(ancestor))!, ancestor), 'incomplete-proof');
+  }
+  const append = input.acceptedAppend;
+  if (append) {
+    const r = proveRequest(reader.request(append.requestId), append.requestId, input.origin, fence.conversationId, 'planning'), m = reader.message(fence.conversationId, append.messageId);
+    requireValue(m && m.id === append.messageId && m.conversationId === fence.conversationId && m.requestId === append.requestId && m.role === 'user' && m.source === 'user' && m.classification === 'observed' && m.ordinal > fence.messages.at(-1)!.ordinal && r.inputMessageId === append.messageId && r.inputContentDigest === append.contentDigest, 'invalid-history-append');
+    const declared = new Map(r.provenance!.dependencies.map(dep => [dependencyKey(dep), dep]));
+    for (const dep of dependencies) requireValue(declared.has(dependencyKey(dep)) && containsDependency(declared.get(dependencyKey(dep))!, dep), 'incomplete-proof');
+  }
+  return { valid: true };
+}
 /** No callback may mutate or invoke a provider. fits() measures the entire actual frozen prompt, not raw content length. */
 export function selectBoundedHistory(input: {
   enabled: boolean; origin: HistoryOrigin; snapshot: HistorySnapshot | null; reader: HistoryProofReader;
@@ -241,12 +296,8 @@ export function validateFrozenHistory(input: {
   fence: HistoryFence; history: ProviderHistory; origin: HistoryOrigin; reader: HistoryProofReader;
   current: { conversationId: string; revision: number }; acceptedAppend?: AcceptedHistoryAppend;
 }): { valid: true; validationBytes: number } {
-  const { fence, acceptedAppend: append } = input, { digest, ...body } = fence;
-  requireValue(fence.schemaVersion === 1 && hash(digest) && input.history.schemaVersion === 1 && input.history.coverage === 'bounded-authorized-whole-messages' && input.history.messages.length > 0 && input.history.messages.length <= HISTORY_LIMITS.maxMessages && input.history.messages.length % 2 === 0 && encodedBytes(input.history) <= HISTORY_LIMITS.maxEncodedBytes && fence.dependencies.length <= HISTORY_LIMITS.maxDependencies && historyDigest(fenceBody(body)) === digest && historyDigest(input.history) === fence.historyDigest, 'invalid-history-fence');
-  requireOrigin(fence.origin, input.origin);
-  requireValue(input.current.conversationId === fence.conversationId && input.current.revision === (append ? append.revision : fence.baseRevision), 'stale-history-revision');
-  const declared = new Map(unionHistoryDependencies(fence.dependencies).map(dep => [dependencyKey(dep), historyDigest(dep)]));
-  requireValue(fence.messages.every(proof => declared.get(dependencyKey(proof)) === historyDigest(proof)), 'incomplete-proof');
+  validateFenceEnvelope(input); const { fence, acceptedAppend: append } = input;
+  requireValue(input.history.schemaVersion === 1 && input.history.coverage === 'bounded-authorized-whole-messages' && encodedBytes(input.history) <= HISTORY_LIMITS.maxEncodedBytes && historyDigest(input.history) === fence.historyDigest, 'invalid-history-fence');
   const verifier = new Verifier(input.reader, input.origin, fence.conversationId); verifier.dependencies(fence.dependencies);
   requireValue(input.history.messages.length === fence.messages.length, 'invalid-history-fence');
   for (const [index, proof] of fence.messages.entries()) {
@@ -257,7 +308,9 @@ export function validateFrozenHistory(input: {
     requireValue(append.revision === fence.baseRevision + 1 && identifier(append.requestId) && identifier(append.messageId) && hash(append.contentDigest) && !fence.messages.some(m => m.messageId === append.messageId), 'invalid-history-append');
     const actual = verifier.message(fence.conversationId, append.messageId).message;
     requireValue(actual.role === 'user' && actual.source === 'user' && actual.classification === 'observed' && actual.requestId === append.requestId && historyDigest(actual.content) === append.contentDigest, 'invalid-history-append');
-    const request = input.reader.request(append.requestId); requireValue(request && request.conversationId === fence.conversationId && request.state === 'planning' && request.inputMessageId === append.messageId && request.intent === actual.content, 'invalid-history-append'); requireOrigin(request.origin, input.origin);
+    const request = proveRequest(input.reader.request(append.requestId), append.requestId, input.origin, fence.conversationId, 'planning'); requireValue(request.inputMessageId === append.messageId && request.inputContentDigest === historyDigest(actual.content), 'invalid-history-append');
+    const declared = new Map(request.provenance!.dependencies.map(dep => [dependencyKey(dep), dep]));
+    for (const dep of fence.dependencies) requireValue(declared.has(dependencyKey(dep)) && containsDependency(declared.get(dependencyKey(dep))!, dep), 'incomplete-proof');
   }
   return { valid: true, validationBytes: verifier.bytes };
 }
