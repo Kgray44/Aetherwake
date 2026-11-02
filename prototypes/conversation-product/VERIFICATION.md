@@ -2,6 +2,15 @@
 
 Checkpoint: module unit and type verification passed; combined host acceptance pending.
 
+Draft schema v2 follow-up: the six focused real SQLite draft tests passed (81,272 ms),
+including exact 8 MiB aggregate capacity and 4,096 retained rows. They cover additive
+v1 preservation, unknown-version non-reset, same-file kernel connection restart,
+CAS/empty tombstones, exact Unicode/whitespace/NUL text, archive/access denial without
+erasure, source independence, and later typing during a synthetic failed provider
+callback. Full Core startup with v2 and native/UI draft recovery require the parent
+integration; these tests do not claim provider or native acceptance. Bounded storage
+admission passed for C ≤ 67,108,864 bytes and D = 0 for this batch.
+
 - Node 24.18.0: `node --test prototypes/conversation-product/test/*.test.mts`
   passed **6/6** tests, 0 failures, duration 1,202 ms in the final bounded CPU-only
   validation gap. Earlier five-test checkpoint also passed.
