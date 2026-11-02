@@ -76,6 +76,8 @@ export class BackendCore {
   private privateMode: boolean;
   private readonly historyContextEnabled:boolean;
   private conversations!: ConversationProduct;
+  /** One synchronous canonical read only; never retained view authority. */
+  private conversationBatch:{active:boolean;access:Map<string,boolean>}|null=null;
   private conversationAccess!: ReturnType<typeof createCanonicalAccessHelper>;
   private capabilityCache = createObservedCapabilityCache();
   private sendPreviews = new Map<string,{input:ConversationSendInput;preview:ConversationSendPreview}>();
@@ -698,7 +700,8 @@ export class BackendCore {
     this.conversations=new ConversationProduct(this.db,{
       snapshot:()=>this.command('snapshot',{}),desktop:()=>this.command('desktop',{type:'snapshot'}),command:(name,input)=>this.command(name,input),
       canonicalReadView:async()=>this.conversationReadView(),
-      organize,access:this.conversationAccess.access,capabilitySnapshot:this.capabilityCache.snapshot,
+      canonicalReadBatch:read=>this.canonicalConversationReadBatch(read),
+      organize,access:(id,messageId)=>this.conversationReadAccess(id,messageId),capabilitySnapshot:this.capabilityCache.snapshot,
       sendWithContext:async()=>{throw new ServiceError('native_send_approval_required');},
       contextReceipt:(executionId,resourceId,shareId,digest)=>{
         const receipt=this.state.contextSupplies?.[executionId];return receipt?.resourceId===resourceId&&receipt.items.some(i=>i.shareId===shareId&&i.digest===digest)===true;
@@ -708,7 +711,31 @@ export class BackendCore {
   /** In-process metadata only, over the owning SQLite connection and graph.
    * No Desktop snapshot (which hydrates notes/messages), graph clone or second
    * graph is needed to browse. Every lazy body/source read rechecks policy. */
-  private conversationReadView():ConversationReadView {
+  private conversationReadAccess(id:string,messageId?:string):boolean {
+    const batch=this.conversationBatch;
+    if(!batch)return this.conversationAccess.access(id,messageId);
+    ensure(batch.active,'conversation_read_batch_closed');
+    const key=JSON.stringify([id,messageId??null]);
+    if(batch.access.has(key))return batch.access.get(key)!;
+    const allowed=this.conversationAccess.access(id,messageId);batch.access.set(key,allowed);return allowed;
+  }
+  private canonicalConversationReadBatch<T>(read:(view:ConversationReadView)=>T):T {
+    ensure(typeof read==='function'&&!this.conversationBatch,'conversation_read_batch_active');
+    ensure(read.constructor.name!=='AsyncFunction','synchronous_conversation_read_required');
+    return this.kernel.withTransaction(()=>{
+      const batch={active:true,access:new Map<string,boolean>()};this.conversationBatch=batch;
+      const assertOpen=()=>ensure(batch.active&&this.conversationBatch===batch,'conversation_read_batch_closed');
+      try{
+        const result=read(this.conversationReadView(assertOpen));
+        if(result&&typeof(result as any).then==='function'){
+          void Promise.resolve(result).catch(()=>{});
+          throw new ServiceError('synchronous_conversation_read_required');
+        }
+        return result;
+      }finally{batch.active=false;batch.access.clear();this.conversationBatch=null;}
+    });
+  }
+  private conversationReadView(assertOpen?:()=>void):ConversationReadView {
     return this.kernel.withTransaction(()=>{
       const projects=this.db.prepare("SELECT id,title,version FROM projects WHERE state='active' ORDER BY created_at,id").all() as ConversationReadView['desktop']['projects'];
       const workspaces=this.db.prepare("SELECT w.* FROM workspaces w LEFT JOIN projects p ON p.id=w.project_id WHERE w.state='active' AND (w.project_id IS NULL OR p.state='active') ORDER BY w.created_at,w.id").all() as ConversationReadView['desktop']['workspaces'];
@@ -719,14 +746,15 @@ export class BackendCore {
       }));
       const byResource=new Map(resources.map(r=>[r.id,r])),headers=new Map(this.state.graph.conversations.map(c=>[c.id,c]));
       const resourceMap={...this.state.resources};
+      const graphAtRead=this.state.graph,publicIds=new Map(Object.entries(resourceMap).map(([rid,gid])=>[gid,rid]));
       const conversations=Object.entries(resourceMap).flatMap(([resourceId,gid])=>{
         const c=headers.get(gid),resource=byResource.get(resourceId);if(!c||!resource)return [];
         return [{resourceId,revision:this.state.revisions[resourceId],title:c.title,providerId:c.providerId,kind:c.kind,taskId:null,projectId:resource.project_id}];
       });
       const blocks=this.db.prepare('SELECT workspace_id,resource_id FROM blocks WHERE resource_id IS NOT NULL').all().filter(b=>activeWorkspaces.has(String(b.workspace_id))).map(b=>({workspace_id:String(b.workspace_id),resource_id:String(b.resource_id)}));
       const executions=Object.fromEntries(Object.entries(this.state.executions).map(([id,e])=>[id,{id:e.id,resourceId:e.resourceId,providerId:e.providerId,state:e.state,commandId:e.commandId,startedAt:e.startedAt,endedAt:e.endedAt,taskVerified:false as const,...(e.errorCode?{errorCode:e.errorCode}:{})}]));
-      const sourceId=(gid:string)=>Object.entries(this.state.resources).find(([,value])=>value===gid)?.[0];
-      const currentSource=(gid:string,messageId?:string)=>{const rid=sourceId(gid);return !!rid&&this.conversationAccess.access(rid,messageId);};
+      const sourceId=(gid:string)=>this.state.graph===graphAtRead?publicIds.get(gid):Object.entries(this.state.resources).find(([,value])=>value===gid)?.[0];
+      const currentSource=(gid:string,messageId?:string)=>{assertOpen?.();const rid=sourceId(gid);return !!rid&&this.conversationReadAccess(rid,messageId);};
       return {conversations,resourceMap,executions,desktop:{projects,workspaces,resources,blocks},
         graphMetadata:{providers:this.state.graph.providers,conversations:this.state.graph.conversations,edges:this.state.graph.edges,unavailableMessageIds:this.state.graph.unavailableMessageIds},
         graph:{
@@ -734,9 +762,10 @@ export class BackendCore {
           visibleMessageMetadata:(gid,options)=>{ensure(currentSource(gid),'source_unavailable');return this.graph.visibleMessageMetadata(gid,{...options,allow:m=>currentSource(m.conversationId,m.id)&&options.allow(m)});},
         },
         messageMetadata:messageId=>{
+          assertOpen?.();
           const m=this.state.graph.messages.find(value=>value.id===messageId);return m&&currentSource(m.conversationId,m.id)?{id:m.id,conversationId:m.conversationId,createdAt:m.createdAt}:null;
         },
-        resourceContent:resourceId=>{ensure(this.conversationAccess.access(resourceId),'source_unavailable');return this.kernel.getResource(resourceId).note?.content??'';},
+        resourceContent:resourceId=>{assertOpen?.();ensure(this.conversationReadAccess(resourceId),'source_unavailable');return this.kernel.getResource(resourceId).note?.content??'';},
       };
     });
   }
