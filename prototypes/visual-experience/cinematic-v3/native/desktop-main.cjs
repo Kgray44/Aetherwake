@@ -258,7 +258,9 @@ app.whenReady().then(async () => {
     minHeight: 650,
     show: true,
     backgroundColor: "#05060c",
-    title: "Aerynth · Working environment",
+    title: verify
+      ? "Aerynth · Automated check"
+      : "Aerynth · Working environment",
     titleBarStyle: "hidden",
     titleBarOverlay: { color: "#080910", symbolColor: "#d8cee9", height: 42 },
     autoHideMenuBar: true,
@@ -270,6 +272,7 @@ app.whenReady().then(async () => {
     },
   });
   const startupErrors = [];
+  if (verify) win.on("page-title-updated", (event) => event.preventDefault());
   const velaRequestDiagnostics = [];
   const observeVelaRequest = process.argv.includes("--integration-vela-live")
     ? (event) => {
