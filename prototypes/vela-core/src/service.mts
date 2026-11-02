@@ -1,17 +1,21 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { CAPABILITIES, VelaError, check, identifier, isRecord, text, validateAction, validateProposal } from './capabilities.ts';
+import { defaultAdaptation, effectivePreference, observePreference, preferenceCategory, samePreferenceScope, setExplicitPreference, validatePreference } from './adaptation.ts';
 import { VELA_CONTRACT } from './contracts.ts';
 import type {
   ActionReceipt, AppAttentionEvent, AttentionItem, AttentionPreferences, AuthorizationRequest,
   ContextManifest, DelegateTaskAction, HostActionResult, PlanStep, ResourceRef, VelaHostPort,
   VelaNativeAction, VelaPlan, VelaPlanningPort, VelaRequest, VelaScope, VelaState,
+  AdaptationPolicy, AdaptationState, ExplicitPreference, PreferenceHypothesis, PreferenceKey,
+  PreferenceScope, PreferenceValue, AdaptationReceipt,
 } from './contracts.ts';
 
 interface StoredState {
   schemaVersion: 1; conversationId: string | null; requests: VelaRequest[];
   plans: VelaPlan[]; receipts: ActionReceipt[]; preferences: AttentionPreferences;
   attention: AttentionItem[]; lastPresenceAt: string | null;
+  adaptation: AdaptationState;
 }
 export interface VelaServiceOptions {
   /** The SAME live canonical SQLite connection. This service never opens/closes a database. */
@@ -46,9 +50,12 @@ export class VelaService {
         this.stored = String(row.json); this.data = JSON.parse(this.stored);
         check(this.data.schemaVersion === 1 && Array.isArray(this.data.requests) && Array.isArray(this.data.plans) && Array.isArray(this.data.receipts) && Array.isArray(this.data.attention) && isRecord(this.data.preferences), 'corrupt_vela_state');
       } else this.data = { schemaVersion: 1, conversationId: null, requests: [], plans: [], receipts: [], attention: [], lastPresenceAt: null,
+        adaptation: defaultAdaptation(this.now(), !!options.host.applyPreference),
         preferences: { version: 1, mode: 'normal', monitoringEnabled: false, delegationEnabled: false,
           allowedEventTypes: [], minimumSeverity: 'warning', maxInterruptionsPerHour: 3,
           source: 'default', updatedAt: this.now(), learning: 'disabled' } };
+      this.data.adaptation ??= defaultAdaptation(this.now(), !!options.host.applyPreference);
+      this.data.adaptation.applicationAvailable = !!options.host.applyPreference;
       // Restart does not replay a plan, start inference, mark attention reviewed, or claim interrupted effects failed.
       for (const request of this.data.requests) if (request.state === 'planning') {
         request.state = 'unknown'; request.errorCode = 'restart_planning_outcome_unknown'; request.updatedAt = this.now();
@@ -59,6 +66,11 @@ export class VelaService {
       }
       for (const receipt of this.data.receipts) if (receipt.state === 'started') {
         receipt.state = 'unknown'; receipt.errorCode = 'restart_action_outcome_unknown';
+      }
+      for (const receipt of this.data.adaptation.receipts) if (receipt.state === 'started') {
+        receipt.state = 'unknown'; receipt.errorCode = 'restart_preference_outcome_unknown';
+        const hypothesis = this.data.adaptation.hypotheses.find(h => h.id === receipt.hypothesisId);
+        if (hypothesis) { hypothesis.state = 'unknown'; hypothesis.errorCode = receipt.errorCode; }
       }
       this.save();
     });
@@ -137,6 +149,7 @@ export class VelaService {
       capabilities: CAPABILITIES, requests, plans, receipts: this.data.receipts.filter(r => planIds.has(r.planId)),
       preferences: this.data.preferences, attention: this.data.attention.filter(visible),
       lastPresenceAt: this.data.lastPresenceAt, coverage: 'authorized-app-events-only',
+      adaptation: this.visibleAdaptation(scope),
     };
     return structuredClone(result);
   }
@@ -390,5 +403,106 @@ export class VelaService {
     check(Array.isArray(ids) && ids.length <= 500 && ids.every(identifier) && ['reviewed', 'dismissed'].includes(disposition), 'invalid_attention_review');
     const visible = new Set(this.state().attention.map(i => i.id));
     this.atomic(() => { for (const id of ids) { check(visible.has(id), 'attention_not_authorized'); const item = this.data.attention.find(i => i.id === id)!; if (disposition === 'reviewed') item.reviewedAt = this.now(); else item.dismissedAt = this.now(); } });
+  }
+  private preferenceScope(scope: PreferenceScope) {
+    check(isRecord(scope) && ((scope.kind === 'global' && scope.id === null) || (scope.kind === 'workspace' && identifier(scope.id))), 'invalid_preference_scope');
+    return scope.kind === 'workspace' ? [this.resolve(scope.id!, 'workspace', this.scope())] : [];
+  }
+  private visibleAdaptation(scope: VelaScope): AdaptationState {
+    const data = structuredClone(this.data.adaptation);
+    const visible = (s: PreferenceScope) => s.kind === 'global' || (scope.workspaceIds.includes(s.id!) && !!this.opts.host.resolve({ id: s.id!, kind: 'workspace' }, scope));
+    data.hypotheses = data.hypotheses.filter(h => visible(h.scope));
+    data.explicit = data.explicit.filter(h => visible(h.scope));
+    data.suppressions = data.suppressions.filter(h => visible(h.scope));
+    data.receipts = data.receipts.filter(h => visible(h.scope));
+    return data;
+  }
+  adaptationPolicy(input: { expectedVersion: number; enabled: boolean; categories: AdaptationPolicy['categories'] }): AdaptationPolicy {
+    check(typeof input.enabled === 'boolean' && isRecord(input.categories) && Object.keys(input.categories).sort().join(',') === 'organization,presentation', 'invalid_adaptation_policy');
+    for (const category of Object.values(input.categories)) check(isRecord(category) && Object.keys(category).sort().join(',') === 'enabled,level' && typeof category.enabled === 'boolean' && ['manual', 'suggestive', 'assisted', 'adaptive'].includes(category.level), 'invalid_adaptation_policy');
+    return this.atomic(() => {
+      check(this.data.adaptation.policy.version === input.expectedVersion, 'stale_adaptation_policy_version');
+      this.data.adaptation.policy = { version: input.expectedVersion + 1, enabled: input.enabled, categories: structuredClone(input.categories), updatedAt: this.now() };
+      return structuredClone(this.data.adaptation.policy);
+    });
+  }
+  /** Host app-event adapter only; never exposed as a renderer-generated behavioral observation. */
+  observePreference(input: { key: PreferenceKey; value: PreferenceValue; scope: PreferenceScope; eventId: string }): PreferenceHypothesis | null {
+    validatePreference(input.key, input.value, input.scope); this.preferenceScope(input.scope);
+    const category = this.data.adaptation.policy.categories[preferenceCategory(input.key)];
+    if (!this.data.adaptation.policy.enabled || !category.enabled || category.level === 'manual') return null;
+    const event = this.data.attention.find(e => e.id === input.eventId); check(event, 'preference_evidence_unavailable');
+    const hypothesis = this.atomic(() => observePreference(this.data.adaptation, { ...input, event }, randomUUID()));
+    if (!hypothesis) return null;
+    const explicit = effectivePreference(this.data.adaptation, input.key, input.scope);
+    if (category.level === 'adaptive' && hypothesis.state === 'suggested' && hypothesis.evidence.length >= 3 && explicit?.source !== 'explicit') {
+      this.applyPreferenceValue({ key: hypothesis.key, value: hypothesis.value, scope: hypothesis.scope, hypothesisId: hypothesis.id, origin: 'authorized-adaptation' });
+    }
+    return structuredClone(this.data.adaptation.hypotheses.find(h => h.id === hypothesis.id)!);
+  }
+  effectivePreference(key: PreferenceKey, scope: PreferenceScope) {
+    this.preferenceScope(scope); return structuredClone(effectivePreference(this.data.adaptation, key, scope));
+  }
+  explicitPreference(input: { key: PreferenceKey; value: PreferenceValue; scope: PreferenceScope; expectedVersion: number; apply: boolean }): ExplicitPreference {
+    check(typeof input.apply === 'boolean', 'invalid_preference_application'); this.preferenceScope(input.scope);
+    const preference = this.atomic(() => structuredClone(setExplicitPreference(this.data.adaptation, input, randomUUID(), this.now())));
+    if (input.apply) this.applyPreferenceValue({ ...input, origin: 'explicit-user' });
+    return preference;
+  }
+  reviewPreference(input: { hypothesisId: string; decision: 'accept' | 'reject' | 'suppress'; apply: boolean }): PreferenceHypothesis {
+    check(['accept', 'reject', 'suppress'].includes(input.decision) && typeof input.apply === 'boolean', 'invalid_preference_review');
+    const hypothesis = this.data.adaptation.hypotheses.find(h => h.id === input.hypothesisId); check(hypothesis, 'preference_hypothesis_not_found');
+    this.preferenceScope(hypothesis.scope); check(hypothesis.state === 'suggested', 'preference_not_reviewable');
+    this.atomic(() => {
+      hypothesis.reviewedAt = this.now();
+      if (input.decision === 'accept') {
+        const previous = this.data.adaptation.explicit.find(p => p.key === hypothesis.key && samePreferenceScope(p.scope, hypothesis.scope));
+        setExplicitPreference(this.data.adaptation, { ...hypothesis, expectedVersion: previous?.version ?? 0 }, randomUUID(), this.now());
+        hypothesis.state = 'accepted';
+      } else {
+        hypothesis.state = input.decision === 'suppress' ? 'suppressed' : 'rejected';
+        // Rejection suppresses the same value/evidence pattern until an explicit reset permits it again.
+        this.data.adaptation.suppressions.push({ key: hypothesis.key, value: hypothesis.value, scope: structuredClone(hypothesis.scope), createdAt: this.now() });
+      }
+    });
+    if (input.decision === 'accept' && input.apply) this.applyPreferenceValue({ key: hypothesis.key, value: hypothesis.value, scope: hypothesis.scope, hypothesisId: hypothesis.id, origin: 'explicit-user' });
+    return structuredClone(this.data.adaptation.hypotheses.find(h => h.id === hypothesis.id)!);
+  }
+  resetPreferences(input: { scope: PreferenceScope; clearSuppressions: boolean }): void {
+    this.preferenceScope(input.scope); check(typeof input.clearSuppressions === 'boolean', 'invalid_preference_reset');
+    this.atomic(() => {
+      for (const preference of this.data.adaptation.explicit) if (samePreferenceScope(preference.scope, input.scope)) { preference.active = false; preference.version++; preference.updatedAt = this.now(); }
+      for (const hypothesis of this.data.adaptation.hypotheses) if (samePreferenceScope(hypothesis.scope, input.scope) && ['suggested', 'accepted', 'applied'].includes(hypothesis.state)) hypothesis.state = 'superseded';
+      if (input.clearSuppressions) this.data.adaptation.suppressions = this.data.adaptation.suppressions.filter(s => !samePreferenceScope(s.scope, input.scope));
+      // Resetting a preference does not pretend to undo host UI effects. Explicit opposite commands remain available.
+    });
+  }
+  private applyPreferenceValue(input: { key: PreferenceKey; value: PreferenceValue; scope: PreferenceScope; hypothesisId?: string; origin: 'explicit-user' | 'authorized-adaptation' }): AdaptationReceipt {
+    validatePreference(input.key, input.value, input.scope);
+    const targets = this.preferenceScope(input.scope), scope = this.scope();
+    const hypothesis = this.data.adaptation.hypotheses.find(h => h.id === input.hypothesisId);
+    if (input.origin === 'authorized-adaptation') {
+      const category = this.data.adaptation.policy.categories[preferenceCategory(input.key)];
+      check(this.data.adaptation.policy.enabled && category.enabled && category.level === 'adaptive' && hypothesis && hypothesis.evidence.length >= 3, 'automatic_adaptation_not_authorized');
+      check(effectivePreference(this.data.adaptation, input.key, input.scope)?.source !== 'explicit', 'explicit_preference_overrides_inference');
+    }
+    const receipt: AdaptationReceipt = { id: randomUUID(), commandId: 'vela-preference:' + randomUUID(), key: input.key, value: input.value,
+      scope: structuredClone(input.scope), origin: input.origin, state: 'started', startedAt: this.now(), ...(input.hypothesisId ? { hypothesisId: input.hypothesisId } : {}) };
+    this.atomic(() => this.data.adaptation.receipts.push(receipt));
+    let result: HostActionResult, dispatched = false;
+    try {
+      check(this.opts.host.applyPreference, 'host_preference_application_unavailable');
+      const action = { type: 'applyPreference' as const, key: input.key, value: input.value, scope: input.scope };
+      const authorizationRef = this.authorize({ phase: 'adaptation', requestId: receipt.id, intent: input.origin === 'explicit-user' ? 'Apply the explicit low-risk application preference' : 'Apply an authorized low-risk inferred preference', scope, targets, actions: [action] });
+      dispatched = true;
+      result = this.opts.host.applyPreference({ action, commandId: receipt.commandId, authorizationRef, expectedVersions: targets,
+        evidenceEventIds: hypothesis?.evidence.map(e => e.eventId) ?? [], origin: input.origin });
+      check(result && ['applied', 'failed', 'cancelled', 'unknown'].includes(result.status) && identifier(result.receiptId), 'invalid_host_preference_receipt');
+    } catch (e) { result = { status: dispatched ? 'unknown' : 'failed', receiptId: receipt.id, errorCode: errorCode(e, 'preference_application_unknown') }; }
+    this.atomic(() => {
+      receipt.state = result.status; receipt.endedAt = this.now(); receipt.hostReceiptId = result.receiptId; if (result.errorCode) receipt.errorCode = result.errorCode;
+      if (hypothesis) { hypothesis.state = result.status === 'applied' ? 'applied' : result.status === 'cancelled' ? 'failed' : result.status; if (result.errorCode) hypothesis.errorCode = result.errorCode; }
+    });
+    return structuredClone(receipt);
   }
 }
