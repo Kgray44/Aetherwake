@@ -14,12 +14,20 @@ import type {
   BlockConfiguration,
   TemplatePlacementRole,
   SubjectCaptureChoices,
+  BlockInstanceKind,
+  SubjectBlockKind,
+  CreatedSubjectBlock,
+  SubjectTargets,
 } from "./contracts.ts";
 import {
   searchBlocks,
   blockDefinition,
   blockAvailability,
   blockCapabilities,
+  searchBlockCatalog,
+  catalogDefinition,
+  isSubjectBlockKind,
+  BUILTIN_BLOCKS,
 } from "./registry.ts";
 import { captureWorkspaceTemplate } from "./model.ts";
 import { blockPreview } from "./preview.ts";
@@ -117,6 +125,7 @@ export function mountBlockLibrary(
     workspaceId: string;
     expectedLayoutVersion: number | (() => number);
     onCreated(result: CreatedBlock): void | Promise<void>;
+    onSubjectCreated?(result: CreatedSubjectBlock): void | Promise<void>;
     onClose(): void;
   },
 ) {
@@ -129,6 +138,7 @@ export function mountBlockLibrary(
     list = node("div", "aw-library__list"),
     detail = node("div", "aw-library__detail");
   search.type = "search";
+  search.maxLength = 500;
   search.placeholder = "Search blocks, actions or categories";
   search.setAttribute("aria-label", "Search blocks");
   for (const [value, label] of [
@@ -137,6 +147,7 @@ export function mountBlockLibrary(
     ["knowledge", "Knowledge"],
     ["planning", "Planning"],
     ["observability", "Observability"],
+    ["organization", "Organization"],
   ]) {
     const option = node("option", "", label);
     option.value = value;
@@ -159,14 +170,17 @@ export function mountBlockLibrary(
   ui.body.append(search, toolbar, columns);
   let capabilities: LibraryCapabilities | null = null,
     preferences: LibraryPreferences | null = null,
-    selected: BlockKind = "conversation",
+    selected: BlockInstanceKind = "conversation",
     pending = false,
     detailSequence = 0;
   const revision = () =>
     typeof options.expectedLayoutVersion === "function"
       ? options.expectedLayoutVersion()
       : options.expectedLayoutVersion;
-  async function perform(work: () => Promise<CreatedBlock>) {
+  async function performResult<T>(
+    work: () => Promise<T>,
+    created: (result: T) => void | Promise<void>,
+  ) {
     if (pending) return;
     pending = true;
     ui.panel.setAttribute("aria-busy", "true");
@@ -180,7 +194,7 @@ export function mountBlockLibrary(
       const result = await work();
       if (ui.disposed) return;
       ui.status.textContent = "Block saved.";
-      await options.onCreated(result);
+      await created(result);
       if (port.preferences) preferences = await port.preferences();
       if (!ui.disposed) {
         renderList();
@@ -197,10 +211,16 @@ export function mountBlockLibrary(
       if (!ui.disposed) showDetail();
     }
   }
+  const perform = (work: () => Promise<CreatedBlock>) =>
+    performResult(work, options.onCreated);
   const showDetail = () => {
     const generation = ++detailSequence;
     detail.replaceChildren();
     if (!capabilities) return;
+    if (isSubjectBlockKind(selected)) {
+      showSubjectDetail(selected, generation);
+      return;
+    }
     const definition = blockDefinition(selected),
       available = blockAvailability(selected, capabilities),
       title = node("input");
@@ -497,10 +517,225 @@ export function mountBlockLibrary(
       attach,
     );
   };
+  function showSubjectDetail(kind: SubjectBlockKind, generation: number) {
+    const definition = catalogDefinition(kind),
+      available = blockAvailability(kind, capabilities!),
+      form = node("form"),
+      target = node("select"),
+      query = node("input"),
+      resourceKind = node("select"),
+      width = node("input"),
+      height = node("input"),
+      shape = node("select"),
+      status = node("p", "aw-library__hint"),
+      create = node("button", "aw-library__button", "Add view");
+    let targets: SubjectTargets | null = null;
+    create.type = "submit";
+    create.disabled = true;
+    target.required = true;
+    query.type = "search";
+    query.maxLength = 500;
+    query.setAttribute("aria-label", "Saved resource query");
+    const favorite = button(
+      preferences?.favorites.includes(kind) ? "★ Favorited" : "☆ Favorite",
+      () => {
+        if (!port.setFavorite || !preferences || pending) return;
+        favorite.disabled = true;
+        void port
+          .setFavorite({
+            kind,
+            favorite: !preferences.favorites.includes(kind),
+            expectedVersion: preferences.version,
+          })
+          .then((value) => {
+            preferences = value;
+            if (!ui.disposed) {
+              renderList();
+              showDetail();
+            }
+          })
+          .catch((error) => {
+            if (!ui.disposed) ui.status.textContent = errorText(error);
+          });
+      },
+    );
+    favorite.disabled = !port.setFavorite || !preferences || pending;
+    for (const definition of BUILTIN_BLOCKS) {
+      const option = node("option", "", definition.title);
+      option.value = definition.kind;
+      resourceKind.append(option);
+    }
+    const all = node("option", "", "All resource kinds");
+    all.value = "";
+    resourceKind.prepend(all);
+    resourceKind.value = "";
+    for (const value of definition.supportedShapes) {
+      const option = node("option", "", value);
+      option.value = value;
+      shape.append(option);
+    }
+    shape.value = definition.defaultPresentation.shape;
+    for (const [input, value, min] of [
+      [width, definition.defaultPresentation.width, 128],
+      [height, definition.defaultPresentation.height, 96],
+    ] as const) {
+      input.type = "number";
+      input.value = String(value);
+      input.min = String(min);
+      input.max = "4096";
+      input.required = true;
+    }
+    const settings = node("details"),
+      summary = node("summary", "", "Configure presentation");
+    settings.append(
+      summary,
+      field("Shape", shape),
+      field("Width", width),
+      field("Height", height),
+    );
+    const controls = node("ul");
+    for (const capability of definition.controls)
+      controls.append(node("li", "", capability));
+    form.append(
+      field(
+        kind === "collection_browser" ? "Collection" : "Project scope",
+        target,
+      ),
+    );
+    if (kind === "resource_browser")
+      form.append(
+        field("Search within resource titles and IDs", query),
+        field("Resource kind", resourceKind),
+      );
+    form.append(settings, create, status);
+    detail.append(
+      node("h3", "", definition.title),
+      favorite,
+      node("p", "", definition.description),
+      blockPreview(kind),
+      node(
+        "p",
+        "aw-library__hint",
+        definition.id + " · v" + definition.version + " · " + available.state,
+      ),
+      controls,
+      form,
+      node(
+        "p",
+        "aw-library__hint",
+        "This creates a view of a canonical subject. It does not clone project data, collection members or resource content.",
+      ),
+    );
+    const connected =
+      !!port.subjectTargets &&
+      !!port.createSubjectBlock &&
+      !!options.onSubjectCreated;
+    if (!connected) {
+      status.textContent =
+        "This native host has not connected subject views to the library.";
+      return;
+    }
+    status.textContent = "Reading authorized local subjects…";
+    void port.subjectTargets!(options.workspaceId)
+      .then((value) => {
+        if (ui.disposed || generation !== detailSequence) return;
+        targets = value;
+        target.replaceChildren();
+        const placeholder = node(
+          "option",
+          "",
+          "Choose a " +
+            (kind === "collection_browser" ? "collection" : "project"),
+        );
+        placeholder.value = "";
+        placeholder.disabled = true;
+        target.append(placeholder);
+        if (kind === "resource_browser" && value.globalQueryAllowed) {
+          const option = node(
+            "option",
+            "",
+            "All authorized projects and unassigned resources",
+          );
+          option.value = "*";
+          target.append(option);
+        }
+        const rows =
+          kind === "collection_browser" ? value.collections : value.projects;
+        for (const item of rows) {
+          const option = node(
+            "option",
+            "",
+            item.title + " · " + item.id.slice(0, 8),
+          );
+          option.value = item.id;
+          target.append(option);
+        }
+        target.value =
+          kind !== "collection_browser" &&
+          value.projects.some((project) => project.id === value.projectId)
+            ? value.projectId!
+            : kind === "resource_browser" && value.globalQueryAllowed
+              ? "*"
+              : "";
+        const ready = () => {
+          create.disabled =
+            pending || available.state !== "available" || !target.value;
+        };
+        target.onchange = ready;
+        ready();
+        status.textContent =
+          available.state !== "available"
+            ? (available.reason ?? "Subject view is " + available.state)
+            : value.truncated
+              ? "The first authorized subjects are listed; the native catalog page is bounded."
+              : "Canonical local data only. Each read and placement is checked again by the trusted host.";
+      })
+      .catch((error) => {
+        if (!ui.disposed && generation === detailSequence)
+          status.textContent = errorText(error);
+      });
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      if (
+        !targets ||
+        !port.createSubjectBlock ||
+        !options.onSubjectCreated ||
+        !form.reportValidity()
+      )
+        return;
+      const subject =
+        kind === "project_overview"
+          ? { kind: "project" as const, projectId: target.value }
+          : kind === "collection_browser"
+            ? { kind: "collection" as const, collectionId: target.value }
+            : {
+                kind: "resource-query" as const,
+                projectId: target.value === "*" ? null : target.value || null,
+                query: query.value,
+                ...(resourceKind.value ? { kinds: [resourceKind.value] } : {}),
+              };
+      void performResult(
+        () =>
+          port.createSubjectBlock!({
+            commandId: commandId(),
+            workspaceId: options.workspaceId,
+            expectedLayoutVersion: revision(),
+            kind,
+            subject,
+            presentation: {
+              shape: shape.value as typeof definition.defaultPresentation.shape,
+              width: Number(width.value),
+              height: Number(height.value),
+            },
+          }),
+        options.onSubjectCreated,
+      );
+    };
+  }
   const renderList = () => {
     if (!capabilities) return;
     list.replaceChildren();
-    const results = searchBlocks(
+    const results = searchBlockCatalog(
       search.value,
       capabilities,
       (category.value || undefined) as BlockCategory | undefined,

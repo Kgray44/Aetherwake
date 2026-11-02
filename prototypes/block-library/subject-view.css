@@ -1,0 +1,84 @@
+.aw-subject-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  color: inherit;
+}
+.aw-subject-view :is(h3, h4, p) {
+  margin: 0;
+}
+.aw-subject-view ul,
+.aw-subject-view ol {
+  padding-left: 18px;
+  margin: 0;
+}
+.aw-subject-view small {
+  display: block;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+  font-size: 0.78em;
+}
+.aw-subject-view input,
+.aw-subject-view select {
+  font: inherit;
+  color: inherit;
+  background: #15172855;
+  border: 1px solid #d7c4f32b;
+  border-radius: 8px;
+  padding: 7px;
+  min-width: 0;
+}
+.aw-subject-filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.aw-subject-filters input[type="search"] {
+  flex: 1;
+  min-width: 130px;
+}
+.aw-subject-filters label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.aw-subject-action {
+  font: inherit;
+  color: inherit;
+  padding: 6px 9px;
+  border: 1px solid #d7c4f32b;
+  border-radius: 8px;
+  background: #d7c4f30a;
+  cursor: pointer;
+}
+.aw-subject-action:focus-visible,
+.aw-subject-view :is(input, select):focus-visible {
+  outline: 2px solid #e6d6fa;
+  outline-offset: 2px;
+}
+.aw-subject-action:disabled {
+  opacity: 0.45;
+  cursor: wait;
+}
+.aw-subject-resources {
+  list-style: none;
+  padding: 0 !important;
+  overflow: auto;
+  min-height: 0;
+  max-height: 460px;
+}
+.aw-subject-resources li {
+  padding: 10px 0;
+  border-bottom: 1px solid #d7c4f31f;
+}
+.aw-subject-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.aw-subject-status,
+.aw-subject-hint {
+  font-size: 0.8em;
+  opacity: 0.75;
+}

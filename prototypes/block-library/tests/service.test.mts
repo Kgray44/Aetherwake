@@ -19,6 +19,7 @@ import type {
   BlockKind,
 } from "../contracts.ts";
 import { predefinedTemplates } from "../model.ts";
+import { presentation } from "../../workspace-engine/geometry.mts";
 
 class KernelHost implements CanonicalTemplateHost<DatabaseSync> {
   readonly kernel: WorkspaceKernel;
@@ -220,6 +221,74 @@ const counts = (h: KernelHost) =>
     "block_library_receipts",
   ].map((name) => h.count(name));
 
+test("templates capture and reuse 0, 1, 3, 10, 25 and 50 distinct canonical resources", (t) => {
+  const { host, service } = fixture(t);
+  for (const count of [0, 1, 3, 10, 25, 50]) {
+    const body = structuredClone(predefinedTemplates()[0].body);
+    body.organization.mode = "freeform";
+    body.resources = Array.from({ length: count }, (_, i) => ({
+      key: "resource" + i,
+      label: "Synthetic note " + i,
+      source: { mode: "new", kind: "note", title: "Synthetic note " + i },
+    }));
+    body.placements = body.resources.map((r, i) => ({
+      key: "placement" + i,
+      resourceKey: r.key,
+      presentation: presentation({
+        x: (i % 5) * 430,
+        y: Math.floor(i / 5) * 300,
+        width: 400,
+        height: 280,
+        shape: "rounded",
+        zIndex: i,
+      }),
+    }));
+    const template = service.saveTemplate(draft(body));
+    const created = service.applyTemplate(apply(template.id));
+    host.desktop.apply(
+      {
+        type: "navigate",
+        target: { kind: "workspace", workspaceId: created.workspaceId },
+      },
+      () => {
+        throw new Error("unexpected_provider_execution");
+      },
+    );
+    const snapshot = host.desktop.snapshot(() => ({
+      provider: "local",
+      messages: [],
+    }));
+    const captured = captureWorkspaceTemplate(
+      snapshot,
+      Object.fromEntries(
+        snapshot.resources.map((r) => [r.id, "reference" as const]),
+      ),
+    );
+    assert.equal(captured.resources.length, count);
+    assert.equal(captured.placements.length, count);
+    const saved = service.saveTemplate(draft(captured));
+    const before = host.count("resources");
+    const preview = service.previewTemplate(apply(saved.id));
+    assert.equal(host.count("resources"), before);
+    assert.equal(preview.referenceCount, count);
+    assert.equal(preview.placementCount, count);
+    const reused = service.applyTemplate(apply(saved.id));
+    assert.equal(host.count("resources"), before);
+    const first = host.engine.project(created.workspaceId),
+      second = host.engine.project(reused.workspaceId);
+    assert.deepEqual(
+      second.blocks.map((b) => b.resourceId).sort(),
+      first.blocks.map((b) => b.resourceId).sort(),
+    );
+    assert.deepEqual(
+      second.blocks.map((b) => [b.x, b.y, b.width, b.height, b.shape]),
+      first.blocks.map((b) => [b.x, b.y, b.width, b.height, b.shape]),
+    );
+    assert.equal(second.organization.mode, "freeform");
+  }
+  host.kernel.assertIntegrity();
+});
+
 test("registry describes exactly seven implemented kinds; absent and unavailable capabilities never claim support", (t) => {
   const { host, service } = fixture(t);
   assert.equal(BUILTIN_BLOCKS.length, 7);
@@ -387,14 +456,13 @@ test("same resource keeps canonical ID, ownership and history across distinct pl
     },
   ];
   body.groups = [];
-  body.placements = body.placements
-    .slice(0, 2)
-    .map((p, i) => ({
-      ...p,
-      key: "place" + i,
-      resourceKey: "shared",
-      presentation: { ...p.presentation, x: 100, y: 100 },
-    }));
+  body.placements = body.placements.slice(0, 2).map((p, i) => ({
+    ...p,
+    key: "place" + i,
+    resourceKey: "shared",
+    subjectBinding: undefined,
+    presentation: { ...p.presentation, x: 100, y: 100 },
+  }));
   const template = service.saveTemplate(draft(body));
   const input = apply(template.id, {
     projectId: project.id,
@@ -453,7 +521,7 @@ test("cross-project, archived, revoked and stale references fail at apply time a
   ];
   body.placements = body.placements
     .slice(0, 1)
-    .map((p) => ({ ...p, resourceKey: "shared" }));
+    .map((p) => ({ ...p, resourceKey: "shared", subjectBinding: undefined }));
   body.groups = [];
   const template = service.saveTemplate(draft(body)),
     input = apply(template.id, { projectId: p.id, expectedProjectVersion: 1 });
@@ -609,7 +677,7 @@ test("template capture requires explicit binding, preserves roles/shapes/mode/sp
   invalid.resources[0].source.messages = [];
   assert.throws(() => validateBody(invalid), /invalid_template_fields/);
   const tooMany = structuredClone(body);
-  tooMany.resources = Array.from({ length: 33 }, (_, i) => ({
+  tooMany.resources = Array.from({ length: 65 }, (_, i) => ({
     ...body.resources[0],
     key: "resource" + i,
   }));

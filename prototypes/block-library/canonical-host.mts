@@ -151,6 +151,61 @@ export function createCanonicalTemplateHost(
     readProject,
     readResource,
     readWorkspace,
+    subjectTargets(workspaceId) {
+      const workspace = readWorkspace(identifier(workspaceId));
+      check(workspace?.authorized, "workspace_unavailable");
+      const projectRows = db
+          .prepare(
+            "SELECT id,title,version FROM projects WHERE state='active' ORDER BY title,id LIMIT 101",
+          )
+          .all(),
+        collectionRows = db
+          .prepare(
+            "SELECT id,title,project_id,version FROM collections WHERE state='active' ORDER BY title,id LIMIT 101",
+          )
+          .all();
+      return {
+        projectId: workspace.projectId,
+        projects: projectRows
+          .slice(0, 100)
+          .filter(
+            (row) =>
+              readProject(String(row.id))?.authorized &&
+              options.authorizeSubject?.({
+                kind: "project",
+                projectId: String(row.id),
+              }) === true,
+          )
+          .map((row) => ({
+            id: String(row.id),
+            title: String(row.title),
+            version: Number(row.version),
+          })),
+        collections: collectionRows
+          .slice(0, 100)
+          .filter(
+            (row) =>
+              projectVisible(row.project_id as string | null) &&
+              options.authorizeSubject?.({
+                kind: "collection",
+                collectionId: String(row.id),
+              }) === true,
+          )
+          .map((row) => ({
+            id: String(row.id),
+            title: String(row.title),
+            projectId: row.project_id as string | null,
+            version: Number(row.version),
+          })),
+        globalQueryAllowed:
+          options.authorizeSubject?.({
+            kind: "resource-query",
+            projectId: null,
+            query: "",
+          }) === true,
+        truncated: projectRows.length > 100 || collectionRows.length > 100,
+      };
+    },
     readSubject(subject) {
       return {
         authorized: options.authorizeSubject?.(subject) === true,
