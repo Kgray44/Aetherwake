@@ -60,6 +60,7 @@ export class BackendCore {
   private graph!: ConversationGraph;
   private state!: State;
   private storedJson: string | null = null;
+  private mutationDepth = 0;
   private port: ProviderPort;
   private connectionId = randomUUID();
   private sequence = 0;
@@ -676,7 +677,13 @@ export class BackendCore {
     // visibility/ancestry/revocation are still checked here for every source read.
     this.conversationAccess = createCanonicalAccessHelper({ db:this.db, allow:()=>true, allowArchivedResources:true,
       messageVisible:(resourceId,messageId)=>{
-        const gid=this.state.resources[resourceId]; if(!gid||this.graph.snapshot().unavailableMessageIds.includes(messageId))return false;
+        const gid=this.state.resources[resourceId]; if(!gid||this.state.graph.unavailableMessageIds.includes(messageId))return false;
+        // An already committed own-message needs no inherited transcript/body
+        // projection. Keep the same current resource policy and ownership gate.
+        const own=this.state.graph.conversations.find(c=>c.id===gid);
+        const entry=this.state.graph.messages.find(m=>m.id===messageId&&m.conversationId===gid);
+        if(!this.mutationDepth&&own?.ownMessageIds.includes(messageId)&&entry)return this.conversationAccess.resource(resourceId,'read',true);
+        if(this.graph.snapshot().unavailableMessageIds.includes(messageId))return false;
         const message=this.graph.visibleMessages(gid).find(m=>m.id===messageId);
         return !!message&&this.conversationAccess.resource(this.publicId(message.conversationId),'read',true);
       } });
@@ -804,8 +811,22 @@ export class BackendCore {
     const before = structuredClone(this.state);
     const graphBefore = this.graph.snapshot();
     const storedBefore = this.storedJson;
+    this.mutationDepth++;
     try { return this.kernel.withTransaction(() => { const result = fn(); this.save(); return result; }); }
-    catch (error) { this.state = before; this.storedJson = storedBefore; this.graph = this.createGraph(graphBefore); throw error; }
+    catch (error) {
+      // An awaiting execution retains its execution/review objects. Restore
+      // their values in place so another command's rollback cannot detach the
+      // live turn from the canonical records it must eventually complete.
+      const retain = <T extends object>(live: Record<string,T>, saved: Record<string,T>) => {
+        for (const [id, value] of Object.entries(saved)) {
+          const record = live[id]; if (!record) continue;
+          for (const key of Object.keys(record)) delete (record as Record<string,unknown>)[key];
+          Object.assign(record, value); saved[id] = record;
+        }
+      };
+      retain(this.state.executions, before.executions); retain(this.state.reviews, before.reviews);
+      this.state = before; this.storedJson = storedBefore; this.graph = this.createGraph(graphBefore); throw error;
+    } finally { this.mutationDepth--; }
   }
   private gid(resourceId: string) { ensure(typeof resourceId === 'string' && Object.hasOwn(this.state.resources, resourceId), 'resource_not_found'); return this.state.resources[resourceId]; }
   private publicId(graphId: string) { const id = Object.keys(this.state.resources).find(id => this.state.resources[id] === graphId); ensure(id, 'resource_not_found'); return id; }

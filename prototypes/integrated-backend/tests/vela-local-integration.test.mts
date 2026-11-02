@@ -67,8 +67,40 @@ test('clock facts remain available through the existing execution busy gate with
 test('actual Core restart replays the original local fact/body/IDs without duplicate messages or a new clock/context lookup',async t=>{
   const f=fixture(t);const original=await local(f.core,'What time is it?','durable-local-clock');assert(original.matched);
   await f.reopen();forbidContext(f.core);(f.core as any).vela.opts.local.clock=()=>{throw Error('Idempotent replay must not refresh the clock');};
+  const graph=(f.core as any).graph,snapshot=graph.snapshot,visible=graph.visibleMessages;
+  graph.snapshot=graph.visibleMessages=()=>{throw Error('A committed own-message replay must not project unrelated transcripts');};
   const restored=await local(f.core,'What time is it?','durable-local-clock');assert(restored.matched);
   assert.deepEqual(restored.request,original.request);assert.equal(restored.result.content,original.result.content);assert.equal(restored.result.messageId,original.result.messageId);assert.equal(restored.result.replayed,true);
+  graph.snapshot=snapshot;graph.visibleMessages=visible;
+  (f.core as any).atomic(()=>{graph.markUnavailable(original.result.messageId);assert.equal((f.core as any).conversationAccess.access(original.request.conversationId,original.result.messageId),false,'An in-flight revocation cannot use the committed-graph fast path');});
+  await assert.rejects(local(f.core,'What time is it?','durable-local-clock'),/local_response_unavailable/);
   assert.equal((await f.core.command('snapshot',{})).graph.messages.length,2);
   await assert.rejects(local(f.core,"What's today's date?",'durable-local-clock'),/local_command_id_conflict/);
+});
+
+for (const failure of ['append','save'] as const) test('local '+failure+' rollback preserves an awaiting execution and approved handoff through real terminal commit/restart',async t=>{
+  const f=fixture(t),core=f.core as any;
+  const source=await f.core.command('createConversation',{title:'Synthetic rollback source',commandId:'rollback-source'});
+  const message=await f.core.command('addMessage',{resourceId:source.resourceId,role:'user',content:'Synthetic reviewed context',expectedRevision:1,sensitivity:'public'});
+  const branch=await f.core.command('branch',{resourceId:source.resourceId,messageId:message.id,includeMessageIds:[message.id],providerId:'fixture-codex',title:'Synthetic awaiting turn',commandId:'rollback-branch',tokenBudget:8192});
+  await f.core.command('review',{handoffId:branch.handoff.id,fingerprint:branch.handoff.fingerprint,approve:true});
+  let resume!:()=>void,entered!:()=>void;
+  const waiting=new Promise<void>(resolve=>{resume=resolve;}),ready=new Promise<void>(resolve=>{entered=resolve;});
+  const terminal=core.port.terminal.bind(core.port);core.port.terminal=async(...args:unknown[])=>{entered();await waiting;return terminal(...args);};
+  const pending=f.core.command('execute',{resourceId:branch.conversation.resourceId,handoffId:branch.handoff.id,prompt:'Synthetic suspended fixture turn',commandId:'rollback-execute',authorized:true});
+  await ready;
+  const execution=core.active,review=core.state.reviews[branch.handoff.id];
+  const before=await f.core.command('snapshot',{}),key=failure==='append'?'appendVelaMessage':'save',original=core[key];let failed=false;
+  core[key]=function(...args:unknown[]){const result=original.apply(this,args);if(!failed){failed=true;throw Error('synthetic-local-'+failure+'-failure');}return result;};
+  try {
+    await assert.rejects(local(f.core,'What time is it?','rollback-clock'),new RegExp('synthetic-local-'+failure+'-failure'));
+    assert.equal(core.state.executions[execution.id],execution,'The pending turn retains its canonical execution object');
+    assert.equal(core.active,execution);assert.equal(core.state.reviews[review.id],review);
+    const rolledBack=await f.core.command('snapshot',{});assert.deepEqual(rolledBack.graph,before.graph);assert.deepEqual(rolledBack.executions,before.executions);assert.deepEqual(rolledBack.handoffs,before.handoffs);
+  } finally {core[key]=original;resume();}
+  const completed=await pending;assert.equal(completed.state,'provider_completed');
+  let after=await f.core.command('snapshot',{});assert.deepEqual(after.executions[completed.id],completed);assert.equal(after.handoffs[review.id].state,'applied');
+  assert.equal(after.graph.messages.filter(item=>item.content==='INTEGRATION_OK').length,1);
+  assert.equal(after.graph.messages.some(item=>item.content==='What time is it?'),false);
+  await f.reopen();after=await f.core.command('snapshot',{});assert.deepEqual(after.executions[completed.id],completed);assert.equal(after.handoffs[review.id].state,'applied');
 });
