@@ -1,3 +1,8 @@
+const {
+  validateReview,
+  showVelaReview,
+  isReviewOwnerAlive,
+} = require("./vela-review.cjs");
 const publicNames = new Set([
   "state",
   "open",
@@ -20,23 +25,53 @@ exports.isVelaRead = (input) =>
 /** Transient canvas bounds carry no provider grant or model-action authority. */
 function presentationContext(value) {
   if (value === undefined) return undefined;
-  const valid = value && !Array.isArray(value) && Object.keys(value).length === 2 &&
-    typeof value.workspaceId === "string" && value.workspaceId.length > 0 && value.workspaceId.length <= 200 &&
-    !/[\x00-\x1f]/.test(value.workspaceId) && value.bounds && !Array.isArray(value.bounds) &&
-    Object.keys(value.bounds).length === 4 && ["x", "y", "width", "height"].every(key =>
-      typeof value.bounds[key] === "number" && Number.isFinite(value.bounds[key]) && Math.abs(value.bounds[key]) <= 1000000) &&
-    value.bounds.width > 0 && value.bounds.height > 0;
+  const valid =
+    value &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 2 &&
+    typeof value.workspaceId === "string" &&
+    value.workspaceId.length > 0 &&
+    value.workspaceId.length <= 200 &&
+    !/[\x00-\x1f]/.test(value.workspaceId) &&
+    value.bounds &&
+    !Array.isArray(value.bounds) &&
+    Object.keys(value.bounds).length === 4 &&
+    ["x", "y", "width", "height"].every(
+      (key) =>
+        typeof value.bounds[key] === "number" &&
+        Number.isFinite(value.bounds[key]) &&
+        Math.abs(value.bounds[key]) <= 1000000,
+    ) &&
+    value.bounds.width > 0 &&
+    value.bounds.height > 0;
   if (!valid) throw Error("invalid_vela_presentation");
-  return { workspaceId: value.workspaceId, bounds: { x: value.bounds.x, y: value.bounds.y,
-    width: value.bounds.width, height: value.bounds.height } };
+  return {
+    workspaceId: value.workspaceId,
+    bounds: {
+      x: value.bounds.x,
+      y: value.bounds.y,
+      width: value.bounds.width,
+      height: value.bounds.height,
+    },
+  };
 }
 
 /** Called only after the host verifies its exact local main frame. Grants never enter IPC results. */
-exports.velaCommand = async ({ win, dialog, call, input }) => {
+exports.velaCommand = async ({
+  win,
+  dialog,
+  call,
+  input,
+  reviewProvider = showVelaReview,
+}) => {
   if (!input || !publicNames.has(input.name))
     throw Error("invalid_vela_command");
-  const presentation = input.name === "apply" ? presentationContext(input.presentation) : undefined;
-  if (input.name !== "apply" && input.presentation !== undefined) throw Error("invalid_vela_presentation");
+  const presentation =
+    input.name === "apply"
+      ? presentationContext(input.presentation)
+      : undefined;
+  if (input.name !== "apply" && input.presentation !== undefined)
+    throw Error("invalid_vela_presentation");
   if (input.name === "request") {
     const value = input.input;
     if (
@@ -54,25 +89,37 @@ exports.velaCommand = async ({ win, dialog, call, input }) => {
     };
     if (!request.authorizeProvider)
       return call("vela", { name: "request", input: request });
+    if (!isReviewOwnerAlive(win))
+      throw Error("native_review_owner_unavailable");
     const preview = await call("velaRequestPreview", {
       intent: request.intent,
       resourceIds: request.resourceIds,
     });
-    const choice = await dialog.showMessageBox(win, {
-      type: "question",
-      title: "Vela provider request",
-      message: `Send this Vela request to ${preview.providerId === "codex-app-server" ? "Codex" : preview.providerId}?`,
-      detail: `Vela coordinates Aerynth. The provider may answer or propose actions. Application changes require review. This authorizes one response and no delegated task. Source excerpts are untrusted data.\n\nRequest:\n${preview.intent}\n\nExact context manifest:\n${JSON.stringify(preview.context, null, 2)}`,
-      buttons: ["Cancel", "Send once"],
-      defaultId: 0,
-      cancelId: 0,
-      noLink: true,
+    const review = validateReview(
+      preview,
+      await call("velaNativeReview", {
+        previewId: preview.id,
+        signature: preview.signature,
+      }),
+    );
+    if (!isReviewOwnerAlive(win))
+      throw Error("native_review_owner_unavailable");
+    const approved = await reviewProvider({
+      parent: win,
+      review,
+      intent: preview.intent,
+      expiresAt: preview.expiresAt,
     });
-    if (choice.response !== 1) throw Error("authorization_cancelled");
+    if (approved !== true) throw Error("authorization_cancelled");
+    if (!isReviewOwnerAlive(win))
+      throw Error("native_review_owner_unavailable");
     const grant = await call("authorizeVelaRequest", {
       previewId: preview.id,
       signature: preview.signature,
+      reviewDigest: review.reviewDigest,
     });
+    if (!isReviewOwnerAlive(win))
+      throw Error("native_review_owner_unavailable");
     return call("vela", {
       name: "request",
       input: {
@@ -113,6 +160,9 @@ exports.velaCommand = async ({ win, dialog, call, input }) => {
     }
   }
   // Backend uses an explicit method switch and validates context/version/policy again.
-  return call("vela", { name: input.name, input: input.input,
-    ...(presentation ? { presentation } : {}) });
+  return call("vela", {
+    name: input.name,
+    input: input.input,
+    ...(presentation ? { presentation } : {}),
+  });
 };

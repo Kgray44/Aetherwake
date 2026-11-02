@@ -20,6 +20,8 @@ function disclosure() {
     context: {
       included: [
         {
+          id: "note",
+          kind: "resource",
           title: 'Note <img src="private">',
           content: "Untrusted </pre><script>send()</script>",
         },
@@ -88,6 +90,28 @@ test("bounded disclosure escapes source/history/prompt markup, retains full text
     reviewPage(longest).includes(longest.prompt),
     "the exact UTF-8 ceiling stays inspectable",
   );
+});
+
+test("resource metadata is disclosed even when its body was not selected", () => {
+  const r = disclosure();
+  r.context.discovered = [
+    { id: "note", kind: "resource", title: "Selected Note" },
+    { id: "project", kind: "project", title: "Current project metadata" },
+    { id: "workspace", kind: "workspace", title: "Current workspace metadata" },
+  ];
+  validateReview(preview, r);
+  const html = reviewPage(r);
+  assert(html.includes("Shared resources (3)"));
+  assert(html.includes("Current project metadata"));
+  assert(html.includes("Current workspace metadata"));
+  assert.equal(html.split("Metadata only").length - 1, 2);
+  assert.equal(html.split("Selected excerpt").length - 1, 1);
+  assert(
+    html.includes(
+      'role="dialog" aria-modal="true" aria-labelledby="review-title"',
+    ),
+  );
+  assert(html.includes('id="review-title"'));
 });
 
 function runtime() {

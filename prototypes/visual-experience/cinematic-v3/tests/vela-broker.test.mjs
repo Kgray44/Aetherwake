@@ -1,12 +1,31 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 const { velaCommand, isVelaRead } = createRequire(import.meta.url)(
   "../native/vela-broker.cjs",
 );
 function fixture(choice = 1) {
   const calls = [],
-    dialogs = [];
+    dialogs = [],
+    reviews = [];
+  let closed = false;
+  const win = {
+    isDestroyed: () => closed,
+    webContents: { isDestroyed: () => closed },
+  };
+  const context = {
+    included: [
+      {
+        id: "note",
+        kind: "resource",
+        title: "Reviewed Note",
+        content: "Reviewed source excerpt",
+      },
+    ],
+  };
+  const prompt =
+    "Exact semantic prompt with Reviewed source excerpt and selected prior answer";
   const plan = {
     id: "plan",
     requestId: "request",
@@ -27,6 +46,15 @@ function fixture(choice = 1) {
   return {
     calls,
     dialogs,
+    reviews,
+    win,
+    close: () => {
+      closed = true;
+    },
+    reviewProvider: async (value) => {
+      reviews.push(value);
+      return choice === 1;
+    },
     plan,
     dialog: {
       async showMessageBox(_win, value) {
@@ -42,7 +70,30 @@ function fixture(choice = 1) {
           signature: "backend-signature",
           providerId: "codex-app-server",
           intent: "Exact intent",
-          context: { included: [{ content: "Reviewed source excerpt" }] },
+          context,
+          expiresAt: new Date(Date.now() + 30000).toISOString(),
+        };
+      if (name === "velaNativeReview")
+        return {
+          previewId: "preview",
+          signature: "backend-signature",
+          providerId: "codex-app-server",
+          context,
+          prompt,
+          promptDigest: createHash("sha256")
+            .update(JSON.stringify(prompt))
+            .digest("hex"),
+          reviewDigest: "a".repeat(64),
+          history: {
+            messages: [
+              {
+                role: "assistant",
+                providerId: "codex-app-server",
+                content: "Selected prior answer",
+              },
+            ],
+          },
+          historyOmissions: [],
         };
       if (name === "authorizeVelaRequest")
         return { grantId: "private-native-grant" };
@@ -94,14 +145,23 @@ test("Vela planning reviews backend context then uses only a newly issued native
   await velaCommand({ ...f, input: request(true) });
   assert.deepEqual(
     f.calls.map((c) => c.name),
-    ["velaRequestPreview", "authorizeVelaRequest", "vela"],
+    ["velaRequestPreview", "velaNativeReview", "authorizeVelaRequest", "vela"],
   );
-  assert.match(f.dialogs[0].detail, /Reviewed source excerpt/);
-  assert.deepEqual(f.calls[1].input, {
+  assert.equal(f.dialogs.length, 0, "no oversized OS text dialog");
+  assert.equal(
+    f.reviews[0].review.context.included[0].content,
+    "Reviewed source excerpt",
+  );
+  assert.equal(
+    f.reviews[0].review.history.messages[0].content,
+    "Selected prior answer",
+  );
+  assert.deepEqual(f.calls[2].input, {
     previewId: "preview",
     signature: "backend-signature",
+    reviewDigest: "a".repeat(64),
   });
-  assert.equal(f.calls[2].input.input.grantId, "private-native-grant");
+  assert.equal(f.calls[3].input.input.grantId, "private-native-grant");
 });
 test("cancelled planning consent never grants or dispatches", async () => {
   const f = fixture(0);
@@ -111,7 +171,7 @@ test("cancelled planning consent never grants or dispatches", async () => {
   );
   assert.deepEqual(
     f.calls.map((c) => c.name),
-    ["velaRequestPreview"],
+    ["velaRequestPreview", "velaNativeReview"],
   );
 });
 test("revoked or stale planning context fails at native grant creation without dispatch", async () => {
@@ -155,6 +215,7 @@ test("cancelled delegation cannot authorize a task or apply the plan", async () 
 test("private grants and reflective method names are not renderer commands", async () => {
   for (const name of [
     "authorizeVelaRequest",
+    "velaNativeReview",
     "authorizeVelaDelegation",
     "constructor",
     "__proto__",
@@ -165,5 +226,54 @@ test("private grants and reflective method names are not renderer commands", asy
       /invalid_vela_command/,
     );
     assert.equal(f.calls.length, 0);
+  }
+});
+
+test("native review failures or substituted prompts cannot fall back to legacy consent or dispatch", async () => {
+  for (const mismatch of [false, true]) {
+    const f = fixture(),
+      original = f.call;
+    f.call = async (name, input) => {
+      if (name !== "velaNativeReview") return original(name, input);
+      if (!mismatch) throw Error("native_review_unavailable");
+      return {
+        ...(await original(name, input)),
+        prompt: "Unreviewed replacement",
+      };
+    };
+    await assert.rejects(
+      velaCommand({ ...f, input: request(true) }),
+      /native_review_unavailable|invalid_native_vela_review/,
+    );
+    assert.equal(f.dialogs.length, 0);
+    assert.equal(f.reviews.length, 0);
+    assert(
+      !f.calls.some(
+        (c) => c.name === "authorizeVelaRequest" || c.name === "vela",
+      ),
+    );
+  }
+});
+
+test("closing the owner during review or grant creation cannot dispatch a provider request", async () => {
+  for (const closeAt of ["review", "grant"]) {
+    const f = fixture(),
+      original = f.call;
+    if (closeAt === "review")
+      f.reviewProvider = async () => {
+        f.close();
+        return true;
+      };
+    else
+      f.call = async (name, input) => {
+        const value = await original(name, input);
+        if (name === "authorizeVelaRequest") f.close();
+        return value;
+      };
+    await assert.rejects(
+      velaCommand({ ...f, input: request(true) }),
+      /native_review_owner_unavailable/,
+    );
+    assert(!f.calls.some((c) => c.name === "vela"));
   }
 });

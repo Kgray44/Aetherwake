@@ -30,9 +30,32 @@ function validateReview(preview, review) {
     !hash(review.reviewDigest) ||
     !review.context ||
     !Array.isArray(review.context.included) ||
+    !review.context.included.every(
+      (source) =>
+        source &&
+        typeof source.id === "string" &&
+        typeof source.kind === "string" &&
+        typeof source.title === "string" &&
+        typeof source.content === "string",
+    ) ||
+    (review.context.discovered !== undefined &&
+      (!Array.isArray(review.context.discovered) ||
+        !review.context.discovered.every(
+          (source) =>
+            source &&
+            typeof source.id === "string" &&
+            typeof source.kind === "string" &&
+            typeof source.title === "string",
+        ))) ||
     (review.history !== undefined &&
       (!Array.isArray(review.history.messages) ||
-        review.history.messages.length > 4)) ||
+        review.history.messages.length > 4 ||
+        !review.history.messages.every(
+          (message) =>
+            message &&
+            ["user", "assistant"].includes(message.role) &&
+            typeof message.content === "string",
+        ))) ||
     Buffer.byteLength(JSON.stringify(review)) > 65536
   )
     throw Error("invalid_native_vela_review");
@@ -41,10 +64,20 @@ function validateReview(preview, review) {
 function reviewPage(review, intent = "") {
   const provider =
     review.providerId === "codex-app-server" ? "Codex" : review.providerId;
-  const sources = review.context.included
+  const sourceKey = (source) => JSON.stringify([source.kind, source.id]);
+  const included = new Map(
+    review.context.included.map((source) => [sourceKey(source), source]),
+  );
+  const resources = [...(review.context.discovered ?? review.context.included)];
+  for (const source of review.context.included)
+    if (
+      !resources.some((resource) => sourceKey(resource) === sourceKey(source))
+    )
+      resources.push(source);
+  const sources = resources
     .map(
       (source) =>
-        `<article><h2>${escape(source.title ?? source.id ?? "Selected source")}</h2><pre>${escape(source.content ?? "")}</pre></article>`,
+        `<article><h2>${escape(source.title ?? source.id ?? "Selected resource")}</h2><small>${included.has(sourceKey(source)) ? "Selected excerpt" : "Metadata only"}</small>${included.has(sourceKey(source)) ? `<pre>${escape(included.get(sourceKey(source)).content)}</pre>` : ""}</article>`,
     )
     .join("");
   const history = (review.history?.messages ?? [])
@@ -54,7 +87,7 @@ function reviewPage(review, intent = "") {
     )
     .join("");
   const styleHash = createHash("sha256").update(css).digest("base64");
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>Vela · Review sharing</title><style>${css}</style></head><body><main class="review"><header><h1>Send to ${escape(provider)}?</h1><p>One provider response. App changes still require review.</p></header><div class="content" tabindex="0" aria-label="Review what will be shared"><p class="intent">${escape(intent)}</p><details${sources ? " open" : ""}><summary>Shared sources (${review.context.included.length})</summary><section>${sources || "No selected source content."}</section></details><details${history ? " open" : ""}><summary>Previous messages (${review.history?.messages.length ?? 0})</summary><section>${history || "No prior messages included."}</section></details><details><summary>Exact provider request</summary><section><pre>${escape(review.prompt)}</pre><small>Request digest: ${escape(review.promptDigest)}</small></section></details></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">Send once</button></footer></main></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>Vela · Review sharing</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">Send to ${escape(provider)}?</h1><p>One provider response. App changes still require review.</p></header><div class="content" tabindex="0" aria-label="Review what will be shared"><p class="intent">${escape(intent)}</p><details${sources ? " open" : ""}><summary>Shared resources (${resources.length})</summary><section>${sources || "No selected source content."}</section></details><details${history ? " open" : ""}><summary>Previous messages (${review.history?.messages.length ?? 0})</summary><section>${history || "No prior messages included."}</section></details><details><summary>Exact provider request</summary><section><pre>${escape(review.prompt)}</pre><small>Request digest: ${escape(review.promptDigest)}</small></section></details></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">Send once</button></footer></main></body></html>`;
   if (Buffer.byteLength(html) > 524288)
     throw Error("native_vela_review_capacity_exceeded");
   return html;
@@ -176,3 +209,4 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime }) {
 exports.validateReview = validateReview;
 exports.reviewPage = reviewPage;
 exports.showVelaReview = showVelaReview;
+exports.isReviewOwnerAlive = ownerAlive;
