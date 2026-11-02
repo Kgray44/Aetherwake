@@ -97,6 +97,8 @@ import {
   type AgentBlockProjection,
 } from "../../../block-library/agent-view.ts";
 import "../../../block-library/agent-view.css";
+import { mountTimelineExperience } from "../../../block-library/timeline-view.ts";
+import "../../../block-library/timeline-view.css";
 import type { ProviderConnectionStatus } from "../../../application-contract/provider-connections.ts";
 import { mountDirectResourceExperience } from "../../../block-library/direct-resource-view.ts";
 import "../../../block-library/direct-resource-view.css";
@@ -345,6 +347,11 @@ export function installApplication(hooks: Hooks) {
   let checklistCreator: ReturnType<typeof mountChecklistCreator> | null = null;
   let checklistCreatorSurface: ContextualSurfaceRequest | null = null;
   let checklistCreatorSerial = 0;
+  let activityTimelineAttempt: {
+    request: Parameters<typeof productClients.timelines.create>[0];
+    pending: boolean;
+    resourceId?: string;
+  } | null = null;
   const checklistViews = new Map<
     string,
     {
@@ -362,6 +369,14 @@ export function installApplication(hooks: Hooks) {
     }
   >();
   const agentProjections = new Map<string, AgentBlockProjection>();
+  const timelineViews = new Map<
+    string,
+    {
+      view: ReturnType<typeof mountTimelineExperience>;
+      version: number;
+      width: number;
+    }
+  >();
   const noteSessions = new Map<string, NoteSession>();
   const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
   const groupViews = new Map<
@@ -522,6 +537,18 @@ export function installApplication(hooks: Hooks) {
           chooseReference: () => chooseChecklistReference(root),
           openReference: openChecklistReference,
         },
+        timelines: {
+          port: productClients.timelines,
+          motion: experienceMotion,
+          viewId: "direct:" + resource.id,
+          resourceTitle: (id) =>
+            state?.resources.find(
+              (item) =>
+                item.id === id &&
+                item.available !== false &&
+                item.visible !== false,
+            )?.title,
+        },
         copyText,
         noteSession,
         saveContent,
@@ -645,6 +672,8 @@ export function installApplication(hooks: Hooks) {
       for (const entry of agentBlockViews.values()) entry.view.dispose();
       agentBlockViews.clear();
       agentProjections.clear();
+      for (const entry of timelineViews.values()) entry.view.dispose();
+      timelineViews.clear();
       controlMotion.dispose();
       resourceOpener.cancel();
       directResources.dispose();
@@ -907,6 +936,11 @@ export function installApplication(hooks: Hooks) {
         agentBlockViews.delete(id);
         agentProjections.delete(id);
       }
+    for (const [id, entry] of timelineViews)
+      if (!next.blocks.some((block) => block.id === id)) {
+        entry.view.dispose();
+        timelineViews.delete(id);
+      }
     for (const [id, view] of groupViews)
       if (!next.blocks.some((b) => b.id === id)) {
         view.dispose();
@@ -1123,6 +1157,7 @@ export function installApplication(hooks: Hooks) {
     await conversationDisposing;
     await checklistCreator?.flush();
     for (const entry of checklistViews.values()) await entry.view.flush();
+    for (const entry of timelineViews.values()) await entry.view.flush();
     await directResources.flush();
     for (;;) {
       await flushConversationDraftSessions(() => composerSessions.values());
@@ -1493,8 +1528,7 @@ export function installApplication(hooks: Hooks) {
     const projectId = conversationId
       ? (state?.resources.find((r) => r.id === conversationId)?.project_id ??
         null)
-      : (state?.workspaces.find((w) => w.id === state?.activeWorkspaceId)
-          ?.project_id ?? null);
+      : creationProjectId();
     const controller = mountChecklistCreator(content, {
       port: productClients.checklists,
       motion: experienceMotion,
@@ -1539,6 +1573,73 @@ export function installApplication(hooks: Hooks) {
       },
     };
     surfaces.open(checklistCreatorSurface);
+  }
+  function creationProjectId(): string | null {
+    const navigation = state?.navigation;
+    if (navigation?.kind === "workspace")
+      return (
+        state?.workspaces.find(
+          (workspace) => workspace.id === navigation.workspaceId,
+        )?.project_id ?? null
+      );
+    return navigation?.kind === "constellation" ? navigation.projectId : null;
+  }
+  async function newActivityTimeline() {
+    await flush();
+    let attempt = activityTimelineAttempt;
+    if (!attempt) {
+      const projectId = creationProjectId();
+      const capturedAt = Date.now();
+      attempt = {
+        pending: false,
+        request: {
+          commandId: "activity-timeline:" + crypto.randomUUID(),
+          title: projectId ? "Project activity" : "Recent activity",
+          projectId,
+          view: {
+            schemaVersion: 1,
+            mode: "activity",
+            scope: { projectId, resourceIds: [] },
+            sources: {
+              providerIds: [],
+              eventTypes: [],
+              classifications: ["observed", "reported", "inferred"],
+            },
+            viewport: {
+              from: new Date(capturedAt - 86400000).toISOString(),
+              to: new Date(capturedAt + 60000).toISOString(),
+              displayTimeZone:
+                Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+            },
+            selection: null,
+          },
+        },
+      };
+      activityTimelineAttempt = attempt;
+    }
+    if (attempt.pending) return;
+    attempt.pending = true;
+    try {
+      if (!attempt.resourceId)
+        attempt.resourceId = (
+          await productClients.timelines.create(attempt.request)
+        ).resourceId;
+      const opened = await resourceOpener.open({
+        resourceId: attempt.resourceId,
+        origin: { source: "application" },
+      });
+      if (opened.status !== "ready")
+        throw Error("Timeline created. Reopen it from Resources.");
+      if (activityTimelineAttempt === attempt) activityTimelineAttempt = null;
+    } catch {
+      hooks.status(
+        attempt.resourceId
+          ? "Timeline created. Reopen it from Resources."
+          : "Timeline creation could not be confirmed. Activity timeline will retry the same attempt.",
+      );
+    } finally {
+      attempt.pending = false;
+    }
   }
   async function showAgents(resourceId?: string): Promise<void> {
     if (!agentLibrary || !agentSurface) {
@@ -2031,7 +2132,7 @@ export function installApplication(hooks: Hooks) {
     if (!state) return;
     open(
       "Resources",
-      '<label>Find a resource<input id="resource-search" type="search" placeholder="Search title or type"></label><button id="standalone-note">New note</button><button id="standalone-checklist" data-aerynth-motion-control="true">New checklist</button><div id="resource-results"></div>',
+      '<label>Find a resource<input id="resource-search" type="search" placeholder="Search title or type"></label><button id="standalone-note">New note</button><button id="standalone-checklist" data-aerynth-motion-control="true">New checklist</button><button id="new-activity-timeline" data-aerynth-motion-control="true">Activity timeline</button><div id="resource-results"></div>',
     );
     const draw = () => {
       const q = el<HTMLInputElement>(
@@ -2076,7 +2177,6 @@ export function installApplication(hooks: Hooks) {
               if (
                 !resource ||
                 !workspaceId ||
-                resource.kind === "timeline" ||
                 !REGISTERED_BLOCKS.some((def) => def.kind === resource.kind)
               )
                 throw Error(
@@ -2100,6 +2200,10 @@ export function installApplication(hooks: Hooks) {
     el("#standalone-checklist", dialog).onclick = () => {
       dialog.close();
       void newChecklist().catch(report);
+    };
+    el("#new-activity-timeline", dialog).onclick = () => {
+      dialog.close();
+      void newActivityTimeline().catch(report);
     };
     el("#standalone-note", dialog).onclick = () => {
       void (async () => {
@@ -3229,6 +3333,39 @@ export function installApplication(hooks: Hooks) {
         void view.refresh({ latest: true }).catch(report);
       }
       view?.setActive(activeBlocks.get(b.id) ?? false);
+    } else if (r.kind === "timeline") {
+      const content = el(".working-content", article);
+      let entry = timelineViews.get(id);
+      if (!entry && activeBlocks.get(id)) {
+        content.replaceChildren();
+        entry = {
+          view: mountTimelineExperience(
+            content,
+            r.id,
+            productClients.timelines,
+            {
+              viewId: "block:" + id,
+              motion: experienceMotion,
+              active: true,
+              presentation: blockPresentation(id),
+              onOpenResource: openCanonicalResource,
+              resourceTitle: (resourceId) =>
+                state?.resources.find(
+                  (resource) =>
+                    resource.id === resourceId &&
+                    resource.available !== false &&
+                    resource.visible !== false,
+                )?.title,
+            },
+          ),
+          version: r.version,
+          width: content.clientWidth,
+        };
+        timelineViews.set(id, entry);
+      } else if (entry && entry.version !== r.version) {
+        entry.version = r.version;
+        void entry.view.refresh().catch(report);
+      }
     } else if (r.kind === "agent") {
       const content = el(".working-content", article);
       let entry = agentBlockViews.get(id);
@@ -3779,9 +3916,14 @@ export function installApplication(hooks: Hooks) {
         state?.resources.find(
           (resource) => resource.id === block.resource_id,
         ) &&
-        ["conversation", "task_group", "stream", "checklist", "agent"].includes(
-          resource?.kind ?? "",
-        )
+        [
+          "conversation",
+          "task_group",
+          "stream",
+          "checklist",
+          "agent",
+          "timeline",
+        ].includes(resource?.kind ?? "")
       ) {
         const article = document.querySelector<HTMLElement>(
           `[data-block="${id}"]`,
@@ -3797,6 +3939,7 @@ export function installApplication(hooks: Hooks) {
     groupViews.get(id)?.setPresentation(presentation);
     checklistViews.get(id)?.view.setPresentation(presentation);
     agentBlockViews.get(id)?.view.setPresentation(presentation);
+    timelineViews.get(id)?.view.setPresentation(presentation);
     chatViews.get(id)?.setActive(active);
     noteViews.get(id)?.setActive(active);
     subjectViews.get(id)?.setActive(active);
@@ -3804,6 +3947,7 @@ export function installApplication(hooks: Hooks) {
     groupViews.get(id)?.setActive(active);
     checklistViews.get(id)?.view.setActive(active);
     agentBlockViews.get(id)?.view.setActive(active);
+    timelineViews.get(id)?.view.setActive(active);
   }
   return {
     frame(now: number, policy: Policy) {
@@ -3841,6 +3985,17 @@ export function installApplication(hooks: Hooks) {
       environmentNavigator?.frame();
       workspaceActions?.frame();
       agentLibrary?.frame();
+      for (const [id, entry] of timelineViews) {
+        const width =
+          document.querySelector<HTMLElement>(
+            `[data-block="${id}"] .working-content`,
+          )?.clientWidth ?? 0;
+        if (width !== entry.width) {
+          entry.width = width;
+          entry.view.reflow();
+        }
+        entry.view.frame();
+      }
       for (const [id, entry] of agentBlockViews) {
         const width =
           document.querySelector<HTMLElement>(

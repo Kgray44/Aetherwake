@@ -30,7 +30,7 @@ test('actual Core Timeline commands persist one canonical view over existing aut
     const expected=(await core.command('timelines',{name:'read',input:{resourceId:created.resourceId}})).result;
     const desktop=await core.command('desktop',{type:'snapshot'});assert.equal(desktop.workspaces.length,0);assert.equal(desktop.blocks.length,0);assert.equal(desktop.resources.find(r=>r.id===created.resourceId)!.kind,'timeline');
     assert.equal((core as any).db.prepare('SELECT count(*) n FROM notes').get().n,0);
-    assert.equal((await core.command('openResource',{resourceId:created.resourceId})).status,'unsupported','An unwired viewer must not be presented as a working Note or block');
+    const opened=await core.command('openResource',{resourceId:created.resourceId});assert.equal(opened.status,'ready');if(opened.status==='ready'){assert.equal(opened.presentation.kind,'timeline');assert.equal(opened.resource.content,'');}
     assert.deepEqual(await core.command('providerActivity',{}),{codexConnections:0,providerRequests:0,systemMemoryReads:0,scope:'process-session-native-attempts'});
     await core.command('close',{});core=new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only'});
     assert.deepEqual((await core.command('timelines',{name:'read',input:{resourceId:created.resourceId}})).result,expected);

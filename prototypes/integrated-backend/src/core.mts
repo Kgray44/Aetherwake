@@ -267,6 +267,7 @@ export class BackendCore {
   private createLibraryResource(kind:BlockKind,title:string,provider:'local'|'codex'|undefined,projectId:string|null):string {
     ensure(!['file','link'].includes(kind),'media_import_required');
     ensure(kind!=='agent','agent_library_creation_required');
+    ensure(kind!=='timeline','timeline_creation_required');
     if(kind==='checklist')return this.productDomains().checklist({name:'create',input:{commandId:randomUUID(),title,projectId}}).resourceId;
     if(kind==='conversation')return this.create(title,provider==='codex'?this.port.id:provider==='local'?'local':this.defaultOrdinaryProvider(),projectId).resourceId;
     const resource=this.kernel.createNote(title,'',projectId);this.db.prepare('INSERT INTO desktop_resources(resource_id,kind) VALUES(?,?)').run(resource.id,kind);return resource.id;
@@ -912,10 +913,11 @@ export class BackendCore {
     return this.kernel.withTransaction(()=>{
       const row=this.db.prepare('SELECT r.*,d.kind AS desktop_kind,d.metadata_json FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=?').get(resourceId);
       if(!row||row.state!=='active'||!this.libraryAuthorized({kind:'resource',id:resourceId})||!this.conversationReadAccess(resourceId))return unavailable();
-      const actualKind=row.kind==='conversation'?'conversation':row.desktop_kind??(row.kind==='generic'?'reference':row.kind),kinds:CanonicalResourceKind[]=['conversation','note','research','task','task_group','reference','stream','agent','checklist'];
+      const actualKind=row.kind==='conversation'?'conversation':row.desktop_kind??(row.kind==='generic'?'reference':row.kind),kinds:CanonicalResourceKind[]=['conversation','note','research','task','task_group','reference','stream','agent','checklist','timeline'];
       if(!kinds.includes(actualKind as BlockKind)||actualKind==='conversation'&&row.kind!=='conversation')return {...base,status:'unsupported',reason:'resource-kind-unsupported',kind:String(actualKind).slice(0,64)};
       const kind=actualKind as CanonicalResourceKind;
       if(kind==='agent'||kind==='checklist')try{const domains=this.productDomains();if(kind==='agent')domains.agent({name:'inspect',input:{resourceId}});else domains.checklist({name:'read',input:{resourceId}});}catch{return unavailable();}
+      if(kind==='timeline')try{compositeTimelineDomain({kernel:this.kernel,db:this.db,projectAccess:id=>this.libraryAuthorized({kind:'project',id}),resourceAccess:id=>this.productResourceAccess(id),eventAccess:()=>false,recordEvent:()=>{throw new ServiceError('unexpected_timeline_open_mutation');}}).dispatch({name:'read',input:{resourceId}});}catch{return unavailable();}
       if(request.selection&&kind!=='conversation')return {...base,status:'unsupported',reason:'message-selection-unsupported',kind};
       const conversation=kind==='conversation'?this.state.graph.conversations.find(c=>c.id===this.state.resources[resourceId]):undefined;
       if(kind==='conversation'&&!conversation)return unavailable();
@@ -923,7 +925,7 @@ export class BackendCore {
       // Conversation history/drafts retain their existing canonical ports; this
       // is an opening projection, not a second transcript or a guessed count.
       const resource:PublicResource={id:resourceId,title:String(row.title),kind,version:Number(row.version),project_id:row.project_id===null?null:String(row.project_id),state:'active',visible:true,available:true,content:'',provider:conversation?.kind==='codex'?'codex':'local',messages:[],...(conversation?{providerId:conversation.providerId,conversationRevision:this.state.revisions[resourceId]}:{})};
-      if(kind!=='conversation'&&kind!=='agent'&&kind!=='checklist')resource.content=this.kernel.getResource(resourceId).note?.content??'';
+      if(kind!=='conversation'&&kind!=='agent'&&kind!=='checklist'&&kind!=='timeline')resource.content=this.kernel.getResource(resourceId).note?.content??'';
       if(kind==='task'||kind==='task_group'){
         let metadata:Record<string,unknown>;try{metadata=JSON.parse(String(row.metadata_json??'{}'));if(!metadata||typeof metadata!=='object'||Array.isArray(metadata))return unavailable();}catch{return unavailable();}
         if(kind==='task'){
