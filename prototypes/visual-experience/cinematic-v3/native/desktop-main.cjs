@@ -71,6 +71,7 @@ const source = {
   ),
 };
 const verify =
+  process.argv.includes("--integration-visual-smoke") ||
   process.argv.includes("--integration-verify") ||
   process.argv.includes("--integration-live") ||
   process.argv.includes("--integration-benchmark") ||
@@ -260,6 +261,18 @@ app.whenReady().then(async () => {
       sandbox: true,
     },
   });
+  const startupErrors = [];
+  if (process.argv.includes("--integration-visual-smoke"))
+    win.webContents.on("console-message", (details) => {
+      if (details.level === "error") {
+        startupErrors.push({
+          message: String(details.message).slice(0, 2048),
+          line: details.lineNumber,
+          source: String(details.sourceId).slice(0, 300),
+        });
+        if (startupErrors.length > 32) startupErrors.shift();
+      }
+    });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   win.webContents.on("will-navigate", (event, url) => {
     if (url !== localURL) event.preventDefault();
@@ -428,6 +441,16 @@ app.whenReady().then(async () => {
   }, 240000);
   reserveTimer.unref();
   if (verify) {
+    if (process.argv.includes("--integration-visual-smoke")) {
+      await require("./integration-visual-smoke.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        source,
+        startupErrors,
+      });
+      return;
+    }
     if (process.argv.includes("--integration-vela-live")) {
       await require("../../../vela-core/test/native-live.cjs").verify({
         win,
