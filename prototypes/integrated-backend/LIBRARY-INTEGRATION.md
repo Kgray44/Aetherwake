@@ -35,7 +35,7 @@ Quiet presence remains engine-owned and separate from templates. Tests verify th
 
 Focused real-SQLite library + existing Vela backend regressions: **12/12 passed**, 3722.7372 ms reported duration. They cover actual released workspace creation and exact receipt, identity/history preservation, local conversation mapping, template capture, preferences/configuration/restart, cross-project/stale/archive denial and canonical graph rollback after a failed factory.
 
-The combined backend typecheck reports the already identified Universal subject-arm issues in `desktop.mts:297` and `desktop.test.mts:169`; no new Core/contracts diagnostics were reported. The Universal/Desktop owner is supplying those tagged-union fixes. This commit does not edit those owned files or claim the combined typecheck passed.
+The initial combined backend typecheck identified Universal subject-arm issues in `desktop.mts:297` and `desktop.test.mts:169`. After applying the Universal owner's `3beb596` tagged-union correction, the full integrated-backend TypeScript check passed with zero diagnostics, including the subsequent canonical notes adapter.
 
 No actual Codex/model turn, native application window or network request ran. Parent owns public IPC admissions/view mounting/native policy review and combined/live acceptance. Notes recovery is a subsequent bounded integration step.
 

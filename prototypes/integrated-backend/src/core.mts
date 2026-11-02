@@ -19,10 +19,12 @@ import type { VelaMessage, ContextManifest, AuthorizationRequest, AuthorizationD
 import type { VelaRequestPreview, VelaNativeCapabilities, VelaBackendState } from './contracts.mts';
 import { TemplateService } from '../../block-library/service.mts';
 import { createCanonicalTemplateHost } from '../../block-library/canonical-host.mts';
+import { NoteExperienceService } from '../../block-library/note-service.mts';
+import { createCanonicalNoteHost } from '../../block-library/note-host.mts';
 import { BUILTIN_BLOCKS } from '../../block-library/registry.ts';
 import type { LibraryCapabilities, BlockKind } from '../../block-library/contracts.ts';
 import { validateSubjectRef, type NonResourceSubjectRef } from '../../workspace-kernel/subjects.ts';
-import type { LibraryRequest, LibraryResponse } from './contracts.mts';
+import type { LibraryRequest, LibraryResponse, NoteRequest } from './contracts.mts';
 import { CONTRACT, ensure, ServiceError, type Binding, type Execution, type HandoffReview, type Options, type ProviderPort, type StreamEvent, type CommandMap, type ConversationSendInput, type ConversationSendPreview } from './contracts.mts';
 
 const now = () => new Date().toISOString();
@@ -73,6 +75,7 @@ export class BackendCore {
   private velaDelegationGrants=new Map<string,{planId:string;stepId:string;fingerprint:string;actionDigest:string;contextDigest:string;expiresAt:string;consumed:boolean}>();
   private pendingVelaGrant:string|null=null;
   private library!:TemplateService;
+  private notes!:NoteExperienceService;
   constructor(options: Options, emit: (event: StreamEvent) => void = () => {}) {
     this.privateMode = options.contentPolicy === 'local-private';
     if (options.contentPolicy !== 'synthetic-only') {
@@ -176,6 +179,10 @@ export class BackendCore {
       isAuthorized:subject=>this.libraryAuthorized(subject),authorizeSubject:(subject,workspaceId)=>this.librarySubjectAllowed(subject,workspaceId),
     });
     this.library=new TemplateService(this.db,host);
+    this.notes=new NoteExperienceService(this.db,createCanonicalNoteHost({db:this.db,kernel:this.kernel,templateHost:host,atomic:work=>this.atomic(work),
+      applyDesktopCommand:command=>this.desktop.apply(command,()=>{throw new ServiceError('unexpected_note_conversation_creation');}),
+      renameResource:input=>{this.kernel.renameResource(input.resourceId,input.title,input.expectedVersion);},
+    }));
     this.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources','createResource','attach','applyStructuredPreset'],workspaceRevision:id=>engine.project(id).revision,dispatch:input=>{
       const a=input.action;
       if(a.type==='workspaceFromResources') {
@@ -206,6 +213,19 @@ export class BackendCore {
     }};
     const result=mutation?this.atomic(()=>{const value=execute();if((operation.name==='createBlock'||operation.name==='attachBlock')&&input.workspaceId)this.desktop.nativeBlockServices().navigateWorkspace(input.workspaceId);return value;}):await execute();
     if(mutation){this.record('application/library.'+operation.name,'observed');return {result,desktop:await this.command('desktop',{type:'snapshot'})};}return {result};
+  }
+  private async noteCommand(operation:NoteRequest):Promise<LibraryResponse> {
+    const input:any=operation?.input;let result:unknown;
+    switch(operation?.name){
+      case 'readNote':return {result:this.notes.readNote(input)};
+      case 'saveNoteDraft':result=this.notes.saveNoteDraft(input);break;
+      case 'commitNote':result=this.notes.commitNote(input);break;
+      case 'discardNoteDraft':result=this.notes.discardNoteDraft(input);break;
+      case 'renameNote':result=this.notes.renameNote(input);break;
+      default:throw new ServiceError('unsupported_note_command');
+    }
+    this.record('application/notes.'+operation.name,'observed');
+    return operation.name==='commitNote'||operation.name==='renameNote'?{result,desktop:await this.command('desktop',{type:'snapshot'})}:{result};
   }
   /** Trusted in-process bootstrap only. No RPC exposes capability registration. */
   registerVelaNativeCapabilities(capabilities:VelaNativeCapabilities) {
@@ -654,8 +674,9 @@ export class BackendCore {
     // Reads and interruption remain available during execution. Local mutation
     // is rejected rather than racing source approval and streamed commits.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export'];
-    if (!['snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources'].includes(a?.name))) ensure(!this.active, 'execution_busy');
+    if (!['snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {
+      case 'notes':return this.noteCommand(a) as any;
       case 'library':return this.libraryCommand(a) as any;
       case 'vela':return this.velaCommand(a) as any;
       case 'velaRequestPreview':return this.previewVelaRequest(a) as any;

@@ -7,6 +7,9 @@ import type { AttachedContext } from '../../conversation-product/src/service.mts
 import type { VelaClient, VelaState, ContextManifest, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
 import type { PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
 import type { TemplateService } from '../../block-library/service.mts';
+import type { NoteExperienceService } from '../../block-library/note-service.mts';
+export type NoteMethod = 'readNote'|'saveNoteDraft'|'commitNote'|'discardNoteDraft'|'renameNote';
+export type NoteRequest = { [K in NoteMethod]: {name:K;input:Parameters<NoteExperienceService[K]>[0]} }[NoteMethod];
 export type LibraryMethod = 'capabilities'|'preferences'|'setFavorite'|'getBlockSettings'|'configureBlock'|'findResources'|'attachBlock'|'createBlock'|'listTemplates'|'getTemplate'|'saveTemplate'|'renameTemplate'|'archiveTemplate'|'previewTemplate'|'applyTemplate'|'previewWorkspaceFromResources'|'workspaceFromResources'|'requestVelaTemplate';
 export type LibraryRequest = { [K in LibraryMethod]: {name:K;input:Parameters<TemplateService[K]>[0] extends undefined?Record<string,never>:Parameters<TemplateService[K]>[0]} }[LibraryMethod];
 export type LibraryResponse = {result:unknown;desktop?:DesktopSnapshot};
@@ -91,6 +94,7 @@ export interface Options {
   velaPlanningPort?: VelaPlanningPort;
 }
 export interface CommandMap {
+  notes: {input:NoteRequest;output:LibraryResponse};
   library: {input:LibraryRequest;output:LibraryResponse};
   vela: { input: VelaOperation; output: unknown };
   velaRequestPreview: { input: {intent:string;resourceIds:string[]}; output: VelaRequestPreview };
