@@ -40,7 +40,10 @@ import "../../../conversation-product/src/style.css";
 import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
-import { createContextualSurfaces } from "./contextual-surfaces";
+import {
+  createContextualSurfaces,
+  type ContextualSurfaceRequest,
+} from "./contextual-surfaces";
 import "./contextual-surfaces.css";
 import {
   mountBlockLibrary,
@@ -237,6 +240,8 @@ export function installApplication(hooks: Hooks) {
   const conversationView = createManagerState();
   let conversationManager: ReturnType<typeof mountConversationManager> | null =
     null;
+  let conversationSurface: ContextualSurfaceRequest | null = null;
+  let conversationDisposing: Promise<void> | null = null;
   let constellation: ReturnType<typeof mountConstellation> | null = null;
   let policyKey = "";
   const arrivalId = "application:arrival";
@@ -595,6 +600,8 @@ export function installApplication(hooks: Hooks) {
     return flushInFlight;
   }
   async function flushDrafts() {
+    await conversationDisposing;
+    await conversationManager?.flush();
     for (;;) {
       const ids = new Set([
         ...drafts.keys(),
@@ -815,7 +822,6 @@ export function installApplication(hooks: Hooks) {
     cardConfiguration?.dispose();
     cardConfiguration = null;
     surfaces.close("conversations");
-    conversationManager = null;
     dialog.classList.remove("conversation-surface");
     lastTrigger = document.activeElement as HTMLElement;
     dialog.innerHTML = `<div class="command-heading"><h2>${title}</h2><button data-close aria-label="Close panel">×</button></div>${body}<p id="command-error" role="status"></p>`;
@@ -824,14 +830,24 @@ export function installApplication(hooks: Hooks) {
     el<HTMLInputElement>("input,select,button", dialog)?.focus();
   }
   function conversations(resourceId?: string) {
+    void showConversations(resourceId).catch(report);
+  }
+  async function showConversations(resourceId?: string) {
+    await conversationDisposing;
     dialog.close();
     cardConfiguration?.dispose();
     cardConfiguration = null;
+    if (conversationManager && conversationSurface) {
+      surfaces.open(conversationSurface).id = "conversation-surface";
+      if (resourceId) await conversationManager.open(resourceId);
+      else await conversationManager.refresh();
+      return;
+    }
     const content = document.createElement("div");
     content.id = "conversation-product";
     content.className = "application-conversation-content";
     let controller: ReturnType<typeof mountConversationManager> | undefined;
-    const surface = surfaces.open({
+    const request: ContextualSurfaceRequest = {
       id: "conversations",
       anchor: el(".brand"),
       content,
@@ -839,11 +855,41 @@ export function installApplication(hooks: Hooks) {
       minSize: { width: 560, height: 360 },
       maxSize: { width: 1100, height: 760 },
       initialFocus: '.cp-toolbar input[type="search"]',
-      onClose: () => {
-        controller?.dispose();
-        if (conversationManager === controller) conversationManager = null;
+      beforeClose: async () => {
+        try {
+          await controller?.flush();
+          return true;
+        } catch (error) {
+          report(error);
+          return false;
+        }
       },
-    });
+      onClose: () => {
+        if (!controller) return;
+        const closing = controller;
+        const disposal = closing
+          .dispose()
+          .then(() => {
+            if (conversationManager === closing) {
+              conversationManager = null;
+              conversationSurface = null;
+            }
+          })
+          .catch((error) => {
+            report(error);
+            // A failed recovery save keeps the same editor and its draft usable.
+            if (conversationManager === closing)
+              surfaces.open(request).id = "conversation-surface";
+          })
+          .finally(() => {
+            if (conversationDisposing === disposal)
+              conversationDisposing = null;
+          });
+        conversationDisposing = disposal;
+      },
+    };
+    conversationSurface = request;
+    const surface = surfaces.open(request);
     surface.id = "conversation-surface";
     const port: ConversationProductPort = {
       async command<K extends keyof ProductCommandMap>(
