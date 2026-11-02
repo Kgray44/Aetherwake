@@ -2,7 +2,7 @@ const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
-const {reviewDeadline,assertCheckpoint,assertGeometry,assertRetained,assertEventScope,recordVisibleLines,durableIdentity}=require('./native-review-ui.cjs')._offline;
+const {reviewDeadline,assertCheckpoint,assertGeometry,assertRetained,assertEventScope,recordVisibleLines,measureTextLines,durableIdentity}=require('./native-review-ui.cjs')._offline;
 const rect=(left,top,width,height)=>({left,top,right:left+width,bottom:top+height,width,height});
 function frame(){return {effectiveOpacity:1,view:{width:400,height:500},shell:{nodeId:1,rect:rect(0,0,400,500)},flow:{nodeId:2,rect:rect(0,0,400,360),overflowY:'auto',scrollTop:0},compose:{nodeId:3,rect:rect(0,380,400,120)},editor:{nodeId:4,rect:rect(10,390,380,60),name:'Message Vela',hitTest:true,disabled:false,value:'',selectionStart:0,selectionEnd:0},groups:[{key:'message:synthetic:content',nodeId:5,rect:rect(10,10,380,100),ownerRect:rect(5,5,390,110),scrollOwner:'flow',lines:[{rect:rect(10,10,200,20),visible:rect(10,10,200,20)}]},{key:'plan:0',nodeId:6,rect:rect(10,130,380,40),ownerRect:rect(5,120,390,200),scrollOwner:'flow',lines:[{rect:rect(10,130,200,20),visible:rect(10,130,200,20)}]}],controls:[{key:0,nodeId:7,name:'Plan details and evidence',disabled:false,insideFlow:true,hitTest:true,rect:rect(10,300,240,36)}]};}
 test('review mode shortens but cannot extend the one global native slot',()=>{
@@ -13,6 +13,18 @@ test('synthetic rectangle fixtures reject real visible inter-group overlap and t
   assert.equal(assertGeometry(frame()).groups.length,2);
   const overlap=frame();overlap.groups[1].rect=rect(10,15,380,40);overlap.groups[1].ownerRect=rect(5,5,390,200);overlap.groups[1].lines=[{rect:rect(10,15,200,20),visible:rect(10,15,200,20)}];assert.throws(()=>assertGeometry(overlap),/text groups overlap/);
   const shrunken=frame();shrunken.groups[0].rect=rect(10,10,380,12);assert.throws(()=>assertGeometry(shrunken),/outside its nonshrinking reading group/);
+});
+function rangeDocument(textContent,boxes){
+  const node={textContent},selected=[];return {node,selected,document:{defaultView:{NodeFilter:{SHOW_TEXT:4}},createTreeWalker(){let done=false;return{nextNode(){if(done)return null;done=true;return node;}};},createRange(){let start,end;return{setStart(text,offset){assert.equal(text,node);start=offset;},setEnd(text,offset){assert.equal(text,node);end=offset;},getClientRects(){assert(Number.isSafeInteger(start)&&Number.isSafeInteger(end),'Offsets must select an exact non-whitespace run');const value=textContent.slice(start,end);selected.push({value,start,end});assert(!/\s/u.test(value));return boxes(value,start,end);}};}}};
+}
+test('wrapped trailing whitespace advances are excluded by exact offsets while actual same-row words coalesce without clipping',()=>{
+  const fixture=rangeDocument('alpha beta\n gamma ',value=>value==='alpha'?[rect(10,10,100,20)]:value==='beta'?[rect(300,10,88,20)]:[rect(10,36,120,20)]);
+  const result=measureTextLines(fixture.document,fixture.node);assert.deepEqual(fixture.selected.map(x=>x.value),['alpha','beta','gamma']);assert.deepEqual(result.lines,[rect(10,10,378,20),rect(10,36,120,20)]);assert.equal(result.runs,3);assert.equal(result.fragments,3);assert.equal(fixture.node.textContent,'alpha beta\n gamma ','Measurement never changes full canonical text or whitespace');
+});
+test('Unicode offsets and wrapped real-word fragments remain exact; an oversized actual word still fails the unchanged geometry guard',()=>{
+  const unicode=rangeDocument('\t𐐀mega  beta\n',(_value,start)=>[rect(10,start?36:10,100,20)]);measureTextLines(unicode.document,unicode.node);assert.deepEqual(unicode.selected,[{value:'𐐀mega',start:1,end:7},{value:'beta',start:9,end:13}]);
+  const oversized=rangeDocument('oversized-real-word',()=>[rect(10,10,400,20)]),actual=measureTextLines(oversized.document,oversized.node);assert.equal(actual.lines[0].right,410,'Real word overflow is retained, never clamped to its owner');const f=frame();f.groups[0].lines=actual.lines.map(r=>({rect:r,visible:r}));assert.throws(()=>assertGeometry(f),/outside its nonshrinking reading group/);
+  const wrapped=rangeDocument('very-long-real-word',()=>[rect(10,10,200,20),rect(10,36,100,20)]);assert.equal(measureTextLines(wrapped.document,wrapped.node).lines.length,2);
 });
 test('unknown, missing, incorrect scroll ownership and composer occlusion fail closed',()=>{
   for(const mutate of [f=>{f.flow.rect.width=NaN;},f=>{f.groups[0].lines=[];},f=>{f.groups[0].scrollOwner='unexpected';},f=>{f.flow.overflowY='visible';},f=>{f.compose.rect.top=350;},f=>{f.controls[0].name='';},f=>{f.controls[0].name='Approve and apply';},f=>{f.editor.name='';},f=>{f.editor.hitTest=false;},f=>{f.view.height=200;}]){const f=frame();mutate(f);assert.throws(()=>assertGeometry(f));}
