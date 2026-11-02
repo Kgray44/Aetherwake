@@ -1,4 +1,5 @@
 import type { BlockIdentityModel, IdentityRow } from "./identity-model.ts";
+import { blockComposition, blockApproachTarget, type BlockComposition, type BlockFootprint, type BlockApproachTarget } from './presentation-policy.ts';
 const element = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className = "",
@@ -26,6 +27,7 @@ const glyphs: Record<BlockIdentityModel["layout"], string> = {
   reference: "M6 3h12v18l-6-4-6 4zM9 7h6M9 11h6",
 };
 type Actions = {
+  approach?(target: BlockApproachTarget): void | Promise<void>;
   toggleTask?(id: string, done: boolean): Promise<void>;
   openResource?(id: string): void;
   openWorkspace?(id: string): void;
@@ -54,6 +56,19 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
   query.oninput = () => actions.search?.(query.value);
   root.append(query, body, status);
   inner.insertBefore(root, working);
+  // Overlay the retained working wrapper. Its full children keep their layout
+  // and controller identity; overview never shrinks the host's observed body.
+  const overview = element('section', 'aw-block-overview'),
+    overviewContent = element('div', 'aw-block-overview-content'),
+    approach = element('button', 'aw-block-approach', 'Approach'),
+    approachStatus = element('p', 'aw-block-approach-status');
+  overview.hidden = true;
+  approach.hidden = true;
+  overview.setAttribute('data-no-card-drag', '');
+  approach.type = 'button';
+  approachStatus.setAttribute('role', 'status');
+  overview.append(overviewContent, approachStatus);
+  working.append(overview);
   const mark = document.createElementNS("http://www.w3.org/2000/svg", "svg"),
     path = document.createElementNS("http://www.w3.org/2000/svg", "path");
   mark.classList.add("aw-block-mark");
@@ -74,9 +89,92 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
   const openActions = article.querySelector(".folio-actions"),
     originalActionsParent = openActions?.parentElement;
   if (openActions) top.append(openActions);
+  (openActions ?? overview).append(approach);
   let model: BlockIdentityModel | null = null,
     fingerprint = "",
     disposed = false;
+  let footprint: BlockFootprint | undefined, composition: BlockComposition = 'working', composing = false, approaching = false;
+  const heldInert = new Map<HTMLElement, boolean>();
+  const releaseWorking = () => {
+    for (const [child, alreadyInert] of heldInert) if (!alreadyInert) child.removeAttribute('inert');
+    heldInert.clear();
+  };
+  const hasWorkingFocus = () => {
+    const active = document.activeElement;
+    return active instanceof HTMLElement && working.contains(active) && !overview.contains(active)
+      && ['input', 'textarea', 'button', 'select', 'summary', 'a[href]', '[contenteditable="true"]'].some(selector => active.matches(selector) || !!active.closest('[contenteditable="true"]'));
+  };
+  const reconcileComposition = () => {
+    if (disposed) return;
+    const next = model && model.phase === 'ready' && footprint && actions.approach && !article.classList.contains('expanded')
+      ? blockComposition(model.kind, footprint, composition, composing || hasWorkingFocus()) : 'working';
+    composition = next;
+    if (article.dataset.blockComposition !== next) article.dataset.blockComposition = next;
+    if (overview.parentElement !== working) working.append(overview);
+    overview.hidden = next !== 'overview';
+    approach.hidden = next !== 'overview';
+    if (next === 'overview') {
+      for (const child of Array.from(working.children)) if (child instanceof HTMLElement && child !== overview && !heldInert.has(child)) {
+        heldInert.set(child, child.hasAttribute('inert'));
+        child.setAttribute('inert', '');
+      }
+    } else releaseWorking();
+  };
+  const focusChanged = () => queueMicrotask(() => reconcileComposition());
+  const compositionStarted = (event: Event) => {
+    if (event.target instanceof HTMLElement && working.contains(event.target) && !overview.contains(event.target)) { composing = true; reconcileComposition(); }
+  };
+  const compositionEnded = () => { composing = false; reconcileComposition(); };
+  article.addEventListener('focusin', focusChanged);
+  article.addEventListener('focusout', focusChanged);
+  article.addEventListener('compositionstart', compositionStarted, true);
+  article.addEventListener('compositionend', compositionEnded, true);
+  approach.onclick = () => {
+    if (approaching || !model || !actions.approach || disposed) return;
+    approaching = true;
+    approach.disabled = true;
+    text(approachStatus, '');
+    const target = blockApproachTarget(model.kind, footprint?.textScale);
+    void Promise.resolve().then(() => { if (!disposed) return actions.approach!(target); })
+      .catch(() => { if (!disposed) text(approachStatus, 'Could not approach this card.'); })
+      .finally(() => { if (!disposed) { approaching = false; approach.disabled = false; } });
+  };
+  function renderOverview(value: BlockIdentityModel) {
+    overview.dataset.layout = value.layout;
+    overview.setAttribute('aria-label', value.label + ' overview');
+    approach.setAttribute('aria-label', 'Approach ' + value.label.toLowerCase());
+    const content: HTMLElement[] = [], paragraph = (text: string, className = '') => { if (text) content.push(element('p', className, text)); };
+    if (value.phase !== 'ready') paragraph(value.empty || value.subtitle);
+    else if (value.kind === 'conversation') {
+      const latest = value.rows.at(-1);
+      paragraph(latest?.title ?? value.label, 'aw-overview-speaker');
+      paragraph(latest?.detail ?? value.empty, 'aw-overview-excerpt');
+      for (const metric of value.metrics.slice(0, 1)) paragraph(metric.value, 'aw-overview-state');
+    } else if (value.kind === 'task') {
+      paragraph(value.rows[0]?.detail ?? value.empty, 'aw-overview-state');
+      paragraph(value.paragraphs[0] ?? '', 'aw-overview-excerpt');
+    } else if (value.kind === 'task_group') {
+      paragraph(value.subtitle, 'aw-overview-state');
+      for (const row of value.rows.slice(0, 2)) paragraph((row.checked ? '✓ ' : '○ ') + row.title, 'aw-overview-task');
+    } else if (value.kind === 'stream') {
+      const latest = value.rows[0];
+      paragraph(latest?.title ?? value.empty, 'aw-overview-event');
+      paragraph(latest ? [latest.detail, latest.time].filter(Boolean).join(' · ') : value.subtitle, 'aw-overview-meta');
+    } else if (value.kind === 'project_overview') {
+      const metrics = element('dl', 'aw-overview-metrics');
+      for (const metric of value.metrics) { const item = element('div'); item.append(element('dt', '', metric.label), element('dd', '', metric.value)); metrics.append(item); }
+      content.push(metrics);
+    } else if (value.kind === 'resource_browser' || value.kind === 'collection_browser') {
+      for (const row of value.rows.slice(0, 2)) { const item = element('div', 'aw-overview-resource'); item.append(element('span', '', row.title), element('small', '', row.detail)); content.push(item); }
+      if (!value.rows.length) paragraph(value.empty, 'aw-overview-excerpt');
+    } else {
+      if (value.kind === 'reference' && value.links[0]) paragraph(value.links[0].domain, 'aw-overview-source');
+      paragraph(value.heading || value.paragraphs[0] || value.empty, 'aw-overview-excerpt');
+      if (value.kind === 'research') paragraph(value.links.map(link => link.domain).join(' · '), 'aw-overview-source');
+      if (value.kind === 'note') paragraph(value.subtitle, 'aw-overview-meta');
+    }
+    overviewContent.replaceChildren(...content);
+  }
   const pending = new Set<string>();
   const run = (id: string, work: () => Promise<void> | undefined) => {
     if (pending.has(id)) return;
@@ -212,6 +310,7 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
   }
   function update(value: BlockIdentityModel) {
     model = value;
+    reconcileComposition();
     article.dataset.blockKind = value.kind;
     article.dataset.blockVariant = value.layout;
     article.dataset.resourceAvailability =
@@ -233,6 +332,7 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
         : "Open " + value.label.toLowerCase();
     const next = JSON.stringify(value);
     if (next === fingerprint) return;
+    renderOverview(value);
     const changedLayout = root.dataset.layout !== value.layout;
     fingerprint = next;
     root.dataset.layout = value.layout;
@@ -338,9 +438,18 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
   }
   return {
     update,
+    setFootprint(value: BlockFootprint) { footprint = value; reconcileComposition(); return composition; },
     search: query,
     dispose() {
       disposed = true;
+      article.removeEventListener('focusin', focusChanged);
+      article.removeEventListener('focusout', focusChanged);
+      article.removeEventListener('compositionstart', compositionStarted, true);
+      article.removeEventListener('compositionend', compositionEnded, true);
+      releaseWorking();
+      overview.remove();
+      approach.remove();
+      delete article.dataset.blockComposition;
       root.remove();
       mark.remove();
       if (openActions && originalActionsParent?.isConnected)

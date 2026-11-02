@@ -5,6 +5,16 @@ export function blockDocument() {
   const view = componentDocument(),
     proto = Object.getPrototypeOf(view.root);
   const classes = Object.getOwnPropertyDescriptor(proto, "classList")!.get!;
+  proto.hasAttribute = function (name: string) { return this.getAttribute(name) !== null; };
+  proto.removeEventListener = function (name: string, listener: unknown) {
+    this.listeners.set(name, (this.listeners.get(name) ?? []).filter((value: unknown) => value !== listener));
+  };
+  const install = view.install.bind(view);
+  view.install = () => {
+    const restore = install(), previous = globalThis.HTMLElement;
+    (globalThis as any).HTMLElement = view.root.constructor;
+    return () => { restore(); if (previous === undefined) delete (globalThis as any).HTMLElement; else globalThis.HTMLElement = previous; };
+  };
   Object.defineProperty(proto, "classList", {
     get() {
       return {
