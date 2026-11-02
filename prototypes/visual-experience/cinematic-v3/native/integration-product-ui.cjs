@@ -7,6 +7,15 @@ const { createDriver } = require('./desktop-verify.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const hash = value => createHash('sha256').update(value).digest('hex');
 
+// The actual controller publishes an errors array, not an error count. Reject
+// missing counters as well as observed errors before accepting a fresh draw.
+const healthyGraphics = value => value?.active === true && value.failed === false && value.contextLost === false
+  && Array.isArray(value.errors) && value.errors.length === 0
+  && Number.isFinite(value.frames) && Number.isFinite(value.draws);
+const freshGraphics = (prior, current) => healthyGraphics(prior) && healthyGraphics(current)
+  && current.frames > prior.frames && current.draws > prior.draws;
+exports.freshGraphics = freshGraphics;
+
 exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) => {
   const started = Date.now(), deadline = started + 15000;
   const out = path.resolve(__dirname, '../.runtime/application-evidence/product-ui-' + started);
@@ -34,7 +43,8 @@ exports.verify = async ({ win, app, privateRoot, source, startupErrors = [] }) =
       const prior = await js(graphics); let bounds, acknowledgement;
       for (let sample = 0; sample < 70; sample++) {
         foreground(); bounds = await js(inspect(selector)); const current = await js(graphics);
-        if (bounds?.opacity >= .995 && current.active && !current.failed && !current.contextLost && current.errors === 0 && current.frames > prior.frames && current.draws > prior.draws) { acknowledgement = current; break; }
+        receipt.lastBounds = bounds; receipt.lastGraphics = { prior, current };
+        if (bounds?.opacity >= .995 && freshGraphics(prior, current)) { acknowledgement = current; break; }
         await pause(60);
       }
       assert(acknowledgement, 'Fresh actual focused GPU draw and visible panel required');
