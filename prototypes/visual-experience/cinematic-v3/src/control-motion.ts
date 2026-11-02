@@ -4,7 +4,7 @@ export interface ControlMotionOptions {
   motion: MotionCoordinator;
   wake(): void;
   root: HTMLElement;
-  /** Explicit Copy controls only; tag before insertion. Never a blanket button selector. */
+  /** Explicit host-feedback controls only; tag before insertion. Never a blanket button selector. */
   selector?: string;
 }
 const variables = [
@@ -48,7 +48,7 @@ export function createControlMotion({
   motion,
   wake,
   root,
-  selector = "[data-native-copy-control]",
+  selector = "[data-native-copy-control],[data-aerynth-motion-control]",
 }: ControlMotionOptions) {
   const prefix = `control-motion:${++instance}:`,
     owner = {},
@@ -185,7 +185,9 @@ export function createControlMotion({
   function candidates(scope: HTMLElement) {
     const found = [...scope.querySelectorAll<HTMLElement>(selector)];
     if (scope.matches(selector)) found.push(scope);
-    return found.filter((node) => node.matches("[data-native-copy-control]"));
+    return found.filter((node) =>
+      node.matches("[data-native-copy-control],[data-aerynth-motion-control]"),
+    );
   }
   const observer = new Observer((records) => {
     if (disposed) return;

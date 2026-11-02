@@ -119,7 +119,7 @@ const childList = (addedNodes = [], removedNodes = []) => [
   { type: "childList", addedNodes, removedNodes },
 ];
 
-test("only explicitly tagged Copy controls are bound, without changing semantics or existing callbacks", () => {
+test("only explicitly tagged controls are bound, without changing semantics or existing callbacks", () => {
   const f = setup();
   try {
     const copy = f.copy(),
@@ -164,6 +164,25 @@ test("only explicitly tagged Copy controls are bound, without changing semantics
     view.dispose();
     copy.fire("click");
     assert.equal(clicked, 2, "semantic handler survives adapter teardown");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("a generic experience control borrows the same shared feedback without claiming clipboard authority", () => {
+  const f = setup();
+  try {
+    const control = f.dom.doc.createElement("button");
+    control.dataset.aerynthMotionControl = "true";
+    control.textContent = "Add checklist item";
+    f.dom.root.append(control);
+    const view = f.mount();
+    assert.equal(f.motion.bodies.size, 1);
+    control.dispatchEvent({ type: "pointerenter" });
+    f.tick(view, 2);
+    const energy = Number(control.style.getPropertyValue("--control-hover"));
+    assert(energy > 0 && energy < 1);
+    assert.equal(control.dataset.nativeCopyControl, undefined);
   } finally {
     f.cleanup();
   }

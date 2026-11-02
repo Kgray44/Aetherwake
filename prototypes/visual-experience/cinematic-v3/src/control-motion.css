@@ -1,11 +1,10 @@
 /* Explicitly bound secondary controls; all interpolation comes from shared MC. */
 :root
   body
-  [data-native-copy-control].aw-control-motion:is(
-    button,
-    input,
-    [role="button"]
-  ) {
+  :is(
+    [data-native-copy-control],
+    [data-aerynth-motion-control]
+  ).aw-control-motion:is(button, input, [role="button"]) {
   --control-hover: 0;
   --control-focus: 0;
   --control-press: 0;
@@ -31,15 +30,26 @@
     );
   opacity: calc(1 - var(--control-disabled) * 0.56);
 }
-:root body [data-native-copy-control].aw-control-motion:focus-visible {
+:root
+  body
+  :is(
+    [data-native-copy-control],
+    [data-aerynth-motion-control]
+  ).aw-control-motion:focus-visible {
   outline: 2px solid #dbe5f3;
   outline-offset: 2px;
 }
 @media (forced-colors: active) {
-  [data-native-copy-control].aw-control-motion {
+  :is(
+    [data-native-copy-control],
+    [data-aerynth-motion-control]
+  ).aw-control-motion {
     forced-color-adjust: auto;
   }
-  [data-native-copy-control].aw-control-motion:focus-visible {
+  :is(
+      [data-native-copy-control],
+      [data-aerynth-motion-control]
+    ).aw-control-motion:focus-visible {
     outline: 2px solid Highlight !important;
   }
 }
