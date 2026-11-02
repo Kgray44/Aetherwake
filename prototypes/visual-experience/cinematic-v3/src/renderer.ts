@@ -1,4 +1,10 @@
 import * as THREE from "three";
+import {
+  contourPoint,
+  defaultSurfaceShape,
+  type SurfaceShape,
+} from "./surface-contour.ts";
+import { compareSurfaceStack } from "./material-compositing.ts";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import {
   OrbitalArchitecture,
@@ -31,6 +37,9 @@ export type VelaState =
   | "unavailable";
 
 export interface SurfacePose {
+  shape?: SurfaceShape;
+  rotation?: number;
+  zIndex?: number;
   id: string;
   x: number;
   y: number;
@@ -73,6 +82,8 @@ export interface EnvironmentFrame {
   width: number;
   height: number;
   surfaces?: readonly SurfacePose[];
+  presencePlacement?: PresenceBounds;
+  presenceScale?: number;
 }
 
 // Openness, structural tension, directed flow. These are expression studies,
@@ -106,6 +117,7 @@ interface FolioVisual {
   height: number;
   unfold: number;
   kind: NonNullable<SurfacePose["kind"]>;
+  shape: SurfaceShape;
 }
 
 const ribbonVertex = /* glsl */ `
@@ -377,6 +389,9 @@ export class Environment {
   private readonly folioById = new Map<string, FolioVisual>();
   private readonly surfaceProjection = new THREE.Matrix4();
   private readonly surfaceRotation = new THREE.Matrix4();
+  private readonly surfaceYaw = new THREE.Matrix4();
+  private readonly folioContour = { x: 0, y: 0, nx: 0, ny: 0 };
+  private readonly surfaceOrder: SurfacePose[] = [];
   private readonly surfaceWorld = new THREE.Matrix4();
   private readonly contactScale = new THREE.Vector3();
   private readonly foregroundAmbient = new THREE.HemisphereLight(
@@ -941,20 +956,21 @@ export class Environment {
         height: 0,
         unfold: -1,
         kind: "conversation",
+        shape: "folio",
       });
     }
   }
 
   /** Three front rings reveal shallow optical curvature above a fixed bevel/backing. */
   private folioGeometry(rimOnly: boolean) {
-    const n = 32,
+    const n = 64,
       rings = rimOnly ? 2 : 6;
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array((n * rings + (rimOnly ? 0 : 2)) * 3);
     const normals = new Float32Array(positions.length);
     for (let ring = 0; ring < rings; ring++) {
       for (let j = 0; j < n; j++) {
-        const angle = (Math.floor(j / 8) + (j % 8) / 8) * Math.PI * 0.5;
+        const angle = (j / n) * Math.PI * 2;
         const radial = rimOnly
           ? 0
           : ring < 3
@@ -1032,8 +1048,9 @@ export class Environment {
     rimOnly: boolean,
     kind: NonNullable<SurfacePose["kind"]>,
     unfold: number,
+    shape: SurfaceShape = defaultSurfaceShape(kind),
   ) {
-    const n = 32,
+    const n = 64,
       rings = rimOnly ? 2 : 6;
     const position = geometry.getAttribute("position") as THREE.BufferAttribute;
     const normal = geometry.getAttribute("normal") as THREE.BufferAttribute;
@@ -1042,7 +1059,7 @@ export class Environment {
         ? 12 * (1 - unfold) ** 2
         : kind === "conversation"
           ? 3.4 * (1 - unfold)
-          : 0;
+          : 2.4 * (1 - unfold);
     for (let ring = 0; ring < rings; ring++) {
       const inset = rimOnly
         ? ring === 0
@@ -1070,18 +1087,17 @@ export class Environment {
       const faceScale =
         !rimOnly && ring < 3 ? (ring === 0 ? 1 : ring === 1 ? 0.66 : 0.33) : 1;
       for (let j = 0; j < n; j++) {
-        const corner = Math.floor(j / 8);
-        const angle = (corner + (j % 8) / 8) * Math.PI * 0.5;
-        const baseCorner = kind === "research" ? 7 : corner === 0 ? 22 : 7;
-        const radius = Math.max(2, baseCorner + 4 - inset);
-        const round = kind === "research" ? 1 - unfold : 0;
-        const radiusX = halfW * round + radius * (1 - round);
-        const radiusY = halfH * round + radius * (1 - round);
-        const centerX =
-          (corner === 0 || corner === 3 ? 1 : -1) * (halfW - radiusX);
-        const centerY = (corner < 2 ? 1 : -1) * (halfH - radiusY);
-        const x = (centerX + Math.cos(angle) * radiusX) * faceScale;
-        const y = (centerY + Math.sin(angle) * radiusY) * faceScale;
+        const point = contourPoint(
+          width,
+          height,
+          shape,
+          unfold,
+          j / n,
+          5 - inset,
+          this.folioContour,
+        );
+        const x = point.x * faceScale,
+          y = point.y * faceScale;
         position.setXYZ(ring * n + j, x, y, z);
         if (!rimOnly && ring < 3) {
           const nx = (2 * dome * x) / (halfW * halfW);
@@ -1111,6 +1127,7 @@ export class Environment {
     lift: number,
     yaw: number,
     baselineDepth: number,
+    rotation = 0,
   ) {
     const worldPerPixel =
       (2 *
@@ -1140,7 +1157,10 @@ export class Environment {
       0,
       1,
     );
-    this.surfaceRotation.makeRotationY(THREE.MathUtils.degToRad(yaw));
+    this.surfaceRotation.makeRotationZ(-THREE.MathUtils.degToRad(rotation));
+    this.surfaceRotation.multiply(
+      this.surfaceYaw.makeRotationY(THREE.MathUtils.degToRad(yaw)),
+    );
     this.surfaceWorld
       .multiplyMatrices(this.camera.matrixWorld, this.surfaceProjection)
       .multiply(this.surfaceRotation);
@@ -1174,8 +1194,11 @@ export class Environment {
       }
     if (surfaces.length > this.folios.length)
       this.buildFolios(surfaces.length - this.folios.length);
-    for (let i = 0; i < surfaces.length; i++) {
-      const pose = surfaces[i];
+    this.surfaceOrder.length = 0;
+    for (const pose of surfaces) this.surfaceOrder.push(pose);
+    this.surfaceOrder.sort(compareSurfaceStack);
+    for (let i = 0; i < this.surfaceOrder.length; i++) {
+      const pose = this.surfaceOrder[i];
       if (
         !Number.isFinite(pose.x) ||
         !Number.isFinite(pose.y) ||
@@ -1196,8 +1219,13 @@ export class Environment {
       }
       visual.root.visible = true;
       visual.contact.visible = livingWeight > 0.001;
-      const opacity = THREE.MathUtils.clamp(pose.opacity ?? 1, 0, 1);
+      const opacity = Number.isFinite(pose.opacity)
+        ? THREE.MathUtils.clamp(pose.opacity!, 0, 1)
+        : 1;
       const kind = pose.kind ?? "conversation";
+      const shape = pose.shape ?? defaultSurfaceShape(kind);
+      visual.root.renderOrder = i + 10;
+      visual.structure.root.renderOrder = i + 10;
       const unfold = Number.isFinite(pose.unfold)
         ? THREE.MathUtils.clamp(pose.unfold, 0, 1)
         : 0;
@@ -1205,14 +1233,24 @@ export class Environment {
         visual.width !== pose.w ||
         visual.height !== pose.h ||
         visual.unfold !== unfold ||
-        visual.kind !== kind
+        visual.kind !== kind ||
+        visual.shape !== shape
       ) {
-        this.shapeFolio(visual.slab, pose.w, pose.h, false, kind, unfold);
-        this.shapeFolio(visual.rim, pose.w, pose.h, true, kind, unfold);
+        this.shapeFolio(
+          visual.slab,
+          pose.w,
+          pose.h,
+          false,
+          kind,
+          unfold,
+          shape,
+        );
+        this.shapeFolio(visual.rim, pose.w, pose.h, true, kind, unfold, shape);
         visual.width = pose.w;
         visual.height = pose.h;
         visual.unfold = unfold;
         visual.kind = kind;
+        visual.shape = shape;
       }
       visual.root.matrix.copy(
         this.surfaceMatrix(
@@ -1221,6 +1259,7 @@ export class Environment {
           pose.lift,
           pose.yaw,
           7,
+          pose.rotation ?? 0,
         ),
       );
       visual.root.matrixWorldNeedsUpdate = true;
@@ -1229,14 +1268,21 @@ export class Environment {
         kind,
         unfold,
         selected: pose.selected,
+        emphasis: THREE.MathUtils.clamp(pose.lift / 30, 0, 1),
         quality,
         architectureWeight,
       });
-      for (const material of Object.values(visual.materials))
+      for (const material of Object.values(visual.materials)) {
         material.opacity *= opacity;
+        // Canonical2.5D resource layers paint back-to-front as whole objects.
+        // Real cambered geometry/normals still govern physical light response.
+        material.depthTest = false;
+        material.depthWrite = false;
+      }
       visual.root.visible = opacity > 0.01;
       visual.structure.update({
         kind,
+        shape,
         width: pose.w,
         height: pose.h,
         unfold,
@@ -1672,6 +1718,44 @@ export class Environment {
       if (compact)
         this.vela.scale.setScalar(THREE.MathUtils.lerp(0.78, 0.2, focus));
     }
+    const presenceScale = Number.isFinite(frame.presenceScale)
+      ? THREE.MathUtils.clamp(frame.presenceScale!, 0.2, 2)
+      : 1;
+    this.vela.scale.multiplyScalar(presenceScale);
+    this.updatePresenceBounds();
+    const placement = frame.presencePlacement;
+    if (
+      placement &&
+      [placement.x, placement.y, placement.w, placement.h].every(
+        Number.isFinite,
+      ) &&
+      placement.w > 0 &&
+      placement.h > 0
+    ) {
+      const fit = Math.min(
+        placement.w / Math.max(1, this.projectedPresence.w),
+        placement.h / Math.max(1, this.projectedPresence.h),
+      );
+      this.vela.scale.multiplyScalar(fit);
+      this.updatePresenceBounds();
+      const cx = placement.x + placement.w * 0.5,
+        cy = placement.y + placement.h * 0.5;
+      this.presencePoint
+        .copy(this.vela.position)
+        .applyMatrix4(this.camera.matrixWorldInverse);
+      const depth = -this.presencePoint.z;
+      this.presencePoint.x =
+        ((cx / width) * 2 - 1) *
+        depth *
+        Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5)) *
+        this.camera.aspect;
+      this.presencePoint.y =
+        (1 - (cy / height) * 2) *
+        depth *
+        Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5));
+      this.presencePoint.applyMatrix4(this.camera.matrixWorld);
+      this.vela.position.copy(this.presencePoint);
+    }
     this.updateSceneLighting(frame, focus, settle, pointerX);
     this.updatePresenceBounds();
     if (focus > 0 && this.projectedPresence.w > maxFocusedWidth) {
@@ -1758,6 +1842,19 @@ export class Environment {
           meaning:
             "Mirrors the existing architectural directional source; its background light is unchanged.",
         },
+        surfaces: instrumentResources
+          .filter((f) => f.root.visible)
+          .map((f) => ({
+            id: f.id,
+            stackRank: f.root.renderOrder,
+            shape: f.shape,
+            faceOpacity: f.face.opacity,
+            faceRoughness: f.face.roughness,
+            clearcoat: f.face.clearcoat,
+            reflection: f.face.envMapIntensity,
+            depthTest: f.face.depthTest,
+            materialIdentity: f.face.uuid,
+          })),
         structures,
         allocationMeaning:
           "Live constructor-owned buffers/materials, including three legacy slab/rim/contact geometries and one contact shader per resource; renderer caches are reported separately.",

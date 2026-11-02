@@ -31,6 +31,7 @@ Tab/Enter operate the controls; Escape closes the foremost utility surface or re
 
 - [Current celestial environment design and critical review](CELESTIAL-ENVIRONMENT-ADDENDUM-V3.5.md)
 - [Current foreground integration and critical review](FOREGROUND-INTEGRATION-V3.5.md)
+- [Optical material continuity correction and current acceptance work](MATERIAL-CONTINUITY-V3.5.md)
 - [Instrument evidence index](evidence-instruments/README.md) and [performance report](PERFORMANCE-INSTRUMENTS-V3.5.md)
 - [Celestial evidence index](evidence-celestial/README.md)
 - [Celestial performance report](PERFORMANCE-CELESTIAL-V3.5.md)

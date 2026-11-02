@@ -1,11 +1,15 @@
 import { installApplication, type Application } from "./application";
-import type { DesktopSnapshot } from "../../../application-contract/contracts.ts";
+import type {
+  DesktopSnapshot,
+  DesktopCommand,
+} from "../../../application-contract/contracts.ts";
 import type { Resource } from "./store";
 import "./style.css";
 import { motionPolicy } from "./policy";
 import { deriveSceneState } from "./scene-state";
 import { registerScene, retargetScene, sceneWeights } from "./scene-transition";
-import { overlappingSurfaceIds } from "./material-occlusion";
+import { MaterialCompositor } from "./material-compositing";
+import { defaultSurfaceShape, surfaceBorderRadius } from "./surface-contour";
 import type { ArchitectureConcept } from "./orbital-architecture";
 import type { CelestialStudy } from "./celestial-environment";
 import type { InstrumentStudy } from "./instrument-materials";
@@ -40,6 +44,7 @@ app.innerHTML = `
   <div class="scene-vignette" aria-hidden="true"></div>
   <div class="window-drag" aria-hidden="true"><span>AERYNTH <i>·</i> THE QUIET ATELIER</span></div>
   <header class="topbar">
+    <svg width="0" height="0" aria-hidden="true" class="logo-filter"><defs><filter id="logo-clear-background" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 8 8 8 0 0"/></filter></defs></svg>
     <div class="brand"><img src="./aerynth-mark-master.png" alt="Approved Aerynth mark"><span>AERYNTH<small>LIQUID INTELLIGENCE / V3.5</small></span></div>
     <div class="place"><span class="tiny">WORKSPACE</span><span>The quiet atelier</span></div>
     <nav class="scene-navigation" aria-label="Environment"><button data-scene="architecture" aria-pressed="true">Architecture</button><button data-scene="living" aria-pressed="false">Living field</button></nav>
@@ -98,6 +103,7 @@ const motion = new MotionCoordinator();
 registerScene(motion, "architecture");
 const elements = new Map<string, HTMLElement>();
 const poseStyleCache = new Map<string, string>();
+const materialCompositor = new MaterialCompositor();
 let selected: string | null = null,
   expanded: string | null = null,
   quiet = false;
@@ -633,7 +639,9 @@ function replaceWorkspace(state: DesktopSnapshot) {
   for (const block of state.blocks) {
     const resource = state.resources.find((r) => r.id === block.resource_id)!;
     const displayType: Resource["type"] =
-      block.shape === "circle"
+      block.shape === "circle" ||
+      block.shape === "lens" ||
+      resource.kind === "research"
         ? "research"
         : resource.kind === "conversation"
           ? "conversation"
@@ -975,14 +983,40 @@ declare global {
 window.aerynthHost?.onActive(lifecycle);
 
 function renderDOM() {
-  const projected = order.map((id) => ({ id, ...motion.pose(id) }));
-  const overlaps = overlappingSurfaceIds(projected);
+  const projected = order.map((id) => {
+    const p = motion.pose(id),
+      rest = base(id),
+      block = application?.block(id);
+    const unfold = clamp(
+      (p.h - rest.h) / Math.max(1, Math.max(250, innerHeight - 310) - rest.h),
+      0,
+      1,
+    );
+    return {
+      id,
+      ...p,
+      unfold,
+      shape: block?.shape ?? defaultSurfaceShape(resources.get(id)?.type),
+      rotation: (block?.rotation ?? 0) * (1 - unfold),
+      zIndex:
+        expanded === id
+          ? 200000
+          : desktopMode
+            ? (block?.z ?? 0)
+            : drag?.id === id
+              ? 150000
+              : selected === id
+                ? 100000
+                : 3,
+    };
+  });
+  const composite = materialCompositor.update(projected);
   for (const p of projected) {
     const id = p.id,
       el = elements.get(id)!;
-    const materialOverlap = String(overlaps.has(id));
-    if (el.dataset.materialOverlap !== materialOverlap)
-      el.dataset.materialOverlap = materialOverlap;
+    const compositing = composite.find((entry) => entry.id === id)!;
+    if (el.dataset.materialCovered !== String(compositing.covered))
+      el.dataset.materialCovered = String(compositing.covered);
     const rest = base(id);
     const openHeight = Math.max(250, innerHeight - 310);
     const unfold = clamp(
@@ -1002,7 +1036,7 @@ function renderDOM() {
       p.y + p.h < 120 ||
       p.x > innerWidth ||
       p.y > innerHeight - 100;
-    const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateY(${p.yaw}deg);z-index:${expanded === id ? 200000 : drag?.id === id ? 150000 : selected === id ? 100000 : desktopMode ? 20000 + (application?.block(id)?.z ?? 0) : 3};`;
+    const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateZ(${p.rotation}deg) rotateY(${p.yaw}deg);z-index:${compositing.rank + 3};border-radius:${surfaceBorderRadius(p.shape, p.w, p.h, unfold)};clip-path:${compositing.clipPath || "none"};`;
     if (poseStyleCache.get(id) !== style) {
       el.style.cssText = style;
       poseStyleCache.set(id, style);
@@ -1098,6 +1132,28 @@ function tick(now: number) {
                 ? "conversation"
                 : resources.get(id)!.type,
             ...p,
+            shape:
+              application?.block(id)?.shape ??
+              defaultSurfaceShape(resources.get(id)?.type),
+            rotation:
+              (application?.block(id)?.rotation ?? 0) *
+              (1 -
+                clamp(
+                  (p.h - rest.h) /
+                    Math.max(1, Math.max(250, innerHeight - 310) - rest.h),
+                  0,
+                  1,
+                )),
+            zIndex:
+              expanded === id
+                ? 200000
+                : desktopMode
+                  ? (application?.block(id)?.z ?? 0)
+                  : drag?.id === id
+                    ? 150000
+                    : selected === id
+                      ? 100000
+                      : 3,
             selected: id === selected,
             unfold: clamp(
               (p.h - rest.h) /
@@ -1147,9 +1203,29 @@ function tick(now: number) {
         width: innerWidth,
         height: innerHeight,
         surfaces,
+        presencePlacement: (
+          application as
+            | (Application & {
+                presence?: () => { x: number; y: number; w: number; h: number };
+              })
+            | null
+        )?.presence?.(),
+        presenceScale: desktopMode ? 0.65 : 1,
         ambientStrength: scene.ambientStrength,
       });
-      const presence = environment.presenceBounds();
+      const presence =
+        (
+          application as
+            | (Application & {
+                presenceCard?: () => {
+                  x: number;
+                  y: number;
+                  w: number;
+                  h: number;
+                };
+              })
+            | null
+        )?.presenceCard?.() ?? environment.presenceBounds();
       const presenceWidth = Math.max(44, presence.w),
         presenceHeight = Math.max(44, presence.h);
       Object.assign($("#vela").style, {
@@ -1225,8 +1301,10 @@ function controller() {
       poses: Object.fromEntries(order.map((id) => [id, motion.pose(id)])),
       metrics: { ...metrics },
       gpu: environment?.stats(),
+      compositing: materialCompositor.diagnostics(),
     }),
     application: () => application?.snapshot(),
+    execute: (command: DesktopCommand) => application?.run(command),
     flush: () => application?.flush(),
     select,
     expand,

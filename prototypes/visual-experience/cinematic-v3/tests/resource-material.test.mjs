@@ -25,7 +25,15 @@ new Function("require", "exports", "module", outputText)(
 const { Environment } = compiledModule.exports;
 const makeGeometry = (rim) => Environment.prototype.folioGeometry.call({}, rim);
 const shapeGeometry = (geometry, w, h, rim, kind, unfold) =>
-  Environment.prototype.shapeFolio.call({}, geometry, w, h, rim, kind, unfold);
+  Environment.prototype.shapeFolio.call(
+    { folioContour: { x: 0, y: 0, nx: 0, ny: 0 } },
+    geometry,
+    w,
+    h,
+    rim,
+    kind,
+    unfold,
+  );
 
 test("resource faces and rims retain finite unit normals, valid indices and outward winding across transformations", () => {
   const a = new THREE.Vector3();
@@ -151,8 +159,8 @@ test("the optical research face flattens continuously into a reading plane witho
     }
     shapeGeometry(geometry, 280, 180, false, "note", 0);
     assert(
-      Math.abs(frontHeight()) < 1e-6,
-      "the matte note must retain a flat face",
+      frontHeight() > 2 && frontHeight() < 3,
+      "the optical note has restrained real camber at rest",
     );
   } finally {
     geometry.dispose();

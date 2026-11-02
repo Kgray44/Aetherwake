@@ -7,6 +7,7 @@ export interface InstrumentMaterialFrame {
   kind: InstrumentKind;
   unfold: number;
   selected: boolean;
+  emphasis?: number;
   quality: "cinematic" | "balanced" | "efficient";
   architectureWeight: number;
 }
@@ -104,17 +105,21 @@ export function updateInstrumentMaterials(
   const glass = input.study !== "engineered";
   const efficient = input.quality === "efficient";
   const architecture = THREE.MathUtils.clamp(input.architectureWeight, 0, 1);
+  const emphasis = Number.isFinite(input.emphasis)
+    ? THREE.MathUtils.clamp(input.emphasis!, 0, 1)
+    : 0;
   const reflection =
     profile.reflection *
     (1 - reading * 0.6) *
     (efficient ? 0.65 : 1) *
-    (1.1 - architecture * 0.1);
+    (1.1 - architecture * 0.1) *
+    (1 + emphasis * 0.1);
   const face = materials.face;
   face.color.setHex(note ? (glass ? 0x101019 : 0x101419) : profile.face);
   face.roughness = THREE.MathUtils.lerp(
     note
       ? glass
-        ? 0.46
+        ? 0.21
         : 0.72
       : lens && input.study === "optical"
         ? 0.13
@@ -128,11 +133,10 @@ export function updateInstrumentMaterials(
       : 0.22
     : profile.metalness * (1 - reading * 0.3);
   face.clearcoat =
-    (note ? (glass ? 0.72 : 0.16) : profile.coat) * (1 - reading * 0.68);
+    (note ? (glass ? 1 : 0.16) : profile.coat) * (1 - reading * 0.68);
   face.clearcoatRoughness =
     (glass ? (lens ? 0.12 : 0.15) : 0.23) + reading * 0.22;
-  face.specularIntensity =
-    (glass ? (note ? 0.76 : 1) : note ? 0.38 : 0.88) - reading * 0.3;
+  face.specularIntensity = (glass ? 1 : note ? 0.38 : 0.88) - reading * 0.3;
   face.envMapIntensity = reflection;
   face.ior = 1.48;
   face.opacity = 1;
@@ -152,9 +156,7 @@ export function updateInstrumentMaterials(
     // the actual cambered bevel supplies selective reflections, not a uniform
     // bright ring from the studio environment's large reflection panels.
     material.envMapIntensity =
-      reflection *
-      (input.study === "engineered" ? 0.5 : 0.72) *
-      (input.selected ? 1.08 : 0.9);
+      reflection * (input.study === "engineered" ? 0.5 : 0.72) * 0.95;
     material.emissiveIntensity = 0;
     material.opacity = glass
       ? THREE.MathUtils.lerp(
@@ -214,9 +216,7 @@ export function updateInstrumentMaterials(
   materials.accent.envMapIntensity = reflection;
   materials.accent.emissive.setHex(note ? 0x5f4526 : 0x2d7189);
   materials.accent.emissiveIntensity =
-    input.study === "composite"
-      ? (input.selected ? 0.12 : 0.07) * (1 - reading)
-      : 0;
+    input.study === "composite" ? (0.07 + emphasis * 0.05) * (1 - reading) : 0;
   materials.accent.opacity = glass ? 0.68 + reading * 0.32 : 1;
   materials.accent.depthWrite = !glass;
 }

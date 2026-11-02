@@ -1,9 +1,15 @@
 import * as THREE from "three";
+import {
+  contourPoint,
+  defaultSurfaceShape,
+  type SurfaceShape,
+} from "./surface-contour.ts";
 
 export type InstrumentKind = "conversation" | "research" | "note";
 export type InstrumentStudy = "optical" | "engineered" | "composite";
 export interface InstrumentFrame {
   kind: InstrumentKind;
+  shape?: SurfaceShape;
   width: number;
   height: number;
   unfold: number;
@@ -238,6 +244,8 @@ export class InstrumentStructure {
     });
   }
 
+  private shape: SurfaceShape = "folio";
+
   private contour(
     width: number,
     height: number,
@@ -246,27 +254,15 @@ export class InstrumentStructure {
     phase: number,
     outset: number,
   ) {
-    const p = phase >= 1 ? 0 : phase;
-    const corner = Math.min(3, Math.floor(p * 4));
-    const angle = p * Math.PI * 2;
-    const halfW = Math.max(3, width * 0.5 + outset),
-      halfH = Math.max(3, height * 0.5 + outset);
-    const cornerBase = kind === "research" ? 7 : corner === 0 ? 22 : 7;
-    const radius = Math.max(2, Math.min(cornerBase + outset - 1, halfW, halfH));
-    const round = kind === "research" ? 1 - unfold : 0;
-    const rx = halfW * round + radius * (1 - round),
-      ry = halfH * round + radius * (1 - round);
-    const c = Math.cos(angle),
-      s = Math.sin(angle);
-    this.contourPoint.x =
-      (corner === 0 || corner === 3 ? 1 : -1) * (halfW - rx) + c * rx;
-    this.contourPoint.y = (corner < 2 ? 1 : -1) * (halfH - ry) + s * ry;
-    const nx = c / rx,
-      ny = s / ry,
-      inv = 1 / Math.hypot(nx, ny);
-    this.contourPoint.nx = nx * inv;
-    this.contourPoint.ny = ny * inv;
-    return this.contourPoint;
+    return contourPoint(
+      width,
+      height,
+      this.shape,
+      unfold,
+      phase,
+      outset,
+      this.contourPoint,
+    );
   }
 
   private shapeBand(
@@ -390,9 +386,11 @@ export class InstrumentStructure {
       this.height !== frame.height ||
       this.kind !== frame.kind ||
       this.unfold !== unfold ||
-      this.study !== frame.study;
+      this.study !== frame.study ||
+      this.shape !== (frame.shape ?? defaultSurfaceShape(frame.kind));
     this.quality = frame.quality;
     if (reshaped) {
+      this.shape = frame.shape ?? defaultSurfaceShape(frame.kind);
       this.width = frame.width;
       this.height = frame.height;
       this.kind = frame.kind;
@@ -475,8 +473,7 @@ export class InstrumentStructure {
     this.frameMesh.visible = true;
     this.backMesh.visible = frame.study !== "optical";
     this.seatMesh.visible =
-      frame.kind === "research" ||
-      (!efficient && frame.kind !== "note" && frame.study !== "engineered");
+      frame.kind === "research" || (!efficient && frame.study !== "engineered");
     this.retainers.visible = !efficient && frame.study === "engineered";
     this.inlays.visible =
       !efficient && (frame.kind === "note" || frame.study === "composite");

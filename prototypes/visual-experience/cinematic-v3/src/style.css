@@ -107,6 +107,12 @@ body[data-study="architecture"] .scene-vignette {
   width: 64px;
   height: 64px;
   object-fit: contain;
+  mix-blend-mode: screen;
+  filter: url(#logo-clear-background);
+}
+.logo-filter {
+  position: absolute;
+  pointer-events: none;
 }
 .brand > span {
   font-size: 17px;
@@ -1131,29 +1137,28 @@ body:not(.focused):has(#stream:not([hidden])) #vela .vela-label {
     inset 0 1px 0 #d4e3f018;
   background: #0e141e;
 }
-/* Compact DOM content is a quiet veil over an opaque physical resource face.
-   Reading surfaces become fully opaque through the existing unfold coordinate.
-   Projected overlap independently makes the DOM veil opaque: another resource's
-   DOM text sits above the GPU canvas and cannot be occluded by its backing.
-   Without confirmed physical faces (including Efficient/graphics fallback),
-   the original opaque CSS material remains the complete legibility fallback. */
-.folio[data-material-overlap="true"] {
-  --material-overlap: 1;
-}
+/* Opaque GPU substrates protect content; rear DOM paint and hit regions are
+   clipped by the canonical front silhouette. Ordinary overlap never changes
+   this optical veil. Focus protects only its central reading region. */
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio:not(.receded) {
-  --material-clarity: max(var(--unfold, 0), var(--material-overlap, 0));
-  background: rgba(8, 13, 21, calc(0.12 + 0.88 * var(--material-clarity)));
+  background: rgba(8, 13, 21, 0.06);
   border-color: transparent;
   box-shadow: none;
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
-  .folio.research:not(.receded) {
-  background: rgba(7, 13, 23, calc(0.12 + 0.88 * var(--material-clarity)));
+  .folio:not(.receded)
+  .working-content {
+  background: #0b1019;
+  border-radius: 7px;
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
-  .folio.note:not(.receded) {
-  background: rgba(13, 16, 21, calc(0.18 + 0.82 * var(--material-clarity)));
+  .folio:not(.receded)
+  .folio-top {
+  background: rgba(4, 7, 14, 0.58);
+  border-radius: 5px;
+  padding: 4px 6px;
+  margin: -4px -6px 0;
 }
 body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   .folio:not(.receded)::before {

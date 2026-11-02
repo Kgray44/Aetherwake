@@ -127,8 +127,8 @@ test("study changes preserve material identity while reading reduces reflection 
     );
     updateInstrumentMaterials(materials, { ...base, kind: "note" });
     assert(
-      materials.face.roughness > 0.35,
-      "the memory slate stays quieter than the polished lens while retaining its optical coat",
+      materials.face.roughness > 0.18 && materials.face.roughness < 0.3,
+      "the memory slate retains a slightly quieter coated-glass response rather than a matte substrate",
     );
     assert(
       materials.face.color.b >= materials.face.color.r,
