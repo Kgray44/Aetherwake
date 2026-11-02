@@ -248,8 +248,15 @@ export interface VelaState {
   receipts: ActionReceipt[]; preferences: AttentionPreferences; attention: AttentionItem[];
   lastPresenceAt: string | null; coverage: 'authorized-app-events-only';
   adaptation?: AdaptationState;
+  presentation?: VelaPresentationState;
   applicationContext?: { currentProjectId:string|null;currentWorkspaceId:string|null;references:ResourceRef[] };
 }
+/** Durable view references only; dismissing a manifestation never changes canonical history or action state. */
+export interface VelaPresentationState {
+  schemaVersion: 1; version: number; view: 'current' | 'history'; selectedRequestId: string | null;
+  dismissedRequestIds: string[]; pinnedRequestIds: string[];
+}
+export type VelaPresentationPatch = Partial<Pick<VelaPresentationState, 'view' | 'selectedRequestId' | 'dismissedRequestIds' | 'pinnedRequestIds'>>;
 export type AdaptationLevel = 'manual' | 'suggestive' | 'assisted' | 'adaptive';
 export type PreferenceCategory = 'presentation' | 'organization';
 export type PreferenceKey = 'presentation.density' | 'organization.defaultPreset';
@@ -293,6 +300,7 @@ export interface VelaClient {
   search(query: string): Promise<ResourceRef[]>;
   request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean; commandId?: string }): Promise<VelaRequest>;
   local?(input: { intent: string; commandId: string }): Promise<VelaLocalDispatch>;
+  presentation?(input: { expectedVersion: number; patch: VelaPresentationPatch }): Promise<VelaPresentationState>;
   native(input: { intent: string; action: VelaNativeAction }): Promise<VelaPlan>;
   review(input: { planId: string; fingerprint: string; decision: 'approve' | 'reject' }): Promise<VelaPlan>;
   apply(planId: string): Promise<VelaPlan>;
