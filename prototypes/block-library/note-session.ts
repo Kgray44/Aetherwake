@@ -22,6 +22,7 @@ export class NoteSession {
   private value: NoteSessionState;
   private listeners = new Set<(state: NoteSessionState) => void>();
   private sequence = 0;
+  private committedSequence = 0;
   private persistedSequence = -1;
   private baseVersion: number;
   private draftRevision = 0;
@@ -52,6 +53,11 @@ export class NoteSession {
   }
   get hasObservers(): boolean {
     return this.listeners.size > 0;
+  }
+  /** Dirty also includes an untouched recovered draft. Only edit() advances
+   * this sequence; opening/reading a normal card cannot authorize a commit. */
+  get hasPendingEdits(): boolean {
+    return this.sequence !== this.committedSequence;
   }
   subscribe(listener: (state: NoteSessionState) => void) {
     this.listeners.add(listener);
@@ -148,9 +154,20 @@ export class NoteSession {
     this.fail(error);
     if (this.value.phase === "conflict") this.fenced = true;
   }
+  /** Automatic host/navigation save. Untouched recovery remains a draft until
+   * an explicit Save/Keep my text decision; new input retains normal autosave. */
+  flushEdits(): Promise<void> {
+    return this.commitPending(false);
+  }
+  /** Explicit Save, including deliberate promotion of a recovered draft. */
   flush(): Promise<void> {
+    return this.commitPending(true);
+  }
+  private commitPending(includeRecovered: boolean): Promise<void> {
     return this.queue(async () => {
       try {
+        await this.ready;
+        if (!includeRecovered && !this.hasPendingEdits) return;
         await this.persistNow();
         if (this.value.phase === "conflict")
           throw new Error("note_revision_conflict");
@@ -169,6 +186,7 @@ export class NoteSession {
           // Edits typed during our own commit descend from that commit. Keep and persist them.
           this.value.dirty = sequence !== this.sequence;
           this.persistedSequence = sequence;
+          this.committedSequence = sequence;
           if (this.value.dirty) await this.persistNow();
         }
         this.value.phase = "saved";
@@ -216,6 +234,7 @@ export class NoteSession {
         this.baseVersion = doc.resource.version;
         this.draftRevision = doc.draftRevision;
         this.value.dirty = sequence !== this.sequence;
+        this.committedSequence = sequence;
         this.persistedSequence = this.value.dirty ? -1 : this.sequence;
         if (!this.value.dirty) this.value.content = doc.resource.content;
         this.value.phase = this.value.dirty ? "saving" : "saved";
@@ -235,6 +254,7 @@ export class NoteSession {
       await this.ready;
       if (this.value.dirty) return;
       this.sequence = 0;
+      this.committedSequence = 0;
       try {
         await this.load();
       } catch (error) {

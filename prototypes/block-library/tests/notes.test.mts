@@ -102,6 +102,112 @@ test("editor recovers the durable draft and commits through the same canonical n
   assert.equal(f.service.readNote(note.id).draft, null);
 });
 
+test("opening and automatically draining an untouched recovery after restart preserves exact canonical and draft revisions until explicit Save", async (t) => {
+  const directory = mkdtempSync(join(tmpdir(), "aerynth-note-recovery-nav-")),
+    path = join(directory, "synthetic.sqlite");
+  let f = fixture(path);
+  t.after(() => {
+    f.kernel.close();
+    const target = resolve(directory);
+    assert.ok(target.startsWith(resolve(tmpdir()) + "\\"));
+    rmSync(target, { recursive: true, force: true });
+  });
+  const note = f.kernel.createNote(
+      "Synthetic untouched recovery",
+      "Synthetic committed text",
+    ),
+    draft = f.service.saveNoteDraft({
+      resourceId: note.id,
+      expectedDraftVersion: 0,
+      baseResourceVersion: 1,
+      content: "Synthetic separate recovered draft",
+    });
+  f.kernel.close();
+  f = fixture(path);
+  const before = f.service.readNote(note.id),
+    session = new NoteSession(note.id, sessionPort(f), before.resource);
+  await session.flushEdits();
+  assert.equal(session.snapshot().phase, "recovered");
+  assert.equal(session.snapshot().dirty, true);
+  assert.equal(session.hasPendingEdits, false);
+  for (let i = 0; i < 3; i++) {
+    await session.flushEdits();
+    await session.refresh();
+  }
+  assert.deepEqual(
+    f.service.readNote(note.id),
+    before,
+    "Navigation/read-only drain may not promote or replace recovery",
+  );
+  assert.deepEqual(f.service.readNote(note.id).draft, draft);
+  await session.flush();
+  assert.equal(f.kernel.getResource(note.id).note.content, draft.content);
+  assert.equal(f.kernel.getResource(note.id).resource.version, 2);
+  assert.equal(f.service.readNote(note.id).draft, null);
+  assert.equal(session.hasPendingEdits, false);
+});
+
+test("new input on a recovered note still autosaves canonically, while discard clears the new-edit obligation", async (t) => {
+  const f = fixture();
+  t.after(() => f.kernel.close());
+  const note = f.kernel.createNote(
+    "Synthetic recovery editing",
+    "Synthetic base",
+  );
+  f.service.saveNoteDraft({
+    resourceId: note.id,
+    expectedDraftVersion: 0,
+    baseResourceVersion: 1,
+    content: "Recovered text",
+  });
+  const session = new NoteSession(
+    note.id,
+    sessionPort(f),
+    f.service.readNote(note.id).resource,
+  );
+  await session.flushEdits();
+  await session.edit("Recovered text plus actual new input");
+  assert.equal(session.hasPendingEdits, true);
+  await session.flushEdits();
+  assert.equal(
+    f.kernel.getResource(note.id).note.content,
+    "Recovered text plus actual new input",
+  );
+  assert.equal(session.hasPendingEdits, false);
+  const savedVersion = f.kernel.getResource(note.id).resource.version;
+  await session.flushEdits();
+  assert.equal(f.kernel.getResource(note.id).resource.version, savedVersion);
+  await session.edit("Synthetic discarded later text");
+  await session.useSaved();
+  assert.equal(session.hasPendingEdits, false);
+  await session.flushEdits();
+  assert.equal(f.kernel.getResource(note.id).resource.version, savedVersion);
+});
+
+test("an untouched conflicting recovery does not block read-only navigation or bypass the explicit overwrite fence", async (t) => {
+  const f = fixture();
+  t.after(() => f.kernel.close());
+  const note = f.kernel.createNote(
+    "Synthetic conflicting recovery",
+    "Original text",
+  );
+  f.service.saveNoteDraft({
+    resourceId: note.id,
+    expectedDraftVersion: 0,
+    baseResourceVersion: 1,
+    content: "Recovered old draft",
+  });
+  f.kernel.updateNote(note.id, "Newer canonical text", 1);
+  const before = f.service.readNote(note.id),
+    session = new NoteSession(note.id, sessionPort(f), before.resource);
+  await session.flushEdits();
+  assert.equal(session.snapshot().phase, "conflict");
+  assert.equal(session.hasPendingEdits, false);
+  assert.deepEqual(f.service.readNote(note.id), before);
+  await assert.rejects(session.flush(), /note_revision_conflict/);
+  assert.deepEqual(f.service.readNote(note.id), before);
+});
+
 test("typing during an in-flight canonical save is serialized without dropping the later text", async (t) => {
   const f = fixture();
   t.after(() => f.kernel.close());
@@ -130,9 +236,10 @@ test("typing during an in-flight canonical save is serialized without dropping t
     { version: 1, content: "Synthetic base" },
   );
   await session.edit("Synthetic first");
-  const saving = session.flush();
+  const saving = session.flushEdits();
   await started;
   const later = session.edit("Synthetic second typed during save");
+  assert.equal(session.hasPendingEdits, true);
   release();
   await Promise.all([saving, later]);
   assert.equal(
@@ -141,6 +248,7 @@ test("typing during an in-flight canonical save is serialized without dropping t
   );
   assert.equal(f.kernel.getResource(note.id).resource.version, 3);
   assert.equal(session.snapshot().dirty, false);
+  assert.equal(session.hasPendingEdits, false);
 });
 
 test("a stale editor preserves local and canonical text until an explicit overwrite decision", async (t) => {
