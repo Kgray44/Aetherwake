@@ -74,7 +74,7 @@ test('consent includes actual project/workspace/owner metadata before binding an
 });
 
 
-test('subject metadata RPC reads canonical objects without advertising an unmounted renderer or fabricating resource IDs',async()=>{
+test('released subject RPC creates persistent typed placements without fabricating canonical resource IDs',async()=>{
  const f=fixture();try{
   const project=(await f.core.command('desktop',{type:'createProject',title:'Actual overview project'})).projects[0];
   const desktop=await f.core.command('desktop',{type:'createWorkspace',title:'Actual overview workspace',projectId:project.id}),workspace=desktop.workspaces[0];
@@ -86,8 +86,10 @@ test('subject metadata RPC reads canonical objects without advertising an unmoun
   const page=(await library(f.core,'browseResources',{subject:{kind:'project',projectId:project.id},query:'Canonical browser note'})).result;
   assert.deepEqual(page.resources.map((r:any)=>r.id),[note.resourceId]);
   const capabilities=(await library(f.core,'capabilities')).result;
-  assert.equal(capabilities.subjects,undefined,'Subject views stay unavailable until their actual renderer is integrated');
-  await assert.rejects(library(f.core,'createSubjectBlock',{commandId:randomUUID(),workspaceId:workspace.id,expectedLayoutVersion:before.layoutVersion,kind:'project_overview',subject:{kind:'project',projectId:project.id}}));
+  assert.equal(capabilities.subjects.project_overview.state,'available');assert.equal(capabilities.subjects.resource_browser.state,'available');assert.equal(capabilities.subjects.collection_browser.state,'available');
+  const created=await library(f.core,'createSubjectBlock',{commandId:randomUUID(),workspaceId:workspace.id,expectedLayoutVersion:before.layoutVersion,kind:'project_overview',subject:{kind:'project',projectId:project.id}});
+  const placement=created.desktop.blocks.find((block:any)=>block.id===created.result.placementId);assert.equal(placement.resource_id,undefined);assert.deepEqual(placement.subject,{kind:'project',projectId:project.id});
+  await f.reopen();const restored=await f.core.command('desktop',{type:'snapshot'});assert.deepEqual(restored.blocks.find(block=>block.id===placement.id)?.subject,placement.subject);
   assert.deepEqual((await f.core.command('desktop',{type:'snapshot'})).resources.map(r=>r.id),before.resources.map(r=>r.id));
   await f.core.command('desktop',{type:'archiveSubject',kind:'project',id:project.id,expectedVersion:project.version,archived:true});
   await assert.rejects(library(f.core,'projectOverview',project.id));

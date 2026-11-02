@@ -21,7 +21,7 @@ import { TemplateService } from '../../block-library/service.mts';
 import { createCanonicalTemplateHost } from '../../block-library/canonical-host.mts';
 import { NoteExperienceService } from '../../block-library/note-service.mts';
 import { createCanonicalNoteHost } from '../../block-library/note-host.mts';
-import { BUILTIN_BLOCKS } from '../../block-library/registry.ts';
+import { BUILTIN_BLOCKS, SUBJECT_BLOCKS } from '../../block-library/registry.ts';
 import type { LibraryCapabilities, BlockKind } from '../../block-library/contracts.ts';
 import { validateSubjectRef, type NonResourceSubjectRef } from '../../workspace-kernel/subjects.ts';
 import type { LibraryRequest, LibraryResponse, NoteRequest } from './contracts.mts';
@@ -164,7 +164,7 @@ export class BackendCore {
   }
   private libraryCapabilities():LibraryCapabilities {
     const cap=this.capabilityCache.snapshot(),codex=!!cap&&!cap.mock&&cap.authentication==='available'&&cap.providerId===this.port.id;
-    return {revision:1,kinds:Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'unsupported',reason:'A typed template planning port is not registered; reviewed Vela native workspace proposals remain separate'}};
+    return {revision:1,kinds:Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),subjects:Object.fromEntries(SUBJECT_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'unsupported',reason:'A typed template planning port is not registered; reviewed Vela native workspace proposals remain separate'}};
   }
   private createLibraryResource(kind:BlockKind,title:string,provider:'local'|'codex'|undefined,projectId:string|null):string {
     if(kind==='conversation')return this.create(title,provider==='codex'?this.port.id:'local',projectId).resourceId;

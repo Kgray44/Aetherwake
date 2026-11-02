@@ -49,4 +49,4 @@ Context follow-up verification: **13/13** focused library/Vela backend tests pas
 
 ## Subject view integration seam
 
-The explicit public family additionally supports `subjectTargets(workspaceId)`, `createSubjectBlock(input)`, `projectOverview(projectId)` and `browseResources(input)`, with the released typed DTOs. Reads apply the existing canonical subject grants. Subject creation returns the exact released receipt and canonical desktop snapshot. The browser transport exposes these methods; subject capabilities remain absent until the actual typed subject renderer is integrated. Metadata reads never create substitute resource IDs.
+The explicit public family additionally supports `subjectTargets(workspaceId)`, `createSubjectBlock(input)`, `projectOverview(projectId)` and `browseResources(input)`, with the released typed DTOs. Reads apply the existing canonical subject grants. Subject creation returns the exact released receipt and canonical desktop snapshot. The browser transport exposes these methods; subject capabilities are now explicitly available alongside the integrated typed subject renderer. Metadata reads never create substitute resource IDs.
