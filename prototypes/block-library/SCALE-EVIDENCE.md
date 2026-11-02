@@ -39,3 +39,22 @@ Median elapsed milliseconds after projection reuse:
 |50|1308.93|1478.86|2243.83|130.50|
 
 These short sequential runs show a useful reduction in committed backend latency at higher counts. Host conditions were not exclusive and no native renderer ran, so this is not a displayed-frame comparison, a definitive performance ratio or product acceptance. Retained candidate fixtures total28,381,184 bytes. Both runs' fixtures and raw paths remain in their private `.runtime` indices.
+
+## Bounded validated-history reuse
+
+Commitb765919 adds a one-workspace cache for normalized geometry/identity history, eligible only while its encoded history is at most4 MiB. Decoded JavaScript memory can be larger; this is not a4 MiB process-memory quota. Exact history JSON, legacy presence JSON, legacy organization JSON and workspace ID fence reuse. Writes obtain independent data; larger histories use the original uncached path. Full normalization/validation still occurs on every new key. No resource content, provider state, database ownership, permission policy or100-operation recovery retention is changed.
+
+The complete engine+DesktopState suite passes82 tests, including new actual nested-transaction rollback and external corrupt-history replacement after warm reads. The library+backend notes/library suite passes49 tests, including canonical persistence and rollback, and the affected source/tests pass strict TypeScript. The new rollback test first used incorrect command names; the corrected test and the earlier failure logs are retained privately. There was no engine failure hidden by that test correction.
+
+All18 repeated samples pass exact resource/placement identity, captured per-role preferences, geometry, viewport, organization, presence and no-provider-execution checks. Candidate medians in elapsed milliseconds:
+
+|Note cards|Template apply|10 workspace navigation commands|10 geometry commits|SQLite reopen/projection|
+|---:|---:|---:|---:|---:|
+|0|19.34|138.28|Unavailable (no card)|14.53|
+|1|25.66|142.66|186.94|18.66|
+|3|41.21|187.65|257.83|21.95|
+|10|84.16|272.26|355.46|29.67|
+|25|308.42|510.89|728.51|51.74|
+|50|918.63|854.84|1258.66|94.88|
+
+The50-card geometry figure is a total for ten persisted backend commands, not input latency or displayed frame rate. Native direct resize, mixed resource workloads, idle/hidden rendering, GPU/resource use and physical application restart remain unqualified by these source samples. Node process RSS samples ranged73,539,584–338,800,640 bytes across these18 sequential trials; garbage collection and module/fixture lifetime prevent attributing that range solely to the cache or declaring leak freedom. The original baseline and both candidates remain available rather than replacing adverse or slower measurements. This run retained28,381,184 bytes of synthetic SQLite fixtures outside the repository.

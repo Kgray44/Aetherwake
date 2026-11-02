@@ -52,6 +52,7 @@ const sourceFiles = [
   "canonical-host.mts",
   "../integrated-backend/src/desktop.mts",
   "../integrated-backend/src/core.mts",
+  "../workspace-engine/engine.mts",
 ];
 const hashes = Object.fromEntries(
   sourceFiles.map((name) => [
