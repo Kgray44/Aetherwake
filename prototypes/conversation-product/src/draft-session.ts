@@ -30,6 +30,7 @@ export class ConversationDraftSession {
   private readonly port: ConversationDraftPort;
   private readonly onChange?: (state: DraftSessionSnapshot) => void;
   private readonly delay: number;
+  private readonly initialLocal: boolean;
   private content: string;
   private editRevision = 0;
   private known: ConversationDraftRecord | null = null;
@@ -45,12 +46,12 @@ export class ConversationDraftSession {
 
   constructor(options: { resourceId: string; port: ConversationDraftPort; initialContent?: string; debounceMs?: number; onChange?: (state: DraftSessionSnapshot) => void }) {
     this.resourceId = options.resourceId; this.port = options.port; this.onChange = options.onChange;
-    this.delay = options.debounceMs ?? 180; this.content = options.initialContent ?? '';
+    this.delay = options.debounceMs ?? 180; this.content = options.initialContent ?? ''; this.initialLocal = options.initialContent !== undefined;
     this.ready = this.load(options.initialContent !== undefined);
   }
   snapshot(): DraftSessionSnapshot {
     return { resourceId: this.resourceId, content: this.content, version: this.known?.version ?? null, editRevision: this.editRevision,
-      phase: this.loading ? 'loading' : this.remote ? 'conflict' : this.error ? 'error' : this.saving ? 'saving' : this.dirty() ? 'dirty' : 'clean',
+      phase: this.loading ? 'loading' : this.remote ? 'conflict' : this.error ? 'error' : this.saving ? 'saving' : this.dirty() || this.tasks.length ? 'dirty' : 'clean',
       remote: this.remote ? { ...this.remote } : null, error: this.error };
   }
   private emit() { this.onChange?.(this.snapshot()); }
@@ -155,14 +156,29 @@ export class ConversationDraftSession {
   async reload() {
     if (this.stopped) throw new Error('draft_session_closed');
     await this.ready; await this.worker;
+    const readRevision = this.editRevision;
     let record: ConversationDraftRecord;
     try { record = this.checkRecord(await this.port.command('readDraft', { resourceId: this.resourceId })); }
     catch (error) { this.error = failure(error); this.remote = null; this.emit(); throw error; }
+    // A read response is a snapshot from before its transport delay. Writes and typing
+    // may have completed while awaiting it; never roll back either observed revision.
+    while (this.worker) await this.worker;
+    if (record.version < Math.max(this.known?.version ?? 0, this.remote?.version ?? 0)) { this.emit(); return; }
+    if ((record.version === this.known?.version && record.content !== this.known.content) || (record.version === this.remote?.version && record.content !== this.remote.content)) { this.error = 'invalid_draft_response'; this.emit(); throw new Error(this.error); }
+    const localIntent = this.dirty() || this.editRevision !== readRevision || (!this.known && (this.initialLocal || this.editRevision > 0));
     if (this.remote && record.content !== this.content) { this.remote = record; this.error = null; }
-    else if (this.dirty() && record.content !== this.content && record.version !== this.known?.version) this.remote = record;
-    else { if (!this.dirty()) this.content = record.content; this.known = record; this.remote = null; this.error = null; }
-    this.emit();
+    else if (localIntent && record.content !== this.content && record.version > (this.known?.version ?? 0)) this.remote = record;
+    else { if (!localIntent) this.content = record.content; this.known = record; this.remote = null; this.error = null; }
+    this.emit(); if (this.dirty() && !this.blocked()) this.schedule();
   }
   /** The owner must await flush before unmount/shutdown; a conflict prevents disposal instead of losing text. */
   async dispose() { if (this.stopped) return; await this.flush(); this.stopped = true; clearTimeout(this.timer); }
+}
+
+/** Drain all live composers again if another session or editor changed during an awaited save. */
+export async function flushConversationDraftSessions(sessions: () => Iterable<ConversationDraftSession>, capture?: () => void): Promise<void> {
+  for (;;) {
+    capture?.(); await Promise.all([...sessions()].map(session => session.flush())); capture?.();
+    if ([...sessions()].every(session => session.snapshot().phase === 'clean')) return;
+  }
 }

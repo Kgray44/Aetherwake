@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ConversationDraftSession, type ConversationDraftPort, type ConversationDraftRecord } from '../src/draft-session.ts';
+import { ConversationDraftSession, flushConversationDraftSessions, type ConversationDraftPort, type ConversationDraftRecord } from '../src/draft-session.ts';
 
 function deferred<T = void>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 async function until(check: () => boolean) { for (let i = 0; i < 50 && !check(); i++) await new Promise(resolve => setImmediate(resolve)); assert.ok(check()); }
@@ -8,10 +8,10 @@ async function until(check: () => boolean) { for (let i = 0; i < 50 && !check();
 function fixture(initial: Partial<ConversationDraftRecord> = {}) {
   let record: ConversationDraftRecord = { resourceId: 'chat:synthetic', version: 0, content: '', updatedAt: null, ...initial };
   const writes: { resourceId: string; expectedVersion: number; content: string }[] = [];
-  let readGate: Promise<void> | null = null, responseGate: Promise<void> | null = null, lostResponse = false, denied = false, active = 0, maximumActive = 0;
+  let readGate: Promise<void> | null = null, responseGate: Promise<void> | null = null, lostResponse = false, denied = false, active = 0, maximumActive = 0, readCount = 0;
   const port: ConversationDraftPort = { async command(name: string, input: any) {
     if (denied) throw new Error('source_unavailable');
-    if (name === 'readDraft') { await readGate; return { ...record }; }
+    if (name === 'readDraft') { readCount++; const result = { ...record }; await readGate; return result; }
     active++; maximumActive = Math.max(maximumActive, active); writes.push({ ...input });
     try {
       if (record.version !== input.expectedVersion) throw new Error('stale_draft_version');
@@ -20,7 +20,7 @@ function fixture(initial: Partial<ConversationDraftRecord> = {}) {
     } finally { active--; }
   } };
   const create = (initialContent?: string) => new ConversationDraftSession({ port, resourceId: record.resourceId, debounceMs: 10000, ...(initialContent !== undefined ? { initialContent } : {}) });
-  return { port, create, writes, get record() { return { ...record }; }, get maximumActive() { return maximumActive; },
+  return { port, create, writes, get record() { return { ...record }; }, get maximumActive() { return maximumActive; }, get readCount() { return readCount; },
     setReadGate: (gate: Promise<void> | null) => { readGate = gate; }, setResponseGate: (gate: Promise<void> | null) => { responseGate = gate; }, loseResponse: () => { lostResponse = true; }, deny: (value: boolean) => { denied = value; },
     external: (content: string) => { record = { ...record, version: record.version + 1, content, updatedAt: '2026-11-02T00:00:01Z' }; } };
 }
@@ -83,4 +83,27 @@ test('lost draft response and access denial preserve text; explicit reload recon
 
 test('over-limit input remains local and visible until corrected; it is never truncated or sent', async () => {
   const f = fixture(), session = f.create(); await session.ready; const text = 'x'.repeat(16385); session.update(text); await assert.rejects(session.flush(), /draft_limit_exceeded/); assert.equal(session.snapshot().content, text); assert.equal(f.writes.length, 0); session.update('Corrected local recovery'); await session.flush(); assert.equal(f.record.content, 'Corrected local recovery'); await session.dispose();
+});
+
+test('a delayed reload response cannot roll back a newer acknowledged editor save or canonical version', async () => {
+  const f = fixture(), session = f.create(); await session.ready; const gate = deferred(); f.setReadGate(gate.promise); const reload = session.reload(); await until(() => f.readCount === 2);
+  session.update('New text saved while the older read response is pending'); await session.flush(); assert.equal(session.snapshot().version, 1); gate.resolve(); await reload;
+  assert.equal(session.snapshot().version, 1); assert.equal(session.snapshot().content, f.record.content); assert.equal(session.snapshot().phase, 'clean'); f.setReadGate(null); await session.dispose();
+});
+
+test('a newer competing draft read preserves text typed during that read and requires explicit conflict resolution', async () => {
+  const f = fixture(), session = f.create(); await session.ready; f.external('A genuine competing writer'); const gate = deferred(); f.setReadGate(gate.promise); const reload = session.reload(); await until(() => f.readCount === 2);
+  session.update('This editor typed during the read'); gate.resolve(); await reload; assert.equal(session.snapshot().content, 'This editor typed during the read'); assert.equal(session.snapshot().phase, 'conflict'); assert.equal(session.snapshot().remote?.content, 'A genuine competing writer'); await assert.rejects(session.flush(), /stale_draft_version/);
+  f.setReadGate(null); await session.resolve('keep-local', 1); assert.equal(f.record.content, 'This editor typed during the read'); await session.dispose();
+});
+
+test('retrying an initial failed read cannot discard local recovery when a stored draft becomes available', async () => {
+  const f = fixture(); f.deny(true); const session = f.create(); await session.ready; session.update('Text retained while the first read was denied'); f.deny(false); f.external('Stored competing recovery'); await session.reload();
+  assert.equal(session.snapshot().content, 'Text retained while the first read was denied'); assert.equal(session.snapshot().phase, 'conflict'); assert.equal(session.snapshot().remote?.content, 'Stored competing recovery'); await session.resolve('keep-local', 1); await session.dispose();
+});
+
+test('manager-wide draining rechecks an earlier composer after awaiting another composer save', async () => {
+  const a = fixture({ resourceId: 'chat:a' }), b = fixture({ resourceId: 'chat:b' }), first = a.create(), second = b.create(); await Promise.all([first.ready, second.ready]); const gate = deferred(); b.setResponseGate(gate.promise); second.update('Slow second composer write');
+  const flush = flushConversationDraftSessions(() => [first, second]); await until(() => b.writes.length === 1); first.update('Input arriving while another composer is saving'); b.setResponseGate(null); gate.resolve(); await flush;
+  assert.equal(a.record.content, 'Input arriving while another composer is saving'); assert.equal(first.snapshot().phase, 'clean'); assert.equal(second.snapshot().phase, 'clean'); await Promise.all([first.dispose(), second.dispose()]);
 });

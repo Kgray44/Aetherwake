@@ -1,5 +1,5 @@
 import type { BranchPolicy, Collection, ConversationProductPort, Detail, ProductCommandMap, SearchQuery, Share } from './contracts.ts';
-import { ConversationDraftSession, type DraftSessionSnapshot } from './draft-session.ts';
+import { ConversationDraftSession, flushConversationDraftSessions, type DraftSessionSnapshot } from './draft-session.ts';
 
 export type ManagerState = { selectedResourceId: string | null; drafts: Record<string,string>; scroll: Record<string,number>; query: SearchQuery; messageOffset: Record<string,number> };
 export type ManagerOptions = { state?: ManagerState; resourceId?: string; onClose?: () => void; onResource?: (resourceId: string, messageId?: string) => void; onState?: (state: ManagerState) => void; copy?: (text: string) => Promise<void>; download?: (name: string, content: string) => void };
@@ -50,7 +50,7 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const call=<K extends keyof ProductCommandMap>(name:K,input:ProductCommandMap[K]['input'])=>port.command(name,input);
  const save=()=>{if(disposed)return;if(state.selectedResourceId){state.drafts[state.selectedResourceId]=draft.value;state.scroll[state.selectedResourceId]=messages.scrollTop;draftSessions.get(state.selectedResourceId)?.update(draft.value);}options.onState?.(state);};
  const activeDraft=()=>state.selectedResourceId?draftSessions.get(state.selectedResourceId):undefined;
- const flush=async()=>{if(disposed)return;save();await Promise.all([...draftSessions.values()].map(session=>session.flush()));};
+ const flush=async()=>{if(disposed)return;await flushConversationDraftSessions(()=>draftSessions.values(),save);};
  const recover=async(action:()=>Promise<void>)=>{if(recoveryBusy)return;recoveryBusy=true;renderDraft();try{await action();}catch(error){status.textContent=error instanceof Error?error.message:String(error);}finally{recoveryBusy=false;renderDraft();}};
  function renderDraft(snapshot:DraftSessionSnapshot|undefined=activeDraft()?.snapshot()) {
   if(disposed||!snapshot||snapshot.resourceId!==state.selectedResourceId)return;
