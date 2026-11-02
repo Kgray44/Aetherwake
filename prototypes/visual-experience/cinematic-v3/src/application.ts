@@ -784,7 +784,7 @@ export function installApplication(hooks: Hooks) {
   function open(title: string, body: string) {
     cardConfiguration?.dispose();
     cardConfiguration = null;
-    conversationManager?.dispose();
+    surfaces.close("conversations");
     conversationManager = null;
     dialog.classList.remove("conversation-surface");
     lastTrigger = document.activeElement as HTMLElement;
@@ -794,8 +794,27 @@ export function installApplication(hooks: Hooks) {
     el<HTMLInputElement>("input,select,button", dialog)?.focus();
   }
   function conversations(resourceId?: string) {
-    open("Conversations", '<div id="conversation-product"></div>');
-    dialog.classList.add("conversation-surface");
+    dialog.close();
+    cardConfiguration?.dispose();
+    cardConfiguration = null;
+    const content = document.createElement("div");
+    content.id = "conversation-product";
+    content.className = "application-conversation-content";
+    let controller: ReturnType<typeof mountConversationManager> | undefined;
+    const surface = surfaces.open({
+      id: "conversations",
+      anchor: el(".brand"),
+      content,
+      label: "Conversations",
+      minSize: { width: 560, height: 360 },
+      maxSize: { width: 1100, height: 760 },
+      initialFocus: '.cp-toolbar input[type="search"]',
+      onClose: () => {
+        controller?.dispose();
+        if (conversationManager === controller) conversationManager = null;
+      },
+    });
+    surface.id = "conversation-surface";
     const port: ConversationProductPort = {
       async command<K extends keyof ProductCommandMap>(
         name: K,
@@ -823,52 +842,46 @@ export function installApplication(hooks: Hooks) {
         return result;
       },
     };
-    conversationManager = mountConversationManager(
-      el("#conversation-product", dialog),
-      port,
-      {
-        state: conversationView,
-        ...(resourceId ? { resourceId } : {}),
-        onClose: () => dialog.close(),
-        onResource: (id, messageId) => {
-          const resource = state?.resources.find((r) => r.id === id);
-          if (resource?.kind === "conversation") {
-            if (conversationView.selectedResourceId !== id)
-              void conversationManager?.open(id, messageId);
-            else
-              hooks.status(
-                `${resource.title}${messageId ? " · canonical source message" : " · conversation history"}`,
-              );
-            return;
-          }
-          const placement = (
-            state?.navigationBlocks ??
-            state?.blocks ??
-            []
-          ).find((b) => b.resource_id === id);
-          if (!placement) {
+    controller = conversationManager = mountConversationManager(content, port, {
+      state: conversationView,
+      ...(resourceId ? { resourceId } : {}),
+      onClose: () => surfaces.close("conversations"),
+      onResource: (id, messageId) => {
+        const resource = state?.resources.find((r) => r.id === id);
+        if (resource?.kind === "conversation") {
+          if (conversationView.selectedResourceId !== id)
+            void controller?.open(id, messageId);
+          else
             hooks.status(
-              "This source has no workspace placement. It remains available in Resources.",
+              `${resource.title}${messageId ? " · canonical source message" : " · conversation history"}`,
             );
-            return;
-          }
-          dialog.close();
-          void enqueue(async () => {
-            await flush();
-            await command({
-              type: "navigate",
-              target: {
-                kind: "workspace",
-                workspaceId: placement.workspace_id,
-              },
-            });
-            reveal(placement.id);
-            hooks.focus(placement.id);
+          return;
+        }
+        const placement = (state?.navigationBlocks ?? state?.blocks ?? []).find(
+          (b) => b.resource_id === id,
+        );
+        if (!placement) {
+          hooks.status(
+            "This source has no workspace placement. It remains available in Resources.",
+          );
+          return;
+        }
+        surfaces.close("conversations");
+        void enqueue(async () => {
+          await flush();
+          await command({
+            type: "navigate",
+            target: {
+              kind: "workspace",
+              workspaceId: placement.workspace_id,
+            },
           });
-        },
+          reveal(placement.id);
+          hooks.focus(placement.id);
+        });
       },
-    );
-    void conversationManager.ready.catch(report);
+    });
+    void controller.ready.catch(report);
   }
   function openVela() {
     if (velaOpen) {

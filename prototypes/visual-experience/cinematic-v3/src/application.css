@@ -40,6 +40,25 @@
   box-shadow: none;
   background: transparent;
 }
+.application-conversation-content .cp-manager {
+  width: 100%;
+  max-height: none;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.application-conversation-content .cp-manager > header > h2,
+#conversation-surface > .aw-contextual-heading > .aw-contextual-dismiss {
+  display: none;
+}
+.application-conversation-content
+  .cp-manager
+  :is(input, textarea, select, button, summary),
+.application-conversation-content .cp-disclosure-panel {
+  background: #bbc8ee0b;
+  border-color: #c8c6e139;
+}
 .application-vela-content .vela-core-message,
 .application-vela-content .vela-core-plan,
 .application-vela-content .vela-core-attention article,
@@ -342,7 +361,7 @@
   border: 0;
 }
 .constellation-host .aw-working .aw-constellation-bar {
-  display: none;
+  display: flex;
 }
 .application-ready .topbar,
 .application-ready .dock,

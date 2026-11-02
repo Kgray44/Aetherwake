@@ -73,6 +73,7 @@ const verify =
   process.argv.includes("--integration-direct") ||
   process.argv.includes("--integration-conversation-product") ||
   process.argv.includes("--integration-vela") ||
+  process.argv.includes("--integration-vela-live") ||
   process.argv.includes("--integration-expanded") ||
   process.argv.includes("--integration-spatial-benchmark");
 const captureReview =
@@ -81,6 +82,7 @@ const captureReview =
   process.argv.includes("--integration-direct") ||
   process.argv.includes("--integration-conversation-product") ||
   process.argv.includes("--integration-vela") ||
+  process.argv.includes("--integration-vela-live") ||
   process.argv.includes("--integration-expanded") ||
   process.argv.includes("--integration-spatial-benchmark");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
@@ -391,6 +393,15 @@ app.whenReady().then(async () => {
   }, 240000);
   reserveTimer.unref();
   if (verify) {
+    if (process.argv.includes("--integration-vela-live")) {
+      await require("../../../vela-core/test/native-live.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        source,
+      });
+      return;
+    }
     if (process.argv.includes("--integration-vela")) {
       await require("../../../vela-core/test/native-desktop.cjs").verify({
         win,
