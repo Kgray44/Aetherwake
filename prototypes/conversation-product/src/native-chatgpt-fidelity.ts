@@ -33,7 +33,8 @@ export interface RelatedChatGPTCapability {
   readonly status: FidelityStatus;
   readonly interfaceName: string;
   readonly statusScope: string;
-  readonly implementation: 'on-hold' | 'source-tested-host-unwired';
+  readonly implementation: 'on-hold' | 'in-progress' | 'source-tested-host-unwired';
+  readonly reason?: string;
   readonly satisfiesNativeAccountFidelity: false;
   readonly evidence: readonly FidelityEvidence[];
 }
@@ -126,7 +127,7 @@ export function createNativeChatGPTFidelityDescriptor(): NativeChatGPTFidelityDe
         reason: 'First-party UI can add an existing ChatGPT chat to Codex. This does not establish a third-party source read/send grant or native shared state; existing Aerynth sharing does not merge account history.', evidence: [projects(), overview()] },
     ],
     relatedCapabilities: [
-      { id: 'eligible-plan-responses-inference', label: 'Eligible ChatGPT-plan Responses inference', status: 'RequiresAdditionalAuthorization', interfaceName: 'SIWC POST https://api.openai.com/v1/responses', statusScope: 'Eligible inference only; not native account chat creation, history, memory or sync.', implementation: 'on-hold', satisfiesNativeAccountFidelity: false, evidence: [models(), preview()] },
+      { id: 'eligible-plan-responses-inference', label: 'Eligible ChatGPT-plan Responses inference', status: 'RequiresAdditionalAuthorization', interfaceName: 'SIWC POST https://api.openai.com/v1/responses', statusScope: 'Eligible inference only; not native account chat creation, history, memory or sync.', implementation: 'in-progress', reason: 'Implementation in progress; account authorization and live inference remain unverified.', satisfiesNativeAccountFidelity: false, evidence: [models(), preview()] },
       { id: 'local-codex-navigation', label: 'First-party local Codex chat navigation', status: 'Supported', interfaceName: 'ChatGPT desktop codex://threads/<technical-thread-id>', statusScope: 'Explicit native external-open request for a verified same-installation local Codex chat only.', implementation: 'source-tested-host-unwired', satisfiesNativeAccountFidelity: false, evidence: [deepLinks()] },
     ],
   };

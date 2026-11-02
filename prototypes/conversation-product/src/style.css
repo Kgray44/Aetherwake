@@ -10,6 +10,7 @@
   min-height: 0;
 }
 .cp-manager {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1351,4 +1352,92 @@ details[data-active="true"] > .cp-control .cp-control-glyph {
   margin: 8px 0 4px;
   font-size: 13px;
   font-weight: 600;
+}
+.cp-library-scroll {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.cp-library-scroll > .cp-results {
+  flex: none;
+  max-height: none;
+  overflow: visible;
+}
+.cp-library-tree,
+.cp-tree-children,
+.cp-switcher-results {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cp-tree-group {
+  min-width: 0;
+}
+.cp-tree-group > summary {
+  width: 100%;
+  text-align: start;
+}
+.cp-tree-children {
+  margin-inline-start: 12px;
+  padding-inline-start: 8px;
+  border-inline-start: 1px solid #c6b0db29;
+}
+.cp-tree-group:not([open]) > .cp-tree-children {
+  display: none;
+}
+.cp-tree-meta,
+.cp-result-meta,
+.cp-library-empty,
+.cp-switcher-status,
+.cp-branch-relation {
+  margin: 0;
+  color: #cbbdde;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.cp-result-group {
+  min-width: 0;
+  padding: 8px 0;
+  border-top: 1px solid #c6b0db20;
+}
+.cp-result-group > .cp-result-meta {
+  padding-inline: 8px;
+}
+.cp-result-group > button[data-result-kind="message"] {
+  margin-inline-start: 8px;
+  width: calc(100% - 8px);
+  color: #d9d0e6;
+  font-size: 13px;
+  font-weight: 400;
+}
+.cp-switcher > .cp-disclosure-panel {
+  position: absolute;
+  inset-block-start: 48px;
+  inset-inline: 12px;
+  z-index: 6;
+  width: auto;
+  max-width: 360px;
+  max-height: min(360px, calc(100% - 72px));
+  padding: 12px;
+  border: 1px solid #c6b0db38;
+  border-radius: 12px;
+  background: var(--surface-raised, #171622);
+  overflow: auto;
+}
+.cp-switcher-results button,
+.cp-branch-row button {
+  justify-content: flex-start;
+  text-align: start;
+}
+.cp-switcher-results button {
+  flex-wrap: wrap;
+}
+.cp-branch-row {
+  padding-block: 8px;
+  border-top: 1px solid #c6b0db20;
 }
