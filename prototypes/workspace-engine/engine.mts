@@ -106,7 +106,10 @@ export class WorkspaceEngine {
     return row;
   }
   private readOrganization(workspaceId: string): WorkspaceOrganization {
-    const o = JSON.parse(this.layout(workspaceId).organization_json);
+    return this.parseOrganization(this.layout(workspaceId).organization_json);
+  }
+  private parseOrganization(json: string): WorkspaceOrganization {
+    const o = JSON.parse(json);
     ensure(o.schemaVersion === 1 && Number.isSafeInteger(o.revision) && o.revision > 0, 'INTEGRITY');
     return updateOrganization(o);
   }
@@ -117,7 +120,10 @@ export class WorkspaceEngine {
     const { revision: _a, ...left } = a, { revision: _b, ...right } = b; return hash(left) !== hash(right);
   }
   private readPresence(workspaceId: string): PresencePlacement {
-    const p = JSON.parse(this.layout(workspaceId).presence_json) as PresencePlacement;
+    return this.parsePresence(workspaceId, this.layout(workspaceId).presence_json);
+  }
+  private parsePresence(workspaceId: string, json: string): PresencePlacement {
+    const p = JSON.parse(json) as PresencePlacement;
     ensure(p.id === 'system:vela' && p.kind === 'vela' && p.workspaceId === workspaceId && p.scale === 0.65
       && Number.isSafeInteger(p.version) && p.version > 0, 'INTEGRITY');
     this.presencePatch(p, {}); return p;
@@ -199,6 +205,43 @@ export class WorkspaceEngine {
           const common={workspaceId,version:row.version,resourceState:subjectState,subjectState,contentMode:b.minimized || ['circle','pill','lens'].includes(b.shape)?'summary' as const:'reading' as const};
           return b.resourceId?{...projected,...common,resourceId:b.resourceId,subject:{kind:'resource' as const,resourceId:b.resourceId}}:{...projected,...common,subject:b.subject!};
         }), canUndo: h.undo.length > 0, canRedo: h.redo.length > 0,
+      };
+    });
+  }
+  /** Main-process read seam. The trusted host must reauthorize the workspace
+   * and its owning project before exposing this projection. Like project(),
+   * this engine does not own canonical grants. Unlike project(), this method
+   * never initializes, normalizes history, backfills, changes session or writes.
+   * A deferred read transaction keeps all SELECTs on one SQLite snapshot. */
+  inspectWorkspace(workspaceId: string): WorkspaceProjection {
+    ensure(text(workspaceId));
+    return this.atomic(() => {
+      const workspace = this.db.prepare('SELECT * FROM workspaces WHERE id=?').get(workspaceId);
+      ensure(workspace?.state === 'active', 'UNAVAILABLE');
+      if (workspace.project_id !== null)
+        ensure(this.db.prepare('SELECT state FROM projects WHERE id=?').get(workspace.project_id)?.state === 'active', 'UNAVAILABLE');
+      const layout = this.db.prepare('SELECT * FROM workspace_layouts WHERE workspace_id=?').get(workspaceId);
+      const initialized = this.db.prepare('SELECT * FROM workspace_engine_layouts WHERE workspace_id=?').get(workspaceId);
+      ensure(layout && initialized && typeof initialized.presence_json === 'string' && !!initialized.presence_json
+        && typeof initialized.organization_json === 'string' && !!initialized.organization_json
+        && typeof initialized.history_json === 'string' && !!initialized.history_json, 'UNAVAILABLE');
+      ensure(Number.isSafeInteger(layout.version) && Number(layout.version) > 0, 'INTEGRITY');
+      const history = JSON.parse(initialized.history_json);
+      ensure(history && Array.isArray(history.undo) && Array.isArray(history.redo), 'INTEGRITY');
+      const rows = this.db.prepare('SELECT b.*,p.json AS initialized_presentation FROM blocks b LEFT JOIN block_presentations p ON p.block_id=b.id WHERE b.workspace_id=? ORDER BY b.z,b.id').all(workspaceId);
+      ensure(rows.every(row => typeof row.initialized_presentation === 'string' && !!row.initialized_presentation), 'UNAVAILABLE');
+      return {
+        contract: CONTRACT, workspaceId, projectId: workspace.project_id as string | null, title: String(workspace.title),
+        workspaceVersion: Number(workspace.version), layoutId: String(initialized.id), revision: Number(layout.version),
+        viewport: this.viewport(JSON.parse(String(layout.viewport_json))),
+        presence: this.parsePresence(workspaceId, initialized.presence_json), organization: this.parseOrganization(initialized.organization_json),
+        blocks: rows.map(row => {
+          const block = this.block(row), subject = this.subject(block), subjectState = this.kernel.subjectState(subject);
+          const common = { ...this.presentationOf(block), blockId: block.blockId, workspaceId, version: Number(row.version),
+            resourceState: subjectState, subjectState, contentMode: block.minimized || ['circle', 'pill', 'lens'].includes(block.shape) ? 'summary' as const : 'reading' as const };
+          return block.resourceId ? { ...common, resourceId: block.resourceId, subject: { kind: 'resource' as const, resourceId: block.resourceId } }
+            : { ...common, subject: block.subject! };
+        }), canUndo: history.undo.length > 0, canRedo: history.redo.length > 0,
       };
     });
   }

@@ -83,3 +83,8 @@ export interface WorkspacePort {
   project(workspaceId: string): Promise<WorkspaceProjection>;
   execute(command: Command): Promise<CommandResult>;
 }
+/** Optional production read transport, separate from navigation/lazy project.
+ * The canonical host rechecks current authorization before every call. */
+export interface WorkspaceInspectionPort {
+  inspectWorkspace(workspaceId: string): Promise<WorkspaceProjection>;
+}
