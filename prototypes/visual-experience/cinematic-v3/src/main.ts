@@ -156,6 +156,8 @@ const metrics = {
 };
 const osReduced = matchMedia("(prefers-reduced-motion: reduce)");
 let manualReduced = false;
+let frameRunning = false,
+  wakeRequested = false;
 let dirty = true,
   raf = 0,
   schedulerTimer = 0,
@@ -242,6 +244,10 @@ function event(
 function wake(invalidate = true) {
   lastInteraction = performance.now();
   dirty ||= invalidate;
+  if (frameRunning) {
+    wakeRequested = true;
+    return;
+  }
   if (schedulerTimer) {
     clearTimeout(schedulerTimer);
     schedulerTimer = 0;
@@ -1124,236 +1130,247 @@ function renderDOM() {
 function tick(now: number) {
   raf = 0;
   if (!running || !nativeActive || document.hidden) return;
-  const dt = Math.min((now - lastFrame) / 1000, 0.12);
-  const interval = now - lastFrame;
-  lastFrame = now;
-  visualClock += dt * 1000;
-  metrics.callbacks++;
-  if (metrics.intervals.length < 18000) metrics.intervals.push(interval);
-  const moving = motion.step(dt);
-  application?.frame(now, {
-    tier: quality,
-    reduced: motion.reduced,
-    quiet,
-    hidden: !nativeActive || document.hidden,
-    graphicsAvailable: !graphicsFailed,
-  });
-  const targetFocus = expanded ? 1 : selected ? 0.13 : 0;
-  focus = motion.reduced
-    ? targetFocus
-    : focus + (targetFocus - focus) * (1 - Math.exp(-dt * 10));
-  const targetAttention = vela === "idle" || vela === "unavailable" ? 0 : 1;
-  attention = motion.reduced
-    ? targetAttention
-    : attention + (targetAttention - attention) * (1 - Math.exp(-dt * 7));
-  renderDOM();
-  document.body.style.setProperty("--scene-focus", String(focus));
-  const idle = now - lastInteraction > 12000;
-  const activeQuality: Quality = quiet ? "efficient" : quality;
-  const transitioning =
-    moving ||
-    Math.abs(focus - targetFocus) > 0.001 ||
-    Math.abs(attention - targetAttention) > 0.001;
-  const policy = motionPolicy({
-    tier: activeQuality,
-    idle,
-    quiet,
-    reduced: motion.reduced,
-    ambient,
-    unavailable: vela === "unavailable",
-    transitioning,
-  });
-  const cadence = policy.cadenceMs;
-  const pointerCadence =
-    activeQuality === "cinematic"
-      ? 0
-      : activeQuality === "balanced"
-        ? 1000 / 60
-        : 1000 / 15;
-  const shouldDraw =
-    dirty ||
-    (transitioning && activeQuality !== "efficient") ||
-    (policy.continuous &&
-      (now + 0.25 >= nextDraw || !Number.isFinite(nextDraw))) ||
-    (pointerDirty && now - lastDraw >= pointerCadence - 0.25);
-  if (shouldDraw) {
-    if (environment && !graphicsFailed) {
-      const surfaces = order
-        .filter(
-          (id) =>
-            !elements.get(id)?.hidden &&
-            application?.snapshot()?.navigation.kind !== "constellation",
-        )
-        .map((id) => {
-          const p = motion.pose(id),
-            rest = base(id),
-            block = presentationBlock(id);
-          return {
-            id,
-            kind:
-              innerWidth < 1000 && resources.get(id)!.type === "research"
-                ? "conversation"
-                : resources.get(id)!.type,
-            ...p,
-            shape: block?.shape ?? defaultSurfaceShape(resources.get(id)?.type),
-            rotation: (block?.rotation ?? 0) * (1 - resourceUnfold(motion, id)),
-            presentationLayer:
-              expanded === id || resourceUnfold(motion, id) > 0.001 ? 1 : 0,
-            zIndex:
-              expanded === id
-                ? 200000
-                : desktopMode
-                  ? (block?.z ?? 0)
-                  : drag?.id === id
-                    ? 150000
-                    : selected === id
-                      ? 100000
-                      : 3,
-            selected: id === selected,
-            unfold: resourceUnfold(motion, id),
-          };
+  // Synchronous host/layer invalidation requests the next existing frame;
+  // it cannot start a second RAF chain while the current frame is executing.
+  frameRunning = true;
+  wakeRequested = false;
+  try {
+    const interval = Math.max(0, now - lastFrame);
+    const dt = Math.min(interval / 1000, 0.12);
+    lastFrame = now;
+    visualClock += dt * 1000;
+    metrics.callbacks++;
+    if (metrics.intervals.length < 18000) metrics.intervals.push(interval);
+    const moving = motion.step(dt);
+    application?.frame(now, {
+      tier: quality,
+      reduced: motion.reduced,
+      quiet,
+      hidden: !nativeActive || document.hidden,
+      graphicsAvailable: !graphicsFailed,
+    });
+    const targetFocus = expanded ? 1 : selected ? 0.13 : 0;
+    focus = motion.reduced
+      ? targetFocus
+      : focus + (targetFocus - focus) * (1 - Math.exp(-dt * 10));
+    const targetAttention = vela === "idle" || vela === "unavailable" ? 0 : 1;
+    attention = motion.reduced
+      ? targetAttention
+      : attention + (targetAttention - attention) * (1 - Math.exp(-dt * 7));
+    renderDOM();
+    document.body.style.setProperty("--scene-focus", String(focus));
+    const idle = now - lastInteraction > 12000;
+    const activeQuality: Quality = quiet ? "efficient" : quality;
+    const transitioning =
+      moving ||
+      Math.abs(focus - targetFocus) > 0.001 ||
+      Math.abs(attention - targetAttention) > 0.001;
+    const policy = motionPolicy({
+      tier: activeQuality,
+      idle,
+      quiet,
+      reduced: motion.reduced,
+      ambient,
+      unavailable: vela === "unavailable",
+      transitioning,
+    });
+    const cadence = policy.cadenceMs;
+    const pointerCadence =
+      activeQuality === "cinematic"
+        ? 0
+        : activeQuality === "balanced"
+          ? 1000 / 60
+          : 1000 / 15;
+    const shouldDraw =
+      dirty ||
+      (transitioning && activeQuality !== "efficient") ||
+      (policy.continuous &&
+        (now + 0.25 >= nextDraw || !Number.isFinite(nextDraw))) ||
+      (pointerDirty && now - lastDraw >= pointerCadence - 0.25);
+    if (shouldDraw) {
+      if (environment && !graphicsFailed) {
+        const surfaces = order
+          .filter(
+            (id) =>
+              !elements.get(id)?.hidden &&
+              application?.snapshot()?.navigation.kind !== "constellation",
+          )
+          .map((id) => {
+            const p = motion.pose(id),
+              rest = base(id),
+              block = presentationBlock(id);
+            return {
+              id,
+              kind:
+                innerWidth < 1000 && resources.get(id)!.type === "research"
+                  ? "conversation"
+                  : resources.get(id)!.type,
+              ...p,
+              shape:
+                block?.shape ?? defaultSurfaceShape(resources.get(id)?.type),
+              rotation:
+                (block?.rotation ?? 0) * (1 - resourceUnfold(motion, id)),
+              presentationLayer:
+                expanded === id || resourceUnfold(motion, id) > 0.001 ? 1 : 0,
+              zIndex:
+                expanded === id
+                  ? 200000
+                  : desktopMode
+                    ? (block?.z ?? 0)
+                    : drag?.id === id
+                      ? 150000
+                      : selected === id
+                        ? 100000
+                        : 3,
+              selected: id === selected,
+              unfold: resourceUnfold(motion, id),
+            };
+          });
+        const scene = deriveSceneState({
+          selected,
+          expanded,
+          related: ["idle", "unavailable"].includes(vela)
+            ? null
+            : (document.body.dataset.related ?? null),
+          dragging: !!drag,
+          focus,
+          attention,
+          ambient,
+          ambientStrength,
+          quiet,
+          visible: nativeActive && !document.hidden,
+          reduced: motion.reduced,
+          vela,
+          pointer,
+          surfaces,
+          width: innerWidth,
+          height: innerHeight,
         });
-      const scene = deriveSceneState({
-        selected,
-        expanded,
-        related: ["idle", "unavailable"].includes(vela)
-          ? null
-          : (document.body.dataset.related ?? null),
-        dragging: !!drag,
-        focus,
-        attention,
-        ambient,
-        ambientStrength,
-        quiet,
-        visible: nativeActive && !document.hidden,
-        reduced: motion.reduced,
-        vela,
-        pointer,
-        surfaces,
-        width: innerWidth,
-        height: innerHeight,
-      });
-      sceneState = scene;
-      environment.setSpatialLayer(
-        (
-          application as
-            | (Application & {
-                spatialLayer?: () =>
-                  | import("../../../constellation/spatial-types.ts").SpatialRenderLayer
-                  | null;
-              })
-            | null
-        )?.spatialLayer?.() ?? null,
-      );
-      environment.render({
-        time: motion.reduced ? 0 : visualClock,
-        focus: scene.focus,
-        attention: scene.attention,
-        pointer: scene.pointer,
-        inputPointer: motion.reduced ? { x: 0, y: 0 } : pointer,
-        interaction: scene.interaction,
-        vela,
-        study,
-        sceneWeights: sceneWeights(motion),
-        architectureConcept,
-        celestialStudy,
-        instrumentStudy,
-        architecturePhase: environmentPhase,
-        quality: activeQuality,
-        reduced: motion.reduced,
-        width: innerWidth,
-        height: innerHeight,
-        surfaces,
-        surfaceView,
-        quiet,
-        presencePlacement:
-          presenceReviewScale !== null
-            ? undefined
-            : (
-                application as
-                  | (Application & {
-                      presence?: () => {
-                        x: number;
-                        y: number;
-                        w: number;
-                        h: number;
-                      };
-                    })
-                  | null
-              )?.presence?.(),
-        presenceScale: presenceReviewScale ?? (desktopMode ? 0.65 : 1),
-        ambientStrength: scene.ambientStrength,
-      });
-      const presence =
-        (
-          application as
-            | (Application & {
-                presenceCard?: () => {
-                  x: number;
-                  y: number;
-                  w: number;
-                  h: number;
-                };
-              })
-            | null
-        )?.presenceCard?.() ?? environment.presenceBounds();
-      const presenceWidth = Math.max(44, presence.w),
-        presenceHeight = Math.max(44, presence.h);
-      const presenceX = clamp(presence.x, 4, innerWidth - presenceWidth - 4),
-        presenceY = Math.max(100, presence.y);
-      Object.assign($("#vela").style, {
-        left: `${presenceX}px`,
-        top: `${presenceY}px`,
-        width: `${presenceWidth}px`,
-        height: `${presenceHeight}px`,
-        clipPath: document.body.classList.contains("vela-access")
-          ? "none"
-          : materialCompositor.clipOverlay({
-              id: "vela-dom-presentation",
-              x: presenceX,
-              y: presenceY,
-              w: presenceWidth,
-              h: presenceHeight,
-              lift: 0,
-              yaw: 0,
-              opacity: 1,
-            }) || "none",
-      });
-      if (lastDraw && metrics.drawIntervals.length < 18000)
-        metrics.drawIntervals.push(now - lastDraw);
-      lastDraw = now;
-      metrics.draws++;
-      metrics.lastDraw = now;
+        sceneState = scene;
+        environment.setSpatialLayer(
+          (
+            application as
+              | (Application & {
+                  spatialLayer?: () =>
+                    | import("../../../constellation/spatial-types.ts").SpatialRenderLayer
+                    | null;
+                })
+              | null
+          )?.spatialLayer?.() ?? null,
+        );
+        environment.render({
+          time: motion.reduced ? 0 : visualClock,
+          focus: scene.focus,
+          attention: scene.attention,
+          pointer: scene.pointer,
+          inputPointer: motion.reduced ? { x: 0, y: 0 } : pointer,
+          interaction: scene.interaction,
+          vela,
+          study,
+          sceneWeights: sceneWeights(motion),
+          architectureConcept,
+          celestialStudy,
+          instrumentStudy,
+          architecturePhase: environmentPhase,
+          quality: activeQuality,
+          reduced: motion.reduced,
+          width: innerWidth,
+          height: innerHeight,
+          surfaces,
+          surfaceView,
+          quiet,
+          presencePlacement:
+            presenceReviewScale !== null
+              ? undefined
+              : (
+                  application as
+                    | (Application & {
+                        presence?: () => {
+                          x: number;
+                          y: number;
+                          w: number;
+                          h: number;
+                        };
+                      })
+                    | null
+                )?.presence?.(),
+          presenceScale: presenceReviewScale ?? (desktopMode ? 0.65 : 1),
+          ambientStrength: scene.ambientStrength,
+        });
+        const presence =
+          (
+            application as
+              | (Application & {
+                  presenceCard?: () => {
+                    x: number;
+                    y: number;
+                    w: number;
+                    h: number;
+                  };
+                })
+              | null
+          )?.presenceCard?.() ?? environment.presenceBounds();
+        const presenceWidth = Math.max(44, presence.w),
+          presenceHeight = Math.max(44, presence.h);
+        const presenceX = clamp(presence.x, 4, innerWidth - presenceWidth - 4),
+          presenceY = Math.max(100, presence.y);
+        Object.assign($("#vela").style, {
+          left: `${presenceX}px`,
+          top: `${presenceY}px`,
+          width: `${presenceWidth}px`,
+          height: `${presenceHeight}px`,
+          clipPath: document.body.classList.contains("vela-access")
+            ? "none"
+            : materialCompositor.clipOverlay({
+                id: "vela-dom-presentation",
+                x: presenceX,
+                y: presenceY,
+                w: presenceWidth,
+                h: presenceHeight,
+                lift: 0,
+                yaw: 0,
+                opacity: 1,
+              }) || "none",
+        });
+        if (lastDraw && metrics.drawIntervals.length < 18000)
+          metrics.drawIntervals.push(now - lastDraw);
+        lastDraw = now;
+        metrics.draws++;
+        metrics.lastDraw = now;
+      }
+      nextDraw = !Number.isFinite(cadence)
+        ? Infinity
+        : dirty || !Number.isFinite(nextDraw) || now - nextDraw > cadence * 4
+          ? now + cadence
+          : nextDraw + cadence;
+      dirty = false;
+      pointerDirty = false;
     }
-    nextDraw = !Number.isFinite(cadence)
-      ? Infinity
-      : dirty || !Number.isFinite(nextDraw) || now - nextDraw > cadence * 4
-        ? now + cadence
-        : nextDraw + cadence;
-    dirty = false;
-    pointerDirty = false;
-  }
-  if (inputAt) {
-    metrics.inputFeedback.push(now - inputAt);
-    if (metrics.inputFeedback.length > 1024) metrics.inputFeedback.shift();
-    inputAt = 0;
-  }
-  metrics.policy = `${activeQuality} / ${motion.reduced ? "reduced" : quiet ? "quiet" : !ambient ? "ambient off" : idle ? "ambient idle" : "active"}`;
-  $("#policy").textContent = metrics.policy;
-  if (transitioning || policy.continuous || pointerDirty) {
-    if (
-      !transitioning &&
-      policy.continuous &&
-      (idle || activeQuality === "efficient")
-    )
-      schedulerTimer = window.setTimeout(
-        () => {
-          schedulerTimer = 0;
-          raf = requestAnimationFrame(tick);
-        },
-        Math.max(1, nextDraw - performance.now() - 1),
-      );
-    else raf = requestAnimationFrame(tick);
+    if (inputAt) {
+      metrics.inputFeedback.push(now - inputAt);
+      if (metrics.inputFeedback.length > 1024) metrics.inputFeedback.shift();
+      inputAt = 0;
+    }
+    metrics.policy = `${activeQuality} / ${motion.reduced ? "reduced" : quiet ? "quiet" : !ambient ? "ambient off" : idle ? "ambient idle" : "active"}`;
+    $("#policy").textContent = metrics.policy;
+    if (transitioning || policy.continuous || pointerDirty || wakeRequested) {
+      if (
+        !transitioning &&
+        !wakeRequested &&
+        policy.continuous &&
+        (idle || activeQuality === "efficient")
+      )
+        schedulerTimer = window.setTimeout(
+          () => {
+            schedulerTimer = 0;
+            raf = requestAnimationFrame(tick);
+          },
+          Math.max(1, nextDraw - performance.now() - 1),
+        );
+      else raf = requestAnimationFrame(tick);
+    }
+  } finally {
+    frameRunning = false;
   }
 }
 function controller() {
