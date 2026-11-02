@@ -98,7 +98,7 @@ export function spatialControls(
     list,
     element(
       "p",
-      "Arrow keys pan · Shift + arrows orbit · I inspects selection. Escape stops movement and closes panels.",
+      "Arrow keys pan · Shift + arrows orbit · Alt + ← / → moves through history · I inspects selection. Escape stops movement and closes panels.",
       "aw-guide-footnote",
     ),
     element("p", "Esc to close", "aw-panel-hint"),

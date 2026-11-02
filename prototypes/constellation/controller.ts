@@ -15,6 +15,7 @@ import type {
   Bookmark,
   Camera,
   Destination,
+  HistoryEntry,
   Location,
   Node,
   Point,
@@ -89,7 +90,7 @@ export class ConstellationController {
   readonly motionId = `constellation:camera:${++serial}`;
   snapshot: Snapshot;
   nodes = new Map<string, Node>();
-  state: ViewState;
+  state: ViewState & { future: HistoryEntry[] };
   selected: string | null = null;
   policy: Policy;
   error = "";
@@ -110,6 +111,7 @@ export class ConstellationController {
       anchors: {},
       bookmarks: {},
       history: [],
+      future: [],
       location: canonicalLocation(options.snapshot),
     };
     this.update(options.snapshot, false);
@@ -222,36 +224,10 @@ export class ConstellationController {
           s.location.kind === "surface"
             ? { kind: "workspace", workspaceId: s.location.workspaceId }
             : s.location;
-      this.state.history = Array.isArray(s.history)
-        ? s.history
-            .slice(-32)
-            .filter(
-              (h) =>
-                h &&
-                isLocation(h.location) &&
-                allowedLocation(h.location, this.nodes) &&
-                h.bookmark &&
-                validCamera(h.bookmark.camera),
-            )
-            .map((h) => ({
-              location: h.location,
-              bookmark: {
-                camera: { ...h.bookmark.camera },
-                ...(validSpatialCamera(h.bookmark.spatial)
-                  ? { spatial: structuredClone(h.bookmark.spatial) }
-                  : {}),
-                selected: this.nodes.has(h.bookmark.selected ?? "")
-                  ? h.bookmark.selected
-                  : null,
-              },
-            }))
-        : [];
+      this.state.history = this.cleanEntries(s.history);
+      this.state.future = this.cleanEntries(s.future);
       for (const [key, b] of Object.entries(this.state.bookmarks))
         this.state.bookmarks[key] = this.cleanBookmark(b);
-      this.state.history = this.state.history.map((h) => ({
-        ...h,
-        bookmark: this.cleanBookmark(h.bookmark),
-      }));
       this.applyBookmark(this.state.bookmarks[scopeOf(this.location)]);
       this.motion.snap(this.motionId);
       if (this.spatial) this.motion.snap(this.spatial.id);
@@ -284,17 +260,8 @@ export class ConstellationController {
           },
         ]),
     );
-    this.state.history = this.state.history
-      .filter((h) => allowedLocation(h.location, this.nodes))
-      .map((h) => ({
-        ...h,
-        bookmark: {
-          ...h.bookmark,
-          selected: this.nodes.has(h.bookmark.selected ?? "")
-            ? h.bookmark.selected
-            : null,
-        },
-      }));
+    this.state.history = this.cleanEntries(this.state.history);
+    this.state.future = this.cleanEntries(this.state.future);
     if (!allowedLocation(this.location, this.nodes))
       this.state.location = { kind: "universe" };
     const nextCanonical = canonicalLocation(snapshot);
@@ -309,10 +276,6 @@ export class ConstellationController {
     if (!this.nodes.has(this.selected ?? "")) this.selected = null;
     for (const [key, b] of Object.entries(this.state.bookmarks))
       this.state.bookmarks[key] = this.cleanBookmark(b);
-    this.state.history = this.state.history.map((h) => ({
-      ...h,
-      bookmark: this.cleanBookmark(h.bookmark),
-    }));
     if (notify) {
       this.changed();
       void this.persist();
@@ -330,11 +293,42 @@ export class ConstellationController {
         : null,
     };
     this.state.bookmarks[scopeOf(location)] = retained;
-    if (push)
+    if (push) {
+      this.state.future = [];
       this.state.history = [
         ...this.state.history,
         { location, bookmark: retained },
       ].slice(-32);
+    }
+  }
+  private cleanEntries(value: unknown): HistoryEntry[] {
+    if (!Array.isArray(value)) return [];
+    return value
+      .slice(-32)
+      .filter(
+        (h): h is HistoryEntry =>
+          !!h &&
+          isLocation(h.location) &&
+          allowedLocation(h.location, this.nodes) &&
+          h.bookmark &&
+          validCamera(h.bookmark.camera),
+      )
+      .map(({ location: l, bookmark }) => ({
+        location:
+          l.kind === "universe"
+            ? { kind: l.kind }
+            : l.kind === "project"
+              ? { kind: l.kind, projectId: l.projectId }
+              : l.kind === "workspace"
+                ? { kind: l.kind, workspaceId: l.workspaceId }
+                : {
+                    kind: l.kind,
+                    workspaceId: l.workspaceId,
+                    resourceId: l.resourceId,
+                    blockId: l.blockId,
+                  },
+        bookmark: this.cleanBookmark(bookmark),
+      }));
   }
   private cleanBookmark(bookmark: Bookmark): Bookmark {
     const spatial = validSpatialCamera(bookmark.spatial)
@@ -359,6 +353,7 @@ export class ConstellationController {
     previous: Location,
     bookmark?: Bookmark,
   ) {
+    this.state.future = [];
     if (bookmark)
       this.remember(
         previous,
@@ -508,6 +503,7 @@ export class ConstellationController {
     location: Location,
     returning?: Bookmark,
     spatialOverride?: SpatialCamera,
+    historyTravel?: { history: HistoryEntry[]; future: HistoryEntry[] },
   ) {
     if (!allowedLocation(location, this.nodes))
       throw new Error("Destination unavailable");
@@ -555,6 +551,12 @@ export class ConstellationController {
         old,
         !returning && JSON.stringify(from) !== JSON.stringify(location),
       );
+      if (historyTravel) {
+        this.state.history = this.cleanEntries(historyTravel.history);
+        this.state.future = this.cleanEntries(historyTravel.future);
+      } else {
+        this.state.future = [];
+      }
       this.state.location = location;
       const bookmark = returning ?? this.state.bookmarks[scopeOf(location)];
       this.applyBookmark(
@@ -599,33 +601,37 @@ export class ConstellationController {
   async back() {
     const h = this.state.history.at(-1);
     if (!h) return;
-    const travel = this.go(h.location, h.bookmark),
-      generation = this.generation;
-    await travel;
-    if (generation !== this.generation || this.destroyed) return;
-    this.state.history.pop();
-    await this.persist();
-    this.changed();
+    return this.go(h.location, h.bookmark, undefined, {
+      history: this.state.history.slice(0, -1),
+      future: [
+        ...this.state.future,
+        { location: this.location, bookmark: this.bookmark() },
+      ],
+    });
+  }
+  async forward() {
+    const h = this.state.future.at(-1);
+    if (!h) return;
+    return this.go(h.location, h.bookmark, undefined, {
+      history: [
+        ...this.state.history,
+        { location: this.location, bookmark: this.bookmark() },
+      ],
+      future: this.state.future.slice(0, -1),
+    });
   }
   async returnHistory(index: number) {
     const history = [...this.state.history],
       h = history[index];
     if (!h) return;
-    const travel = this.go(h.location, h.bookmark),
-      generation = this.generation;
-    await travel;
-    if (generation !== this.generation || this.destroyed) return;
-    if (JSON.stringify(this.location) === JSON.stringify(h.location)) {
-      this.state.history = history
-        .slice(0, index)
-        .filter((h) => allowedLocation(h.location, this.nodes))
-        .map((h) => ({
-          location: h.location,
-          bookmark: this.cleanBookmark(h.bookmark),
-        }));
-      await this.persist();
-      this.changed();
-    }
+    return this.go(h.location, h.bookmark, undefined, {
+      history: history.slice(0, index),
+      future: [
+        ...this.state.future,
+        { location: this.location, bookmark: this.bookmark() },
+        ...history.slice(index + 1).reverse(),
+      ],
+    });
   }
   async persist() {
     if (this.destroyed) return;

@@ -528,7 +528,7 @@ exports.verify = async ({
           "restart canonical " + key,
         );
       const restored = await view();
-      for (const key of ["anchors", "bookmarks", "location", "history"])
+      for (const key of ["anchors", "bookmarks", "location", "history", "future"])
         assert.deepEqual(
           restored[key],
           expected.view[key],

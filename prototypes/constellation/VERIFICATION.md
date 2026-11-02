@@ -2,7 +2,9 @@
 
 ## Current source checkpoint
 
-The latest full source run passes **66 tests**, strict TypeScript, the fixture build and diff checks. This is source evidence, not completion of the owner's native gates A–J.
+The latest full source run passes **74 tests** and strict TypeScript. This is source evidence, not completion of the owner's native gates A–J.
+
+Forward restores the exact camera, selection, mode, presentation and neighborhood through command search or spatial-field Alt+Right. Back, Forward and History jumps persist their two bounded stacks together only after successful, current-generation navigation. Seven new regressions cover multi-step order, exact restoration, restart/legacy profiles, failed and superseded travel, metadata refresh, permission revocation and bounded input. The optional `future` host persistence seam is supplied by Integration commit `385fb6d`; no new native verification has run for this source.
 
 Back and History returns now check that their awaited travel still owns the navigation generation before changing history. A deferred-service reproduction showed a cancelled Back deleting its old history entry; the regression covers both Back and a return to the current location's earlier history entry. A separate case revokes a project during a pending History return and verifies that the captured history cannot reintroduce that destination or its stale bookmark.
 

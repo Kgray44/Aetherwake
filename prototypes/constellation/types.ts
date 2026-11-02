@@ -99,12 +99,15 @@ export type Bookmark = {
   selected: string | null;
   spatial?: SpatialCamera;
 };
+export type HistoryEntry = { location: Location; bookmark: Bookmark };
 export type ViewState = {
   schema: "aerynth.constellation@1";
   anchors: Record<string, Anchor>;
   bookmarks: Record<string, Bookmark>;
   location: Location;
-  history: { location: Location; bookmark: Bookmark }[];
+  history: HistoryEntry[];
+  /** Optional for existing @1 profiles. Last entry is the next Forward view. */
+  future?: HistoryEntry[];
 };
 /** Save only view state; implement in the host's private, canonical persistence. */
 export type ViewPersistence = {

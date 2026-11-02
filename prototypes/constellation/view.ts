@@ -279,6 +279,13 @@ export function mountConstellation(
         enabled: controller.state.history.length > 0,
       },
       {
+        id: "forward",
+        title: "Forward",
+        hint: "Alt → · Restore the next view",
+        run: () => controller.forward(),
+        enabled: controller.state.future.length > 0,
+      },
+      {
         id: "fit",
         title: "Fit selection",
         hint: "F",
@@ -911,10 +918,14 @@ export function mountConstellation(
       void invoke(() => spatial.undoPosition());
       return;
     }
-    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowLeft")) {
+    if (e.altKey && ["ArrowUp", "ArrowLeft", "ArrowRight"].includes(e.key)) {
       e.preventDefault();
       void invoke(() =>
-        e.key === "ArrowUp" ? controller.zoomOut() : controller.back(),
+        e.key === "ArrowUp"
+          ? controller.zoomOut()
+          : e.key === "ArrowLeft"
+            ? controller.back()
+            : controller.forward(),
       );
       return;
     }
