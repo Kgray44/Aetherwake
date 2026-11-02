@@ -668,6 +668,21 @@ async function run(win) {
     `document.querySelector('.brand img').parentElement.style.background='';document.querySelector('.brand img').style.mixBlendMode=''`,
   );
   await sample("23-logo-direct-on-scene");
+  await geometry(
+    ids[1],
+    { x: 1030, y: 405, w: 350, h: 164, z: 20 },
+    "rectangle",
+  );
+  await pause(900);
+  const compact = await js(
+    `(()=>{const e=document.querySelector('[data-block="${ids[1]}"]'),b=e.getBoundingClientRect(),a=e.querySelector('.unfold'),r=a.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return{card:{x:b.x,y:b.y,w:b.width,h:b.height},action:{x:r.x,y:r.y,w:r.width,h:r.height},reachable:hit===a||a.contains(hit),bottomInside:r.bottom<=b.bottom-4}})()`,
+  );
+  receipt.compactResearch = compact;
+  await sample("24-compact-research-action");
+  check(
+    "short research spans keep the native unfold action visible and reachable",
+    compact.reachable && compact.bottomInside,
+  );
   await reset();
   await js("window.__aerynth.setEnvironmentPhase(null)");
   for (const count of [3, 10, 25, 50]) {
@@ -710,6 +725,7 @@ async function run(win) {
       callbacks: end.metrics.callbacks,
       submissions: end.metrics.draws,
       submissionIntervals: end.metrics.drawIntervals,
+      callbackIntervals: end.metrics.intervals,
       gpu: end.gpu,
       compositing: end.compositing,
       meaning:
@@ -720,6 +736,10 @@ async function run(win) {
       end.gpu.surfacesRendered === count &&
         end.gpu.surfaceCapacity >= count &&
         end.gpu.instruments.surfaces.every((s) => s.faceOpacity === 1),
+    );
+    check(
+      "one RAF chain at " + count + " blocks",
+      end.metrics.intervals.filter((dt) => dt < 0.001).length <= 1,
     );
   }
   receipt.masterLogoSHA256 = hash(
