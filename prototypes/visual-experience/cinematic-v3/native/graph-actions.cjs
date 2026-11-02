@@ -31,6 +31,13 @@ async function graphAction(action, call) {
         expectedVersion: action.expectedVersion,
       };
       break;
+    case "attach":
+      command = {
+        type: "attach",
+        workspaceId: action.workspaceId,
+        resourceId: action.resourceId,
+      };
+      break;
     case "archive":
       if (!["project", "workspace", "resource"].includes(action.kind))
         throw new Error("invalid_archive_subject");

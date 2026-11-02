@@ -270,8 +270,8 @@
   pointer-events: none;
 }
 #constellation-view.overview {
-  background: radial-gradient(ellipse, #191626c0, #080c16a0);
-  border: 1px solid #b2a4cf20;
+  background: transparent;
+  border: 0;
 }
 .constellation-host .aw-working .aw-constellation-bar {
   display: none;

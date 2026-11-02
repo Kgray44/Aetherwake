@@ -57,7 +57,9 @@ const source = {
 const verify =
   process.argv.includes("--integration-verify") ||
   process.argv.includes("--integration-live") ||
-  process.argv.includes("--integration-benchmark");
+  process.argv.includes("--integration-benchmark") ||
+  process.argv.includes("--integration-constellation");
+const captureReview = process.argv.includes("--integration-constellation");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
 const privateRoot = profileArg
   ? path.resolve(profileArg.slice(10))
@@ -193,6 +195,7 @@ app.whenReady().then(async () => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      additionalArguments: captureReview ? ["--aerynth-capture-visible"] : [],
     },
   });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -303,7 +306,9 @@ app.whenReady().then(async () => {
     sendToWindow(
       win,
       "host-active",
-      win.isVisible() && !win.isMinimized() && win.isFocused(),
+      win.isVisible() &&
+        !win.isMinimized() &&
+        (win.isFocused() || captureReview),
     );
   };
   win.on("close", (event) => {
@@ -336,6 +341,19 @@ app.whenReady().then(async () => {
   }, 240000);
   reserveTimer.unref();
   if (verify) {
+    if (captureReview) {
+      await require("./integration-constellation.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        call,
+        source,
+        moduleStarted,
+        session: session.defaultSession,
+        localURL,
+      });
+      return;
+    }
     const checks = require("./desktop-verify.cjs");
     await (
       process.argv.includes("--integration-live")

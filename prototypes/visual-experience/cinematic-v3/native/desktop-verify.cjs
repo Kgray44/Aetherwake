@@ -323,7 +323,8 @@ async function driver(win) {
   const wait = async (expr, timeout = 90000) => {
     const end = Date.now() + timeout;
     while (Date.now() < end) {
-      if (await js(expr)) return;
+      if (await js(`(()=>{try{return (${expr})}catch{return false}})()`))
+        return;
       await pause(80);
     }
     throw new Error(
@@ -336,7 +337,7 @@ async function driver(win) {
   const click = async (selector) => {
     await pause(130);
     const p = await js(
-      `(()=>{let e=document.querySelector(${JSON.stringify(selector)});let r=e?.getBoundingClientRect();if(!r||e.disabled||e.hidden)throw Error('Unavailable '+${JSON.stringify(selector)});let x=r.x+r.width/2,y=r.y+r.height/2,h=document.elementFromPoint(x,y);if(!h||!(e===h||e.contains(h)))throw Error('Occluded '+${JSON.stringify(selector)});return {x:Math.round(x),y:Math.round(y)}})()`,
+      `(()=>{let e=document.querySelector(${JSON.stringify(selector)});e?.scrollIntoView({block:'nearest',inline:'nearest'});let r=e?.getBoundingClientRect();if(!r||e.disabled||e.hidden)throw Error('Unavailable '+${JSON.stringify(selector)});let x=r.x+r.width/2,y=r.y+r.height/2,h=document.elementFromPoint(x,y);if(!h||!(e===h||e.contains(h)))throw Error('Occluded '+${JSON.stringify(selector)});return {x:Math.round(x),y:Math.round(y)}})()`,
     );
     const inputAt = Date.now();
     for (const type of ["mouseMove", "mouseDown", "mouseUp"])
@@ -353,7 +354,7 @@ async function driver(win) {
     js(
       `(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.value=${JSON.stringify(value)};e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))})()`,
     );
-  await wait('document.body.classList.contains("application-ready")');
+  await wait('document.body.dataset.applicationHydrated === "true"');
   return {
     js,
     wait,
@@ -362,6 +363,7 @@ async function driver(win) {
     snapshot: () => js("window.__aerynth.application()"),
   };
 }
+exports.createDriver = driver;
 
 exports.live = async ({
   win,

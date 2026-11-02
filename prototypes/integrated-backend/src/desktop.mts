@@ -560,6 +560,10 @@ export class DesktopState {
         check(s.activeWorkspaceId, "workspace_required");
         this.engineCommand(s.activeWorkspaceId!, { type: "undoLayout" });
         break;
+      case "redo":
+        check(s.activeWorkspaceId, "workspace_required");
+        this.engineCommand(s.activeWorkspaceId!, { type: "redoLayout" });
+        break;
       default:
         check(false, "unsupported_desktop_command");
     }
@@ -705,6 +709,9 @@ export class DesktopState {
       ),
       canUndo: s.activeWorkspaceId
         ? this.engine.project(s.activeWorkspaceId).canUndo
+        : false,
+      canRedo: s.activeWorkspaceId
+        ? this.engine.project(s.activeWorkspaceId).canRedo
         : false,
       hasCheckpoint: s.activeWorkspaceId
         ? this.engine.listCheckpoints(s.activeWorkspaceId).length > 0

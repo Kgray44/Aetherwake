@@ -2,7 +2,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld(
   "aerynthHost",
   Object.freeze({
-    renderWhileVisible: false,
+    renderWhileVisible: process.argv.includes("--aerynth-capture-visible"),
     onActive(listener) {
       if (typeof listener === "function")
         ipcRenderer.on("host-active", (_e, active) => {

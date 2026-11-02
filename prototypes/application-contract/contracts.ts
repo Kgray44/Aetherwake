@@ -98,6 +98,7 @@ export type DesktopSnapshot = {
   activeWorkspaceId: string | null;
   layoutVersion: number;
   canUndo: boolean;
+  canRedo: boolean;
   hasCheckpoint: boolean;
   navigationBlocks?: Block[];
   viewport?: { x: number; y: number; zoom: number; displayId?: string };
@@ -177,6 +178,7 @@ type DesktopAction =
       status: "open" | "done";
     }
   | { type: "undo" }
+  | { type: "redo" }
   | { type: "checkpoint" }
   | { type: "restore" };
 export type DesktopCommand = DesktopAction & {

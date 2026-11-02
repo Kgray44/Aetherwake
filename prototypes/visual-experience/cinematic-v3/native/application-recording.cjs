@@ -30,7 +30,9 @@ async function startWindowRecording(win, session, localURL) {
         !request.videoRequested ||
         request.audioRequested ||
         !request.userGesture ||
-        request.frame !== frame ||
+        !request.frame ||
+        request.frame.routingId !== frame.routingId ||
+        request.frame.processId !== frame.processId ||
         request.frame.url !== localURL
       ) {
         callback(null);

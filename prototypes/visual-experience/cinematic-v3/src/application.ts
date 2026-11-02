@@ -71,7 +71,6 @@ export function installApplication(hooks: Hooks) {
   const arrivalPose = { x: 1, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity: 1 };
   hooks.motion.add(arrivalId, arrivalPose);
   const presenceId = "application:vela-presence";
-  const arranged = new Set<string>();
   let presenceDrag: {
     workspaceId: string;
     version: number;
@@ -254,6 +253,7 @@ export function installApplication(hooks: Hooks) {
           createResource: true,
           archive: true,
           detach: true,
+          attach: true,
           relate: true,
           unrelate: true,
           branch: true,
@@ -306,14 +306,6 @@ export function installApplication(hooks: Hooks) {
       decorate(el(`[data-block="${block.id}"]`), block.id);
     hooks.layout();
     document.body.classList.add("application-ready");
-    if (next.activeWorkspaceId && !arranged.has(next.activeWorkspaceId)) {
-      arranged.add(next.activeWorkspaceId);
-      const workspaceId = next.activeWorkspaceId;
-      void enqueue(async () => {
-        await flush();
-        await command({ type: "resolveLayout", workspaceId });
-      });
-    }
   }
   let flushInFlight: Promise<void> | null = null;
   function flush(): Promise<void> {
@@ -653,7 +645,7 @@ export function installApplication(hooks: Hooks) {
     if (!b) return;
     open(
       "Shape and place",
-      `<form><div class="geometry-grid">${(["x", "y", "width", "height", "z"] as const).map((k) => `<label>${k === "z" ? "Layer" : k}<input type="number" name="${k}" value="${b[k]}" required step="1"></label>`).join("")}<label>Shape<select name="shape">${["rectangle", "rounded", "circle"].map((s) => `<option ${s === b.shape ? "selected" : ""}>${s}</option>`).join("")}</select></label></div><p>Circle is a compact presentation. Opening always provides a rectangular reading surface.</p><button type="submit">Apply layout</button></form>`,
+      `<form><div class="geometry-grid">${(["x", "y", "width", "height", "z"] as const).map((k) => `<label>${k === "z" ? "Layer" : k}<input type="number" name="${k}" value="${b[k]}" required step="1"></label>`).join("")}<label>Shape<select name="shape">${["rectangle", "rounded", "circle", "pill", "folio", "lens"].map((s) => `<option ${s === b.shape ? "selected" : ""}>${s}</option>`).join("")}</select></label></div><p>Compact shapes unfold into a rectangular reading surface.</p><button type="submit">Apply layout</button></form>`,
     );
     form(async (f) => {
       const placement = Object.fromEntries(
@@ -676,17 +668,39 @@ export function installApplication(hooks: Hooks) {
     }
     open(
       "Layouts and blocks",
-      `<div class="layout-actions"><button id="save-layout">Save layout checkpoint</button><button id="restore-layout" ${state.hasCheckpoint ? "" : "disabled"}>Restore checkpoint</button><button id="undo-layout" ${state.canUndo ? "" : "disabled"}>Undo layout</button></div><p>Checkpoints and undo restore placements, shapes and geometry. Resource text remains independent.</p>${state.blocks.map((b) => `<div class="workspace-row"><button data-locate="${b.id}">${escape(state!.resources.find((r) => r.id === b.resource_id)?.title ?? "Resource")}</button><button data-properties="${b.id}">Properties</button></div>`).join("")}`,
+      `<div class="layout-actions"><button id="save-layout">Save layout checkpoint</button><button id="restore-layout" ${state.hasCheckpoint ? "" : "disabled"}>Restore checkpoint</button><button id="undo-layout" ${state.canUndo ? "" : "disabled"}>Undo layout</button><button id="redo-layout" ${state.canRedo ? "" : "disabled"}>Redo layout</button><button id="resolve-layout">Make room · undoable</button></div><p>Saved geometry remains unchanged until you edit or organize it. Checkpoints and history restore placements, shapes and geometry. Resource text remains independent.</p><button id="locate-vela">Locate Vela</button>${state.blocks.map((b) => `<div class="workspace-row"><button data-locate="${b.id}">${escape(state!.resources.find((r) => r.id === b.resource_id)?.title ?? "Resource")}</button><button data-properties="${b.id}">Properties</button></div>`).join("")}`,
     );
     for (const [id, type] of [
       ["save-layout", "checkpoint"],
       ["restore-layout", "restore"],
       ["undo-layout", "undo"],
+      ["redo-layout", "redo"],
     ] as const)
       el("#" + id, dialog).onclick = () => {
         dialog.close();
         void run({ type });
       };
+    el("#resolve-layout", dialog).onclick = () => {
+      dialog.close();
+      void run({
+        type: "resolveLayout",
+        workspaceId: state!.activeWorkspaceId!,
+      });
+    };
+    el("#locate-vela", dialog).onclick = () => {
+      dialog.close();
+      const p = state?.presence;
+      if (!p) return;
+      hooks.home();
+      offset = {
+        x: innerWidth / 2 - p.x - p.width / 2,
+        y: innerHeight / 2 - p.y - p.height / 2,
+      };
+      presenceTarget();
+      hooks.layout();
+      hooks.wake();
+      velaCard.focus();
+    };
     dialog
       .querySelectorAll<HTMLElement>("[data-properties]")
       .forEach((b) => (b.onclick = () => geometry(b.dataset.properties!)));
@@ -820,7 +834,7 @@ export function installApplication(hooks: Hooks) {
           void host.command!("send", {
             resourceId: current.id,
             content,
-            expectedVersion: current.version,
+            expectedVersion: current.conversationRevision ?? current.version,
           })
             .then(
               async (result) => {
@@ -930,7 +944,7 @@ export function installApplication(hooks: Hooks) {
             void run({
               type: "taskStatus",
               resourceId: r.id,
-              expectedVersion: current.conversationRevision ?? current.version,
+              expectedVersion: current.version,
               status: (event.target as HTMLInputElement).checked
                 ? "done"
                 : "open",
@@ -1056,6 +1070,7 @@ export function installApplication(hooks: Hooks) {
   });
   const ready = command({ type: "snapshot" })
     .then(async () => {
+      await constellation?.ready;
       const replay = (await host.command!("replay", {})) as {
         events: typeof localEvents;
         truncated: boolean;
@@ -1066,6 +1081,8 @@ export function installApplication(hooks: Hooks) {
           "Event history is partial: this view shows the latest 250 retained records.",
         );
       fillEvents(el("#events"));
+      await tail;
+      document.body.dataset.applicationHydrated = "true";
     })
     .catch((e) => {
       hooks.status(
@@ -1110,6 +1127,15 @@ export function installApplication(hooks: Hooks) {
             })
           | null
       )?.layer ?? null,
+    spatialDiagnostics: () => ({
+      location: constellation?.controller.location,
+      selected: constellation?.controller.selected,
+      anchors: constellation?.controller.state.anchors,
+      camera: constellation?.controller.spatial?.camera,
+      bookmark: constellation?.controller.spatial?.bookmark(),
+      renderer: constellation?.layer.diagnostics,
+      policy: constellation?.controller.policy,
+    }),
     presenceCard,
     presence: () => {
       const p = presenceCard();

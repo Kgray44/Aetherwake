@@ -158,6 +158,12 @@ test("desktop checkpoints, undo, invalid geometry and failed commands preserve r
     s = await call({ type: "undo" });
     assert.equal(s.blocks[0].id, first.id);
     assert.equal(s.blocks[0].resource_id, first.resource_id);
+    assert.equal(s.canRedo, true);
+    s = await call({type:"redo"});
+    assert.equal(s.blocks.length, 0);
+    assert.equal(s.canRedo, false);
+    s = await call({type:"undo"});
+    assert.equal(s.blocks[0].id, first.id);
     await call({
       type: "content",
       resourceId: first.resource_id,
