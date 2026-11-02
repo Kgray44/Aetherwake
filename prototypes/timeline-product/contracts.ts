@@ -40,6 +40,8 @@ export interface TimelineDocument {
   contract: typeof TIMELINE_CONTRACT;
   schemaVersion: 1;
   resource: TimelineResource;
+  /** Current host policy hint, never persisted or accepted as mutation authority. */
+  canEdit: boolean;
   view: TimelineView;
   viewDigest: string;
   selectionUnavailable: boolean;
