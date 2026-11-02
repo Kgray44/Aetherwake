@@ -17,10 +17,26 @@ const publicNames = new Set([
 exports.isVelaRead = (input) =>
   input && ["state", "search"].includes(input.name);
 
+/** Transient canvas bounds carry no provider grant or model-action authority. */
+function presentationContext(value) {
+  if (value === undefined) return undefined;
+  const valid = value && !Array.isArray(value) && Object.keys(value).length === 2 &&
+    typeof value.workspaceId === "string" && value.workspaceId.length > 0 && value.workspaceId.length <= 200 &&
+    !/[\x00-\x1f]/.test(value.workspaceId) && value.bounds && !Array.isArray(value.bounds) &&
+    Object.keys(value.bounds).length === 4 && ["x", "y", "width", "height"].every(key =>
+      typeof value.bounds[key] === "number" && Number.isFinite(value.bounds[key])) &&
+    value.bounds.width > 0 && value.bounds.height > 0;
+  if (!valid) throw Error("invalid_vela_presentation");
+  return { workspaceId: value.workspaceId, bounds: { x: value.bounds.x, y: value.bounds.y,
+    width: value.bounds.width, height: value.bounds.height } };
+}
+
 /** Called only after the host verifies its exact local main frame. Grants never enter IPC results. */
 exports.velaCommand = async ({ win, dialog, call, input }) => {
   if (!input || !publicNames.has(input.name))
     throw Error("invalid_vela_command");
+  const presentation = input.name === "apply" ? presentationContext(input.presentation) : undefined;
+  if (input.name !== "apply" && input.presentation !== undefined) throw Error("invalid_vela_presentation");
   if (input.name === "request") {
     const value = input.input;
     if (
@@ -97,5 +113,6 @@ exports.velaCommand = async ({ win, dialog, call, input }) => {
     }
   }
   // Backend uses an explicit method switch and validates context/version/policy again.
-  return call("vela", { name: input.name, input: input.input });
+  return call("vela", { name: input.name, input: input.input,
+    ...(presentation ? { presentation } : {}) });
 };

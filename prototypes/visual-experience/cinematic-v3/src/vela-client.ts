@@ -2,15 +2,22 @@ import type {
   VelaClient,
   VelaState,
 } from "../../../vela-core/src/contracts.ts";
+import type { WorkspacePresentationContext } from "../../../application-contract/contracts.ts";
 
 /** Browser transport only. Native main owns provider consent; backend owns identity and state. */
 export function createVelaClient(options: {
   command(name: string, input: unknown): Promise<unknown>;
   changed(name: string, result: unknown): Promise<void>;
   observed(state: VelaState): void;
+  presentation?(): WorkspacePresentationContext | null;
 }): VelaClient {
   const invoke = async <T>(name: string, input: unknown): Promise<T> => {
-    const result = await options.command("vela", { name, input });
+    const presentation = name === "apply" ? options.presentation?.() : null;
+    const result = await options.command("vela", {
+      name,
+      input,
+      ...(presentation ? { presentation: structuredClone(presentation) } : {}),
+    });
     if (name === "state" || name === "open")
       options.observed(result as VelaState);
     if (

@@ -170,6 +170,10 @@ export function installApplication(hooks: Hooks) {
   });
   const velaClient = createVelaClient({
     command: (name, input) => host.command!(name, input),
+    presentation: () =>
+      state?.navigation.kind === "workspace" && state.activeWorkspaceId
+        ? { workspaceId: state.activeWorkspaceId, bounds: viewBounds() }
+        : null,
     changed: (name, result) =>
       enqueue(async () => {
         const previousWorkspaceId = state?.activeWorkspaceId;
