@@ -11,6 +11,7 @@ import {
   scopeOf,
 } from "./projection.ts";
 import type {
+  Anchor,
   Bookmark,
   Camera,
   Destination,
@@ -23,6 +24,12 @@ import type {
   ViewPersistence,
   ViewState,
 } from "./types.ts";
+import {
+  validSpatialCamera,
+  validVector,
+  type SpatialNavigator,
+} from "./spatial.ts";
+import type { GraphActions, GraphAction } from "./spatial-types.ts";
 
 const clamp = (n: number, a: number, b: number) => Math.max(a, Math.min(b, n));
 const finite = (n: unknown): n is number =>
@@ -60,7 +67,7 @@ export const defaultPolicy: Policy = {
   graphicsAvailable: true,
 };
 let serial = 0;
-export type ControllerOptions = {
+export type ControllerOptions = GraphActions & {
   snapshot: Snapshot;
   motion: MotionCoordinator;
   navigate(target: Destination): Promise<unknown>;
@@ -76,6 +83,7 @@ export type ControllerOptions = {
 };
 
 export class ConstellationController {
+  spatial?: SpatialNavigator;
   readonly motion: MotionCoordinator;
   readonly motionId = `constellation:camera:${++serial}`;
   snapshot: Snapshot;
@@ -148,6 +156,7 @@ export class ConstellationController {
     return {
       camera: { x: p.x.target, y: p.y.target, zoom: p.w.target },
       selected: this.selected,
+      ...(this.spatial ? { spatial: this.spatial.bookmark() } : {}),
     };
   }
   async restore() {
@@ -160,16 +169,22 @@ export class ConstellationController {
       )
         return;
       const s = raw as ViewState;
-      const anchors: Record<string, Point> = {};
+      const anchors: Record<string, Anchor> = {};
       for (const [key, p] of Object.entries(s.anchors ?? {}).slice(0, 20000))
         if (
-          /^(project|workspace):/.test(key) &&
+          /^(project|workspace|resource):/.test(key) &&
           key.length < 1024 &&
           p &&
           finite(p.x) &&
           finite(p.y)
         )
-          anchors[key] = { x: p.x, y: p.y };
+          anchors[key] = {
+            x: p.x,
+            y: p.y,
+            ...(validVector(p.spatial) ? { spatial: { ...p.spatial } } : {}),
+            ...(p.pinned === true ? { pinned: true } : {}),
+            ...(finite(p.rotation) ? { rotation: p.rotation } : {}),
+          };
       this.state.anchors = anchors;
       this.update(this.snapshot, false);
       const scopes = new Set([
@@ -183,6 +198,9 @@ export class ConstellationController {
         if (scopes.has(key) && b && validCamera(b.camera))
           this.state.bookmarks[key] = {
             camera: { ...b.camera },
+            ...(validSpatialCamera(b.spatial)
+              ? { spatial: structuredClone(b.spatial) }
+              : {}),
             selected:
               typeof b.selected === "string" && this.nodes.has(b.selected)
                 ? b.selected
@@ -218,6 +236,9 @@ export class ConstellationController {
               location: h.location,
               bookmark: {
                 camera: { ...h.bookmark.camera },
+                ...(validSpatialCamera(h.bookmark.spatial)
+                  ? { spatial: structuredClone(h.bookmark.spatial) }
+                  : {}),
                 selected: this.nodes.has(h.bookmark.selected ?? "")
                   ? h.bookmark.selected
                   : null,
@@ -226,6 +247,7 @@ export class ConstellationController {
         : [];
       this.applyBookmark(this.state.bookmarks[scopeOf(this.location)]);
       this.motion.snap(this.motionId);
+      if (this.spatial) this.motion.snap(this.spatial.id);
       this.changed();
     } catch {
       this.error =
@@ -239,11 +261,8 @@ export class ConstellationController {
     const bookmark = notify && !this.pending ? this.bookmark() : undefined;
     this.snapshot = snapshot;
     this.nodes = project(snapshot, this.state.anchors);
-    const validKeys = new Set(
-      [...this.nodes.values()]
-        .filter((n) => n.kind !== "resource")
-        .map((n) => n.key),
-    );
+    this.spatial?.updateGraph();
+    const validKeys = new Set([...this.nodes.keys()]);
     this.state.anchors = Object.fromEntries(
       Object.entries(this.state.anchors).filter(([k]) => validKeys.has(k)),
     );
@@ -290,6 +309,9 @@ export class ConstellationController {
     if (!allowedLocation(location, this.nodes)) return;
     const retained = {
       camera: bookmark.camera,
+      ...(validSpatialCamera(bookmark.spatial)
+        ? { spatial: bookmark.spatial }
+        : {}),
       selected: this.nodes.has(bookmark.selected ?? "")
         ? bookmark.selected
         : null,
@@ -316,6 +338,7 @@ export class ConstellationController {
     this.applyBookmark(this.state.bookmarks[scopeOf(location)]);
   }
   private applyBookmark(bookmark?: Bookmark) {
+    this.spatial?.restore(bookmark?.spatial);
     this.selected = bookmark?.selected ?? null;
     this.move(bookmark?.camera ?? this.defaultCamera(), "navigation");
   }
@@ -328,13 +351,16 @@ export class ConstellationController {
   }
   setPolicy(policy: Partial<Policy>) {
     this.policy = { ...this.policy, ...policy };
-    if (this.policy.reduced || this.policy.quiet || this.policy.hidden)
+    if (this.policy.reduced || this.policy.quiet || this.policy.hidden) {
       this.motion.snap(this.motionId);
+      this.spatial?.interrupt();
+    }
     this.changed();
   }
   zoom(factor: number) {
     if (!Number.isFinite(factor) || factor <= 0)
       throw new Error("Invalid zoom");
+    this.spatial?.zoom(factor);
     const p = this.motion.bodies.get(this.motionId)!.channels;
     this.move(
       {
@@ -347,6 +373,7 @@ export class ConstellationController {
   }
   pan(dx: number, dy: number) {
     if (!finite(dx) || !finite(dy)) return;
+    this.spatial?.pan(dx, dy);
     const c = this.camera;
     this.move(
       { ...c, x: clamp(c.x + dx, -1e7, 1e7), y: clamp(c.y + dy, -1e7, 1e7) },
@@ -354,14 +381,17 @@ export class ConstellationController {
     );
   }
   interrupt() {
+    this.spatial?.interrupt();
     this.motion.target(this.motionId, pose(this.camera), "interrupt", true);
     this.motion.snap(this.motionId);
     this.changed();
   }
   recenter() {
+    this.spatial?.recenter();
     this.move(this.defaultCamera(), "recenter");
   }
   fit(key = this.selected) {
+    this.spatial?.fit(key);
     const n = this.nodes.get(key ?? "");
     if (n)
       this.move(
@@ -539,6 +569,18 @@ export class ConstellationController {
     this.update(this.snapshot);
     await this.persist();
   }
+  can(action: GraphAction["type"]) {
+    return (
+      !!this.options.graphAction && this.options.capabilities?.[action] === true
+    );
+  }
+  async act(action: GraphAction) {
+    if (!this.can(action.type))
+      throw Error("This graph operation is unavailable in the current host");
+    const next = await this.options.graphAction!(action);
+    this.update(next);
+    return next;
+  }
   visible(width: number, height: number) {
     const c = this.camera,
       l = this.location;
@@ -601,6 +643,7 @@ export class ConstellationController {
     return visible;
   }
   dispose() {
+    this.spatial?.dispose();
     this.destroyed = true;
     this.generation++;
     this.listeners.clear();

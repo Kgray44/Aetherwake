@@ -260,3 +260,105 @@
     font-size: 12px;
   }
 }
+.aw-spatial-label {
+  min-height: 0 !important;
+  width: 175px !important;
+  padding: 5px 8px !important;
+  border: 0 !important;
+  border-radius: 5px !important;
+  box-shadow: none !important;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    #0e0c16ba,
+    transparent
+  ) !important;
+  text-shadow: 0 1px 5px #000;
+  gap: 1px !important;
+  will-change: transform;
+}
+.aw-spatial-label .aw-anchor-sculpture {
+  display: none;
+}
+.aw-spatial-label strong {
+  font-size: 13px !important;
+}
+.aw-spatial-label small {
+  font-size: 9px !important;
+}
+.aw-spatial-mode .aw-camera-tools {
+  max-width: 80%;
+  flex-wrap: wrap;
+}
+.aw-camera-tools input[type="range"] {
+  width: 60px;
+  padding: 0;
+}
+.aw-camera-tools select {
+  background: #211a2c;
+  color: #eeeaf9;
+  border: 1px solid #bda3db5c;
+  border-radius: 7px;
+}
+.aw-spatial-mode .aw-spatial-detail {
+  max-height: 130px;
+  max-width: 67vw;
+  bottom: 14px;
+}
+.aw-spatial-detail input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+}
+.aw-graph-dialog {
+  pointer-events: auto;
+  color: #eeeaf9;
+  background: #15111fed;
+  border: 1px solid #9e82be88;
+  border-radius: 16px;
+  max-width: min(660px, 85vw);
+  max-height: 80vh;
+  overflow: auto;
+  padding: 24px;
+}
+.aw-graph-dialog::backdrop {
+  background: #08060cb0;
+}
+.aw-graph-dialog form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 20px;
+}
+.aw-graph-dialog label {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.aw-graph-dialog input,
+.aw-graph-dialog select {
+  background: #261d32;
+  color: #eeeaf9;
+  padding: 7px;
+  border: 1px solid #ad8fca66;
+  border-radius: 6px;
+  max-width: 100%;
+}
+.aw-graph-dialog fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.aw-graph-dialog h2 {
+  font-size: 21px;
+  font-weight: 500;
+}
+.aw-graph-dialog section {
+  margin: 14px 0;
+  padding: 12px;
+  border: 1px solid #977ba344;
+  border-radius: 8px;
+}
+.aw-graph-dialog button {
+  margin: 5px 6px 0 0;
+}

@@ -4,6 +4,10 @@ import {
 } from "./controller.ts";
 import { keyOf } from "./projection.ts";
 import type { Node, Policy, Snapshot } from "./types.ts";
+import { SpatialNavigator, edges } from "./spatial.ts";
+import { ConstellationScene } from "./renderer3d.ts";
+import { graphControls } from "./graph-controls.ts";
+import type { Vector3 } from "./spatial-types.ts";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -31,7 +35,32 @@ export function mountConstellation(
   container: HTMLElement,
   options: ControllerOptions,
 ) {
-  const controller = new ConstellationController(options);
+  let field: HTMLDivElement;
+  let layer: ConstellationScene;
+  const controller = new ConstellationController({
+    ...options,
+    onTransition: (transition) => {
+      const n =
+        transition.to.kind === "project"
+          ? controller.nodes.get("project:" + transition.to.projectId)
+          : transition.to.kind === "workspace"
+            ? controller.nodes.get("workspace:" + transition.to.workspaceId)
+            : transition.to.kind === "surface"
+              ? controller.nodes.get("resource:" + transition.to.blockId)
+              : undefined;
+      const bounds = field?.getBoundingClientRect();
+      const p =
+        n && bounds && layer
+          ? layer.project(n.key, bounds.width, bounds.height)
+          : null;
+      options.onTransition?.({
+        ...transition,
+        ...(p && bounds
+          ? { screenOrigin: { x: bounds.left + p.x, y: bounds.top + p.y } }
+          : {}),
+      });
+    },
+  });
   const root = el("section", "", "aw-constellation");
   root.setAttribute("aria-label", "Constellation navigation");
   const bar = el("nav", "", "aw-constellation-bar");
@@ -47,7 +76,7 @@ export function mountConstellation(
   });
   toggle.setAttribute("aria-expanded", "false");
   bar.append(back, out, universe, breadcrumb, toggle);
-  const field = el("div", "", "aw-spatial-field");
+  field = el("div", "", "aw-spatial-field");
   field.tabIndex = 0;
   field.setAttribute("role", "region");
   field.setAttribute(
@@ -96,6 +125,62 @@ export function mountConstellation(
     dirty = true,
     lastResultKey = "",
     lastDetailKey = "";
+  const invalidate = () => {
+    dirty = true;
+    options.onDirty?.();
+  };
+  const spatial = new SpatialNavigator(controller, invalidate);
+  controller.spatial = spatial;
+  layer = new ConstellationScene(controller, spatial, () =>
+    field.getBoundingClientRect(),
+  );
+  const graph = graphControls(root, controller, () => {
+    lastDetailKey = "";
+    invalidate();
+  });
+  const mode = el("select");
+  mode.setAttribute("aria-label", "Spatial pointer mode");
+  for (const value of ["orbit", "pan"]) {
+    const o = el("option", value);
+    o.value = value;
+    mode.append(o);
+  }
+  mode.onchange = () => {
+    spatial.mode = mode.value as "orbit" | "pan";
+    void controller.persist();
+  };
+  const sensitivity = el("input");
+  sensitivity.type = "range";
+  sensitivity.min = ".1";
+  sensitivity.max = "3";
+  sensitivity.step = ".1";
+  sensitivity.value = "1";
+  sensitivity.setAttribute("aria-label", "Orbit sensitivity");
+  sensitivity.oninput = () => {
+    spatial.sensitivity = Number(sensitivity.value);
+  };
+  sensitivity.onchange = () => void controller.persist();
+  tools.append(
+    mode,
+    sensitivity,
+    button("Orbit left", () => spatial.orbit(-70, 0)),
+    button("Orbit right", () => spatial.orbit(70, 0)),
+    button("Orbit up", () => spatial.orbit(0, -60)),
+    button("Orbit down", () => spatial.orbit(0, 60)),
+    button("Undo position", () => spatial.undoPosition()),
+    button("3D / List", () => {
+      spatial.presentation =
+        spatial.presentation === "spatial" ? "list" : "spatial";
+      drawer.hidden = spatial.presentation !== "list";
+      if (!drawer.hidden) search.focus();
+      invalidate();
+      void controller.persist();
+    }),
+  );
+  bar.append(
+    button("Create", () => graph.create()),
+    button("Link resources", () => graph.relate()),
+  );
   const views = new Map<string, HTMLButtonElement>();
   const report = (error: unknown) => {
     controller.error =
@@ -158,10 +243,23 @@ export function mountConstellation(
   };
   const paintDetail = () => {
     const n = controller.nodes.get(controller.selected ?? "");
-    const key = `${n?.key}:${controller.snapshot.relationships.length}:${n?.title}:${n?.point.x}:${n?.point.y}`;
+    const position = n ? spatial.position(n.key) : null;
+    const key = `${n?.key}:${controller.snapshot.relationships.length}:${controller.snapshot.conversationBranches?.length}:${n?.title}:${JSON.stringify(position)}:${layer.selectedEdge}`;
     if (key === lastDetailKey) return;
     lastDetailKey = key;
     detail.replaceChildren();
+    if (layer.selectedEdge) {
+      const edge = edges(controller).find((e) => e.id === layer.selectedEdge);
+      if (edge) {
+        detail.append(
+          el("strong", edge.kind),
+          el("p", `${edge.sourceId} → ${edge.targetId} · ${edge.provenance}`),
+          button("Inspect connection", () => graph.inspectRelationships()),
+        );
+        return;
+      }
+      layer.selectedEdge = null;
+    }
     if (!n) {
       detail.append(
         el("p", "Select a destination. Enter or double-click to approach."),
@@ -177,26 +275,50 @@ export function mountConstellation(
     );
     open.disabled = !n.available;
     detail.append(open);
-    if (n.kind !== "resource") {
+    {
       const x = el("input"),
-        y = el("input");
-      x.type = y.type = "number";
-      x.value = String(n.point.x);
-      y.value = String(n.point.y);
+        y = el("input"),
+        z = el("input");
+      x.type = y.type = z.type = "number";
+      x.value = String(Math.round(position!.x));
+      y.value = String(Math.round(position!.y));
+      z.value = String(Math.round(position!.z));
       x.setAttribute("aria-label", "Anchor X position");
       y.setAttribute("aria-label", "Anchor Y position");
-      x.className = y.className = "aw-position";
+      z.setAttribute("aria-label", "Anchor Z position");
+      x.className = y.className = z.className = "aw-position";
+      const pinned = el("input");
+      pinned.type = "checkbox";
+      pinned.checked = controller.state.anchors[n.key]?.pinned === true;
+      pinned.setAttribute("aria-label", "Pin spatial position");
       detail.append(
         x,
         y,
+        z,
+        pinned,
+        el("span", "Pin"),
         button("Save position", () =>
           invoke(() =>
-            controller.pin(n.key, { x: Number(x.value), y: Number(y.value) }),
+            spatial.place(
+              n.key,
+              { x: Number(x.value), y: Number(y.value), z: Number(z.value) },
+              pinned.checked,
+            ),
           ),
         ),
       );
     }
     if (n.kind === "resource") {
+      detail.append(
+        button("Explore neighborhood", () => spatial.explore(n.key)),
+        button("Inspect relationships", () => graph.inspectRelationships()),
+      );
+      const r = controller.snapshot.resources.find((r) => r.id === n.id);
+      if (r?.kind === "conversation") {
+        const branch = button("Branch conversation", () => graph.branch());
+        branch.disabled = !controller.can("branch");
+        detail.append(branch);
+      }
       const allowed = new Set(
         [...controller.nodes.values()]
           .filter((x) => x.kind === "resource")
@@ -219,11 +341,25 @@ export function mountConstellation(
           ),
         );
     }
+    const remove = button(
+      n.kind === "resource" ? "Remove visual block" : "Archive destination",
+      () => graph.remove(),
+    );
+    remove.disabled = !controller.can(
+      n.kind === "resource" ? "detach" : "archive",
+    );
+    detail.append(remove);
   };
   function paint() {
     const l = controller.location,
       working = l.kind === "workspace" || l.kind === "surface";
     root.classList.toggle("aw-working", working);
+    const spatialMode =
+      spatial.presentation === "spatial" && controller.policy.graphicsAvailable;
+    root.classList.toggle("aw-spatial-mode", spatialMode);
+    layer.enabled = spatialMode;
+    mode.value = spatial.mode;
+    sensitivity.value = String(spatial.sensitivity);
     root.classList.toggle(
       "aw-efficient",
       controller.policy.tier === "efficient",
@@ -246,7 +382,7 @@ export function mountConstellation(
     breadcrumb.textContent = working
       ? `${p?.title ?? "Standalone"} / ${w?.title ?? "Unavailable"}${l.kind === "surface" ? " / Resource" : ""}`
       : l.kind === "project"
-        ? `${p?.title ?? "Project"} / Workspaces`
+        ? `${p?.title ?? "Project"} / ${spatial.neighborhood ? "Resource neighborhood" : "Constellation"}`
         : "Universe / Projects";
     back.disabled = controller.state.history.length === 0;
     out.disabled = l.kind === "universe";
@@ -260,16 +396,19 @@ export function mountConstellation(
           : !controller.policy.graphicsAvailable
             ? "Graphics unavailable. Direct navigation remains available."
             : "");
-    field.hidden = working || !controller.policy.graphicsAvailable;
+    field.hidden = working;
     tools.hidden = working;
     detail.hidden = working;
     if (!drawer.hidden) paintResults();
     paintDetail();
     const { width, height } = field.getBoundingClientRect(),
       c = controller.camera;
-    const nodes =
-        working || !controller.policy.graphicsAvailable
-          ? []
+    const labels = spatialMode && !working ? layer.labels(width, height) : [];
+    const labelMap = new Map(labels.map((p) => [p.node.key, p]));
+    const nodes = working
+        ? []
+        : spatialMode
+          ? labels.map((p) => p.node)
           : controller.visible(width, height),
       present = new Set(nodes.map((n) => n.key));
     for (const [key, v] of views)
@@ -277,10 +416,18 @@ export function mountConstellation(
         v.remove();
         views.delete(key);
       }
-    const screen = (n: Node) => ({
-      x: width / 2 + (n.point.x - c.x) * c.zoom,
-      y: height / 2 + (n.point.y - c.y) * c.zoom,
-    });
+    const screen = (n: Node) =>
+      spatialMode
+        ? {
+            x: labelMap.get(n.key)?.x ?? 0,
+            y:
+              (labelMap.get(n.key)?.y ?? 0) +
+              (n.kind === "project" ? 65 : n.kind === "workspace" ? 38 : 24),
+          }
+        : {
+            x: width / 2 + (n.point.x - c.x) * c.zoom,
+            y: height / 2 + (n.point.y - c.y) * c.zoom,
+          };
     for (const n of nodes) {
       let v = views.get(n.key);
       if (!v) {
@@ -312,10 +459,12 @@ export function mountConstellation(
       v.setAttribute("aria-pressed", String(controller.selected === n.key));
       v.classList.toggle("aw-selected", controller.selected === n.key);
       v.classList.toggle("aw-unavailable", !n.available);
+      v.classList.toggle("aw-spatial-label", spatialMode);
       const s = screen(n);
       v.style.transform = `translate(${s.x}px,${s.y}px) translate(-50%,-50%)`;
     }
     lines.replaceChildren();
+    lines.style.display = spatialMode ? "none" : "";
     lines.setAttribute("viewBox", `0 0 ${width} ${height}`);
     // Only canonical relationships between currently visible resources. No proximity links.
     const byResource = new Map(
@@ -358,29 +507,104 @@ export function mountConstellation(
     options.onDirty?.();
   });
   resize.observe(container);
-  let pointer: { x: number; y: number; id: number } | null = null;
+  let pointer: {
+    x: number;
+    y: number;
+    id: number;
+    pan: boolean;
+    key?: string;
+    before?: Vector3;
+    preview?: Vector3;
+  } | null = null;
   field.onpointerdown = (e) => {
     if (e.target !== field && e.target !== world) return;
     controller.interrupt();
-    pointer = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    field.focus();
+    const rect = field.getBoundingClientRect(),
+      hit = layer.enabled
+        ? layer.pick(
+            e.clientX - rect.left,
+            e.clientY - rect.top,
+            rect.width,
+            rect.height,
+          )
+        : null;
+    if (hit?.key) {
+      controller.select(hit.key);
+      layer.selectedEdge = null;
+    } else if (hit?.edge) {
+      layer.selectedEdge = hit.edge;
+      lastDetailKey = "";
+      invalidate();
+    }
+    pointer = {
+      x: e.clientX,
+      y: e.clientY,
+      id: e.pointerId,
+      pan: e.shiftKey || spatial.mode === "pan",
+      ...(e.altKey && hit?.key
+        ? { key: hit.key, before: { ...spatial.position(hit.key) } }
+        : {}),
+    };
     field.setPointerCapture(e.pointerId);
   };
   field.onpointermove = (e) => {
     if (!pointer) return;
-    controller.pan(
-      (pointer.x - e.clientX) / controller.camera.zoom,
-      (pointer.y - e.clientY) / controller.camera.zoom,
-    );
-    pointer = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    if (pointer.key) {
+      const rect = field.getBoundingClientRect(),
+        p = layer.dragPosition(
+          e.clientX - rect.left,
+          e.clientY - rect.top,
+          rect.width,
+          rect.height,
+          pointer.key,
+        );
+      if (p) {
+        pointer.preview = p;
+        controller.state.anchors[pointer.key].spatial = p;
+        invalidate();
+      }
+    } else if (layer.enabled) {
+      if (pointer.pan)
+        spatial.pan(pointer.x - e.clientX, e.clientY - pointer.y);
+      else spatial.orbit(e.clientX - pointer.x, e.clientY - pointer.y);
+    } else
+      controller.pan(
+        (pointer.x - e.clientX) / controller.camera.zoom,
+        (pointer.y - e.clientY) / controller.camera.zoom,
+      );
+    pointer.x = e.clientX;
+    pointer.y = e.clientY;
   };
   const end = () => {
     if (pointer) {
+      if (pointer.key && pointer.before && controller.nodes.has(pointer.key)) {
+        const p = pointer;
+        controller.state.anchors[p.key!].spatial = p.before;
+        if (p.preview) void spatial.place(p.key!, p.preview, true);
+      }
       pointer = null;
       void controller.persist();
     }
   };
   field.onpointerup = end;
-  field.onpointercancel = end;
+  const cancel = () => {
+    if (pointer?.key && pointer.before && controller.nodes.has(pointer.key))
+      controller.state.anchors[pointer.key].spatial = pointer.before;
+    pointer = null;
+    invalidate();
+  };
+  field.onpointercancel = cancel;
+  field.ondblclick = (e) => {
+    const rect = field.getBoundingClientRect(),
+      hit = layer.pick(
+        e.clientX - rect.left,
+        e.clientY - rect.top,
+        rect.width,
+        rect.height,
+      );
+    if (hit?.key) void invoke(() => controller.approach(hit.key));
+  };
   field.addEventListener(
     "wheel",
     (e) => {
@@ -403,7 +627,10 @@ export function mountConstellation(
       "=": () => controller.zoom(1.3),
       "-": () => controller.zoom(1 / 1.3),
       Home: () => controller.recenter(),
-      Escape: () => controller.interrupt(),
+      Escape: () => {
+        cancel();
+        controller.interrupt();
+      },
       Enter: () => controller.approach(),
       Backspace: () => controller.back(),
     };
@@ -424,7 +651,9 @@ export function mountConstellation(
   function frame(now = performance.now()) {
     if (disposed || controller.policy.hidden) return;
     const moving =
-      controller.motion.bodies.get(controller.motionId)?.transitioning ?? false;
+      (controller.motion.bodies.get(controller.motionId)?.transitioning ??
+        false) ||
+      (controller.motion.bodies.get(spatial.id)?.transitioning ?? false);
     const cadence =
       controller.policy.tier === "efficient"
         ? 1000 / 15
@@ -439,6 +668,7 @@ export function mountConstellation(
   paint();
   return {
     controller,
+    layer,
     ready: controller.restore(),
     frame,
     update(snapshot: Snapshot) {
@@ -457,6 +687,8 @@ export function mountConstellation(
       media.removeEventListener("change", mediaChange);
       document.removeEventListener("visibilitychange", visibility);
       controller.dispose();
+      layer.dispose();
+      graph.dispose();
       root.remove();
     },
   };
