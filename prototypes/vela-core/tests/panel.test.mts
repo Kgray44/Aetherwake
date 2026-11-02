@@ -42,7 +42,7 @@ class Node {
   fire(name: string, extra: Record<string, unknown> = {}) { const event = { target: this, key: '', defaultPrevented: false, stopped: false, preventDefault() { this.defaultPrevented = true; }, stopPropagation() { this.stopped = true; }, ...extra }; for (let node: Node | null = this; node; node = node.parent) { for (const callback of node.listeners.get(name) ?? []) callback(event); if (event.stopped) break; } return event; }
   remove() { if (this.parent) this.parent.children = this.parent.children.filter(child => child !== this); this.parent = null; }
   contains(node: Node | null): boolean { return node === this || this.children.some(child => child.contains(node)); }
-  matches(selector: string) { const plan = selector.match(/^\[data-plan-id="([^"]+)"\]$/); return plan ? this.dataset.planId === plan[1] : selector === 'details[open]' ? this.tagName === 'details' && this.open : selector === 'summary' ? this.tagName === 'summary' : false; }
+  matches(selector: string) { const plan = selector.match(/^\[data-plan-id="([^"]+)"\]$/); return plan ? this.dataset.planId === plan[1] : selector === 'details[open]' ? this.tagName === 'details' && this.open : this.tagName === selector; }
   closest(selector: string): Node | null { return this.matches(selector) ? this : this.parent?.closest(selector) ?? null; }
   querySelectorAll(selector: string): Node[] { return this.children.flatMap(child => [...(child.matches(selector) ? [child] : []), ...child.querySelectorAll(selector)]); }
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
@@ -160,4 +160,26 @@ test('unavailable native tools are disabled by actual host availability and atte
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, { native: async () => { nativeCalls++; throw new Error('Unavailable'); }, reviewAttention: async ids => { reviewed.push(ids); canonical.attention[0].reviewedAt = manifest.createdAt; } }));
   await settles(() => !!root.find(node => node.className === 'vela-core-availability')); named(root, 'Local tools').fire('click'); assert.equal(named(root, 'Create note').disabled, true); named(root, 'Create note').fire('click'); assert.equal(nativeCalls, 0); assert.match(root.find(node => node.className === 'vela-core-availability')!.textContent, /unavailable/);
   const attention = root.find(node => node.className === 'vela-core-attention')!; attention.open = true; assert.equal(reviewed.length, 0); named(root, 'Mark reviewed').fire('click'); await settles(() => reviewed.length === 1); assert.deepEqual(reviewed, [['event:one']]); panel.dispose();
+});
+
+test('read-only refresh preserves keyed plan disclosures, reading focus and pending approval controls without replaying actions', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state(); let reviews = 0, applies = 0, finishReview!: () => void;
+  const plan: VelaPlan = { id: 'plan:current', requestId: 'request:synthetic', version: 1, fingerprint: 'exact:current', summary: 'Create the reviewed note', steps: [{ id: 'create', explanation: 'Only this local note', action: { type: 'createResource', kind: 'note', title: 'Reviewed note', workspaceId: null } }], targets: [], scope: { principalId: 'synthetic', policyVersion: 'policy:synthetic', resourceIds: [], projectIds: [], workspaceIds: [] }, state: 'prepared', createdAt: manifest.createdAt, expiresAt: manifest.createdAt, contribution: null };
+  canonical.plans = [{ ...structuredClone(plan), id: 'plan:earlier', state: 'applied' }, plan]; canonical.requests = [request({ state: 'awaiting-review', planId: plan.id })];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => structuredClone(canonical), {
+    review: async () => { reviews++; await new Promise<void>(resolve => { finishReview = resolve; }); plan.state = 'approved'; return structuredClone(plan); },
+    apply: async () => { applies++; plan.state = 'applied'; canonical.requests[0].state = 'completed'; return structuredClone(plan); },
+  }));
+  await settles(() => !!root.find(node => node.dataset.planId === plan.id));
+  const currentCard = root.find(node => node.dataset.planId === plan.id)!, earlierCard = root.find(node => node.dataset.planId === 'plan:earlier')!, history = root.find(node => node.className === 'vela-core-plan-history')!;
+  const evidence = currentCard.find(node => node.className === 'vela-core-plan-details')!, earlierEvidence = earlierCard.find(node => node.className === 'vela-core-plan-details')!, approve = named(currentCard, 'Approve and apply');
+  history.open = evidence.open = earlierEvidence.open = true; earlierEvidence.children[0].focus();
+  await panel.refresh(); await panel.refresh();
+  assert.equal(root.find(node => node.dataset.planId === plan.id), currentCard); assert.equal(root.find(node => node.dataset.planId === 'plan:earlier'), earlierCard); assert.equal(root.find(node => node.className === 'vela-core-plan-history'), history);
+  assert.equal(history.open, true); assert.equal(evidence.open, true); assert.equal(earlierEvidence.open, true); assert.equal(doc.activeElement, earlierEvidence.children[0]); assert.equal(reviews, 0); assert.equal(applies, 0);
+  approve.focus(); approve.fire('click'); assert.equal(reviews, 1); assert.equal(approve.disabled, true);
+  await panel.refresh(); assert.equal(named(root, 'Approve and apply'), approve); assert.equal(approve.disabled, true); assert.equal(doc.activeElement, approve); assert.equal(evidence.open, true);
+  approve.fire('click'); assert.equal(reviews, 1); assert.equal(applies, 0); finishReview();
+  await settles(() => applies === 1 && root.find(node => node.dataset.planId === plan.id)?.dataset.planState === 'applied');
+  assert.equal(reviews, 1); assert.equal(root.find(node => node.dataset.planId === plan.id)!.find(node => node.className === 'vela-core-plan-details')!.open, true); panel.dispose();
 });
