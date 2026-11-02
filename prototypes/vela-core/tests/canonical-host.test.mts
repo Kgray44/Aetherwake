@@ -189,3 +189,21 @@ test('native consent preview reads current canonical chat history without creati
     assert.throws(() => f.grant(preview.discovered), /stale_canonical_target_version/);
   } finally { f.close(); }
 });
+
+test('delegation attenuates metadata as well as content to the exact child resource scope and rechecks freshness', async () => {
+  const f = fixture();
+  try {
+    let calls = 0;
+    const host = createCanonicalVelaHost({ ...f.options, dispatch: { ...f.options.dispatch, delegateTask: async () => { calls++; return { status: 'applied', receiptId: 'synthetic-parent-execution-receipt' }; } } });
+    const sourceConversationId = host.ensureConversation('system:vela'), ref = host.resolve({ id: f.note.id, kind: 'resource' }, host.scope())!;
+    const other = host.resolve({ id: f.conversation.id, kind: 'resource' }, host.scope())!;
+    const grant = f.grant([ref]); if (grant.decision !== 'allow') return;
+    const context = { id: 'manifest:delegation', createdAt: '2026-11-02T02:00:00Z', policyVersion: 'policy:1', discovered: [ref], included: [], omitted: [], contentBytes: 0, coverage: 'explicit-resources-only' as const };
+    const input = { action: { type: 'delegateTask' as const, title: 'Bounded synthetic delegation', objective: 'Inspect selected metadata only', providerId: 'codex-app-server', resourceIds: [f.note.id], constraints: ['No writes'] },
+      commandId: 'command:delegation', requestId: 'request:delegation', planId: 'plan:delegation', initiatingIntent: 'Inspect this note', sourceConversationId, context, authorizationRef: grant.authorizationRef };
+    await assert.rejects(host.delegateTask!({ ...input, context: { ...context, discovered: [ref, other] } }), /canonical_delegation_context_not_authorized/);
+    assert.equal(calls, 0); assert.equal((await host.delegateTask!(input)).status, 'applied'); assert.equal(calls, 1);
+    f.kernel.updateNote(f.note.id, 'Changed after delegation preview', f.note.version);
+    await assert.rejects(host.delegateTask!(input), /stale_canonical_target_version/); assert.equal(calls, 1);
+  } finally { f.close(); }
+});

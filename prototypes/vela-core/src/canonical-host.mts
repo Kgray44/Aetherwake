@@ -212,6 +212,7 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
       validateTargets(input.context.discovered, current);
       validateTargets(input.context.included, current);
       for (const id of input.action.resourceIds) check(resolve({ id, kind: 'resource' }, current.scope, current), 'canonical_delegation_resource_not_authorized');
+      check(input.context.discovered.every(ref => ref.kind === 'resource' && input.action.resourceIds.includes(ref.id)) && input.context.omitted.every(ref => input.action.resourceIds.includes(ref.id)), 'canonical_delegation_context_not_authorized');
       for (const included of input.context.included) check(input.action.resourceIds.includes(included.id) && options.permissions.content(included, current.context, current.metadata) === true, 'canonical_delegation_context_not_authorized');
     });
     return options.dispatch.delegateTask!(structuredClone(input));
