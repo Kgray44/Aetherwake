@@ -5,7 +5,10 @@ const { createHash } = require("node:crypto");
 const native = "../../visual-experience/cinematic-v3/native/";
 const { createDriver } = require(native + "desktop-verify.cjs");
 const { startWindowRecording } = require(native + "application-recording.cjs");
-const { checkLabelClearance } = require("./native-labels.cjs");
+const {
+  checkLabelClearance,
+  verifyWorkspaceGuide,
+} = require("./native-labels.cjs");
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const geometry = (s) =>
   s.blocks
@@ -720,6 +723,10 @@ exports.verify = async ({
       );
       await workingHome();
       await selectWorkspace(originalRow.workspaceId);
+      receipt.workspaceGuide = await verifyWorkspaceGuide(win);
+      receipt.checks.push(
+        "working-workspace-keeps-one-visible-glass-help-control-and-unchanged-canonical-state",
+      );
       await shot("01-original-working-workspace");
       step(
         1,

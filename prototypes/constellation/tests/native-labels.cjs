@@ -1,5 +1,76 @@
 const assert = require("node:assert/strict");
 
+/** Working workspace keeps one visible help entry and its existing keyboard owner. */
+exports.verifyWorkspaceGuide = async (win) => {
+  const {
+    createDriver,
+  } = require("../../visual-experience/cinematic-v3/native/desktop-verify.cjs");
+  const { js, click, wait, snapshot } = await createDriver(win),
+    before = await snapshot();
+  const focusedCard = await js(
+    'document.querySelector(".folio.expanded")?.dataset.block??null',
+  );
+  const location = await js(
+    "window.__aerynth.snapshot().spatial.location.kind",
+  );
+  assert.ok(["workspace", "surface"].includes(location));
+  const visible = await js(
+    'Array.from(document.querySelectorAll(".aw-constellation-bar button")).filter(e=>e.getClientRects().length&&getComputedStyle(e).visibility==="visible").map(e=>e.getAttribute("aria-label"))',
+  );
+  assert.deepEqual(
+    visible,
+    ["Navigation guide"],
+    "workspace exposes only the compact info control",
+  );
+  await click('.aw-info-control[aria-label="Navigation guide"]');
+  await wait('!document.querySelector(".aw-navigation-guide").hidden');
+  assert.equal(
+    await js('document.querySelector(".aw-navigation-guide").dataset.scope'),
+    "workspace-entry",
+  );
+  assert.ok(
+    await js(
+      'document.querySelector(".aw-guide-intro").textContent.includes("Workspace actions")',
+    ),
+  );
+  for (const type of ["keyDown", "keyUp"])
+    win.webContents.sendInputEvent({ type, keyCode: "Escape" });
+  await wait('document.querySelector(".aw-navigation-guide").hidden');
+  assert.equal(
+    await js(
+      'document.activeElement===document.querySelector(".aw-info-control")',
+    ),
+    true,
+    "Escape returns to visible opener",
+  );
+  const after = await snapshot();
+  assert.equal(
+    await js('document.querySelector(".folio.expanded")?.dataset.block??null'),
+    focusedCard,
+    "help dismissal retains the actual focused working surface",
+  );
+  for (const field of [
+    "blocks",
+    "resources",
+    "viewport",
+    "presence",
+    "activeWorkspaceId",
+  ])
+    assert.deepEqual(
+      after[field],
+      before[field],
+      "help retains working workspace " + field,
+    );
+  return {
+    checks: [
+      "one-visible-info-control",
+      "workspace-entry-instructions",
+      "native-Escape-focus-return",
+      "canonical-workspace-unchanged",
+    ],
+  };
+};
+
 /** Read-only assertion in the integration lead's existing synthetic QA window. */
 exports.checkLabelClearance = async (win) => {
   const result = await win.webContents.executeJavaScript(

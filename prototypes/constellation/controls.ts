@@ -230,6 +230,14 @@ export function spatialControls(
   }
   function openGuide() {
     options.onOpen?.();
+    const overview = options.overview();
+    guide.dataset.scope = overview ? "constellation" : "workspace-entry";
+    guide.querySelector("h2")!.textContent = overview
+      ? "Move naturally."
+      : "Explore Constellation.";
+    guide.querySelector(".aw-guide-intro")!.textContent = overview
+      ? "Explore with your mouse. Keep your place with the keyboard."
+      : "From Workspace actions (⋯), choose Constellation. These gestures apply in the spatial view.";
     const opening = guide.hidden;
     opener = document.activeElement as HTMLElement;
     close();
@@ -257,7 +265,10 @@ export function spatialControls(
     if (e.defaultPrevented || root.ownerDocument.querySelector("dialog[open]"))
       return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
-      if (!options.overview() && drawer.hidden) return;
+      if (!options.overview() && drawer.hidden) {
+        if (!guide.hidden) close(true);
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       openPalette();

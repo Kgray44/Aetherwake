@@ -68,6 +68,9 @@
   min-width: 0;
   color: #e6dfef;
 }
+.aw-working .aw-constellation-bar > :not(.aw-info-control) {
+  display: none;
+}
 .aw-constellation .aw-quiet-control {
   flex: 0 0 34px;
   width: 34px;
