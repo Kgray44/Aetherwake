@@ -13,6 +13,10 @@ const { randomUUID, createHash } = require("node:crypto");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { sendToWindow } = require("./host-lifecycle.cjs");
+const {
+  conversationCommand,
+  isConversationRead,
+} = require("./conversation-broker.cjs");
 const root = path.resolve(__dirname, "..");
 const moduleStarted = Date.now();
 const repository = path.resolve(root, "../../..");
@@ -230,6 +234,7 @@ app.whenReady().then(async () => {
       if (
         !admitted &&
         !["replay", "executionStatus", "interrupt"].includes(command) &&
+        !(command === "conversation" && isConversationRead(input)) &&
         !(command === "desktop" && input?.type === "snapshot")
       )
         throw new Error("storage_reserve_admission_denied");
@@ -302,6 +307,8 @@ app.whenReady().then(async () => {
             commandId: randomUUID(),
           });
         }
+      } else if (command === "conversation") {
+        result = await conversationCommand({ win, dialog, call, input });
       } else throw new Error("unsupported_command");
       return { ok: true, result };
     } catch (e) {
