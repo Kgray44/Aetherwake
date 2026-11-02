@@ -81,6 +81,8 @@ import "./environment-navigator.css";
 import { mountWorkspaceActions } from "./workspace-actions.ts";
 import "./workspace-actions.css";
 import { createClipboardClient } from "../../../application-contract/clipboard.ts";
+import { createControlMotion } from "./control-motion.ts";
+import "./control-motion.css";
 import type { ProviderConnectionStatus } from "../../../application-contract/provider-connections.ts";
 import { mountDirectResourceExperience } from "../../../block-library/direct-resource-view.ts";
 import "../../../block-library/direct-resource-view.css";
@@ -169,6 +171,11 @@ const escape = (s: string) =>
 
 export function installApplication(hooks: Hooks) {
   const host = window.aerynthHost!;
+  const controlMotion = createControlMotion({
+    motion: hooks.motion,
+    wake: hooks.wake,
+    root: document.body,
+  });
   const clipboardClient = createClipboardClient(
     host.copyText ? { copyText: (text) => host.copyText!(text) } : null,
   );
@@ -368,6 +375,7 @@ export function installApplication(hooks: Hooks) {
     typeof mountEnvironmentNavigator
   > | null = null;
   let environmentSurface: ContextualSurfaceRequest | null = null;
+  let environmentPresentation = 0;
   let workspaceActions: ReturnType<typeof mountWorkspaceActions> | null = null;
   let workspaceActionsSurface: ContextualSurfaceRequest | null = null;
   let offset = { x: 0, y: 0 };
@@ -569,6 +577,7 @@ export function installApplication(hooks: Hooks) {
     () => {
       environmentNavigator?.dispose();
       workspaceActions?.dispose();
+      controlMotion.dispose();
       resourceOpener.cancel();
       directResources.dispose();
     },
@@ -1511,6 +1520,7 @@ export function installApplication(hooks: Hooks) {
   }
   function manager() {
     if (!state) return;
+    environmentPresentation++;
     dialog.close();
     if (environmentNavigator && environmentSurface) {
       environmentNavigator.update(state);
@@ -1531,27 +1541,33 @@ export function installApplication(hooks: Hooks) {
       motion: hooks.motion,
       wake: hooks.wake,
       openWorkspace: async (workspaceId) => {
+        const presentation = environmentPresentation;
         await mutate({
           type: "navigate",
           target: { kind: "workspace", workspaceId },
         });
-        surfaces.close("environments");
+        if (presentation === environmentPresentation)
+          surfaces.close("environments");
       },
       openProject: async (projectId) => {
+        const presentation = environmentPresentation;
         await mutate({
           type: "navigate",
           target: { kind: "constellation", projectId },
         });
-        surfaces.close("environments");
+        if (presentation === environmentPresentation)
+          surfaces.close("environments");
       },
       createProject: (title) => mutate({ type: "createProject", title }),
       createWorkspace: async ({ title, projectId }) => {
+        const presentation = environmentPresentation;
         const next = await mutate({
           type: "createWorkspace",
           title,
           projectId,
         });
-        surfaces.close("environments");
+        if (presentation === environmentPresentation)
+          surfaces.close("environments");
         return next;
       },
       renameWorkspace: ({ id, title, expectedVersion }) =>
@@ -1585,12 +1601,16 @@ export function installApplication(hooks: Hooks) {
         composer.focus();
       },
       newConversation: async () => {
+        const presentation = environmentPresentation;
         await newConversation();
-        surfaces.close("environments");
+        if (presentation === environmentPresentation)
+          surfaces.close("environments");
       },
       conversations: async () => {
+        const presentation = environmentPresentation;
         await showConversations();
-        surfaces.close("environments");
+        if (presentation === environmentPresentation)
+          surfaces.close("environments");
       },
       resources: async () => {
         surfaces.close("environments");
@@ -3445,6 +3465,7 @@ export function installApplication(hooks: Hooks) {
       surfaces.frame(now);
       environmentNavigator?.frame();
       workspaceActions?.frame();
+      controlMotion.frame();
       velaExperience.frame(policy);
       velaManifestation.frame(policy);
       paintPreview();

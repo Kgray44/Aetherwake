@@ -11,6 +11,7 @@ export function decorateConversationControl(node: HTMLElement, presentation: Con
   const label=presentation.label??node.textContent??'',glyph=document.createElement('span'),caption=document.createElement('span');
   glyph.className='cp-control-glyph';glyph.dataset.glyph=presentation.identity;glyph.setAttribute('aria-hidden','true');caption.className='cp-control-label';caption.textContent=label;
   node.classList.add('cp-control');node.dataset.cpControl=presentation.identity;node.dataset.emphasis=presentation.emphasis??'quiet';node.replaceChildren(glyph,caption);
+  if(presentation.identity==='copy')node.dataset.nativeCopyControl='true';
 }
 export function setConversationControlLabel(node: HTMLElement, label: string): void {
   const caption=node.querySelector<HTMLElement>('.cp-control-label');if(caption)caption.textContent=label;else node.textContent=label;

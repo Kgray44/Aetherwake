@@ -59,6 +59,7 @@ export function renderMarkdown(source: string, copy: (text: string) => Promise<v
     if (block.kind === 'code') {
       const section = document.createElement('div'), header = document.createElement('div'), language = document.createElement('span'), button = document.createElement('button'), pre = document.createElement('pre'), code = document.createElement('code');
       section.className = 'cp-code'; header.className = 'cp-code-header'; language.textContent = block.language || 'Code'; button.type = 'button'; button.textContent = 'Copy code';
+      button.dataset.nativeCopyControl='true';
       button.addEventListener('click', () => { void copy(block.text).then(() => report('Code copied'), error => report(String(error))); });
       code.textContent = block.text; pre.append(code); header.append(language, button); section.append(header, pre); root.append(section);
     } else if (block.kind === 'list') {
