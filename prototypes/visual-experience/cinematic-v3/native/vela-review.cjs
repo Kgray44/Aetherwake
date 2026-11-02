@@ -50,7 +50,7 @@ function reviewPage(review, intent = "") {
   const history = (review.history?.messages ?? [])
     .map(
       (message) =>
-        `<article><h2>${escape(message.role === "user" ? "You" : (message.providerId ?? provider))}</h2><pre>${escape(message.content)}</pre></article>`,
+        `<article><h2>${escape(message.role === "user" ? "You" : message.providerId === "codex-app-server" ? "Codex" : (message.providerId ?? provider))}</h2><pre>${escape(message.content)}</pre></article>`,
     )
     .join("");
   const styleHash = createHash("sha256").update(css).digest("base64");
