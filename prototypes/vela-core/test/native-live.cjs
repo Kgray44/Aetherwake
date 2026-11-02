@@ -109,6 +109,7 @@ exports.verify = async ({win, app, privateRoot, source}) => {
       const file=path.join(out,name+'.png'); await fs.writeFile(file,png); const item={file,bytes:png.length,sha256:hash(png),focused:true,before,acknowledgement}; budget.count++;budget.bytes+=png.length;budget.files.push(item);receipt.captures.push(item);await fs.writeFile(budgetFile,encode(budget));
     };
     const velaSurface = '#vela-assistant-surface[data-surface-id="vela"]';
+    const librarySurface = 'dialog.aw-contextual-surface[data-surface-id="block-library"]';
     const openVela = async () => {
       if (!await js(`(()=>{const e=document.querySelector(${JSON.stringify(velaSurface)});return !!e&&e.open&&!e.inert&&e.getClientRects().length>0})()`)) await click('#vela');
       await until(() => js(`!!document.querySelector(${JSON.stringify(velaSurface + ' .vela-core')})`), 'actual Vela contextual panel');
@@ -178,12 +179,12 @@ exports.verify = async ({win, app, privateRoot, source}) => {
       const origin=(await desktop()).workspaces.find(w=>w.title===names.origin); assert(origin&&origin.project_id===project.id); if((await desktop()).activeWorkspaceId!==origin.id)await navigate(origin.id);
       const createResource=async(kind,title)=>{
         const before=new Set((await desktop()).resources.map(r=>r.id)); await click('.aw-workspace-add');
-        await until(() => js(`!!document.querySelector('#block-library-surface .aw-library__detail form')&&!document.querySelector('#block-library-surface .aw-library')?.hasAttribute('aria-busy')`),'released Library ready');
-        await clickText(kind==='conversation'?'Conversation':'Note','#block-library-surface .aw-library__list','button',true);
-        await type(await field('#block-library-surface .aw-library__detail','Title'),title);
-        if(kind==='conversation')await choose(await field('#block-library-surface .aw-library__detail','Conversation backend','select'),'local');
-        await clickText('Add New '+(kind==='conversation'?'Conversation':'Note'),'#block-library-surface .aw-library__detail');
-        await until(async()=>!await js(`!!document.querySelector('#block-library-surface')`)&&(await desktop()).resources.some(r=>!before.has(r.id)&&r.title===title),'released Library canonical resource creation');
+        await until(() => js(`(()=>{const e=document.querySelector(${JSON.stringify(librarySurface)});return !!e&&e.open&&!e.inert&&e.getClientRects().length>0&&!!e.querySelector('.aw-library__detail form')&&!e.querySelector('.aw-library')?.hasAttribute('aria-busy')})()`),'released Library ready');
+        await clickText(kind==='conversation'?'Conversation':'Note',librarySurface+' .aw-library__list','button',true);
+        await type(await field(librarySurface+' .aw-library__detail','Title'),title);
+        if(kind==='conversation')await choose(await field(librarySurface+' .aw-library__detail','Conversation backend','select'),'local');
+        await clickText('Add New '+(kind==='conversation'?'Conversation':'Note'),librarySurface+' .aw-library__detail');
+        await until(async()=>!await js(`!!document.querySelector(${JSON.stringify(librarySurface)})`)&&(await desktop()).resources.some(r=>!before.has(r.id)&&r.title===title),'released Library canonical resource creation');
         const resource=(await desktop()).resources.find(r=>!before.has(r.id)&&r.title===title); assert(resource&&resource.kind===kind&&resource.project_id===project.id); return resource;
       };
       const localChat=await createResource('conversation',names.chat); assert.equal(localChat.providerId,'local'); const sourceChat='Synthetic local source message '+token+'.'; await recordChat(origin.id,localChat.id,sourceChat);
