@@ -38,6 +38,8 @@ export type ConversationChatPresentation = 'workspace'|'focused';
 export interface ConversationChatOptions {
   port: ConversationProductPort; resourceId: string;
   presentation?: ConversationChatPresentation;
+  /** Externally sized ancestor (for example the canonical folio), never an auto-sized chat/content node. */
+  layoutHost?: HTMLElement;
   /** Externally supplied sessions remain owned by the caller. */
   draftSession?: ConversationDraftSession; initialDraft?: string; initialScroll?: number; initialOffset?: number;
   execution?: ConversationExecutionPort; copy?: (text: string) => Promise<void>;
@@ -69,6 +71,8 @@ export function acceptedConversationSubmission(input: { resourceId:string;provid
 export function mountConversationChat(container: HTMLElement, options: ConversationChatOptions): ConversationChat {
   const { port, resourceId } = options;
   let presentation=options.presentation??'focused';if(presentation!=='workspace'&&presentation!=='focused')throw new Error('invalid_chat_presentation');
+  const layoutHost=options.layoutHost??container.closest<HTMLElement>('.cp-manager');
+  if(layoutHost&&(!layoutHost.contains(container)||layoutHost.matches('.cp-chat')||(layoutHost.style.height??'').trim()==='auto'||!Number.isFinite(layoutHost.clientHeight)||layoutHost.clientHeight<0||(layoutHost.clientWidth!==undefined&&(!Number.isFinite(layoutHost.clientWidth)||layoutHost.clientWidth<0))))throw new Error('invalid_chat_layout_host');
   if (options.draftSession && options.draftSession.resourceId !== resourceId) throw new Error('draft_resource_mismatch');
   const root = el('section', undefined, 'cp-chat'); root.dataset.resourceId = resourceId; root.setAttribute('aria-label', 'Chat');
   const messages = el('div', undefined, 'cp-messages'); messages.tabIndex = 0; messages.setAttribute('aria-label', 'Conversation messages');
@@ -96,18 +100,33 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const report = (text: string) => { if (!disposed) status.textContent = text; };
   const active = () => execution && ['dispatching','running'].includes(execution.state);
   const viewState = () => options.onViewState?.({resourceId,content:textarea.value,scroll:messages.scrollTop,offset:current?.messages.offset??offset??0});
-  let measuredHeight=0;
+  let measuredHeight=layoutHost?.clientHeight??0,measuredWidth=layoutHost?.clientWidth??0,layoutHidden=!!layoutHost&&measuredHeight===0;
+  let measureKey='',naturalHeight=0,resizeFrame:number|undefined,resizeTimer:ReturnType<typeof setTimeout>|undefined;
+  const cancelResize=()=>{if(resizeFrame!==undefined){if(typeof cancelAnimationFrame==='function')cancelAnimationFrame(resizeFrame);resizeFrame=undefined;}if(resizeTimer!==undefined){clearTimeout(resizeTimer);resizeTimer=undefined;}};
   const resize = () => {
-    const height=measuredHeight||root.clientHeight,managerHeight=root.closest<HTMLElement>('.cp-manager')?.clientHeight;
-    const compact=presentation==='workspace'||(managerHeight?managerHeight<420:height>0&&height<280);
-    root.dataset.presentation=presentation;root.classList.add('cp-chat-'+presentation);root.classList.remove('cp-chat-'+(presentation==='workspace'?'focused':'workspace'));
-    if(compact)root.classList.add('cp-chat-compact');else root.classList.remove('cp-chat-compact');
-    textarea.rows=compact?1:2;
-    const minimum=compact?34:56,maximum=height>0?Math.max(minimum,Math.min(compact?96:200,height*(compact ? .25 : .35))):200;
-    textarea.style.height='auto';textarea.style.height=Math.min(maximum,Math.max(minimum,textarea.scrollHeight))+'px';
+    if(disposed||layoutHidden)return;
+    // Bounds belong to the external host. Reading our auto-sized root here creates a feedback edge.
+    const height=measuredHeight,manager=layoutHost?.matches('.cp-manager'),compact=presentation==='workspace'||(height>0&&height<(manager?420:280));
+    if(root.dataset.presentation!==presentation){root.dataset.presentation=presentation;root.classList.add('cp-chat-'+presentation);root.classList.remove('cp-chat-'+(presentation==='workspace'?'focused':'workspace'));}
+    const wasCompact=root.className.split(/\s+/).includes('cp-chat-compact');if(wasCompact!==compact){if(compact)root.classList.add('cp-chat-compact');else root.classList.remove('cp-chat-compact');}
+    const rows=compact?1:2;if(textarea.rows!==rows)textarea.rows=rows;
+    const font=typeof getComputedStyle==='function'?getComputedStyle(textarea):null;
+    const key=JSON.stringify([textarea.value,textarea.clientWidth,rows,font?.font,font?.lineHeight,font?.letterSpacing,font?.paddingTop,font?.paddingBottom]);
+    if(key!==measureKey){
+      // Only content/width/type changes require a temporary shrink to measure natural height.
+      // This never runs in ResizeObserver delivery and repeated unchanged frames do not write.
+      if(textarea.style.height!=='0px')textarea.style.height='0px';naturalHeight=textarea.scrollHeight;measureKey=key;
+    }
+    const minimum=compact?34:56,cap=compact?96:200,maximum=height>0?Math.max(minimum,Math.min(cap,height*(compact ? .25 : .35))):cap;
+    const next=Math.floor(Math.min(maximum,Math.max(minimum,naturalHeight)))+'px';if(textarea.style.height!==next)textarea.style.height=next;
   };
-  const resizeObserver=typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(entries=>{const entry=entries.find(value=>value.target===root);if(!disposed&&entry&&entry.contentRect.height>0){measuredHeight=entry.contentRect.height;resize();}});
-  resizeObserver?.observe(root);
+  const scheduleResize=()=>{if(disposed||layoutHidden||resizeFrame!==undefined||resizeTimer!==undefined)return;const reconcile=()=>{resizeFrame=undefined;resizeTimer=undefined;resize();};if(typeof requestAnimationFrame==='function')resizeFrame=requestAnimationFrame(reconcile);else resizeTimer=setTimeout(reconcile,0);};
+  const resizeObserver=!layoutHost||typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(entries=>{
+    const entry=entries.find(value=>value.target===layoutHost);if(disposed||!entry)return;
+    const {height,width}=entry.contentRect;if(!Number.isFinite(height)||!Number.isFinite(width)||height<=0||width<=0){layoutHidden=true;cancelResize();return;}
+    const changed=layoutHidden||height!==measuredHeight||width!==measuredWidth;layoutHidden=false;measuredHeight=height;measuredWidth=width;if(changed)scheduleResize();
+  });
+  if(layoutHost)resizeObserver?.observe(layoutHost);
   function revokeView() {
     const notify=!accessRevoked;accessRevoked=true;generation++;root.dataset.resourceAvailable='false';current=null;cache.clear();messages.replaceChildren();
     streamText.textContent='';stream.hidden=true;paging.hidden=true;capabilityNote.textContent=contextNote.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;
@@ -250,7 +269,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   // must be independent so a pane can close and the host can offer interruption on quit.
   const flush=async()=>{await session.flush();viewState();};
   return {ready,refresh,focusComposer:()=>textarea.focus(),setPresentation(mode){if(mode!=='workspace'&&mode!=='focused')throw new Error('invalid_chat_presentation');if(disposed)return;const scroll=messages.scrollTop;presentation=mode;resize();messages.scrollTop=scroll;},flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
-    if(disposed)return;await flush();disposed=true;generation++;unsubscribeDraft();unsubscribeExecution?.();resizeObserver?.disconnect();viewState();root.remove();
+    if(disposed)return;await flush();disposed=true;generation++;unsubscribeDraft();unsubscribeExecution?.();cancelResize();resizeObserver?.disconnect();viewState();root.remove();
     if(!options.draftSession){
       if(sendTask){void sendTask.then(()=>session.dispose(),()=>session.dispose()).catch(()=>{/* Existing durable recovery is untouched; never overwrite or replay a conflict. */});}
       else await session.dispose();
