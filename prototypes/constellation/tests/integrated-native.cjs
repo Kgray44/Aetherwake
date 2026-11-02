@@ -118,6 +118,14 @@ exports.verify = async ({
   const view = () => js("window.aerynthHost.command('viewState',{})");
   const shot = async (name) => {
     assert.ok(receipt.screenshots.length < 14, "screenshot count bound");
+    assert.ok(
+      win.isFocused() && !win.isMinimized(),
+      "native evidence requires the focused visible owner window",
+    );
+    const before = await js("window.__aerynth.snapshot().metrics.draws");
+    for (const x of [3, 1])
+      win.webContents.sendInputEvent({ type: "mouseMove", x, y: 1 });
+    await wait(`window.__aerynth.snapshot().metrics.draws>${before}`, 8000);
     await pause(350);
     const bytes = (await win.webContents.capturePage()).toPNG();
     assert.ok(bytes.length < 8 * 1024 * 1024, "screenshot byte bound");
@@ -126,6 +134,10 @@ exports.verify = async ({
       file: name + ".png",
       byteCount: bytes.length,
       sha256: createHash("sha256").update(bytes).digest("hex"),
+      freshGpuDraws: {
+        before,
+        after: await js("window.__aerynth.snapshot().metrics.draws"),
+      },
     });
   };
   const commandIds = {
@@ -198,21 +210,176 @@ exports.verify = async ({
     );
     return (await snapshot()).workspaces.find((w) => w.title === title).id;
   };
-  const add = async (kind, title) => {
-    await click("#add-block");
-    await fill("#block-kind", kind);
-    await fill("#block-title", title);
-    await click('#command-surface button[type="submit"]');
-    await wait('!document.querySelector("#command-surface").open');
+  const libraryField = async (label, tag = "input") => {
+    const token = "library-field-" + label.toLowerCase().replaceAll(" ", "-");
+    await js(
+      `(()=>{const labels=[...document.querySelectorAll('.aw-library[aria-label="Block Library"] .aw-library__detail form label')],label=labels.find(e=>e.firstChild?.textContent.trim()===${JSON.stringify(label)}),control=label?.querySelector(${JSON.stringify(tag)});if(!control)throw Error('Missing Library field: '+${JSON.stringify(label)});control.dataset.expandedField=${JSON.stringify(token)}})()`,
+    );
+    return `[data-expanded-field="${token}"]`;
+  };
+  const add = async (kind, title, dimensions) => {
+    await workingHome();
+    const label = {
+      conversation: "Conversation",
+      note: "Note",
+      task: "Task",
+      research: "Research",
+      reference: "Reference",
+      task_group: "Task group",
+    }[kind];
+    assert.ok(label, "supported actual Library entry");
+    await click('.aw-workspace-add[aria-label="Add block"]');
+    await wait(
+      `!!document.querySelector('.aw-library[aria-label="Block Library"] .aw-library__detail form')`,
+    );
+    await fill('.aw-library input[aria-label="Search blocks"]', label);
+    await js(
+      `(()=>{const entry=[...document.querySelectorAll('.aw-library__list button')].find(e=>e.firstChild?.textContent.replace(/^★ /,'').trim()===${JSON.stringify(label)});if(!entry)throw Error('Missing available Library entry: '+${JSON.stringify(label)});entry.dataset.expandedKind=${JSON.stringify(kind)}})()`,
+    );
+    await click(`.aw-library__list button[data-expanded-kind="${kind}"]`);
+    await wait(
+      `document.querySelector('.aw-library__detail h3')?.textContent===${JSON.stringify(label)}`,
+    );
+    await fill(await libraryField("Title"), title);
+    if (kind === "conversation")
+      await fill(await libraryField("Conversation backend", "select"), "local");
+    if (dimensions) {
+      await click(".aw-library__detail form > details > summary");
+      for (const axis of ["Width", "Height"])
+        if (dimensions[axis.toLowerCase()] !== undefined)
+          await fill(
+            await libraryField(axis),
+            String(dimensions[axis.toLowerCase()]),
+          );
+    }
+    await click('.aw-library__detail form > button[type="submit"]');
+    await wait(
+      `!document.querySelector('.aw-library[aria-label="Block Library"]')`,
+    );
+    await wait(
+      `window.__aerynth.application().resources.some(r=>r.title===${JSON.stringify(title)})`,
+    );
     const s = await snapshot(),
       r = s.resources.find((r) => r.title === title),
       b = s.blocks.find((b) => b.resource_id === r?.id);
     assert.ok(r && b, "created canonical resource and block");
+    assert.equal(r.kind, kind);
+    if (kind === "conversation") assert.equal(r.provider, "local");
+    mark("Created through actual Block Library: " + title);
     return { resource: r, block: b };
   };
+  const workingHome = async () => {
+    await key("Escape");
+    await wait('!document.querySelector(".folio.expanded")');
+  };
+  const workspaceActions = () =>
+    click('.aw-workspace-layout [aria-label="Workspace actions"]');
+  const workspaceOut = async () => {
+    await workingHome();
+    await workspaceActions();
+    await click("#workspace-constellation");
+    await pause(350);
+  };
   const openBlock = async (id) => {
-    await click("#layout-manager");
+    await workingHome();
+    await workspaceActions();
     await click(`[data-locate="${id}"]`);
+  };
+  const cardPoint = async (id, edge) => {
+    const selector = `[data-block="${id}"] ${edge ? ".aw-card-edge--" + edge : ".folio-top"}`;
+    let last, point;
+    const deadline = Date.now() + 3000;
+    do {
+      await pause(80);
+      point = await js(
+        `(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e?.getBoundingClientRect();if(!r||!r.width||!r.height)return{error:'Missing direct card target'};for(const ratio of [.5,.3,.7,.15,.85]){const x=Math.round(r.x+r.width*ratio),y=Math.round(r.y+r.height*.5),hit=document.elementFromPoint(x,y);if(hit?.closest('[data-block]')?.dataset.block===${JSON.stringify(id)}&&!hit.closest('button,input,textarea,select,a,[contenteditable=true]')&&(!${JSON.stringify(edge ?? null)}||hit.closest('[data-resize-edge]')?.dataset.resizeEdge===${JSON.stringify(edge ?? null)}))return{x,y};}return{error:'Occluded direct card target'}})()`,
+      );
+      if (
+        !point.error &&
+        last &&
+        !last.error &&
+        Math.hypot(last.x - point.x, last.y - point.y) < 0.75
+      )
+        return point;
+      last = point;
+    } while (Date.now() < deadline);
+    throw Error(point?.error ?? "Moving direct card target");
+  };
+  const cardGesture = async (id, edge, dx, dy) => {
+    const before = await snapshot(),
+      old = before.blocks.find((b) => b.id === id),
+      p = await cardPoint(id, edge);
+    for (const type of ["mouseMove", "mouseDown"])
+      win.webContents.sendInputEvent({
+        type,
+        ...p,
+        button: "left",
+        clickCount: 1,
+      });
+    for (let i = 1; i <= 12; i++) {
+      win.webContents.sendInputEvent({
+        type: "mouseMove",
+        x: Math.round(p.x + (dx * i) / 12),
+        y: Math.round(p.y + (dy * i) / 12),
+        button: "left",
+        modifiers: ["leftbuttondown"],
+      });
+      await pause(20);
+    }
+    win.webContents.sendInputEvent({
+      type: "mouseUp",
+      x: p.x + dx,
+      y: p.y + dy,
+      button: "left",
+      clickCount: 1,
+    });
+    await wait(
+      `window.__aerynth.application().layoutVersion>${before.layoutVersion}`,
+    );
+    const after = await snapshot(),
+      moved = after.blocks.find((b) => b.id === id);
+    assert.ok(
+      edge
+        ? moved.width !== old.width || moved.height !== old.height
+        : moved.x !== old.x || moved.y !== old.y,
+      "native gesture changes actual canonical geometry",
+    );
+    assert.deepEqual(
+      after.resources,
+      before.resources,
+      "layout gesture cannot edit canonical resource content",
+    );
+    receipt.actions.push({
+      label: edge ? "Resize card" : "Move card",
+      blockId: id,
+      edge: edge ?? null,
+      dx,
+      dy,
+      method: "native-mouse-input",
+      before: old,
+      after: moved,
+    });
+    await pause(150);
+  };
+  const cardPresentation = async (id, shape) => {
+    const p = await cardPoint(id);
+    for (const type of ["mouseMove", "mouseDown", "mouseUp"])
+      win.webContents.sendInputEvent({
+        type,
+        ...p,
+        button: "right",
+        clickCount: 1,
+      });
+    await wait(
+      'document.querySelector("#command-surface").open&&!!document.querySelector("#command-surface select[name=shape]")',
+    );
+    await fill('#command-surface select[name="shape"]', shape);
+    await click('#command-surface button[type="submit"]');
+    await wait('!document.querySelector("#command-surface").open');
+    await wait(
+      `window.__aerynth.application().blocks.find(b=>b.id===${JSON.stringify(id)}).shape===${JSON.stringify(shape)}`,
+    );
+    mark("Changed actual card presentation through native context menu");
   };
   const projectView = async () => {
     for (
@@ -220,8 +387,7 @@ exports.verify = async ({
       i < 2 && (await spatial()).location.kind !== "project";
       i++
     ) {
-      await click("#zoom-out");
-      await pause(350);
+      await workspaceOut();
     }
     assert.equal((await spatial()).location.kind, "project");
   };
@@ -374,7 +540,7 @@ exports.verify = async ({
         "fresh-process-restart-keeps-canonical-identities-content-relationships-branch-ancestry-and-complete-spatial-view",
       );
       await shot("11-restored-workspace");
-      await click("#zoom-out");
+      await workspaceOut();
       const project = actual.workspaces.find(
           (w) => w.id === actual.activeWorkspaceId,
         ).project_id,
@@ -414,36 +580,31 @@ exports.verify = async ({
             "research",
             "reference",
           ]) {
-            row[kind] = await add(kind, title + " " + kind);
+            row[kind] = await add(
+              kind,
+              title + " " + kind,
+              kind === "note"
+                ? { width: 330 + pi * 35, height: 230 + wi * 25 }
+                : undefined,
+            );
           }
           const b = row.note.block;
-          await click(`[data-block="${b.id}"] .block-properties`);
-          for (const [field, value] of Object.entries({
-            x: 100 + pi * 70,
-            y: 190 + wi * 65,
-            width: 330 + pi * 35,
-            height: 230 + wi * 25,
-          }))
-            await fill(
-              `#command-surface input[name="${field}"]`,
-              String(value),
-            );
-          await click('#command-surface button[type="submit"]');
-          await wait('!document.querySelector("#command-surface").open');
-          await click(`[data-block="${b.id}"] .unfold`);
+          await openBlock(b.id);
+          await workingHome();
+          await cardGesture(b.id, null, 35 + pi * 10, 15 + wi * 10);
+          await openBlock(b.id);
           await fill(
             `[data-block="${b.id}"] textarea`,
             "Synthetic durable " + title + " note. Stable resource identity.",
           );
           await flush();
-          await click("#home");
-          await click(`[data-block="${row.reference.block.id}"] .unfold`);
+          await openBlock(row.reference.block.id);
           await fill(
             `[data-block="${row.reference.block.id}"] textarea`,
             "Synthetic link: https://example.invalid/" + title.toLowerCase(),
           );
           await flush();
-          await click("#home");
+          await workingHome();
           records.push(row);
         }
       }
@@ -458,7 +619,7 @@ exports.verify = async ({
         await add("conversation", row.title + " follow-up conversation");
         const extraTask = await add("task", row.title + " verification task"),
           taskGroup = await add("task_group", row.title + " local task group");
-        await click(`[data-block="${taskGroup.block.id}"] .unfold`);
+        await openBlock(taskGroup.block.id);
         await click(
           `[data-block="${taskGroup.block.id}"] .manage-task-members`,
         );
@@ -499,7 +660,7 @@ exports.verify = async ({
           blockId: taskGroup.block.id,
           memberResourceIds: [row.task.resource.id, extraTask.resource.id],
         });
-        await click("#home");
+        await workingHome();
         await projectView();
         await relate(row.conversation.resource.id, row.note.resource.id);
       }
@@ -545,14 +706,19 @@ exports.verify = async ({
       }
       await selectWorkspace(records[4].workspaceId);
       await openBlock(receipt.taskGroups[2].blockId);
-      receipt.focusedDock = await js(
-        `([...document.querySelectorAll('.dock,.dock button,.dock span')].map(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {tag:e.tagName,text:e.textContent,rect:{x:r.x,y:r.y,w:r.width,h:r.height},scrollWidth:e.scrollWidth,clientWidth:e.clientWidth,clipPath:s.clipPath,transform:s.transform,opacity:s.opacity,overflow:s.overflow}}))`,
+      receipt.focusedControls = await js(
+        `([...document.querySelectorAll('.aw-workspace-layout,.aw-workspace-layout button,#workspace-manager')].map(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {tag:e.tagName,text:e.textContent,rect:{x:r.x,y:r.y,w:r.width,h:r.height},display:s.display,opacity:s.opacity}}))`,
+      );
+      assert.equal(
+        await js('getComputedStyle(document.querySelector(".dock")).display'),
+        "none",
+        "legacy taskbar stays hidden",
       );
       await shot("00-real-local-task-group");
       receipt.checks.push(
         "each-of-three-projects-has-a-canonical-task-group-two-real-members-local-status-and-related-note",
       );
-      await click("#home");
+      await workingHome();
       await selectWorkspace(originalRow.workspaceId);
       await shot("01-original-working-workspace");
       step(
@@ -572,29 +738,21 @@ exports.verify = async ({
         "Synthetic note created and arranged at the start of the real journey.",
       );
       await flush();
-      await click("#home");
-      await click(`[data-block="${journeyNote.block.id}"] .block-properties`);
-      for (const [field, value] of Object.entries({
-        x: 320,
-        y: 350,
-        width: 390,
-        height: 230,
-      }))
-        await fill(`#command-surface input[name="${field}"]`, String(value));
-      await fill('#command-surface select[name="shape"]', "folio");
-      await click('#command-surface button[type="submit"]');
-      await wait('!document.querySelector("#command-surface").open');
+      await workingHome();
+      await cardGesture(journeyNote.block.id, null, 50, 25);
+      await cardGesture(journeyNote.block.id, "se", 55, 30);
+      await cardPresentation(journeyNote.block.id, "lens");
       assert.equal(
         (await snapshot()).blocks.find((b) => b.id === journeyNote.block.id)
           .shape,
-        "folio",
+        "lens",
       );
       await shot("01b-new-block-created-and-arranged");
       step(
         2,
         "Create, edit, resize, reshape and place another real working block",
       );
-      await click("#zoom-out");
+      await workspaceOut();
       await pause(650);
       await checkOverviewPresence("project");
       step(3, "Zoom out from the workspace");
@@ -670,7 +828,7 @@ exports.verify = async ({
           `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(sourceRow.conversation.resource.id)}).messages.some(m=>m.content===${JSON.stringify(content)})`,
         );
       }
-      await click("#home");
+      await workingHome();
       await projectView();
       const source = (await snapshot()).resources.find(
         (r) => r.id === sourceRow.conversation.resource.id,
@@ -877,8 +1035,7 @@ exports.verify = async ({
       step(18, "Enter its Engineering working workspace");
       // Fluid insertion may legitimately move a prior block beyond this camera.
       // Exercise the real offscreen-block access instead of assuming visibility.
-      await click("#layout-manager");
-      await click(`[data-locate="${other.note.block.id}"]`);
+      await openBlock(other.note.block.id);
       await fill(
         `[data-block="${other.note.block.id}"] textarea`,
         "Synthetic real editor change after spatial branch and relationship navigation.",
@@ -892,7 +1049,7 @@ exports.verify = async ({
       );
       await shot("08a-other-workspace-real-edit");
       step(19, "Edit and save a real persistent glass-panel note");
-      await click("#home");
+      await workingHome();
       await projectView();
       await textButton("Universe", ".aw-constellation-bar");
       await pause(500);
