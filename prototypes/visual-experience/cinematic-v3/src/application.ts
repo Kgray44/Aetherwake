@@ -31,7 +31,12 @@ import {
 import {
   createManagerState,
   mountConversationManager,
+  acceptedConversationSubmission,
 } from "../../../conversation-product/src/ui.ts";
+import {
+  ConversationDraftSession,
+  type DraftSessionSnapshot,
+} from "../../../conversation-product/src/draft-session.ts";
 import type {
   ConversationProductPort,
   ProductCommandMap,
@@ -232,6 +237,19 @@ export function installApplication(hooks: Hooks) {
   >();
   const streaming = new Map<string, string>();
   const busy = new Set<string>();
+  const composerSessions = new Map<string, ConversationDraftSession>();
+  const composerSendReview = new Set<string>();
+  const composerPort: ConversationProductPort = {
+    async command<K extends keyof ProductCommandMap>(
+      name: K,
+      input: ProductCommandMap[K]["input"],
+    ): Promise<ProductCommandMap[K]["output"]> {
+      return (await host.command!("conversation", {
+        name,
+        input,
+      })) as ProductCommandMap[K]["output"];
+    },
+  };
   type Activity = Partial<StreamEvent> & { type: string };
   const localEvents: StreamEvent[] = [];
   const eventViews = new Map<string, ReturnType<typeof mountEventExperience>>();
@@ -404,6 +422,15 @@ export function installApplication(hooks: Hooks) {
     )
       cancelPreview();
     state = next;
+    for (const [id, session] of composerSessions)
+      if (
+        !next.blocks.some((block) => block.resource_id === id) &&
+        session.snapshot().phase === "clean"
+      ) {
+        composerSessions.delete(id);
+        composerSendReview.delete(id);
+        void session.dispose().catch(report);
+      }
     for (const id of activeBlocks.keys())
       if (!next.blocks.some((block) => block.id === id))
         activeBlocks.delete(id);
@@ -625,6 +652,7 @@ export function installApplication(hooks: Hooks) {
         if (drafts.get(resourceId) === draft) drafts.delete(resourceId);
       }
     }
+    for (const session of composerSessions.values()) await session.flush();
   }
   function run(a: DesktopCommand) {
     return enqueue(async () => {
@@ -692,6 +720,8 @@ export function installApplication(hooks: Hooks) {
     if (!previewCommitting) cancelPreview();
     cardConfiguration?.dispose();
     cardConfiguration = null;
+    for (const session of composerSessions.values())
+      void session.reload().catch(report);
   });
   addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || (!presenceDrag && !cancelResize)) return;
@@ -1242,9 +1272,14 @@ export function installApplication(hooks: Hooks) {
                 .map((block) =>
                   block.resource_id
                     ? state!.resources.find(
-                        (resource) => resource.id === block.resource_id,
+                        (resource) =>
+                          resource.id === block.resource_id &&
+                          resource.available !== false &&
+                          resource.visible !== false,
                       )?.kind
-                    : block.subject && block.subject.kind !== "resource"
+                    : block.subject &&
+                        block.subject.kind !== "resource" &&
+                        (!block.subjectState || block.subjectState === "active")
                       ? subjectBlockKind(block.subject)
                       : undefined,
                 )
@@ -1663,6 +1698,107 @@ export function installApplication(hooks: Hooks) {
         })
       : Promise.resolve();
   }
+  function paintComposerDraft(resourceId: string, value: DraftSessionSnapshot) {
+    if (
+      !state?.resources.some(
+        (resource) =>
+          resource.id === resourceId && resource.available !== false,
+      )
+    )
+      return;
+    for (const block of state.blocks.filter(
+      (block) => block.resource_id === resourceId,
+    )) {
+      const article = document.querySelector<HTMLElement>(
+          `[data-block="${block.id}"]`,
+        ),
+        surface = article?.querySelector<HTMLElement>(".working-content"),
+        input = surface?.querySelector<HTMLTextAreaElement>(
+          ".conversation-compose textarea",
+        ),
+        status = surface?.querySelector<HTMLElement>(
+          ".conversation-draft-status",
+        );
+      if (!article || !surface || !input || !status) continue;
+      if (input.value !== value.content) {
+        const start = input.selectionStart,
+          end = input.selectionEnd;
+        input.value = value.content;
+        input.setSelectionRange(
+          Math.min(start, value.content.length),
+          Math.min(end, value.content.length),
+        );
+      }
+      input.disabled = value.phase === "loading";
+      const messages = {
+        loading: "Opening saved draft…",
+        clean: value.content
+          ? "Draft recovery saved locally."
+          : "No retained draft text.",
+        dirty: "Saving unsent draft…",
+        saving: "Saving unsent draft…",
+        conflict:
+          "Another composer saved a different draft. Review the stored text before choosing.",
+        error: "Draft recovery failed. Your current text is retained here.",
+      };
+      status.textContent =
+        messages[value.phase] +
+        (value.error ? " " + value.error.replaceAll("_", " ") : "");
+      surface.dataset.conversationDraftState = value.phase;
+      const recovery = el(".conversation-draft-recovery", surface);
+      recovery.hidden =
+        !value.remote &&
+        value.phase !== "error" &&
+        !composerSendReview.has(resourceId);
+      recovery.dataset.remoteVersion = value.remote
+        ? String(value.remote.version)
+        : "";
+      el(".conversation-stored-draft", recovery).textContent =
+        value.remote?.content ?? "No competing stored draft is available.";
+      el(".conversation-stored-draft", recovery).parentElement!.hidden =
+        !value.remote;
+      for (const control of recovery.querySelectorAll<HTMLElement>(
+        "[data-draft-resolve]",
+      ))
+        control.hidden = !value.remote;
+      el(".conversation-draft-retry", recovery).hidden =
+        value.phase !== "error";
+      el(".conversation-send-reviewed", recovery).hidden =
+        !composerSendReview.has(resourceId);
+      el<HTMLButtonElement>(
+        '.conversation-compose button[type="submit"]',
+        surface,
+      ).disabled =
+        busy.has(resourceId) ||
+        ["loading", "conflict", "error"].includes(value.phase) ||
+        composerSendReview.has(resourceId) ||
+        !value.content.trim();
+      if (value.content)
+        el(".folio-preview", article).textContent =
+          "Draft recovery · " + value.content.slice(0, 240);
+    }
+  }
+  function composerSession(resourceId: string) {
+    let session = composerSessions.get(resourceId);
+    if (!session) {
+      if (
+        !state?.resources.some(
+          (resource) =>
+            resource.id === resourceId &&
+            resource.kind === "conversation" &&
+            resource.available !== false,
+        )
+      )
+        throw new Error("conversation_unavailable");
+      session = new ConversationDraftSession({
+        resourceId,
+        port: composerPort,
+        onChange: (value) => paintComposerDraft(resourceId, value),
+      });
+      composerSessions.set(resourceId, session);
+    }
+    return session;
+  }
   function noteSession(resourceId: string) {
     let session = noteSessions.get(resourceId);
     if (!session) {
@@ -1990,51 +2126,147 @@ export function installApplication(hooks: Hooks) {
       const surface = el(".working-content", article);
       if (!surface.querySelector(".conversation-compose")) {
         surface.innerHTML =
-          '<p class="provider-label"></p><div class="conversation-transcript" role="log" aria-label="Conversation messages"></div><form class="conversation-compose"><label>Message<textarea rows="2" maxlength="16000" required aria-label="Conversation message"></textarea></label><div><button type="submit">Send</button><button type="button" class="cancel-turn">Cancel turn</button><button type="button" class="open-full-conversation">History, search and branches</button></div><p class="execution-state" role="status"></p></form>';
+          '<p class="provider-label"></p><div class="conversation-transcript" role="log" aria-label="Conversation messages"></div><form class="conversation-compose"><label>Message<textarea rows="2" maxlength="16000" required aria-label="Conversation message"></textarea></label><div><button type="submit">Send</button><button type="button" class="cancel-turn">Cancel turn</button><button type="button" class="open-full-conversation">History, search and branches</button></div><p class="execution-state" role="status"></p></form><p class="conversation-draft-status" role="status" aria-live="polite"></p><div class="conversation-draft-recovery" hidden><details><summary>Stored competing draft</summary><pre class="conversation-stored-draft"></pre></details><button type="button" data-draft-resolve="keep-local">Keep my text</button><button type="button" data-draft-resolve="use-stored">Use stored draft</button><button type="button" class="conversation-draft-retry">Retry draft recovery</button><button type="button" class="conversation-send-reviewed">I reviewed the saved history</button></div>';
+        const input = el<HTMLTextAreaElement>(
+          ".conversation-compose textarea",
+          surface,
+        );
+        input.maxLength = 16384;
+        input.oninput = () => composerSession(r.id).update(input.value);
         el<HTMLFormElement>("form", surface).onsubmit = (event) => {
           event.preventDefault();
-          const input = el<HTMLTextAreaElement>("textarea", surface);
-          const current = state!.resources.find((r) => r.id === b.resource_id)!;
-          if (busy.has(current.id)) return;
-          const content = input.value;
-          busy.add(current.id);
+          if (
+            busy.has(r.id) ||
+            composerSendReview.has(r.id) ||
+            !input.value.trim()
+          )
+            return;
+          const current = state!.resources.find(
+            (resource) => resource.id === r.id,
+          )!;
+          const session = composerSession(r.id),
+            commandId = crypto.randomUUID(),
+            intentRevision = current.conversationRevision ?? current.version;
+          session.update(input.value);
+          const checkpoint = session.checkpoint();
+          busy.add(r.id);
+          paintComposerDraft(r.id, session.snapshot());
           hooks.vela("working");
           el(".execution-state", surface).textContent =
-            current.provider === "codex"
-              ? "Awaiting native authorization / provider response…"
-              : "Saving local message…";
-          void host.command!("send", {
-            resourceId: current.id,
-            content,
-            expectedVersion: current.conversationRevision ?? current.version,
-          })
-            .then(
-              async (result) => {
-                const execution = result as { state?: string };
-                el(".execution-state", surface).textContent = execution.state
-                  ? `${execution.state} · task verification is separate`
-                  : "Saved locally. Model response unavailable.";
-                if (
-                  !execution.state ||
-                  execution.state === "provider_completed"
-                )
-                  input.value = "";
-                streaming.delete(current.id);
-                await command({ type: "snapshot" });
-                hooks.vela(
-                  execution.state === "failed" || execution.state === "unknown"
-                    ? "attention"
-                    : "idle",
-                );
-              },
-              (e) => {
-                el(".execution-state", surface).textContent = (
-                  e as Error
-                ).message;
-                hooks.vela("attention");
-              },
-            )
-            .finally(() => busy.delete(current.id));
+            "Saving the exact draft before submission…";
+          let submitted = false;
+          void (async () => {
+            const sent = await checkpoint;
+            const before = await composerPort.command("detail", {
+              resourceId: r.id,
+              limit: 50,
+              offset: Math.max(
+                0,
+                (current.messageCount ?? current.messages.length) - 50,
+              ),
+            });
+            if (before.conversation.revision !== intentRevision) {
+              await command({ type: "snapshot" });
+              throw new Error(
+                "Conversation history changed. Review the saved messages before sending again.",
+              );
+            }
+            const evidence = {
+              resourceId: r.id,
+              providerId: before.conversation.providerId,
+              content: sent.record.content,
+              commandId,
+              revision: before.conversation.revision,
+              priorMessageIds: before.messages.items.map(
+                (message) => message.id,
+              ),
+            };
+            el(".execution-state", surface).textContent =
+              current.provider === "codex"
+                ? "Awaiting native authorization / provider response…"
+                : "Recording local message…";
+            submitted = true;
+            const result = await composerPort.command("send", {
+              resourceId: r.id,
+              content: sent.record.content,
+              expectedRevision: before.conversation.revision,
+              commandId,
+            });
+            let accepted = acceptedConversationSubmission(evidence, result);
+            if (!accepted) {
+              const after = await composerPort.command("detail", {
+                resourceId: r.id,
+                limit: 50,
+                offset: Math.max(0, before.conversation.messageCount - 1),
+              });
+              accepted = acceptedConversationSubmission(
+                evidence,
+                result,
+                after,
+              );
+            }
+            if (accepted) {
+              await session.acknowledgeSent(sent);
+              composerSendReview.delete(r.id);
+            } else composerSendReview.add(r.id);
+            const execution = result as { state?: string };
+            el(".execution-state", surface).textContent = !accepted
+              ? "Submission acceptance is unconfirmed. The saved draft is retained; review the history before retrying."
+              : execution.state
+                ? execution.state + " · task verification is separate"
+                : "Message recorded locally. Model response is unavailable.";
+            streaming.delete(r.id);
+            await command({ type: "snapshot" });
+            hooks.vela(
+              !accepted || ["failed", "unknown"].includes(execution.state ?? "")
+                ? "attention"
+                : ["running", "dispatching"].includes(execution.state ?? "")
+                  ? "working"
+                  : "idle",
+            );
+          })()
+            .catch((error) => {
+              const message =
+                error instanceof Error ? error.message : "submission_failed";
+              if (submitted && message !== "authorization_cancelled")
+                composerSendReview.add(r.id);
+              el(".execution-state", surface).textContent =
+                message === "authorization_cancelled"
+                  ? "Send cancelled. The saved draft is retained."
+                  : message;
+              hooks.vela(
+                message === "authorization_cancelled" ? "idle" : "attention",
+              );
+            })
+            .finally(() => {
+              busy.delete(r.id);
+              paintComposerDraft(r.id, session.snapshot());
+            });
+        };
+        for (const control of surface.querySelectorAll<HTMLButtonElement>(
+          "[data-draft-resolve]",
+        ))
+          control.onclick = () => {
+            const version = Number(
+              el(".conversation-draft-recovery", surface).dataset.remoteVersion,
+            );
+            void composerSession(r.id)
+              .resolve(
+                control.dataset.draftResolve as "keep-local" | "use-stored",
+                version,
+              )
+              .catch(report);
+          };
+        el(".conversation-draft-retry", surface).onclick = () => {
+          const session = composerSession(r.id);
+          void session
+            .reload()
+            .then(() => session.flush())
+            .catch(report);
+        };
+        el(".conversation-send-reviewed", surface).onclick = () => {
+          composerSendReview.delete(r.id);
+          paintComposerDraft(r.id, composerSession(r.id).snapshot());
         };
         el(".cancel-turn", surface).onclick = () => {
           void host.command!("executionStatus", {})
@@ -2058,8 +2290,14 @@ export function installApplication(hooks: Hooks) {
             .catch(report);
         };
       }
-      el(".open-full-conversation", surface).onclick = () =>
-        conversations(r.id);
+      el(".open-full-conversation", surface).onclick = () => {
+        void (async () => {
+          const session = composerSession(r.id);
+          await session.flush();
+          conversationView.drafts[r.id] = session.snapshot().content;
+          conversations(r.id);
+        })().catch(report);
+      };
       const latestMessage = r.messages.at(-1);
       el(".folio-preview", article).textContent = latestMessage
         ? latestMessage.role + " · " + latestMessage.content.slice(0, 500)
@@ -2076,6 +2314,17 @@ export function installApplication(hooks: Hooks) {
           `${r.execution.state}${r.execution.errorCode ? " · " + r.execution.errorCode : ""} · task verification is separate`;
       el<HTMLButtonElement>(".cancel-turn", surface).hidden =
         r.provider !== "codex";
+      const session =
+        composerSessions.get(r.id) ??
+        (article.classList.contains("expanded")
+          ? composerSession(r.id)
+          : undefined);
+      if (session) paintComposerDraft(r.id, session.snapshot());
+      else
+        el<HTMLTextAreaElement>(
+          ".conversation-compose textarea",
+          surface,
+        ).disabled = true;
       if (!article.classList.contains("expanded") || document.hidden) return;
       const log = el(".conversation-transcript", surface),
         nearBottom = log.scrollHeight - log.clientHeight - log.scrollTop < 40;
@@ -2474,7 +2723,13 @@ export function installApplication(hooks: Hooks) {
   addEventListener("beforeunload", (event) => {
     if (
       drafts.size ||
-      [...noteSessions.values()].some((session) => session.snapshot().dirty)
+      [...noteSessions.values()].some((session) => session.snapshot().dirty) ||
+      [...composerSessions.values()].some(
+        (session) =>
+          ["dirty", "saving", "conflict"].includes(session.snapshot().phase) ||
+          (session.snapshot().phase === "error" &&
+            session.snapshot().editRevision > 0),
+      )
     ) {
       event.preventDefault();
       event.returnValue = "";

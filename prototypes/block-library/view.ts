@@ -800,6 +800,8 @@ export function mountBlockLibrary(
         },
       );
       item.setAttribute("aria-pressed", String(definition.kind === selected));
+      item.dataset.blockKind = definition.kind;
+      item.dataset.blockType = definition.id;
       item.append(node("small", "aw-library__hint", definition.description));
       if (discovery.value === "recommended")
         item.append(

@@ -6,6 +6,13 @@ const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** Actual desktop/native-input journey. No provider execution; all seeded content is synthetic. */
 exports.verify = async ({ win, app, privateRoot, source }) => {
+  if (process.argv.includes("--verify-inline-drafts"))
+    return require("./integration-inline-drafts.cjs").verify({
+      win,
+      app,
+      privateRoot,
+      source,
+    });
   const output = path.resolve(
     __dirname,
     "../.runtime/application-evidence",
@@ -116,7 +123,12 @@ exports.verify = async ({ win, app, privateRoot, source }) => {
           });
       }
       state = await snapshot();
-      await execute({type:"setPresence",workspaceId:state.activeWorkspaceId,expectedVersion:state.presence.version,placement:{x:1180,y:170}});
+      await execute({
+        type: "setPresence",
+        workspaceId: state.activeWorkspaceId,
+        expectedVersion: state.presence.version,
+        placement: { x: 1180, y: 170 },
+      });
       state = await snapshot();
       const block = state.blocks.find(
           (b) =>

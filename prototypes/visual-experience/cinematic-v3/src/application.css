@@ -516,3 +516,30 @@
   min-height: 0;
   overflow: auto;
 }
+
+.conversation-draft-status {
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+.conversation-draft-recovery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.5rem 0;
+}
+.conversation-draft-recovery details {
+  width: 100%;
+}
+.conversation-draft-recovery pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 12rem;
+  overflow: auto;
+  padding: 0.6rem;
+  background: #14203322;
+  border-radius: 0.6rem;
+}
+.conversation-draft-recovery[hidden],
+.conversation-draft-recovery [hidden] {
+  display: none;
+}
