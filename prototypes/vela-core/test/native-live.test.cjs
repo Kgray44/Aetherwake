@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
-const {createSlot,trustedReviewWindow,consoleRecord,cancelObservedPlanning} = require('./native-live.cjs')._offline;
+const {createSlot,trustedReviewWindow,consoleRecord,cancelObservedPlanning,submitStableTarget} = require('./native-live.cjs')._offline;
 
 /** Pure lifecycle fixtures only. These never launch Electron or qualify actual native/provider behavior. */
 function fixture(){
@@ -32,6 +32,32 @@ test('only the focused actual parent-disabled review child permits observational
 
 test('pending async work is bounded by the same abort and cannot restart after its late completion',async()=>{
   const f=fixture();let resolve;const pending=f.slot.bound(()=>new Promise(done=>{resolve=done;}));await Promise.resolve();f.advance(83500);assert.throws(()=>f.slot.check(),/slot_deadline/);await assert.rejects(pending,/slot_deadline/);resolve('late');await assert.rejects(f.slot.bound(()=> 'retry'),/slot_deadline/);
+});
+
+const rectangle=left=>({x:left+20,y:30,left,top:10,width:40,height:40});
+test('moving submit target must reach three consecutive stable actual rectangles before exactly one native gesture',async()=>{
+  const f=fixture(),inputs=[],positions=[0,4,9,9,9];let samples=0;
+  const result=await submitStableTarget({slot:f.slot,sample:async()=>{assert.equal(inputs.length,0,'No input while waiting for geometry');return rectangle(positions[samples++]);},wait:async ms=>f.advance(ms),sendInput:event=>inputs.push(event)});
+  assert.equal(result.samples,5);assert.deepEqual(inputs.map(e=>e.type),['mouseMove','mouseDown','mouseUp']);assert(inputs.every(e=>e.x===29&&e.y===30&&e.clickCount===1));
+});
+
+test('never-stable submit readiness expires within its local bound and the existing global monotonic slot without input',async()=>{
+  for(const global of [false,true]){
+    const f=fixture(),inputs=[];let samples=0;if(global)f.advance(83400);const before=f.slot.now();
+    await assert.rejects(submitStableTarget({slot:f.slot,sample:async()=>rectangle(++samples),wait:async ms=>f.advance(ms),sendInput:event=>inputs.push(event)}),global?/slot_deadline/:/bounded readiness did not settle/);
+    assert(f.slot.now()-before<=2500);assert.deepEqual(inputs,[]);assert(samples>=1);
+  }
+});
+
+test('submit readiness aborts for occlusion, focus loss and Escape before any input; partial input is never retried',async()=>{
+  for(const reason of ['occluded','focus','escape']){
+    const f=fixture(),inputs=[];let samples=0;
+    await assert.rejects(submitStableTarget({slot:f.slot,sample:async()=>{samples++;if(reason==='occluded')throw Error('Native submit occluded');return rectangle(0);},wait:async ms=>{f.advance(ms);if(reason==='focus')f.focus(false);else if(reason==='escape')f.slot.abort(Error('vela_live_operator_escape'));},sendInput:event=>inputs.push(event)}),/occluded|focus_lost|operator_escape/);
+    assert.deepEqual(inputs,[]);assert.equal(samples,1);
+  }
+  const f=fixture(),inputs=[];let samples=0;
+  await assert.rejects(submitStableTarget({slot:f.slot,sample:async()=>{samples++;return rectangle(0);},wait:async ms=>f.advance(ms),sendInput:event=>{inputs.push(event);throw Error('Actual native input failed');}}),/Actual native input failed/);
+  assert.equal(samples,3);assert.equal(inputs.length,1,'One failed input attempt is terminal, never a retried gesture');
 });
 
 test('native cleanup can cancel only one actually observed pending request and never claims provider interruption',async()=>{
