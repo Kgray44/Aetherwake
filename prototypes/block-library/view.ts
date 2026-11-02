@@ -29,7 +29,9 @@ import {
   searchBlockCatalog,
   catalogDefinition,
   isSubjectBlockKind,
+  subjectBlockKind,
   BUILTIN_BLOCKS,
+  REGISTERED_BLOCKS,
   recommendBlocks,
 } from "./registry.ts";
 import { captureWorkspaceTemplate } from "./model.ts";
@@ -79,6 +81,13 @@ const placementLabel = (
         : placement.subjectBinding.subject.kind === "collection"
           ? "Collection browser"
           : "Resource browser";
+const kindTitle = (kind: BlockInstanceKind) => REGISTERED_BLOCKS.find(definition => definition.kind === kind)?.title ?? 'Unavailable block';
+const placementKind = (template: WorkspaceTemplate, placement: TemplatePlacementRole): BlockInstanceKind | undefined =>
+  placement.resourceKey !== undefined
+    ? template.body.resources.find(role => role.key === placement.resourceKey)?.source.kind
+    : placement.subjectBinding.mode === 'project-context'
+      ? placement.subjectBinding.view === 'project' ? 'project_overview' : 'resource_browser'
+      : subjectBlockKind(placement.subjectBinding.subject);
 function shell(root: HTMLElement, title: string, onClose: () => void) {
   const previousFocus =
     document.activeElement instanceof HTMLElement
@@ -1089,13 +1098,18 @@ export function mountWorkspaceTemplates(
         "aw-library__layout-block",
         placementLabel(template, placement),
       );
+      const kind = placementKind(template, placement);
+      if (kind) {
+        tile.dataset.blockKind = kind;
+        tile.prepend(node('small', 'aw-library__layout-kind', kindTitle(kind)));
+      }
       const p = placement.presentation;
       tile.style.left = ((p.x - minX) / width) * 100 + "%";
       tile.style.top = ((p.y - minY) / height) * 100 + "%";
       tile.style.width = (p.width / width) * 100 + "%";
       tile.style.height = (p.height / height) * 100 + "%";
       tile.style.borderRadius =
-        p.shape === "circle" ? "50%" : p.shape === "pill" ? "40px" : "8px";
+        p.shape === "circle" || p.shape === "pill" ? "50%" : p.shape === "rectangle" ? "0" : "8px";
       tile.title = placementLabel(template, placement) + " · " + p.shape;
       diagram.append(tile);
     }
@@ -1109,38 +1123,20 @@ export function mountWorkspaceTemplates(
       node(
         "p",
         "aw-library__hint",
-        "Template geometry is shown above. The workspace engine resolves Fluid and Structured layouts. Vela keeps its separate presence.",
+        "Your saved layout. Fluid and Structured arrange cards automatically; Vela keeps her own position.",
       ),
     );
-    const roles = node("ul");
-    for (const role of template.body.resources)
-      roles.append(
-        node(
-          "li",
-          "",
-          role.label +
-            " — " +
-            role.source.kind +
-            " — " +
-            (role.source.mode === "new"
-              ? "create empty new resource"
-              : "reuse resource " + role.source.resourceId),
-        ),
-      );
-    for (const placement of template.body.placements)
-      if (placement.subjectBinding)
-        roles.append(
-          node(
-            "li",
-            "",
-            placementLabel(template, placement) +
-              " — " +
-              (placement.subjectBinding.mode === "project-context"
-                ? "bind to the new workspace project"
-                : "reference " +
-                  JSON.stringify(placement.subjectBinding.subject)),
-          ),
-        );
+    const roles = node('ul', 'aw-library__bindings');
+    for (const role of template.body.resources) {
+      const item = node('li');
+      item.append(node('strong', '', role.label), node('small', '', kindTitle(role.source.kind) + ' · ' + (role.source.mode === 'new' ? 'Start empty' : 'Reuse existing')));
+      roles.append(item);
+    }
+    for (const placement of template.body.placements) if (placement.subjectBinding) {
+      const item = node('li');
+      item.append(node('strong', '', placementLabel(template, placement)), node('small', '', placement.subjectBinding.mode === 'project-context' ? "Use this workspace’s project" : 'Reuse the saved view'));
+      roles.append(item);
+    }
     detail.append(roles);
     const form = node("form"),
       name = node("input");

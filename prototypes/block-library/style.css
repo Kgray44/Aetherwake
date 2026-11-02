@@ -288,3 +288,22 @@
   outline: 2px solid #e5d2ff;
   outline-offset: 3px;
 }
+
+/* Type cues in a saved layout stay visible beside its explicit reuse choices. */
+.aw-library__layout-block { --aw-preview-accent: #c9c4d3; border-color: var(--aw-preview-accent); }
+.aw-library__layout-block[data-block-kind="conversation"] { --aw-preview-accent: #b8c4ef; }
+.aw-library__layout-block[data-block-kind="note"] { --aw-preview-accent: #dfd0b9; }
+.aw-library__layout-block[data-block-kind="task"] { --aw-preview-accent: #acc3d7; }
+.aw-library__layout-block[data-block-kind="task_group"] { --aw-preview-accent: #aecab8; }
+.aw-library__layout-block[data-block-kind="stream"] { --aw-preview-accent: #a7c8cb; }
+.aw-library__layout-block[data-block-kind="project_overview"] { --aw-preview-accent: #bcb2dc; }
+.aw-library__layout-block[data-block-kind="resource_browser"] { --aw-preview-accent: #b9c6d4; }
+.aw-library__layout-block[data-block-kind="collection_browser"] { --aw-preview-accent: #c2b2d0; }
+.aw-library__layout-block[data-block-kind="research"] { --aw-preview-accent: #9fc9d3; }
+.aw-library__layout-block[data-block-kind="reference"] { --aw-preview-accent: #cabbac; }
+.aw-library__layout-kind { display: block; color: var(--aw-preview-accent); font-size: 9px; font-weight: 600; margin-bottom: 3px; }
+.aw-library__bindings { display: grid; gap: 8px; list-style: none; padding-left: 0 !important; }
+.aw-library__bindings li { min-width: 0; overflow-wrap: anywhere; }
+.aw-library__bindings strong { font-size: 13px; font-weight: 500; }
+.aw-library__bindings small { display: block; color: #b6c3dc; font-size: 12px; }
+.aw-library__detail > .aw-library__button { margin: 0 8px 8px 0; }
