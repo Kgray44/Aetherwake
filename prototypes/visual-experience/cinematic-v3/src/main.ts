@@ -1190,7 +1190,9 @@ function renderDOM() {
       visible,
       expanded === id ? "focused" : "workspace",
     );
-    const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};transform:perspective(1500px) translateZ(${p.lift}px) rotateZ(${p.rotation}deg) rotateY(${p.yaw}deg);z-index:${compositing.rank + 3};border-radius:${surfaceBorderRadius(p.shape, p.w, p.h, unfold)};clip-path:inset(0 round ${surfaceBorderRadius(p.shape, p.w, p.h, unfold)});--resource-content-clip:${compositing.clipPath || "none"};`;
+    const radius = surfaceBorderRadius(p.shape, p.w, p.h, unfold);
+    const [radiusX, radiusY = radiusX] = radius.split(/\s*\/\s*/);
+    const style = `left:${p.x}px;top:${p.y}px;width:${p.w}px;height:${p.h}px;--lift:${p.lift};--opacity:${p.opacity};--unfold:${unfold};--dock:${dock};--aw-resize-radius-x:${radiusX};--aw-resize-radius-y:${radiusY};transform:perspective(1500px) translateZ(${p.lift}px) rotateZ(${p.rotation}deg) rotateY(${p.yaw}deg);z-index:${compositing.rank + 3};border-radius:${radius};clip-path:inset(0 round ${radius});--resource-content-clip:${compositing.clipPath || "none"};`;
     if (poseStyleCache.get(id) !== style) {
       applyBlockPoseStyle(el.style, style);
       poseStyleCache.set(id, style);
