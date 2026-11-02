@@ -1,0 +1,43 @@
+/* Opt-in optical tokens only. Component owners retain semantics, layout,
+   keyboard behavior and menus. The host's existing MC owns interpolation. */
+.aw-optical-controls {
+  --aw-control-radius: 999px;
+  --aw-control-min-height: 36px;
+  --aw-control-pad-block: 6px;
+  --aw-control-pad-inline: 12px;
+  --aw-menu-radius: 18px;
+  --aw-option-radius: 11px;
+  --aw-menu-pad: 6px;
+  --aw-control-text: #ede8f5;
+  --aw-control-muted: #bcb4cd;
+  --aw-control-rim: #d4b8f529;
+  --aw-control-hover-film: #d4b8f514;
+  --aw-control-press-film: #d4b8f520;
+  --aw-control-focus: #ddc7f7;
+  --aw-menu-ink: #10111d;
+  --aw-menu-rim: #d4b8f52b;
+  --aw-menu-shadow: 0 14px 36px #02030a40;
+  --aw-option-selected-film: #d4b8f51c;
+  --aw-option-selected-text: var(--aw-control-text);
+  /* Optional aliases for the existing shared control-motion material rules.
+     Their host-owned defaults remain unchanged outside this opt-in scope. */
+  --control-edge-rgb: 212 184 245;
+  --control-film-rgb: 212 184 245;
+  --control-sheen-rgb: 240 221 255;
+  --control-focus-color: var(--aw-control-focus);
+}
+@media (forced-colors: active) {
+  .aw-optical-controls {
+    --aw-control-text: CanvasText;
+    --aw-control-muted: CanvasText;
+    --aw-control-rim: ButtonText;
+    --aw-control-hover-film: ButtonFace;
+    --aw-control-press-film: ButtonFace;
+    --aw-control-focus: Highlight;
+    --aw-menu-ink: Canvas;
+    --aw-menu-rim: CanvasText;
+    --aw-menu-shadow: none;
+    --aw-option-selected-film: Highlight;
+    --aw-option-selected-text: HighlightText;
+  }
+}
