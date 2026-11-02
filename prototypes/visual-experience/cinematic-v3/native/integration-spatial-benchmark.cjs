@@ -718,6 +718,55 @@ function assertBodyCounters(renderer, cap, canonicalBound) {
     "camera alignment must not remove bodies",
   );
 }
+
+function assertSpatialRecovery(before, after, canonicalBound) {
+  for (const [phase, observation] of [
+    ["before loss", before],
+    ["after recovery", after],
+  ]) {
+    assert.equal(observation.quality, "cinematic", phase + " quality");
+    assertBodyCounters(observation.renderer, 280, canonicalBound);
+    assert(
+      observation.gpu.spatialLayer.active === true &&
+        observation.gpu.spatialLayer.failed === false,
+      phase + " healthy spatial layer",
+    );
+    assert(
+      Number.isInteger(observation.gpu.framesRendered) &&
+        observation.gpu.framesRendered > 0,
+      phase + " requires an actual GPU frame in its Environment epoch",
+    );
+  }
+  const camera = before.camera;
+  for (const value of [
+    camera?.target?.x,
+    camera?.target?.y,
+    camera?.target?.z,
+    camera?.distance,
+    camera?.yaw,
+    camera?.pitch,
+  ])
+    assert(Number.isFinite(value), "actual pre-loss camera required");
+  assert(camera.distance > 0, "actual pre-loss camera distance");
+  assert.deepEqual(after.camera, camera, "recovery preserves the camera pose");
+  assert(before.renderer.nodes > 0, "visible bodies before context loss");
+  assert.equal(
+    after.renderer.nodes + after.renderer.culled,
+    before.renderer.nodes + before.renderer.culled,
+    "recovery preserves canonical body candidates",
+  );
+  assert.equal(
+    after.renderer.nodes,
+    before.renderer.nodes,
+    "recovery preserves visible bodies at the unchanged view",
+  );
+  if (before.renderer.instancedBodies > 0)
+    assert(
+      after.renderer.instancedBodies > 0,
+      "visible instance batch survives context recovery",
+    );
+}
+
 function scalarMemory(value) {
   return Object.fromEntries(
     Object.entries(value ?? {})
@@ -739,6 +788,7 @@ exports.qualifyPerformanceCase = qualifyPerformanceCase;
 exports.startPresentationCapture = startPresentationCapture;
 exports.benchmarkControls = benchmarkControls;
 exports.assertBodyCounters = assertBodyCounters;
+exports.assertSpatialRecovery = assertSpatialRecovery;
 exports.intervalDistribution = intervalDistribution;
 exports.presentationTailStatistics = presentationTailStatistics;
 exports.callbackWindowStatistics = callbackWindowStatistics;
@@ -1381,14 +1431,41 @@ exports.verify = async ({
       receipt.regressions.push(
         "native-window-resize-keeps-unique-current-labels",
       );
+      const observeRecovery = async () => {
+        const requested = hostClock();
+        const observation = await observe();
+        return { requested, completed: hostClock(), observation };
+      };
+      const recovery = (receipt.contextRecovery = {
+        detailedBodyCap: 280,
+        canonicalBodyBound: canonicalBound,
+        frameCounterMeaning:
+          "The host creates a new Environment on WebGL restoration, resetting framesRendered to zero. A positive recovered counter proves a fresh frame; counters from different epochs are not compared.",
+        before: await observeRecovery(),
+        after: null,
+        passed: false,
+      });
       await read("window.__aerynth.simulateContextLoss()");
       await waitOwned("window.__aerynth.snapshot().graphicsFailed");
       await read("window.__aerynth.restoreContext()");
       await waitOwned(
         "!window.__aerynth.snapshot().graphicsFailed&&window.__aerynth.snapshot().gpu.spatialLayer.active&&!window.__aerynth.snapshot().gpu.spatialLayer.failed",
       );
+      await waitOwned(
+        "!window.__aerynth.snapshot().graphicsFailed&&window.__aerynth.snapshot().gpu.framesRendered>0",
+      );
+      recovery.after = await observeRecovery();
+      assertSpatialRecovery(
+        recovery.before.observation,
+        recovery.after.observation,
+        canonicalBound,
+      );
+      recovery.passed = true;
       receipt.regressions.push(
         "real-WebGL-recovery-restores-combined-spatial-layer",
+      );
+      receipt.regressions.push(
+        "real-WebGL-recovery-preserves-cinematic-body-counters",
       );
       await click('button[data-scene="living"]');
       await ownedPause(200);

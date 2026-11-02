@@ -11,6 +11,7 @@ const {
   nativeOrbit,
   benchmarkControls,
   assertBodyCounters,
+  assertSpatialRecovery,
   universeObservation,
   assertUniverseFrame,
   qualifyPerformanceCase,
@@ -169,6 +170,112 @@ test("quality limits detailed geometry while all visible instanced bodies remain
     () => assertBodyCounters({ ...r, overlapCulled: 1 }, 160, 5002),
     /camera alignment/,
   );
+});
+
+function recoveryFixture() {
+  const before = spatialObservation(snapshot());
+  before.quality = "cinematic";
+  before.renderer.detailedBodies = 280;
+  before.renderer.instancedBodies = 4720;
+  const after = structuredClone(before);
+  after.gpu.framesRendered = 1;
+  return { before, after, canonicalBound: 5002 };
+}
+
+test("context recovery accepts a fresh frame in the new Environment epoch and preserves bounded bodies without mutating observations", () => {
+  const { before, after, canonicalBound } = recoveryFixture(),
+    saved = structuredClone({ before, after });
+  assert.equal(before.gpu.framesRendered, 70);
+  assert.equal(after.gpu.framesRendered, 1);
+  assertSpatialRecovery(before, after, canonicalBound);
+  assert.deepEqual({ before, after }, saved);
+});
+
+test("healthy layer flags cannot qualify blank, stale, missing, over-budget or lost-body recovery", () => {
+  const failures = [
+    ["no recovered frame", (b, a) => (a.gpu.framesRendered = 0)],
+    ["missing recovered frame", (b, a) => (a.gpu.framesRendered = null)],
+    ["non-finite recovered frame", (b, a) => (a.gpu.framesRendered = NaN)],
+    ["wrong tier", (b, a) => (a.quality = "balanced")],
+    ["inactive layer", (b, a) => (a.gpu.spatialLayer.active = false)],
+    ["failed layer", (b, a) => (a.gpu.spatialLayer.failed = true)],
+    ["missing pre-loss frame", (b) => (b.gpu.framesRendered = 0)],
+    ["changed camera", (b, a) => (a.camera.yaw += 0.01)],
+    [
+      "missing camera in both observations",
+      (b, a) => {
+        b.camera.target.x = null;
+        a.camera.target.x = null;
+      },
+    ],
+    [
+      "detail exceeds Cinematic cap",
+      (b, a) => {
+        a.renderer.detailedBodies = 281;
+        a.renderer.instancedBodies = 4719;
+      },
+    ],
+    [
+      "canonical candidate lost",
+      (b, a) => {
+        a.renderer.nodes--;
+        a.renderer.instancedBodies--;
+      },
+    ],
+    [
+      "visible body incorrectly culled",
+      (b, a) => {
+        a.renderer.nodes--;
+        a.renderer.instancedBodies--;
+        a.renderer.culled++;
+      },
+    ],
+    [
+      "blank but allocated scene",
+      (b, a) => {
+        Object.assign(a.renderer, {
+          nodes: 0,
+          detailedBodies: 0,
+          instancedBodies: 0,
+          culled: 5002,
+        });
+      },
+    ],
+    ["incorrect visible accounting", (b, a) => a.renderer.instancedBodies--],
+    ["unbounded instances", (b, a) => (a.renderer.instanceDrawCount = 5003)],
+  ];
+  for (const [reason, breakObservation] of failures) {
+    const { before, after, canonicalBound } = recoveryFixture();
+    breakObservation(before, after);
+    assert.throws(
+      () => assertSpatialRecovery(before, after, canonicalBound),
+      undefined,
+      reason,
+    );
+  }
+});
+
+test("a previously visible instance batch must survive even when full-detail replacement would fit the cap", () => {
+  const { before, after, canonicalBound } = recoveryFixture();
+  Object.assign(before.renderer, {
+    nodes: 200,
+    detailedBodies: 150,
+    instancedBodies: 50,
+    instanceDrawCount: 201,
+  });
+  Object.assign(after.renderer, {
+    nodes: 200,
+    detailedBodies: 200,
+    instancedBodies: 0,
+    instanceDrawCount: 201,
+  });
+  assert.throws(
+    () => assertSpatialRecovery(before, after, canonicalBound),
+    /visible instance batch/,
+  );
+  before.renderer.detailedBodies = 200;
+  before.renderer.instancedBodies = 0;
+  assertSpatialRecovery(before, after, canonicalBound);
 });
 
 function owner() {
