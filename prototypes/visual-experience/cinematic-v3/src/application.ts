@@ -1411,7 +1411,7 @@ export function installApplication(hooks: Hooks) {
         const group = document.createElement("section");
         group.className = "task-group-summary";
         group.innerHTML =
-          '<p>Local tasks · execution is separate</p><ul class="group-task-list"></ul><button type="button" class="manage-task-members">Manage tasks</button>';
+          '<p>Local tasks · execution is separate</p><label>Show tasks<select class="task-group-filter"><option value="all">All</option><option value="open">Open</option><option value="done">Done</option></select></label><ul class="group-task-list"></ul><button type="button" class="manage-task-members">Manage tasks</button>';
         surface.prepend(group);
         el(".manage-task-members", group).onclick = () =>
           void enqueue(async () => {
@@ -1419,10 +1419,17 @@ export function installApplication(hooks: Hooks) {
             taskGroupMembers(r.id);
           });
       }
+      el<HTMLSelectElement>(".task-group-filter", surface).onchange = () =>
+        decorate(article, id);
       const members = r.taskMembers ?? [],
         list = el(".group-task-list", surface);
       list.replaceChildren();
       for (const task of members) {
+        const filter = el<HTMLSelectElement>(
+          ".task-group-filter",
+          surface,
+        ).value;
+        if (filter !== "all" && task.status !== filter) continue;
         const item = document.createElement("li"),
           button = document.createElement("button");
         button.type = "button";
@@ -1477,6 +1484,40 @@ export function installApplication(hooks: Hooks) {
         if (editor.value !== content) editor.value = content;
       }
       if (r.kind === "task") {
+        if (!article.querySelector(".task-priority")) {
+          const label = document.createElement("label");
+          label.textContent = "Priority";
+          const priority = document.createElement("select");
+          priority.className = "task-priority";
+          priority.setAttribute("aria-label", "Task priority");
+          for (const value of ["low", "normal", "high", "urgent"]) {
+            const option = document.createElement("option");
+            option.value = value;
+            option.textContent = value[0].toUpperCase() + value.slice(1);
+            priority.append(option);
+          }
+          label.append(priority);
+          el(".working-content", article).prepend(label);
+          priority.onchange = () => {
+            const current = state!.resources.find(
+              (resource) => resource.id === r.id,
+            )!;
+            priority.disabled = true;
+            void run({
+              type: "taskPriority",
+              resourceId: r.id,
+              expectedVersion: current.version,
+              priority: priority.value as NonNullable<Resource["taskPriority"]>,
+            }).finally(() => {
+              priority.disabled = false;
+              priority.value =
+                state!.resources.find((resource) => resource.id === r.id)
+                  ?.taskPriority ?? "normal";
+            });
+          };
+        }
+        el<HTMLSelectElement>(".task-priority", article).value =
+          r.taskPriority ?? "normal";
         if (!article.querySelector(".task-completed")) {
           const label = document.createElement("label");
           label.className = "local-task-state";

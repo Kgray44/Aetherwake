@@ -654,12 +654,14 @@ export class DesktopState {
         );
         this.kernel.updateNote(a.resourceId, a.content, a.expectedVersion);
         break;
-      case "taskStatus": {
+      case "taskStatus":
+      case "taskPriority": {
         const row = this.db
-          .prepare("SELECT kind FROM desktop_resources WHERE resource_id=?")
+          .prepare("SELECT kind,metadata_json FROM desktop_resources WHERE resource_id=?")
           .get(a.resourceId);
-        check(row?.kind === "task" && ["open", "done"].includes(a.status));
+        check(row?.kind === "task" && (a.type==='taskStatus'?["open", "done"].includes(a.status):['low','normal','high','urgent'].includes(a.priority)));
         const current = this.kernel.getResource(a.resourceId);
+        check(current.resource.state==='active','resource_archived');
         this.kernel.updateNote(
           a.resourceId,
           current.note.content,
@@ -669,7 +671,7 @@ export class DesktopState {
           .prepare(
             "UPDATE desktop_resources SET metadata_json=? WHERE resource_id=?",
           )
-          .run(JSON.stringify({ taskStatus: a.status }), a.resourceId);
+          .run(JSON.stringify({...JSON.parse(String(row!.metadata_json??'{}')),...(a.type==='taskStatus'?{taskStatus:a.status}:{taskPriority:a.priority})}), a.resourceId);
         break;
       }
       case "checkpoint":
@@ -784,6 +786,7 @@ export class DesktopState {
                 taskStatus:
                   JSON.parse(String(metadata?.metadata_json ?? "{}"))
                     .taskStatus ?? "open",
+                taskPriority:JSON.parse(String(metadata?.metadata_json??'{}')).taskPriority??'normal',
               }
             : {}),
           provider: "local" as const,
