@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ResponsesTransport, prepareResponsesTurn, fetchModelCatalog, RESPONSES_ENDPOINT, MODELS_ENDPOINT } from '../responses.mts';
-import type { NativeCredential, NativeDispatchPort, TurnInput, TurnEvent } from '../contracts.mts';
+import type { ModelCatalogDiagnostic, NativeCredential, NativeDispatchPort, TurnInput, TurnEvent } from '../contracts.mts';
 import { digest } from '../common.mts';
 const boundary = 'a'.repeat(64);
 const input = (): TurnInput => ({ executionId: 'execution-1', requestId: 'request-1', configurationId: 'ordinary-profile', providerId: 'chatgpt-plan-responses', assistant: 'ordinary', model: 'fixture-model', instructions: 'Ordinary assistant instruction, no coding agent harness.', messages: [{ role: 'user', content: 'Hello\n世界' }], contextDigest: 'b'.repeat(64) });
@@ -151,4 +151,92 @@ test('offline: final dispatch rechecks expiry and terminal hidden tool output ca
     assert.equal(calls, 0);
     const hidden = fixture(ports(), async () => stream([{ ...completed, response: { ...completed.response, output: [{ type: 'function_call', name: 'execute' }] } }]));
     assert.equal((await hidden.transport.turn(input())).errorCode, 'unsupported_provider_output');
+});
+
+const catalogClock = 1700000000000;
+const catalogBody = () => ({ models: [{ slug: 'private-model-z', display_name: 'Private model Z', visibility: 'list' }, { slug: 'private-hidden', display_name: 'Private hidden', visibility: 'hide' }, { slug: 'private-model-a', display_name: 'Private model A', visibility: 'list' }] });
+async function observedCatalog(response: Response, observer?: (value: Readonly<ModelCatalogDiagnostic>) => void) {
+    const diagnostics: Readonly<ModelCatalogDiagnostic>[] = []; let calls = 0;
+    let result, error;
+    try { result = await fetchModelCatalog({ providerId: 'chatgpt-plan-responses', configurationId: 'private-configuration', now: () => catalogClock, resolveCredential: async () => credential(), fetch: async (url, init) => { calls++; assert.equal(url, MODELS_ENDPOINT); assert.equal(init?.redirect, 'error'); assert.equal(init?.credentials, 'omit'); assert.equal(init?.cache, 'no-store'); return response; }, onDiagnostic: value => { diagnostics.push(value); return observer?.(value); } }); }
+    catch (caught) { error = caught; }
+    assert.equal(calls, 1); assert.equal(diagnostics.length, 1);
+    const diagnostic = diagnostics[0]; assert.equal(Object.getPrototypeOf(diagnostic), null); assert.equal(Object.isFrozen(diagnostic), true);
+    assert(Object.values(Object.getOwnPropertyDescriptors(diagnostic)).every(descriptor => 'value' in descriptor && descriptor.get === undefined && descriptor.set === undefined));
+    return { result, error, diagnostic };
+}
+
+test('offline: catalog diagnostic is once-only frozen bodyless scalars with HTTP request identity and bounded returned/listed counts', async () => {
+    const { result, error, diagnostic } = await observedCatalog(Response.json(catalogBody(), { headers: { 'x-request-id': 'req_catalog123' } }));
+    assert.equal(error, undefined); assert.deepEqual(result?.models.map(model => model.id), ['private-model-z', 'private-model-a']);
+    assert.deepEqual({ ...diagnostic }, { contract: 'aerynth.model-catalog-diagnostic@1', outcome: 'accepted', httpStatus: 200, serverRequestId: 'req_catalog123', bodyShape: 'models', remoteCode: null, returnedCount: 3, listedCount: 2, observedAt: catalogClock });
+    const serialized = JSON.stringify(diagnostic); for (const secret of ['private-', 'synthetic-plan-token', boundary, 'Private model', 'Authorization', 'https://']) assert.equal(serialized.includes(secret), false);
+});
+
+test('offline: model GET HTTP403 retains only allowlisted code/status/request ID and preserves the catalog error', async () => {
+    const { error, diagnostic } = await observedCatalog(Response.json({ error: { code: 'subscription_sharing_user_not_eligible', message: 'PRIVATE account/client/host and https://private.invalid/path', account_id: 'private-account' } }, { status: 403, headers: { 'x-request-id': 'req_denied123' } }), () => { throw Error('private observer failure'); });
+    assert.match(String(error), /model_catalog_unavailable/); assert.equal(diagnostic.outcome, 'http-error'); assert.equal(diagnostic.httpStatus, 403); assert.equal(diagnostic.bodyShape, 'error'); assert.equal(diagnostic.remoteCode, 'subscription_sharing_user_not_eligible'); assert.equal(diagnostic.returnedCount, null); assert.equal(diagnostic.listedCount, null);
+    assert.equal(JSON.stringify(diagnostic).includes('PRIVATE'), false); assert.equal(JSON.stringify(diagnostic).includes('private-account'), false);
+    const unknown = await observedCatalog(Response.json({ error: { code: 'private-arbitrary-code', message: 'PRIVATE raw body' } }, { status: 403 })); assert.equal(unknown.diagnostic.remoteCode, null); assert.equal(unknown.diagnostic.serverRequestId, null);
+});
+
+test('offline: unstructured detail is classified without retaining its content or extracting a code from prose', async () => {
+    for (const detail of ['PRIVATE subscription_sharing_user_not_eligible is mentioned in prose with account=secret', { message: 'PRIVATE detail', arbitrary: 'https://private.invalid' }]) {
+        const { error, diagnostic } = await observedCatalog(Response.json({ detail }, { status: 403 })); assert.match(String(error), /model_catalog_unavailable/); assert.equal(diagnostic.bodyShape, 'detail'); assert.equal(diagnostic.remoteCode, null); assert.equal(diagnostic.httpStatus, 403); assert.equal(JSON.stringify(diagnostic).includes('PRIVATE'), false);
+    }
+    const structured = await observedCatalog(Response.json({ detail: { code: 'rate_limit_exceeded', message: 'PRIVATE' } }, { status: 429 })); assert.equal(structured.diagnostic.remoteCode, 'rate_limit_exceeded');
+});
+
+test('offline: HTTP200 malformed JSON/schema/duplicate catalog have distinct safe observations and preserve strict parser errors', async () => {
+    const invalidJSON = await observedCatalog(new Response('{PRIVATE invalid JSON', { status: 200 })); assert.match(String(invalidJSON.error), /invalid_json_response/); assert.equal(invalidJSON.diagnostic.outcome, 'invalid-catalog'); assert.equal(invalidJSON.diagnostic.bodyShape, 'invalid-json'); assert.equal(invalidJSON.diagnostic.httpStatus, 200);
+    const invalidDenied = await observedCatalog(new Response('{PRIVATE invalid JSON', { status: 403 })); assert.match(String(invalidDenied.error), /model_catalog_unavailable/); assert.equal(invalidDenied.diagnostic.outcome, 'http-error'); assert.equal(invalidDenied.diagnostic.bodyShape, 'invalid-json');
+    const wrongRoute = await observedCatalog(Response.json({ data: [{ id: 'PRIVATE-api-model' }] })); assert.match(String(wrongRoute.error), /invalid_model_catalog/); assert.equal(wrongRoute.diagnostic.bodyShape, 'data'); assert.equal(wrongRoute.diagnostic.returnedCount, null);
+    const badRow = await observedCatalog(Response.json({ models: [{ visibility: 'list', private: 'PRIVATE' }] })); assert.match(String(badRow.error), /invalid_model_catalog/); assert.equal(badRow.diagnostic.bodyShape, 'models'); assert.equal(badRow.diagnostic.listedCount, 1);
+    const duplicate = await observedCatalog(Response.json({ models: [catalogBody().models[0], catalogBody().models[0]] })); assert.match(String(duplicate.error), /ambiguous_model_catalog/); assert.equal(duplicate.diagnostic.outcome, 'invalid-catalog'); assert.equal(duplicate.diagnostic.returnedCount, 2);
+    const empty = await observedCatalog(Response.json({ models: [] })); assert.equal(empty.error, undefined); assert.equal(empty.diagnostic.outcome, 'accepted'); assert.equal(empty.diagnostic.listedCount, 0); assert.equal(empty.result?.catalogOnly, true);
+});
+
+test('offline: catalog diagnostic preserves byte/row ceilings and unavailable shape without retry or raw body on failure', async () => {
+    const large = 'PRIVATE'.repeat(40000);
+    const ok = await observedCatalog(new Response(large)); assert.match(String(ok.error), /response_capacity_exceeded/); assert.equal(ok.diagnostic.outcome, 'invalid-catalog'); assert.equal(ok.diagnostic.bodyShape, 'unavailable');
+    const denied = await observedCatalog(new Response(large, { status: 403 })); assert.match(String(denied.error), /model_catalog_unavailable/); assert.equal(denied.diagnostic.outcome, 'http-error'); assert.equal(denied.diagnostic.bodyShape, 'unavailable');
+    const rows = await observedCatalog(Response.json({ models: Array.from({ length: 2049 }, () => ({ visibility: 'hide' })) })); assert.match(String(rows.error), /invalid_model_catalog/); assert.equal(rows.diagnostic.returnedCount, null); assert.equal(rows.diagnostic.listedCount, null);
+    const other = await observedCatalog(Response.json(['PRIVATE'])); assert.match(String(other.error), /invalid_model_catalog/); assert.equal(other.diagnostic.bodyShape, 'other');
+});
+
+test('offline: server request ID rejects non-ASCII, URI/control data and credential echoes', async () => {
+    for (const requestId of ['PRIVATE', 'req_space value', 'req_é', 'https://private.invalid', 'req_synthetic-plan-token', 'req_' + 'a'.repeat(129)]) {
+        const { diagnostic } = await observedCatalog(Response.json(catalogBody(), { headers: { 'x-request-id': requestId } })); assert.equal(diagnostic.serverRequestId, null);
+    }
+    const control = Response.json(catalogBody()); Object.defineProperty(control, 'headers', { value: { get: (key: string) => { assert.equal(key, 'x-request-id'); return 'req_a\r\nPRIVATE'; } } }); assert.equal((await observedCatalog(control)).diagnostic.serverRequestId, null);
+    const diagnostics: ModelCatalogDiagnostic[] = [], response = Response.json({ data: [{ id: 'private-api-model' }] }, { headers: { 'x-request-id': 'req_org-private' } });
+    await fetchModelCatalog({ providerId: 'openai-api-vela', configurationId: 'private-vela', resolveCredential: async () => ({ providerId: 'openai-api-vela', kind: 'openai-api-key', bearer: 'private-api-key', boundaryDigest: boundary, organization: 'org-private', project: 'project-private' }), fetch: async () => response, onDiagnostic: value => { diagnostics.push(value); } });
+    assert.equal(diagnostics[0].bodyShape, 'data'); assert.equal(diagnostics[0].serverRequestId, null); assert.equal(diagnostics[0].listedCount, 1);
+});
+
+test('offline: unavailable credential/fetch and 15s abort observations are isolated, once-only, and cannot leak exception messages', async () => {
+    for (const stage of ['credential', 'fetch'] as const) {
+        const observations: ModelCatalogDiagnostic[] = []; let fetches = 0;
+        await assert.rejects(fetchModelCatalog({ providerId: 'chatgpt-plan-responses', configurationId: 'private', resolveCredential: async () => { if (stage === 'credential') throw Error('PRIVATE vault'); return credential(); }, fetch: async () => { fetches++; throw Error('PRIVATE network https://private.invalid'); }, onDiagnostic: value => { observations.push(value); } }));
+        assert.equal(fetches, stage === 'fetch' ? 1 : 0); assert.equal(observations.length, 1); assert.equal(observations[0].outcome, 'unavailable'); assert.equal(observations[0].httpStatus, null); assert.equal(observations[0].bodyShape, 'unavailable'); assert.equal(JSON.stringify(observations).includes('PRIVATE'), false);
+    }
+    const original = AbortSignal.timeout, controller = new AbortController(), observations: ModelCatalogDiagnostic[] = []; let fetches = 0;
+    try {
+        AbortSignal.timeout = milliseconds => { assert.equal(milliseconds, 15000); return controller.signal; };
+        await assert.rejects(fetchModelCatalog({ providerId: 'chatgpt-plan-responses', configurationId: 'private', resolveCredential: async () => credential(), fetch: async () => { fetches++; queueMicrotask(() => controller.abort()); return new Promise<Response>(() => {}); }, onDiagnostic: value => { observations.push(value); } }), /operation_aborted/);
+        assert.equal(fetches, 1); assert.equal(observations.length, 1); assert.equal(observations[0].outcome, 'unavailable');
+    } finally { AbortSignal.timeout = original; }
+});
+
+test('offline: diagnostic projection/serialization has no inherited payload getters and observer promises cannot reject the catalog', async () => {
+    const response = Response.json(catalogBody()); let getters = 0; const keys = ['error', 'detail', 'toJSON'] as const, prior = keys.map(key => Object.getOwnPropertyDescriptor(Object.prototype, key));
+    try {
+        for (const key of keys) Object.defineProperty(Object.prototype, key, { configurable: true, get() { getters++; throw Error('PRIVATE getter must never be invoked'); } });
+        const { error, diagnostic } = await observedCatalog(response, async () => { throw Error('PRIVATE async observer'); });
+        assert.equal(error, undefined); assert.equal(JSON.stringify(diagnostic).includes('PRIVATE'), false); assert.equal(getters, 0);
+        await new Promise(resolve => setImmediate(resolve));
+    } finally { keys.forEach((key, index) => { if (prior[index]) Object.defineProperty(Object.prototype, key, prior[index]!); else delete (Object.prototype as Record<string, unknown>)[key]; }); }
+    let thenGets = 0;
+    const { error } = await observedCatalog(Response.json(catalogBody()), () => Object.defineProperty({}, 'then', { get() { thenGets++; throw Error('PRIVATE then getter'); } }));
+    assert.equal(error, undefined); assert.equal(thenGets, 0);
 });
