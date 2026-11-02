@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { PresenceProjection } from "./presence-projection.ts";
 import {
   contourPoint,
   defaultSurfaceShape,
@@ -90,6 +91,7 @@ export interface EnvironmentFrame {
   surfaces?: readonly SurfacePose[];
   presencePlacement?: PresenceBounds;
   presenceScale?: number;
+  presencePhase?: number;
   surfaceView?: SurfaceView;
   quiet?: boolean;
 }
@@ -425,7 +427,8 @@ export class Environment {
     h: 0,
   };
   private readonly presencePoint = new THREE.Vector3();
-  private presenceEnvelopeGain = 0;
+  private readonly presenceProjection = new PresenceProjection();
+  private presenceFit: ReturnType<PresenceProjection["fit"]> | null = null;
   private readonly expression = new THREE.Vector4();
   private expressionState: VelaState = "idle";
   private expressionEnteredAt = 0;
@@ -1374,39 +1377,13 @@ export class Environment {
   }
 
   private updatePresenceBounds() {
-    // The shader's actual surface is bounded by this known local envelope.
-    // BufferGeometry positions contain (t, v) parameters, so Box3 would be wrong.
-    let minX = Infinity,
-      minY = Infinity,
-      maxX = -Infinity,
-      maxY = -Infinity;
-    this.vela.updateMatrixWorld(true);
-    const envelopeScale =
-      1 +
-      this.presenceEnvelopeGain * 0.05 +
-      Math.max(0, this.expression.x) * 0.045 +
-      Math.abs(this.expression.y) * 0.025 +
-      Math.abs(this.expression.w) * 0.02;
-    for (let corner = 0; corner < 8; corner++) {
-      this.presencePoint
-        .set(
-          (corner & 1 ? 1.35 : -1.35) * envelopeScale,
-          (corner & 2 ? 1.5 : -1.5) * envelopeScale,
-          (corner & 4 ? 1 : -1) * (0.85 + this.presenceEnvelopeGain * 0.08),
-        )
-        .applyMatrix4(this.vela.matrixWorld)
-        .project(this.camera);
-      const x = (this.presencePoint.x * 0.5 + 0.5) * this.width;
-      const y = (0.5 - this.presencePoint.y * 0.5) * this.height;
-      minX = Math.min(minX, x);
-      minY = Math.min(minY, y);
-      maxX = Math.max(maxX, x);
-      maxY = Math.max(maxY, y);
-    }
-    this.projectedPresence.x = minX;
-    this.projectedPresence.y = minY;
-    this.projectedPresence.w = maxX - minX;
-    this.projectedPresence.h = maxY - minY;
+    this.presenceProjection.project(
+      this.ribbons[0],
+      this.camera,
+      this.width,
+      this.height,
+      this.projectedPresence,
+    );
   }
 
   private updateSceneLighting(
@@ -1547,9 +1524,92 @@ export class Environment {
       .transformDirection(this.camera.matrixWorldInverse);
   }
 
-  /** Cached conservative CSS-pixel bounds; callers must not mutate the returned object. */
+  /** Current shader-deformed LOD vertex bounds in CSS pixels; callers must not mutate. */
   presenceBounds(): Readonly<PresenceBounds> {
     return this.projectedPresence;
+  }
+
+  /** Bounded, explicit native QA only. Re-renders the production vertex shader
+   * into an isolated solid mask; no DOM bounds or CPU sampler defines its pixels. */
+  capturePresenceMaskForReview() {
+    if (this.disposed || this.lost) throw new Error("Presence GPU unavailable");
+    const ratio = Math.min(1, 2048 / this.width, 1536 / this.height);
+    const width = Math.max(1, Math.floor(this.width * ratio)),
+      height = Math.max(1, Math.floor(this.height * ratio));
+    const target = new THREE.WebGLRenderTarget(width, height);
+    const pixels = new Uint8Array(width * height * 4);
+    const material = new THREE.ShaderMaterial({
+      uniforms: this.ribbons[0].material.uniforms,
+      vertexShader: ribbonVertex,
+      fragmentShader: "void main(){gl_FragColor=vec4(1.);}",
+      side: THREE.FrontSide,
+    });
+    const scene = new THREE.Scene(),
+      mesh = new THREE.Mesh(this.ribbons[0].geometry, material);
+    this.ribbons[0].updateWorldMatrix(true, false);
+    mesh.matrixAutoUpdate = false;
+    mesh.matrix.copy(this.ribbons[0].matrixWorld);
+    scene.add(mesh);
+    const renderer = this.renderer,
+      previous = renderer.getRenderTarget(),
+      cube = renderer.getActiveCubeFace(),
+      mip = renderer.getActiveMipmapLevel();
+    const viewport = renderer.getViewport(new THREE.Vector4()),
+      scissor = renderer.getScissor(new THREE.Vector4());
+    const scissorTest = renderer.getScissorTest(),
+      autoClear = renderer.autoClear,
+      alpha = renderer.getClearAlpha(),
+      color = renderer.getClearColor(new THREE.Color());
+    try {
+      renderer.setRenderTarget(target);
+      renderer.setViewport(0, 0, width, height);
+      renderer.setScissorTest(false);
+      renderer.setClearColor(0, 0);
+      renderer.clear();
+      renderer.render(scene, this.camera);
+      renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
+    } finally {
+      renderer.setRenderTarget(previous, cube, mip);
+      renderer.setViewport(viewport);
+      renderer.setScissor(scissor);
+      renderer.setScissorTest(scissorTest);
+      renderer.setClearColor(color, alpha);
+      renderer.autoClear = autoClear;
+      target.dispose();
+      material.dispose(); // Geometry is borrowed, never disposed.
+    }
+    let minX = width,
+      minY = height,
+      maxX = -1,
+      maxY = -1,
+      count = 0;
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++)
+        if (pixels[(y * width + x) * 4 + 3] > 127) {
+          minX = Math.min(minX, x);
+          maxX = Math.max(maxX, x);
+          minY = Math.min(minY, y);
+          maxY = Math.max(maxY, y);
+          count++;
+        }
+    const sx = this.width / width,
+      sy = this.height / height;
+    return {
+      bounds: count
+        ? {
+            x: minX * sx,
+            y: (height - 1 - maxY) * sy,
+            w: (maxX - minX + 1) * sx,
+            h: (maxY - minY + 1) * sy,
+          }
+        : null,
+      paintedPixels: count,
+      maskWidth: width,
+      maskHeight: height,
+      maskBytes: pixels.byteLength,
+      meaning:
+        "Independent raster mask from current production GPU vertex shader, active LOD, uniforms, world matrix and camera; CPU bounds and DOM are not used to generate pixels.",
+    };
   }
 
   setSpatialLayer(layer: SpatialRenderLayer | null) {
@@ -1649,7 +1709,10 @@ export class Environment {
           : 0x8c7cdb;
     this.targetTint.setHex(palette);
     this.semanticTint.lerp(this.targetTint, settle);
-    const presenceTime = frame.vela === "unavailable" ? 0 : time;
+    const presenceTime =
+      frame.vela === "unavailable" || frame.reduced
+        ? 0
+        : (frame.presencePhase ?? time);
     if (this.expressionState !== frame.vela) {
       this.expressionState = frame.vela;
       this.expressionEnteredAt = time;
@@ -1671,7 +1734,6 @@ export class Environment {
       frame.reduced || frame.vela === "unavailable"
         ? 0
         : THREE.MathUtils.clamp(frame.ambientStrength ?? 1, 0, 1.5);
-    this.presenceEnvelopeGain = ambientGain;
     for (let i = 0; i < this.ribbons.length; i++) {
       const ribbon = this.ribbons[i];
       ribbon.material.uniforms.uTime.value = presenceTime;
@@ -1775,48 +1837,60 @@ export class Environment {
       ? THREE.MathUtils.clamp(frame.presenceScale!, 0.2, 2)
       : 1;
     this.vela.scale.multiplyScalar(presenceScale);
-    this.updatePresenceBounds();
-    const placement = frame.presencePlacement;
-    if (
-      placement &&
-      [placement.x, placement.y, placement.w, placement.h].every(
-        Number.isFinite,
-      ) &&
-      placement.w > 0 &&
-      placement.h > 0
-    ) {
-      const fit = Math.min(
-        1,
-        placement.w / Math.max(1, this.projectedPresence.w),
-        placement.h / Math.max(1, this.projectedPresence.h),
-      );
-      this.vela.scale.multiplyScalar(fit);
-      this.updatePresenceBounds();
+    const ribbon = this.ribbons[0];
+    this.presenceProjection.sample(
+      ribbon.geometry.getAttribute("position") as THREE.BufferAttribute,
+      {
+        time: presenceTime,
+        ambient: ambientGain,
+        expression: this.expression,
+      },
+    );
+    const p = frame.presencePlacement;
+    const placement =
+      p && [p.x, p.y, p.w, p.h].every(Number.isFinite) && p.w > 0 && p.h > 0
+        ? p
+        : undefined;
+    if (placement) {
+      // Initial camera-plane placement keeps scene lighting near the intended
+      // location. Final alignment below uses the actual deformed mesh center.
       const cx = placement.x + placement.w * 0.5,
         cy = placement.y + placement.h * 0.5;
       this.presencePoint
         .copy(this.vela.position)
         .applyMatrix4(this.camera.matrixWorldInverse);
-      const depth = -this.presencePoint.z;
+      const depth = -this.presencePoint.z,
+        tan = Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5));
       this.presencePoint.x =
-        ((cx / width) * 2 - 1) *
-        depth *
-        Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5)) *
-        this.camera.aspect;
-      this.presencePoint.y =
-        (1 - (cy / height) * 2) *
-        depth *
-        Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5));
+        ((cx / width) * 2 - 1) * depth * tan * this.camera.aspect;
+      this.presencePoint.y = (1 - (cy / height) * 2) * depth * tan;
       this.presencePoint.applyMatrix4(this.camera.matrixWorld);
       this.vela.position.copy(this.presencePoint);
     }
+    // This also acknowledges selection by rotating the sculpture. It must
+    // happen BEFORE final fitting, never invalidate a previously fitted pose.
     this.updateSceneLighting(frame, focus, settle, pointerX);
     this.updatePresenceBounds();
-    if (focus > 0 && this.projectedPresence.w > maxFocusedWidth) {
+    this.presenceFit = placement
+      ? this.presenceProjection.fit(
+          this.vela,
+          ribbon,
+          this.camera,
+          width,
+          height,
+          placement,
+          this.projectedPresence,
+        )
+      : null;
+    if (!placement && focus > 0 && this.projectedPresence.w > maxFocusedWidth) {
       const fit = maxFocusedWidth / this.projectedPresence.w;
       this.vela.scale.multiplyScalar(THREE.MathUtils.lerp(1, fit, focus));
       this.updatePresenceBounds();
     }
+    this.ribbonLightDirection
+      .copy(this.fill.position)
+      .sub(this.vela.position)
+      .transformDirection(this.camera.matrixWorldInverse);
     this.updateCelestialLighting(frame, focus);
     this.updateInstrumentLighting(frame);
     this.updateFolios(frame);
@@ -1884,6 +1958,10 @@ export class Environment {
     return {
       backend: "Three.js WebGL2",
       presenceBounds: { ...this.projectedPresence },
+      presenceProjection: {
+        ...this.presenceProjection.diagnostics(),
+        fit: this.presenceFit,
+      },
       spatialLayer: {
         attached: !!this.spatialLayer,
         active: !!this.spatialLayer?.active,
@@ -1998,6 +2076,7 @@ export class Environment {
     if (this.disposed) return;
     this.disposed = true;
     this.spatialLayer = null; // Application owns layer lifetime across renderer recovery.
+    this.presenceProjection.dispose();
     this.canvas.removeEventListener("webglcontextlost", this.onContextLost);
     this.canvas.removeEventListener(
       "webglcontextrestored",

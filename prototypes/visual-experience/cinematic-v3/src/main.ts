@@ -126,6 +126,7 @@ document.body.dataset.study = study;
 let celestialStudy: CelestialStudy = "starlit";
 let instrumentStudy: InstrumentStudy = "optical";
 let presenceReviewScale: number | null = null;
+let presenceReviewPhase: number | null = null;
 document.body.dataset.instrumentStudy = instrumentStudy;
 // Explicit native evidence hook. Null means the ordinary autonomous clock.
 let environmentPhase: number | null = null;
@@ -1295,42 +1296,49 @@ function tick(now: number) {
                     | null
                 )?.presence?.(),
           presenceScale: presenceReviewScale ?? (desktopMode ? 0.65 : 1),
+          presencePhase: presenceReviewPhase ?? undefined,
           ambientStrength: scene.ambientStrength,
         });
-        const presence =
-          (
-            application as
-              | (Application & {
-                  presenceCard?: () => {
-                    x: number;
-                    y: number;
-                    w: number;
-                    h: number;
-                  };
-                })
-              | null
-          )?.presenceCard?.() ?? environment.presenceBounds();
-        const presenceWidth = Math.max(44, presence.w),
-          presenceHeight = Math.max(44, presence.h);
-        const presenceX = clamp(presence.x, 4, innerWidth - presenceWidth - 4),
-          presenceY = Math.max(100, presence.y);
+        const presenceCard = (
+          application as
+            | (Application & {
+                presenceCard?: () => {
+                  x: number;
+                  y: number;
+                  w: number;
+                  h: number;
+                };
+              })
+            | null
+        )?.presenceCard?.();
+        const presence = presenceCard ?? environment.presenceBounds();
+        // Engine-owned cards use the exact same rectangle as GPU placement.
+        // Independent DOM clamping/minimum sizes would detach the drag target.
+        const presenceWidth = Math.max(presenceCard ? 1 : 44, presence.w),
+          presenceHeight = Math.max(presenceCard ? 1 : 44, presence.h);
+        const presenceX = presenceCard
+            ? presence.x
+            : clamp(presence.x, 4, innerWidth - presenceWidth - 4),
+          presenceY = presenceCard ? presence.y : Math.max(100, presence.y);
         Object.assign($("#vela").style, {
           left: `${presenceX}px`,
           top: `${presenceY}px`,
           width: `${presenceWidth}px`,
           height: `${presenceHeight}px`,
-          clipPath: document.body.classList.contains("vela-access")
-            ? "none"
-            : materialCompositor.clipOverlay({
-                id: "vela-dom-presentation",
-                x: presenceX,
-                y: presenceY,
-                w: presenceWidth,
-                h: presenceHeight,
-                lift: 0,
-                yaw: 0,
-                opacity: 1,
-              }) || "none",
+          clipPath:
+            document.body.classList.contains("vela-access") ||
+            application?.snapshot()?.navigation.kind === "constellation"
+              ? "none"
+              : materialCompositor.clipOverlay({
+                  id: "vela-dom-presentation",
+                  x: presenceX,
+                  y: presenceY,
+                  w: presenceWidth,
+                  h: presenceHeight,
+                  lift: 0,
+                  yaw: 0,
+                  opacity: 1,
+                }) || "none",
         });
         if (lastDraw && metrics.drawIntervals.length < 18000)
           metrics.drawIntervals.push(now - lastDraw);
@@ -1384,6 +1392,7 @@ function controller() {
       celestialStudy,
       instrumentStudy,
       environmentPhase,
+      presenceReviewPhase,
       sceneWeights: sceneWeights(motion),
       quality,
       vela,
@@ -1440,6 +1449,16 @@ function controller() {
       presenceReviewScale = scale;
       wake();
     },
+    setPresencePhaseForReview: (seconds: number | null) => {
+      if (
+        seconds !== null &&
+        (!Number.isFinite(seconds) || seconds < 0 || seconds > 3600)
+      )
+        return;
+      presenceReviewPhase = seconds;
+      wake();
+    },
+    presenceMaskForReview: () => environment?.capturePresenceMaskForReview(),
     execute: (command: DesktopCommand) => application?.run(command),
     flush: () => application?.flush(),
     select,
