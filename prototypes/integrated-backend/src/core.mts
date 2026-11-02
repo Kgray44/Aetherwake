@@ -321,6 +321,11 @@ export class BackendCore {
     if(operation?.name==='createBlock'&&input?.kind==='conversation'&&input.provider===undefined)await this.refreshOrdinaryStatus();
     const mutation=['setFavorite','configureBlock','attachBlock','createBlock','saveTemplate','renameTemplate','archiveTemplate','applyTemplate','workspaceFromResources','createSubjectBlock'].includes(operation?.name);
     const execute=()=>{switch(operation?.name){
+      case 'inspectWorkspace':return this.kernel.withTransaction(()=>{
+        ensure(input&&typeof input==='object'&&!Array.isArray(input)&&Object.keys(input).length===1&&typeof input.workspaceId==='string'&&input.workspaceId.length>0&&input.workspaceId.length<=2048,'invalid_workspace_inspection');
+        ensure(this.libraryAuthorized({kind:'workspace',id:input.workspaceId}),'workspace_unavailable');
+        return this.desktop.nativeBlockServices().engine.inspectWorkspace(input.workspaceId);
+      });
       case 'capabilities':return this.library.capabilities();case 'preferences':return this.library.preferences();case 'setFavorite':return this.library.setFavorite(input);
       case 'getBlockSettings':return this.library.getBlockSettings(input);case 'configureBlock':return this.library.configureBlock(input);case 'findResources':return this.library.findResources(input);
       case 'attachBlock':return this.library.attachBlock(input);case 'createBlock':return this.library.createBlock(input);case 'listTemplates':return this.library.listTemplates(input??{});case 'getTemplate':return this.library.getTemplate(input);
@@ -1295,7 +1300,7 @@ export class BackendCore {
     // Reads, interruption and durable draft recovery remain available during
     // execution. Canonical mutations retain source/approval fences.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft'];
-    if (!(name==='close'&&this.active?.providerId===CHATGPT_PLAN_PROVIDER)&&!(name==='conversation'&&a?.name==='saveDraft')&&!['providerConnection','providerAuth','ordinaryProviderStatus','ordinaryProviderCheck','openResource','snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
+    if (!(name==='close'&&this.active?.providerId===CHATGPT_PLAN_PROVIDER)&&!(name==='conversation'&&a?.name==='saveDraft')&&!['providerConnection','providerAuth','ordinaryProviderStatus','ordinaryProviderCheck','openResource','snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['inspectWorkspace','capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {
       case 'providerAuth':return this.providerAuth(a) as any;
       case 'providerConnection':{
