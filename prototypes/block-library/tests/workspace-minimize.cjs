@@ -119,6 +119,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
         const before = await snapshot(); receipt.activeCase.minimizedPose = await js(x.pose(selector));
         if (entry.shape === 'circle') { await settledPoint(selector + ' .aw-block-restore'); await shot('fresh-process-minimized-circle-restore'); }
         await restore(entry); await wait(x.restoredSize(selector, entry.workingPose));
+        if (entry.kind !== 'reference') await wait(x.composition(selector, 'working'));
         const after = await snapshot(); exports.assertTransition(before, after, entry.blockId, false);
         const retained = await js(x.retainedEditor(input)); assert(retained.sameNode && retained.sameText && retained.sameSelection && retained.scrollDelta <= 1, 'Fresh-process Restore retains the editor');
         receipt.cases.push({ ...receipt.activeCase, restored: true, retainedEditor: retained }); delete receipt.activeCase;
@@ -154,6 +155,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
         assert(receipt.activeCase.retainedWhileMinimized.sameNode && receipt.activeCase.retainedWhileMinimized.sameText && receipt.activeCase.retainedWhileMinimized.sameSelection && receipt.activeCase.retainedWhileMinimized.scrollDelta <= 1, 'Minimize retains editor node/text/caret/scroll');
         if (entry.shape === 'circle') { await settledPoint(selector + ' .aw-block-restore'); await shot('tiny-minimized-circle-native-restore'); }
         await restore(entry); await wait(x.restoredSize(selector, entry.workingPose));
+        if (entry.kind !== 'reference') await wait(x.composition(selector, 'working'));
         const after = await snapshot(); exports.assertTransition(minimizedState, after, entry.blockId, false);
         receipt.activeCase.retainedAfterRestore = await js(x.retainedEditor(input)); assert(receipt.activeCase.retainedAfterRestore.sameNode && receipt.activeCase.retainedAfterRestore.sameText && receipt.activeCase.retainedAfterRestore.sameSelection && receipt.activeCase.retainedAfterRestore.scrollDelta <= 1, 'Restore retains editor node/text/caret/scroll');
         if (entry.kind === 'conversation') assert.equal((await cp('readDraft', { resourceId: entry.resourceId })).content, chatDraft);
