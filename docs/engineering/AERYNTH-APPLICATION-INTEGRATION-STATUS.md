@@ -2,6 +2,40 @@
 
 Snapshot: 2026-11-02 UTC. Integration remains active; full product acceptance is incomplete.
 
+## Current connection and conversation follow-up
+
+The P review at `1ddc0cf` preserves the owner's existing private profile.
+Official sign-in and plan authorization were already valid. Model discovery
+failed because the actual account catalog exceeded the old 256 KiB JSON limit.
+Success responses now have a separate 2 MiB limit; errors retain 256 KiB,
+requests retain 15 seconds, and model-row validation remains enforced.
+An actual managed desktop GET now succeeds. Its private receipt contains only
+safe response metadata and byte/count measurements, without model names or
+credentials. Connections distinguishes sign-in from model discovery and does
+not repeat OAuth, change billing, or claim successful inference.
+
+A brief native UI check created a fresh ordinary conversation and sent only a
+synthetic request. The message persisted, but the response is **unknown** with
+`invalid_stream_response`: no response identity or assistant output was observed.
+It has not been retried. Model discovery does not establish working inference
+or native ChatGPT history, Projects, personalization or memory parity.
+Computer control was reset and its newly owned helper processes were stopped.
+
+P includes provider-aware chat copy, title-only history rows, canonical message
+times and local-calendar day separators. Rounded menus, provider-pill navigation,
+Motion Coordinator disclosures and compact recovery layout remain in progress.
+AI-generated titles are not implemented or simulated with truncated user text.
+
+Populated chats require a reviewed application continuation when changing
+providers. Their original provider, transcript and native binding are preserved.
+Empty, unbound chats retain direct provider selection. Continuation preparation
+checks the conversation product's source revision atomically and starts no turn.
+
+At this checkpoint, 203 backend, 358 application, 58 provider and 14 packaging
+checks passed, with focused strict checks and a production build. Counts overlap
+and do not establish visual, accessibility, presentation-performance or product
+acceptance. Earlier checkpoints below remain historical.
+
 P0 native ChatGPT fidelity investigation is integrated. The [exact 13-aim compatibility matrix](../../prototypes/conversation-product/CHATGPT-ACCOUNT-FIDELITY.md) distinguishes documented support, interface-scoped exclusions, unverified native-account interfaces and additional authorization. Official documentation confirms the unified desktop Chat/Work/Codex experience, but Sign in with ChatGPT explicitly excludes existing conversations and other account context. Installed public App Server schemas and versioned OpenAI source do not establish ChatGPT cloud history, Projects or account-memory access. The canonical provider catalog now returns typed evidence for each aim while ChatGPT remains unavailable for recording/execution. Eligible Responses inference remains a separate capability with implementation on hold. Local Codex navigation remains a separately labelled, host-unwired seam. No authentication, private service access, copied history, synthetic memory or substitute model provider was introduced.
 
 The combined application now renders that report in an invoked, collapsed compatibility disclosure and wires explicit public-site navigation to the official ChatGPT home. Reviewed evidence links use an exact 12-URL native allowlist rather than generic popups. `requested` acknowledges an OS request only; errors remain unknown with no retry. Neither operation connects an account or imports content. The combined backend checkpoint passes 356 tests; the final UI/descriptor/interop subset passes 60, the application suite passes 182, and strict production build passes with the existing chunk-size warning. These overlapping source suites do not establish native navigation, real account fidelity or visual acceptance. No GUI or account/provider action was used for this checkpoint.
