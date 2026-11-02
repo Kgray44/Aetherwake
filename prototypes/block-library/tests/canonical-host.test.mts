@@ -173,6 +173,34 @@ test('Checklist library creation uses its canonical service and multiple placeme
   assert.equal(count(f.db, 'resources'), 1); assert.equal(f.checklist.count('notes'), 0); assert.equal(count(f.db, 'blocks'), 1);
 });
 
+test('Checklist template capture and apply require explicit canonical reuse, preserve entries and reject empty-copy bypasses', t => {
+  const f = fixture(t), workspace = f.engine.createWorkspace('Synthetic Checklist template source');
+  const created = f.service.createBlock({ commandId: 'checklist:template:create', workspaceId: workspace.workspaceId,
+    expectedLayoutVersion: workspace.revision, kind: 'checklist', title: 'Checklist with actual saved items' });
+  f.checklist.mutate(created.resourceId, [{ type: 'addEntry', key: 'entry', entry: { text: 'Preserve actual contents', description: 'Retained item description' } }]);
+  f.desktop.apply({ type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.workspaceId } }, () => { throw new Error('No provider call'); });
+  const snapshot = f.desktop.snapshot(() => ({ provider: 'local', messages: [] })), retained = structuredClone(snapshot);
+  assert.throws(() => captureWorkspaceTemplate(snapshot, { [created.resourceId]: 'new' }), /checklist_template_reference_required/);
+  assert.equal(JSON.stringify(snapshot), JSON.stringify(retained));
+  const body = captureWorkspaceTemplate(snapshot, { [created.resourceId]: 'reference' });
+  assert.equal(body.resources[0].source.mode, 'reference');
+  assert.doesNotMatch(JSON.stringify(body), /Preserve actual contents|Retained item description/);
+  const fakeCopy = structuredClone(body);
+  fakeCopy.resources[0].source = { mode: 'new', kind: 'checklist', title: 'Should not become an empty copy' };
+  const templateCount = count(f.db, 'workspace_templates');
+  assert.throws(() => f.service.saveTemplate({ name: 'Refused empty Checklist copy', description: '', tags: [], body: fakeCopy }), /checklist_template_reference_required/);
+  assert.equal(count(f.db, 'workspace_templates'), templateCount);
+  const template = f.service.saveTemplate({ name: 'Explicitly reused Checklist', description: '', tags: [], body });
+  const document = f.checklist.service.read(created.resourceId), applied = f.service.applyTemplate(request({ templateId: template.id, expectedVersion: template.version }));
+  assert.deepEqual(Object.values(applied.resourceIds), [created.resourceId]);
+  assert.deepEqual(f.checklist.service.read(created.resourceId), document);
+  assert.equal(f.checklist.count('checklist_documents'), 1); assert.equal(count(f.db, 'resources'), 1);
+  f.checklist.mutate(created.resourceId, [{ type: 'setChecked', entryId: document.entries[0].id, checked: true }]);
+  const counts = [count(f.db, 'workspaces'), count(f.db, 'blocks')];
+  assert.throws(() => f.service.applyTemplate(request({ templateId: template.id, expectedVersion: template.version })), /reference_version_conflict/);
+  assert.deepEqual([count(f.db, 'workspaces'), count(f.db, 'blocks')], counts);
+});
+
 test("vacant initial placement honors host bounds while keeping fixed overlapping Freeform cards and presence exact", t => {
   const f = fixture(t), workspace = f.engine.createWorkspace('Synthetic bounded placement', null, { mode: 'freeform' });
   const bounds = { x: 20, y: 170, width: 1240, height: 750 };
@@ -243,6 +271,7 @@ const count = (db: CanonicalTemplateHostOptions["db"], table: string) => {
       "blocks",
       "relationships",
       "block_library_receipts",
+      'workspace_templates',
     ].includes(table),
   );
   return Number(db.prepare("SELECT count(*) AS n FROM " + table).get()!.n);

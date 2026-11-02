@@ -1439,6 +1439,11 @@ export function mountWorkspaceTemplates(
         if (select.value) choices[id] = select.value as "new" | "reference";
         else delete choices[id];
       };
+      if (resource.kind === 'checklist') {
+        const fresh = select.querySelector<HTMLOptionElement>('option[value="new"]');
+        if (fresh) { fresh.disabled = true; fresh.textContent = 'Copying checklist contents is unavailable'; }
+        form.append(node('p', 'aw-library__hint', 'Reuse this checklist to keep its saved items, groups and linked sources. Checklist contents are not copied.'));
+      }
       form.append(field(resource.title + " · " + resource.kind, select));
     }
     for (const placement of snapshot.blocks) {

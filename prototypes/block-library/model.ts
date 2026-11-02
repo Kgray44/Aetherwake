@@ -169,6 +169,7 @@ export function validateBody(input: TemplateBody): TemplateBody {
         ? ["mode", "kind", "title", "provider"]
         : ["mode", "kind", "resourceId", "expectedVersion"],
     );
+    check(role.source.kind !== 'checklist' || role.source.mode !== 'new', 'checklist_template_reference_required');
     blockDefinition(role.source.kind);
     check(
       ["new", "reference"].includes(role.source.mode),
@@ -373,6 +374,7 @@ export function captureWorkspaceTemplate(
     const manifest = BUILTIN_BLOCKS.find(definition => definition.kind === r.kind);
     check(manifest, 'unsupported_resource_presentation');
     const kind = manifest.kind;
+    check(kind !== 'checklist' || choices[id] === 'reference', 'checklist_template_reference_required');
     check(
       choices[id] === "reference" || choices[id] === "new",
       "binding_choice_required",
