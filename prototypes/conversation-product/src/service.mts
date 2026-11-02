@@ -40,7 +40,7 @@ export interface ConversationReadView {
  readonly graphMetadata: Readonly<Pick<GraphData,'providers'|'conversations'|'edges'|'unavailableMessageIds'>>;
  readonly executions: Readonly<Record<string,PublicConversationExecution>>;
  /** Only currently visible canonical metadata. Bodies are deliberately absent from this shape. */
- readonly desktop: Readonly<Pick<DesktopSnapshot,'projects'|'workspaces'|'blocks'>> & {readonly resources:readonly Readonly<Pick<Resource,'id'|'kind'|'title'|'version'|'state'|'visible'|'available'|'project_id'>>[]};
+ readonly desktop: Readonly<Pick<DesktopSnapshot,'projects'|'workspaces'>> & {readonly blocks:readonly {readonly workspace_id:string;readonly resource_id?:string}[];readonly resources:readonly Readonly<Pick<Resource,'id'|'kind'|'title'|'version'|'state'|'visible'|'available'|'project_id'>>[]};
  messageMetadata(messageId:string): {id:string;conversationId:string;createdAt:string}|null;
  /** Both lazy callbacks must recheck current source authorization; retained views never confer permission. */
  resourceContent(resourceId:string): string;

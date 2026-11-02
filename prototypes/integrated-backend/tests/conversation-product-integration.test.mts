@@ -6,6 +6,7 @@ import { join,relative,resolve,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
 import type { ConversationProductRequest,ConversationSendInput,ProviderPort } from '../src/contracts.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
+import type { ConversationReadView } from '../../conversation-product/src/service.mts';
 
 function fixture(mode='normal'){
  const dir=mkdtempSync(join(tmpdir(),'aerynth-product-integration-')),path=join(dir,'canonical.sqlite');let core=new BackendCore({path,provider:'fixture',fixtureMode:mode,contentPolicy:'synthetic-only'});
@@ -13,6 +14,35 @@ function fixture(mode='normal'){
 }
 async function product<K extends keyof ProductCommandMap>(core:BackendCore,name:K,input:ProductCommandMap[K]['input']):Promise<ProductCommandMap[K]['output']>{return core.command('conversation',{name,input} as ConversationProductRequest) as Promise<ProductCommandMap[K]['output']>;}
 async function approved(core:BackendCore,input:ConversationSendInput){const preview=await core.command('conversationSendPreview',input),grant=await core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:input.commandId});return {preview,dispatch:{previewId:preview.id,fingerprint:preview.fingerprint,commandId:input.commandId,grantId:grant.grantId}};}
+
+test('real Core browse uses bodyless canonical metadata and retained lazy reads recheck current revocation and access',async()=>{
+ const f=fixture();try{
+  const conversation=await f.core.command('createConversation',{title:'Metadata-only synthetic chat',providerId:'local',commandId:crypto.randomUUID()});
+  const message=await f.core.command('addMessage',{resourceId:conversation.resourceId,role:'user',content:'Synthetic retained source',expectedRevision:1});
+  const internal=f.core as any,view:ConversationReadView=internal.conversationReadView(),gid=view.resourceMap[conversation.resourceId];
+  const graphSnapshot=internal.graph.snapshot,desktopSnapshot=internal.desktop.snapshot,getResource=internal.kernel.getResource,visibleMessages=internal.graph.visibleMessages;
+  try{
+   internal.graph.snapshot=()=>{throw new Error('browse cloned all transcripts');};
+   internal.desktop.snapshot=()=>{throw new Error('browse hydrated desktop bodies');};
+   internal.kernel.getResource=()=>{throw new Error('browse read resource content');};
+   internal.graph.visibleMessages=()=>{throw new Error('browse read complete histories');};
+   const listed=await product(f.core,'list',{limit:50});assert.equal(listed.total,1);assert.equal(listed.items[0].messageCount,1);assert.equal(listed.items[0].historyMetadataStatus,'complete');
+   assert.equal((await product(f.core,'search',{text:''})).items[0].resourceId,conversation.resourceId);
+   assert.deepEqual(view.messageMetadata(message.id),{id:message.id,conversationId:gid,createdAt:view.messageMetadata(message.id)!.createdAt});
+  }finally{internal.graph.snapshot=graphSnapshot;internal.desktop.snapshot=desktopSnapshot;internal.kernel.getResource=getResource;internal.graph.visibleMessages=visibleMessages;}
+  const access=internal.conversationAccess.access;
+  internal.conversationAccess.access=()=>false;
+  try{
+   assert.equal(view.messageMetadata(message.id),null);
+   assert.throws(()=>view.graph.visibleMessages(gid),/source_unavailable/);
+   assert.throws(()=>view.resourceContent(conversation.resourceId),/source_unavailable/);
+  }finally{internal.conversationAccess.access=access;}
+  internal.atomic(()=>internal.graph.markUnavailable(message.id));
+  assert.equal(view.messageMetadata(message.id),null);
+  assert.deepEqual(view.graph.visibleMessages(gid),[]);
+  assert.equal(view.graph.visibleMessageMetadata(gid,{limit:1,maxScan:4096,maxBodyBytes:131072,allow:()=>true}).limitedBy,'denied');
+ }finally{await f.close();}
+});
 async function sourceContext(core:BackendCore){
  const parent=await core.command('createConversation',{title:'Synthetic native parent',providerId:'fixture-codex',commandId:crypto.randomUUID()}),origin=await core.command('addMessage',{resourceId:parent.resourceId,role:'user',content:'Synthetic common origin',expectedRevision:1});
  const child=await core.command('branch',{resourceId:parent.resourceId,messageId:origin.id,includeMessageIds:[origin.id],providerId:'local',title:'Synthetic child',commandId:crypto.randomUUID(),tokenBudget:32768});

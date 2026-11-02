@@ -10,7 +10,7 @@ import { ConversationGraph, type GraphData, type MessageMetadata, type ProviderA
 import { localConversationAdapter, mockOrdinaryAdapter } from '../../connected-conversations/src/adapters.ts';
 import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
 import { nativeProvider, fixtureProvider } from './providers.mts';
-import { ConversationProduct, type AttachedContext } from '../../conversation-product/src/service.mts';
+import { ConversationProduct, type AttachedContext, type ConversationReadView } from '../../conversation-product/src/service.mts';
 import { createCanonicalOrganizationAdapter, createCanonicalAccessHelper, createObservedCapabilityCache } from '../../conversation-product/src/canonical-host.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import { VelaService, VELA_PLANNING_INSTRUCTION } from '../../vela-core/src/service.mts';
@@ -696,11 +696,47 @@ export class BackendCore {
     });
     this.conversations=new ConversationProduct(this.db,{
       snapshot:()=>this.command('snapshot',{}),desktop:()=>this.command('desktop',{type:'snapshot'}),command:(name,input)=>this.command(name,input),
+      canonicalReadView:async()=>this.conversationReadView(),
       organize,access:this.conversationAccess.access,capabilitySnapshot:this.capabilityCache.snapshot,
       sendWithContext:async()=>{throw new ServiceError('native_send_approval_required');},
       contextReceipt:(executionId,resourceId,shareId,digest)=>{
         const receipt=this.state.contextSupplies?.[executionId];return receipt?.resourceId===resourceId&&receipt.items.some(i=>i.shareId===shareId&&i.digest===digest)===true;
       },
+    });
+  }
+  /** In-process metadata only, over the owning SQLite connection and graph.
+   * No Desktop snapshot (which hydrates notes/messages), graph clone or second
+   * graph is needed to browse. Every lazy body/source read rechecks policy. */
+  private conversationReadView():ConversationReadView {
+    return this.kernel.withTransaction(()=>{
+      const projects=this.db.prepare("SELECT id,title,version FROM projects WHERE state='active' ORDER BY created_at,id").all() as ConversationReadView['desktop']['projects'];
+      const workspaces=this.db.prepare("SELECT w.* FROM workspaces w LEFT JOIN projects p ON p.id=w.project_id WHERE w.state='active' AND (w.project_id IS NULL OR p.state='active') ORDER BY w.created_at,w.id").all() as ConversationReadView['desktop']['workspaces'];
+      const activeProjects=new Set(projects.map(p=>p.id)),activeWorkspaces=new Set(workspaces.map(w=>w.id));
+      const resources=this.db.prepare('SELECT r.id,r.kind,r.title,r.version,r.state,r.project_id,d.kind AS desktop_kind FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id ORDER BY r.id').all().map(r=>({
+        id:String(r.id),kind:(r.desktop_kind??(r.kind==='generic'?'reference':r.kind)) as ConversationReadView['desktop']['resources'][number]['kind'],title:String(r.title),version:Number(r.version),state:r.state as 'active'|'archived',project_id:r.project_id===null?null:String(r.project_id),
+        visible:r.state==='active'&&(r.project_id===null||activeProjects.has(String(r.project_id))),available:r.state==='active'&&(r.project_id===null||activeProjects.has(String(r.project_id))),
+      }));
+      const byResource=new Map(resources.map(r=>[r.id,r])),headers=new Map(this.state.graph.conversations.map(c=>[c.id,c]));
+      const resourceMap={...this.state.resources};
+      const conversations=Object.entries(resourceMap).flatMap(([resourceId,gid])=>{
+        const c=headers.get(gid),resource=byResource.get(resourceId);if(!c||!resource)return [];
+        return [{resourceId,revision:this.state.revisions[resourceId],title:c.title,providerId:c.providerId,kind:c.kind,taskId:null,projectId:resource.project_id}];
+      });
+      const blocks=this.db.prepare('SELECT workspace_id,resource_id FROM blocks WHERE resource_id IS NOT NULL').all().filter(b=>activeWorkspaces.has(String(b.workspace_id))).map(b=>({workspace_id:String(b.workspace_id),resource_id:String(b.resource_id)}));
+      const executions=Object.fromEntries(Object.entries(this.state.executions).map(([id,e])=>[id,{id:e.id,resourceId:e.resourceId,providerId:e.providerId,state:e.state,commandId:e.commandId,startedAt:e.startedAt,endedAt:e.endedAt,taskVerified:false as const,...(e.errorCode?{errorCode:e.errorCode}:{})}]));
+      const sourceId=(gid:string)=>Object.entries(this.state.resources).find(([,value])=>value===gid)?.[0];
+      const currentSource=(gid:string,messageId?:string)=>{const rid=sourceId(gid);return !!rid&&this.conversationAccess.access(rid,messageId);};
+      return {conversations,resourceMap,executions,desktop:{projects,workspaces,resources,blocks},
+        graphMetadata:{providers:this.state.graph.providers,conversations:this.state.graph.conversations,edges:this.state.graph.edges,unavailableMessageIds:this.state.graph.unavailableMessageIds},
+        graph:{
+          visibleMessages:gid=>{ensure(currentSource(gid),'source_unavailable');return this.graph.visibleMessages(gid).filter(m=>currentSource(m.conversationId,m.id));},
+          visibleMessageMetadata:(gid,options)=>{ensure(currentSource(gid),'source_unavailable');return this.graph.visibleMessageMetadata(gid,{...options,allow:m=>currentSource(m.conversationId,m.id)&&options.allow(m)});},
+        },
+        messageMetadata:messageId=>{
+          const m=this.state.graph.messages.find(value=>value.id===messageId);return m&&currentSource(m.conversationId,m.id)?{id:m.id,conversationId:m.conversationId,createdAt:m.createdAt}:null;
+        },
+        resourceContent:resourceId=>{ensure(this.conversationAccess.access(resourceId),'source_unavailable');return this.kernel.getResource(resourceId).note?.content??'';},
+      };
     });
   }
   private pruneSendApprovals() {
