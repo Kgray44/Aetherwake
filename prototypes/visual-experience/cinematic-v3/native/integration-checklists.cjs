@@ -31,6 +31,19 @@ function assertOwnedProfile(root, argv, title) {
   assert(typeof root === 'string' && path.win32.isAbsolute(root) && path.win32.parse(root).root.toLowerCase() === 'c:\\' && /^review-checklists-\d+$/.test(path.win32.basename(root)), 'fresh_owned_checklists_profile_required');
   assert.match(title, /Automated check/i, 'owned_automated_window_required');
 }
+/** Main owns canonical SQLite/evidence at root and isolates Chromium beneath it. */
+function assertOwnedApplicationProfile(root, userData, argv) {
+  const canonical = path.win32.resolve(root);
+  assert(typeof userData === 'string' && path.win32.isAbsolute(userData), 'absolute_owned_chromium_profile_required');
+  assert.equal(path.win32.resolve(userData), path.win32.join(canonical, 'chromium'), 'actual_same_owned_application_profile_required');
+  const explicit = argv.filter(value => value.startsWith('--profile='));
+  if (explicit.length) {
+    assert.equal(explicit.length, 1, 'single_explicit_profile_argument_required');
+    const value = explicit[0].slice('--profile='.length);
+    assert(path.win32.isAbsolute(value), 'absolute_explicit_profile_required');
+    assert.equal(path.win32.resolve(value), canonical, 'same_explicit_canonical_profile_required');
+  }
+}
 function assertRead(name, input) {
   assert(['checklists', 'desktop', 'snapshot', 'replay'].includes(name), 'checklists_readonly_rpc_required');
   if (name === 'checklists') assert(input?.name === 'read' && typeof input.input?.resourceId === 'string' && Object.keys(input.input).length === 1, 'checklists_ui_mutations_only');
@@ -97,7 +110,7 @@ async function bounded(promise, ms, code) {
   finally { clearTimeout(timer); }
 }
 async function readJson(file) { assert((await fs.stat(file)).size <= MiB, 'bounded_checklists_checkpoint_required'); return JSON.parse(await fs.readFile(file, 'utf8')); }
-Object.assign(exports, { assertOwnedProfile, assertRead, assertDocument, assertNoExecution, assertNoPlacements, assertFinished, passingCheckpoint, FIXTURE });
+Object.assign(exports, { assertOwnedProfile, assertOwnedApplicationProfile, assertRead, assertDocument, assertNoExecution, assertNoPlacements, assertFinished, passingCheckpoint, FIXTURE });
 
 exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs, observeProviderActivity }) {
   const restore = process.argv.includes('--verify-restore'), limitMs = restore ? 12000 : 45000;
@@ -107,7 +120,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     inputMethod: 'App-only software native-window mouse/key/insertText events; visible date field uses explicitly recorded DOM input. Every renderer evaluation is false. No OS/global hooks, seeding or mutation RPC, provider, account, auth or clipboard.',
     limits: { milliseconds: limitMs, combinedPNGs: 3, combinedPNGBytes: 16 * MiB, videos: 0 }, actions: [], captures: [], checks: [], errors: [],
     limitations: ['Manual completion is not agent/task/provider execution or verification.', 'Fresh GPU draw is not monitor-presentation, performance or artistic qualification.', 'Root must inspect native-window PNGs and independently confirm window/process/backend exit.', 'Cross-workspace placement is outside this bounded journey.'] };
-  let owned = false, admitted = false, budgetWritable = false, passed = false, slot, expected, pendingExpected, workTimer, hardTimer, rejectAbort, failureCapture;
+  let owned = false, admitted = false, listenersInstalled = false, budgetWritable = false, passed = false, slot, expected, pendingExpected, workTimer, hardTimer, rejectAbort, failureCapture;
   let budget = { count: 0, bytes: 0, files: [] };
   const aborted = new Promise((_, reject) => { rejectAbort = reject; }); aborted.catch(() => {});
   const abort = code => rejectAbort(slot?.abort(code) ?? Error(code));
@@ -115,11 +128,11 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
   const escape = (_event, input) => { if (input?.type === 'keyDown' && input.key === 'Escape') abort('checklists_operator_escape'); };
   const consoleError = (_event, details) => { if ((details?.level === 'error' || details?.level === 3) && receipt.errors.length < 24) receipt.errors.push(String(details.message).slice(0, 1000)); };
   const run = async () => {
-    assertOwnedProfile(privateRoot, process.argv, win.getTitle()); assert.equal(path.resolve(app.getPath('userData')), root, 'actual_same_owned_application_profile_required'); sourceIdentity(source); owned = true;
+    assertOwnedProfile(privateRoot, process.argv, win.getTitle()); assertOwnedApplicationProfile(privateRoot, app.getPath('userData'), process.argv); sourceIdentity(source); owned = true;
     slot = createSlot({ win, startedAt: moduleStartedMonotonicMs, limitMs, cleanupMs: restore ? 2500 : 4000 }); slot.check();
     hardTimer = setTimeout(() => { receipt.hardDeadline = true; abort('checklists_hard_deadline'); app.exit(1); }, slot.remaining());
     workTimer = setTimeout(() => abort('checklists_work_deadline'), slot.workRemaining());
-    win.on('blur', blur); win.on('hide', blur); win.on('minimize', blur);
+    listenersInstalled = true; win.on('blur', blur); win.on('hide', blur); win.on('minimize', blur);
     win.webContents.on('before-input-event', escape); win.webContents.on('console-message', consoleError);
     receipt.reserve = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', path.join(process.env.LOCALAPPDATA || '', 'AeroStorageWatch', 'ReserveGuard.ps1'), '-EstimatedCBytes', String(32 * MiB), '-EstimatedDBytes', '0'], { windowsHide: true, timeout: Math.floor(Math.min(4000, slot.workRemaining())), maxBuffer: 8192, encoding: 'utf8' }));
     assert.equal(receipt.reserve.allowed, true); admitted = true; slot.check(); await fs.mkdir(out, { recursive: true });
@@ -248,7 +261,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       }
       console.log(JSON.stringify({ passed: receipt.passed, restore, evidence: admitted ? out : null, error: receipt.error?.message, elapsedMs: receipt.elapsedMs }));
     } catch (error) { receipt.passed = false; console.log(JSON.stringify({ passed: false, error: String(error.message).slice(0, 1000) })); }
-    finally { win.removeListener('blur', blur); win.removeListener('hide', blur); win.removeListener('minimize', blur); win.webContents.removeListener('before-input-event', escape); win.webContents.removeListener('console-message', consoleError); clearTimeout(hardTimer); if (owned) app.exit(receipt.passed ? 0 : 1); }
+    finally { if (listenersInstalled) { win.removeListener('blur', blur); win.removeListener('hide', blur); win.removeListener('minimize', blur); win.webContents.removeListener('before-input-event', escape); win.webContents.removeListener('console-message', consoleError); } clearTimeout(hardTimer); if (owned) app.exit(receipt.passed ? 0 : 1); }
   }
   return receipt;
 };

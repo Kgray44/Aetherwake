@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const { assertOwnedProfile, assertRead, assertDocument, assertNoExecution, assertNoPlacements, assertFinished, passingCheckpoint, FIXTURE } = require('../native/integration-checklists.cjs');
+const { assertOwnedProfile, assertOwnedApplicationProfile, assertRead, assertDocument, assertNoExecution, assertNoPlacements, assertFinished, passingCheckpoint, FIXTURE, verify } = require('../native/integration-checklists.cjs');
 const { createSlot } = require('../native/integration-resource-opening.cjs');
 const { fillNative } = require('../native/integration-agents.cjs');
 const { validateBudget, admitPNG } = require('../native/integration-desktop-basics.cjs');
@@ -21,6 +21,26 @@ test('native Checklist helper admits only explicit owned fresh-profile flag and 
   for (const root of ['C:\\Users\\person', 'D:\\review-checklists-123', 'review-checklists-123', 'C:\\Owned\\review-checklists-real']) assert.throws(() => assertOwnedProfile(root, ['--integration-checklists'], 'Automated check'));
   assert.throws(() => assertOwnedProfile('C:\\Owned\\review-checklists-123', [], 'Automated check'));
   assert.throws(() => assertOwnedProfile('C:\\Owned\\review-checklists-123', ['--integration-checklists'], 'Ordinary user window'));
+});
+
+test('canonical profile root and its exact Chromium child match Main; other profiles, siblings and mismatched CLI roots are denied', () => {
+  const root = 'C:\\Owned\\review-checklists-123', child = root + '\\chromium';
+  assertOwnedApplicationProfile(root, child, ['--integration-checklists', '--profile=' + root]);
+  assertOwnedApplicationProfile(root, child, ['--integration-checklists']);
+  for (const userData of [root, root + '\\chromium-sibling', 'C:\\Owned\\review-checklists-124\\chromium', 'C:\\Owned\\chromium', 'chromium']) assert.throws(() => assertOwnedApplicationProfile(root, userData, ['--profile=' + root]));
+  for (const explicit of [root + '\\chromium', 'C:\\Owned\\review-checklists-124', 'review-checklists-123']) assert.throws(() => assertOwnedApplicationProfile(root, child, ['--profile=' + explicit]));
+  assert.throws(() => assertOwnedApplicationProfile(root, child, ['--profile=' + root, '--profile=' + root]));
+});
+
+test('unowned Chromium profile fails before any window control, RPC, output write or app exit', async () => {
+  const previous = process.argv; process.argv = [...previous, '--integration-checklists'];
+  const originalLog = console.log; console.log = () => {};
+  let controls = 0;
+  const forbidden = () => { controls++; throw Error('must_not_control_unowned_profile'); };
+  try {
+    const result = await verify({ privateRoot: 'C:\\Owned\\review-checklists-123', win: { getTitle: () => 'Automated check', on: forbidden, removeListener: forbidden, webContents: { executeJavaScript: forbidden, sendInputEvent: forbidden, removeListener: forbidden } }, app: { getPath: () => 'C:\\Owned\\review-checklists-124\\chromium', exit: forbidden }, call: forbidden });
+    assert.equal(result.passed, false); assert.match(result.error.message, /actual_same_owned_application_profile_required/); assert.equal(controls, 0); assert.equal(result.nativeCloseConfirmed, undefined); assert.equal(result.reserve, undefined);
+  } finally { process.argv = previous; console.log = originalLog; }
 });
 
 test('only actual read RPC is admitted; creation and edits must come through public UI', () => {
