@@ -40,6 +40,8 @@ The subsystem creates no animation loop or graphics context. The transparent ove
 
 The controller exposes `go`, `zoomOut`, `approach`, `back`, `search`, `locate`, `pan`, `zoom`, `interrupt`, `fit`, `recenter`, `pin`, and `persist`. Its camera history includes bookmarks; bind a host Back action to `controller.back()` when restoring this camera history. A separate service Back stack has different presentation-history semantics.
 
+External canonical switches retain the previous available location and camera in this history. A saved focused resource restores explicitly as its containing workspace, retaining its bookmark and selection; the host does not claim an editor reopened merely because its ID was saved. Resources are revalidated after awaited navigation before editor focus, and a completed canonical workspace switch remains active if its resource disappears.
+
 ## Behavior
 
 - Universe shows project anchors and standalone workspaces. Project overview shows workspaces; close zoom reveals resource proxies. Working scale delegates to actual workspace panels and editor identities.

@@ -6,7 +6,7 @@ Status: implemented and locally demonstrated as a navigation subsystem. The inte
 
 | Check                                                         | Result / evidence                                                                                                    |
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Canonical navigation, persistence, camera, filtering, density | 15 passing tests in `tests/navigation.test.mjs`                                                                      |
+| Canonical navigation, persistence, camera, filtering, density | 19 passing tests in `tests/navigation.test.mjs`                                                                      |
 | Strict TypeScript                                             | `tsc -p prototypes/constellation/tsconfig.json` passed                                                               |
 | Synthetic fixture production build                            | Vite production build passed, no added runtime dependency                                                            |
 | Native fixture journey                                        | `evidence/native-verification.json`, five synthetic screenshots, source and capture hashes                           |
@@ -53,3 +53,5 @@ Advisory context was routed from charters 01/02/03/13/14/15. These documents hav
 - Owner artistic acceptance and production/release approval remain explicit future decisions. No host, graphics stack, or governance status is finalized here.
 
 Rollback: remove the subsystem mount and use the host's conventional workspace selector. Canonical data, resource contents, ownership and permissions are never migrated by Constellation. Its separately versioned view state may remain private or be removed through the host's explicit retention policy.
+
+Follow-up source checks add regressions for mixed direct/spatial Back with camera restoration, revoked history destinations, a block disappearing during awaited navigation, and explicit workspace fallback for saved focused surfaces. The earlier native receipt remains bound to its recorded source hashes; the combined application must rerun its native acceptance against these follow-up changes.

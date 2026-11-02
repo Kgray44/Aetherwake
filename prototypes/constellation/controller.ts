@@ -197,7 +197,12 @@ export class ConstellationController {
           ? scopeOf(s.location) === scopeOf(expected)
           : true)
       )
-        this.state.location = s.location;
+        // An editor is host state, not proof supplied by a saved camera record.
+        // Restore the containing workspace; opening a resource remains explicit.
+        this.state.location =
+          s.location.kind === "surface"
+            ? { kind: "workspace", workspaceId: s.location.workspaceId }
+            : s.location;
       this.state.history = Array.isArray(s.history)
         ? s.history
             .slice(-32)
@@ -230,6 +235,8 @@ export class ConstellationController {
   }
   update(snapshot: Snapshot, notify = true) {
     const oldCanonical = canonicalLocation(this.snapshot);
+    const previous = this.location;
+    const bookmark = notify && !this.pending ? this.bookmark() : undefined;
     this.snapshot = snapshot;
     this.nodes = project(snapshot, this.state.anchors);
     const validKeys = new Set(
@@ -271,14 +278,42 @@ export class ConstellationController {
       JSON.stringify(oldCanonical) !== JSON.stringify(nextCanonical) &&
       allowedLocation(nextCanonical, this.nodes)
     ) {
-      this.state.location = nextCanonical;
-      this.applyBookmark(this.state.bookmarks[scopeOf(nextCanonical)]);
+      this.followCanonical(nextCanonical, previous, bookmark);
     }
     if (!this.nodes.has(this.selected ?? "")) this.selected = null;
     if (notify) {
       this.changed();
       void this.persist();
     }
+  }
+  private remember(location: Location, bookmark: Bookmark, push: boolean) {
+    if (!allowedLocation(location, this.nodes)) return;
+    const retained = {
+      camera: bookmark.camera,
+      selected: this.nodes.has(bookmark.selected ?? "")
+        ? bookmark.selected
+        : null,
+    };
+    this.state.bookmarks[scopeOf(location)] = retained;
+    if (push)
+      this.state.history = [
+        ...this.state.history,
+        { location, bookmark: retained },
+      ].slice(-32);
+  }
+  private followCanonical(
+    location: Location,
+    previous: Location,
+    bookmark?: Bookmark,
+  ) {
+    if (bookmark)
+      this.remember(
+        previous,
+        bookmark,
+        JSON.stringify(previous) !== JSON.stringify(location),
+      );
+    this.state.location = location;
+    this.applyBookmark(this.state.bookmarks[scopeOf(location)]);
   }
   private applyBookmark(bookmark?: Bookmark) {
     this.selected = bookmark?.selected ?? null;
@@ -403,6 +438,7 @@ export class ConstellationController {
     const generation = ++this.generation;
     const from = this.location,
       origin = locationNode(location, this.nodes)?.point ?? this.camera;
+    const beforeCanonical = canonicalLocation(this.snapshot);
     const old = this.bookmark();
     this.error = "";
     this.pending = true;
@@ -420,6 +456,9 @@ export class ConstellationController {
         .then(async () => {
           if (generation !== this.generation || this.destroyed) return;
           await this.options.navigate(target);
+          if (generation !== this.generation || this.destroyed) return;
+          if (!allowedLocation(location, this.nodes))
+            throw new Error("Destination unavailable");
           if (
             generation === this.generation &&
             !this.destroyed &&
@@ -432,12 +471,11 @@ export class ConstellationController {
       if (generation !== this.generation || this.destroyed) return;
       if (!allowedLocation(location, this.nodes))
         throw new Error("Destination unavailable");
-      this.state.bookmarks[scopeOf(from)] = old;
-      if (!returning && JSON.stringify(from) !== JSON.stringify(location))
-        this.state.history = [
-          ...this.state.history,
-          { location: from, bookmark: old },
-        ].slice(-32);
+      this.remember(
+        from,
+        old,
+        !returning && JSON.stringify(from) !== JSON.stringify(location),
+      );
       this.state.location = location;
       this.applyBookmark(returning ?? this.state.bookmarks[scopeOf(location)]);
       this.options.onTransition?.({
@@ -449,6 +487,15 @@ export class ConstellationController {
       await this.persist();
     } catch (error) {
       if (generation === this.generation) {
+        // The workspace switch may have succeeded before its editor vanished.
+        // Keep that real canonical destination rather than display the old one.
+        const canonical = canonicalLocation(this.snapshot);
+        if (
+          (JSON.stringify(canonical) !== JSON.stringify(beforeCanonical) ||
+            !allowedLocation(from, this.nodes)) &&
+          allowedLocation(canonical, this.nodes)
+        )
+          this.followCanonical(canonical, from, old);
         this.error =
           error instanceof Error ? error.message : "Navigation failed";
         throw error;

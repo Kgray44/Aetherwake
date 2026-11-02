@@ -312,6 +312,127 @@ test("external canonical direct navigation synchronizes the layer; stale bookmar
   });
 });
 
+test("a direct switch after spatial navigation records the previous workspace and camera for Back", async (t) => {
+  const { service } = setup(t),
+    { c, motion } = create(service);
+  const b = service
+    .snapshot()
+    .workspaces.find((w) => w.title === "Engineering");
+  const next = service
+    .snapshot()
+    .workspaces.find((w) => w.title === "Calibration");
+  await c.zoomOut();
+  await c.go({ kind: "universe" });
+  await c.go({ kind: "workspace", workspaceId: b.id });
+  c.move({ x: 450, y: 230, zoom: 1.3 });
+  step(motion);
+  const bookmark = c.camera;
+  service.navigate({ kind: "workspace", workspaceId: next.id });
+  c.update(service.snapshot());
+  const length = c.state.history.length;
+  c.update(service.snapshot());
+  assert.equal(
+    c.state.history.length,
+    length,
+    "ordinary snapshots do not duplicate history",
+  );
+  await c.back();
+  step(motion);
+  assert.deepEqual(c.location, { kind: "workspace", workspaceId: b.id });
+  assert.deepEqual(c.camera, bookmark);
+  assert.equal(service.snapshot().activeWorkspaceId, b.id);
+});
+
+test("an unavailable previous workspace is not reintroduced into direct-switch history", async (t) => {
+  const { service } = setup(t),
+    { c } = create(service);
+  const previous = c.location.workspaceId;
+  const next = service.snapshot().workspaces.find((w) => w.id !== previous);
+  service.navigate({ kind: "workspace", workspaceId: next.id });
+  const snapshot = service.snapshot();
+  snapshot.workspaces = snapshot.workspaces.filter((w) => w.id !== previous);
+  c.update(snapshot);
+  assert.equal(JSON.stringify(c.state.history).includes(previous), false);
+  assert.deepEqual(c.location, { kind: "workspace", workspaceId: next.id });
+});
+
+test("a block removed during awaited navigation cannot open an editor; completed canonical workspace navigation is retained", async (t) => {
+  const { service } = setup(t);
+  const target = service
+    .snapshot()
+    .workspaces.find((w) => w.title === "Engineering");
+  const block = service
+    .snapshot()
+    .blocks.find((b) => b.workspace_id === target.id);
+  let opened = 0,
+    c;
+  c = new ConstellationController({
+    snapshot: service.snapshot(),
+    motion: new MotionCoordinator(),
+    navigate: async (destination) => {
+      const next = service.navigate(destination);
+      c.update({
+        ...next,
+        blocks: next.blocks.filter((b) => b.id !== block.id),
+      });
+    },
+    openResource: async () => {
+      opened++;
+    },
+  });
+  await assert.rejects(
+    c.go({
+      kind: "surface",
+      workspaceId: target.id,
+      resourceId: block.resource_id,
+      blockId: block.id,
+    }),
+    /Destination unavailable/,
+  );
+  assert.equal(opened, 0);
+  assert.deepEqual(c.location, { kind: "workspace", workspaceId: target.id });
+  assert.equal(c.pending, false);
+});
+
+test("a saved surface explicitly restores as its workspace with bookmark and selection, without claiming an open editor", async (t) => {
+  const { service } = setup(t),
+    { c, motion } = create(service);
+  const block = service
+    .snapshot()
+    .blocks.find((b) => b.workspace_id === c.location.workspaceId);
+  c.select(`resource:${block.id}`);
+  await c.go({
+    kind: "surface",
+    workspaceId: block.workspace_id,
+    resourceId: block.resource_id,
+    blockId: block.id,
+  });
+  c.move({ x: 570, y: 210, zoom: 1.7 });
+  step(motion);
+  await c.persist();
+  let opened = 0;
+  const restored = new ConstellationController({
+    snapshot: service.snapshot(),
+    motion: new MotionCoordinator(),
+    navigate: async () => {},
+    openResource: async () => {
+      opened++;
+    },
+    persistence: {
+      load: async () => service.load(),
+      save: async (state) => service.save(state),
+    },
+  });
+  await restored.restore();
+  assert.deepEqual(restored.location, {
+    kind: "workspace",
+    workspaceId: block.workspace_id,
+  });
+  assert.deepEqual(restored.camera, c.camera);
+  assert.equal(restored.selected, `resource:${block.id}`);
+  assert.equal(opened, 0);
+});
+
 test("overlapping async navigation is serialized and the latest destination wins in the canonical service", async (t) => {
   const { service } = setup(t),
     motion = new MotionCoordinator();
