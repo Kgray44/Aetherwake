@@ -258,7 +258,6 @@ app.whenReady().then(async () => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      additionalArguments: captureReview ? ["--aerynth-capture-visible"] : [],
     },
   });
   win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -506,7 +505,7 @@ app.whenReady().then(async () => {
       });
       return;
     }
-    if (captureReview) {
+    if (process.argv.includes("--integration-constellation")) {
       await require("./integration-constellation.cjs").verify({
         win,
         app,
