@@ -46,6 +46,8 @@ import type {
   ProductCommandMap,
 } from "../../../conversation-product/src/contracts.ts";
 import "../../../conversation-product/src/style.css";
+import "./optical-controls.css";
+import "../../../conversation-product/src/picker.css";
 import { mountBlockChat } from "../../../block-library/chat-view.ts";
 import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
@@ -1888,6 +1890,8 @@ export function installApplication(hooks: Hooks) {
     };
     controller = conversationManager = mountConversationManager(content, port, {
       embedded: true,
+      motion: experienceMotion,
+      viewId: "conversation-manager",
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
       onOpenChatGPT: async (reference) => {
@@ -3436,6 +3440,18 @@ export function installApplication(hooks: Hooks) {
         const session = composerSession(r.id);
         view = mountBlockChat(surface, {
           copy: copyText,
+          motion: experienceMotion,
+          viewId: "block:" + b.id + ":conversation",
+          onProviderChange: async change => {
+            if (change.mode === "continuation") {
+              await showConversations(change.resourceId);
+              await conversationManager?.beginProviderContinuation(change.targetProviderId);
+            } else {
+              await composerPort.command("selectProvider", { resourceId: change.resourceId, providerId: change.targetProviderId, expectedRevision: change.expectedRevision });
+              await command({ type: "snapshot" });
+              await view?.refresh({ latest: false });
+            }
+          },
           resourceId: r.id,
           port: composerPort,
           draftSession: session,
@@ -4180,6 +4196,8 @@ export function installApplication(hooks: Hooks) {
       environmentNavigator?.frame();
       workspaceActions?.frame();
       agentLibrary?.frame();
+      conversationManager?.frame();
+      for (const view of chatViews.values()) view.frame();
       for (const [id, entry] of timelineViews) {
         const width =
           document.querySelector<HTMLElement>(

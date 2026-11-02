@@ -60,6 +60,7 @@ export function mountBlockChat(
   void chat.ready.catch(options.failed);
   return {
     ready: chat.ready,
+    frame: chat.frame,
     refresh: chat.refresh,
     whenSubmissionSettled: chat.whenSubmissionSettled,
     setPresentation: chat.setPresentation,
