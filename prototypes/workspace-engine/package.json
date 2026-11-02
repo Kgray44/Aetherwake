@@ -5,7 +5,8 @@
   "scripts": {
     "test": "node --test tests/*.test.mts",
     "demo": "node demo/server.mts",
-    "benchmark": "node benchmark.mts"
+    "benchmark": "node benchmark.mts",
+    "benchmark:collisions": "node benchmark-collisions.mts"
   },
   "engines": { "node": ">=24.0.0" }
 }

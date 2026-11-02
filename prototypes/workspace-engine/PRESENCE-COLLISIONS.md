@@ -66,8 +66,24 @@ Parent integration should issue one explicit undoable `resolveLayout` when adopt
 
 ## Verification and limits
 
-36 engine tests pass: the original 21 regressions plus 15 presence/collision scenarios. New coverage includes 0/1/10/25/50 blocks; restart; independent workspace presence; Vela-to-card and card-to-Vela drops; resize; bounded presence and pannable block overflow; one-step undo/redo; canonical draft preservation; no-op resolution; zoom/snapping previews; stale presence versions; invalid geometry/bounds; deterministic rotated footprints; fixed/locked failure rollback; v2 raw archive and late imported recovery; and interrupted child-process transaction recovery.
+38 engine tests pass: the original 21 regressions plus 17 presence/collision scenarios. New coverage includes 0/1/10/25/50 blocks; restart; independent workspace presence; Vela-to-card and card-to-Vela drops; resize; bounded presence and pannable block overflow; one-step undo/redo; canonical draft preservation; no-op resolution retaining redo; zoom/snapping previews; stale presence versions and idempotent replay across SQLite connections; invalid geometry/bounds; deterministic rotated footprints; fixed/locked failure rollback; v2 raw archive and late imported recovery; failed schema3 migration rollback; and interrupted child-process transaction recovery.
 
-Strict TypeScript checking passes using the existing integration toolchain. The integration base's backend and kernel regressions also run; exact results are reported in the handoff. These are service/fixture checks. Native dragging, keyboard discoverability, glass compositing, reduced-motion experience, physical displays and the visual 65% result require integration-owner evidence. No native acceptance is claimed by this worker.
+Strict TypeScript checking passes using the existing integration toolchain. The integration base's 26 backend and 12 kernel regressions pass. These are service/fixture checks. Native dragging, keyboard discoverability, glass compositing, reduced-motion experience, physical displays and the visual 65% result require integration-owner evidence. No native acceptance is claimed by this worker.
+
+### Resolver timing observation
+
+Run `npm run benchmark:collisions` to reproduce. The predeclared synthetic workload starts all blocks at one point, rotates every fifth card by 12 degrees, includes the separate presence and safe bounds, runs three warm-ups and 20 samples, removes no outliers and asserts disjoint results. Percentiles use sorted samples at `floor(n*p)`; with 20 samples p95/p99 are both the maximum. No performance acceptance threshold is claimed.
+
+The [recorded result](evidence/presence-collision-benchmark.json) at implementation `ba22a44`, Windows 10.0.26300 / Node v24.18.0 / Ryzen AI 7 350, measured these pure resolver wall times:
+
+| User blocks plus Vela | p50 ms | p95 ms |
+|---|---|---|
+| 0 + 1 | 0.010 | 0.039 |
+| 1 + 1 | 0.044 | 0.607 |
+| 10 + 1 | 0.297 | 0.599 |
+| 25 + 1 | 1.691 | 2.220 |
+| 50 + 1 | 9.600 | 12.362 |
+
+This isolates the geometric resolver; it excludes SQLite/history serialization, IPC, native input latency, GPU work and frame times. Other local workloads were concurrent and not sampled or attributed. Keep previews local and commit only at gesture end. The earlier full-service history benchmark in EVALUATION.md remains a separate older-revision observation.
 
 Storage preflight for branch reuse: C:109,802,164,224 bytes and D:501,728,264,192 bytes free; bounded additional allocation C:1.5 GiB, D:0. Follow-up tests checked a 256 MiB C: allocation with C:109,725,265,920 and D:501,728,088,064 bytes free. Both independent 30 GiB reserves passed. These instruction-based checks cannot constrain unrelated applications, cloud jobs or processes that have not loaded the rule.

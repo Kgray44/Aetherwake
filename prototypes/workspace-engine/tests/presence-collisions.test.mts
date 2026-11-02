@@ -94,6 +94,9 @@ test('repeated resolveLayout is a no-op: revision, versions, history, redo and a
   assert.equal(k.listEvents('workspace', s.workspaceId).length, events);
   s = run(e, s, { type: 'undoLayout' });
   const redone = run(e, s, { type: 'redoLayout' }); assert.ok(redone.presence.version > s.presence.version);
+  s = run(e, redone, { type: 'setPresence', expectedVersion: redone.presence.version, presentation: { x: redone.presence.x + 16 } }, bounds);
+  s = run(e, s, { type: 'undoLayout' }); assert.equal(s.canRedo, true);
+  assert.deepEqual(run(e, s, { type: 'resolveLayout' }, bounds), s);
 });
 
 test('presence gesture previews use viewport zoom and commit one versioned native command', t => {
@@ -113,6 +116,43 @@ test('invalid presence/bounds and stale presence versions cannot partially rearr
   assert.throws(() => run(e, state, { type: 'resolveLayout' }, { x: 0, y: 0, width: -1, height: 100 }), code('INVALID'));
   assert.throws(() => run(e, state, { type: 'setPresence', expectedVersion: 999, presentation: { x: 1 } }), code('CONFLICT'));
   assert.deepEqual(e.project(state.workspaceId), state);
+});
+
+test('presence retries are idempotent across SQLite connections and stale windows cannot overwrite them', t => {
+  const { engine: e, state, path } = fixture(t, true), other = WorkspaceKernel.open(path);
+  try {
+    const second = new WorkspaceEngine(other), stale = second.project(state.workspaceId);
+    const command: Command = { type: 'setPresence', commandId: 'presence-idempotent', workspaceId: state.workspaceId,
+      expectedRevision: state.revision, expectedVersion: state.presence.version, presentation: { x: 100, y: 250 } };
+    const result = e.execute(command); assert.deepEqual(second.execute(command), result);
+    assert.throws(() => run(second, stale, { type: 'setPresence', expectedVersion: stale.presence.version, presentation: { x: 500 } }), code('CONFLICT'));
+    assert.deepEqual(second.project(state.workspaceId), result);
+  } finally { other.close(); }
+});
+
+test('failed schema3 migration rolls back presence columns and archive while retaining prior recovery JSON', t => {
+  const { engine: e, kernel: k, state } = fixture(t);
+  const s = run(e, state, { type: 'createBlock', resource: { kind: 'note', title: 'Synthetic retained', content: 'kept' } });
+  let raw = '';
+  k.withTransaction(db => {
+    raw = String(db.prepare('SELECT history_json FROM workspace_engine_layouts').get()!.history_json);
+    db.exec(`DROP TABLE workspace_engine_v2_recovery_archive;
+      ALTER TABLE workspace_engine_layouts DROP COLUMN presence_json;
+      ALTER TABLE workspace_engine_layouts DROP COLUMN legacy_presence_json;
+      UPDATE workspace_engine_schema SET version=2;
+      CREATE TRIGGER fail_presence_migration BEFORE UPDATE ON workspace_engine_schema
+      WHEN NEW.version=3 BEGIN SELECT RAISE(ABORT,'Synthetic presence migration failure'); END;`);
+  });
+  assert.throws(() => new WorkspaceEngine(k), /Synthetic presence migration failure/);
+  k.withTransaction(db => {
+    assert.equal(db.prepare('SELECT version FROM workspace_engine_schema').get()!.version, 2);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM pragma_table_info('workspace_engine_layouts') WHERE name='presence_json'").get()!.n, 0);
+    assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='workspace_engine_v2_recovery_archive'").get()!.n, 0);
+    assert.equal(db.prepare('SELECT history_json FROM workspace_engine_layouts').get()!.history_json, raw);
+    db.exec('DROP TRIGGER fail_presence_migration');
+  });
+  const recovered = new WorkspaceEngine(k).project(s.workspaceId); assert.equal(recovered.blocks[0].resourceId, s.blocks[0].resourceId);
+  assert.equal(k.getResource(recovered.blocks[0].resourceId).note.content, 'kept');
 });
 
 test('resolver is deterministic under reversed input, respects rotations and finds a nearest vacant slot', () => {
