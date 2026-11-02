@@ -12,6 +12,27 @@
   padding: 0;
   font: inherit;
 }
+.application-vela-content .vela-core-header h2 {
+  display: none;
+}
+.application-vela-content
+  .vela-core-compose
+  .vela-core-field:has(input[type="checkbox"]) {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+.application-vela-content
+  .vela-core-compose
+  .vela-core-field:has(input[type="checkbox"])
+  > span {
+  flex: 1;
+  min-width: 0;
+}
+.application-vela-content .vela-core-compose input[type="checkbox"] {
+  flex: none;
+  order: -1;
+  margin-top: 4px;
+}
 .application-library-content .aw-library {
   padding: 0;
   border: 0;

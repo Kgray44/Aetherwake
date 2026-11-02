@@ -91,7 +91,15 @@ export function installApplication(hooks: Hooks) {
     motion: hooks.motion,
     wake: hooks.wake,
     viewport: () => ({ width: innerWidth, height: innerHeight }),
-    safeInsets: { top: 96, left: 16, right: 16, bottom: 24 },
+    safeInsets: () => ({
+      top: 96,
+      left: 16,
+      right: 16,
+      bottom: Math.max(
+        24,
+        innerHeight - el(".provenance").getBoundingClientRect().top + 12,
+      ),
+    }),
   });
   addEventListener("resize", surfaces.viewportChanged);
   let velaPanel: ReturnType<typeof mountVelaPanel> | null = null;
