@@ -98,6 +98,11 @@ import {
 } from "../../../block-library/agent-view.ts";
 import "../../../block-library/agent-view.css";
 import { mountTimelineExperience } from "../../../block-library/timeline-view.ts";
+import { mountTaskTrackerExperience } from "../../../block-library/task-tracker-view.ts";
+import { mountTaskObjectiveCreator } from "../../../block-library/task-objective-creator.ts";
+import type { TaskObjectiveDocument } from "../../../task-product/contracts.ts";
+import "../../../block-library/task-tracker-view.css";
+import "../../../block-library/task-objective-creator.css";
 import "../../../block-library/timeline-view.css";
 import type { ProviderConnectionStatus } from "../../../application-contract/provider-connections.ts";
 import { mountDirectResourceExperience } from "../../../block-library/direct-resource-view.ts";
@@ -350,6 +355,20 @@ export function installApplication(hooks: Hooks) {
   let checklistCreator: ReturnType<typeof mountChecklistCreator> | null = null;
   let checklistCreatorSurface: ContextualSurfaceRequest | null = null;
   let checklistCreatorSerial = 0;
+  let taskCreator: ReturnType<typeof mountTaskObjectiveCreator> | null = null;
+  let taskCreatorSurface: ContextualSurfaceRequest | null = null;
+  let taskCreatorSerial = 0;
+  const taskTrackerViews = new Map<
+    string,
+    {
+      view: ReturnType<typeof mountTaskTrackerExperience>;
+      version: number;
+      width: number;
+    }
+  >();
+  const taskProjections = new Map<string, TaskObjectiveDocument | null>();
+  let taskRefreshPending = false;
+  let taskResourceRevisionStamp = "";
   let activityTimelineAttempt: {
     request: Parameters<typeof productClients.timelines.create>[0];
     pending: boolean;
@@ -426,6 +445,7 @@ export function installApplication(hooks: Hooks) {
       key: string;
       content: string;
       projection?: SubjectIdentity;
+      taskObjective?: TaskObjectiveDocument | null;
       model: BlockIdentityModel;
     }
   >();
@@ -542,6 +562,18 @@ export function installApplication(hooks: Hooks) {
         },
         timelines: {
           port: productClients.timelines,
+          motion: experienceMotion,
+          viewId: "direct:" + resource.id,
+          resourceTitle: (id) =>
+            state?.resources.find(
+              (item) =>
+                item.id === id &&
+                item.available !== false &&
+                item.visible !== false,
+            )?.title,
+        },
+        taskObjectives: {
+          port: productClients.taskObjectives,
           motion: experienceMotion,
           viewId: "direct:" + resource.id,
           resourceTitle: (id) =>
@@ -670,6 +702,10 @@ export function installApplication(hooks: Hooks) {
       workspaceActions?.dispose();
       agentLibrary?.dispose();
       checklistCreator?.dispose();
+      taskCreator?.dispose();
+      for (const entry of taskTrackerViews.values()) entry.view.dispose();
+      taskTrackerViews.clear();
+      taskProjections.clear();
       for (const entry of checklistViews.values()) entry.view.dispose();
       checklistViews.clear();
       for (const entry of agentBlockViews.values()) entry.view.dispose();
@@ -879,6 +915,19 @@ export function installApplication(hooks: Hooks) {
     )
       cancelPreview();
     state = next;
+    const taskStamp = JSON.stringify(
+      next.resources.map((resource) => [
+        resource.id,
+        resource.version,
+        resource.conversationRevision,
+        resource.available,
+        resource.visible,
+      ]),
+    );
+    if (taskStamp !== taskResourceRevisionStamp) {
+      taskResourceRevisionStamp = taskStamp;
+      refreshTaskProjections();
+    }
     environmentNavigator?.update(next);
     workspaceActions?.update(next);
     subjectDataKey = JSON.stringify([
@@ -943,6 +992,12 @@ export function installApplication(hooks: Hooks) {
       if (!next.blocks.some((block) => block.id === id)) {
         entry.view.dispose();
         timelineViews.delete(id);
+      }
+    for (const [id, entry] of taskTrackerViews)
+      if (!next.blocks.some((block) => block.id === id)) {
+        entry.view.dispose();
+        taskTrackerViews.delete(id);
+        taskProjections.delete(id);
       }
     for (const [id, view] of groupViews)
       if (!next.blocks.some((b) => b.id === id)) {
@@ -1159,6 +1214,8 @@ export function installApplication(hooks: Hooks) {
   async function flushDrafts() {
     await conversationDisposing;
     await checklistCreator?.flush();
+    await taskCreator?.flush();
+    for (const entry of taskTrackerViews.values()) await entry.view.flush();
     for (const entry of checklistViews.values()) await entry.view.flush();
     for (const entry of timelineViews.values()) await entry.view.flush();
     await directResources.flush();
@@ -1576,6 +1633,64 @@ export function installApplication(hooks: Hooks) {
       },
     };
     surfaces.open(checklistCreatorSurface);
+  }
+  async function newTaskObjective() {
+    await flush();
+    if (taskCreator && taskCreatorSurface) {
+      taskCreator.setActive(true);
+      surfaces.open(taskCreatorSurface);
+      return;
+    }
+    const content = document.createElement("div");
+    let opened = false;
+    const controller = mountTaskObjectiveCreator(content, {
+      port: productClients.taskObjectives,
+      motion: experienceMotion,
+      viewId: "task-creator:" + ++taskCreatorSerial,
+      projectId: creationProjectId(),
+      showTitle: false,
+      onCreated: async (resourceId) => {
+        const result = await resourceOpener.open({
+          resourceId,
+          origin: { source: "application" },
+        });
+        if (result.status !== "ready")
+          throw Error("Created objective is not available to open.");
+        opened = true;
+        if (taskCreator === controller) surfaces.close("task-objective-create");
+      },
+    });
+    taskCreator = controller;
+    taskCreatorSurface = {
+      id: "task-objective-create",
+      anchor: el("#application-resources"),
+      content,
+      label: "New task",
+      placement: "bottom",
+      minSize: { width: 340, height: 260 },
+      maxSize: { width: 520, height: 640 },
+      preferredSize: { width: 460, height: 420 },
+      initialFocus: "input",
+      beforeClose: async () => {
+        try {
+          await controller.flush();
+          return true;
+        } catch (error) {
+          report(error);
+          return false;
+        }
+      },
+      onClose: () => {
+        if (opened) {
+          controller.dispose();
+          if (taskCreator === controller) {
+            taskCreator = null;
+            taskCreatorSurface = null;
+          }
+        } else controller.setActive(false);
+      },
+    };
+    surfaces.open(taskCreatorSurface);
   }
   function creationProjectId(): string | null {
     const navigation = state?.navigation;
@@ -2135,7 +2250,7 @@ export function installApplication(hooks: Hooks) {
     if (!state) return;
     open(
       "Resources",
-      '<label>Find a resource<input id="resource-search" type="search" placeholder="Search title or type"></label><button id="standalone-note">New note</button><button id="standalone-checklist" data-aerynth-motion-control="true">New checklist</button><button id="new-activity-timeline" data-aerynth-motion-control="true">Activity timeline</button><div id="resource-results"></div>',
+      '<label>Find a resource<input id="resource-search" type="search" placeholder="Search title or type"></label><button id="standalone-note">New note</button><button id="standalone-checklist" data-aerynth-motion-control="true">New checklist</button><button id="standalone-task-objective" data-aerynth-motion-control="true">New task</button><button id="new-activity-timeline" data-aerynth-motion-control="true">Activity timeline</button><div id="resource-results"></div>',
     );
     const draw = () => {
       const q = el<HTMLInputElement>(
@@ -2206,6 +2321,10 @@ export function installApplication(hooks: Hooks) {
     el("#new-activity-timeline", dialog).onclick = () => {
       dialog.close();
       void newActivityTimeline().catch(report);
+    };
+    el("#standalone-task-objective", dialog).onclick = () => {
+      dialog.close();
+      void newTaskObjective().catch(report);
     };
     el("#standalone-note", dialog).onclick = () => {
       void (async () => {
@@ -3070,7 +3189,8 @@ export function installApplication(hooks: Hooks) {
       cached &&
       cached.key === key &&
       cached.content === content &&
-      cached.projection === projection
+      cached.projection === projection &&
+      cached.taskObjective === taskProjections.get(id)
         ? cached.model
         : blockIdentity({
             kind: knownKind,
@@ -3080,8 +3200,15 @@ export function installApplication(hooks: Hooks) {
             events,
             disconnected: eventDisconnected,
             agent: agentProjections.get(id),
+            taskObjective: taskProjections.get(id),
           });
-    identityModels.set(id, { key, content, projection, model });
+    identityModels.set(id, {
+      key,
+      content,
+      projection,
+      model,
+      taskObjective: taskProjections.get(id),
+    });
     view.update(model);
     view.setMinimized(block.minimized === true);
     const footprint = blockFootprints.get(id);
@@ -3297,7 +3424,11 @@ export function installApplication(hooks: Hooks) {
     if (restoredEditor) restoredEditor.disabled = false;
     article.dataset.shape = b.shape;
     el(".grip span", article).textContent =
-      r.kind === "task_group" ? "TASK GROUP" : r.kind.toUpperCase();
+      r.kind === "task_group"
+        ? "TASK GROUP"
+        : r.kind === "task_objective"
+          ? "TASK TRACKER"
+          : r.kind.toUpperCase();
     if (r.kind === "conversation") {
       const surface = el(".working-content", article);
       let view = chatViews.get(b.id);
@@ -3335,6 +3466,47 @@ export function installApplication(hooks: Hooks) {
         void view.refresh({ latest: true }).catch(report);
       }
       view?.setActive(activeBlocks.get(b.id) ?? false);
+    } else if (r.kind === "task_objective") {
+      const content = el(".working-content", article);
+      let entry = taskTrackerViews.get(id);
+      if (!entry && activeBlocks.get(id)) {
+        content.replaceChildren();
+        entry = {
+          view: mountTaskTrackerExperience(
+            content,
+            r.id,
+            productClients.taskObjectives,
+            {
+              viewId: "block:" + id,
+              motion: experienceMotion,
+              active: true,
+              presentation: blockPresentation(id),
+              showTitle: false,
+              openResource: openCanonicalResource,
+              resourceTitle: (resourceId) =>
+                state?.resources.find(
+                  (resource) =>
+                    resource.id === resourceId &&
+                    resource.available !== false &&
+                    resource.visible !== false,
+                )?.title,
+              onProjection: (projection) => {
+                taskProjections.set(id, projection);
+                const target = document.querySelector<HTMLElement>(
+                  `[data-block="${id}"]`,
+                );
+                if (target) decorate(target, id);
+              },
+            },
+          ),
+          version: r.version,
+          width: content.clientWidth,
+        };
+        taskTrackerViews.set(id, entry);
+      } else if (entry && entry.version !== r.version) {
+        entry.version = r.version;
+        void entry.view.refresh().catch(report);
+      }
     } else if (r.kind === "timeline") {
       const content = el(".working-content", article);
       let entry = timelineViews.get(id);
@@ -3716,6 +3888,19 @@ export function installApplication(hooks: Hooks) {
   el("#stream-button").addEventListener("click", () =>
     fillEvents(el("#events")),
   );
+  function refreshTaskProjections() {
+    if (taskRefreshPending) return;
+    taskRefreshPending = true;
+    queueMicrotask(() => {
+      taskRefreshPending = false;
+      void Promise.all([
+        ...(state?.resources
+          .filter((resource) => resource.kind === "task_objective")
+          .map((resource) => directResources.refresh(resource.id)) ?? []),
+        ...[...taskTrackerViews.values()].map((entry) => entry.view.refresh()),
+      ]).catch(report);
+    });
+  }
   host.onEvent?.((event) => {
     refreshVelaFromEvent();
     const e = event as Activity & {
@@ -3725,6 +3910,12 @@ export function installApplication(hooks: Hooks) {
     // Assistant text is handled by the one shared execution adapter. It is not
     // copied into a second transcript, activity payload cache or frame path.
     if (e.payload?.delta && e.resourceId) return;
+    if (
+      /^(execution\/|resource[./]|note[./]|conversation[./]|agent[./]|task-objective[./]|policy[./]|source[./])/.test(
+        e.type,
+      )
+    )
+      refreshTaskProjections();
     rememberEvent(e);
     fillEvents(el("#events"));
     el("#event-count").textContent = String(localEvents.length);
@@ -3942,6 +4133,7 @@ export function installApplication(hooks: Hooks) {
     checklistViews.get(id)?.view.setPresentation(presentation);
     agentBlockViews.get(id)?.view.setPresentation(presentation);
     timelineViews.get(id)?.view.setPresentation(presentation);
+    taskTrackerViews.get(id)?.view.setPresentation(presentation);
     chatViews.get(id)?.setActive(active);
     noteViews.get(id)?.setActive(active);
     subjectViews.get(id)?.setActive(active);
@@ -3950,6 +4142,7 @@ export function installApplication(hooks: Hooks) {
     checklistViews.get(id)?.view.setActive(active);
     agentBlockViews.get(id)?.view.setActive(active);
     timelineViews.get(id)?.view.setActive(active);
+    taskTrackerViews.get(id)?.view.setActive(active);
   }
   return {
     frame(now: number, policy: Policy) {
@@ -4010,6 +4203,18 @@ export function installApplication(hooks: Hooks) {
         entry.view.frame();
       }
       checklistCreator?.frame();
+      taskCreator?.frame();
+      for (const [id, entry] of taskTrackerViews) {
+        const width =
+          document.querySelector<HTMLElement>(
+            `[data-block="${id}"] .working-content`,
+          )?.clientWidth ?? 0;
+        if (width !== entry.width) {
+          entry.width = width;
+          entry.view.reflow();
+        }
+        entry.view.frame();
+      }
       directResources.frame();
       for (const [id, entry] of checklistViews) {
         const width =

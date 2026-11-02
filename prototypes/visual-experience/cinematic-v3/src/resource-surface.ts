@@ -11,6 +11,8 @@ export interface DirectResourceView {
   dispose(): void;
   frame?(): void;
   reflow?(): void;
+  refresh?(): Promise<void>;
+  hasUnsavedChanges?(): boolean;
 }
 
 /** Retains the actual focused editor DOM across closes. Only view state lives
@@ -130,7 +132,9 @@ export function createResourceSurface(options: {
       entries.set(resource.id, entry);
       // Clean hidden editors are bounded; callers flush before switching.
       if (entries.size > 8) {
-        const oldest = [...entries.values()].find((value) => !value.active);
+        const oldest = [...entries.values()].find(
+          (value) => !value.active && !value.view.hasUnsavedChanges?.(),
+        );
         if (oldest) release(oldest.resourceId);
       }
     },
@@ -165,6 +169,18 @@ export function createResourceSurface(options: {
         }
         entry.view.frame?.();
       }
+    },
+    async refresh(resourceId?: string) {
+      await Promise.all(
+        [...entries.values()]
+          .filter(
+            (entry) =>
+              entry.active &&
+              entry.authorized &&
+              (!resourceId || entry.resourceId === resourceId),
+          )
+          .map((entry) => entry.view.refresh?.()),
+      );
     },
     async flush() {
       for (const entry of entries.values())
