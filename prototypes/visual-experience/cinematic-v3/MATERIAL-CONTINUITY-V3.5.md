@@ -12,6 +12,10 @@ One contour contract covers rectangle, rounded, circle, pill, folio and lens pre
 
 The note retains restrained optical camber and a smoother coat at rest. Selection enhances the same material continuously through the existing interpolated lift. It does not replace the material or activate glass. Focused reading protects its central content region; a small header backing keeps controls readable over a bright specular patch. Efficient and graphics-loss modes retain deliberate opaque CSS fallbacks.
 
+Optical unfolding now has a semantic channel on the existing Motion Coordinator. Card height no longer masquerades as reading progress during resizing. Interruption, reversal and reduced-motion reconciliation use the same coordinator. Global workspace-arrival scale/origin is projected consistently into DOM clipping and GPU geometry; focus has a temporary representation rank above arbitrary canonical layers. The obsolete overlap-to-opaque helper and its policy tests are replaced by silhouette, material continuity and semantic-motion regressions.
+
+An optional application-owned `SpatialRenderLayer` shares the existing renderer/context and frame scheduler between the background and foreground. The hook restores host render target, viewport, scissor and clear state, contains layer failure and forwards context lifecycle notifications. Layer lifetime stays with the application across renderer recovery. This hook does not claim that the expanded 3D Constellation implementation is qualified.
+
 The logo's original master PNG is unchanged. A small SVG alpha filter removes its black raster background at display time, allowing the existing artwork to sit directly over the scene. The preceding blend-only attempt was insufficient in the header stacking context and is not reported as the delivered fix.
 
 The renderer also accepts an optional engine-owned Vela screen envelope and a separate scale. The application integration workstream owns persistent placement, collision resolution, drag/keyboard controls and undo. The rendering hook preserves sculptural geometry and ambient motion and supports the requested 65% resting application presence.

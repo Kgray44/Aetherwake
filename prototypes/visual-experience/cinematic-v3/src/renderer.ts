@@ -4,7 +4,12 @@ import {
   defaultSurfaceShape,
   type SurfaceShape,
 } from "./surface-contour.ts";
-import { compareSurfaceStack } from "./material-compositing.ts";
+import type { SpatialRenderLayer } from "../../../constellation/spatial-types.ts";
+import {
+  compareSurfaceStack,
+  normalizeSurfaceView,
+  type SurfaceView,
+} from "./material-compositing.ts";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import {
   OrbitalArchitecture,
@@ -40,6 +45,7 @@ export interface SurfacePose {
   shape?: SurfaceShape;
   rotation?: number;
   zIndex?: number;
+  presentationLayer?: number;
   id: string;
   x: number;
   y: number;
@@ -84,6 +90,8 @@ export interface EnvironmentFrame {
   surfaces?: readonly SurfacePose[];
   presencePlacement?: PresenceBounds;
   presenceScale?: number;
+  surfaceView?: SurfaceView;
+  quiet?: boolean;
 }
 
 // Openness, structural tension, directed flow. These are expression studies,
@@ -390,6 +398,13 @@ export class Environment {
   private readonly surfaceProjection = new THREE.Matrix4();
   private readonly surfaceRotation = new THREE.Matrix4();
   private readonly surfaceYaw = new THREE.Matrix4();
+  private readonly surfaceScreen = new THREE.Matrix4();
+  private surfaceView: SurfaceView = { scale: 1, originX: 0, originY: 0 };
+  private spatialLayer: SpatialRenderLayer | null = null;
+  private spatialLayerFailed = false;
+  private readonly savedViewport = new THREE.Vector4();
+  private readonly savedScissor = new THREE.Vector4();
+  private readonly savedClearColor = new THREE.Color();
   private readonly folioContour = { x: 0, y: 0, nx: 0, ny: 0 };
   private readonly surfaceOrder: SurfacePose[] = [];
   private readonly surfaceWorld = new THREE.Matrix4();
@@ -471,9 +486,11 @@ export class Environment {
   private disposed = false;
   private readonly onContextLost = () => {
     this.lost = true;
+    this.spatialLayer?.contextLost?.();
   };
   private readonly onContextRestored = () => {
     this.lost = false;
+    this.spatialLayer?.contextRestored?.();
   };
 
   constructor(private readonly canvas: HTMLCanvasElement) {
@@ -1161,8 +1178,33 @@ export class Environment {
     this.surfaceRotation.multiply(
       this.surfaceYaw.makeRotationY(THREE.MathUtils.degToRad(yaw)),
     );
+    const view = this.surfaceView,
+      scale = view.scale;
+    const tangent = Math.tan(THREE.MathUtils.degToRad(this.camera.fov * 0.5));
+    this.surfaceScreen.set(
+      scale,
+      0,
+      -(1 - scale) *
+        ((view.originX / this.width) * 2 - 1) *
+        tangent *
+        this.camera.aspect,
+      0,
+      0,
+      scale,
+      -(1 - scale) * (1 - (view.originY / this.height) * 2) * tangent,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      0,
+      1,
+    );
     this.surfaceWorld
-      .multiplyMatrices(this.camera.matrixWorld, this.surfaceProjection)
+      .multiplyMatrices(this.camera.matrixWorld, this.surfaceScreen)
+      .multiply(this.surfaceProjection)
       .multiply(this.surfaceRotation);
     return this.surfaceWorld;
   }
@@ -1219,9 +1261,13 @@ export class Environment {
       }
       visual.root.visible = true;
       visual.contact.visible = livingWeight > 0.001;
-      const opacity = Number.isFinite(pose.opacity)
-        ? THREE.MathUtils.clamp(pose.opacity!, 0, 1)
+      const viewOpacity = Number.isFinite(this.surfaceView.opacity)
+        ? THREE.MathUtils.clamp(this.surfaceView.opacity!, 0, 1)
         : 1;
+      const opacity =
+        (Number.isFinite(pose.opacity)
+          ? THREE.MathUtils.clamp(pose.opacity!, 0, 1)
+          : 1) * viewOpacity;
       const kind = pose.kind ?? "conversation";
       const shape = pose.shape ?? defaultSurfaceShape(kind);
       visual.root.renderOrder = i + 10;
@@ -1506,7 +1552,14 @@ export class Environment {
     return this.projectedPresence;
   }
 
+  setSpatialLayer(layer: SpatialRenderLayer | null) {
+    if (this.spatialLayer === layer) return;
+    this.spatialLayer = layer;
+    this.spatialLayerFailed = false;
+    if (this.lost) layer?.contextLost?.();
+  }
   render(frame: EnvironmentFrame) {
+    this.surfaceView = normalizeSurfaceView(frame.surfaceView);
     if (this.disposed || this.lost) return;
     const width = Math.max(1, frame.width),
       height = Math.max(1, frame.height);
@@ -1779,8 +1832,46 @@ export class Environment {
     this.renderer.clearDepth();
     if (this.architecture.visible)
       this.renderer.render(this.architecturalScene, this.camera);
+    this.renderSpatialLayer(frame);
     this.renderer.render(this.scene, this.camera);
     this.frames++;
+  }
+
+  private renderSpatialLayer(frame: EnvironmentFrame) {
+    const layer = this.spatialLayer;
+    if (layer?.active && !this.spatialLayerFailed) {
+      const renderer = this.renderer;
+      const target = renderer.getRenderTarget(),
+        cube = renderer.getActiveCubeFace(),
+        mip = renderer.getActiveMipmapLevel();
+      const scissorTest = renderer.getScissorTest(),
+        autoClear = renderer.autoClear,
+        clearAlpha = renderer.getClearAlpha();
+      renderer.getViewport(this.savedViewport);
+      renderer.getScissor(this.savedScissor);
+      renderer.getClearColor(this.savedClearColor);
+      try {
+        renderer.clearDepth();
+        layer.render(renderer, {
+          width: frame.width,
+          height: frame.height,
+          time: frame.time,
+          quality: frame.quality,
+          reduced: frame.reduced,
+          quiet: !!frame.quiet,
+        });
+      } catch {
+        this.spatialLayerFailed = true;
+      } finally {
+        renderer.setRenderTarget(target, cube, mip);
+        renderer.setViewport(this.savedViewport);
+        renderer.setScissor(this.savedScissor);
+        renderer.setScissorTest(scissorTest);
+        renderer.autoClear = autoClear;
+        renderer.setClearColor(this.savedClearColor, clearAlpha);
+        renderer.clearDepth();
+      }
+    }
   }
 
   stats() {
@@ -1791,6 +1882,12 @@ export class Environment {
     }));
     return {
       backend: "Three.js WebGL2",
+      presenceBounds: { ...this.projectedPresence },
+      spatialLayer: {
+        attached: !!this.spatialLayer,
+        active: !!this.spatialLayer?.active,
+        failed: this.spatialLayerFailed,
+      },
       framesRendered: this.frames,
       drawCalls: this.renderer.info.render.calls,
       triangles: this.renderer.info.render.triangles,
@@ -1899,6 +1996,7 @@ export class Environment {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.spatialLayer = null; // Application owns layer lifetime across renderer recovery.
     this.canvas.removeEventListener("webglcontextlost", this.onContextLost);
     this.canvas.removeEventListener(
       "webglcontextrestored",

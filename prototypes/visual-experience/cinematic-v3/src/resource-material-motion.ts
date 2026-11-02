@@ -1,0 +1,26 @@
+import { clamp, type MotionCoordinator } from "./motion.ts";
+const neutral = { x: 0, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity: 1 };
+export const materialMotionKey = (id: string) => `material:${id}`;
+/** Semantic optical unfolding shares the existing coordinator, independently
+ * of placement/resize geometry. No additional scheduler or canonical store. */
+export function registerResourceMaterial(
+  motion: MotionCoordinator,
+  id: string,
+) {
+  motion.add(materialMotionKey(id), neutral);
+}
+export function targetResourceMaterial(
+  motion: MotionCoordinator,
+  id: string,
+  expanded: boolean,
+  cause: string,
+) {
+  motion.target(
+    materialMotionKey(id),
+    { ...neutral, x: expanded ? 1 : 0 },
+    `optical unfolding: ${cause}`,
+  );
+}
+export function resourceUnfold(motion: MotionCoordinator, id: string) {
+  return clamp(motion.pose(materialMotionKey(id)).x, 0, 1);
+}

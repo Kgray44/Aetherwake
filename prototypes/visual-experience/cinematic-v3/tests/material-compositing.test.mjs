@@ -247,3 +247,32 @@ test("shared contour supports all six engine shapes without replacing material r
   assert(css.includes("mix-blend-mode: screen"));
   assert(css.includes("background: #0b1019"));
 });
+
+test("global arrival projection preserves the same rear local clipping region", () => {
+  const c = new MaterialCompositor(),
+    poses = [
+      surface("rear", 50, 60),
+      surface("front", 140, 90, { zIndex: 2, rotation: 12, yaw: 8, lift: 25 }),
+    ];
+  const first = c.update(poses).find((e) => e.id === "rear").clipPath;
+  const second = c
+    .update(poses, { scale: 0.73, originX: 790, originY: 450 })
+    .find((e) => e.id === "rear").clipPath;
+  for (const [x, y] of [
+    [20, 20],
+    [140, 80],
+    [180, 130],
+  ])
+    assert.equal(visible(first, x, y), visible(second, x, y));
+});
+
+test("focused representation stays above any canonical layer without rewriting persistent z", () => {
+  const back = surface("focus", 0, 0, {
+    zIndex: -1000000,
+    presentationLayer: 1,
+  });
+  const front = surface("ordinary", 0, 0, { zIndex: 1000000 });
+  const rows = new MaterialCompositor().update([back, front]);
+  assert.equal(rows.at(-1).id, "focus");
+  assert.equal(back.zIndex, -1000000);
+});

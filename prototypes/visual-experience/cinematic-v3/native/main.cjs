@@ -1265,17 +1265,15 @@ async function verify() {
   await evaluate("window.__aerynth.move('conversation-tidal',2)");
   await delay(900);
   await shot("overlapping-materials");
-  const overlapReadability =
-    await evaluate(`Array.from(document.querySelectorAll('.folio[data-material-overlap="true"]')).map(el => ({
-    id: el.dataset.resource,
-    overlap: getComputedStyle(el).getPropertyValue('--material-overlap').trim(),
-    background: getComputedStyle(el).backgroundImage
-  }))`);
+  const overlapReadability = await evaluate(
+    `Array.from(document.querySelectorAll('.folio')).map(el=>({id:el.dataset.resource,clip:getComputedStyle(el).clipPath,background:getComputedStyle(el).backgroundColor,covered:el.dataset.materialCovered}))`,
+  );
   check(
-    "overlapping DOM resources retain opaque material backing",
-    overlapReadability.length >= 2 &&
-      overlapReadability.every(
-        (item) => item.overlap === "1" && !item.background.includes("rgba("),
+    "overlap clips rear DOM content while preserving optical veils and opaque GPU substrates",
+    overlapReadability.some((item) => item.clip !== "none") &&
+      overlapReadability.every((item) => item.background.includes("rgba(")) &&
+      (await snap()).gpu.instruments.surfaces.every(
+        (item) => item.faceOpacity === 1 && item.clearcoat > 0.9,
       ),
     overlapReadability,
   );

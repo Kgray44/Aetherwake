@@ -4,6 +4,21 @@ import {
   type SurfaceShape,
 } from "./surface-contour.ts";
 
+export interface SurfaceView {
+  scale: number;
+  originX: number;
+  originY: number;
+  opacity?: number;
+}
+const IDENTITY_VIEW: SurfaceView = { scale: 1, originX: 0, originY: 0 };
+export function normalizeSurfaceView(view?: SurfaceView): SurfaceView {
+  return view &&
+    [view.scale, view.originX, view.originY].every(Number.isFinite) &&
+    view.scale > 0.01 &&
+    view.scale < 100
+    ? view
+    : IDENTITY_VIEW;
+}
 export interface CompositeSurface {
   id: string;
   x: number;
@@ -15,6 +30,7 @@ export interface CompositeSurface {
   opacity: number;
   rotation?: number;
   zIndex?: number;
+  presentationLayer?: number;
   shape?: SurfaceShape;
   kind?: string;
   unfold?: number;
@@ -135,10 +151,11 @@ function inversePoint(p: CompositeSurface, x: number, y: number) {
 }
 /** The engine supplies z. Selection is deliberately absent from this ordering. */
 export function compareSurfaceStack(
-  a: Pick<CompositeSurface, "id" | "zIndex">,
-  b: Pick<CompositeSurface, "id" | "zIndex">,
+  a: Pick<CompositeSurface, "id" | "zIndex" | "presentationLayer">,
+  b: Pick<CompositeSurface, "id" | "zIndex" | "presentationLayer">,
 ) {
   return (
+    (a.presentationLayer ?? 0) - (b.presentationLayer ?? 0) ||
     (a.zIndex ?? 0) - (b.zIndex ?? 0) ||
     (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
   );
@@ -161,8 +178,22 @@ export class MaterialCompositor {
   private insideB: Polygon = { points: new Float64Array(512), count: 0 };
   private outside: Polygon = { points: new Float64Array(512), count: 0 };
   recomputations = 0;
-  update(surfaces: readonly CompositeSurface[]) {
-    let changed = this.ordered.length !== surfaces.length;
+  private view: SurfaceView = { scale: 1, originX: 0, originY: 0 };
+  update(
+    surfaces: readonly CompositeSurface[],
+    view: SurfaceView = { scale: 1, originX: 0, originY: 0 },
+  ) {
+    view = normalizeSurfaceView(view);
+    const viewChanged =
+      this.view.scale !== view.scale ||
+      this.view.originX !== view.originX ||
+      this.view.originY !== view.originY;
+    if (viewChanged) {
+      this.view.scale = view.scale;
+      this.view.originX = view.originX;
+      this.view.originY = view.originY;
+    }
+    let changed = viewChanged || this.ordered.length !== surfaces.length;
     this.activeIds.clear();
     this.ordered.length = 0;
     for (const p of surfaces) {
@@ -199,11 +230,12 @@ export class MaterialCompositor {
         p.zIndex ?? 0,
         p.opacity,
         p.unfold ?? 0,
+        p.presentationLayer ?? 0,
       ];
       let different = shape !== e.shape;
       for (let k = 0; k < values.length; k++)
         if (e.key[k] !== values[k]) different = true;
-      if (different) {
+      if (different || viewChanged) {
         e.key = values;
         e.shape = shape;
         e.pose = p;
@@ -331,8 +363,10 @@ export class MaterialCompositor {
         for (let k = 0; k < poly.count; k++) {
           const point = inversePoint(
             rear.pose,
-            poly.points[k * 2],
-            poly.points[k * 2 + 1],
+            this.view.originX +
+              (poly.points[k * 2] - this.view.originX) / this.view.scale,
+            this.view.originY +
+              (poly.points[k * 2 + 1] - this.view.originY) / this.view.scale,
           );
           path +=
             (k ? "L" : "M") + point.x.toFixed(3) + " " + point.y.toFixed(3);
@@ -384,6 +418,8 @@ export class MaterialCompositor {
         return;
       }
       const q = projectSurfacePoint(p, v.x, -v.y);
+      q.x = this.view.originX + (q.x - this.view.originX) * this.view.scale;
+      q.y = this.view.originY + (q.y - this.view.originY) * this.view.scale;
       push(e.polygon, q.x, q.y);
       e.left = Math.min(e.left, q.x);
       e.top = Math.min(e.top, q.y);

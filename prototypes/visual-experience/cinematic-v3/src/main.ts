@@ -1,3 +1,9 @@
+import {
+  registerResourceMaterial,
+  targetResourceMaterial,
+  resourceUnfold,
+  materialMotionKey,
+} from "./resource-material-motion.ts";
 import { installApplication, type Application } from "./application";
 import type {
   DesktopSnapshot,
@@ -8,7 +14,11 @@ import "./style.css";
 import { motionPolicy } from "./policy";
 import { deriveSceneState } from "./scene-state";
 import { registerScene, retargetScene, sceneWeights } from "./scene-transition";
-import { MaterialCompositor } from "./material-compositing";
+import {
+  MaterialCompositor,
+  normalizeSurfaceView,
+  type SurfaceView,
+} from "./material-compositing";
 import { defaultSurfaceShape, surfaceBorderRadius } from "./surface-contour";
 import type { ArchitectureConcept } from "./orbital-architecture";
 import type { CelestialStudy } from "./celestial-environment";
@@ -104,6 +114,7 @@ registerScene(motion, "architecture");
 const elements = new Map<string, HTMLElement>();
 const poseStyleCache = new Map<string, string>();
 const materialCompositor = new MaterialCompositor();
+let surfaceView: SurfaceView = { scale: 1, originX: 0, originY: 0 };
 let selected: string | null = null,
   expanded: string | null = null,
   quiet = false;
@@ -330,6 +341,7 @@ function layout(cause: string) {
       }
     }
     motion.target(id, p, cause);
+    targetResourceMaterial(motion, id, expanded === id, cause);
     const el = elements.get(id)!;
     el.classList.toggle("selected", selected === id);
     el.classList.toggle("expanded", expanded === id);
@@ -360,7 +372,10 @@ function layout(cause: string) {
   $("#home").setAttribute("aria-current", expanded ? "false" : "page");
   document.body.classList.toggle("drag-active", !!drag);
   if (!nativeActive || document.hidden) {
-    for (const id of order) motion.snap(id);
+    for (const id of order) {
+      motion.snap(id);
+      motion.snap(materialMotionKey(id));
+    }
     renderDOM();
   }
   dirty = true;
@@ -619,6 +634,7 @@ function mountResource(id: string, r: Resource) {
   $("#stage").append(article);
   elements.set(id, article);
   motion.add(id, base(id));
+  registerResourceMaterial(motion, id);
 }
 
 for (const [id, r] of resources) mountResource(id, r);
@@ -633,6 +649,7 @@ function replaceWorkspace(state: DesktopSnapshot) {
       elements.delete(id);
       resources.delete(id);
       motion.bodies.delete(id);
+      motion.bodies.delete(materialMotionKey(id));
       poseStyleCache.delete(id);
     }
   order = state.blocks.map((b) => b.id);
@@ -956,7 +973,10 @@ function lifecycle(active: boolean) {
     clearTimeout(schedulerTimer);
     schedulerTimer = 0;
     raf = 0;
-    for (const id of order) motion.snap(id);
+    for (const id of order) {
+      motion.snap(id);
+      motion.snap(materialMotionKey(id));
+    }
     renderDOM();
   } else wake();
 }
@@ -983,21 +1003,22 @@ declare global {
 window.aerynthHost?.onActive(lifecycle);
 
 function renderDOM() {
+  surfaceView = (
+    application as (Application & { surfaceView?: () => SurfaceView }) | null
+  )?.surfaceView?.() ?? { scale: 1, originX: 0, originY: 0 };
   const projected = order.map((id) => {
     const p = motion.pose(id),
       rest = base(id),
       block = application?.block(id);
-    const unfold = clamp(
-      (p.h - rest.h) / Math.max(1, Math.max(250, innerHeight - 310) - rest.h),
-      0,
-      1,
-    );
+    const unfold = resourceUnfold(motion, id);
     return {
       id,
       ...p,
       unfold,
       shape: block?.shape ?? defaultSurfaceShape(resources.get(id)?.type),
       rotation: (block?.rotation ?? 0) * (1 - unfold),
+      presentationLayer:
+        expanded === id || resourceUnfold(motion, id) > 0.001 ? 1 : 0,
       zIndex:
         expanded === id
           ? 200000
@@ -1010,7 +1031,7 @@ function renderDOM() {
                 : 3,
     };
   });
-  const composite = materialCompositor.update(projected);
+  const composite = materialCompositor.update(projected, surfaceView);
   for (const p of projected) {
     const id = p.id,
       el = elements.get(id)!;
@@ -1019,11 +1040,7 @@ function renderDOM() {
       el.dataset.materialCovered = String(compositing.covered);
     const rest = base(id);
     const openHeight = Math.max(250, innerHeight - 310);
-    const unfold = clamp(
-      (p.h - rest.h) / Math.max(1, openHeight - rest.h),
-      0,
-      1,
-    );
+    const unfold = resourceUnfold(motion, id);
     const dockWidth = innerWidth >= 1100 ? 176 : 56;
     // Width can lag its new resting value during an ordinary window resize.
     // Only an actual focused-work transition may reveal peripheral anchors.
@@ -1111,6 +1128,7 @@ function tick(now: number) {
         : 1000 / 15;
   const shouldDraw =
     dirty ||
+    (transitioning && activeQuality !== "efficient") ||
     (policy.continuous &&
       (now + 0.25 >= nextDraw || !Number.isFinite(nextDraw))) ||
     (pointerDirty && now - lastDraw >= pointerCadence - 0.25);
@@ -1137,13 +1155,9 @@ function tick(now: number) {
               defaultSurfaceShape(resources.get(id)?.type),
             rotation:
               (application?.block(id)?.rotation ?? 0) *
-              (1 -
-                clamp(
-                  (p.h - rest.h) /
-                    Math.max(1, Math.max(250, innerHeight - 310) - rest.h),
-                  0,
-                  1,
-                )),
+              (1 - resourceUnfold(motion, id)),
+            presentationLayer:
+              expanded === id || resourceUnfold(motion, id) > 0.001 ? 1 : 0,
             zIndex:
               expanded === id
                 ? 200000
@@ -1155,12 +1169,7 @@ function tick(now: number) {
                       ? 100000
                       : 3,
             selected: id === selected,
-            unfold: clamp(
-              (p.h - rest.h) /
-                Math.max(1, Math.max(250, innerHeight - 310) - rest.h),
-              0,
-              1,
-            ),
+            unfold: resourceUnfold(motion, id),
           };
         });
       const scene = deriveSceneState({
@@ -1184,6 +1193,17 @@ function tick(now: number) {
         height: innerHeight,
       });
       sceneState = scene;
+      environment.setSpatialLayer(
+        (
+          application as
+            | (Application & {
+                spatialLayer?: () =>
+                  | import("../../../constellation/spatial-types.ts").SpatialRenderLayer
+                  | null;
+              })
+            | null
+        )?.spatialLayer?.() ?? null,
+      );
       environment.render({
         time: motion.reduced ? 0 : visualClock,
         focus: scene.focus,
@@ -1203,6 +1223,8 @@ function tick(now: number) {
         width: innerWidth,
         height: innerHeight,
         surfaces,
+        surfaceView,
+        quiet,
         presencePlacement: (
           application as
             | (Application & {
@@ -1299,10 +1321,30 @@ function controller() {
       events: [...events],
       receipts: [...motion.receipts],
       poses: Object.fromEntries(order.map((id) => [id, motion.pose(id)])),
+      materialUnfold: Object.fromEntries(
+        order.map((id) => [id, resourceUnfold(motion, id)]),
+      ),
       metrics: { ...metrics },
       gpu: environment?.stats(),
       compositing: materialCompositor.diagnostics(),
     }),
+    // Native synthetic review only: transient poses stay in the existing
+    // coordinator and never write or compete with canonical engine geometry.
+    previewForReview: (
+      updates: { id: string; pose: Partial<Pose> }[],
+      snap = false,
+    ) => {
+      for (const update of updates)
+        if (elements.has(update.id)) {
+          motion.target(
+            update.id,
+            { ...motion.pose(update.id), ...update.pose },
+            "synthetic material review",
+          );
+          if (snap) motion.snap(update.id);
+        }
+      wake();
+    },
     application: () => application?.snapshot(),
     execute: (command: DesktopCommand) => application?.run(command),
     flush: () => application?.flush(),
