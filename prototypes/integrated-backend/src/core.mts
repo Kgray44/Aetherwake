@@ -11,6 +11,7 @@ import { localConversationAdapter, mockOrdinaryAdapter } from '../../connected-c
 import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
 import { nativeProvider, fixtureProvider } from './providers.mts';
 import { ConversationProduct, type AttachedContext, type ConversationReadView } from '../../conversation-product/src/service.mts';
+import type { NativeHostServices } from './native-host.mts';
 import { createCanonicalOrganizationAdapter, createCanonicalAccessHelper, createObservedCapabilityCache } from '../../conversation-product/src/canonical-host.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import { VelaService, VELA_PLANNING_INSTRUCTION } from '../../vela-core/src/service.mts';
@@ -76,6 +77,7 @@ export class BackendCore {
   private privateMode: boolean;
   private readonly historyContextEnabled:boolean;
   private conversations!: ConversationProduct;
+  private nativeHostServices?:NativeHostServices;
   /** One synchronous canonical read only; never retained view authority. */
   private conversationBatch:{active:boolean;access:Map<string,boolean>}|null=null;
   private conversationAccess!: ReturnType<typeof createCanonicalAccessHelper>;
@@ -98,7 +100,8 @@ export class BackendCore {
   private pendingVelaGrant:string|null=null;
   private library!:TemplateService;
   private notes!:NoteExperienceService;
-  constructor(options: Options, emit: (event: StreamEvent) => void = () => {}) {
+  constructor(options: Options, emit: (event: StreamEvent) => void = () => {}, nativeHostServices?:NativeHostServices) {
+    this.nativeHostServices=nativeHostServices;
     this.privateMode = options.contentPolicy === 'local-private';
     this.historyContextEnabled=options.velaHistoryContext===true;
     if (options.contentPolicy !== 'synthetic-only') {
