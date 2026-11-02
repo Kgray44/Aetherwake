@@ -8,6 +8,8 @@ The integration lead's native candidate `1843b6c` includes planet appearance `cc
 
 The expanded three-project native journey, pin/branch/typed relationship persistence and actual rendered scale measurements remain with the integration lead. No current unit test or baseline screenshot establishes presented-frame smoothness, sustained GPU cost or final artistic acceptance. The older committed fixture evidence below remains bound to its original, earlier navigation source.
 
+`tests/integrated-native.cjs` supplies the expanded journey to the existing desktop host under an explicit `--integration-expanded` mode. It creates three named projects, six workspaces and 30 real typed resources through actual UI controls; exercises native orbit/pan/Alt-drag, reviewed local continuation, position/pin, typed relationship inspection, real editor changes and exact workspace return; and saves expected canonical/private view state for a separate `--verify-restore` process. It requires source/build hashes, uses at most two existing 60-second recording segments and 12 bounded screenshots, and never launches a window itself. A syntax check is not an executed native acceptance result. The integration lead owns the entry point, profile, recording permission and run coordination.
+
 ## Earlier fixture evidence
 
 Status: implemented and locally demonstrated as a navigation subsystem. The integration lead owns the combined application's V3.5 scene, stage transition, Vela, canonical service, native host, and final application acceptance. Local evidence is not owner artistic acceptance or a release qualification.
