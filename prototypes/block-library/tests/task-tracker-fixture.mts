@@ -27,7 +27,7 @@ export function taskTrackerFixture(t: any) {
   const host: TaskObjectiveHost = { db, identity: () => ({ principalId: 'synthetic:task-owner', actorKind: 'user', authority: 'manual', policyVersion: 'synthetic:policy:1' }),
     now: () => '2026-11-02T12:00:00.000Z', authorize: input => ({ decision: deniedOperations.has(input.operation) ? 'deny' : 'allow',
       authorizationRef: 'synthetic:authorization:' + input.operation + ':' + input.requestDigest, policyVersion: 'synthetic:policy:1' }),
-    projectAccess: () => false, resourceAccess: access,
+    projectAccess: id => !!db.prepare("SELECT 1 FROM projects WHERE id=? AND state='active'").get(id), resourceAccess: access,
     readResource: id => { const value = resource(id); return value ? { resource: value, authorized: access(id), writable } : null; },
     createResource: input => { const value = kernel.createGenericResource(input.title, input.projectId); db.prepare("INSERT INTO desktop_resources(resource_id,kind) VALUES(?,'task_objective')").run(value.id); return resource(value.id)!; },
     touchResource: input => { kernel.touchGenericResource(input.resourceId, input.expectedVersion); return resource(input.resourceId)!; },

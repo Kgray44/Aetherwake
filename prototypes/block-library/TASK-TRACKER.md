@@ -61,3 +61,18 @@ Root must promote the `task_objective` presentation kind in its shared contract,
 mount the workspace component and enable its capability only when actual host
 resolution and service access are wired. A canonical kind alone does not enable
 a workspace presentation. Native acceptance is still required.
+
+`mountTaskObjectiveCreator(root, { port, motion, viewId, projectId, active?,
+showTitle?, onCreated })` supplies a small separate creation form. Import
+`task-objective-creator.css`, drive `frame`, retain or explicitly discard drafts
+using `hasUnsavedChanges`, and call `flush` before leaving. The form records the
+title, objective and up to32 explicit requirements through the actual create
+command; sources, assignees and dependencies can be selected in the tracker
+afterward. It captures the selected project scope at mount. It creates no Note,
+workspace, placement or execution. Root owns its Resources entry, contextual
+anchored surface and canonical navigation. `setActive(false)` prevents hidden
+submissions and navigation. Unknown acknowledgment retries the exact original
+definition and command; a confirmed creation with navigation failure can open
+again without another write. Closing during an already submitted write does not
+cancel or undo that write. Six actual-service CPU DOM journeys cover these
+boundaries and full service input limits; native qualification remains Root's.
