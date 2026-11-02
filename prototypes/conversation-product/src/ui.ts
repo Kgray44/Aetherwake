@@ -4,7 +4,7 @@ import { mountConversationChat, decorateConversationControl, decorateConversatio
 export { acceptedConversationSubmission } from './chat.ts';
 
 export type ManagerState = { selectedResourceId: string | null; drafts: Record<string,string>; scroll: Record<string,number>; query: SearchQuery; messageOffset: Record<string,number> };
-export type ManagerOptions = { embedded?: boolean; execution?: ConversationExecutionPort; draftSession?: (resourceId: string) => ConversationDraftSession; state?: ManagerState; resourceId?: string; onClose?: () => void; onResource?: (resourceId: string, messageId?: string) => void; onState?: (state: ManagerState) => void; copy?: (text: string) => Promise<void>; download?: (name: string, content: string) => void };
+export type ManagerOptions = { embedded?: boolean; execution?: ConversationExecutionPort; draftSession?: (resourceId: string) => ConversationDraftSession; state?: ManagerState; resourceId?: string; onClose?: () => void; onResource?: (resourceId: string, messageId?: string) => void; onState?: (state: ManagerState) => void; copy?: (text: string) => Promise<void>; download?: (name: string, content: string) => void; /** Explicit ChatGPT site/reviewed documentation navigation only; host revalidates an exact allowlist. Never account connection or sync. */ onOpenChatGPT?: (reference?: string) => Promise<{status:'requested'|'unknown'|'unavailable'}> };
 export const createManagerState = (): ManagerState => ({selectedResourceId:null,drafts:{},scroll:{},query:{},messageOffset:{}});
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, label?: string, className?: string): HTMLElementTagNameMap[K] => { const node=document.createElement(tag); if(label!==undefined)node.textContent=label;if(className)node.className=className;return node; };
 const button = (label: string, action: () => void | Promise<void>, presentation: ConversationControlPresentation={identity:'action'}) => { const b=el('button',label);b.type='button';decorateConversationControl(b,presentation);b.addEventListener('click',()=>{if(!b.disabled)void action();});return b; };
@@ -19,14 +19,14 @@ const fidelityStatusLabel=(status:FidelityStatus)=>status==='RequiresAdditionalA
 const officialEvidenceURL=(value:string):string|null=>{
  try{const url=new URL(value);return url.protocol==='https:'&&!url.username&&!url.password&&(['developers.openai.com','learn.chatgpt.com'].includes(url.hostname)||url.hostname==='github.com'&&url.pathname.startsWith('/openai/'))?url.href:null;}catch{return null;}
 };
-const renderChatGPTCompatibility=(report:NativeChatGPTFidelityDescriptor)=>{
+const renderChatGPTCompatibility=(report:NativeChatGPTFidelityDescriptor,onOpenEvidence?: (url:string)=>void)=>{
  const view=disclosure('ChatGPT compatibility','cp-chatgpt-compatibility');view.node.dataset.fidelityId=report.id;view.node.dataset.providerId=report.providerId;
  view.panel.append(el('p',`Documentation checked ${report.review.dateUtc} · Runtime account access unverified.`, 'cp-fidelity-review'),el('p',report.reason,'cp-fidelity-note'));
  const row=(label:string,status:FidelityStatus,interfaceName:string,scope:string,reason:string,evidence:NativeChatGPTFidelityDescriptor['aims'][number]['evidence'],className:string)=>{
   const item=disclosure(label,className),badge=el('span',fidelityStatusLabel(status),'cp-fidelity-status');item.node.dataset.status=status;item.summary.append(badge);
   const facts=el('dl',undefined,'cp-fidelity-facts');for(const [name,value] of [['Reviewed interface',interfaceName],['Scope',scope],['Reason',reason],['Status meaning',report.statusDefinitions[status]]])facts.append(el('dt',name),el('dd',value));item.panel.append(facts);
   const sources=el('ul',undefined,'cp-fidelity-evidence');sources.setAttribute('aria-label','Official evidence');
-  for(const source of evidence){const entry=el('li'),href=officialEvidenceURL(source.url);if(href){const link=el('a',source.section+' · '+new URL(href).hostname);link.href=href;link.target='_blank';link.rel='noopener noreferrer';entry.append(link);}else entry.append(el('span',source.section+' · Evidence link unavailable'));sources.append(entry);}
+  for(const source of evidence){const entry=el('li'),href=officialEvidenceURL(source.url);if(href){const link=el('a',source.section+' · '+new URL(href).hostname);link.href=href;link.target='_blank';link.rel='noopener noreferrer';if(onOpenEvidence)link.addEventListener('click',event=>{event.preventDefault();onOpenEvidence(href);});entry.append(link);}else entry.append(el('span',source.section+' · Evidence link unavailable'));sources.append(entry);}
   item.panel.append(sources);return item;
  };
  const aims=el('ol',undefined,'cp-fidelity-aims');aims.setAttribute('aria-label','Native ChatGPT account requirements');
@@ -67,7 +67,14 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const detail=el('section',undefined,'cp-detail'),detailHeader=el('div',undefined,'cp-detail-header'),chatHost=el('div',undefined,'cp-chat-host'),secondary=el('div',undefined,'cp-secondary'),extras=el('details',undefined,'cp-chat-extras'),extrasSummary=el('summary','Branches and context');extras.append(extrasSummary,secondary);decorateConversationDisclosure(extras,extrasSummary,'branches',secondary);detailHeader.append(extras);detail.append(detailHeader,chatHost);body.append(catalog,detail);root.append(header,status,body);container.append(root);
  let disposed=false,request=0,current:Detail|null=null,collections:Collection[]=[],busy=false,searchTimer:ReturnType<typeof setTimeout>|undefined,closing=false,filterQueued=false;
  let chat:ConversationChat|null=null,chatResource:string|null=null,selectedMessageId:string|undefined;
- let running:Promise<void>|null=null,collectionOpening:Promise<void>=Promise.resolve();
+ let running:Promise<void>|null=null,collectionOpening:Promise<void>=Promise.resolve(),openingChatGPT=false;
+ async function openFirstParty(reference?:string){
+  if(!options.onOpenChatGPT||openingChatGPT||disposed)return;openingChatGPT=true;
+  for(const control of root.querySelectorAll<HTMLButtonElement>('[data-first-party-target="chatgpt-home"]'))control.disabled=true;
+  try{const receipt=await options.onOpenChatGPT(reference);if(!disposed)status.textContent=receipt.status==='requested'?(reference?'Reference open requested.':'Open requested. Continue in ChatGPT.'):receipt.status==='unavailable'?'ChatGPT navigation is unavailable here.':'The open request could not be confirmed. Check your browser before trying again.';}
+  catch{if(!disposed)status.textContent='The open request could not be confirmed. Check your browser before trying again.';}
+  finally{openingChatGPT=false;if(!disposed)for(const control of root.querySelectorAll<HTMLButtonElement>('[data-first-party-target="chatgpt-home"]'))control.disabled=false;}
+ }
  const draftSessions=new Map<string,ConversationDraftSession>();
  const ownedDraftSessions=new Set<ConversationDraftSession>();
  const detachedSubmissions=new Set<Promise<void>>();
@@ -120,7 +127,9 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   const lineage=el('details'),lineageTitle=el('summary','Branch lineage');lineage.append(lineageTitle);decorateConversationDisclosure(lineage,lineageTitle,'lineage');for(const edge of d.lineage)lineage.append(el('p',`${edge.mode} · ${edge.createdAt} · fork at ${edge.sourceMessageId}`),button(`${edge.parentResourceId} → ${edge.childResourceId}`,async()=>run(()=>open(edge.childResourceId,edge.sourceMessageId))));
   const providers=el('details',undefined,'cp-provider-capabilities'),providerSummary=el('summary','Provider capabilities');providers.open=providerOpen;providers.append(providerSummary);decorateConversationDisclosure(providers,providerSummary,'providers');
   for(const p of d.providers){const fidelity=p.id==='chatgpt'&&p.accountFidelity?.providerId===p.id&&p.accountFidelity.schemaVersion===1?p.accountFidelity:undefined;providers.append(el('p',`${p.label}: ${p.available?'available':'unavailable'} · ${p.execute?'execution supported':'no model execution'}${p.reason&&!fidelity?' · '+p.reason:''}`,'cp-provider-summary'));
-   if(fidelity){const compatibility=renderChatGPTCompatibility(fidelity);compatibility.node.open=compatibilityOpen;compatibility.node.dataset.open=String(compatibilityOpen);for(const item of compatibility.node.querySelectorAll<HTMLDetailsElement>('details')){item.open=openFidelityRows.has(item.dataset.aimId??item.dataset.relatedCapabilityId);item.dataset.open=String(item.open);}providers.append(compatibility.node);}
+   if(fidelity){const compatibility=renderChatGPTCompatibility(fidelity,options.onOpenChatGPT?url=>void openFirstParty(url):undefined);compatibility.node.open=compatibilityOpen;compatibility.node.dataset.open=String(compatibilityOpen);for(const item of compatibility.node.querySelectorAll<HTMLDetailsElement>('details')){item.open=openFidelityRows.has(item.dataset.aimId??item.dataset.relatedCapabilityId);item.dataset.open=String(item.open);}
+    if(options.onOpenChatGPT){const open=button('Open ChatGPT',()=>openFirstParty(),{identity:'providers'});open.disabled=openingChatGPT;open.title='Open the official ChatGPT site in your browser';open.dataset.firstPartyTarget='chatgpt-home';compatibility.panel.append(open);}
+    providers.append(compatibility.node);}
   }
   const providerSelect=select(d.providers.map(p=>({value:p.id,label:p.label,disabled:!p.available})),d.conversation.providerId);providerSelect.setAttribute('aria-label','Conversation provider');providers.append(providerSelect,button('Use provider for future turns',async()=>run(async()=>{await call('selectProvider',{resourceId:id,providerId:providerSelect.value,expectedRevision:d.conversation.revision});await loadDetail();})));
   const shares=disclosure('Published and attached excerpts · '+d.shares.length,'cp-shares');shares.panel.append(...d.shares.map(s=>renderShare(s,d)));

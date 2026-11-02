@@ -1158,6 +1158,25 @@ export function installApplication(hooks: Hooks) {
     };
     controller = conversationManager = mountConversationManager(content, port, {
       embedded: true,
+      onOpenChatGPT: async (reference) => {
+        const receipt = (await host.command!(
+          "firstPartyChat",
+          reference
+            ? {
+                target: "chatgpt-documentation",
+                url: reference,
+              }
+            : {
+                target: "chatgpt-home",
+              },
+        )) as { status?: string } | null;
+        return {
+          status:
+            receipt?.status === "requested" || receipt?.status === "unavailable"
+              ? receipt.status
+              : "unknown",
+        };
+      },
       execution: conversationExecution,
       draftSession: composerSession,
       state: conversationView,

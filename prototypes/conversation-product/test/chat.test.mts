@@ -28,6 +28,42 @@ function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativ
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
 
+test('first-party Open is explicit and single-flight across detail refresh without sending or changing conversation authority',async()=>{
+  const f=fixture();let manager,calls=0,finish!:(receipt:{status:'requested'})=>void;
+  try{addChatGPTCompatibility(f);manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId,onOpenChatGPT:()=>{calls++;return new Promise(resolve=>{finish=resolve;});}});await manager.ready;
+    const editor=f.view.root.querySelector('textarea');editor.focus();editor.setSelectionRange(2,6);const draft=f.draft,priorCalls=f.calls.length;
+    const compatibility=f.view.root.querySelector('.cp-chatgpt-compatibility');compatibility.open=true;compatibility.fire('toggle');assert.equal(calls,0);
+    const open=named(compatibility,'Open ChatGPT');assert.equal(open.dataset.firstPartyTarget,'chatgpt-home');open.fire('click');open.fire('click');assert.equal(calls,1);assert.equal(open.disabled,true);
+    await manager.refresh();const current=named(f.view.root.querySelector('.cp-chatgpt-compatibility'),'Open ChatGPT');assert.equal(current.disabled,true);current.fire('click');assert.equal(calls,1);
+    finish({status:'requested'});await until(()=>!current.disabled);assert.equal(f.view.root.querySelector('.cp-status').textContent,'Open requested. Continue in ChatGPT.');
+    assert.equal(f.view.root.querySelector('textarea'),editor);assert.equal(f.view.doc.activeElement,editor);assert.equal(editor.selectionStart,2);assert.equal(editor.selectionEnd,6);assert.deepEqual(f.draft,draft);
+    assert.equal(f.detail.providers.find(p=>p.id==='chatgpt')?.available,false);assert.equal(f.calls.slice(priorCalls).some(c=>['send','selectProvider','branch','create'].includes(c.name)),false);
+  }finally{finish?.({status:'requested'});await manager?.dispose();f.restore();}
+});
+
+for(const outcome of ['unknown','unavailable','error']as const)test('first-party '+outcome+' receipt never becomes account connection or an automatic retry',async()=>{
+  const f=fixture();let manager,calls=0;
+  try{addChatGPTCompatibility(f);manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId,onOpenChatGPT:async()=>{calls++;if(outcome==='error')throw Error('Synthetic OS response lost');return {status:outcome};}});await manager.ready;
+    const open=named(f.view.root.querySelector('.cp-chatgpt-compatibility'),'Open ChatGPT');assert.equal(calls,0);open.fire('click');await until(()=>!open.disabled);
+    const status=f.view.root.querySelector('.cp-status').textContent;assert.match(status,outcome==='unavailable'?/unavailable/:/could not be confirmed/);assert.doesNotMatch(status,/connected|synchroniz|signed in/i);await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,1);
+    assert.equal(f.calls.some(c=>['send','selectProvider','branch','create'].includes(c.name)),false);
+  }finally{await manager?.dispose();f.restore();}
+});
+
+test('a host without first-party navigation still exposes compatibility without a dead Open control',async()=>{
+  const f=fixture();let manager;
+  try{addChatGPTCompatibility(f);manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;assert.equal(f.view.root.querySelectorAll('.cp-fidelity-aim').length,13);assert.equal(named(f.view.root,'Open ChatGPT'),undefined);}
+  finally{await manager?.dispose();f.restore();}
+});
+
+test('an invoked evidence link requests its exact public reference through the host without page navigation or account actions',async()=>{
+  const f=fixture(),references:(string|undefined)[]=[];let manager;
+  try{addChatGPTCompatibility(f);manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId,onOpenChatGPT:async reference=>{references.push(reference);return {status:'requested'};}});await manager.ready;
+    assert.equal(references.length,0);const link=f.view.root.querySelector('.cp-fidelity-evidence').querySelector('a'),event=link.fire('click');assert.equal(event.defaultPrevented,true);await until(()=>f.view.root.querySelector('.cp-status').textContent==='Reference open requested.');
+    assert.deepEqual(references,[link.href]);assert.equal(f.calls.some(c=>['send','selectProvider','branch','create'].includes(c.name)),false);
+  }finally{await manager?.dispose();f.restore();}
+});
+
 test('mounted ChatGPT compatibility is explicitly collapsed with exactly 13 labelled status rows and original provider gates',async()=>{
   const f=fixture();let manager;
   try{addChatGPTCompatibility(f);manager=mountConversationManager(f.view.root,f.port,{resourceId:f.draft.resourceId});await manager.ready;

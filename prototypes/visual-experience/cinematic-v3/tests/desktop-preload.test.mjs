@@ -93,9 +93,14 @@ test("renderer cannot invoke private grant creation, raw provider execution or h
 test("first-party navigation exposes only its public native family, never a general external-open command", async () => {
   const { host, calls } = bridge();
   await host.command("firstPartyChat", { target: "chatgpt-home" });
-  assert.deepEqual(calls, [["application-command", "firstPartyChat", { target: "chatgpt-home" }]]);
+  assert.deepEqual(calls, [
+    ["application-command", "firstPartyChat", { target: "chatgpt-home" }],
+  ]);
   for (const command of ["openExternal", "shell", "openURL"])
-    await assert.rejects(host.command(command, "https://untrusted.invalid"), /unsupported_command/);
+    await assert.rejects(
+      host.command(command, "https://untrusted.invalid"),
+      /unsupported_command/,
+    );
   assert.equal(calls.length, 1);
 });
 
