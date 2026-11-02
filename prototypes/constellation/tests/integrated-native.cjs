@@ -429,6 +429,7 @@ async function verifyJourney({
     Arrange: "arrange",
     "Save current view": "save-view",
     "Saved views": "saved-views",
+    Recenter: "home",
   };
   const command = async (title) => {
     await click('.aw-quiet-control[aria-label="Commands and destinations"]');
@@ -1489,7 +1490,15 @@ async function verifyJourney({
       );
       // Explicit branch placement is an authorized layout mutation. Capture the
       // working reference AFTER those changes and BEFORE cross-project travel.
+      // The pinned moon's close neighborhood legitimately puts its workspace
+      // off-screen. Use real navigation to expose the destination first.
+      await textButton("Recenter");
+      await wait("!window.__aerynth.snapshot().spatial.camera.neighborhood");
+      await locate(originalRow.title, "workspace:" + originalRow.workspaceId);
       await node("workspace:" + originalRow.workspaceId);
+      await wait(
+        `window.__aerynth.application().navigation.kind==='workspace'&&window.__aerynth.application().activeWorkspaceId===${JSON.stringify(originalRow.workspaceId)}`,
+      );
       const original = await snapshot();
       receipt.workingReference = {
         workspaceId: original.activeWorkspaceId,
@@ -1657,6 +1666,9 @@ async function verifyJourney({
         Array.from({ length: 23 }, (_, i) => i + 1),
       );
     }
+    receipt.rendererErrors = await js(
+      "(()=>{const errors=window.__aerynth.snapshot().metrics.errors;return Array.isArray(errors)?errors.slice(-16).map(e=>String(e).slice(0,1024)):null})()",
+    );
     run.guard();
     receipt.passed = true;
     receipt.state = "completed";
@@ -1721,6 +1733,10 @@ async function verifyJourney({
           };
         })()`),
       };
+      receipt.rendererErrors =
+        receipt.failureDiagnostics.renderer.scene?.metrics?.errors
+          ?.slice(-16)
+          .map((value) => String(value).slice(0, 1024));
     } catch (diagnosticError) {
       receipt.failureDiagnosticError = String(
         diagnosticError.stack ?? diagnosticError,
