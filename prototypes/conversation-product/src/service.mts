@@ -223,8 +223,10 @@ export class ConversationProduct implements ConversationProductPort {
   if(name==='list')return page(this.summaries(v,a),a);
   if(name==='collections')return this.collections(v);
   const needle = String(a.text ?? '').trim().toLocaleLowerCase(); check(needle.length <= 1000,'invalid_query'); const hits: SearchHit[] = [],mode=a.searchMode??(needle?'all':'conversations');check(['conversations','messages','resources','all'].includes(mode),'invalid_search_mode');
-  if(mode!=='resources')for (const c of this.summaries(v,{...a,text:undefined})) {
-   if ((mode==='all'||mode==='conversations')&&(!needle||c.title.toLocaleLowerCase().includes(needle)||mode==='conversations'&&this.matches(v,c,needle,!!a.archived))) hits.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
+  // A conversation-only search can authorize/match first and summarize just
+  // the matching IDs. It needs no activity/count scan of every non-match.
+  if(mode!=='resources')for (const c of this.summaries(v,{...a,text:mode==='conversations'&&needle?needle:undefined})) {
+   if (mode==='conversations'||mode==='all'&&(!needle||c.title.toLocaleLowerCase().includes(needle))) hits.push({kind:'conversation',resourceId:c.resourceId,title:c.title,excerpt:c.title,providerId:c.providerId,summary:c,sourceTime:c.lastActivityAt??undefined});
    if(needle&&(mode==='all'||mode==='messages'))for (const m of v.graph.visibleMessages(c.conversationId)) { const sourceId = v.publicIds.get(m.conversationId)!; if (!this.readable(v,sourceId,m.id,!!a.archived)) continue; const index = m.content.toLocaleLowerCase().indexOf(needle); if (index >= 0) hits.push({kind:'message',resourceId:c.resourceId,messageId:m.id,title:c.title,excerpt:m.content.slice(Math.max(0,index-60),index+160),sourceTime:m.createdAt,providerId:c.providerId}); }
   }
   const resourceCollection=a.collectionId?this.collections(v).find(c=>c.id===a.collectionId):undefined;
