@@ -894,4 +894,16 @@
     font-size: 18px;
     line-height: 1;
   }
+  .folio[data-block-minimized="true"] .aw-block-restore {
+    flex: 0 0 28px;
+    width: 28px;
+    min-height: 28px;
+    padding: 0;
+    font-size: 0;
+  }
+  .folio[data-block-minimized="true"] .aw-block-restore::before {
+    content: "⤢";
+    font-size: 18px;
+    line-height: 1;
+  }
 }
