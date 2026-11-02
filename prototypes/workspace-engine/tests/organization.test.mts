@@ -96,11 +96,12 @@ test('Fluid local yielding avoids propagating a move into an unrelated neighbor'
   assert.ok(result.affectedPlacementIds.includes(b.blockId));
 });
 
-for (const count of [0, 3, 10, 25, 50]) test(`Structured variable spans and Vela at ${count} blocks remain aligned and restart identically`, t => {
+for (const count of [0, 3, 10, 25, 50]) test(`Explicit Structured resolve at ${count} blocks retains variable spans/alignment and restarts identically`, t => {
   const { engine: e, path, state } = fixture(t, true); let s = state;
   for (let i = 0; i < count; i++) s = add(e, s, { width: i % 3 === 0 ? 650 : 260, height: i % 2 === 0 ? 300 : 180 });
   const ids = s.blocks.map(b => b.blockId).sort(), presenceSize = geometry(s.presence);
   s = run(e, s, { type: 'setOrganization', organization: { mode: 'structured', structured: { columnCount: 4, rowHeight: 96, margin: 16 } } });
+  s = run(e, s, { type: 'resolveLayout' });
   assert.equal(s.organization.mode, 'structured'); disjoint(s);
   assert.deepEqual(s.blocks.map(b => b.blockId).sort(), ids);
   assert.equal(s.presence.width, presenceSize.width); assert.equal(s.presence.height, presenceSize.height);
@@ -115,6 +116,7 @@ for (const count of [0, 3, 10, 25, 50]) test(`Structured variable spans and Vela
 test('Structured resize and reorder previews equal commits; all presets retain identities', t => {
   const { engine: e, state } = fixture(t); let s = state; for (let i = 0; i < 5; i++) s = add(e, s, { width: 260, height: 180 });
   s = run(e, s, { type: 'setOrganization', organization: { mode: 'structured', structured: { columnCount: 4 } } });
+  s = run(e, s, { type: 'resolveLayout' });
   const b = s.blocks[0], updates = [{ blockId: b.blockId, expectedVersion: b.version, presentation: { width: 800, height: 450 } }];
   const preview = previewLayout(s, { placements: updates, bounds });
   s = run(e, s, { type: 'saveLayout', placements: updates }); assert.deepEqual(layouts(s), layouts(preview));
@@ -140,13 +142,14 @@ test('explicit Structured spans survive setOrganization, resolve and restart', t
   try { assert.deepEqual(new WorkspaceEngine(reopened).project(s.workspaceId), s); } finally { reopened.close(); }
 });
 
-test('Structured reading order does not backfill Vela before wide resources; drag preview and commit agree', t => {
+test('Explicit Structured order does not backfill Vela; later Vela drag preserves that preference and matches commit', t => {
   const { engine: e, path, state } = fixture(t, true);
   let s = run(e, state, { type: 'setOrganization', organization: { mode: 'freeform' } });
   for (let i = 0; i < 3; i++) s = add(e, s, { width: 650, height: 300 });
   const ids = s.blocks.map(b => b.blockId), order = [...ids, 'system:vela'];
   const spans = Object.fromEntries(ids.map(id => [id, { columns: 2, rows: 4 }]));
   s = run(e, s, { type: 'setOrganization', organization: { mode: 'structured', structured: { columnCount: 3, order, spans } } });
+  s = run(e, s, { type: 'resolveLayout' });
   const items = [...s.blocks.map(b => ({ ...b, id: b.blockId })), s.presence];
   const visualOrder = items.toSorted((a, b) => a.y - b.y || a.x - b.x).map(b => b.id);
   assert.deepEqual(visualOrder, order); disjoint(s);
@@ -154,7 +157,7 @@ test('Structured reading order does not backfill Vela before wide resources; dra
   const first = s.blocks.find(b => b.blockId === ids[0])!, before = s;
   const presence = { expectedVersion: s.presence.version, presentation: { x: first.x, y: first.y - s.presence.height } };
   const predicted = previewLayout(s, { presence, bounds });
-  assert.equal(predicted.organization.structured.order[0], 'system:vela');
+  assert.deepEqual(predicted.organization.structured.order, order, 'Dragging is not an implicit reorder/pack command');
   assert.notDeepEqual(geometry(predicted.presence), geometry(s.presence));
   s = run(e, s, { type: 'setPresence', ...presence });
   assert.deepEqual(layouts(s), layouts(predicted)); disjoint(s);

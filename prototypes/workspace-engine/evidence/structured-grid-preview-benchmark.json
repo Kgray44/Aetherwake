@@ -1,0 +1,255 @@
+{
+  "schemaVersion": 1,
+  "measuredAt": "2026-11-02T15:41:31.907Z",
+  "sourceBinding": {
+    "organization.mts": "b9aebc41a68849ebae7933c47c07d7c070a8ac5b41221d5dd4167775480ecf2b",
+    "structured-grid.mts": "0cd9c3ff002cef2858f7dc322b1eb14200ee0d719a9c703b34925aa58de32b62",
+    "collisions.mts": "5cee0f40f5faa4701130b6982731722d5afeef46410218198d6cc33a15fa1259",
+    "contracts.mts": "c509944300c2b641b349d77187e3e8e67be29e52ecd02a590a9a617baad8245a",
+    "benchmark-modes.mts": "06f86306a1d5ad4e30782f6e22c1afb766a09ed18995b98c91248cd5c19b20ee"
+  },
+  "measurement": "pure previewLayout wall time, not displayed rendering, SQLite, native input or frame timing",
+  "plan": {
+    "blocks": [
+      3,
+      10,
+      25,
+      50
+    ],
+    "warmups": 3,
+    "samples": 20,
+    "outliersRemoved": false,
+    "threshold": null,
+    "concurrentWorkloads": "not sampled or attributed",
+    "bounds": {
+      "x": 20,
+      "y": 170,
+      "width": 1240,
+      "height": 650
+    }
+  },
+  "environment": {
+    "node": "v24.18.0",
+    "platform": "win32",
+    "release": "10.0.26300",
+    "cpu": "AMD Ryzen AI 7 350 w/ Radeon 860M              "
+  },
+  "results": [
+    {
+      "blocks": 3,
+      "mode": "fluid",
+      "operation": "drag",
+      "p50Ms": 0.06620000000000914,
+      "p95Ms": 1.4997000000000043,
+      "p99Ms": 1.4997000000000043,
+      "maxMs": 1.4997000000000043
+    },
+    {
+      "blocks": 3,
+      "mode": "fluid",
+      "operation": "resize",
+      "p50Ms": 0.04039999999999111,
+      "p95Ms": 0.4545999999999992,
+      "p99Ms": 0.4545999999999992,
+      "maxMs": 0.4545999999999992
+    },
+    {
+      "blocks": 3,
+      "mode": "freeform",
+      "operation": "drag",
+      "p50Ms": 0.008499999999997954,
+      "p95Ms": 0.04630000000000223,
+      "p99Ms": 0.04630000000000223,
+      "maxMs": 0.04630000000000223
+    },
+    {
+      "blocks": 3,
+      "mode": "freeform",
+      "operation": "resize",
+      "p50Ms": 0.008099999999998886,
+      "p95Ms": 0.026899999999997704,
+      "p99Ms": 0.026899999999997704,
+      "maxMs": 0.026899999999997704
+    },
+    {
+      "blocks": 3,
+      "mode": "structured",
+      "operation": "drag",
+      "p50Ms": 0.04560000000000741,
+      "p95Ms": 0.094600000000014,
+      "p99Ms": 0.094600000000014,
+      "maxMs": 0.094600000000014
+    },
+    {
+      "blocks": 3,
+      "mode": "structured",
+      "operation": "resize",
+      "p50Ms": 0.045099999999990814,
+      "p95Ms": 0.725200000000001,
+      "p99Ms": 0.725200000000001,
+      "maxMs": 0.725200000000001
+    },
+    {
+      "blocks": 10,
+      "mode": "fluid",
+      "operation": "drag",
+      "p50Ms": 0.18810000000001992,
+      "p95Ms": 0.569500000000005,
+      "p99Ms": 0.569500000000005,
+      "maxMs": 0.569500000000005
+    },
+    {
+      "blocks": 10,
+      "mode": "fluid",
+      "operation": "resize",
+      "p50Ms": 0.4998999999999967,
+      "p95Ms": 0.9158999999999935,
+      "p99Ms": 0.9158999999999935,
+      "maxMs": 0.9158999999999935
+    },
+    {
+      "blocks": 10,
+      "mode": "freeform",
+      "operation": "drag",
+      "p50Ms": 0.0146000000000015,
+      "p95Ms": 0.10380000000000678,
+      "p99Ms": 0.10380000000000678,
+      "maxMs": 0.10380000000000678
+    },
+    {
+      "blocks": 10,
+      "mode": "freeform",
+      "operation": "resize",
+      "p50Ms": 0.012400000000013733,
+      "p95Ms": 0.02010000000001355,
+      "p99Ms": 0.02010000000001355,
+      "maxMs": 0.02010000000001355
+    },
+    {
+      "blocks": 10,
+      "mode": "structured",
+      "operation": "drag",
+      "p50Ms": 0.09659999999999513,
+      "p95Ms": 0.7622000000000071,
+      "p99Ms": 0.7622000000000071,
+      "maxMs": 0.7622000000000071
+    },
+    {
+      "blocks": 10,
+      "mode": "structured",
+      "operation": "resize",
+      "p50Ms": 0.06530000000000769,
+      "p95Ms": 0.3137000000000114,
+      "p99Ms": 0.3137000000000114,
+      "maxMs": 0.3137000000000114
+    },
+    {
+      "blocks": 25,
+      "mode": "fluid",
+      "operation": "drag",
+      "p50Ms": 0.22220000000004347,
+      "p95Ms": 0.3015999999999508,
+      "p99Ms": 0.3015999999999508,
+      "maxMs": 0.3015999999999508
+    },
+    {
+      "blocks": 25,
+      "mode": "fluid",
+      "operation": "resize",
+      "p50Ms": 0.28530000000000655,
+      "p95Ms": 0.8444999999999823,
+      "p99Ms": 0.8444999999999823,
+      "maxMs": 0.8444999999999823
+    },
+    {
+      "blocks": 25,
+      "mode": "freeform",
+      "operation": "drag",
+      "p50Ms": 0.014200000000016644,
+      "p95Ms": 0.018699999999967076,
+      "p99Ms": 0.018699999999967076,
+      "maxMs": 0.018699999999967076
+    },
+    {
+      "blocks": 25,
+      "mode": "freeform",
+      "operation": "resize",
+      "p50Ms": 0.013800000000003365,
+      "p95Ms": 0.015499999999974534,
+      "p99Ms": 0.015499999999974534,
+      "maxMs": 0.015499999999974534
+    },
+    {
+      "blocks": 25,
+      "mode": "structured",
+      "operation": "drag",
+      "p50Ms": 0.1484999999999559,
+      "p95Ms": 3.7024000000000115,
+      "p99Ms": 3.7024000000000115,
+      "maxMs": 3.7024000000000115
+    },
+    {
+      "blocks": 25,
+      "mode": "structured",
+      "operation": "resize",
+      "p50Ms": 0.07740000000001146,
+      "p95Ms": 0.140199999999993,
+      "p99Ms": 0.140199999999993,
+      "maxMs": 0.140199999999993
+    },
+    {
+      "blocks": 50,
+      "mode": "fluid",
+      "operation": "drag",
+      "p50Ms": 0.36029999999993834,
+      "p95Ms": 0.45870000000002165,
+      "p99Ms": 0.45870000000002165,
+      "maxMs": 0.45870000000002165
+    },
+    {
+      "blocks": 50,
+      "mode": "fluid",
+      "operation": "resize",
+      "p50Ms": 1.143199999999979,
+      "p95Ms": 3.7023999999998978,
+      "p99Ms": 3.7023999999998978,
+      "maxMs": 3.7023999999998978
+    },
+    {
+      "blocks": 50,
+      "mode": "freeform",
+      "operation": "drag",
+      "p50Ms": 0.044199999999932515,
+      "p95Ms": 0.07880000000000109,
+      "p99Ms": 0.07880000000000109,
+      "maxMs": 0.07880000000000109
+    },
+    {
+      "blocks": 50,
+      "mode": "freeform",
+      "operation": "resize",
+      "p50Ms": 0.06290000000001328,
+      "p95Ms": 0.11810000000002674,
+      "p99Ms": 0.11810000000002674,
+      "maxMs": 0.11810000000002674
+    },
+    {
+      "blocks": 50,
+      "mode": "structured",
+      "operation": "drag",
+      "p50Ms": 0.17919999999992342,
+      "p95Ms": 0.3932999999999538,
+      "p99Ms": 0.3932999999999538,
+      "maxMs": 0.3932999999999538
+    },
+    {
+      "blocks": 50,
+      "mode": "structured",
+      "operation": "resize",
+      "p50Ms": 0.12649999999996453,
+      "p95Ms": 0.17449999999996635,
+      "p99Ms": 0.17449999999996635,
+      "maxMs": 0.17449999999996635
+    }
+  ]
+}

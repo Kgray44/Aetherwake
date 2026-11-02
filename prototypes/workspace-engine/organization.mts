@@ -1,6 +1,7 @@
 import type { WorkspaceOrganization, OrganizationUpdate, LayoutState, LayoutPreview, LayoutPreviewRequest, Geometry, BlockProjection, GridSpan, StructuredPreset, LayoutIntent, StructuredOrganization } from './contracts.mts';
 import { ensure, defaults, presentation } from './geometry.mts';
 import { footprint, resolveCollisions, validateBounds, type CollisionPlacement } from './collisions.mts';
+import { snapStructuredTargets, structuredGridGuides } from './structured-grid.mts';
 
 const idOrder = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const presets = ['balanced', 'focus', 'development', 'research'];
@@ -28,7 +29,7 @@ export function updateOrganization(base: WorkspaceOrganization, patch: Organizat
   ensure(['fluid', 'freeform', 'structured'].includes(o.mode) && Number.isFinite(o.gap) && o.gap >= 0 && o.gap <= 256);
   return o;
 }
-export type PolicyOptions = { targets?: string[]; resizeIds?: string[]; bounds?: Geometry; intent?: LayoutIntent; order?: string[]; preset?: StructuredPreset; spanOverrides?: string[] };
+export type PolicyOptions = { targets?: string[]; resizeIds?: string[]; bounds?: Geometry; intent?: LayoutIntent; order?: string[]; preset?: StructuredPreset; spanOverrides?: string[]; before?: LayoutState };
 const entries = (state: LayoutState): CollisionPlacement[] => [
   ...state.blocks.map(b => ({ id: b.blockId, x: b.x, y: b.y, width: b.width, height: b.height, rotation: b.rotation, locked: b.locked })),
   { ...state.presence, keepVisible: true },
@@ -50,16 +51,6 @@ function structured(state: LayoutState, input: CollisionPlacement[], options: Po
     ensure(Array.isArray(options.order), 'INVALID_ORDER');
     ensure(options.order.length === input.length && new Set(options.order).size === input.length && options.order.every(id => ids.has(id)), 'INVALID_ORDER');
     order = [...options.order];
-  } else if (options.intent === 'move') {
-    for (const id of options.targets ?? []) {
-      const p = input.find(p => p.id === id); if (!p || p.locked) continue;
-      const others = order.filter(other => other !== id);
-      const nearest = others.map((other, i) => { const b = input.find(p => p.id === other)!; return { i, b, distance: (p.x + p.width / 2 - b.x - b.width / 2) ** 2 + (p.y + p.height / 2 - b.y - b.height / 2) ** 2 }; }).sort((a, b) => a.distance - b.distance || a.i - b.i)[0];
-      if (!nearest) continue;
-      const sameRow = Math.abs(p.y + p.height / 2 - nearest.b.y - nearest.b.height / 2) < stepY / 2;
-      const after = sameRow ? p.x + p.width / 2 > nearest.b.x + nearest.b.width / 2 : p.y + p.height / 2 > nearest.b.y + nearest.b.height / 2;
-      others.splice(nearest.i + Number(after), 0, id); order = others;
-    }
   }
   const spans: Record<string, GridSpan> = {}, occupied: Geometry[] = [], placed = new Map<string, CollisionPlacement>();
   const overlaps = (a: Geometry, b: Geometry) => a.x < b.x + b.width + cfg.columnGap - 1e-7 && a.x + a.width + cfg.columnGap > b.x + 1e-7
@@ -138,7 +129,23 @@ export function applyOrganizationPolicy(state: LayoutState, options: PolicyOptio
     if(options.intent==='mode'&&options.bounds&&items.some(item=>{const box=footprint(item);return (box.x<options.bounds!.x||box.y<options.bounds!.y||box.x+box.width>options.bounds!.x+options.bounds!.width||box.y+box.height>options.bounds!.y+options.bounds!.height);})){const boxes=items.map(footprint),left=Math.min(...boxes.map(box=>box.x)),top=Math.min(...boxes.map(box=>box.y)),width=Math.max(...boxes.map(box=>box.x+box.width))-left+32,height=Math.max(...boxes.map(box=>box.y+box.height))-top+32;
       const nextZoom=Math.min(state.viewport.zoom,options.bounds.width*state.viewport.zoom/width,options.bounds.height*state.viewport.zoom/height);ensure(Number.isFinite(nextZoom)&&nextZoom>0,'INVALID_VIEWPORT');const safeX=(options.bounds.x-state.viewport.x)*state.viewport.zoom,safeY=(options.bounds.y-state.viewport.y)*state.viewport.zoom;viewport={...viewport,x:left-16-safeX/nextZoom,y:top-16-safeY/nextZoom,zoom:nextZoom};}
   } else if (organization.mode === 'structured') {
-    const result = structured(state, input, options); items = result.items; organization = result.organization; guides = result.guides;
+    if (options.preset || options.order || options.intent === 'resolve' || options.intent === 'reorder') {
+      const result = structured(state, input, options); items = result.items; organization = result.organization; guides = result.guides;
+    } else {
+      // Mode/configuration selection enables the grid; it never arranges the
+      // current workspace. Only the user's later active geometry is snapped.
+      guides = structuredGridGuides(options.bounds);
+      if (options.intent !== 'mode') items = snapStructuredTargets(state, input, options.before, options.targets ?? [], options.bounds);
+      if (options.resizeIds?.length) {
+        const cfg = organization.structured, area = options.bounds ?? { x: 0, y: 0, width: 1280, height: 720 };
+        const columns = cfg.columnCount ?? Math.max(1, Math.min(12, Math.floor((area.width - cfg.margin * 2 + cfg.columnGap) / (320 + cfg.columnGap))));
+        const stepX = Math.max(128, (area.width - cfg.margin * 2 - (columns - 1) * cfg.columnGap) / columns) + cfg.columnGap, stepY = cfg.rowHeight + cfg.rowGap;
+        for (const id of options.resizeIds) {
+          const item = items.find(item => item.id === id); if (!item) continue;
+          const box = footprint(item); cfg.spans[id] = { columns: Math.max(1, Math.ceil((box.width + cfg.columnGap - 1e-7) / stepX)), rows: Math.max(1, Math.ceil((box.height + cfg.rowGap - 1e-7) / stepY)) };
+        }
+      }
+    }
   }
   const byId = new Map(items.map(p => [p.id, p]));
   const blocks = state.blocks.map(b => { const p = byId.get(b.blockId)!; return { ...b, x: p.x, y: p.y, width: p.width, height: p.height }; });
@@ -178,8 +185,8 @@ export function previewLayout(state: LayoutState, request: LayoutPreviewRequest 
   }
   if (request.structuredPreset) next.organization = updateOrganization(next.organization, { mode: 'structured', structured: { preset: request.structuredPreset } });
   if (request.order) ensure(next.organization.mode === 'structured', 'UNSUPPORTED_POLICY');
-  const intent = request.intent ?? (request.organization || request.structuredPreset ? 'mode' : resizeIds.length ? 'resize' : targets.length ? 'move' : request.viewport ? 'view' : 'resolve');
-  const result = applyOrganizationPolicy(next, { targets, resizeIds, bounds: request.bounds, intent, order: request.order, preset: request.structuredPreset, spanOverrides: Object.keys(request.organization?.structured?.spans ?? {}) });
+  const intent = request.intent ?? (request.organization || request.structuredPreset ? 'mode' : resizeIds.length ? 'resize' : targets.length ? 'move' : request.viewport || request.placements && next.organization.mode === 'structured' ? 'view' : 'resolve');
+  const result = applyOrganizationPolicy(next, { targets, resizeIds, bounds: request.bounds, intent, order: request.order, preset: request.structuredPreset, spanOverrides: Object.keys(request.organization?.structured?.spans ?? {}), before: state });
   const old = entries(state), output = [...result.blocks.map(b => ({ ...b, id: b.blockId })), result.presence];
   result.affectedPlacementIds = output.filter(p => changedGeometry(p, old.find(b => b.id === p.id)!)).map(p => p.id);
   return result;

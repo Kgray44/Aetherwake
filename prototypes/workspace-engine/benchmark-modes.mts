@@ -34,7 +34,7 @@ for (const count of [3, 10, 25, 50]) {
   } finally { kernel.close(); }
 }
 const report = JSON.stringify({ schemaVersion: 1, measuredAt: new Date().toISOString(),
-  sourceBinding: Object.fromEntries(['organization.mts', 'collisions.mts', 'contracts.mts', 'benchmark-modes.mts'].map(file => [file, createHash('sha256').update(readFileSync(new URL(file, import.meta.url))).digest('hex')])),
+  sourceBinding: Object.fromEntries(['organization.mts', 'structured-grid.mts', 'collisions.mts', 'contracts.mts', 'benchmark-modes.mts'].map(file => [file, createHash('sha256').update(readFileSync(new URL(file, import.meta.url))).digest('hex')])),
   measurement: 'pure previewLayout wall time, not displayed rendering, SQLite, native input or frame timing',
   plan: { blocks: [3, 10, 25, 50], warmups: 3, samples: 20, outliersRemoved: false, threshold: null, concurrentWorkloads: 'not sampled or attributed', bounds },
   environment: { node: process.version, platform: platform(), release: release(), cpu: cpus()[0].model }, results,

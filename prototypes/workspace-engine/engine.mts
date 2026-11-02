@@ -5,6 +5,7 @@ import { WorkspaceKernel } from '../workspace-kernel/kernel.mts';
 import { validateSubjectRef, type BlockSubjectRef, type NonResourceSubjectRef } from '../workspace-kernel/subjects.ts';
 import { CONTRACT, type Command, type CommandResult, type WorkspaceProjection, type Presentation, type Viewport, type BlockTemplate, type WorkspaceSummary, type PresencePlacement, type Geometry, type WorkspaceOrganization, type OrganizationUpdate, type LayoutPreviewRequest } from './contracts.mts';
 import { ensure, WorkspaceError, defaults, presentation, resize, snapValue, presetGeometry } from './geometry.mts';
+import { findVacantGridPlacement, STRUCTURED_GRID_SIZE } from './structured-grid.mts';
 import { validateBounds, findVacantPlacement } from './collisions.mts';
 import { defaultOrganization, updateOrganization, applyOrganizationPolicy, previewLayout, type PolicyOptions } from './organization.mts';
 export { WorkspaceError } from './geometry.mts';
@@ -326,9 +327,10 @@ export class WorkspaceEngine {
         ensure(!c.templateId || t, 'UNKNOWN_TEMPLATE');
         const next = presentation({ x: 32 + state.blocks.length % 10 * 24, y: 32 + state.blocks.length % 10 * 24, ...t?.presentation, ...c.presentation });
         if (c.placement !== 'nearest-free') return next;
-        const vacant = findVacantPlacement({ ...next, id: 'initial-placement' }, [
-          ...state.blocks.map(b => ({ ...b, id: b.blockId })), state.presence,
-        ], command.bounds, state.organization.gap);
+        const anchors = [...state.blocks.map(b => ({ ...b, id: b.blockId })), state.presence];
+        const vacant = state.organization.mode === 'structured'
+          ? findVacantGridPlacement({ ...next, id: 'initial-placement', keepVisible: true, x: snapValue(next.x, STRUCTURED_GRID_SIZE), y: snapValue(next.y, STRUCTURED_GRID_SIZE) }, anchors, command.bounds, state.organization.gap)
+          : findVacantPlacement({ ...next, id: 'initial-placement' }, anchors, command.bounds, state.organization.gap);
         return presentation({ x: vacant.x, y: vacant.y }, next);
       };
       switch (command.type) {
@@ -394,7 +396,7 @@ export class WorkspaceEngine {
         case 'saveLayout': {
           ensure(Array.isArray(command.placements)); this.apply(workspaceId, command.placements, state.revision, this.viewport(command.viewport ?? state.viewport));
           for (const p of command.placements) { targets.push(p.blockId); const b = find(p.blockId); if ((p.presentation.width !== undefined && p.presentation.width !== b.width) || (p.presentation.height !== undefined && p.presentation.height !== b.height) || (p.presentation.shape === 'circle' && b.width !== b.height)) resizeIds.push(p.blockId); }
-          if (!command.placements.length && command.viewport) policy.intent = 'view';
+          if (!command.placements.length && (command.viewport || state.organization.mode === 'structured')) policy.intent = 'view';
           break;
         }
         case 'applyPreset': {
@@ -418,13 +420,15 @@ export class WorkspaceEngine {
           this.db.prepare('INSERT INTO workspace_engine_checkpoints VALUES(?,?,?,?,?)').run(checkpointId, workspaceId, command.name.trim(), JSON.stringify(before), now()); break;
         case 'restoreCheckpoint': {
           const row = this.db.prepare('SELECT snapshot_json FROM workspace_engine_checkpoints WHERE id=? AND workspace_id=?').get(command.checkpointId, workspaceId);
-          ensure(row, 'NOT_FOUND'); this.restore(workspaceId, this.normalizeSnapshot(workspaceId, JSON.parse(String(row.snapshot_json))), state.revision); break;
+          ensure(row, 'NOT_FOUND'); this.restore(workspaceId, this.normalizeSnapshot(workspaceId, JSON.parse(String(row.snapshot_json))), state.revision);
+          if (this.readOrganization(workspaceId).mode === 'structured') policy.intent = 'view';
+          break;
         }
         default: throw new WorkspaceError('UNKNOWN_COMMAND');
       }
       policy.targets = targets; policy.resizeIds = resizeIds; policy.intent ??= resizeIds.length ? 'resize' : targets.length ? 'move' : 'resolve';
       const resolve = ['createBlock', 'attachResource', 'attachSubject', 'duplicateBlock', 'moveBlock', 'resizeBlock', 'setBlockShape', 'setBlockPresentation', 'setPresence', 'saveLayout', 'applyPreset', 'resolveLayout', 'restoreCheckpoint', 'setOrganization', 'applyStructuredPreset', 'reorderPlacements', 'bringAllIntoView'].includes(command.type);
-      const resolved = resolve ? this.resolve(workspaceId, policy, state.organization.revision) : { changed: [], viewport: state.viewport };
+      const resolved = resolve ? this.resolve(workspaceId, { ...policy, before: state }, state.organization.revision) : { changed: [], viewport: state.viewport };
       const rearrangedPlacementIds = resolved.changed;
       const noOp = ['resolveLayout', 'setOrganization', 'bringAllIntoView', 'reorderPlacements', 'setBlockMinimized'].includes(command.type) && hash(before) === hash(this.snapshot(workspaceId)) && hash(state.viewport) === hash(resolved.viewport);
       if (!noOp && this.kernel.openWorkspace(workspaceId).layout.version === state.revision)
