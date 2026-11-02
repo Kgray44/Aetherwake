@@ -12,6 +12,8 @@ import type {
   VelaTemplatePlan,
   LibraryPreferences,
   BlockConfiguration,
+  TemplatePlacementRole,
+  SubjectCaptureChoices,
 } from "./contracts.ts";
 import {
   searchBlocks,
@@ -48,6 +50,23 @@ const errorText = (error: unknown) =>
     ? error.message.replaceAll("_", " ")
     : "The host could not complete this operation.";
 const commandId = () => "library:" + crypto.randomUUID();
+const placementLabel = (
+  template: WorkspaceTemplate,
+  placement: TemplatePlacementRole,
+) =>
+  placement.resourceKey !== undefined
+    ? (template.body.resources.find(
+        (role) => role.key === placement.resourceKey,
+      )?.label ?? "Unavailable resource role")
+    : placement.subjectBinding.mode === "project-context"
+      ? placement.subjectBinding.view === "project"
+        ? "Current project overview"
+        : "Current project resources"
+      : placement.subjectBinding.subject.kind === "project"
+        ? "Project overview"
+        : placement.subjectBinding.subject.kind === "collection"
+          ? "Collection browser"
+          : "Resource browser";
 function shell(root: HTMLElement, title: string, onClose: () => void) {
   const previousFocus =
     document.activeElement instanceof HTMLElement
@@ -654,10 +673,11 @@ export function mountWorkspaceTemplates(
         ),
       );
     for (const placement of placements) {
-      const role = template.body.resources.find(
-        (r) => r.key === placement.resourceKey,
-      )!;
-      const tile = node("span", "aw-library__layout-block", role.label);
+      const tile = node(
+        "span",
+        "aw-library__layout-block",
+        placementLabel(template, placement),
+      );
       const p = placement.presentation;
       tile.style.left = ((p.x - minX) / width) * 100 + "%";
       tile.style.top = ((p.y - minY) / height) * 100 + "%";
@@ -665,7 +685,7 @@ export function mountWorkspaceTemplates(
       tile.style.height = (p.height / height) * 100 + "%";
       tile.style.borderRadius =
         p.shape === "circle" ? "50%" : p.shape === "pill" ? "40px" : "8px";
-      tile.title = role.label + " · " + p.shape;
+      tile.title = placementLabel(template, placement) + " · " + p.shape;
       diagram.append(tile);
     }
     return diagram;
@@ -696,6 +716,20 @@ export function mountWorkspaceTemplates(
               : "reuse resource " + role.source.resourceId),
         ),
       );
+    for (const placement of template.body.placements)
+      if (placement.subjectBinding)
+        roles.append(
+          node(
+            "li",
+            "",
+            placementLabel(template, placement) +
+              " — " +
+              (placement.subjectBinding.mode === "project-context"
+                ? "bind to the new workspace project"
+                : "reference " +
+                  JSON.stringify(placement.subjectBinding.subject)),
+          ),
+        );
     detail.append(roles);
     const form = node("form"),
       name = node("input");
@@ -862,12 +896,16 @@ export function mountWorkspaceTemplates(
       field("Organization mode", mode),
     );
     for (const placement of body.placements) {
-      const role = body.resources.find((r) => r.key === placement.resourceKey)!,
-        group = node("details"),
-        summary = node("summary", "", role.label + " · " + role.source.kind),
+      const group = node("details"),
+        summary = node("summary", "", placementLabel(template, placement)),
         shape = node("select");
       group.append(summary);
-      for (const value of blockDefinition(role.source.kind).supportedShapes) {
+      for (const value of blockDefinition(
+        placement.resourceKey !== undefined
+          ? body.resources.find((r) => r.key === placement.resourceKey)!.source
+              .kind
+          : "reference",
+      ).supportedShapes) {
         const option = node("option", "", value);
         option.value = value;
         shape.append(option);
@@ -946,7 +984,8 @@ export function mountWorkspaceTemplates(
       name = node("input"),
       description = node("textarea"),
       tags = node("input"),
-      choices: CaptureChoices = {};
+      choices: CaptureChoices = {},
+      subjectChoices: SubjectCaptureChoices = {};
     name.required = true;
     name.maxLength = 120;
     name.value =
@@ -962,7 +1001,9 @@ export function mountWorkspaceTemplates(
       field("Description", description),
       field("Categories / tags (comma separated)", tags),
     );
-    for (const id of new Set(snapshot.blocks.flatMap((b) => b.resource_id?[b.resource_id]:[]))) {
+    for (const id of new Set(
+      snapshot.blocks.flatMap((b) => (b.resource_id ? [b.resource_id] : [])),
+    )) {
       const resource = snapshot.resources.find((r) => r.id === id);
       if (!resource) continue;
       const select = node("select");
@@ -982,6 +1023,36 @@ export function mountWorkspaceTemplates(
       };
       form.append(field(resource.title + " · " + resource.kind, select));
     }
+    for (const placement of snapshot.blocks) {
+      if (
+        placement.resource_id ||
+        placement.workspace_id !== snapshot.activeWorkspaceId
+      )
+        continue;
+      const subject = placement.subject!,
+        select = node("select");
+      select.required = true;
+      for (const [value, label] of [
+        ["", "Choose subject binding"],
+        ["reference", "Reference the same canonical " + subject.kind],
+        ...(subject.kind === "project" ||
+        (subject.kind === "resource-query" && !subject.collectionId)
+          ? [["project-context", "Bind to the new workspace project"]]
+          : []),
+      ]) {
+        const option = node("option", "", label);
+        option.value = value;
+        select.append(option);
+      }
+      select.onchange = () => {
+        if (select.value)
+          subjectChoices[placement.id] = select.value as
+            | "reference"
+            | "project-context";
+        else delete subjectChoices[placement.id];
+      };
+      form.append(field(JSON.stringify(subject), select));
+    }
     const submit = node(
       "button",
       "aw-library__button",
@@ -997,6 +1068,7 @@ export function mountWorkspaceTemplates(
           snapshot,
           choices,
           options.currentConfigurations?.(),
+          subjectChoices,
         );
       } catch (error) {
         ui.status.textContent = errorText(error);

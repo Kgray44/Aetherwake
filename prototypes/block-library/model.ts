@@ -10,7 +10,14 @@ import type {
   TemplateDraft,
   TemplateResourceRole,
   BlockConfiguration,
+  TemplatePlacementRole,
+  TemplateSubjectBinding,
+  SubjectCaptureChoices,
 } from "./contracts.ts";
+import {
+  validateSubjectRef,
+  type NonResourceSubjectRef,
+} from "../workspace-kernel/subjects.ts";
 import { blockDefinition, validateConfiguration } from "./registry.ts";
 
 export const TEMPLATE_LIMITS = {
@@ -52,6 +59,63 @@ export const key = (value: unknown): string => {
   return value;
 };
 export const identifier = (value: unknown): string => text(value, 200);
+export function validateSubjectBinding(
+  binding: TemplateSubjectBinding,
+): TemplateSubjectBinding {
+  object(
+    binding,
+    binding?.mode === "reference"
+      ? ["mode", "subject"]
+      : ["mode", "view", "query", "kinds"],
+  );
+  if (binding.mode === "reference") {
+    const subject = validateSubjectRef(binding.subject);
+    check(subject.kind !== "resource", "template_subject_must_not_be_resource");
+    return { mode: "reference", subject };
+  }
+  check(
+    binding.mode === "project-context" &&
+      ["project", "resource-query"].includes(binding.view),
+    "invalid_template_subject_binding",
+  );
+  if (binding.view === "project") {
+    check(
+      binding.query === undefined && binding.kinds === undefined,
+      "invalid_project_context",
+    );
+    return { mode: "project-context", view: "project" };
+  }
+  const query = validateSubjectRef({
+    kind: "resource-query",
+    projectId: null,
+    query: binding.query ?? "",
+    ...(binding.kinds ? { kinds: binding.kinds } : {}),
+  });
+  check(query.kind === "resource-query", "invalid_template_query");
+  return {
+    mode: "project-context",
+    view: "resource-query",
+    query: query.query,
+    ...(query.kinds ? { kinds: query.kinds } : {}),
+  };
+}
+export function resolveTemplateSubject(
+  binding: TemplateSubjectBinding,
+  projectId: string | null,
+): NonResourceSubjectRef {
+  const valid = validateSubjectBinding(binding);
+  if (valid.mode === "reference") return valid.subject;
+  if (valid.view === "project") {
+    check(projectId !== null, "project_context_required");
+    return { kind: "project", projectId };
+  }
+  return {
+    kind: "resource-query",
+    projectId,
+    query: valid.query ?? "",
+    ...(valid.kinds ? { kinds: valid.kinds } : {}),
+  };
+}
 export function validateBody(input: TemplateBody): TemplateBody {
   check(
     new TextEncoder().encode(JSON.stringify(input)).byteLength <=
@@ -66,7 +130,7 @@ export function validateBody(input: TemplateBody): TemplateBody {
     "groups",
     "viewport",
   ]);
-  check(input.schemaVersion === 1, "unsupported_template_schema");
+  check([1, 2].includes(input.schemaVersion), "unsupported_template_schema");
   object(input.organization, ["schemaVersion", "mode", "gap", "structured"]);
   check(
     input.organization.schemaVersion === 1,
@@ -151,17 +215,30 @@ export function validateBody(input: TemplateBody): TemplateBody {
       input.placements.length <= TEMPLATE_LIMITS.placements,
     "template_placement_limit",
   );
-  const placements = input.placements.map((role) => {
+  const placements = input.placements.map((role): TemplatePlacementRole => {
     object(role, [
       "key",
       "resourceKey",
       "presentation",
       "span",
       "configuration",
+      "subjectBinding",
     ]);
-    const placementKey = key(role.key),
-      resourceKey = key(role.resourceKey);
-    check(byKey.has(resourceKey), "placement_resource_missing");
+    const placementKey = key(role.key);
+    let binding:
+      | { resourceKey: string; subjectBinding?: never }
+      | { resourceKey?: never; subjectBinding: TemplateSubjectBinding };
+    if (role.resourceKey !== undefined) {
+      check(role.subjectBinding === undefined, "ambiguous_placement_binding");
+      const resourceKey = key(role.resourceKey);
+      check(byKey.has(resourceKey), "placement_resource_missing");
+      binding = { resourceKey };
+    } else {
+      check(input.schemaVersion === 2, "unsupported_template_schema");
+      binding = {
+        subjectBinding: validateSubjectBinding(role.subjectBinding!),
+      };
+    }
     if (role.span !== undefined) {
       object(role.span, ["columns", "rows"]);
       check(
@@ -176,7 +253,7 @@ export function validateBody(input: TemplateBody): TemplateBody {
     }
     return {
       key: placementKey,
-      resourceKey,
+      ...binding,
       presentation: presentation(role.presentation),
       ...(role.span ? { span: { ...role.span } } : {}),
       ...(role.configuration
@@ -234,7 +311,7 @@ export function validateBody(input: TemplateBody): TemplateBody {
     "invalid_template_viewport",
   );
   return {
-    schemaVersion: 1,
+    schemaVersion: input.schemaVersion,
     organization: {
       schemaVersion: 1,
       mode: organization.mode,
@@ -269,13 +346,15 @@ export function captureWorkspaceTemplate(
   snapshot: DesktopSnapshot,
   choices: CaptureChoices,
   configurations: Record<string, BlockConfiguration> = {},
+  subjectChoices: SubjectCaptureChoices = {},
 ): TemplateBody {
   check(snapshot.activeWorkspaceId, "workspace_required");
-  check(snapshot.blocks.every(b=>typeof b.resource_id==='string'),'subject_template_capture_unavailable');
   const blocks = snapshot.blocks.filter(
-    (b): b is typeof b & {resource_id:string} => b.workspace_id === snapshot.activeWorkspaceId && typeof b.resource_id==='string',
+    (b) => b.workspace_id === snapshot.activeWorkspaceId,
   );
-  const resourceIds = [...new Set(blocks.map((b) => b.resource_id))];
+  const resourceIds = [
+    ...new Set(blocks.flatMap((b) => (b.resource_id ? [b.resource_id] : []))),
+  ];
   check(
     resourceIds.length <= TEMPLATE_LIMITS.resources &&
       blocks.length <= TEMPLATE_LIMITS.placements,
@@ -328,28 +407,60 @@ export function captureWorkspaceTemplate(
       (bi < 0 ? blocks.indexOf(b) + blocks.length : bi)
     );
   });
-  const placements = ordered.map((b, i) => ({
-    key: "placement" + (i + 1),
-    resourceKey: roles.get(b.resource_id)!,
-    presentation: presentation({
-      x: b.x,
-      y: b.y,
-      width: b.width,
-      height: b.height,
-      zIndex: b.z,
-      shape: b.shape,
-      rotation: b.rotation ?? 0,
-      minimized: b.minimized ?? false,
-      locked: b.locked ?? false,
-      materialVariant: b.materialVariant ?? "default",
+  const placements = ordered.map(
+    (b, i): TemplatePlacementRole => ({
+      key: "placement" + (i + 1),
+      ...(b.resource_id
+        ? { resourceKey: roles.get(b.resource_id)! }
+        : {
+            subjectBinding: (() => {
+              const subject = validateSubjectRef(b.subject);
+              check(
+                subject.kind !== "resource",
+                "template_subject_must_not_be_resource",
+              );
+              check(
+                subjectChoices[b.id] === "reference" ||
+                  subjectChoices[b.id] === "project-context",
+                "subject_binding_choice_required",
+              );
+              if (subjectChoices[b.id] === "reference")
+                return { mode: "reference" as const, subject };
+              check(
+                subject.kind === "project" ||
+                  (subject.kind === "resource-query" && !subject.collectionId),
+                "subject_context_binding_unavailable",
+              );
+              return subject.kind === "project"
+                ? { mode: "project-context" as const, view: "project" as const }
+                : {
+                    mode: "project-context" as const,
+                    view: "resource-query" as const,
+                    query: subject.query,
+                    ...(subject.kinds ? { kinds: subject.kinds } : {}),
+                  };
+            })(),
+          }),
+      presentation: presentation({
+        x: b.x,
+        y: b.y,
+        width: b.width,
+        height: b.height,
+        zIndex: b.z,
+        shape: b.shape,
+        rotation: b.rotation ?? 0,
+        minimized: b.minimized ?? false,
+        locked: b.locked ?? false,
+        materialVariant: b.materialVariant ?? "default",
+      }),
+      ...(organization.structured.spans[b.id]
+        ? { span: { ...organization.structured.spans[b.id] } }
+        : {}),
+      ...(configurations[b.id]
+        ? { configuration: validateConfiguration(configurations[b.id]) }
+        : {}),
     }),
-    ...(organization.structured.spans[b.id]
-      ? { span: { ...organization.structured.spans[b.id] } }
-      : {}),
-    ...(configurations[b.id]
-      ? { configuration: validateConfiguration(configurations[b.id]) }
-      : {}),
-  }));
+  );
   const groups = resources
     .filter((r) => r.source.mode === "new" && r.source.kind === "task_group")
     .map((r) => ({
@@ -365,7 +476,7 @@ export function captureWorkspaceTemplate(
         .filter((k): k is string => !!k),
     }));
   return validateBody({
-    schemaVersion: 1,
+    schemaVersion: placements.some((p) => p.subjectBinding) ? 2 : 1,
     organization: {
       schemaVersion: 1,
       mode: organization.mode,

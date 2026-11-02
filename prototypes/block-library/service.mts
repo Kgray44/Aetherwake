@@ -20,6 +20,10 @@ import type {
   BlockKind,
   BlockConfiguration,
   BlockInstanceSettings,
+  TemplateBody,
+  WorkspaceFromResourcesInput,
+  WorkspaceConstructionPreview,
+  ConstructedWorkspace,
 } from "./contracts.ts";
 import {
   TEMPLATE_LIMITS,
@@ -29,14 +33,22 @@ import {
   identifier,
   validateDraft,
   predefinedTemplates,
+  resolveTemplateSubject,
+  validateBody,
 } from "./model.ts";
+import {
+  defaultOrganization,
+  updateOrganization,
+} from "../workspace-engine/organization.mts";
 import {
   assertBlockAvailable,
   validateCreateBlock,
   BUILTIN_BLOCKS,
   blockDefinition,
   validateConfiguration,
+  subjectBlockKind,
 } from "./registry.ts";
+import type { NonResourceSubjectRef } from "../workspace-kernel/subjects.ts";
 import { presentation } from "../workspace-engine/geometry.mts";
 
 /** Extension metadata only; the injected host owns all resources, placements, events and execution. */
@@ -61,21 +73,22 @@ export class TemplateService {
           "CREATE TABLE IF NOT EXISTS block_library_events(id TEXT PRIMARY KEY,subject_id TEXT NOT NULL,type TEXT NOT NULL,occurred_at TEXT NOT NULL);" +
           "CREATE TABLE IF NOT EXISTS block_library_preferences(id INTEGER PRIMARY KEY CHECK(id=1),json TEXT NOT NULL);" +
           // Engine undo restores canonical placements by delete/reinsert. Retain metadata by stable ID across that operation.
-          "CREATE TABLE IF NOT EXISTS block_library_instances(placement_id TEXT PRIMARY KEY,resource_id TEXT NOT NULL,kind TEXT NOT NULL,manifest_version INTEGER NOT NULL,version INTEGER NOT NULL,json TEXT NOT NULL);",
+          "CREATE TABLE IF NOT EXISTS block_library_instances(placement_id TEXT PRIMARY KEY,resource_id TEXT NOT NULL,kind TEXT NOT NULL,manifest_version INTEGER NOT NULL,version INTEGER NOT NULL,json TEXT NOT NULL);" +
+          "CREATE TABLE IF NOT EXISTS block_library_subject_instances(placement_id TEXT PRIMARY KEY,kind TEXT NOT NULL,manifest_version INTEGER NOT NULL,version INTEGER NOT NULL,json TEXT NOT NULL);",
       );
       const schema = db
         .prepare("SELECT version FROM block_library_schema WHERE id=1")
         .get();
       if (!schema)
-        db.prepare("INSERT INTO block_library_schema VALUES(1,2)").run();
+        db.prepare("INSERT INTO block_library_schema VALUES(1,3)").run();
       else {
         check(
-          [1, 2].includes(Number(schema.version)),
+          [1, 2, 3].includes(Number(schema.version)),
           "unsupported_library_schema",
         );
-        if (schema.version === 1)
+        if (Number(schema.version) < 3)
           db.prepare(
-            "UPDATE block_library_schema SET version=2 WHERE id=1",
+            "UPDATE block_library_schema SET version=3 WHERE id=1",
           ).run();
       }
       db.prepare(
@@ -214,6 +227,36 @@ export class TemplateService {
     check(this.host.readPlacement, "block_configuration_unavailable");
     const placement = this.host.readPlacement(identifier(placementId));
     check(placement?.authorized, "placement_unavailable");
+    if (placement.subject) {
+      check(this.host.readSubject, "subject_blocks_unavailable");
+      const subject = this.host.readSubject(placement.subject);
+      check(
+        subject.authorized && subject.state === "active",
+        "subject_unavailable",
+      );
+      const row = this.db
+          .prepare(
+            "SELECT * FROM block_library_subject_instances WHERE placement_id=?",
+          )
+          .get(placementId),
+        kind = subjectBlockKind(placement.subject);
+      if (row)
+        check(
+          row.kind === kind && row.manifest_version === 1,
+          "unsupported_block_manifest_version",
+        );
+      return {
+        placementId,
+        subject: placement.subject,
+        kind,
+        manifestVersion: 1,
+        version: row ? Number(row.version) : 0,
+        configuration: row
+          ? validateConfiguration(JSON.parse(String(row.json)))
+          : validateConfiguration(),
+      };
+    }
+    check(placement.resourceId, "reference_unavailable");
     const resource = this.host.readResource(placement.resourceId);
     check(
       resource?.authorized && resource.state === "active",
@@ -266,16 +309,61 @@ export class TemplateService {
         current.version === input.expectedVersion,
         "block_configuration_conflict",
       );
-      const result = this.writeSettings(
-        current.placementId,
-        current.resourceId,
-        current.kind,
-        configuration,
-        current.version + 1,
-      );
+      const result = current.subject
+        ? this.writeSubjectSettings(
+            current.placementId,
+            current.subject,
+            configuration,
+            current.version + 1,
+          )
+        : this.writeSettings(
+            current.placementId,
+            current.resourceId,
+            current.kind,
+            configuration,
+            current.version + 1,
+          );
       this.event(current.placementId, "block.configured");
       return result;
     });
+  }
+  private writeSubjectSettings(
+    placementId: string,
+    subject: NonResourceSubjectRef,
+    configuration: BlockConfiguration,
+    revision = 1,
+  ): BlockInstanceSettings {
+    const kind = subjectBlockKind(subject);
+    if (
+      !this.db
+        .prepare(
+          "SELECT 1 FROM block_library_subject_instances WHERE placement_id=?",
+        )
+        .get(placementId)
+    )
+      check(
+        Number(
+          this.db
+            .prepare(
+              "SELECT count(*) AS n FROM block_library_subject_instances",
+            )
+            .get()!.n,
+        ) < 16384,
+        "block_settings_capacity_reached",
+      );
+    this.db
+      .prepare(
+        "INSERT INTO block_library_subject_instances VALUES(?,?,?,?,?) ON CONFLICT(placement_id) DO UPDATE SET version=excluded.version,json=excluded.json",
+      )
+      .run(placementId, kind, 1, revision, JSON.stringify(configuration));
+    return {
+      placementId,
+      kind,
+      subject,
+      manifestVersion: 1,
+      version: revision,
+      configuration,
+    };
   }
   findResources(input: ResourceDiscoveryInput): ResourceDiscoveryPage {
     check(
@@ -661,6 +749,7 @@ export class TemplateService {
         assertBlockAvailable(resource.kind, capabilities);
       }
     }
+    this.validateSubjectBindings(template.body, input.projectId);
     return {
       templateId: template.id,
       version: template.version,
@@ -775,72 +864,262 @@ export class TemplateService {
     return this.host.atomic(() =>
       this.once(input.commandId, { operation: "applyTemplate", input }, () => {
         const preview = this.validateApply(input),
-          body = preview.body;
-        const workspace = this.host.createWorkspace({
-          title: preview.title,
-          projectId: preview.projectId,
-          organization: body.organization,
-          viewport: body.viewport,
-        });
-        const resourceIds: Record<string, string> = {},
-          placementIds: Record<string, string> = {};
-        for (const role of body.resources)
-          resourceIds[role.key] =
-            role.source.mode === "reference"
-              ? role.source.resourceId
-              : this.host.createResource({
-                  kind: role.source.kind,
-                  title: role.source.title,
-                  provider: role.source.provider,
-                  projectId: preview.projectId,
-                }).id;
-        for (const role of body.placements) {
-          const resourceId = resourceIds[role.resourceKey],
-            kind = body.resources.find((r) => r.key === role.resourceKey)!
-              .source.kind;
-          placementIds[role.key] = this.host.placeResource({
-            workspaceId: workspace.id,
-            resourceId,
-            presentation: role.presentation,
-          }).id;
-          this.writeSettings(
-            placementIds[role.key],
-            resourceId,
-            kind,
-            validateConfiguration(role.configuration),
+          result = this.instantiate(
+            preview.title,
+            preview.projectId,
+            preview.body,
           );
-        }
-        for (const group of body.groups)
-          this.host.setTaskGroupMembers({
-            groupId: resourceIds[group.groupKey],
-            taskIds: group.taskKeys.map((k) => resourceIds[k]),
-          });
-        this.host.setOrganization({
-          workspaceId: workspace.id,
-          organization: {
-            mode: body.organization.mode,
-            gap: body.organization.gap,
-            structured: {
-              ...body.organization.structured,
-              order: body.placements.map((p) => placementIds[p.key]),
-              spans: Object.fromEntries(
-                body.placements
-                  .filter((p) => p.span)
-                  .map((p) => [placementIds[p.key], p.span!]),
-              ),
-            },
-          },
-          viewport: body.viewport,
-        });
-        this.event(workspace.id, "template.applied");
+        this.event(result.workspaceId, "template.applied");
         return {
-          workspaceId: workspace.id,
-          resourceIds,
-          placementIds,
+          ...result,
           templateId: preview.templateId,
           templateVersion: preview.version,
         };
       }),
+    );
+  }
+  private validateSubjectBindings(
+    body: TemplateBody,
+    projectId: string | null,
+  ) {
+    for (const placement of body.placements) {
+      if (!placement.subjectBinding) continue;
+      check(
+        this.host.readSubject && this.host.placeSubject,
+        "subject_blocks_unavailable",
+      );
+      const subject = resolveTemplateSubject(
+          placement.subjectBinding,
+          projectId,
+        ),
+        available = this.host.readSubject(subject);
+      check(
+        available.authorized && available.state === "active",
+        "subject_unavailable",
+      );
+    }
+  }
+  /** One canonical placement pipeline for saved templates, human construction and Vela's native action. */
+  private instantiate(
+    title: string,
+    projectId: string | null,
+    body: TemplateBody,
+  ) {
+    const workspace = this.host.createWorkspace({
+        title,
+        projectId,
+        organization: body.organization,
+        viewport: body.viewport,
+      }),
+      resourceIds: Record<string, string> = {},
+      placementIds: Record<string, string> = {};
+    for (const role of body.resources)
+      resourceIds[role.key] =
+        role.source.mode === "reference"
+          ? role.source.resourceId
+          : this.host.createResource({
+              kind: role.source.kind,
+              title: role.source.title,
+              provider: role.source.provider,
+              projectId,
+            }).id;
+    for (const role of body.placements) {
+      if (role.resourceKey !== undefined) {
+        const resourceId = resourceIds[role.resourceKey],
+          kind = body.resources.find((r) => r.key === role.resourceKey)!.source
+            .kind;
+        placementIds[role.key] = this.host.placeResource({
+          workspaceId: workspace.id,
+          resourceId,
+          presentation: role.presentation,
+        }).id;
+        this.writeSettings(
+          placementIds[role.key],
+          resourceId,
+          kind,
+          validateConfiguration(role.configuration),
+        );
+      } else {
+        check(this.host.placeSubject, "subject_blocks_unavailable");
+        const subject = resolveTemplateSubject(role.subjectBinding, projectId);
+        placementIds[role.key] = this.host.placeSubject({
+          workspaceId: workspace.id,
+          subject,
+          presentation: role.presentation,
+        }).id;
+        this.writeSubjectSettings(
+          placementIds[role.key],
+          subject,
+          validateConfiguration(role.configuration),
+        );
+      }
+    }
+    for (const group of body.groups)
+      this.host.setTaskGroupMembers({
+        groupId: resourceIds[group.groupKey],
+        taskIds: group.taskKeys.map((k) => resourceIds[k]),
+      });
+    this.host.setOrganization({
+      workspaceId: workspace.id,
+      organization: {
+        mode: body.organization.mode,
+        gap: body.organization.gap,
+        structured: {
+          ...body.organization.structured,
+          order: body.placements.map((p) => placementIds[p.key]),
+          spans: Object.fromEntries(
+            body.placements
+              .filter((p) => p.span)
+              .map((p) => [placementIds[p.key], p.span!]),
+          ),
+        },
+      },
+      viewport: body.viewport,
+    });
+    return { workspaceId: workspace.id, resourceIds, placementIds };
+  }
+  previewWorkspaceFromResources(
+    input: WorkspaceFromResourcesInput,
+  ): WorkspaceConstructionPreview {
+    check(
+      input &&
+        typeof input === "object" &&
+        Object.keys(input).every((k) =>
+          [
+            "commandId",
+            "title",
+            "projectId",
+            "expectedProjectVersion",
+            "resources",
+            "organization",
+          ].includes(k),
+        ),
+      "invalid_workspace_construction",
+    );
+    this.commandId(input.commandId);
+    const title = text(input.title);
+    if (input.projectId !== null) {
+      const project = this.host.readProject(identifier(input.projectId));
+      check(
+        project?.authorized && project.state === "active",
+        "project_unavailable",
+      );
+      check(
+        project.version === version(input.expectedProjectVersion),
+        "project_version_conflict",
+      );
+    } else
+      check(
+        input.expectedProjectVersion === undefined,
+        "unexpected_project_version",
+      );
+    check(
+      Array.isArray(input.resources) &&
+        input.resources.length <= TEMPLATE_LIMITS.resources,
+      "workspace_resource_limit",
+    );
+    const seen = new Set<string>();
+    const resources = input.resources.map((binding, index) => {
+      check(
+        binding &&
+          Object.keys(binding).every((k) =>
+            ["resourceId", "expectedVersion"].includes(k),
+          ),
+        "invalid_resource_binding",
+      );
+      const id = identifier(binding.resourceId);
+      check(!seen.has(id), "duplicate_resource_binding");
+      seen.add(id);
+      const resource = this.host.readResource(id);
+      check(
+        resource?.authorized && resource.state === "active",
+        "reference_unavailable",
+      );
+      check(
+        resource.version === version(binding.expectedVersion),
+        "reference_version_conflict",
+      );
+      check(
+        resource.projectId === null || resource.projectId === input.projectId,
+        "cross_project_reference",
+      );
+      assertBlockAvailable(resource.kind, this.host.capabilities());
+      return {
+        key: "resource" + index,
+        label: blockDefinition(resource.kind).title,
+        source: {
+          mode: "reference" as const,
+          kind: resource.kind,
+          resourceId: id,
+          expectedVersion: resource.version,
+        },
+      };
+    });
+    const organization = updateOrganization(
+        defaultOrganization(),
+        input.organization ?? {},
+      ),
+      { order: _order, spans: _spans, ...structured } = organization.structured;
+    const body = validateBody({
+      schemaVersion: 1,
+      organization: {
+        schemaVersion: 1,
+        mode: organization.mode,
+        gap: organization.gap,
+        structured,
+      },
+      resources,
+      placements: resources.map((role, index) => ({
+        key: "placement" + index,
+        resourceKey: role.key,
+        presentation: {
+          ...blockDefinition(role.source.kind).defaultPresentation,
+          x: 32 + (index % 3) * 560,
+          y: 32 + Math.floor(index / 3) * 440,
+          zIndex: index,
+        },
+      })),
+      groups: [],
+      viewport: { x: 0, y: 0, zoom: 1 },
+    });
+    return {
+      title,
+      projectId: input.projectId,
+      body,
+      resourceIds: resources.map((r) => r.source.resourceId),
+    };
+  }
+  workspaceFromResources(
+    input: WorkspaceFromResourcesInput,
+  ): ConstructedWorkspace {
+    check(input && typeof input === "object", "invalid_workspace_construction");
+    return this.host.atomic(() =>
+      this.once(
+        input.commandId,
+        { operation: "workspaceFromResources", input },
+        () => {
+          const preview = this.previewWorkspaceFromResources(input),
+            result = this.instantiate(
+              preview.title,
+              preview.projectId,
+              preview.body,
+            );
+          this.event(
+            result.workspaceId,
+            "workspace.constructed_from_resources",
+          );
+          return {
+            createdWorkspaceId: result.workspaceId,
+            resourceIds: preview.resourceIds,
+            placementIds: Object.values(result.placementIds),
+            receipt: {
+              commandId: input.commandId,
+              operation: "workspaceFromResources" as const,
+              workspaceId: result.workspaceId,
+            },
+          };
+        },
+      ),
     );
   }
   async requestVelaTemplate(

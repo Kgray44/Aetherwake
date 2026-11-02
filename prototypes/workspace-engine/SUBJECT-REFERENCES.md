@@ -24,7 +24,7 @@ Fluid, Freeform, Structured, collision solving, viewport mapping and `system:vel
 
 `application-contract.Block` mirrors this with `resource_id` only in the resource arm. Before looking up a resource, consumers must check `typeof block.resource_id === 'string'`. Non-resource views use the tagged subject and trusted read ports. `navigationBlocks` carries the same union. Project views link to existing project anchors in Constellation; they do not create canonical resource nodes or imply project ownership.
 
-The library currently reports `subject_template_capture_unavailable` instead of silently dropping non-resource placements from its schema-1 templates. Subject-aware template roles and content adapters are the next separate increment. Native shell and Constellation adaptations remain integration work, not proof supplied by the migration tests.
+The subsequent library schema-2 template increment supports explicit reference or target-project-context subject bindings. Old schema-1 resource templates remain readable. Native shell and Constellation adaptations remain integration work, not proof supplied by the migration tests.
 
 ## Verification
 

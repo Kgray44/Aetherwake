@@ -10,6 +10,16 @@ import type {
 } from "./contracts.ts";
 import { presentation, limits } from "../workspace-engine/geometry.mts";
 import { shapes } from "../workspace-engine/contracts.mts";
+import type { NonResourceSubjectRef } from "../workspace-kernel/subjects.ts";
+import type { SubjectBlockKind } from "./contracts.ts";
+export const subjectBlockKind = (
+  subject: NonResourceSubjectRef,
+): SubjectBlockKind =>
+  subject.kind === "project"
+    ? "project_overview"
+    : subject.kind === "collection"
+      ? "collection_browser"
+      : "resource_browser";
 
 const define = (
   kind: BlockKind,

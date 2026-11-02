@@ -14,6 +14,8 @@ Forward the following `TemplateService` methods through the existing validated n
 | `setFavorite` | kind, favorite, expectedVersion | `LibraryPreferences` |
 | `getBlockSettings` | placementId | `BlockInstanceSettings` |
 | `configureBlock` | placementId, expectedVersion, configuration | `BlockInstanceSettings` |
+| `previewWorkspaceFromResources` | `WorkspaceFromResourcesInput` | `WorkspaceConstructionPreview` |
+| `workspaceFromResources` | `WorkspaceFromResourcesInput` | `ConstructedWorkspace` |
 
 `createCanonicalTemplateHost` supplies discovery and placement authorization through its existing effective-grant callback. Search uses bounded keyset pages and returns only active resources of the selected kind owned by the target project or unassigned. Attachment rechecks resource and layout versions and grants in the canonical transaction, creates only a placement, and records a persistent command receipt. A disconnected execution provider does not prohibit reading or attaching an otherwise available conversation.
 
@@ -30,5 +32,9 @@ In the existing block inspector mount `mountBlockConfiguration`. Apply saved/cur
 Template management includes duplicate, metadata/category editing, shape/geometry and organization editing, versioned update from the current workspace with explicit resource bindings, and archival removal. Editing/deleting a template does not rewrite an existing workspace. Preview and apply keep their existing access/version checks and canonical atomic behavior.
 
 ## Acceptance boundary
+
+The native `workspaceFromResources` action accepts `{commandId,title,projectId,expectedProjectVersion?,resources:[{resourceId,expectedVersion}],organization?}`. The parent binds versions from the reviewed canonical plan; model text cannot supply effective grants. `previewWorkspaceFromResources` performs no writes. Execution revalidates inside the existing canonical transaction and invokes the same private placement pipeline as template application, with no transient fake template row. It returns `{createdWorkspaceId,resourceIds,placementIds,receipt:{commandId,operation,workspaceId}}`. Repeating an identical command returns that receipt; altered input conflicts. Resource IDs stay unchanged and no provider turn or task completion is inferred.
+
+Template body schema 2 additionally supports explicit subject placements: `{subjectBinding:{mode:'reference',subject}}` or `{subjectBinding:{mode:'project-context',view:'project'|'resource-query',query?,kinds?}}`. Schema-1 resource-role templates remain supported. Capture requires an explicit subject-binding choice for each such placement. Context roles bind to the target project; a project overview requires a non-null project. The adapter's optional `authorizeSubject(subject,workspaceId?)` plus the engine's `allowSubjectAttachment` are required effective host grants. New library metadata schema 3 retains subject presentation settings by placement ID through undo/restart, with the same bounded retention as resource placement settings. Subject views create no resource row.
 
 The focused suite covers the actual SQLite/kernel/engine/DesktopState adapter, attachment scope and identity, independent settings, undo/redo, schema upgrade and restart, and capability honesty. Type checking covers browser and native modules. These checks do not establish that the native host has wired the ports, that the visual design has owner acceptance, or that an actual Vela model interpreted a construction request. Combined desktop journeys, graphics recovery and renderer performance require the integrated host.

@@ -12,7 +12,7 @@ import {
   type TaskGroupMembershipCommand,
 } from "../canonical-host.mts";
 import { TemplateService } from "../service.mts";
-import { predefinedTemplates } from "../model.ts";
+import { predefinedTemplates, captureWorkspaceTemplate } from "../model.ts";
 import { BUILTIN_BLOCKS } from "../registry.ts";
 import {
   blockCapabilities,
@@ -29,7 +29,9 @@ function fixture(t: any) {
   const kernel = WorkspaceKernel.open(":memory:"),
     db = kernel.withTransaction((db) => db),
     desktop = new DesktopState(kernel, db),
-    engine = new WorkspaceEngine(kernel);
+    engine = new WorkspaceEngine(kernel, {
+      allowSubjectAttachment: () => true,
+    });
   t.after(() => kernel.close());
   const revoked = new Set<string>(),
     groupCommands: TaskGroupMembershipCommand[] = [],
@@ -54,6 +56,14 @@ function fixture(t: any) {
     kernel,
     engine,
     capabilities: () => capabilities,
+    authorizeSubject(subject) {
+      return subject.kind === "project"
+        ? !revoked.has(subject.projectId)
+        : subject.kind === "collection"
+          ? !revoked.has(subject.collectionId)
+          : (!subject.projectId || !revoked.has(subject.projectId)) &&
+            (!subject.collectionId || !revoked.has(subject.collectionId));
+    },
     atomic<T>(operation: () => T): T {
       const before = graph.snapshot(),
         previous = { ...mappings };
@@ -262,23 +272,21 @@ test("Freeform overlap, presentation, viewport and same-ID shared placements sur
     },
   ];
   body.groups = [];
-  body.placements = body.placements
-    .slice(0, 2)
-    .map((p, i) => ({
-      ...p,
-      key: "placement" + i,
-      resourceKey: "shared",
-      presentation: {
-        ...p.presentation,
-        x: 120,
-        y: 140,
-        shape: i ? "lens" : "folio",
-        rotation: i ? 15 : 0,
-        minimized: i === 1,
-        materialVariant: "default",
-      },
-      span: { columns: 2, rows: 3 },
-    }));
+  body.placements = body.placements.slice(0, 2).map((p, i) => ({
+    ...p,
+    key: "placement" + i,
+    resourceKey: "shared",
+    presentation: {
+      ...p.presentation,
+      x: 120,
+      y: 140,
+      shape: i ? "lens" : "folio",
+      rotation: i ? 15 : 0,
+      minimized: i === 1,
+      materialVariant: "default",
+    },
+    span: { columns: 2, rows: 3 },
+  }));
   const template = f.service.saveTemplate({
     name: "Synthetic intentional overlap",
     description: "Synthetic adapter test",
@@ -792,4 +800,218 @@ test("manifest and capability discovery distinguish immutable definitions, local
       }),
     /preferences_version_conflict/,
   );
+});
+
+test("Vela workspaceFromResources uses the template pipeline, returns same canonical IDs and a durable retry receipt", (t) => {
+  const f = fixture(t),
+    project = f.kernel.createProject("Synthetic construction project"),
+    note = f.options.createResource(
+      "note",
+      "Synthetic construction note",
+      undefined,
+      project.id,
+    ),
+    task = f.options.createResource(
+      "task",
+      "Synthetic construction task",
+      undefined,
+      project.id,
+    );
+  const input = {
+    commandId: "native-composition",
+    title: "Synthetic native workspace",
+    projectId: project.id,
+    expectedProjectVersion: 1,
+    resources: [
+      { resourceId: note, expectedVersion: 1 },
+      { resourceId: task, expectedVersion: 1 },
+    ],
+    organization: { mode: "structured" as const },
+  };
+  const before = [
+    "workspaces",
+    "resources",
+    "blocks",
+    "block_library_receipts",
+  ].map((table) => count(f.db, table));
+  const preview = f.service.previewWorkspaceFromResources(input);
+  assert.deepEqual(preview.resourceIds, [note, task]);
+  assert.deepEqual(
+    ["workspaces", "resources", "blocks", "block_library_receipts"].map(
+      (table) => count(f.db, table),
+    ),
+    before,
+  );
+  const result = f.service.workspaceFromResources(input);
+  assert.deepEqual(result.resourceIds, [note, task]);
+  assert.equal(result.receipt.workspaceId, result.createdWorkspaceId);
+  assert.equal(result.receipt.operation, "workspaceFromResources");
+  assert.equal(
+    f.engine.project(result.createdWorkspaceId).organization.mode,
+    "structured",
+  );
+  assert.deepEqual(
+    new Set(
+      f.engine
+        .project(result.createdWorkspaceId)
+        .blocks.map((b) => b.resourceId),
+    ),
+    new Set([note, task]),
+  );
+  assert.equal(f.factoryCalls.length, 2);
+  assert.deepEqual(f.service.workspaceFromResources(input), result);
+  assert.equal(count(f.db, "resources"), before[1]);
+  assert.equal(count(f.db, "workspaces"), before[0] + 1);
+  assert.throws(
+    () =>
+      f.service.workspaceFromResources({ ...input, title: "Changed scope" }),
+    /idempotency_conflict/,
+  );
+  f.kernel.assertIntegrity();
+});
+
+test("construction revalidates grants/versions and rolls back canonical workspace/session/placements on mid-operation failure", (t) => {
+  const f = fixture(t),
+    note = f.options.createResource(
+      "note",
+      "Synthetic construct source",
+      undefined,
+      null,
+    ),
+    task = f.options.createResource(
+      "task",
+      "Synthetic construct task",
+      undefined,
+      null,
+    ),
+    existing = f.engine.createWorkspace("Synthetic retained context"),
+    input = {
+      commandId: "construction-failure",
+      title: "Synthetic construction",
+      projectId: null,
+      resources: [
+        { resourceId: note, expectedVersion: 1 },
+        { resourceId: task, expectedVersion: 1 },
+      ],
+    };
+  f.options.navigateWorkspace(existing.workspaceId);
+  const before = [
+    "workspaces",
+    "resources",
+    "blocks",
+    "block_library_receipts",
+  ].map((table) => count(f.db, table));
+  f.service.previewWorkspaceFromResources(input);
+  f.revoked.add(note);
+  assert.throws(
+    () => f.service.workspaceFromResources(input),
+    /reference_unavailable/,
+  );
+  f.revoked.clear();
+  assert.throws(
+    () =>
+      f.service.workspaceFromResources({
+        ...input,
+        resources: [{ resourceId: note, expectedVersion: 2 }],
+      }),
+    /reference_version_conflict/,
+  );
+  const original = f.host.placeResource;
+  let calls = 0;
+  f.host.placeResource = (command) => {
+    const result = original(command);
+    if (++calls === 2) throw new Error("synthetic_construction_failure");
+    return result;
+  };
+  assert.throws(
+    () => f.service.workspaceFromResources(input),
+    /synthetic_construction_failure/,
+  );
+  assert.deepEqual(
+    ["workspaces", "resources", "blocks", "block_library_receipts"].map(
+      (table) => count(f.db, table),
+    ),
+    before,
+  );
+  assert.equal(f.engine.activeWorkspaceId(), existing.workspaceId);
+  assert.equal(
+    f.desktop.snapshot(() => ({ provider: "local", messages: [] }))
+      .activeWorkspaceId,
+    existing.workspaceId,
+  );
+  f.host.placeResource = original;
+  assert.ok(f.service.workspaceFromResources(input).createdWorkspaceId);
+  f.kernel.assertIntegrity();
+});
+
+test("schema2 templates bind project context explicitly and preserve subject settings without cloning a canonical resource", (t) => {
+  const f = fixture(t),
+    projectA = f.kernel.createProject("Synthetic template project A"),
+    projectB = f.kernel.createProject("Synthetic template project B"),
+    body = predefinedTemplates()[0].body;
+  body.schemaVersion = 2;
+  body.placements = [
+    {
+      key: "overview",
+      subjectBinding: { mode: "project-context", view: "project" },
+      presentation: BUILTIN_BLOCKS[1].defaultPresentation,
+      configuration: {
+        schemaVersion: 1,
+        textScale: 1.5,
+        contentMode: "reading",
+      },
+    },
+  ];
+  const template = f.service.saveTemplate({
+    name: "Synthetic project template",
+    description: "Synthetic explicit context binding",
+    tags: [],
+    body,
+  });
+  const before = count(f.db, "resources");
+  const a = f.service.applyTemplate(
+      request({
+        templateId: template.id,
+        projectId: projectA.id,
+        expectedProjectVersion: 1,
+      }),
+    ),
+    b = f.service.applyTemplate(
+      request({
+        templateId: template.id,
+        projectId: projectB.id,
+        expectedProjectVersion: 1,
+      }),
+    );
+  assert.deepEqual(f.engine.project(a.workspaceId).blocks[0].subject, {
+    kind: "project",
+    projectId: projectA.id,
+  });
+  assert.deepEqual(f.engine.project(b.workspaceId).blocks[0].subject, {
+    kind: "project",
+    projectId: projectB.id,
+  });
+  assert.equal(count(f.db, "resources"), before);
+  assert.equal(
+    f.service.getBlockSettings(b.placementIds.overview).configuration.textScale,
+    1.5,
+  );
+  assert.deepEqual(f.service.getTemplate(template.id).body, body);
+  assert.throws(
+    () => f.service.applyTemplate(request({ templateId: template.id })),
+    /project_context_required/,
+  );
+  f.revoked.add(projectB.id);
+  assert.throws(
+    () =>
+      f.service.applyTemplate(
+        request({
+          templateId: template.id,
+          projectId: projectB.id,
+          expectedProjectVersion: 1,
+        }),
+      ),
+    /project_unavailable/,
+  );
+  f.kernel.assertIntegrity();
 });

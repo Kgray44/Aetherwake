@@ -761,7 +761,7 @@ test("schema upgrade, per-placement preferences, recents and favorites survive S
   );
   assert.equal(
     host.db.prepare("SELECT version FROM block_library_schema").get()?.version,
-    2,
+    3,
   );
   host.kernel.assertIntegrity();
 });

@@ -7,6 +7,7 @@ import type {
   WorkspaceProjection,
 } from "../workspace-engine/contracts.mts";
 import type { DesktopCommand } from "../application-contract/contracts.ts";
+import type { NonResourceSubjectRef } from "../workspace-kernel/subjects.ts";
 import type {
   BlockKind,
   CanonicalTemplateHost,
@@ -45,6 +46,10 @@ export type CanonicalTemplateHostOptions = {
   }): boolean;
   /** Optional native usable canvas bounds, in canonical world coordinates. */
   bounds?(workspaceId: string): Geometry | undefined;
+  authorizeSubject?(
+    subject: NonResourceSubjectRef,
+    workspaceId?: string,
+  ): boolean;
 };
 
 /** Adapter over the existing canonical kernel and engine. It opens no connection and writes no extension/resource/placement table itself. */
@@ -146,11 +151,51 @@ export function createCanonicalTemplateHost(
     readProject,
     readResource,
     readWorkspace,
+    readSubject(subject) {
+      return {
+        authorized: options.authorizeSubject?.(subject) === true,
+        state: kernel.subjectState(subject),
+      };
+    },
+    placeSubject(input) {
+      const state = workspaceState(input.workspaceId);
+      check(
+        options.authorizeSubject?.(input.subject, input.workspaceId) === true &&
+          kernel.subjectState(input.subject) === "active",
+        "subject_unavailable",
+      );
+      const existing = new Set(state.blocks.map((block) => block.blockId));
+      const result = engine.execute({
+        ...envelope(state),
+        type: "attachSubject",
+        subject: input.subject,
+        presentation: input.presentation,
+      });
+      const added = result.blocks.filter(
+        (block) => !existing.has(block.blockId),
+      );
+      check(added.length === 1, "canonical_placement_required");
+      return { id: added[0].blockId };
+    },
     readPlacement(id) {
       const row = db
         .prepare("SELECT id,resource_id,workspace_id FROM blocks WHERE id=?")
         .get(identifier(id));
       if (!row) return null;
+      if (!row.resource_id) {
+        const subject = kernel.readBlockSubject(String(row.id));
+        check(subject.kind !== "resource", "invalid_block_subject");
+        return {
+          id: String(row.id),
+          subject,
+          workspaceId: String(row.workspace_id),
+          authorized:
+            readWorkspace(String(row.workspace_id))?.authorized === true &&
+            options.authorizeSubject?.(subject, String(row.workspace_id)) ===
+              true &&
+            kernel.subjectState(subject) === "active",
+        };
+      }
       const workspace = readWorkspace(String(row.workspace_id)),
         resource = readResource(String(row.resource_id));
       return {

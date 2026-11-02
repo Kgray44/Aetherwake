@@ -8,6 +8,10 @@ import type {
   WorkspaceOrganization,
   GridSpan,
 } from "../workspace-engine/contracts.mts";
+import type {
+  NonResourceSubjectRef,
+  SubjectState,
+} from "../workspace-kernel/subjects.ts";
 
 export type { BlockKind, Presentation };
 export type Availability = {
@@ -31,6 +35,11 @@ export type BlockCategory =
   | "knowledge"
   | "planning"
   | "observability";
+export type SubjectBlockKind =
+  | "project_overview"
+  | "resource_browser"
+  | "collection_browser";
+export type BlockInstanceKind = BlockKind | SubjectBlockKind;
 export type BlockDefinition = {
   id: string;
   version: 1;
@@ -96,12 +105,17 @@ export type AttachBlockInput = {
 };
 export type BlockInstanceSettings = {
   placementId: string;
-  resourceId: string;
-  kind: BlockKind;
   manifestVersion: number;
   version: number;
   configuration: BlockConfiguration;
-};
+} & (
+  | { resourceId: string; kind: BlockKind; subject?: never }
+  | {
+      resourceId?: never;
+      kind: SubjectBlockKind;
+      subject: NonResourceSubjectRef;
+    }
+);
 export type CreateBlockInput = {
   commandId: string;
   workspaceId: string;
@@ -154,16 +168,26 @@ export type TemplateResourceRole = {
         expectedVersion: number;
       };
 };
+export type TemplateSubjectBinding =
+  | { mode: "reference"; subject: NonResourceSubjectRef }
+  | {
+      mode: "project-context";
+      view: "project" | "resource-query";
+      query?: string;
+      kinds?: string[];
+    };
 export type TemplatePlacementRole = {
   key: string;
-  resourceKey: string;
   presentation: Presentation;
   span?: GridSpan;
   configuration?: BlockConfiguration;
-};
+} & (
+  | { resourceKey: string; subjectBinding?: never }
+  | { resourceKey?: never; subjectBinding: TemplateSubjectBinding }
+);
 /** Contains no note text, transcripts, execution/session bindings, credentials or Vela placement. */
 export type TemplateBody = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   organization: Omit<WorkspaceOrganization, "revision" | "structured"> & {
     structured: Omit<WorkspaceOrganization["structured"], "order" | "spans">;
   };
@@ -261,6 +285,34 @@ export interface WorkspaceTemplatePort {
   requestVelaTemplate(input: VelaTemplateRequest): Promise<VelaTemplatePlan>;
 }
 export type CaptureChoices = Record<string, "reference" | "new">;
+export type SubjectCaptureChoices = Record<
+  string,
+  "reference" | "project-context"
+>;
+export type WorkspaceFromResourcesInput = {
+  commandId: string;
+  title: string;
+  projectId: string | null;
+  expectedProjectVersion?: number;
+  resources: { resourceId: string; expectedVersion: number }[];
+  organization?: OrganizationUpdate;
+};
+export type WorkspaceConstructionPreview = {
+  title: string;
+  projectId: string | null;
+  body: TemplateBody;
+  resourceIds: string[];
+};
+export type ConstructedWorkspace = {
+  createdWorkspaceId: string;
+  resourceIds: string[];
+  placementIds: string[];
+  receipt: {
+    commandId: string;
+    operation: "workspaceFromResources";
+    workspaceId: string;
+  };
+};
 export type TemplateMountOptions = {
   projectId: string | null;
   expectedProjectVersion?: number;
@@ -277,9 +329,7 @@ export interface CanonicalTemplateHost<Database = unknown> {
   readProject(
     id: string,
   ): { id: string; version: number; state: string; authorized: boolean } | null;
-  readResource(
-    id: string,
-  ): {
+  readResource(id: string): {
     id: string;
     kind: BlockKind;
     projectId: string | null;
@@ -287,9 +337,7 @@ export interface CanonicalTemplateHost<Database = unknown> {
     state: string;
     authorized: boolean;
   } | null;
-  readWorkspace(
-    id: string,
-  ): {
+  readWorkspace(id: string): {
     id: string;
     projectId: string | null;
     layoutVersion: number;
@@ -297,14 +345,22 @@ export interface CanonicalTemplateHost<Database = unknown> {
     authorized: boolean;
   } | null;
   findResources?(input: ResourceDiscoveryInput): ResourceDiscoveryPage;
-  readPlacement?(
-    id: string,
-  ): {
+  readPlacement?(id: string): {
     id: string;
-    resourceId: string;
+    resourceId?: string;
+    subject?: NonResourceSubjectRef;
     workspaceId: string;
     authorized: boolean;
   } | null;
+  readSubject?(subject: NonResourceSubjectRef): {
+    authorized: boolean;
+    state: SubjectState;
+  };
+  placeSubject?(input: {
+    workspaceId: string;
+    subject: NonResourceSubjectRef;
+    presentation: Presentation;
+  }): { id: string };
   createWorkspace(input: {
     title: string;
     projectId: string | null;
