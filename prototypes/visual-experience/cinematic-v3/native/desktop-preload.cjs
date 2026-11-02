@@ -10,8 +10,10 @@ contextBridge.exposeInMainWorld(
         });
     },
     onEvent(listener) {
-      if (typeof listener === "function")
-        ipcRenderer.on("application-event", (_e, event) => listener(event));
+      if (typeof listener !== "function") return () => {};
+      const handler = (_e, event) => listener(event);
+      ipcRenderer.on("application-event", handler);
+      return () => ipcRenderer.removeListener("application-event", handler);
     },
     async command(name, input) {
       if (

@@ -1103,7 +1103,7 @@ declare global {
       renderWhileVisible?: boolean;
       onActive: (listener: (active: boolean) => void) => void;
       command?: (name: string, input: unknown) => Promise<unknown>;
-      onEvent?: (listener: (event: unknown) => void) => void;
+      onEvent?: (listener: (event: unknown) => void) => () => void;
     };
     __aerynth: ReturnType<typeof controller>;
   }

@@ -46,6 +46,7 @@ import "../../../conversation-product/src/style.css";
 import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
+import { createConversationExecutionPort } from "./conversation-execution";
 import { workspaceWheelFactor } from "./workspace-wheel";
 import {
   createContextualSurfaces,
@@ -125,6 +126,12 @@ const escape = (s: string) =>
 
 export function installApplication(hooks: Hooks) {
   const host = window.aerynthHost!;
+  const conversationExecution = createConversationExecutionPort({
+    command: (name, input) => host.command!(name, input),
+    onEvent: (listener) => host.onEvent?.(listener) ?? (() => {}),
+    visible: () => !document.hidden && document.hasFocus(),
+    onError: (error) => hooks.status(`Conversation activity: ${(error as Error).message}`),
+  });
   const surfaces = createContextualSurfaces({
     motion: hooks.motion,
     wake: hooks.wake,
@@ -974,6 +981,9 @@ export function installApplication(hooks: Hooks) {
       },
     };
     controller = conversationManager = mountConversationManager(content, port, {
+      embedded: true,
+      execution: conversationExecution,
+      draftSession: composerSession,
       state: conversationView,
       ...(resourceId ? { resourceId } : {}),
       onClose: () => surfaces.close("conversations"),
