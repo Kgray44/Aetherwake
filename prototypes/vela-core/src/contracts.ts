@@ -43,7 +43,11 @@ export interface VelaMessage {
   requestId?: string; planId?: string; classification: EvidenceClass;
 }
 export interface CanonicalConversation { resourceId: string; revision: number; messages: VelaMessage[] }
-export interface ProviderContribution { providerId: string; model?: string; nativeThreadId?: string; nativeTurnId?: string; classification: 'reported' }
+export interface ProviderContribution {
+  providerId: string; model?: string; nativeThreadId?: string; nativeTurnId?: string;
+  executionId?: string; planningConversationId?: string; sourceMessageId?: string;
+  classification: 'reported';
+}
 export interface DelegateTaskAction {
   type: 'delegateTask'; title: string; objective: string; providerId: string;
   resourceIds: string[]; constraints: string[];

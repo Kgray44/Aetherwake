@@ -65,7 +65,7 @@ export function validateProposal(value: unknown, providerId: string): ProviderPr
   check(isRecord(value) && fields(value, ['schemaVersion', 'summary', 'steps', 'contribution']), 'invalid_provider_proposal');
   check(value.schemaVersion === 1 && text(value.summary, 4000) && Array.isArray(value.steps) && value.steps.length > 0 && value.steps.length <= 12, 'invalid_provider_proposal');
   const c = value.contribution;
-  check(isRecord(c) && c.providerId === providerId && c.classification === 'reported' && Object.keys(c).every(k => ['providerId', 'model', 'nativeThreadId', 'nativeTurnId', 'classification'].includes(k)) && Object.entries(c).every(([k, v]) => k === 'classification' || text(v, 200)), 'invalid_provider_attribution');
+  check(isRecord(c) && c.providerId === providerId && c.classification === 'reported' && Object.keys(c).every(k => ['providerId', 'model', 'nativeThreadId', 'nativeTurnId', 'executionId', 'planningConversationId', 'sourceMessageId', 'classification'].includes(k)) && Object.entries(c).every(([k, v]) => k === 'classification' || text(v, 200)), 'invalid_provider_attribution');
   const steps = value.steps.map((step): PlanStep => {
     check(isRecord(step) && fields(step, ['id', 'explanation', 'action']) && identifier(step.id) && text(step.explanation, 2000), 'invalid_plan_step');
     return { id: step.id, explanation: step.explanation, action: validateAction(step.action) };
