@@ -45,6 +45,7 @@ import { mountBlockChat } from "../../../block-library/chat-view.ts";
 import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
+import { createVelaExperience } from "./vela-experience";
 import { createConversationExecutionPort } from "./conversation-execution";
 import { workspaceWheelFactor } from "./workspace-wheel";
 import { returnFocusAfterDialogClose } from "./focus-return";
@@ -161,6 +162,12 @@ export function installApplication(hooks: Hooks) {
   let velaRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   const velaContent = document.createElement("div");
   velaContent.className = "application-vela-content";
+  const velaExperience = createVelaExperience({
+    motion: hooks.motion,
+    root: velaContent,
+    wake: hooks.wake,
+    resize: (size) => surfaces.resize("vela", size),
+  });
   const velaClient = createVelaClient({
     command: (name, input) => host.command!(name, input),
     changed: (name, result) =>
@@ -1128,6 +1135,7 @@ export function installApplication(hooks: Hooks) {
     }
     if (!velaPanel)
       velaPanel = mountVelaPanel(velaContent, velaClient, {
+        onPresentation: (value) => velaExperience.observe(value),
         onConnectProvider: () => host.command!("capabilities", {}),
         onOpenSubject: (subject) => {
           surfaces.close("vela");
@@ -1180,15 +1188,18 @@ export function installApplication(hooks: Hooks) {
       content: velaContent,
       label: "Vela",
       placement: "left",
-      minSize: { width: 360, height: 260 },
-      maxSize: { width: 560, height: 720 },
+      minSize: { width: 280, height: 110 },
+      maxSize: { width: 560, height: 640 },
+      preferredSize: velaExperience.size(),
       initialFocus: ".vela-core-compose textarea",
       onClose: () => {
         velaOpen = false;
+        velaExperience.setActive(false);
         el("#vela").setAttribute("aria-expanded", "false");
       },
     });
     surface.id = "vela-assistant-surface";
+    velaExperience.setActive(true);
     el("#vela").setAttribute("aria-controls", surface.id);
     el("#vela").setAttribute("aria-expanded", "true");
     void velaPanel.open().catch(report);
@@ -1206,9 +1217,8 @@ export function installApplication(hooks: Hooks) {
       ).catch(report);
     }, 150);
   }
-  dialog.addEventListener(
-    "close",
-    () => returnFocusAfterDialogClose(dialog, lastTrigger),
+  dialog.addEventListener("close", () =>
+    returnFocusAfterDialogClose(dialog, lastTrigger),
   );
   function form(action: (data: FormData) => Promise<unknown>) {
     el<HTMLFormElement>("form", dialog).onsubmit = async (event) => {
@@ -2777,9 +2787,12 @@ export function installApplication(hooks: Hooks) {
           target as HTMLElement,
         ),
         blocked:
-          !!preview || previewCommitting || !!presenceDrag || !!cancelResize ||
+          !!preview ||
+          previewCommitting ||
+          !!presenceDrag ||
+          !!cancelResize ||
           !!document.querySelector(
-            '.aw-contextual-surface, dialog[open], .floating-dialog:not([hidden]), .folio.dragging',
+            ".aw-contextual-surface, dialog[open], .floating-dialog:not([hidden]), .folio.dragging",
           ) ||
           (active instanceof HTMLElement &&
             !!active.closest(
@@ -2791,7 +2804,9 @@ export function installApplication(hooks: Hooks) {
       if (factor === null) return;
       event.preventDefault();
       try {
-        void Promise.resolve(constellation.controller.zoom(factor)).catch(report);
+        void Promise.resolve(constellation.controller.zoom(factor)).catch(
+          report,
+        );
       } catch (error) {
         report(error);
       }
@@ -2898,6 +2913,7 @@ export function installApplication(hooks: Hooks) {
   return {
     frame(now: number, policy: Policy) {
       surfaces.frame(now);
+      velaExperience.frame(policy);
       paintPreview();
       const target = presenceTarget();
       if (target && !presenceDrag)
