@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
-const { createSlot, canonicalProjection, sourceIdentity, targetScript } = require('../native/integration-resource-opening.cjs');
+const { createSlot, canonicalProjection, sourceIdentity, targetScript, unplacedSelector, waitForCondition } = require('../native/integration-resource-opening.cjs');
 
 test('one monotonic slot reserves cleanup, focus loss is sticky, and neither deadline nor regained focus permits continuation', () => {
   let now = 1000, focused = true; const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => focused, webContents: { isDestroyed: () => false } };
@@ -31,4 +31,30 @@ test('renderer actions require an actually visible unobstructed control and disp
   const context = { document: { querySelector: () => node, elementFromPoint: () => occluded ? {} : node }, getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity }), innerWidth: 800, innerHeight: 600, Event: class { constructor(type, options) { this.type = type; this.bubbles = options.bubbles; } } };
   const run = (action, value) => vm.runInNewContext(targetScript('#actual-control', action, value), context);
   hidden = true; assert(run('click').unavailable); hidden = false; occluded = true; assert(run('click').occluded); occluded = false; opacity = '.5'; assert(run('click').unavailable); assert.equal(clicks, 0); opacity = '1'; assert(run('inspect').ready); assert.equal(clicks, 0); assert(run('click').ready); assert.equal(clicks, 1); assert(run('input', 'Synthetic exact text').ready); assert.equal(node.value, 'Synthetic exact text'); assert.equal(inputs, 1);
+});
+
+test('unplaced Constellation lookup uses its public key and the dynamic canonical resource identity', () => {
+  const id = 'synthetic:unplaced-note-723', selector = unplacedSelector(id); let clicks = 0;
+  assert.equal(selector, '[data-key="resource:unplaced:synthetic:unplaced-note-723"]');
+  assert.notEqual(unplacedSelector('synthetic:other'), selector);
+  const node = { parentElement: null, closest: () => null, contains: value => value === node, getBoundingClientRect: () => ({ x: 20, y: 30, width: 120, height: 36 }), click: () => { clicks++; } };
+  const context = { document: { querySelector: query => query === selector ? node : null, elementFromPoint: () => node }, getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }), innerWidth: 800, innerHeight: 600 };
+  assert(vm.runInNewContext(targetScript(`[data-key="resource:${id}"]`, 'inspect'), context).unavailable, 'the old wrong key cannot qualify a visible target');
+  assert(vm.runInNewContext(targetScript(selector, 'inspect'), context).ready); assert.equal(clicks, 0);
+});
+
+test('missing conditions stop at four seconds with bounded diagnostics, not the global work deadline', async () => {
+  let now = 0, checks = 0, diagnostics = 0;
+  const slot = { check: () => assert(now < 41500), workRemaining: () => 41500 - now };
+  await assert.rejects(waitForCondition({ slot, label: 'Missing actual anchor', check: () => { checks++; return false; }, diagnose: () => { diagnostics++; return { status: 'Synthetic unavailable', anchors: [] }; }, now: () => now, sleep: async ms => { now += ms; } }), error => error.message.includes('condition_timeout: Missing actual anchor') && error.diagnostics.status === 'Synthetic unavailable');
+  assert.equal(now, 4000); assert(checks > 1); assert.equal(diagnostics, 1); assert.equal(slot.workRemaining(), 37500);
+});
+
+test('condition deadline covers a hanging read and focus loss skips diagnostics without grace or input', async () => {
+  const slot = { check() {}, workRemaining: () => 10000 };
+  await assert.rejects(waitForCondition({ slot, label: 'Hung read', check: () => new Promise(() => {}), timeoutMs: 10 }), /condition_timeout: Hung read/);
+  let now = 0, focused = true, diagnostics = 0;
+  const guarded = { check: () => { if (!focused) throw Error('sticky_focus_lost'); }, workRemaining: () => 10000 - now };
+  await assert.rejects(waitForCondition({ slot: guarded, label: 'Lost focus', check: () => { focused = false; return false; }, diagnose: () => { diagnostics++; }, now: () => now, sleep: async ms => { now += ms; } }), /sticky_focus_lost/);
+  assert.equal(diagnostics, 0);
 });
