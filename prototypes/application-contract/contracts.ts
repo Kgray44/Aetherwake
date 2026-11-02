@@ -97,6 +97,7 @@ export type DesktopCommand =
       expectedVersion: number;
       placement: Geometry;
       shape: Shape;
+      rotation?: number;
     }
   | {
       type: "content";

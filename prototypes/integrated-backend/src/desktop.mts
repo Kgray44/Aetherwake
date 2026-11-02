@@ -256,7 +256,7 @@ export class DesktopState {
         materialVariant: b.materialVariant,
         contentMode: b.contentMode,
       }))
-      .sort((a, b) => a.z - b.z || a.id.localeCompare(b.id));
+      .sort((a, b) => a.z - b.z || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   }
   private geometry(p: Geometry) {
     check(
@@ -385,6 +385,7 @@ export class DesktopState {
         const b = this.block(a.blockId, a.expectedVersion);
         this.geometry(a.placement);
         check(shapes.includes(a.shape));
+        if (a.rotation !== undefined) check(Number.isFinite(a.rotation) && Math.abs(a.rotation) <= 360, "invalid_rotation");
         this.engineCommand(b.workspace_id, {
           type: "saveLayout",
           placements: [
@@ -398,6 +399,7 @@ export class DesktopState {
                 height: a.placement.height,
                 zIndex: a.placement.z,
                 shape: a.shape,
+                ...(a.rotation === undefined ? {} : {rotation:a.rotation}),
               },
             },
           ],
