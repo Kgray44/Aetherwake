@@ -13,6 +13,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   let current: VelaState | null = null, disposed = false, busy = false, nativeBusy = false, composing = false, draftRevision = 0, lastDisclosure: HTMLDetailsElement | null = null;
   const selected = new Map<string, ResourceRef>(), sourceControls = new Map<string, HTMLInputElement>();
   const messages = new Map<string, { node: HTMLElement; signature: string }>(), workingPlans = new Set<string>();
+  const planCards = new Map<string, { node: HTMLElement; controls: HTMLElement; signature: string }>();
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string) => {
     const node = doc.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node;
   };
@@ -30,6 +31,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const flow = el('div', 'vela-core-scroll'); flow.setAttribute('aria-label', 'Conversation and plans');
   const conversation = el('div', 'vela-core-conversation'); conversation.setAttribute('aria-label', 'Vela conversation');
   const plans = el('section', 'vela-core-plans'); plans.setAttribute('aria-label', 'Plans to review');
+  const planHistory = disclosure('Earlier plans', 'vela-core-plan-history');
   const more = disclosure('Tools and preferences', 'vela-core-more');
   const sourcePanel = disclosure('Find and add sources', 'vela-core-source-panel');
   const searchForm = el('form', 'vela-core-search'), search = el('input'), searchButton = el('button', 'vela-core-button', 'Search');
@@ -125,26 +127,32 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     }
   }
   function renderPlans(state: VelaState) {
-    plans.replaceChildren(); const history = disclosure('Earlier plans', 'vela-core-plan-history'), latest = state.plans.at(-1);
+    const latest = state.plans.at(-1), activeCards: HTMLElement[] = [], earlierCards: HTMLElement[] = [], visible = new Set<string>();
     for (const plan of [...state.plans].reverse()) {
-      const active = ['prepared', 'approved', 'applying', 'failed', 'unknown'].includes(plan.state) || plan.id === latest?.id; if (!active && history.body.children.length >= 8) continue;
+      const active = ['prepared', 'approved', 'applying', 'failed', 'unknown'].includes(plan.state) || plan.id === latest?.id; if (!active && earlierCards.length >= 8) continue;
+      const target = active ? activeCards : earlierCards, receipts = state.receipts.filter(receipt => receipt.planId === plan.id), effects = plan.steps.map(step => effect(step.action, plan));
+      const signature = JSON.stringify({ plan, receipts, effects }), cached = planCards.get(plan.id); visible.add(plan.id);
+      if (cached?.signature === signature) { target.push(cached.node); continue; }
       const card = el('article', 'vela-core-plan'); card.dataset.planId = plan.id; card.dataset.planState = plan.state; card.tabIndex = -1;
-      const receipts = state.receipts.filter(receipt => receipt.planId === plan.id), confirmed = receipts.filter(receipt => receipt.state === 'applied' && receipt.hostReceiptId).length;
+      const confirmed = receipts.filter(receipt => receipt.state === 'applied' && receipt.hostReceiptId).length;
       const complete = plan.steps.length > 0 && plan.steps.every(step => receipts.some(receipt => receipt.stepId === step.id && receipt.state === 'applied' && receipt.hostReceiptId));
       const stateLabel = { prepared: 'Ready for your review', approved: 'Approved · ready to apply', rejected: 'Not applied', applying: 'Applying reviewed changes', applied: complete ? 'Applied' : 'Results need review', failed: 'Stopped · review needed', cancelled: 'Cancelled', unknown: 'Outcome unknown · review needed' }[plan.state];
       card.append(el('p', 'vela-core-plan-state', stateLabel), el('h3', undefined, plan.summary), el('p', 'vela-core-meta', plan.contribution ? 'Proposed with ' + providerName(plan.contribution.providerId) : 'Local app action'));
-      const steps = el('ol', 'vela-core-effects'); for (const step of plan.steps) { const item = el('li'); item.append(el('p', undefined, effect(step.action, plan))); if (step.action.type === 'content') item.append(el('pre', 'vela-core-change-preview', step.action.content)); if (step.action.type === 'delegateTask') item.append(el('p', undefined, step.action.objective), el('p', 'vela-core-secondary', 'Starting this work requires a separate execution approval. A finished provider turn does not verify the task.')); steps.append(item); } card.append(steps);
+      const steps = el('ol', 'vela-core-effects'); for (const [index, step] of plan.steps.entries()) { const item = el('li'); item.append(el('p', undefined, effects[index])); if (step.action.type === 'content') item.append(el('pre', 'vela-core-change-preview', step.action.content)); if (step.action.type === 'delegateTask') item.append(el('p', undefined, step.action.objective), el('p', 'vela-core-secondary', 'Starting this work requires a separate execution approval. A finished provider turn does not verify the task.')); steps.append(item); } card.append(steps);
       if (plan.targets.length) card.append(el('p', 'vela-core-targets', 'Uses: ' + plan.targets.map(ref => ref.title).join(', ')));
       const controls = el('div', 'vela-core-actions');
-      const perform = async (approve: boolean) => { if (workingPlans.has(plan.id)) return; const previousFocus = doc.activeElement, returnFocus = controls.contains(previousFocus); workingPlans.add(plan.id); for (const child of Array.from(controls.children)) (child as HTMLButtonElement).disabled = true; try { if (approve) await client.review({ planId: plan.id, fingerprint: plan.fingerprint, decision: 'approve' }); await client.apply(plan.id); await refresh(); if (returnFocus && (doc.activeElement === previousFocus || doc.activeElement === doc.body)) plans.querySelector<HTMLElement>('[data-plan-id="' + plan.id + '"]')?.focus(); } finally { workingPlans.delete(plan.id); for (const child of Array.from(controls.children)) (child as HTMLButtonElement).disabled = false; } };
+      const perform = async (approve: boolean) => { if (workingPlans.has(plan.id)) return; const previousFocus = doc.activeElement, returnFocus = controls.contains(previousFocus); workingPlans.add(plan.id); setPlanBusy(plan.id, true); try { if (approve) await client.review({ planId: plan.id, fingerprint: plan.fingerprint, decision: 'approve' }); await client.apply(plan.id); await refresh(); if (returnFocus && (doc.activeElement === previousFocus || doc.activeElement === doc.body)) plans.querySelector<HTMLElement>('[data-plan-id="' + plan.id + '"]')?.focus(); } finally { workingPlans.delete(plan.id); setPlanBusy(plan.id, false); } };
       if (plan.state === 'prepared') controls.append(button('Approve and apply', () => perform(true)), button('Reject plan', async () => { await client.review({ planId: plan.id, fingerprint: plan.fingerprint, decision: 'reject' }); await refresh(); }));
       if (plan.state === 'approved') controls.append(button('Apply approved plan', () => perform(false))); card.append(controls);
       if (receipts.length) card.append(el('p', 'vela-core-receipt', confirmed + ' of ' + plan.steps.length + ' steps confirmed' + (receipts.some(receipt => ['failed', 'unknown'].includes(receipt.state)) ? ' · review details before trying again' : '')));
-      const details = disclosure('Plan details and evidence', 'vela-core-plan-details'); details.body.append(el('pre', undefined, JSON.stringify({ actions: plan.steps, targets: plan.targets, provider: plan.contribution, receipts }, null, 2))); card.append(details.node);
-      (active ? plans : history.body).append(card);
+      const details = disclosure('Plan details and evidence', 'vela-core-plan-details'); details.node.open = cached?.node.querySelector<HTMLDetailsElement>('details')?.open ?? false; details.body.append(el('pre', undefined, JSON.stringify({ actions: plan.steps, targets: plan.targets, provider: plan.contribution, receipts }, null, 2))); card.append(details.node);
+      planCards.set(plan.id, { node: card, controls, signature }); setPlanBusy(plan.id, workingPlans.has(plan.id)); target.push(card);
     }
-    if (history.body.children.length) plans.append(history.node);
+    reconcile(planHistory.body, earlierCards); reconcile(plans, earlierCards.length ? [...activeCards, planHistory.node] : activeCards);
+    for (const id of planCards.keys()) if (!visible.has(id)) planCards.delete(id);
   }
+  function setPlanBusy(id: string, pending: boolean) { const controls = planCards.get(id)?.controls; if (controls) for (const child of Array.from(controls.children)) (child as HTMLButtonElement).disabled = pending; }
+  function reconcile(parent: HTMLElement, children: HTMLElement[]) { for (const child of Array.from(parent.children)) if (!children.includes(child as HTMLElement)) child.remove(); children.forEach((node, index) => { if (parent.children[index] !== node) parent.insertBefore(node, parent.children[index] ?? null); }); }
   function render(state: VelaState) {
     if (disposed) return; current = state;
     provider.textContent = state.planner.available ? providerName(state.planner.providerId) + (state.planner.busy ? ' · busy' : ' · available') : 'Planning unavailable';
