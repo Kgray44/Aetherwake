@@ -64,6 +64,11 @@ import {
 import "../../../block-library/event-view.css";
 import type { StreamEvent } from "../../../integrated-backend/src/contracts.mts";
 import type { SubjectExperiencePort } from "../../../block-library/contracts.ts";
+import type { BlockInstanceSettings } from "../../../block-library/contracts.ts";
+import {
+  applyBlockConfiguration,
+  mountBlockConfiguration,
+} from "../../../block-library/configuration-view.ts";
 import type {
   Block,
   BlockKind,
@@ -163,6 +168,11 @@ export function installApplication(hooks: Hooks) {
     string,
     ReturnType<typeof mountSubjectExperience>
   >();
+  const blockSettings = new Map<string, BlockInstanceSettings>();
+  const settingsReads = new Map<string, Promise<void>>();
+  const settingsFailures = new Set<string>();
+  let cardConfiguration: ReturnType<typeof mountBlockConfiguration> | null =
+    null;
   let state: DesktopSnapshot | null = null;
   let offset = { x: 0, y: 0 };
   let zoom = 1;
@@ -371,6 +381,12 @@ export function installApplication(hooks: Hooks) {
         view.dispose();
         eventViews.delete(id);
       }
+    for (const id of blockSettings.keys())
+      if (!next.blocks.some((block) => block.id === id))
+        blockSettings.delete(id);
+    for (const id of settingsFailures)
+      if (!next.blocks.some((block) => block.id === id))
+        settingsFailures.delete(id);
     for (const [id, binding] of directBindings)
       if (!next.blocks.some((block) => block.id === id)) {
         binding.dispose();
@@ -631,6 +647,8 @@ export function installApplication(hooks: Hooks) {
   }
   dialog.addEventListener("close", () => {
     if (!previewCommitting) cancelPreview();
+    cardConfiguration?.dispose();
+    cardConfiguration = null;
   });
   addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || (!presenceDrag && !cancelResize)) return;
@@ -764,6 +782,8 @@ export function installApplication(hooks: Hooks) {
     });
   });
   function open(title: string, body: string) {
+    cardConfiguration?.dispose();
+    cardConfiguration = null;
     conversationManager?.dispose();
     conversationManager = null;
     dialog.classList.remove("conversation-surface");
@@ -1152,6 +1172,19 @@ export function installApplication(hooks: Hooks) {
       expectedProjectVersion: state?.projects.find((p) => p.id === projectId)
         ?.version,
       currentWorkspace: () => state,
+      currentConfigurations: () => {
+        const blocks = state?.blocks ?? [];
+        if (blocks.some((block) => !blockSettings.has(block.id)))
+          throw new Error(
+            "Block presentation preferences are still loading or unavailable. Reopen the card settings to retry before saving this template.",
+          );
+        return Object.fromEntries(
+          blocks.map((block) => [
+            block.id,
+            blockSettings.get(block.id)!.configuration,
+          ]),
+        );
+      },
       onApplied: () => {
         surfaces.close("workspace-templates");
         hooks.home();
@@ -1230,6 +1263,36 @@ export function installApplication(hooks: Hooks) {
     open(
       "Card",
       `<div class="layout-actions"><button id="focus-card">Open</button><button id="front-card">Bring to front</button><button id="detach-card">Remove from workspace</button></div><label><input type="checkbox" id="block-lock" ${block.locked ? "checked" : ""}> Lock placement</label><form><label>Presentation<select name="shape"><option value="rounded">Card</option><option value="lens">Lens</option><option value="circle">Circle</option><option value="pill">Pill</option></select></label><button type="submit">Save presentation</button></form>`,
+    );
+    const configurationRoot = document.createElement("section");
+    configurationRoot.className = "card-content-preferences";
+    dialog.append(configurationRoot);
+    cardConfiguration = mountBlockConfiguration(
+      configurationRoot,
+      {
+        ...libraryClient,
+        getBlockSettings: async (id) => {
+          if (!libraryClient.getBlockSettings)
+            throw new Error("block_configuration_unavailable");
+          const settings = await libraryClient.getBlockSettings(id);
+          rememberBlockSettings(settings);
+          return settings;
+        },
+        configureBlock: async (input) => {
+          if (!libraryClient.configureBlock)
+            throw new Error("block_configuration_unavailable");
+          const settings = await libraryClient.configureBlock(input);
+          rememberBlockSettings(settings);
+          return settings;
+        },
+      },
+      blockId,
+      (configuration) => {
+        const article = document.querySelector<HTMLElement>(
+          `[data-block="${blockId}"]`,
+        );
+        if (article) applyBlockConfiguration(article, configuration);
+      },
     );
     el<HTMLSelectElement>('[name="shape"]', dialog).value = [
       "rectangle",
@@ -1668,10 +1731,49 @@ export function installApplication(hooks: Hooks) {
     );
     subjectViews.set(block.id, view);
   }
+  function rememberBlockSettings(settings: BlockInstanceSettings) {
+    if (!state?.blocks.some((block) => block.id === settings.placementId))
+      return;
+    blockSettings.set(settings.placementId, settings);
+    settingsFailures.delete(settings.placementId);
+    const article = document.querySelector<HTMLElement>(
+      `[data-block="${settings.placementId}"]`,
+    );
+    if (article) {
+      applyBlockConfiguration(article, settings.configuration);
+      article.dataset.configurationState = "ready";
+    }
+  }
+  function loadBlockSettings(id: string) {
+    const cached = blockSettings.get(id);
+    if (cached) {
+      rememberBlockSettings(cached);
+      return;
+    }
+    if (
+      settingsReads.has(id) ||
+      settingsFailures.has(id) ||
+      !libraryClient.getBlockSettings
+    )
+      return;
+    const read = libraryClient
+      .getBlockSettings(id)
+      .then(rememberBlockSettings)
+      .catch(() => {
+        settingsFailures.add(id);
+        const article = document.querySelector<HTMLElement>(
+          `[data-block="${id}"]`,
+        );
+        if (article) article.dataset.configurationState = "unavailable";
+      })
+      .finally(() => settingsReads.delete(id));
+    settingsReads.set(id, read);
+  }
   function decorate(article: HTMLElement, id: string) {
     if (!article) return;
     const b = state?.blocks.find((b) => b.id === id);
     if (!b) return;
+    loadBlockSettings(id);
     article.dataset.locked = String(!!b.locked);
     if (!directBindings.has(id))
       directBindings.set(
