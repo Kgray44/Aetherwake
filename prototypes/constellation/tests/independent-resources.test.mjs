@@ -60,7 +60,14 @@ function setup(snapshot = fixture(), load = null) {
 }
 
 test("zero-project zero-workspace resources are real Universe nodes with rendered labels, list discovery and direct Open", async () => {
-  for (const kind of ["note", "conversation", "image"]) {
+  for (const kind of [
+    "note",
+    "conversation",
+    "image",
+    "agent",
+    "checklist",
+    "timeline",
+  ]) {
     const snapshot = fixture([resource(kind, kind)]),
       before = structuredClone(snapshot),
       { c, n, scene, calls, dispose } = setup(snapshot),
