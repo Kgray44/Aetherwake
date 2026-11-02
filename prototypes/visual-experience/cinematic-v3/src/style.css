@@ -107,7 +107,7 @@ body[data-study="architecture"] .scene-vignette {
   width: 64px;
   height: 64px;
   object-fit: contain;
-  mix-blend-mode: screen;
+  mix-blend-mode: normal;
   filter: url(#logo-clear-background);
 }
 .logo-filter {

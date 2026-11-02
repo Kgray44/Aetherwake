@@ -54,7 +54,7 @@ app.innerHTML = `
   <div class="scene-vignette" aria-hidden="true"></div>
   <div class="window-drag" aria-hidden="true"><span>AERYNTH <i>·</i> THE QUIET ATELIER</span></div>
   <header class="topbar">
-    <svg width="0" height="0" aria-hidden="true" class="logo-filter"><defs><filter id="logo-clear-background" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 8 8 8 0 0"/></filter></defs></svg>
+    <svg width="0" height="0" aria-hidden="true" class="logo-filter"><defs><filter id="logo-clear-background" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 4 4 4 0 -0.32"/></filter></defs></svg>
     <div class="brand"><img src="./aerynth-mark-master.png" alt="Approved Aerynth mark"><span>AERYNTH<small>LIQUID INTELLIGENCE / V3.5</small></span></div>
     <div class="place"><span class="tiny">WORKSPACE</span><span>The quiet atelier</span></div>
     <nav class="scene-navigation" aria-label="Environment"><button data-scene="architecture" aria-pressed="true">Architecture</button><button data-scene="living" aria-pressed="false">Living field</button></nav>
