@@ -93,11 +93,15 @@ identity.
 
 ## Verification state
 
-Four focused adapter scenarios are written in `test/canonical-host.test.mts`:
+Four focused adapter scenarios passed in `test/canonical-host.test.mts`:
 versioned/idempotent memberships and rollback; synchronized conversation callbacks;
 current ownership/legacy placement scopes and same-connection enforcement; observed
-capability cache expiry/cloning and local/provider identity. Execution is pending
-the parent's next CPU-only test slot. Native windows, captures and provider turns
+capability cache expiry/cloning and local/provider identity. Node 24.18.0 execution
+passed **4/4**, zero failures, duration 801 ms. Strict TypeScript noEmit passed for
+all module service/UI/adapter files and both test files with the existing compiler
+and Node types. These adapter tests use the actual canonical backend/kernel/graph
+and synthetic-only parent callbacks; they do not claim the parent's concrete final
+callbacks or policy/native integration have been accepted. Native windows, captures and provider turns
 are outside this adapter worker's scope. Storage guard passed for bounded C≤256MiB,
 D=0 additional allocation; exact host telemetry stays in private receipts. The
 reserve instruction does not enforce quotas on external/already-running processes.
