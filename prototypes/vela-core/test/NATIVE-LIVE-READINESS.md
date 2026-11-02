@@ -12,7 +12,11 @@ verify({
   deadlineMs?: number,   // default/max 85000, includes cleanup
   cancelOwnedPlanning?: (value: {
     requestId: string; reason: 'focus-lost' | 'deadline'
-  }) => Promise<unknown>
+  }) => Promise<unknown>,
+  getNativeRequestDiagnostics?: () => readonly {
+    stage: 'preview' | 'review' | 'grant' | 'request';
+    state: 'started' | 'completed' | 'failed'; code?: string;
+  }[] // synchronous cached native metadata, at most 24 records
 })
 ```
 
@@ -54,3 +58,9 @@ The added eighth offline test follows the active mounting chain, checks these so
 An actual pre-request run found that two geometry samples could still catch the composer settling. Submission now repeatedly samples the actual rectangle and hit test for at most 2.5 seconds within the same global monotonic work deadline. Three consecutive stable samples, 80 ms apart, must agree on center, position and size before one native mouse gesture is sent. Occlusion, unavailable controls, focus loss or parent Escape stop the check. No input is retried after it starts. Parent Escape uses the same sticky abort; the native sharing child's own Escape remains its actual Cancel path. Console/shader error checks are unchanged.
 
 Three focused offline cases exercise moving→stable with zero early input and exactly one gesture, never-stable local/global expiry, and occlusion/focus/Escape/partial-input failure without retry. Total offline tests: 11 passing, plus syntax and whitespace checks. This correction has not been run with a GUI, native approval or provider call.
+
+## Native stage observation
+
+The optional synchronous native diagnostic callback is sampled during sharing-child observation and into the private terminal receipt. It accepts only the four named stages, started/completed/failed states and an optional machine code of at most 160 identifier characters. More than 24 records, raw body/error fields, unknown fields/stages, asynchronous values and callback errors reject helper qualification. Callback exceptions are replaced by a fixed diagnostic error code rather than copied into evidence. Root owns sanitization and observer isolation; the helper receives no broker command or grant authority through this callback.
+
+An explicit failed stage stops the wait with its sanitized code. Completed records never stand in for the actual trusted child or approval. No parent renderer read, RPC or input is permitted while consent is pending, including failure diagnostics; only cached native observations are retained then. Missing callback keeps the bounded wait. Two additional pure/offline cases cover bounded cloning, invalid/body-bearing records, observer errors and truthful failure/completion semantics. Total offline tests: 13 passing. No GUI/provider/auth/network calls were run.

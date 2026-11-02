@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
-const {createSlot,trustedReviewWindow,consoleRecord,cancelObservedPlanning,submitStableTarget} = require('./native-live.cjs')._offline;
+const {createSlot,trustedReviewWindow,consoleRecord,cancelObservedPlanning,submitStableTarget,readNativeRequestDiagnostics,nativeRequestFailure} = require('./native-live.cjs')._offline;
 
 /** Pure lifecycle fixtures only. These never launch Electron or qualify actual native/provider behavior. */
 function fixture(){
@@ -70,9 +70,24 @@ test('current console detail shape and legacy level record actual errors, never 
   assert.deepEqual(consoleRecord({level:'error',message:'shader failed',lineNumber:9,sourceId:'actual.js'}),{message:'shader failed',line:9,source:'actual.js'});assert.deepEqual(consoleRecord(3,'legacy error',4,'legacy.js'),{message:'legacy error',line:4,source:'legacy.js'});assert.equal(consoleRecord({level:'info',message:'ordinary log'}),null);
 });
 
+test('native diagnostics are a cloned bounded metadata projection, with no authority or raw error/body fields',()=>{
+  assert.deepEqual(readNativeRequestDiagnostics(undefined),[]);const records=[{stage:'preview',state:'started'},{stage:'preview',state:'completed'},{stage:'review',state:'failed',code:'planning_prompt_capacity_exceeded'}];let calls=0;
+  const snapshot=readNativeRequestDiagnostics(()=>{calls++;return records;});assert.equal(calls,1);assert.deepEqual(snapshot,records);assert.notEqual(snapshot[0],records[0]);records[0].state='failed';assert.equal(snapshot[0].state,'started');assert.equal(snapshot.at(-1).code,'planning_prompt_capacity_exceeded');
+  for(const invalid of [Array(25).fill({stage:'preview',state:'started'}),[{stage:'execute',state:'started'}],[{stage:'review',state:'approved'}],[{stage:'review',state:'failed',code:'raw private error text'}],[{stage:'preview',state:'failed',code:'x'.repeat(161)}],[{stage:'preview',state:'completed',prompt:'PRIVATE'}],Promise.resolve([])])assert.throws(()=>readNativeRequestDiagnostics(()=>invalid),/invalid_native_request_diagnostics/);
+  assert.throws(()=>readNativeRequestDiagnostics(()=>{throw Error('PRIVATE prompt or error body');}),error=>error.message==='native_request_diagnostics_unavailable');
+});
+
+test('explicit native failure is terminal; stage completion never substitutes for the real trusted child or consent',()=>{
+  for(const stage of ['preview','review','grant','request'])assert.equal(nativeRequestFailure([{stage,state:'failed',code:'native_test_failure'}]).message,'native_'+stage+'_failed:native_test_failure');
+  assert.equal(nativeRequestFailure([{stage:'preview',state:'started'},{stage:'review',state:'completed'},{stage:'grant',state:'completed'}]),null);
+  const f=fixture();f.focus(false);f.enable(false);f.slot.consent(true);assert.throws(()=>f.slot.check(true),/focus_lost/,'Diagnostic completion cannot fabricate a trusted child or parent foreground');
+});
+
 test('helper source retains real canonical/consent/restart evidence and removes obsolete waits without adding approval transport',()=>{
   const source=fs.readFileSync(path.join(__dirname,'native-live.cjs'),'utf8');assert(!source.includes('240000'));assert(!source.includes('45000'));assert(!/\.focus\s*\(/.test(source));assert(!/command\(['"](?:authorizeVelaRequest|velaNativeReview|execute)['"]/.test(source));assert(!/click\([^\n]*#approve/.test(source));
   const transition=source.slice(source.indexOf('const observeNativeReview ='),source.indexOf('const control ='));assert(!transition.includes('win.webContents.executeJavaScript'),'Even pre-child observation cannot queue parent reads across the modal transition');assert(transition.includes('mode.child.webContents.executeJavaScript'));
+  assert(transition.includes('nativeRequestFailure(observeDiagnostics())'));assert(source.includes("nativeRequestDiagnosticsError='native_request_diagnostics_unavailable'"));
+  assert(source.includes("if (slot.isConsentPending()) return {error:'parent_diagnostic_withheld_during_native_consent'}"));assert(source.includes('if(driver&&!slot.failure()&&!slot.isConsentPending())for'));
   for(const required of ['planningCoverage','Complete scoped planning evidence must contain no tool or file-change items','Original placements remain canonical and unchanged','Restart retains the exact execution and native IDs','Dispatch retains the exact displayed native source/context bytes','One exact semantic provider input','taskVerified','--resume-reviewed-plan'])assert(source.includes(required),required);
 });
 
