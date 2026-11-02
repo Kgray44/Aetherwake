@@ -60,6 +60,11 @@
   overflow-wrap: anywhere;
   user-select: text;
 }
+/* Camera Approach/Return changes line wrapping on the retained editor.
+   Native scroll anchoring must not replace the user's scroll position. */
+[data-note-state] textarea {
+  overflow-anchor: none;
+}
 .aw-note-reading h1 {
   font-size: 1.6em;
 }
