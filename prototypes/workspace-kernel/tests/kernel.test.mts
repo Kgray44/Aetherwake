@@ -17,6 +17,45 @@ function fixture() {
 }
 const errorCode = (code: string) => (error: unknown) => error instanceof KernelError && error.code === code;
 
+test('resource organization preserves identity, placements and content while fencing stale edits', () => {
+  const f = fixture();
+  try {
+    let k = WorkspaceKernel.open(f.path);
+    const original = k.createProject('Original'), destination = k.createProject('Destination');
+    const note = k.createNote('Existing note', 'Durable source', original.id);
+    const workspace = k.createWorkspace('Existing view', original.id);
+    const block = k.attachBlock(workspace.id, note.id, placement);
+    const renamed = k.renameResource(note.id, 'Renamed note', note.version);
+    assert.equal(renamed.id, note.id);
+    assert.throws(() => k.assignResourceProject(note.id, destination.id, note.version), errorCode('CONFLICT'));
+    const moved = k.assignResourceProject(note.id, destination.id, renamed.version);
+    assert.equal(moved.project_id, destination.id);
+    assert.equal(k.getResource(note.id).note.content, 'Durable source');
+    assert.equal(k.openWorkspace(workspace.id).blocks[0].id, block.id);
+    k.close(); k = WorkspaceKernel.open(f.path);
+    assert.deepEqual(k.getResource(note.id).resource, moved);
+    assert.equal(k.openWorkspace(workspace.id).blocks[0].resource_id, note.id);
+    const archived = k.setProjectArchived(original.id, true, original.version);
+    assert.throws(() => k.assignResourceProject(note.id, archived.id, moved.version), errorCode('INVALID'));
+    assert.deepEqual(k.getResource(note.id).resource, moved);
+    k.close();
+  } finally { f.cleanup(); }
+});
+
+test('collection membership and its canonical version compose atomically', () => {
+  const f = fixture();
+  try {
+    const k = WorkspaceKernel.open(f.path), note = k.createNote('Member', ''), collection = k.createCollection('Folder');
+    k.withTransaction(() => { k.addToCollection(collection.id, note.id); k.touchCollection(collection.id, collection.version); });
+    assert.equal(k.listCollection(collection.id)[0].id, note.id);
+    assert.throws(() => k.withTransaction(() => { k.removeFromCollection(collection.id, note.id); k.touchCollection(collection.id, collection.version); }), errorCode('CONFLICT'));
+    assert.equal(k.listCollection(collection.id)[0].id, note.id);
+    const next = k.touchCollection(collection.id, collection.version + 1);
+    assert.equal(next.version, collection.version + 2);
+    k.close();
+  } finally { f.cleanup(); }
+});
+
 test('canonical resource survives multiple blocks, moves, layout save and restart', () => {
   const f = fixture();
   try {

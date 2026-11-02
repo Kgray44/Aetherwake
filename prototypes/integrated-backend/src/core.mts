@@ -6,7 +6,7 @@ import { DesktopState } from './desktop.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { ConversationGraph, type GraphData, type ProviderAdapter as GraphAdapter } from '../../connected-conversations/src/graph.ts';
-import { mockOrdinaryAdapter } from '../../connected-conversations/src/adapters.ts';
+import { localConversationAdapter, mockOrdinaryAdapter } from '../../connected-conversations/src/adapters.ts';
 import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
 import { nativeProvider, fixtureProvider } from './providers.mts';
 import { CONTRACT, ensure, ServiceError, type Binding, type Execution, type HandoffReview, type Options, type ProviderPort, type StreamEvent, type CommandMap } from './contracts.mts';
@@ -98,7 +98,7 @@ export class BackendCore {
   private localAdapters(): GraphAdapter[] {
     const ordinary = mockOrdinaryAdapter();
     const staging: GraphAdapter = { snapshot: { ...ordinary.snapshot, id: this.port.id, label: this.port.mock ? 'SIMULATED Codex fixture' : 'Codex local identity staging (execution not established)', mock: this.port.mock, nativeFork: { supported: false, authorized: false, availability: 'unsupported' } }, open: () => ({ providerSessionId: null }) };
-    return [ordinary, staging];
+    return [localConversationAdapter(), ordinary, staging];
   }
   private validateState() {
     ensure(this.state.resources && this.state.revisions && this.state.bindings && this.state.reviews && this.state.executions && this.state.receipts, 'corrupt_state');
@@ -149,11 +149,11 @@ export class BackendCore {
   }
   private conv(resourceId: string) {
     const c = this.graph.snapshot().conversations.find(c => c.id === this.gid(resourceId))!;
-    return { resourceId, revision: this.state.revisions[resourceId], title: c.title, providerId: c.providerId, kind: c.kind, taskId: null, projectId: null };
+    return { resourceId, revision: this.state.revisions[resourceId], title: c.title, providerId: c.providerId, kind: c.kind, taskId: null, projectId: this.kernel.getResource(resourceId).resource.project_id };
   }
-  private create(title: string, providerId: string) {
-    const c = this.graph.createChat(providerId === 'mock-ordinary' ? 'ordinary' : 'codex', providerId, title);
-    const resource = this.kernel.createConversationRef(title);
+  private create(title: string, providerId: string, projectId: string | null = null) {
+    const c = this.graph.createChat(['local','mock-ordinary'].includes(providerId) ? 'ordinary' : 'codex', providerId, title);
+    const resource = this.kernel.createConversationRef(title, projectId);
     this.state.resources[resource.id] = c.id; this.state.revisions[resource.id] = 1;
     return this.conv(resource.id);
   }
@@ -220,6 +220,7 @@ export class BackendCore {
     const fingerprint = hash({ type: 'execute', ...input });
     const previous = Object.hasOwn(this.state.receipts, input.commandId) ? this.state.receipts[input.commandId] : undefined;
     if (previous) { ensure(previous.fingerprint === fingerprint, 'idempotency_conflict'); return structuredClone(this.state.executions[previous.result]); }
+    if (input.expectedRevision !== undefined) ensure(this.state.revisions[input.resourceId] === input.expectedRevision, 'stale_resource_version');
     ensure(typeof input.commandId === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,198}$/.test(input.commandId), 'invalid_command_id');
     const unresolved = Object.values(this.state.executions).find(e => e.resourceId === input.resourceId && ['running','dispatching','unknown'].includes(e.state));
     ensure(!unresolved, 'reconciliation_required');
@@ -298,7 +299,7 @@ export class BackendCore {
       case 'viewState': return this.desktop.viewState(a) as any;
       case 'desktop': {
         if (a.type !== 'snapshot') {
-          this.atomic(() => this.desktop.apply(a, (title, codex) => this.create(title, codex ? this.port.id : 'mock-ordinary').resourceId));
+          this.atomic(() => this.desktop.apply(a, (title, codex) => this.create(title, codex ? this.port.id : this.privateMode ? 'local' : 'mock-ordinary').resourceId));
           this.record('application/' + a.type, 'observed');
         }
         const graph = this.graph.snapshot();
@@ -313,15 +314,18 @@ export class BackendCore {
           return {provider:c.kind==='codex'?'codex':'local',providerId:c.providerId,conversationRevision:this.state.revisions[id],messageCount:messages.length,...(execution?{execution:{id:execution.id,state:execution.state,errorCode:execution.errorCode,taskVerified:false as const}}:{}),messages:messages.slice(-200).map(m=>({id:m.id,role:m.role,content:m.content}))};
         },{revision:graph.counter,branches}) as any;
       }
-      case 'createConversation': return this.atomic(() => this.once(a.commandId, { name, ...a }, () => this.create(a.title, a.providerId ?? 'mock-ordinary'))) as any;
-      case 'addMessage': return this.atomic(() => {
+      case 'createConversation': return this.atomic(() => this.once(a.commandId, { name, ...a }, () => this.create(a.title, a.providerId ?? (this.privateMode ? 'local' : 'mock-ordinary')))) as any;
+      case 'addMessage': {
+        const append = () => {
         ensure(this.kernel.getResource(a.resourceId).resource.state === 'active', 'resource_archived');
         ensure(this.state.revisions[a.resourceId] === a.expectedRevision, 'stale_resource_version');
         ensure(typeof a.content === 'string' && Buffer.byteLength(a.content) <= 65536, 'invalid_message');
         ensure(!a.sensitivity || ['public','internal','sensitive','restricted'].includes(a.sensitivity), 'invalid_sensitivity');
         const m = this.graph.addMessage(this.gid(a.resourceId), a.role, a.content, { sensitivity: a.sensitivity });
         this.state.revisions[a.resourceId]++; return { ...m, resourceId: a.resourceId, revision: this.state.revisions[a.resourceId] };
-      }) as any;
+        };
+        return this.atomic(() => a.commandId ? this.once(a.commandId, {name, ...a}, append) : append()) as any;
+      }
       case 'workspace': return this.atomic(() => { const p = a.projectTitle ? this.kernel.createProject(a.projectTitle) : null; return this.kernel.createWorkspace(a.title, p?.id ?? null); }) as any;
       case 'openWorkspace': return this.kernel.openWorkspace(a.workspaceId) as any;
       case 'place': return this.atomic(() => { this.gid(a.resourceId); return this.kernel.attachBlock(a.workspaceId, a.resourceId, { x: 0, y: 0, width: 320, height: 240, z: 0 }); }) as any;
@@ -330,8 +334,8 @@ export class BackendCore {
         ensure(Number.isInteger(a.tokenBudget) && a.tokenBudget > 0 && a.tokenBudget <= 32768, 'invalid_token_budget');
         ensure(Array.isArray(a.includeMessageIds) && a.includeMessageIds.length > 0 && a.includeMessageIds.length <= 100, 'explicit_source_selection_required');
         const sourceId = this.gid(a.resourceId);
-        const result = this.graph.branch({ sourceConversationId: sourceId, sourceMessageId: a.messageId, targetKind: a.providerId === 'mock-ordinary' ? 'ordinary' : 'codex', targetProviderId: a.providerId, title: a.title, includeMessageIds: a.includeMessageIds });
-        const resource = this.kernel.createConversationRef(a.title);
+        const result = this.graph.branch({ sourceConversationId: sourceId, sourceMessageId: a.messageId, targetKind: ['local','mock-ordinary'].includes(a.providerId) ? 'ordinary' : 'codex', targetProviderId: a.providerId, title: a.title, includeMessageIds: a.includeMessageIds });
+        const resource = this.kernel.createConversationRef(a.title, this.kernel.getResource(a.resourceId).resource.project_id);
         this.state.resources[resource.id] = result.conversation.id; this.state.revisions[resource.id] = 1;
         this.kernel.relate(a.resourceId, resource.id, 'application_continuation', 'user');
         if (a.workspaceId) this.desktop.apply({type:'attach',workspaceId:a.workspaceId,resourceId:resource.id,...(a.bounds?{bounds:a.bounds}:{})},()=>{throw new ServiceError('unsupported_command');});
