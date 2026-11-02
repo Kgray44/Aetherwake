@@ -20,6 +20,7 @@ const glyphs: Record<BlockIdentityModel["layout"], string> = {
   task: "M4 4h16v16H4zM8 12l3 3 6-7",
   checklist: "M3 5l2 2 3-4M11 5h10M3 12l2 2 3-4M11 12h10M3 19h5M11 19h10",
   ledger: 'M5 3h14v18H5zM8 7h2v2H8zM13 8h3M8 12h2v2H8zM13 13h3M8 17h2v2H8zM13 18h3',
+  agent: 'M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M4 21v-3a8 8 0 0 1 16 0v3M8 17h8',
   timeline: "M6 3v18M3 6h6M3 12h6M3 18h6M12 6h9M12 12h6M12 18h8",
   project: "M12 3l8 5v9l-8 4-8-4V8zM4 8l8 5 8-5M12 13v8",
   table: "M3 5h18v15H3zM3 10h18M8 5v15M3 15h18",
@@ -418,7 +419,13 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
       rowNodes.clear();
       return;
     }
-    if (
+    if (value.layout === 'agent') {
+      body.replaceChildren(); rowNodes.clear();
+      const hero = element('div', 'aw-identity-agent-profile'), monogram = element('span', 'aw-identity-agent-monogram', Array.from(value.heading.trim())[0]?.toUpperCase() ?? 'A');
+      hero.append(monogram, element('h3', '', value.heading)); body.append(hero);
+      for (const paragraph of value.paragraphs) body.append(element('p', 'aw-identity-paragraph', paragraph));
+      if (value.empty) body.append(element('small', 'aw-identity-agent-specialties', value.empty));
+    } else if (
       [
         "chat",
         "execution",

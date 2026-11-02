@@ -1,4 +1,10 @@
 /* Type belongs to the registered DOM identity, not the shared GPU material family. */
+.folio[data-block-kind="agent"] { --aw-type-accent:#b7cadb; }
+.folio[data-block-kind="checklist"] { --aw-type-accent:#bdc9b3; }
+.aw-block-compact[data-layout="agent"] .aw-identity-agent-profile { display:flex; align-items:center; gap:.7rem; margin-bottom:.7rem; }
+.aw-identity-agent-monogram { display:grid; place-items:center; flex:0 0 38px; height:38px; border-radius:50%; border:1px solid #b7cadb55; font:500 1.3rem Georgia,serif; }
+.aw-identity-agent-profile h3 { margin:0; font:500 1.1rem/1.4 system-ui,sans-serif; }.aw-identity-agent-specialties { display:block; margin-top:.5rem; opacity:.65; }
+.aw-block-compact[data-layout="ledger"] .aw-identity-row { border:1px solid #bdc9b32b; border-radius:.55rem; padding:.5rem; margin-bottom:.4rem; }
 .folio[data-block-kind] {
   --aw-type-accent: #c9c4d3;
 }

@@ -40,5 +40,5 @@ export function agentFixture(t: any) {
     return service.recordAssignment({ commandId: randomUUID(), agent: created.agent, task: { id: String(task.id), version: Number(task.version) },
       expectedCatalogRevision: configuration.catalogRevision, expectedConfigurationDigest: configuration.digest });
   };
-  return { kernel, db, service, client, created, link, deny() { allowed = false; } };
+  return { kernel, db, desktop, service, client, created, link, authorized: () => allowed, deny() { allowed = false; } };
 }

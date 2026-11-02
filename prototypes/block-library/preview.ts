@@ -15,7 +15,14 @@ export function blockPreview(kind: BlockInstanceKind): HTMLElement {
     root.append(element);
     return element;
   };
-  if (kind === "project_overview") {
+  if (kind === 'agent') {
+    line('small', 'SAVED AGENT · EXAMPLE');
+    line('h4', 'Researcher');
+    line('p', 'Investigate a question and compare sources.');
+    line('p', 'Purpose · Specialties · Effective configuration');
+    line('div', 'Open agent', 'aw-library__sample-input');
+    line('p', 'A saved profile is not a running execution.', 'aw-library__hint');
+  } else if (kind === "project_overview") {
     line("small", "PROJECT OVERVIEW · EXAMPLE");
     line("h4", "A project and its work");
     line("p", "Workspaces → Development · Research");

@@ -162,6 +162,7 @@ export function mountBlockLibrary(
     ["conversation", "Conversation"],
     ["knowledge", "Knowledge"],
     ["planning", "Planning"],
+    ['intelligence', 'Intelligence'],
     ["observability", "Observability"],
     ["organization", "Organization"],
   ]) {
@@ -592,7 +593,7 @@ export function mountBlockLibrary(
         for (const resource of page.resources) {
           const row = node("div", "aw-library__resource-row"),
             label = node("div", "", resource.title);
-          label.append(node("small", "", resource.kind + " · " + resource.id));
+          label.append(node("small", "", kindTitle(resource.kind)));
           const action = button("Attach " + resource.title, () => {
             void perform(() =>
               port.attachBlock!({
@@ -672,6 +673,14 @@ export function mountBlockLibrary(
       form,
       attach,
     );
+    if (definition.creation === 'reference-only') {
+      form.onsubmit = event => { event.preventDefault(); };
+      create.disabled = true; form.remove(); attach.open = true;
+      attachHeading.textContent = 'Choose a saved agent';
+      detail.insertBefore(node('p', 'aw-library__hint', 'Create and configure agent profiles in the Agent Library, then attach the same saved agent here.'), attach);
+      attach.append(settings);
+      if (port.findResources && port.attachBlock) void loadResources();
+    }
   };
   function showSubjectDetail(kind: SubjectBlockKind, generation: number) {
     const definition = catalogDefinition(kind),
@@ -1443,6 +1452,11 @@ export function mountWorkspaceTemplates(
         const fresh = select.querySelector<HTMLOptionElement>('option[value="new"]');
         if (fresh) { fresh.disabled = true; fresh.textContent = 'Copying checklist contents is unavailable'; }
         form.append(node('p', 'aw-library__hint', 'Reuse this checklist to keep its saved items, groups and linked sources. Checklist contents are not copied.'));
+      }
+      if (resource.kind === 'agent') {
+        const fresh = select.querySelector<HTMLOptionElement>('option[value="new"]');
+        if (fresh) { fresh.disabled = true; fresh.textContent = 'Create profiles in the Agent Library'; }
+        form.append(node('p', 'aw-library__hint', 'Reuse the saved agent profile. Workspace templates do not copy agents or their assignment history.'));
       }
       form.append(field(resource.title + " · " + resource.kind, select));
     }

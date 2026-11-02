@@ -85,6 +85,7 @@ export const BLOCK_DEFAULT_SIZES: Readonly<
   task: { width: 320, height: 260 },
   task_group: { width: 440, height: 460 },
   checklist: { width: 460, height: 500 },
+  agent: { width: 400, height: 460 },
   stream: { width: 500, height: 380 },
   project_overview: { width: 520, height: 360 },
   resource_browser: { width: 560, height: 440 },
@@ -195,6 +196,10 @@ export const BUILTIN_BLOCKS: readonly BlockDefinition[] = deepFreeze([
     ['Add and edit items', 'Check items manually', 'Group and order items', 'Link sources'],
     'An empty checklist. Checkmarks record manual or explicitly reviewed changes; they do not verify agent work.',
   ), requiredServices: ['canonical-resources', 'workspace-engine', 'checklist-service'] },
+  { ...define('agent', 'Agent', 'intelligence', 'Keep an existing saved agent, its purpose and supported configuration close to your work.',
+    ['Open agent', 'Inspect effective configuration'],
+    'References one saved Agent profile. Catalog compatibility does not mean an agent is running.'),
+    creation: 'reference-only', requiredServices: ['canonical-resources', 'workspace-engine', 'agent-library'] },
   define(
     "reference",
     "Reference",
@@ -522,6 +527,8 @@ export function validateCreateBlock(
   )
     throw Object.assign(new Error("invalid_title"), { code: "invalid_title" });
   assertBlockAvailable(input.kind, capabilities, input.provider);
+  if (blockDefinition(input.kind).creation === 'reference-only')
+    throw Object.assign(new Error('agent_library_creation_required'), { code: 'agent_library_creation_required' });
   return {
     ...input,
     title: input.title.trim(),

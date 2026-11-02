@@ -310,7 +310,8 @@ test("every new block kind uses its distinct preferred geometry without rewritin
     collection_browser: { state: "available" },
   };
   const sizes = new Set<string>();
-  for (const manifest of REGISTERED_BLOCKS) {
+  const creatable = REGISTERED_BLOCKS.filter(definition => definition.creation !== 'reference-only');
+  for (const manifest of creatable) {
     const base = {
       commandId: "default-size:" + manifest.kind,
       workspaceId: workspace.workspaceId,
@@ -1417,7 +1418,7 @@ test("registered project/browser views have live capability states and create on
       "Synthetic view workspace",
       project.id,
     );
-  assert.equal(REGISTERED_BLOCKS.length, 11);
+  assert.equal(REGISTERED_BLOCKS.length, 12);
   assert.equal(
     f.service
       .discoverBlocks()

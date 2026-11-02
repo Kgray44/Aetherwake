@@ -6,6 +6,7 @@ import type {
 } from "./contracts.ts";
 import { sourceLinks } from "./source-links.ts";
 import type { ChecklistDocument } from '../application-contract/checklist.ts';
+import type { AgentBlockProjection } from './agent-view.ts';
 
 export type SubjectIdentity =
   | { phase: "loading" | "unavailable"; message?: string }
@@ -41,6 +42,7 @@ export type BlockIdentityModel = {
     | "task"
     | "checklist"
     | 'ledger'
+    | 'agent'
     | "timeline"
     | "project"
     | "table"
@@ -75,6 +77,7 @@ const document = (content: string) => {
   };
 };
 const typeLabel = {
+  agent: 'Agent',
   conversation: "Conversation",
   note: "Note",
   task: "Manual Task",
@@ -99,10 +102,12 @@ export function blockIdentity(input: {
   subject?: SubjectIdentity;
   events?: IdentityEvent[];
   checklist?: ChecklistDocument;
+  agent?: AgentBlockProjection;
   disconnected?: boolean;
 }): BlockIdentityModel {
   const { kind, resource } = input;
   const layouts = {
+    agent: 'agent',
     conversation: resource?.provider === "codex" ? "execution" : "chat",
     note: "document",
     task: "task",
@@ -197,6 +202,18 @@ export function blockIdentity(input: {
       : [];
     model.paragraphs = document(content).paragraphs.slice(0, 2);
     model.empty = "Add a description in task details.";
+  } else if (kind === 'agent') {
+    const agent = input.agent;
+    if (!agent || agent.phase !== 'ready' || agent.profile.resource.id !== resource?.id) {
+      model.phase = agent?.phase === 'unavailable' ? 'unavailable' : 'loading';
+      model.subtitle = model.phase === 'loading' ? 'Loading saved agent…' : 'Agent unavailable';
+      model.empty = 'Open the Agent Library to inspect this saved profile.';
+    } else {
+      model.heading = agent.profile.resource.title;
+      model.subtitle = agent.configuration ? ({ supported: 'Configuration compatible · saved profile', 'needs-setup': 'Needs setup · saved profile', unsupported: 'Unsupported configuration', unknown: 'Configuration unknown' } as const)[agent.configuration.configurationState] : 'Saved profile · configuration unavailable';
+      model.paragraphs = [excerpt(agent.profile.profile.purpose, 220)];
+      model.empty = agent.profile.profile.specialties.slice(0, 3).join(' · ');
+    }
   } else if (kind === 'checklist') {
     const checklist = input.checklist;
     if (!checklist || checklist.resource.id !== resource?.id) {

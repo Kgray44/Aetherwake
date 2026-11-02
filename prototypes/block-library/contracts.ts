@@ -38,6 +38,7 @@ export type BlockCategory =
   | "knowledge"
   | "planning"
   | "observability"
+  | 'intelligence'
   | "organization";
 export type SubjectBlockKind =
   | "project_overview"
@@ -49,6 +50,8 @@ export type LibraryRecommendationContext = {
   presentKinds: readonly BlockInstanceKind[];
 };
 export type BlockDefinition<K extends BlockInstanceKind = BlockKind> = {
+  /** Canonical profiles are created in their domain library, then referenced. */
+  creation?: 'reference-only';
   id: string;
   version: 1;
   iconId: string;
