@@ -90,6 +90,8 @@ export const BLOCK_DEFAULT_SIZES: Readonly<
   collection_browser: { width: 460, height: 400 },
   research: { width: 420, height: 420 },
   reference: { width: 340, height: 300 },
+  file: { width: 420, height: 240 },
+  link: { width: 420, height: 220 },
 });
 
 const define = (

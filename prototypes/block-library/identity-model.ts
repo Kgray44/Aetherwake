@@ -83,6 +83,8 @@ const typeLabel = {
   collection_browser: "Collection",
   research: "Research",
   reference: "Reference",
+  file: 'File',
+  link: 'Link',
 } satisfies Record<BlockInstanceKind, string>;
 
 /** Read-only projections of canonical data. Empty and unavailable are explicit;
@@ -107,6 +109,8 @@ export function blockIdentity(input: {
     collection_browser: "collection",
     research: "research",
     reference: "reference",
+    file: 'document',
+    link: 'reference',
   } as const;
   const model: BlockIdentityModel = {
     kind,

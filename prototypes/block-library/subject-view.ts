@@ -285,7 +285,7 @@ export function mountSubjectExperience(
       }
       item.resource = resource;
       item.row.dataset.resourceKind = resource.kind;
-      item.kind.textContent = ({ conversation: "CHAT", note: "NOTE", task: "TASK", task_group: "LIST", stream: "FEED", research: "STUDY", reference: "REF" } as const)[resource.kind];
+      item.kind.textContent = ({ conversation: "CHAT", note: "NOTE", task: "TASK", task_group: "LIST", stream: "FEED", research: "STUDY", reference: "REF", file: 'FILE', link: 'LINK' } as const)[resource.kind];
       item.title.textContent = resource.title;
       if (options.openResource)
         item.title.setAttribute("aria-label", "Open " + resource.title);

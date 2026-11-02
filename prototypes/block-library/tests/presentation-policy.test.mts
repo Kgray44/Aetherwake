@@ -11,7 +11,9 @@ const small: BlockFootprint = { width: 160, height: 220, bodyWidth: 120, bodyHei
 const chat: Resource = { id: 'resource:retained-chat', kind: 'conversation', title: 'Synthetic retained Chat', version: 1, provider: 'local', content: '', messages: [{ id: 'message:actual', role: 'user', content: 'Exact canonical message', provenance: 'user' } as any] };
 
 test('all registered kinds use body readability and a reachable Approach target, independent of canonical defaults', () => {
-  assert.deepEqual(Object.keys(readableBody).sort(), REGISTERED_BLOCKS.map(value => value.kind).sort());
+  // Released file/link kinds need safe projections before the native import
+  // capability is enabled; a type projection does not advertise a provider.
+  assert.deepEqual(Object.keys(readableBody).sort(), [...new Set([...REGISTERED_BLOCKS.map(value => value.kind), 'file', 'link'])].sort());
   for (const { kind } of REGISTERED_BLOCKS) {
     assert.equal(blockComposition(kind, { ...small, bodyHeight: 20 }), 'overview');
     const target = blockApproachTarget(kind, 1.5);

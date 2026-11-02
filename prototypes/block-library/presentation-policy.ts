@@ -27,6 +27,8 @@ export const readableBody = Object.freeze({
   collection_browser: Object.freeze({ width: 224, height: 120 }),
   research: Object.freeze({ width: 192, height: 80 }),
   reference: Object.freeze({ width: 176, height: 72 }),
+  file: Object.freeze({ width: 280, height: 200 }),
+  link: Object.freeze({ width: 240, height: 96 }),
 } satisfies Record<BlockInstanceKind, { width: number; height: number }>);
 const widthMargin = 16, heightMargin = 12;
 const scale = (value: number) => Number.isFinite(value) && value > 0 ? value : 1;
