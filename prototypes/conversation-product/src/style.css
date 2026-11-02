@@ -36,6 +36,10 @@
 .cp-composer{align-items:end;margin-top:14px}
 .cp-composer textarea{flex:1 1 240px;min-height:90px;resize:vertical}
 .cp-composer button{flex:0 0 auto}
+.cp-draft-status{font-size:11px!important;line-height:1.5!important;color:#bac9dc;margin:6px 0}
+.cp-draft-recovery{max-width:100%;overflow-wrap:anywhere}
+.cp-draft-recovery pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:160px;overflow:auto;margin:0;padding:8px;border:1px solid #adc5df35;border-radius:8px}
+.cp-draft-recovery>p{font-size:12px}
 .cp-disclosure{max-width:100%}
 .cp-disclosure>summary{font-size:12px;padding:6px 9px;width:fit-content;list-style-position:inside}
 .cp-disclosure-panel{display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:12px;margin:7px 0;border:1px solid #adc5df35;border-radius:10px;background:#101b2b;max-width:100%}
