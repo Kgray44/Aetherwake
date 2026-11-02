@@ -42,6 +42,36 @@ Opening an existing ID with the same content and modality retargets the same dia
 
 `onClose(reason)` is optional per request. Reasons are `escape`, `outside-pointer`, `close-button`, `programmatic`, `anchor-removed`, `native-close` and `disposed`. `restoreFocus(target)` and `onFrame(id,rect,constrained)` are optional trusted UI callbacks; onFrame is a geometry notification, not a scheduler subscription. Parent adapters own trigger aria-expanded/aria-controls state, title/content semantics, authorization, canonical operations and error reporting. An absent anchor closes its representation. Dispose removes listeners, observers and this host's motion bodies while retaining unrelated motion and caller content.
 
-Validation: TypeScript passes; six pure placement tests include 3,600 combinations of tiny/fractional viewports, offscreen anchors, insets, panel sizes and directions. Fourteen [source-hash-bound Electron DOM/component checks](evidence-material-continuity/contextual-surfaces-component.json) cover actual CSS reflow, draft/caret identity, focus return, Escape and inner consumption, outside dismissal, modal Tab cycling, narrow viewport, interrupted close, anchor removal, invalid limits, disposal and ResizeObserver settling. Run `node --experimental-strip-types --test tests/contextual-surfaces.test.mjs` and `electron native/contextual-surfaces-verify.cjs` from the prototype. The latter bundles only a synthetic component fixture into ignored runtime output and uses a hidden sandboxed Electron window with network access blocked. It does not instantiate the application backend or production environment. No native foreground, visual screenshot, shared-host functional or performance qualification is claimed; those checks follow real App integration.
+Initial component release validation (4634a36): TypeScript passes; six pure placement tests include 3,600 combinations of tiny/fractional viewports, offscreen anchors, insets, panel sizes and directions. Fourteen [source-hash-bound Electron DOM/component checks](evidence-material-continuity/contextual-surfaces-component.json) cover actual CSS reflow, draft/caret identity, focus return, Escape and inner consumption, outside dismissal, modal Tab cycling, narrow viewport, interrupted close, anchor removal, invalid limits, disposal and ResizeObserver settling. Run `node --experimental-strip-types --test tests/contextual-surfaces.test.mjs` and `electron native/contextual-surfaces-verify.cjs` from the prototype. The latter bundles only a synthetic component fixture into ignored runtime output and uses a hidden sandboxed Electron window with network access blocked. It does not instantiate the application backend or production environment. No native foreground, visual screenshot, shared-host functional or performance qualification is claimed; those checks follow real App integration.
 
 Storage admission passed before bounded local work with both drives above their separate 30 GiB reserves. This monitoring rule is not an OS quota and cannot constrain unrelated applications, cloud work or processes that have not loaded it.
+
+## Guarded close lifecycle
+
+Optional request `beforeClose(reason): boolean | Promise<boolean>` lets a reusable panel finish durable saving before dismissal. Ordinary outside-pointer, Escape, close-button and programmatic `close()` calls invoke this guard before making the dialog inert or targeting its closing motion. Only `true` permits closing. False, a synchronous throw or a rejected promise leaves the same live DOM, current focus and editable state; the callback owns the visible persistence error. No rejection escapes from the guard. This is a persistence lifecycle hook, not a user approval flow.
+
+```ts
+surfaces.open({
+  id: "conversation-manager",
+  anchor: conversationsButton,
+  content: conversationContent,
+  label: "Conversations",
+  beforeClose: async () => {
+    try {
+      await conversationManager.flush();
+      return true;
+    } catch (error) {
+      showPersistenceError(error);
+      return false;
+    }
+  },
+});
+```
+
+`close()` still returns void. Ungated surfaces keep their synchronous behavior, and a synchronous boolean guard is also decided synchronously. Promise guards do not add a scheduler or timer. Repeated dismissal attempts while one decision is pending reuse that decision instead of invoking persistence again. Inputs remain usable while saving, so the callback must return true only once the current edits are durable, including any edits made during the await. The host does not pretend to save drafts or choose an application's persistence policy.
+
+Calling `open()` for the same ID/content/modality reuses the dialog and invalidates any pending close decision. A stale success or rejection cannot dismiss that reopened surface or clear a newer pending decision. A different content node or modality remains an explicit synchronous forced replacement: its caller MUST flush before swapping. Replacement bypasses beforeClose, restores the old content and invokes its onClose once with `programmatic`, then installs the new representation. An old native-dialog close event cannot remove the replacement.
+
+Anchor removal, native dialog closure and dispose are forced immediate UI cleanup. They invalidate pending decisions, release this host's listeners/observers/motion bodies and restore caller content without waiting for persistence. Forced cleanup does not cancel the underlying promise or guarantee storage durability. The parent native shutdown/subject-removal lifecycle must await its actual persistence separately. `onClose` remains a cleanup notification after the UI lifetime has ended; saving that must veto closing belongs in beforeClose. A native dialog whose close event is delayed is also recognized through its open state during the shared frame, close-decision and reopen paths.
+
+Follow-up validation: strict TypeScript and formatting pass. The new [source-hash-bound component receipt](evidence-material-continuity/contextual-surfaces-close-guard.json) passes all **27 checks**, including the initial fourteen and thirteen lifecycle checks for synchronous allow/veto/throw, asynchronous success/veto/rejection, deduplicated dismissal paths, edits/focus/caret retention, stale reopen/replacement/native-close races, and forced teardown. The isolated hidden DOM verifier now disables hardware acceleration and records its environment; it requires no foreground window or production renderer. Earlier failed native-close timing checks remain in ignored runtime output and were not relabeled. The initial fourteen-check receipt remains preserved above. Live conversation-manager wiring and native save/reopen acceptance remain Integration-owned.

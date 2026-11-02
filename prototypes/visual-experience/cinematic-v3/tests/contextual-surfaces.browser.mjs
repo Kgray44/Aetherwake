@@ -3,9 +3,9 @@ import { createContextualSurfaces } from "../src/contextual-surfaces.ts";
 import "../src/contextual-surfaces.css";
 export async function run() {
   const checks = [];
-  const check = (name, ok) => {
+  const check = (name, ok, detail) => {
     checks.push({ name, passed: !!ok });
-    if (!ok) throw Error(name);
+    if (!ok) throw Error(name + (detail ? ": " + JSON.stringify(detail) : ""));
   };
   document.body.innerHTML =
     '<button id="anchor" style="position:fixed;left:280px;top:210px">Open</button><button id="outside" style="position:fixed;left:4px;top:4px">Other action</button><div id="source" hidden></div>';
@@ -216,6 +216,299 @@ export async function run() {
       motion.bodies.size === 1 &&
       wakes > 0,
   );
+  const guardMotion = new MotionCoordinator();
+  guardMotion.reduced = true;
+  const guarded = createContextualSurfaces({
+    motion: guardMotion,
+    wake: () => {},
+    viewport: () => ({ width: 400, height: 300 }),
+  });
+  const unhandled = [];
+  const onUnhandled = (event) => {
+    unhandled.push(event.reason);
+    event.preventDefault();
+  };
+  window.addEventListener("unhandledrejection", onUnhandled);
+  const settle = async () => {
+    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  const deferred = () => {
+    let resolve, reject;
+    const promise = new Promise((a, b) => {
+      resolve = a;
+      reject = b;
+    });
+    return { promise, resolve, reject };
+  };
+  const fixture = (id, beforeClose) => {
+    const trigger = document.createElement("button");
+    trigger.textContent = "Open draft";
+    document.body.append(trigger);
+    trigger.focus();
+    const content = document.createElement("div");
+    content.innerHTML =
+      '<label>Draft<textarea>Unsaved draft</textarea></label><p role="status"></p>';
+    source.append(content);
+    const input = content.querySelector("textarea"),
+      closed = [];
+    const request = {
+      id,
+      anchor: trigger,
+      content,
+      label: "Draft",
+      beforeClose,
+      onClose: (reason) => closed.push(reason),
+    };
+    const panel = guarded.open(request);
+    input.setSelectionRange(2, 6);
+    return { request, panel, input, content, trigger, closed };
+  };
+  let allowed = false,
+    syncCalls = 0;
+  const sync = fixture("sync-guard", () => {
+    syncCalls++;
+    return allowed;
+  });
+  const returned = guarded.close("sync-guard");
+  check(
+    "a synchronous veto preserves the same usable input, focus and caret",
+    returned === undefined &&
+      sync.panel.isConnected &&
+      !sync.panel.inert &&
+      document.activeElement === sync.input &&
+      sync.input.value === "Unsaved draft" &&
+      sync.input.selectionStart === 2 &&
+      sync.input.selectionEnd === 6 &&
+      syncCalls === 1,
+  );
+  allowed = true;
+  guarded.close("sync-guard");
+  check(
+    "a synchronous allowed retry closes exactly once with the existing void API",
+    !sync.panel.isConnected &&
+      sync.closed.length === 1 &&
+      sync.closed[0] === "programmatic" &&
+      syncCalls === 2 &&
+      sync.content.parentElement === source,
+  );
+  const success = deferred();
+  let successCalls = 0;
+  const good = fixture("async-success", () => {
+    successCalls++;
+    return success.promise;
+  });
+  guarded.close("async-success");
+  good.input.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "Escape",
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  good.panel.querySelector(".aw-contextual-dismiss").click();
+  outside.dispatchEvent(
+    new PointerEvent("pointerdown", { bubbles: true, clientX: 4, clientY: 4 }),
+  );
+  guarded.close("async-success");
+  check(
+    "pending persistence deduplicates all dismissal paths without inerting or starting the close",
+    successCalls === 1 &&
+      good.panel.isConnected &&
+      !good.panel.inert &&
+      Number(good.panel.style.opacity) === 1 &&
+      document.activeElement === good.input &&
+      good.closed.length === 0,
+  );
+  success.resolve(true);
+  await settle();
+  check(
+    "successful asynchronous persistence closes once and restores the same content",
+    !good.panel.isConnected &&
+      good.closed.length === 1 &&
+      good.content.parentElement === source &&
+      good.input.value === "Unsaved draft",
+  );
+  const veto = deferred();
+  const kept = fixture("async-veto", () => veto.promise);
+  guarded.close("async-veto", "escape");
+  kept.input.value = "Edited while saving";
+  kept.input.setSelectionRange(3, 8);
+  veto.resolve(false);
+  await settle();
+  check(
+    "an asynchronous veto retains edits made while pending and the live focus/caret",
+    kept.panel.isConnected &&
+      !kept.panel.inert &&
+      document.activeElement === kept.input &&
+      kept.input.value === "Edited while saving" &&
+      kept.input.selectionStart === 3 &&
+      kept.input.selectionEnd === 8 &&
+      kept.closed.length === 0,
+  );
+  guarded.close("async-veto", "disposed");
+  const rejection = deferred();
+  const failed = fixture("async-rejection", () => rejection.promise);
+  failed.content.querySelector('[role="status"]').textContent =
+    "Save failed; draft retained";
+  guarded.close("async-rejection");
+  rejection.reject(Error("Synthetic persistence failure"));
+  await settle();
+  check(
+    "a rejected guard keeps the same usable DOM/focus and caller's visible save error",
+    failed.panel.isConnected &&
+      !failed.panel.inert &&
+      document.activeElement === failed.input &&
+      failed.content.textContent.includes("Save failed") &&
+      failed.input.value === "Unsaved draft" &&
+      failed.closed.length === 0 &&
+      unhandled.length === 0,
+  );
+  guarded.close("async-rejection", "disposed");
+  const thrown = fixture("throwing-guard", () => {
+    throw Error("Synthetic synchronous save failure");
+  });
+  guarded.close("throwing-guard");
+  check(
+    "a throwing guard is contained without closing or disabling its draft",
+    thrown.panel.isConnected &&
+      !thrown.panel.inert &&
+      document.activeElement === thrown.input &&
+      thrown.closed.length === 0,
+  );
+  guarded.close("throwing-guard", "disposed");
+  const stale = deferred(),
+    fresh = deferred();
+  let freshCalls = 0;
+  const race = fixture("reopen-race", () => stale.promise);
+  guarded.close("reopen-race");
+  const same = guarded.open({
+    ...race.request,
+    beforeClose: () => {
+      freshCalls++;
+      return fresh.promise;
+    },
+  });
+  guarded.close("reopen-race");
+  stale.resolve(true);
+  await settle();
+  guarded.close("reopen-race");
+  check(
+    "reopen invalidates the old success without clearing a newer pending decision",
+    same === race.panel &&
+      same.isConnected &&
+      !same.inert &&
+      same.contains(race.input) &&
+      freshCalls === 1 &&
+      race.closed.length === 0,
+  );
+  fresh.resolve(false);
+  await settle();
+  guarded.close("reopen-race", "disposed");
+  const old = deferred();
+  const replaced = fixture("replace-race", () => old.promise);
+  guarded.close("replace-race");
+  const replacementContent = document.createElement("div");
+  replacementContent.innerHTML = '<input value="Replacement draft">';
+  source.append(replacementContent);
+  const replacement = guarded.open({
+    ...replaced.request,
+    content: replacementContent,
+    modal: true,
+    beforeClose: () => false,
+    onClose: () => {},
+  });
+  old.resolve(true);
+  await settle();
+  check(
+    "explicit synchronous replacement ignores a stale guard and preserves replacement input",
+    replacement !== replaced.panel &&
+      replacement.isConnected &&
+      replacement.matches(":modal") &&
+      !replacement.inert &&
+      replacementContent.querySelector("input").value === "Replacement draft" &&
+      replaced.closed.length === 1 &&
+      replaced.content.parentElement === source,
+  );
+  guarded.close("replace-race", "disposed");
+  const nativePending = deferred();
+  let nativeCalls = 0;
+  const native = fixture("native-force", () => {
+    nativeCalls++;
+    return nativePending.promise;
+  });
+  guarded.close("native-force");
+  native.panel.close();
+  guarded.frame(0);
+  await settle();
+  nativePending.resolve(true);
+  await settle();
+  check(
+    "native-close forces immediate cleanup and invalidates a pending decision",
+    !native.panel.isConnected &&
+      native.closed.length === 1 &&
+      native.closed[0] === "native-close" &&
+      nativeCalls === 1 &&
+      native.content.parentElement === source,
+    {
+      connected: native.panel.isConnected,
+      open: native.panel.open,
+      closed: native.closed,
+      calls: nativeCalls,
+      restored: native.content.parentElement === source,
+    },
+  );
+  const nativeStale = deferred();
+  const nativeRace = fixture("native-reopen", () => nativeStale.promise);
+  guarded.close("native-reopen");
+  nativeRace.panel.close();
+  const nativeReopened = guarded.open({
+    ...nativeRace.request,
+    beforeClose: () => false,
+  });
+  nativeStale.resolve(true);
+  await settle();
+  check(
+    "a queued native-close event and old guard cannot dismiss the reopened dialog",
+    nativeReopened !== nativeRace.panel &&
+      nativeReopened.isConnected &&
+      nativeReopened.open &&
+      !nativeReopened.inert &&
+      nativeReopened.contains(nativeRace.input) &&
+      nativeRace.input.value === "Unsaved draft" &&
+      nativeRace.closed.length === 1,
+  );
+  guarded.close("native-reopen", "disposed");
+  const anchorPending = deferred();
+  const anchorGone = fixture("anchor-force", () => anchorPending.promise);
+  guarded.close("anchor-force");
+  anchorGone.trigger.remove();
+  guarded.frame(0);
+  anchorPending.reject(Error("Late canceled save"));
+  await settle();
+  check(
+    "anchor removal cannot hang on a pending guard or leak its rejection",
+    !anchorGone.panel.isConnected &&
+      anchorGone.closed.length === 1 &&
+      anchorGone.closed[0] === "anchor-removed" &&
+      unhandled.length === 0,
+  );
+  const disposePending = deferred();
+  const disposing = fixture("dispose-force", () => disposePending.promise);
+  guarded.close("dispose-force");
+  guarded.dispose();
+  disposePending.resolve(true);
+  await settle();
+  check(
+    "dispose never waits for persistence and stale completion cannot revive UI",
+    !disposing.panel.isConnected &&
+      disposing.closed.length === 1 &&
+      disposing.closed[0] === "disposed" &&
+      guardMotion.bodies.size === 0 &&
+      !document.querySelector(".aw-contextual-layer") &&
+      unhandled.length === 0,
+  );
+  window.removeEventListener("unhandledrejection", onUnhandled);
   return {
     checks,
     limitations: [

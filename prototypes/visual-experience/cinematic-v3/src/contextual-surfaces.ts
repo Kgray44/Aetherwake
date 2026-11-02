@@ -35,6 +35,7 @@ export type ContextualSurfaceRequest = {
   modal?: boolean;
   dismissOnOutside?: boolean;
   initialFocus?: HTMLElement | string | false;
+  beforeClose?: (reason: SurfaceCloseReason) => boolean | Promise<boolean>;
   onClose?: (reason: SurfaceCloseReason) => void;
 };
 export type ContextualSurfaceOptions = {
@@ -166,6 +167,7 @@ type Entry = {
   observer: ResizeObserver;
   dirty: boolean;
   closing: SurfaceCloseReason | null;
+  pendingClose: object | null;
   destroyed: boolean;
   target: SurfaceRect;
   constrained: boolean;
@@ -239,6 +241,7 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
   function destroy(e: Entry, reason: SurfaceCloseReason) {
     if (e.destroyed) return;
     e.destroyed = true;
+    e.pendingClose = null;
     const focused = document.activeElement;
     const returnFocus =
       reason !== "outside-pointer" &&
@@ -263,9 +266,7 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
     }
     e.request.onClose?.(reason);
   }
-  function close(id: string, reason: SurfaceCloseReason = "programmatic") {
-    const e = entries.get(id);
-    if (!e || e.closing) return;
+  function beginClose(e: Entry, reason: SurfaceCloseReason) {
     e.closing = reason;
     e.node.inert = true;
     options.motion.target(
@@ -275,6 +276,56 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
     );
     options.wake();
     if (options.motion.reduced) destroy(e, reason);
+  }
+  function close(id: string, reason: SurfaceCloseReason = "programmatic") {
+    const e = entries.get(id);
+    if (!e || e.destroyed) return;
+    if (!e.node.open) {
+      destroy(e, "native-close");
+      return;
+    }
+    // Teardown cannot wait on persistence owned by an outer lifecycle.
+    if (
+      reason === "anchor-removed" ||
+      reason === "native-close" ||
+      reason === "disposed"
+    ) {
+      destroy(e, reason);
+      return;
+    }
+    if (e.closing || e.pendingClose) return;
+    const guard = e.request.beforeClose;
+    if (!guard) {
+      beginClose(e, reason);
+      return;
+    }
+    const token = {};
+    e.pendingClose = token;
+    const decide = (allowed: boolean) => {
+      if (e.destroyed || entries.get(id) !== e || e.pendingClose !== token)
+        return;
+      if (!e.node.open) {
+        destroy(e, "native-close");
+        return;
+      }
+      e.pendingClose = null;
+      if (allowed === true) beginClose(e, reason);
+    };
+    let result: boolean | Promise<boolean>;
+    try {
+      result = guard(reason);
+    } catch {
+      decide(false);
+      return;
+    }
+    if (typeof result === "boolean") decide(result);
+    else
+      void Promise.resolve(result)
+        .then(decide, () => decide(false))
+        .catch(() => {
+          // Contain a guard/thenable failure; caller owns visible save errors.
+          if (e.pendingClose === token) e.pendingClose = null;
+        });
   }
   function measure(e: Entry) {
     const area = usableArea(options.viewport(), insets());
@@ -330,6 +381,10 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
     if (disposed) return;
     for (const e of [...entries.values()]) {
       if (e.destroyed) continue;
+      if (!e.node.open) {
+        destroy(e, "native-close");
+        continue;
+      }
       if (
         typeof e.request.anchor !== "function" &&
         "isConnected" in e.request.anchor &&
@@ -409,9 +464,11 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
     const existing = entries.get(request.id);
     if (
       existing &&
+      existing.node.open &&
       existing.request.content === request.content &&
       !!existing.request.modal === !!request.modal
     ) {
+      existing.pendingClose = null;
       existing.request = request;
       existing.closing = null;
       existing.node.inert = false;
@@ -431,7 +488,11 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
         initialFocus(existing);
       return existing.node;
     }
-    if (existing) destroy(existing, "programmatic");
+    // A synchronous explicit replacement is forced UI cleanup, not close().
+    // Its caller must flush before swapping content/modality; old decisions
+    // are invalidated by destroy() and cannot affect the replacement.
+    if (existing)
+      destroy(existing, existing.node.open ? "programmatic" : "native-close");
     if (
       [...entries.values()].some((e) => e.request.content === request.content)
     )
@@ -484,6 +545,7 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
       }),
       dirty: true,
       closing: null,
+      pendingClose: null,
       destroyed: false,
       target: { x: 0, y: 0, width: 1, height: 1 },
       constrained: false,

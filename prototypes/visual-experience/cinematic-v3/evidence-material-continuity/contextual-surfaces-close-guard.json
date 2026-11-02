@@ -1,0 +1,126 @@
+{
+  "checks": [
+    {
+      "name": "content and input identities remain mounted with their state",
+      "passed": true
+    },
+    {
+      "name": "nonmodal surface is bounded and focuses its actual control",
+      "passed": true
+    },
+    {
+      "name": "measured content settles without a repeating ResizeObserver wake loop",
+      "passed": true
+    },
+    {
+      "name": "an inner component can consume Escape without dismissing its host",
+      "passed": true
+    },
+    {
+      "name": "Escape closes and returns focus while restoring the original content slot",
+      "passed": true
+    },
+    {
+      "name": "outside-pointer dismissal does not steal focus from the new target",
+      "passed": true
+    },
+    {
+      "name": "explicit modal uses native modality and accessible dialog semantics",
+      "passed": true
+    },
+    {
+      "name": "modal Tab wraps to the first control",
+      "passed": true
+    },
+    {
+      "name": "modal Shift-Tab wraps back to the last control",
+      "passed": true
+    },
+    {
+      "name": "a viewport below the minimum gets real reflow and scrolling, never a scale",
+      "passed": true
+    },
+    {
+      "name": "interrupted close reverses through the same dialog and editor identity",
+      "passed": true
+    },
+    {
+      "name": "removing the anchor releases its UI and motion body without deleting content",
+      "passed": true
+    },
+    {
+      "name": "invalid size limits leave no mounted UI or leaked motion body",
+      "passed": true
+    },
+    {
+      "name": "disposal is idempotent and preserves the caller's existing motion body",
+      "passed": true
+    },
+    {
+      "name": "a synchronous veto preserves the same usable input, focus and caret",
+      "passed": true
+    },
+    {
+      "name": "a synchronous allowed retry closes exactly once with the existing void API",
+      "passed": true
+    },
+    {
+      "name": "pending persistence deduplicates all dismissal paths without inerting or starting the close",
+      "passed": true
+    },
+    {
+      "name": "successful asynchronous persistence closes once and restores the same content",
+      "passed": true
+    },
+    {
+      "name": "an asynchronous veto retains edits made while pending and the live focus/caret",
+      "passed": true
+    },
+    {
+      "name": "a rejected guard keeps the same usable DOM/focus and caller's visible save error",
+      "passed": true
+    },
+    {
+      "name": "a throwing guard is contained without closing or disabling its draft",
+      "passed": true
+    },
+    {
+      "name": "reopen invalidates the old success without clearing a newer pending decision",
+      "passed": true
+    },
+    {
+      "name": "explicit synchronous replacement ignores a stale guard and preserves replacement input",
+      "passed": true
+    },
+    {
+      "name": "native-close forces immediate cleanup and invalidates a pending decision",
+      "passed": true
+    },
+    {
+      "name": "a queued native-close event and old guard cannot dismiss the reopened dialog",
+      "passed": true
+    },
+    {
+      "name": "anchor removal cannot hang on a pending guard or leak its rejection",
+      "passed": true
+    },
+    {
+      "name": "dispose never waits for persistence and stale completion cannot revive UI",
+      "passed": true
+    }
+  ],
+  "limitations": [
+    "Hidden Electron DOM/component validation with scripted DOM events; no native foreground, screenshot, shared-host integration or performance qualification claimed."
+  ],
+  "sources": {
+    "src/contextual-surfaces.ts": "8553537de2033ccc459928dfbbfbaeab95b4b0db2472ec7d15a71675825bb0d9",
+    "src/contextual-surfaces.css": "72fdbfc6a140992e63278d38f90fed763dc9985b8a6a425ecbd444d82ab2ab8f",
+    "tests/contextual-surfaces.browser.mjs": "3bc3390ccd6b959d2a8a7086c2dc05d2d8375394a00005ee04d24a235d4879ba",
+    "native/contextual-surfaces-verify.cjs": "d55b438fd2e4b5f2e06c4732274676399d415d47836c56338e83cc081a9387bb"
+  },
+  "environment": {
+    "visibleWindow": false,
+    "hardwareAcceleration": false,
+    "electron": "45.2.1"
+  }
+}

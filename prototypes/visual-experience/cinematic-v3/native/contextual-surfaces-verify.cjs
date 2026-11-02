@@ -11,6 +11,8 @@ app.setPath(
   "userData",
   path.join(os.tmpdir(), "aerynth-contextual-component-" + Date.now()),
 );
+// DOM/focus/layout checks do not need a hardware GPU or a visible window.
+app.disableHardwareAcceleration();
 app
   .whenReady()
   .then(async () => {
@@ -64,13 +66,26 @@ app
       "src/contextual-surfaces.ts",
       "src/contextual-surfaces.css",
       "tests/contextual-surfaces.browser.mjs",
+      "native/contextual-surfaces-verify.cjs",
     ]) {
       const bytes = await fs.readFile(path.join(root, file));
       hashes[file] = createHash("sha256").update(bytes).digest("hex");
     }
     await fs.writeFile(
       path.join(out, "verification.json"),
-      JSON.stringify({ ...result, sources: hashes }, null, 2),
+      JSON.stringify(
+        {
+          ...result,
+          sources: hashes,
+          environment: {
+            visibleWindow: false,
+            hardwareAcceleration: false,
+            electron: process.versions.electron,
+          },
+        },
+        null,
+        2,
+      ),
     );
     console.log(
       JSON.stringify({
