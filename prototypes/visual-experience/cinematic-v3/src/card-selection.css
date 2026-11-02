@@ -1,0 +1,27 @@
+/* Local optical cue only. The existing material MC body supplies
+   --card-selection: 0..1, including reversal and reduced-motion policy.
+   The host mounts an aria-hidden child; no class change starts CSS motion. */
+.resource-presentation > .card-selection-rim {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border: 0;
+  border-radius: inherit;
+  background: none;
+  box-shadow:
+    inset 0 0 0 1px #dbc7ee38,
+    inset 0 2px 8px #ead7f90d,
+    inset 0 -1px 0 #b9a2d522;
+  opacity: clamp(0, var(--card-selection, 0), 1);
+  animation: none;
+  transition: none;
+}
+@media (forced-colors: active) {
+  .resource-presentation > .card-selection-rim {
+    forced-color-adjust: none;
+    box-shadow: none;
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
