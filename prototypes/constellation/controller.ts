@@ -663,8 +663,9 @@ export class ConstellationController {
             n.parent === keyOf("project", l.projectId) ||
             ((c.zoom > 1.4 || n.key === this.selected) &&
               n.kind === "resource" &&
-              this.nodes.get(n.parent!)?.parent ===
-                keyOf("project", l.projectId)),
+              this.nodes.get(
+                n.workspaceId ? keyOf("workspace", n.workspaceId) : n.parent!,
+              )?.parent === keyOf("project", l.projectId)),
       )
       .filter(
         (n) =>

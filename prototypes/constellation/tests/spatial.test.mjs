@@ -59,6 +59,33 @@ const setup = (s = fixture(), extra = {}) => {
   c.spatial = navigation;
   return { c, motion, navigation };
 };
+const groupedFixture = () => {
+  const s = fixture();
+  s.resources.push({
+    id: "group",
+    title: "Synthetic task group",
+    kind: "task_group",
+    project_id: "p",
+  });
+  s.blocks.push({
+    id: "bg",
+    resource_id: "group",
+    workspace_id: "w2",
+    x: 100,
+    y: 100,
+    width: 300,
+    height: 200,
+    z: 20,
+  });
+  s.relationships.push({
+    id: "contains",
+    source_id: "group",
+    target_id: "r2",
+    kind: "contains_task",
+    provenance: "user",
+  });
+  return s;
+};
 const settle = (m) => {
   for (let i = 0; i < 180; i++) m.step(1 / 60);
 };
@@ -255,6 +282,131 @@ test("canonical relationships, placements and branch lineage preserve distinct t
     edges(c).some((e) => e.id.startsWith("lineage:")),
     false,
   );
+});
+
+test("explicit task membership clusters only the same-workspace placement and retains canonical workspace edges", () => {
+  const s = groupedFixture();
+  s.blocks.push({
+    id: "shared-task",
+    resource_id: "r2",
+    workspace_id: "w",
+    x: 0,
+    y: 0,
+    width: 300,
+    height: 200,
+    z: 21,
+  });
+  const before = structuredClone(s),
+    { c, navigation: n } = setup(s);
+  assert.equal(c.nodes.get("resource:b2").parent, "resource:bg");
+  assert.equal(c.nodes.get("resource:shared-task").parent, "workspace:w");
+  assert.equal(c.nodes.get("resource:b2").resourceId, "r2");
+  assert.ok(n.candidateNodes().some((node) => node.key === "resource:b2"));
+  const all = edges(c);
+  assert.ok(
+    all.some(
+      (e) =>
+        e.kind === "contains_task" &&
+        e.sourceId === "group" &&
+        e.targetId === "r2",
+    ),
+  );
+  assert.ok(
+    all.some(
+      (e) =>
+        e.id === "membership:resource:b2" &&
+        e.kind === "workspace_placement" &&
+        e.targetId === "w2",
+    ),
+  );
+  assert.deepEqual(s, before);
+  c.dispose();
+});
+
+test("hidden, unavailable, inferred and ambiguous group links never invent a parent or ownership", () => {
+  for (const scenario of [
+    "hidden",
+    "unavailable",
+    "inferred",
+    "reversed",
+    "non-task",
+    "ambiguous",
+  ]) {
+    const s = groupedFixture();
+    if (scenario === "hidden") s.resources.at(-1).visible = false;
+    if (scenario === "unavailable") s.resources.at(-1).available = false;
+    if (scenario === "inferred") s.relationships.at(-1).provenance = "inferred";
+    if (scenario === "reversed")
+      [s.relationships.at(-1).source_id, s.relationships.at(-1).target_id] = [
+        "r2",
+        "group",
+      ];
+    if (scenario === "non-task") s.resources[2].kind = "note";
+    if (scenario === "ambiguous") {
+      s.resources.push({
+        id: "group2",
+        title: "Second group",
+        kind: "task_group",
+      });
+      s.blocks.push({ ...s.blocks.at(-1), id: "bg2", resource_id: "group2" });
+      s.relationships.push({
+        ...s.relationships.at(-1),
+        id: "contains2",
+        source_id: "group2",
+      });
+    }
+    const { c } = setup(s);
+    assert.equal(c.nodes.get("resource:b2").parent, "workspace:w2", scenario);
+    if (scenario === "hidden")
+      assert.equal(c.search("Synthetic task group").length, 0);
+    if (scenario === "ambiguous")
+      assert.equal(
+        edges(c).filter((e) => e.kind === "contains_task").length,
+        2,
+      );
+    c.dispose();
+  }
+});
+
+test("new task-group membership retains saved XYZ and coherent unpinned cluster movement", async () => {
+  const { c, navigation: n } = setup();
+  const original = { ...n.position("resource:b2") };
+  c.update(groupedFixture());
+  assert.deepEqual(n.position("resource:b2"), original);
+  const group = n.position("resource:bg");
+  await n.place("resource:bg", {
+    x: group.x + 100,
+    y: group.y + 20,
+    z: group.z + 40,
+  });
+  assert.deepEqual(n.position("resource:b2"), {
+    x: Math.round((original.x + 100) * 1000) / 1000,
+    y: Math.round((original.y + 20) * 1000) / 1000,
+    z: Math.round((original.z + 40) * 1000) / 1000,
+  });
+  const pinned = { ...n.position("resource:b2") };
+  await n.place("resource:b2", pinned, true);
+  await n.place("resource:bg", group);
+  assert.deepEqual(n.position("resource:b2"), pinned);
+  await n.explore("resource:b2");
+  const keys = new Set(n.candidateNodes().map((node) => node.key));
+  for (const key of ["resource:bg", "resource:b2", "workspace:w2", "project:p"])
+    assert.ok(keys.has(key));
+  c.dispose();
+});
+
+test("grouped tasks retain accessible selected labels without the 3D renderer", () => {
+  const motion = new MotionCoordinator(),
+    c = new ConstellationController({
+      snapshot: groupedFixture(),
+      motion,
+      navigate: async () => {},
+    });
+  c.select("resource:b2");
+  c.fit();
+  settle(motion);
+  assert.ok(c.visible(1440, 900).some((node) => node.key === "resource:b2"));
+  c.dispose();
 });
 
 test("3D scene has real planetary geometry, perspective picking and graphics-loss recovery", () => {

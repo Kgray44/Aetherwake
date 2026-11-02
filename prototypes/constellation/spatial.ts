@@ -100,7 +100,12 @@ export function edges(controller: ConstellationController): SpatialEdge[] {
         sourceMessageId: b.sourceMessageId,
       } as SpatialEdge);
   for (const n of controller.nodes.values()) {
-    const parent = n.parent ? controller.nodes.get(n.parent) : undefined;
+    const parent =
+      n.kind === "resource" && n.workspaceId
+        ? controller.nodes.get(keyOf("workspace", n.workspaceId))
+        : n.parent
+          ? controller.nodes.get(n.parent)
+          : undefined;
     if (parent && n.available && parent.available)
       direct.push({
         id: "membership:" + n.key,
@@ -583,7 +588,12 @@ export class SpatialNavigator {
     const p = keyOf("project", l.projectId),
       workspaces = new Set(all.filter((n) => n.parent === p).map((n) => n.key));
     all = all.filter(
-      (n) => n.key === p || n.parent === p || workspaces.has(n.parent ?? ""),
+      (n) =>
+        n.key === p ||
+        n.parent === p ||
+        workspaces.has(n.parent ?? "") ||
+        (n.workspaceId !== undefined &&
+          workspaces.has(keyOf("workspace", n.workspaceId))),
     );
     if (this.neighborhood) {
       all = [...c.nodes.values()];
@@ -597,8 +607,11 @@ export class SpatialNavigator {
       const related = all.filter((n) => n.kind === "resource" && ids.has(n.id)),
         parents = new Set(related.map((n) => n.parent));
       for (const parent of [...parents]) {
-        const p = parent ? c.nodes.get(parent)?.parent : null;
-        if (p) parents.add(p);
+        let p = parent ? c.nodes.get(parent)?.parent : null;
+        while (p && !parents.has(p)) {
+          parents.add(p);
+          p = c.nodes.get(p)?.parent;
+        }
       }
       all = all.filter((n) =>
         n.kind === "resource" ? ids.has(n.id) : parents.has(n.key),

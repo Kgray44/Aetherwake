@@ -132,6 +132,50 @@ export function project(
         point: { x: center.x + 200, y: center.y + 200 },
       });
     }
+  // Canonical membership may organize a presentation, never change placement or ownership.
+  const memberships = snapshot.relationships.filter(
+    (e) =>
+      e.kind === "contains_task" &&
+      permitted(e) &&
+      e.available !== false &&
+      e.provenance !== "inferred",
+  );
+  if (memberships.length) {
+    const placements = new Map<string, Node[]>();
+    for (const n of nodes.values())
+      if (
+        n.kind === "resource" &&
+        n.available &&
+        n.workspaceId &&
+        nodes.get(keyOf("workspace", n.workspaceId))?.available &&
+        ["task", "task_group"].includes(n.resourceKind ?? "")
+      ) {
+        const list = placements.get(n.id) ?? [];
+        list.push(n);
+        placements.set(n.id, list);
+      }
+    const parents = new Map<string, Set<string>>();
+    for (const edge of memberships)
+      for (const group of placements.get(edge.source_id) ?? [])
+        if (group.resourceKind === "task_group")
+          for (const member of placements.get(edge.target_id) ?? [])
+            if (
+              member.resourceKind === "task" &&
+              group.workspaceId === member.workspaceId
+            ) {
+              const candidates = parents.get(member.key) ?? new Set<string>();
+              candidates.add(group.key);
+              parents.set(member.key, candidates);
+            }
+    for (const [key, candidates] of parents)
+      if (candidates.size === 1) {
+        const member = nodes.get(key)!;
+        member.parent = [...candidates][0];
+        // Keep parents before children for incremental layout and coherent cluster moves.
+        nodes.delete(key);
+        nodes.set(key, member);
+      }
+  }
   return nodes;
 }
 
