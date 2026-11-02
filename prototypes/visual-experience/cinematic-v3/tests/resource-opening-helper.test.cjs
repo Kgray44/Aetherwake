@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
-const { createSlot, canonicalProjection, sourceIdentity, targetScript, unplacedSelector, waitForCondition } = require('../native/integration-resource-opening.cjs');
+const { createSlot, canonicalProjection, sourceIdentity, targetScript, unplacedSelector, waitForCondition, assertWorkspaceProjection } = require('../native/integration-resource-opening.cjs');
 
 test('one monotonic slot reserves cleanup, focus loss is sticky, and neither deadline nor regained focus permits continuation', () => {
   let now = 1000, focused = true; const win = { isDestroyed: () => false, isVisible: () => true, isMinimized: () => false, isFocused: () => focused, webContents: { isDestroyed: () => false } };
@@ -18,6 +18,16 @@ test('canonical comparison preserves resource identity/content/revisions, all pl
   const value = fixture(), before = canonicalProjection(value); assert.deepEqual(canonicalProjection(structuredClone(value)), before);
   for (const change of [v => v.desktop.resources[0].id = 'synthetic:copy', v => v.desktop.resources[0].version++, v => v.desktop.resources[0].content = 'Changed text', v => v.desktop.navigationBlocks[0].x++, v => v.layouts['synthetic:workspace'].layout.version++, v => v.core.graph.messages[0].content = 'Changed history', v => v.collections[0].memberIds = [], v => v.core.bindings.new = [{ nativeThreadId: 'synthetic:unexpected' }], v => v.core.executions.new = { state: 'running' }, v => v.core.handoffs.new = { approved: true }]) { const changed = structuredClone(value); change(changed); assert.notDeepEqual(canonicalProjection(changed), before); }
   assert.throws(() => canonicalProjection({ ...value, core: { graph: {} } }), /projection_required|history_and_collections_required/);
+});
+
+test('workspace inspection requires the complete canonical engine projection and preserves every layout field', () => {
+  const workspace = { id: 'synthetic:workspace', project_id: null, title: 'Synthetic workspace', version: 1 };
+  const projection = { contract: 'aetherwake.workspace/1', workspaceId: workspace.id, projectId: null, title: workspace.title, workspaceVersion: 1, layoutId: 'synthetic:layout', revision: 3, viewport: { x: 42, y: -4, zoom: .8 }, organization: { schemaVersion: 1, revision: 2, mode: 'fluid', structured: { order: [], spans: {} } }, presence: { id: 'system:vela', workspaceId: workspace.id, version: 1, x: 600, y: 200, width: 200, height: 200 }, blocks: [{ blockId: 'synthetic:placement', workspaceId: workspace.id, version: 2, x: 20, y: 30, width: 400, height: 250, zIndex: 2, shape: 'folio', rotation: .1, locked: false, minimized: false, materialVariant: 'default', resourceId: 'synthetic:note' }], canUndo: true, canRedo: false };
+  assert.equal(assertWorkspaceProjection(workspace, projection), projection);
+  for (const field of ['viewport', 'organization', 'presence', 'blocks', 'layoutId', 'revision', 'canUndo']) { const missing = structuredClone(projection); delete missing[field]; assert.throws(() => assertWorkspaceProjection(workspace, missing)); }
+  assert.throws(() => assertWorkspaceProjection(workspace, { ...projection, workspaceId: 'synthetic:other' }), /identity_required/);
+  assert.throws(() => assertWorkspaceProjection({ ...workspace, project_id: 'synthetic:unauthorized' }, projection), /identity_required/);
+  for (const mutate of [value => value.viewport.x++, value => value.organization.structured.order.push('synthetic:placement'), value => value.presence.x++, value => value.blocks[0].shape = 'circle', value => value.blocks[0].rotation += .1, value => value.blocks[0].version++]) { const changed = structuredClone(projection); mutate(changed); assert.notDeepEqual(assertWorkspaceProjection(workspace, changed), projection, 'inspection fields are never normalized away'); }
 });
 
 test('restart source identity excludes startup time but never ignores changed source or original build hashes', () => {

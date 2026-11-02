@@ -5,6 +5,8 @@
  * resource-opening-expected.json and exact original source/build identities.
  * Initial/restore global slots: 45s/12s, including cleanup. Combined evidence:
  * <=6 PNG/24MiB and one exact-window WebM/48MiB. Root's caller must confirm exit.
+ * Requires production library.inspectWorkspace({workspaceId}) ->
+ * {result:WorkspaceProjection}; no private-command or partial-layout fallback.
  * Launch only through the explicit owned fresh-profile Main verification flag. */
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -56,6 +58,19 @@ function createSlot({ win, startedAt, limitMs, now = () => performance.now(), cl
   return { check, abort, remaining: () => Math.max(0, startedAt + limitMs - now()), workRemaining: () => Math.max(0, startedAt + limitMs - cleanupMs - now()), failure: () => failure?.message ?? null };
 }
 function sourceIdentity(source) { assert(source?.hashes && Object.keys(source.hashes).length && source?.buildAssets && Object.keys(source.buildAssets).length, 'source_and_build_binding_required'); return { hashes: source.hashes, buildAssets: source.buildAssets }; }
+/** Existing WorkspaceProjection, retained whole: no synthetic fallback layout. */
+function assertWorkspaceProjection(workspace, value) {
+  const revision = n => Number.isSafeInteger(n) && n > 0;
+  const geometry = v => v && ['x', 'y', 'width', 'height'].every(key => Number.isFinite(v[key])) && v.width > 0 && v.height > 0;
+  assert(value?.contract === 'aetherwake.workspace/1' && value.workspaceId === workspace.id && value.projectId === workspace.project_id && value.title === workspace.title && value.workspaceVersion === workspace.version, 'canonical_workspace_identity_required');
+  assert(typeof value.layoutId === 'string' && value.layoutId && revision(value.revision), 'canonical_layout_revision_required');
+  assert(value.viewport && ['x', 'y', 'zoom'].every(key => Number.isFinite(value.viewport[key])) && value.viewport.zoom > 0, 'canonical_viewport_required');
+  assert(value.organization?.schemaVersion === 1 && revision(value.organization.revision) && ['fluid', 'freeform', 'structured'].includes(value.organization.mode) && value.organization.structured, 'canonical_organization_required');
+  assert(value.presence?.id === 'system:vela' && value.presence.workspaceId === workspace.id && revision(value.presence.version) && geometry(value.presence), 'canonical_presence_required');
+  assert(Array.isArray(value.blocks) && value.blocks.length <= 128 && new Set(value.blocks.map(block => block.blockId)).size === value.blocks.length && value.blocks.every(block => typeof block.blockId === 'string' && block.workspaceId === workspace.id && revision(block.version) && geometry(block) && Number.isFinite(block.zIndex) && Number.isFinite(block.rotation) && typeof block.shape === 'string' && typeof block.locked === 'boolean' && typeof block.minimized === 'boolean'), 'canonical_placement_presentation_required');
+  assert(typeof value.canUndo === 'boolean' && typeof value.canRedo === 'boolean', 'canonical_layout_history_required');
+  return value;
+}
 /** Camera/navigation are checked separately around direct opening, not erased. */
 function canonicalProjection({ desktop, core, layouts, collections, notes, chats, draft, vela }) {
   for (const key of ['projects', 'workspaces', 'resources', 'blocks']) assert(Array.isArray(desktop[key]), 'canonical_desktop_projection_required');
@@ -77,7 +92,7 @@ function targetScript(selector, action, value) {
     return { ready: true, rect: { x: r.x, y: r.y, width: r.width, height: r.height } };
   }.toString()})(${JSON.stringify(selector)},${JSON.stringify(action)},${JSON.stringify(value)})`;
 }
-exports.createSlot = createSlot; exports.canonicalProjection = canonicalProjection; exports.sourceIdentity = sourceIdentity; exports.targetScript = targetScript; exports.unplacedSelector = unplacedSelector; exports.waitForCondition = waitForCondition;
+exports.createSlot = createSlot; exports.canonicalProjection = canonicalProjection; exports.sourceIdentity = sourceIdentity; exports.targetScript = targetScript; exports.unplacedSelector = unplacedSelector; exports.waitForCondition = waitForCondition; exports.assertWorkspaceProjection = assertWorkspaceProjection;
 
 exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], session, localURL, moduleStartedMonotonicMs }) {
   const restore = process.argv.includes('--verify-restore'), limitMs = restore ? 12000 : 45000, started = performance.now(), root = path.resolve(privateRoot), out = path.join(root, 'resource-opening-evidence', (restore ? 'restore-' : 'initial-') + Date.now());
@@ -134,7 +149,10 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       const d = await desktop(), core = await rpc('snapshot', {}), layouts = {};
       assert.equal(Object.keys(core.executions).length, 0, 'No provider execution authorized'); assert.equal(Object.keys(core.handoffs).length, 0, 'No delegated handoff authorized');
       assert(d.resources.length <= 16 && d.workspaces.length <= 4, 'bounded_synthetic_fixture_required');
-      for (const workspace of d.workspaces) layouts[workspace.id] = await rpc('openWorkspace', { workspaceId: workspace.id });
+      for (const workspace of d.workspaces) {
+        const inspection = await rpc('library', { name: 'inspectWorkspace', input: { workspaceId: workspace.id } });
+        layouts[workspace.id] = assertWorkspaceProjection(workspace, inspection.result);
+      }
       const notes = {}, chats = {}, draft = {};
       for (const resource of d.resources) if (resource.available !== false && resource.state !== 'archived') {
         if (resource.kind === 'note') notes[resource.id] = await note(resource.id);
@@ -193,10 +211,11 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       for (const workspaceId of fixture.workspaceIds) await application({ type: 'attach', workspaceId, resourceId: fixture.noteId });
       fixture.blockIds = [];
       for (const [index, workspaceId] of fixture.workspaceIds.entries()) {
-        const view = await rpc('openWorkspace', { workspaceId }), block = view.blocks.find(block => block.resource_id === fixture.noteId); assert(block); fixture.blockIds.push(block.id);
         // Explicit navigation is fixture intent. The actual card's unfold/read
         // is checked separately; default direct Open never gets this exception.
         await application({ type: 'navigate', target: { kind: 'workspace', workspaceId } });
+        const current = await desktop(); assert.equal(current.activeWorkspaceId, workspaceId); assert.deepEqual(current.navigation, { kind: 'workspace', workspaceId });
+        const block = current.blocks.find(block => block.resource_id === fixture.noteId); assert(block); fixture.blockIds.push(block.id);
         await viewOnly('D/actual workspace card reads the same canonical Note ' + index, async () => {
           const prior = await graphics(); await action(`[data-block="${block.id}"] .unfold`); const editor = `[data-block="${block.id}"] .working-content textarea`;
           await wait('Actual focused workspace Note editor is usable', async () => (await js(targetScript(editor, 'inspect'))).ready);
