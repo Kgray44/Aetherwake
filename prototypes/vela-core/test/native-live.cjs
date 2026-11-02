@@ -122,7 +122,7 @@ exports.verify = async ({win, app, privateRoot, source}) => {
     };
     const workingBlock = async (workspaceId, resourceId) => {
       const d=await desktop(); assert.equal(d.activeWorkspaceId,workspaceId); const block=d.blocks.find(b=>b.resource_id===resourceId); assert(block,'Canonical placement unavailable');
-      await click('#layout-manager'); await click(`[data-locate="${block.id}"]`);
+      await click('.aw-workspace-layout button[aria-label="Workspace actions"]'); await click(`[data-locate="${block.id}"]`);
       await until(() => js(`!!document.querySelector(${JSON.stringify(`[data-block="${block.id}"]`)})`), 'actual canonical block mounted');
       if (!await js(`document.querySelector(${JSON.stringify(`[data-block="${block.id}"]`)})?.classList.contains('expanded')`)) await click(`[data-block="${block.id}"] .unfold`);
       await until(() => js(`(()=>{const e=document.querySelector(${JSON.stringify(`[data-block="${block.id}"] textarea`)});return !!e&&!e.disabled&&!e.hidden&&e.getClientRects().length>0})()`), 'working canonical block editor');
