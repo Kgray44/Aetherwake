@@ -23,6 +23,7 @@ test('canonical drag fixture reopens exact known separated geometry, real settin
 function fixture(){
  const card:any={id:'note',gesture:{blockId:'note',intent:'move',phase:'active'},pose:{x:140,y:280,w:420,h:360,lift:55,opacity:1},target:{x:224,y:320,w:420,h:360,lift:55,opacity:1},outline:{x:224,y:320,width:420,height:360,opacity:1},gpuProjection:{bounds:{x:138,y:278,width:425,height:366},matrix:Array(16).fill(0)},domRect:{x:138,y:278,width:425,height:366},domTransform:'matrix3d(observed)'};
  card.gpuProjection.corners=[{x:138,y:278},{x:563,y:278},{x:563,y:644},{x:138,y:644}];
+ card.pose.yaw=card.target.yaw=0;
  const frame:any={drawSequence:12,rendererNowMs:1200,reduced:false,cards:[card],grid:{visible:true,reveal:1}};
  const document:any={hidden:false,hasFocus:()=>true,fonts:{status:'loaded'}};
  const context={window:{__aerynth:{snapshot:()=>({active:true,dragGlideFrame:frame})}},document};return {card,frame,document,probe:(rest=false)=>runInNewContext(x.glide('note',11,rest),context)};
@@ -38,7 +39,7 @@ test('compiled atomic observations require genuine active visible outline, indep
  f.card.gpuProjection.matrix[0]=NaN;assert.equal(f.probe().ready,false);f.card.gpuProjection.matrix[0]=0;
  f.document.hidden=true;assert.equal(f.probe().ready,false);f.document.hidden=false;
  f.document.fonts.status='loading';assert.equal(f.probe().ready,false);f.document.fonts.status='loaded';
- Object.assign(f.card.pose,{x:224,y:320,lift:0});f.card.gesture=null;assert.equal(f.probe(true).ready,true);assert.equal(f.probe().ready,false);
+ Object.assign(f.card.pose,{x:224,y:320,lift:0});f.card.gesture=null;assert.equal(f.probe(true).ready,false,'A still-rising lift is not a converged frame');f.card.target.lift=0;assert.equal(f.probe(true).ready,true);assert.equal(f.probe().ready,false);f.card.pose.lift=f.card.target.lift=30;assert.equal(f.probe(true).ready,true,'Existing selected-card local lift is a valid resting target');f.card.pose.w++;assert.equal(f.probe(true).ready,false,'Return must converge dimensions as well as position');
 });
 test('modern glide source preserves guard boundaries and refuses invalid startup or consumed profiles before native operations',async()=>{
  const source=readFileSync(new URL('./drag-glide-native.cjs',import.meta.url),'utf8');assert.doesNotMatch(source,/\.focus\(|\.dispatchEvent\(|resetMetrics\(|\.setBounds\(|\.setSize\(/);assert.doesNotMatch(source,/\b(?:js|wait)\(\s*['"`]/);assert.match(source,/driver\.js\(compileExpression\(code\)\)/);

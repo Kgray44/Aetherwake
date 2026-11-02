@@ -14,14 +14,15 @@ function observe(id,after=-1,atRest=false){
   if(!bounds||bounds.width<=0||bounds.height<=0||!finite(card?.pose?.opacity)||card.pose.opacity<0.995)problems.push('moving-card-not-painted');
   if(!Array.isArray(card?.gpuProjection?.matrix)||card.gpuProjection.matrix.length!==16||!card.gpuProjection.matrix.every(finite)||!Array.isArray(card.gpuProjection.corners)||card.gpuProjection.corners.length!==4||!card.gpuProjection.corners.every(p=>finite(p.x)&&finite(p.y)))problems.push('missing-independent-scene-geometry');
   const lag=card?.pose&&card?.target?Math.hypot(card.pose.x-card.target.x,card.pose.y-card.target.y):null;
+  const converged=!!card?.pose&&!!card?.target&&['x','y','w','h','lift','yaw'].every(k=>finite(card.pose[k])&&finite(card.target[k])&&Math.abs(card.pose[k]-card.target[k])<=0.15);
   if(!finite(lag))problems.push('missing-lag');
-  if(atRest){if(card?.gesture||!finite(lag)||lag>0.15||Math.abs(card.pose.lift)>0.15)problems.push('not-at-rest');}
+  if(atRest){if(card?.gesture||!converged)problems.push('not-at-rest');}
   else {
     if(card?.gesture?.intent!=='move'||card.gesture.phase!=='active'||!card.outline)problems.push('not-active-move-outline');
     if(!finite(card?.outline?.opacity)||card.outline.opacity<0.5)problems.push('outline-not-painted');
     if(card?.outline&&card?.target&&!['x','y','width','height'].every(k=>finite(card.outline[k])&&finite(card.target[({width:'w',height:'h'})[k]??k])&&Math.abs(card.outline[k]-card.target[({width:'w',height:'h'})[k]??k])<=0.75))problems.push('outline-target-mismatch');
   }
-  return {ready:!problems.length,problems,drawSequence:frame?.drawSequence??null,rendererNowMs:frame?.rendererNowMs??null,reduced:frame?.reduced??null,card,grid:frame?.grid??null,lag,match,
+  return {ready:!problems.length,problems,drawSequence:frame?.drawSequence??null,rendererNowMs:frame?.rendererNowMs??null,reduced:frame?.reduced??null,card,grid:frame?.grid??null,lag,match,converged,
     meaning:'Same completed renderer submission: independent Three scene projection versus DOM; not GPU readback or OS presentation'};
 }
 const body=fn=>fn.toString();
@@ -29,7 +30,7 @@ const expressions={...common,
   viewport:()=>`({width:innerWidth,height:innerHeight})`,
   glide:(id,after=-1,rest=false)=>`(${body(observe)})(${q(id)},${q(after)},${q(rest)})`,
   glideReady:(id,after=-1,rest=false)=>`(${expressions.glide(id,after,rest)}).ready`,
-  glideConverged:id=>`(()=>{const f=${expressions.glide(id)};return f.ready&&f.lag<=0.15})()`,
+  glideConverged:id=>`(()=>{const f=${expressions.glide(id)};return f.ready&&f.converged})()`,
 };
 exports.expressions=expressions;
 exports.preflight=()=>{const inherited=commonPreflight(),cases=[expressions.viewport(),expressions.glide('quote"\n'),expressions.glideReady('quote"\n',8,false),expressions.glideReady('quote"\n',8,true),expressions.glideConverged('quote"\n')];for(const code of cases)compileExpression(code);return {factories:5,cases:cases.length,sha256:createHash('sha256').update(inherited.sha256+cases.join('\n')).digest('hex')};};

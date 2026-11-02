@@ -6,6 +6,8 @@ Root integrates `--integration-drag-glide` and forwards `{win,app,privateRoot,ca
 
 The host's native-verification-only atomic observer must expose `snapshot().dragGlideFrame` **after an actual completed renderer submission**: draw sequence/time/reduced flag plus card ID, transient gesture, Motion Coordinator pose/target, actual painted outline bounds/opacity, independent Three scene projection bounds/matrix/corners, and same-frame DOM bounds/transform. The moving card's projection is mandatory. The probe requires matching scene/DOM bounds within0.75 CSS pixels and a visible outline matching the resolved target. This measures scene geometry and submission; it is not GPU readback, image-pixel equivalence or monitor presentation.
 
+Rest means convergence of position, dimensions, lift and yaw to the actual same-frame Motion Coordinator target, with no active gesture. An existing selected card may legitimately retain its local lift; the test does not force an invented zero-lift state. Return, mode changes, release and Undo require completed draws newer than their pre-action baseline, so an older converged frame cannot qualify a later transition.
+
 Initial journey:
 
 1. Verify exact canonical fixture, recovery and per-placement settings, zero executions/bindings/assistant messages, healthy current source/build and the existing frame observer. Node-private graph inspection retains only three counts; no private graph enters the page or receipt.
