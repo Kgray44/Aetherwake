@@ -62,6 +62,7 @@ test('native Vela grant binds exact intent, metadata/content versions, expiry an
 
 test('unsupported block actions are honestly unavailable and only released parent capabilities receive workspace composites',async()=>{
  const f=fixture();try{
+  f.core.registerVelaNativeCapabilities({supportedActions:[],dispatch:()=>{throw new Error('Explicitly disabled host capability');}});
   const state=await vela(f.core,'state') as VelaBackendState;assert.equal(state.nativeCapabilities.workspaceFromResources.available,false);assert.ok(!state.capabilities.some(c=>c.id==='workspaceFromResources'));
   await assert.rejects(vela(f.core,'native',{intent:'Requires released block capability',action:{type:'workspaceFromResources',title:'Unsupported workspace',projectId:null,resourceIds:[]}}),/host_policy_denied/);
   let calls=0;f.core.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources'],dispatch:input=>{calls++;assert.equal(input.action.type,'workspaceFromResources');return {status:'applied',receiptId:'synthetic-released-capability-receipt'};}});

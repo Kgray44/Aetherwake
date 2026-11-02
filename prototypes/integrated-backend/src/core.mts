@@ -17,6 +17,12 @@ import { createCanonicalVelaHost, type CanonicalVelaHost, type CanonicalVelaMeta
 import { CodexPlanningAdapter, planningDigest, type CodexPlanningGrant, type PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
 import type { VelaMessage, ContextManifest, AuthorizationRequest, AuthorizationDecision, VelaPlanningPort, ResourceRef, VelaPlan, HostActionResult } from '../../vela-core/src/contracts.ts';
 import type { VelaRequestPreview, VelaNativeCapabilities, VelaBackendState } from './contracts.mts';
+import { TemplateService } from '../../block-library/service.mts';
+import { createCanonicalTemplateHost } from '../../block-library/canonical-host.mts';
+import { BUILTIN_BLOCKS } from '../../block-library/registry.ts';
+import type { LibraryCapabilities, BlockKind } from '../../block-library/contracts.ts';
+import { validateSubjectRef, type NonResourceSubjectRef } from '../../workspace-kernel/subjects.ts';
+import type { LibraryRequest, LibraryResponse } from './contracts.mts';
 import { CONTRACT, ensure, ServiceError, type Binding, type Execution, type HandoffReview, type Options, type ProviderPort, type StreamEvent, type CommandMap, type ConversationSendInput, type ConversationSendPreview } from './contracts.mts';
 
 const now = () => new Date().toISOString();
@@ -66,6 +72,7 @@ export class BackendCore {
   private velaPolicyGrants=new Map<string,{requestId:string;planId?:string;fingerprint?:string;phase:string;expiresAt:string}>();
   private velaDelegationGrants=new Map<string,{planId:string;stepId:string;fingerprint:string;actionDigest:string;contextDigest:string;expiresAt:string;consumed:boolean}>();
   private pendingVelaGrant:string|null=null;
+  private library!:TemplateService;
   constructor(options: Options, emit: (event: StreamEvent) => void = () => {}) {
     this.privateMode = options.contentPolicy === 'local-private';
     if (options.contentPolicy !== 'synthetic-only') {
@@ -122,12 +129,83 @@ export class BackendCore {
         this.save();
       });
       this.stopEvents = this.port.onEvent(e => this.ingest(e));
-      this.desktop = new DesktopState(this.kernel, this.db);
+      this.desktop = new DesktopState(this.kernel, this.db,{allowSubjectAttachment:(subject,workspaceId)=>this.librarySubjectAllowed(subject,workspaceId)});
       this.initializeConversations();
+      this.initializeLibrary();
       ensure(!options.velaPlanningPort||!this.privateMode,'synthetic_vela_planner_forbidden');
       this.initializeVela(options.velaPlanningPort);
       this.record('stream/reopened', 'inferred');
     } catch (error) { this.kernel.close(); throw error; }
+  }
+  private libraryAuthorized(subject:{kind:'project'|'workspace'|'resource';id:string}):boolean {
+    const table=subject.kind==='project'?'projects':subject.kind==='workspace'?'workspaces':'resources';
+    const row=this.db.prepare(`SELECT * FROM ${table} WHERE id=?`).get(subject.id);if(!row||row.state!=='active')return false;
+    return subject.kind==='project'||row.project_id===null||this.db.prepare("SELECT id FROM projects WHERE id=? AND state='active'").get(row.project_id)!==undefined;
+  }
+  private librarySubjectAllowed(input:NonResourceSubjectRef,workspaceId?:string):boolean {
+    try {
+      const subject=validateSubjectRef(input);if(subject.kind==='resource')return false;
+      const workspace=workspaceId?this.db.prepare('SELECT * FROM workspaces WHERE id=?').get(workspaceId):null;
+      if(workspaceId&&!this.libraryAuthorized({kind:'workspace',id:workspaceId}))return false;
+      const projectAllowed=(id:string|null)=>id===null||this.libraryAuthorized({kind:'project',id});
+      const targetAllows=(id:string|null)=>!workspace||workspace.project_id===null||id===workspace.project_id;
+      if(subject.kind==='project')return projectAllowed(subject.projectId)&&targetAllows(subject.projectId);
+      const collectionId=subject.kind==='collection'?subject.collectionId:subject.collectionId;
+      const collection=collectionId?this.db.prepare("SELECT * FROM collections WHERE id=? AND state='active'").get(collectionId):null;
+      if(collectionId&&(!collection||!projectAllowed(collection.project_id as string|null)||!targetAllows(collection.project_id as string|null)))return false;
+      if(subject.kind==='collection')return !!collection;
+      if(!projectAllowed(subject.projectId)||!targetAllows(subject.projectId))return false;
+      if(subject.kinds?.some(kind=>!BUILTIN_BLOCKS.some(b=>b.kind===kind)))return false;
+      return !collection||subject.projectId===null||collection.project_id===null||collection.project_id===subject.projectId;
+    }catch{return false;}
+  }
+  private libraryCapabilities():LibraryCapabilities {
+    const cap=this.capabilityCache.snapshot(),codex=!!cap&&!cap.mock&&cap.authentication==='available'&&cap.providerId===this.port.id;
+    return {revision:1,kinds:Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'unsupported',reason:'A typed template planning port is not registered; reviewed Vela native workspace proposals remain separate'}};
+  }
+  private createLibraryResource(kind:BlockKind,title:string,provider:'local'|'codex'|undefined,projectId:string|null):string {
+    if(kind==='conversation')return this.create(title,provider==='codex'?this.port.id:'local',projectId).resourceId;
+    const resource=this.kernel.createNote(title,'',projectId);this.db.prepare('INSERT INTO desktop_resources(resource_id,kind) VALUES(?,?)').run(resource.id,kind);return resource.id;
+  }
+  private initializeLibrary() {
+    const bridge=this.desktop.nativeBlockServices(),engine=bridge.engine;
+    const host=createCanonicalTemplateHost({db:this.db,kernel:this.kernel,engine,atomic:work=>this.atomic(work),capabilities:()=>this.libraryCapabilities(),
+      createResource:(kind,title,provider,projectId)=>this.createLibraryResource(kind,title,provider,projectId),
+      resourceKind:id=>{const row=this.db.prepare('SELECT coalesce(d.kind,r.kind) AS kind FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=?').get(id);ensure(row,'resource_not_found');return (row.kind==='generic'?'reference':row.kind) as BlockKind;},
+      navigateWorkspace:id=>bridge.navigateWorkspace(id),setTaskGroupMembers:command=>this.desktop.apply(command,()=>{throw new ServiceError('unexpected_library_conversation_creation');}),
+      isAuthorized:subject=>this.libraryAuthorized(subject),authorizeSubject:(subject,workspaceId)=>this.librarySubjectAllowed(subject,workspaceId),
+    });
+    this.library=new TemplateService(this.db,host);
+    this.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources','createResource','attach','applyStructuredPreset'],workspaceRevision:id=>engine.project(id).revision,dispatch:input=>{
+      const a=input.action;
+      if(a.type==='workspaceFromResources') {
+        const result=this.library.workspaceFromResources({commandId:input.commandId,title:a.title,projectId:a.projectId,...(a.projectId?{expectedProjectVersion:Number(this.db.prepare('SELECT version FROM projects WHERE id=?').get(a.projectId)?.version)}:{}),resources:a.resourceIds.map(id=>({resourceId:id,expectedVersion:this.kernel.getResource(id).resource.version}))});
+        return {status:'applied',receiptId:result.receipt.commandId,createdWorkspaceId:result.createdWorkspaceId};
+      }
+      if(a.type==='createResource') {
+        if(a.workspaceId===null){const id=this.createLibraryResource(a.kind,a.title,'local',null);return {status:'applied',receiptId:input.commandId,createdResourceId:id};}
+        const result=this.library.createBlock({commandId:input.commandId,workspaceId:a.workspaceId,expectedLayoutVersion:engine.project(a.workspaceId).revision,kind:a.kind,title:a.title});bridge.navigateWorkspace(a.workspaceId);return {status:'applied',receiptId:input.commandId,createdResourceId:result.resourceId};
+      }
+      if(a.type==='attach') {
+        const row=host.readResource(a.resourceId);ensure(row?.authorized,'resource_unavailable');this.library.attachBlock({commandId:input.commandId,workspaceId:a.workspaceId,expectedLayoutVersion:engine.project(a.workspaceId).revision,resourceId:a.resourceId,expectedResourceVersion:row.version,kind:row.kind});bridge.navigateWorkspace(a.workspaceId);return {status:'applied',receiptId:input.commandId};
+      }
+      ensure(a.type==='applyStructuredPreset','unsupported_released_vela_action');this.desktop.apply(a,()=>{throw new ServiceError('unexpected_library_conversation_creation');});return {status:'applied',receiptId:input.commandId};
+    }});
+  }
+  private async libraryCommand(operation:LibraryRequest):Promise<LibraryResponse> {
+    const input:any=operation?.input;
+    const mutation=['setFavorite','configureBlock','attachBlock','createBlock','saveTemplate','renameTemplate','archiveTemplate','applyTemplate','workspaceFromResources'].includes(operation?.name);
+    const execute=()=>{switch(operation?.name){
+      case 'capabilities':return this.library.capabilities();case 'preferences':return this.library.preferences();case 'setFavorite':return this.library.setFavorite(input);
+      case 'getBlockSettings':return this.library.getBlockSettings(input);case 'configureBlock':return this.library.configureBlock(input);case 'findResources':return this.library.findResources(input);
+      case 'attachBlock':return this.library.attachBlock(input);case 'createBlock':return this.library.createBlock(input);case 'listTemplates':return this.library.listTemplates(input??{});case 'getTemplate':return this.library.getTemplate(input);
+      case 'saveTemplate':ensure(input.source!=='vela'&&input.provenance===undefined,'native_template_provenance_required');return this.library.saveTemplate(input);
+      case 'renameTemplate':return this.library.renameTemplate(input);case 'archiveTemplate':return this.library.archiveTemplate(input);case 'previewTemplate':return this.library.previewTemplate(input);case 'applyTemplate':return this.library.applyTemplate(input);
+      case 'previewWorkspaceFromResources':return this.library.previewWorkspaceFromResources(input);case 'workspaceFromResources':return this.library.workspaceFromResources(input);case 'requestVelaTemplate':return this.library.requestVelaTemplate(input);
+      default:throw new ServiceError('unsupported_library_command');
+    }};
+    const result=mutation?this.atomic(()=>{const value=execute();if((operation.name==='createBlock'||operation.name==='attachBlock')&&input.workspaceId)this.desktop.nativeBlockServices().navigateWorkspace(input.workspaceId);return value;}):await execute();
+    if(mutation){this.record('application/library.'+operation.name,'observed');return {result,desktop:await this.command('desktop',{type:'snapshot'})};}return {result};
   }
   /** Trusted in-process bootstrap only. No RPC exposes capability registration. */
   registerVelaNativeCapabilities(capabilities:VelaNativeCapabilities) {
@@ -566,8 +644,9 @@ export class BackendCore {
     // Reads and interruption remain available during execution. Local mutation
     // is rejected rather than racing source approval and streamed commits.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export'];
-    if (!['snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))) ensure(!this.active, 'execution_busy');
+    if (!['snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {
+      case 'library':return this.libraryCommand(a) as any;
       case 'vela':return this.velaCommand(a) as any;
       case 'velaRequestPreview':return this.previewVelaRequest(a) as any;
       case 'authorizeVelaRequest':return this.authorizeVelaRequest(a) as any;
