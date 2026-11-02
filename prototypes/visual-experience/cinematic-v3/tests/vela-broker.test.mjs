@@ -277,3 +277,89 @@ test("closing the owner during review or grant creation cannot dispatch a provid
     assert(!f.calls.some((c) => c.name === "vela"));
   }
 });
+
+test("native request failure diagnostics disclose only the failed stage and a safe code before consent", async () => {
+  for (const message of [
+    "vela_prompt_too_large",
+    "Private source body: do not disclose",
+  ]) {
+    const f = fixture(),
+      observations = [];
+    f.call = async () => {
+      throw Error(message);
+    };
+    await assert.rejects(
+      velaCommand({
+        ...f,
+        input: request(true),
+        observeNativeRequest: (event) => observations.push(event),
+      }),
+      (error) => error.message === message,
+    );
+    assert.deepEqual(observations, [
+      { stage: "preview", state: "started" },
+      {
+        stage: "preview",
+        state: "failed",
+        code:
+          message === "vela_prompt_too_large" ? message : "operation_failed",
+      },
+    ]);
+    assert.equal(f.reviews.length, 0);
+    assert(observations.every(Object.isFrozen));
+    assert(!JSON.stringify(observations).includes("Private source body"));
+  }
+});
+
+test("diagnostic callbacks cannot approve, alter or fail the native request", async () => {
+  const baseline = fixture(),
+    observed = fixture(),
+    failingObserver = fixture(),
+    events = [];
+  await velaCommand({ ...baseline, input: request(true) });
+  await velaCommand({
+    ...observed,
+    input: request(true),
+    observeNativeRequest: (event) => {
+      events.push(event);
+      return false;
+    },
+  });
+  await velaCommand({
+    ...failingObserver,
+    input: request(true),
+    observeNativeRequest: () => {
+      throw Error("observer failed");
+    },
+  });
+  assert.deepEqual(
+    observed.calls.map((c) => c.name),
+    baseline.calls.map((c) => c.name),
+  );
+  assert.deepEqual(
+    failingObserver.calls.map((c) => c.name),
+    baseline.calls.map((c) => c.name),
+  );
+  assert.equal(observed.reviews.length, 1);
+  assert.equal(failingObserver.reviews.length, 1);
+  assert.deepEqual(
+    events.map((e) => [e.stage, e.state]),
+    ["preview", "review", "grant", "request"].flatMap((stage) => [
+      [stage, "started"],
+      [stage, "completed"],
+    ]),
+  );
+  assert(
+    events.every((e) =>
+      Object.keys(e).every((key) => ["stage", "state", "code"].includes(key)),
+    ),
+  );
+  const local = fixture();
+  await velaCommand({
+    ...local,
+    input: request(false),
+    observeNativeRequest: () =>
+      assert.fail("Local-only input has no provider stages"),
+  });
+  assert.equal(local.calls.length, 1);
+});

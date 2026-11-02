@@ -270,6 +270,13 @@ app.whenReady().then(async () => {
     },
   });
   const startupErrors = [];
+  const velaRequestDiagnostics = [];
+  const observeVelaRequest = process.argv.includes("--integration-vela-live")
+    ? (event) => {
+        velaRequestDiagnostics.push({ ...event });
+        if (velaRequestDiagnostics.length > 24) velaRequestDiagnostics.shift();
+      }
+    : undefined;
   if (verify)
     win.webContents.on("console-message", (details) => {
       if (details.level === "error") {
@@ -402,7 +409,13 @@ app.whenReady().then(async () => {
       } else if (command === "conversation") {
         result = await conversationCommand({ win, dialog, call, input });
       } else if (command === "vela") {
-        result = await velaCommand({ win, dialog, call, input });
+        result = await velaCommand({
+          win,
+          dialog,
+          call,
+          input,
+          observeNativeRequest: observeVelaRequest,
+        });
       } else if (command === "library") {
         result = await call("library", input);
       } else if (command === "notes") {
@@ -510,6 +523,8 @@ app.whenReady().then(async () => {
         privateRoot,
         source,
         startupErrors,
+        getNativeRequestDiagnostics: () =>
+          velaRequestDiagnostics.map((event) => ({ ...event })),
         slotStartedAt: moduleStartedMonotonicMs,
         deadlineMs: 85000,
         cancelOwnedPlanning: async ({ requestId }) => {

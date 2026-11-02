@@ -63,7 +63,32 @@ exports.velaCommand = async ({
   call,
   input,
   reviewProvider = showVelaReview,
+  observeNativeRequest,
 }) => {
+  const observe = (event) => {
+    try {
+      observeNativeRequest?.(Object.freeze(event));
+    } catch {
+      // Native diagnostics have no command, consent or failure authority.
+    }
+  };
+  const stage = async (name, work) => {
+    observe({ stage: name, state: "started" });
+    try {
+      const result = await work();
+      observe({ stage: name, state: "completed" });
+      return result;
+    } catch (error) {
+      const candidate = error?.code ?? error?.message;
+      const code =
+        typeof candidate === "string" &&
+        /^[a-z][a-z0-9_]{0,95}$/.test(candidate)
+          ? candidate
+          : "operation_failed";
+      observe({ stage: name, state: "failed", code });
+      throw error;
+    }
+  };
   if (!input || !publicNames.has(input.name))
     throw Error("invalid_vela_command");
   const presentation =
@@ -91,16 +116,20 @@ exports.velaCommand = async ({
       return call("vela", { name: "request", input: request });
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    const preview = await call("velaRequestPreview", {
-      intent: request.intent,
-      resourceIds: request.resourceIds,
-    });
-    const review = validateReview(
-      preview,
-      await call("velaNativeReview", {
-        previewId: preview.id,
-        signature: preview.signature,
+    const preview = await stage("preview", () =>
+      call("velaRequestPreview", {
+        intent: request.intent,
+        resourceIds: request.resourceIds,
       }),
+    );
+    const review = await stage("review", async () =>
+      validateReview(
+        preview,
+        await call("velaNativeReview", {
+          previewId: preview.id,
+          signature: preview.signature,
+        }),
+      ),
     );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
@@ -113,21 +142,25 @@ exports.velaCommand = async ({
     if (approved !== true) throw Error("authorization_cancelled");
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    const grant = await call("authorizeVelaRequest", {
-      previewId: preview.id,
-      signature: preview.signature,
-      reviewDigest: review.reviewDigest,
-    });
+    const grant = await stage("grant", () =>
+      call("authorizeVelaRequest", {
+        previewId: preview.id,
+        signature: preview.signature,
+        reviewDigest: review.reviewDigest,
+      }),
+    );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    return call("vela", {
-      name: "request",
-      input: {
-        ...request,
-        previewId: preview.id,
-        grantId: grant.grantId,
-      },
-    });
+    return stage("request", () =>
+      call("vela", {
+        name: "request",
+        input: {
+          ...request,
+          previewId: preview.id,
+          grantId: grant.grantId,
+        },
+      }),
+    );
   }
   if (input.name === "apply") {
     if (typeof input.input !== "string") throw Error("invalid_vela_plan");
