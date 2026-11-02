@@ -1,6 +1,9 @@
 import { createInterface } from "node:readline";
 import { Backend } from "./service.mts";
-const [path, privateRoot, cwd] = process.argv.slice(2);
+import {createNativeHostClient,isNativeHostEnvelope} from './native-host.mts';
+const [path, privateRoot, cwd,...flags] = process.argv.slice(2);
+const write = (v: unknown) => process.stdout.write(JSON.stringify(v) + "\n");
+const nativeClient=flags.length===1&&flags[0]==='--native-secrets'?createNativeHostClient(write):undefined;
 const backend = new Backend({
   path,
   privateRoot,
@@ -8,8 +11,7 @@ const backend = new Backend({
   contentPolicy: "local-private",
   provider: "codex",
   retention: { maxEvents: 10000 },
-});
-const write = (v: unknown) => process.stdout.write(JSON.stringify(v) + "\n");
+},nativeClient?.services);
 backend.subscribe((event) => write({ event }));
 const lines = createInterface({ input: process.stdin });
 lines.on("line", async (line) => {
@@ -18,6 +20,7 @@ lines.on("line", async (line) => {
     if (Buffer.byteLength(line) > 2 * 1024 * 1024 + 2048)
       throw new Error("command_too_large");
     const request = JSON.parse(line);
+    if(isNativeHostEnvelope(request)){nativeClient?.handle(request);return;}
     id = request.id;
     if (request.command === "metrics") {
       write({ id, result: process.memoryUsage() });
@@ -53,6 +56,7 @@ lines.on("line", async (line) => {
     const result = await backend.call(request.command, request.input);
     write({ id, result });
     if (request.command === "close") {
+      nativeClient?.close();
       lines.close();
       process.exitCode = 0;
     }
@@ -68,8 +72,8 @@ lines.on("line", async (line) => {
 lines.on(
   "close",
   () =>
-    void backend
+    {nativeClient?.close();void backend
       .close()
       .catch(() => {})
-      .finally(() => process.exit()),
+      .finally(() => process.exit());},
 );
