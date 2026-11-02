@@ -63,9 +63,37 @@ function validateReview(preview, review) {
     throw Error("invalid_native_vela_review");
   return review;
 }
-function reviewPage(review, intent = "") {
-  const provider =
-    review.providerId === "codex-app-server" ? "Codex" : review.providerId;
+/** Presentation only. Each trusted native caller validates its own exact DTO,
+ * body digest, source policy and capacity before opening this read-only pane. */
+function presentation(experience) {
+  if (!["vela", "ordinary"].includes(experience))
+    throw Error("invalid_native_review_experience");
+  return experience === "ordinary"
+    ? {
+        title: "Aerynth · Review sharing",
+        subtitle: "One request in this chat. Review exactly what will be shared.",
+        historyLabel: "Aerynth local history",
+        emptyHistory: "No Aerynth local history included.",
+        // Full 256KiB request plus its disclosed sources may expand on escaping.
+        htmlBytes: 4 * 1024 * 1024,
+      }
+    : {
+        title: "Vela · Review sharing",
+        subtitle: "One provider response. App changes still require review.",
+        historyLabel: "Previous messages",
+        emptyHistory: "No prior messages included.",
+        htmlBytes: 524288,
+      };
+}
+function reviewPage(review, intent = "", experience = "vela") {
+  const view = presentation(experience);
+  const providerLabel = (id) =>
+    id === "codex-app-server"
+      ? "Codex"
+      : experience === "ordinary" && id === "chatgpt-plan-responses"
+        ? "ChatGPT plan"
+        : id;
+  const provider = providerLabel(review.providerId);
   const sourceKey = (source) => JSON.stringify([source.kind, source.id]);
   const included = new Map(
     review.context.included.map((source) => [sourceKey(source), source]),
@@ -85,13 +113,13 @@ function reviewPage(review, intent = "") {
   const history = (review.history?.messages ?? [])
     .map(
       (message) =>
-        `<article><h2>${escape(message.role === "user" ? "You" : message.providerId === "codex-app-server" ? "Codex" : (message.providerId ?? provider))}</h2><pre>${escape(message.content)}</pre></article>`,
+        `<article><h2>${escape(message.role === "user" ? "You" : providerLabel(message.providerId ?? review.providerId))}</h2><pre>${escape(message.content)}</pre></article>`,
     )
     .join("");
   const styleHash = createHash("sha256").update(css).digest("base64");
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>Vela · Review sharing</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">Send to ${escape(provider)}?</h1><p>One provider response. App changes still require review.</p></header><div class="content" tabindex="0" aria-label="Review what will be shared"><p class="intent">${escape(intent)}</p><details${sources ? " open" : ""}><summary>Shared resources (${resources.length})</summary><section>${sources || "No selected source content."}</section></details><details${history ? " open" : ""}><summary>Previous messages (${review.history?.messages.length ?? 0})</summary><section>${history || "No prior messages included."}</section></details><details><summary>Exact provider request</summary><section><pre>${escape(review.prompt)}</pre><small>Request digest: ${escape(review.promptDigest)}</small></section></details></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">Send once</button></footer></main></body></html>`;
-  if (Buffer.byteLength(html) > 524288)
-    throw Error("native_vela_review_capacity_exceeded");
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">Send to ${escape(provider)}?</h1><p>${escape(view.subtitle)}</p></header><div class="content" tabindex="0" aria-label="Review what will be shared"><p class="intent">${escape(intent)}</p><details${sources ? " open" : ""}><summary>Shared resources (${resources.length})</summary><section>${sources || "No selected source content."}</section></details><details${history ? " open" : ""}><summary>${escape(view.historyLabel)} (${review.history?.messages.length ?? 0})</summary><section>${history || escape(view.emptyHistory)}</section></details><details><summary>Exact provider request</summary><section><pre>${escape(review.prompt)}</pre><small>Request digest: ${escape(review.promptDigest)}</small></section></details></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">Send once</button></footer></main></body></html>`;
+  if (Buffer.byteLength(html) > view.htmlBytes)
+    throw Error(experience === "vela" ? "native_vela_review_capacity_exceeded" : "native_ordinary_review_capacity_exceeded");
   return html;
 }
 function ownerAlive(parent) {
@@ -105,13 +133,14 @@ function ownerAlive(parent) {
 }
 /** A finite, parent-owned native approval surface. It has no application bridge,
  * scripts, network access, credentials, grant, canonical writes or provider port. */
-async function showVelaReview({ parent, review, intent, expiresAt, runtime }) {
+async function showVelaReview({ parent, review, intent, expiresAt, runtime, experience = "vela" }) {
+  const view = presentation(experience);
   if (!ownerAlive(parent)) return false;
   const remaining = Date.parse(expiresAt) - Date.now();
   if (!Number.isFinite(remaining) || remaining <= 0) return false;
   const url =
     "data:text/html;charset=utf-8," +
-    encodeURIComponent(reviewPage(review, intent));
+    encodeURIComponent(reviewPage(review, intent, experience));
   const { BrowserWindow, ipcMain, session } = runtime ?? require("electron");
   const token = randomUUID(),
     channel = "vela-review-decision",
@@ -133,7 +162,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime }) {
     height: Math.min(720, bounds.height),
     backgroundColor: "#0c0d17",
     autoHideMenuBar: true,
-    title: "Vela · Review sharing",
+    title: view.title,
     minimizable: false,
     webPreferences: {
       preload: reviewPreload,
