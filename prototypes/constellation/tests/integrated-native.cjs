@@ -594,7 +594,10 @@ exports.verify = async ({
         );
       await shot("08-exact-original-workspace-return");
       await selectWorkspace(other.workspaceId);
-      await click(`[data-block="${other.note.block.id}"] .unfold`);
+      // Fluid insertion may legitimately move a prior block beyond this camera.
+      // Exercise the real offscreen-block access instead of assuming visibility.
+      await click("#layout-manager");
+      await click(`[data-locate="${other.note.block.id}"]`);
       await fill(
         `[data-block="${other.note.block.id}"] textarea`,
         "Synthetic real editor change after spatial branch and relationship navigation.",
