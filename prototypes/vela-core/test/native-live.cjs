@@ -264,9 +264,9 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
     };
     const recordChat = async (workspaceId, resourceId, content) => {
       const d=await chat(resourceId); assert.equal(d.conversation.providerId,'local'); const before=d.messages.total;
-      const block=await workingBlock(workspaceId,resourceId); await type(`[data-block="${block.id}"] .conversation-compose textarea`,content); await click(`[data-block="${block.id}"] .conversation-compose button[type="submit"]`);
+      const block=await workingBlock(workspaceId,resourceId); await type(`[data-block="${block.id}"] .cp-composer textarea`,content); await click(`[data-block="${block.id}"] .cp-composer button[type="submit"]`);
       await until(async () => {const actual=await chat(resourceId);return actual.messages.total===before+1&&actual.messages.items.at(-1)?.content===content;}, 'durable local canonical message');
-      await until(() => js(`document.querySelector(${JSON.stringify(`[data-block="${block.id}"] .conversation-transcript`)})?.textContent.includes(${JSON.stringify(content)})`), 'working chat renders the durable local message');
+      await until(() => js(`document.querySelector(${JSON.stringify(`[data-block="${block.id}"] .cp-messages`)})?.textContent.includes(${JSON.stringify(content)})`), 'working chat renders the durable local message');
       assert(!(await chat(resourceId)).messages.items.some(m=>m.role==='assistant')); return block;
     };
     const editNote = async (workspaceId, resourceId, content) => {
@@ -303,7 +303,7 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
       let archived;if(expected.proposalEvidence){const original=await originalEvidence(expected.proposalEvidence.file);assert.equal(original.sha256,expected.proposalEvidence.sha256,'Original proposal receipt changed');archived=original.value.providerEvidence;receipt.proposalEvidence=expected.proposalEvidence;}
       receipt.providerEvidence=await verifyExecution(current.requests.find(r=>r.id===expected.requestId),current.plans.find(p=>p.id===expected.planId),[],archived); assert.deepEqual(receipt.providerEvidence.execution,expected.executions[0]);
       await capture('05-restored-real-plan-receipts'); await closeVela(); await navigate(expected.workspace.id);
-      const chatBlock=await workingBlock(expected.workspace.id,expected.chat.conversation.resourceId); await until(() => js(`document.querySelector(${JSON.stringify(`[data-block="${chatBlock.id}"] .conversation-transcript`)})?.textContent.includes(${JSON.stringify(expected.chat.messages.at(-1).content)})`),'restored working chat content');
+      const chatBlock=await workingBlock(expected.workspace.id,expected.chat.conversation.resourceId); await until(() => js(`document.querySelector(${JSON.stringify(`[data-block="${chatBlock.id}"] .cp-messages`)})?.textContent.includes(${JSON.stringify(expected.chat.messages.at(-1).content)})`),'restored working chat content');
       const noteBlock=await workingBlock(expected.workspace.id,expected.note.id); assert.equal(await js(`document.querySelector(${JSON.stringify(`[data-block="${noteBlock.id}"] textarea`)}).value`),expected.note.content);
       assert.deepEqual(await executions(),beforeExecutions,'Read-only restore and working-view inspection starts no execution'); check('restart-exact-canonical-content-placements-real-plan-and-execution');
     } else if(resume) {
