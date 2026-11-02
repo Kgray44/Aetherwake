@@ -2,6 +2,7 @@
   "name": "aerynth-constellation",
   "version": "0.1.0",
   "private": true,
+  "peerDependencies": { "three": "0.180.0" },
   "type": "module",
   "scripts": {
     "test": "node --experimental-strip-types --test tests/*.test.mjs",

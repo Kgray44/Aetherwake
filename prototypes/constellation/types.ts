@@ -1,13 +1,15 @@
-/** Structural subset of aerynth.desktop@1. Content is intentionally absent. */
+import type { SpatialCamera, Vector3 } from './spatial-types.ts';
+/** Structural subset of aerynth.desktop@1. Content is never persisted by this layer. */
 export type Visibility = { visible?: boolean; available?: boolean };
 export type Snapshot = {
-  projects: ({ id: string; title: string } & Visibility)[];
+  projects: ({ id: string; title: string; version?: number } & Visibility)[];
   workspaces: ({
     id: string;
     project_id: string | null;
     title: string;
+    version?: number;
   } & Visibility)[];
-  resources: ({ id: string; title: string; kind: string } & Visibility)[];
+  resources: ({ id: string; title: string; kind: string; version?: number; project_id?: string | null; provider?: string; messages?: {id:string;role:string;content?:string}[] } & Visibility)[];
   blocks: ({
     id: string;
     workspace_id: string;
@@ -17,6 +19,7 @@ export type Snapshot = {
     width: number;
     height: number;
     z: number;
+    version?: number;
   } & Visibility)[];
   relationships: ({
     id: string;
@@ -24,9 +27,13 @@ export type Snapshot = {
     target_id: string;
     kind: string;
     provenance: string;
+    created_at?: string;
+    evidenceRef?: string;
+    freshness?: string;
   } & Visibility)[];
   activeWorkspaceId: string | null;
   navigation?: Destination;
+  conversationBranches?: ({parentResourceId:string;childResourceId:string;sourceMessageId:string;mode:string;createdAt?:string} & Visibility)[];
 };
 export type Destination =
   | { kind: "workspace"; workspaceId: string }
@@ -42,6 +49,7 @@ export type Location =
       blockId: string;
     };
 export type Point = { x: number; y: number };
+export type Anchor = Point & { spatial?: Vector3; pinned?: boolean; rotation?: number };
 export type Camera = Point & { zoom: number };
 export type Node = {
   key: string;
@@ -54,10 +62,10 @@ export type Node = {
   resourceId?: string;
   workspaceId?: string;
 };
-export type Bookmark = { camera: Camera; selected: string | null };
+export type Bookmark = { camera: Camera; selected: string | null; spatial?: SpatialCamera };
 export type ViewState = {
   schema: "aerynth.constellation@1";
-  anchors: Record<string, Point>;
+  anchors: Record<string, Anchor>;
   bookmarks: Record<string, Bookmark>;
   location: Location;
   history: { location: Location; bookmark: Bookmark }[];
@@ -79,4 +87,6 @@ export type Transition = {
   to: Location;
   origin: Point;
   camera: Camera;
+  /** Optional absolute client position of a perspective-projected destination. */
+  screenOrigin?: Point;
 };
