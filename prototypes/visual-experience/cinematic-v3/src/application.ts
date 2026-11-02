@@ -87,6 +87,11 @@ import { createProductClients } from "./product-clients.ts";
 import { mountAgentLibrary } from "../../../agent-product/view.ts";
 import "../../../agent-product/view.css";
 import type { ExperienceMotionPort } from "../../../application-contract/motion.ts";
+import type { ChecklistReference } from "../../../application-contract/checklist.ts";
+import { mountChecklistExperience } from "../../../checklist-product/view.ts";
+import { mountChecklistCreator } from "../../../checklist-product/creator.ts";
+import "../../../checklist-product/view.css";
+import "../../../checklist-product/creator.css";
 import type { ProviderConnectionStatus } from "../../../application-contract/provider-connections.ts";
 import { mountDirectResourceExperience } from "../../../block-library/direct-resource-view.ts";
 import "../../../block-library/direct-resource-view.css";
@@ -332,6 +337,17 @@ export function installApplication(hooks: Hooks) {
   };
   let agentLibrary: ReturnType<typeof mountAgentLibrary> | null = null;
   let agentSurface: ContextualSurfaceRequest | null = null;
+  let checklistCreator: ReturnType<typeof mountChecklistCreator> | null = null;
+  let checklistCreatorSurface: ContextualSurfaceRequest | null = null;
+  let checklistCreatorSerial = 0;
+  const checklistViews = new Map<
+    string,
+    {
+      view: ReturnType<typeof mountChecklistExperience>;
+      version: number;
+      width: number;
+    }
+  >();
   const noteSessions = new Map<string, NoteSession>();
   const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
   const groupViews = new Map<
@@ -485,6 +501,13 @@ export function installApplication(hooks: Hooks) {
     mount: (root, resource) =>
       mountDirectResourceExperience(root, resource, {
         notes: notesClient,
+        checklists: {
+          port: productClients.checklists,
+          motion: experienceMotion,
+          viewId: "direct:" + resource.id,
+          chooseReference: () => chooseChecklistReference(root),
+          openReference: openChecklistReference,
+        },
         copyText,
         noteSession,
         saveContent,
@@ -602,6 +625,9 @@ export function installApplication(hooks: Hooks) {
       environmentNavigator?.dispose();
       workspaceActions?.dispose();
       agentLibrary?.dispose();
+      checklistCreator?.dispose();
+      for (const entry of checklistViews.values()) entry.view.dispose();
+      checklistViews.clear();
       controlMotion.dispose();
       resourceOpener.cancel();
       directResources.dispose();
@@ -853,6 +879,11 @@ export function installApplication(hooks: Hooks) {
         view.dispose();
         noteViews.delete(id);
       }
+    for (const [id, entry] of checklistViews)
+      if (!next.blocks.some((block) => block.id === id)) {
+        entry.view.dispose();
+        checklistViews.delete(id);
+      }
     for (const [id, view] of groupViews)
       if (!next.blocks.some((b) => b.id === id)) {
         view.dispose();
@@ -1067,6 +1098,9 @@ export function installApplication(hooks: Hooks) {
   }
   async function flushDrafts() {
     await conversationDisposing;
+    await checklistCreator?.flush();
+    for (const entry of checklistViews.values()) await entry.view.flush();
+    await directResources.flush();
     for (;;) {
       await flushConversationDraftSessions(() => composerSessions.values());
       await conversationManager?.flush();
@@ -1323,6 +1357,166 @@ export function installApplication(hooks: Hooks) {
     if (resourceId) openCanonicalResource(resourceId);
     else void showConversations().catch(report);
   }
+  function openChecklistReference(reference: ChecklistReference) {
+    if (reference.kind === "project") {
+      void run({
+        type: "navigate",
+        target: { kind: "constellation", projectId: reference.projectId },
+      });
+    } else if (
+      reference.kind === "resource" ||
+      reference.kind === "conversation"
+    ) {
+      openCanonicalResource(
+        reference.resourceId,
+        reference.kind === "conversation" ? reference.messageId : undefined,
+      );
+    } else if (reference.kind === "agent")
+      openCanonicalResource(reference.agentId);
+    else if (reference.kind === "task") openCanonicalResource(reference.taskId);
+    else hooks.status("This linked source has no available viewer yet.");
+  }
+  function chooseChecklistReference(
+    anchor: HTMLElement,
+  ): Promise<ChecklistReference | null> {
+    return new Promise((resolve) => {
+      const content = document.createElement("div");
+      content.className = "application-source-choice";
+      const search = document.createElement("input"),
+        results = document.createElement("div"),
+        summary = document.createElement("small");
+      search.type = "search";
+      search.placeholder = "Find a source";
+      search.setAttribute("aria-label", "Find a checklist source");
+      search.dataset.aerynthMotionControl = "true";
+      content.append(search, results, summary);
+      const choices: { title: string; reference: ChecklistReference }[] = [];
+      let settled = false;
+      const finish = (value: ChecklistReference | null) => {
+        if (!settled) {
+          settled = true;
+          resolve(value);
+        }
+      };
+      const add = (title: string, reference: ChecklistReference) => {
+        choices.push({ title, reference });
+      };
+      for (const resource of state?.resources ?? []) {
+        if (
+          resource.available === false ||
+          resource.visible === false ||
+          resource.state === "archived"
+        )
+          continue;
+        add(
+          resource.title,
+          resource.kind === "conversation"
+            ? { kind: "conversation", resourceId: resource.id }
+            : resource.kind === "agent"
+              ? { kind: "agent", agentId: resource.id }
+              : { kind: "resource", resourceId: resource.id },
+        );
+      }
+      for (const project of state?.projects ?? [])
+        add(project.title, { kind: "project", projectId: project.id });
+      const draw = () => {
+        const matches = choices.filter((choice) =>
+          choice.title.toLowerCase().includes(search.value.toLowerCase()),
+        );
+        results.replaceChildren();
+        for (const choice of matches.slice(0, 100)) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.textContent = choice.title;
+          button.dataset.aerynthMotionControl = "true";
+          button.onclick = () => {
+            finish(choice.reference);
+            surfaces.close("checklist-sources");
+          };
+          results.append(button);
+        }
+        summary.textContent =
+          matches.length > 100
+            ? "100 matches · refine your search"
+            : matches.length
+              ? ""
+              : "No matching authorized sources.";
+      };
+      search.oninput = draw;
+      draw();
+      surfaces.open({
+        id: "checklist-sources",
+        anchor,
+        content,
+        label: "Link a source",
+        placement: "right",
+        minSize: { width: 260, height: 140 },
+        maxSize: { width: 420, height: 480 },
+        initialFocus: search,
+        onClose: () => finish(null),
+      });
+    });
+  }
+  async function newChecklist(
+    conversationId?: string,
+    anchor: HTMLElement = el("#application-resources"),
+  ) {
+    await flush();
+    if (checklistCreator && checklistCreatorSurface) {
+      surfaces.open(checklistCreatorSurface);
+      return;
+    }
+    const content = document.createElement("div");
+    const projectId = conversationId
+      ? (state?.resources.find((r) => r.id === conversationId)?.project_id ??
+        null)
+      : (state?.workspaces.find((w) => w.id === state?.activeWorkspaceId)
+          ?.project_id ?? null);
+    const controller = mountChecklistCreator(content, {
+      port: productClients.checklists,
+      motion: experienceMotion,
+      projectId,
+      conversationId,
+      viewId: "creator:" + ++checklistCreatorSerial,
+      onCreated: async (resourceId) => {
+        const result = await resourceOpener.open({
+          resourceId,
+          origin: { source: "application" },
+        });
+        if (result.status !== "ready")
+          throw Error("Created checklist is not available to open.");
+        if (checklistCreator === controller) surfaces.close("checklist-create");
+      },
+    });
+    checklistCreator = controller;
+    checklistCreatorSurface = {
+      id: "checklist-create",
+      anchor,
+      content,
+      label: "Checklist",
+      placement: "bottom",
+      minSize: { width: 300, height: 190 },
+      maxSize: { width: 460, height: 320 },
+      initialFocus: "input",
+      beforeClose: async () => {
+        try {
+          await controller.flush();
+          return true;
+        } catch (error) {
+          report(error);
+          return false;
+        }
+      },
+      onClose: () => {
+        controller.dispose();
+        if (checklistCreator === controller) {
+          checklistCreator = null;
+          checklistCreatorSurface = null;
+        }
+      },
+    };
+    surfaces.open(checklistCreatorSurface);
+  }
   async function showAgents(resourceId?: string): Promise<void> {
     if (!agentLibrary || !agentSurface) {
       const content = document.createElement("div");
@@ -1453,6 +1647,7 @@ export function installApplication(hooks: Hooks) {
     controller = conversationManager = mountConversationManager(content, port, {
       embedded: true,
       copy: copyText,
+      onCreateChecklist: (resourceId) => newChecklist(resourceId),
       onOpenChatGPT: async (reference) => {
         const receipt = (await host.command!(
           "firstPartyChat",
@@ -1813,7 +2008,7 @@ export function installApplication(hooks: Hooks) {
     if (!state) return;
     open(
       "Resources",
-      '<label>Find a resource<input id="resource-search" type="search" placeholder="Search title or type"></label><button id="standalone-note">New note</button><div id="resource-results"></div>',
+      '<label>Find a resource<input id="resource-search" type="search" placeholder="Search title or type"></label><button id="standalone-note">New note</button><button id="standalone-checklist" data-aerynth-motion-control="true">New checklist</button><div id="resource-results"></div>',
     );
     const draw = () => {
       const q = el<HTMLInputElement>(
@@ -1826,7 +2021,7 @@ export function installApplication(hooks: Hooks) {
           .filter((r) => `${r.title} ${r.kind}`.toLowerCase().includes(q))
           .map(
             (r) =>
-              `<div class="resource-opening-row"><button class="resource-result" data-open-resource="${r.id}">${escape(r.title)}<small>${r.kind}</small></button><button data-attach="${r.id}" ${!state!.activeWorkspaceId || r.available === false ? "disabled" : ""} aria-label="Add ${escape(r.title)} to this workspace">Add to workspace</button></div>`,
+              `<div class="resource-opening-row"><button class="resource-result" data-open-resource="${r.id}">${escape(r.title)}<small>${r.kind}</small></button><button data-attach="${r.id}" ${!state!.activeWorkspaceId || r.available === false || !REGISTERED_BLOCKS.some((def) => def.kind === r.kind) ? "disabled" : ""} aria-label="Add ${escape(r.title)} to this workspace">Add to workspace</button></div>`,
           )
           .join("") || "<p>No matching resources.</p>";
       dialog
@@ -1849,15 +2044,40 @@ export function installApplication(hooks: Hooks) {
               return;
             }
             dialog.close();
-            void run({
-              type: "attach",
-              workspaceId: state!.activeWorkspaceId,
-              resourceId: b.dataset.attach!,
-            });
+            void enqueueResult(async () => {
+              await flush();
+              const resource = state?.resources.find(
+                  (r) => r.id === b.dataset.attach,
+                ),
+                workspaceId = state?.activeWorkspaceId;
+              if (
+                !resource ||
+                !workspaceId ||
+                resource.kind === "agent" ||
+                !REGISTERED_BLOCKS.some((def) => def.kind === resource.kind)
+              )
+                throw Error(
+                  "Resource has no available workspace presentation.",
+                );
+              if (!libraryClient.attachBlock)
+                throw Error("Workspace attachment is unavailable.");
+              await libraryClient.attachBlock({
+                commandId: crypto.randomUUID(),
+                workspaceId,
+                expectedLayoutVersion: state!.layoutVersion,
+                resourceId: resource.id,
+                expectedResourceVersion: resource.version,
+                kind: resource.kind,
+              });
+            }).catch(report);
           }),
       );
     };
     el("#resource-search", dialog).oninput = draw;
+    el("#standalone-checklist", dialog).onclick = () => {
+      dialog.close();
+      void newChecklist().catch(report);
+    };
     el("#standalone-note", dialog).onclick = () => {
       void (async () => {
         const known = new Set(state!.resources.map((resource) => resource.id));
@@ -2984,6 +3204,33 @@ export function installApplication(hooks: Hooks) {
         void view.refresh({ latest: true }).catch(report);
       }
       view?.setActive(activeBlocks.get(b.id) ?? false);
+    } else if (r.kind === "checklist") {
+      const content = el(".working-content", article);
+      let entry = checklistViews.get(id);
+      if (!entry && activeBlocks.get(id)) {
+        content.replaceChildren();
+        entry = {
+          view: mountChecklistExperience(
+            content,
+            r.id,
+            productClients.checklists,
+            {
+              viewId: "block:" + id,
+              motion: experienceMotion,
+              active: true,
+              presentation: blockPresentation(id),
+              chooseReference: () => chooseChecklistReference(content),
+              openReference: openChecklistReference,
+            },
+          ),
+          version: r.version,
+          width: content.clientWidth,
+        };
+        checklistViews.set(id, entry);
+      } else if (entry && entry.version !== r.version) {
+        entry.version = r.version;
+        void entry.view.refresh().catch(report);
+      }
     } else if (r.kind === "task_group") {
       const surface = el(".working-content", article);
       const members = r.taskMembers ?? [];
@@ -3472,7 +3719,9 @@ export function installApplication(hooks: Hooks) {
         state?.resources.find(
           (resource) => resource.id === block.resource_id,
         ) &&
-        ["conversation", "task_group", "stream"].includes(resource?.kind ?? "")
+        ["conversation", "task_group", "stream", "checklist"].includes(
+          resource?.kind ?? "",
+        )
       ) {
         const article = document.querySelector<HTMLElement>(
           `[data-block="${id}"]`,
@@ -3486,11 +3735,13 @@ export function installApplication(hooks: Hooks) {
     subjectViews.get(id)?.setPresentation(presentation);
     eventViews.get(id)?.setPresentation(presentation);
     groupViews.get(id)?.setPresentation(presentation);
+    checklistViews.get(id)?.view.setPresentation(presentation);
     chatViews.get(id)?.setActive(active);
     noteViews.get(id)?.setActive(active);
     subjectViews.get(id)?.setActive(active);
     eventViews.get(id)?.setActive(active);
     groupViews.get(id)?.setActive(active);
+    checklistViews.get(id)?.view.setActive(active);
   }
   return {
     frame(now: number, policy: Policy) {
@@ -3528,6 +3779,19 @@ export function installApplication(hooks: Hooks) {
       environmentNavigator?.frame();
       workspaceActions?.frame();
       agentLibrary?.frame();
+      checklistCreator?.frame();
+      directResources.frame();
+      for (const [id, entry] of checklistViews) {
+        const width =
+          document.querySelector<HTMLElement>(
+            `[data-block="${id}"] .working-content`,
+          )?.clientWidth ?? 0;
+        if (width !== entry.width) {
+          entry.width = width;
+          entry.view.reflow();
+        }
+        entry.view.frame();
+      }
       controlMotion.frame();
       velaExperience.frame(policy);
       velaManifestation.frame(policy);

@@ -85,6 +85,19 @@
   min-height: 0;
   height: 100%;
 }
+.application-source-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+}
+.application-source-choice button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .application-conversation-content {
   display: flex;
   flex-direction: column;

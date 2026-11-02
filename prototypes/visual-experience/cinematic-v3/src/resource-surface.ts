@@ -9,6 +9,8 @@ export interface DirectResourceView {
   setActive(active: boolean): void;
   flush(): Promise<void>;
   dispose(): void;
+  frame?(): void;
+  reflow?(): void;
 }
 
 /** Retains the actual focused editor DOM across closes. Only view state lives
@@ -32,6 +34,8 @@ export function createResourceSurface(options: {
       authorized: boolean;
       active: boolean;
       request: ContextualSurfaceRequest;
+      width?: number;
+      height?: number;
     }
   >();
   let selected: string | null = null;
@@ -148,6 +152,19 @@ export function createResourceSurface(options: {
     },
     unavailable(resourceId: string) {
       release(resourceId);
+    },
+    frame() {
+      for (const entry of entries.values()) {
+        if (!entry.active || !entry.authorized) continue;
+        const width = entry.root.clientWidth,
+          height = entry.root.clientHeight;
+        if (width !== entry.width || height !== entry.height) {
+          entry.width = width;
+          entry.height = height;
+          entry.view.reflow?.();
+        }
+        entry.view.frame?.();
+      }
     },
     async flush() {
       for (const entry of entries.values())

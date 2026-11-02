@@ -349,7 +349,7 @@ export class DesktopState {
   private attach(workspaceId: string, resourceId: string) {
     const data = this.workspace(workspaceId);
     this.kernel.getResource(resourceId);
-    check(!['agent','checklist'].includes(String(this.resourceKind(resourceId))), 'resource_presenter_unavailable');
+    check(this.resourceKind(resourceId)!=='agent', 'resource_presenter_unavailable');
     const n = data.blocks.length;
     return this.engineCommand(workspaceId, {
       type: "attachResource",

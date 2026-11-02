@@ -5,9 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { prepareWorkspaceNative } from "../prepare-workspace-native.mts";
+import { prepareWorkspaceNative, WORKSPACE_SOURCE_REVIEW_BLOCKS } from "../prepare-workspace-native.mts";
 import { BackendCore } from "../../integrated-backend/src/core.mts";
-import { REGISTERED_BLOCKS } from "../registry.ts";
 const require = createRequire(import.meta.url);
 const { options, workspaceState, verify } = require("./workspace-native.cjs");
 
@@ -152,7 +151,7 @@ test("offline normal-card preparation and fresh Core restore use canonical kinds
       contentPolicy: "local-private",
     });
   t.after(() => core.command("close", {}));
-  assert.equal(seed.cases.length, REGISTERED_BLOCKS.length);
+  assert.equal(seed.cases.length, WORKSPACE_SOURCE_REVIEW_BLOCKS.length);
   assert.equal(seed.relatedCase, undefined); assert.equal(seed.relatedValidation, undefined, 'Ordinary fixture does not silently acquire recovery specialization');
   const approach = require('./workspace-approach.cjs'), expressions = require('./workspace-approach-expressions.cjs');
   assert.equal(seed.approachValidation.preflightSha256, expressions.preflight().sha256);

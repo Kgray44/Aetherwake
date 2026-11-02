@@ -172,7 +172,7 @@ export async function prepareWorkspaceNative(
     const cases: WorkspaceNativeCase[] = [];
     let taskId = "",
       groupId = "";
-    for (const definition of REGISTERED_BLOCKS) {
+    for (const definition of WORKSPACE_SOURCE_REVIEW_BLOCKS) {
       desktop = await core.command("desktop", {
         type: "createWorkspace",
         title: "Synthetic normal " + definition.kind,

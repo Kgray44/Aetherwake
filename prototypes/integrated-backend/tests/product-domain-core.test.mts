@@ -79,3 +79,23 @@ test('outer Core persistence failure rolls domain schema/resource/receipt/events
     assert.equal(f.events.filter(e=>e.type==='checklist.created').length,1);
   }finally{await f.close();}
 });
+
+test('real library Checklist creation and multi-workspace attachment preserve one generic identity and retain entries after detaching',async()=>{
+  const f=fixture();try{
+    let desktop=await f.core.command('desktop',{type:'createWorkspace',title:'Synthetic Checklist workspace A',projectId:null});
+    const first=desktop.activeWorkspaceId!;
+    const created=(await f.core.command('library',{name:'createBlock',input:{commandId:'synthetic-library-checklist',workspaceId:first,expectedLayoutVersion:desktop.layoutVersion,kind:'checklist',title:'Synthetic shared steps'}})).result as any;
+    const row=f.owner.db.prepare('SELECT kind FROM resources WHERE id=?').get(created.resourceId);assert.equal(row.kind,'generic');assert.equal(counts(f).notes,0);
+    const document=(await f.core.command('checklists',{name:'read',input:{resourceId:created.resourceId}})).result as ChecklistDocument;
+    await f.core.command('checklists',{name:'mutate',input:{commandId:'synthetic-shared-add',resourceId:created.resourceId,expectedVersion:document.resource.version,operations:[{type:'addEntry',key:'first',entry:{text:'Synthetic retained manual step'}}]}});
+    const expected=(await f.core.command('checklists',{name:'read',input:{resourceId:created.resourceId}})).result as ChecklistDocument;
+    desktop=await f.core.command('desktop',{type:'createWorkspace',title:'Synthetic Checklist workspace B',projectId:null});
+    const second=desktop.activeWorkspaceId!;
+    await f.core.command('library',{name:'attachBlock',input:{commandId:'synthetic-library-checklist-attach',workspaceId:second,expectedLayoutVersion:desktop.layoutVersion,resourceId:created.resourceId,expectedResourceVersion:expected.resource.version,kind:'checklist'}});
+    const placements=f.owner.db.prepare('SELECT * FROM blocks WHERE resource_id=? ORDER BY id').all(created.resourceId);assert.equal(placements.length,2);assert(placements.every((p:any)=>p.width===460&&p.height===500));
+    const original=placements.find((p:any)=>p.workspace_id===first);await f.core.command('desktop',{type:'detach',blockId:original.id,expectedVersion:original.version});
+    assert.deepEqual((await f.core.command('checklists',{name:'read',input:{resourceId:created.resourceId}})).result,expected);
+    assert.equal(f.owner.db.prepare('SELECT count(*) n FROM blocks WHERE resource_id=?').get(created.resourceId).n,1);
+    await f.reopen();assert.deepEqual((await f.core.command('checklists',{name:'read',input:{resourceId:created.resourceId}})).result,expected);assert.equal(counts(f).notes,0);
+  }finally{await f.close();}
+});

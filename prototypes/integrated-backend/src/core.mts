@@ -249,6 +249,7 @@ export class BackendCore {
   }
   private createLibraryResource(kind:BlockKind,title:string,provider:'local'|'codex'|undefined,projectId:string|null):string {
     ensure(!['file','link'].includes(kind),'media_import_required');
+    if(kind==='checklist')return this.productDomains().checklist({name:'create',input:{commandId:randomUUID(),title,projectId}}).resourceId;
     if(kind==='conversation')return this.create(title,provider==='codex'?this.port.id:provider==='local'?'local':this.defaultOrdinaryProvider(),projectId).resourceId;
     const resource=this.kernel.createNote(title,'',projectId);this.db.prepare('INSERT INTO desktop_resources(resource_id,kind) VALUES(?,?)').run(resource.id,kind);return resource.id;
   }
