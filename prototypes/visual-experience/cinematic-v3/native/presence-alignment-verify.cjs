@@ -281,10 +281,28 @@ async function run(win) {
   await pause(1200);
   await gather("universe upper-right");
   await shot("universe-upper-right");
+  const overview = await js(
+    "({bounds:window.__aerynth.snapshot().gpu.presenceBounds,width:innerWidth,height:innerHeight})",
+  );
+  check(
+    "actual overview sculpture occupies the upper right",
+    overview.bounds.x > overview.width * 0.65 &&
+      overview.bounds.x + overview.bounds.w < overview.width - 12 &&
+      overview.bounds.y >= 80 &&
+      overview.bounds.y + overview.bounds.h < overview.height - 100,
+    overview,
+  );
+  await execute({
+    type: "navigate",
+    target: { kind: "workspace", workspaceId: workspace },
+  });
+  await pause(1000);
   check(
     "overview preserves exact saved workspace presence",
     (await canonical()) === saved,
   );
+  await gather("return to exact workspace placement");
+  await shot("returned-workspace");
   check("no renderer errors", receipt.errors.length === 0, receipt.errors);
   receipt.pngBytes = written;
   await fs.writeFile(
