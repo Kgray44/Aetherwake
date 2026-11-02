@@ -174,11 +174,11 @@ exports.verify = async ({
     );
     await pause(300);
   };
-  const node = async (key) => {
+  const node = async (nodeKey) => {
     await wait(
-      `!!document.querySelector(${JSON.stringify('[data-key="' + key + '"]')})`,
+      `!!document.querySelector(${JSON.stringify('[data-key="' + nodeKey + '"]')})`,
     );
-    await click(`[data-key="${key}"]`);
+    await click(`[data-key="${nodeKey}"]`);
     await key("Enter");
     await pause(450);
   };
