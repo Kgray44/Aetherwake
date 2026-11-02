@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 const { conversationCommand, isConversationRead } = createRequire(
   import.meta.url,
 )("../native/conversation-broker.cjs");
@@ -138,4 +139,158 @@ test("source changes after preview fail through the canonical grant boundary wit
     f.calls.some((c) => c.name === "conversationSend"),
     false,
   );
+});
+
+function planFixture({ shared = false, approve = true } = {}) {
+  const f = fixture("local"),
+    original = f.call,
+    reviews = [];
+  f.call = async (name, input) => {
+    const result = await original(name, input);
+    if (name === "desktop")
+      return {
+        resources: [
+          { ...result.resources[0], providerId: "chatgpt-plan-responses" },
+        ],
+      };
+    if (name === "conversationSendPreview") {
+      const messages = [
+        { role: "user", content: "An earlier question" },
+        { role: "assistant", content: "An earlier real answer" },
+        ...(shared
+          ? [{ role: "user", content: "A reviewed selected source" }]
+          : []),
+        { role: "user", content: input.content },
+      ];
+      const model = "synthetic-catalog-model",
+        instructions = "Synthetic ordinary instructions";
+      const body = JSON.stringify({
+        model,
+        instructions,
+        input: messages,
+        store: false,
+        stream: true,
+      });
+      return {
+        ...result,
+        providerId: "chatgpt-plan-responses",
+        resourceId: input.resourceId,
+        expiresAt: new Date(Date.now() + 60000).toISOString(),
+        context: shared
+          ? [
+              {
+                sourceResourceId: "selected-note",
+                content: "A reviewed selected source",
+              },
+            ]
+          : [],
+        responses: {
+          model,
+          instructions,
+          configurationId: "aerynth.chatgpt-plan.primary",
+          connectionVersion: 1,
+          messages,
+          history: [
+            { resourceId: "conversation", messageId: "q" },
+            {
+              resourceId: "conversation",
+              messageId: "a",
+              providerId: "chatgpt-plan-responses",
+            },
+          ],
+          bodyDigest: createHash("sha256").update(body).digest("hex"),
+          bodyBytes: Buffer.byteLength(body),
+          requiresSourceReview: shared,
+        },
+      };
+    }
+    return result;
+  };
+  f.reviewSources = async (request) => {
+    reviews.push(request);
+    return approve;
+  };
+  return { ...f, reviews };
+}
+
+test("ordinary ChatGPT-plan sends use real canonical execution even when the legacy resource projection is local", async () => {
+  const f = planFixture();
+  await conversationCommand(f);
+  assert.deepEqual(
+    f.calls.map((value) => value.name),
+    [
+      "desktop",
+      "conversationSendPreview",
+      "authorizeConversationSend",
+      "conversationSend",
+    ],
+  );
+  assert.equal(f.dialogs.length, 0);
+  assert.equal(f.reviews.length, 0);
+  assert.equal(f.calls.at(-1).input.grantId, "host-only-grant");
+  assert.equal(f.calls[2].input.grantId, undefined);
+});
+
+test("ordinary selected-source sharing uses the full exact request in the native Aerynth pane and cancellation denies execution", async () => {
+  for (const approve of [false, true]) {
+    const f = planFixture({ shared: true, approve });
+    if (approve) await conversationCommand(f);
+    else
+      await assert.rejects(conversationCommand(f), /authorization_cancelled/);
+    assert.equal(f.reviews.length, 1);
+    const review = f.reviews[0];
+    assert.equal(review.experience, "ordinary");
+    assert.equal(review.review.providerId, "chatgpt-plan-responses");
+    assert.equal(JSON.parse(review.review.prompt).store, false);
+    assert.equal(
+      JSON.parse(review.review.prompt).input.at(-1).content,
+      "Exact user request",
+    );
+    assert.equal(
+      review.review.context.included[0].content,
+      "A reviewed selected source",
+    );
+    assert.equal(
+      f.calls.some((value) => value.name === "authorizeConversationSend"),
+      approve,
+    );
+  }
+});
+
+test("changed exact Responses body, model, request or source-review classification cannot obtain a native grant", async () => {
+  for (const change of [
+    (r) => (r.bodyDigest = "0".repeat(64)),
+    (r) => r.bodyBytes++,
+    (r) => (r.model = "substituted"),
+    (r) => (r.messages.at(-1).content = "substituted"),
+  ]) {
+    const f = planFixture(),
+      original = f.call;
+    f.call = async (name, input) => {
+      const value = await original(name, input);
+      if (name === "conversationSendPreview") change(value.responses);
+      return value;
+    };
+    await assert.rejects(
+      conversationCommand(f),
+      /invalid_native_responses_preview/,
+    );
+    assert.equal(
+      f.calls.some((value) => value.name === "authorizeConversationSend"),
+      false,
+    );
+  }
+  const f = planFixture({ shared: true }),
+    original = f.call;
+  f.call = async (name, input) => {
+    const value = await original(name, input);
+    if (name === "conversationSendPreview")
+      value.responses.requiresSourceReview = false;
+    return value;
+  };
+  await assert.rejects(
+    conversationCommand(f),
+    /invalid_native_responses_preview/,
+  );
+  assert.equal(f.reviews.length, 0);
 });

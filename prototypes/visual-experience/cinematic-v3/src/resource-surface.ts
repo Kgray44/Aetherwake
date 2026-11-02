@@ -51,7 +51,7 @@ export function createResourceSurface(options: {
   }
 
   return {
-    show(resource: Resource) {
+    show(resource: Resource, anchor?: SurfaceAnchor) {
       if (
         resource.available === false ||
         resource.visible === false ||
@@ -114,6 +114,7 @@ export function createResourceSurface(options: {
       }
       entry.view.update(resource);
       entry.request.label = resource.title;
+      if (anchor) entry.request.anchor = anchor;
       // The existing surface manager moves this same content node and reverses
       // its Motion Coordinator transition when reopened during dismissal.
       options.surfaces.open(entry.request);

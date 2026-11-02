@@ -80,6 +80,14 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     else { budget = JSON.parse(await fs.readFile(budgetFile, 'utf8')); assert(Number.isSafeInteger(budget.count) && budget.count >= 0 && budget.count <= 4 && Number.isSafeInteger(budget.bytes) && budget.bytes >= 0 && budget.bytes <= receipt.limits.combinedPNGBytes && budget.videos <= 1 && Array.isArray(budget.files), 'invalid_combined_evidence_budget'); }
     await fs.mkdir(out, { recursive: true });
     driver = await createDriver(win, { assertActive: () => slot.check() });
+    const connection = await remainingRace(driver.js("window.aerynthHost.command('providerConnection',{type:'status',providerId:'chatgpt-plan-responses'})"), slot.workRemaining(), 'native_connection_status_deadline');
+    assert.equal(connection.contract, 'aerynth.provider-connection@1');
+    assert.equal(connection.storageAvailable, true, 'Actual native protected-storage hop must be available');
+    assert.equal(connection.state, 'disconnected', 'Fresh synthetic profile must not contain an account');
+    assert.equal(connection.nativeAccountHistory, false);
+    assert.equal(connection.nativeAccountMemory, false);
+    assert.equal(connection.nativeAccountSync, false);
+    receipt.checks.push('Actual renderer/Main/desktop/worker/Core/native-secret status hop; OS protection available, no account or inference');
     const js = code => { slot.check(); return remainingRace(driver.js(code), slot.workRemaining(), 'resource_opening_renderer_deadline'); };
     const rpc = async (name, input) => { slot.check(); const value = await remainingRace(call(name, input), slot.workRemaining(), 'resource_opening_backend_deadline'); slot.check(); return value; };
     const wait = async (label, check) => { receipt.phase = label; while (slot.workRemaining() > 0) { slot.check(); const value = await check(); if (value) return value; await pause(35); } slot.check(); throw Error('resource_opening_condition_timeout'); };

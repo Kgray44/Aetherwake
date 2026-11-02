@@ -28,6 +28,9 @@ const {
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
 const { createProtectedStorageBroker } = require("./protected-storage.cjs");
+const {
+  createProviderConnectionBroker,
+} = require("./provider-connections.cjs");
 const root = path.resolve(__dirname, "..");
 const moduleStarted = Date.now();
 const moduleStartedMonotonicMs = performance.now();
@@ -50,6 +53,7 @@ function hashFolder(folder) {
 }
 for (const folder of [
   "prototypes/integrated-backend/src",
+  "prototypes/openai-provider",
   "prototypes/connected-conversations/src",
   "prototypes/codex-bridge/src",
   "prototypes/workspace-kernel",
@@ -76,6 +80,7 @@ const source = {
   ),
 };
 const verify =
+  process.argv.includes("--integration-resource-opening") ||
   process.argv.includes("--integration-native-review") ||
   process.argv.includes("--integration-workspace-views") ||
   process.argv.includes("--integration-product-ui") ||
@@ -184,22 +189,26 @@ if (deadlineArgument) {
 }
 const pending = new Map();
 let nativeSecretBroker;
+let providerConnections;
 function call(command, input) {
   if (!child || child.killed || !child.stdin.writable)
     return Promise.reject(new Error("backend_disconnected"));
   if (pending.size >= 64) return Promise.reject(new Error("backpressure"));
   const id = ++serial;
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pending.delete(id);
-      reject(
-        new Error(
-          command === "execute"
-            ? "unknown_execution_outcome"
-            : "backend_timeout",
-        ),
-      );
-    }, 90000);
+    const timer = setTimeout(
+      () => {
+        pending.delete(id);
+        reject(
+          new Error(
+            command === "execute"
+              ? "unknown_execution_outcome"
+              : "backend_timeout",
+          ),
+        );
+      },
+      command === "conversationSend" ? 120000 : 90000,
+    );
     pending.set(id, { resolve, reject, timer });
     child.stdin.write(JSON.stringify({ id, command, input }) + "\n");
   });
@@ -228,8 +237,13 @@ app.whenReady().then(async () => {
       child.stdin.write(JSON.stringify(wire) + "\n");
     },
   });
+  providerConnections = createProviderConnectionBroker({
+    call,
+    openExternal: (url) => shell.openExternal(url),
+  });
   const fail = () => {
     nativeSecretBroker?.close();
+    providerConnections?.close();
     for (const p of pending.values()) {
       clearTimeout(p.timer);
       p.reject(new Error("backend_disconnected"));
@@ -344,6 +358,7 @@ app.whenReady().then(async () => {
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "vela" && isVelaRead(input)) &&
         !(command === "notes" && input?.name === "readNote") &&
+        !(command === "providerConnection" && input?.type === "status") &&
         !(
           command === "library" &&
           [
@@ -367,6 +382,8 @@ app.whenReady().then(async () => {
       if (command === "desktop") result = await call("desktop", input);
       else if (command === "openResource")
         result = await call("openResource", input);
+      else if (command === "providerConnection")
+        result = await providerConnections.command(input);
       else if (command === "graphAction")
         result = await require("./graph-actions.cjs").graphAction(input, call);
       else if (command === "viewState") result = await call("viewState", input);
@@ -542,6 +559,20 @@ app.whenReady().then(async () => {
             : undefined,
         },
       );
+      return;
+    }
+    if (process.argv.includes("--integration-resource-opening")) {
+      await require("./integration-resource-opening.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        call,
+        source,
+        startupErrors,
+        session: session.defaultSession,
+        localURL,
+        moduleStartedMonotonicMs,
+      });
       return;
     }
     if (process.argv.includes("--integration-product-ui")) {
@@ -733,7 +764,11 @@ app.on("before-quit", (event) => {
       if (active.length) {
         const choice = await dialog.showMessageBox(win, {
           type: "question",
-          message: "A Codex turn is still active.",
+          message: active.every(
+            (execution) => execution.providerId === "chatgpt-plan-responses",
+          )
+            ? "A response is still being received."
+            : "An AI turn is still active.",
           detail:
             "Closing requests interruption. If the provider cannot confirm it, the outcome will be unknown after restart.",
           buttons: ["Keep open", "Interrupt and close"],
@@ -745,10 +780,11 @@ app.on("before-quit", (event) => {
           return;
         }
         for (const e of active)
-          if (e.turnId)
+          if (e.turnId || e.providerId === "chatgpt-plan-responses")
             await call("interrupt", { executionId: e.id }).catch(() => {});
       }
       await call("close", {}).catch(() => {});
+      providerConnections?.close();
       nativeSecretBroker?.close();
       child.kill();
       app.quit();
@@ -764,6 +800,7 @@ app.on("before-quit", (event) => {
         cancelId: 0,
       });
       if (choice.response === 1) {
+        providerConnections?.close();
         nativeSecretBroker?.close();
         child.kill();
         app.quit();

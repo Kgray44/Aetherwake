@@ -75,6 +75,8 @@ import "../../../block-library/resource-links-view.css";
 import { createRelatedResourcesPort } from "./related-resources";
 import { createResourceOpener } from "./resource-opening.ts";
 import { createResourceSurface } from "./resource-surface.ts";
+import { mountProviderConnections } from "./provider-connections.ts";
+import type { ProviderConnectionStatus } from "../../../application-contract/provider-connections.ts";
 import { mountDirectResourceExperience } from "../../../block-library/direct-resource-view.ts";
 import "../../../block-library/direct-resource-view.css";
 import type {
@@ -413,6 +415,8 @@ export function installApplication(hooks: Hooks) {
     null;
   let conversationSurface: ContextualSurfaceRequest | null = null;
   let conversationDisposing: Promise<void> | null = null;
+  let connectionsView: ReturnType<typeof mountProviderConnections> | null =
+    null;
   let constellation: ReturnType<typeof mountConstellation> | null = null;
   const directResources = createResourceSurface({
     surfaces,
@@ -464,9 +468,25 @@ export function installApplication(hooks: Hooks) {
         input,
       )) as ResourceOpeningResult;
     },
-    present: async (result, _input, current) => {
+    present: async (result, input, current) => {
       if (!current()) return;
       const resource = result.resource;
+      const projection = input.origin?.nodeKey
+        ? constellation?.layer.screenBodyProjection?.(input.origin.nodeKey)
+        : null;
+      const body =
+        projection?.resourceId === resource.id
+          ? projection.clippedBounds
+          : null;
+      const anchor =
+        body && body.right > body.left && body.bottom > body.top
+          ? {
+              x: body.left,
+              y: body.top,
+              width: body.right - body.left,
+              height: body.bottom - body.top,
+            }
+          : undefined;
       if (state)
         state = {
           ...state,
@@ -502,10 +522,11 @@ export function installApplication(hooks: Hooks) {
           resource.id,
           result.selection?.messageId,
           current,
+          anchor,
         );
       } else {
         surfaces.close("conversations");
-        directResources.show(resource);
+        directResources.show(resource, anchor);
       }
     },
     unavailable: (result) => {
@@ -620,10 +641,9 @@ export function installApplication(hooks: Hooks) {
   el("#demo").hidden = true;
   el("#stream .synthetic").textContent =
     "Observed application/provider activity · private reasoning unavailable";
-  el("#status").textContent =
-    "Open Workspaces to begin. Empty workspaces are ready for your ideas.";
+  el("#status").textContent = "Ready.";
   el(".place").innerHTML =
-    '<button id="workspace-manager" title="Projects and workspaces (Ctrl+K)">Workspaces ↗</button><button id="application-new-chat">＋ Chat</button><button id="application-resources">Resources</button>';
+    '<button id="workspace-manager" title="Projects and workspaces (Ctrl+K)">Workspaces ↗</button><button id="application-new-chat">＋ Chat</button><button id="application-resources">Resources</button><button id="application-connections" aria-label="Connections" title="Connections">⌁</button>';
   const dock = el(".dock");
   dock.insertAdjacentHTML(
     "afterbegin",
@@ -1243,6 +1263,7 @@ export function installApplication(hooks: Hooks) {
     resourceId?: string,
     messageId?: string,
     current: () => boolean = () => true,
+    anchor?: { x: number; y: number; width: number; height: number },
   ) {
     await conversationDisposing;
     if (!current()) return;
@@ -1250,6 +1271,7 @@ export function installApplication(hooks: Hooks) {
     cardConfiguration?.dispose();
     cardConfiguration = null;
     if (conversationManager && conversationSurface) {
+      if (anchor) conversationSurface.anchor = anchor;
       surfaces.open(conversationSurface).id = "conversation-surface";
       if (resourceId) await conversationManager.open(resourceId, messageId);
       else await conversationManager.refresh();
@@ -1261,7 +1283,7 @@ export function installApplication(hooks: Hooks) {
     let controller: ReturnType<typeof mountConversationManager> | undefined;
     const request: ContextualSurfaceRequest = {
       id: "conversations",
-      anchor: el(".brand"),
+      anchor: anchor ?? el(".brand"),
       content,
       label: "Conversations",
       minSize: { width: 560, height: 560 },
@@ -1579,7 +1601,6 @@ export function installApplication(hooks: Hooks) {
   async function newConversation() {
     const created = await composerPort.command("create", {
       title: "",
-      providerId: "local",
       commandId: crypto.randomUUID(),
     });
     await resourceOpener.open({
@@ -3223,6 +3244,7 @@ export function installApplication(hooks: Hooks) {
   el("#application-new-chat").onclick = () => {
     void newConversation().catch(report);
   };
+  el("#application-connections").onclick = connections;
   el("#add-block").onclick = add;
   el("#resource-picker").onclick = picker;
   el("#layout-manager").onclick = layouts;
@@ -3272,26 +3294,49 @@ export function installApplication(hooks: Hooks) {
     },
     { passive: false },
   );
-  el("#connections").onclick = () => {
-    open(
-      "Connections",
-      '<p>Local notes, workspaces and conversations work offline.</p><p>Ordinary model inference and ChatGPT account history are unavailable. No subscription access is assumed.</p><button id="connect-codex">Check local Codex connection</button><p id="connection-result" role="status">Codex has not been probed. No turn starts during connection checks.</p>',
-    );
-    el("#connect-codex", dialog).onclick = () => {
-      el("#connection-result", dialog).textContent =
-        "Checking installed provider…";
-      void host.command!("capabilities", {}).then(
-        (result) => {
-          const c = result as { authentication: string; models: string[] };
-          el("#connection-result", dialog).textContent =
-            `Codex authentication: ${c.authentication}. ${c.models.length} catalog entries (entitlement unverified). Approval requests are denied in this read-only review build.`;
+  function connections() {
+    dialog.close();
+    connectionsView?.dispose();
+    const content = document.createElement("section");
+    const controller = mountProviderConnections(content, {
+      command: async (input) =>
+        (await host.command!(
+          "providerConnection",
+          input,
+        )) as ProviderConnectionStatus,
+      newConversation: async () => {
+        surfaces.close("connections");
+        await newConversation();
+      },
+      codex: async () =>
+        (await host.command!("capabilities", {})) as {
+          authentication: string;
+          models: string[];
         },
-        (e) =>
-          (el("#connection-result", dialog).textContent =
-            `Codex unavailable: ${(e as Error).message}. Local work remains usable.`),
-      );
-    };
-  };
+      changed: async () => {
+        await conversationManager?.refresh();
+        await Promise.all(
+          [...chatViews.values()].map((view) =>
+            view.refresh({ latest: false }),
+          ),
+        );
+      },
+    });
+    connectionsView = controller;
+    surfaces.open({
+      id: "connections",
+      anchor: el("#application-connections"),
+      content,
+      label: "Connections",
+      minSize: { width: 340, height: 240 },
+      maxSize: { width: 540, height: 680 },
+      onClose: () => {
+        controller.dispose();
+        if (connectionsView === controller) connectionsView = null;
+      },
+    });
+  }
+  el("#connections").onclick = connections;
   addEventListener("keydown", (event) => {
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
       if (event.defaultPrevented || state?.navigation.kind === "constellation")

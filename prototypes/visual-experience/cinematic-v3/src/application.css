@@ -769,3 +769,30 @@ body.application-ready
 .resource-opening-row > [data-attach] {
   font-size: 0.8rem;
 }
+.application-connections {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+  max-width: 30rem;
+}
+.application-connections h3,
+.application-connections p {
+  margin: 0;
+}
+.application-connections .connection-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+.application-connections .connection-boundary {
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: #c6c0d1;
+}
+.application-connections details {
+  border-top: 1px solid #bbb0ce24;
+  padding-top: 0.65rem;
+}
+.application-connections details > button {
+  margin: 0.6rem 0.5rem 0.1rem 0;
+}

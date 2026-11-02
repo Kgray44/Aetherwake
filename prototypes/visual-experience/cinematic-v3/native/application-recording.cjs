@@ -4,6 +4,7 @@ const { createHash } = require("node:crypto");
 /** Bounded, video-only capture of this exact synthetic verification window. */
 async function startWindowRecording(win, session, localURL) {
   if (
+    !process.argv.includes("--integration-resource-opening") &&
     !process.argv.includes("--integration-constellation") &&
     !process.argv.includes("--integration-organization") &&
     !process.argv.includes("--integration-expanded") &&

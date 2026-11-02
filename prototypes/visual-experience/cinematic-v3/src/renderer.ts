@@ -1911,7 +1911,9 @@ export class Environment {
     this.updateFolios(frame);
     this.renderer.info.reset();
     this.renderer.clear();
+    const celestialCamera = this.spatialLayer?.prepareCelestialCamera?.(width, height) ?? null;
     this.cosmos.render(this.renderer, this.camera, {
+      spatialCamera: celestialCamera,
       study: frame.celestialStudy ?? "starlit",
       quality: frame.quality,
       focus,
