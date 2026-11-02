@@ -2,6 +2,7 @@ import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
 import type { GraphData, Message, ContextPackage, Sensitivity } from '../../connected-conversations/src/graph.ts';
 import type { Resource } from '../../workspace-kernel/kernel.mts';
 import type { DesktopCommand, DesktopSnapshot, PublicConversationExecution, ConversationActivitySnapshot, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
+import type { ResourceOpeningInput, ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import type { AttachedContext } from '../../conversation-product/src/service.mts';
 import type { VelaClient, VelaState, ContextManifest, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
@@ -102,6 +103,8 @@ export interface Options {
   velaPlanningPort?: VelaPlanningPort;
 }
 export interface CommandMap {
+  /** Read-only canonical resource resolution; no workspace placement required. */
+  openResource: {input:ResourceOpeningInput;output:ResourceOpeningResult};
   conversationActivity: { input: { resourceIds: string[] }; output: ConversationActivitySnapshot };
   notes: {input:NoteRequest;output:LibraryResponse};
   library: {input:LibraryRequest;output:LibraryResponse};
