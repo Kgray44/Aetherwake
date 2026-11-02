@@ -16,9 +16,32 @@ const placements = (desktop, workspaceId) => sorted((desktop.navigationBlocks ??
 const noteIdentity = note => ({id:note.id, title:note.title, kind:note.kind, project_id:note.project_id ?? null, version:note.version, content:note.content, state:note.state});
 const chatIdentity = detail => ({conversation:detail.conversation, messages:detail.messages.items, total:detail.messages.total});
 const velaIdentity = state => ({identity:state.identity, conversation:state.conversation, requests:state.requests, plans:state.plans, receipts:state.receipts, preferences:state.preferences, adaptation:state.adaptation, planningReferences:state.planningReferences});
+const stable = value => Array.isArray(value) ? value.map(stable) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().filter(key=>value[key]!==undefined).map(key=>[key,stable(value[key])])) : value;
+const digest = value => hash(JSON.stringify(stable(value)));
+/** Renderer replay is a global last-250 slice; its truncated flag is not a scoped provider gap. */
+const planningCoverage = (replay, reference, executionId, archived) => {
+  const coverage=reference.eventCoverage;assert(coverage&&!coverage.truncated&&!coverage.gapObserved,'Canonical planning adapter reported an actual coverage gap');
+  assert(Number.isSafeInteger(coverage.afterCursor)&&Number.isSafeInteger(coverage.latestCursor)&&coverage.latestCursor>coverage.afterCursor,'Invalid scoped planning cursor window');
+  const window=replay.events.filter(e=>e.cursor>coverage.afterCursor&&e.cursor<=coverage.latestCursor),complete=window.length===coverage.latestCursor-coverage.afterCursor&&window.every((e,i)=>e.cursor===coverage.afterCursor+i+1);
+  let events=replay.events.filter(e=>e.executionId===executionId&&e.cursor>coverage.afterCursor&&e.cursor<=coverage.latestCursor),source='current-scoped-cursor-window';
+  if(!complete){
+    assert(archived&&archived.execution.id===executionId,'Current replay does not cover the execution window; original bound evidence is required');
+    assert.deepEqual(archived.reference.eventCoverage,coverage);assert.deepEqual(archived.coverage.adapter,coverage);
+    events=archived.eventRefs;assert(events.length&&events[0].type==='vela.planning.running','Original execution tail does not start with its canonical running observation');
+    assert(events.every((e,i)=>e.cursor>coverage.afterCursor&&e.cursor<=coverage.latestCursor&&(!i||e.cursor===events[i-1].cursor+1)),'Original execution event tail has a cursor gap');
+    assert.equal(events.at(-1).cursor,coverage.latestCursor);assert.equal(events.at(-1).type,'turn/completed');
+    for(const event of reference.eventRefs)assert(events.some(e=>e.eventId===event.eventId&&e.cursor===event.cursor&&e.type===event.type&&e.classification===event.classification),'Canonical adapter event is missing from original evidence');
+    const currentIds=new Map(replay.events.map(e=>[e.eventId,e]));for(const event of events){const now=currentIds.get(event.eventId);if(now)for(const key of ['cursor','type','classification'])assert.equal(now[key],event[key],'Retained event disagrees with original evidence');}
+    assert(currentIds.has(events.at(-1).eventId),'Canonical terminal event is outside the current retained replay');source='original-contiguous-execution-tail-and-canonical-scoped-coverage';
+  }
+  assert(events.length&&events.some(e=>e.type==='turn/completed'),'Canonical completed execution event required');assert(!events.some(e=>e.classification==='simulated'),'No fixture event may qualify live evidence');
+  return {events,coverage:{globalReplayTruncated:!!replay.truncated,currentScopedWindowComplete:complete,source,adapter:coverage,originalGlobalReplayTruncated:archived?.coverage.replayTruncated}};
+};
+const originalEvidence = async file => {assert(file&&path.isAbsolute(file)&&inside(runtime,file)&&path.basename(file)==='journey.json','Original ignored-runtime journey receipt required');const stat=await fs.stat(file);assert(stat.size<=2*1024*1024,'Original receipt exceeds bound');const bytes=await fs.readFile(file),value=JSON.parse(bytes);assert.equal(value.contract,'aerynth.actual-vela-live-workspace@1');return {file,sha256:hash(bytes),value};};
 
 exports.verify = async ({win, app, privateRoot, source}) => {
-  const restore = process.argv.includes('--verify-restore');
+  const restore = process.argv.includes('--verify-restore'),resume=process.argv.includes('--resume-reviewed-plan');
+  const argument = name => process.argv.find(value=>value.startsWith(name+'='))?.slice(name.length+1);
   const out = path.join(runtime, 'application-evidence', 'vela-live-' + Date.now());
   assert(inside(runtime, out), 'Evidence must remain in ignored runtime');
   assert(privateRoot && path.isAbsolute(privateRoot), 'Actual host-owned external private profile is required');
@@ -26,11 +49,11 @@ exports.verify = async ({win, app, privateRoot, source}) => {
   const expectedFile = path.join(privateRoot, 'vela-live-expected.json');
   const budgetFile = path.join(privateRoot, 'vela-live-capture-budget.json');
   const receipt = {
-    contract:'aerynth.actual-vela-live-workspace@1', at:new Date().toISOString(), restore, source, passed:false,
+    contract:'aerynth.actual-vela-live-workspace@1', at:new Date().toISOString(), restore, resume, source, privateRoot, passed:false,
     host:'Actual released desktop, Vela, Library, canonical SQLite, and identified native Codex planning adapter',
     syntheticSources:true, actions:[], checks:[], captures:[], consoleErrors:[], partial:{},
-    bounds:{planningRequests:1, realTurns:1, delegatedTurns:0, automaticRetries:0, pngs:6, pngBytes:12*1024*1024},
-    consent:{method:'Actual native host dialog, operated externally by the parent', automaticGrants:false, dialogObservation:'The helper does not claim to observe an OS dialog or the operator decision.'},
+    bounds:{planningRequests:resume||restore?0:1, realTurns:resume||restore?0:1, delegatedTurns:0, automaticRetries:0, pngs:6, pngBytes:12*1024*1024},
+    consent:{method:resume||restore?'Original bound native planning approval; this phase requests no provider consent':'Actual native host dialog, operated externally by the parent', automaticGrants:false, dialogObservation:'The helper does not claim to observe an OS dialog or the operator decision.'},
     recording:{requested:false, reason:'This bounded helper uses focused PNG captures; no recording is started.'},
     limitations:[
       'Workspace-planning phase only. Delegation requires a separately bounded live acceptance batch.',
@@ -55,6 +78,7 @@ exports.verify = async ({win, app, privateRoot, source}) => {
   };
   try {
     assert(process.argv.includes('--integration-vela-live'), 'Explicit live acceptance flag required');
+    assert(!(resume&&restore),'Resume reviewed application and restart verification are separate modes');
     assert(!process.argv.includes('--integration-live'), 'Do not combine with the legacy live helper/auto-consent flag');
     assert(source?.hashes && source?.buildAssets && Object.keys(source.buildAssets).length, 'Exact host source and loaded asset hashes required');
     receipt.moduleHashes = {};
@@ -153,7 +177,7 @@ exports.verify = async ({win, app, privateRoot, source}) => {
       const block=await workingBlock(workspaceId,resourceId); await type(`[data-block="${block.id}"] .working-content textarea`,content);
       await until(async () => (await desktop()).resources.find(r=>r.id===resourceId)?.content===content, 'canonical committed note text', 30000); return block;
     };
-    const verifyExecution = async (request, plan, initialExecutionIds=[]) => {
+    const verifyExecution = async (request, plan, initialExecutionIds=[], archived) => {
       const observed=await executions(), fresh=observed.filter(e=>!initialExecutionIds.includes(e.id)); assert.equal(fresh.length,1,'Exactly one real planning turn; no retries/delegation');
       const execution=fresh[0], contribution=plan.contribution, current=await state(), reference=current.planningReferences[request.id];
       assert(contribution&&reference,'Canonical provider attribution and observation required'); assert.equal(execution.providerId,'codex-app-server'); assert.equal(execution.state,'provider_completed'); assert.equal(execution.taskVerified,false); assert(execution.binding?.nativeThreadId&&execution.turnId);
@@ -161,11 +185,11 @@ exports.verify = async ({win, app, privateRoot, source}) => {
       assert.notEqual(execution.resourceId,current.conversation.resourceId,'Codex has a distinct canonical planning conversation'); assert.equal(reference.executionId,execution.id); assert.equal(reference.stage,'proposal-ready'); assert.equal(reference.nativeThreadId,execution.binding.nativeThreadId); assert.equal(reference.nativeTurnId,execution.turnId);
       const output=await chat(execution.resourceId), message=output.messages.items.find(m=>m.id===contribution.sourceMessageId); assert(message&&message.role==='assistant'&&message.provenance==='application','Observed provider output must be retained in the canonical Codex conversation');
       assert.equal(output.conversation.providerId,'codex-app-server');
-      const replay=await read('replay',{}), events=replay.events.filter(e=>e.executionId===execution.id); assert(events.length,'Actual canonical planning event references required'); assert(!events.some(e=>e.classification==='simulated'),'No fixture output may qualify a live run');
-      const evidence={execution,contribution,reference,output:chatIdentity(output),eventRefs:events.map(e=>({eventId:e.eventId,cursor:e.cursor,type:e.type,classification:e.classification,itemType:e.payload?.itemType})),coverage:{replayTruncated:replay.truncated,adapter:reference.eventCoverage}};
+      if(archived){assert.deepEqual(execution,archived.execution,'Resume must use the exact original execution');assert.deepEqual(contribution,archived.contribution);assert.deepEqual(reference,archived.reference);assert.deepEqual(chatIdentity(output),archived.output,'Original provider output and canonical message IDs must be unchanged');}
+      const replay=await read('replay',{}),proof=planningCoverage(replay,reference,execution.id,archived),events=proof.events;
+      const evidence={execution,contribution,reference,output:chatIdentity(output),eventRefs:events.map(e=>({eventId:e.eventId,cursor:e.cursor,type:e.type,classification:e.classification,itemType:e.itemType??e.payload?.itemType})),coverage:{...proof.coverage,replayTruncated:replay.truncated}};
       receipt.providerEvidence=evidence;
-      assert(!replay.truncated&&!reference.eventCoverage.truncated&&!reference.eventCoverage.gapObserved,'Planning event coverage is incomplete; preserve this partial live evidence');
-      const tools=events.filter(e=>e.payload?.itemType&&['commandExecution','fileChange','mcpToolCall','dynamicToolCall','webSearch','imageGeneration','collabAgentToolCall'].includes(e.payload.itemType)); assert.deepEqual(tools,[],'Available complete planning evidence must contain no tool or file-change items');
+      const tools=events.filter(e=>['commandExecution','fileChange','mcpToolCall','dynamicToolCall','webSearch','imageGeneration','collabAgentToolCall'].includes(e.itemType??e.payload?.itemType)); assert.deepEqual(tools,[],'Complete scoped planning evidence must contain no tool or file-change items');
       check('actual-distinct-codex-planning-execution-and-native-ids',{resourceId:execution.resourceId,executionId:execution.id,nativeThreadId:execution.binding.nativeThreadId,nativeTurnId:execution.turnId,taskVerified:false}); return evidence;
     };
 
@@ -178,11 +202,40 @@ exports.verify = async ({win, app, privateRoot, source}) => {
       const d=await desktop(); assert.deepEqual(d.projects.find(p=>p.id===expected.project.id),expected.project); assert.deepEqual(d.workspaces.find(w=>w.id===expected.origin.id),expected.origin); assert.deepEqual(d.workspaces.find(w=>w.id===expected.workspace.id),expected.workspace); assert.deepEqual(placements(d,expected.origin.id),expected.originPlacements); assert.deepEqual(placements(d,expected.workspace.id),expected.targetPlacements);
       assert.deepEqual(noteIdentity(d.resources.find(r=>r.id===expected.note.id)),expected.note); assert.deepEqual(chatIdentity(await chat(expected.chat.conversation.resourceId)),expected.chat);
       await until(() => js(`document.querySelector('.vela-core-status')?.dataset.requestState==='completed'&&document.querySelector('.vela-core-status')?.dataset.planState==='applied'`),'restored truthful completed plan UI');
-      receipt.providerEvidence=await verifyExecution(current.requests.find(r=>r.id===expected.requestId),current.plans.find(p=>p.id===expected.planId)); assert.deepEqual(receipt.providerEvidence.execution,expected.executions[0]);
+      let archived;if(expected.proposalEvidence){const original=await originalEvidence(expected.proposalEvidence.file);assert.equal(original.sha256,expected.proposalEvidence.sha256,'Original proposal receipt changed');archived=original.value.providerEvidence;receipt.proposalEvidence=expected.proposalEvidence;}
+      receipt.providerEvidence=await verifyExecution(current.requests.find(r=>r.id===expected.requestId),current.plans.find(p=>p.id===expected.planId),[],archived); assert.deepEqual(receipt.providerEvidence.execution,expected.executions[0]);
       await capture('05-restored-real-plan-receipts'); await closeVela(); await navigate(expected.workspace.id);
       const chatBlock=await workingBlock(expected.workspace.id,expected.chat.conversation.resourceId); await until(() => js(`document.querySelector(${JSON.stringify(`[data-block="${chatBlock.id}"] .conversation-transcript`)})?.textContent.includes(${JSON.stringify(expected.chat.messages.at(-1).content)})`),'restored working chat content');
       const noteBlock=await workingBlock(expected.workspace.id,expected.note.id); assert.equal(await js(`document.querySelector(${JSON.stringify(`[data-block="${noteBlock.id}"] textarea`)}).value`),expected.note.content);
       assert.deepEqual(await executions(),beforeExecutions,'Read-only restore and working-view inspection starts no execution'); check('restart-exact-canonical-content-placements-real-plan-and-execution');
+    } else if(resume) {
+      const original=await originalEvidence(argument('--resume-evidence')),old=original.value,requestId=argument('--resume-request'),planId=argument('--resume-plan');
+      assert(requestId&&planId,'Explicit original request and plan IDs are required for resume');assert.equal(old.passed,false);assert.equal(old.error?.message,'Planning event coverage is incomplete; preserve this partial live evidence');
+      const originalRequest=old.partial.vela.requests.find(r=>r.id===requestId),originalPlan=old.partial.vela.plans.find(p=>p.id===planId),archived=old.providerEvidence;
+      assert(originalRequest&&originalPlan&&archived,'Original real request, plan and native execution evidence required');assert.equal(originalRequest.planId,planId);assert.equal(originalPlan.requestId,requestId);assert.equal(originalRequest.state,'awaiting-review');assert.equal(originalPlan.state,'prepared');
+      const body=Object.fromEntries(['requestId','version','summary','steps','targets','scope','contribution'].map(key=>[key,originalPlan[key]]));assert.equal(digest(body),originalPlan.fingerprint,'Original canonical plan fingerprint is invalid');
+      receipt.proposalEvidence={file:original.file,sha256:original.sha256,at:old.at,source:old.source,moduleHashes:old.moduleHashes,assets:old.assets,requestId,planId,executionId:archived.execution.id,coverage:archived.coverage};
+      let current=await state(),d=await desktop();const beforeExecutions=await executions();assert.equal(current.requests.length,1);assert.equal(current.plans.length,1);assert.deepEqual(current.requests[0],originalRequest,'Resume request/context must be exact');assert.deepEqual(current.plans[0],originalPlan,'Resume prepared plan/fingerprint must be exact');assert.deepEqual(beforeExecutions,[archived.execution],'Resume cannot start or substitute another execution');
+      assert(Date.parse(originalPlan.expiresAt)>Date.now(),'Existing plan expired; resume cannot renew it or bypass review');assert.equal(current.receipts.filter(r=>r.planId===planId).length,0,'Resume requires a still-unapplied plan');assert.equal(current.preferences.delegationEnabled,false);
+      const source=old.partial.sources,project=old.partial.project,origin=d.workspaces.find(w=>w.id===source.origin.id),localChat=d.resources.find(r=>r.id===source.chatId),localNote=d.resources.find(r=>r.id===source.noteId);
+      assert(origin&&localChat&&localNote&&d.projects.some(p=>p.id===project.id));assert.equal(d.projects.length,1);assert.equal(d.workspaces.length,1);assert.equal(origin.project_id,project.id);assert.equal(localChat.kind,'conversation');assert.equal(localChat.providerId,'local');assert.equal(localNote.kind,'note');
+      assert.deepEqual(d.resources.map(r=>r.id).sort(),[source.chatId,source.noteId,current.conversation.resourceId,archived.execution.resourceId].sort(),'Resume uses only the original canonical resources');
+      assert.equal(originalPlan.steps.length,1);const action=originalPlan.steps[0].action;assert.equal(action.type,'workspaceFromResources');assert.equal(action.projectId,project.id);assert.deepEqual([...action.resourceIds].sort(),[source.chatId,source.noteId].sort());assert(action.title.startsWith('Synthetic Vela planned workspace '));
+      const included=originalRequest.context.included;assert.deepEqual(included.map(r=>r.id).sort(),[source.chatId,source.noteId].sort());for(const entry of included){assert.equal(digest(entry.content),entry.contentDigest);assert.equal(entry.trust,'untrusted-source-data');assert.equal(entry.projectId,project.id);}
+      const noteSource=included.find(r=>r.id===source.noteId),chatSource=included.find(r=>r.id===source.chatId),chatManifest=JSON.parse(chatSource.content),chatBefore=await chat(source.chatId);
+      assert.equal(localNote.content,noteSource.content);assert.equal(localNote.version,noteSource.version);assert.equal(chatBefore.conversation.version,chatSource.version);assert.equal(chatBefore.conversation.revision,chatManifest.revision);assert.equal(chatManifest.resourceId,source.chatId);assert.deepEqual(chatBefore.messages.items.map(m=>({id:m.id,role:m.role,content:m.content})),chatManifest.messages.map(m=>({id:m.id,role:m.role,content:m.content})));
+      const raw=archived.output.messages.find(m=>m.id===archived.contribution.sourceMessageId);assert(raw?.role==='assistant');let json=raw.content.trim();if(json.startsWith('```')){const lines=json.split(/\r?\n/);assert(['```','```json'].includes(lines[0])&&lines.at(-1)==='```');json=lines.slice(1,-1).join('\n').trim();}const provider=JSON.parse(json);assert.equal(provider.schemaVersion,1);assert.equal(provider.summary,originalPlan.summary);assert.deepEqual(provider.steps,originalPlan.steps,'Resume plan must be the actual provider output, never a substitute');
+      const evidence=await verifyExecution(originalRequest,originalPlan,[],archived),originPlacements=placements(d,origin.id);assert.deepEqual(originPlacements.map(b=>b.resource_id).sort(),[source.chatId,source.noteId].sort());assert(!d.workspaces.some(w=>w.title===action.title));
+      current=await openVela();await until(()=>js(`document.querySelector('.vela-core-status')?.dataset.requestId===${JSON.stringify(requestId)}&&document.querySelector('.vela-core-status')?.dataset.requestState==='awaiting-review'&&document.querySelector('.vela-core-status')?.dataset.planState==='prepared'`),'original real plan rendered for fresh UI review');assert.equal(await js(`document.querySelector('.vela-core-plan pre')?.textContent`),JSON.stringify(action,null,2));await capture('03-resumed-original-plan-review');
+      assert(Date.parse(originalPlan.expiresAt)>Date.now(),'Original plan expired before UI approval');await clickText('Approve and apply reviewed plan','.vela-core-plan');
+      await until(async()=>{const s=await state(),p=s.plans.find(p=>p.id===planId);receipt.partial.application={plan:p,receipts:s.receipts.filter(r=>r.planId===planId)};if(p&&['failed','cancelled','unknown'].includes(p.state))throw Error('Resumed reviewed application ended '+p.state);return p?.state==='applied';},'original reviewed plan host application');
+      current=await state();const applied=current.receipts.filter(r=>r.planId===planId);assert.equal(applied.length,1);const appliedReceipt=applied[0];assert.equal(appliedReceipt.state,'applied');assert.equal(appliedReceipt.source,'vela');assert.equal(appliedReceipt.providerId,null);assert.equal(appliedReceipt.taskVerified,false);assert(appliedReceipt.hostReceiptId&&appliedReceipt.createdWorkspaceId);
+      await until(()=>js(`document.querySelector('.vela-core-status')?.dataset.requestState==='completed'&&document.querySelector('.vela-core-status')?.dataset.planState==='applied'&&document.querySelector('.vela-core-status')?.textContent.includes('Host receipts confirm')`),'resumed truthful applied receipt rendered');
+      d=await desktop();const workspace=d.workspaces.find(w=>w.id===appliedReceipt.createdWorkspaceId);assert(workspace&&workspace.title===action.title&&workspace.project_id===project.id);assert.deepEqual(placements(d,workspace.id).map(b=>b.resource_id).sort(),[source.chatId,source.noteId].sort());assert.deepEqual(placements(d,origin.id),originPlacements);assert.deepEqual(await executions(),beforeExecutions,'UI application starts no provider execution');
+      await closeVela();await navigate(workspace.id);await recordChat(workspace.id,source.chatId,'Synthetic same-ID local chat after original reviewed workspace application.');await editNote(workspace.id,source.noteId,noteSource.content+'\n\nThe same canonical note remains editable after the original reviewed workspace application.');await capture('04-resumed-working-same-id-resources');
+      d=await desktop();current=await state();assert.deepEqual(await executions(),beforeExecutions);assert.equal(current.requests.length,1);assert.equal(current.plans.length,1);
+      const expected={contract:'aerynth.vela-live-restore@1',moduleHashes:receipt.moduleHashes,assets:receipt.assets,hostSourceHashes:receipt.source.hashes,proposalEvidence:receipt.proposalEvidence,project:d.projects.find(p=>p.id===project.id),origin:d.workspaces.find(w=>w.id===origin.id),workspace:d.workspaces.find(w=>w.id===workspace.id),originPlacements:placements(d,origin.id),targetPlacements:placements(d,workspace.id),chat:chatIdentity(await chat(source.chatId)),note:noteIdentity(d.resources.find(r=>r.id===source.noteId)),vela:velaIdentity(current),attention:current.attention,executions:beforeExecutions,requestId,planId};
+      await fs.writeFile(expectedFile,encode(expected));receipt.expectedFile=expectedFile;check('original-real-proposal-reviewed-and-applied-without-new-turn',{requestId,planId,workspaceId:workspace.id,chatId:source.chatId,noteId:source.noteId,executionId:evidence.execution.id,hostReceiptId:appliedReceipt.hostReceiptId});
     } else {
       const initial=await desktop(), initialVela=await state(), initialExecutionIds=(await executions()).map(e=>e.id);
       assert.equal(initialExecutionIds.length,0,'Live journey requires a fresh owned profile'); assert.equal(initial.projects.length,0,'Do not mix acceptance egress with existing projects'); assert.equal(initial.workspaces.length,0); assert(initial.resources.every(r=>r.id===initialVela.conversation?.resourceId),'Only the canonical Vela identity may pre-exist'); assert.equal(initialVela.requests.length,0);
@@ -250,6 +303,6 @@ exports.verify = async ({win, app, privateRoot, source}) => {
   }
   win.webContents.removeListener('console-message',consoleError);
   await fs.writeFile(path.join(out,restore?'restore.json':'journey.json'),encode(receipt));
-  console.log(JSON.stringify({status:'vela-live-terminal',passed:receipt.passed,restore,error:receipt.error?.message,evidence:out,captures:receipt.captures.length,scope:'one actual workspace-planning turn, no delegation or automatic retries'}));
+  console.log(JSON.stringify({status:'vela-live-terminal',passed:receipt.passed,restore,resume,error:receipt.error?.message,evidence:out,captures:receipt.captures.length,scope:resume||restore?'existing real proposal; zero new provider turns, probes, or consent':'one actual workspace-planning turn, no delegation or automatic retries'}));
   process.exitCode=receipt.passed?0:1; app.quit(); return receipt;
 };
