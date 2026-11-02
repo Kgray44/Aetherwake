@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createRequire } from 'node:module';
 import { acceptedConversationSubmission } from '../src/ui.ts';
 
 test('canonical submission acceptance is separate from execution completion and needs matching command/resource/message evidence', () => {
@@ -20,8 +19,4 @@ test('canonical submission acceptance is separate from execution completion and 
   assert.equal(acceptedConversationSubmission(input, { ...message, revision: 5 }), false);
 });
 
-test('mounted manager preserves contextual controls, draft recovery, pending-send edits, conflict resolution and canonical source references', async () => {
-  const require = createRequire(import.meta.url);
-  const result = await require('./native-desktop.cjs').componentChecks();
-  assert.equal(result.passed, true); assert.equal(result.checks, 11);
-});
+// Mounted behavior is exercised by chat.test.mts, without invoking the native acceptance helper.

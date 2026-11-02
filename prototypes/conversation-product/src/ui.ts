@@ -1,8 +1,10 @@
 import type { BranchPolicy, Collection, ConversationProductPort, Detail, ProductCommandMap, SearchQuery, Share } from './contracts.ts';
-import { ConversationDraftSession, flushConversationDraftSessions, type DraftSessionSnapshot } from './draft-session.ts';
+import { ConversationDraftSession, flushConversationDraftSessions } from './draft-session.ts';
+import { mountConversationChat, type ConversationChat, type ConversationExecutionPort } from './chat.ts';
+export { acceptedConversationSubmission } from './chat.ts';
 
 export type ManagerState = { selectedResourceId: string | null; drafts: Record<string,string>; scroll: Record<string,number>; query: SearchQuery; messageOffset: Record<string,number> };
-export type ManagerOptions = { state?: ManagerState; resourceId?: string; onClose?: () => void; onResource?: (resourceId: string, messageId?: string) => void; onState?: (state: ManagerState) => void; copy?: (text: string) => Promise<void>; download?: (name: string, content: string) => void };
+export type ManagerOptions = { embedded?: boolean; execution?: ConversationExecutionPort; draftSession?: (resourceId: string) => ConversationDraftSession; state?: ManagerState; resourceId?: string; onClose?: () => void; onResource?: (resourceId: string, messageId?: string) => void; onState?: (state: ManagerState) => void; copy?: (text: string) => Promise<void>; download?: (name: string, content: string) => void };
 export const createManagerState = (): ManagerState => ({selectedResourceId:null,drafts:{},scroll:{},query:{},messageOffset:{}});
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, label?: string, className?: string): HTMLElementTagNameMap[K] => { const node=document.createElement(tag); if(label!==undefined)node.textContent=label;if(className)node.className=className;return node; };
 const button = (label: string, action: () => void | Promise<void>) => { const b=el('button',label);b.type='button';b.addEventListener('click',()=>void action());return b; };
@@ -12,20 +14,12 @@ const disclosure = (label:string,className:string) => {
  const node=el('details',undefined,'cp-disclosure '+className),summary=el('summary',label),panel=el('div',undefined,'cp-disclosure-panel');node.append(summary,panel);return {node,summary,panel};
 };
 
-/** Submission acceptance is separate from provider/task completion. Execution receipts require exact new message evidence. */
-export function acceptedConversationSubmission(input:{resourceId:string;providerId:string;content:string;commandId:string;revision:number;priorMessageIds:readonly string[]},result:unknown,after?:{conversation:{resourceId:string;revision:number};messages:{items:{id:string;resourceId:string;inherited:boolean;role:string;content:string}[]}}):boolean {
- if(!result||typeof result!=='object')return false;const value=result as Record<string,unknown>;
- if(value.resourceId!==input.resourceId||typeof value.id!=='string')return false;
- if(value.role==='user'&&value.content===input.content&&typeof value.revision==='number'&&value.revision>input.revision)return true;
- return value.commandId===input.commandId&&value.providerId===input.providerId&&['running','provider_completed'].includes(String(value.state))&&after?.conversation.resourceId===input.resourceId&&after.conversation.revision>input.revision&&after.messages.items.some(message=>message.resourceId===input.resourceId&&!message.inherited&&message.role==='user'&&message.content===input.content&&!input.priorMessageIds.includes(message.id))===true;
-}
-
 /** Temporary surface: the host decides placement, focus transition, and shared Motion Coordinator. */
 export function mountConversationManager(container: HTMLElement, port: ConversationProductPort, options: ManagerOptions = {}) {
  const state=options.state??createManagerState();if(options.resourceId)state.selectedResourceId=options.resourceId;
- const root=el('section',undefined,'cp-manager');root.setAttribute('role','region');root.setAttribute('aria-label','Conversations');
+ const root=el('section',undefined,'cp-manager'+(options.embedded===false?' cp-standalone':' cp-embedded'));root.setAttribute('role','region');root.setAttribute('aria-label','Conversations');
  const header=el('header'),heading=el('h2','Conversations'),status=el('p','', 'cp-status');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
- const close=button('Close',()=>closeManager()),headerActions=el('div',undefined,'cp-header-actions'),newChat=disclosure('New chat','cp-new-chat');headerActions.append(newChat.node,close);header.append(heading,headerActions);
+ const historyToggle=button('History',()=>{const open=root.classList.toggle('cp-history-open');historyToggle.setAttribute('aria-expanded',String(open));}),close=button('Close',()=>closeManager()),headerActions=el('div',undefined,'cp-header-actions'),newChat=disclosure('New chat','cp-new-chat');historyToggle.className='cp-history-toggle';historyToggle.setAttribute('aria-expanded','false');headerActions.append(historyToggle,newChat.node,close);header.append(heading,headerActions);
  const toolbar=el('div',undefined,'cp-toolbar'),query=el('input'),project=el('select'),collection=el('select'),archive=select([{value:'active',label:'Active'},{value:'archived',label:'Archived'}],state.query.archived?'archived':'active'),favorite=el('input');
  query.type='search';query.placeholder='Search conversations, messages, and resources';query.value=state.query.text??'';query.setAttribute('aria-label','Search conversation history');favorite.type='checkbox';favorite.checked=!!state.query.favorite;
  const filters=disclosure('Filters','cp-filters');filters.panel.append(field('Project',project),field('Folder or collection',collection),field('History',archive),field('Favorites',favorite));toolbar.append(query,filters.node);
@@ -41,67 +35,31 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  const saveSearch=button('Save search as smart collection',async()=>run(async()=>{const title=folderTitle.value.trim();if(!title)throw new Error('Enter a folder title first');await call('organize',{type:'createCollection',title,projectId:state.query.projectId??null});await reloadCollections();const c=collections.find(c=>c.title===title);if(!c)throw new Error('Created collection not found');const {offset,limit,collectionId,...rule}=state.query;await call('collectionRule',{collectionId:c.id,parentId:null,rule,expectedVersion:c.version,expectedRuleRevision:c.ruleRevision});await refresh();}));createFolder.append(saveSearch);
  const historyTools=disclosure('Organize history','cp-history-tools');historyTools.panel.append(createFolder,folderEditor);
  const body=el('div',undefined,'cp-body'),catalog=el('nav',undefined,'cp-catalog'),results=el('div',undefined,'cp-results'),resultCount=el('p'),paging=el('div',undefined,'cp-paging');catalog.setAttribute('aria-label','Conversation history');catalog.append(toolbar,historyTools.node,resultCount,results,paging);
- const detail=el('section',undefined,'cp-detail'),detailHeader=el('div',undefined,'cp-detail-header'),messages=el('div',undefined,'cp-messages'),detailPaging=el('div',undefined,'cp-paging'),secondary=el('div',undefined,'cp-secondary');messages.tabIndex=0;messages.setAttribute('aria-label','Conversation messages');
- const composer=el('form',undefined,'cp-composer'),draft=el('textarea'),send=el('button','Record message'),draftStatus=el('p','', 'cp-draft-status'),draftRecovery=el('div',undefined,'cp-draft-recovery');draftStatus.setAttribute('role','status');draftStatus.setAttribute('aria-live','polite');draft.setAttribute('aria-label','Message');draft.placeholder='Write a message';composer.append(draft,send);detail.append(detailHeader,messages,detailPaging,composer,draftStatus,draftRecovery,secondary);body.append(catalog,detail);root.append(header,status,body);container.append(root);
- let disposed=false,request=0,current:Detail|null=null,collections:Collection[]=[],busy=false,searchTimer:ReturnType<typeof setTimeout>|undefined;
- let recoveryBusy=false,closing=false,sendReview:string|null=null;
+ const detail=el('section',undefined,'cp-detail'),detailHeader=el('div',undefined,'cp-detail-header'),chatHost=el('div',undefined,'cp-chat-host'),secondary=el('div',undefined,'cp-secondary'),extras=el('details',undefined,'cp-chat-extras');extras.append(el('summary','Branches and context'),secondary);detail.append(detailHeader,extras,chatHost);body.append(catalog,detail);root.append(header,status,body);container.append(root);
+ let disposed=false,request=0,current:Detail|null=null,collections:Collection[]=[],busy=false,searchTimer:ReturnType<typeof setTimeout>|undefined,closing=false;
+ let chat:ConversationChat|null=null,chatResource:string|null=null;
  const draftSessions=new Map<string,ConversationDraftSession>();
- const nodeCache=new Map<string,{node:HTMLElement;signature:string}>();
+ const ownedDraftSessions=new Set<ConversationDraftSession>();
  const call=<K extends keyof ProductCommandMap>(name:K,input:ProductCommandMap[K]['input'])=>port.command(name,input);
- const save=()=>{if(disposed)return;if(state.selectedResourceId){state.drafts[state.selectedResourceId]=draft.value;state.scroll[state.selectedResourceId]=messages.scrollTop;draftSessions.get(state.selectedResourceId)?.update(draft.value);}options.onState?.(state);};
- const activeDraft=()=>state.selectedResourceId?draftSessions.get(state.selectedResourceId):undefined;
- const flush=async()=>{if(disposed)return;await flushConversationDraftSessions(()=>draftSessions.values(),save);};
- const recover=async(action:()=>Promise<void>)=>{if(recoveryBusy)return;recoveryBusy=true;renderDraft();try{await action();}catch(error){status.textContent=error instanceof Error?error.message:String(error);}finally{recoveryBusy=false;renderDraft();}};
- function renderDraft(snapshot:DraftSessionSnapshot|undefined=activeDraft()?.snapshot()) {
-  if(disposed||!snapshot||snapshot.resourceId!==state.selectedResourceId)return;
-  if(draft.value!==snapshot.content)draft.value=snapshot.content;state.drafts[snapshot.resourceId]=snapshot.content;
-  draftStatus.dataset.draftState=snapshot.phase;draftStatus.dataset.draftVersion=String(snapshot.version??'unknown');
-  draftStatus.textContent=snapshot.phase==='loading'?'Loading saved draft.':snapshot.phase==='saving'?'Saving draft recovery locally.':snapshot.phase==='dirty'?'Draft changes are waiting to save.':snapshot.phase==='conflict'?'Another editor saved a different draft. Your text is retained; review both versions.':snapshot.phase==='error'?'Draft recovery could not be saved. Your text is retained here.':snapshot.content?'Draft saved locally · revision '+snapshot.version:'';
-  draftStatus.hidden=!draftStatus.textContent;draftRecovery.replaceChildren();
-  const session=activeDraft();if(!session)return;
-  if(snapshot.remote){const review=disclosure('Review draft conflict','cp-draft-conflict');review.node.open=true;review.panel.append(el('p','This editor'),el('pre',snapshot.content),el('p','Stored draft · revision '+snapshot.remote.version),el('pre',snapshot.remote.content));
-   for(const [label,choice] of [['Keep this editor’s draft','keep-local'],['Use the stored draft','use-stored']] as const){const control=button(label,()=>recover(()=>session.resolve(choice,snapshot.remote!.version)));control.disabled=recoveryBusy;review.panel.append(control);}draftRecovery.append(review.node);
-  }else if(snapshot.phase==='error'){draftRecovery.append(el('p',snapshot.error??'Draft persistence unavailable'),button('Retry draft recovery',()=>recover(async()=>{await session.reload();await session.flush();})));}
-  if(sendReview===snapshot.resourceId){draftRecovery.append(el('p','Send acceptance was not confirmed, or recovery could not be cleared. Inspect this conversation before sending again.'),button('I reviewed the send outcome',()=>{sendReview=null;renderDraft();}));}
-  send.disabled=busy||!current||current.conversation.resourceId!==snapshot.resourceId||current.conversation.state!=='active'||snapshot.phase==='loading'||snapshot.phase==='conflict'||snapshot.phase==='error'||sendReview===snapshot.resourceId;
- }
- const bindDraft=async(resourceId:string)=>{
+ const save=()=>{if(!disposed)options.onState?.(state);};
+ const flush=async()=>{if(disposed)return;await chat?.flush();await flushConversationDraftSessions(()=>draftSessions.values(),save);};
+ async function closeManager(){if(closing||disposed)return;closing=true;close.disabled=true;try{await flush();options.onClose?.();}catch(error){status.textContent='Draft recovery needs attention before closing: '+(error instanceof Error?error.message:String(error));}finally{closing=false;close.disabled=false;}}
+ const run=async(action:()=>Promise<void>)=>{if(busy||disposed)return;busy=true;root.setAttribute('aria-busy','true');try{status.textContent='';await action();}catch(error){status.textContent=error instanceof Error?error.message:String(error);}finally{busy=false;root.removeAttribute('aria-busy');save();}};
+ const bindChat=async(resourceId:string,aroundMessageId?:string)=>{
+  if(chatResource===resourceId&&chat){await chat.refresh(aroundMessageId?{aroundMessageId}:{});return;}
+  await chat?.dispose();chat=null;chatResource=null;
   let session=draftSessions.get(resourceId);
-  if(session){await session.reload();renderDraft(session.snapshot());return;}
-  session=new ConversationDraftSession({resourceId,port,...(Object.hasOwn(state.drafts,resourceId)?{initialContent:state.drafts[resourceId]}:{}),onChange:renderDraft});draftSessions.set(resourceId,session);renderDraft(session.snapshot());await session.ready;renderDraft(session.snapshot());
+  if(!session){if(options.draftSession)session=options.draftSession(resourceId);else{session=new ConversationDraftSession({resourceId,port,...(Object.hasOwn(state.drafts,resourceId)?{initialContent:state.drafts[resourceId]}:{})});ownedDraftSessions.add(session);}if(session.resourceId!==resourceId)throw new Error('draft_resource_mismatch');draftSessions.set(resourceId,session);}else await session.reload();
+  chatResource=resourceId;chat=mountConversationChat(chatHost,{port,resourceId,draftSession:session,execution:options.execution,copy:options.copy,initialScroll:state.scroll[resourceId],initialOffset:state.messageOffset[resourceId],
+   onViewState:view=>{state.drafts[view.resourceId]=view.content;state.scroll[view.resourceId]=view.scroll;state.messageOffset[view.resourceId]=view.offset;save();},onDetail:renderDetail,onUnavailable:()=>{current=null;detailHeader.replaceChildren();secondary.replaceChildren();extras.open=false;},onChanged:refresh,
+   onMessageAction:async event=>{if(event.action==='source'){options.onResource?.(event.message.resourceId,event.message.id);return;}if(event.action==='branch'){if(current)showBranch(current,event.message.id);return;}
+    const selection=event.selection;if(!selection||event.message.content.slice(selection.start,selection.end)!==selection.text)throw new Error('Select a current source excerpt');
+    await run(async()=>{await call('publish',{sourceResourceId:event.message.resourceId,sourceMessageId:event.message.id,range:{start:selection.start,end:selection.end},evidence:'excerpt'});status.textContent='Excerpt published for authorized branch discovery';await loadDetail();});
+   }});await chat.ready;if(aroundMessageId)await chat.refresh({aroundMessageId});
  };
- async function closeManager(){if(closing||disposed)return;closing=true;close.disabled=true;try{await flush();options.onClose?.();}catch(error){status.textContent='Draft recovery needs attention before closing: '+(error instanceof Error?error.message:String(error));renderDraft();}finally{closing=false;close.disabled=false;}}
- const run=async(action:()=>Promise<void>)=>{if(busy||disposed)return;busy=true;root.setAttribute('aria-busy','true');send.disabled=true;try{status.textContent='';await action();}catch(error){status.textContent=error instanceof Error?error.message:String(error);}finally{busy=false;root.removeAttribute('aria-busy');save();renderDraft();}};
- const open=async(resourceId:string,messageId?:string)=>{await flush();state.selectedResourceId=resourceId;if(messageId)state.messageOffset[resourceId]=0;draft.value=state.drafts[resourceId]??'';await bindDraft(resourceId);await loadDetail(messageId);options.onResource?.(resourceId,messageId);};
- const renderMessages=(d:Detail)=>{
-  const targetNodes=d.messages.items.map(m=>{const key=d.conversation.resourceId+':'+m.id,signature=JSON.stringify([m.content,m.resourceId,m.role,m.inherited,m.provenance]),cached=nodeCache.get(key);if(cached?.signature===signature)return cached.node;
-   const article=el('article',undefined,'cp-message');article.dataset.messageId=m.id;article.dataset.sourceResourceId=m.resourceId;
-   const by=el('p',`${m.role}${m.inherited?' · inherited source':''} · ${m.provenance}`,'cp-message-source'),content=el('pre',m.content,'cp-message-content'),actions=disclosure('Message actions','cp-message-actions'),excerpt=el('blockquote',undefined,'cp-excerpt-preview'),selectionNote=el('p','Select text in this message to publish an excerpt.','cp-selection-note');
-   let captured:{start:number;end:number;text:string}|null=null;
-   const readSelection=()=>{
-    const selection=window.getSelection();if(!selection||selection.isCollapsed||!selection.rangeCount||!selection.anchorNode||!content.contains(selection.anchorNode)||!selection.focusNode||!content.contains(selection.focusNode))return null;
-    const selected=selection.getRangeAt(0),before=document.createRange();before.selectNodeContents(content);before.setEnd(selected.startContainer,selected.startOffset);const start=before.toString().length,text=selected.toString(),end=start+text.length;
-    return text&&m.content.slice(start,end)===text?{start,end,text}:null;
-   };
-   const showSelection=()=>{excerpt.textContent=captured?.text??'';excerpt.hidden=!captured;selectionNote.textContent=captured?'Selected excerpt · '+captured.text.length+' characters. Publication happens only when you choose Publish selected excerpt.':'Select text in this message to publish an excerpt.';publish.disabled=!captured;};
-   const capture=()=>{captured=readSelection();showSelection();};
-   content.addEventListener('mouseup',capture);content.addEventListener('keyup',capture);
-   // Capture before native focus/click handling can collapse the browser selection.
-   actions.summary.addEventListener('pointerdown',()=>{const next=readSelection();if(next||!window.getSelection()?.isCollapsed)captured=next;showSelection();});
-   actions.summary.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' '){const next=readSelection();if(next)captured=next;showSelection();}});
-   const action=(label:string,work:()=>void|Promise<void>)=>button(label,async()=>{actions.node.open=false;await work();});
-   const publish=action('Publish selected excerpt',async()=>run(async()=>{
-    const selected=captured;if(!selected||content.textContent!==m.content||m.content.slice(selected.start,selected.end)!==selected.text)throw new Error('Select a current text range inside this message before publishing');
-    const s=await call('publish',{sourceResourceId:m.resourceId,sourceMessageId:m.id,range:{start:selected.start,end:selected.end},evidence:'excerpt'});captured=null;showSelection();status.textContent=`Excerpt published for authorized branch discovery (${s.id})`;await loadDetail();
-   }));publish.disabled=true;
-   actions.panel.append(action('Copy',async()=>run(async()=>{if(options.copy)await options.copy(m.content);else await navigator.clipboard.writeText(m.content);status.textContent='Copied';})),action('Quote',()=>{draft.value+=(draft.value?'\n\n':'')+`> ${m.content.replaceAll('\n','\n> ')}\n`;save();draft.focus();}),action('Source',()=>options.onResource?.(m.resourceId,m.id)),action('Branch from here',()=>{if(current)showBranch(current,m.id);}),selectionNote,excerpt,publish);excerpt.hidden=true;
-   article.append(by,content,actions.node);nodeCache.set(key,{node:article,signature});return article;
-  });
-  for(const child of [...messages.children])if(!targetNodes.includes(child as HTMLElement))child.remove();targetNodes.forEach((node,index)=>{if(messages.children[index]!==node)messages.insertBefore(node,messages.children[index]??null);});
-  for(const [key] of nodeCache)if(!targetNodes.some(n=>n===nodeCache.get(key)?.node))nodeCache.delete(key);
- };
+ const open=async(resourceId:string,messageId?:string)=>{await flush();state.selectedResourceId=resourceId;root.classList.remove('cp-history-open');historyToggle.setAttribute('aria-expanded','false');await bindChat(resourceId,messageId);options.onResource?.(resourceId,messageId);};
  const showBranch=(d:Detail,messageId:string)=>{
-  secondary.replaceChildren();const form=el('form'),title=el('input'),providers=select(d.providers.filter(p=>p.record).map(p=>({value:p.id,label:p.label})),d.conversation.providerId),selection=el('fieldset'),legend=el('legend','Select source messages to prepare for review');title.value=d.conversation.title+' · branch';title.setAttribute('aria-label','Branch title');selection.append(legend);
+  extras.open=true;secondary.replaceChildren();const form=el('form'),title=el('input'),providers=select(d.providers.filter(p=>p.record).map(p=>({value:p.id,label:p.label})),d.conversation.providerId),selection=el('fieldset'),legend=el('legend','Select source messages to prepare for review');title.value=d.conversation.title+' · branch';title.setAttribute('aria-label','Branch title');selection.append(legend);
   let reached=false;const chosen=new Set([messageId]);for(const m of d.messages.items){if(reached)break;const box=el('input');box.type='checkbox';box.checked=m.id===messageId;box.addEventListener('change',()=>box.checked?chosen.add(m.id):chosen.delete(m.id));selection.append(field(`${m.role}: ${m.content.slice(0,100)}`,box));if(m.id===messageId)reached=true;}
   const note=el('p','Application continuation: selected source references are prepared for review. Creating a branch does not send a model turn.'),create=el('button','Create branch and review context');form.append(field('Title',title),field('Provider',providers),selection,note,create);form.addEventListener('submit',event=>{event.preventDefault();void run(async()=>{const b=await call('branch',{resourceId:d.conversation.resourceId,messageId,includeMessageIds:[...chosen],providerId:providers.value,title:title.value,commandId:crypto.randomUUID(),tokenBudget:32768,expectedRevision:d.conversation.revision});secondary.replaceChildren(el('p','Branch created; source context is prepared, awaiting your review.'),button('Approve selected context',async()=>run(async()=>{await call('reviewBranch',{handoffId:b.handoffId,fingerprint:b.fingerprint,approve:true});await open(b.resourceId);await refresh();})),button('Reject context',async()=>run(async()=>{await call('reviewBranch',{handoffId:b.handoffId,fingerprint:b.fingerprint,approve:false});await open(b.resourceId);await refresh();})));});});secondary.append(form);title.focus();
  };
@@ -115,22 +73,21 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
   if(share.status==='current')row.append(button('Inspect source excerpt',async()=>run(async()=>{const inspected=await call('inspectShare',{resourceId:d.conversation.resourceId,shareId:share.id});row.append(el('blockquote',inspected.content),button('Attach to future context',async()=>run(async()=>{await call('attachShare',{resourceId:d.conversation.resourceId,shareId:share.id,attach:true});await loadDetail();})));})),button('Detach',async()=>run(async()=>{await call('attachShare',{resourceId:d.conversation.resourceId,shareId:share.id,attach:false});await loadDetail();})));
   if(share.sourceResourceId===d.conversation.resourceId)row.append(button('Revoke publication',async()=>run(async()=>{await call('revokeShare',{shareId:share.id});await loadDetail();})));return row;
  };
- const loadDetail=async(aroundMessageId?:string)=>{
-  const id=state.selectedResourceId;if(!id){detailHeader.replaceChildren(el('p','Open or create a conversation.'));composer.hidden=true;return;}
-  const generation=++request;const d=await call('detail',{resourceId:id,offset:state.messageOffset[id]??0,limit:50,...(aroundMessageId?{aroundMessageId}:{})});if(disposed||generation!==request)return;
+ const renderDetail=(d:Detail)=>{
+  const id=d.conversation.resourceId;
   const optionsOpen=root.dataset.resourceId===id&&!!detailHeader.querySelector<HTMLDetailsElement>('.cp-chat-options')?.open;
-  current=d;root.dataset.resourceId=id;composer.hidden=d.conversation.state!=='active';send.textContent=d.providers.find(p=>p.id===d.conversation.providerId)?.execute?'Send to Codex':'Record message';
+  current=d;root.dataset.resourceId=id;
   const chatOptions=disclosure('Chat options','cp-chat-options');chatOptions.node.open=optionsOpen;
   const title=el('input');title.value=d.conversation.title;title.setAttribute('aria-label','Conversation title');const folder=select([{value:'',label:'Choose folder'},...collections.map(c=>({value:c.id,label:c.title}))]),projectSelect=select([{value:'',label:'No project'},...[...project.options].filter(p=>p.value&&p.value!=='__none').map(p=>({value:p.value,label:p.text}))],d.conversation.projectId??'');
   chatOptions.panel.append(field('Title',title),button('Rename',async()=>run(async()=>{await call('organize',{type:'renameConversation',resourceId:id,title:title.value,expectedRevision:d.conversation.revision,expectedVersion:d.conversation.version});await refresh();})),button(d.conversation.favorite?'Unfavorite':'Favorite',async()=>run(async()=>{await call('favorite',{resourceId:id,favorite:!d.conversation.favorite});await refresh();})),button(d.conversation.state==='archived'?'Restore conversation':'Archive conversation',async()=>run(async()=>{await flush();await call('archive',{resourceId:id,archived:d.conversation.state!=='archived',expectedVersion:d.conversation.version});await refresh();})),field('Project association',projectSelect),button('Associate project',async()=>run(async()=>{await call('organize',{type:'associateProject',resourceId:id,projectId:projectSelect.value||null,expectedVersion:d.conversation.version});await refresh();})),field('Folder',folder),button('Add to folder',async()=>run(async()=>{const c=collections.find(c=>c.id===folder.value);if(!c)throw new Error('Choose a folder');await call('organize',{type:'membership',collectionId:c.id,resourceId:id,member:true,expectedVersion:c.version});await refresh();})),button('Remove from folder',async()=>run(async()=>{const c=collections.find(c=>c.id===folder.value);if(!c)throw new Error('Choose a folder');await call('organize',{type:'membership',collectionId:c.id,resourceId:id,member:false,expectedVersion:c.version});await refresh();})),button('Export conversation',async()=>run(async()=>{const data=await call('export',{resourceId:id});const json=JSON.stringify(data,null,2);if(options.download)options.download('conversation.json',json);else{const url=URL.createObjectURL(new Blob([json],{type:'application/json'})),link=el('a','Download export');link.href=url;link.download='conversation.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}})));
-  const identity=el('div',undefined,'cp-chat-identity');identity.append(el('h3',d.conversation.title),el('p',`${d.conversation.providerId} · ${d.conversation.state}${d.conversation.favorite?' · favorite':''}`));detailHeader.replaceChildren(identity,chatOptions.node);
-  renderMessages(d);detailPaging.replaceChildren(el('span',`${d.messages.offset+1}–${d.messages.offset+d.messages.items.length} of ${d.messages.total}`),button('Earlier',async()=>run(async()=>{state.messageOffset[id]=Math.max(0,d.messages.offset-50);await loadDetail();})),button('Later',async()=>run(async()=>{state.messageOffset[id]=d.messages.hasMore?d.messages.offset+50:d.messages.offset;await loadDetail();})));
+  const identity=el('div',undefined,'cp-chat-identity');identity.append(el('h3',d.conversation.title),el('p',`${d.providers.find(p=>p.id===d.conversation.providerId)?.label??d.conversation.providerId} · ${d.conversation.state}${d.conversation.favorite?' · favorite':''}`));detailHeader.replaceChildren(identity,chatOptions.node);
   const lineage=el('details'),lineageTitle=el('summary','Branch lineage');lineage.append(lineageTitle);for(const edge of d.lineage)lineage.append(el('p',`${edge.mode} · ${edge.createdAt} · fork at ${edge.sourceMessageId}`),button(`${edge.parentResourceId} → ${edge.childResourceId}`,async()=>run(()=>open(edge.childResourceId,edge.sourceMessageId))));
   const providers=el('details');providers.append(el('summary','Provider capabilities'));for(const p of d.providers)providers.append(el('p',`${p.label}: ${p.available?'available':'unavailable'} · ${p.execute?'execution supported':'no model execution'}${p.reason?' · '+p.reason:''}`));
   const providerSelect=select(d.providers.map(p=>({value:p.id,label:p.label,disabled:!p.available})),d.conversation.providerId);providers.append(providerSelect,button('Use provider for future turns',async()=>run(async()=>{await call('selectProvider',{resourceId:id,providerId:providerSelect.value,expectedRevision:d.conversation.revision});await loadDetail();})));
   const shares=disclosure('Published and attached excerpts · '+d.shares.length,'cp-shares');shares.panel.append(...d.shares.map(s=>renderShare(s,d)));
-  secondary.replaceChildren(renderPolicy(d),lineage,providers,...(d.shares.length?[shares.node]:[]));detailPaging.hidden=d.messages.total<=d.messages.limit;if(aroundMessageId)messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(aroundMessageId)}"]`)?.scrollIntoView({block:'center'});else messages.scrollTop=state.scroll[id]??0;
+  secondary.replaceChildren(renderPolicy(d),lineage,providers,...(d.shares.length?[shares.node]:[]));
  };
+ const loadDetail=async(aroundMessageId?:string)=>{const id=state.selectedResourceId;if(!id){detailHeader.replaceChildren(el('p','Open or create a conversation.'));return;}await bindChat(id,aroundMessageId);};
  const reloadCollections=async()=>{collections=await call('collections',{});const previous=collection.value;collection.replaceChildren(el('option','All collections'));collection.options[0].value='';for(const c of collections){const o=el('option',`${c.parentId?'↳ ':''}${c.title}${c.rule?' (smart)':''}`);o.value=c.id;collection.append(o);}collection.value=state.query.collectionId??previous;};
  const refresh=async()=>{
   save();await reloadCollections();const [list,providers]=await Promise.all([call('search',{...state.query,offset:state.query.offset??0,limit:50}),call('providers',{})]);if(disposed)return;
@@ -141,22 +98,12 @@ export function mountConversationManager(container: HTMLElement, port: Conversat
  };
  const filter=()=>{state.query={...state.query,text:query.value,projectId:project.value==='__none'?null:project.value||undefined,collectionId:collection.value||undefined,archived:archive.value==='archived',favorite:favorite.checked,offset:0};void run(refresh);};
  query.addEventListener('input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(filter,180);});for(const control of [project,collection,archive,favorite])control.addEventListener('change',filter);
- draft.addEventListener('input',save);messages.addEventListener('scroll',save,{passive:true});composer.addEventListener('submit',event=>{event.preventDefault();const session=activeDraft();if(!current||!session||!draft.value.trim()||send.disabled)return;const c=current.conversation,content=draft.value,priorMessageIds=current.messages.items.map(message=>message.id),commandId=crypto.randomUUID();save();const checkpoint=session.checkpoint();void run(async()=>{
-  const sent=await checkpoint;
-  try{const result=await call('send',{resourceId:c.resourceId,content,expectedRevision:c.revision,commandId}),evidence={resourceId:c.resourceId,providerId:c.providerId,content,commandId,revision:c.revision,priorMessageIds};
-   let accepted=acceptedConversationSubmission(evidence,result);if(!accepted){const after=await call('detail',{resourceId:c.resourceId,limit:50,offset:Math.max(0,c.messageCount-1)});accepted=acceptedConversationSubmission(evidence,result,after);}
-   if(accepted){try{const cleared=await session.acknowledgeSent(sent);status.textContent=cleared?'Message accepted. Its saved draft revision was cleared.':'Message accepted. Later draft edits were retained.';}catch(error){sendReview=c.resourceId;throw error;}}
-   else{sendReview=c.resourceId;status.textContent='Send acceptance is not confirmed. Draft recovery was retained; inspect the conversation before retrying.';}
-   await refresh();
-  }catch(error){if(error instanceof Error&&error.message==='authorization_cancelled')status.textContent='Send cancelled. Your saved draft was retained.';else{sendReview=c.resourceId;throw error;}}
- });});
- createForm.addEventListener('submit',event=>{event.preventDefault();void run(async()=>{const c=await call('create',{title:newTitle.value,providerId:newProvider.value,commandId:crypto.randomUUID()});newTitle.value='';newChat.node.open=false;await open(c.resourceId);await refresh();draft.focus();});});
+ createForm.addEventListener('submit',event=>{event.preventDefault();void run(async()=>{const c=await call('create',{title:newTitle.value,providerId:newProvider.value,commandId:crypto.randomUUID()});newTitle.value='';newChat.node.open=false;await open(c.resourceId);await refresh();chat?.focusComposer();});});
  createFolder.addEventListener('submit',event=>{event.preventDefault();void run(async()=>{await call('organize',{type:'createCollection',title:folderTitle.value,projectId:state.query.projectId??null});folderTitle.value='';await refresh();});});
  root.addEventListener('toggle',event=>{const opened=event.target as HTMLDetailsElement;if(opened.tagName!=='DETAILS'||!opened.open)return;for(const other of root.querySelectorAll<HTMLDetailsElement>('details[open]'))if(other!==opened&&!other.contains(opened)&&!opened.contains(other))other.open=false;},true);
  root.addEventListener('keydown',event=>{if(event.key==='Escape'){
   const target=event.target as HTMLElement,active=target.closest<HTMLDetailsElement>('details[open]')??[...root.querySelectorAll<HTMLDetailsElement>('details[open]')].at(-1);
   event.preventDefault();event.stopPropagation();if(active){active.open=false;active.querySelector('summary')?.focus();return;}void closeManager();
- }if(event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&event.target===draft){event.preventDefault();composer.requestSubmit();}});
- if(state.selectedResourceId)draft.value=state.drafts[state.selectedResourceId]??'';
- const ready=run(async()=>{if(state.selectedResourceId)await bindDraft(state.selectedResourceId);await refresh();});return {ready,state,flush,refresh:()=>run(refresh),open:(id:string,messageId?:string)=>run(()=>open(id,messageId)),async dispose(){if(disposed)return;await flush();await Promise.all([...draftSessions.values()].map(session=>session.dispose()));disposed=true;request++;clearTimeout(searchTimer);root.remove();}};
+ }});
+ const ready=run(refresh);return {ready,state,flush,refresh:()=>run(refresh),open:(id:string,messageId?:string)=>run(()=>open(id,messageId)),async dispose(){if(disposed)return;await flush();await chat?.dispose();await Promise.all([...ownedDraftSessions].map(session=>session.dispose()));disposed=true;request++;clearTimeout(searchTimer);root.remove();}};
 }

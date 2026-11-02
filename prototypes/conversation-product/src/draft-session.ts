@@ -29,6 +29,7 @@ export class ConversationDraftSession {
   readonly ready: Promise<void>;
   private readonly port: ConversationDraftPort;
   private readonly onChange?: (state: DraftSessionSnapshot) => void;
+  private readonly listeners = new Set<(state: DraftSessionSnapshot) => void>();
   private readonly delay: number;
   private readonly initialLocal: boolean;
   private content: string;
@@ -54,7 +55,11 @@ export class ConversationDraftSession {
       phase: this.loading ? 'loading' : this.remote ? 'conflict' : this.error ? 'error' : this.saving ? 'saving' : this.dirty() || this.tasks.length ? 'dirty' : 'clean',
       remote: this.remote ? { ...this.remote } : null, error: this.error };
   }
-  private emit() { this.onChange?.(this.snapshot()); }
+  /** A view may observe an externally owned session without taking its persistence lifecycle. */
+  subscribe(listener: (state: DraftSessionSnapshot) => void): () => void {
+    this.listeners.add(listener); return () => { this.listeners.delete(listener); };
+  }
+  private emit() { this.onChange?.(this.snapshot()); for (const listener of this.listeners) listener(this.snapshot()); }
   private dirty() { return !!this.known && this.content !== this.known.content; }
   private checkRecord(record: ConversationDraftRecord) {
     if (!record || record.resourceId !== this.resourceId || !Number.isSafeInteger(record.version) || record.version < 0 || typeof record.content !== 'string' || !validContent(record.content) || (record.updatedAt !== null && typeof record.updatedAt !== 'string')) throw new Error('invalid_draft_response');
