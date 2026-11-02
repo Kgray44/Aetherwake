@@ -60,6 +60,19 @@ function assertSyntheticClipboard(actual, expected) {
     "native_clipboard_exact_synthetic_copy_mismatch",
   );
 }
+function nativeHover(win, slot, point) {
+  slot.check();
+  assert(
+    Number.isSafeInteger(point?.x) &&
+      point.x >= 0 &&
+      Number.isSafeInteger(point?.y) &&
+      point.y >= 0,
+    "visible_native_hover_point_required",
+  );
+  // Movement alone does not click, focus, select or grant transient activation.
+  win.webContents.sendInputEvent({ type: "mouseMove", x: point.x, y: point.y });
+  slot.check();
+}
 function passingCheckpoint(checkpoint, initial) {
   assert(
     checkpoint?.contract === "aerynth.desktop-basics-checkpoint@1" &&
@@ -399,6 +412,7 @@ exports.resourceInformation = resourceInformation;
 exports.namedControlScript = namedControlScript;
 exports.assertSyntheticClipboard = assertSyntheticClipboard;
 exports.passingCheckpoint = passingCheckpoint;
+exports.nativeHover = nativeHover;
 
 exports.verify = async function verify({
   win,
@@ -649,6 +663,26 @@ exports.verify = async function verify({
           clickCount: 1,
         });
       }
+    };
+    const hover = async (query) => {
+      await js(
+        `document.querySelector(${JSON.stringify(query)})?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`,
+      );
+      let point;
+      await wait("Visible actual message hover target " + query, async () => {
+        const value = await js(targetScript(query, "inspect"));
+        if (!value.ready) return false;
+        point = {
+          x: Math.round(value.rect.x + value.rect.width / 2),
+          y: Math.round(value.rect.y + value.rect.height / 2),
+        };
+        return true;
+      });
+      nativeHover(win, slot, point);
+      receipt.actions.push({
+        method: "software-native-window-hover",
+        selector: query,
+      });
     };
     const key = (keyCode, modifiers = []) => {
       for (const type of ["keyDown", "keyUp"]) {
@@ -1212,6 +1246,10 @@ exports.verify = async function verify({
           js(
             `document.querySelector(${JSON.stringify(chatScope + ` .cp-message[data-message-id=${JSON.stringify(messageId)}] .cp-message-content`)})?.textContent===${JSON.stringify(CLIPBOARD_FIXTURE.message)}`,
           ),
+        );
+        await hover(
+          chatScope +
+            ` .cp-message[data-message-id=${JSON.stringify(messageId)}] .cp-message-content`,
         );
         await click(
           chatScope +

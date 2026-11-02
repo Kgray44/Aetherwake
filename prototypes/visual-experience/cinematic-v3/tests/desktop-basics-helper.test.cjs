@@ -16,6 +16,7 @@ const {
   namedControlScript,
   assertSyntheticClipboard,
   passingCheckpoint,
+  nativeHover,
 } = require("../native/integration-desktop-basics.cjs");
 const { createSlot } = require("../native/integration-resource-opening.cjs");
 const GiB = 1073741824,
@@ -38,6 +39,56 @@ const measurement = () => ({
     used: "total-minus-available",
     excludes: "process-and-committed-memory",
   },
+});
+
+test("message hover uses one actual app-window mouseMove with focus guards and never manufactures activation or a click", () => {
+  const events = [];
+  let checks = 0;
+  const win = {
+      webContents: { sendInputEvent: (event) => events.push(event) },
+    },
+    slot = {
+      check() {
+        checks++;
+      },
+    };
+  nativeHover(win, slot, { x: 140, y: 220 });
+  assert.deepEqual(events, [{ type: "mouseMove", x: 140, y: 220 }]);
+  assert.equal(checks, 2);
+  assert.throws(() => nativeHover(win, slot, { x: NaN, y: 1 }), /hover_point/);
+  assert.throws(
+    () =>
+      nativeHover(
+        win,
+        {
+          check() {
+            throw Error("sticky_focus_lost");
+          },
+        },
+        { x: 1, y: 1 },
+      ),
+    /sticky_focus_lost/,
+  );
+  assert.equal(events.length, 1);
+  const source = fs.readFileSync(
+    require.resolve("../native/integration-desktop-basics.cjs"),
+    "utf8",
+  );
+  const rendered = source.indexOf(
+      "Actual canonical conversation message rendered",
+    ),
+    hover = source.indexOf("await hover(", rendered),
+    summary = source.indexOf(".cp-message-actions > summary", rendered);
+  assert(hover > rendered && summary > hover);
+  assert(
+    source.includes("targetScript(query, 'inspect')") ||
+      source.includes('targetScript(query, "inspect")'),
+  );
+  assert(
+    !/\.classList\.(?:add|toggle)|style\.opacity\s*=|dispatchEvent\(.*(?:mouseover|mouseenter)/.test(
+      source,
+    ),
+  );
 });
 const state = () => ({
   identity: { id: "system:vela", name: "Vela", role: "application-assistant" },
