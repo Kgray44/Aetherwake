@@ -22,6 +22,7 @@ import {
 } from "./material-compositing";
 import { defaultSurfaceShape, surfaceBorderRadius } from "./surface-contour";
 import { applyBlockPoseStyle } from "../../../block-library/pose-style.ts";
+import { placeStatus, type StatusObstacle } from "./status-placement.ts";
 import type { ArchitectureConcept } from "./orbital-architecture";
 import type { CelestialStudy } from "./celestial-environment";
 import type { InstrumentStudy } from "./instrument-materials";
@@ -117,6 +118,17 @@ const elements = new Map<string, HTMLElement>();
 const poseStyleCache = new Map<string, string>();
 const materialCompositor = new MaterialCompositor();
 let surfaceView: SurfaceView = { scale: 1, originX: 0, originY: 0 };
+let statusMetricsDirty = true;
+let statusChrome: StatusObstacle[] = [];
+let statusWidth = 128;
+let lastStatusPlacement = "";
+const statusNode = $("#status");
+const statusChromeObserver = new ResizeObserver(() => {
+  statusMetricsDirty = true;
+  wake(false);
+});
+for (const node of document.querySelectorAll(".keys,.provenance"))
+  statusChromeObserver.observe(node);
 let selected: string | null = null,
   expanded: string | null = null,
   quiet = false;
@@ -184,7 +196,9 @@ let drag: {
 } | null = null;
 
 function status(text: string) {
-  $("#status").textContent = text;
+  statusNode.textContent = text;
+  statusMetricsDirty = true;
+  wake();
 }
 function persist() {
   if (desktopMode) return true;
@@ -1074,6 +1088,7 @@ addEventListener("pointermove", (e) => {
   }
 });
 addEventListener("resize", () => {
+  statusMetricsDirty = true;
   cancelDrag();
   layout("viewport retarget");
 });
@@ -1195,6 +1210,48 @@ function renderDOM() {
     if (poseStyleCache.get(id) !== style) {
       applyBlockPoseStyle(el.style, style);
       poseStyleCache.set(id, style);
+    }
+  }
+  if (desktopMode && statusNode.textContent) {
+    if (statusMetricsDirty) {
+      statusWidth = Math.max(128, statusNode.scrollWidth);
+      statusChrome = [
+        ...document.querySelectorAll<HTMLElement>(".keys,.provenance"),
+      ]
+        .map((node) => node.getBoundingClientRect())
+        .filter((rect) => rect.width > 0 && rect.height > 0);
+      statusMetricsDirty = false;
+    }
+    const obstacles = [...statusChrome];
+    if (workspaceSurfacesVisible())
+      for (const entry of composite) {
+        const node = elements.get(entry.id);
+        if (
+          entry.valid &&
+          !entry.covered &&
+          entry.pose.opacity > 0.01 &&
+          node &&
+          !node.hidden &&
+          !node.classList.contains("receded")
+        )
+          obstacles.push(entry);
+      }
+    const placement = placeStatus({
+      width: innerWidth,
+      height: innerHeight,
+      desiredWidth: statusWidth,
+      obstacles,
+    });
+    const signature = `${placement.left}:${placement.width}:${placement.bottom}:${placement.placement}`;
+    if (signature !== lastStatusPlacement) {
+      statusNode.style.setProperty("--status-left", `${placement.left}px`);
+      statusNode.style.setProperty(
+        "--status-max-width",
+        `${placement.width}px`,
+      );
+      statusNode.style.setProperty("--status-bottom", `${placement.bottom}px`);
+      document.body.dataset.statusPlacement = placement.placement;
+      lastStatusPlacement = signature;
     }
   }
   const target = document.body.dataset.related;
