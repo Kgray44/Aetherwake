@@ -276,6 +276,16 @@ function presentationBlock(id: string) {
     )?.previewBlock?.(id) ?? application?.block(id)
   );
 }
+function workspaceSurfacesVisible() {
+  return (
+    (
+      application as
+        | (Application & { workspaceSurfacesVisible?: () => boolean })
+        | null
+    )?.workspaceSurfacesVisible?.() ??
+    application?.snapshot()?.navigation.kind !== "constellation"
+  );
+}
 function restAt(id: string, slot: number) {
   const block = presentationBlock(id);
   if (block) {
@@ -1192,9 +1202,7 @@ function tick(now: number) {
       if (environment && !graphicsFailed) {
         const surfaces = order
           .filter(
-            (id) =>
-              !elements.get(id)?.hidden &&
-              application?.snapshot()?.navigation.kind !== "constellation",
+            (id) => !elements.get(id)?.hidden && workspaceSurfacesVisible(),
           )
           .map((id) => {
             const p = motion.pose(id),
@@ -1327,7 +1335,8 @@ function tick(now: number) {
           height: `${presenceHeight}px`,
           clipPath:
             document.body.classList.contains("vela-access") ||
-            application?.snapshot()?.navigation.kind === "constellation"
+            (application?.snapshot()?.navigation.kind === "constellation" &&
+              !workspaceSurfacesVisible())
               ? "none"
               : materialCompositor.clipOverlay({
                   id: "vela-dom-presentation",

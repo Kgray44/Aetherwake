@@ -95,8 +95,9 @@ async function run(win) {
   let s = await state();
   await execute({
     type: "setPresence",
+    workspaceId: workspace,
     expectedVersion: s.presence.version,
-    presentation: { x: 650, y: 280, width: 208, height: 260 },
+    placement: { x: 650, y: 280, width: 208, height: 260 },
   });
   const canonical = () => state().then((s) => JSON.stringify(s.presence));
   const gather = async (name, mask = true) => {
@@ -184,7 +185,7 @@ async function run(win) {
       await execute({
         type: "setViewport",
         workspaceId: workspace,
-        viewport: { x: 350 - 754 * zoom, y: 240 - 410 * zoom, zoom },
+        viewport: { x: 350 - 754 * zoom, y: 430 - 410 * zoom, zoom },
       });
       await pause(850);
       for (const phase of [0, 2.7, 6.1, 11.3, 18.8, 30.2]) {
@@ -254,7 +255,7 @@ async function run(win) {
   const saved = await canonical();
   await execute({
     type: "navigate",
-    target: { kind: "constellation", scope: "universe" },
+    target: { kind: "constellation", projectId: null },
   });
   await pause(1200);
   await gather("universe upper-right");
