@@ -5,13 +5,147 @@ const { assertNativeOwner, nativeInput } = require("./native-input.cjs");
 const { loadPreparedWorkspaces } = require("./prepared-workspaces.cjs");
 const { createHash } = require("node:crypto");
 const native = "../../visual-experience/cinematic-v3/native/";
-const { createDriver } = require(native + "desktop-verify.cjs");
-const { startWindowRecording } = require(native + "application-recording.cjs");
 const {
   checkLabelClearance,
   verifyWorkspaceGuide,
 } = require("./native-labels.cjs");
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const JOURNEY_LIMITS = Object.freeze({
+  receiptBytes: 2 * 1024 * 1024,
+  journalBytes: 256 * 1024,
+  journalEventBytes: 4096,
+  actions: 1024,
+  steps: 25,
+  expectedBytes: 2 * 1024 * 1024,
+});
+
+/** Same absolute budget as the host; no separate timer extends its slot. */
+function journeyDeadline(argv, startedAt, now = Date.now()) {
+  const { verificationDeadline } = require(
+    native + "integration-spatial-benchmark.cjs",
+  );
+  return verificationDeadline(argv, Date.parse(startedAt), now);
+}
+
+function createJourneyGuard(win, expiresAt, now = Date.now, sleep = pause) {
+  assert.ok(
+    Number.isFinite(expiresAt) && expiresAt > now(),
+    "live absolute journey deadline required",
+  );
+  let aborted,
+    expectedEscapeUntil = 0,
+    expectedEscape = false;
+  const status = {
+    intentionalEscapesSent: 0,
+    intentionalEscapesObserved: 0,
+    escapeAllowanceMs: 250,
+  };
+  const guard = () => {
+    if (aborted) throw aborted;
+    if (now() >= expiresAt) throw Error("native_expanded_deadline");
+    assertNativeOwner(win);
+  };
+  const beforeInput = (event, input) => {
+    if (input.type !== "keyDown" || input.key !== "Escape") return;
+    // Electron's window event does not identify physical vs injected input.
+    // Consume only one non-repeat Escape explicitly sent by this helper, within
+    // a short bounded window. Any other Escape latches an irreversible abort.
+    if (expectedEscape && now() <= expectedEscapeUntil && !input.isAutoRepeat) {
+      expectedEscape = false;
+      status.intentionalEscapesObserved++;
+      return;
+    }
+    aborted = Error("native_expanded_operator_escape");
+    status.operatorEscapeAt = new Date(now()).toISOString();
+    event?.preventDefault?.();
+  };
+  const input = (event) => {
+    guard();
+    if (event.type === "keyDown" && event.keyCode === "Escape") {
+      expectedEscape = true;
+      expectedEscapeUntil = Math.min(
+        expiresAt,
+        now() + status.escapeAllowanceMs,
+      );
+      status.intentionalEscapesSent++;
+    }
+    nativeInput(win, event);
+  };
+  const js = async (code, userGesture = true) => {
+    guard();
+    const value = await win.webContents.executeJavaScript(code, userGesture);
+    guard();
+    return value;
+  };
+  const ownedPause = async (ms) => {
+    const until = now() + ms;
+    do {
+      guard();
+      await sleep(Math.min(50, Math.max(1, until - now())));
+    } while (now() < until);
+    guard();
+  };
+  // The existing driver and label/guide checks use these exact methods. They
+  // retain real window state and input, with no show/focus/reclaim capability.
+  const owner = {
+    isDestroyed: () => win.isDestroyed(),
+    isVisible: () => win.isVisible(),
+    isMinimized: () => win.isMinimized(),
+    isFocused: () => win.isFocused(),
+    webContents: {
+      isDestroyed: () => win.webContents.isDestroyed(),
+      executeJavaScript: js,
+      sendInputEvent: input,
+    },
+  };
+  return { guard, beforeInput, input, js, pause: ownedPause, owner, status };
+}
+
+function createJourneyEvidence(out, receipt) {
+  let journalBytes = 0;
+  const checkpoint = async () => {
+    assert.ok(
+      receipt.actions.length <= JOURNEY_LIMITS.actions,
+      "journey action count bound",
+    );
+    assert.ok(
+      receipt.steps.length <= JOURNEY_LIMITS.steps,
+      "journey step count bound",
+    );
+    const bytes = Buffer.from(JSON.stringify(receipt, null, 2));
+    assert.ok(
+      bytes.length <= JOURNEY_LIMITS.receiptBytes,
+      "journey receipt byte bound",
+    );
+    await fs.writeFile(path.join(out, "expanded.pending.json"), bytes);
+    await fs.rename(
+      path.join(out, "expanded.pending.json"),
+      path.join(out, "expanded.json"),
+    );
+  };
+  const record = async (event) => {
+    const bytes = Buffer.from(
+      JSON.stringify({ at: new Date().toISOString(), ...event }) + "\n",
+    );
+    assert.ok(
+      bytes.length <= JOURNEY_LIMITS.journalEventBytes,
+      "journey journal event byte bound",
+    );
+    assert.ok(
+      journalBytes + bytes.length <= JOURNEY_LIMITS.journalBytes,
+      "journey journal byte bound",
+    );
+    await fs.appendFile(path.join(out, "expanded-progress.jsonl"), bytes);
+    journalBytes += bytes.length;
+    await checkpoint();
+  };
+  return { checkpoint, record };
+}
+exports.JOURNEY_LIMITS = JOURNEY_LIMITS;
+exports.journeyDeadline = journeyDeadline;
+exports.createJourneyGuard = createJourneyGuard;
+exports.createJourneyEvidence = createJourneyEvidence;
+
 const geometry = (s) =>
   s.blocks
     .map(
@@ -42,14 +176,14 @@ const geometry = (s) =>
     .sort((a, b) => a.id.localeCompare(b.id));
 
 /** Called only by the integration lead's existing real desktop host; never launches a window. */
-exports.verify = async ({
+async function verifyJourney({
   win,
   app,
   privateRoot,
   source,
   session,
   localURL,
-}) => {
+}) {
   assert.ok(
     process.argv.includes("--integration-expanded"),
     "explicit expanded native mode required",
@@ -58,12 +192,14 @@ exports.verify = async ({
     source?.hashes && source?.buildAssets,
     "source and built asset hashes required",
   );
-  const out = path.resolve(
+  const evidenceBase = path.resolve(
     __dirname,
     "../../visual-experience/cinematic-v3/.runtime/application-evidence",
-    "expanded-" + Date.now(),
   );
-  await fs.mkdir(out, { recursive: true });
+  await fs.mkdir(evidenceBase, { recursive: true });
+  const out = await fs.mkdtemp(
+    path.join(evidenceBase, "expanded-" + Date.now() + "-"),
+  );
   const receipt = {
     source,
     syntheticData: true,
@@ -74,18 +210,41 @@ exports.verify = async ({
     screenshots: [],
     videos: [],
     passed: false,
+    state: "initializing",
+    limits: JOURNEY_LIMITS,
+    timing: { helperStartedAt: new Date().toISOString() },
     limitations: [
       "Window recordings and callback statistics do not measure monitor-presented frames.",
       "Ordinary conversation branching is an app-level continuation with reviewed source context; no provider fork, inference or model response is claimed.",
       "This journey does not replace rendered-scale performance measurements or owner artistic acceptance.",
+      "Injected and physical window Escape events have no source identifier. Only one explicitly injected non-repeat Escape has a 250 ms allowance; unmatched or repeating Escape aborts.",
     ],
   };
-  let recorder;
-  const { js, wait, click, fill, snapshot } = await createDriver(win);
-  const mark = (label) =>
+  let recorder, run, ownerContents, wait, click, fill, snapshot;
+  const rawJs = (code) => win.webContents.executeJavaScript(code, true);
+  const js = (code) => {
+    assert.ok(run, "admitted journey required");
+    return run.js(code);
+  };
+  const pause = (ms) => {
+    assert.ok(run, "admitted journey required");
+    return run.pause(ms);
+  };
+  const send = (event) => {
+    assert.ok(run, "admitted journey required");
+    return run.input(event);
+  };
+  const evidence = createJourneyEvidence(out, receipt);
+  const mark = async (label) => {
     receipt.actions.push({ label, at: new Date().toISOString() });
-  const step = (number, label) =>
+    await evidence.record({ phase: "action", label });
+    run.guard();
+  };
+  const step = async (number, label) => {
     receipt.steps.push({ number, label, at: new Date().toISOString() });
+    await evidence.record({ phase: "step-completed", number, label });
+    run.guard();
+  };
   const spatial = () => js("window.__aerynth.snapshot().spatial");
   const checkOverviewPresence = async (label) => {
     await wait(
@@ -94,17 +253,28 @@ exports.verify = async ({
     receipt.actions.push({
       label: "Overview Vela placement: " + label,
       bounds: await js("window.__aerynth.snapshot().gpu.presenceBounds"),
-      labelClearance: await checkLabelClearance(win),
+      labelClearance: await checkLabelClearance(run.owner),
     });
     const scene = await spatial(),
       discs = scene.renderer.projectedBodies;
     assert.ok(discs.length > 0, "actual scene has projected body bounds");
-    assert.equal(scene.renderer.overlapCulled, 0, "on-screen bodies are never removed for camera alignment");
-    assert.equal(scene.renderer.nodes, scene.renderer.detailedBodies + scene.renderer.instancedBodies);
+    assert.equal(
+      scene.renderer.overlapCulled,
+      0,
+      "on-screen bodies are never removed for camera alignment",
+    );
+    assert.equal(
+      scene.renderer.nodes,
+      scene.renderer.detailedBodies + scene.renderer.instancedBodies,
+    );
     for (let i = 0; i < discs.length; i++)
       for (let j = i + 1; j < discs.length; j++)
         assert.ok(
-          Math.hypot(discs[i].world.x - discs[j].world.x, discs[i].world.y - discs[j].world.y, discs[i].world.z - discs[j].world.z) >=
+          Math.hypot(
+            discs[i].world.x - discs[j].world.x,
+            discs[i].world.y - discs[j].world.y,
+            discs[i].world.z - discs[j].world.z,
+          ) >=
             discs[i].worldRadius + discs[j].worldRadius + 27.99,
           "actual body envelopes retain their physical gap through orbit",
         );
@@ -118,19 +288,28 @@ exports.verify = async ({
   };
   const flush = () => js("window.__aerynth.flush()");
   const key = async (keyCode, modifiers = []) => {
-    nativeInput(win, { type: "keyDown", keyCode, modifiers });
-    nativeInput(win, { type: "keyUp", keyCode, modifiers });
+    send({ type: "keyDown", keyCode, modifiers });
+    send({ type: "keyUp", keyCode, modifiers });
     await pause(100);
   };
   const nativeWheel = async (point, domDeltaY) => {
     const scale = await js("devicePixelRatio");
-    assert.ok(Number.isFinite(scale) && scale > 0 && scale <= 16, "valid native wheel pixel scale");
+    assert.ok(
+      Number.isFinite(scale) && scale > 0 && scale <= 16,
+      "valid native wheel pixel scale",
+    );
     // Electron copies deltaY to Blink's native delta; DOM wheel reverses it and
     // divides by devicePixelRatio. Callers use DOM direction and CSS pixels.
     // https://github.com/electron/electron/blob/v45.2.1/shell/common/gin_converters/blink_converter.cc#L409-L410
     // https://github.com/chromium/chromium/blob/main/third_party/blink/renderer/core/events/wheel_event.cc#L100-L101
-    nativeInput(win, { type: "mouseMove", ...point });
-    nativeInput(win, { type: "mouseWheel", ...point, deltaX: 0, deltaY: -domDeltaY * scale, canScroll: true });
+    send({ type: "mouseMove", ...point });
+    send({
+      type: "mouseWheel",
+      ...point,
+      deltaX: 0,
+      deltaY: -domDeltaY * scale,
+      canScroll: true,
+    });
   };
   const view = () => js("window.aerynthHost.command('viewState',{})");
   const shot = async (name) => {
@@ -140,13 +319,12 @@ exports.verify = async ({
       "native evidence requires the focused visible owner window",
     );
     const before = await js("window.__aerynth.snapshot().metrics.draws");
-    for (const x of [3, 1])
-      nativeInput(win, { type: "mouseMove", x, y: 1 });
+    for (const x of [3, 1]) send({ type: "mouseMove", x, y: 1 });
     await wait(`window.__aerynth.snapshot().metrics.draws>${before}`, 8000);
     await pause(350);
-    assertNativeOwner(win);
+    run.guard();
     const bytes = (await win.webContents.capturePage()).toPNG();
-    assertNativeOwner(win);
+    run.guard();
     assert.ok(bytes.length < 8 * 1024 * 1024, "screenshot byte bound");
     await fs.writeFile(path.join(out, name + ".png"), bytes, { flag: "wx" });
     receipt.screenshots.push({
@@ -158,6 +336,8 @@ exports.verify = async ({
         after: await js("window.__aerynth.snapshot().metrics.draws"),
       },
     });
+    await evidence.record({ phase: "screenshot", file: name + ".png" });
+    run.guard();
   };
   const commandIds = {
     "Link resources": "link",
@@ -286,7 +466,7 @@ exports.verify = async ({
     assert.ok(r && b, "created canonical resource and block");
     assert.equal(r.kind, kind);
     if (kind === "conversation") assert.equal(r.provider, "local");
-    mark("Created through actual Block Library: " + title);
+    await mark("Created through actual Block Library: " + title);
     return { resource: r, block: b };
   };
   const workingHome = async () => {
@@ -298,11 +478,20 @@ exports.verify = async ({
   const workspaceOut = async (wheel = false) => {
     await workingHome();
     if (wheel) {
-      const point = await js(`(()=>{for(let y=90;y<innerHeight-70;y+=45)for(let x=45;x<innerWidth-40;x+=55){const e=document.elementFromPoint(x,y);if(e&&['world','stage','app'].includes(e.id))return{x,y}}return null})()`);
-      assert.ok(point, "actual empty workspace background is available for wheel departure");
+      const point = await js(
+        `(()=>{for(let y=90;y<innerHeight-70;y+=45)for(let x=45;x<innerWidth-40;x+=55){const e=document.elementFromPoint(x,y);if(e&&['world','stage','app'].includes(e.id))return{x,y}}return null})()`,
+      );
+      assert.ok(
+        point,
+        "actual empty workspace background is available for wheel departure",
+      );
       await nativeWheel(point, 120);
-      await wait("window.__aerynth.application().navigation.kind==='constellation'");
-      mark("Zoomed out through native wheel input over actual empty workspace space");
+      await wait(
+        "window.__aerynth.application().navigation.kind==='constellation'",
+      );
+      await mark(
+        "Zoomed out through native wheel input over actual empty workspace space",
+      );
     } else {
       await workspaceActions();
       await click("#workspace-constellation");
@@ -310,16 +499,27 @@ exports.verify = async ({
     await pause(350);
   };
   const workspaceIn = async (workspaceId) => {
-    const workspace = (await snapshot()).workspaces.find((w) => w.id === workspaceId),
+    const workspace = (await snapshot()).workspaces.find(
+        (w) => w.id === workspaceId,
+      ),
       nodeKey = "workspace:" + workspaceId;
     assert.ok(workspace);
     await locate(workspace.title, nodeKey);
     await click(`[data-key="${nodeKey}"]`);
-    const point = await js(`(()=>{const e=document.querySelector(${JSON.stringify('[data-key="' + nodeKey + '"]')}),r=e?.getBoundingClientRect();if(!r)return null;const x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);return document.elementFromPoint(x,y)?.closest('.aw-anchor')?.dataset.key===${JSON.stringify(nodeKey)}?{x,y}:null})()`);
-    assert.ok(point, "workspace destination is visibly exposed for inward wheel input");
+    const point = await js(
+      `(()=>{const e=document.querySelector(${JSON.stringify('[data-key="' + nodeKey + '"]')}),r=e?.getBoundingClientRect();if(!r)return null;const x=Math.round(r.x+r.width/2),y=Math.round(r.y+r.height/2);return document.elementFromPoint(x,y)?.closest('.aw-anchor')?.dataset.key===${JSON.stringify(nodeKey)}?{x,y}:null})()`,
+    );
+    assert.ok(
+      point,
+      "workspace destination is visibly exposed for inward wheel input",
+    );
     await nativeWheel(point, -120);
-    await wait(`window.__aerynth.application().navigation.kind==='workspace'&&window.__aerynth.application().activeWorkspaceId===${JSON.stringify(workspaceId)}`);
-    mark("Entered the actual workspace through native inward wheel input");
+    await wait(
+      `window.__aerynth.application().navigation.kind==='workspace'&&window.__aerynth.application().activeWorkspaceId===${JSON.stringify(workspaceId)}`,
+    );
+    await mark(
+      "Entered the actual workspace through native inward wheel input",
+    );
     await pause(350);
   };
   const openBlock = async (id) => {
@@ -351,7 +551,10 @@ exports.verify = async ({
     const before = await snapshot(),
       old = before.blocks.find((b) => b.id === id),
       p = await cardPoint(id, edge);
-    assert.ok(Number.isSafeInteger(old?.version), "canonical gesture target has a revision");
+    assert.ok(
+      Number.isSafeInteger(old?.version),
+      "canonical gesture target has a revision",
+    );
     receipt.lastGesture = {
       blockId: id,
       edge: edge ?? null,
@@ -363,14 +566,14 @@ exports.verify = async ({
       at: new Date().toISOString(),
     };
     for (const type of ["mouseMove", "mouseDown"])
-      nativeInput(win, {
+      send({
         type,
         ...p,
         button: "left",
         clickCount: 1,
       });
     for (let i = 1; i <= 12; i++) {
-      nativeInput(win, {
+      send({
         type: "mouseMove",
         x: Math.round(p.x + (dx * i) / 12),
         y: Math.round(p.y + (dy * i) / 12),
@@ -379,7 +582,7 @@ exports.verify = async ({
       });
       await pause(20);
     }
-    nativeInput(win, {
+    send({
       type: "mouseUp",
       x: p.x + dx,
       y: p.y + dy,
@@ -419,7 +622,7 @@ exports.verify = async ({
   const cardPresentation = async (id, shape) => {
     const p = await cardPoint(id);
     for (const type of ["mouseMove", "mouseDown", "mouseUp"])
-      nativeInput(win, {
+      send({
         type,
         ...p,
         button: "right",
@@ -434,7 +637,7 @@ exports.verify = async ({
     await wait(
       `window.__aerynth.application().blocks.find(b=>b.id===${JSON.stringify(id)}).shape===${JSON.stringify(shape)}`,
     );
-    mark("Changed actual card presentation through native context menu");
+    await mark("Changed actual card presentation through native context menu");
   };
   const projectView = async () => {
     for (
@@ -467,19 +670,27 @@ exports.verify = async ({
       receipt.videos.length < 2,
       "two bounded recording segments maximum",
     );
+    run.guard();
+    const { startWindowRecording } = require(
+      native + "application-recording.cjs",
+    );
     recorder = await startWindowRecording(win, session, localURL);
-    mark("Start recording: " + label);
+    run.guard();
+    await mark("Start recording: " + label);
   };
   const stopSegment = async (file) => {
+    run.guard();
     receipt.videos.push(await recorder.stop(path.join(out, file)));
     recorder = null;
+    await evidence.record({ phase: "recording-completed", file });
+    run.guard();
   };
   const drag = async (selector, dx, dy, modifiers = [], bodyKey) => {
     const p = await js(
       `(()=>{const e=document.querySelector(${JSON.stringify(selector)}),r=e?.getBoundingClientRect();if(!r)throw Error('Missing drag surface');let x=Math.round(r.x+r.width*.2),y=Math.round(r.y+r.height*.7);const key=${JSON.stringify(bodyKey ?? null)};if(key){const label=document.querySelector('[data-key="'+key+'"]'),lr=label?.getBoundingClientRect();if(!lr)throw Error('Body label missing');const lx=lr.x+lr.width/2-r.x,ly=lr.y+lr.height/2-r.y,lines=[...document.querySelectorAll('.aw-connections line')];const line=lines.find(l=>Math.abs(Number(l.getAttribute('x2'))-lx)<4&&Math.abs(Number(l.getAttribute('y2'))+15-ly)<4);if(!line)throw Error('Projected body leader missing');x=Math.round(r.x+Number(line.getAttribute('x1')));y=Math.round(r.y+Number(line.getAttribute('y1')));}const h=document.elementFromPoint(x,y);if(h!==e&&!h?.classList.contains('aw-spatial-world'))throw Error('Drag target occluded: '+h?.className);return {x,y}})()`,
     );
-    nativeInput(win, { type: "mouseMove", ...p, modifiers });
-    nativeInput(win, {
+    send({ type: "mouseMove", ...p, modifiers });
+    send({
       type: "mouseDown",
       ...p,
       button: "left",
@@ -488,7 +699,7 @@ exports.verify = async ({
     });
     await pause(75);
     for (let i = 1; i <= 12; i++) {
-      nativeInput(win, {
+      send({
         type: "mouseMove",
         x: Math.round(p.x + (dx * i) / 12),
         y: Math.round(p.y + (dy * i) / 12),
@@ -497,7 +708,7 @@ exports.verify = async ({
       });
       await pause(20);
     }
-    nativeInput(win, {
+    send({
       type: "mouseUp",
       x: Math.round(p.x + dx),
       y: Math.round(p.y + dy),
@@ -506,10 +717,32 @@ exports.verify = async ({
       modifiers,
     });
     await pause(650);
-    mark("Native pointer drag " + selector + " " + modifiers.join("+"));
+    await mark("Native pointer drag " + selector + " " + modifiers.join("+"));
   };
   try {
+    const budget = journeyDeadline(process.argv, source.startedAt);
+    receipt.timing.moduleStartedAt = source.startedAt;
+    receipt.timing.deadlineAt = new Date(budget.expiresAt).toISOString();
+    receipt.timing.deadlineMs = budget.durationMs;
+    run = createJourneyGuard(win, budget.expiresAt);
+    receipt.inputGuard = run.status;
+    ownerContents = win.webContents;
+    ownerContents.on("before-input-event", run.beforeInput);
+    await evidence.record({ phase: "hydrating" });
+    const { createDriver } = require(native + "desktop-verify.cjs");
+    ({ wait, click, fill, snapshot } = await createDriver(run.owner));
+    run.guard();
+    receipt.state = "running";
+    await evidence.record({
+      phase: "interactive",
+      restart: process.argv.includes("--verify-restore"),
+    });
     if (process.argv.includes("--verify-restore")) {
+      assert.ok(
+        (await fs.stat(path.join(privateRoot, "expanded-expected.json")))
+          .size <= JOURNEY_LIMITS.expectedBytes,
+        "restart expectation byte bound",
+      );
       const expected = JSON.parse(
         await fs.readFile(
           path.join(privateRoot, "expanded-expected.json"),
@@ -531,7 +764,7 @@ exports.verify = async ({
         expected.buildAssets,
         "same compiled assets across restart",
       );
-      step(
+      await step(
         24,
         "Restart the actual native host and service with the same source and profile",
       );
@@ -563,7 +796,14 @@ exports.verify = async ({
           "restart canonical " + key,
         );
       const restored = await view();
-      for (const key of ["anchors", "bookmarks", "location", "history", "future", "savedViews"])
+      for (const key of [
+        "anchors",
+        "bookmarks",
+        "location",
+        "history",
+        "future",
+        "savedViews",
+      ])
         assert.deepEqual(
           restored[key],
           expected.view[key],
@@ -587,7 +827,7 @@ exports.verify = async ({
         "actual camera restored, beyond the stored receipt",
       );
       assert.equal(live.selected, expected.view.bookmarks[scope].selected);
-      step(
+      await step(
         25,
         "Verify all workspace geometry, canonical relationships, branch ancestry, XYZ, pins, bookmarks, history and live camera survived restart",
       );
@@ -618,110 +858,117 @@ exports.verify = async ({
         workspaces = [],
         records = [];
       if (process.argv.includes("--prepared-workspaces")) {
-        const prepared = await loadPreparedWorkspaces(privateRoot, source, await snapshot());
+        const prepared = await loadPreparedWorkspaces(
+          privateRoot,
+          source,
+          await snapshot(),
+        );
         ({ projects, workspaces, records } = prepared);
         receipt.taskGroups = prepared.taskGroups;
         receipt.setup = prepared.evidence;
       } else {
-      for (const [pi, [name, names]] of [
-        ["A World for Two", ["Development", "Planning"]],
-        ["Voyagewright", ["Engineering", "Review"]],
-        ["Airbrush Disc System", ["Calibration", "Hardware"]],
-      ].entries()) {
-        const projectId = await createProject(name);
-        projects.push(projectId);
-        for (const [wi, title] of names.entries()) {
-          const workspaceId = await createWorkspace(title, projectId);
-          workspaces.push(workspaceId);
-          const row = { projectId, workspaceId, title };
-          for (const kind of [
-            "conversation",
-            "note",
-            "task",
-            "research",
-            "reference",
-          ]) {
-            row[kind] = await add(
-              kind,
-              title + " " + kind,
-              kind === "note"
-                ? { width: 330 + pi * 35, height: 230 + wi * 25 }
-                : undefined,
+        for (const [pi, [name, names]] of [
+          ["A World for Two", ["Development", "Planning"]],
+          ["Voyagewright", ["Engineering", "Review"]],
+          ["Airbrush Disc System", ["Calibration", "Hardware"]],
+        ].entries()) {
+          const projectId = await createProject(name);
+          projects.push(projectId);
+          for (const [wi, title] of names.entries()) {
+            const workspaceId = await createWorkspace(title, projectId);
+            workspaces.push(workspaceId);
+            const row = { projectId, workspaceId, title };
+            for (const kind of [
+              "conversation",
+              "note",
+              "task",
+              "research",
+              "reference",
+            ]) {
+              row[kind] = await add(
+                kind,
+                title + " " + kind,
+                kind === "note"
+                  ? { width: 330 + pi * 35, height: 230 + wi * 25 }
+                  : undefined,
+              );
+            }
+            const b = row.note.block;
+            await openBlock(b.id);
+            await workingHome();
+            await cardGesture(b.id, null, 35 + pi * 10, 15 + wi * 10);
+            await openBlock(b.id);
+            await fill(
+              `[data-block="${b.id}"] textarea`,
+              "Synthetic durable " + title + " note. Stable resource identity.",
             );
+            await flush();
+            await openBlock(row.reference.block.id);
+            await fill(
+              `[data-block="${row.reference.block.id}"] textarea`,
+              "Synthetic link: https://example.invalid/" + title.toLowerCase(),
+            );
+            await flush();
+            await workingHome();
+            records.push(row);
           }
-          const b = row.note.block;
-          await openBlock(b.id);
-          await workingHome();
-          await cardGesture(b.id, null, 35 + pi * 10, 15 + wi * 10);
-          await openBlock(b.id);
-          await fill(
-            `[data-block="${b.id}"] textarea`,
-            "Synthetic durable " + title + " note. Stable resource identity.",
-          );
-          await flush();
-          await openBlock(row.reference.block.id);
-          await fill(
-            `[data-block="${row.reference.block.id}"] textarea`,
-            "Synthetic link: https://example.invalid/" + title.toLowerCase(),
-          );
-          await flush();
-          await workingHome();
-          records.push(row);
         }
-      }
-      assert.equal(projects.length, 3);
-      assert.equal(workspaces.length, 6);
-      receipt.taskGroups = [];
-      for (const row of [records[0], records[2], records[4]]) {
-        await selectWorkspace(row.workspaceId);
-        await add("conversation", row.title + " follow-up conversation");
-        const extraTask = await add("task", row.title + " verification task"),
-          taskGroup = await add("task_group", row.title + " local task group");
-        await openBlock(taskGroup.block.id);
-        await click(
-          `[data-block="${taskGroup.block.id}"] .manage-task-members`,
-        );
-        for (const taskId of [row.task.resource.id, extraTask.resource.id])
+        assert.equal(projects.length, 3);
+        assert.equal(workspaces.length, 6);
+        receipt.taskGroups = [];
+        for (const row of [records[0], records[2], records[4]]) {
+          await selectWorkspace(row.workspaceId);
+          await add("conversation", row.title + " follow-up conversation");
+          const extraTask = await add("task", row.title + " verification task"),
+            taskGroup = await add(
+              "task_group",
+              row.title + " local task group",
+            );
+          await openBlock(taskGroup.block.id);
           await click(
-            `#task-group-members input[name="taskId"][value="${taskId}"]`,
+            `[data-block="${taskGroup.block.id}"] .manage-task-members`,
           );
-        await click('#task-group-members button[type="submit"]');
-        await wait('!document.querySelector("#command-surface").open');
-        await wait(
-          `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(taskGroup.resource.id)}).taskMembers.length===2`,
-        );
-        await click(
-          `[data-block="${taskGroup.block.id}"] .group-task[data-task-id="${extraTask.resource.id}"]`,
-        );
-        await wait(
-          `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(extraTask.resource.id)}).taskStatus==='done'`,
-        );
-        const grouped = (await snapshot()).resources.find(
-          (r) => r.id === taskGroup.resource.id,
-        );
-        assert.equal(
-          grouped.taskMembers.filter((t) => t.status === "done").length,
-          1,
-        );
-        for (const taskId of [row.task.resource.id, extraTask.resource.id])
-          assert.ok(
-            (await snapshot()).relationships.some(
-              (e) =>
-                e.kind === "contains_task" &&
-                e.source_id === taskGroup.resource.id &&
-                e.target_id === taskId,
-            ),
+          for (const taskId of [row.task.resource.id, extraTask.resource.id])
+            await click(
+              `#task-group-members input[name="taskId"][value="${taskId}"]`,
+            );
+          await click('#task-group-members button[type="submit"]');
+          await wait('!document.querySelector("#command-surface").open');
+          await wait(
+            `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(taskGroup.resource.id)}).taskMembers.length===2`,
           );
-        receipt.taskGroups.push({
-          projectId: row.projectId,
-          resourceId: taskGroup.resource.id,
-          blockId: taskGroup.block.id,
-          memberResourceIds: [row.task.resource.id, extraTask.resource.id],
-        });
-        await workingHome();
-        await projectView();
-        await relate(row.conversation.resource.id, row.note.resource.id);
-      }
+          await click(
+            `[data-block="${taskGroup.block.id}"] .group-task[data-task-id="${extraTask.resource.id}"]`,
+          );
+          await wait(
+            `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(extraTask.resource.id)}).taskStatus==='done'`,
+          );
+          const grouped = (await snapshot()).resources.find(
+            (r) => r.id === taskGroup.resource.id,
+          );
+          assert.equal(
+            grouped.taskMembers.filter((t) => t.status === "done").length,
+            1,
+          );
+          for (const taskId of [row.task.resource.id, extraTask.resource.id])
+            assert.ok(
+              (await snapshot()).relationships.some(
+                (e) =>
+                  e.kind === "contains_task" &&
+                  e.source_id === taskGroup.resource.id &&
+                  e.target_id === taskId,
+              ),
+            );
+          receipt.taskGroups.push({
+            projectId: row.projectId,
+            resourceId: taskGroup.resource.id,
+            blockId: taskGroup.block.id,
+            memberResourceIds: [row.task.resource.id, extraTask.resource.id],
+          });
+          await workingHome();
+          await projectView();
+          await relate(row.conversation.resource.id, row.note.resource.id);
+        }
       }
       const originalRow = records[0],
         other = records[2],
@@ -784,12 +1031,12 @@ exports.verify = async ({
       );
       await workingHome();
       await selectWorkspace(originalRow.workspaceId);
-      receipt.workspaceGuide = await verifyWorkspaceGuide(win);
+      receipt.workspaceGuide = await verifyWorkspaceGuide(run.owner);
       receipt.checks.push(
         "working-workspace-keeps-one-visible-glass-help-control-and-unchanged-canonical-state",
       );
       await shot("01-original-working-workspace");
-      step(
+      await step(
         1,
         "Start in the normal A World for Two Development glass workspace",
       );
@@ -816,24 +1063,24 @@ exports.verify = async ({
         "lens",
       );
       await shot("01b-new-block-created-and-arranged");
-      step(
+      await step(
         2,
         "Create, edit, resize, reshape and place another real working block",
       );
       await workspaceOut(true);
       await pause(650);
       await checkOverviewPresence("project");
-      step(3, "Zoom out from the workspace");
-      step(4, "Observe its real project system");
+      await step(3, "Zoom out from the workspace");
+      await step(4, "Observe its real project system");
       const before = (await spatial()).camera;
       await drag(".aw-spatial-field", 95, -25);
       const orbited = (await spatial()).camera;
       assert.notEqual(orbited.yaw, before.yaw);
-      step(5, "Orbit the project with native pointer input");
+      await step(5, "Orbit the project with native pointer input");
       await drag(".aw-spatial-field", 60, 25, ["shift"]);
       const panned = (await spatial()).camera;
       assert.notDeepEqual(panned.target, orbited.target);
-      step(6, "Pan across its resource clusters");
+      await step(6, "Pan across its resource clusters");
       await click('.aw-quiet-control[aria-label="Navigation guide"]');
       await wait('!document.querySelector(".aw-navigation-guide").hidden');
       await pause(200);
@@ -846,7 +1093,7 @@ exports.verify = async ({
         guide.text.includes("Alt + drag") && guide.text.includes("Ctrl + K"),
       );
       assert.notEqual(guide.material, "none");
-      await checkLabelClearance(win);
+      await checkLabelClearance(run.owner);
       receipt.actions.push({ label: "Compact glass navigation guide", guide });
       await shot("02-orbit-pan-and-glass-guide");
       await key("Escape");
@@ -877,7 +1124,7 @@ exports.verify = async ({
       await wait(
         `!!document.querySelector('[data-block="${sourceRow.conversation.block.id}"] .conversation-compose')`,
       );
-      step(
+      await step(
         7,
         "Approach the original project's actual conversation and unfold its working surface",
       );
@@ -903,14 +1150,17 @@ exports.verify = async ({
       );
       assert.equal(sourceConversation.provider, "local");
       assert.equal(sourceConversation.messages.length, 2);
-      await locate(sourceConversation.title, "resource:" + sourceRow.conversation.block.id);
+      await locate(
+        sourceConversation.title,
+        "resource:" + sourceRow.conversation.block.id,
+      );
       await textButton("Explore neighborhood", ".aw-spatial-detail");
       await wait(
         `window.__aerynth.snapshot().spatial.camera.neighborhood===${JSON.stringify("resource:" + sourceRow.conversation.block.id)}`,
       );
       await textButton("Inspect relationships", ".aw-spatial-detail");
       await shot("04-inspected-resource-provenance");
-      step(
+      await step(
         8,
         "Inspect the conversation's canonical note reference and placement",
       );
@@ -926,7 +1176,10 @@ exports.verify = async ({
         '.aw-graph-dialog input[type="text"]',
         "Reviewed Development continuation",
       );
-      await fill(".aw-graph-dialog select", sourceConversation.messages.at(-1).id);
+      await fill(
+        ".aw-graph-dialog select",
+        sourceConversation.messages.at(-1).id,
+      );
       await click('.aw-graph-dialog fieldset input[type="checkbox"]');
       receipt.reviewedBranch = {
         parentResourceId: sourceConversation.id,
@@ -946,12 +1199,20 @@ exports.verify = async ({
         );
       assert.ok(child && lineage);
       assert.equal(child.provider, "local");
-      assert.equal(child.providerId, "local", "continuation uses the real local provider identity");
+      assert.equal(
+        child.providerId,
+        "local",
+        "continuation uses the real local provider identity",
+      );
       assert.equal(lineage.parentResourceId, sourceConversation.id);
-      assert.equal(lineage.sourceMessageId, sourceConversation.messages.at(-1).id);
+      assert.equal(
+        lineage.sourceMessageId,
+        sourceConversation.messages.at(-1).id,
+      );
       assert.equal(lineage.mode, "application_continuation");
       assert.deepEqual(
-        afterBranch.resources.find((r) => r.id === sourceConversation.id).messages,
+        afterBranch.resources.find((r) => r.id === sourceConversation.id)
+          .messages,
         sourceConversation.messages,
       );
       assert.ok(
@@ -962,7 +1223,7 @@ exports.verify = async ({
       receipt.checks.push(
         "native-reviewed-app-level-branch-with-explicit-source-selection-real-ancestry-and-unchanged-parent",
       );
-      step(
+      await step(
         9,
         "Create a canonical app-level continuation using explicitly reviewed source context",
       );
@@ -973,14 +1234,17 @@ exports.verify = async ({
       assert.equal((await spatial()).selected, "resource:" + childBlock.id);
       await checkOverviewPresence("new branch in original project");
       await shot("05b-new-branch-visible");
-      step(
+      await step(
         10,
         "Observe the new branch in the real original project constellation",
       );
       await stopSegment("01-orbit-inspect-reviewed-branch.webm");
 
       await startSegment("pin, typed relationship and exact working return");
-      await locate(sourceConversation.title, "resource:" + sourceRow.conversation.block.id);
+      await locate(
+        sourceConversation.title,
+        "resource:" + sourceRow.conversation.block.id,
+      );
       const beforeDrag = (await spatial()).anchors[
         "resource:" + sourceRow.conversation.block.id
       ].spatial;
@@ -996,7 +1260,10 @@ exports.verify = async ({
       ];
       assert.notDeepEqual(afterDrag.spatial, beforeDrag);
       assert.equal(afterDrag.pinned, true);
-      step(11, "Move the ray-picked conversation moon using native Alt-drag");
+      await step(
+        11,
+        "Move the ray-picked conversation moon using native Alt-drag",
+      );
       receipt.checks.push(
         "native-alt-drag-moves-and-pins-the-ray-picked-3D-moon",
       );
@@ -1031,14 +1298,17 @@ exports.verify = async ({
       assert.equal(pinned.pinned, true);
       await click('.aw-spatial-detail [aria-label="Close information"]');
       await key("f");
-      step(
+      await step(
         12,
         "Set and persist the chosen XYZ and pin using non-drag controls",
       );
       await shot("06-moved-and-pinned-moon");
       await textButton("Link resources", ".aw-constellation-bar");
       // Each select belongs to a label, so address the form's label order explicitly.
-      await fill(".aw-graph-dialog label:nth-of-type(1) select", sourceConversation.id);
+      await fill(
+        ".aw-graph-dialog label:nth-of-type(1) select",
+        sourceConversation.id,
+      );
       await fill(
         ".aw-graph-dialog label:nth-of-type(2) select",
         sourceRow.research.resource.id,
@@ -1053,7 +1323,7 @@ exports.verify = async ({
           e.kind === "references",
       );
       assert.ok(relationship);
-      step(
+      await step(
         13,
         "Create a new explicit canonical resource-reference relationship",
       );
@@ -1065,7 +1335,10 @@ exports.verify = async ({
       );
       await shot("07-typed-relationship-inspection");
       await closeGraph();
-      step(14, "Inspect the new relationship's direction, type and provenance");
+      await step(
+        14,
+        "Inspect the new relationship's direction, type and provenance",
+      );
       receipt.checks.push(
         "native-position-pin-and-canonical-directed-relationship-creation-with-inspection",
       );
@@ -1085,17 +1358,25 @@ exports.verify = async ({
       await click(".aw-spatial-field");
       await key("Home");
       await textButton("Save current view");
-      await fill('.aw-saved-views input[name="viewName"]', "Synthetic original constellation");
+      await fill(
+        '.aw-saved-views input[name="viewName"]',
+        "Synthetic original constellation",
+      );
       await click('.aw-saved-views button[type="submit"]');
       await wait('!document.querySelector(".aw-saved-views").open');
       await flush();
-      const savedCameraView = (await view()).savedViews.find((v) => v.name === "Synthetic original constellation");
-      assert.ok(savedCameraView, "the actual named camera view was privately persisted");
+      const savedCameraView = (await view()).savedViews.find(
+        (v) => v.name === "Synthetic original constellation",
+      );
+      assert.ok(
+        savedCameraView,
+        "the actual named camera view was privately persisted",
+      );
       receipt.savedCameraView = savedCameraView;
       await textButton("Universe", ".aw-constellation-bar");
       await pause(650);
       await checkOverviewPresence("universe");
-      step(15, "Zoom out to Universe");
+      await step(15, "Zoom out to Universe");
       assert.equal(
         (await snapshot()).projects.filter((p) => projects.includes(p.id))
           .length,
@@ -1106,13 +1387,13 @@ exports.verify = async ({
           await js(`!!document.querySelector('[data-key="project:${id}"]')`),
         );
       await shot("03-three-planet-universe");
-      step(16, "Observe all three actual named project systems");
+      await step(16, "Observe all three actual named project systems");
       await node("project:" + other.projectId);
       await checkOverviewPresence("other project");
-      step(17, "Approach Voyagewright");
+      await step(17, "Approach Voyagewright");
       await workspaceIn(other.workspaceId);
       assert.equal((await snapshot()).activeWorkspaceId, other.workspaceId);
-      step(18, "Enter its Engineering working workspace");
+      await step(18, "Enter its Engineering working workspace");
       // Fluid insertion may legitimately move a prior block beyond this camera.
       // Exercise the real offscreen-block access instead of assuming visibility.
       await openBlock(other.note.block.id);
@@ -1128,23 +1409,36 @@ exports.verify = async ({
         "Synthetic real editor change after spatial branch and relationship navigation.",
       );
       await shot("08a-other-workspace-real-edit");
-      step(19, "Edit and save a real persistent glass-panel note");
+      await step(19, "Edit and save a real persistent glass-panel note");
       await workingHome();
       await projectView();
       await textButton("Universe", ".aw-constellation-bar");
       await pause(500);
-      step(20, "Return to Universe");
+      await step(20, "Return to Universe");
       await textButton("Saved views");
       await fill('.aw-saved-views select[name="viewId"]', savedCameraView.id);
       await textButton("Open view", ".aw-saved-views");
       await wait('!document.querySelector(".aw-saved-views").open');
-      assert.equal((await snapshot()).navigation.projectId, originalRow.projectId);
-      assert.deepEqual((await spatial()).bookmark, savedCameraView.bookmark.spatial, "named view restores its exact camera and mode");
-      assert.equal((await spatial()).selected, savedCameraView.bookmark.selected, "named view restores the saved canonical selection");
-      receipt.checks.push("named-camera-view-save-and-return-with-identical-pose");
-      step(21, "Navigate back to A World for Two");
+      assert.equal(
+        (await snapshot()).navigation.projectId,
+        originalRow.projectId,
+      );
+      assert.deepEqual(
+        (await spatial()).bookmark,
+        savedCameraView.bookmark.spatial,
+        "named view restores its exact camera and mode",
+      );
+      assert.equal(
+        (await spatial()).selected,
+        savedCameraView.bookmark.selected,
+        "named view restores the saved canonical selection",
+      );
+      receipt.checks.push(
+        "named-camera-view-save-and-return-with-identical-pose",
+      );
+      await step(21, "Navigate back to A World for Two");
       await node("workspace:" + originalRow.workspaceId);
-      step(22, "Restore its Development working workspace");
+      await step(22, "Restore its Development working workspace");
       assert.deepEqual(geometry(await snapshot()), geometry(original));
       assert.deepEqual(
         (await snapshot()).presence,
@@ -1162,7 +1456,7 @@ exports.verify = async ({
           original.resources.find((r) => r.id === id),
         );
       await shot("08-exact-original-workspace-return");
-      step(
+      await step(
         23,
         "Verify exact original resource identities, geometry, shapes, content, viewport and Vela footprint",
       );
@@ -1198,9 +1492,17 @@ exports.verify = async ({
       );
       await fs.writeFile(
         path.join(privateRoot, "expanded-expected.json"),
-        JSON.stringify(expected),
+        (() => {
+          const bytes = Buffer.from(JSON.stringify(expected));
+          assert.ok(
+            bytes.length <= JOURNEY_LIMITS.expectedBytes,
+            "restart expectation byte bound",
+          );
+          return bytes;
+        })(),
         { flag: "wx" },
       );
+      run.guard();
       receipt.finalSpatial = await spatial();
       receipt.checks.push(
         "saved-private-view-state-includes-pins-XYZ-camera-bookmarks-and-history-with-real-canonical-branch-and-relationship",
@@ -1210,12 +1512,26 @@ exports.verify = async ({
         Array.from({ length: 23 }, (_, i) => i + 1),
       );
     }
+    run.guard();
     receipt.passed = true;
+    receipt.state = "completed";
+    await evidence.record({
+      phase: "completed",
+      steps: receipt.steps.map((row) => row.number),
+    });
   } catch (error) {
-    receipt.error = error.stack;
+    receipt.passed = false;
+    receipt.state = "failed";
+    receipt.error = String(error.stack ?? error).slice(0, 16384);
+    try {
+      await evidence.record({
+        phase: "failed",
+        error: receipt.error.slice(0, 2048),
+      });
+    } catch {}
     if (receipt.lastGesture)
       try {
-        const current = await snapshot();
+        const current = await rawJs("window.__aerynth.application()");
         receipt.lastGesture.observedAfterFailure = current.blocks.find(
           (b) => b.id === receipt.lastGesture.blockId,
         );
@@ -1232,7 +1548,7 @@ exports.verify = async ({
           minimized: win.isMinimized(),
           bounds: win.getBounds(),
         },
-        renderer: await js(`(()=>{
+        renderer: await rawJs(`(()=>{
           const library=document.querySelector('.aw-library[aria-label="Block Library"]');
           const text=(value,max=512)=>String(value??'').slice(0,max);
           const rect=e=>{const r=e.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height}};
@@ -1261,35 +1577,79 @@ exports.verify = async ({
         })()`),
       };
     } catch (diagnosticError) {
-      receipt.failureDiagnosticError = String(diagnosticError.stack ?? diagnosticError).slice(0,2048);
+      receipt.failureDiagnosticError = String(
+        diagnosticError.stack ?? diagnosticError,
+      ).slice(0, 2048);
     }
     try {
       await shot("failure");
     } catch (captureError) {
-      receipt.failureCaptureError = String(captureError.stack ?? captureError).slice(0,2048);
+      receipt.failureCaptureError = String(
+        captureError.stack ?? captureError,
+      ).slice(0, 2048);
     }
   } finally {
-    if (recorder)
+    try {
       try {
-        receipt.videos.push(
-          await recorder.stop(path.join(out, "partial-failed-segment.webm")),
-        );
+        if (run)
+          ownerContents?.removeListener("before-input-event", run.beforeInput);
       } catch (error) {
-        receipt.recordingError = error.message;
+        receipt.listenerCleanupError = String(error.message).slice(0, 1024);
       }
+      if (recorder)
+        try {
+          receipt.videos.push(
+            await recorder.stop(path.join(out, "partial-failed-segment.webm")),
+          );
+        } catch (error) {
+          receipt.recordingError = String(error.message).slice(0, 1024);
+        }
+      receipt.timing.finishedAt = new Date().toISOString();
+      try {
+        await evidence.checkpoint();
+      } catch (error) {
+        receipt.passed = false;
+        await fs.writeFile(
+          path.join(out, "expanded-finalization-failure.json"),
+          JSON.stringify({
+            passed: false,
+            state: "failed",
+            error: String(error.message).slice(0, 1024),
+            at: new Date().toISOString(),
+            retained: "Earlier bounded checkpoints and progress remain",
+          }),
+          { flag: "wx" },
+        );
+      }
+      console.log(
+        JSON.stringify({
+          passed: receipt.passed,
+          checks: receipt.checks,
+          error: receipt.error,
+          evidence: out,
+        }),
+      );
+    } finally {
+      process.exitCode = receipt.passed ? 0 : 1;
+    }
   }
-  await fs.writeFile(
-    path.join(out, "expanded.json"),
-    JSON.stringify(receipt, null, 2),
-  );
-  console.log(
-    JSON.stringify({
-      passed: receipt.passed,
-      checks: receipt.checks,
-      error: receipt.error,
-      evidence: out,
-    }),
-  );
-  process.exitCode = receipt.passed ? 0 : 1;
-  app.quit();
+}
+
+exports.verify = async (context) => {
+  try {
+    await verifyJourney(context);
+  } catch (error) {
+    // Admission/output initialization can fail before a receipt directory exists.
+    // The actual owned host must still close; do not strand its backend/window.
+    process.exitCode = 1;
+    console.error(
+      JSON.stringify({
+        passed: false,
+        state: "journey-initialization-failed",
+        error: String(error.stack ?? error).slice(0, 4096),
+      }),
+    );
+  } finally {
+    context.app.quit();
+  }
 };
