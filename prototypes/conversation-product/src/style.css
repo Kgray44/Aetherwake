@@ -1057,9 +1057,20 @@ details[data-active="true"] > .cp-control .cp-control-glyph {
 
 /* Workspace and focused chat are the same live component; only spacing yields. */
 .cp-chat[data-presentation="workspace"] {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  max-height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #b7a0cd55 transparent;
   gap: 5px;
 }
 .cp-chat[data-presentation="workspace"] .cp-messages {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
   padding: 4px 0 8px;
 }
 .cp-chat[data-presentation="workspace"] .cp-message {
@@ -1069,9 +1080,12 @@ details[data-active="true"] > .cp-control .cp-control-glyph {
   padding: 8px 12px;
 }
 .cp-chat[data-presentation="workspace"] .cp-composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   margin: 0;
   padding: 8px 10px 6px;
-  flex: none;
+  flex: 0 0 auto;
 }
 .cp-chat[data-presentation="workspace"] .cp-composer textarea {
   min-height: 40px;
@@ -1083,6 +1097,12 @@ details[data-active="true"] > .cp-control .cp-control-glyph {
 }
 .cp-chat[data-presentation="workspace"] .cp-composer-hint {
   display: none;
+}
+.cp-chat[data-presentation="workspace"] .cp-chat-feedback {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 4.5rem;
+  overflow: auto;
 }
 .cp-chat[data-presentation="workspace"]
   :is(
