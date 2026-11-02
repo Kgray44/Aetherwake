@@ -13,6 +13,8 @@ export interface ContourPoint {
   nx: number;
   ny: number;
 }
+/** Shared by GPU silhouettes, DOM clipping and focused readers. */
+export const CARD_CORNER_RADIUS = 18;
 export function contourPoint(
   width: number,
   height: number,
@@ -28,25 +30,22 @@ export function contourPoint(
   const halfH = Math.max(1, height * 0.5 + outset);
   const reading = Math.max(0, Math.min(1, unfold));
   const radial = shape === "circle" || shape === "lens";
-  const base =
-    shape === "rectangle"
-      ? 1
-      : shape === "rounded"
-        ? 18
-        : shape === "pill"
-          ? Math.min(halfW, halfH)
-          : shape === "folio" && corner === 0
-            ? 22
-            : 7;
+  const base = shape === "pill" ? Math.min(halfW, halfH) : CARD_CORNER_RADIUS;
   const radius = Math.max(
     0.5,
-    Math.min(base * (1 - reading) + 7 * reading + outset, halfW, halfH),
+    Math.min(
+      base * (1 - reading) + CARD_CORNER_RADIUS * reading + outset,
+      halfW,
+      halfH,
+    ),
   );
   const rx = radial
-    ? halfW * (1 - reading) + Math.min(7 + outset, halfW) * reading
+    ? halfW * (1 - reading) +
+      Math.min(CARD_CORNER_RADIUS + outset, halfW) * reading
     : radius;
   const ry = radial
-    ? halfH * (1 - reading) + Math.min(7 + outset, halfH) * reading
+    ? halfH * (1 - reading) +
+      Math.min(CARD_CORNER_RADIUS + outset, halfH) * reading
     : radius;
   const c = Math.cos(angle),
     s = Math.sin(angle);
@@ -60,7 +59,7 @@ export function contourPoint(
   return result;
 }
 export function defaultSurfaceShape(kind?: string): SurfaceShape {
-  return kind === "research" ? "lens" : "folio";
+  return kind === "research" ? "lens" : "rounded";
 }
 export function surfaceBorderRadius(
   shape: SurfaceShape,
@@ -71,19 +70,10 @@ export function surfaceBorderRadius(
   const radial = shape === "circle" || shape === "lens";
   if (radial) {
     const u = Math.max(0, Math.min(1, unfold));
-    return `${w * 0.5 * (1 - u) + 7 * u}px / ${h * 0.5 * (1 - u) + 7 * u}px`;
+    return `${w * 0.5 * (1 - u) + Math.min(CARD_CORNER_RADIUS, w / 2) * u}px / ${h * 0.5 * (1 - u) + Math.min(CARD_CORNER_RADIUS, h / 2) * u}px`;
   }
   const u = Math.max(0, Math.min(1, unfold));
-  const base =
-    shape === "rectangle"
-      ? 1
-      : shape === "rounded"
-        ? 18
-        : shape === "pill"
-          ? Math.min(w, h) * 0.5
-          : 7;
-  const r = base * (1 - u) + 7 * u;
-  return shape === "folio"
-    ? `${r}px ${22 * (1 - u) + 7 * u}px ${r}px ${r}px`
-    : `${r}px`;
+  const base = shape === "pill" ? Math.min(w, h) * 0.5 : CARD_CORNER_RADIUS;
+  const r = Math.min(w / 2, h / 2, base * (1 - u) + CARD_CORNER_RADIUS * u);
+  return `${r}px`;
 }

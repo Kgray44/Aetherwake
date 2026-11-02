@@ -18,6 +18,11 @@ import {
   previewBlock as desktopPreviewBlock,
 } from "./organization-preview";
 import "./application.css";
+import {
+  mountDirectManipulation,
+  mountWorkspaceLayoutControls,
+} from "../../../block-library/direct-manipulation.ts";
+import "../../../block-library/direct-manipulation.css";
 import { sculptureRegion, overviewPresence } from "./presence-layout";
 import {
   createManagerState,
@@ -75,6 +80,10 @@ export function installApplication(hooks: Hooks) {
   let previewRequest: LayoutPreviewRequest | undefined;
   let previewCommitting = false;
   let cancelResize: (() => void) | undefined;
+  const directBindings = new Map<
+    string,
+    ReturnType<typeof mountDirectManipulation>
+  >();
   const previewGuides = document.createElement("div");
   previewGuides.className = "layout-preview-guides";
   previewGuides.setAttribute("aria-hidden", "true");
@@ -207,41 +216,21 @@ export function installApplication(hooks: Hooks) {
     "beforeend",
     '<button id="connections">⌁ <span>Connections</span></button>',
   );
-  const canvasTools = document.createElement("nav");
-  canvasTools.className = "canvas-tools";
-  canvasTools.setAttribute("aria-label", "Canvas navigation");
-  canvasTools.innerHTML =
-    '<button data-pan="left" aria-label="Pan left">←</button><button data-pan="up" aria-label="Pan up">↑</button><button data-pan="home" aria-label="Reset canvas view">⌑</button><button data-pan="down" aria-label="Pan down">↓</button><button data-pan="right" aria-label="Pan right">→</button>';
-  el("#app").append(canvasTools);
-  canvasTools.addEventListener("click", (event) => {
-    const direction = (event.target as HTMLElement).dataset.pan;
-    if (!direction) return;
-    if (!state?.activeWorkspaceId) return;
-    const v = state.viewport ?? { x: 0, y: 0, zoom: 1 };
-    void run({
-      type: "setViewport",
-      workspaceId: state.activeWorkspaceId,
-      viewport:
-        direction === "home"
-          ? { x: 0, y: 0, zoom: 1 }
-          : {
-              ...v,
-              x:
-                v.x +
-                (direction === "right"
-                  ? 350 / zoom
-                  : direction === "left"
-                    ? -350 / zoom
-                    : 0),
-              y:
-                v.y +
-                (direction === "down"
-                  ? 280 / zoom
-                  : direction === "up"
-                    ? -280 / zoom
-                    : 0),
-            },
-    });
+  const layoutControls = mountWorkspaceLayoutControls(el(".place"), {
+    mode: () => state?.organization?.mode ?? "fluid",
+    change: async (mode) => {
+      if (!state?.activeWorkspaceId || !state.organization) return;
+      queuePreview({ organization: { mode }, intent: "mode" });
+      await commitLayout({
+        type: "setOrganization",
+        workspaceId: state.activeWorkspaceId,
+        expectedOrganizationRevision: state.organization.revision,
+        organization: { mode },
+      });
+    },
+    add: () => el("#add-block").click(),
+    more: () => layouts(),
+    failed: report,
   });
   function report(e: unknown) {
     hooks.status(
@@ -280,6 +269,12 @@ export function installApplication(hooks: Hooks) {
     )
       cancelPreview();
     state = next;
+    for (const [id, binding] of directBindings)
+      if (!next.blocks.some((block) => block.id === id)) {
+        binding.dispose();
+        directBindings.delete(id);
+      }
+    layoutControls.refresh();
     zoom = next.viewport?.zoom ?? 1;
     offset = {
       x: -(next.viewport?.x ?? 0) * zoom,
@@ -965,100 +960,57 @@ export function installApplication(hooks: Hooks) {
     );
   }
   function geometry(blockId: string) {
-    const b = state!.blocks.find((b) => b.id === blockId);
-    if (!b) return;
+    const block = state?.blocks.find((item) => item.id === blockId);
+    if (!block) return;
     open(
-      "Shape and place",
-      `<form><div class="geometry-grid">${(["x", "y", "width", "height", "z"] as const).map((k) => `<label>${k === "z" ? "Layer" : k}<input type="number" name="${k}" value="${b[k]}" required step="1"></label>`).join("")}<label>Shape<select name="shape">${["rectangle", "rounded", "circle", "pill", "folio", "lens"].map((s) => `<option ${s === b.shape ? "selected" : ""}>${s}</option>`).join("")}</select></label></div><p>Compact shapes unfold into a rectangular reading surface.</p><button type="submit">Apply layout</button></form>`,
+      "Card",
+      `<div class="layout-actions"><button id="focus-card">Open</button><button id="front-card">Bring to front</button><button id="detach-card">Remove from workspace</button></div><label><input type="checkbox" id="block-lock" ${block.locked ? "checked" : ""}> Lock placement</label><form><label>Presentation<select name="shape"><option value="rounded">Card</option><option value="lens">Lens</option><option value="circle">Circle</option><option value="pill">Pill</option></select></label><button type="submit">Save presentation</button></form>`,
     );
-    form(async (f) => {
-      const placement = Object.fromEntries(
-        ["x", "y", "width", "height", "z"].map((k) => [k, Number(f.get(k))]),
-      ) as Geometry;
-      if (f.get("shape") === "circle") placement.height = placement.width;
-      await command({
-        type: "geometry",
-        blockId,
-        expectedVersion: b.version,
-        placement,
-        shape: String(f.get("shape")) as Shape,
-      });
-    });
-    dialog.insertAdjacentHTML(
-      "beforeend",
-      `<div class="layer-actions" aria-label="Stacking order">${(
-        [
-          ["front", "Bring to front"],
-          ["back", "Send to back"],
-          ["raise", "Raise one level"],
-          ["lower", "Lower one level"],
-        ] as const
-      )
-        .map(
-          ([value, label]) =>
-            `<button type="button" data-layer="${value}">${label}</button>`,
-        )
-        .join("")}</div>`,
-    );
-    dialog.insertAdjacentHTML(
-      "beforeend",
-      `<label><input type="checkbox" id="block-lock" ${b.locked ? "checked" : ""}> Lock placement</label>`,
-    );
+    el<HTMLSelectElement>('[name="shape"]', dialog).value = [
+      "rectangle",
+      "folio",
+    ].includes(block.shape)
+      ? "rounded"
+      : block.shape;
+    el("#focus-card", dialog).onclick = () => {
+      dialog.close();
+      reveal(blockId);
+      hooks.focus(blockId);
+    };
+    el("#front-card", dialog).onclick = () => {
+      dialog.close();
+      void run({ type: "layerBlock", blockId, direction: "front" });
+    };
+    el("#detach-card", dialog).onclick = () => {
+      dialog.close();
+      void run({ type: "detach", blockId, expectedVersion: block.version });
+    };
     el<HTMLInputElement>("#block-lock", dialog).onchange = (event) => {
-      const locked = (event.target as HTMLInputElement).checked;
       dialog.close();
       void run({
         type: "lockBlock",
         blockId,
-        expectedVersion: b.version,
-        locked,
+        expectedVersion: block.version,
+        locked: (event.target as HTMLInputElement).checked,
       });
     };
-    dialog.querySelectorAll<HTMLButtonElement>("[data-layer]").forEach(
-      (button) =>
-        (button.onclick = () => {
-          dialog.close();
-          void run({
-            type: "layerBlock",
-            blockId,
-            direction: button.dataset.layer as
-              | "front"
-              | "back"
-              | "raise"
-              | "lower",
-          });
-        }),
+    form(async (data) =>
+      command({
+        type: "geometry",
+        blockId,
+        expectedVersion: block.version,
+        placement: {
+          x: block.x,
+          y: block.y,
+          width: block.width,
+          height:
+            String(data.get("shape")) === "circle" ? block.width : block.height,
+          z: block.z,
+        },
+        shape: String(data.get("shape")) as Shape,
+        rotation: block.rotation ?? 0,
+      }),
     );
-    if (state?.organization?.mode === "structured") {
-      const span = state.organization.structured.spans[blockId] ?? {
-        columns: 1,
-        rows: 1,
-      };
-      dialog.insertAdjacentHTML(
-        "beforeend",
-        `<form id="grid-span-form"><fieldset><legend>Structured grid span</legend><label>Columns<input name="columns" type="number" min="1" max="128" value="${span.columns}" required></label><label>Rows<input name="rows" type="number" min="1" max="128" value="${span.rows}" required></label><button type="submit">Apply span</button></fieldset></form>`,
-      );
-      el<HTMLFormElement>("#grid-span-form", dialog).onsubmit = (event) => {
-        event.preventDefault();
-        const data = new FormData(event.currentTarget as HTMLFormElement);
-        const organization = {
-          structured: {
-            spans: {
-              [blockId]: {
-                columns: Number(data.get("columns")),
-                rows: Number(data.get("rows")),
-              },
-            },
-          },
-        };
-        void commitLayout({
-          type: "setOrganization",
-          workspaceId: state!.activeWorkspaceId!,
-          expectedOrganizationRevision: state!.organization!.revision,
-          organization,
-        }).then(() => dialog.close());
-      };
-    }
   }
   const modeDescriptions = {
     fluid: "Resources intelligently make room for one another.",
@@ -1152,14 +1104,28 @@ export function installApplication(hooks: Hooks) {
       return;
     }
     open(
-      "Layouts and blocks",
-      `<div class="layout-actions"><button id="save-layout">Save layout checkpoint</button><button id="restore-layout" ${state.hasCheckpoint ? "" : "disabled"}>Restore checkpoint</button><button id="undo-layout" ${state.canUndo ? "" : "disabled"}>Undo layout</button><button id="redo-layout" ${state.canRedo ? "" : "disabled"}>Redo layout</button><button id="resolve-layout">Make room · undoable</button></div><p>Saved geometry remains unchanged until you edit or organize it. Checkpoints and history restore placements, shapes and geometry. Resource text remains independent.</p><button id="locate-vela">Locate Vela</button>${state.blocks.map((b) => `<div class="workspace-row"><button data-locate="${b.id}">${escape(state!.resources.find((r) => r.id === b.resource_id)?.title ?? "Resource")}</button><button data-properties="${b.id}">Properties</button></div>`).join("")}`,
+      "Workspace actions",
+      `<div class="layout-actions"><button id="save-layout">Save layout checkpoint</button><button id="restore-layout" ${state.hasCheckpoint ? "" : "disabled"}>Restore checkpoint</button><button id="undo-layout" ${state.canUndo ? "" : "disabled"}>Undo layout</button><button id="redo-layout" ${state.canRedo ? "" : "disabled"}>Redo layout</button><button id="resolve-layout">Make room · undoable</button></div><p>Saved geometry remains unchanged until you edit or organize it. Checkpoints and history restore placements, shapes and geometry. Resource text remains independent.</p><button id="locate-vela">Locate Vela</button>${state.blocks.map((b) => `<div class="workspace-row"><button data-locate="${b.id}">${escape(state!.resources.find((r) => r.id === b.resource_id)?.title ?? "Resource")}</button></div>`).join("")}`,
     );
     dialog.insertAdjacentHTML(
       "afterbegin",
       `<div class="organization-summary"><button id="organization-settings">Organization · ${state.organization?.mode ?? "fluid"}</button><button id="bring-all">Bring All Into View</button></div>`,
     );
     el("#organization-settings", dialog).onclick = organizationControls;
+    dialog.insertAdjacentHTML(
+      "beforeend",
+      '<div class="layout-actions"><button id="workspace-resources">Resources</button><button id="workspace-constellation">Constellation</button><button id="workspace-stream">Intelligence Stream</button><button id="workspace-connections">Connections</button></div>',
+    );
+    for (const [source, target] of [
+      ["workspace-resources", "resource-picker"],
+      ["workspace-constellation", "zoom-out"],
+      ["workspace-stream", "stream-button"],
+      ["workspace-connections", "connections"],
+    ])
+      el("#" + source, dialog).onclick = () => {
+        dialog.close();
+        el("#" + target).click();
+      };
     dialog.insertAdjacentHTML(
       "beforeend",
       `<label><input id="presence-lock" type="checkbox" ${state.presence?.locked ? "checked" : ""}> Lock Vela placement</label>`,
@@ -1259,96 +1225,64 @@ export function installApplication(hooks: Hooks) {
     const b = state?.blocks.find((b) => b.id === id);
     if (!b) return;
     const r = state!.resources.find((r) => r.id === b.resource_id)!;
-    if (!article.querySelector(".block-properties")) {
-      const controls = document.createElement("div");
-      controls.className = "block-tools";
-      controls.innerHTML =
-        '<button class="block-properties" title="Move, resize, shape and layer">⋯</button><button class="block-remove" title="Remove visual block, preserve resource">×</button><button class="resize-handle" aria-label="Resize block; use Properties for keyboard resizing">↘</button>';
-      (article.querySelector(".resource-presentation") ?? article).append(
-        controls,
-      );
-      el(".block-properties", controls).onclick = () => geometry(id);
-      el(".block-remove", controls).onclick = () => {
-        const current = state!.blocks.find((b) => b.id === id)!;
-        void run({
-          type: "detach",
+    article.dataset.locked = String(!!b.locked);
+    if (!directBindings.has(id))
+      directBindings.set(
+        id,
+        mountDirectManipulation(article, {
           blockId: id,
-          expectedVersion: current.version,
-        });
-      };
-      let resizing: {
-        block: Block;
-        width: number;
-        height: number;
-        x: number;
-        y: number;
-      } | null = null;
-      const handle = el(".resize-handle", controls);
-      handle.onpointerdown = (event) => {
-        const current = state!.blocks.find((b) => b.id === id)!;
-        if (current.locked || event.button !== 0) return;
-        resizing = {
-          block: { ...current },
-          width: current.width,
-          height: current.height,
-          x: event.clientX,
-          y: event.clientY,
-        };
-        handle.setPointerCapture(event.pointerId);
-        cancelResize = () => {
-          resizing = null;
-          cancelPreview();
-        };
-      };
-      const resizeTarget = (event: PointerEvent) => {
-        const r = resizing!;
-        const width = Math.round(
-          Math.max(128, Math.min(4096, r.width + (event.clientX - r.x) / zoom)),
-        );
-        const height =
-          r.block.shape === "circle"
-            ? width
-            : Math.round(
-                Math.max(
-                  96,
-                  Math.min(4096, r.height + (event.clientY - r.y) / zoom),
-                ),
-              );
-        return { width, height };
-      };
-      handle.onpointermove = (event) => {
-        if (!resizing) return;
-        queuePreview({
-          placements: [
-            {
+          state: () => {
+            const current = state && layoutState(state);
+            return current && state?.activeWorkspaceId
+              ? { ...current, workspaceId: state.activeWorkspaceId }
+              : null;
+          },
+          preview: (presentation, intent) => {
+            const current = state?.blocks.find((block) => block.id === id);
+            if (current)
+              queuePreview({
+                placements: [
+                  {
+                    blockId: id,
+                    expectedVersion: current.version,
+                    presentation,
+                  },
+                ],
+                intent,
+              });
+          },
+          commit: async (action) => {
+            if (action.type !== "saveLayout" || action.placements.length !== 1)
+              throw new Error("invalid_direct_gesture");
+            const current = state?.blocks.find((block) => block.id === id);
+            if (
+              !current ||
+              state?.activeWorkspaceId !== action.workspaceId ||
+              state.layoutVersion !== action.expectedRevision
+            )
+              throw new Error("layout_version_conflict");
+            const patch = action.placements[0].presentation;
+            await commitLayout({
+              type: "geometry",
               blockId: id,
-              expectedVersion: resizing.block.version,
-              presentation: resizeTarget(event),
-            },
-          ],
-          intent: "resize",
-        });
-      };
-      handle.onpointerup = (event) => {
-        if (!resizing) return;
-        const current = resizing.block;
-        const { width, height } = resizeTarget(event);
-        resizing = null;
-        cancelResize = undefined;
-        void commitLayout({
-          type: "geometry",
-          blockId: id,
-          expectedVersion: current.version,
-          placement: { ...current, width, height },
-          shape: current.shape,
-        });
-      };
-      handle.onpointercancel = () => {
-        resizing = null;
-        cancelResize = undefined;
-        cancelPreview();
-      };
-    }
+              expectedVersion: action.placements[0].expectedVersion,
+              expectedLayoutVersion: action.expectedRevision,
+              placement: {
+                x: patch.x ?? current.x,
+                y: patch.y ?? current.y,
+                width: patch.width ?? current.width,
+                height: patch.height ?? current.height,
+                z: patch.zIndex ?? current.z,
+              },
+              shape: patch.shape ?? current.shape,
+              rotation: patch.rotation ?? current.rotation ?? 0,
+            });
+          },
+          cancel: cancelPreview,
+          failed: report,
+          context: () => geometry(id),
+        }),
+      );
     if (r.available === false) {
       article.querySelector(".task-group-summary")?.remove();
       article.querySelector(".conversation-transcript")?.replaceChildren();
@@ -1520,8 +1454,10 @@ export function installApplication(hooks: Hooks) {
       el(".synthetic", article).textContent =
         "LOCAL TASK GROUP · NO AUTOMATIC EXECUTION";
       const editor = article.querySelector<HTMLTextAreaElement>("textarea");
-      if (editor && document.activeElement !== editor)
-        editor.value = drafts.get(r.id)?.content ?? r.content;
+      if (editor && document.activeElement !== editor) {
+        const content = drafts.get(r.id)?.content ?? r.content;
+        if (editor.value !== content) editor.value = content;
+      }
     } else if (r.kind === "stream") {
       const content = el(".working-content", article);
       content.innerHTML =
@@ -1536,8 +1472,10 @@ export function installApplication(hooks: Hooks) {
             : "DURABLE LOCAL RESOURCE";
       const editor = article.querySelector<HTMLTextAreaElement>("textarea");
       if (editor) editor.setAttribute("aria-label", `${r.title} content`);
-      if (editor && document.activeElement !== editor)
-        editor.value = drafts.get(r.id)?.content ?? r.content;
+      if (editor && document.activeElement !== editor) {
+        const content = drafts.get(r.id)?.content ?? r.content;
+        if (editor.value !== content) editor.value = content;
+      }
       if (r.kind === "task") {
         if (!article.querySelector(".task-completed")) {
           const label = document.createElement("label");

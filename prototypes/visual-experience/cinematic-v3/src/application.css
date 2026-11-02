@@ -125,9 +125,7 @@
   cursor: nwse-resize;
   touch-action: none;
 }
-.folio[data-shape="rounded"]:not(.expanded) {
-  border-radius: 32px;
-}
+.folio[data-shape="rounded"]:not(.expanded) { border-radius: 18px; }
 .folio[data-shape="circle"]:not(.expanded) {
   border-radius: 50%;
 }
@@ -149,6 +147,8 @@
   gap: 8px;
   z-index: 30;
 }
+.application-ready .dock { display: none; }
+.application-ready .place { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .canvas-tools button {
   background: #141727c9;
   border: 1px solid #b9a3dc33;

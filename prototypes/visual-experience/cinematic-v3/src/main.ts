@@ -374,6 +374,8 @@ function layout(cause: string) {
       }
     }
     motion.target(id, p, cause);
+    if (elements.get(id)?.classList.contains("direct-manipulating"))
+      motion.snap(id);
     targetResourceMaterial(
       motion,
       id,
@@ -429,7 +431,7 @@ function select(id: string) {
   interaction();
   layout("select");
   status(
-    `${resources.get(id)!.title} selected. Unfold to work; drag its grip to rearrange.`,
+    `${resources.get(id)!.title} selected. Open to work, drag its surface to move, or resize from an edge.`,
   );
 }
 function expand(id: string) {
