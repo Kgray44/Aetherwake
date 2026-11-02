@@ -111,7 +111,7 @@ export function mountConstellation(
       controls.guide,
       ...root.querySelectorAll<HTMLElement>(".aw-graph-dialog[open]"),
       ...root.ownerDocument.querySelectorAll<HTMLElement>(
-        "#vela, #vela .vela-label, #vela .vela-grip",
+        "#vela, #vela .vela-label, #vela .vela-grip, dialog.aw-contextual-surface[open], #command-surface[open], .floating-dialog:not([hidden])",
       ),
     ]
       .filter(
@@ -547,6 +547,38 @@ export function mountConstellation(
     field.hidden = working;
     detail.hidden = working || !inspectorOpen;
     paintDetail();
+    // Use the host's real foreground panels; keep informational hints whole.
+    status.classList.remove("aw-status-away", "aw-status-quiet");
+    if (!working && status.textContent) {
+      const panels = [
+        ...root.ownerDocument.querySelectorAll<HTMLElement>(
+          "dialog.aw-contextual-surface[open], #command-surface[open], .floating-dialog:not([hidden]), .aw-navigation-guide:not([hidden]), .aw-destinations:not([hidden]), .aw-spatial-detail:not([hidden])",
+        ),
+      ]
+        .filter(
+          (e) =>
+            e.getClientRects().length &&
+            getComputedStyle(e).visibility === "visible",
+        )
+        .map((e) => e.getBoundingClientRect());
+      const intersects = () => {
+        const r = status.getBoundingClientRect();
+        return panels.some(
+          (p) =>
+            p.width > 0 &&
+            p.height > 0 &&
+            r.left < p.right &&
+            r.right > p.left &&
+            r.top < p.bottom &&
+            r.bottom > p.top,
+        );
+      };
+      if (intersects()) {
+        status.classList.add("aw-status-away");
+        if (!controller.error && !controller.pending && intersects())
+          status.classList.add("aw-status-quiet");
+      }
+    }
     const { width, height } = field.getBoundingClientRect(),
       c = controller.camera;
     const labels = spatialMode && !working ? layer.labels(width, height) : [];
