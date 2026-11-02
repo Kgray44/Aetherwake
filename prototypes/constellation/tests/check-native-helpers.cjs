@@ -4,7 +4,7 @@ function checkNativeHelpers() {
   const lookup = { paths: [path.resolve(__dirname, ".."), path.resolve(__dirname, "../../visual-experience/cinematic-v3")] };
   const ts = require(require.resolve("typescript", lookup));
   const typeRoot = path.resolve(path.dirname(require.resolve("typescript/package.json", lookup)), "../@types");
-  const files = ["integrated-native.cjs", "native-labels.cjs", "native-input.cjs", "prepared-workspaces.cjs"].map((name) => path.join(__dirname, name));
+  const files = ["integrated-native.cjs", "native-labels.cjs", "native-input.cjs", "prepared-workspaces.cjs", "native-console.cjs"].map((name) => path.join(__dirname, name));
   const selected = new Set(files.map((file) => path.resolve(file)));
   const program = ts.createProgram(files, {
     allowJs: true, checkJs: true, noEmit: true, skipLibCheck: true,

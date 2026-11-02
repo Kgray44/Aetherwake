@@ -7,6 +7,11 @@ const {
   assertNativeOwner,
   nativeInput,
 } = require("../../../constellation/tests/native-input.cjs");
+const {
+  createNativeConsoleMonitor,
+  frameCaptureHealth,
+  assertFrameCaptureHealth,
+} = require("../../../constellation/tests/native-console.cjs");
 
 const REQUIRED_MATRIX = Object.freeze([
   { projects: 1, resources: 50 },
@@ -709,6 +714,7 @@ exports.verify = async ({
   source,
   privateRoot,
   moduleStarted,
+  startupErrors,
 }) => {
   const base = path.resolve(__dirname, "../.runtime/application-evidence");
   await fs.mkdir(base, { recursive: true });
@@ -729,6 +735,9 @@ exports.verify = async ({
     limits: LIMITS,
     timing: { helperStartedAt: new Date(helperStarted).toISOString() },
     captures: [],
+    consoleDiagnostics: null,
+    rendererErrorScope:
+      "Window error events and caught graphics construction/recovery exceptions; console-message errors are recorded separately.",
     samples: [],
     regressions: [],
     limitations: [
@@ -750,6 +759,7 @@ exports.verify = async ({
     budget,
     abort,
     ownerContents,
+    consoleMonitor,
     progressBytes = 0;
   const presentationChildren = new Set();
   const beforeInput = (_event, input) => {
@@ -803,6 +813,7 @@ exports.verify = async ({
     progressBytes += Buffer.byteLength(text);
   }
   async function checkpoint() {
+    receipt.consoleDiagnostics = consoleMonitor?.snapshot() ?? null;
     const text = JSON.stringify(receipt, null, 2);
     assert(
       Buffer.byteLength(text) <= LIMITS.receiptBytes,
@@ -814,8 +825,19 @@ exports.verify = async ({
       path.join(out, "scale.json"),
     );
   }
-  async function capture(name) {
+  async function capture(name, failureOnly = false) {
     guard();
+    const health = async () => {
+      if (!failureOnly) consoleMonitor.assertClean();
+      guard();
+      const observed = await win.webContents.executeJavaScript(
+        "(" + frameCaptureHealth.toString() + ")()",
+        true,
+      );
+      guard();
+      assertFrameCaptureHealth(observed, failureOnly);
+    };
+    await health();
     const target = name.startsWith("universe") ? receipt.universe : receipt;
     markPhase(target, "png-" + name + "-start");
     assert(
@@ -824,10 +846,12 @@ exports.verify = async ({
     );
     const bytes = (await win.webContents.capturePage()).toPNG();
     guard();
+    await health();
     assert(bytes.length <= LIMITS.pngBytes, "screenshot byte bound");
     await fs.writeFile(path.join(out, name + ".png"), bytes, { flag: "wx" });
     receipt.captures.push({
       file: name + ".png",
+      purpose: failureOnly ? "failure-diagnostic" : "verification",
       bytes: bytes.length,
       sha256: createHash("sha256").update(bytes).digest("hex"),
       at: new Date().toISOString(),
@@ -890,6 +914,8 @@ exports.verify = async ({
     guard();
     ownerContents = win.webContents;
     ownerContents.on("before-input-event", beforeInput);
+    consoleMonitor = createNativeConsoleMonitor(ownerContents, startupErrors);
+    consoleMonitor.assertClean();
     const js = (code) => win.webContents.executeJavaScript(code, true);
     const { read, wait, click, fill, snapshot } = benchmarkControls(
       win,
@@ -1548,6 +1574,20 @@ exports.verify = async ({
     universe.state =
       universe.presentation?.qualified === true ? "completed" : "partial";
     universe.timing.finishedAt = new Date().toISOString();
+    for (const phase of [receipt, universe]) {
+      assert.deepEqual(
+        phase.observedRendererErrors,
+        [],
+        "recorded window/runtime sample errors fail the case",
+      );
+      if (phase.fullCaptureCallbacks)
+        assert.deepEqual(
+          phase.fullCaptureCallbacks.observedRendererErrors,
+          [],
+          "recorded window/runtime capture errors fail the case",
+        );
+    }
+    consoleMonitor.assertClean();
     receipt.passed = qualifyPerformanceCase(receipt);
     receipt.state = receipt.passed ? "completed" : "partial";
     await progress({
@@ -1564,8 +1604,13 @@ exports.verify = async ({
     } catch {}
     if (budget)
       try {
-        await capture("failure");
-      } catch {}
+        await capture("failure", true);
+      } catch (captureError) {
+        receipt.failureCaptureError = String(captureError.message).slice(
+          0,
+          1024,
+        );
+      }
   } finally {
     try {
       try {
@@ -1579,6 +1624,17 @@ exports.verify = async ({
             child.kill();
       } catch (error) {
         receipt.presentationCleanupError = String(error.message).slice(0, 1024);
+      }
+      if (consoleMonitor) {
+        try {
+          consoleMonitor.dispose();
+          consoleMonitor.assertClean();
+        } catch (error) {
+          receipt.passed = false;
+          receipt.state = "failed";
+          receipt.consoleMonitoringError = String(error.message).slice(0, 1024);
+          receipt.error ??= receipt.consoleMonitoringError;
+        }
       }
       receipt.timing.finishedAt = new Date().toISOString();
       receipt.helperElapsedMs = Date.now() - helperStarted;

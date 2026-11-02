@@ -4,6 +4,11 @@ const assert = require("node:assert/strict");
 const { assertNativeOwner, nativeInput } = require("./native-input.cjs");
 const { loadPreparedWorkspaces } = require("./prepared-workspaces.cjs");
 const { createHash } = require("node:crypto");
+const {
+  createNativeConsoleMonitor,
+  frameCaptureHealth,
+  assertFrameCaptureHealth,
+} = require("./native-console.cjs");
 const native = "../../visual-experience/cinematic-v3/native/";
 const {
   checkLabelClearance,
@@ -101,9 +106,10 @@ function createJourneyGuard(win, expiresAt, now = Date.now, sleep = pause) {
   return { guard, beforeInput, input, js, pause: ownedPause, owner, status };
 }
 
-function createJourneyEvidence(out, receipt) {
+function createJourneyEvidence(out, receipt, beforeCheckpoint = () => {}) {
   let journalBytes = 0;
   const checkpoint = async () => {
+    beforeCheckpoint();
     assert.ok(
       receipt.actions.length <= JOURNEY_LIMITS.actions,
       "journey action count bound",
@@ -329,6 +335,7 @@ async function verifyJourney({
   source,
   session,
   localURL,
+  startupErrors,
 }) {
   assert.ok(
     process.argv.includes("--integration-expanded"),
@@ -357,6 +364,9 @@ async function verifyJourney({
     videos: [],
     passed: false,
     state: "initializing",
+    consoleDiagnostics: null,
+    rendererErrorScope:
+      "Window error events and caught graphics construction/recovery exceptions; console-message errors are recorded separately.",
     limits: JOURNEY_LIMITS,
     timing: { helperStartedAt: new Date().toISOString() },
     limitations: [
@@ -366,7 +376,7 @@ async function verifyJourney({
       "Injected and physical window Escape events have no source identifier. Only one explicitly injected non-repeat Escape has a 250 ms allowance; unmatched or repeating Escape aborts.",
     ],
   };
-  let recorder, run, ownerContents, wait, click, fill, snapshot;
+  let recorder, run, ownerContents, wait, click, fill, snapshot, consoleMonitor;
   const rawJs = (code) => win.webContents.executeJavaScript(code, true);
   const js = (code) => {
     assert.ok(run, "admitted journey required");
@@ -380,7 +390,9 @@ async function verifyJourney({
     assert.ok(run, "admitted journey required");
     return run.input(event);
   };
-  const evidence = createJourneyEvidence(out, receipt);
+  const evidence = createJourneyEvidence(out, receipt, () => {
+    receipt.consoleDiagnostics = consoleMonitor?.snapshot() ?? null;
+  });
   const mark = async (label) => {
     receipt.actions.push({ label, at: new Date().toISOString() });
     await evidence.record({ phase: "action", label });
@@ -458,23 +470,45 @@ async function verifyJourney({
     });
   };
   const view = () => js("window.aerynthHost.command('viewState',{})");
-  const shot = async (name) => {
+  const shot = async (name, failureOnly = false) => {
     assert.ok(receipt.screenshots.length < 14, "screenshot count bound");
     assert.ok(
       win.isFocused() && !win.isMinimized(),
       "native evidence requires the focused visible owner window",
     );
+    const health = async () => {
+      if (!failureOnly) consoleMonitor.assertClean();
+      assertFrameCaptureHealth(
+        await js("(" + frameCaptureHealth.toString() + ")()"),
+        failureOnly,
+      );
+    };
+    await health();
     const before = await js("window.__aerynth.snapshot().metrics.draws");
     for (const x of [3, 1]) send({ type: "mouseMove", x, y: 1 });
-    await wait(`window.__aerynth.snapshot().metrics.draws>${before}`, 8000);
+    const fresh = `window.__aerynth.snapshot().metrics.draws>${before}`;
+    if (failureOnly) {
+      // Initialization can fail before the shared driver exists. Keep this
+      // diagnostic read under the same admitted owner/deadline, without a
+      // console-health gate preventing capture of the actual error state.
+      const end = Date.now() + 8000;
+      while (!(await js(fresh))) {
+        if (Date.now() >= end)
+          throw Error("failure capture GPU draw timed out");
+        await pause(80);
+      }
+    } else await wait(fresh, 8000);
     await pause(350);
     run.guard();
+    await health();
     const bytes = (await win.webContents.capturePage()).toPNG();
     run.guard();
+    await health();
     assert.ok(bytes.length < 8 * 1024 * 1024, "screenshot byte bound");
     await fs.writeFile(path.join(out, name + ".png"), bytes, { flag: "wx" });
     receipt.screenshots.push({
       file: name + ".png",
+      purpose: failureOnly ? "failure-diagnostic" : "verification",
       byteCount: bytes.length,
       sha256: createHash("sha256").update(bytes).digest("hex"),
       freshGpuDraws: {
@@ -909,6 +943,8 @@ async function verifyJourney({
     receipt.inputGuard = run.status;
     ownerContents = win.webContents;
     ownerContents.on("before-input-event", run.beforeInput);
+    consoleMonitor = createNativeConsoleMonitor(ownerContents, startupErrors);
+    consoleMonitor.assertClean();
     await evidence.record({ phase: "hydrating" });
     const { createDriver } = require(native + "desktop-verify.cjs");
     ({ wait, click, fill, snapshot } = await createDriver(run.owner));
@@ -1741,6 +1777,12 @@ async function verifyJourney({
       "(()=>{const errors=window.__aerynth.snapshot().metrics.errors;return Array.isArray(errors)?errors.slice(-16).map(e=>String(e).slice(0,1024)):null})()",
     );
     run.guard();
+    assert.deepEqual(
+      receipt.rendererErrors,
+      [],
+      "recorded window/runtime errors fail the journey",
+    );
+    consoleMonitor.assertClean();
     receipt.passed = true;
     receipt.state = "completed";
     await evidence.record({
@@ -1814,7 +1856,7 @@ async function verifyJourney({
       ).slice(0, 2048);
     }
     try {
-      await shot("failure");
+      await shot("failure", true);
     } catch (captureError) {
       receipt.failureCaptureError = String(
         captureError.stack ?? captureError,
@@ -1836,6 +1878,17 @@ async function verifyJourney({
         } catch (error) {
           receipt.recordingError = String(error.message).slice(0, 1024);
         }
+      if (consoleMonitor) {
+        try {
+          consoleMonitor.dispose();
+          consoleMonitor.assertClean();
+        } catch (error) {
+          receipt.passed = false;
+          receipt.state = "failed";
+          receipt.consoleMonitoringError = String(error.message).slice(0, 1024);
+          receipt.error ??= receipt.consoleMonitoringError;
+        }
+      }
       receipt.timing.finishedAt = new Date().toISOString();
       try {
         await evidence.checkpoint();
