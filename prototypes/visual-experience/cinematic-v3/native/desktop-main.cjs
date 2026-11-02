@@ -5,6 +5,7 @@ const {
   session,
   dialog,
   nativeTheme,
+  shell,
 } = require("electron");
 const { spawn, execFileSync } = require("node:child_process");
 const { createInterface } = require("node:readline");
@@ -24,6 +25,7 @@ const {
   isConversationRead,
 } = require("./conversation-broker.cjs");
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
+const { firstPartyChatCommand } = require("./first-party-chat.cjs");
 const root = path.resolve(__dirname, "..");
 const moduleStarted = Date.now();
 const moduleStartedMonotonicMs = performance.now();
@@ -315,6 +317,7 @@ app.whenReady().then(async () => {
           "executionStatus",
           "conversationActivity",
           "interrupt",
+          "firstPartyChat",
         ].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "vela" && isVelaRead(input)) &&
@@ -409,6 +412,12 @@ app.whenReady().then(async () => {
             commandId: randomUUID(),
           });
         }
+      } else if (command === "firstPartyChat") {
+        result = await firstPartyChatCommand({
+          input,
+          win,
+          openExternal: (url) => shell.openExternal(url),
+        });
       } else if (command === "conversation") {
         result = await conversationCommand({ win, dialog, call, input });
       } else if (command === "vela") {

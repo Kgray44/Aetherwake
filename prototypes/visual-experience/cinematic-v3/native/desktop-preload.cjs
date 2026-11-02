@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld(
           "vela",
           "library",
           "notes",
+          "firstPartyChat",
         ].includes(name)
       )
         throw new Error("unsupported_command");
