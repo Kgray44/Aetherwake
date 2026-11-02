@@ -41,6 +41,6 @@ The adapter retains only transient control/observation state while one proposal 
 
 ## Qualification status
 
-Synthetic adapter regressions are written in `tests/codex-planning-adapter.test.mts`. They verify host grant binding, exact canonical provenance, prompt bounds, busy/fixture denial, strict parsing, actual interrupt routing and unknown outcomes. They are **queued, not executed** in this implementation checkpoint because the host is reserved for integrated native/performance acceptance.
+Synthetic adapter regressions in `tests/codex-planning-adapter.test.mts` verify host grant binding, exact canonical provenance, prompt bounds, busy/fixture denial, strict parsing, actual interrupt routing and unknown outcomes. All seven adapter tests passed in the owner-released CPU slot; the full module passed **23/23 tests** (438.8769 ms reported test duration) and the full TypeScript check passed with zero diagnostics. These are command-port test doubles, not real Codex planning qualification.
 
 No real provider turn, native window, network call or CPU test was launched by this worker for this adapter. Root must wire the real callbacks, execute an explicitly approved live planning task, inspect the canonical Codex conversation/native execution evidence, then review/apply the typed workspace proposal through real application commands. Unit doubles do not qualify real intelligence or application acceptance.
