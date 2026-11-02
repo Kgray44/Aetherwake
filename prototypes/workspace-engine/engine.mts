@@ -2,18 +2,20 @@ import { randomUUID, createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
 import { WorkspaceKernel } from '../workspace-kernel/kernel.mts';
-import { CONTRACT, type Command, type CommandResult, type WorkspaceProjection, type Presentation, type Viewport, type BlockTemplate, type WorkspaceSummary, type PresencePlacement, type Geometry } from './contracts.mts';
+import { CONTRACT, type Command, type CommandResult, type WorkspaceProjection, type Presentation, type Viewport, type BlockTemplate, type WorkspaceSummary, type PresencePlacement, type Geometry, type WorkspaceOrganization, type OrganizationUpdate, type LayoutPreviewRequest } from './contracts.mts';
 import { ensure, WorkspaceError, defaults, presentation, resize, snapValue, presetGeometry } from './geometry.mts';
-import { resolveCollisions, validateBounds } from './collisions.mts';
+import { validateBounds } from './collisions.mts';
+import { defaultOrganization, updateOrganization, applyOrganizationPolicy, previewLayout, type PolicyOptions } from './organization.mts';
 export { WorkspaceError } from './geometry.mts';
 export type * from './contracts.mts';
 
 type StoredBlock = Presentation & { blockId: string; resourceId: string };
 type StoredPresence = Omit<PresencePlacement, 'version'>;
-type Snapshot = { viewport: Viewport; blocks: StoredBlock[]; presence: StoredPresence };
+type StoredOrganization = Omit<WorkspaceOrganization, 'revision'>;
+type Snapshot = { viewport: Viewport; blocks: StoredBlock[]; presence: StoredPresence; organization: StoredOrganization };
 type Entry = { before: Snapshot; after: Snapshot };
 type History = { undo: Entry[]; redo: Entry[] };
-const files = ['001-presentation.sql', '002-history.sql', '003-presence.sql'];
+const files = ['001-presentation.sql', '002-history.sql', '003-presence.sql', '004-organization.sql'];
 const now = () => new Date().toISOString();
 const stable = (v: any): string => JSON.stringify(v, (_key, value) => value && typeof value === 'object' && !Array.isArray(value) ? Object.fromEntries(Object.keys(value).sort().map(k => [k, value[k]])) : value);
 const hash = (v: unknown) => createHash('sha256').update(stable(v)).digest('hex');
@@ -31,6 +33,7 @@ export const templates: readonly BlockTemplate[] = [
 export interface EngineOptions {
   /** Host-owned retention/approval policy. Default is fail closed. Never deletes provider data. */
   allowResourceDeletion?: (request: { resourceId: string; expectedVersion: number; approvalId: string }) => boolean;
+  defaultOrganization?: OrganizationUpdate;
 }
 /** Main-process service. Owns no database connection and never stores resource content. */
 export class WorkspaceEngine {
@@ -50,6 +53,7 @@ export class WorkspaceEngine {
       }
       ensure(version >= 0 && version <= files.length, 'UNSUPPORTED_SCHEMA');
       const upgradePresence = version < 3;
+      const upgradeOrganization = version < 4;
       while (version < files.length) {
         db.exec(readFileSync(new URL(`./migrations/${files[version]}`, import.meta.url), 'utf8'));
         version++;
@@ -57,7 +61,7 @@ export class WorkspaceEngine {
       }
       for (const w of db.prepare('SELECT id FROM workspaces').all()) {
         const workspaceId = String(w.id); this.layout(workspaceId);
-        if (upgradePresence) {
+        if (upgradePresence || upgradeOrganization) {
           this.writeHistory(workspaceId, this.history(workspaceId));
           for (const cp of db.prepare('SELECT id,snapshot_json FROM workspace_engine_checkpoints WHERE workspace_id=?').all(workspaceId))
             db.prepare('UPDATE workspace_engine_checkpoints SET snapshot_json=? WHERE id=?').run(JSON.stringify(this.normalizeSnapshot(workspaceId, JSON.parse(String(cp.snapshot_json)))), cp.id);
@@ -84,7 +88,26 @@ export class WorkspaceEngine {
       this.db.prepare('UPDATE workspace_engine_layouts SET presence_json=?,legacy_presence_json=? WHERE workspace_id=?').run(presence, presence, workspaceId);
       row = this.db.prepare('SELECT * FROM workspace_engine_layouts WHERE workspace_id=?').get(workspaceId);
     }
+    if (!row!.organization_json) {
+      const legacy = this.kernel.openWorkspace(workspaceId).layout;
+      const mode = legacy.viewport.organization?.mode ?? legacy.viewport.organizationMode ?? (legacy.mode === 'structured' ? 'structured' : 'fluid');
+      const organization = updateOrganization(defaultOrganization(), { mode });
+      const json = JSON.stringify(organization);
+      this.db.prepare('UPDATE workspace_engine_layouts SET organization_json=?,legacy_organization_json=? WHERE workspace_id=?').run(json, json, workspaceId);
+      row = this.db.prepare('SELECT * FROM workspace_engine_layouts WHERE workspace_id=?').get(workspaceId);
+    }
     return row;
+  }
+  private readOrganization(workspaceId: string): WorkspaceOrganization {
+    const o = JSON.parse(this.layout(workspaceId).organization_json);
+    ensure(o.schemaVersion === 1 && Number.isSafeInteger(o.revision) && o.revision > 0, 'INTEGRITY');
+    return updateOrganization(o);
+  }
+  private writeOrganization(workspaceId: string, organization: WorkspaceOrganization) {
+    this.db.prepare('UPDATE workspace_engine_layouts SET organization_json=? WHERE workspace_id=?').run(JSON.stringify(organization), workspaceId);
+  }
+  private organizationChanged(a: WorkspaceOrganization, b: WorkspaceOrganization) {
+    const { revision: _a, ...left } = a, { revision: _b, ...right } = b; return hash(left) !== hash(right);
   }
   private readPresence(workspaceId: string): PresencePlacement {
     const p = JSON.parse(this.layout(workspaceId).presence_json) as PresencePlacement;
@@ -103,16 +126,17 @@ export class WorkspaceEngine {
     this.db.prepare('UPDATE workspace_engine_layouts SET presence_json=? WHERE workspace_id=?').run(JSON.stringify(p), workspaceId);
   }
   /** Compatibility for old imported desktop histories written after constructor migration. */
-  private normalizeSnapshot(workspaceId: string, snapshot: any, baseline?: PresencePlacement): Snapshot {
+  private normalizeSnapshot(workspaceId: string, snapshot: any, baseline?: PresencePlacement, organizationBaseline?: WorkspaceOrganization): Snapshot {
     ensure(snapshot && Array.isArray(snapshot.blocks) && snapshot.viewport, 'INTEGRITY');
     const { version, ...presence } = snapshot.presence ?? baseline ?? JSON.parse(this.layout(workspaceId).legacy_presence_json);
-    return { ...snapshot, presence };
+    const { revision, ...organization } = snapshot.organization ?? organizationBaseline ?? JSON.parse(this.layout(workspaceId).legacy_organization_json);
+    return { ...snapshot, presence, organization };
   }
   private viewport(v: any): Viewport {
     ensure(v && typeof v === 'object' && !Array.isArray(v));
     const p = { x: v.x ?? 0, y: v.y ?? 0, zoom: v.zoom ?? 1, ...(v.displayId === undefined ? {} : { displayId: v.displayId }) };
-    ensure(Number.isFinite(p.x) && Number.isFinite(p.y) && Math.abs(p.x) <= 1e6 && Math.abs(p.y) <= 1e6);
-    ensure(Number.isFinite(p.zoom) && p.zoom >= 0.1 && p.zoom <= 4);
+    ensure(Number.isFinite(p.x) && Number.isFinite(p.y) && Math.abs(p.x) <= 1e12 && Math.abs(p.y) <= 1e12);
+    ensure(Number.isFinite(p.zoom) && p.zoom > 0 && p.zoom <= 4);
     ensure(p.displayId === undefined || text(p.displayId));
     return p;
   }
@@ -126,14 +150,16 @@ export class WorkspaceEngine {
   private snapshot(workspaceId: string): Snapshot {
     const state = this.kernel.openWorkspace(workspaceId);
     const { version, ...presence } = this.readPresence(workspaceId);
-    return { viewport: this.viewport(state.layout.viewport), presence, blocks: state.blocks.map(row => this.block(row)).sort((a, b) => a.blockId.localeCompare(b.blockId)) };
+    const { revision, ...organization } = this.readOrganization(workspaceId);
+    return { viewport: this.viewport(state.layout.viewport), presence, organization, blocks: state.blocks.map(row => this.block(row)).sort((a, b) => a.blockId.localeCompare(b.blockId)) };
   }
   private history(workspaceId: string): History {
     const h = JSON.parse(this.layout(workspaceId).history_json);
     ensure(h && Array.isArray(h.undo) && Array.isArray(h.redo), 'INTEGRITY');
     const baseline = JSON.parse(this.layout(workspaceId).legacy_presence_json);
+    const organization = JSON.parse(this.layout(workspaceId).legacy_organization_json);
     for (const stack of [h.undo, h.redo]) for (const entry of stack) {
-      entry.before = this.normalizeSnapshot(workspaceId, entry.before, baseline); entry.after = this.normalizeSnapshot(workspaceId, entry.after, baseline);
+      entry.before = this.normalizeSnapshot(workspaceId, entry.before, baseline, organization); entry.after = this.normalizeSnapshot(workspaceId, entry.after, baseline, organization);
     }
     return h;
   }
@@ -148,7 +174,7 @@ export class WorkspaceEngine {
       return {
         contract: CONTRACT, workspaceId, projectId: state.workspace.project_id, title: state.workspace.title,
         workspaceVersion: state.workspace.version, layoutId: l.id, revision: state.layout.version,
-        viewport: this.viewport(state.layout.viewport), presence: this.readPresence(workspaceId),
+        viewport: this.viewport(state.layout.viewport), presence: this.readPresence(workspaceId), organization: this.readOrganization(workspaceId),
         blocks: state.blocks.map(row => {
           const b = this.block(row);
           return { ...b, workspaceId, version: row.version, resourceState: this.kernel.getResource(b.resourceId).resource.state,
@@ -160,12 +186,16 @@ export class WorkspaceEngine {
   listWorkspaces(): WorkspaceSummary[] {
     return this.db.prepare('SELECT * FROM workspaces ORDER BY created_at,id').all().map((w: any) => ({ workspaceId: w.id, projectId: w.project_id, title: w.title, version: w.version, state: w.state }));
   }
-  createWorkspace(title: string, projectId: string | null = null): WorkspaceProjection {
+  createWorkspace(title: string, projectId: string | null = null, organizationOverride?: OrganizationUpdate): WorkspaceProjection {
     return this.atomic(() => {
       const w = this.kernel.createWorkspace(title, projectId); this.layout(w.id);
+      const organization = updateOrganization(defaultOrganization(), organizationOverride ?? this.options.defaultOrganization);
+      this.writeOrganization(w.id, organization);
+      this.db.prepare('UPDATE workspace_engine_layouts SET legacy_organization_json=? WHERE workspace_id=?').run(JSON.stringify(organization), w.id);
       this.switchWorkspace(w.id); return this.project(w.id);
     });
   }
+  preview(workspaceId: string, request: LayoutPreviewRequest) { return previewLayout(this.project(workspaceId), request); }
   renameWorkspace(workspaceId: string, title: string, expectedVersion: number): WorkspaceProjection {
     return this.atomic(() => { this.kernel.renameWorkspace(workspaceId, title, expectedVersion); return this.project(workspaceId); });
   }
@@ -198,7 +228,7 @@ export class WorkspaceEngine {
       const p = presentation(u.presentation, base); this.writePresentation(blockId, p);
       return { blockId, expectedVersion: b.version, placement: { x: p.x, y: p.y, width: p.width, height: p.height, z: p.zIndex } };
     });
-    return this.kernel.saveLayout(workspaceId, 'freeform', viewport, placements, revision);
+    return this.kernel.saveLayout(workspaceId, state.organization.mode === 'structured' ? 'structured' : 'freeform', viewport, placements, revision);
   }
   private restore(workspaceId: string, target: Snapshot, revision: number) {
     const current = this.kernel.openWorkspace(workspaceId);
@@ -219,26 +249,29 @@ export class WorkspaceEngine {
     const oldPresence = this.readPresence(workspaceId);
     const presence = this.presencePatch(oldPresence, { x: target.presence.x, y: target.presence.y, width: target.presence.width, height: target.presence.height, locked: target.presence.locked });
     this.writePresence(workspaceId, { ...presence, version: oldPresence.version + 1 });
-    this.kernel.saveLayout(workspaceId, 'freeform', this.viewport(target.viewport), [], revision);
+    const oldOrganization = this.readOrganization(workspaceId);
+    this.writeOrganization(workspaceId, { ...target.organization, revision: oldOrganization.revision + 1 });
+    this.kernel.saveLayout(workspaceId, target.organization.mode === 'structured' ? 'structured' : 'freeform', this.viewport(target.viewport), [], revision);
   }
-  private resolve(workspaceId: string, targets: string[], bounds?: Geometry): string[] {
-    const state = this.kernel.openWorkspace(workspaceId), presence = this.readPresence(workspaceId);
-    const blocks = state.blocks.map(row => this.block(row));
-    const inputs = blocks.map(b => ({ ...b, id: b.blockId }));
-    const resolved = resolveCollisions([...inputs, { ...presence, keepVisible: true }], targets, bounds);
+  private resolve(workspaceId: string, options: PolicyOptions, initialOrganizationRevision: number): { changed: string[]; viewport: Viewport } {
+    const state = this.project(workspaceId), presence = state.presence, blocks = state.blocks;
+    const result = applyOrganizationPolicy(state, options);
+    const resolved = [...result.blocks.map(b => ({ ...b, id: b.blockId })), result.presence];
     const changed: string[] = [];
     for (const p of resolved) {
       if (p.id === presence.id) {
-        if (p.x === presence.x && p.y === presence.y) continue;
-        this.writePresence(workspaceId, { ...presence, x: p.x, y: p.y, version: presence.version + 1 });
+        if (p.x === presence.x && p.y === presence.y && p.width === presence.width && p.height === presence.height) continue;
+        this.writePresence(workspaceId, { ...presence, x: p.x, y: p.y, width: p.width, height: p.height, version: presence.version + 1 });
       } else {
         const old = blocks.find(b => b.blockId === p.id)!;
-        if (p.x === old.x && p.y === old.y) continue;
-        this.db.prepare('UPDATE blocks SET x=?,y=?,version=version+1 WHERE id=?').run(p.x, p.y, p.id);
+        if (p.x === old.x && p.y === old.y && p.width === old.width && p.height === old.height) continue;
+        this.db.prepare('UPDATE blocks SET x=?,y=?,width=?,height=?,version=version+1 WHERE id=?').run(p.x, p.y, p.width, p.height, p.id);
       }
       changed.push(p.id);
     }
-    return changed;
+    if (this.organizationChanged(state.organization, result.organization))
+      this.writeOrganization(workspaceId, { ...result.organization, revision: Math.max(state.organization.revision, initialOrganizationRevision + 1) });
+    return { changed, viewport: result.viewport };
   }
   execute(command: Command): CommandResult {
     ensure(command && text(command.commandId) && text(command.workspaceId));
@@ -250,14 +283,20 @@ export class WorkspaceEngine {
       const receipt = this.db.prepare('SELECT * FROM workspace_engine_receipts WHERE command_id=?').get(command.commandId);
       if (receipt) {
         ensure(receipt.fingerprint === fingerprint, 'COMMAND_ID_REUSED'); const result = JSON.parse(String(receipt.result_json));
-        return { ...result, presence: result.presence ?? defaultPresence(command.workspaceId) };
+        return { ...result, presence: result.presence ?? defaultPresence(command.workspaceId), organization: result.organization ?? JSON.parse(this.layout(command.workspaceId).legacy_organization_json) };
       }
       const state = this.project(command.workspaceId); ensure(state.revision === command.expectedRevision, 'CONFLICT');
       const workspaceId = state.workspaceId, before = this.snapshot(workspaceId), h = this.history(workspaceId);
       let checkpointId: string | undefined;
       const targets: string[] = [];
+      const resizeIds: string[] = [];
+      const policy: PolicyOptions = { bounds: command.bounds };
       const find = (blockId: string) => { const b = state.blocks.find(b => b.blockId === blockId); ensure(b, 'NOT_FOUND'); return b; };
-      const patch = (blockId: string, p: Partial<Presentation>) => { targets.push(blockId); return this.apply(workspaceId, [{ blockId, expectedVersion: find(blockId).version, presentation: p }], state.revision, state.viewport); };
+      const patch = (blockId: string, p: Partial<Presentation>) => {
+        const old = find(blockId); targets.push(blockId);
+        if ((p.width !== undefined && p.width !== old.width) || (p.height !== undefined && p.height !== old.height) || (p.shape === 'circle' && old.width !== old.height)) resizeIds.push(blockId);
+        return this.apply(workspaceId, [{ blockId, expectedVersion: old.version, presentation: p }], state.revision, state.viewport);
+      };
       const newPresentation = (c: { templateId?: string; presentation?: Partial<Presentation> }) => {
         const t = c.templateId ? templates.find(t => t.id === c.templateId) : undefined;
         ensure(!c.templateId || t, 'UNKNOWN_TEMPLATE');
@@ -284,16 +323,39 @@ export class WorkspaceEngine {
         }
         case 'setBlockShape': patch(command.blockId, { shape: command.shape }); break;
         case 'setBlockLayer': patch(command.blockId, { zIndex: command.zIndex }); break;
+        case 'layerBlock': {
+          ensure(['front', 'back', 'raise', 'lower'].includes(command.direction)); const b = find(command.blockId);
+          const zIndex = command.direction === 'front' ? Math.max(...state.blocks.map(b => b.zIndex)) + 1 : command.direction === 'back' ? Math.min(...state.blocks.map(b => b.zIndex)) - 1 : b.zIndex + (command.direction === 'raise' ? 1 : -1);
+          patch(b.blockId, { zIndex }); break;
+        }
         case 'setBlockLock': patch(command.blockId, { locked: command.locked }); break;
         case 'setBlockPresentation': patch(command.blockId, command.patch); break;
         case 'setPresence': {
           ensure(command.expectedVersion === state.presence.version, 'CONFLICT');
           const next = this.presencePatch(state.presence, command.presentation);
           ensure(!state.presence.locked || (Object.keys(command.presentation).length === 1 && command.presentation.locked === false), 'LOCKED');
-          this.writePresence(workspaceId, { ...next, version: state.presence.version + 1 }); targets.push(next.id); break;
+          this.writePresence(workspaceId, { ...next, version: state.presence.version + 1 }); targets.push(next.id);
+          if (next.width !== state.presence.width || next.height !== state.presence.height) resizeIds.push(next.id); break;
         }
         case 'resolveLayout': break;
-        case 'saveLayout': ensure(Array.isArray(command.placements)); this.apply(workspaceId, command.placements, state.revision, this.viewport(command.viewport ?? state.viewport)); targets.push(...command.placements.map(p => p.blockId)); break;
+        case 'setOrganization': {
+          ensure(command.expectedOrganizationRevision === undefined || command.expectedOrganizationRevision === state.organization.revision, 'CONFLICT');
+          const next = updateOrganization(state.organization, command.organization);
+          if (this.organizationChanged(state.organization, next)) this.writeOrganization(workspaceId, { ...next, revision: state.organization.revision + 1 });
+          policy.intent = 'mode'; policy.spanOverrides = Object.keys(command.organization.structured?.spans ?? {}); break;
+        }
+        case 'applyStructuredPreset': {
+          const next = updateOrganization(state.organization, { mode: 'structured', structured: { preset: command.preset } });
+          this.writeOrganization(workspaceId, { ...next, revision: state.organization.revision + 1 }); policy.intent = 'mode'; policy.preset = command.preset; break;
+        }
+        case 'reorderPlacements': ensure(state.organization.mode === 'structured', 'UNSUPPORTED_POLICY'); policy.order = command.order; policy.intent = 'reorder'; break;
+        case 'bringAllIntoView': policy.intent = 'recover'; break;
+        case 'saveLayout': {
+          ensure(Array.isArray(command.placements)); this.apply(workspaceId, command.placements, state.revision, this.viewport(command.viewport ?? state.viewport));
+          for (const p of command.placements) { targets.push(p.blockId); const b = find(p.blockId); if ((p.presentation.width !== undefined && p.presentation.width !== b.width) || (p.presentation.height !== undefined && p.presentation.height !== b.height) || (p.presentation.shape === 'circle' && b.width !== b.height)) resizeIds.push(p.blockId); }
+          if (!command.placements.length && command.viewport) policy.intent = 'view';
+          break;
+        }
         case 'applyPreset': {
           const ps = presetGeometry(command.preset, state.blocks, command.width, command.height);
           this.apply(workspaceId, state.blocks.filter(b => !b.locked).map(b => {
@@ -319,11 +381,13 @@ export class WorkspaceEngine {
         }
         default: throw new WorkspaceError('UNKNOWN_COMMAND');
       }
-      const resolve = ['createBlock', 'attachResource', 'duplicateBlock', 'moveBlock', 'resizeBlock', 'setBlockShape', 'setBlockPresentation', 'setPresence', 'saveLayout', 'applyPreset', 'resolveLayout', 'restoreCheckpoint'].includes(command.type);
-      const rearrangedPlacementIds = resolve ? this.resolve(workspaceId, targets, command.bounds) : [];
-      const noOp = command.type === 'resolveLayout' && !rearrangedPlacementIds.length;
+      policy.targets = targets; policy.resizeIds = resizeIds; policy.intent ??= resizeIds.length ? 'resize' : targets.length ? 'move' : 'resolve';
+      const resolve = ['createBlock', 'attachResource', 'duplicateBlock', 'moveBlock', 'resizeBlock', 'setBlockShape', 'setBlockPresentation', 'setPresence', 'saveLayout', 'applyPreset', 'resolveLayout', 'restoreCheckpoint', 'setOrganization', 'applyStructuredPreset', 'reorderPlacements', 'bringAllIntoView'].includes(command.type);
+      const resolved = resolve ? this.resolve(workspaceId, policy, state.organization.revision) : { changed: [], viewport: state.viewport };
+      const rearrangedPlacementIds = resolved.changed;
+      const noOp = ['resolveLayout', 'setOrganization', 'bringAllIntoView', 'reorderPlacements'].includes(command.type) && hash(before) === hash(this.snapshot(workspaceId)) && hash(state.viewport) === hash(resolved.viewport);
       if (!noOp && this.kernel.openWorkspace(workspaceId).layout.version === state.revision)
-        this.kernel.saveLayout(workspaceId, 'freeform', state.viewport, [], state.revision);
+        this.kernel.saveLayout(workspaceId, this.readOrganization(workspaceId).mode === 'structured' ? 'structured' : 'freeform', resolved.viewport, [], state.revision);
       if (!noOp && !['undoLayout', 'redoLayout', 'checkpoint'].includes(command.type)) {
         const after = this.snapshot(workspaceId);
         h.undo.push({ before, after }); h.redo = []; this.writeHistory(workspaceId, h);
@@ -347,7 +411,7 @@ export class WorkspaceEngine {
     ensure(text(approvalId) && this.options.allowResourceDeletion?.({ resourceId, expectedVersion, approvalId }) === true, 'DELETE_POLICY_REQUIRED');
     this.atomic(() => {
       // Keep history/checkpoints recoverable; forgetting recovery data is a separate policy decision.
-      const history = this.db.prepare('SELECT history_json AS json FROM workspace_engine_layouts UNION ALL SELECT snapshot_json AS json FROM workspace_engine_checkpoints UNION ALL SELECT json FROM workspace_engine_v2_recovery_archive').all();
+      const history = this.db.prepare('SELECT history_json AS json FROM workspace_engine_layouts UNION ALL SELECT snapshot_json AS json FROM workspace_engine_checkpoints UNION ALL SELECT json FROM workspace_engine_v2_recovery_archive UNION ALL SELECT json FROM workspace_engine_v3_recovery_archive').all();
       ensure(!history.some(row => String(row.json).includes(resourceId)), 'RECOVERY_REFERENCE');
       this.kernel.deleteResource(resourceId, expectedVersion, { correlationId: approvalId });
     });

@@ -244,7 +244,10 @@ test('presets act on real blocks, keep locked placements and allow subsequent cu
 test('failed extension migration is atomic and retains the previous schema for recovery', t => {
   const { kernel: k } = fixture(t);
   k.withTransaction(db => {
-    db.exec(`DROP TABLE workspace_engine_v2_recovery_archive;
+    db.exec(`DROP TABLE workspace_engine_v3_recovery_archive;
+      ALTER TABLE workspace_engine_layouts DROP COLUMN organization_json;
+      ALTER TABLE workspace_engine_layouts DROP COLUMN legacy_organization_json;
+      DROP TABLE workspace_engine_v2_recovery_archive;
       ALTER TABLE workspace_engine_layouts DROP COLUMN presence_json;
       ALTER TABLE workspace_engine_layouts DROP COLUMN legacy_presence_json;
       DROP TABLE workspace_engine_receipts; DROP TABLE workspace_engine_checkpoints;

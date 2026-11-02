@@ -1,5 +1,7 @@
 # Dynamic workspace engine
 
+Current policy contract: [Fluid, Freeform and Structured organization](ORGANIZATION-MODES.md). Fluid is the default; the three policies share the same resources, placements, presence, database, history and Motion Coordinator. Schema3 presence/collision notes below describe the preserved foundation; schema4 makes automatic collision handling specific to the selected organization policy.
+
 Reusable main-process engine over the existing `WorkspaceKernel`, with renderer-neutral typed commands, projections, and interaction bindings. Vela has a separate persistent system-presence placement; committed moves/resizes resolve collisions in one undoable transaction. This implementation does not select a desktop stack or replace the Cinematic renderer. See [presence and collision integration](PRESENCE-COLLISIONS.md) for schema 3 and the additive service API.
 
 ```ts

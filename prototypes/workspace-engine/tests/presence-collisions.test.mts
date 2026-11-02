@@ -136,7 +136,10 @@ test('failed schema3 migration rolls back presence columns and archive while ret
   let raw = '';
   k.withTransaction(db => {
     raw = String(db.prepare('SELECT history_json FROM workspace_engine_layouts').get()!.history_json);
-    db.exec(`DROP TABLE workspace_engine_v2_recovery_archive;
+    db.exec(`DROP TABLE workspace_engine_v3_recovery_archive;
+      ALTER TABLE workspace_engine_layouts DROP COLUMN organization_json;
+      ALTER TABLE workspace_engine_layouts DROP COLUMN legacy_organization_json;
+      DROP TABLE workspace_engine_v2_recovery_archive;
       ALTER TABLE workspace_engine_layouts DROP COLUMN presence_json;
       ALTER TABLE workspace_engine_layouts DROP COLUMN legacy_presence_json;
       UPDATE workspace_engine_schema SET version=2;
@@ -203,7 +206,7 @@ test('schema2 history/checkpoint upgrade preserves exact raw recovery and suppor
     assert.deepEqual(s.presence, defaultPresence(w.id));
     k.withTransaction(db => {
       assert.equal(db.prepare("SELECT json FROM workspace_engine_v2_recovery_archive WHERE kind='history'").get()!.json, raw);
-      assert.equal(db.prepare('SELECT version FROM workspace_engine_schema').get()!.version, 3);
+      assert.equal(db.prepare('SELECT version FROM workspace_engine_schema').get()!.version, 4);
     });
     s = run(e, s, { type: 'undoLayout' }); assert.equal(s.blocks[0].x, 32);
     s = run(e, s, { type: 'redoLayout' }); assert.equal(s.blocks[0].x, 100);

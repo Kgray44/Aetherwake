@@ -7,6 +7,17 @@ export type Presentation = Geometry & {
   materialVariant: string;
 };
 export type Viewport = { x: number; y: number; zoom: number; displayId?: string };
+export type OrganizationMode = 'fluid' | 'freeform' | 'structured';
+export type StructuredPreset = 'balanced' | 'focus' | 'development' | 'research';
+export type GridSpan = { columns: number; rows: number };
+export type StructuredOrganization = {
+  columnCount?: number; rowHeight: number; rowGap: number; columnGap: number; margin: number;
+  preset: StructuredPreset; order: string[]; spans: Record<string, GridSpan>;
+};
+export type WorkspaceOrganization = {
+  schemaVersion: 1; mode: OrganizationMode; gap: number; revision: number; structured: StructuredOrganization;
+};
+export type OrganizationUpdate = { mode?: OrganizationMode; gap?: number; structured?: Partial<StructuredOrganization> };
 /** System presence is a layout participant, never a duplicate assistant resource. */
 export type PresencePlacement = Geometry & {
   id: 'system:vela'; kind: 'vela'; workspaceId: string; version: number; scale: 0.65; locked: boolean;
@@ -18,7 +29,7 @@ export type BlockProjection = Presentation & {
 export type WorkspaceProjection = {
   contract: typeof CONTRACT; workspaceId: string; projectId: string | null; title: string;
   workspaceVersion: number; layoutId: string; revision: number; viewport: Viewport;
-  blocks: BlockProjection[]; presence: PresencePlacement; canUndo: boolean; canRedo: boolean;
+  blocks: BlockProjection[]; presence: PresencePlacement; organization: WorkspaceOrganization; canUndo: boolean; canRedo: boolean;
 };
 export type WorkspaceSummary = { workspaceId: string; projectId: string | null; title: string; version: number; state: string };
 export type Preset = 'freeform' | 'focus' | 'columns' | 'research' | 'development';
@@ -38,6 +49,11 @@ type Action =
   | { type: 'setBlockPresentation'; blockId: string; patch: Partial<Presentation> }
   | { type: 'setPresence'; expectedVersion: number; presentation: Partial<Geometry & { locked: boolean }> }
   | { type: 'resolveLayout' }
+  | { type: 'setOrganization'; organization: OrganizationUpdate; expectedOrganizationRevision?: number }
+  | { type: 'applyStructuredPreset'; preset: StructuredPreset }
+  | { type: 'reorderPlacements'; order: string[] }
+  | { type: 'bringAllIntoView' }
+  | { type: 'layerBlock'; blockId: string; direction: 'front' | 'back' | 'raise' | 'lower' }
   | { type: 'saveLayout'; placements: PlacementUpdate[]; viewport?: Viewport }
   | { type: 'applyPreset'; preset: Preset; width: number; height: number }
   | { type: 'undoLayout' | 'redoLayout' }
@@ -45,6 +61,19 @@ type Action =
   | { type: 'restoreCheckpoint'; checkpointId: string };
 export type Command = Action & { commandId: string; workspaceId: string; expectedRevision: number; bounds?: Geometry };
 export type CommandResult = WorkspaceProjection & { checkpointId?: string };
+export type LayoutIntent = 'move' | 'resize' | 'reorder' | 'mode' | 'resolve' | 'recover' | 'view';
+export type LayoutState = Pick<WorkspaceProjection, 'revision' | 'blocks' | 'presence' | 'organization' | 'viewport'>;
+export type LayoutPreviewRequest = {
+  expectedRevision?: number; placements?: PlacementUpdate[];
+  presence?: { expectedVersion: number; presentation: Partial<Geometry & { locked: boolean }> };
+  organization?: OrganizationUpdate; bounds?: Geometry; viewport?: Viewport; intent?: LayoutIntent;
+  order?: string[]; structuredPreset?: StructuredPreset;
+};
+export type LayoutPreview = {
+  canonical: false; baseRevision: number; blocks: BlockProjection[]; presence: PresencePlacement;
+  organization: WorkspaceOrganization; viewport: Viewport; affectedPlacementIds: string[];
+  guides: { axis: 'x' | 'y'; position: number; from: number; to: number }[]; placementAreas: Geometry[];
+};
 export interface WorkspacePort {
   project(workspaceId: string): Promise<WorkspaceProjection>;
   execute(command: Command): Promise<CommandResult>;
