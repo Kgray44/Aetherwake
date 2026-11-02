@@ -1,120 +1,1120 @@
-import type { BlockLibraryHostPort, BlockKind, BlockCategory, CreatedBlock, LibraryCapabilities, TemplateMountOptions, WorkspaceTemplatePort, WorkspaceTemplate, TemplateApplyInput, CaptureChoices, VelaTemplatePlan } from './contracts.ts';
-import { searchBlocks, blockDefinition, blockAvailability } from './registry.ts';
-import { captureWorkspaceTemplate } from './model.ts';
+import type {
+  BlockLibraryHostPort,
+  BlockKind,
+  BlockCategory,
+  CreatedBlock,
+  LibraryCapabilities,
+  TemplateMountOptions,
+  WorkspaceTemplatePort,
+  WorkspaceTemplate,
+  TemplateApplyInput,
+  CaptureChoices,
+  VelaTemplatePlan,
+  LibraryPreferences,
+  BlockConfiguration,
+} from "./contracts.ts";
+import {
+  searchBlocks,
+  blockDefinition,
+  blockAvailability,
+  blockCapabilities,
+} from "./registry.ts";
+import { captureWorkspaceTemplate } from "./model.ts";
+import { blockPreview } from "./preview.ts";
 
-const node = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', text = ''): HTMLElementTagNameMap[K] => {
-  const element = document.createElement(tag); element.className = className; element.textContent = text; return element;
+const node = <K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  className = "",
+  text = "",
+): HTMLElementTagNameMap[K] => {
+  const element = document.createElement(tag);
+  element.className = className;
+  element.textContent = text;
+  return element;
 };
-const button = (text: string, run: () => void) => { const element = node('button','aw-library__button',text); element.type = 'button'; element.onclick = run; return element; };
-const field = (label: string, input: HTMLElement) => { const element = node('label','aw-library__field',label); element.append(input); return element; };
-const errorText = (error: unknown) => error instanceof Error ? error.message.replaceAll('_',' ') : 'The host could not complete this operation.';
-const commandId = () => 'library:' + crypto.randomUUID();
+const button = (text: string, run: () => void) => {
+  const element = node("button", "aw-library__button", text);
+  element.type = "button";
+  element.onclick = run;
+  return element;
+};
+const field = (label: string, input: HTMLElement) => {
+  const element = node("label", "aw-library__field", label);
+  element.append(input);
+  return element;
+};
+const errorText = (error: unknown) =>
+  error instanceof Error
+    ? error.message.replaceAll("_", " ")
+    : "The host could not complete this operation.";
+const commandId = () => "library:" + crypto.randomUUID();
 function shell(root: HTMLElement, title: string, onClose: () => void) {
-  const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const panel = node('section','aw-library'); panel.setAttribute('role','region'); panel.setAttribute('aria-label',title);
-  const header = node('header','aw-library__header'), heading = node('h2','',title), close = button('Close',onClose);
-  header.append(heading,close); const status = node('p','aw-library__status'); status.setAttribute('role','status'); status.setAttribute('aria-live','polite');
-  const body = node('div','aw-library__body'); panel.append(header,status,body); root.append(panel);
-  const escape = (event: KeyboardEvent) => { if (event.key === 'Escape') { event.stopPropagation(); onClose(); } };
-  panel.addEventListener('keydown',escape);
+  const previousFocus =
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+  const panel = node("section", "aw-library");
+  panel.setAttribute("role", "region");
+  panel.setAttribute("aria-label", title);
+  const header = node("header", "aw-library__header"),
+    heading = node("h2", "", title),
+    close = button("Close", onClose);
+  header.append(heading, close);
+  const status = node("p", "aw-library__status");
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  const body = node("div", "aw-library__body");
+  panel.append(header, status, body);
+  root.append(panel);
+  const escape = (event: KeyboardEvent) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      onClose();
+    }
+  };
+  panel.addEventListener("keydown", escape);
   let disposed = false;
-  return {panel,body,status,get disposed(){return disposed;},dispose(){disposed=true;panel.removeEventListener('keydown',escape);panel.remove();previousFocus?.focus();}};
+  return {
+    panel,
+    body,
+    status,
+    get disposed() {
+      return disposed;
+    },
+    dispose() {
+      disposed = true;
+      panel.removeEventListener("keydown", escape);
+      panel.remove();
+      previousFocus?.focus();
+    },
+  };
 }
 
 /** Contextual Add surface only. Created blocks open the parent's existing canonical controls. */
-export function mountBlockLibrary(root: HTMLElement, port: BlockLibraryHostPort, options: {
-  workspaceId: string; expectedLayoutVersion: number | (() => number); onCreated(result: CreatedBlock): void | Promise<void>; onClose(): void;
-}) {
-  const ui = shell(root,'Block Library',options.onClose), search = node('input'), category = node('select'), columns = node('div','aw-library__columns'), list = node('div','aw-library__list'), detail = node('div','aw-library__detail');
-  search.type='search'; search.placeholder='Search blocks, actions or categories'; search.setAttribute('aria-label','Search blocks');
-  for (const [value,label] of [['','All categories'],['conversation','Conversation'],['knowledge','Knowledge'],['planning','Planning'],['observability','Observability']]) {const option=node('option','',label);option.value=value;category.append(option);}
-  category.setAttribute('aria-label','Block category'); columns.append(list,detail);ui.body.append(search,category,columns);
-  let capabilities: LibraryCapabilities | null=null, selected: BlockKind='conversation', pending=false;
+export function mountBlockLibrary(
+  root: HTMLElement,
+  port: BlockLibraryHostPort,
+  options: {
+    workspaceId: string;
+    expectedLayoutVersion: number | (() => number);
+    onCreated(result: CreatedBlock): void | Promise<void>;
+    onClose(): void;
+  },
+) {
+  const ui = shell(root, "Block Library", options.onClose),
+    search = node("input"),
+    category = node("select"),
+    discovery = node("select"),
+    toolbar = node("div", "aw-library__toolbar"),
+    columns = node("div", "aw-library__columns"),
+    list = node("div", "aw-library__list"),
+    detail = node("div", "aw-library__detail");
+  search.type = "search";
+  search.placeholder = "Search blocks, actions or categories";
+  search.setAttribute("aria-label", "Search blocks");
+  for (const [value, label] of [
+    ["", "All categories"],
+    ["conversation", "Conversation"],
+    ["knowledge", "Knowledge"],
+    ["planning", "Planning"],
+    ["observability", "Observability"],
+  ]) {
+    const option = node("option", "", label);
+    option.value = value;
+    category.append(option);
+  }
+  for (const [value, label] of [
+    ["all", "All blocks"],
+    ["favorites", "Favorites"],
+    ["recent", "Recently used"],
+    ["compatible", "Available here"],
+  ]) {
+    const option = node("option", "", label);
+    option.value = value;
+    discovery.append(option);
+  }
+  category.setAttribute("aria-label", "Block category");
+  discovery.setAttribute("aria-label", "Block discovery");
+  toolbar.append(category, discovery);
+  columns.append(list, detail);
+  ui.body.append(search, toolbar, columns);
+  let capabilities: LibraryCapabilities | null = null,
+    preferences: LibraryPreferences | null = null,
+    selected: BlockKind = "conversation",
+    pending = false,
+    detailSequence = 0;
+  const revision = () =>
+    typeof options.expectedLayoutVersion === "function"
+      ? options.expectedLayoutVersion()
+      : options.expectedLayoutVersion;
+  async function perform(work: () => Promise<CreatedBlock>) {
+    if (pending) return;
+    pending = true;
+    ui.panel.setAttribute("aria-busy", "true");
+    ui.status.textContent = "Saving workspace placement…";
+    detail
+      .querySelectorAll<HTMLButtonElement>(
+        "button[type=submit], [data-attach-resource]",
+      )
+      .forEach((b) => (b.disabled = true));
+    try {
+      const result = await work();
+      if (ui.disposed) return;
+      ui.status.textContent = "Block saved.";
+      await options.onCreated(result);
+      if (port.preferences) preferences = await port.preferences();
+      if (!ui.disposed) {
+        renderList();
+        showDetail();
+      }
+    } catch (error) {
+      if (!ui.disposed) {
+        ui.status.textContent = errorText(error);
+        showDetail();
+      }
+    } finally {
+      pending = false;
+      ui.panel.removeAttribute("aria-busy");
+      if (!ui.disposed) showDetail();
+    }
+  }
   const showDetail = () => {
-    detail.replaceChildren(); if (!capabilities) return;
-    const definition=blockDefinition(selected), available=blockAvailability(selected,capabilities), title=node('input');title.value=definition.title;title.maxLength=120;title.required=true;
-    const heading=node('h3','',definition.title), description=node('p','',definition.description), preview=node('p','aw-library__preview',definition.preview), controls=node('ul');
-    for (const action of definition.controls) controls.append(node('li','',action));
-    const form=node('form'), provider=node('select');const later=node('option','','Choose provider later (empty conversation)');later.value='';provider.append(later);
-    if (selected==='conversation') for (const name of ['local','codex'] as const) {const state=capabilities.providers[name];const option=node('option','',name+' — '+(state?.reason ?? state?.state ?? 'unknown'));option.value=name;option.disabled=state?.state!=='available';provider.append(option);}
-    const create=node('button','aw-library__button','Add '+definition.title);create.type='submit';create.disabled=available.state!=='available'||pending;
-    form.append(field('Title',title));if(selected==='conversation')form.append(field('Conversation backend',provider));form.append(create);
-    if(available.state!=='available')form.append(node('p','aw-library__limitation',available.reason ?? 'Unavailable: '+available.state));
-    form.onsubmit=event=>{event.preventDefault();if(pending||!capabilities)return;pending=true;create.disabled=true;ui.status.textContent='Saving block…';
-      const kind=selected;
-      void port.createBlock({commandId:commandId(),workspaceId:options.workspaceId,expectedLayoutVersion:typeof options.expectedLayoutVersion==='function'?options.expectedLayoutVersion():options.expectedLayoutVersion,kind,title:title.value,...(kind==='conversation'&&provider.value?{provider:provider.value as 'local'|'codex'}:{})})
-        .then(async result=>{if(ui.disposed)return;ui.status.textContent='Block saved.';await options.onCreated(result);})
-        .catch(error=>{if(!ui.disposed)ui.status.textContent=errorText(error);})
-        .finally(()=>{pending=false;if(!ui.disposed)create.disabled=available.state!=='available';});};
-    detail.append(heading,description,preview,node('h4','','Canonical controls'),controls,form);
+    const generation = ++detailSequence;
+    detail.replaceChildren();
+    if (!capabilities) return;
+    const definition = blockDefinition(selected),
+      available = blockAvailability(selected, capabilities),
+      title = node("input");
+    title.value = definition.title;
+    title.maxLength = 120;
+    title.required = true;
+    const heading = node("h3", "", definition.title),
+      description = node("p", "", definition.description),
+      controls = node("ul"),
+      kind = selected;
+    for (const capability of blockCapabilities(kind, capabilities))
+      controls.append(
+        node(
+          "li",
+          "",
+          capability.id.replaceAll("-", " ") +
+            " · " +
+            capability.availability.state +
+            (capability.availability.reason
+              ? " — " + capability.availability.reason
+              : ""),
+        ),
+      );
+    const favorite = button(
+      preferences?.favorites.includes(kind) ? "★ Favorited" : "☆ Favorite",
+      () => {
+        if (!port.setFavorite || !preferences || pending) return;
+        const before = preferences;
+        favorite.disabled = true;
+        void port
+          .setFavorite({
+            kind,
+            favorite: !before.favorites.includes(kind),
+            expectedVersion: before.version,
+          })
+          .then((value) => {
+            preferences = value;
+            if (!ui.disposed) {
+              renderList();
+              showDetail();
+            }
+          })
+          .catch(async (error) => {
+            if (ui.disposed) return;
+            ui.status.textContent = errorText(error);
+            if (port.preferences)
+              try {
+                preferences = await port.preferences();
+              } catch {}
+            if (!ui.disposed) showDetail();
+          });
+      },
+    );
+    favorite.disabled = !preferences || !port.setFavorite || pending;
+    const form = node("form"),
+      provider = node("select");
+    const later = node(
+      "option",
+      "",
+      "Choose provider later (empty conversation)",
+    );
+    later.value = "";
+    provider.append(later);
+    if (selected === "conversation")
+      for (const name of ["local", "codex"] as const) {
+        const state = capabilities.providers[name];
+        const option = node(
+          "option",
+          "",
+          name + " — " + (state?.reason ?? state?.state ?? "unknown"),
+        );
+        option.value = name;
+        option.disabled = state?.state !== "available";
+        provider.append(option);
+      }
+    const create = node(
+      "button",
+      "aw-library__button",
+      "Add New " + definition.title,
+    );
+    create.type = "submit";
+    create.disabled = available.state !== "available" || pending;
+    const settings = node("details"),
+      settingsHeading = node("summary", "", "Configure presentation"),
+      shape = node("select"),
+      width = node("input"),
+      height = node("input"),
+      scale = node("select"),
+      mode = node("select");
+    for (const value of definition.supportedShapes) {
+      const option = node("option", "", value);
+      option.value = value;
+      shape.append(option);
+    }
+    shape.value = definition.defaultPresentation.shape;
+    for (const [input, value, min] of [
+      [
+        width,
+        definition.defaultPresentation.width,
+        definition.minimumSize.width,
+      ],
+      [
+        height,
+        definition.defaultPresentation.height,
+        definition.minimumSize.height,
+      ],
+    ] as const) {
+      input.type = "number";
+      input.min = String(min);
+      input.max = "4096";
+      input.value = String(value);
+      input.required = true;
+    }
+    for (const value of [0.75, 1, 1.25, 1.5, 2]) {
+      const option = node("option", "", Math.round(value * 100) + "%");
+      option.value = String(value);
+      scale.append(option);
+    }
+    scale.value = "1";
+    for (const value of ["auto", "compact", "reading"]) {
+      const option = node("option", "", value);
+      option.value = value;
+      mode.append(option);
+    }
+    settings.append(
+      settingsHeading,
+      field("Shape", shape),
+      field("Width", width),
+      field("Height", height),
+    );
+    // Older native hosts can still add geometry without promising unsupported preference persistence.
+    if (port.configureBlock)
+      settings.append(
+        field("Text scale", scale),
+        field("Content presentation", mode),
+      );
+    const placement = () => ({
+      shape: shape.value as typeof definition.defaultPresentation.shape,
+      width: Number(width.value),
+      height: Number(height.value),
+    });
+    const configuration = (): BlockConfiguration => ({
+      schemaVersion: 1,
+      textScale: Number(scale.value),
+      contentMode: mode.value as BlockConfiguration["contentMode"],
+    });
+    form.append(field("Title", title));
+    if (selected === "conversation")
+      form.append(field("Conversation backend", provider));
+    form.append(create);
+    if (available.state !== "available")
+      form.append(
+        node(
+          "p",
+          "aw-library__limitation",
+          available.reason ?? "Unavailable: " + available.state,
+        ),
+      );
+    form.prepend(settings);
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+      void perform(() =>
+        port.createBlock({
+          commandId: commandId(),
+          workspaceId: options.workspaceId,
+          expectedLayoutVersion: revision(),
+          kind,
+          title: title.value,
+          presentation: placement(),
+          ...(port.configureBlock ? { configuration: configuration() } : {}),
+          ...(kind === "conversation" && provider.value
+            ? { provider: provider.value as "local" | "codex" }
+            : {}),
+        }),
+      );
+    };
+    const attach = node("details"),
+      attachHeading = node("summary", "", "Attach Existing"),
+      resourceSearch = node("input"),
+      resourceList = node("div", "aw-library__resources"),
+      more = button("Load more resources", () => {
+        void loadResources(true);
+      });
+    resourceSearch.type = "search";
+    resourceSearch.placeholder = "Search compatible resources";
+    resourceSearch.setAttribute(
+      "aria-label",
+      "Search existing " + definition.title + " resources",
+    );
+    more.hidden = true;
+    let cursor: string | null = null,
+      querySequence = 0;
+    const queried = node("p", "aw-library__hint");
+    async function loadResources(append = false) {
+      if (!port.findResources || !port.attachBlock) return;
+      const request = ++querySequence;
+      queried.textContent = "Finding authorized resources…";
+      try {
+        const page = await port.findResources({
+          workspaceId: options.workspaceId,
+          kind,
+          query: resourceSearch.value,
+          ...(append && cursor ? { afterId: cursor } : {}),
+        });
+        if (
+          ui.disposed ||
+          generation !== detailSequence ||
+          request !== querySequence
+        )
+          return;
+        if (!append) resourceList.replaceChildren();
+        cursor = page.nextCursor;
+        more.hidden = !cursor;
+        queried.textContent =
+          "Resources from this project and unassigned resources. Attachment preserves content and identity.";
+        if (!page.resources.length && !append)
+          resourceList.append(
+            node("p", "", "No compatible resources on this page."),
+          );
+        for (const resource of page.resources) {
+          const row = node("div", "aw-library__resource-row"),
+            label = node("div", "", resource.title);
+          label.append(node("small", "", resource.kind + " · " + resource.id));
+          const action = button("Attach " + resource.title, () => {
+            void perform(() =>
+              port.attachBlock!({
+                commandId: commandId(),
+                workspaceId: options.workspaceId,
+                expectedLayoutVersion: revision(),
+                kind,
+                resourceId: resource.id,
+                expectedResourceVersion: resource.version,
+                presentation: placement(),
+                ...(port.configureBlock
+                  ? { configuration: configuration() }
+                  : {}),
+              }),
+            );
+          });
+          action.dataset.attachResource = resource.id;
+          action.disabled = pending || available.state !== "available";
+          row.append(label, action);
+          resourceList.append(row);
+        }
+      } catch (error) {
+        if (
+          !ui.disposed &&
+          generation === detailSequence &&
+          request === querySequence
+        )
+          queried.textContent = errorText(error);
+      }
+    }
+    attach.append(attachHeading);
+    if (port.findResources && port.attachBlock) {
+      attach.append(resourceSearch, queried, resourceList, more);
+      attach.ontoggle = () => {
+        if (attach.open) void loadResources();
+      };
+      resourceSearch.oninput = () => {
+        void loadResources();
+      };
+    } else
+      attach.append(
+        node(
+          "p",
+          "aw-library__limitation",
+          "This native host has not connected resource attachment to the library.",
+        ),
+      );
+    detail.append(
+      heading,
+      favorite,
+      description,
+      blockPreview(kind),
+      node("p", "aw-library__hint", definition.preview),
+      node(
+        "p",
+        "aw-library__hint",
+        definition.id +
+          " · v" +
+          definition.version +
+          " · " +
+          definition.defaultPresentation.width +
+          " × " +
+          definition.defaultPresentation.height +
+          " preferred · supports " +
+          definition.compatibleResourceKinds.join(", "),
+      ),
+      node("h4", "", "Current capabilities"),
+      controls,
+      form,
+      attach,
+    );
   };
-  const renderList=()=>{if(!capabilities)return;list.replaceChildren();const results=searchBlocks(search.value,capabilities,(category.value||undefined) as BlockCategory|undefined);
-    if(!results.length)list.append(node('p','','No matching supported block types.'));
-    for(const definition of results){const item=button(definition.title+(definition.availability.state==='available'?'':' · '+definition.availability.state),()=>{selected=definition.kind;renderList();showDetail();});item.setAttribute('aria-pressed',String(definition.kind===selected));list.append(item);}
+  const renderList = () => {
+    if (!capabilities) return;
+    list.replaceChildren();
+    const results = searchBlocks(
+      search.value,
+      capabilities,
+      (category.value || undefined) as BlockCategory | undefined,
+    );
+    const filtered = results.filter((d) =>
+      discovery.value === "favorites"
+        ? preferences?.favorites.includes(d.kind)
+        : discovery.value === "recent"
+          ? preferences?.recent.includes(d.kind)
+          : discovery.value === "compatible"
+            ? d.availability.state === "available"
+            : true,
+    );
+    if (discovery.value === "recent")
+      filtered.sort(
+        (a, b) =>
+          (preferences?.recent.indexOf(a.kind) ?? 0) -
+          (preferences?.recent.indexOf(b.kind) ?? 0),
+      );
+    if (!filtered.length)
+      list.append(node("p", "", "No matching block types."));
+    for (const definition of filtered) {
+      const item = button(
+        (preferences?.favorites.includes(definition.kind) ? "★ " : "") +
+          definition.title +
+          (definition.availability.state === "available"
+            ? ""
+            : " · " + definition.availability.state),
+        () => {
+          selected = definition.kind;
+          renderList();
+          showDetail();
+        },
+      );
+      item.setAttribute("aria-pressed", String(definition.kind === selected));
+      item.append(node("small", "aw-library__hint", definition.description));
+      list.append(item);
+    }
   };
-  search.oninput=renderList;category.onchange=renderList;ui.status.textContent='Reading host capabilities…';
-  void port.capabilities().then(value=>{if(ui.disposed)return;capabilities=value;ui.status.textContent='';renderList();showDetail();search.focus();}).catch(error=>{if(!ui.disposed)ui.status.textContent=errorText(error);});
-  return {dispose:ui.dispose,refreshCapabilities:async()=>{const value=await port.capabilities();if(!ui.disposed){capabilities=value;renderList();showDetail();}}};
+  search.oninput = renderList;
+  category.onchange = renderList;
+  discovery.onchange = renderList;
+  ui.status.textContent = "Reading host capabilities…";
+  void Promise.all([
+    port.capabilities(),
+    port.preferences?.() ?? Promise.resolve(null),
+  ])
+    .then(([value, prefs]) => {
+      if (ui.disposed) return;
+      capabilities = value;
+      preferences = prefs;
+      ui.status.textContent = "";
+      renderList();
+      showDetail();
+      search.focus();
+    })
+    .catch((error) => {
+      if (!ui.disposed) ui.status.textContent = errorText(error);
+    });
+  return {
+    dispose: ui.dispose,
+    refreshCapabilities: async () => {
+      const value = await port.capabilities();
+      if (!ui.disposed) {
+        capabilities = value;
+        renderList();
+        showDetail();
+      }
+    },
+  };
 }
 
-export function mountWorkspaceTemplates(root: HTMLElement, port: WorkspaceTemplatePort, options: TemplateMountOptions) {
-  const ui=shell(root,'New Workspace',options.onClose), toolbar=node('div','aw-library__toolbar'), search=node('input'), archived=node('input'), columns=node('div','aw-library__columns'),list=node('div','aw-library__list'),detail=node('div','aw-library__detail');
-  search.type='search';search.placeholder='Search workspace templates';search.setAttribute('aria-label','Search workspace templates');archived.type='checkbox';
-  const saveCurrent=button('Save current workspace as template',()=>showSaveCurrent()),ask=button('Ask Vela',()=>showVela());saveCurrent.disabled=!options.currentWorkspace;
-  toolbar.append(saveCurrent,ask,field('Include archived',archived));columns.append(list,detail);ui.body.append(search,toolbar,columns);
-  let pending=false, sequence=0, capabilities:LibraryCapabilities|null=null;
-  async function run<T>(message:string,operation:()=>Promise<T>):Promise<T|undefined>{if(pending)return;pending=true;ui.panel.setAttribute('aria-busy','true');ui.status.textContent=message;
-    try{const result=await operation();if(!ui.disposed){ui.status.textContent='';return result;}}catch(error){if(!ui.disposed)ui.status.textContent=errorText(error);}finally{pending=false;ui.panel.removeAttribute('aria-busy');}}
-  async function refresh(){const request=++sequence;try{const templates=await port.listTemplates({query:search.value,includeArchived:archived.checked});if(ui.disposed||request!==sequence)return;list.replaceChildren();if(!templates.length)list.append(node('p','','No templates found.'));
-    for(const template of templates){const item=button(template.name+' · '+template.mode+' · '+template.placementCount+' blocks'+(template.state==='archived'?' · archived':''),()=>{void run('Loading template…',()=>port.getTemplate(template.id)).then(value=>{if(value)showTemplate(value);});});list.append(item);}
-  }catch(error){if(!ui.disposed)ui.status.textContent=errorText(error);}}
-  function previewLayout(template:WorkspaceTemplate){
-    const diagram=node('div','aw-library__layout');diagram.setAttribute('aria-label','Template layout preview');
-    const placements=template.body.placements;
-    const minX=Math.min(0,...placements.map(p=>p.presentation.x)),minY=Math.min(0,...placements.map(p=>p.presentation.y));
-    const width=Math.max(1,...placements.map(p=>p.presentation.x+p.presentation.width-minX)),height=Math.max(1,...placements.map(p=>p.presentation.y+p.presentation.height-minY));
-    for(const placement of placements){const role=template.body.resources.find(r=>r.key===placement.resourceKey)!;const tile=node('span','aw-library__layout-block',role.label);const p=placement.presentation;tile.style.left=((p.x-minX)/width*100)+'%';tile.style.top=((p.y-minY)/height*100)+'%';tile.style.width=(p.width/width*100)+'%';tile.style.height=(p.height/height*100)+'%';tile.style.borderRadius=p.shape==='circle'?'50%':p.shape==='pill'?'40px':'8px';tile.title=role.label+' · '+p.shape;diagram.append(tile);}
+export function mountWorkspaceTemplates(
+  root: HTMLElement,
+  port: WorkspaceTemplatePort,
+  options: TemplateMountOptions,
+) {
+  const ui = shell(root, "New Workspace", options.onClose),
+    toolbar = node("div", "aw-library__toolbar"),
+    search = node("input"),
+    archived = node("input"),
+    columns = node("div", "aw-library__columns"),
+    list = node("div", "aw-library__list"),
+    detail = node("div", "aw-library__detail");
+  search.type = "search";
+  search.placeholder = "Search workspace templates";
+  search.setAttribute("aria-label", "Search workspace templates");
+  archived.type = "checkbox";
+  const saveCurrent = button("Save current workspace as template", () =>
+      showSaveCurrent(),
+    ),
+    ask = button("Ask Vela", () => showVela());
+  saveCurrent.disabled = !options.currentWorkspace;
+  toolbar.append(saveCurrent, ask, field("Include archived", archived));
+  columns.append(list, detail);
+  ui.body.append(search, toolbar, columns);
+  let pending = false,
+    sequence = 0,
+    capabilities: LibraryCapabilities | null = null;
+  async function run<T>(
+    message: string,
+    operation: () => Promise<T>,
+  ): Promise<T | undefined> {
+    if (pending) return;
+    pending = true;
+    ui.panel.setAttribute("aria-busy", "true");
+    ui.status.textContent = message;
+    try {
+      const result = await operation();
+      if (!ui.disposed) {
+        ui.status.textContent = "";
+        return result;
+      }
+    } catch (error) {
+      if (!ui.disposed) ui.status.textContent = errorText(error);
+    } finally {
+      pending = false;
+      ui.panel.removeAttribute("aria-busy");
+    }
+  }
+  async function refresh() {
+    const request = ++sequence;
+    try {
+      const templates = await port.listTemplates({
+        query: search.value,
+        includeArchived: archived.checked,
+      });
+      if (ui.disposed || request !== sequence) return;
+      list.replaceChildren();
+      if (!templates.length) list.append(node("p", "", "No templates found."));
+      for (const template of templates) {
+        const item = button(
+          template.name +
+            " · " +
+            template.mode +
+            " · " +
+            template.placementCount +
+            " blocks" +
+            (template.state === "archived" ? " · archived" : ""),
+          () => {
+            void run("Loading template…", () =>
+              port.getTemplate(template.id),
+            ).then((value) => {
+              if (value) showTemplate(value);
+            });
+          },
+        );
+        list.append(item);
+      }
+    } catch (error) {
+      if (!ui.disposed) ui.status.textContent = errorText(error);
+    }
+  }
+  function previewLayout(template: WorkspaceTemplate) {
+    const diagram = node("div", "aw-library__layout");
+    diagram.setAttribute("aria-label", "Template layout preview");
+    const placements = template.body.placements;
+    const minX = Math.min(0, ...placements.map((p) => p.presentation.x)),
+      minY = Math.min(0, ...placements.map((p) => p.presentation.y));
+    const width = Math.max(
+        1,
+        ...placements.map(
+          (p) => p.presentation.x + p.presentation.width - minX,
+        ),
+      ),
+      height = Math.max(
+        1,
+        ...placements.map(
+          (p) => p.presentation.y + p.presentation.height - minY,
+        ),
+      );
+    for (const placement of placements) {
+      const role = template.body.resources.find(
+        (r) => r.key === placement.resourceKey,
+      )!;
+      const tile = node("span", "aw-library__layout-block", role.label);
+      const p = placement.presentation;
+      tile.style.left = ((p.x - minX) / width) * 100 + "%";
+      tile.style.top = ((p.y - minY) / height) * 100 + "%";
+      tile.style.width = (p.width / width) * 100 + "%";
+      tile.style.height = (p.height / height) * 100 + "%";
+      tile.style.borderRadius =
+        p.shape === "circle" ? "50%" : p.shape === "pill" ? "40px" : "8px";
+      tile.title = role.label + " · " + p.shape;
+      diagram.append(tile);
+    }
     return diagram;
   }
-  function showTemplate(template:WorkspaceTemplate){
-    detail.replaceChildren(node('h3','',template.name),node('p','',template.description),previewLayout(template),node('p','aw-library__hint','Template geometry is shown above. The workspace engine resolves Fluid and Structured layouts. Vela keeps its separate presence.'));
-    const roles=node('ul');for(const role of template.body.resources)roles.append(node('li','',role.label+' — '+role.source.kind+' — '+(role.source.mode==='new'?'create empty new resource':'reuse resource '+role.source.resourceId)));detail.append(roles);
-    const form=node('form'),name=node('input');name.value=template.name==='Blank'?'New workspace':template.name;name.maxLength=120;name.required=true;
-    const preview=button('Check template',()=>{void inspect();}),apply=node('button','aw-library__button','Create workspace');apply.type='submit';apply.disabled=template.state!=='active';
-    const summary=node('p','aw-library__hint');let checked:TemplateApplyInput|null=null;
-    const input=():TemplateApplyInput=>({commandId:commandId(),templateId:template.id,expectedVersion:template.version,title:name.value,projectId:options.projectId,...(options.expectedProjectVersion===undefined?{}:{expectedProjectVersion:options.expectedProjectVersion})});
-    async function inspect(){const candidate=input();const result=await run('Checking current access and versions…',()=>port.previewTemplate(candidate));if(result){checked=candidate;summary.textContent=result.newResourceCount+' new resources, '+result.referenceCount+' references, '+result.placementCount+' placements in a new '+result.body.organization.mode+' workspace.';}}
-    name.oninput=()=>{checked=null;summary.textContent='';};
-    form.onsubmit=event=>{event.preventDefault();void(async()=>{if(!checked)await inspect();if(!checked||ui.disposed)return;const result=await run('Creating workspace atomically…',()=>port.applyTemplate(checked!));if(result){ui.status.textContent='Workspace saved.';await options.onApplied(result);}})().catch(error=>{if(!ui.disposed)ui.status.textContent=errorText(error);});};
-    form.append(field('Workspace name',name),preview,apply,summary);detail.append(form);
-    if(template.source!=='preset'){
-      const renameForm=node('form'),rename=node('input');rename.value=template.name;rename.maxLength=120;rename.required=true;const renameButton=node('button','aw-library__button','Rename template');renameButton.type='submit';renameForm.append(field('Template name',rename),renameButton);renameForm.onsubmit=event=>{event.preventDefault();void run('Renaming…',()=>port.renameTemplate({id:template.id,expectedVersion:template.version,name:rename.value})).then(value=>{if(value){showTemplate(value);void refresh();}});};
-      const archive=button(template.state==='active'?'Archive template':'Restore template',()=>{void run('Updating template…',()=>port.archiveTemplate({id:template.id,expectedVersion:template.version,archived:template.state==='active'})).then(value=>{if(value){showTemplate(value);void refresh();}});});detail.append(renameForm,archive);
+  function showTemplate(template: WorkspaceTemplate) {
+    detail.replaceChildren(
+      node("h3", "", template.name),
+      node("p", "", template.description),
+      previewLayout(template),
+      node(
+        "p",
+        "aw-library__hint",
+        "Template geometry is shown above. The workspace engine resolves Fluid and Structured layouts. Vela keeps its separate presence.",
+      ),
+    );
+    const roles = node("ul");
+    for (const role of template.body.resources)
+      roles.append(
+        node(
+          "li",
+          "",
+          role.label +
+            " — " +
+            role.source.kind +
+            " — " +
+            (role.source.mode === "new"
+              ? "create empty new resource"
+              : "reuse resource " + role.source.resourceId),
+        ),
+      );
+    detail.append(roles);
+    const form = node("form"),
+      name = node("input");
+    name.value = template.name === "Blank" ? "New workspace" : template.name;
+    name.maxLength = 120;
+    name.required = true;
+    const preview = button("Check template", () => {
+        void inspect();
+      }),
+      apply = node("button", "aw-library__button", "Create workspace");
+    apply.type = "submit";
+    apply.disabled = template.state !== "active";
+    const summary = node("p", "aw-library__hint");
+    let checked: TemplateApplyInput | null = null;
+    const input = (): TemplateApplyInput => ({
+      commandId: commandId(),
+      templateId: template.id,
+      expectedVersion: template.version,
+      title: name.value,
+      projectId: options.projectId,
+      ...(options.expectedProjectVersion === undefined
+        ? {}
+        : { expectedProjectVersion: options.expectedProjectVersion }),
+    });
+    async function inspect() {
+      const candidate = input();
+      const result = await run("Checking current access and versions…", () =>
+        port.previewTemplate(candidate),
+      );
+      if (result) {
+        checked = candidate;
+        summary.textContent =
+          result.newResourceCount +
+          " new resources, " +
+          result.referenceCount +
+          " references, " +
+          result.placementCount +
+          " placements in a new " +
+          result.body.organization.mode +
+          " workspace.";
+      }
     }
-    if(template.provenance)detail.append(node('p','aw-library__hint','Vela plan from '+template.provenance.providerId+(template.provenance.model?' · '+template.provenance.model:'')));
+    name.oninput = () => {
+      checked = null;
+      summary.textContent = "";
+    };
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      void (async () => {
+        if (!checked) await inspect();
+        if (!checked || ui.disposed) return;
+        const result = await run("Creating workspace atomically…", () =>
+          port.applyTemplate(checked!),
+        );
+        if (result) {
+          ui.status.textContent = "Workspace saved.";
+          await options.onApplied(result);
+        }
+      })().catch((error) => {
+        if (!ui.disposed) ui.status.textContent = errorText(error);
+      });
+    };
+    form.append(field("Workspace name", name), preview, apply, summary);
+    detail.append(form);
+    const duplicate = button("Duplicate template", () => {
+      void run("Duplicating reusable layout…", () =>
+        port.saveTemplate({
+          name: template.name.slice(0, 110) + " copy",
+          description: template.description,
+          tags: template.tags,
+          body: template.body,
+        }),
+      ).then((value) => {
+        if (value) {
+          showTemplate(value);
+          void refresh();
+        }
+      });
+    });
+    detail.append(duplicate);
+    if (template.source !== "preset") {
+      const edit = button("Edit template", () => showEditTemplate(template));
+      edit.disabled = template.state !== "active";
+      const update = button("Update from current workspace", () =>
+        showSaveCurrent(template),
+      );
+      update.disabled =
+        template.state !== "active" || !options.currentWorkspace;
+      const archive = button(
+        template.state === "active"
+          ? "Remove from personal library"
+          : "Restore template",
+        () => {
+          void run("Updating template…", () =>
+            port.archiveTemplate({
+              id: template.id,
+              expectedVersion: template.version,
+              archived: template.state === "active",
+            }),
+          ).then((value) => {
+            if (value) {
+              showTemplate(value);
+              void refresh();
+            }
+          });
+        },
+      );
+      detail.append(
+        edit,
+        update,
+        archive,
+        node(
+          "p",
+          "aw-library__hint",
+          "Removing a template archives its definition. Workspaces already created from it retain their resources and arrangements.",
+        ),
+      );
+    }
+    if (template.provenance)
+      detail.append(
+        node(
+          "p",
+          "aw-library__hint",
+          "Vela plan from " +
+            template.provenance.providerId +
+            (template.provenance.model
+              ? " · " + template.provenance.model
+              : ""),
+        ),
+      );
   }
-  function showSaveCurrent(){
-    const snapshot=options.currentWorkspace?.();if(!snapshot?.activeWorkspaceId){ui.status.textContent='Open a workspace before saving its layout.';return;}
-    detail.replaceChildren(node('h3','','Save reusable workspace'),node('p','','Choose how each resource is reused. New resources start empty; note text, conversation history, provider sessions and execution are never copied.'));
-    const form=node('form'),name=node('input'),description=node('textarea'),choices:CaptureChoices={};name.required=true;name.maxLength=120;name.value=(snapshot.workspaces.find(w=>w.id===snapshot.activeWorkspaceId)?.title??'Workspace')+' template';description.maxLength=500;
-    form.append(field('Template name',name),field('Description',description));
-    for(const id of new Set(snapshot.blocks.map(b=>b.resource_id))){const resource=snapshot.resources.find(r=>r.id===id);if(!resource)continue;const select=node('select');select.required=true;
-      for(const [value,label] of [['','Choose resource binding'],['reference','Reuse existing resource (same ID)'],['new','Create empty new resource']]){const option=node('option','',label);option.value=value;select.append(option);}select.onchange=()=>{if(select.value)choices[id]=select.value as 'new'|'reference';else delete choices[id];};form.append(field(resource.title+' · '+resource.kind,select));}
-    const submit=node('button','aw-library__button','Save template');submit.type='submit';form.append(submit);form.onsubmit=event=>{event.preventDefault();let body;try{body=captureWorkspaceTemplate(snapshot,choices);}catch(error){ui.status.textContent=errorText(error);return;}void run('Saving reusable layout…',()=>port.saveTemplate({name:name.value,description:description.value,tags:[],body})).then(value=>{if(value){showTemplate(value);void refresh();}});};detail.append(form);
+  function showEditTemplate(template: WorkspaceTemplate) {
+    detail.replaceChildren(
+      node("h3", "", "Edit " + template.name),
+      node(
+        "p",
+        "aw-library__hint",
+        "These changes update the reusable template only. Existing workspaces keep their current layout.",
+      ),
+    );
+    const form = node("form"),
+      name = node("input"),
+      description = node("textarea"),
+      tags = node("input"),
+      mode = node("select"),
+      body = structuredClone(template.body);
+    name.value = template.name;
+    name.maxLength = 120;
+    name.required = true;
+    description.value = template.description;
+    description.maxLength = 500;
+    tags.value = template.tags.join(", ");
+    tags.maxLength = 500;
+    for (const value of ["fluid", "freeform", "structured"]) {
+      const option = node("option", "", value);
+      option.value = value;
+      mode.append(option);
+    }
+    mode.value = body.organization.mode;
+    form.append(
+      field("Template name", name),
+      field("Description", description),
+      field("Categories / tags (comma separated)", tags),
+      field("Organization mode", mode),
+    );
+    for (const placement of body.placements) {
+      const role = body.resources.find((r) => r.key === placement.resourceKey)!,
+        group = node("details"),
+        summary = node("summary", "", role.label + " · " + role.source.kind),
+        shape = node("select");
+      group.append(summary);
+      for (const value of blockDefinition(role.source.kind).supportedShapes) {
+        const option = node("option", "", value);
+        option.value = value;
+        shape.append(option);
+      }
+      shape.value = placement.presentation.shape;
+      shape.onchange = () => {
+        placement.presentation.shape =
+          shape.value as typeof placement.presentation.shape;
+      };
+      group.append(field("Shape", shape));
+      for (const property of ["x", "y", "width", "height"] as const) {
+        const value = node("input");
+        value.type = "number";
+        value.value = String(placement.presentation[property]);
+        value.min =
+          property === "width"
+            ? "128"
+            : property === "height"
+              ? "96"
+              : "-1000000";
+        value.max =
+          property === "width" || property === "height" ? "4096" : "1000000";
+        value.required = true;
+        value.oninput = () => {
+          placement.presentation[property] = Number(value.value);
+        };
+        group.append(field(property, value));
+      }
+      form.append(group);
+    }
+    const save = node("button", "aw-library__button", "Save template changes");
+    save.type = "submit";
+    form.append(
+      save,
+      button("Cancel editing", () => showTemplate(template)),
+    );
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      body.organization.mode = mode.value as typeof body.organization.mode;
+      void run("Saving versioned template…", () =>
+        port.saveTemplate({
+          id: template.id,
+          expectedVersion: template.version,
+          name: name.value,
+          description: description.value,
+          tags: tags.value
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean),
+          body,
+        }),
+      ).then((value) => {
+        if (value) {
+          showTemplate(value);
+          void refresh();
+        }
+      });
+    };
+    detail.append(form);
   }
-  function showVela(){
-    detail.replaceChildren(node('h3','','Ask Vela to construct a workspace'),node('p','','Describe the work you want to do. Vela returns a proposal for review; resources are created only when you apply it.'));
-    const form=node('form'),prompt=node('textarea');prompt.required=true;prompt.maxLength=5000;const submit=node('button','aw-library__button','Request proposal');submit.type='submit';submit.disabled=capabilities?.velaPlanning.state!=='available';form.append(field('Workspace purpose',prompt),submit);
-    if(submit.disabled)form.append(node('p','aw-library__limitation',capabilities?.velaPlanning.reason??'Vela planning is unavailable. Use Blank, a preset or a saved template.'));
-    form.onsubmit=event=>{event.preventDefault();void run('Waiting for Vela’s proposal…',()=>port.requestVelaTemplate({requestId:commandId(),prompt:prompt.value,projectId:options.projectId})).then(plan=>{if(plan)showVelaPlan(plan);});};detail.append(form);
+  function showSaveCurrent(target?: WorkspaceTemplate) {
+    const snapshot = options.currentWorkspace?.();
+    if (!snapshot?.activeWorkspaceId) {
+      ui.status.textContent = "Open a workspace before saving its layout.";
+      return;
+    }
+    detail.replaceChildren(
+      node("h3", "", "Save reusable workspace"),
+      node(
+        "p",
+        "",
+        "Choose how each resource is reused. New resources start empty; note text, conversation history, provider sessions and execution are never copied.",
+      ),
+    );
+    const form = node("form"),
+      name = node("input"),
+      description = node("textarea"),
+      tags = node("input"),
+      choices: CaptureChoices = {};
+    name.required = true;
+    name.maxLength = 120;
+    name.value =
+      target?.name ??
+      (snapshot.workspaces.find((w) => w.id === snapshot.activeWorkspaceId)
+        ?.title ?? "Workspace") + " template";
+    description.maxLength = 500;
+    description.value = target?.description ?? "";
+    tags.value = target?.tags.join(", ") ?? "";
+    tags.maxLength = 500;
+    form.append(
+      field("Template name", name),
+      field("Description", description),
+      field("Categories / tags (comma separated)", tags),
+    );
+    for (const id of new Set(snapshot.blocks.map((b) => b.resource_id))) {
+      const resource = snapshot.resources.find((r) => r.id === id);
+      if (!resource) continue;
+      const select = node("select");
+      select.required = true;
+      for (const [value, label] of [
+        ["", "Choose resource binding"],
+        ["reference", "Reuse existing resource (same ID)"],
+        ["new", "Create empty new resource"],
+      ]) {
+        const option = node("option", "", label);
+        option.value = value;
+        select.append(option);
+      }
+      select.onchange = () => {
+        if (select.value) choices[id] = select.value as "new" | "reference";
+        else delete choices[id];
+      };
+      form.append(field(resource.title + " · " + resource.kind, select));
+    }
+    const submit = node(
+      "button",
+      "aw-library__button",
+      target ? "Update template from workspace" : "Save template",
+    );
+    submit.type = "submit";
+    form.append(submit);
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      let body;
+      try {
+        body = captureWorkspaceTemplate(
+          snapshot,
+          choices,
+          options.currentConfigurations?.(),
+        );
+      } catch (error) {
+        ui.status.textContent = errorText(error);
+        return;
+      }
+      void run("Saving reusable layout…", () =>
+        port.saveTemplate({
+          ...(target ? { id: target.id, expectedVersion: target.version } : {}),
+          name: name.value,
+          description: description.value,
+          tags: tags.value
+            .split(",")
+            .map((t) => t.trim())
+            .filter(Boolean),
+          body,
+        }),
+      ).then((value) => {
+        if (value) {
+          showTemplate(value);
+          void refresh();
+        }
+      });
+    };
+    detail.append(form);
   }
-  function showVelaPlan(plan:VelaTemplatePlan){
-    detail.replaceChildren(node('h3','',plan.name),node('p','',plan.description),node('p','aw-library__hint','Proposal from '+plan.provenance.providerId+'. Review and save before applying.'));
-    const roles=node('ul');for(const role of plan.body.resources)roles.append(node('li','',role.label+' · '+role.source.kind+' · '+role.source.mode));detail.append(roles);
-    const name=node('input');name.value=plan.name;name.maxLength=120;name.required=true;const save=button('Save proposal as template',()=>{void run('Saving Vela proposal…',()=>port.saveTemplate({...plan,name:name.value,source:'vela'})).then(value=>{if(value){showTemplate(value);void refresh();}});});detail.append(field('Template name',name),save);
+  function showVela() {
+    detail.replaceChildren(
+      node("h3", "", "Ask Vela to construct a workspace"),
+      node(
+        "p",
+        "",
+        "Describe the work you want to do. Vela returns a proposal for review; resources are created only when you apply it.",
+      ),
+    );
+    const form = node("form"),
+      prompt = node("textarea");
+    prompt.required = true;
+    prompt.maxLength = 5000;
+    const submit = node("button", "aw-library__button", "Request proposal");
+    submit.type = "submit";
+    submit.disabled = capabilities?.velaPlanning.state !== "available";
+    form.append(field("Workspace purpose", prompt), submit);
+    if (submit.disabled)
+      form.append(
+        node(
+          "p",
+          "aw-library__limitation",
+          capabilities?.velaPlanning.reason ??
+            "Vela planning is unavailable. Use Blank, a preset or a saved template.",
+        ),
+      );
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      void run("Waiting for Vela’s proposal…", () =>
+        port.requestVelaTemplate({
+          requestId: commandId(),
+          prompt: prompt.value,
+          projectId: options.projectId,
+        }),
+      ).then((plan) => {
+        if (plan) showVelaPlan(plan);
+      });
+    };
+    detail.append(form);
   }
-  search.oninput=()=>{void refresh();};archived.onchange=()=>{void refresh();};
-  void port.capabilities().then(value=>{if(!ui.disposed)capabilities=value;}).catch(error=>{if(!ui.disposed)ui.status.textContent=errorText(error);});
-  void refresh();search.focus();
-  return {dispose:ui.dispose,refresh};
+  function showVelaPlan(plan: VelaTemplatePlan) {
+    detail.replaceChildren(
+      node("h3", "", plan.name),
+      node("p", "", plan.description),
+      node(
+        "p",
+        "aw-library__hint",
+        "Proposal from " +
+          plan.provenance.providerId +
+          ". Review and save before applying.",
+      ),
+    );
+    const roles = node("ul");
+    for (const role of plan.body.resources)
+      roles.append(
+        node(
+          "li",
+          "",
+          role.label + " · " + role.source.kind + " · " + role.source.mode,
+        ),
+      );
+    detail.append(roles);
+    const name = node("input");
+    name.value = plan.name;
+    name.maxLength = 120;
+    name.required = true;
+    const save = button("Save proposal as template", () => {
+      void run("Saving Vela proposal…", () =>
+        port.saveTemplate({ ...plan, name: name.value, source: "vela" }),
+      ).then((value) => {
+        if (value) {
+          showTemplate(value);
+          void refresh();
+        }
+      });
+    });
+    detail.append(field("Template name", name), save);
+  }
+  search.oninput = () => {
+    void refresh();
+  };
+  archived.onchange = () => {
+    void refresh();
+  };
+  void port
+    .capabilities()
+    .then((value) => {
+      if (!ui.disposed) capabilities = value;
+    })
+    .catch((error) => {
+      if (!ui.disposed) ui.status.textContent = errorText(error);
+    });
+  void refresh();
+  search.focus();
+  return { dispose: ui.dispose, refresh };
 }
