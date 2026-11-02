@@ -29,7 +29,7 @@ const kinds = [
   "reference",
   "stream",
 ];
-const shapes = ["rectangle", "rounded", "circle"];
+const shapes = ["rectangle", "rounded", "circle", "pill", "folio", "lens"];
 type Session = {
   activeWorkspaceId: string | null;
   navigation: NavigationTarget;
@@ -249,9 +249,12 @@ export class DesktopState {
         width: b.width,
         height: b.height,
         z: b.zIndex,
-        shape: (["rectangle", "rounded", "circle"].includes(b.shape)
-          ? b.shape
-          : "rounded") as Shape,
+        shape: b.shape,
+        rotation: b.rotation,
+        minimized: b.minimized,
+        locked: b.locked,
+        materialVariant: b.materialVariant,
+        contentMode: b.contentMode,
       }))
       .sort((a, b) => a.z - b.z || a.id.localeCompare(b.id));
   }
@@ -525,6 +528,7 @@ export class DesktopState {
         .all()
         .map((b: any) => ({ ...b, shape: "rectangle" as const })),
       layoutVersion: w?.layout.version ?? 0,
+      viewport: s.activeWorkspaceId ? this.engine.project(s.activeWorkspaceId).viewport : undefined,
       canUndo: s.activeWorkspaceId
         ? this.engine.project(s.activeWorkspaceId).canUndo
         : false,

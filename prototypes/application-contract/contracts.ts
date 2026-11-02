@@ -6,7 +6,7 @@ export type BlockKind =
   | "task"
   | "reference"
   | "stream";
-export type Shape = "rectangle" | "rounded" | "circle";
+export type Shape = "rectangle" | "rounded" | "circle" | "pill" | "folio" | "lens";
 export type Geometry = {
   x: number;
   y: number;
@@ -20,6 +20,12 @@ export type Block = Geometry & {
   workspace_id: string;
   version: number;
   shape: Shape;
+  /** Authoritative engine presentation; rotation is planar, not the renderer's 3D yaw. */
+  rotation?: number;
+  minimized?: boolean;
+  locked?: boolean;
+  materialVariant?: string;
+  contentMode?: "summary" | "reading";
 };
 export type Project = { id: string; title: string; version: number };
 export type Workspace = {
@@ -62,6 +68,7 @@ export type DesktopSnapshot = {
   canUndo: boolean;
   hasCheckpoint: boolean;
   navigationBlocks?: Block[];
+  viewport?: { x: number; y: number; zoom: number; displayId?: string };
 };
 export type DesktopCommand =
   | { type: "snapshot" }
