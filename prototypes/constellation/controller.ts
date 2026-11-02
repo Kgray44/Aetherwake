@@ -443,7 +443,7 @@ export class ConstellationController {
       .filter((n) => n.title.toLocaleLowerCase().includes(q))
       .slice(0, clamp(limit, 1, 100));
   }
-  async locate(key: string) {
+  async locate(key: string, fit = true) {
     const n = this.nodes.get(key);
     if (!n) throw new Error("Destination unavailable");
     const projectId =
@@ -460,9 +460,15 @@ export class ConstellationController {
           : projectId
             ? { kind: "project", projectId }
             : { kind: "workspace", workspaceId: n.workspaceId! };
-    await this.go(parent);
+    const manualRevision = this.spatial?.manualRevision,
+      travel = this.go(parent),
+      generation = this.generation;
+    await travel;
+    if (generation !== this.generation || this.destroyed) return false;
+    if (!this.nodes.has(key)) throw new Error("Destination unavailable");
     this.select(key);
-    this.fit(key);
+    if (fit && manualRevision === this.spatial?.manualRevision) this.fit(key);
+    return true;
   }
   async approach(key = this.selected) {
     const n = this.nodes.get(key ?? "");

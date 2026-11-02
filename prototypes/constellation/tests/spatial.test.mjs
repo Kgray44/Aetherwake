@@ -655,6 +655,82 @@ test("authorized cross-project links appear in a resource neighborhood without i
   );
 });
 
+test("exploring separated pinned resources frames their actual bodies and typed curve in wide and narrow fields", async () => {
+  for (const width of [1440, 420]) {
+    const { c, motion, navigation: n } = setup(fixture(2));
+    const scene = new ConstellationScene(c, n, () => ({
+      left: 0, top: 0, width, height: 900, bottom: 900,
+    }));
+    await n.place("resource:b0", { x: 50000, y: 30000, z: 50000 });
+    await n.place("resource:b1", { x: 56000, y: 30000, z: 50000 });
+    const anchors = structuredClone(c.state.anchors);
+    await n.explore("resource:b0");
+    settle(motion);
+    scene.update(width, 900);
+    for (const key of ["resource:b0", "resource:b1"]) {
+      assert.ok(scene.objects.has(key), `${width}: missing actual body ${key}`);
+      const p = scene.project(key, width, 900);
+      assert.ok(p.x > 0 && p.x < width && p.y > 0 && p.y < 900);
+    }
+    assert.ok(scene.links.children.some((o) => o.userData.edge === "edge1"));
+    assert.ok(scene.labels(width, 900).some((l) => l.node.key === "resource:b1"));
+    assert.deepEqual(c.state.anchors, anchors);
+    assert.ok(n.bookmark().distance > 6000);
+    // The first inward wheel gesture must retain the wide neighborhood.
+    n.zoom(1.01);
+    await new Promise(setImmediate);
+    assert.equal(n.neighborhood, "resource:b0");
+    assert.deepEqual(c.location, { kind: "project", projectId: "p" });
+    n.zoom(0.99);
+    await new Promise(setImmediate);
+    assert.equal(n.neighborhood, "resource:b0");
+    assert.deepEqual(c.location, { kind: "project", projectId: "p" });
+    n.zoom(0.4);
+    assert.equal(n.neighborhood, undefined);
+    await new Promise(setImmediate);
+    scene.dispose();
+    c.dispose();
+  }
+});
+
+test("manual input while Locate or Explore awaits canonical navigation keeps its newer camera", async () => {
+  for (const operation of ["locate", "explore"]) {
+    let release;
+    const { c, motion, navigation: n } = setup(fixture(), {
+      navigate: () => new Promise((resolve) => { release = resolve; }),
+    });
+    const travel = operation === "locate"
+      ? c.locate("resource:b0") : n.explore("resource:b0");
+    await new Promise(setImmediate);
+    n.orbit(90, -30);
+    n.pan(80, 20);
+    const desired = n.bookmark();
+    release();
+    await travel;
+    settle(motion);
+    assert.deepEqual(n.camera, desired, operation);
+    c.dispose();
+  }
+});
+
+test("a superseded Locate cannot select or fit its old destination over newer travel", async () => {
+  const releases = [];
+  const { c } = setup(fixture(), {
+    navigate: () => new Promise((resolve) => releases.push(resolve)),
+  });
+  const old = c.locate("resource:b0");
+  await new Promise(setImmediate);
+  const newer = c.go({ kind: "universe" });
+  releases.shift()();
+  await old;
+  assert.notEqual(c.selected, "resource:b0");
+  await new Promise(setImmediate);
+  releases.shift()();
+  await newer;
+  assert.equal(c.location.kind, "universe");
+  c.dispose();
+});
+
 test("unplaced canonical resources remain in their project graph and cannot fabricate an editor placement", async () => {
   const s = fixture();
   s.resources[0].project_id = "p";

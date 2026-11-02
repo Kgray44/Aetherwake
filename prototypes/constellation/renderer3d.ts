@@ -92,6 +92,8 @@ export class ConstellationScene implements SpatialRenderLayer {
     this.bounds = bounds;
     this.wake = wake;
     this.exclusions = exclusions;
+    const rect = bounds();
+    navigation.setViewport(rect.width, rect.height);
     this.scene.add(this.links);
     this.raycaster.params.Line = { threshold: 12 };
   }
@@ -134,6 +136,7 @@ export class ConstellationScene implements SpatialRenderLayer {
     root.removeFromParent();
   }
   private configure(width: number, height: number) {
+    this.navigation.setViewport(width, height);
     const p = this.navigation.camera,
       d = p.distance,
       cp = Math.cos(p.pitch);
@@ -239,11 +242,13 @@ export class ConstellationScene implements SpatialRenderLayer {
             priority:
               n.key === this.controller.selected
                 ? -1
-                : n.kind === "project"
+                : this.navigation.neighborhood && n.kind === "resource"
                   ? 0
+                : n.kind === "project"
+                  ? 1
                   : n.kind === "workspace"
-                    ? 1
-                    : 2,
+                    ? 2
+                    : 3,
             distance: (p.x - target.x) ** 2 + (p.z - target.z) ** 2,
           };
         })
@@ -508,10 +513,12 @@ export class ConstellationScene implements SpatialRenderLayer {
       const p = this.projectPrepared(n.key, width, height);
       if (p.depth < -1 || p.depth > 1) continue;
       const essential =
-        n.kind !== "resource" || n.key === this.controller.selected;
+        n.kind !== "resource" || n.key === this.controller.selected ||
+        !!this.navigation.neighborhood;
       if (
         n.kind === "resource" &&
         this.navigation.camera.distance > 2400 &&
+        !this.navigation.neighborhood &&
         n.key !== this.controller.selected
       )
         continue;

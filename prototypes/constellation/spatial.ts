@@ -145,6 +145,15 @@ export class SpatialNavigator {
   private preview = new Map<string, Vector3>();
   private space = new BodySpace();
   private radii = new Map<string, { identity: string; radius: number }>();
+  private viewportAspect = 1.6;
+  private neighborhoodFrameCache?: {
+    nodes: Map<string, Node>;
+    revision: number;
+    key: string;
+    aspect: number;
+    target: Vector3;
+    distance: number;
+  };
   notice = "";
   readonly controller: ConstellationController;
   private dirty: () => void;
@@ -209,6 +218,62 @@ export class SpatialNavigator {
     const radius = bodyEnvelope(n.id, n.kind);
     this.radii.set(key, { identity, radius });
     return radius;
+  }
+  setViewport(width: number, height: number) {
+    if (width > 0 && height > 0 && Number.isFinite(width / height))
+      this.viewportAspect = width / height;
+  }
+  private neighborhoodFrame() {
+    const key = this.neighborhood;
+    if (!key) return undefined;
+    const cached = this.neighborhoodFrameCache;
+    if (
+      cached?.key === key &&
+      cached.nodes === this.controller.nodes &&
+      cached.revision === this.layoutRevision &&
+      cached.aspect === this.viewportAspect
+    )
+      return cached;
+    const bodies = this.candidateNodes().filter((n) => n.kind === "resource"),
+      low = { x: Infinity, y: Infinity, z: Infinity },
+      high = { x: -Infinity, y: -Infinity, z: -Infinity };
+    for (const body of bodies) {
+      const p = this.position(body.key),
+        r = this.radius(body.key);
+      for (const axis of ["x", "y", "z"] as const) {
+        low[axis] = Math.min(low[axis], p[axis] - r);
+        high[axis] = Math.max(high[axis], p[axis] + r);
+      }
+    }
+    if (!bodies.length) return undefined;
+    const target = {
+      x: (low.x + high.x) / 2,
+      y: (low.y + high.y) / 2,
+      z: (low.z + high.z) / 2,
+    };
+    let radius = 0;
+    for (const body of bodies) {
+      const p = this.position(body.key);
+      radius = Math.max(
+        radius,
+        Math.hypot(p.x - target.x, p.y - target.y, p.z - target.z) +
+          this.radius(body.key));
+    }
+    const halfFov = Math.atan(
+      Math.tan((43 * Math.PI) / 360) * Math.min(1, this.viewportAspect),
+    );
+    const distance = Math.min(
+      100000,
+      Math.max(550, ((radius + 80) * 1.12) / Math.sin(halfFov)),
+    );
+    return (this.neighborhoodFrameCache = {
+      nodes: this.controller.nodes,
+      revision: this.layoutRevision,
+      key,
+      aspect: this.viewportAspect,
+      target,
+      distance,
+    });
   }
   updateGraph() {
     const c = this.controller,
@@ -477,15 +542,19 @@ export class SpatialNavigator {
       if (selected?.kind === "project")
         p.target = { ...this.position(selected.key) };
     }
-    this.target(p, "dolly");
-    if (this.neighborhood && p.distance > 2200) {
+    if (
+      this.neighborhood && factor < 1 &&
+      p.distance > Math.max(2200, (this.neighborhoodFrame()?.distance ?? 550) * 1.5)
+    ) {
       this.neighborhood = undefined;
       delete p.neighborhood;
     }
+    this.target(p, "dolly");
     if (this.semanticPending || c.pending) return;
     let destination: import("./types.ts").Location | undefined;
     if (
       c.location.kind === "project" &&
+      !this.neighborhood &&
       factor < 1 &&
       p.distance >
         Math.max(
@@ -816,9 +885,19 @@ export class SpatialNavigator {
   async explore(key: string) {
     const n = this.controller.nodes.get(key);
     if (!n || n.kind !== "resource") return;
-    await this.controller.locate(key);
+    const revision = this.manualRevision;
+    if (
+      !(await this.controller.locate(key, false)) ||
+      revision !== this.manualRevision
+    )
+      return;
     this.neighborhood = key;
-    this.fit(key);
+    const frame = this.neighborhoodFrame();
+    if (frame)
+      this.target(
+        { ...this.bookmark(), target: { ...frame.target }, distance: frame.distance },
+        "explore related resources",
+      );
     await this.controller.persist();
     this.dirty();
   }
