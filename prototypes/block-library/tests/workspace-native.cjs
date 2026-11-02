@@ -85,7 +85,7 @@ exports.verify = async ({
           .map((error) => String(error?.message ?? error).slice(0, 1000))
       : ["Invalid host startup error collection"];
   };
-  let limits, guard;
+  let limits, guard, inspectState;
   try {
     limits = exports.options(process.argv, moduleStarted);
     guard = createInlineDraftGuard(win, limits);
@@ -162,10 +162,15 @@ exports.verify = async ({
         ),
       );
     const click = async (selector) => {
+      receipt.lastIntent = { action: "native click", selector };
       await guard.around(() => driver.click(selector));
       receipt.actions.push({ action: "native click", selector });
     };
     const snapshot = () => guard.around(() => driver.snapshot());
+    inspectState = () =>
+      js(
+        `(()=>{const a=window.__aerynth.application(),s=window.__aerynth.snapshot(),selector=${q(receipt.lastIntent?.selector ?? "")},target=selector?document.querySelector(selector):null,r=target?.getBoundingClientRect(),hit=r?document.elementFromPoint(Math.round(r.x+r.width/2),Math.round(r.y+r.height/2)):null;return {activeWorkspaceId:a.activeWorkspaceId,blocks:a.blocks.map(b=>({id:b.id,workspaceId:b.workspace_id,resourceId:b.resource_id,shape:b.shape,x:b.x,y:b.y,width:b.width,height:b.height,z:b.z})),graphics:{active:s.active,failed:s.graphicsFailed,contextLost:s.gpu?.contextLost,errorCount:s.metrics.errors.length,errors:s.metrics.errors.slice(0,20).map(e=>String(e).slice(0,1000)),draws:s.metrics.draws,frames:s.gpu?.framesRendered},intent:{selector,targetBlockId:target?.closest('[data-block]')?.dataset.block,hitBlockId:hit?.closest('[data-block]')?.dataset.block,hitClass:typeof hit?.className==='string'?hit.className:''},domCards:[...document.querySelectorAll('.folio[data-block]')].slice(0,32).map(e=>({id:e.dataset.block,kind:e.dataset.blockKind,hidden:e.hidden,expanded:e.classList.contains('expanded'),receded:e.classList.contains('receded')}))}})()`,
+      );
     const execute = async (command) => {
       receipt.actions.push({ action: "canonical fixture command", command });
       return js(`window.__aerynth.execute(${q(command)})`);
@@ -444,6 +449,11 @@ exports.verify = async ({
         a.kind === "note" ? -1 : b.kind === "note" ? 1 : 0,
       );
       for (const entry of order) {
+        receipt.currentCase = {
+          phase: "default",
+          kind: entry.kind,
+          workspaceId: entry.workspaceId,
+        };
         drawBaseline = await js("window.__aerynth.snapshot().metrics.draws");
         await navigate(entry);
         if (!entry.blockId) {
@@ -628,6 +638,12 @@ exports.verify = async ({
         10,
       );
       for (const entry of seed.shapeCases) {
+        receipt.currentCase = {
+          phase: "saved shape",
+          kind: entry.kind,
+          shape: entry.shape,
+          workspaceId: entry.workspaceId,
+        };
         await navigate(entry);
         const card = await normal(entry),
           before = await snapshot(),
@@ -702,6 +718,14 @@ exports.verify = async ({
     }
     await noExecution();
     assert.deepEqual(receipt.errors, []);
+    receipt.finalState = await inspectState();
+    assert.equal(
+      receipt.finalState.graphics.errorCount,
+      0,
+      "Observed final renderer errors",
+    );
+    assert.equal(receipt.finalState.graphics.failed, false, "Graphics failed at final inspection");
+    assert.equal(receipt.finalState.graphics.contextLost, false, "Graphics context lost at final inspection");
     recordStartupErrors();
     assert.equal(
       receipt.startupErrorCount,
@@ -716,6 +740,20 @@ exports.verify = async ({
     // After custody loss, only a bounded failure receipt may be written. No
     // recovery input, capture, focus acquisition or observer is left behind.
     try {
+      receipt.partialCounts = {
+        completedDefaults: receipt.cases.length,
+        completedShapes: receipt.shapeCases.length,
+      };
+      if (inspectState && !receipt.finalState) {
+        try {
+          receipt.finalState = await inspectState();
+        } catch (error) {
+          receipt.finalStateUnavailable = String(error?.message ?? error).slice(
+            0,
+            1000,
+          );
+        }
+      }
       recordStartupErrors();
       if (receipt.startupErrorCount !== 0) receipt.passed = false;
       win.webContents.removeListener("console-message", consoleError);
