@@ -44,11 +44,11 @@ function admitPNG(budget, bytes, file) {
   const item = { file, bytes: bytes.length, sha256: hash(bytes) };
   budget.files.push(item); budget.count++; budget.bytes += bytes.length; return item;
 }
-/** Only workspace display name/version may change during organization. Every
+/** Workspace name/version/update time change during explicit organization. Every
  * engine geometry/presentation/revision, resource and provider field remains. */
 function organizationInvariant(value) {
   const copy = structuredClone(value);
-  for (const key of ['workspaces', 'archivedWorkspaces']) copy[key] = copy[key].map(({ title, version, ...identity }) => identity);
+  for (const key of ['workspaces', 'archivedWorkspaces']) copy[key] = copy[key].map(({ title, version, updated_at, ...identity }) => identity);
   for (const layout of Object.values(copy.layouts)) { delete layout.title; delete layout.workspaceVersion; }
   return copy;
 }

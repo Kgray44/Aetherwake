@@ -28,9 +28,9 @@ test('shared initial/restore PNG count and byte limits cannot reset or overflow'
   assert.throws(() => validateBudget({ ...value, count: NaN }));
 });
 
-test('organization comparison ignores only expected workspace names/versions and retains geometry, identity, content and provider state', () => {
+test('organization comparison permits explicit workspace metadata edits and retains geometry, identity, content and provider state', () => {
   const state = { projects: [{ id: 'p', version: 1 }], workspaces: [{ id: 'w', title: 'one', version: 1 }], archivedWorkspaces: [], layouts: { w: { workspaceId: 'w', projectId: 'p', title: 'one', workspaceVersion: 1, revision: 7, viewport: { x: 8, y: 9, zoom: .7 }, presence: { id: 'system:vela', x: 6 }, blocks: [{ blockId: 'b', resourceId: 'r', x: 20, shape: 'folio', version: 3 }], canUndo: true } }, resources: [{ id: 'r', content: 'Exact synthetic body', version: 2 }], placements: [{ id: 'b', resource_id: 'r', x: 20, version: 3 }], bindings: {}, executions: {}, graph: { messages: [] } };
-  const renamed = structuredClone(state); renamed.workspaces[0].title = 'two'; renamed.workspaces[0].version++; renamed.layouts.w.title = 'two'; renamed.layouts.w.workspaceVersion++;
+  const renamed = structuredClone(state); renamed.workspaces[0].title = 'two'; renamed.workspaces[0].version++; renamed.workspaces[0].updated_at='2026-11-02T21:33:26.872Z'; renamed.layouts.w.title = 'two'; renamed.layouts.w.workspaceVersion++;
   assert.deepEqual(organizationInvariant(renamed), organizationInvariant(state)); assert.equal(state.layouts.w.title, 'one', 'input is not mutated');
   for (const change of [s => s.workspaces[0].id = 'copy', s => s.workspaces[0].project_id = 'foreign', s => s.layouts.w.blocks[0].x++, s => s.layouts.w.blocks[0].shape = 'circle', s => s.layouts.w.blocks[0].version++, s => s.layouts.w.presence.x++, s => s.layouts.w.viewport.zoom++, s => s.layouts.w.revision++, s => s.resources[0].content = 'changed', s => s.placements[0].resource_id = 'copy', s => s.projects[0].version++, s => s.executions.e = { state: 'running' }, s => s.bindings.r = ['provider-thread'], s => s.graph.messages.push({ id: 'unauthorized' })]) {
     const altered = structuredClone(state); change(altered); assert.notDeepEqual(organizationInvariant(altered), organizationInvariant(state));

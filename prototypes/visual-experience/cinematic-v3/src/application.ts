@@ -1624,7 +1624,7 @@ export function installApplication(hooks: Hooks) {
       label: "Environments",
       minSize: { width: 340, height: 240 },
       maxSize: { width: 520, height: 700 },
-      placement: "bottom",
+      placement: "right",
       initialFocus: 'input[type="search"]',
     };
     surfaces.open(environmentSurface).classList.add("application-environments");

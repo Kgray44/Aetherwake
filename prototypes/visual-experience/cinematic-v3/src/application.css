@@ -66,6 +66,7 @@
 .application-environments > .aw-contextual-content,
 .application-workspace-actions > .aw-contextual-content {
   overflow: hidden;
+  padding: 3px;
 }
 @media (forced-colors: active) {
   .application-environments.aw-contextual-surface,
