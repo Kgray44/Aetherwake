@@ -4,6 +4,7 @@ import { ConversationGraph, type Message } from '../../connected-conversations/s
 import type { Snapshot, CommandMap } from '../../integrated-backend/src/contracts.mts';
 import type { DesktopSnapshot } from '../../application-contract/contracts.ts';
 import type { BranchPolicy, CanonicalOrganizationCommand, Collection, ConversationProductPort, ConversationSummary, Detail, Evidence, MessageView, Page, ProductCommandMap, ProviderCapability, SearchHit, SearchQuery, Share } from './contracts.ts';
+import { CONVERSATION_DRAFT_LIMITS, type ConversationDraft } from './contracts.ts';
 
 export interface CanonicalConversationHost {
  snapshot(): Promise<Snapshot>;
@@ -39,6 +40,8 @@ export class ConversationProduct implements ConversationProductPort {
  constructor(db: DatabaseSync, host: CanonicalConversationHost) {
   this.db=db;this.host=host;
   this.tx(() => {
+   const installed=!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_schema'").get();
+   if(installed){const versions=db.prepare('SELECT id,version FROM cp_schema').all();check(versions.length===1&&versions[0].id===1&&(versions[0].version===1||versions[0].version===2),'unsupported_conversation_product_schema');}
    db.exec(`CREATE TABLE IF NOT EXISTS cp_schema(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS cp_flags(resource_id TEXT PRIMARY KEY REFERENCES resources(id), favorite INTEGER NOT NULL CHECK(favorite IN(0,1)));
     CREATE TABLE IF NOT EXISTS cp_collection_rules(collection_id TEXT PRIMARY KEY REFERENCES collections(id), parent_id TEXT REFERENCES collections(id), rule TEXT, version INTEGER NOT NULL);
@@ -46,9 +49,12 @@ export class ConversationProduct implements ConversationProductPort {
     CREATE TABLE IF NOT EXISTS cp_shares(id TEXT PRIMARY KEY, source_resource_id TEXT NOT NULL REFERENCES resources(id), source_message_id TEXT NOT NULL, source_time TEXT NOT NULL, digest TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL, evidence TEXT NOT NULL, created_at TEXT NOT NULL, revoked INTEGER NOT NULL DEFAULT 0, supersedes TEXT REFERENCES cp_shares(id));
     CREATE TABLE IF NOT EXISTS cp_adoptions(share_id TEXT NOT NULL REFERENCES cp_shares(id), target_id TEXT NOT NULL REFERENCES resources(id), inspected_at TEXT, attached_at TEXT, sent_at TEXT, execution_id TEXT, PRIMARY KEY(share_id,target_id));
     CREATE TABLE IF NOT EXISTS cp_audit(id TEXT PRIMARY KEY, action TEXT NOT NULL, subject_id TEXT NOT NULL, at TEXT NOT NULL);`);
-   const row = db.prepare('SELECT version FROM cp_schema WHERE id=1').get();
-   check(!row || row.version === 1, 'unsupported_conversation_product_schema');
-   db.prepare('INSERT OR IGNORE INTO cp_schema VALUES(1,1)').run();
+   if(!installed)db.prepare('INSERT INTO cp_schema VALUES(1,1)').run();
+   const row = db.prepare('SELECT version FROM cp_schema WHERE id=1').get()!;
+   if(row.version===1){
+    db.exec(`CREATE TABLE cp_drafts(resource_id TEXT PRIMARY KEY REFERENCES resources(id), version INTEGER NOT NULL CHECK(version>=1 AND version<=9007199254740991), content TEXT NOT NULL, content_bytes INTEGER NOT NULL CHECK(content_bytes>=0 AND content_bytes<=65536 AND content_bytes=length(CAST(content AS BLOB))), updated_at TEXT NOT NULL) STRICT;`);
+    db.prepare('UPDATE cp_schema SET version=2 WHERE id=1 AND version=1').run();
+   }else check(!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_drafts'").get(),'conversation_draft_storage_unavailable');
   });
  }
  private tx<T>(fn: () => T): T { this.db.exec('SAVEPOINT conversation_product'); try { const result = fn(); this.db.exec('RELEASE conversation_product'); return result; } catch (error) { this.db.exec('ROLLBACK TO conversation_product'); this.db.exec('RELEASE conversation_product'); throw error; } }
@@ -67,6 +73,32 @@ export class ConversationProduct implements ConversationProductPort {
   return r;
  }
  private readable(v: View, id: string, messageId?: string, archived = false) { try { this.resource(v, id, messageId, archived); return true; } catch { return false; } }
+ private draftResource(v: View, id: string) {
+  const r=this.resource(v,id),canonical=this.db.prepare('SELECT kind,state FROM resources WHERE id=?').get(id);
+  check(r.kind==='conversation'&&(r.state===undefined||r.state==='active')&&canonical?.kind==='conversation'&&canonical.state==='active'&&!!v.snapshot.resourceMap[id]&&v.snapshot.conversations.some(c=>c.resourceId===id),'source_unavailable');
+ }
+ private draft(id: string): ConversationDraft {
+  const row=this.db.prepare('SELECT version,content,content_bytes,updated_at FROM cp_drafts WHERE resource_id=?').get(id);
+  if(!row)return {resourceId:id,version:0,content:'',updatedAt:null};
+  const content=String(row.content),version=Number(row.version),updatedAt=String(row.updated_at);
+  check(Number.isSafeInteger(version)&&version>=1&&content.length<=CONVERSATION_DRAFT_LIMITS.contentUnits&&Buffer.byteLength(content,'utf8')===row.content_bytes&&Number(row.content_bytes)<=CONVERSATION_DRAFT_LIMITS.contentBytes&&!Number.isNaN(Date.parse(updatedAt)),'corrupt_conversation_draft');
+  return {resourceId:id,version,content,updatedAt};
+ }
+ private saveDraft(v: View, input: ProductCommandMap['saveDraft']['input']): ConversationDraft {
+  this.draftResource(v,input.resourceId);
+  check(Number.isSafeInteger(input.expectedVersion)&&input.expectedVersion>=0,'invalid_draft_version');
+  check(typeof input.content==='string'&&input.content.length<=CONVERSATION_DRAFT_LIMITS.contentUnits,'invalid_draft_content');
+  const encoded=Buffer.from(input.content,'utf8');check(encoded.length<=CONVERSATION_DRAFT_LIMITS.contentBytes&&encoded.toString('utf8')===input.content,'invalid_draft_content');
+  return this.tx(()=>{
+   this.draftResource(v,input.resourceId);const previous=this.draft(input.resourceId);
+   check(previous.version===input.expectedVersion,'stale_draft_version');check(previous.version<Number.MAX_SAFE_INTEGER,'draft_revision_exhausted');
+   const usage=this.db.prepare('SELECT COUNT(*) AS records,COALESCE(SUM(content_bytes),0) AS bytes FROM cp_drafts').get()!;
+   check((previous.version>0||Number(usage.records)<CONVERSATION_DRAFT_LIMITS.records)&&Number(usage.bytes)-Buffer.byteLength(previous.content,'utf8')+encoded.length<=CONVERSATION_DRAFT_LIMITS.aggregateBytes,'draft_capacity_exceeded');
+   const updatedAt=stamp(),version=previous.version+1;
+   const result=this.db.prepare('INSERT INTO cp_drafts(resource_id,version,content,content_bytes,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(resource_id) DO UPDATE SET version=excluded.version,content=excluded.content,content_bytes=excluded.content_bytes,updated_at=excluded.updated_at WHERE cp_drafts.version=?').run(input.resourceId,version,input.content,encoded.length,updatedAt,input.expectedVersion);
+   check(Number(result.changes)===1,'stale_draft_version');return {resourceId:input.resourceId,version,content:input.content,updatedAt};
+  });
+ }
  private message(v: View, resourceId: string, messageId: string): Message {
   this.resource(v, resourceId, messageId);
   const gid = v.snapshot.resourceMap[resourceId]; check(gid, 'conversation_missing');
@@ -191,6 +223,8 @@ export class ConversationProduct implements ConversationProductPort {
     const family=this.family(v,a.resourceId); const lineage=v.snapshot.graph.edges.map(e=>({id:e.id,parentResourceId:v.publicIds.get(e.parentId)!,childResourceId:v.publicIds.get(e.childId)!,sourceMessageId:e.sourceMessageId,mode:e.mode,createdAt:e.createdAt})).filter(e=>family.has(e.parentResourceId)&&this.readable(v,e.parentResourceId)&&this.readable(v,e.childResourceId));
     result={conversation:c,messages:page<MessageView>(all,{...a,...(around>=0?{offset:Math.max(0,around-Math.min(10,Math.floor((a.limit??50)/2)))}:{})}),lineage,policy:this.policy(a.resourceId),shares:this.db.prepare('SELECT * FROM cp_shares WHERE source_resource_id=? OR id IN(SELECT share_id FROM cp_adoptions WHERE target_id=?)').all(a.resourceId,a.resourceId).map(row=>this.share(v,row,a.resourceId)),providers:await this.providers(v)} satisfies Detail; break;
    }
+   case 'readDraft': this.draftResource(v,a.resourceId);result=this.draft(a.resourceId);break;
+   case 'saveDraft': result=this.saveDraft(v,a);break;
    case 'collections': result=this.collections(v); break;
    case 'projects': result=v.desktop.projects;break;
    case 'organize': {

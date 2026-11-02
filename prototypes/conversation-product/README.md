@@ -69,10 +69,14 @@ operations the host can register with Vela under the same authorization policy.
 
 ## Persistence and search
 
-Schema v1 is additive, version checked, and installed in a savepoint. Unknown
-versions are rejected without resetting user data. `cp_flags`,
+Schema v2 is additive, version checked, and installed in a savepoint. The v1→v2
+migration preserves existing metadata and IDs. Unknown versions are rejected
+without resetting user data. `cp_flags`,
 `cp_collection_rules`, `cp_policy`, `cp_shares`, `cp_adoptions`, and `cp_audit`
-contain only metadata/reference records. `cp_schema` owns this extension version.
+contain only metadata/reference records. `cp_drafts` stores unsent local text under
+the canonical resource ID, independently from messages and execution; `cp_schema`
+owns this extension version. See [draft persistence](DRAFTS.md) for the exact
+read/save contract, capacity limits, access checks and send-clear coordination.
 Canonical collection IDs and membership come directly from the kernel tables.
 Saved rules have a separate rule revision for concurrent-edit detection.
 
@@ -133,9 +137,10 @@ await manager.ready;
 // Later: manager.open(id, optionalMessageId); manager.refresh(); manager.dispose();
 ```
 
-The surface is temporary and mountable; it adds no permanent sidebar. Drafts,
-selected resource, page offsets, and scroll are held in `ManagerState`, which the
-host can persist in private view state across remount/restart. Composer DOM survives
+The surface is temporary and mountable; it adds no permanent sidebar. `ManagerState`
+holds a transient draft cache, selected resource, page offsets, and scroll. Durable
+draft recovery requires the UI/host to coordinate `readDraft` and `saveDraft`; view
+state alone is not a durability guarantee. Composer DOM survives
 refresh; unchanged messages keep keyed DOM nodes for selection stability. History
 renders 50 messages per page. Search input is debounced; there is no animation loop,
 backend subscription, native window, capture, inference timer, or hidden renderer.

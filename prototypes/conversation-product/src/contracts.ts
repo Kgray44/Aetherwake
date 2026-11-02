@@ -11,6 +11,9 @@ export type BranchPolicy = { resourceId: string; revision: number; mode: Sharing
 export type Share = { id: string; sourceResourceId: string; sourceMessageId: string; sourceTime: string; digest: string; range: { start: number; end: number }; evidence: Evidence; createdAt: string; status: 'current' | 'stale' | 'revoked' | 'unavailable' | 'superseded'; supersedes: string | null; supersededBy: string[]; state: 'discoverable' | 'inspected' | 'attached' | 'sent'; attached: boolean; content?: string; targetResourceId?: string; executionId?: string };
 export type ProviderCapability = { id: string; label: string; available: boolean; record: boolean; execute: boolean; nativeFork: boolean; history: 'local' | 'unavailable'; reason?: string; simulated: boolean; models: string[] };
 export type Detail = { conversation: ConversationSummary; messages: Page<MessageView>; lineage: { id: string; parentResourceId: string; childResourceId: string; sourceMessageId: string; mode: string; createdAt: string }[]; policy: BranchPolicy; shares: Share[]; providers: ProviderCapability[] };
+/** Unsent local text. Its revision is independent from the canonical transcript. */
+export type ConversationDraft = { resourceId: string; version: number; content: string; updatedAt: string | null };
+export const CONVERSATION_DRAFT_LIMITS = { contentUnits: 16384, contentBytes: 65536, aggregateBytes: 8 * 1024 * 1024, records: 4096 } as const;
 export type CanonicalOrganizationCommand =
  | { type: 'createCollection'; title: string; projectId: string | null }
  | { type: 'renameCollection'; collectionId: string; title: string; expectedVersion: number }
@@ -22,6 +25,8 @@ export interface ProductCommandMap {
  list: { input: SearchQuery; output: Page<ConversationSummary> };
  search: { input: SearchQuery; output: Page<SearchHit> };
  detail: { input: { resourceId: string; offset?: number; limit?: number; aroundMessageId?: string }; output: Detail };
+ readDraft: { input: { resourceId: string }; output: ConversationDraft };
+ saveDraft: { input: { resourceId: string; expectedVersion: number; content: string }; output: ConversationDraft };
  collections: { input: Record<string, never>; output: Collection[] };
  projects: { input: Record<string, never>; output: { id: string; title: string; version: number }[] };
  organize: { input: CanonicalOrganizationCommand; output: unknown };

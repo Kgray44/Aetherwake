@@ -48,7 +48,7 @@ test('canonical IDs, multiple canonical collections, favorites and migrations su
   await f.close();f=fixture(path);new ConversationProduct(f.db,f.host);
   const restored=await f.product.command('detail',{resourceId:c.resourceId});assert.equal(restored.conversation.conversationId,first.conversation.conversationId);assert.equal(restored.conversation.favorite,true);assert.equal(restored.messages.items[0].id,m.id);assert.equal(restored.conversation.collectionIds.length,2);
   const found=await f.product.command('search',{text:'persistent searchable'});assert.ok(found.items.some(hit=>hit.resourceId===c.resourceId&&hit.messageId===m.id));
-  f.db.prepare('UPDATE cp_schema SET version=2 WHERE id=1').run();assert.throws(()=>new ConversationProduct(f.db,f.host),/unsupported_conversation_product_schema/);assert.equal(f.db.prepare('SELECT version FROM cp_schema WHERE id=1').get()!.version,2);assert.equal((await f.core.command('snapshot',{})).graph.messages[0].id,m.id);f.db.prepare('UPDATE cp_schema SET version=1 WHERE id=1').run();
+  f.db.prepare('UPDATE cp_schema SET version=99 WHERE id=1').run();assert.throws(()=>new ConversationProduct(f.db,f.host),/unsupported_conversation_product_schema/);assert.equal(f.db.prepare('SELECT version FROM cp_schema WHERE id=1').get()!.version,99);assert.equal((await f.core.command('snapshot',{})).graph.messages[0].id,m.id);f.db.prepare('UPDATE cp_schema SET version=2 WHERE id=1').run();
  }finally{await f.close();removeFixture(dir);}
 });
 
