@@ -77,8 +77,9 @@ async function setup(win) {
   s = await state();
   await execute({
     type: "setPresence",
+    workspaceId: s.activeWorkspaceId,
     expectedVersion: s.presence.version,
-    presentation: { x: 710, y: 180, width: 208, height: 260 },
+    placement: { x: 710, y: 180, width: 208, height: 260 },
   });
   await js(
     'window.__aerynth.home();window.__aerynth.setEnvironmentPhase(null);window.__aerynth.setQuality("balanced")',
