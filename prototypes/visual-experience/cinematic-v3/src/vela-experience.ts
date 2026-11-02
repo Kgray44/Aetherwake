@@ -31,24 +31,48 @@ export function createVelaExperience(options: {
   let active = false,
     baseline = false,
     latest: VelaPanelPresentation | null = null;
-  const size = () =>
-    latest?.context ||
-    latest?.phase === "review" ||
-    latest?.phase === "applying"
-      ? { width: 520, height: 580 }
-      : latest?.messageIds.length
-        ? { width: 480, height: 420 }
-        : {
-            width: 440,
-            height: Math.max(
-              150,
-              Math.ceil(
-                options.root
-                  .querySelector<HTMLElement>(".vela-core-compose")
-                  ?.getBoundingClientRect().height ?? 0,
-              ) + 28,
-            ),
-          };
+  const size = () => {
+    const feedback = Math.min(
+      160,
+      [
+        ...options.root.querySelectorAll<HTMLElement>(
+          ".vela-core-status:not([hidden]),.vela-core-error:not([hidden])",
+        ),
+      ].reduce((sum, node) => sum + node.getBoundingClientRect().height, 0),
+    );
+    const composer = Math.max(
+      150,
+      Math.ceil(
+        options.root
+          .querySelector<HTMLElement>(".vela-core-compose")
+          ?.getBoundingClientRect().height ?? 0,
+      ) +
+        feedback +
+        28,
+    );
+    if (latest?.context) {
+      const context =
+        options.root.querySelector<HTMLElement>(".vela-core-contextual")
+          ?.scrollHeight ?? 0;
+      const history = latest.planIds.length
+        ? 180
+        : latest.messageIds.length
+          ? 120
+          : 0;
+      return {
+        width: 520,
+        height:
+          context > 0
+            ? Math.max(240, Math.min(640, composer + context + history + 36))
+            : 580,
+      };
+    }
+    if (latest?.phase === "review" || latest?.phase === "applying")
+      return { width: 520, height: 580 };
+    if (latest?.messageIds.length)
+      return { width: 480, height: Math.max(420, composer + 160) };
+    return { width: 440, height: composer };
+  };
   const resizeObserver =
     typeof ResizeObserver === "undefined"
       ? null
@@ -124,6 +148,12 @@ export function createVelaExperience(options: {
       if (active) {
         const composer = options.root.querySelector(".vela-core-compose");
         if (composer) resizeObserver?.observe(composer);
+        const context = options.root.querySelector(".vela-core-contextual");
+        if (context) resizeObserver?.observe(context);
+        for (const feedback of options.root.querySelectorAll(
+          ".vela-core-status,.vela-core-error",
+        ))
+          resizeObserver?.observe(feedback);
         reconcile();
       } else {
         resizeObserver?.disconnect();

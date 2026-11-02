@@ -110,3 +110,33 @@ test("actual context and phase retarget in place, while quiet/reduced/graphics l
   assert.equal(experience.diagnostics().energy, 0.35);
   experience.dispose();
 });
+
+test("an empty source search uses its measured content rather than a standing large panel", () => {
+  const motion = new MotionCoordinator(),
+    context = { scrollHeight: 100 };
+  const root = {
+    style: { setProperty() {} },
+    dataset: {},
+    querySelectorAll: () => [],
+    querySelector: (selector) =>
+      selector === ".vela-core-compose"
+        ? { getBoundingClientRect: () => ({ height: 100 }) }
+        : context,
+  };
+  const experience = createVelaExperience({
+    motion,
+    root,
+    wake() {},
+    resize() {},
+  });
+  experience.setActive(true);
+  experience.observe(observation({ context: "sources", messageIds: [] }));
+  assert.deepEqual(experience.size(), { width: 520, height: 286 });
+  context.scrollHeight = 1000;
+  assert.equal(
+    experience.size().height,
+    640,
+    "actual results remain locally bounded",
+  );
+  experience.dispose();
+});
