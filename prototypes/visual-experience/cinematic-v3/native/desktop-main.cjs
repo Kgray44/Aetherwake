@@ -581,8 +581,16 @@ app.whenReady().then(async () => {
   if (checkCatalog) {
     // Explicit CLI support action uses this normal app's existing managed
     // connection. The window stays open; this installs no input hooks.
-    const receipt =
-      await require("./model-catalog-check.cjs").checkModelCatalog({ call });
+    const receipt = await require("./model-catalog-check.cjs")
+      .checkModelCatalog({ call })
+      .catch(() => ({
+        contract: "aerynth.native-model-catalog-check@1",
+        state: "check-unavailable",
+        modelInferenceAttempted: false,
+        openedAuthorization: false,
+        billingFallbackUsed: false,
+        credentialsExported: false,
+      }));
     const bytes = JSON.stringify(receipt, null, 2);
     if (Buffer.byteLength(bytes) > 8192)
       throw Error("catalog_diagnostic_capacity");
