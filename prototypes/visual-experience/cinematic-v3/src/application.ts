@@ -130,13 +130,43 @@ export function installApplication(hooks: Hooks) {
   velaContent.className = "application-vela-content";
   const velaClient = createVelaClient({
     command: (name, input) => host.command!(name, input),
-    changed: async () => {
-      apply(
-        (await host.command!("desktop", {
+    changed: (name, result) =>
+      enqueue(async () => {
+        const previousWorkspaceId = state?.activeWorkspaceId;
+        const next = (await host.command!("desktop", {
           type: "snapshot",
-        })) as DesktopSnapshot,
-      );
-    },
+        })) as DesktopSnapshot;
+        apply(next);
+        if (
+          name === "apply" &&
+          next.activeWorkspaceId &&
+          next.activeWorkspaceId !== previousWorkspaceId
+        ) {
+          const planId = (result as { id?: string })?.id;
+          const observed = (await host.command!("vela", {
+            name: "state",
+            input: {},
+          })) as {
+            receipts: {
+              planId: string;
+              state: string;
+              createdWorkspaceId?: string;
+            }[];
+          };
+          if (
+            observed.receipts.some(
+              (receipt) =>
+                receipt.planId === planId &&
+                receipt.state === "applied" &&
+                receipt.createdWorkspaceId === next.activeWorkspaceId,
+            )
+          )
+            await command({
+              type: "bringAllIntoView",
+              workspaceId: next.activeWorkspaceId,
+            });
+        }
+      }),
     observed: (value) => {
       if (
         value.requests.some((r) => r.state === "planning") ||

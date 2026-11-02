@@ -6,7 +6,7 @@ import type {
 /** Browser transport only. Native main owns provider consent; backend owns identity and state. */
 export function createVelaClient(options: {
   command(name: string, input: unknown): Promise<unknown>;
-  changed(): Promise<void>;
+  changed(name: string, result: unknown): Promise<void>;
   observed(state: VelaState): void;
 }): VelaClient {
   const invoke = async <T>(name: string, input: unknown): Promise<T> => {
@@ -27,7 +27,7 @@ export function createVelaClient(options: {
         "resetPreferences",
       ].includes(name)
     )
-      await options.changed();
+      await options.changed(name, result);
     return result as T;
   };
   return {
