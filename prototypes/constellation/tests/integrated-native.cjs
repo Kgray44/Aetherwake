@@ -5,6 +5,7 @@ const { createHash } = require("node:crypto");
 const native = "../../visual-experience/cinematic-v3/native/";
 const { createDriver } = require(native + "desktop-verify.cjs");
 const { startWindowRecording } = require(native + "application-recording.cjs");
+const { checkLabelClearance } = require("./native-labels.cjs");
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const geometry = (s) =>
   s.blocks
@@ -85,6 +86,7 @@ exports.verify = async ({
     receipt.actions.push({
       label: "Overview Vela placement: " + label,
       bounds: await js("window.__aerynth.snapshot().gpu.presenceBounds"),
+      labelClearance: await checkLabelClearance(win),
     });
   };
   const flush = () => js("window.__aerynth.flush()");
@@ -385,6 +387,9 @@ exports.verify = async ({
         blockId: taskGroup.block.id,
         memberResourceIds: [other.task.resource.id, extraTask.resource.id],
       };
+      receipt.focusedDock = await js(
+        `([...document.querySelectorAll('.dock,.dock button,.dock span')].map(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {tag:e.tagName,text:e.textContent,rect:{x:r.x,y:r.y,w:r.width,h:r.height},scrollWidth:e.scrollWidth,clientWidth:e.clientWidth,clipPath:s.clipPath,transform:s.transform,opacity:s.opacity,overflow:s.overflow}}))`,
+      );
       await shot("00-real-local-task-group");
       receipt.checks.push(
         "native-canonical-task-group-creation-membership-and-real-local-member-status-update-without-execution",

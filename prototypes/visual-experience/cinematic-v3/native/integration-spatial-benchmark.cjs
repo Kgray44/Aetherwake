@@ -5,6 +5,9 @@ const { spawn } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const { createDriver } = require("./desktop-verify.cjs");
 const {
+  checkLabelClearance,
+} = require("../../../constellation/tests/native-labels.cjs");
+const {
   percentiles,
   summarizePresentMon,
 } = require("./presentation-metrics.cjs");
@@ -66,6 +69,7 @@ exports.verify = async ({
     await click("#settings-close");
     await pause(1200);
     receipt.foreground = win.isFocused();
+    receipt.labelClearance = await checkLabelClearance(win);
     await fs.writeFile(
       path.join(out, "project-before.png"),
       (await win.webContents.capturePage()).toPNG(),
@@ -254,12 +258,13 @@ exports.verify = async ({
       assert.equal(await js("window.__aerynth.snapshot().reduced"), true);
       checks.push("reduced-motion-retains-native-spatial-navigation");
       const size = win.getSize();
-      win.setSize(1280, 800);
-      await pause(300);
+      win.setContentSize(1050, 800);
+      await pause(900);
       const labels = await js(
         '[...document.querySelectorAll(".aw-spatial-label[data-key]")].map(e=>e.dataset.key)',
       );
       assert.equal(new Set(labels).size, labels.length);
+      receipt.smallWindowLabelClearance = await checkLabelClearance(win);
       win.setSize(...size);
       await pause(250);
       checks.push("native-window-resize-keeps-unique-labels");
