@@ -31,6 +31,8 @@ export type ContextualSurfaceRequest = {
   role?: "dialog" | "region" | "menu";
   minSize?: SurfaceSize;
   maxSize?: SurfaceSize;
+  /** Semantic content size, projected through the existing motion channels. */
+  preferredSize?: SurfaceSize;
   placement?: SurfaceSide;
   modal?: boolean;
   dismissOnOutside?: boolean;
@@ -82,6 +84,27 @@ function usableArea(
     y: r.y + top,
     width: r.width - left - right,
     height: r.height - top - bottom,
+  };
+}
+
+/** Paint the current spring dimensions, including a retarget interrupted by a
+ * viewport change. Text reflows at its real size; no scale transform is used. */
+export function presentContextualSurface(input: {
+  pose: Pose;
+  viewport: SurfaceRect | SurfaceSize;
+  safeInsets?: Partial<SurfaceInsets>;
+}): SurfaceRect {
+  const area = usableArea(input.viewport, input.safeInsets),
+    p = input.pose;
+  if (![p.x, p.y, p.w, p.h, p.lift].every(finite))
+    throw new Error("Invalid contextual presentation pose");
+  const width = clamp(p.w, Math.min(1, area.width), area.width),
+    height = clamp(p.h, Math.min(1, area.height), area.height);
+  return {
+    x: clamp(p.x, area.x, area.x + area.width - width),
+    y: clamp(p.y + p.lift, area.y, area.y + area.height - height),
+    width,
+    height,
   };
 }
 
@@ -335,15 +358,21 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
     e.node.style.maxHeight = `${Math.min(max.height, area.height)}px`;
     e.node.style.width = "fit-content";
     e.node.style.height = "auto";
+    const preferred = e.request.preferredSize;
+    if (
+      preferred &&
+      ![preferred.width, preferred.height].every((n) => finite(n) && n > 0)
+    )
+      throw new Error("Invalid preferred contextual size");
     const rect = e.node.getBoundingClientRect();
     const width = clamp(
-      Math.ceil(rect.width),
+      preferred?.width ?? Math.ceil(rect.width),
       Math.min(min.width, area.width),
       Math.min(max.width, area.width),
     );
     e.node.style.width = `${width}px`;
     const height = clamp(
-      Math.ceil(e.node.scrollHeight + 2),
+      preferred?.height ?? Math.ceil(e.node.scrollHeight + 2),
       Math.min(min.height, area.height),
       Math.min(max.height, area.height),
     );
@@ -400,28 +429,20 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
         destroy(e, e.closing);
         continue;
       }
-      const area = usableArea(options.viewport(), insets());
-      const x = clamp(
-        p.x,
-        area.x,
-        Math.max(area.x, area.x + area.width - e.target.width),
-      );
-      const y = clamp(
-        p.y + p.lift,
-        area.y,
-        Math.max(area.y, area.y + area.height - e.target.height),
-      );
+      const { x, y, width, height } = presentContextualSurface({
+        pose: p,
+        viewport: options.viewport(),
+        safeInsets: insets(),
+      });
       const style = `translate3d(${x.toFixed(3)}px,${y.toFixed(3)}px,0)`;
-      const signature = `${style}/${p.opacity.toFixed(4)}/${e.target.width}/${e.target.height}`;
+      const signature = `${style}/${p.opacity.toFixed(4)}/${width}/${height}`;
+      e.node.style.width = `${width}px`;
+      e.node.style.height = `${height}px`;
       e.node.style.transform = style;
       e.node.style.opacity = String(clamp(p.opacity, 0, 1));
       if (e.lastStyle !== signature) {
         e.lastStyle = signature;
-        options.onFrame?.(
-          e.request.id,
-          { x, y, width: e.target.width, height: e.target.height },
-          e.constrained,
-        );
+        options.onFrame?.(e.request.id, { x, y, width, height }, e.constrained);
       }
     }
   }
@@ -630,6 +651,25 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
     open,
     close,
     frame,
+    resize(id: string, preferredSize: SurfaceSize) {
+      if (
+        ![preferredSize.width, preferredSize.height].every(
+          (n) => finite(n) && n > 0,
+        )
+      )
+        throw new Error("Invalid preferred contextual size");
+      const e = entries.get(id);
+      if (!e || e.destroyed || e.closing) return;
+      if (
+        e.request.preferredSize?.width === preferredSize.width &&
+        e.request.preferredSize?.height === preferredSize.height
+      )
+        return;
+      e.request = { ...e.request, preferredSize: { ...preferredSize } };
+      e.dirty = true;
+      retarget(e);
+      options.wake();
+    },
     viewportChanged() {
       for (const e of entries.values()) e.dirty = true;
       frame(0);
