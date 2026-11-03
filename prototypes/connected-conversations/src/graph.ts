@@ -81,6 +81,10 @@ const copy = <T>(value: T): T => structuredClone(value);
 export class ConversationGraph {
   private data: GraphData;
   private adapters: Map<string, ProviderAdapter>;
+  private readonly conversationsById: Map<string, Conversation>;
+  private readonly messagesById: Map<string, Message>;
+  private readonly edgesByChild: Map<string, LineageEdge>;
+  private readonly unavailableMessages: Set<string>;
   private readonly clock: ConversationClock;
   constructor(adapters: ProviderAdapter[], imported?: GraphData, options: ConversationGraphOptions = {}) {
     this.clock = options.clock ?? wallClock;
@@ -93,6 +97,10 @@ export class ConversationGraph {
       artifacts: [], edges: [], handoffs: [], unavailableMessageIds: [], idempotency: {}
     };
     this.validate();
+    this.conversationsById = new Map(this.data.conversations.map(c => [c.id, c]));
+    this.messagesById = new Map(this.data.messages.map(m => [m.id, m]));
+    this.edgesByChild = new Map(this.data.edges.map(e => [e.childId, e]));
+    this.unavailableMessages = new Set(this.data.unavailableMessageIds);
   }
   private id(prefix: string): string {
     this.data.counter++;
@@ -114,12 +122,12 @@ export class ConversationGraph {
     return adapter;
   }
   private conversation(id: string): Conversation {
-    const value = this.data.conversations.find(c => c.id === id);
+    const value = this.conversationsById.get(id);
     assert(value, 'conversation missing: ' + id);
     return value;
   }
   private message(id: string): Message {
-    const value = this.data.messages.find(m => m.id === id);
+    const value = this.messagesById.get(id);
     assert(value, 'message missing: ' + id);
     return value;
   }
@@ -143,6 +151,7 @@ export class ConversationGraph {
       state: 'idle', ownMessageIds: []
     };
     this.data.conversations.push(c);
+    this.conversationsById.set(c.id, c);
     this.remember(key, id);
     return copy(c);
   }
@@ -166,6 +175,7 @@ export class ConversationGraph {
       sensitivity: options.sensitivity ?? 'internal', providerTurnId: options.providerTurnId
     };
     this.data.messages.push(msg);
+    this.messagesById.set(msg.id, msg);
     c.ownMessageIds.push(msg.id);
     this.remember(options.key, msg.id);
     return copy(msg);
@@ -180,10 +190,18 @@ export class ConversationGraph {
     this.data.artifacts.push(a);
     return copy(a);
   }
+  messageHeader(id: string): { id: string; conversationId: string; createdAt: string; unavailable: boolean } | null {
+    const message = this.messagesById.get(id);
+    return message ? { id, conversationId: message.conversationId, createdAt: message.createdAt, unavailable: this.unavailableMessages.has(id) } : null;
+  }
+  ownsMessage(conversationId: string, messageId: string): boolean {
+    const message = this.messagesById.get(messageId);
+    return !!message && message.conversationId === conversationId && this.conversationsById.get(conversationId)?.ownMessageIds[message.sequence - 1] === messageId;
+  }
   private visibleMessageRecords(conversationId:string,budget?:{remaining:number}):Message[] {
     const c = this.conversation(conversationId);
     if(budget){const count=1+c.ownMessageIds.length;if(count>budget.remaining)throw new MetadataScanLimit();budget.remaining-=count;}
-    const edge = this.data.edges.find(e => e.childId === c.id);
+    const edge = this.edgesByChild.get(c.id);
     let inherited: Message[] = [];
     if (edge) {
       const parent = this.visibleMessageRecords(edge.parentId,budget);
@@ -195,20 +213,20 @@ export class ConversationGraph {
   }
   visibleMessages(conversationId: string): Message[] {return this.visibleMessageRecords(conversationId).map(copy);}
   /** Bounded lineage projection only. Counts/bytes describe this window, never the entire history.
-   * maxScan counts ancestry nodes plus own-message refs before allocation; existing ID searches remain linear.
+   * maxScan counts ancestry nodes plus own-message refs before allocation.
    * The mandatory host policy gates ALL contributing messages before anything escapes. */
   visibleMessageMetadata(conversationId:string,options:{limit:number;maxScan:number;maxBodyBytes:number;offset?:number;tail?:boolean;allow(meta:Readonly<Pick<MessageMetadata,'id'|'conversationId'|'sequence'|'role'|'sensitivity'|'unavailable'>>):boolean}):MessageMetadataWindow {
     const {limit,maxScan,maxBodyBytes}=options,offset=options.offset??0;
     assert([limit,maxScan,maxBodyBytes,offset].every(value=>Number.isSafeInteger(value)&&value>=0)&&limit<=256&&maxScan<=4096&&maxBodyBytes<=131072&&offset<=4096&&(options.tail===undefined||typeof options.tail==='boolean')&&typeof options.allow==='function','invalid metadata limits');
     const empty=(limitedBy:MessageMetadataWindow['limitedBy']):MessageMetadataWindow=>({items:[],emittedCount:0,emittedBodyBytes:0,hasMore:false,limitedBy});
     let records:Message[];try{records=this.visibleMessageRecords(conversationId,{remaining:maxScan});}catch(error){if(error instanceof MetadataScanLimit)return empty('scan-limit');throw error;}
-    for(const message of records){const meta=Object.freeze({id:message.id,conversationId:message.conversationId,sequence:message.sequence,role:message.role,sensitivity:message.sensitivity,unavailable:this.data.unavailableMessageIds.includes(message.id)});try{if(options.allow(meta)!==true)return empty('denied');}catch{return empty('denied');}}
+    for(const message of records){const meta=Object.freeze({id:message.id,conversationId:message.conversationId,sequence:message.sequence,role:message.role,sensitivity:message.sensitivity,unavailable:this.unavailableMessages.has(message.id)});try{if(options.allow(meta)!==true)return empty('denied');}catch{return empty('denied');}}
     const end=options.tail?Math.max(0,records.length-offset):Math.min(records.length,offset+limit),start=options.tail?Math.max(0,end-limit):Math.min(offset,records.length);
     const indices=Array.from({length:Math.max(0,end-start)},(_,index)=>start+index);if(options.tail)indices.reverse();
     const items:MessageMetadata[]=[];let emittedBodyBytes=0,limitedBy:MessageMetadataWindow['limitedBy']=null;
     for(const index of indices){const message=records[index],remaining=maxBodyBytes-emittedBodyBytes;if(message.content.length>remaining){limitedBy='byte-limit';break;}
       const bodyBytes=Buffer.byteLength(message.content,'utf8');if(bodyBytes>remaining){limitedBy='byte-limit';break;}
-      items.push({id:message.id,conversationId:message.conversationId,sequence:message.sequence,role:message.role,sensitivity:message.sensitivity,ordinal:index+1,bodyBytes,unavailable:this.data.unavailableMessageIds.includes(message.id)});emittedBodyBytes+=bodyBytes;
+      items.push({id:message.id,conversationId:message.conversationId,sequence:message.sequence,role:message.role,sensitivity:message.sensitivity,ordinal:index+1,bodyBytes,unavailable:this.unavailableMessages.has(message.id)});emittedBodyBytes+=bodyBytes;
     }
     if(options.tail)items.reverse();return {items,emittedCount:items.length,emittedBodyBytes,hasMore:start>0||end<records.length||limitedBy!==null,limitedBy};
   }
@@ -286,8 +304,10 @@ export class ConversationGraph {
       sourceMessageId: input.sourceMessageId, mode, handoffId: handoff.id, createdAt: this.now()
     };
     this.data.conversations.push(c);
+    this.conversationsById.set(c.id, c);
     this.data.handoffs.push(handoff);
     this.data.edges.push(edge);
+    this.edgesByChild.set(c.id, edge);
     this.remember(input.key, c.id);
     return { conversation: copy(c), edge: copy(edge), handoff: copy(handoff) };
   }
@@ -305,7 +325,9 @@ export class ConversationGraph {
   }
   markUnavailable(messageId: string): void {
     this.message(messageId);
-    if (!this.data.unavailableMessageIds.includes(messageId)) this.data.unavailableMessageIds.push(messageId);
+    if (this.unavailableMessages.has(messageId)) return;
+    this.data.unavailableMessageIds.push(messageId);
+    this.unavailableMessages.add(messageId);
   }
   interruptHandoff(handoffId: string): void {
     const h = this.data.handoffs.find(item => item.id === handoffId);

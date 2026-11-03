@@ -1014,10 +1014,9 @@ export class BackendCore {
         const gid=this.state.resources[resourceId]; if(!gid||this.state.graph.unavailableMessageIds.includes(messageId))return false;
         // An already committed own-message needs no inherited transcript/body
         // projection. Keep the same current resource policy and ownership gate.
-        const own=this.state.graph.conversations.find(c=>c.id===gid);
-        const entry=this.state.graph.messages.find(m=>m.id===messageId&&m.conversationId===gid);
-        if(!this.mutationDepth&&own?.ownMessageIds.includes(messageId)&&entry)return this.conversationAccess.resource(resourceId,'read',true);
-        if(this.graph.snapshot().unavailableMessageIds.includes(messageId))return false;
+        const header=this.graph.messageHeader(messageId);
+        if(!header||header.unavailable)return false;
+        if(!this.mutationDepth&&this.graph.ownsMessage(gid,messageId))return true;
         const message=this.graph.visibleMessages(gid).find(m=>m.id===messageId);
         return !!message&&this.conversationAccess.resource(this.publicId(message.conversationId),'read',true);
       } });
@@ -1094,7 +1093,8 @@ export class BackendCore {
         },
         messageMetadata:messageId=>{
           assertOpen?.();
-          const m=this.state.graph.messages.find(value=>value.id===messageId);return m&&currentSource(m.conversationId,m.id)?{id:m.id,conversationId:m.conversationId,createdAt:m.createdAt}:null;
+          const m=this.mutationDepth ? this.state.graph.messages.find(value=>value.id===messageId) : this.graph.messageHeader(messageId);
+          return m&&currentSource(m.conversationId,m.id)?{id:m.id,conversationId:m.conversationId,createdAt:m.createdAt}:null;
         },
         resourceContent:resourceId=>{assertOpen?.();ensure(this.conversationReadAccess(resourceId),'source_unavailable');return this.kernel.getResource(resourceId).note?.content??'';},
       };

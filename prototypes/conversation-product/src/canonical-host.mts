@@ -38,16 +38,19 @@ export type CanonicalCollection = { id:string; project_id:string|null; title:str
 /** Reads only the existing canonical tables. No cached permission/content projection. */
 export function createCanonicalAccessHelper(options:AccessHelperOptions) {
  const {db}=options;
+ const projectState=db.prepare('SELECT state FROM projects WHERE id=?');
+ const resourceState=db.prepare('SELECT project_id,state FROM resources WHERE id=?');
+ const resourcePlacements=db.prepare(`SELECT w.id AS workspace_id,w.project_id,w.state AS workspace_state,p.state AS project_state
+  FROM blocks b JOIN workspaces w ON w.id=b.workspace_id LEFT JOIN projects p ON p.id=w.project_id
+  WHERE b.resource_id=? ORDER BY w.id`);
  const allow=(request:CanonicalAccessRequest)=>options.allow(request)===true;
  const project=(projectId:string|null,intent:'read'|'organize'='read',includeArchived=false):boolean=>{
   if(!allow({kind:'project',id:projectId,intent}))return false;
   if(projectId===null)return true;
-  const row=db.prepare('SELECT state FROM projects WHERE id=?').get(projectId);
+  const row=projectState.get(projectId);
   return !!row&&(row.state==='active'||includeArchived&&row.state==='archived');
  };
- const placements=(resourceId:string)=>db.prepare(`SELECT w.id AS workspace_id,w.project_id,w.state AS workspace_state,p.state AS project_state
-  FROM blocks b JOIN workspaces w ON w.id=b.workspace_id LEFT JOIN projects p ON p.id=w.project_id
-  WHERE b.resource_id=? ORDER BY w.id`).all(resourceId);
+ const placements=(resourceId:string)=>resourcePlacements.all(resourceId);
  const projectIds=(resourceId:string):string[]=>{
   const row=db.prepare('SELECT project_id FROM resources WHERE id=?').get(resourceId);
   if(!row)return [];
@@ -55,7 +58,7 @@ export function createCanonicalAccessHelper(options:AccessHelperOptions) {
   return [...new Set(placements(resourceId).filter(p=>p.project_id!==null).map(p=>String(p.project_id)))].sort();
  };
  const resource=(resourceId:string,intent:'read'|'organize'='read',includeArchived=false):boolean=>{
-  const row=db.prepare('SELECT project_id,state FROM resources WHERE id=?').get(resourceId);
+  const row=resourceState.get(resourceId);
   if(!row||!(row.state==='active'||includeArchived&&row.state==='archived')||!allow({kind:'resource',id:resourceId,intent}))return false;
   if(row.project_id!==null)return project(String(row.project_id),intent);
   const locations=placements(resourceId);
