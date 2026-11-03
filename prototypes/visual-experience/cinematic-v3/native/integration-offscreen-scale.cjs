@@ -12,6 +12,8 @@ exports.verify = async ({
   win, app, privateRoot, call, source, moduleStartedMonotonicMs, startupErrors,
 }) => {
   const selected = options(process.argv);
+  const profile = process.argv.includes("--offscreen-profile");
+  const devtools = win.webContents.debugger;
   const receipt = {
     contract: "aerynth.offscreen-block-scale@1",
     source,
@@ -52,7 +54,17 @@ exports.verify = async ({
   };
   const snapshot = () => js("window.__aerynth.application()");
   const execute = (action) => js("window.__aerynth.execute(" + JSON.stringify(action) + ")");
+  const metrics = async () => {
+    const { metrics } = await devtools.sendCommand("Performance.getMetrics");
+    return Object.fromEntries(metrics.map(({ name, value }) => [name, value]));
+  };
+  const delta = (before, after) => Object.fromEntries([
+    "ScriptDuration", "LayoutDuration", "RecalcStyleDuration", "TaskDuration",
+    "LayoutCount", "RecalcStyleCount",
+  ].filter((key) => Number.isFinite(before[key]) && Number.isFinite(after[key]))
+    .map((key) => [key, after[key] - before[key]]));
   const sample = async (label) => {
+    const before = profile ? await metrics() : null;
     await js("window.__aerynth.resetMetrics()");
     paintIntervals.length = 0;
     lastPaint = paintCount = 0;
@@ -77,6 +89,7 @@ exports.verify = async ({
       callbacks: metrics.callbacks, draws: metrics.draws, paints: paintCount,
       callbackIntervalsMs: percentiles(metrics.intervals),
       offscreenPaintIntervalsMs: percentiles(paintIntervals),
+      ...(before ? { chromiumPerformanceDelta: delta(before, await metrics()) } : {}),
     });
   };
   const navigate = (target) => execute({ type: "navigate", target });
@@ -88,6 +101,10 @@ exports.verify = async ({
       ));
   })()`);
   try {
+    if (profile) {
+      devtools.attach("1.3");
+      await devtools.sendCommand("Performance.enable");
+    }
     await wait('document.body.dataset.applicationHydrated === "true"');
     receipt.startupToHydratedMs = performance.now() - moduleStartedMonotonicMs;
     await js("window.__aerynth.setActive(true)");
@@ -159,6 +176,7 @@ exports.verify = async ({
   } catch (error) {
     receipt.error = String(error.stack || error);
   }
+  if (profile && devtools.isAttached()) devtools.detach();
   win.webContents.removeListener("paint", onPaint);
   const evidence = path.join(privateRoot, "offscreen-scale-" + receipt.phase + ".json");
   try { await call("close", {}); }
