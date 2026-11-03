@@ -104,7 +104,7 @@ exports.verify = async ({win,app,privateRoot,source}) => {
     const ordinary = 'Can you explain how a speaker works?';
     await type('.vela-core-compose textarea', ordinary);
     await clickText('Send to Vela', '.vela-core-compose');
-    await until(()=>js(`document.querySelector('.vela-core-status')?.textContent.includes('Connect your ChatGPT plan in Connections')`),
+    await until(()=>js(`document.querySelector('.vela-core-error:not([hidden])')?.textContent.includes('Connect your ChatGPT plan in Connections')`),
       'A fresh profile explains why the conversational route is unavailable');
     assert.equal(await js("document.querySelector('.vela-core-compose textarea').value"), ordinary);
     assert.equal((await readVela()).requests.length, questions.length);

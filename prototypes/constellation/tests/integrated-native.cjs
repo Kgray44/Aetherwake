@@ -1439,7 +1439,7 @@ async function verifyJourney({
           conversationComposer + ' textarea[aria-label="Message"]',
         conversationSend =
           conversationComposer +
-          ' button[type="submit"][aria-label="Record message"]';
+          ' button[type="submit"][data-cp-control="send"]';
       await wait(
         `(()=>{const e=document.querySelector(${JSON.stringify(conversationInput)});return !!e&&!e.disabled&&e.getClientRects().length>0})()`,
       );
