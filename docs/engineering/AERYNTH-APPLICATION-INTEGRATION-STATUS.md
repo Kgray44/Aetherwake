@@ -2,6 +2,37 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 native media import and Portable AX
+
+The desktop now uses the Universal Block System media readers from
+`bb69509` through the canonical resource kernel. The Library imports files
+through the native picker and accepts web URLs. The backend stores the
+selected locator privately, returns bounded revision-checked reads, and
+retains the same resource when its placement is removed. Resources can
+reopen a saved file in a direct reading surface. Local videos and YouTube
+links open in the system player or browser. Inline playback is still pending.
+
+Portable AX packages `03ea1d374be9f2b5acf69b1e4d42a56eaee13648`.
+All 426 payload hashes matched, including both document workers and the
+media license notices. Manifest SHA-256 is
+`b6de378f8131887b8ce85001de9127c9af0ad7e568041b23890b6c5386bc2b8b`.
+Two hidden Electron processes exercised the packaged renderer, host,
+and bundled Node runtime. Synthetic picker results imported a real PDF
+and DOCX. The test checked inline rendering, blocked imports without a
+user gesture, and intercepted the explicit YouTube shell action. Restart
+restored exact resource and placement identities. The Resources button
+reopened the PDF and its second page rendered with a selectable text layer.
+Visual review caught a shadow on that layer and the AX capture confirms
+the correction. No provider requests were sent.
+
+Private profile `review-block-scale-0-1793699580441` holds the capture and
+initial/restart receipts. Receipt SHA-256 values are
+`53745b4f760a7b778b69b8e194538713021fedf84252382945021512d8c5731e` and
+`4ae8f8c203188cc237954f2b3a2bf40603dfe1bb8e2822798c88f2ca67433966`.
+Strict build and 403 desktop, 259 Block Library, 254 backend, and 15
+packager tests passed. Foreground picker interaction, external playback,
+and physical display performance remain outside this verification.
+
 ## November 3 model-selected Vela navigation
 
 An authorized single navigation action now runs through the same host policy
