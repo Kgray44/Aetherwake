@@ -24,6 +24,7 @@ export function velaPanelStatus(state: Pick<VelaState, 'requests' | 'plans' | 'r
     return result('This request stopped. Review what happened before trying again.' + priorEffects);
   }
   if (request.state === 'cancelled' || plan?.state === 'cancelled') return result('This request was cancelled. Review any earlier changes in the details.' + priorEffects);
+  if (request.errorCode === 'stale_context_scope') return result('The workspace or reviewed context changed before Vela could use the response. Return to the original workspace or review a new request.');
   if (request.state === 'invalid-plan') return result('The provider response could not be used. No proposed changes were applied.');
   if (request.state === 'provider-unavailable') {
     if (request.errorCode === 'provider_authorization_required') return result('Provider access was not enabled. Local tools are available.');

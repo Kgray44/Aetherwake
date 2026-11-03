@@ -1913,7 +1913,12 @@ export class BackendCore {
         if(phase==='before-append')ensure(!grant.consumed&&!grant.requestId&&!preview.acceptedAppend&&!append,'native_vela_grant_consumed');
         else ensure(preview.acceptedAppend&&append&&planningDigest(append)===planningDigest(preview.acceptedAppend)&&(!grant.requestId||grant.requestId===append.requestId),'invalid_history_append');
         if(phase==='before-response')ensure(grant.requestId===append?.requestId,'native_vela_grant_mismatch');
-        this.validateFrozenVelaPreview(preview);
+        try { this.validateFrozenVelaPreview(preview); }
+        catch (error) {
+          if (phase === 'before-response' && error instanceof ServiceError && error.code === 'stale_vela_preview')
+            throw new VelaError('stale_context_scope');
+          throw error;
+        }
       },onAcceptedAppend:(value,base)=>{
         const id=this.state.vela!.conversationId,meta=this.state.vela!.messages[value.messageId];
         ensure(!preview.acceptedAppend&&id&&base&&base.conversationId===id&&Number.isSafeInteger(base.revision)&&base.revision>=1&&base.revision<Number.MAX_SAFE_INTEGER&&value.revision===base.revision+1&&this.state.revisions[id]===value.revision&&meta?.source==='user'&&meta.classification==='observed'&&meta.requestId===value.requestId&&value.contentDigest===preview.inputDigest,'invalid_history_append');

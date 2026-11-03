@@ -45,7 +45,16 @@ The live evaluation on `73bfc71518989ab06f3966b0d221123af6ecd964` used 24 held-o
 
 All 48 turns completed with the expected route and no observed provider failure. This evaluation requested zero escalations. First-output medians were 2.26/2.24 s for everyday, 2.04/1.80 s for technical, and 3.93/4.84 s for reasoning. Per-turn timing in the backend separated routing, capability retrieval, context preparation and total preview. Across the 42 subsequent turns, their median durations were 0.98, 2.77, 13.54 and 21.43 ms, respectively. Six first turns were labeled separately, with catalog probing before the first send. The first turn in each batch was baseline and the provider's upstream cache, network conditions and monetary cost were unobserved. With eight pairs per category and observable same-model variation, the results support keeping adaptation opt-in.
 
+Review of the eight failed rubric rows found two responses that included extra words despite a short-answer instruction. Both arms correctly distinguished latency from throughput using wording outside the matcher. Four correct engineering derivations used LaTeX units the matcher missed. The original rubric scores remain in the table. This review found no factual or mathematical error in those eight replies.
+
 Run the source-only Windows desktop helper with `--integration-vela-air-plan --air-plan-held-out=1` through `6` on an isolated synthetic signed-in profile after completing and verifying the three original calibration batches. Each batch has an exclusive dispatch marker. `node scripts/report-vela-air-held-out.mts --profile=<absolute test profile>` checks the six receipts against SQLite and emits timing, usage and outcome rows without prompts, account identifiers, conversation IDs or profile paths.
+
+## Hardening checkpoints
+
+- The exact `2161c4dc375dcfa9eb6c5d92ee608e231cc1a29a` tree passed 1,890 Windows tests across all 16 groups, the 352-case offline suite, and hosted Ubuntu CI. The portable archive's SHA-256 was `13af4c7a2833b0ee47fe70eb7b1a9b5d442e121a9282c2139a14ea544a87483a`. The Windows window appeared after approximately 1.99 s in one fresh launch. [Ubuntu run](https://github.com/Kgray44/Aetherwake/actions/runs/41688680027)
+- With the packaged Node and broker and both providers unavailable, eight local facts or calculations passed with zero provider requests and zero Codex connections. The CPU result sampled 264 ms, and GPU query completion took 2.84 s. This probe exercised the packaged backend without rendering.
+- The installed Codex probe on the same source revision proposed one reviewed synthetic edit using `gpt-6-astra` at medium effort. The actual written bytes verified and the selected one-test sandbox check passed.
+- A separate packaged backend probe navigated to another workspace in 39 ms during a 17.27 s real Codex read-only run. The stale scope blocked canonical delivery. A follow-up regression now checks that the rejected answer also stays out of Vela details and displays a workspace/context change explanation. The Codex execution keeps its original scoped evidence. This probe measured backend behavior separately from the Windows renderer.
 
 | Capability | Implementation and evidence boundary |
 | --- | --- |

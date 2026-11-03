@@ -660,7 +660,7 @@ export class VelaService {
       return r;
     });
     const controller = new AbortController(); this.controllers.set(request.id, controller);
-    let providerOutput: unknown, providerOutputReceived = false;
+    let providerOutput: unknown, providerOutputReceived = false, retainInvalidProposal = false;
     let localReadPlanId: string | undefined;
     try {
       const status = planner?.availability();
@@ -677,6 +677,9 @@ export class VelaService {
         intent: request.intent, context: structuredClone(providerContext), capabilities: structuredClone(CAPABILITIES), instruction: VELA_PLANNING_INSTRUCTION }, controller.signal);
       providerOutput = proposal; providerOutputReceived = true;
       if (controller.signal.aborted || this.getRequest(request.id).state !== 'planning') return structuredClone(this.getRequest(request.id));
+      // Never retain a rejected provider body from a request whose reviewed scope has changed.
+      validate('before-response');
+      check(digest(this.contextIdentity()) === digest(navigation), 'stale_context_scope');
       let parsed;
       try { parsed = validateProviderResult(proposal, planner.providerId); }
       catch (e) {
@@ -694,6 +697,7 @@ export class VelaService {
         check(currentScope.policyVersion === scope.policyVersion && currentScope.principalId === scope.principalId, 'stale_policy_version');
         for (const ref of active.context.included) check(this.resolve(ref.id, ref.kind, currentScope).version === ref.version, 'stale_context_version');
         if (parsed.kind === 'plan') {
+          retainInvalidProposal = true;
           const plan = this.prepare(active, parsed.summary, parsed.steps, parsed.contribution);
           if (plan.steps.length === 1 && isImmediateNativeAction(plan.steps[0].action.type)) {
             plan.authorizationRef = this.authorize(this.authInput(plan, 'review'));
@@ -719,7 +723,7 @@ export class VelaService {
     } catch (e) {
       if (this.getRequest(request.id).state === 'cancelled') return structuredClone(this.getRequest(request.id));
       this.atomic(() => { const r = this.getRequest(request.id); r.state = e instanceof VelaError && e.outcome === 'unknown' ? 'unknown' : providerOutputReceived ? 'invalid-plan' : 'failed'; r.errorCode = errorCode(e, 'planning_failed');
-        if (providerOutputReceived) r.invalidProposal = preserveProposal(providerOutput);
+        if (retainInvalidProposal) r.invalidProposal = preserveProposal(providerOutput);
         r.updatedAt = this.now(); this.append('The request could not produce a usable response (' + r.errorCode + '). ' +
           (routed?.route?.kind === 'agentic' || routed?.route?.kind === 'composite' ? 'Review Codex activity before retrying.' : 'No proposed actions were run.'), r.id, 'vela-native'); });
     } finally { this.controllers.delete(request.id); }
