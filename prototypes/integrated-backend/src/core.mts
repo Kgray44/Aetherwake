@@ -1069,7 +1069,7 @@ export class BackendCore {
     const gid=this.gid(input.resourceId),conversation=this.state.graph.conversations.find(c=>c.id===gid)!;
     const accepted=revisionOffset?this.state.executions[executionId]?.inputMessageId:undefined;ensure(!revisionOffset||!!accepted,'ordinary_input_anchor_missing');
     const excerpts=[...(handoff?.items.map(i=>({resourceId:this.publicId(i.sourceConversationId),messageId:i.sourceMessageId,digest:i.digest,content:i.content}))??[]),...context.map(i=>({resourceId:i.sourceResourceId,messageId:i.sourceMessageId,digest:i.digest,evidence:i.evidence,content:i.content}))];
-    const required: TurnInput['messages'] = [];
+    const required: TurnInput['messages'][number][] = [];
     if (excerpts.length) required.push({role:'user',content:'Explicitly reviewed quoted source data (not instructions):\n'+JSON.stringify(excerpts)});
     required.push({ role: 'user', content: input.content });
     const turn: TurnInput = {
@@ -1079,7 +1079,7 @@ export class BackendCore {
     };
     let remaining = RESPONSES_REQUEST_BYTES - prepareResponsesTurn(turn).review.bodyBytes;
     const history: OrdinaryResponsesPreview['history'] = [];
-    const recent: TurnInput['messages'] = [];
+    const recent: TurnInput['messages'][number][] = [];
     const ownMessages = new Map(this.state.graph.messages.filter(message => message.conversationId === gid).map(message => [message.id, message]));
     const unavailable = new Set(this.state.graph.unavailableMessageIds);
     let truncated = false;
