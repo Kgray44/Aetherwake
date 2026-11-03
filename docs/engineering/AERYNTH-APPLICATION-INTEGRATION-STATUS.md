@@ -2,6 +2,39 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 chat composer measurement during Fit
+
+A Chromium trace on the 50-block workspace attributed 31
+`getBoundingClientRect` CPU samples, totaling 47 ms, to queued chat
+composer measurement during Fit. `a7c6f87` retains the latest observer
+dimensions during passive card motion and reconciles once the existing
+Motion Coordinator settles. The focused chat and direct resize paths
+keep live measurement. The regression also exercises a resize callback
+already queued when motion begins and preserves the editor selection.
+
+The follow-up trace recorded zero samples from that chat measurement
+call path. Two hidden Electron runs using the same SQLite seed as the
+baseline passed Fit, Universe travel, return, resize, WebGL recovery,
+and exact restart checks. The candidate's 900-ms Fit paint P95 was
+87.4 and 99.4 ms, compared with 83.3 and 108.5 ms for the two controls.
+The ranges overlap. This fixes a repeated source of synchronous work
+and leaves overall Fit pacing and physical presentation unqualified.
+
+Separate experiments with CSS layer hints and flat transforms were
+discarded after uneven Fit paint timing. Sharing contour samples between
+cards was also discarded after a CPU comparison regressed mixed-size
+workspaces. Private diagnostics, including the oversized trace that
+exceeded its capture cap, remain in `scale-layer-trial-1793694969788`.
+The strict build, 158 conversation tests, and 402 desktop tests passed.
+
+Portable AP packages `a7c6f8717ed35604786546eacdd2db84fcf29259`.
+All 383 file hashes were independently checked and packaged renderer
+assets matched the hidden initial and restart receipts. The bundled
+backend passed 22 initial and five restart calls. Manifest SHA-256 is
+`a7bcd79b3389314ab098e2d3a5572c569efd8bd36912dcd483678d61844c1ca3`.
+The package's normal foreground launch and live Codex send remain
+separate checks.
+
 ## November 3 desktop scale and process memory
 
 `ce0b87a` adds per-process working set and private memory, optional
