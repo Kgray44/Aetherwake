@@ -2,6 +2,35 @@
 
 Snapshot: 2026-11-02 UTC. Integration remains active; full product acceptance is incomplete.
 
+## November 3 workspace scale checkpoint
+
+Review candidate `525a134` passed hidden Electron navigation, resize, reduced
+motion, WebGL recovery, and fresh-process restoration at 10, 25, and 50 blocks.
+The run used synthetic workspaces and the real renderer, desktop host and
+SQLite. Exact saved geometry, resource identities, content and Vela placement
+survived restart. The owner review remained open on its existing profile.
+
+The follow-up `c1ce98e` omits style updates for hidden cards while preserving
+mounted editors. The 50-block run passed again and separated the return
+transition from the settled workspace. In the approximately one-second
+samples, renderer callback P95 was 83.3 ms during return, 33.4 ms once settled,
+and 16.8 ms after restart. Both return samples retained 43 editor nodes with
+12 interactive cards. Restart had 10 editor nodes with 12 interactive cards.
+The fitted overview exposed a separate stall. A nominal one-second sample
+took 4.30 seconds to collect and contained only five offscreen paint intervals.
+An earlier run with the same renderer change still observed 100 ms return
+callback P95. These short runs on a shared host establish the remaining
+problem and do not isolate a performance improvement or measure physical
+display presentation.
+
+The synthetic follow-up receipts are retained outside the checkout with
+SHA-256 `38c0aad9f07a8346cb3bbafef6b7bff43d072da68af8b6ead6afddefd95d09c2`
+for the initial journey and
+`5d63f0e37508a6aeee5f67c445211ffcf7ea054e45b872b84c3fa2323dcf50ec`
+for restart. The packed 50-block capture still clips Vela against the top
+window chrome at the saved camera position. Dense workspace presentation,
+foreground input and presentation timing remain unqualified.
+
 ## Direct workspace return and offscreen scale
 
 An integrated 50-block Electron capture exposed a transparent workspace
