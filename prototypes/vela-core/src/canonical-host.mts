@@ -47,6 +47,10 @@ export interface CanonicalVelaHostOptions {
   dispatch: {
     /** Mandatory opaque parent dispatcher. Block/layout/template work belongs to Universal Block System. */
     native: VelaHostPort['applyNative'];
+    prepareNative?: {
+      supports(action: Parameters<VelaHostPort['applyNative']>[0]['action']): boolean;
+      prepare: NonNullable<VelaHostPort['prepareNative']>;
+    };
     delegateTask?: VelaHostPort['delegateTask']; preference?: VelaHostPort['applyPreference'];
   };
   maxContentBytes?: number;
@@ -81,6 +85,7 @@ function actionSubjects(action: ReturnType<typeof validateAction>, context:Canon
   switch (action.type) {
     case 'navigate': if (action.target.kind === 'workspace') add(action.target.workspaceId, 'workspace'); else add(action.target.projectId, 'project'); break;
     case 'createWorkspace': add(action.projectId, 'project'); break;
+    case 'createTimeline': add(action.projectId, 'project'); add(action.workspaceId, 'workspace'); break;
     case 'renameProject': add(action.projectId,'project'); break;
     case 'renameResource': add(action.resourceId,'resource'); break;
     case 'associateResourceProject': add(action.resourceId,'resource'); add(action.projectId,'project'); break;
@@ -272,21 +277,36 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
       return structuredClone(decision);
     }),
     applyNative: input => within(() => {
-      const action = validateAction(input.action),current=view(restoringActions([action])); check(action.type !== 'delegateTask', 'canonical_native_action_required');
-      check(identifier(input.authorizationRef) && identifier(input.commandId) && identifier(input.requestId) && identifier(input.planId), 'canonical_dispatch_authorization_required');
-      validateTargets(input.expectedVersions, current);
-      if(action.type==='setAttentionMode') {
-        check(options.permissions.attentionPreferences?.('change-mode',current.context,current.metadata)===true,'canonical_attention_mode_denied');
-        const revision=options.revisions.attentionPreferences?.();check(validVersion(revision)&&revision<Number.MAX_SAFE_INTEGER,'canonical_attention_preferences_unavailable');check(action.expectedVersion===revision,'stale_preference_version');
-      }
-      for (const subject of actionSubjects(action,current.context)) check(input.expectedVersions.some(target => target.id === subject.id && target.kind === subject.kind), 'canonical_action_target_manifest_required');
-      if(action.type==='renameResource'||action.type==='associateResourceProject') {
-        const ref=resolve({id:action.resourceId,kind:'resource'},current.scope,current),entity=row('resources',action.resourceId);
-        check(ref&&['note','task','task_group','reference'].includes(ref.resourceKind??'')&&entity&&['note','generic'].includes(String(entity.kind)),'canonical_resource_organization_unsupported');
-      }
-      // No block, template, placement, layout or fallback implementation. Parent dispatcher owns capability/release checks.
+      validateNative(input);
       return options.dispatch.native(structuredClone(input));
     }),
+  };
+  function validateNative(input: Parameters<VelaHostPort['applyNative']>[0]) {
+    const action = validateAction(input.action), current = view(restoringActions([action]));
+    check(action.type !== 'delegateTask', 'canonical_native_action_required');
+    check(identifier(input.authorizationRef) && identifier(input.commandId) && identifier(input.requestId) && identifier(input.planId), 'canonical_dispatch_authorization_required');
+    validateTargets(input.expectedVersions, current);
+    if(action.type==='setAttentionMode') {
+      check(options.permissions.attentionPreferences?.('change-mode',current.context,current.metadata)===true,'canonical_attention_mode_denied');
+      const revision=options.revisions.attentionPreferences?.();check(validVersion(revision)&&revision<Number.MAX_SAFE_INTEGER,'canonical_attention_preferences_unavailable');check(action.expectedVersion===revision,'stale_preference_version');
+    }
+    for (const subject of actionSubjects(action,current.context)) check(input.expectedVersions.some(target => target.id === subject.id && target.kind === subject.kind), 'canonical_action_target_manifest_required');
+    if(action.type==='renameResource'||action.type==='associateResourceProject') {
+      const ref=resolve({id:action.resourceId,kind:'resource'},current.scope,current),entity=row('resources',action.resourceId);
+      check(ref&&['note','task','task_group','reference'].includes(ref.resourceKind??'')&&entity&&['note','generic'].includes(String(entity.kind)),'canonical_resource_organization_unsupported');
+    }
+  }
+  if (options.dispatch.prepareNative) host.prepareNative = (input, signal) => {
+    // Adapters may decline preparation for ordinary synchronous actions. A
+    // staged adapter receives no mutable action state from the renderer/model.
+    const stage = options.dispatch.prepareNative!;
+    if (!stage.supports(input.action)) return;
+    readWithin(() => validateNative(input));
+    return stage.prepare(structuredClone(input), signal)?.then(commit => () => within(() => {
+      check(!signal.aborted, 'native_preparation_cancelled');
+      validateNative(input);
+      return commit();
+    }));
   };
   if (options.dispatch.delegateTask) host.delegateTask = async input => {
     within(() => {

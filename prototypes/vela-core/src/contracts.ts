@@ -37,6 +37,8 @@ export type VelaNativeAction =
   | { type: 'renameResource'; resourceId: string; title: string }
   | { type: 'associateResourceProject'; resourceId: string; projectId: string | null }
   | { type: 'createWorkspace'; title: string; projectId: string | null }
+  | { type: 'createTimeline'; title: string; projectId: string | null; workspaceId: string | null;
+      source: { kind: 'application-activity' } | { kind: 'github-commits'; repositoryUrl: string } }
   | { type: 'renameWorkspace'; workspaceId: string; title: string }
   | { type: 'bringAllIntoView'; workspaceId: string }
   | { type: 'resolveLayout'; workspaceId: string }
@@ -61,7 +63,7 @@ export type VelaNativeAction =
 export interface CapabilityDescriptor {
   id: VelaNativeAction['type'] | 'search' | 'delegateTask'; label: string;
   effect: 'read' | 'navigate' | 'create' | 'mutate' | 'provider-execution';
-  scope: string; authorization: 'host-policy' | 'explicit-execution-authorization';
+  scope: string; authorization: 'host-policy' | 'reviewed-action' | 'explicit-execution-authorization';
   /** JSON-schema-shaped public contract; runtime validation also rejects unknown fields. */
   schema: Record<string, unknown>; reversible: 'host-dependent' | 'no-state-change';
 }
@@ -214,6 +216,9 @@ export interface VelaHostPort {
     action: VelaNativeAction; commandId: string; requestId: string; planId: string;
     intent: string; expectedVersions: ResourceRef[]; authorizationRef: string;
   }): HostActionResult;
+  /** Optional read-only preparation outside a SQLite transaction. The returned
+   * commit runs synchronously after the service and host revalidate authority. */
+  prepareNative?(input: Parameters<VelaHostPort['applyNative']>[0], signal: AbortSignal): Promise<() => HostActionResult> | undefined;
   /** Execution truth remains in host execution storage; this module retains only a link/receipt. */
   delegateTask?(input: {
     action: DelegateTaskAction; commandId: string; requestId: string; planId: string;

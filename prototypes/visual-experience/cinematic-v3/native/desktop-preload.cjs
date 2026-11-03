@@ -62,11 +62,15 @@ contextBridge.exposeInMainWorld(
           "agents",
           "checklists",
           "timelines",
+          "githubTimeline",
           "taskObjectives",
           "firstPartyChat",
         ].includes(name)
       )
         throw new Error("unsupported_command");
+      if (name === "githubTimeline" && input?.name === "openCommit" &&
+          navigator.userActivation?.isActive !== true)
+        throw new Error("github_user_gesture_required");
       const reply = await ipcRenderer.invoke(
         "application-command",
         name,

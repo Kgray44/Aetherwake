@@ -432,6 +432,7 @@ app.whenReady().then(async () => {
         ].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "vela" && isVelaRead(input)) &&
+        !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&
         !(command === "notes" && input?.name === "readNote") &&
         !(command === "providerConnection" && input?.type === "status") &&
@@ -550,6 +551,17 @@ app.whenReady().then(async () => {
           input,
           observeNativeRequest: observeVelaRequest,
         });
+      } else if (command === "githubTimeline") {
+        if (input?.name === "openCommit") {
+          const { url } = await call("githubTimeline", input);
+          if (win.isDestroyed() || event.senderFrame !== win.webContents.mainFrame ||
+              event.senderFrame?.url !== localURL ||
+              typeof url !== "string" || !/^https:\/\/github\.com\/[a-z\d-]{1,39}\/[a-z\d_.-]{1,100}\/commit\/[a-f\d]{40}$/i.test(url))
+            throw new Error("github_commit_unavailable");
+          await shell.openExternal(url);
+          result = { opened: true };
+        } else if (input?.name === "sources") result = await call("githubTimeline", input);
+        else throw new Error("unsupported_command");
       } else if (command === "library") {
         result = await call("library", input);
       } else if (command === "notes") {

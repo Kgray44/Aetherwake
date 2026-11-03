@@ -357,6 +357,7 @@ export class VelaService {
         case 'setAttentionMode': {const version=this.attentionPreferenceVersion();check(version!==null,'attention_preferences_unavailable');check(version===a.expectedVersion,'stale_preference_version');break;}
         case 'navigate': if (a.target.kind === 'workspace') add(a.target.workspaceId, 'workspace'); else add(a.target.projectId, 'project'); break;
         case 'createWorkspace': add(a.projectId, 'project'); break;
+        case 'createTimeline': add(a.projectId, 'project'); add(a.workspaceId, 'workspace'); break;
         case 'renameProject': add(a.projectId,'project'); break;
         case 'renameResource': case 'associateResourceProject': {
           add(a.resourceId,'resource');
@@ -543,6 +544,7 @@ export class VelaService {
         createdAt: this.now(), updatedAt: this.now(), providerId: null, context: this.context([], scope) };
       this.data.requests.push(r); this.append(r.intent, r.id, 'user');
       const plan = this.prepare(r, input.intent, [{ id: 'native-1', explanation: 'Explicit native application command', action }], null);
+      if (CAPABILITIES.find(capability => capability.id === action.type)?.authorization === 'reviewed-action') return structuredClone(plan);
       plan.authorizationRef = this.authorize(this.authInput(plan, 'review')); plan.reviewedAt = this.now(); plan.state = 'approved';
       return structuredClone(plan);
     });
@@ -606,10 +608,25 @@ export class VelaService {
             context, authorizationRef: executionAuthorization });
         } else {
           // The host must atomically validate expectedVersions, authorizationRef and commandId with canonical writes.
-          dispatched = true;
-          const dispatch=()=>this.opts.host.applyNative({ action: structuredClone(step.action) as VelaNativeAction, commandId: receipt.commandId,
-            requestId: request.id, planId, intent: request.intent, expectedVersions: targets, authorizationRef });
-          result = step.action.type==='setAttentionMode' ? this.atomic(dispatch) : dispatch();
+          const input = { action: structuredClone(step.action) as VelaNativeAction, commandId: receipt.commandId,
+            requestId: request.id, planId, intent: request.intent, expectedVersions: targets, authorizationRef };
+          const controller = new AbortController();
+          const preparation = this.opts.host.prepareNative?.(input, controller.signal);
+          if (preparation) {
+            this.controllers.set(request.id, controller);
+            try {
+              const commit = await preparation;
+              check(!controller.signal.aborted && this.getPlan(planId).state === 'applying', 'native_preparation_cancelled');
+              check(Date.parse(plan.expiresAt) > Date.parse(this.now()), 'plan_expired');
+              check(this.scope([step]).policyVersion === plan.scope.policyVersion, 'stale_policy_version');
+              dispatched = true;
+              result = commit();
+            } finally { this.controllers.delete(request.id); }
+          } else {
+            dispatched = true;
+            const dispatch = () => this.opts.host.applyNative(input);
+            result = step.action.type==='setAttentionMode' ? this.atomic(dispatch) : dispatch();
+          }
         }
         check(result && ['applied', 'failed', 'cancelled', 'unknown'].includes(result.status) && identifier(result.receiptId), 'invalid_host_receipt');
       } catch (e) {
@@ -620,7 +637,8 @@ export class VelaService {
           const restored=this.data.receipts.find(value=>value.id===receipt.id);check(restored,'canonical_receipt_missing');receipt=restored;
         }
         // An adapter can throw after side effects. Never turn that uncertainty into a safe-to-retry failure.
-        result = { status: dispatched ? 'unknown' : 'failed', receiptId: receipt.id, errorCode: errorCode(e, dispatched ? 'host_action_outcome_unknown' : 'action_validation_failed') };
+        const cancelled = !dispatched && this.getPlan(planId).state !== 'applying';
+        result = { status: dispatched ? 'unknown' : cancelled ? 'cancelled' : 'failed', receiptId: receipt.id, errorCode: errorCode(e, dispatched ? 'host_action_outcome_unknown' : 'action_validation_failed') };
       }
       this.atomic(() => {
         receipt.state = result.status; receipt.endedAt = this.now(); receipt.hostReceiptId = result.receiptId;

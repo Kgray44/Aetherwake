@@ -6,6 +6,7 @@ import { join,resolve,relative,isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
 import type { AgentMutationReceipt } from '../../agent-product/contracts.ts';
 import type { TimelineDocument,TimelineMutationResult,TimelineView,TimelineWindow } from '../../timeline-product/contracts.ts';
+import type { VelaNativeAction, VelaPlan, VelaPlanningPort, VelaRequest, VelaState } from '../../vela-core/src/contracts.ts';
 
 test('actual Core Timeline commands persist one canonical view over existing authorized event headers without Notes, workspace or copied events',async()=>{
   const dir=mkdtempSync(join(tmpdir(),'aerynth-timeline-core-')),path=join(dir,'canonical.sqlite');
@@ -38,5 +39,115 @@ test('actual Core Timeline commands persist one canonical view over existing aut
     assert(restored.items.some(item=>item.event.eventId===event.eventId&&item.event.receivedAt===event.receivedAt));
   }finally{
     await core.command('close',{});const target=resolve(dir),part=relative(resolve(tmpdir()),target);assert(part.startsWith('aerynth-timeline-core-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(target,{recursive:true,force:true});
+  }
+});
+
+test('Vela discovers Timeline creation, composes with approved GitHub evidence, and restores canonical resources after restart', async t => {
+  const dir=mkdtempSync(join(tmpdir(),'aerynth-github-timeline-')),path=join(dir,'canonical.sqlite');
+  let proposed!: VelaNativeAction;
+  const planner: VelaPlanningPort = {
+    providerId:'synthetic-timeline-planner',
+    availability:()=>({available:true,busy:false}),
+    async propose(input) {
+      assert(input.capabilities.some(capability=>capability.id==='createTimeline'));
+      return {schemaVersion:2,kind:'plan',summary:'Save the reviewed development history',steps:[{id:'timeline',explanation:'Use the selected public repository',action:proposed}],
+        contribution:{providerId:'synthetic-timeline-planner',classification:'reported'}};
+    },
+  };
+  const options = {path,provider:'fixture' as const,contentPolicy:'synthetic-only' as const,velaPlanningPort:planner};
+  let core=new BackendCore(options);
+  const calls: URL[] = [];
+  const sha='f'.repeat(40);
+  let holdCommits: (() => void) | undefined;
+  t.mock.method(globalThis,'fetch',async (url:URL, options:RequestInit)=>{
+    calls.push(url);
+    assert.equal(url.origin,'https://api.github.com');
+    assert.equal(options.redirect,'error');
+    assert(!new Headers(options.headers).has('Authorization'));
+    if(url.pathname==='/repos/synthetic/example')
+      return Response.json({full_name:'Synthetic/Example',private:false,default_branch:'main'});
+    assert.equal(url.pathname,'/repos/synthetic/example/commits');
+    assert.equal(url.searchParams.get('sha'),'main');
+    assert.equal(url.searchParams.get('per_page'),'30');
+    if(holdCommits){
+      holdCommits();
+      return await new Promise<Response>((_,reject)=>options.signal!.addEventListener('abort',()=>reject(options.signal!.reason),{once:true}));
+    }
+    return Response.json([{sha,commit:{message:'Public commit title\nPrivate fixture body',committer:{date:new Date(Date.now()-60000).toISOString(),email:'SYNTHETIC_EMAIL'}}}],{
+      headers:{link:'<https://api.github.com/ignored>; rel="next"'},
+    });
+  });
+  try {
+    const project=(await core.command('desktop',{type:'createProject',title:'Synthetic development'})).projects[0]!;
+    const desktop=await core.command('desktop',{type:'createWorkspace',projectId:project.id,title:'Development'});
+    const workspaceId=desktop.activeWorkspaceId!;
+    proposed={type:'createTimeline',title:'Development history',projectId:project.id,workspaceId,source:{kind:'github-commits',repositoryUrl:'https://github.com/Synthetic/Example'}};
+    await assert.rejects(core.command('vela',{name:'native',input:{intent:'Invalid repository',action:{...proposed,source:{kind:'github-commits',repositoryUrl:'https://github.com.evil.invalid/Synthetic/Example'}}}}),/unsupported_or_invalid_action/);
+    assert.equal(calls.length,0);
+    const intent='Give me a development history from the public source we discussed';
+    const preview=await core.command('velaRequestPreview',{intent,resourceIds:[]});
+    const grant=await core.command('authorizeVelaRequest',{previewId:preview.id,signature:preview.signature});
+    const request=await core.command('vela',{name:'request',input:{intent,resourceIds:[],authorizeProvider:true,previewId:preview.id,grantId:grant.grantId}}) as VelaRequest;
+    const state=()=>core.command('vela',{name:'state',input:{}}) as Promise<VelaState>;
+    const plan=(await state()).plans.find(plan=>plan.id===request.planId)!;
+    assert.equal(plan.state,'prepared');
+    await assert.rejects(core.command('vela',{name:'apply',input:plan.id}),/review_authorization_required/);
+    assert.equal(calls.length,0);
+    await core.command('vela',{name:'review',input:{planId:plan.id,fingerprint:plan.fingerprint,decision:'approve'}});
+    assert.equal(calls.length,0);
+    const applied=await core.command('vela',{name:'apply',input:plan.id}) as VelaPlan;
+    assert.equal(applied.state,'applied');
+    assert.deepEqual(await core.command('vela',{name:'apply',input:plan.id}),applied);
+    const receipt=(await state()).receipts.find(receipt=>receipt.planId===plan.id)!;
+    assert.equal(receipt.state,'applied');
+    const result={resourceId:receipt.createdResourceId!};
+    assert.equal(calls.length,2);
+    const read=(await core.command('timelines',{name:'read',input:{resourceId:result.resourceId}})).result as TimelineDocument;
+    const query={name:'query' as const,input:{resourceId:result.resourceId,expectedVersion:read.resource.version}};
+    const window=(await core.command('timelines',query)).result as TimelineWindow;
+    assert.equal(window.timeAxis,'reportedAt');
+    assert.equal(window.sourceCoverage?.status,'partial');
+    const item=window.items[0]!;
+    assert.equal(item.externalEvidence?.title,'Public commit title');assert.equal(item.evidenceClass,'reported');
+    assert.doesNotMatch(JSON.stringify(window),/Private fixture body|SYNTHETIC_EMAIL/);
+    const target={timelineId:result.resourceId,eventId:item.event.eventId,cursor:item.event.cursor};
+    const url='https://github.com/Synthetic/Example/commit/'+sha;
+    assert.deepEqual(await core.command('githubTimeline',{name:'openCommit',input:target}),{url});
+    await assert.rejects(core.command('githubTimeline',{name:'openCommit',input:{...target,eventId:'wrong'}}),/github_commit_unavailable/);
+    assert.doesNotMatch(JSON.stringify(await core.command('replay',{after:0,limit:100})),/Public commit title|Synthetic\/Example/);
+    const stored=await core.command('desktop',{type:'snapshot'});
+    const placement=stored.blocks.find(block=>block.resource_id===result.resourceId);
+    assert(placement);assert.equal(placement.workspace_id,workspaceId);
+    await core.command('close',{});
+    core=new BackendCore(options);
+    const restored=(await core.command('timelines',query)).result as TimelineWindow;
+    assert.deepEqual(restored.items,window.items);
+    assert.deepEqual(restored.sourceCoverage,window.sourceCoverage);
+    assert.deepEqual((await core.command('desktop',{type:'snapshot'})).blocks.find(block=>block.id===placement.id),placement);
+    assert.deepEqual(await core.command('githubTimeline',{name:'sources',input:{}}),{repositories:['https://github.com/synthetic/example']});
+    const local=await core.command('vela',{name:'native',input:{intent:'Show recorded activity',action:{
+      type:'createTimeline',title:'Activity',projectId:project.id,workspaceId:null,source:{kind:'application-activity'},
+    }}}) as VelaPlan;
+    await core.command('vela',{name:'review',input:{planId:local.id,fingerprint:local.fingerprint,decision:'approve'}});
+    assert.equal((await core.command('vela',{name:'apply',input:local.id}) as VelaPlan).state,'applied');
+    const localId=(await state()).receipts.find(receipt=>receipt.planId===local.id)!.createdResourceId!;
+    const localDoc=(await core.command('timelines',{name:'read',input:{resourceId:localId}})).result as TimelineDocument;
+    assert.equal(localDoc.view.timeAxis,undefined);
+    assert.equal(localDoc.resource.title,'Activity');
+    assert.equal(calls.length,2);
+    const pending=await core.command('vela',{name:'native',input:{intent:'Prepare another development timeline',action:proposed}}) as VelaPlan;
+    await core.command('vela',{name:'review',input:{planId:pending.id,fingerprint:pending.fingerprint,decision:'approve'}});
+    const fetching=new Promise<void>(resolve=>{holdCommits=resolve;});
+    const operation=core.command('vela',{name:'apply',input:pending.id}) as Promise<VelaPlan>;
+    await fetching;
+    await core.command('vela',{name:'cancel',input:pending.requestId});
+    assert.equal((await operation).state,'cancelled');
+    const afterCancel=await core.command('desktop',{type:'snapshot'});
+    assert.deepEqual(afterCancel.resources.filter(r=>r.kind==='timeline').map(r=>r.id).sort(),[result.resourceId,localId].sort());
+  } finally {
+    await core.command('close',{});
+    const target=resolve(dir),part=relative(resolve(tmpdir()),target);
+    assert(part.startsWith('aerynth-github-timeline-')&&!part.startsWith('..')&&!isAbsolute(part));
+    rmSync(target,{recursive:true,force:true});
   }
 });

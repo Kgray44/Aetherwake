@@ -1,6 +1,7 @@
 import type { CapabilityDescriptor, DelegateTaskAction, PlanStep, ProviderContribution, ProviderProposal, ProviderResult, VelaNativeAction } from './contracts.ts';
 import { defaultOrganization, updateOrganization } from '../../workspace-engine/organization.mts';
 import type { OrganizationUpdate } from '../../workspace-engine/contracts.mts';
+import { AERYNTH_SOURCE_REPOSITORY, githubRepository } from '../../application-contract/github-timeline.ts';
 
 export class VelaError extends Error {
   readonly code: string;
@@ -41,9 +42,10 @@ function organization(value: unknown): value is OrganizationUpdate {
   if (isRecord(value.structured) && isRecord(value.structured.spans) && !Object.values(value.structured.spans).every(span => isRecord(span) && fields(span, ['columns', 'rows']))) return false;
   try { updateOrganization(defaultOrganization(), value); return true; } catch { return false; }
 }
-function capability(id: CapabilityDescriptor['id'], label: string, effect: CapabilityDescriptor['effect'], properties: Record<string, unknown>, scope: string): CapabilityDescriptor {
+function capability(id: CapabilityDescriptor['id'], label: string, effect: CapabilityDescriptor['effect'], properties: Record<string, unknown>, scope: string,
+  authorization: CapabilityDescriptor['authorization'] = id === 'delegateTask' ? 'explicit-execution-authorization' : 'host-policy'): CapabilityDescriptor {
   return { id, label, effect, schema: objectSchema(properties), scope,
-    authorization: id === 'delegateTask' ? 'explicit-execution-authorization' : 'host-policy',
+    authorization,
     reversible: ['read', 'navigate'].includes(effect) ? 'no-state-change' : 'host-dependent' };
 }
 export const CAPABILITIES: CapabilityDescriptor[] = [
@@ -54,6 +56,11 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('renameResource', 'Rename a local resource', 'mutate', { type: { const: 'renameResource' }, resourceId: idSchema, title: stringSchema }, 'One authorized active note, task, task group or reference; preserves content, drafts and placements'),
   capability('associateResourceProject', 'Change a local resource project', 'mutate', { type: { const: 'associateResourceProject' }, resourceId: idSchema, projectId: nullableIdSchema }, 'One authorized active non-chat local resource and exact authorized destination project or null; grants no content or sharing access'),
   capability('createWorkspace', 'Create an empty workspace', 'create', { type: { const: 'createWorkspace' }, title: stringSchema, projectId: nullableIdSchema }, 'One canonical workspace in the exact authorized project or without a project; opens the new workspace'),
+  capability('createTimeline', 'Create and show a saved Timeline', 'create', {
+    type: { const: 'createTimeline' }, title: stringSchema, projectId: nullableIdSchema, workspaceId: nullableIdSchema,
+    source: { oneOf: [objectSchema({ kind: { const: 'application-activity' } }),
+      objectSchema({ kind: { const: 'github-commits' }, repositoryUrl: { ...stringSchema, maxLength: 180 } })] },
+  }, 'Current project; optionally place in current workspace. Use canonical app events or reviewed public GitHub default-branch commits. Ask which repository if unclear. Aerynth product source: ' + AERYNTH_SOURCE_REPOSITORY, 'reviewed-action'),
   capability('renameWorkspace', 'Rename a workspace', 'mutate', { type: { const: 'renameWorkspace' }, workspaceId: idSchema, title: stringSchema }, 'One authorized workspace; current entity and layout revisions are bound by the target manifest'),
   capability('bringAllIntoView', 'Frame the current workspace', 'mutate', { type: { const: 'bringAllIntoView' }, workspaceId: idSchema }, 'Frame the current authorized workspace using actual presenter bounds supplied outside the model action; does not create or duplicate resources'),
   capability('resolveLayout', 'Resolve workspace layout collisions', 'mutate', { type: { const: 'resolveLayout' }, workspaceId: idSchema }, 'One authorized workspace and its existing canonical layout participants, including Vela'),
@@ -93,6 +100,11 @@ export function validateAction(value: unknown): VelaNativeAction | DelegateTaskA
     case 'renameResource': valid = fields(v, ['type', 'resourceId', 'title']) && identifier(v.resourceId) && text(v.title); break;
     case 'associateResourceProject': valid = fields(v, ['type', 'resourceId', 'projectId']) && identifier(v.resourceId) && nullableId(v.projectId); break;
     case 'createWorkspace': valid = fields(v, ['type', 'title', 'projectId']) && text(v.title) && nullableId(v.projectId); break;
+    case 'createTimeline': valid = fields(v, ['type', 'title', 'projectId', 'workspaceId', 'source']) && text(v.title) &&
+      nullableId(v.projectId) && nullableId(v.workspaceId) && isRecord(v.source) &&
+      ((v.source.kind === 'application-activity' && fields(v.source, ['kind'])) ||
+       (v.source.kind === 'github-commits' && fields(v.source, ['kind', 'repositoryUrl']) &&
+        text(v.source.repositoryUrl, 180) && !!githubRepository(v.source.repositoryUrl))); break;
     case 'renameWorkspace': valid = fields(v, ['type', 'workspaceId', 'title']) && identifier(v.workspaceId) && text(v.title); break;
     case 'bringAllIntoView': case 'resolveLayout': valid = fields(v, ['type', 'workspaceId']) && identifier(v.workspaceId); break;
     case 'setOrganization': valid = fields(v, ['type', 'workspaceId', 'organization']) && identifier(v.workspaceId) && organization(v.organization); break;

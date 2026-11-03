@@ -7,6 +7,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
 import { compositeTimelineDomain,isTimelineRead,type TimelineRequest } from './timeline-domain.mts';
+import { githubRepository, type GitHubTimelineCommand } from '../../application-contract/github-timeline.ts';
+import type { GitHubCommitEvidence, TimelineSourceCoverage } from '../../timeline-product/contracts.ts';
+import { readPublicGitHubCommits } from './github-timeline.mts';
 import { createTaskObjectiveCommands,isTaskObjectiveRead,type TaskObjectiveCommandsOptions } from './task-objectives.mts';
 import { createTaskReferenceTargets } from './task-reference-targets.mts';
 import type { TaskTargetQuery } from '../../application-contract/task-targets.ts';
@@ -36,7 +39,7 @@ import { CapabilityCatalogLease, createCapabilityCatalog, validateCatalogDeclara
 import type { CapabilityCatalogSnapshot, CapabilityNativeCall, CapabilityToolReply } from '../../vela-core/src/capability-catalog.mts';
 import { historyDigest } from '../../vela-core/src/bounded-history.mts';
 import type { AcceptedHistoryAppend, HistoryFence, HistoryOrigin, HistoryOmission, PrivateFrozenProviderContext, HistoryMessageMetadata, HistoryRequestRecord, HistorySnapshot } from '../../vela-core/src/bounded-history.mts';
-import type { VelaMessage, VelaLocalHost, ContextManifest, AuthorizationRequest, AuthorizationDecision, VelaPlanningPort, ResourceRef, VelaPlan, HostActionResult, CapabilityDescriptor, VelaScopePurpose } from '../../vela-core/src/contracts.ts';
+import type { VelaMessage, VelaLocalHost, ContextManifest, AuthorizationRequest, AuthorizationDecision, VelaNativeAction, VelaPlanningPort, ResourceRef, VelaPlan, HostActionResult, CapabilityDescriptor, VelaScopePurpose } from '../../vela-core/src/contracts.ts';
 import type { VelaRequestPreview, VelaNativeReview, VelaNativeCapabilities, VelaBackendState } from './contracts.mts';
 import { TemplateService } from '../../block-library/service.mts';
 import { createCanonicalTemplateHost } from '../../block-library/canonical-host.mts';
@@ -99,6 +102,7 @@ export class BackendCore {
   private emit: (event: StreamEvent) => void;
   private maxEvents: number;
   private closed = false;
+  private githubImport: AbortController | null = null;
   private desktop: DesktopState;
   private privateMode: boolean;
   private readonly historyContextEnabled:boolean;
@@ -290,9 +294,8 @@ export class BackendCore {
     const result=read?execute():this.atomic(execute);
     return read?{result}:{result,desktop:await this.command('desktop',{type:'snapshot'})};
   }
-  private async timelineCommand(operation:TimelineRequest) {
-    const read=isTimelineRead(operation);
-    const execute=()=>compositeTimelineDomain({kernel:this.kernel,db:this.db,
+  private timelineDomain() {
+    return compositeTimelineDomain({kernel:this.kernel,db:this.db,
       projectAccess:id=>this.libraryAuthorized({kind:'project',id}),resourceAccess:id=>this.productResourceAccess(id),
       eventAccess:header=>{
         if(header.resourceId!==null&&!this.productResourceAccess(header.resourceId))return false;
@@ -302,9 +305,113 @@ export class BackendCore {
         return true;
       },
       recordEvent:event=>this.record(event.type,'observed',undefined,'timeline:'+event.commandId+':'+event.type,{providerId:'aerynth-native',detached:true,resourceId:event.resourceId,correlationId:event.commandId,payload:{redacted:true,application:{resourceVersion:event.resourceVersion,commandId:event.commandId,detail:event.detail}}}),
-    }).dispatch(operation);
+    });
+  }
+  private async timelineCommand(operation:TimelineRequest) {
+    ensure(operation.name!=='openGitHubCommit','native_github_link_required');
+    const read=isTimelineRead(operation);
+    const execute=()=>this.timelineDomain().dispatch(operation);
     const result=read?execute():this.atomic(execute);
     return read?{result}:{result,desktop:await this.command('desktop',{type:'snapshot'})};
+  }
+  private githubScope() {
+    const session = this.velaSession();
+    const workspaceId = session.navigation.kind === 'workspace' ? session.navigation.workspaceId : null;
+    const projectId = session.navigation.kind === 'constellation' ? session.navigation.projectId :
+      this.db.prepare("SELECT project_id FROM workspaces WHERE id=? AND state='active'").get(workspaceId)?.project_id as string|null|undefined ?? null;
+    ensure(!projectId || this.libraryAuthorized({kind:'project',id:projectId}), 'github_timeline_scope_unavailable');
+    return { workspaceId, projectId };
+  }
+  private githubReferences(projectId: string | null, url?: string) {
+    return this.db.prepare(
+      "SELECT r.id,n.content FROM resources r JOIN notes n ON n.resource_id=r.id JOIN desktop_resources d ON d.resource_id=r.id WHERE d.kind='reference' AND r.state='active' AND r.project_id IS ? AND " +
+      (url ? "n.content=?" : "length(n.content)<=180 AND n.content LIKE 'https://github.com/%'") +
+      " ORDER BY r.id LIMIT 24"
+    ).all(...(url ? [projectId,url] : [projectId])).filter(row=>this.productResourceAccess(String(row.id)));
+  }
+  private async githubTimelineCommand(operation:GitHubTimelineCommand):Promise<CommandMap['githubTimeline']['output']> {
+    ensure(operation && Object.keys(operation).length===2 && operation.input && typeof operation.input==='object' && !Array.isArray(operation.input), 'invalid_github_timeline_request');
+    if(operation.name==='openCommit'){
+      const url=this.timelineDomain().dispatch({name:'openGitHubCommit',input:operation.input});
+      ensure(url,'github_commit_unavailable');
+      return {url};
+    }
+    if(operation.name==='sources'){
+      ensure(Object.keys(operation.input).length===0,'invalid_github_timeline_request');
+      return {repositories:[...new Set(this.githubReferences(this.githubScope().projectId).flatMap(row=>{
+        const repository=githubRepository(String(row.content));return repository?['https://github.com/'+repository]:[];
+      }))]};
+    }
+    throw new ServiceError('invalid_github_timeline_request');
+  }
+  private timelineScope(action: Extract<VelaNativeAction, {type:'createTimeline'}>) {
+    const scope=this.githubScope();
+    ensure(action.projectId===scope.projectId && (action.workspaceId===null||action.workspaceId===scope.workspaceId),'timeline_scope_changed');
+    return scope;
+  }
+  private prepareVelaNative(input:Parameters<CanonicalVelaHost['applyNative']>[0],cancel:AbortSignal) {
+    const action=input.action;
+    if(action.type!=='createTimeline'||action.source.kind!=='github-commits')return;
+    this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
+    const scope=this.timelineScope(action);
+    const repo=githubRepository(action.source.repositoryUrl);
+    ensure(repo,'invalid_github_repository');
+    ensure(!this.active&&!this.githubImport,'github_timeline_busy');
+    const controller=new AbortController();
+    this.githubImport=controller;
+    const signal=AbortSignal.any([controller.signal,cancel,AbortSignal.timeout(15000)]);
+    return readPublicGitHubCommits(repo,signal).then(batch=>{
+      ensure(!this.closed&&!signal.aborted&&!this.active,'timeline_scope_changed');
+      const current=this.timelineScope(action);
+      ensure(current.workspaceId===scope.workspaceId,'timeline_scope_changed');
+      ensure(batch.commits.length+2<=this.maxEvents,'github_timeline_retention_too_small');
+      return () => {
+        ensure(!this.closed&&!signal.aborted&&!this.active,'timeline_scope_changed');
+        this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
+        const latest=this.timelineScope(action);
+        ensure(latest.workspaceId===scope.workspaceId,'timeline_scope_changed');
+        return this.once<HostActionResult>(input.commandId,{type:'velaNative',...input},()=>{
+          if(!batch.commits.length)return {status:'failed',receiptId:input.commandId,errorCode:'github_no_usable_commits'};
+          return this.commitVelaTimeline(action,input.commandId,batch);
+        });
+      };
+    }).finally(()=>{this.githubImport=null;});
+  }
+  private commitVelaTimeline(action:Extract<VelaNativeAction,{type:'createTimeline'}>,commandId:string,batch?:Awaited<ReturnType<typeof readPublicGitHubCommits>>):HostActionResult {
+    const {projectId,workspaceId}=action;
+    const scope={projectId,resourceIds:[] as string[]};
+    if(action.source.kind==='github-commits'){
+      ensure(batch,'github_reviewed_preparation_required');
+      const url='https://github.com/'+githubRepository(action.source.repositoryUrl);
+      let sourceId=this.githubReferences(projectId,url)[0]?.id as string|undefined;
+      if(!sourceId){
+        sourceId=this.kernel.createNote(batch.coverage.sourceLabel+' · GitHub',url,projectId).id;
+        this.db.prepare("INSERT INTO desktop_resources(resource_id,kind) VALUES(?,'reference')").run(sourceId);
+      }
+      scope.resourceIds.push(sourceId);
+    }
+    const capture=Date.now(),coverage=batch?.coverage;
+    const timeline=this.timelineDomain().dispatch({name:'create',input:{
+      commandId,title:action.title,projectId,
+      view:{schemaVersion:1,mode:'activity',...(batch?{timeAxis:'reportedAt' as const}:{}),scope,
+        sources:batch?{providerIds:['github'],eventTypes:['github.commit'],classifications:['reported']}:{providerIds:[],eventTypes:[],classifications:['observed','reported','inferred']},
+        viewport:{from:coverage?.requestedFrom??new Date(capture-86400000).toISOString(),
+          to:new Date(coverage?Date.parse(coverage.requestedTo)+1:capture+60000).toISOString(),
+          displayTimeZone:Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'},selection:null},
+    }});
+    if(batch){
+      const sourceId=scope.resourceIds[0]!,{sourceLabel}=batch.coverage;
+      for(const commit of batch.commits){
+        const externalEvidence={...commit.evidence,source:{ref:sourceId,label:sourceLabel,permalink:`https://github.com/${sourceLabel}/commit/${commit.sha}`}};
+        this.record('github.commit','reported',undefined,`github:${sourceId}:${commit.sha}`,{providerId:'github',detached:true,resourceId:sourceId,nativeEventId:commit.sha,providerTime:Date.parse(externalEvidence.reportedAt!),providerTimeSource:externalEvidence.timeSource!,externalEvidence});
+      }
+      this.record('github.import','observed',undefined,'github-import:'+commandId,{providerId:'github',detached:true,resourceId:timeline.resourceId,correlationId:sourceId,externalCoverage:batch.coverage});
+    }
+    if(workspaceId){
+      const engine=this.desktop.nativeBlockServices().engine;
+      this.library.attachBlock({commandId:commandId+':attach',workspaceId,expectedLayoutVersion:engine.project(workspaceId).revision,resourceId:timeline.resourceId,expectedResourceVersion:timeline.version,kind:'timeline'});
+    }
+    return {status:'applied',receiptId:commandId,createdResourceId:timeline.resourceId};
   }
   private libraryAuthorized(subject:{kind:'project'|'workspace'|'resource';id:string}):boolean {
     const table=subject.kind==='project'?'projects':subject.kind==='workspace'?'workspaces':'resources';
@@ -607,7 +714,7 @@ export class BackendCore {
     this.velaHost=createCanonicalVelaHost({db:this.db,transaction:work=>this.atomic(()=>work(this.db)),readTransaction:work=>this.kernel.withTransaction(work),metadata:purpose=>this.velaMetadata(purpose),currentContext:()=>this.velaContext(),
       permissions:{attentionPreferences:(_intent,c)=>c.principalId==='local-owner'&&c.policyVersion==='aerynth.local-owner@1',scope:(c,m)=>this.velaScope(c,m),metadata:(ref,_c,m)=>ref.kind==='resource'?!!m.resources.find(r=>r.id===ref.id&&r.visible!==false):ref.kind==='workspace'?m.workspaces.some(w=>w.id===ref.id):ref.kind==='collection'?!!m.collections?.some(c=>c.id===ref.id)&&this.conversationAccess.collection(ref.id,'read',ref.state==='archived'):m.projects.some(p=>p.id===ref.id),content:ref=>ref.kind==='resource'&&!!this.conversationAccess.resource(ref.id),authorize:request=>this.authorizeVelaPolicy(request),restoreCollection:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'organize',true),inspectCollectionArchiveReceipt:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'read',true)},
       revisions:{attentionPreferences:()=>this.vela.attentionPreferenceVersion(),conversation:id=>this.state.revisions[id]??null,workspace:id=>this.velaNative?.workspaceRevision?.(id)??Number(this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(id)?.version??0),collection:id=>Number(this.db.prepare('SELECT version FROM cp_collection_rules WHERE collection_id=?').get(id)?.version??0)},
-      conversations:{ensure:()=>this.ensureVelaConversation(),read:id=>this.readVelaConversation(id),append:(id,message)=>this.appendVelaMessage(id,message)},dispatch:{native:input=>this.applyVelaNative(input),delegateTask:input=>this.executeVelaDelegation(input),preference:input=>{
+      conversations:{ensure:()=>this.ensureVelaConversation(),read:id=>this.readVelaConversation(id),append:(id,message)=>this.appendVelaMessage(id,message)},dispatch:{native:input=>this.applyVelaNative(input),prepareNative:{supports:action=>action.type==='createTimeline'&&action.source.kind==='github-commits',prepare:(input,signal)=>this.prepareVelaNative(input,signal)},delegateTask:input=>this.executeVelaDelegation(input),preference:input=>{
         ensure(this.velaNative?.applyPreference,'vela_preference_capability_unavailable');this.requireVelaPolicyGrant(input.authorizationRef,undefined,'adaptation');return this.velaNative.applyPreference(input);
       }}});
     this.velaHost.contextReferences=selectedIds=>{
@@ -646,6 +753,7 @@ export class BackendCore {
     this.vela=new VelaService({db:this.db,transaction:work=>this.atomic(work),readTransaction:work=>this.kernel.withTransaction(work),host:this.velaHost,local:this.localVelaHost(),planner:this.velaPlanner,history:{snapshot:(id,limit)=>this.velaHistorySnapshot(id,limit),message:(id,messageId,maxBytes)=>this.velaHistoryMessage(id,messageId,maxBytes),content:(ref,maxBytes)=>this.velaHistoryContent(ref,maxBytes),messageMetadata:(id,messageId)=>this.velaHistoryMessageMetadata(id,messageId),verifyProviderContribution:(contribution,message,request)=>this.verifyVelaHistoryContribution(contribution,message,request)}});
   }
   private velaCapability(id:string) {
+    if(id==='createTimeline')return true;
     if(id==='setAttentionMode')return this.velaNative?.supportedActions.includes('setAttentionMode')===true&&this.vela?.attentionPreferenceVersion()!=null;
     if(id==='bringAllIntoView')return this.velaContext().currentWorkspaceId!==null&&this.velaNative?.supportedActions.includes('bringAllIntoView')===true;
     return ['search','navigate','content','taskStatus','setTaskGroupMembers','relate','createResource'].includes(id)||this.velaNative?.supportedActions.includes(id as any)===true||(id==='delegateTask'&&this.capabilityCache.snapshot()?.authentication==='available');
@@ -751,6 +859,7 @@ export class BackendCore {
     if(request.actions.some(a=>a.type==='renameProject'&&!this.conversationAccess.project(a.projectId,'organize')||(a.type==='renameResource'||a.type==='associateResourceProject')&&(!this.conversationAccess.resource(a.resourceId,'organize')||a.type==='associateResourceProject'&&!this.conversationAccess.project(a.projectId,'organize'))))return {decision:'deny',reason:'Canonical organization permission is unavailable',policyVersion:request.scope.policyVersion};
     if(request.actions.some(a=>a.type==='createConversation'&&a.providerId==='codex-app-server'&&(this.port.id!=='codex-app-server'||this.port.mock)))return {decision:'deny',reason:'A real Codex conversation provider is not configured',policyVersion:request.scope.policyVersion};
     if(request.actions.some(a=>a.type==='createResource'&&a.workspaceId!==null&&!this.velaNative?.supportedActions.includes('createResource')))return {decision:'deny',reason:'Placement capability is unavailable',policyVersion:request.scope.policyVersion};
+    for(const action of request.actions)if(action.type==='createTimeline')this.timelineScope(action);
     if(request.phase==='provider-context') {
       ensure(this.pendingVelaGrant,'native_vela_grant_required');const grant=this.validateVelaGrant(this.pendingVelaGrant),preview=this.velaPreviews.get(grant.previewId)!;
       this.validateFrozenVelaPreview(preview);ensure(!grant.requestId&&request.contextManifest&&this.velaEgress(request.intent,request.contextManifest,preview.discovery,preview)===preview.signature&&(!preview.acceptedAppend||preview.acceptedAppend.requestId===request.requestId),'stale_vela_preview');grant.requestId=request.requestId;
@@ -768,6 +877,11 @@ export class BackendCore {
     ensure(!this.active,'execution_busy');this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
     return this.once(input.commandId,{type:'velaNative',...input},()=>{
       const a=input.action;
+      if(a.type==='createTimeline'){
+        this.timelineScope(a);
+        ensure(a.source.kind==='application-activity','github_reviewed_preparation_required');
+        return this.commitVelaTimeline(a,input.commandId);
+      }
       if(this.velaNative?.supportedActions.includes(a.type))return this.velaNative.dispatch(input);
       ensure(a.type!=='setAttentionMode','vela_attention_mode_capability_unavailable');
       ensure(this.velaCapability(a.type),'vela_native_capability_unavailable');ensure(a.type!=='createResource'||a.workspaceId===null,'vela_block_capability_unavailable');
@@ -1256,19 +1370,20 @@ export class BackendCore {
     this.state.resources[resource.id] = c.id; this.state.revisions[resource.id] = 1;
     return this.conv(resource.id);
   }
-  private record(type: string, classification: StreamEvent['classification'], native?: EventEnvelope, dedupe: string = randomUUID(),override?:{providerId:string;detached?:boolean;resourceId?:string;correlationId?:string;payload?:StreamEvent['payload']}) {
+  private record(type: string, classification: StreamEvent['classification'], native?: EventEnvelope, dedupe: string = randomUUID(),override?:{providerId:string;detached?:boolean;resourceId?:string;correlationId?:string;payload?:StreamEvent['payload'];nativeEventId?:string;providerTime?:number;providerTimeSource?:string;externalEvidence?:GitHubCommitEvidence;externalCoverage?:TimelineSourceCoverage}) {
     const e: StreamEvent = { schemaVersion: 1, eventId: randomUUID(), cursor: 0, resourceId: override?.resourceId??(override?.detached?null:this.active?.resourceId ?? null), executionId: override?.detached?null:this.active?.id ?? null,
-      providerId: override?.providerId??this.port.id, providerInstanceId: override?.providerId===CHATGPT_PLAN_PROVIDER?'aerynth.responses':override?.providerId==='aerynth-native'?'aerynth.canonical':this.port.instanceId, connectionId: this.connectionId,
-      nativeEventId: null, nativeSequence: native?.sequence ?? null, threadId: override?.detached||override?.providerId===CHATGPT_PLAN_PROVIDER?null:native?.providerThreadId ?? this.active?.binding?.nativeThreadId ?? null,
+      providerId: override?.providerId??this.port.id, providerInstanceId: override?.providerId===CHATGPT_PLAN_PROVIDER?'aerynth.responses':override?.providerId==='aerynth-native'?'aerynth.canonical':override?.providerId==='github'?'github.public-rest':this.port.instanceId, connectionId: this.connectionId,
+      nativeEventId: override?.nativeEventId??null, nativeSequence: native?.sequence ?? null, threadId: override?.detached||override?.providerId===CHATGPT_PLAN_PROVIDER?null:native?.providerThreadId ?? this.active?.binding?.nativeThreadId ?? null,
       turnId: override?.detached||override?.providerId===CHATGPT_PLAN_PROVIDER?null:native?.providerTurnId ?? this.active?.turnId ?? null, correlationId: override?.correlationId??(override?.detached?null:this.active?.commandId ?? null), causationId: override?.detached?null:this.active?.id ?? null,
-      receivedAt: now(), providerTime: native?.providerTime ?? null, providerTimeSource: native?.providerTimeSource ?? null,
+      receivedAt: now(), providerTime: override?.providerTime??native?.providerTime??null, providerTimeSource: override?.providerTimeSource??native?.providerTimeSource??null,
       type, classification, status: native?.terminalStatus ?? null, payload: { redacted: true, ...(typeof native?.payload.delta === 'string' ? { textBytes: Buffer.byteLength(native.payload.delta) } : {}), ...(native?.payload.item ? { itemType: itemType((native.payload.item as any).type) } : {}),...override?.payload } };
     let inserted = false;
     this.kernel.withTransaction(() => {
       const result = this.db.prepare('INSERT OR IGNORE INTO intelligence_events(dedupe,json) VALUES(?,?)').run(dedupe, JSON.stringify(e));
       if (!result.changes) return;
       inserted = true; e.cursor = Number(result.lastInsertRowid);
-      this.db.prepare('UPDATE intelligence_events SET json=? WHERE cursor=?').run(JSON.stringify(e), e.cursor);
+      const stored = {...e,...(override?.externalEvidence?{externalEvidence:override.externalEvidence}:{}),...(override?.externalCoverage?{externalCoverage:override.externalCoverage}:{})};
+      this.db.prepare('UPDATE intelligence_events SET json=? WHERE cursor=?').run(JSON.stringify(stored), e.cursor);
       this.db.prepare('UPDATE integration_meta SET latest=? WHERE id=1').run(e.cursor);
       this.db.prepare('DELETE FROM intelligence_events WHERE cursor NOT IN (SELECT cursor FROM intelligence_events ORDER BY cursor DESC LIMIT ?)').run(this.maxEvents);
     });
@@ -1497,6 +1612,7 @@ export class BackendCore {
     // execution. Canonical mutations retain source/approval fences.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft','readViewState'];
     if(name==='timelines'){ensure(isTimelineRead(a)||!this.active,'execution_busy');return this.timelineCommand(a) as any;}
+    if(name==='githubTimeline')return this.githubTimelineCommand(a) as any;
     if(name==='taskObjectives'){ensure(a?.name==='targets'||isTaskObjectiveRead(a)||!this.active,'execution_busy');return this.taskObjectiveCommand(a) as any;}
     if(name==='agents'||name==='checklists'){
       ensure((name==='agents'?isAgentRead(a):isChecklistRead(a))||!this.active,'execution_busy');
@@ -1645,12 +1761,12 @@ export class BackendCore {
       case 'replay': {
         const after = a.after ?? 0, limit = a.limit ?? 100;
         ensure(Number.isSafeInteger(after) && after >= 0 && Number.isInteger(limit) && limit > 0 && limit <= 1000, 'invalid_cursor');
-        const events = this.db.prepare('SELECT json FROM intelligence_events WHERE cursor>? ORDER BY cursor LIMIT ?').all(after, limit).map(row => JSON.parse(String(row.json)));
+        const events = this.db.prepare("SELECT json_remove(json,'$.externalEvidence','$.externalCoverage') AS json FROM intelligence_events WHERE cursor>? ORDER BY cursor LIMIT ?").all(after, limit).map(row => JSON.parse(String(row.json)));
         const earliest = this.db.prepare('SELECT min(cursor) AS value FROM intelligence_events').get()!.value as number | null;
         const latest = Number(this.db.prepare('SELECT latest FROM integration_meta WHERE id=1').get()!.latest);
         return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;
       }
-      case 'close': this.ordinaryController?.abort();if(this.ordinaryTask)await this.ordinaryTask.catch(()=>{});await this.ordinaryConnections.close();await Promise.allSettled([...this.ordinaryAuth.values()]);for(const id of this.velaCatalogLeases.keys())this.finishVelaCatalog(id);this.stopEvents(); this.port.close(); this.kernel.close(); this.closed = true; return null as any;
+      case 'close': this.githubImport?.abort();this.ordinaryController?.abort();if(this.ordinaryTask)await this.ordinaryTask.catch(()=>{});await this.ordinaryConnections.close();await Promise.allSettled([...this.ordinaryAuth.values()]);for(const id of this.velaCatalogLeases.keys())this.finishVelaCatalog(id);this.stopEvents(); this.port.close(); this.kernel.close(); this.closed = true; return null as any;
       default: throw new ServiceError('unsupported_command');
     }
   }

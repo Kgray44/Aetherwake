@@ -18,6 +18,7 @@ import {
   type TimelinePage,
   type RecordedTimelineItem,
   type GitHubCommitEvidence,
+  type TimelineSourceCoverage,
 } from "./contracts.ts";
 
 export interface TimelineHostPort {
@@ -211,6 +212,18 @@ function githubEvidence(value: unknown, event: TimelineEventHeader): GitHubCommi
       event.providerTime !== Date.parse(evidence.reportedAt) || event.providerTimeSource !== evidence.timeSource)
     return;
   return evidence as unknown as GitHubCommitEvidence;
+}
+
+function sourceCoverage(value: unknown): TimelineSourceCoverage | undefined {
+  if (typeof value !== "string") return;
+  const data: unknown = JSON.parse(value);
+  const keys = ["kind", "sourceLabel", "requestedFrom", "requestedTo", "fetchedAt", "status"];
+  if (!fields(data, [...keys, "omissionReason"], keys) || data.kind !== "github-commits" ||
+      !id(data.sourceLabel, 140) || !iso(data.requestedFrom) || !iso(data.requestedTo) ||
+      data.requestedFrom >= data.requestedTo || !iso(data.fetchedAt) ||
+      !["bounded", "partial"].includes(data.status) ||
+      (Object.hasOwn(data, "omissionReason") && !id(data.omissionReason, 200))) return;
+  return data as unknown as TimelineSourceCoverage;
 }
 
 /** Durable view configuration, never a mirror of source events. Unknown reads
@@ -652,6 +665,35 @@ export class TimelineService {
       (view.timeAxis !== "reportedAt" || !!githubEvidence(row.externalEvidence, header)?.reportedAt)
     );
   }
+  openGitHubCommit(input: { timelineId: string; eventId: string; cursor: number }): string | null {
+    return this.tx(() => {
+      check(fields(input, ["timelineId", "eventId", "cursor"]) &&
+        id(input.timelineId) && id(input.eventId) && version(input.cursor), "invalid_github_commit_open");
+      const { view } = this.stored(input.timelineId);
+      if (!this.source()) return null;
+      const row = this.host.db.prepare("SELECT " + projection + " FROM intelligence_events WHERE cursor=?").get(input.cursor);
+      if (!row) return null;
+      const event = this.header(row);
+      if (typeof event === "string" || event.eventId !== input.eventId || !this.visible(event, view).allowed) return null;
+      const evidence = githubEvidence(row.externalEvidence, event);
+      const time = view.timeAxis === "reportedAt" ? evidence?.reportedAt : event.receivedAt;
+      if (!time || time < view.viewport.from || time >= view.viewport.to) return null;
+      return evidence?.source.permalink ?? null;
+    });
+  }
+  private githubCoverage(timelineId: string, view: TimelineView): TimelineSourceCoverage | undefined {
+    if (view.timeAxis !== "reportedAt" || view.scope.resourceIds.length !== 1) return;
+    const row = this.host.db.prepare(
+      "SELECT " + projection +
+      ",CASE WHEN length(CAST(json_extract(json,'$.externalCoverage') AS BLOB))<=1536 THEN json_extract(json,'$.externalCoverage') END AS externalCoverage" +
+      " FROM intelligence_events WHERE CASE WHEN json_valid(json) THEN json_extract(json,'$.type')='github.import' AND json_extract(json,'$.resourceId')=? AND json_extract(json,'$.correlationId')=? END ORDER BY cursor DESC LIMIT 1",
+    ).get(timelineId, view.scope.resourceIds[0]!);
+    if (!row) return;
+    const event = this.header(row);
+    if (typeof event === "string" || event.providerId !== "github" ||
+        !this.allow(() => this.host.eventAccess(Object.freeze(structuredClone(event))))) return;
+    return sourceCoverage(row.externalCoverage);
+  }
   read(resourceId: string): TimelineDocument {
     return this.tx(() => {
       const value = this.stored(resourceId),
@@ -977,22 +1019,28 @@ export class TimelineService {
       const through = page?.throughCursor ?? source.latest,
         after = page?.afterCursor ?? 0;
       result.source.throughCursor = through;
+      const coverage = this.githubCoverage(value.resource.id, value.view);
+      if (coverage) result.sourceCoverage = coverage;
       if (source.earliest !== null && after < source.earliest - 1)
         gap("before-retained-cursor");
+      const githubScope = result.timeAxis === "reportedAt" ? value.view.scope.resourceIds : [];
+      const githubFilter = githubScope.length ?
+        " AND CASE WHEN json_valid(json) THEN json_extract(json,'$.providerId')='github' AND json_extract(json,'$.type')='github.commit' AND json_extract(json,'$.resourceId') IN (" +
+        githubScope.map(() => "?").join(",") + ") END" : "";
       const rows = this.host.db
         .prepare(
           "SELECT " +
             projection +
-            " FROM intelligence_events WHERE cursor>? AND cursor<=? ORDER BY cursor LIMIT ?",
+            " FROM intelligence_events WHERE cursor>? AND cursor<=?" + githubFilter + " ORDER BY cursor LIMIT ?",
         )
-        .all(after, through, TIMELINE_LIMITS.scan);
+        .all(after, through, ...githubScope, TIMELINE_LIMITS.scan);
       let scanned = after,
         bytes = 0,
         stopped = false;
       for (const row of rows) {
         const raw = row as Record<string, any>,
           header = this.header(raw);
-        if (scanned && Number(raw.storeCursor) > scanned + 1)
+        if (!githubScope.length && scanned && Number(raw.storeCursor) > scanned + 1)
           gap("cursor-discontinuity");
         if (typeof header === "string") {
           gap(header);
@@ -1060,7 +1108,7 @@ export class TimelineService {
           afterCursor: scanned,
           throughCursor: through,
         };
-      } else if (scanned < through) gap("cursor-discontinuity");
+      } else if (!githubScope.length && scanned < through) gap("cursor-discontinuity");
       const latest = this.source();
       result.source.observedLatestCursor = latest?.latest ?? null;
       result.hasNewEvents = latest ? latest.latest > through : null;

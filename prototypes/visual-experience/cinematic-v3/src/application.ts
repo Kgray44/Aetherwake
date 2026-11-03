@@ -101,6 +101,7 @@ import {
 } from "../../../block-library/agent-view.ts";
 import "../../../block-library/agent-view.css";
 import { mountTimelineExperience } from "../../../block-library/timeline-view.ts";
+import type { TimelineExternalOpen } from "../../../block-library/timeline-presentation.ts";
 import { mountTaskTrackerExperience } from "../../../block-library/task-tracker-view.ts";
 import { mountTaskObjectiveCreator } from "../../../block-library/task-objective-creator.ts";
 import type { TaskObjectiveDocument } from "../../../task-product/contracts.ts";
@@ -586,6 +587,7 @@ export function installApplication(hooks: Hooks) {
         },
         timelines: {
           port: productClients.timelines,
+          onOpenExternalSource: openGitHubCommit,
           motion: experienceMotion,
           viewId: "direct:" + resource.id,
           resourceTitle: (id) =>
@@ -1854,6 +1856,9 @@ export function installApplication(hooks: Hooks) {
       );
     return navigation?.kind === "constellation" ? navigation.projectId : null;
   }
+  async function openGitHubCommit(input: TimelineExternalOpen) {
+    await host.command!("githubTimeline", { name: "openCommit", input });
+  }
   async function newActivityTimeline() {
     await flush();
     let attempt = activityTimelineAttempt;
@@ -2091,6 +2096,10 @@ export function installApplication(hooks: Hooks) {
         onPresentation: (value) => velaExperience.observe(value),
         onManifestation: (value) => velaManifestation.observe(value),
         onConnectProvider: () => host.command!("capabilities", {}),
+        listTimelineRepositories: async () => {
+          const { repositories } = await host.command!("githubTimeline", { name: "sources", input: {} }) as { repositories: string[] };
+          return repositories;
+        },
         onOpenSubject: (subject) => {
           surfaces.close("vela");
           if (subject.kind === "collection") {
@@ -2108,8 +2117,17 @@ export function installApplication(hooks: Hooks) {
               target: { kind: "constellation", projectId: subject.id },
             });
           } else {
+            const timeline = state?.resources.find((resource) => resource.id === subject.id && resource.kind === "timeline");
+            const placement = timeline && state?.blocks.find((block) => block.resource_id === timeline.id);
             void resourceOpener
-              .open({ resourceId: subject.id, origin: { source: "vela" } })
+              .open({
+                resourceId: subject.id,
+                origin: { source: "vela" },
+                ...(placement ? {
+                  preferredPresentation: "existing-placement",
+                  preferredPlacement: { workspaceId: placement.workspace_id, blockId: placement.id },
+                } : {}),
+              })
               .catch(report);
           }
         },
@@ -3709,6 +3727,7 @@ export function installApplication(hooks: Hooks) {
               active: true,
               presentation: blockPresentation(id),
               onOpenResource: openCanonicalResource,
+              onOpenExternalSource: openGitHubCommit,
               resourceTitle: (resourceId) =>
                 state?.resources.find(
                   (resource) =>

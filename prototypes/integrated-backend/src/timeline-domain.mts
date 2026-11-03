@@ -21,6 +21,7 @@ export interface TimelineCommandMap {
   read: Command<{ resourceId: string }, TimelineDocument>;
   save: Command<SaveTimeline, TimelineMutationResult>;
   query: Command<QueryTimeline, TimelineWindow>;
+  openGitHubCommit: Command<Parameters<TimelineService["openGitHubCommit"]>[0], string | null>;
 }
 export type TimelineRequest = {
   [K in keyof TimelineCommandMap]: {
@@ -236,7 +237,7 @@ export function compositeTimelineDomain(
   function dispatch(request: TimelineRequest): TimelineResponse {
     check(
       envelope(request) &&
-        ["create", "read", "save", "query"].includes(request.name),
+        ["create", "read", "save", "query", "openGitHubCommit"].includes(request.name),
       "invalid_timeline_request",
     );
     if (request.name === "read")
@@ -255,6 +256,8 @@ export function compositeTimelineDomain(
           return service.save(request.input);
         case "query":
           return service.query(request.input);
+        case "openGitHubCommit":
+          return service.openGitHubCommit(request.input);
       }
     });
   }
