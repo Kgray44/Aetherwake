@@ -22,6 +22,7 @@ exports.verify = async ({
     scope: "Offscreen Electron callback and compositor paint observations. No visible window, native pointer input, OS presentation, or provider execution.",
     passed: false,
     samples: [],
+    commandElapsedMs: {},
   };
   const seed = JSON.parse(await readFile(path.join(privateRoot, "block-scale-seed.json"), "utf8"));
   const projection = (state) => Object.fromEntries(Object.keys(seed.expected).map((key) => [key, state[key]]));
@@ -54,6 +55,21 @@ exports.verify = async ({
   };
   const snapshot = () => js("window.__aerynth.application()");
   const execute = (action) => js("window.__aerynth.execute(" + JSON.stringify(action) + ")");
+  const timed = async (name, action) => {
+    const start = performance.now();
+    const result = await action();
+    receipt.commandElapsedMs[name] = performance.now() - start;
+    return result;
+  };
+  const processMemory = () => {
+    const rendererPid = win.webContents.getOSProcessId();
+    return app.getAppMetrics().map(({ pid, type, memory }) => ({
+      role: pid === rendererPid ? "workspace-renderer" : type,
+      workingSetKiB: memory.workingSetSize,
+      peakWorkingSetKiB: memory.peakWorkingSetSize,
+      ...(Number.isFinite(memory.privateBytes) ? { privateKiB: memory.privateBytes } : {}),
+    }));
+  };
   const chromiumMetrics = async () => {
     const { metrics } = await devtools.sendCommand("Performance.getMetrics");
     return Object.fromEntries(metrics.map(({ name, value }) => [name, value]));
@@ -86,12 +102,18 @@ exports.verify = async ({
     assert.deepEqual(result.metrics.errors, []);
     assert(result.metrics.draws > 0 && paintCount > 0, "no_offscreen_frames_observed");
     const { metrics, ...observations } = result;
+    const elapsedMs = performance.now() - start;
+    const after = before ? await chromiumMetrics() : null;
     receipt.samples.push({
-      label, ...observations, elapsedMs: performance.now() - start,
+      label, ...observations, elapsedMs,
       callbacks: metrics.callbacks, draws: metrics.draws, paints: paintCount,
       callbackIntervalsMs: percentiles(metrics.intervals),
       offscreenPaintIntervalsMs: percentiles(paintIntervals),
-      ...(before ? { chromiumPerformanceDelta: delta(before, await chromiumMetrics()) } : {}),
+      processMemory: processMemory(),
+      ...(after ? {
+        chromiumPerformanceDelta: delta(before, after),
+        ...(Number.isFinite(after.JSHeapUsedSize) ? { rendererHeapUsedBytes: after.JSHeapUsedSize } : {}),
+      } : {}),
     });
   };
   const navigate = (target) => execute({ type: "navigate", target });
@@ -146,7 +168,7 @@ exports.verify = async ({
       await sample("restored-working-workspace");
     } else {
       sameState(seed.expected, initial);
-      await execute({ type: "bringAllIntoView", workspaceId: seed.workspaceId });
+      await timed("fit", () => execute({ type: "bringAllIntoView", workspaceId: seed.workspaceId }));
       await sample("fitted-workspace");
       if (process.argv.includes("--offscreen-capture-fit")) {
         await settledWorkspace();
@@ -164,13 +186,13 @@ exports.verify = async ({
         })()`);
         receipt.fitCapture = await capture("offscreen-scale-fitted.png");
       }
-      await navigate({ kind: "constellation", projectId: null });
+      await timed("navigateUniverse", () => navigate({ kind: "constellation", projectId: null }));
       assert.equal((await snapshot()).navigation.kind, "constellation");
       await wait("document.querySelector('#stage').inert === true");
       await sample("universe");
-      await navigate({ kind: "workspace", workspaceId: seed.alternateWorkspaceId });
+      await timed("openEmptyWorkspace", () => navigate({ kind: "workspace", workspaceId: seed.alternateWorkspaceId }));
       await wait("document.querySelectorAll('[data-block]').length === 0");
-      await navigate({ kind: "workspace", workspaceId: seed.workspaceId });
+      await timed("returnToWorkspace", () => navigate({ kind: "workspace", workspaceId: seed.workspaceId }));
       await execute({ type: "setViewport", workspaceId: seed.workspaceId, viewport: { x: 0, y: 0, zoom: 1 } });
       const before = await snapshot();
       assert.deepEqual(before.resources, seed.expected.resources);
@@ -178,11 +200,11 @@ exports.verify = async ({
       if (selected.count) {
         const block = before.blocks.find((item) => item.id === seed.primaryBlockId);
         assert(block);
-        await execute({
+        await timed("resize", () => execute({
           type: "geometry", blockId: block.id, expectedVersion: block.version,
           placement: { x: block.x, y: block.y, width: block.width + 32, height: block.height + 24, z: block.z },
           shape: block.shape,
-        });
+        }));
         const resized = (await snapshot()).blocks.find((item) => item.id === block.id);
         assert.equal(resized.width, block.width + 32);
         assert.equal(resized.height, block.height + 24);
