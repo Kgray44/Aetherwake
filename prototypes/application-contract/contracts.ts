@@ -93,6 +93,7 @@ export type PublicConversationExecution = {
   startedAt: string;
   endedAt: string | null;
   taskVerified: false;
+  recoveryAvailable?: true;
   errorCode?: string;
   httpDiagnostic?: Readonly<import("../openai-provider/contracts.mts").TurnHttpDiagnostic>;
 };

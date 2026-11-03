@@ -1212,11 +1212,73 @@ export class BackendCore {
     const time=Date.now();for(const [id,value] of this.sendPreviews)if(Date.parse(value.preview.expiresAt)<=time)this.sendPreviews.delete(id);
     for(const [id,value] of this.sendGrants)if(Date.parse(value.expiresAt)<=time)this.sendGrants.delete(id);
   }
+  private recoverableCodexTurn(e: Execution): boolean {
+    const binding = e.binding;
+    return e.state === 'unknown' && !this.port.mock && !!this.port.recentTurns &&
+      e.providerId === 'codex-app-server' && !!e.turnId && !!e.inputMessageId && !!binding &&
+      binding.providerId === this.port.id && binding.instanceId === this.port.instanceId &&
+      binding.accountScope === this.port.accountScope &&
+      this.state.bindings[e.resourceId]?.some(value => hash(value) === hash(binding)) === true &&
+      !this.state.contextSupplies?.[e.id]?.items.length &&
+      !Object.values(this.state.reviews).some(review => review.resourceId === e.resourceId);
+  }
+
+  private async reconcileConversationTurn(input: CommandMap['reconcileConversationTurn']['input']): Promise<CommandMap['reconcileConversationTurn']['output']> {
+    ensure(input && typeof input.resourceId === 'string' && typeof input.executionId === 'string' &&
+      Object.keys(input).length === 2, 'invalid_turn_recovery');
+    const e = Object.hasOwn(this.state.executions, input.executionId) ? this.state.executions[input.executionId] : undefined;
+    ensure(e?.resourceId === input.resourceId && this.conversationAccess.resource(input.resourceId), 'source_unavailable');
+    const unchanged = { state: 'unchanged' } as const;
+    if (!this.recoverableCodexTurn(e)) return unchanged;
+    const binding = e.binding!, turnId = e.turnId!;
+    const stillAllowed = () => !this.closed && !this.active && this.state.executions[e.id] === e &&
+      this.conversationAccess.resource(e.resourceId) && this.recoverableCodexTurn(e);
+    let state: 'provider_completed' | 'failed' | 'interrupted', finalText = '';
+    try {
+      await this.port.connect();
+      if (!stillAllowed()) return unchanged;
+      const candidates = (await this.port.recentTurns!(binding.nativeThreadId)).filter(turn => turn.id === turnId);
+      if (!stillAllowed() || candidates.length !== 1) return unchanged;
+      const status = candidates[0].status;
+      if (status !== 'completed' && status !== 'failed' && status !== 'interrupted') return unchanged;
+      state = status === 'completed' ? 'provider_completed' : status;
+      if (state === 'provider_completed') {
+        const page = await this.port.items(binding.nativeThreadId, turnId);
+        if (!stillAllowed() || page.nextCursor !== null || !Array.isArray(page.data) || page.data.length > 100 ||
+            page.data.some(entry => entry?.turnId !== turnId)) return unchanged;
+        finalText = new CodexTurnOutput(binding.nativeThreadId, () => {}).finishItems(page.data.map(entry => entry.item));
+      }
+    } catch { return unchanged; }
+    return this.atomic(() => {
+      if (!stillAllowed()) return unchanged;
+      if (finalText.trim()) {
+        const message = this.graph.addMessage(this.gid(e.resourceId), 'assistant', finalText, {
+          provenance: 'application', providerTurnId: turnId, sensitivity: 'public',
+        });
+        e.outputMessageId = message.id;
+        this.state.messageEvidence[message.id] = {
+          classification: 'reported', executionId: e.id, providerId: e.providerId,
+          nativeThreadId: binding.nativeThreadId, nativeTurnId: turnId,
+        };
+      }
+      e.state = state;
+      if (state === 'provider_completed') delete e.errorCode;
+      else e.errorCode = 'recovered_provider_' + state;
+      e.endedAt = now();
+      this.state.revisions[e.resourceId]++;
+      this.record('execution/recovered', 'observed', undefined, randomUUID(), {
+        providerId: e.providerId, resourceId: e.resourceId, correlationId: e.commandId, detached: true,
+        payload: { redacted: true },
+      });
+      return { state };
+    });
+  }
+
   private conversationActivity(input:{resourceIds:string[]}):ConversationActivitySnapshot {
     ensure(input&&Array.isArray(input.resourceIds)&&input.resourceIds.length<=64&&input.resourceIds.every(id=>typeof id==='string'&&id.length>0&&id.length<=256)&&new Set(input.resourceIds).size===input.resourceIds.length,'invalid_conversation_activity');
     const resources=input.resourceIds.map(resourceId=>({resourceId,available:!!this.state.resources[resourceId]&&this.conversationAccess.access(resourceId)}));
     const allowed=new Set(resources.filter(item=>item.available).map(item=>item.resourceId));
-    const publicExecution=(execution:Execution):PublicConversationExecution=>({id:execution.id,resourceId:execution.resourceId,providerId:execution.providerId,commandId:execution.commandId,state:execution.state,startedAt:execution.startedAt,endedAt:execution.endedAt,taskVerified:false,...(execution.errorCode?{errorCode:execution.errorCode}:{}),...(execution.httpDiagnostic?{httpDiagnostic:projectTurnHttpDiagnostic(execution.httpDiagnostic)}:{})});
+    const publicExecution=(execution:Execution):PublicConversationExecution=>({id:execution.id,resourceId:execution.resourceId,providerId:execution.providerId,commandId:execution.commandId,state:execution.state,startedAt:execution.startedAt,endedAt:execution.endedAt,taskVerified:false,...(this.recoverableCodexTurn(execution)?{recoveryAvailable:true as const}:{}),...(execution.errorCode?{errorCode:execution.errorCode}:{}),...(execution.httpDiagnostic?{httpDiagnostic:projectTurnHttpDiagnostic(execution.httpDiagnostic)}:{})});
     const current=this.active?this.state.executions[this.active.id]:null;
     const latest=new Map<string,Execution>();for(const execution of Object.values(this.state.executions))if(allowed.has(execution.resourceId))latest.set(execution.resourceId,execution);
     if(current&&allowed.has(current.resourceId))latest.set(current.resourceId,current);
@@ -1312,6 +1374,8 @@ export class BackendCore {
     ensure(Number.isSafeInteger(input.expectedRevision)&&input.expectedRevision>0,'invalid_expected_version');
     ensure(this.conversationAccess.resource(input.resourceId),'source_unavailable');const c=this.conv(input.resourceId);
     ensure(c.providerId===this.port.id||c.providerId===CHATGPT_PLAN_PROVIDER,'native_provider_required');ensure(c.revision===input.expectedRevision+revisionOffset,'stale_resource_version');
+    if (c.providerId === 'codex-app-server')
+      ensure(!Object.values(this.state.executions).some(e => e.resourceId === c.resourceId && e.state === 'unknown'), 'reconciliation_required');
     ensure(input.model===undefined||typeof input.model==='string'&&input.model.length>0&&input.model.length<=200,'invalid_model');
     ensure(input.reasoningEffort === undefined || c.providerId === CHATGPT_PLAN_PROVIDER &&
       input.model !== undefined && supportsOrdinaryReasoning(input.model, input.reasoningEffort), 'unsupported_reasoning_effort');
@@ -1606,7 +1670,11 @@ export class BackendCore {
       this.state.executions[e.id] = e; this.state.receipts[input.commandId] = { fingerprint, result: e.id }; if (r) r.state = 'dispatching';
       // Persist a private desktop user's authorized request before network dispatch.
       // A failure or lost process must not erase the user's side of the conversation.
-      if (this.privateMode||managed) { this.graph.addMessage(this.gid(e.resourceId), 'user', input.prompt, { sensitivity: 'internal' }); this.state.revisions[e.resourceId]++; }
+      if (this.privateMode || managed) {
+        const message = this.graph.addMessage(this.gid(e.resourceId), 'user', input.prompt, { sensitivity: 'internal' });
+        if (managed) e.inputMessageId = message.id;
+        this.state.revisions[e.resourceId]++;
+      }
     });
     this.active = e; this.assistantText = ''; this.assistantCursor=0; this.streamFailure = false;
     let remoteDispatched = false;
@@ -1755,6 +1823,7 @@ export class BackendCore {
       case 'authorizeConversationSend': return this.authorizeConversationSend(a) as any;
       case 'conversationSend': return this.sendConversation(a) as any;
       case 'conversationActivity': return this.conversationActivity(a) as any;
+      case 'reconcileConversationTurn': return this.reconcileConversationTurn(a) as any;
       case 'viewState': return this.desktop.viewState(a) as any;
       case 'desktop': {
         if(a.type==='createResource')ensure(!['file','link'].includes(a.kind),'media_import_required');

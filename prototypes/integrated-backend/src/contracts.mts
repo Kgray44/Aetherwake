@@ -105,6 +105,7 @@ export interface ProviderPort {
   open(): Promise<string>; resume(threadId: string): Promise<string>;
   read(threadId: string): Promise<Record<string, unknown>>;
   items(threadId: string, turnId: string): Promise<Record<string, unknown>>;
+  recentTurns?(threadId: string): Promise<readonly Record<string, unknown>[]>;
   turn(threadId: string, text: string, model?: string): Promise<string>;
   terminal(threadId: string, turnId: string): Promise<EventEnvelope>;
   interrupt(threadId: string, turnId: string): Promise<void>;
@@ -158,6 +159,7 @@ export interface CommandMap {
   /** Read-only canonical resource resolution; no workspace placement required. */
   openResource: {input:ResourceOpeningInput;output:ResourceOpeningResult};
   conversationActivity: { input: { resourceIds: string[] }; output: ConversationActivitySnapshot };
+  reconcileConversationTurn: { input: { resourceId: string; executionId: string }; output: { state: 'unchanged' | 'provider_completed' | 'failed' | 'interrupted' } };
   notes: {input:NoteRequest;output:LibraryResponse};
   library: {input:LibraryRequest;output:LibraryResponse};
   agents: {input:AgentRequest;output:{result:AgentResponse;desktop?:DesktopSnapshot}};

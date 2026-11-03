@@ -157,6 +157,62 @@ test('an explicit capability check recovers a lost App Server without replaying 
   } finally { await b.close(); }
 });
 
+test('a reviewed direct Codex send recovers its exact native turn after restart without resending', { timeout: 20000 }, async t => {
+  const path = temp(t);
+  const server = fileURLToPath(new URL('../../codex-bridge/tests/fake-server.mjs', import.meta.url));
+  const backend = (mode: string) => new Backend({
+    path, contentPolicy: 'synthetic-only', provider: 'codex', codexExecutable: process.execPath, codexArgs: [server, mode],
+  });
+  let b = backend('recoverable-crash');
+  let recovery: { resourceId: string; executionId: string };
+  try {
+    const chat = await b.call('createConversation', { title: 'Synthetic direct Codex', providerId: 'codex-app-server', commandId: 'chat' });
+    const input = { resourceId: chat.resourceId, expectedRevision: chat.revision, commandId: 'synthetic-send', content: 'Synthetic request to recover.' };
+    await b.call('conversation', { name: 'saveDraft', input: { resourceId: chat.resourceId, expectedVersion: 0, content: input.content } });
+    const preview = await b.call('conversationSendPreview', input);
+    const exact = { previewId: preview.id, fingerprint: preview.fingerprint, commandId: input.commandId };
+    const grant = await b.call('authorizeConversationSend', exact);
+    const lost = await b.call('conversationSend', { ...exact, grantId: grant.grantId });
+    assert.equal(lost.state, 'unknown');
+    assert.equal(lost.turnId, 'fixture-turn');
+    recovery = { resourceId: chat.resourceId, executionId: lost.id };
+    assert.equal((await b.call('conversationActivity', { resourceIds: [chat.resourceId] })).executions[0].recoveryAvailable, true);
+    await assert.rejects(b.call('conversationSendPreview', { ...input, expectedRevision: chat.revision + 1 }), /reconciliation_required/);
+  } finally { await b.close(); }
+
+  for (const mode of ['recovered-foreign', 'recovered-truncated']) {
+    b = backend(mode);
+    try {
+      assert.deepEqual(await b.call('reconcileConversationTurn', recovery), { state: 'unchanged' });
+      assert.equal((await b.call('snapshot', {})).executions[recovery.executionId].state, 'unknown');
+    } finally { await b.close(); }
+  }
+  b = backend('recovered');
+  try {
+    await assert.rejects(b.call('reconcileConversationTurn', { ...recovery, resourceId: 'foreign' }), /source_unavailable/);
+    const results = await Promise.all([b.call('reconcileConversationTurn', recovery), b.call('reconcileConversationTurn', recovery)]);
+    assert.deepEqual(results.map(result => result.state).sort(), ['provider_completed', 'unchanged']);
+    assert.equal((await b.call('providerActivity', {})).providerRequests, 0);
+  } finally { await b.close(); }
+
+  b = backend('recovered');
+  try {
+    const snapshot = await b.call('snapshot', {});
+    const e = snapshot.executions[recovery.executionId];
+    assert.equal(e.state, 'provider_completed');
+    assert.equal(e.taskVerified, false);
+    assert.deepEqual(snapshot.graph.messages.map(message => [message.role, message.content]), [
+      ['user', 'Synthetic request to recover.'], ['assistant', 'Recovered fixture reply.'],
+    ]);
+    assert.equal(snapshot.messageEvidence[e.outputMessageId!].nativeTurnId, 'fixture-turn');
+    const events = (await b.call('replay', { limit: 250 })).events;
+    assert.equal(events.filter(event => event.type === 'turn/started').length, 1);
+    assert.equal(events.filter(event => event.type === 'execution/recovered').length, 1);
+    const draft = await b.call('conversation', { name: 'readDraft', input: { resourceId: recovery.resourceId } }) as { content: string };
+    assert.equal(draft.content, 'Synthetic request to recover.');
+  } finally { await b.close(); }
+});
+
 test('an explicit App Server rejection does not leave a Codex conversation blocked as unknown', async t => {
   const fake = fileURLToPath(new URL('../../codex-bridge/tests/fake-server.mjs', import.meta.url));
   for (const mode of ['rate-limit', 'unavailable-model']) {

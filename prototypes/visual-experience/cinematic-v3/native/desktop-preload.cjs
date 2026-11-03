@@ -49,6 +49,7 @@ contextBridge.exposeInMainWorld(
           "replay",
           "executionStatus",
           "conversationActivity",
+          "reconcileConversationTurn",
           "openResource",
           "providerConnection",
           "interrupt",
@@ -70,6 +71,9 @@ contextBridge.exposeInMainWorld(
       if (name === "githubTimeline" && input?.name === "openCommit" &&
           navigator.userActivation?.isActive !== true)
         throw new Error("github_user_gesture_required");
+      if (name === "reconcileConversationTurn" &&
+          navigator.userActivation?.isActive !== true)
+        throw new Error("turn_recovery_user_gesture_required");
       const reply = await ipcRenderer.invoke(
         "application-command",
         name,

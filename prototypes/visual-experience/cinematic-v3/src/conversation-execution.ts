@@ -6,7 +6,7 @@ import type {
 
 type Host = {
   command(
-    name: "conversationActivity" | "interrupt",
+    name: "conversationActivity" | "interrupt" | "reconcileConversationTurn",
     input: Record<string, unknown>,
   ): Promise<unknown>;
   onEvent(listener: (event: unknown) => void): () => void;
@@ -52,6 +52,7 @@ function publicExecution(value: unknown): ConversationExecution | null {
     startedAt: item.startedAt,
     endedAt: item.endedAt,
     taskVerified: false,
+    ...(item.recoveryAvailable === true ? { recoveryAvailable: true as const } : {}),
     ...(item.errorCode ? { errorCode: item.errorCode as string } : {}),
   };
 }
@@ -382,6 +383,16 @@ export function createConversationExecutionPort(
         }
         stopIdle();
       };
+    },
+    async recoverTurn(resourceId, executionId) {
+      const turn = latest.get(resourceId);
+      if (!watchers.has(resourceId) || turn?.id !== executionId ||
+          turn.state !== "unknown" || !turn.recoveryAvailable)
+        throw new Error("No observed Codex turn to check");
+      const result = (await host.command("reconcileConversationTurn", { resourceId, executionId })) as
+        { state: "unchanged" | "provider_completed" | "failed" | "interrupted" };
+      await refresh();
+      return result;
     },
     async cancel(executionId) {
       await refresh();

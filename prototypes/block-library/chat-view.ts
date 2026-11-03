@@ -37,6 +37,13 @@ export function mountBlockChat(
           };
         },
         cancel: (id) => options.execution!.cancel(id),
+        ...(options.execution.recoverTurn ? {
+          recoverTurn: (resourceId, executionId) => {
+            if (!active || disposed || resourceId !== options.resourceId)
+              throw new Error("The conversation is no longer active");
+            return options.execution!.recoverTurn!(resourceId, executionId);
+          },
+        } : {}),
       }
     : undefined;
   root.replaceChildren();

@@ -48,6 +48,7 @@ lines.on("line", async (line) => {
         "branch",
         "conversation",
         "conversationActivity",
+        "reconcileConversationTurn",
         "openResource",
         "providerConnection",
         "providerAuth",

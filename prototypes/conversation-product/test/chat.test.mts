@@ -130,6 +130,48 @@ test('unknown send recovery and actual live preview share one transcript scroll 
  const f=fixture('codex-app-server'),m=pickerMotion();let chat;try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,motion:m.motion,viewId:'chat:feedback',presentation:'workspace'});await chat.ready;const editor=f.view.root.querySelector('textarea'),messages=f.view.root.querySelector('.cp-messages'),feedback=f.view.root.querySelector('.cp-chat-feedback');f.view.root.querySelector('.cp-composer').fire('submit');await until(()=>!!f.pending);f.pending!.resolve({id:'execution:unknown',resourceId:f.draft.resourceId,state:'unknown'});await chat.whenSubmissionSettled();assert.equal(f.view.root.querySelector('.cp-chat-status').textContent.includes('not confirmed'),true);assert.ok(messages.contains(f.view.root.querySelector('.cp-stream')));assert.ok(messages.contains(f.view.root.querySelector('.cp-draft-recovery')));assert.equal(feedback.querySelectorAll('.cp-draft-status').length,0);assert.equal(feedback.querySelectorAll('.cp-capability-note').length,0);assert.ok((m.targets.get('chat:feedback:feedback-bar')?.h??1000)<=40);const toggle=named(feedback,'Review send outcome'),body=f.view.root.querySelector('.cp-chat-inspection');assert.equal(body.hidden,true);toggle.fire('click');assert.equal(body.hidden,false);assert.equal(body.inert,false);assert.equal(named(f.view.root,'Send').disabled,true,'Opening recovery never acknowledges unknown send');m.step();chat.frame();toggle.fire('click');assert.equal(body.inert,true);assert.equal(body.hidden,false,'Close keeps actual body until shared motion settles');m.step();chat.frame();assert.equal(body.hidden,true);assert.ok(f.view.root.querySelector('textarea')===editor);assert.equal(f.draft.content,editor.value);assert.equal(f.calls.filter(c=>c.name==='send').length,1);}finally{f.pending?.reject(new Error('synthetic cleanup'));await chat?.dispose();assert.equal(m.poses.size,0);f.restore();}
 });
 
+test('an observed unknown Codex turn can be checked from the composer without sending or changing its draft', async () => {
+  const f = fixture('codex-app-server');
+  const resourceId = f.draft.resourceId;
+  const execution = {
+    id: 'exact-turn', resourceId, providerId: 'codex-app-server',
+    commandId: 'exact-send', state: 'unknown' as const, startedAt: '2026-11-02T00:00:00Z',
+    endedAt: null, taskVerified: false as const, recoveryAvailable: true as const,
+  };
+  const checks: string[][] = [];
+  let observe!: (event: ConversationExecutionObservation) => void;
+  const chat = mountConversationChat(f.view.root, { port: f.port, resourceId, execution: {
+    observe(_resourceId, listener) { observe = listener; return () => {}; },
+    async cancel() { throw Error('Unexpected interrupt'); },
+    async recoverTurn(id, turnId) {
+      checks.push([id, turnId]);
+      if (checks.length === 1) return { state: 'unchanged' };
+      observe({ execution: { ...execution, state: 'provider_completed', recoveryAvailable: undefined } });
+      return { state: 'provider_completed' };
+    },
+  } });
+  try {
+    await chat.ready;
+    const editor = f.view.root.querySelector('textarea');
+    const draft = f.draft;
+    observe({ execution });
+    assert.equal(named(f.view.root, 'Send').disabled, true);
+    named(f.view.root, 'Details').fire('click');
+    const check = named(f.view.root, 'Check Codex outcome');
+    assert.equal(check.hidden, false);
+    check.fire('click');
+    await until(() => f.view.root.querySelector('.cp-chat-status').textContent.includes('did not confirm'));
+    assert.equal(named(f.view.root, 'Send').disabled, true);
+    check.fire('click');
+    await until(() => f.view.root.querySelector('.cp-chat-status').textContent.includes('Recovered the completed Codex turn'));
+    assert.deepEqual(checks, [[resourceId, execution.id], [resourceId, execution.id]]);
+    assert.equal(named(f.view.root, 'Send').disabled, true);
+    assert.equal(f.view.root.querySelector('textarea'), editor);
+    assert.deepEqual(f.draft, draft);
+    assert.equal(f.calls.some(call => call.name === 'send' || call.name === 'saveDraft'), false);
+  } finally { await chat.dispose(); f.restore(); }
+});
+
 test('actual live deltas follow only at the existing transcript tail; metadata refresh and deliberate scrolling do not jump reading position',async()=>{
  const f=fixture('codex-app-server'),m=pickerMotion();let chat,observe:((value:ConversationExecutionObservation)=>void)|undefined;const execution={id:'execution:stream-scroll',resourceId:f.draft.resourceId,providerId:'codex-app-server',commandId:'command:stream-scroll',state:'running' as const,startedAt:'2026-11-02T00:00:00Z',endedAt:null,taskVerified:false as const};try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,motion:m.motion,viewId:'chat:scroll',execution:{observe(_id,listener){observe=listener;return()=>{};},async cancel(){throw Error('no automatic cancel');}}});await chat.ready;const messages=f.view.root.querySelector('.cp-messages');messages.clientHeight=80;messages.scrollHeight=1000;messages.scrollTop=920;observe!({execution,delta:{eventId:'event:1',cursor:1,text:'Actual synthetic live text'}});messages.scrollHeight=1200;chat.frame();assert.equal(messages.scrollTop,1120);messages.scrollTop=100;messages.fire('wheel');observe!({execution,delta:{eventId:'event:2',cursor:2,text:' plus another actual delta'}});messages.scrollHeight=1400;chat.frame();assert.equal(messages.scrollTop,100);observe!({execution});chat.frame();assert.equal(messages.scrollTop,100);assert.equal(f.calls.some(c=>c.name==='send'),false);}finally{await chat?.dispose();assert.equal(m.poses.size,0);f.restore();}
 });

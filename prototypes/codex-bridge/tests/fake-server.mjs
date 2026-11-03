@@ -21,6 +21,14 @@ lines.on("line", line => {
   if (message.method === "thread/read") { if (mode === "missing-history") send({ id: message.id, error: { code: -32000, message: "Thread not found" } }); else send({ id: message.id, result: { thread: { id: message.params.threadId, cwd: "C:\\fixture", turns: [] } } }); return; }
   if (message.method === "thread/list") { send({ id: message.id, result: { data: [{ id: "fixture-thread", cwd: "C:\\fixture", ephemeral: false, status: { type: "notLoaded" } }], nextCursor: message.params.cursor ? null : "page-2", backwardsCursor: null, receivedSourceKinds: message.params.sourceKinds } }); return; }
   if (message.method === "thread/turns/list") { send({ id: message.id, result: { data: [{ id: "fixture-turn", status: "completed" }], nextCursor: null, backwardsCursor: null } }); return; }
+  if (message.method === "thread/items/list" && mode.startsWith("recovered")) {
+    const turnId = mode === "recovered-foreign" ? "another-turn" : "fixture-turn";
+    send({ id: message.id, result: { data: [
+      { turnId, item: { type: "agentMessage", id: "interim", phase: "commentary", text: "Synthetic progress." } },
+      { turnId, item: { type: "agentMessage", id: "final", phase: "final_answer", text: "Recovered fixture reply." } },
+    ], nextCursor: mode === "recovered-truncated" ? "next-page" : null, backwardsCursor: null } });
+    return;
+  }
   if (message.method === "thread/items/list") { send({ id: message.id, result: { data: [{ turnId: "fixture-turn", item: { type: "agentMessage", text: "BRIDGE_OK" } }], nextCursor: null, backwardsCursor: null } }); return; }
   if (message.method === "turn/start") {
     if (mode === "invalid") { send({ id: message.id, error: { code: -32602, message: "Invalid params" } }); return; }
@@ -30,6 +38,7 @@ lines.on("line", line => {
     send({ method: "turn/started", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "inProgress", startedAt: 123 } } });
     if (mode === "approval" || mode === "explicit-denial" || mode === "cancel") send({ id: 88, method: "item/commandExecution/requestApproval", params: { threadId: "fixture-thread", turnId: "fixture-turn", command: "echo harmless" } });
     else if (mode === "file-approval") send({ id: 88, method: "item/fileChange/requestApproval", params: { threadId: "fixture-thread", turnId: "fixture-turn", reason: "fixture" } });
+    else if (mode === "recoverable-crash") setTimeout(() => process.exit(19), 50);
     else if (mode === "crash") process.exit(19);
     else if (mode === "interrupted-stream") process.exit(0);
     else if (mode === "wait-interrupt") return;

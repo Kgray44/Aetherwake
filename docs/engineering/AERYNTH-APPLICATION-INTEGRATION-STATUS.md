@@ -2,6 +2,31 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 recovery for a lost Codex turn
+
+A direct Codex conversation with an unknown outcome can explicitly
+check the exact saved provider turn. It can recover a terminal outcome
+and finalized reply without a second turn start. A missing or different
+turn, a partial item page, an inaccessible source, or an unsupported
+history method leaves the original state unknown. The action retains
+the draft for inspection. It currently applies to direct turns recorded
+with a canonical user message and an accepted native turn ID, without
+attached excerpts or a branch handoff. Older unbound outcomes remain
+unresolved.
+
+The SQLite regression exercised a lost transport, restart, rejection
+of foreign and truncated history, concurrent recovery, and a second
+restart with one user message and one attributed reply. The 252 backend,
+403 desktop and 14 bridge tests passed, along with strict backend
+typing, the desktop build and the targeted composer recovery test.
+A hidden Electron run used the real workspace conversation block and
+scripted stdio history. The check required renderer user activation,
+recovered the canonical reply, retained the exact draft and reported
+zero new provider requests. Receipt SHA-256 is
+`851951c15583df76fb34f4c8dd86274b95aa2bf33a9d6dcbcc31d74e641fc643`.
+This is synthetic provider evidence. The Portable AR live profile still
+had no executions and its normal live Send remains pending.
+
 ## November 3 model replies and native Vela actions
 
 Free-text Vela requests already go through the configured AI planner.

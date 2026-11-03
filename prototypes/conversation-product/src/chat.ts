@@ -41,6 +41,7 @@ export type ConversationExecutionObservation = {
 export interface ConversationExecutionPort {
   observe(resourceId: string, listener: (observation: ConversationExecutionObservation) => void): () => void;
   cancel(executionId: string): Promise<unknown>;
+  recoverTurn?(resourceId: string, executionId: string): Promise<{ state: 'unchanged' | 'provider_completed' | 'failed' | 'interrupted' }>;
 }
 export type MessageSelection = { start: number; end: number; text: string };
 export type ConversationMessageAction = { action: 'branch'|'source'|'publish'; message: MessageView; selection?: MessageSelection };
@@ -128,8 +129,9 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const capabilityNote=el('p','','cp-capability-note'),contextNote=el('p','','cp-context-note'),draftStatus = el('p', '', 'cp-draft-status'), recovery = el('div', undefined, 'cp-draft-recovery'); draftStatus.setAttribute('role', 'status');
   const recoveryDetails = el('details', undefined, 'cp-draft-conflict'), recoverySummary = el('summary', 'Review draft conflict'), localText = el('pre'), storedText = el('pre');
   const keep = el('button', 'Keep this editor’s draft'), useStored = el('button', 'Use the stored draft'), retry = el('button', 'Retry draft recovery'), reviewed = el('button', 'I reviewed the send outcome');
-  for (const b of [keep,useStored,retry,reviewed]) b.type = 'button';
-  for (const b of [keep,useStored,retry,reviewed])decorateConversationControl(b,{identity:'draft-recovery',emphasis:'secondary'});
+  const checkOutcome = el('button', 'Check Codex outcome');
+  for (const b of [keep,useStored,retry,reviewed,checkOutcome]) b.type = 'button';
+  for (const b of [keep,useStored,retry,reviewed,checkOutcome])decorateConversationControl(b,{identity:'draft-recovery',emphasis:'secondary'});
   recoveryDetails.append(recoverySummary, el('p','This editor'),localText,el('p','Stored draft'),storedText,keep,useStored);
   decorateConversationDisclosure(recoveryDetails,recoverySummary,'draft-conflict');
   const feedback=el('div',undefined,'cp-chat-feedback'),feedbackLine=el('div',undefined,'cp-feedback-line'),feedbackToggle=el('button','Details','cp-feedback-toggle'),feedbackBody=el('div',undefined,'cp-chat-inspection'),feedbackContents=el('div',undefined,'cp-chat-inspection-content'),statusDetail=el('p','','cp-status-detail');
@@ -154,6 +156,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   feedbackToggle.addEventListener('click',()=>{feedbackOpen=!feedbackOpen;feedbackToggle.setAttribute('aria-expanded',String(feedbackOpen));feedbackBody.inert=!feedbackOpen;liveFollow=false;if(feedbackOpen){inspectionReturn=messages.scrollTop;inspectionFollow=true;feedbackBody.hidden=false;feedbackHeight=0;reconcileFeedback();}else{inspectionFollow=false;if(inspectionReturn!==null)setScroll(inspectionReturn);inspectionReturn=null;if(options.motion){options.motion.target(feedbackKey,feedbackPose(0,0),'conversation feedback close');options.motion.wake();}else feedbackBody.hidden=true;}renderFeedback();});
   feedbackBody.addEventListener('focusin',()=>{inspectionFollow=false;inspectionReturn=null;});
   feedbackBody.addEventListener('toggle',()=>{reconcileFeedback();},true);
+  feedbackContents.insertBefore(checkOutcome, capabilityNote);
   let providerPicker: ConversationPicker | null = null;
   let modelPicker: ConversationPicker | null = null;
   let thinkingPicker: ConversationPicker | null = null;
@@ -318,7 +321,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     else if (!uncertain) recovery.replaceChildren();
     if (uncertain && reviewed.parentNode !== recovery) recovery.append(el('p','Send acceptance is not confirmed. Your draft is retained; inspect the chat before retrying.'),reviewed);
     keep.disabled = useStored.disabled = retry.disabled = recovering;
-    send.disabled = sending || !!active() || uncertain || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
+    const codexOutcomeUnknown = execution?.providerId === 'codex-app-server' && execution.state === 'unknown';
+    checkOutcome.hidden = !options.execution?.recoverTurn || !codexOutcomeUnknown || !execution?.recoveryAvailable;
+    checkOutcome.disabled = recovering;
+    send.disabled = sending || !!active() || codexOutcomeUnknown || uncertain || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
     web.hidden = !plan?.execute || !selectedModel?.eligibleTools?.includes('web_search');
     web.disabled = send.disabled || web.hidden || !plan?.available;
     send.dataset.state=uncertain?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=cancelPending?'requested':active()?'available':'inactive';
@@ -330,6 +336,23 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   useStored.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('use-stored',remote.version));} });
   retry.addEventListener('click', () => { markViewIntent();void recover(async()=>{await session.reload();await session.flush();}); });
   reviewed.addEventListener('click', () => { uncertain = false; recovery.replaceChildren(); renderDraft(); });
+  checkOutcome.addEventListener('click', () => {
+    const id = execution?.id, port = options.execution;
+    if (!id || checkOutcome.hidden || !port?.recoverTurn) return;
+    void recover(async () => {
+      const result = await port.recoverTurn!(resourceId, id);
+      if (result.state === 'unchanged') {
+        report('Codex did not confirm an outcome for this turn. Your draft is saved.');
+        return;
+      }
+      if (disposed) return;
+      uncertain = !!session.snapshot().content;
+      await refresh({ latest: true });
+      report(result.state === 'provider_completed' ? 'Recovered the completed Codex turn. Your draft was kept.' :
+        result.state === 'interrupted' ? 'Codex confirmed the turn stopped. Your draft was kept.' :
+        'Codex confirmed the turn failed. Your draft was kept.');
+    });
+  });
   textarea.addEventListener('input', () => { markViewIntent();if(status.dataset.statusKind==='send-accepted'&&textarea.value!==session.snapshot().content)report('');session.update(textarea.value);resize();viewState(); });
   textarea.addEventListener('compositionstart',()=>{composing=true;markViewIntent();});textarea.addEventListener('compositionend',()=>{composing=false;viewState();});
   for(const name of ['keyup','pointerup'])textarea.addEventListener(name,()=>{markViewIntent();viewState();});

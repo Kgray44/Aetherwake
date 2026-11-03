@@ -63,11 +63,13 @@ export class CodexTurnOutput {
 
   finish(terminal: EventEnvelope): string {
     const turn = terminal.payload.turn as { items?: unknown } | undefined;
-    if (Array.isArray(turn?.items)) {
-      for (const item of turn.items) {
-        const message = completedMessage(item);
-        if (message) this.saveCompleted(message);
-      }
+    return this.finishItems(Array.isArray(turn?.items) ? turn.items : []);
+  }
+
+  finishItems(items: readonly unknown[]): string {
+    for (const item of items) {
+      const message = completedMessage(item);
+      if (message) this.saveCompleted(message);
     }
 
     const messages = [...this.completed.values()];

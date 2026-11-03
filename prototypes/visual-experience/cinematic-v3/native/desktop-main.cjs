@@ -480,6 +480,8 @@ app.whenReady().then(async () => {
         result.truncated ||= bounds.latest > 250;
       } else if (command === "conversationActivity")
         result = await call("conversationActivity", input);
+      else if (command === "reconcileConversationTurn")
+        result = await call("reconcileConversationTurn", input);
       else if (command === "executionStatus")
         result = Object.values((await call("snapshot", {})).executions);
       else if (command === "interrupt")

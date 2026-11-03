@@ -45,6 +45,7 @@ export function nativeProvider(options: Options): ProviderPort {
     open: () => bridge.newThread({ cwd: options.cwd ?? process.cwd(), sandbox: 'read-only', approvalPolicy: 'never', serviceName: 'aerynth_integration_prototype' }),
     resume: threadId => bridge.resumeThread({ threadId }),
     read: threadId => bridge.readThread(threadId),
+    recentTurns: async threadId => (await bridge.listTurns({ threadId, limit: 20, itemsView: 'notLoaded' })).data,
     items: async (threadId, turnId) => { const page = await bridge.readItems(threadId, turnId); return { data: page.data, nextCursor: page.nextCursor, backwardsCursor: page.backwardsCursor }; },
     turn: (threadId, text, model) => bridge.beginTurn({ threadId, input: [{ type: 'text', text, text_elements: [] }], ...(model ? { model } : {}) }),
     terminal: (threadId, turnId) => bridge.waitForTerminal(threadId, turnId, 60000),
