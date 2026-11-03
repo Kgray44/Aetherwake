@@ -198,9 +198,10 @@ exports.verify = async ({
     const switchWorkspace = async (workspaceId) => {
       const before = performance.now();
       await click("#workspace-manager");
-      const inputAt = await click(`[data-workspace="${workspaceId}"]`);
+      const row = `.en-tree .en-workspace-row[data-workspace-id=${JSON.stringify(workspaceId)}]`;
+      const inputAt = await click(row + ' [data-action="open-workspace"]');
       await wait(
-        `window.__aerynth.application().activeWorkspaceId===${JSON.stringify(workspaceId)}&&document.querySelector('#command-surface')?.open===false`,
+        `window.__aerynth.application().activeWorkspaceId===${JSON.stringify(workspaceId)}&&!document.querySelector('[data-surface-id="environments"]')`,
       );
       receipt.actions.push({
         type: "workspace-switch",
@@ -213,6 +214,8 @@ exports.verify = async ({
     if (selected.restore) {
       const expected = JSON.parse(await fs.readFile(expectedPath, "utf8"));
       assert.equal(expected.count, selected.count);
+      assert.deepEqual(expected.source.hashes, source.hashes, "same integration source at restart");
+      assert.deepEqual(expected.source.buildAssets, source.buildAssets, "same renderer assets at restart");
       sameState(expected.state, await snapshot());
       receipt.freshProcessRestore = true;
       await sample("fresh-process-restored-idle");
@@ -262,33 +265,24 @@ exports.verify = async ({
           workspaceId: seed.workspaceId,
           viewport: { x: 0, y: 0, zoom: 1 },
         });
-        const focusAt = await click(selector + " .unfold");
-        await wait(
-          `window.__aerynth.snapshot().expanded===${JSON.stringify(id)}&&['ready','saved','recovered'].includes(document.querySelector(${JSON.stringify(selector + " [data-note-state]")})?.dataset.noteState)`,
-        );
-        const editorSize = await js(
-          `getComputedStyle(document.querySelector(${JSON.stringify(selector + " textarea")})).fontSize`,
-        );
-        assert.equal(
-          editorSize,
-          "24px",
-          "actual note editor uses configured150% of16px",
-        );
+        const editor = selector + " textarea";
+        const editorQuery = `document.querySelector(${JSON.stringify(editor)})`;
+        await wait(`['ready','saved','recovered'].includes(document.querySelector(${JSON.stringify(selector + " [data-note-state]")})?.dataset.noteState)`);
+        const focusAt = await click(editor);
+        await wait(`document.activeElement===${editorQuery}`);
+        const editorSize = await js(`getComputedStyle(${editorQuery}).fontSize`);
+        assert.equal(editorSize, "24px", "actual inline note uses its configured 150% text scale");
         receipt.actions.push({
-          type: "focus",
-          method: "native unfold button",
-          inputToExpandedProjectionMs: Date.now() - focusAt,
+          type: "focus-editor",
+          method: "native pointer inside the workspace card",
+          inputToEditorFocusMs: Date.now() - focusAt,
           editorFontSize: editorSize,
         });
-        await sample("focused-note-idle");
+        await sample("focused-inline-note-idle");
         await capture("focused");
-        const collapseAt = await click(selector + " .unfold");
-        await wait("window.__aerynth.snapshot().expanded===null");
-        receipt.actions.push({
-          type: "collapse",
-          method: "native unfold button",
-          inputToCollapsedProjectionMs: Date.now() - collapseAt,
-        });
+        nativeInput(win, { type: "keyDown", keyCode: "Tab" });
+        nativeInput(win, { type: "keyUp", keyCode: "Tab" });
+        await wait(`document.activeElement!==${editorQuery}`);
         // The shared driver waits for settled input targets, and every event
         // goes through the same no-refocus owner guard as other native tests.
         await settled();
