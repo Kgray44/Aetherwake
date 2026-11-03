@@ -760,6 +760,10 @@
 .folio[data-block-composition="overview"] .folio-actions > :not(.aw-block-approach):not(.unfold):not(.aw-block-restore) {
   display: none;
 }
+.folio[data-block-composition="overview"]:not(.expanded, .receded) .folio-top .folio-actions {
+  position: relative;
+  z-index: 6;
+}
 .folio[data-block-composition="overview"]:not(.expanded) .folio-top .unfold {
   display: inline-flex;
   align-items: center;
@@ -882,6 +886,9 @@
   padding-left: 0.5rem;
 }
 .aw-block-approach-status:empty {
+  display: none;
+}
+.aw-block-open-mark {
   display: none;
 }
 @container (max-width: 220px) {
@@ -1044,4 +1051,147 @@
   .folio[data-block-kind="note"] .working-content { padding-top: 0.25rem; }
   .folio[data-block-kind="task_group"] .aw-task-group-summary { font-size: 1.3em; }
   .folio[data-block-kind="project_overview"] .aw-project-metrics dd { font-size: 2em; }
+}
+
+/* Compact cards keep the existing buttons and put the kind glyph over Open.
+   Centering the rail leaves room between its hit boxes and the painted contour. */
+@container (max-width: 156px) or (max-height: 88px) {
+  .folio[data-block-kind][data-block-composition="overview"]:not(.expanded, .receded) {
+    & .folio-top {
+      min-height: 28px;
+      align-self: stretch;
+      justify-content: center;
+    }
+    & .folio-top .card-kind-label {
+      display: none;
+    }
+    & .folio-top .folio-actions {
+      --aw-overview-target: 24px;
+      display: grid;
+      grid-template-columns: var(--aw-overview-target);
+      align-content: center;
+      justify-content: center;
+      gap: 4px;
+      min-width: 0;
+      padding: 0;
+    }
+    & .folio-top .folio-actions:has(> .aw-block-approach:not([hidden])) {
+      grid-template-columns: repeat(2, var(--aw-overview-target));
+    }
+    & .folio-top :is(.unfold, .aw-block-approach, .aw-block-restore) {
+      display: grid;
+      place-items: center;
+      grid-area: 1 / 1;
+      box-sizing: border-box;
+      width: var(--aw-overview-target);
+      height: var(--aw-overview-target);
+      min-height: 0;
+      padding: 0;
+      font-size: 0;
+      pointer-events: auto;
+      outline-offset: -2px;
+    }
+    & .folio-top .aw-block-approach {
+      grid-column: 2;
+    }
+    & .folio-top .unfold::after {
+      position: absolute;
+      inset: 2px 2px auto auto;
+      font-size: min(9px, 19cqw, 19cqh);
+    }
+    & .folio-top .unfold {
+      position: relative;
+    }
+    &[data-block-minimized="true"] .folio-top .unfold {
+      display: none;
+    }
+    & .folio-top .aw-block-approach::before {
+      content: "⊕";
+      font-size: min(16px, 38cqw, 38cqh);
+      line-height: 1;
+    }
+    & .folio-top .aw-block-restore::before {
+      content: "⤢";
+      font-size: min(16px, 38cqw, 38cqh);
+      line-height: 1;
+    }
+    &:not([data-block-minimized="true"]) .folio-actions > .aw-block-open-mark {
+      display: block;
+      grid-area: 1 / 1;
+      place-self: center;
+      width: min(14px, 35cqw, 35cqh);
+      height: min(14px, 35cqw, 35cqh);
+      translate: -2px 2px;
+      z-index: 1;
+      pointer-events: none;
+    }
+  }
+}
+
+@container (max-width: 116px) and (max-height: 120px), (max-height: 88px), (max-width: 67px) {
+  .folio[data-block-kind][data-block-composition="overview"]:not(.expanded, .receded) {
+    & .folio-top .folio-actions {
+      position: absolute;
+      inset: 0;
+      z-index: 6;
+      pointer-events: none;
+    }
+    & .title-select {
+      opacity: 0;
+      pointer-events: none;
+    }
+    & .title-select:focus-visible {
+      position: absolute;
+      z-index: 7;
+      inset: 50% auto auto 50%;
+      translate: -50% -50%;
+      width: min(70cqw, 180px);
+      max-height: 60cqh;
+      opacity: 1;
+      outline-offset: -2px;
+      background: #171e29;
+    }
+    & .title-select:focus-visible h2 {
+      display: block;
+      margin: 0;
+      font-size: min(12px, 27cqh);
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+    & .folio-inner:has(> .title-select:focus-visible) .folio-actions {
+      opacity: 0;
+    }
+    & .folio-inner:has(> .title-select:focus-visible) .folio-actions > button {
+      pointer-events: none;
+    }
+    & .aw-block-overview-content {
+      visibility: hidden;
+    }
+  }
+}
+
+/* When two 24px targets cannot fit, keep one at the center. Approach remains a
+   native button in the tab order and takes the center spot on keyboard focus. */
+@container (max-width: 67px) or (max-height: 39px) {
+  .folio[data-block-kind][data-block-composition="overview"]:not(.expanded, .receded) {
+    & .folio-top .folio-actions,
+    & .folio-top .folio-actions:has(> .aw-block-approach:not([hidden])) {
+      --aw-overview-target: min(24px, 60cqw, 60cqh);
+      grid-template-columns: var(--aw-overview-target);
+    }
+    & .folio-top .aw-block-approach {
+      grid-column: 1;
+      opacity: 0;
+      pointer-events: none;
+    }
+    & .folio-top .aw-block-approach:focus-visible {
+      z-index: 2;
+      opacity: 1;
+      pointer-events: auto;
+    }
+    & .folio-actions:has(> .aw-block-approach:focus-visible) > :is(.unfold, .aw-block-open-mark) {
+      opacity: 0;
+      pointer-events: none;
+    }
+  }
 }

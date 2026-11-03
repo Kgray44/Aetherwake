@@ -112,6 +112,13 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
   (openActions ?? overview).append(approach);
   (openActions ?? overview).append(restore);
   const openControl = article.querySelector<HTMLButtonElement>('.unfold');
+  const openMark = document.createElementNS("http://www.w3.org/2000/svg", "svg"),
+    openPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  openMark.classList.add("aw-block-mark", "aw-block-open-mark");
+  openMark.setAttribute("viewBox", "0 0 24 24");
+  openMark.setAttribute("aria-hidden", "true");
+  openMark.append(openPath);
+  if (openControl) openActions?.append(openMark);
   let heldOpenName: { previous: string | null; assigned: string } | undefined;
   const releaseOpenName = () => {
     if (openControl && heldOpenName && openControl.getAttribute('aria-label') === heldOpenName.assigned) {
@@ -409,6 +416,8 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
     text(article.querySelector(".folio-subtitle"), value.subtitle);
     path.setAttribute("d", glyphs[value.layout]);
     anchorPath.setAttribute("d", glyphs[value.layout]);
+    if (openPath.getAttribute("d") !== glyphs[value.layout])
+      openPath.setAttribute("d", glyphs[value.layout]);
     text(anchor?.querySelector(".anchor-label small") ?? null, value.label);
     const canonicalTitle = article.querySelector("h2")?.textContent?.trim();
     const anchorName =
@@ -560,6 +569,7 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
       overview.remove();
       approach.remove();
       restore.remove();
+      openMark.remove();
       delete article.dataset.blockComposition;
       delete article.dataset.blockMinimized;
       root.remove();
