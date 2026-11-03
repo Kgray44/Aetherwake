@@ -2,6 +2,34 @@
 
 Snapshot: 2026-11-02 UTC. Integration remains active; full product acceptance is incomplete.
 
+## Native workspace scale at 10, 25, and 50 blocks
+
+The same integration source `ecdc05eb0a1fb44c2857e77408e8924ed9381e79`
+and renderer assets passed three bounded desktop runs and three fresh-process
+restores. Real Core and SQLite commands prepared separate synthetic mixed
+workspaces. Native window input used the current environment navigator,
+focused the inline note editor at its saved 150% text scale, and resized the
+note by 32 × 24 units. Switching to the empty workspace unmounted all cards
+and editors. Restart preserved exact placement geometry, resource identities
+and content, viewport, organization, and Vela placement. Provider execution
+count remained zero.
+
+| Blocks | Initial run / restore | Fitted renderer callback P95 | Visible cards / mounted editors at working scale | Return to workspace and navigator dismissal |
+| --- | --- | --- | --- | --- |
+| 10 | 13.25 / 3.57 s | 6.2 ms | 8 / 9 | 0.69 s |
+| 25 | 14.53 / 3.58 s | 12.1 ms | 12 / 22 | 0.94 s |
+| 50 | 25.15 / 4.17 s | 36.3 ms | 12 / 43 | 3.27 s |
+
+The fitted samples lasted roughly 0.75 seconds each. The 50-block sample
+contains 36 callback intervals. These are renderer and interaction
+observations on a shared host. Display presentation, sustained performance,
+GPU memory, and the causes of the dense slowdown remain open. Inspection of
+the 50-block still confirmed Vela was obscured. The synthetic fixture used
+the actual Freeform placement command to put her 208 × 260 footprint at
+(1180, 150), intersecting two saved card rectangles. The same canonical
+overlap survives restart. Universal Block System has the reproduction and
+owns the workspace policy correction.
+
 ## Current connection and conversation follow-up
 
 The P review at `1ddc0cf` preserves the owner's existing private profile.
