@@ -580,11 +580,11 @@ test('global manager mounts the same chat component with contextual extras and s
 });
 
 test('measured short chat hosts compact the stable editor and consolidate feedback before the final composer without mutating its draft',async()=>{
-  const f=fixture();let chat,target:Element|null=null,resize:ResizeObserverCallback|undefined,disconnected=false,layoutActive=true,id=0;const previous=globalThis.ResizeObserver,priorFrame=globalThis.requestAnimationFrame,priorCancel=globalThis.cancelAnimationFrame,frames=new Map<number,FrameRequestCallback>();f.view.root.clientWidth=400;f.view.root.style.height='600px';
+  const f=fixture();let chat,target:Element|null=null,resize:ResizeObserverCallback|undefined,disconnected=false,layoutActive=true,hostMoving=false,id=0;const previous=globalThis.ResizeObserver,priorFrame=globalThis.requestAnimationFrame,priorCancel=globalThis.cancelAnimationFrame,frames=new Map<number,FrameRequestCallback>();f.view.root.clientWidth=400;f.view.root.style.height='600px';
   class MeasuredResizeObserver {constructor(callback:ResizeObserverCallback){resize=callback;}observe(node:Element){target=node;}disconnect(){disconnected=true;}unobserve(){}}
   globalThis.ResizeObserver=MeasuredResizeObserver as unknown as typeof ResizeObserver;globalThis.requestAnimationFrame=callback=>{frames.set(++id,callback);return id;};globalThis.cancelAnimationFrame=key=>{frames.delete(key);};
   const deliver=(height:number,width=400)=>resize!([{target,contentRect:{height,width}} as unknown as ResizeObserverEntry],{} as ResizeObserver),frame=()=>{const entry=frames.entries().next().value;assert.ok(entry);frames.delete(entry[0]);entry[1](0);};
-  try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,layoutHost:f.view.root,layoutActive:()=>layoutActive});await chat.ready;const root=f.view.root.querySelector('.cp-chat'),editor=root.querySelector('textarea'),composer=root.querySelector('.cp-composer');editor.focus();editor.setSelectionRange(3,9);assert.equal(target,f.view.root);assert.notEqual(target,root,'The auto-sized chat is never its own observer target');Object.defineProperty(root,'clientHeight',{get(){throw new Error('Self-dependent chat height must never be read');}});
+  try{chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,layoutHost:f.view.root,layoutActive:()=>layoutActive,deferHostResize:()=>hostMoving});await chat.ready;const root=f.view.root.querySelector('.cp-chat'),editor=root.querySelector('textarea'),composer=root.querySelector('.cp-composer');editor.focus();editor.setSelectionRange(3,9);assert.equal(target,f.view.root);assert.notEqual(target,root,'The auto-sized chat is never its own observer target');Object.defineProperty(root,'clientHeight',{get(){throw new Error('Self-dependent chat height must never be read');}});
     let writes=0;editor.style=new Proxy(editor.style,{set(object,key,value){writes++;object[key]=value;return true;}});deliver(180);deliver(180);deliver(190);assert.equal(writes,0,'ResizeObserver delivery does not write layout');assert.equal(frames.size,1,'Changed bounds coalesce into one reconciliation');frame();assert.ok(root.className.split(' ').includes('cp-chat-compact'));assert.equal(editor.rows,1);assert.ok(parseFloat(editor.style.height)<=48);assert.ok(root.children.at(-1)===composer,'Composer remains the final stable child');assert.ok(root.querySelector('.cp-chat-feedback').contains(root.querySelector('.cp-chat-status')),'Status remains in the compact feedback summary');assert.ok(root.querySelector('.cp-messages').contains(root.querySelector('.cp-draft-recovery')),'Recovery uses the one transcript scroll owner');
     writes=0;deliver(190);chat.setPresentation('focused');assert.equal(frames.size,0);assert.equal(writes,0,'Unchanged frames do not reset auto height or write its final value');
     layoutActive=false;
@@ -598,6 +598,20 @@ test('measured short chat hosts compact the stable editor and consolidate feedba
     assert.equal(frames.size,1,'Working presentation reconciles the latest deferred bounds once');
     frame();
     assert.equal(root.className.split(' ').includes('cp-chat-compact'),false);assert.equal(editor.rows,2);assert.equal(root.querySelector('textarea'),editor);assert.deepEqual([editor.selectionStart,editor.selectionEnd],[3,9]);assert.equal(editor.value,'Saved unsent text');assert.equal(f.draft.content,editor.value);
+    deliver(500);
+    hostMoving=true;
+    frame();
+    deliver(380);
+    deliver(225);
+    chat.frame();
+    assert.equal(frames.size,0,'A queued resize defers once host motion starts');
+    assert.equal(editor.rows,2);
+    hostMoving=false;
+    chat.frame();
+    assert.equal(frames.size,1);
+    frame();
+    assert.equal(editor.rows,1,'The latest measured host size takes effect after motion settles');
+    assert.deepEqual([editor.selectionStart,editor.selectionEnd],[3,9]);
     deliver(180);assert.equal(frames.size,1);deliver(0,0);assert.equal(frames.size,0,'Hidden hosts cancel pending work');const hiddenWrites=writes;chat.setPresentation('workspace');assert.equal(writes,hiddenWrites);deliver(300);assert.equal(frames.size,1);await chat.dispose();assert.equal(frames.size,0);assert.equal(disconnected,true);assert.ok(f.calls.every(call=>['readDraft','detail'].includes(call.name)));
   }finally{await chat?.dispose();for(const [key,value]of Object.entries({ResizeObserver:previous,requestAnimationFrame:priorFrame,cancelAnimationFrame:priorCancel})){if(value===undefined)delete (globalThis as any)[key];else (globalThis as any)[key]=value;}f.restore();}
 });

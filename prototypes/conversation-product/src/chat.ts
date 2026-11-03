@@ -57,6 +57,8 @@ export interface ConversationChatOptions {
   layoutHost?: HTMLElement;
   /** Retained previews can defer editor layout until their host is usable again. */
   layoutActive?: () => boolean;
+  /** Coalesce passive host measurements while its existing motion is resizing the card. */
+  deferHostResize?: () => boolean;
   /** Externally supplied sessions remain owned by the caller. */
   draftSession?: ConversationDraftSession; initialDraft?: string; initialScroll?: number; initialOffset?: number;
   viewPersistence?:ConversationViewPersistence;initialView?:ConversationView;initialAroundMessageId?:string;
@@ -247,9 +249,10 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   };
   const scheduleResize=()=>{
     if(disposed||layoutHidden||resizeFrame!==undefined||resizeTimer!==undefined)return;
-    if(options.layoutActive?.()===false){layoutDeferred=true;return;}
+    if(options.layoutActive?.()===false||options.deferHostResize?.()===true){layoutDeferred=true;return;}
     const reconcile=()=>{
       resizeFrame=undefined;resizeTimer=undefined;
+      if(options.deferHostResize?.()===true){layoutDeferred=true;return;}
       resize();
       if(!layoutDeferred){drainPendingFollow();drainAnchor();}
     };

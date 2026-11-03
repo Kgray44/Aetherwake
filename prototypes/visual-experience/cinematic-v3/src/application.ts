@@ -3829,6 +3829,10 @@ export function installApplication(hooks: Hooks) {
           execution: conversationExecution,
           active: true,
           layoutActive: () => activeBlocks.get(b.id) === true,
+          deferHostResize: () =>
+            !directGestures.has(b.id) &&
+            !surface.contains(document.activeElement) &&
+            hooks.motion.bodies.get(b.id)?.transitioning === true,
           presentation: blockPresentation(b.id),
           onChanged: async () => {
             await command({ type: "snapshot" });
