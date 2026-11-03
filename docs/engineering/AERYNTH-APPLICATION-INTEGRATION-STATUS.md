@@ -2,6 +2,61 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 shared contour samples and Portable BK
+
+Commit `00fa04a` reuses fixed angle samples across the GPU glass,
+housing, and projected occlusion contours. Ring radius and offset
+calculation now runs once per ring. Existing projection, motion,
+clipping, and placement rules are preserved. An exact comparison
+with BJ produced identical position, normal and fitting buffers over
+54 housing configurations. Both SHA-256 digests were
+`d8913828e2e3291c58aea8f35b1dc5a2abd16bfd24d5e3538eb7c3b1ab97ce55`.
+Three warmed 180-frame batches of five reshaping housings took
+159–162 ms in BJ and 62–70 ms in BK on this machine.
+
+Two short packaged Electron CPU traces of the same 50-card seed
+sampled about 36.3 ms in housing band updates in BJ and 17.9 ms in BK.
+Chromium style recalculation still totaled 373 and 370 ms in their
+respective Fit samples. A separate eight-run BJ/BK/BK/BJ and reverse
+comparison recorded Fit offscreen paint p95 values of 58.7–72.1 ms in
+BJ and 57.1–121.0 ms in BK. The ranges overlap. The slowest BK run
+showed a 116.7 ms callback p95. Settled paint p95 was 18.3–20.0 ms
+across both builds. This establishes less geometry computation and
+leaves overall Fit pacing unqualified. Raw traces and comparison
+receipts are in `fit-profile-bj-1793705087688`,
+`fit-profile-bk-1793705351945`, `fit-shared-contours-1793705251312`,
+and `fit-shared-contours-reverse-1793705309469`.
+
+The strict build and all 409 desktop tests passed. The exact BK
+package passed Fit, Universe travel, empty workspace navigation,
+resize, reduced motion, graphics recovery and fresh process
+restoration on synthetic 10-, 25-, and 50-card workspaces. The SQLite
+integrity check passed with zero provider executions in all three
+profiles. The dense working view was visually checked after graphics
+recovery. Its pre-existing synthetic camera position clips Vela at
+the top edge in that view.
+
+| Cards | Initial / restart hydration | Fit / resize | Fit / settled paint p95 | Restart renderer working set |
+| ---: | ---: | ---: | ---: | ---: |
+| 10 | 2.03 / 1.38 s | 46 / 74 ms | 42.6 / 18.6 ms | 175 MiB |
+| 25 | 2.07 / 1.48 s | 80 / 98 ms | 44.9 / 19.5 ms | 179 MiB |
+| 50 | 2.10 / 1.60 s | 127 / 159 ms | 57.6 / 19.2 ms | 189 MiB |
+
+Scale receipts are in `fit-bk-exact-scale-1793705380962` and the
+first BK profile in the reverse comparison. The 10- and 25-card
+samples used 650 ms and the 50-card sample used 900 ms.
+
+Portable BK packages `00fa04a91baea8c2c1347b1184b0a442b0b536f7`.
+All 427 payloads were rehashed. Manifest SHA-256 is
+`88baa6f00c3c27819da5d6fa7798e759232ae8532b50312a22b2de5832c4cd74`.
+The exact packaged local journey passed again through workspace
+creation, cross-project travel, editing, and restart. Launch-to-exit
+times were 6.47, 14.35 and 2.63 seconds. The five PNGs and receipts
+are in `review-package-motion-1793705427994`. All owned test
+processes exited. These hidden runs measured offscreen paint and
+application callbacks separately. Physical display pacing and live
+Codex remain outstanding.
+
 ## November 3 Vela layout context and Portable BJ
 
 The running owner window was identified by its executable manifest as
