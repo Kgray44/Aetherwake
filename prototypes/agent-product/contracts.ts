@@ -180,6 +180,8 @@ export interface AgentHostPort {
  * owns RPC, policy, persistence, and cached catalogs; no provider discovery here. */
 export type AgentSummary = Pick<AgentProfile, "contract" | "ref" | "resource">;
 export interface AgentLibraryClientPort {
+  /** Explicit local initialization through the canonical mutation path. */
+  ensureStarters?(): Promise<{ created: number }>;
   list(input: {
     projectId?: string | null;
     includeArchived?: boolean;

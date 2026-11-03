@@ -246,7 +246,7 @@ test("Agent Library cannot qualify by creating a workspace, placement, note plac
     (d) => d.navigationBlocks.push({ id: "b" }),
     (d) => (d.resources[0].kind = "note"),
     (d) => (d.resources[0].kind = "task"),
-    (d) => d.resources.push({ kind: "agent" }, { kind: "agent" }),
+    (d) => d.resources.push(...Array.from({ length: 11 }, () => ({ kind: "agent" }))),
   ]) {
     const d = desktop();
     change(d);

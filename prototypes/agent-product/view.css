@@ -55,6 +55,72 @@
 .agent-project-filter {
   max-width: 190px;
 }
+.agent-pill {
+  min-width: 0;
+  align-self: flex-start;
+}
+.agent-field .agent-pill {
+  width: 100%;
+}
+.agent-library button.agent-pill-trigger {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  border-radius: 999px;
+  border-color: rgb(
+    213 229 235 /
+      calc(0.2 + var(--control-hover, 0) * 0.2 + var(--control-focus, 0) * 0.18)
+  );
+  background: linear-gradient(
+    120deg,
+    rgb(218 235 240 / calc(0.11 + var(--control-hover, 0) * 0.08)),
+    #637f9b18
+  );
+  padding-inline: 12px;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.agent-pill-trigger::after {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border: solid currentColor;
+  border-width: 0 1px 1px 0;
+  transform: translateY(-2px) rotate(45deg);
+}
+.agent-pill-reveal {
+  overflow: clip;
+}
+.agent-pill-menu {
+  padding-block: 4px;
+}
+.agent-pill-options {
+  display: grid;
+  gap: 2px;
+  max-height: min(220px, 40vh);
+  overflow: auto;
+  padding: 4px;
+  border: 1px solid #c0d5e74a;
+  border-radius: 16px;
+  background: linear-gradient(140deg, #273744, #16232f);
+}
+.agent-library button.agent-pill-option {
+  width: 100%;
+  border-radius: 999px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  background: rgb(
+    218 235 240 /
+      calc(var(--control-hover, 0) * 0.1 + var(--control-focus, 0) * 0.1)
+  );
+}
+.agent-library button.agent-pill-option[aria-selected="true"] {
+  border-color: #b7d2de56;
+  background-color: #bfd4e419;
+}
 .agent-library :is(button, input, select, textarea) {
   color: inherit;
   font: inherit;
@@ -217,7 +283,7 @@
   color: var(--agent-ink);
   font-size: 14px;
 }
-.agent-template-tools select {
+.agent-template-tools .agent-pill {
   flex: 1 1 auto;
 }
 .agent-form-actions {

@@ -124,6 +124,10 @@ export function mountAgentLibrary(
     open: boolean;
     height: number;
   }[] = [];
+  const pills = new Map<HTMLSelectElement, () => void>();
+  let activePill: { node: HTMLElement; close(restore?: boolean): void } | null =
+    null;
+  let starterInitialization: Promise<unknown> | null = null;
   function el<K extends keyof HTMLElementTagNameMap>(
     tag: K,
     cls = "",
@@ -180,6 +184,165 @@ export function mountAgentLibrary(
     motion.wake();
     frame();
   }
+  function mountPill(select: HTMLSelectElement) {
+    const action = select.dataset.action!;
+    const label = select.getAttribute("aria-label") ?? "Project";
+    const holder = el("div", `agent-pill ${select.className}`);
+    const trigger = button("", action, () =>
+      entry.open ? close(true) : open(),
+    );
+    trigger.classList.add("agent-pill-trigger");
+    trigger.dataset.agentPill = "true";
+    trigger.setAttribute("aria-haspopup", "listbox");
+    trigger.setAttribute("aria-expanded", "false");
+    const clipped = el("div", "agent-pill-reveal");
+    const menu = el("div", "agent-pill-menu");
+    const list = el("div", "agent-pill-options");
+    list.id = prefix + action + ":options";
+    list.setAttribute("role", "listbox");
+    list.setAttribute("aria-label", label);
+    trigger.setAttribute("aria-controls", list.id);
+    menu.append(list);
+    clipped.append(menu);
+    const entry = disclosure(clipped, menu, "pill-" + action);
+    let choices: HTMLButtonElement[] = [];
+    let hasEnabledChoice = false;
+    let lastOptions: string | undefined;
+    let lastValue: string | undefined;
+    function close(restore = false) {
+      if (!entry.open) return;
+      if (activePill?.node === holder) activePill = null;
+      trigger.setAttribute("aria-expanded", "false");
+      if (restore && !trigger.disabled) trigger.focus({ preventScroll: true });
+      reveal(entry, false);
+    }
+    function focusChoice(
+      which: "selected" | "first" | "last" | "next" | "previous",
+    ) {
+      const enabled = choices.filter((choice) => !choice.disabled);
+      const index = enabled.indexOf(doc.activeElement as HTMLButtonElement);
+      const target =
+        which === "selected"
+          ? (enabled.find((choice) => choice.value === select.value) ??
+            enabled[0])
+          : which === "first"
+            ? enabled[0]
+            : which === "last"
+              ? enabled.at(-1)
+              : enabled[
+                  Math.max(
+                    0,
+                    Math.min(
+                      enabled.length - 1,
+                      index + (which === "next" ? 1 : -1),
+                    ),
+                  )
+                ];
+      target?.focus();
+    }
+    function open(last = false) {
+      if (trigger.disabled) return;
+      activePill?.close();
+      activePill = { node: holder, close };
+      trigger.setAttribute("aria-expanded", "true");
+      reveal(entry, true);
+      focusChoice(last ? "last" : "selected");
+    }
+    function sync() {
+      const signature = select.dataset.options ?? "";
+      const changed = lastOptions !== signature;
+      if (changed) {
+        lastOptions = signature;
+        const restoreChoice = list.contains(doc.activeElement);
+        choices = Array.from(select.options, (option) => {
+          const choice = button(option.text, "pill-option", () => {
+            if (!entry.open || choice.disabled || select.disabled) return;
+            select.value = option.value;
+            sync();
+            close(true);
+            const EventType = doc.defaultView?.Event ?? Event;
+            select.dispatchEvent(new EventType("input", { bubbles: true }));
+            select.dispatchEvent(new EventType("change", { bubbles: true }));
+          });
+          choice.classList.add("agent-pill-option");
+          choice.dataset.value = option.value;
+          choice.value = option.value;
+          choice.disabled = option.disabled;
+          choice.tabIndex = -1;
+          choice.setAttribute("role", "option");
+          return choice;
+        });
+        hasEnabledChoice = choices.some((choice) => !choice.disabled);
+        list.replaceChildren(...choices);
+        if (restoreChoice && entry.open) focusChoice("selected");
+      }
+      const disabled = select.disabled || !hasEnabledChoice;
+      if (trigger.disabled !== disabled) trigger.disabled = disabled;
+      if (changed || lastValue !== select.value) {
+        lastValue = trigger.value = select.value;
+        const caption =
+          choices.find((choice) => choice.value === select.value)
+            ?.textContent || label;
+        trigger.textContent = caption;
+        trigger.setAttribute(
+          "aria-label",
+          caption === label ? label : `${label}, ${caption}`,
+        );
+        for (const choice of choices)
+          choice.setAttribute(
+            "aria-selected",
+            String(choice.value === select.value),
+          );
+      }
+      if (disabled && entry.open) close();
+    }
+    holder.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && entry.open) {
+        event.preventDefault();
+        event.stopPropagation();
+        close(true);
+        return;
+      }
+      if (
+        event.key !== "ArrowDown" &&
+        event.key !== "ArrowUp" &&
+        event.key !== "Home" &&
+        event.key !== "End"
+      )
+        return;
+      if (!entry.open && event.key !== "ArrowDown" && event.key !== "ArrowUp")
+        return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!entry.open) open(event.key === "ArrowUp");
+      else
+        focusChoice(
+          event.key === "Home"
+            ? "first"
+            : event.key === "End"
+              ? "last"
+              : event.key === "ArrowDown"
+                ? "next"
+                : "previous",
+        );
+    });
+    holder.addEventListener("focusout", (event) => {
+      if (!holder.contains(event.relatedTarget as Node | null)) close();
+    });
+    select.parentElement!.insertBefore(holder, select);
+    holder.append(select, trigger, clipped);
+    delete select.dataset.action;
+    delete select.dataset.aerynthMotionControl;
+    select.hidden = true;
+    select.tabIndex = -1;
+    select.setAttribute("aria-hidden", "true");
+    pills.set(select, sync);
+    sync();
+  }
+  const dismissPill = (event: PointerEvent) => {
+    if (activePill && !activePill.node.contains(event.target as Node))
+      activePill.close();
+  };
   const root = el("section", "agent-library"),
     header = el("header", "agent-library-heading"),
     title = el("h2", "", "Agents"),
@@ -314,7 +477,11 @@ export function mountAgentLibrary(
   specialtiesInput.name = "specialties";
   specialtiesInput.maxLength = 4096;
   const field = (label: string, node: HTMLElement) => {
-    const wrapper = el("label", "agent-field", label);
+    const wrapper = el(
+      node.tagName === "SELECT" ? "div" : "label",
+      "agent-field",
+      label,
+    );
     wrapper.append(node);
     return wrapper;
   };
@@ -376,7 +543,7 @@ export function mountAgentLibrary(
   >();
   for (const key of settingKeys) {
     const entry = el("div", "agent-setting"),
-      label = el("label", "agent-field", settingNames[key]),
+      label = el("div", "agent-field", settingNames[key]),
       source = control(el("select"), `source-${key}`);
     for (const [value, text] of [
       ["inherit", "Inherited"],
@@ -475,6 +642,7 @@ export function mountAgentLibrary(
     status.dataset.state = error ? "error" : "notice";
   }
   function updateControls() {
+    for (const sync of pills.values()) sync();
     root.dataset.state = pending ? "saving" : stale ? "stale" : "ready";
     root.setAttribute("aria-busy", String(pending));
     save.disabled =
@@ -546,6 +714,7 @@ export function mountAgentLibrary(
       select.dataset.options = signature;
     }
     select.value = selected;
+    pills.get(select)?.();
   }
   function projectOptions(desiredProject = projectInput.value) {
     const filtered = scope.value || "@all";
@@ -1250,6 +1419,25 @@ export function mountAgentLibrary(
   });
   async function refresh() {
     if (disposed) return;
+    if (client.ensureStarters) {
+      const initialization = (starterInitialization ??= Promise.resolve().then(
+        () => {
+          if (!disposed) return client.ensureStarters!();
+        },
+      ));
+      try {
+        await initialization;
+      } catch {
+        if (starterInitialization === initialization)
+          starterInitialization = null;
+        if (!disposed)
+          message(
+            "Starter profile check unavailable. Refresh to try again.",
+            true,
+          );
+      }
+    }
+    if (disposed) return;
     await Promise.allSettled([loadMetadata(), loadList()]);
     if (!disposed && selectedId && !creating && !detailPending)
       await loadDetail(selectedId);
@@ -1285,6 +1473,7 @@ export function mountAgentLibrary(
   }
   function frame() {
     if (disposed) return;
+    for (const sync of pills.values()) sync();
     for (const row of rows.values())
       row.node.style.setProperty(
         "--agent-selection",
@@ -1310,6 +1499,8 @@ export function mountAgentLibrary(
       }
     }
   }
+  for (const select of root.querySelectorAll("select")) mountPill(select);
+  doc.addEventListener?.("pointerdown", dismissPill, true);
   clearInspector();
   projectOptions();
   void refresh();
@@ -1321,6 +1512,8 @@ export function mountAgentLibrary(
     dispose() {
       if (disposed) return;
       disposed = true;
+      doc.removeEventListener?.("pointerdown", dismissPill, true);
+      activePill = null;
       ++listEpoch;
       ++detailEpoch;
       ++effectiveEpoch;
