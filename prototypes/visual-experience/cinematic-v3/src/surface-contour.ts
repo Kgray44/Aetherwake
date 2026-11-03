@@ -15,17 +15,13 @@ export interface ContourPoint {
 }
 /** Shared by GPU silhouettes, DOM clipping and focused readers. */
 export const CARD_CORNER_RADIUS = 18;
-export function contourPoint(
+export function contourRing(
   width: number,
   height: number,
   shape: SurfaceShape,
   unfold: number,
-  phase: number,
   outset: number,
-  result: ContourPoint,
 ) {
-  const corner = Math.min(3, Math.floor((phase >= 1 ? 0 : phase) * 4));
-  const angle = phase * Math.PI * 2;
   const halfW = Math.max(1, width * 0.5 + outset);
   const halfH = Math.max(1, height * 0.5 + outset);
   const reading = Math.max(0, Math.min(1, unfold));
@@ -47,16 +43,66 @@ export function contourPoint(
     ? halfH * (1 - reading) +
       Math.min(CARD_CORNER_RADIUS + outset, halfH) * reading
     : radius;
-  const c = Math.cos(angle),
-    s = Math.sin(angle);
-  result.x = (corner === 0 || corner === 3 ? 1 : -1) * (halfW - rx) + c * rx;
-  result.y = (corner < 2 ? 1 : -1) * (halfH - ry) + s * ry;
-  const nx = c / rx,
-    ny = s / ry,
+  return { rx, ry, x: halfW - rx, y: halfH - ry };
+}
+
+function contourSample(phase: number) {
+  const corner = Math.min(3, Math.floor((phase >= 1 ? 0 : phase) * 4));
+  const angle = phase * Math.PI * 2;
+  return {
+    cos: Math.cos(angle),
+    sin: Math.sin(angle),
+    sideX: corner === 0 || corner === 3 ? 1 : -1,
+    sideY: corner < 2 ? 1 : -1,
+  };
+}
+
+/** Fixed angular tables share the same samples at every size and unfold. */
+export function contourSamples(segments: number, closed = false) {
+  return Array.from({ length: segments + Number(closed) }, (_, i) =>
+    contourSample(i / segments),
+  );
+}
+
+type ContourRing = ReturnType<typeof contourRing>;
+type ContourSample = ReturnType<typeof contourSample>;
+export function writeContourPosition(
+  ring: ContourRing,
+  sample: ContourSample,
+  result: Pick<ContourPoint, "x" | "y">,
+) {
+  result.x = sample.sideX * ring.x + sample.cos * ring.rx;
+  result.y = sample.sideY * ring.y + sample.sin * ring.ry;
+}
+
+export function writeContourPoint(
+  ring: ContourRing,
+  sample: ContourSample,
+  result: ContourPoint,
+) {
+  writeContourPosition(ring, sample, result);
+  const nx = sample.cos / ring.rx,
+    ny = sample.sin / ring.ry,
     inverse = 1 / Math.hypot(nx, ny);
   result.nx = nx * inverse;
   result.ny = ny * inverse;
   return result;
+}
+
+export function contourPoint(
+  width: number,
+  height: number,
+  shape: SurfaceShape,
+  unfold: number,
+  phase: number,
+  outset: number,
+  result: ContourPoint,
+) {
+  return writeContourPoint(
+    contourRing(width, height, shape, unfold, outset),
+    contourSample(phase),
+    result,
+  );
 }
 export function defaultSurfaceShape(kind?: string): SurfaceShape {
   return kind === "research" ? "lens" : "rounded";

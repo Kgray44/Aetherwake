@@ -3,7 +3,9 @@ import { WorkspaceGridField } from "./workspace-grid-field.ts";
 import type { WorkspaceGridFrame } from "./workspace-grid.ts";
 import { PresenceProjection } from "./presence-projection.ts";
 import {
-  contourPoint,
+  contourRing,
+  contourSamples,
+  writeContourPosition,
   defaultSurfaceShape,
   type SurfaceShape,
 } from "./surface-contour.ts";
@@ -103,6 +105,7 @@ export interface EnvironmentFrame {
 // Openness, structural tension, directed flow. These are expression studies,
 // never measurements of cognition, progress, or unrecorded agent relationships.
 const FOLIO_SEGMENTS = 64;
+const FOLIO_SAMPLES = contourSamples(FOLIO_SEGMENTS);
 
 const EXPRESSIONS: Readonly<
   Record<VelaState, readonly [number, number, number]>
@@ -1126,21 +1129,15 @@ export class Environment {
       const faceScale =
         !rimOnly && ring < 3 ? (ring === 0 ? 1 : ring === 1 ? 0.66 : 0.33) : 1;
       // Rings with the same inset differ only in depth and face scale.
-      const sameContour = previousInset === inset;
+      const contour = previousInset !== inset
+        ? contourRing(width, height, shape, unfold, 5 - inset)
+        : undefined;
       for (let j = 0; j < n; j++) {
         const sample = j * 2;
-        if (!sameContour) {
-          const point = contourPoint(
-            width,
-            height,
-            shape,
-            unfold,
-            j / n,
-            5 - inset,
-            this.folioContour,
-          );
-          samples[sample] = point.x;
-          samples[sample + 1] = point.y;
+        if (contour) {
+          writeContourPosition(contour, FOLIO_SAMPLES[j], this.folioContour);
+          samples[sample] = this.folioContour.x;
+          samples[sample + 1] = this.folioContour.y;
         }
         const x = samples[sample] * faceScale,
           y = samples[sample + 1] * faceScale;

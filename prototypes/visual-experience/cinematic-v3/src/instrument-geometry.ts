@@ -1,7 +1,10 @@
 import * as THREE from "three";
 import {
   contourPoint,
+  contourRing,
+  contourSamples,
   defaultSurfaceShape,
+  writeContourPoint,
   type SurfaceShape,
 } from "./surface-contour.ts";
 
@@ -31,6 +34,7 @@ interface ProfileBand {
 }
 
 const SEGMENTS = 96;
+const PROFILE_SAMPLES = contourSamples(SEGMENTS, true);
 const PROFILE_POINTS = 12;
 const FRAME_PROFILES: Readonly<Record<InstrumentStudy, Profile>> = {
   optical: [
@@ -238,31 +242,11 @@ export class InstrumentStructure {
 
   private shape: SurfaceShape = "folio";
 
-  private contour(
-    width: number,
-    height: number,
-    kind: InstrumentKind,
-    unfold: number,
-    phase: number,
-    outset: number,
-  ) {
-    return contourPoint(
-      width,
-      height,
-      this.shape,
-      unfold,
-      phase,
-      outset,
-      this.contourPoint,
-    );
-  }
-
   private shapeBand(
     band: ProfileBand,
     profile: Profile,
     width: number,
     height: number,
-    kind: InstrumentKind,
     unfold: number,
     depthScale: number,
     outsetShift = 0,
@@ -308,15 +292,11 @@ export class InstrumentStructure {
       }
       const nextStart = vertex * (SEGMENTS + 1) * 2;
       const previousStart = before * (SEGMENTS + 1) * 2 + 1;
+      const ring = contourRing(
+        width, height, this.shape, unfold, this.profileX[vertex],
+      );
       for (let j = 0; j <= SEGMENTS; j++) {
-        const point = this.contour(
-          width,
-          height,
-          kind,
-          unfold,
-          j / SEGMENTS,
-          this.profileX[vertex],
-        );
+        const point = writeContourPoint(ring, PROFILE_SAMPLES[j], this.contourPoint);
         const next = nextStart + j * 2,
           previous = previousStart + j * 2;
         band.position.setXYZ(next, point.x, point.y, this.profileZ[vertex]);
@@ -346,13 +326,14 @@ export class InstrumentStructure {
   ) {
     mesh.count = phases.length;
     for (let i = 0; i < phases.length; i++) {
-      const point = this.contour(
+      const point = contourPoint(
         frame.width,
         frame.height,
-        frame.kind,
+        this.shape,
         unfold,
         phases[i],
         outset,
+        this.contourPoint,
       );
       this.position.set(point.x, point.y, z);
       this.orientation.setFromAxisAngle(
@@ -401,7 +382,6 @@ export class InstrumentStructure {
         FRAME_PROFILES[frame.study],
         frame.width,
         frame.height,
-        frame.kind,
         unfold,
         depthScale,
       );
@@ -417,7 +397,6 @@ export class InstrumentStructure {
         BACK_PROFILE,
         frame.width,
         frame.height,
-        frame.kind,
         unfold,
         backDepth,
       );
@@ -429,7 +408,6 @@ export class InstrumentStructure {
         OPTIC_PROFILE,
         frame.width,
         frame.height,
-        frame.kind,
         unfold,
         0.7 + unfold * 0.1,
         seatShift,

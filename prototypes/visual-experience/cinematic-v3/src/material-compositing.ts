@@ -1,6 +1,8 @@
 import {
-  contourPoint,
+  contourRing,
+  contourSamples,
   defaultSurfaceShape,
+  writeContourPosition,
   type SurfaceShape,
 } from "./surface-contour.ts";
 
@@ -69,6 +71,8 @@ class PolygonPool {
   }
 }
 const EPSILON = 1e-7;
+const COMPACT_OUTLINE_SAMPLES = contourSamples(16);
+const RADIAL_OUTLINE_SAMPLES = contourSamples(32);
 function area(p: Polygon) {
   let sum = 0;
   for (let i = 0, j = p.count - 1; i < p.count; j = i++)
@@ -172,7 +176,7 @@ export class MaterialCompositor {
   private pool = new PolygonPool();
   private fragments: Polygon[] = [];
   private next: Polygon[] = [];
-  private point = { x: 0, y: 0, nx: 0, ny: 0 };
+  private point = { x: 0, y: 0 };
   private activeIds = new Set<string>();
   private insideA: Polygon = { points: new Float64Array(512), count: 0 };
   private insideB: Polygon = { points: new Float64Array(512), count: 0 };
@@ -466,16 +470,12 @@ export class MaterialCompositor {
       e.bottom = view.originY + (y + halfHeight * scale) * view.scale;
       return;
     }
-    for (let i = 0; i < segments; i++) {
-      const v = contourPoint(
-        p.w,
-        p.h,
-        e.shape,
-        p.unfold ?? 0,
-        i / segments,
-        guard,
-        this.point,
-      );
+    const ring = contourRing(p.w, p.h, e.shape, p.unfold ?? 0, guard);
+    const samples =
+      segments === 32 ? RADIAL_OUTLINE_SAMPLES : COMPACT_OUTLINE_SAMPLES;
+    const v = this.point;
+    for (const sample of samples) {
+      writeContourPosition(ring, sample, v);
       const den = 1500 - p.lift + v.x * Math.sin((p.yaw * Math.PI) / 180);
       if (den <= 0) {
         e.valid = false;
@@ -490,7 +490,7 @@ export class MaterialCompositor {
       e.right = Math.max(e.right, q.x);
       e.bottom = Math.max(e.bottom, q.y);
     }
-    // contourPoint is counterclockwise in Y-up; screen-space flipping reverses it.
+    // The contour is counterclockwise in Y-up; screen-space flipping reverses it.
     if (area(e.polygon) < 0) {
       for (let a = 0, b = e.polygon.count - 1; a < b; a++, b--) {
         const x = e.polygon.points[a * 2],
