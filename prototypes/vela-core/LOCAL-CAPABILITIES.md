@@ -1,29 +1,28 @@
-# Immediate local Vela queries
+# Vela local facts
 
-`VelaService.local({intent, commandId}, signal?)` recognizes an explicit finite English grammar for local time/date, current physical RAM usage (`system.memory`), current workspace layout status, authorized active project count and Aerynth-owned execution status. It returns `{matched:false}` for unknown/compound queries without touching clock/status/context/provider ports or SQLite. This is deterministic capability routing, not simulated model reasoning. Recognition and its small input schema are exported by `src/local-capabilities.mts`; they do not enlarge the model's native-action catalog or prompt.
+Vela's composer sends free text to the configured planning model with the
+reviewed context and the available typed capability catalog. The model can
+select `readLocalFact` for device time, device date, physical RAM, active
+workspace layout status, active project count, or Aerynth execution status.
+The trusted backend validates the capability and measures the fact after
+inference. A single local fact lookup runs under host policy after provider
+consent. The observation stays in Aerynth and is displayed from its canonical
+message and receipt. Plans that change the workspace still require action
+review. The weather capability has its own location-sharing review.
 
-The native broker must call the local method **before** provider selection/checkbox handling, native egress preview/consent, selected-source context construction or grants. Its local input accepts only `intent` and a stable `commandId`; selected IDs, provider/auth booleans and supplied clock facts are rejected. The early `service.request` check is defense in depth; it cannot undo an incorrectly early native preview. Root owns Core/broker/client/App wiring.
+The trusted backend also accepts an explicit typed
+`VelaService.local({capabilityId, intent, commandId}, signal?)` call. The
+desktop renderer has no direct route to this operation. The host supplies
+`VelaLocalHost`, including the native clock and targeted status readers.
+The same canonical transaction stores the user message, observed assistant
+message, and the linked fact record. Repeating the same authorized command
+ID retrieves the original observation. An unknown capability, changed
+intent or policy, or missing canonical message fails closed. Existing
+recorded local answers retain their IDs, attribution, and timestamps.
 
-The host injects `VelaServiceOptions.local: VelaLocalHost`: cheap current `identity()`, trusted `clock()`, SAME-canonical `ensureConversation()` / `appendMessage()` with targeted system:vela access checks, one canonical `readMessage()` for idempotent recovery and optional targeted metadata `workspaceStatus()`, `projectCount()` and `executionStatus()`. `readSystemClock()` uses native Node Date/Intl with the system locale/time zone and no external access. The local canonical callbacks must reuse the actual graph/message provenance and transaction; they must not invoke the general canonical-host metadata/context view. Tests make even ordinary host ensure/append throw to enforce this seam. The host enforces its actual local-owner read policy; callbacks cannot accept renderer permissions/facts. Missing overall host fails closed before source/provider access. Invalid clock/zone or unavailable status produces a canonical local inability without falling back to a provider. Workspace saved status explicitly covers canonical layout, not drafts, cloud sync or external files; execution coverage includes unknown outcomes and only Aerynth-owned work.
-
-A matched query atomically appends the canonical user and `vela-native`/observed assistant messages and records one `responded` request, `providerId:null`, response/input digests and local fact provenance. It creates no plan, review, action/delegation receipt, execution or grant. Direct `VelaLocalResult.content` equals the committed canonical message and is returned immediately for presentation. Only linked message IDs/facts/commandId persist: no duplicate answer body or completed-commit timings. The actual classification/capability/persistence/total monotonic timings are ephemeral and exclude native roundtrip, UI reconciliation and first-visible-output latency.
-
-Reusing an identical command ID reads one currently authorized canonical message and preserves its original clock facts/IDs/content. It does not fetch a new clock or append again. Changed intent/policy, missing/revoked message or corrupt local metadata fails closed. Cancellation before/during the synchronous transaction rolls back the pair; an already committed response is terminal, not an interruptible provider task. Unknown transport outcomes require retry with the same command ID, never silent re-submission as a new request.
-
-This is additive **local-record version1 inside existing Vela persisted schema3**. No new production table/store, schema reset or history rewrite. Existing state1/2/3 loads/migrates by the established path, preserving canonical history and requests; unknown state/local versions reject. Local native answers do not fabricate provider contribution/history proof or enable implicit model history. Existing native provider identity, permission, catalog-discovery/history flags and context limits are unchanged.
-
-The source-confirmed old path had broker egress review before service routing and service context construction before provider availability. The owner's approximately20-second observation has not been remeasured by this worker or fully attributed to individual stages. The new SQLite/Intl/synthetic-port checks establish local service behavior only. Actual warmed/cold native P50/P95, first useful Whisper output, the250ms warmed target, presentation and restart acceptance remain Root-owned. No GUI/provider/auth/network calls are made by these tests.
-
-Source release verification: all114 Vela module tests (11 new local cases), strict Vela and existing backend TypeScript, and diff whitespace checks passed. SQLite tests forbid even the ordinary metadata-bearing host append/ensure callbacks, check real `total_changes()`, exercise atomic failure/cancellation, same-file restart/idempotent recovery, preserved legacy1/2/3 histories and unknown-version denial. This does not claim integrated Core or native UI latency qualification.
-
-## Physical system memory
-
-The trusted Core local host may explicitly register `system: {memory: readSystemMemory}` from `src/system-memory.mts` under its low-risk memory-only policy. That module imports only `node:os` and the browser-safe measurement contract. It exposes no renderer OS bridge, generic command, file, network, credential, process-memory or provider access, and starts no polling. Registration does not sample memory; one recognized explicit request reads it once. Only `memory()` is implemented on the typed `VelaReadOnlySystemHost`; CPU, GPU and deeper diagnostics have no placeholder availability claim.
-
-`aerynth.system-memory@1` carries exact byte counts, a two-decimal utilization percentage, ISO observation timestamp, source API/platform and interpretation. Total must be a positive safe integer, available must be within `[0,total]`, used must equal `total-available`, and percentage, timestamp, source and interpretation are validated before any answer or fact is persisted. Unexpected fields are rejected. Windows `os.freemem()` reflects available physical memory via libuv's `GlobalMemoryStatusEx/ullAvailPhys`; `os.totalmem()` uses `ullTotalPhys`. Other platforms are labelled OS-reported free physical memory instead of promising the Windows definition. Used is a derived physical-memory value, not Aerynth process RSS or committed/virtual memory. The adjacent OS reads are a point-in-time observation, not a continuous monitor or an atomic Windows counter transaction. See [Node OS API](https://nodejs.org/docs/latest-v24.x/api/os.html#osfreemem) and [libuv Windows implementation](https://github.com/libuv/libuv/blob/v1.x/src/win/util.c).
-
-“What is my current RAM usage?” and finite basic variants use this native route before model selection/egress review, even if provider use is checked. The answer displays used/total/available GiB, percentage, the actual measurement timestamp and interpretation. It persists as the existing canonical `vela-native` observed message and linked local-record facts, never as provider output or a separate answer history. Replaying an identical command returns the original timestamp/IDs without remeasuring; a new explicit command makes a fresh observation. Missing/invalid/failed memory registration produces an honest canonical inability and no model fallback. Renderer-supplied measurements or authorization fields are rejected by the existing exact local request schema.
-
-Questions about why a particular process consumes memory, profiling, compound commands and explicit Codex work are deliberately outside this narrow grammar. They retain the distinct configured conversational/reviewed execution route; this change does not relax `CodexPlanningAdapter` tool restrictions or silently start a diagnostic task. Actual Core registration, native UI/restart proof, independent Windows comparison and deeper authorized Codex acceptance remain Root-owned. The added source tests use synthetic measurements only; no real host RAM readings or private telemetry are committed as evidence.
-
-Memory extension verification: all148 Vela module tests, including eight new synthetic memory/SQLite cases, and strict Vela TypeScript passed. The tests cover exact-question routing, absence of provider/context/approval calls, numeric/source validation, missing capability, current authorization denial, append rollback, canonical IDs/facts/timestamps after same-file restart, read-only replay and corrupt-record refusal. This is source/service evidence, not actual native RAM or clipboard acceptance.
+Workspace status describes the saved layout. Execution status covers
+Aerynth-owned executions, including unknown outcomes. The clock uses the
+device's time zone and locale. Physical memory is derived from Node's
+`os.totalmem()` and `os.freemem()` at the time of the read. On Windows the
+available value is OS-reported available physical memory. The result
+represents the system's physical memory rather than an individual process.

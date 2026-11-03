@@ -33,7 +33,8 @@ import { createCanonicalOrganizationAdapter, createCanonicalAccessHelper, create
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import { VelaService, VELA_PLANNING_INSTRUCTION } from '../../vela-core/src/service.mts';
 import { readSystemMemory } from '../../vela-core/src/system-memory.mts';
-import { classifyVelaLocalIntent, evaluateLocalCapability, readSystemClock } from '../../vela-core/src/local-capabilities.mts';
+import { matchOrdinaryClockQuestion } from './ordinary-clock-questions.mts';
+import { evaluateLocalCapability, readSystemClock } from '../../vela-core/src/local-capabilities.mts';
 import { createCanonicalVelaHost, type CanonicalVelaHost, type CanonicalVelaMetadata } from '../../vela-core/src/canonical-host.mts';
 import { CodexPlanningAdapter, planningDigest, buildCodexPlanningPrompt, type CodexPlanningGrant, type PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
 import { CAPABILITIES } from '../../vela-core/src/capabilities.ts';
@@ -780,6 +781,7 @@ export class BackendCore {
     this.vela=new VelaService({db:this.db,transaction:work=>this.atomic(work),readTransaction:work=>this.kernel.withTransaction(work),host:this.velaHost,local:this.localVelaHost(),planner:this.velaPlanner,history:{snapshot:(id,limit)=>this.velaHistorySnapshot(id,limit),message:(id,messageId,maxBytes)=>this.velaHistoryMessage(id,messageId,maxBytes),content:(ref,maxBytes)=>this.velaHistoryContent(ref,maxBytes),messageMetadata:(id,messageId)=>this.velaHistoryMessageMetadata(id,messageId),verifyProviderContribution:(contribution,message,request)=>this.verifyVelaHistoryContribution(contribution,message,request)}});
   }
   private velaCapability(id:string) {
+    if(id==='readLocalFact')return true;
     if(id==='readWeather')return process.platform==='win32'&&!!this.nativeHostServices;
     if(id==='createTimeline')return true;
     if(id==='setAttentionMode')return this.velaNative?.supportedActions.includes('setAttentionMode')===true&&this.vela?.attentionPreferenceVersion()!=null;
@@ -917,6 +919,12 @@ export class BackendCore {
     return this.once(input.commandId,{type:'velaNative',...input},()=>{
       const a=input.action;
       ensure(a.type!=='readWeather','weather_reviewed_preparation_required');
+      if(a.type==='readLocalFact'){
+        const fact=evaluateLocalCapability(a.capabilityId,this.localVelaHost());
+        this.record('vela.native.readLocalFact','observed');
+        return {status:fact.kind==='answer'?'applied':'failed',receiptId:input.commandId,responseText:fact.content,
+          ...(fact.facts.kind==='unavailable'?{errorCode:fact.facts.code}:{})};
+      }
       if(a.type==='createTimeline'){
         this.timelineScope(a);
         ensure(a.source.kind==='application-activity','github_reviewed_preparation_required');
@@ -975,7 +983,6 @@ export class BackendCore {
       case 'explicitPreference':return this.vela.explicitPreference(input);case 'reviewPreference':return this.vela.reviewPreference(input);case 'resetPreferences':return this.vela.resetPreferences(input);
       case 'request': {
         ensure(input&&typeof input.intent==='string'&&Array.isArray(input.resourceIds)&&typeof input.authorizeProvider==='boolean','invalid_vela_request');
-        const local=this.vela.local({intent:input.intent,commandId:input.commandId??randomUUID()});if(local.matched)return local.request;
         if(input?.authorizeProvider===true){ensure(input.grantId&&input.previewId,'native_vela_grant_required');const grant=this.validateVelaGrant(input.grantId),preview=this.velaPreviews.get(grant.previewId)!;ensure(!grant.requestId,'native_vela_grant_consumed');ensure(grant.previewId===input.previewId&&input.intent===preview.intent&&planningDigest(input.resourceIds)===planningDigest(preview.resourceIds),'native_vela_grant_mismatch');}
         const frozen=input?.authorizeProvider===true&&this.velaGrants.get(input.grantId)?.reviewDigest!==undefined?this.frozenVelaProviderContext(input.grantId):undefined;
         this.pendingVelaGrant=input?.grantId??null;try{return await this.vela.request({intent:input.intent,resourceIds:input.resourceIds,authorizeProvider:input.authorizeProvider},frozen);}finally{this.pendingVelaGrant=null;}
@@ -1213,8 +1220,8 @@ export class BackendCore {
   }
   private answerConversationClock(input: ConversationSendInput): CommandMap['conversationClock']['output'] {
     if (input?.webSearch) return null;
-    const capability = classifyVelaLocalIntent(input?.content);
-    if (capability !== 'local.time' && capability !== 'local.date') return null;
+    const capability = matchOrdinaryClockQuestion(input?.content);
+    if (!capability) return null;
     ensure(this.conversationAccess.resource(input.resourceId), 'source_unavailable');
     const conversation = this.conv(input.resourceId);
     ensure(conversation.kind === 'ordinary' && conversation.providerId === CHATGPT_PLAN_PROVIDER, 'native_provider_required');
@@ -1675,7 +1682,6 @@ export class BackendCore {
     const a: any = input;
     // Targeted observed facts can respond during unrelated agent execution.
     // Their own strict schema cannot dispatch an action or a provider.
-    if(name==='vela'&&a?.name==='local')return this.vela.local(a.input) as any;
     if(name==='vela'&&a?.name==='presentation')return this.vela.presentation(a.input) as any;
     // Reads, interruption and durable draft recovery remain available during
     // execution. Canonical mutations retain source/approval fences.
@@ -1687,6 +1693,7 @@ export class BackendCore {
       ensure((name==='agents'?isAgentRead(a):isChecklistRead(a))||!this.active,'execution_busy');
       return this.productCommand(name,a) as any;
     }
+    if(name==='vela'&&a?.name==='local')return this.vela.local(a.input) as any;
     if (!(name==='close'&&this.active?.providerId===CHATGPT_PLAN_PROVIDER)&&!(name==='conversation'&&['saveDraft','saveViewState','selectView'].includes(a?.name))&&!['providerActivity','providerConnection','providerAuth','ordinaryProviderStatus','ordinaryProviderCheck','openResource','snapshot','replay','interrupt','execute','desktop','viewState','conversationCitation','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['inspectWorkspace','capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {
       case 'providerAuth':return this.providerAuth(a) as any;

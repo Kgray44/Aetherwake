@@ -1,24 +1,7 @@
-import { check, identifier, isRecord, text } from './capabilities.ts';
+import { check, identifier, isLocalFact, isRecord, text } from './capabilities.ts';
 import type { VelaLocalCapabilityId, VelaLocalFacts, VelaLocalHost, VelaLocalRecord } from './contracts.ts';
 import { validateSystemMemoryMeasurement } from './system-information.ts';
 
-/** Explicit finite grammar, not general language understanding. Unknown/compound requests never acquire an invented local interpretation. */
-export const VELA_LOCAL_CAPABILITIES = [
-  { id: 'local.time', phrases: ['what time is it', 'what time is it now', 'what time is it right now', 'what time is it on my computer', 'what is the time', 'what is the time right now', "what's the time", 'what is the current time', "what's the current time", 'what is the local time', "what's the local time", 'what is my local time', 'what is the current local time', "what's the current local time", 'can you tell me the time', 'tell me the time', 'tell me the current time', 'current time', 'local time', 'time'] },
-  { id: 'local.date', phrases: ["what is today's date", "what's today's date", 'what is the date', "what's the date", 'what date is it', 'what is the date today', "what's the date today", 'what day is it', 'what day is it today', "today's date", 'current date', 'date'] },
-  { id: 'local.workspace-status', phrases: ['is this workspace saved', 'is my workspace saved', 'is the current workspace saved', 'what workspace is active', 'which workspace is active', 'what workspace am i in', 'which workspace am i in', 'what is the active workspace', "what's the active workspace", 'what is my current workspace', "what's my current workspace", 'workspace status'] },
-  { id: 'local.project-count', phrases: ['how many projects do i have', 'how many projects are there', 'how many active projects do i have', 'project count'] },
-  { id: 'local.execution-status', phrases: ['are any agents running', 'are any tasks running', 'are any executions running', 'are any codex tasks running', 'how many agents are running', 'execution status'] },
-  { id: 'system.memory', phrases: ['what is my current ram usage', "what's my current ram usage", 'what is the current ram usage', "what's the current ram usage", 'what is the current ram usage on my computer', 'what is my ram usage', "what's my ram usage", 'how much ram am i using', 'how much ram am i using right now', 'how much ram is being used', 'how much ram is my computer using', 'how much ram is used', 'how much ram is available', 'how much ram is free', 'how much memory am i using', 'how much memory is my computer using', 'what is my current memory usage', 'what is the current memory usage on my computer', 'what is my memory usage', 'what is my computer memory usage', 'what is my system memory usage', 'what is the system memory usage', 'current ram usage', 'current memory usage', 'ram usage', 'system memory usage', 'show my ram usage', 'show current ram usage', 'show me my current ram usage', 'show system memory usage', 'can you tell me my current ram usage', 'tell me my ram usage', 'how much physical memory is in use', 'how much physical memory is available', 'how much ram do i have'] },
-] as const satisfies readonly { id: VelaLocalCapabilityId; phrases: readonly string[] }[];
-/** Local routing metadata is intentionally separate from provider-native-action schemas and their prompt budget. */
-export const VELA_LOCAL_REQUEST_SCHEMA = { type: 'object', additionalProperties: false, properties: { intent: { type: 'string', minLength: 1, maxLength: 16000 }, commandId: { type: 'string', minLength: 1, maxLength: 200 } }, required: ['intent', 'commandId'] } as const;
-export function classifyVelaLocalIntent(intent: string): VelaLocalCapabilityId | null {
-  if (typeof intent !== 'string' || intent.length > 16000) return null;
-  const normalized = intent.normalize('NFKC').trim().toLowerCase().replaceAll('’', "'").replace(/\s+/gu, ' ').replace(/^vela[,:]?\s+/u, '').replace(/[?!.]+$/u, '').trim();
-  for (const capability of VELA_LOCAL_CAPABILITIES) if ((capability.phrases as readonly string[]).includes(normalized)) return capability.id;
-  return null;
-}
 /** Node/native host system facts. No provider, credentials, files or network are consulted. */
 export function readSystemClock(): ReturnType<VelaLocalHost['clock']> {
   const { timeZone, locale } = new Intl.DateTimeFormat().resolvedOptions();
@@ -28,7 +11,7 @@ const count = (value: unknown): value is number => Number.isSafeInteger(value) &
 const workspace = (value: unknown): boolean => value === null || (isRecord(value) && value.kind === 'workspace' && identifier(value.id) && text(value.title) && Number.isSafeInteger(value.version) && Number(value.version) >= 1 && (value.state === undefined || value.state === 'active') && (value.projectId === undefined || value.projectId === null || identifier(value.projectId)));
 export function validateLocalRecord(value: unknown): asserts value is VelaLocalRecord {
   check(isRecord(value) && value.schemaVersion === 1, 'unsupported_vela_local_schema');
-  check(identifier(value.commandId) && VELA_LOCAL_CAPABILITIES.some(cap => cap.id === value.capabilityId) && value.classification === 'observed' && value.providerId === null && typeof value.observedAt === 'string' && Number.isFinite(Date.parse(value.observedAt)), 'corrupt_vela_local_record');
+  check(identifier(value.commandId) && isLocalFact(value.capabilityId) && value.classification === 'observed' && value.providerId === null && typeof value.observedAt === 'string' && Number.isFinite(Date.parse(value.observedAt)), 'corrupt_vela_local_record');
   const f = value.facts; check(isRecord(f), 'corrupt_vela_local_facts');
   if (f.kind === 'unavailable') { check(typeof f.code === 'string' && /^local_[a-z_]+_unavailable$/u.test(f.code), 'corrupt_vela_local_facts'); return; }
   check(value.capabilityId === (f.kind === 'system-memory' ? 'system.memory' : 'local.' + f.kind), 'corrupt_vela_local_facts');
@@ -40,7 +23,7 @@ export function validateLocalRecord(value: unknown): asserts value is VelaLocalR
   else check(false, 'corrupt_vela_local_facts');
 }
 export function evaluateLocalCapability(id: VelaLocalCapabilityId, host: VelaLocalHost): { facts: VelaLocalFacts; content: string; kind: 'answer' | 'inability' } {
-  check(VELA_LOCAL_CAPABILITIES.some(capability => capability.id === id), 'unsupported_local_capability');
+  check(isLocalFact(id), 'unsupported_local_capability');
   try {
     if (id === 'system.memory') {
       const raw = host.system?.memory(); validateSystemMemoryMeasurement(raw); const measurement = structuredClone(raw), gib = (bytes:number) => (bytes / 1073741824).toFixed(2);

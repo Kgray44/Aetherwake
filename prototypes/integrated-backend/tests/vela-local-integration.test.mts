@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import { BackendCore } from '../src/core.mts';
-import type { VelaLocalDispatch, VelaPresentationState } from '../../vela-core/src/contracts.ts';
+import type { VelaLocalCapabilityId, VelaLocalDispatch, VelaPresentationState } from '../../vela-core/src/contracts.ts';
 import type { VelaBackendState } from '../src/contracts.mts';
 
 function fixture(t:any) {
@@ -18,12 +18,12 @@ function fixture(t:any) {
   });
   return {get core(){return core;},async reopen(){await core.command('close',{});core=new BackendCore(options);}};
 }
-const local=(core:BackendCore,intent:string,commandId:string)=>core.command('vela',{name:'local',input:{intent,commandId}} as any) as Promise<VelaLocalDispatch>;
+const local=(core:BackendCore,intent:string,commandId:string,capabilityId:VelaLocalCapabilityId='local.time')=>core.command('vela',{name:'local',input:{intent,commandId,capabilityId}}) as Promise<VelaLocalDispatch>;
 
 test('native memory reader is registered through actual Core and volatile observations distinguish reads, provider attempts and restart replay',async t=>{
   const f=fixture(t),before=Date.now();
   assert.deepEqual(await f.core.command('providerActivity',{}),{codexConnections:0,providerRequests:0,systemMemoryReads:0,scope:'process-session-native-attempts'});
-  const answer=await local(f.core,'What is my current RAM usage?','native-memory-one');
+  const answer=await local(f.core,'What is my current RAM usage?','native-memory-one','system.memory');
   assert(answer.matched);assert.equal(answer.request.providerId,null);assert.equal(answer.result.facts.kind,'system-memory');
   if(answer.result.facts.kind==='system-memory'){
     const measurement=answer.result.facts.measurement;
@@ -32,7 +32,7 @@ test('native memory reader is registered through actual Core and volatile observ
     assert.equal(measurement.source.platform,process.platform);assert.equal(measurement.source.scope,'host-physical-memory');
   }
   assert.deepEqual(await f.core.command('providerActivity',{}),{codexConnections:0,providerRequests:0,systemMemoryReads:1,scope:'process-session-native-attempts'});
-  await f.reopen();const replay=await local(f.core,'What is my current RAM usage?','native-memory-one');assert(replay.matched);
+  await f.reopen();const replay=await local(f.core,'What is my current RAM usage?','native-memory-one','system.memory');assert(replay.matched);
   assert.deepEqual(replay.request,answer.request);
   assert.deepEqual(await f.core.command('providerActivity',{}),{codexConnections:0,providerRequests:0,systemMemoryReads:0,scope:'process-session-native-attempts'});
   await f.core.command('capabilities',{});
@@ -78,7 +78,7 @@ test('actual Core clock writes the same canonical pair without context projectio
 test('Core unknown local questions are zero-write and do not enter a metadata or provider path',async t=>{
   const f=fixture(t);forbidContext(f.core);const db=(f.core as any).db;
   const before=db.prepare('SELECT total_changes() AS n').get().n;
-  assert.deepEqual(await local(f.core,'Explain electric motor torque','unknown-local-question'),{matched:false});
+  await assert.rejects(local(f.core,'Explain electric motor torque','unknown-local-question','unregistered' as never),/unsupported_local_capability/);
   assert.equal(db.prepare('SELECT total_changes() AS n').get().n,before);
   assert.equal((await f.core.command('snapshot',{})).graph.messages.length,0);
   await assert.rejects(f.core.command('vela',{name:'local',input:{intent:'What time is it?',commandId:'forged-clock',epochMs:0}} as any),/invalid_local_request/);
@@ -88,16 +88,16 @@ test('Core targeted status facts retain workspace layout/resources and do not co
   const f=fixture(t);await f.core.command('desktop',{type:'createProject',title:'Synthetic local facts'});
   const desktop=await f.core.command('desktop',{type:'createWorkspace',title:'Synthetic active workspace',projectId:null});
   forbidContext(f.core);
-  const status=await local(f.core,'Is this workspace saved?','workspace-facts');assert(status.matched);assert.equal(status.result.facts.kind,'workspace-status');assert.match(status.result.content,/layout is saved/);
+  const status=await local(f.core,'Is this workspace saved?','workspace-facts','local.workspace-status');assert(status.matched);assert.equal(status.result.facts.kind,'workspace-status');assert.match(status.result.content,/layout is saved/);
   if(status.result.facts.kind==='workspace-status')assert.equal(status.result.facts.workspace?.id,desktop.activeWorkspaceId);
-  const count=await local(f.core,'How many projects do I have?','project-facts');assert(count.matched);assert.deepEqual(count.result.facts,{kind:'project-count',count:1,coverage:'authorized-active-projects'});
-  const work=await local(f.core,'Are any agents running?','execution-facts');assert(work.matched);assert.deepEqual(work.result.facts,{kind:'execution-status',running:0,unknown:0,coverage:'aerynth-owned-executions'});
+  const count=await local(f.core,'How many projects do I have?','project-facts','local.project-count');assert(count.matched);assert.deepEqual(count.result.facts,{kind:'project-count',count:1,coverage:'authorized-active-projects'});
+  const work=await local(f.core,'Are any agents running?','execution-facts','local.execution-status');assert(work.matched);assert.deepEqual(work.result.facts,{kind:'execution-status',running:0,unknown:0,coverage:'aerynth-owned-executions'});
   const after=await f.core.command('desktop',{type:'snapshot'});assert.deepEqual(after.blocks,desktop.blocks);assert.deepEqual(after.presence,desktop.presence);assert.deepEqual(after.viewport,desktop.viewport);
 });
 
 test('clock facts remain available through the existing execution busy gate without opening a provider',async t=>{
   const f=fixture(t);forbidContext(f.core);(f.core as any).active={id:'synthetic-busy-lock'};
-  try{const answer=await local(f.core,"What's today's date?",'clock-while-busy');assert(answer.matched);assert.equal(answer.result.facts.kind,'date');}
+  try{const answer=await local(f.core,"What's today's date?",'clock-while-busy','local.date');assert(answer.matched);assert.equal(answer.result.facts.kind,'date');}
   finally{(f.core as any).active=null;}
 });
 
@@ -112,7 +112,7 @@ test('actual Core restart replays the original local fact/body/IDs without dupli
   (f.core as any).atomic(()=>{graph.markUnavailable(original.result.messageId);assert.equal((f.core as any).conversationAccess.access(original.request.conversationId,original.result.messageId),false,'An in-flight revocation cannot use the committed-graph fast path');});
   await assert.rejects(local(f.core,'What time is it?','durable-local-clock'),/local_response_unavailable/);
   assert.equal((await f.core.command('snapshot',{})).graph.messages.length,2);
-  await assert.rejects(local(f.core,"What's today's date?",'durable-local-clock'),/local_command_id_conflict/);
+  await assert.rejects(local(f.core,"What's today's date?",'durable-local-clock','local.date'),/local_command_id_conflict/);
 });
 
 for (const failure of ['append','save'] as const) test('local '+failure+' rollback preserves an awaiting execution and approved handoff through real terminal commit/restart',async t=>{

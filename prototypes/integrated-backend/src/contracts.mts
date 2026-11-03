@@ -7,7 +7,7 @@ import type { ProviderConnectionRequest, ProviderConnectionStatus } from '../../
 import type { NativeAuthorizationStart,NativeCredential,ReportedUsage,TurnInput,TurnResult,TurnOutcome,TurnHttpDiagnostic } from '../../openai-provider/contracts.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import type { AttachedContext } from '../../conversation-product/src/service.mts';
-import type { VelaClient, VelaState, ContextManifest, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
+import type { VelaLocalCapabilityId, VelaClient, VelaState, ContextManifest, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
 import type { PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
 import type { TemplateService } from '../../block-library/service.mts';
 import type { NoteExperienceService } from '../../block-library/note-service.mts';
@@ -26,7 +26,7 @@ export type LibraryRequest = { [K in LibraryMethod]: {name:K;input:Parameters<Te
 export type LibraryResponse = {result:unknown;desktop?:DesktopSnapshot};
 export type VelaOperationName = keyof VelaClient;
 export type VelaRequestInput = Parameters<VelaClient['request']>[0] & { previewId?:string;grantId?:string };
-export type VelaOperation = { [K in VelaOperationName]: { name: K; input: K extends 'request' ? VelaRequestInput : Parameters<NonNullable<VelaClient[K]>>[0] extends undefined ? Record<string,never> : Parameters<NonNullable<VelaClient[K]>>[0] } & (K extends 'apply' ? { presentation?:WorkspacePresentationContext } : {}) }[VelaOperationName];
+export type VelaOperation = { [K in VelaOperationName]: { name: K; input: K extends 'request' ? VelaRequestInput : Parameters<NonNullable<VelaClient[K]>>[0] extends undefined ? Record<string,never> : Parameters<NonNullable<VelaClient[K]>>[0] } & (K extends 'apply' ? { presentation?:WorkspacePresentationContext } : {}) }[VelaOperationName] | { name: 'local'; input: { capabilityId: VelaLocalCapabilityId; intent: string; commandId: string } };
 export interface VelaRequestPreview { id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};nativeReviewRequired?:boolean }
 /** Trusted host inspection only; never registered in renderer command/subcommand allowlists. */
 export interface VelaNativeReview {previewId:string;signature:string;providerId:string;prompt:string;promptDigest:string;reviewDigest:string;context:ContextManifest;history?:ProviderHistory;historyOmissions:{reason:HistoryOmissionReason;count?:number}[]}

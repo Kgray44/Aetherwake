@@ -1,4 +1,4 @@
-import type { CapabilityDescriptor, DelegateTaskAction, PlanStep, ProviderContribution, ProviderProposal, ProviderResult, VelaNativeAction } from './contracts.ts';
+import type { VelaLocalCapabilityId, CapabilityDescriptor, DelegateTaskAction, PlanStep, ProviderContribution, ProviderProposal, ProviderResult, VelaNativeAction } from './contracts.ts';
 import { defaultOrganization, updateOrganization } from '../../workspace-engine/organization.mts';
 import type { OrganizationUpdate } from '../../workspace-engine/contracts.mts';
 import { githubRepository } from '../../application-contract/github-timeline.ts';
@@ -48,6 +48,17 @@ function capability(id: CapabilityDescriptor['id'], label: string, effect: Capab
     authorization,
     reversible: ['read', 'navigate'].includes(effect) ? 'no-state-change' : 'host-dependent' };
 }
+export const LOCAL_FACT_LABELS = {
+  'local.time': 'current device time',
+  'local.date': 'current device date',
+  'local.workspace-status': 'active workspace and saved layout status',
+  'local.project-count': 'active project count',
+  'local.execution-status': 'Aerynth execution status',
+  'system.memory': 'physical memory usage',
+} satisfies Record<VelaLocalCapabilityId, string>;
+export const isLocalFact = (id: unknown): id is VelaLocalCapabilityId =>
+  typeof id === 'string' && Object.hasOwn(LOCAL_FACT_LABELS, id);
+
 export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('search', 'Search authorized application resources', 'read', { query: stringSchema }, 'Authorized metadata only; content requires separate retrieval'),
   capability('navigate', 'Open a workspace or project constellation', 'navigate', { type: { const: 'navigate' }, target: { oneOf: [objectSchema({ kind: { const: 'workspace' }, workspaceId: idSchema }), objectSchema({ kind: { const: 'constellation' }, projectId: nullableIdSchema })] } }, 'One authorized navigation target'),
@@ -56,6 +67,9 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('renameResource', 'Rename a local resource', 'mutate', { type: { const: 'renameResource' }, resourceId: idSchema, title: stringSchema }, 'One authorized active note, task, task group or reference; preserves content, drafts and placements'),
   capability('associateResourceProject', 'Change a local resource project', 'mutate', { type: { const: 'associateResourceProject' }, resourceId: idSchema, projectId: nullableIdSchema }, 'One authorized active non-chat local resource and exact authorized destination project or null; grants no content or sharing access'),
   capability('createWorkspace', 'Create an empty workspace', 'create', { type: { const: 'createWorkspace' }, title: stringSchema, projectId: nullableIdSchema }, 'One canonical workspace in the exact authorized project or without a project; opens the new workspace'),
+  capability('readLocalFact', 'Read a live device or Aerynth fact', 'read', {
+    type: { const: 'readLocalFact' }, capabilityId: { enum: Object.keys(LOCAL_FACT_LABELS) },
+  }, 'Read current local time/date, active workspace and save state, project count, execution status, or physical RAM. Aerynth measures it locally and shows the answer directly.'),
   capability('readWeather', 'Read a live local forecast', 'read', {
     type: { const: 'readWeather' }, period: { enum: ['now', 'today', 'tonight', 'tomorrow', 'tomorrow-morning'] },
   }, 'Uses the current Windows device location once. Shares rounded coordinates with the US National Weather Service after review. Use only for local weather requests.', 'reviewed-action'),
@@ -66,7 +80,7 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
   }, 'Current project, optional current workspace placement. Use app activity or public GitHub commits. Use an explicit repository URL or a matching linked repository. Ask when the source is missing or ambiguous.', 'reviewed-action'),
   capability('renameWorkspace', 'Rename a workspace', 'mutate', { type: { const: 'renameWorkspace' }, workspaceId: idSchema, title: stringSchema }, 'One authorized workspace; current entity and layout revisions are bound by the target manifest'),
   capability('bringAllIntoView', 'Frame the current workspace', 'mutate', { type: { const: 'bringAllIntoView' }, workspaceId: idSchema }, 'Frame the current authorized workspace using actual presenter bounds supplied outside the model action; does not create or duplicate resources'),
-  capability('resolveLayout', 'Resolve workspace layout collisions', 'mutate', { type: { const: 'resolveLayout' }, workspaceId: idSchema }, 'One authorized workspace and its existing canonical layout participants, including Vela'),
+  capability('resolveLayout', 'Resolve workspace layout collisions', 'mutate', { type: { const: 'resolveLayout' }, workspaceId: idSchema }, 'Make room in the existing layout without changing its mode. Resolves collisions where the active mode allows it; includes Vela'),
   capability('setOrganization', 'Set workspace organization', 'mutate', { type: { const: 'setOrganization' }, workspaceId: idSchema, organization: organizationSchema }, 'One authorized workspace; validates the canonical organization update and retains resource identities'),
   capability('createConversation', 'Create an empty conversation', 'create', { type: { const: 'createConversation' }, title: stringSchema, providerId: { enum: ['local', 'codex-app-server'] } }, 'One canonical chat in the bound current project or independent scope; Codex requires a configured real Codex provider. No connection, authentication probe, message or provider turn is started'),
   capability('conversationFavorite', 'Set conversation favorite', 'mutate', { type: { const: 'conversationFavorite' }, resourceId: idSchema, favorite: { type: 'boolean' } }, 'One authorized active conversation; canonical identity, history, drafts and provider remain unchanged'),
@@ -84,7 +98,7 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('taskPriority', 'Update task priority', 'mutate', { type: { const: 'taskPriority' }, resourceId: idSchema, expectedVersion: versionSchema, priority: { enum: ['low', 'normal', 'high', 'urgent'] } }, 'One authorized versioned task; priority does not change completion or verification state'),
   capability('setTaskGroupMembers', 'Organize task group members', 'mutate', { type: { const: 'setTaskGroupMembers' }, groupId: idSchema, expectedVersion: versionSchema, taskIds: arraySchema }, 'One versioned group and an explicit task set'),
   capability('relate', 'Link two resources', 'mutate', { type: { const: 'relate' }, sourceId: idSchema, targetId: idSchema, kind: stringSchema }, 'Two existing resources; source is Vela, not inferred authority'),
-  capability('applyStructuredPreset', 'Apply a workspace layout preset', 'mutate', { type: { const: 'applyStructuredPreset' }, workspaceId: idSchema, preset: { enum: ['balanced', 'focus', 'development', 'research'] } }, 'One authorized workspace; references and histories retain identity'),
+  capability('applyStructuredPreset', 'Apply a workspace layout preset', 'mutate', { type: { const: 'applyStructuredPreset' }, workspaceId: idSchema, preset: { enum: ['balanced', 'focus', 'development', 'research'] } }, 'Rearrange cards using the chosen preset and switch to Structured. References and histories retain identity'),
   capability('setAttentionMode', 'Set Vela attention mode', 'mutate', { type: { const: 'setAttentionMode' }, mode: { enum: ['normal','quiet','focused','collaborative','proactive'] }, expectedVersion: versionSchema }, 'Global Vela attention mode only; exact preference version. Does not grant monitoring, delegation, event access or learning.'),
   capability('delegateTask', 'Request an explicitly authorized provider execution', 'provider-execution', { type: { const: 'delegateTask' }, title: stringSchema, objective: { type: 'string', minLength: 1, maxLength: 16000 }, providerId: idSchema, resourceIds: arraySchema, constraints: { type: 'array', maxItems: 30, items: { type: 'string', maxLength: 1000 } } }, 'Original intent, source conversation, exact resource manifest, provider identity, and host-issued execution authorization'),
 ];
@@ -103,6 +117,7 @@ export function validateAction(value: unknown): VelaNativeAction | DelegateTaskA
     case 'renameResource': valid = fields(v, ['type', 'resourceId', 'title']) && identifier(v.resourceId) && text(v.title); break;
     case 'associateResourceProject': valid = fields(v, ['type', 'resourceId', 'projectId']) && identifier(v.resourceId) && nullableId(v.projectId); break;
     case 'createWorkspace': valid = fields(v, ['type', 'title', 'projectId']) && text(v.title) && nullableId(v.projectId); break;
+    case 'readLocalFact': valid = fields(v, ['type', 'capabilityId']) && isLocalFact(v.capabilityId); break;
     case 'readWeather': valid = fields(v, ['type', 'period']) && typeof v.period === 'string' && ['now', 'today', 'tonight', 'tomorrow', 'tomorrow-morning'].includes(v.period); break;
     case 'createTimeline': valid = fields(v, ['type', 'title', 'projectId', 'workspaceId', 'source']) && text(v.title) &&
       nullableId(v.projectId) && nullableId(v.workspaceId) && isRecord(v.source) &&

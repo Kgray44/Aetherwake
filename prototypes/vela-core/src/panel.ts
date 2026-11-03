@@ -1,4 +1,5 @@
-import type { ResourceRef, VelaClient, VelaNativeAction, VelaState, VelaPlan, PlanStep, VelaPresentationState, VelaPresentationPatch, VelaLocalDispatch } from './contracts.ts';
+import { LOCAL_FACT_LABELS } from './capabilities.ts';
+import type { ResourceRef, VelaClient, VelaNativeAction, VelaState, VelaPlan, PlanStep, VelaPresentationState, VelaPresentationPatch } from './contracts.ts';
 import { velaPanelStatus } from './panel-status.ts';
 import { projectVelaManifestation, type VelaManifestationState } from './manifestation-state.ts';
 import { summarizeSystemMemory } from './system-information.ts';
@@ -32,7 +33,6 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   let current: VelaState | null = null, disposed = false, busy = false, nativeBusy = false, composing = false, draftRevision = 0, lastDisclosure: HTMLDetailsElement | null = null;
   let activeContext: string | null = null, contextTrigger: HTMLButtonElement | null = null, chosenProviderId: string | null = null, presentationSignature = '';
   let manifestationSignature = '', manifestationBaseline = true, observing = true, presentationBusy = false, readSequence = 0, viewRevision = 0, transientView: 'current' | 'history' | null = null;
-  let immediateLocal: Extract<VelaLocalDispatch, { matched: true }> | null = null;
   const instanceId = 'vela-context-' + ++panelSequence;
   const selected = new Map<string, ResourceRef>(), sourceControls = new Map<string, HTMLInputElement>();
   const messages = new Map<string, { node: HTMLElement; signature: string }>(), workingPlans = new Set<string>(), applyingPlans = new Set<string>();
@@ -168,12 +168,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return; const submitted = { intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: allowProvider.checked && chosenProviderId === current?.planner.providerId }, revision = draftRevision, submittedView = ++viewRevision; transientView = 'current'; allowProvider.checked = false; chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Thinking…'; present();
       try {
-        const commandId = globalThis.crypto.randomUUID(), local = client.local ? await client.local({ intent: submitted.intent, commandId }) : undefined;
-        const recorded = local?.matched ? local.request : await client.request({ ...submitted, ...(client.local ? { commandId } : {}) });
+        const recorded = await client.request(submitted);
         if (disposed) return;
-        if (local?.matched) showLocal(local, submitted.intent, commandId);
         if (draftRevision === revision && intent.value === submitted.intent) intent.value = ''; renderStatus({ requests: [recorded], plans: [], receipts: [] });
-        if (local?.matched) { void settleSubmittedView(submittedView).catch(() => { if (!disposed && immediateLocal?.request.id === recorded.id) { status.dataset.refreshState = 'unavailable'; status.textContent = 'The saved local response is shown. History could not be refreshed.'; } }); return; }
         await settleSubmittedView(submittedView);
       }
       catch (error) { busy = false; try { await refresh(); } catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; status.hidden = false; status.textContent = 'The request could not be checked. Its outcome is unknown; review the activity before trying again.'; } throw error; }
@@ -195,27 +192,17 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function toggle(ids: readonly string[], id: string | null) { return id === null ? [...ids] : ids.includes(id) ? ids.filter(value => value !== id) : [...ids, id]; }
   function persistent() { return !!client.presentation && !!current?.presentation; }
   function project(): VelaManifestationState {
-    const value = projectVelaManifestation(current, presentation());
-    // A post-commit local DTO can precede the first full history read. No revision is invented.
-    if (!immediateLocal || value.requiredPlanIds.length) return value;
-    const id = immediateLocal.request.id;
-    if (presentation().dismissedRequestIds.includes(id)) return { ...value, kind: 'none', currentRequestId: null, currentMessageId: null, currentPlanId: null, canDismiss: false };
-    return { ...value, kind: 'whisper', currentRequestId: id, currentMessageId: immediateLocal.result.messageId, currentPlanId: null, historyResource: null, pinned: presentation().pinnedRequestIds.includes(id), canDismiss: true, selectionReason: 'latest' };
+    return projectVelaManifestation(current, presentation());
   }
   async function updatePresentation(patch: VelaPresentationPatch) {
     if (presentationBusy || !persistent()) return;
     presentationBusy = true; renderReading();
-    try { const value = await client.presentation!({ expectedVersion: presentation().version, patch }); if (disposed || !current) return; readSequence++; if (value.version >= (current.presentation?.version ?? 0)) current = { ...current, presentation: value }; if (patch.selectedRequestId) immediateLocal = null; transientView = null; renderReading(); await refresh(); }
+    try { const value = await client.presentation!({ expectedVersion: presentation().version, patch }); if (disposed || !current) return; readSequence++; if (value.version >= (current.presentation?.version ?? 0)) current = { ...current, presentation: value }; transientView = null; renderReading(); await refresh(); }
     catch (error) { try { await refresh(); } catch {} throw error; }
     finally { presentationBusy = false; if (!disposed) { renderReading(); present(); } }
   }
   async function setView(value: 'current' | 'history') { viewRevision++; if (persistent()) await updatePresentation({ view: value }); else { transientView = value; renderReading(); present(); } }
   async function settleSubmittedView(revision: number) { if (viewRevision === revision && persistent() && (presentation().view !== 'current' || presentation().selectedRequestId !== null)) await updatePresentation({ view: 'current', selectedRequestId: null }); else await refresh(); }
-  function showLocal(value: Extract<VelaLocalDispatch, { matched: true }>, submitted: string, commandId: string) {
-    const request = value.request, result = value.result, local = request.local;
-    if (request.intent !== submitted || request.state !== 'responded' || request.providerId !== null || request.planId || !local || local.schemaVersion !== 1 || local.providerId !== null || local.classification !== 'observed' || !request.response || request.response.messageId !== result.messageId || !['answer', 'inability'].includes(request.response.kind) || result.schemaVersion !== 1 || result.providerId !== null || result.classification !== 'observed' || result.commandId !== commandId || typeof result.content !== 'string' || !result.content.length || result.content.length > 16000 || local.commandId !== result.commandId || local.capabilityId !== result.capabilityId || local.observedAt !== result.observedAt || JSON.stringify(local.facts) !== JSON.stringify(result.facts)) throw new Error('The local response could not be verified. Review history before trying again.');
-    immediateLocal = value; readSequence++; renderReading(); present();
-  }
   function updatePresence() { shell.dataset.view = !manifestation.hidden || !history.hidden ? 'conversation' : 'empty'; shell.dataset.context = activeContext ?? 'none'; flow.hidden = manifestation.hidden && history.hidden && more.hidden; }
   function emitManifestation() {
     if (disposed || !observing) return;
@@ -226,9 +213,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     try { options.onManifestation?.(value); } catch { /* Geometry cannot block useful content or grant an action. */ }
   }
   function renderReading() {
-    const projection = project(), selectedRequest = immediateLocal?.request.id === projection.currentRequestId ? immediateLocal.request : current?.requests.find(request => request.id === projection.currentRequestId), message = current?.conversation?.messages.find(message => message.id === projection.currentMessageId), local = immediateLocal?.request.id === projection.currentRequestId ? immediateLocal.result : null;
+    const projection = project(), selectedRequest = current?.requests.find(request => request.id === projection.currentRequestId), message = current?.conversation?.messages.find(message => message.id === projection.currentMessageId);
     const facts = selectedRequest?.local?.facts;
-    const content = facts?.kind === 'system-memory' && (local || message) ? summarizeSystemMemory(facts.measurement) : local?.content ?? message?.content ?? '';
+    const content = facts?.kind === 'system-memory' && message ? summarizeSystemMemory(facts.measurement) : message?.content ?? '';
     const signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind, content });
     manifestationBody.dataset.density = content.length > 140 ? 'reading' : 'signal';
     shell.dataset.manifestationKind = projection.kind; shell.dataset.presentationView = view(); manifestation.dataset.requestId = projection.currentRequestId ?? ''; manifestation.dataset.currentMessageId = projection.currentMessageId ?? '';
@@ -241,8 +228,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const sources = selectedRequest?.context.included ?? [], sourceSignature = JSON.stringify(sources.map(ref => [ref.id, ref.kind, ref.version, ref.title]));
     if (manifestationSources.dataset.signature !== sourceSignature) { manifestationSources.dataset.signature = sourceSignature; manifestationSources.replaceChildren(); for (const ref of sources) manifestationSources.append(options.onOpenSubject ? button(ref.title, () => options.onOpenSubject?.({ id: ref.id, kind: ref.kind })) : el('span', undefined, ref.title)); } manifestationSources.hidden = !manifestationSources.children.length;
     const recent = current?.requests.at(-1), recentMessage = recent?.response && current?.conversation?.messages.find(message => message.id === recent.response!.messageId && message.requestId === recent.id && message.source === 'vela-native' && message.classification === 'observed' && message.providerId === undefined && message.providerContribution === undefined);
-    const adjacentFacts = immediateLocal?.result.facts ?? recent?.local?.facts;
-    const adjacentContent = immediateLocal?.result.content ?? (recent?.state === 'responded' && recent.local?.classification === 'observed' && recent.providerId === null ? recentMessage?.content : undefined);
+    const adjacentFacts = recent?.local?.facts;
+    const adjacentContent = (recent?.state === 'responded' && recent.local?.classification === 'observed' && recent.providerId === null ? recentMessage?.content : undefined);
     const adjacent = adjacentContent && adjacentFacts?.kind === 'system-memory' ? summarizeSystemMemory(adjacentFacts.measurement) : adjacentContent;
     localAlongsidePlan.hidden = !projection.requiredPlanIds.length || !adjacent || view() === 'history'; if (adjacent && localAlongsidePlan.textContent !== adjacent) localAlongsidePlan.textContent = adjacent;
     pin.hidden = dismiss.hidden = projection.currentRequestId === null; pin.disabled = presentationBusy || !persistent(); dismiss.disabled = presentationBusy || !persistent() || !projection.canDismiss;
@@ -266,7 +253,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   }
   function present() {
     if (disposed) return;
-    const latest = immediateLocal?.request ?? current?.requests.at(-1), pendingAttention = current?.attention.some(item => !item.reviewedAt && !item.dismissedAt);
+    const latest = current?.requests.at(-1), pendingAttention = current?.attention.some(item => !item.reviewedAt && !item.dismissedAt);
     let phase: VelaPanelPresentation['phase'] = 'idle';
     if (!errorBox.hidden) phase = 'error';
     else if (applyingLocally || applyingPlans.size || current?.plans.some(plan => plan.state === 'applying')) phase = 'applying';
@@ -278,7 +265,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     else if (nativeBusy || intent.value.length) phase = 'receiving';
     shell.dataset.phase = phase;
     stop.hidden = !busy && phase !== 'planning' && phase !== 'applying';
-    const value: VelaPanelPresentation = Object.freeze({ phase, context: activeContext, messageIds: Object.freeze([...new Set([...(current?.conversation?.messages.slice(-80).map(message => message.id) ?? []), ...(immediateLocal ? [immediateLocal.result.messageId] : [])])]), planIds: Object.freeze(current?.plans.filter(plan => planCards.has(plan.id)).map(plan => plan.id) ?? []) });
+    const value: VelaPanelPresentation = Object.freeze({ phase, context: activeContext, messageIds: Object.freeze([...new Set([...(current?.conversation?.messages.slice(-80).map(message => message.id) ?? [])])]), planIds: Object.freeze(current?.plans.filter(plan => planCards.has(plan.id)).map(plan => plan.id) ?? []) });
     const signature = JSON.stringify(value); if (signature === presentationSignature) return; presentationSignature = signature;
     try { options.onPresentation?.(value); } catch { /* Presentation observers cannot fail a canonical request or editor action. */ }
     emitManifestation();
@@ -320,6 +307,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       case 'renameResource': return 'Rename ' + name(action.resourceId, 'resource') + ' to “' + action.title + '”';
       case 'associateResourceProject': return 'Change ' + name(action.resourceId, 'resource') + ' project to ' + (action.projectId ? name(action.projectId, 'project') : 'No project');
       case 'createWorkspace': return 'Create workspace “' + action.title + '”' + (action.projectId ? ' in ' + name(action.projectId) : '');
+      case 'readLocalFact': return 'Read ' + LOCAL_FACT_LABELS[action.capabilityId];
       case 'readWeather': return 'Read your Windows location once and send an approximate point to the US National Weather Service for ' + (action.period === 'now' ? 'the current hour' : action.period.replace('-', ' '));
       case 'createTimeline': {
         const destination = action.workspaceId ? name(action.workspaceId, 'workspace') : action.projectId ? name(action.projectId, 'project') : 'Resources';
@@ -340,7 +328,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       case 'taskStatus': return 'Mark ' + name(action.resourceId) + ' ' + (action.status === 'done' ? 'done' : 'open');
       case 'setTaskGroupMembers': return 'Update ' + name(action.groupId) + ' with ' + action.taskIds.length + (action.taskIds.length === 1 ? ' task' : ' tasks');
       case 'relate': return 'Connect ' + name(action.sourceId) + ' with ' + name(action.targetId) + ' · ' + action.kind;
-      case 'applyStructuredPreset': return 'Apply the ' + action.preset + ' layout to ' + name(action.workspaceId);
+      case 'applyStructuredPreset': return 'Arrange cards in ' + name(action.workspaceId, 'workspace') + ' with the ' + action.preset + ' preset and switch to Structured';
       case 'delegateTask': return 'Start “' + action.title + '” with ' + providerName(action.providerId);
     }
   }
@@ -350,13 +338,17 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       if (!state.conversation || !state.requests.some(request => request.id === plan.requestId && request.planId === plan.id && request.conversationId === state.conversation!.resourceId)) continue;
       const required = projection.requiredPlanIds.includes(plan.id), active = required || plan.id === projection.currentPlanId && view() === 'current'; if (!active && earlierCards.length >= 8) continue;
       const target = active ? activeCards : earlierCards, receipts = state.receipts.filter(receipt => receipt.planId === plan.id), effects = plan.steps.map(step => effect(step.action, plan));
-      const signature = JSON.stringify({ plan, receipts, effects }), cached = planCards.get(plan.id); visible.add(plan.id);
+      const lookup = plan.steps.length === 1 && ['readLocalFact', 'readWeather'].includes(plan.steps[0].action.type);
+      const observation = lookup && ['applied', 'failed'].includes(plan.state) ? state.conversation.messages.findLast(message =>
+        message.requestId === plan.requestId && message.planId === plan.id && message.source === 'vela-native' && message.classification === 'observed') : undefined;
+      const signature = JSON.stringify({ plan, receipts, effects, observationId: observation?.id }), cached = planCards.get(plan.id); visible.add(plan.id);
       if (cached?.signature === signature) { target.push(cached.node); continue; }
       const card = el('article', 'vela-core-plan'); card.dataset.planId = plan.id; card.dataset.planState = plan.state; card.tabIndex = -1;
       const confirmed = receipts.filter(receipt => receipt.state === 'applied' && receipt.hostReceiptId).length;
       const complete = plan.steps.length > 0 && plan.steps.every(step => receipts.some(receipt => receipt.stepId === step.id && receipt.state === 'applied' && receipt.hostReceiptId));
       const stateLabel = { prepared: 'Ready for your review', approved: 'Approved · ready to apply', rejected: 'Not applied', applying: 'Applying reviewed changes', applied: complete ? 'Applied' : 'Results need review', failed: 'Stopped · review needed', cancelled: 'Cancelled', unknown: 'Outcome unknown · review needed' }[plan.state];
       card.append(el('p', 'vela-core-plan-state', stateLabel), el('h3', undefined, plan.summary), el('p', 'vela-core-meta', plan.contribution ? 'Proposed with ' + providerName(plan.contribution.providerId) : 'Local app action'));
+      if (observation) card.append(el('p', 'vela-manifestation-value', observation.content));
       const steps = el('ol', 'vela-core-effects'); for (const [index, step] of plan.steps.entries()) { const item = el('li'); item.append(el('p', undefined, effects[index])); if (step.action.type === 'content') item.append(el('pre', 'vela-core-change-preview', step.action.content)); if (step.action.type === 'delegateTask') item.append(el('p', undefined, step.action.objective), el('p', 'vela-core-secondary', 'Starting this work requires a separate execution approval. A finished provider turn does not verify the task.')); steps.append(item); } card.append(steps);
       if (plan.targets.length) card.append(el('p', 'vela-core-targets', 'Uses: ' + plan.targets.map(ref => ref.title).join(', ')));
       const controls = el('div', 'vela-core-actions');
@@ -393,7 +385,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function setPlanBusy(id: string, pending: boolean) { const controls = planCards.get(id)?.controls; if (controls) for (const child of Array.from(controls.children)) (child as HTMLButtonElement).disabled = pending; }
   function reconcile(parent: HTMLElement, children: HTMLElement[]) { for (const child of Array.from(parent.children)) if (!children.includes(child as HTMLElement)) child.remove(); children.forEach((node, index) => { if (parent.children[index] !== node) parent.insertBefore(node, parent.children[index] ?? null); }); }
   function render(state: VelaState) {
-    if (disposed) return; current = state; immediateLocal = null;
+    if (disposed) return; current = state;
     provider.textContent = state.planner.available ? providerName(state.planner.providerId) + (state.planner.busy ? ' · busy' : ' · available') : 'Provider unavailable';
     providerHint.textContent = state.planner.available ? 'Context sharing needs approval.' : 'Provider unavailable.';
     providerConsent.firstElementChild!.textContent = 'Use ' + providerName(state.planner.providerId) + ' for this request';

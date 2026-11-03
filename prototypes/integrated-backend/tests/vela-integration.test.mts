@@ -18,6 +18,71 @@ async function note(core:BackendCore,title='Synthetic Vela note') {const before=
 function planner(value?:unknown) {let calls=0;const port:VelaPlanningPort={providerId:'synthetic-planning-test-double',availability:()=>({available:true,busy:false}),propose:async()=>{calls++;return value??{schemaVersion:1,summary:'Propose an explicitly local synthetic note',steps:[{id:'capture',explanation:'Test-only proposal through an injected port, never real model qualification',action:{type:'createResource',kind:'note',title:'Synthetic proposed capture',workspaceId:null}}],contribution:{providerId:'synthetic-planning-test-double',classification:'reported'}};}};return {port,calls:()=>calls};}
 async function granted(core:BackendCore,intent:string,resourceIds:string[]) {const preview=await core.command('velaRequestPreview',{intent,resourceIds}),grant=await core.command('authorizeVelaRequest',{previewId:preview.id,signature:preview.signature});return {preview,grant,input:{intent,resourceIds,authorizeProvider:true,previewId:preview.id,grantId:grant.grantId} satisfies VelaRequestInput};}
 
+test('the same model path selects a device tool and a reviewed layout tool against the canonical active workspace', async () => {
+  const calls: Parameters<VelaPlanningPort['propose']>[0][] = [];
+  const providerId = 'synthetic-planning-test-double';
+  const clockQuestion = 'What time is it?';
+  const layoutQuestion = 'Could you give the cards in here a more orderly arrangement?';
+  const f = fixture({
+    providerId,
+    availability: () => ({ available: true, busy: false }),
+    propose: async input => {
+      calls.push(input);
+      const workspace = input.context.discovered.find(ref => ref.kind === 'workspace');
+      assert(workspace);
+      const action = input.intent === clockQuestion
+        ? { type: 'readLocalFact', capabilityId: 'local.time' }
+        : { type: 'applyStructuredPreset', workspaceId: workspace.id, preset: 'balanced' };
+      assert(input.capabilities.some(capability => capability.id === action.type));
+      return { schemaVersion: 2, kind: 'plan', summary: 'Synthetic model-selected action',
+        steps: [{ id: 'tool', explanation: 'Synthetic provider response', action }],
+        contribution: { providerId, classification: 'reported' } };
+    },
+  });
+  try {
+    await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic active layout', projectId: null });
+    const active = await f.core.command('desktop', { type: 'snapshot' });
+    const workspaceId = active.activeWorkspaceId!;
+    assert(workspaceId);
+    for (const kind of ['note', 'task'] as const)
+      await f.core.command('desktop', { type: 'createResource', workspaceId, title: 'Synthetic ' + kind, kind });
+    const baseline = await f.core.command('desktop', { type: 'snapshot' });
+
+    const unapproved = await vela(f.core, 'request', { intent: clockQuestion, resourceIds: [], authorizeProvider: false });
+    assert.equal(unapproved.state, 'provider-unavailable');
+    assert.equal(calls.length, 0);
+    const clock = await granted(f.core, clockQuestion, []);
+    const observed = await vela(f.core, 'request', clock.input);
+    assert.equal(observed.state, 'completed');
+    const state = await vela(f.core, 'state') as VelaBackendState;
+    const message = state.conversation!.messages.find(message => message.requestId === observed.id && message.role === 'assistant');
+    assert.equal(message?.source, 'vela-native');
+    assert.equal(message?.classification, 'observed');
+    assert.equal(message?.providerId, undefined);
+    assert.match(message!.content, /It.s \d{1,2}:\d{2}/u);
+    assert(state.receipts.some(receipt => receipt.requestId === observed.id && receipt.state === 'applied'));
+
+    const layout = await granted(f.core, layoutQuestion, []);
+    const proposed = await vela(f.core, 'request', layout.input);
+    assert.equal(proposed.state, 'awaiting-review');
+    assert.deepEqual(calls.map(call => call.intent), [clockQuestion, layoutQuestion]);
+    const plan = (await vela(f.core, 'state') as VelaBackendState).plans.find(plan => plan.id === proposed.planId)!;
+    assert(plan.targets.some(target => target.kind === 'workspace' && target.id === workspaceId));
+    assert.equal((await f.core.command('desktop', { type: 'snapshot' })).layoutVersion, baseline.layoutVersion);
+    await vela(f.core, 'review', { planId: plan.id, fingerprint: plan.fingerprint, decision: 'approve' });
+    const applied = await vela(f.core, 'apply', plan.id);
+    assert.equal(applied.state, 'applied');
+    const arranged = await f.core.command('desktop', { type: 'snapshot' });
+    assert.equal(arranged.organization?.mode, 'structured');
+    assert.notEqual(arranged.layoutVersion, baseline.layoutVersion);
+    assert.deepEqual(arranged.blocks.map(block => [block.id, block.resource_id]), baseline.blocks.map(block => [block.id, block.resource_id]));
+    await f.reopen();
+    const restored = await f.core.command('desktop', { type: 'snapshot' });
+    assert.deepEqual(restored.blocks, arranged.blocks);
+    assert.deepEqual(restored.organization, arranged.organization);
+  } finally { await f.close(); }
+});
+
 test('Vela has independent canonical local identity, offline native capture/edit, message provenance and restart continuity',async()=>{
  const f=fixture();try{
   const port=(f.core as any).port;let connections=0;port.connect=async()=>{connections++;throw new Error('must remain offline');};

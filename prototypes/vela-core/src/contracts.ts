@@ -37,6 +37,7 @@ export type VelaNativeAction =
   | { type: 'renameResource'; resourceId: string; title: string }
   | { type: 'associateResourceProject'; resourceId: string; projectId: string | null }
   | { type: 'createWorkspace'; title: string; projectId: string | null }
+  | { type: 'readLocalFact'; capabilityId: VelaLocalCapabilityId }
   | { type: 'readWeather'; period: 'now' | 'today' | 'tonight' | 'tomorrow' | 'tomorrow-morning' }
   | { type: 'createTimeline'; title: string; projectId: string | null; workspaceId: string | null;
       source: { kind: 'application-activity' } | { kind: 'github-commits'; repositoryUrl: string } }
@@ -310,8 +311,7 @@ export interface VelaClient {
   state(): Promise<VelaState>;
   open(): Promise<VelaState>;
   search(query: string): Promise<ResourceRef[]>;
-  request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean; commandId?: string }): Promise<VelaRequest>;
-  local?(input: { intent: string; commandId: string }): Promise<VelaLocalDispatch>;
+  request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean }): Promise<VelaRequest>;
   presentation?(input: { expectedVersion: number; patch: VelaPresentationPatch }): Promise<VelaPresentationState>;
   native(input: { intent: string; action: VelaNativeAction }): Promise<VelaPlan>;
   review(input: { planId: string; fingerprint: string; decision: 'approve' | 'reject' }): Promise<VelaPlan>;

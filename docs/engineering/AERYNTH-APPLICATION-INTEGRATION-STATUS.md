@@ -2,6 +2,27 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Vela model routing
+
+Vela's composer sends free text through the configured planning model.
+The trusted backend validates and dispatches typed actions from the same
+registry used by native tools. A single local fact lookup runs under host
+policy after provider review. Layout changes show the proposed action and
+workspace before applying. The model supplies the interpretation. Aerynth
+owns the action, canonical state and receipt.
+
+A hidden Electron run sent a clock question and a workspace organization
+request from the actual composer. Both reached review with the active
+workspace ID and the relevant live-fact and layout tools. The harness
+declined both reviews and recorded zero provider turns and zero layout
+changes. The private receipt has SHA-256
+`8c0d685d8002476f0db3614422f4281e041b662cb0bfcf7e7648a77b5f4a7311`.
+
+A separate Core test with synthetic model output ran the actual clock
+reader and applied a reviewed layout preset. The layout, block IDs, and
+resource IDs survived SQLite restart. Live interpretation and execution
+from the user's request are still unverified on this build.
+
 ## November 3 fitted workspace rendering
 
 Chromium traced a full workspace style invalidation back to the scene controls

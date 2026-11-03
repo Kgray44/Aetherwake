@@ -7,7 +7,6 @@ const { velaCommand, isVelaRead } = createRequire(import.meta.url)(
 );
 function fixture(choice = 1) {
   const calls = [],
-    classifications = [],
     dialogs = [],
     reviews = [];
   let closed = false;
@@ -46,7 +45,6 @@ function fixture(choice = 1) {
   };
   return {
     calls,
-    classifications,
     dialogs,
     reviews,
     win,
@@ -65,12 +63,6 @@ function fixture(choice = 1) {
       },
     },
     async call(name, input) {
-      // Keep the existing consent/action trace separate from the read-only
-      // unmatched classifier; record both lanes rather than hiding dispatches.
-      if (name === "vela" && input.name === "local") {
-        classifications.push({ name, input });
-        return { matched: false };
-      }
       calls.push({ name, input });
       if (name === "velaRequestPreview")
         return {
@@ -153,8 +145,6 @@ test("unapproved Vela requests cannot smuggle renderer grants or contact a provi
   await velaCommand({ ...f, input: request(false) });
   assert.equal(f.dialogs.length, 0);
   assert.equal(f.calls.length, 1);
-  assert.equal(f.classifications.length, 1);
-  assert.deepEqual(Object.keys(f.classifications[0].input.input).sort(), ["commandId", "intent"]);
   assert.deepEqual(f.calls[0], {
     name: "vela",
     input: {
@@ -171,25 +161,18 @@ test("unapproved Vela requests cannot smuggle renderer grants or contact a provi
   assert.equal(isVelaRead({ name: "local" }), false, "Canonical local replies still require storage admission");
 });
 
-test("a clock answer routes before provider checkbox, context review or grants and carries no selected resources", async () => {
-  for (const authorizeProvider of [false, true]) {
-    const calls = [];
-    const answer = { id: "canonical-clock", state: "responded", providerId: null };
-    const result = await velaCommand({
-      win: null,
-      dialog: { showMessageBox: () => { throw Error("Clock must not request approval"); } },
-      reviewProvider: () => { throw Error("Clock must not construct a provider review"); },
-      input: { name: "request", input: { intent: "What time is it?", resourceIds: ["private-selected-note"], authorizeProvider, commandId: "one-clock" } },
-      call: async (name, input) => {
-        calls.push({ name, input });
-        assert.equal(name, "vela"); assert.equal(input.name, "local");
-        assert.deepEqual(input.input, { intent: "What time is it?", commandId: "one-clock" });
-        return { matched: true, request: answer };
-      },
-    });
-    assert.deepEqual(result, answer); assert.equal(calls.length, 1);
-  }
+test("a former clock shortcut uses the same consent and request path as other free text", async () => {
+  const f = fixture(), intent = "What time is it?";
+  await velaCommand({
+    ...f,
+    input: { name: "request", input: { intent, resourceIds: [], authorizeProvider: true } },
+  });
+  assert.equal(f.reviews.length, 1);
+  assert.deepEqual(f.calls.map(call => call.name), ["velaRequestPreview", "velaNativeReview", "authorizeVelaRequest", "vela"]);
+  assert.equal(f.calls.at(-1).input.input.intent, intent);
+  await assert.rejects(velaCommand({ ...f, input: { name: "local", input: { intent } } }), /invalid_vela_command/);
 });
+
 test("Vela planning reviews backend context then uses only a newly issued native grant", async () => {
   const f = fixture();
   await velaCommand({ ...f, input: request(true) });
@@ -336,7 +319,6 @@ test("native request failure diagnostics disclose only the failed stage and a sa
     const f = fixture(),
       observations = [], original = f.call;
     f.call = async (name, input) => {
-      if (name === "vela" && input.name === "local") return original(name, input);
       throw Error(message);
     };
     await assert.rejects(

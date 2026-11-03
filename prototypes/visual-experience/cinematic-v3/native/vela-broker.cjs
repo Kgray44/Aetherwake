@@ -9,7 +9,6 @@ const publicNames = new Set([
   "search",
   "native",
   "request",
-  "local",
   "presentation",
   "review",
   "apply",
@@ -115,16 +114,6 @@ exports.velaCommand = async ({
       resourceIds: value.resourceIds,
       authorizeProvider: value.authorizeProvider,
     };
-    const local = await call("vela", {
-      name: "local",
-      input: {
-        intent: request.intent,
-        commandId: value.commandId ?? require("node:crypto").randomUUID(),
-      },
-    });
-    if (local?.matched === true) return local.request;
-    if (!local || local.matched !== false)
-      throw Error("invalid_local_vela_response");
     if (offerPlanningByDefault) {
       // Launching App Server to observe its installed sign-in is not a model
       // turn. The exact prompt still requires the trusted review below.

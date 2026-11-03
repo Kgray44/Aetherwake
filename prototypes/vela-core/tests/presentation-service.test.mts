@@ -30,7 +30,7 @@ function fixture(file = ':memory:', planner?: VelaPlanningPort) {
   const options = { db, host, local, planner, transaction, readTransaction: <T,>(work: (value: DatabaseSync) => T): T => transaction(() => work(db)), now: () => '2026-11-02T12:00:00.000Z' };
   const load = () => { service = new VelaService(options); }; load();
   return { db, host, calls, get service() { return service; }, load, another: () => new VelaService(options),
-    answer: () => { const result = service.local({ intent: 'What time is it?', commandId: randomUUID() }); assert(result.matched); return result.request; },
+    answer: () => { const result = service.local({ capabilityId: 'local.time', intent: 'What time is it?', commandId: randomUUID() }); assert(result.matched); return result.request; },
     stored: () => JSON.parse(String(db.prepare('SELECT json FROM vela_state').get()!.json)),
     messages: () => db.prepare('SELECT json FROM presentation_test_messages ORDER BY rowid').all().map(row => JSON.parse(String(row.json))),
     failNextSave: () => { const instance = service as any, save = instance.save; instance.save = function() { save.call(this); instance.save = save; throw Error('synthetic-presentation-save-after-write'); }; },

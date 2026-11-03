@@ -96,6 +96,27 @@ test('status distinguishes review, applied receipts, partial failure and unknown
   canonical.requests = [request({ state: 'planning', providerId: 'codex-app-server' })]; canonical.plans = []; assert.match(velaPanelStatus(canonical).message, /with Codex/); assert.doesNotMatch(velaPanelStatus(canonical).message, /codex-app-server/);
 });
 
+test('a model-selected local observation is visible on the completed action', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const plan: VelaPlan = {
+    id: 'plan:clock', requestId: 'request:synthetic', version: 1, fingerprint: 'synthetic',
+    summary: 'Read the device clock', steps: [{ id: 'clock', explanation: 'Live device reading', action: { type: 'readLocalFact', capabilityId: 'local.time' } }],
+    targets: [], scope: { principalId: 'synthetic', policyVersion: 'synthetic', resourceIds: [], workspaceIds: [], projectIds: [] },
+    state: 'applied', createdAt: manifest.createdAt, expiresAt: manifest.createdAt,
+    contribution: { providerId: 'codex-app-server', classification: 'reported' },
+  };
+  canonical.requests = [request({ state: 'completed', planId: plan.id, providerId: 'codex-app-server' })];
+  canonical.plans = [plan];
+  canonical.conversation = { resourceId: canonical.requests[0].conversationId, revision: 2, messages: [
+    { id: 'observed:clock', role: 'assistant', content: 'It is 12:00 AM.', source: 'vela-native', classification: 'observed', requestId: plan.requestId, planId: plan.id },
+  ] };
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical));
+  await settles(() => !!root.find(node => node.className === 'vela-manifestation-value' && node.textContent === 'It is 12:00 AM.'));
+  assert(displayed(root.find(node => node.className === 'vela-manifestation-value' && node.textContent === 'It is 12:00 AM.')!));
+  assert.equal(named(root, 'Approve and apply'), undefined);
+  panel.dispose();
+});
+
 test('explicit workspace project survives refresh and selecting an available project re-enables the real capability', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.capabilities = [{ id: 'workspaceFromResources', label: 'Synthetic capability metadata', effect: 'create', scope: 'synthetic', authorization: 'host-policy', schema: {}, reversible: 'host-dependent' }];
@@ -197,20 +218,6 @@ function retainLocal(canonical: VelaState, value: Extract<VelaLocalDispatch, { m
   canonical.requests.push(value.request); canonical.conversation = { resourceId: value.request.conversationId, revision: (canonical.conversation?.revision ?? 1) + 2, messages: [...(canonical.conversation?.messages ?? []), { id: 'message:input:' + value.request.id, role: 'user', content: value.request.intent, source: 'user', classification: 'observed', requestId: value.request.id }, { id: value.result.messageId, role: 'assistant', content: value.result.content, source: 'vela-native', classification: 'observed', requestId: value.request.id, responseKind: 'answer' }] };
 }
 
-test('canonical local DTO produces useful Whisper before a held full refresh, without provider/context options or a fabricated revision', async () => {
-  const doc = new Document(), root = doc.createElement('main'), canonical = state(), observed: (VelaPanelManifestation | null)[] = []; let reads = 0, fallback = 0, finish!: (value: VelaState) => void, outcome!: Extract<VelaLocalDispatch, { matched: true }>;
-  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => ++reads === 1 ? canonical : new Promise(resolve => { finish = resolve; }), {
-    open: async () => canonical,
-    local: async input => { assert.deepEqual(Object.keys(input).sort(), ['commandId', 'intent']); outcome = localOutcome(input.intent, input.commandId); retainLocal(canonical, outcome); return outcome; },
-    request: async () => { fallback++; throw Error('Clock must never reach provider request'); },
-  }), { onManifestation: value => observed.push(value) });
-  await settles(() => observed.length === 1); const editor = root.find(node => node.tagName === 'textarea')!, shell = root.find(node => node.className === 'vela-core')!;
-  editor.value = 'What time is it?'; editor.fire('input'); editor.fire('keydown', { key: 'Enter' }); editor.value = 'Later text'; editor.selectionStart = 1; editor.selectionEnd = 4; editor.fire('input');
-  await settles(() => shell.dataset.manifestationKind === 'whisper' && reads === 2);
-  const value = root.find(node => node.className === 'vela-manifestation-value')!; assert.equal(value.textContent, outcome.result.content); assert.equal(displayed(value), true); assert.equal(fallback, 0); assert.equal(observed.at(-1)!.projection.currentRequestId, outcome.request.id); assert.equal(observed.at(-1)!.projection.historyResource, null); assert.equal(named(root, 'Send to Vela').disabled, false, 'A completed local call does not hold the composer for a full state read'); assert.equal(editor.value, 'Later text'); assert.equal(editor.selectionStart, 1); assert.equal(editor.selectionEnd, 4);
-  finish(structuredClone(canonical)); await settles(() => observed.at(-1)?.projection.historyResource?.revision === canonical.conversation!.revision); assert.equal(root.find(node => node.className === 'vela-manifestation-value'), value);
-  assert.equal(root.find(node => node.className === 'vela-core-history')!.hidden, true); panel.close(); assert.equal(observed.at(-1), null); await panel.open(); assert.equal(observed.at(-1)!.baseline, true); panel.dispose(); assert.equal(observed.at(-1), null);
-});
 
 test('pin/dismiss/reopen/history use durable CAS only; same-state refresh preserves response/editor/focus and reopening uses canonical identity', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(), calls: unknown[] = []; const local = localOutcome('Synthetic saved clock question', 'synthetic:command'); retainLocal(canonical, local);
@@ -225,19 +232,32 @@ test('pin/dismiss/reopen/history use durable CAS only; same-state refresh preser
   const saved = structuredClone(canonical.presentation), writes = calls.length; panel.dispose(); const reopened = mountVelaPanel(root as unknown as HTMLElement, client); await settles(() => root.find(node => node.className === 'vela-core')!.dataset.manifestationKind === 'whisper'); assert.deepEqual(canonical.presentation, saved); assert.equal(calls.length, writes); reopened.dispose();
 });
 
-test('unknown local input falls through once with original one-shot provider consent; invalid local DTO never triggers an automatic model fallback', async () => {
-  const doc = new Document(), root = doc.createElement('main'), canonical = state(); canonical.planner = { providerId: 'codex-app-server', available: true, busy: false }; let calls = 0, classifications = 0;
-  const client = clientFor(async () => canonical, { local: async () => { classifications++; return { matched: false }; }, request: async input => { calls++; assert.equal(input.intent, 'Synthetic genuine model question'); assert.equal(input.authorizeProvider, true); assert.equal(typeof input.commandId, 'string'); return request(); } });
-  const panel = mountVelaPanel(root as unknown as HTMLElement, client); await settles(() => root.find(node => node.className === 'vela-core-status')!.dataset.requestState === 'idle'); const editor = root.find(node => node.tagName === 'textarea')!, consent = root.find(node => node.tagName === 'input' && !!node.parent?.className.includes('vela-core-consent'))!; consent.checked = true; consent.fire('change'); editor.value = 'Synthetic genuine model question'; editor.fire('input'); editor.fire('keydown', { key: 'Enter' }); await settles(() => calls === 1 && root.find(node => node.className === 'vela-core-compose')!.getAttribute('aria-busy') === 'false'); assert.equal(classifications, 1); assert.equal(consent.checked, false);
-  client.local = async input => { const value = localOutcome(input.intent, input.commandId); value.result.messageId = 'synthetic:spoofed-message'; return value; }; editor.value = 'What time is it?'; editor.fire('input'); editor.fire('keydown', { key: 'Enter' }); await settles(() => root.find(node => node.className === 'vela-core-error')!.hidden === false); assert.equal(calls, 1); assert.equal(editor.value, 'What time is it?'); assert.doesNotMatch(root.find(node => node.className === 'vela-manifestation')!.textContent, /12:00 AM/); panel.dispose();
+test('free text takes the same request path and provider consent is one-shot', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planner = { providerId: 'codex-app-server', available: true, busy: false };
+  const requests: Parameters<VelaClient['request']>[0][] = [];
+  const client = clientFor(async () => canonical, { request: async input => { requests.push(input); return request(); } });
+  const panel = mountVelaPanel(root as unknown as HTMLElement, client);
+  await settles(() => root.find(node => node.className === 'vela-core-status')!.dataset.requestState === 'idle');
+  const editor = root.find(node => node.tagName === 'textarea')!, consent = root.find(node => node.tagName === 'input' && !!node.parent?.className.includes('vela-core-consent'))!;
+  consent.checked = true; consent.fire('change');
+  for (const intent of ['What time is it?', 'Can you organize my workspace?']) {
+    editor.value = intent; editor.fire('input'); editor.fire('keydown', { key: 'Enter' });
+    await settles(() => !editor.value && root.find(node => node.className === 'vela-core-compose')!.getAttribute('aria-busy') === 'false');
+  }
+  assert.deepEqual(requests, [
+    { intent: 'What time is it?', resourceIds: [], authorizeProvider: true },
+    { intent: 'Can you organize my workspace?', resourceIds: [], authorizeProvider: false },
+  ]);
+  assert.equal(consent.checked, false); panel.dispose();
 });
 
-test('protected Action remains visible and cannot be dismissed in History, including a newer immediately useful local Whisper', async () => {
+test('protected Action remains visible and cannot be dismissed in History, including a newer saved local Whisper', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(); let reviews = 0, applies = 0;
   const plan: VelaPlan = { id: 'plan:protected', requestId: 'request:synthetic', version: 1, fingerprint: 'synthetic:protected', summary: 'Actual typed proposal fixture', steps: [{ id: 'one', explanation: 'Synthetic review only', action: { type: 'createProject', title: 'Synthetic project' } }], targets: [], scope: { principalId: 'synthetic', policyVersion: manifest.policyVersion, resourceIds: [], workspaceIds: [], projectIds: [] }, state: 'prepared', createdAt: manifest.createdAt, expiresAt: manifest.createdAt, contribution: null };
   canonical.plans = [plan]; canonical.requests = [request({ state: 'awaiting-review', planId: plan.id })];
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => structuredClone(canonical), {
-    local: async input => { const value = localOutcome(input.intent, input.commandId); retainLocal(canonical, value); return value; },
+    request: async input => { const value = localOutcome(input.intent, 'synthetic:observed'); retainLocal(canonical, value); return value.request; },
     presentation: async input => { canonical.presentation = { ...canonical.presentation!, ...input.patch, version: canonical.presentation!.version + 1 }; return canonical.presentation; },
     review: async () => { reviews++; return plan; }, apply: async () => { applies++; return plan; },
   }));
@@ -257,9 +277,9 @@ test('a stale presentation write does not fake persistence or retry; draft/caret
 
 test('late pre-submit hydration cannot erase immediate local output; host observer failure never hides useful content', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(), stale = structuredClone(canonical); let reads = 0, first!: (value: VelaState) => void, second!: (value: VelaState) => void;
-  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => new Promise(resolve => { if (++reads === 1) first = resolve; else second = resolve; }), { local: async input => { const value = localOutcome(input.intent, input.commandId); retainLocal(canonical, value); return value; } }), { onManifestation: value => { if (value) assert.equal(value.elements.manifestation, root.find(node => node.className === 'vela-manifestation')); throw Error('Synthetic unavailable optics'); } });
-  const editor = root.find(node => node.tagName === 'textarea')!; editor.value = 'What time is it?'; editor.fire('input'); editor.fire('keydown', { key: 'Enter' }); await settles(() => reads === 2 && root.find(node => node.className === 'vela-core')!.dataset.manifestationKind === 'whisper');
-  first(stale); await new Promise(resolve => setImmediate(resolve)); assert.equal(root.find(node => node.className === 'vela-core')!.dataset.manifestationKind, 'whisper'); assert.equal(root.find(node => node.className === 'vela-core-error')!.hidden, true); second(structuredClone(canonical)); await settles(() => root.find(node => node.className === 'vela-manifestation')!.dataset.currentMessageId === 'message:clock'); assert.equal(root.find(node => node.className === 'vela-core-error')!.hidden, true); panel.dispose();
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => new Promise(resolve => { if (++reads === 1) first = resolve; else second = resolve; }), { request: async input => { const value = localOutcome(input.intent, 'synthetic:observed'); retainLocal(canonical, value); return value.request; } }), { onManifestation: value => { if (value) assert.equal(value.elements.manifestation, root.find(node => node.className === 'vela-manifestation')); throw Error('Synthetic unavailable optics'); } });
+  const editor = root.find(node => node.tagName === 'textarea')!; editor.value = 'What time is it?'; editor.fire('input'); editor.fire('keydown', { key: 'Enter' }); await settles(() => reads === 2);
+  first(stale); await new Promise(resolve => setImmediate(resolve)); assert.notEqual(root.find(node => node.className === 'vela-core')!.dataset.manifestationKind, 'whisper'); assert.equal(root.find(node => node.className === 'vela-core-error')!.hidden, true); second(structuredClone(canonical)); await settles(() => root.find(node => node.className === 'vela-manifestation')!.dataset.currentMessageId === 'message:clock'); assert.equal(root.find(node => node.className === 'vela-core-error')!.hidden, true); panel.dispose();
 });
 
 test('missing persistence is honest and provider attribution mismatches never surface as a verified Insight body', async () => {
@@ -272,11 +292,10 @@ test('a new submission leaves an old selected response for latest, while a later
   const doc = new Document(), root = doc.createElement('main'), canonical = state(); retainLocal(canonical, localOutcome('Earlier synthetic clock', 'synthetic:old')); canonical.presentation!.selectedRequestId = 'request:clock'; canonical.presentation!.view = 'history'; let finish!: (value: VelaRequest) => void;
   const client = clientFor(async () => structuredClone(canonical), {
     presentation: async input => { assert.equal(input.expectedVersion, canonical.presentation!.version); canonical.presentation = { ...canonical.presentation!, ...input.patch, version: canonical.presentation!.version + 1 }; return structuredClone(canonical.presentation); },
-    local: async input => { const value = localOutcome(input.intent, input.commandId); value.request.id = 'request:new-clock'; value.request.response!.messageId = value.result.messageId = 'message:new-clock'; retainLocal(canonical, value); return value; },
-    request: async () => new Promise(resolve => { finish = resolve; }),
+    request: async input => { const value = localOutcome(input.intent, 'synthetic:new-clock'); value.request.id = 'request:new-clock'; value.request.response!.messageId = value.result.messageId = 'message:new-clock'; retainLocal(canonical, value); return value.request; },
   });
   const panel = mountVelaPanel(root as unknown as HTMLElement, client); await settles(() => root.find(node => node.className === 'vela-core-history')!.hidden === false); const editor = root.find(node => node.tagName === 'textarea')!; editor.value = 'What time is it?'; editor.fire('input'); editor.fire('keydown', { key: 'Enter' }); await settles(() => canonical.presentation!.selectedRequestId === null && root.find(node => node.className === 'vela-manifestation')!.dataset.currentMessageId === 'message:new-clock'); assert.equal(canonical.presentation!.view, 'current');
-  await settles(() => named(root, 'History').disabled === false); client.local = async () => ({ matched: false }); editor.value = 'Synthetic provider question'; editor.fire('input'); editor.fire('keydown', { key: 'Enter' }); await settles(() => !!finish); named(root, 'History').fire('click'); await settles(() => canonical.presentation!.view === 'history' && root.find(node => node.className === 'vela-core-history')!.hidden === false); const terminal = request({ id: 'request:provider-terminal', intent: 'Synthetic provider question', state: 'provider-unavailable' }); canonical.requests.push(terminal); finish(terminal); await settles(() => root.find(node => node.className === 'vela-core-compose')!.getAttribute('aria-busy') === 'false'); assert.equal(root.find(node => node.className === 'vela-core-history')!.hidden, false); assert.equal(canonical.presentation!.view, 'history'); panel.dispose();
+  await settles(() => named(root, 'History').disabled === false); client.request = async () => new Promise(resolve => { finish = resolve; }); editor.value = 'Synthetic provider question'; editor.fire('input'); editor.fire('keydown', { key: 'Enter' }); await settles(() => !!finish); named(root, 'History').fire('click'); await settles(() => canonical.presentation!.view === 'history' && root.find(node => node.className === 'vela-core-history')!.hidden === false); const terminal = request({ id: 'request:provider-terminal', intent: 'Synthetic provider question', state: 'provider-unavailable' }); canonical.requests.push(terminal); finish(terminal); await settles(() => root.find(node => node.className === 'vela-core-compose')!.getAttribute('aria-busy') === 'false'); assert.equal(root.find(node => node.className === 'vela-core-history')!.hidden, false); assert.equal(canonical.presentation!.view, 'history'); panel.dispose();
 });
 
 test('presentation is a content-free observed baseline and meaningful state changes, never invented planning or automatic attention review', async () => {
