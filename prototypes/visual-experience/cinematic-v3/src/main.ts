@@ -1263,22 +1263,29 @@ function renderDOM() {
     application as (Application & { surfaceView?: () => SurfaceView }) | null
   )?.surfaceView?.() ?? { scale: 1, originX: 0, originY: 0 };
   const workspaceVisible = workspaceSurfacesVisible();
+  const compactViewport = innerWidth < 1000;
   const projected = order.map((id) => {
     const p = motion.pose(id), block = presentationBlock(id);
+    const gesture = application?.directGesture(id);
     const unfold = resourceUnfold(motion, id);
+    const type = resources.get(id)!.type;
+    const kind: Resource["type"] = compactViewport && type === "research" ? "conversation" : type;
     return {
       id,
       ...p,
+      kind,
       unfold,
-      shape: block?.shape ?? defaultSurfaceShape(resources.get(id)?.type),
+      selected: id === selected,
+      selection: resourceSelection(motion, id),
+      shape: block?.shape ?? defaultSurfaceShape(type),
       rotation: (block?.rotation ?? 0) * (1 - unfold),
-      presentationLayer: application?.directGesture(id)?.fromFocusedSide ? 2 :
+      presentationLayer: gesture?.fromFocusedSide ? 2 :
         expanded === id || unfold > 0.001 ? 1 : 0,
       zIndex:
         expanded === id
           ? 200000
           : desktopMode
-            ? directCardLayer(block?.z ?? 0, application?.directGesture(id))
+            ? directCardLayer(block?.z ?? 0, gesture)
             : drag?.id === id
               ? 150000
               : selected === id
@@ -1346,7 +1353,7 @@ function renderDOM() {
     // Keep the mounted editor and its view state while offscreen. Paint its
     // latest pose on re-entry, without updating invisible CSS on each frame.
     if (hidden || !workspaceVisible) continue;
-    const selection = String(resourceSelection(motion, id));
+    const selection = String(p.selection);
     if (presentation.style.getPropertyValue("--card-selection") !== selection)
       presentation.style.setProperty("--card-selection", selection);
     const body = visible ? workingFootprints?.read(id) : undefined;
@@ -1439,6 +1446,7 @@ function renderDOM() {
     );
     path.style.opacity = String(0.2 + attention * 0.55);
   } else path.style.opacity = "0";
+  return { workspaceVisible, projected };
 }
 function tick(now: number) {
   raf = 0;
@@ -1470,7 +1478,7 @@ function tick(now: number) {
     attention = motion.reduced
       ? targetAttention
       : attention + (targetAttention - attention) * (1 - Math.exp(-dt * 7));
-    renderDOM();
+    const { workspaceVisible, projected } = renderDOM();
     document.body.style.setProperty("--scene-focus", String(focus));
     const idle = now - lastInteraction > 12000;
     const activeQuality: Quality = quiet ? "efficient" : quality;
@@ -1504,45 +1512,10 @@ function tick(now: number) {
         now - lastDraw >= pointerCadence - DRAW_EARLY_TOLERANCE_MS);
     if (shouldDraw) {
       if (environment && !graphicsFailed) {
-        const surfaces = order
-          .filter(
-            (id) => !elements.get(id)?.hidden && workspaceSurfacesVisible(),
-          )
-          .map((id) => {
-            const p = motion.pose(id),
-              rest = base(id),
-              block = presentationBlock(id);
-            return {
-              id,
-              kind:
-                innerWidth < 1000 && resources.get(id)!.type === "research"
-                  ? "conversation"
-                  : resources.get(id)!.type,
-              ...p,
-              shape:
-                block?.shape ?? defaultSurfaceShape(resources.get(id)?.type),
-              rotation:
-                (block?.rotation ?? 0) * (1 - resourceUnfold(motion, id)),
-              presentationLayer: application?.directGesture(id)?.fromFocusedSide ? 2 :
-                expanded === id || resourceUnfold(motion, id) > 0.001 ? 1 : 0,
-              zIndex:
-                expanded === id
-                  ? 200000
-                  : desktopMode
-                    ? directCardLayer(
-                        block?.z ?? 0,
-                        application?.directGesture(id),
-                      )
-                    : drag?.id === id
-                      ? 150000
-                      : selected === id
-                        ? 100000
-                        : 3,
-              selected: id === selected,
-              selection: resourceSelection(motion, id),
-              unfold: resourceUnfold(motion, id),
-            };
-          });
+        // DOM, compositing and WebGL use the same projected pose for this frame.
+        const surfaces = workspaceVisible
+          ? projected.filter(({ id }) => !elements.get(id)?.hidden)
+          : [];
         const scene = deriveSceneState({
           selected,
           expanded,

@@ -26,7 +26,7 @@ const { Environment } = compiledModule.exports;
 const makeGeometry = (rim) => Environment.prototype.folioGeometry.call({}, rim);
 const shapeGeometry = (geometry, w, h, rim, kind, unfold) =>
   Environment.prototype.shapeFolio.call(
-    { folioContour: { x: 0, y: 0, nx: 0, ny: 0 } },
+    { folioContour: { x: 0, y: 0, nx: 0, ny: 0 }, folioRingSamples: new Float64Array(64 * 2) },
     geometry,
     w,
     h,

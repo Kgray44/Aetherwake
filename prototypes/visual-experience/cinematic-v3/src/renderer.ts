@@ -102,6 +102,8 @@ export interface EnvironmentFrame {
 
 // Openness, structural tension, directed flow. These are expression studies,
 // never measurements of cognition, progress, or unrecorded agent relationships.
+const FOLIO_SEGMENTS = 64;
+
 const EXPRESSIONS: Readonly<
   Record<VelaState, readonly [number, number, number]>
 > = {
@@ -419,6 +421,7 @@ export class Environment {
   private readonly savedScissor = new THREE.Vector4();
   private readonly savedClearColor = new THREE.Color();
   private readonly folioContour = { x: 0, y: 0, nx: 0, ny: 0 };
+  private readonly folioRingSamples = new Float64Array(FOLIO_SEGMENTS * 2);
   private readonly surfaceOrder: SurfacePose[] = [];
   private readonly surfaceWorld = new THREE.Matrix4();
   private readonly contactScale = new THREE.Vector3();
@@ -994,7 +997,7 @@ export class Environment {
 
   /** Three front rings reveal shallow optical curvature above a fixed bevel/backing. */
   private folioGeometry(rimOnly: boolean) {
-    const n = 64,
+    const n = FOLIO_SEGMENTS,
       rings = rimOnly ? 2 : 6;
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array((n * rings + (rimOnly ? 0 : 2)) * 3);
@@ -1081,7 +1084,7 @@ export class Environment {
     unfold: number,
     shape: SurfaceShape = defaultSurfaceShape(kind),
   ) {
-    const n = 64,
+    const n = FOLIO_SEGMENTS,
       rings = rimOnly ? 2 : 6;
     const position = geometry.getAttribute("position") as THREE.BufferAttribute;
     const normal = geometry.getAttribute("normal") as THREE.BufferAttribute;
@@ -1091,6 +1094,8 @@ export class Environment {
         : kind === "conversation"
           ? 3.4 * (1 - unfold)
           : 2.4 * (1 - unfold);
+    const samples = this.folioRingSamples;
+    let previousInset: number | undefined;
     for (let ring = 0; ring < rings; ring++) {
       const inset = rimOnly
         ? ring === 0
@@ -1117,18 +1122,25 @@ export class Environment {
               : -8;
       const faceScale =
         !rimOnly && ring < 3 ? (ring === 0 ? 1 : ring === 1 ? 0.66 : 0.33) : 1;
+      // Rings with the same inset differ only in depth and face scale.
+      const sameContour = previousInset === inset;
       for (let j = 0; j < n; j++) {
-        const point = contourPoint(
-          width,
-          height,
-          shape,
-          unfold,
-          j / n,
-          5 - inset,
-          this.folioContour,
-        );
-        const x = point.x * faceScale,
-          y = point.y * faceScale;
+        const sample = j * 2;
+        if (!sameContour) {
+          const point = contourPoint(
+            width,
+            height,
+            shape,
+            unfold,
+            j / n,
+            5 - inset,
+            this.folioContour,
+          );
+          samples[sample] = point.x;
+          samples[sample + 1] = point.y;
+        }
+        const x = samples[sample] * faceScale,
+          y = samples[sample + 1] * faceScale;
         position.setXYZ(ring * n + j, x, y, z);
         if (!rimOnly && ring < 3) {
           const nx = (2 * dome * x) / (halfW * halfW);
@@ -1142,6 +1154,7 @@ export class Environment {
           );
         }
       }
+      previousInset = inset;
     }
     if (!rimOnly) {
       position.setXYZ(n * rings, 0, 0, dome);
