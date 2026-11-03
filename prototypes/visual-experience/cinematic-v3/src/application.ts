@@ -103,6 +103,10 @@ import { mountTimelineExperience } from "../../../block-library/timeline-view.ts
 import { mountTaskTrackerExperience } from "../../../block-library/task-tracker-view.ts";
 import { mountTaskObjectiveCreator } from "../../../block-library/task-objective-creator.ts";
 import type { TaskObjectiveDocument } from "../../../task-product/contracts.ts";
+import type {
+  TaskTargetKind,
+  TaskReferenceTarget,
+} from "../../../application-contract/task-targets.ts";
 import "../../../block-library/task-tracker-view.css";
 import "../../../block-library/task-objective-creator.css";
 import "../../../block-library/timeline-view.css";
@@ -576,15 +580,7 @@ export function installApplication(hooks: Hooks) {
         },
         taskObjectives: {
           port: productClients.taskObjectives,
-          motion: experienceMotion,
-          viewId: "direct:" + resource.id,
-          resourceTitle: (id) =>
-            state?.resources.find(
-              (item) =>
-                item.id === id &&
-                item.available !== false &&
-                item.visible !== false,
-            )?.title,
+          ...taskTrackerOptions(root, "direct:" + resource.id),
         },
         copyText,
         noteSession,
@@ -1635,6 +1631,124 @@ export function installApplication(hooks: Hooks) {
       },
     };
     surfaces.open(checklistCreatorSurface);
+  }
+  async function chooseTaskReference(
+    kind: TaskTargetKind,
+    anchor: HTMLElement,
+  ): Promise<TaskReferenceTarget | null> {
+    return new Promise((resolve) => {
+      const content = document.createElement("div"),
+        search = document.createElement("input"),
+        list = document.createElement("div"),
+        status = document.createElement("p");
+      content.className =
+        "application-task-reference-picker aw-optical-controls";
+      search.type = "search";
+      search.maxLength = 100;
+      search.placeholder = "Find a resource";
+      search.setAttribute("aria-label", "Find a task reference");
+      search.dataset.aerynthMotionControl = "true";
+      status.setAttribute("role", "status");
+      list.setAttribute("aria-label", "Available task references");
+      content.append(search, list, status);
+      let generation = 0,
+        settled = false;
+      const finish = (target: TaskReferenceTarget | null) => {
+        if (settled) return;
+        settled = true;
+        generation++;
+        resolve(target);
+        surfaces.close("task-reference-picker");
+      };
+      const load = async () => {
+        const revision = ++generation;
+        status.textContent = "Finding resources…";
+        list.replaceChildren();
+        try {
+          const page = await productClients.taskObjectives.targets({
+            kind,
+            query: search.value,
+            limit: 24,
+          });
+          if (settled || revision !== generation) return;
+          for (const target of page.items) {
+            if (target.kind !== kind) continue;
+            const button = document.createElement("button");
+            button.type = "button";
+            button.textContent = target.label;
+            button.dataset.taskTargetKey = target.key;
+            button.dataset.aerynthMotionControl = "true";
+            button.onclick = () => finish(target);
+            list.append(button);
+          }
+          status.textContent =
+            page.coverage === "bounded"
+              ? "More resources may be available. Refine your search."
+              : page.items.length
+                ? ""
+                : "No matching resources.";
+        } catch {
+          if (!settled && revision === generation)
+            status.textContent =
+              "References are unavailable. Your task is unchanged.";
+        }
+      };
+      search.oninput = () => {
+        void load();
+      };
+      surfaces.open({
+        id: "task-reference-picker",
+        anchor,
+        content,
+        label:
+          kind === "execution"
+            ? "Link recorded work"
+            : kind === "assignee"
+              ? "Assign responsibility"
+              : kind === "dependency"
+                ? "Choose a dependency"
+                : "Link a source",
+        placement: "right",
+        minSize: { width: 280, height: 160 },
+        maxSize: { width: 440, height: 520 },
+        preferredSize: { width: 380, height: 360 },
+        initialFocus: search,
+        onClose: () => finish(null),
+      });
+      void load();
+    });
+  }
+  function taskTrackerOptions(
+    root: HTMLElement,
+    viewId: string,
+  ): Parameters<typeof mountTaskTrackerExperience>[3] {
+    return {
+      viewId,
+      motion: experienceMotion,
+      chooseSource: async () => {
+        const target = await chooseTaskReference("source", root);
+        return target?.kind === "source" ? target.reference : null;
+      },
+      chooseAssignee: async () => {
+        const target = await chooseTaskReference("assignee", root);
+        return target?.kind === "assignee" ? target.reference : null;
+      },
+      chooseDependency: async () => {
+        const target = await chooseTaskReference("dependency", root);
+        return target?.kind === "dependency" ? target.reference : null;
+      },
+      chooseExistingExecution: async () => {
+        const target = await chooseTaskReference("execution", root);
+        return target?.kind === "execution" ? target.reference : null;
+      },
+      resourceTitle: (id) =>
+        state?.resources.find(
+          (resource) =>
+            resource.id === id &&
+            resource.available !== false &&
+            resource.visible !== false,
+        )?.title,
+    };
   }
   async function newTaskObjective() {
     await flush();
@@ -3442,12 +3556,18 @@ export function installApplication(hooks: Hooks) {
           copy: copyText,
           motion: experienceMotion,
           viewId: "block:" + b.id + ":conversation",
-          onProviderChange: async change => {
+          onProviderChange: async (change) => {
             if (change.mode === "continuation") {
               await showConversations(change.resourceId);
-              await conversationManager?.beginProviderContinuation(change.targetProviderId);
+              await conversationManager?.beginProviderContinuation(
+                change.targetProviderId,
+              );
             } else {
-              await composerPort.command("selectProvider", { resourceId: change.resourceId, providerId: change.targetProviderId, expectedRevision: change.expectedRevision });
+              await composerPort.command("selectProvider", {
+                resourceId: change.resourceId,
+                providerId: change.targetProviderId,
+                expectedRevision: change.expectedRevision,
+              });
               await command({ type: "snapshot" });
               await view?.refresh({ latest: false });
             }
@@ -3493,8 +3613,7 @@ export function installApplication(hooks: Hooks) {
             r.id,
             productClients.taskObjectives,
             {
-              viewId: "block:" + id,
-              motion: experienceMotion,
+              ...taskTrackerOptions(content, "block:" + id),
               active: true,
               presentation: blockPresentation(id),
               showTitle: false,

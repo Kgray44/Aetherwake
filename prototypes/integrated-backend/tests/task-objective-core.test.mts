@@ -9,6 +9,7 @@ import type {
   TaskObjectiveDocument,
 } from "../../task-product/contracts.ts";
 import type { StreamEvent } from "../src/contracts.mts";
+import type { TaskTargetPage } from "../../application-contract/task-targets.ts";
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "aerynth-task-core-")),
     path = join(dir, "canonical.sqlite"),
@@ -101,6 +102,22 @@ test("actual Core Task Objectives use canonical resources and manual provenance,
         })
       ).result as TaskObjectiveDocument;
     const before = await read();
+    const targets = (
+      await f.core.command("taskObjectives", {
+        name: "targets",
+        input: { kind: "source", query: note.title },
+      })
+    ).result as TaskTargetPage;
+    assert.equal(targets.referenceOnly, true);
+    const target = targets.items.find(
+      (item) => item.kind === "source" && item.reference.resourceId === note.id,
+    );
+    assert(target?.kind === "source");
+    assert.deepEqual(target.reference, before.sources[0].reference);
+    assert.equal(
+      JSON.stringify(targets).includes("Exact local evidence."),
+      false,
+    );
     assert.equal(before.resource.kind, "task_objective");
     assert.equal(before.canEdit, true);
     assert.equal(before.sources[0].reference?.resourceId, note.id);
@@ -165,17 +182,15 @@ test("actual Core Task event delivery follows outer commit and rejects forged ma
     assert.throws(
       () =>
         f.owner.atomic(() => {
-          f.owner
-            .taskObjectiveDomain()
-            .dispatch({
-              name: "create",
-              input: {
-                commandId: "task-rollback",
-                title: "Synthetic rollback",
-                projectId: null,
-                definition: definition(),
-              },
-            });
+          f.owner.taskObjectiveDomain().dispatch({
+            name: "create",
+            input: {
+              commandId: "task-rollback",
+              title: "Synthetic rollback",
+              projectId: null,
+              definition: definition(),
+            },
+          });
           throw Error("synthetic outer rollback");
         }),
       /synthetic outer rollback/,

@@ -7,7 +7,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
 import { compositeTimelineDomain,isTimelineRead,type TimelineRequest } from './timeline-domain.mts';
-import { createTaskObjectiveCommands,isTaskObjectiveRead,type TaskObjectiveRequest } from './task-objectives.mts';
+import { createTaskObjectiveCommands,isTaskObjectiveRead,type TaskObjectiveCommandsOptions } from './task-objectives.mts';
+import { createTaskReferenceTargets } from './task-reference-targets.mts';
+import type { TaskTargetQuery } from '../../application-contract/task-targets.ts';
 import { RESOURCE_OPENING_CONTRACT, parseResourceOpeningInput, type ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
 import { CHATGPT_PLAN_PROVIDER,PROVIDER_CONNECTION_CONTRACT,type ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
 import { ResponsesTransport,prepareResponsesTurn } from '../../openai-provider/responses.mts';
@@ -234,9 +236,9 @@ export class BackendCore {
     const row=this.db.prepare('SELECT r.version,coalesce(n.revision,0) AS content_revision FROM resources r LEFT JOIN notes n ON n.resource_id=r.id WHERE r.id=?').get(id);
     return row?'resource:'+row.version+':content:'+row.content_revision+':conversation:'+(this.state.revisions[id]??0):null;
   }
-  private taskObjectiveDomain() {
+  private taskObjectiveOptions():TaskObjectiveCommandsOptions {
     const policyVersion='aerynth.local-owner-task-policy@1';
-    return createTaskObjectiveCommands({kernel:this.kernel,db:this.db,
+    return {kernel:this.kernel,db:this.db,
       identity:()=>({principalId:'local-owner',actorKind:'user',authority:'manual',policyVersion}),now,
       authorize:input=>({decision:(!input.projectId||this.libraryAuthorized({kind:'project',id:input.projectId}))&&input.resourceIds.every(id=>this.productResourceAccess(id))?'allow':'deny',authorizationRef:'task-manual:'+input.requestDigest,policyVersion}),
       projectAccess:id=>this.libraryAuthorized({kind:'project',id}),resourceAccess:(id,messageId)=>this.productResourceAccess(id,messageId),
@@ -247,10 +249,33 @@ export class BackendCore {
         return {id:e.id,revision:hash({id:e.id,resourceId:e.resourceId,commandId:e.commandId,state:e.state,startedAt:e.startedAt,endedAt:e.endedAt,threadId:e.binding?.nativeThreadId??null,turnId:e.turnId??null,responseId:e.responseId??null}),resourceId:e.resourceId,providerId:e.providerId,commandId:e.commandId,state:e.state,nativeThreadId:e.binding?.nativeThreadId??null,nativeTurnId:e.turnId??null,nativeResponseId:e.responseId??null};
       },
       recordEvent:event=>this.record(event.type,'observed',undefined,'task-objective:'+event.commandId+':'+event.type,{providerId:'aerynth-native',detached:true,resourceId:event.resourceId,correlationId:event.commandId,payload:{redacted:true,application:{resourceVersion:event.resourceVersion,commandId:event.commandId,detail:event.detail}}}),
-    });
+    };
   }
-  private async taskObjectiveCommand(operation:TaskObjectiveRequest) {
-    const read=isTaskObjectiveRead(operation),execute=()=>this.taskObjectiveDomain().dispatch(operation);
+  private taskObjectiveDomain() {return createTaskObjectiveCommands(this.taskObjectiveOptions());}
+  private taskReferenceTargets(input:TaskTargetQuery) {
+    const shared=this.taskObjectiveOptions();
+    return createTaskReferenceTargets({kernel:this.kernel,db:this.db,
+      identity:shared.identity,projectAccess:shared.projectAccess,resourceAccess:shared.resourceAccess,
+      sourceRevision:shared.sourceRevision,agentProfile:shared.agentProfile,execution:shared.execution,
+      task:id=>{try{const document=this.taskObjectiveDomain().dispatch({name:'read',input:{resourceId:id}});return {resourceId:document.resource.id,version:document.resource.version,eligible:document.resource.state==='active'};}catch{return null;}},
+      resourcePage:query=>{
+        const kind=query.kind==='assignee'?'agent':query.kind==='dependency'?'task_objective':null;
+        const rows=this.db.prepare("SELECT r.id,r.title,coalesce(d.kind,r.kind) AS kind,r.project_id,r.version,r.state FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE r.state='active' AND (? IS NULL OR coalesce(d.kind,r.kind)=?) AND instr(lower(r.title),lower(?))>0 ORDER BY r.id LIMIT ?").all(kind,kind,query.query,query.limit+1);
+        return {items:rows.slice(0,query.limit).map(row=>({id:String(row.id),title:String(row.title),kind:String(row.kind==='generic'?'reference':row.kind),projectId:row.project_id===null?null:String(row.project_id),version:Number(row.version),state:'active' as const})),hasMore:rows.length>query.limit};
+      },
+      executionPage:query=>{
+        const rows=Object.values(this.state.executions).filter(e=>this.productResourceAccess(e.resourceId)).map(e=>({e,title:String(this.db.prepare('SELECT title FROM resources WHERE id=?').get(e.resourceId)?.title??'')})).filter(row=>row.title.toLocaleLowerCase().includes(query.query.toLocaleLowerCase())).sort((a,b)=>b.e.startedAt.localeCompare(a.e.startedAt));
+        return {items:rows.slice(0,query.limit).flatMap(({e})=>{const current=shared.execution(e.id);return current?[{id:current.id,resourceId:current.resourceId,revision:current.revision,startedAt:e.startedAt}]:[];}),hasMore:rows.length>query.limit};
+      },
+      messagePage:query=>{
+        const gid=this.state.resources[query.conversationResourceId],conversation=this.state.graph.conversations.find(c=>c.id===gid);
+        const rows=(conversation?.ownMessageIds??[]).flatMap(id=>{if(!this.productResourceAccess(query.conversationResourceId,id))return [];const message=this.state.graph.messages.find(m=>m.id===id),revision=this.taskSourceRevision(query.conversationResourceId,id);return message&&revision?[{messageId:id,conversationResourceId:query.conversationResourceId,role:message.role,createdAt:message.createdAt,revision}]:[];}).filter(message=>(message.role+' '+message.createdAt).toLocaleLowerCase().includes(query.query.toLocaleLowerCase()));
+        return {items:rows.slice(0,query.limit),hasMore:rows.length>query.limit};
+      },
+    }).query(input);
+  }
+  private async taskObjectiveCommand(operation:CommandMap['taskObjectives']['input']) {
+    const read=operation?.name==='targets'||isTaskObjectiveRead(operation),execute=()=>operation?.name==='targets'?this.taskReferenceTargets(operation.input):this.taskObjectiveDomain().dispatch(operation);
     const result=read?execute():this.atomic(execute);
     return read?{result}:{result,desktop:await this.command('desktop',{type:'snapshot'})};
   }
@@ -1406,7 +1431,7 @@ export class BackendCore {
     // execution. Canonical mutations retain source/approval fences.
     const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft'];
     if(name==='timelines'){ensure(isTimelineRead(a)||!this.active,'execution_busy');return this.timelineCommand(a) as any;}
-    if(name==='taskObjectives'){ensure(isTaskObjectiveRead(a)||!this.active,'execution_busy');return this.taskObjectiveCommand(a) as any;}
+    if(name==='taskObjectives'){ensure(a?.name==='targets'||isTaskObjectiveRead(a)||!this.active,'execution_busy');return this.taskObjectiveCommand(a) as any;}
     if(name==='agents'||name==='checklists'){
       ensure((name==='agents'?isAgentRead(a):isChecklistRead(a))||!this.active,'execution_busy');
       return this.productCommand(name,a) as any;

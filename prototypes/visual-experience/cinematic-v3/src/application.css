@@ -855,3 +855,31 @@ body.application-ready
 .application-connections details > button {
   margin: 0.6rem 0.5rem 0.1rem 0;
 }
+.application-task-reference-picker {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.application-task-reference-picker > div {
+  display: grid;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+.application-task-reference-picker :is(input, button) {
+  width: 100%;
+  min-height: 38px;
+  border-radius: var(--aw-control-radius, 999px);
+  padding: 8px 12px;
+  font: inherit;
+  color: var(--aw-control-text, #ede8f5);
+}
+.application-task-reference-picker button {
+  text-align: start;
+  overflow-wrap: anywhere;
+}
+.application-task-reference-picker p {
+  margin: 0;
+  color: var(--aw-control-muted, #bcb4cd);
+  font-size: 13px;
+}

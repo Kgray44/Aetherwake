@@ -17,6 +17,7 @@ import type { HistoryOmissionReason } from '../../vela-core/src/bounded-history.
 import type { AgentRequest,ChecklistRequest,AgentResponse,ChecklistResponse,DomainEvent } from './product-domains.mts';
 import type { TimelineRequest,TimelineResponse,TimelineDomainEvent } from './timeline-domain.mts';
 import type { TaskObjectiveRequest,TaskObjectiveResponse,TaskObjectiveEvent } from './task-objectives.mts';
+import type { TaskTargetQuery,TaskTargetPage } from '../../application-contract/task-targets.ts';
 export type NoteMethod = 'readNote'|'saveNoteDraft'|'commitNote'|'discardNoteDraft'|'renameNote';
 export type NoteRequest = { [K in NoteMethod]: {name:K;input:Parameters<NoteExperienceService[K]>[0]} }[NoteMethod];
 export type LibraryMethod = 'capabilities'|'preferences'|'setFavorite'|'getBlockSettings'|'configureBlock'|'findResources'|'attachBlock'|'createBlock'|'listTemplates'|'getTemplate'|'saveTemplate'|'renameTemplate'|'archiveTemplate'|'previewTemplate'|'applyTemplate'|'previewWorkspaceFromResources'|'workspaceFromResources'|'requestVelaTemplate'|'subjectTargets'|'createSubjectBlock'|'projectOverview'|'browseResources';
@@ -156,7 +157,7 @@ export interface CommandMap {
   agents: {input:AgentRequest;output:{result:AgentResponse;desktop?:DesktopSnapshot}};
   checklists: {input:ChecklistRequest;output:{result:ChecklistResponse;desktop?:DesktopSnapshot}};
   timelines: {input:TimelineRequest;output:{result:TimelineResponse;desktop?:DesktopSnapshot}};
-  taskObjectives: {input:TaskObjectiveRequest;output:{result:TaskObjectiveResponse;desktop?:DesktopSnapshot}};
+  taskObjectives: {input:TaskObjectiveRequest|{name:'targets';input:TaskTargetQuery};output:{result:TaskObjectiveResponse|TaskTargetPage;desktop?:DesktopSnapshot}};
   vela: { input: VelaOperation; output: unknown };
   velaRequestPreview: { input: {intent:string;resourceIds:string[]}; output: VelaRequestPreview };
   velaNativeReview: {input:{previewId:string;signature:string};output:VelaNativeReview};
