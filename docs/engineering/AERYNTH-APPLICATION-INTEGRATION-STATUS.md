@@ -2,6 +2,46 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Vela return clearance and Portable BH
+
+On a return after the workspace has faded out, the existing Motion
+Coordinator moves Vela to her saved placement. When that route crosses
+a card, the glass reveal waits for both the remaining path and the
+compositor's actual optical clearance. The backdrop and Vela remain
+visible through the handoff. Clear routes, reduced motion and already
+saved destination overlaps reconcile without a fixed timer. No layout,
+camera or Vela placement is written by the handoff.
+
+Hidden Electron runs used identical copies of BF's closed synthetic
+SQLite profile. BF recorded 25 visible crossings and 30 clipped samples.
+The first change in BG eliminated the visible note intersection but
+retained three optical clipping samples. BH recorded 26 geometric
+crossing samples while the stage was hidden and zero visible crossings
+or clipped samples. The observed hold lasted 500 ms from first to last
+held sample. The unchanged canonical geometry, viewport, presence and
+resources were checked after the normal and reduced-motion returns.
+The BF, BG and BH trace receipts are in private profiles
+`review-package-motion-1793703559240`,
+`review-package-motion-1793703597286`, and
+`review-package-motion-1793703744732`. BH trace SHA-256 is
+`cb4e653f7ca709dd9571a274e411de9a1e8d6001110ded6e54ec748fd0dd7667`.
+
+Portable BH packages `da198f4f246bdcd464f2b3250d80630f7725e791`.
+All 427 payload files were rehashed. Manifest SHA-256 is
+`2928c3224e3e93bd7e3a91730806d4657db7be1c8cf830e9361609a51ae75bbe`.
+The strict build and all 409 desktop tests passed. The full local
+journey passed again with setup, cross-project travel and restart
+taking 6.38, 14.46 and 3.17 seconds from launch to exit. SQLite
+integrity passed and the profile recorded zero provider executions.
+
+The 10.586-second recording has 173 verified offscreen Electron paints.
+Review of the return frames showed Vela crossing on the celestial
+backdrop and the glass returning clear of her. The recording and
+five PNGs are in `review-package-motion-1793703763979`, with recording
+SHA-256 `a19e9201d7ded3ce435f10404b1afa07596c81f78ad6f233d73b6b7b9a48d12e`.
+These runs do not measure physical presentation or exercise live
+Codex. All owned test processes exited. The owner's window was untouched.
+
 ## November 3 current Constellation journey and Portable BF
 
 The original worker synchronization and label-culling patches have the
