@@ -1626,8 +1626,7 @@ function tick(now: number) {
           height: `${presenceHeight}px`,
           clipPath:
             document.body.classList.contains("vela-access") ||
-            (application?.snapshot()?.navigation.kind === "constellation" &&
-              !workspaceSurfacesVisible())
+            !workspaceSurfacesVisible()
               ? "none"
               : materialCompositor.clipOverlay({
                   id: "vela-dom-presentation",

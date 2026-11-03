@@ -33,6 +33,7 @@ import {
   sculptureRegion,
   overviewPresence,
   overviewChromeBottom,
+  presenceTravelOccludes,
 } from "./presence-layout";
 import {
   createManagerState,
@@ -819,6 +820,7 @@ export function installApplication(hooks: Hooks) {
   let policyKey = "";
   const arrivalId = "application:arrival";
   let departingWorkspace = false;
+  let waitingForVela = false;
   let arrivalOrigin = { x: innerWidth / 2, y: innerHeight / 2 };
   const arrivalPose = { x: 1, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity: 1 };
   hooks.motion.add(arrivalId, arrivalPose);
@@ -866,6 +868,24 @@ export function installApplication(hooks: Hooks) {
       yaw: 0,
       opacity: 1,
     };
+  }
+  function velaCrossesWorkspace(target: NonNullable<ReturnType<typeof presenceTarget>>) {
+    const current = hooks.motion.pose(presenceId);
+    const { zoom, offset } = camera();
+    const stage = {
+      scale: hooks.motion.pose(arrivalId).x,
+      originX: arrivalOrigin.x,
+      originY: arrivalOrigin.y,
+    };
+    return state?.blocks.some((block) => {
+      const box = footprint({ ...block, locked: !!block.locked });
+      return presenceTravelOccludes(current, target, {
+        x: box.x * zoom + offset.x,
+        y: box.y * zoom + offset.y,
+        width: box.width * zoom,
+        height: box.height * zoom,
+      }, stage);
+    });
   }
   function presenceCard() {
     if (
@@ -1198,7 +1218,14 @@ export function installApplication(hooks: Hooks) {
     const overview = next.navigation.kind === "constellation";
     document.body.classList.toggle("constellation-overview", overview);
     universe.classList.toggle("overview", overview);
-    el("#stage").inert = overview;
+    if (navigated) {
+      waitingForVela = arrivingWorkspace &&
+        hooks.motion.pose(arrivalId).opacity <= 0.003 &&
+        !hooks.motion.reduced &&
+        !constellation?.controller.policy.quiet &&
+        !!presence && !!velaCrossesWorkspace(presence);
+    }
+    el("#stage").inert = overview || waitingForVela;
     if (leavingWorkspace) {
       departingWorkspace = true;
       arrivalOrigin = { x: innerWidth / 2, y: innerHeight / 2 };
@@ -1216,7 +1243,12 @@ export function installApplication(hooks: Hooks) {
       // Direct navigation and interrupted graph travel still apply a canonical
       // workspace. The graph callback can refine the origin when it has one.
       if (arrivingWorkspace) {
-        hooks.motion.target(arrivalId, arrivalPose, "canonical workspace arrival", true);
+        hooks.motion.target(
+          arrivalId,
+          waitingForVela ? { ...arrivalPose, opacity: 0 } : arrivalPose,
+          "canonical workspace arrival",
+          true,
+        );
         hooks.wake();
       }
     }
@@ -1308,6 +1340,7 @@ export function installApplication(hooks: Hooks) {
           };
           el("#stage").style.transformOrigin =
             `${arrivalOrigin.x}px ${arrivalOrigin.y}px`;
+          if (waitingForVela) return;
           const body = hooks.motion.bodies.get(arrivalId)!;
           if (
             !body.transitioning &&
@@ -4928,6 +4961,15 @@ export function installApplication(hooks: Hooks) {
         (policy.reduced || policy.quiet || policy.hidden)
       )
         hooks.motion.snap(presenceId);
+      if (waitingForVela && (
+        policy.reduced || policy.quiet || policy.hidden ||
+        !target || !velaCrossesWorkspace(target)
+      )) {
+        waitingForVela = false;
+        el("#stage").inert = false;
+        hooks.motion.target(arrivalId, arrivalPose, "Vela cleared the workspace arrival");
+        hooks.wake();
+      }
       velaCard.classList.toggle("vela-card", !!presenceCard());
       const card = presenceCard();
       if (card) {
@@ -4954,8 +4996,8 @@ export function installApplication(hooks: Hooks) {
     },
     ready,
     workspaceSurfacesVisible: () =>
-      state?.navigation.kind !== "constellation" ||
-      (departingWorkspace && hooks.motion.pose(arrivalId).opacity > 0.003),
+      !waitingForVela && (state?.navigation.kind !== "constellation" ||
+      (departingWorkspace && hooks.motion.pose(arrivalId).opacity > 0.003)),
     surfaceView: () => ({
       scale: hooks.motion.pose(arrivalId).x,
       opacity: hooks.motion.pose(arrivalId).opacity,
