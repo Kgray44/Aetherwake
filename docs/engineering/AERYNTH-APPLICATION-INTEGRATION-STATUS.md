@@ -2,6 +2,44 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Portable BU scale and combined Codex preflight
+
+All six BU scale receipts passed. Each set of 10, 25, and 50 cards
+exercised Fit, Universe navigation, empty-workspace travel, resize,
+reduced motion, WebGL recovery and exact restart. All three SQLite
+profiles passed integrity and recorded zero provider executions. The
+receipts in bu-exact-scale-1793711051294 match BU's rendered asset hashes.
+
+| Cards | Initial / restart hydration | Fit / resize round trip | Fit callback / offscreen paint p95 | Restart paint p95 / renderer working set |
+| ---: | ---: | ---: | ---: | ---: |
+| 10 | 1.93 / 1.39 s | 48 / 71 ms | 33.4 / 28.1 ms | 18.6 ms / 171 MiB |
+| 25 | 2.00 / 1.35 s | 80 / 85 ms | 33.4 / 33.6 ms | 19.6 ms / 178 MiB |
+| 50 | 2.10 / 1.56 s | 122 / 158 ms | 50.0 / 55.9 ms | 19.1 ms / 183 MiB |
+
+The 50-card overview drew all 50 cards with no detailed housings.
+A separate matched four-run BT/BU/BU/BT check opened the same saved
+transcript on each package. Both BT runs advanced one message. Both
+BU runs kept the original message within 0.18 CSS px and returned to
+the exact original offset. Focus paint p95 was 23.1, 24.5, 24.4 and
+27.7 ms respectively, with callback p95 of 16.8 ms in all four runs.
+These short measurements show no consistent regression in this sample.
+They leave physical presentation and VRAM unmeasured. Receipts are in
+bu-focus-pair-1793711124934.
+
+The BU live Codex launcher continues from a clone of the completed
+steps 1–20 workspace profile. In the same synthetic project, it adds
+a Codex check workspace and preserves Development's exact prior
+geometry, viewport and Vela placement. The installed Codex provider
+reported available authentication. A fresh process recovered the exact
+placement and unsent draft. In a second clone, the real composer Send
+reached native review with the exact draft and zero selected sources.
+The hidden-owner guard declined it, and the draft remained with zero
+executions. Receipt SHA-256 is
+772934899effa96a029a8d32065a4ae4207fae8beea2f8d3f0a648b1573b2543
+in review-package-motion-1793711209999. The owner launcher in
+review-live-codex-bu-1793711184404 is staged for step 21. All owned
+test processes exited and the existing owner window was left open.
+
 ## November 3 Portable BU chat focus and combined journey
 
 Commit 3267786 captures the first visible canonical message before
