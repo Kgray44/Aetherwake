@@ -2580,6 +2580,7 @@ export function installApplication(hooks: Hooks) {
             commandId: crypto.randomUUID(),
             workspaceId,
             expectedLayoutVersion: state.layoutVersion,
+            bounds: viewBounds(),
             resourceId,
             expectedResourceVersion: resource.version,
             kind: definition.kind,
