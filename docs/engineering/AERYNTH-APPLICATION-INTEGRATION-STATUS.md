@@ -30,6 +30,38 @@ and six backend resource-opening tests passed. The journey had zero
 provider executions. The running owner window and portable AH predate
 this correction.
 
+## November 3 packaged motion and fit comparison
+
+The same synthetic 50-card SQLite seed was copied into six fresh profiles.
+Portable AI and AJ ran sequentially in order AI, AJ, AJ, AI, AI, AJ.
+All six fit the same 50 cards and preserved canonical resources and
+placement identities. In 1.2-second fit samples, AI recorded 170–194
+Chromium style recalculations and 426–450 ms of style work. AJ recorded
+769–819 recalculations and 629–642 ms of style work. Median fit-sample
+offscreen paint P95 increased from 78.67 to 100.81 ms. Both builds
+settled to zero style recalculations. AJ preserves the compact control
+hit-test fix. The repeated transition cost was handed to Universal
+Block System for correction. Private source-bound receipts are under
+`fit-comparison-1793692458005`. These short hidden samples do not measure
+the monitor or qualify sustained performance.
+
+A separate AJ journey recorded 180 actual offscreen Electron paints at
+960×600. The 11.8-second WebP uses the captured timing and shows leaving
+Development, travelling through project and Universe views, moving and
+editing the Engineering note, and returning to the exact Development
+layout. Sampled frames show the same orbital architecture throughout,
+Vela moving toward the upper-right in Universe, and the glass workspace
+returning. The same profile passed the separate restart phase. Decoding
+verified every frame and exact recorded playback duration. The recording
+used bounded capture, deliberate review holds and no provider turn. It
+provides motion evidence, not a presented-frame or owner artistic
+qualification.
+
+Private profile `review-package-motion-1793692583209` retains the original
+frames, timings, sampled stills, decoded audit and restart receipt. Motion
+file SHA-256 is
+`d11bbddd504c0b69b62959445b2945b828a7972f1df740a77c62ff371b8019b7`.
+
 ## November 3 portable AJ and compact overview
 
 Universal Block System's `9790f0b` is integrated as `5981e7d`. In the
