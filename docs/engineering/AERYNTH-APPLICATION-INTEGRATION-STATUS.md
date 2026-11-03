@@ -2,6 +2,40 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Portable BU chat focus and combined journey
+
+Commit 3267786 captures the first visible canonical message before
+the workspace card changes focus styling. The shared chat reanchors
+that message during the existing Motion Coordinator frames and
+measured reflow. Scrolling and explicit transcript navigation can
+supersede the anchor. The same editor, conversation, and draft remain
+mounted through the presentation change.
+
+Portable BU packages 3267786ac617dc4542f8217696418dd4b0266657 with
+tree 5bdf2e2fedc71744ee4feecaf0cf26e25c25cae4. Independent rehash
+verified all 427 files and manifest SHA-256
+1fd1b53202f0eb537638733939adbe4e24e2edc55a0a2d21c11e68517736ac27.
+The strict build, 160 conversation checks and 409 desktop checks passed.
+
+The packaged test kept the same reading message within 0.18 CSS px
+through expansion, restored the exact workspace scroll offset, and
+survived a reversal during motion with the same draft, selection,
+editor and message IDs. Restart restored the exact draft and selection
+and the same reading message within one CSS pixel. Reduced motion and
+a subsequent manual scroll also passed. The three PNGs and both
+receipts are in review-package-motion-1793710817069. Receipt SHA-256
+values are 08a940c5dc37fc91ab14ae7d96ac8ea39a252d6a72fdd2501126ba9d853ae0f3
+and 76ce09bc53d50b2e721248181d5b868e5d8a052277a5c18585a10d3009689ba2.
+
+BU also passed the combined workspace/Constellation steps 1–20 in
+review-package-motion-1793710861742, with five PNGs and an 11.232 s
+recording from 172 actual offscreen Electron paints. The decoded
+Aerynth-BU-Constellation-journey.webp has SHA-256
+f4279a93489605aa9d493dcff7c83b4a849ef90a5f1c7517964433d3be12cf75.
+These hidden DOM-driven checks used isolated synthetic profiles. All
+owned processes exited. BU still awaits live provider and physical
+display verification.
+
 ## November 3 Portable BT workspace conversation continuity
 
 The exact BT package opened a workspace conversation with six local
