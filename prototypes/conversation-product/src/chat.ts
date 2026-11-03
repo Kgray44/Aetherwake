@@ -1,9 +1,10 @@
-import type { ConversationProductPort, Detail, MessageView } from './contracts.ts';
+import type { ConversationProductPort, ConversationView, ConversationViewPosition, Detail, MessageView } from './contracts.ts';
 import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
 import { ConversationDraftSession, type DraftSessionSnapshot } from './draft-session.ts';
 import { renderMarkdown } from './markdown.ts';
 import type { ExperienceMotionPort, ExperiencePose } from '../../application-contract/motion.ts';
 import { mountConversationPicker, conversationControlStates, conversationDisclosures, type ConversationPicker } from './picker.ts';
+import type { ConversationViewCapture, ConversationViewPersistence } from './view-persistence.ts';
 let chatSerial=0;
 
 export type ConversationExecution = PublicConversationExecution;
@@ -48,13 +49,14 @@ export interface ConversationChatOptions {
   layoutHost?: HTMLElement;
   /** Externally supplied sessions remain owned by the caller. */
   draftSession?: ConversationDraftSession; initialDraft?: string; initialScroll?: number; initialOffset?: number;
+  viewPersistence?:ConversationViewPersistence;initialView?:ConversationView;initialAroundMessageId?:string;
   execution?: ConversationExecutionPort; copy?: (text: string) => Promise<void>;
   motion?:ExperienceMotionPort;viewId?:string;
   /** Presentation hint only. Canonical source/binding/revision checks stay in the host. */
   onProviderChange?:(event:ConversationProviderChange)=>void|Promise<void>;
   onDetail?: (detail: Detail) => void; onUnavailable?: () => void; onChanged?: () => void | Promise<void>;
   onMessageAction?: (event: ConversationMessageAction) => void | Promise<void>;
-  onViewState?: (state: { resourceId: string; content: string; scroll: number; offset: number }) => void;
+  onViewState?: (state: { resourceId: string; content: string; scroll: number; offset: number; view?:ConversationViewCapture }) => void;
 }
 export interface ConversationChat {
   ready: Promise<void>; refresh(options?: { aroundMessageId?: string; latest?: boolean }): Promise<void>;
@@ -123,6 +125,9 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   let disposed = false, generation = 0, current: Detail|null = null, offset = options.initialOffset, sending = false, uncertain = false, recovering = false, composing = false;
   let sendTask: Promise<void>|null = null, cancelPending = false, streamLimited = false, accessRevoked = false;
   let pendingFollow:{messageId?:string}|null=null;
+  let pendingAnchor:NonNullable<ConversationViewPosition['anchor']>|null=null,viewIntent=0,viewWanted=false,userScroll=false,preferredViewAnchor:string|undefined,persistenceIntent:number|undefined;
+  const tracksView=!!(options.viewPersistence||options.initialView);
+  const setScroll=(value:number)=>{userScroll=false;if(messages.scrollTop!==value)messages.scrollTop=value;};
   let execution: ConversationExecution|null = null, unsubscribeExecution: (()=>void)|undefined, streamExecution = '', lastCursor = -1, connection: 'available'|'unavailable' = 'available';
   const seenEvents = new Set<string>(), cache = new Map<string,{signature:string;node:HTMLElement}>();
   const days = new Map<string,{day:string;node:HTMLElement}>();
@@ -133,7 +138,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   options.motion?.add(feedbackKey,feedbackPose(0,0));options.motion?.add(feedbackBarKey,feedbackPose(0,0));
   const reconcileFeedback=()=>{if(feedbackOpen){const height=feedbackContents.scrollHeight;if(height!==feedbackHeight){feedbackHeight=height;options.motion?.target(feedbackKey,feedbackPose(height,1),'conversation feedback content');options.motion?.wake();}}};
   const renderFeedback=()=>{const phase=session.snapshot().phase,notice=!!status.textContent&&status.dataset.statusKind!=='send-accepted';feedbackToggle.textContent=phase==='conflict'?'Review draft conflict':phase==='error'?'Review draft recovery':uncertain?'Review send outcome':'Details';feedbackToggle.hidden=!feedbackOpen&&!uncertain&&phase==='clean'&&!notice&&!contextNote.textContent&&current?.providers.find(p=>p.id===current?.conversation.providerId)?.available!==false;const cap=presentation==='workspace'?22:availableHeight>0&&availableHeight<280?28:48,height=feedbackToggle.hidden&&!status.textContent?0:Math.min(cap,feedbackLine.scrollHeight);if(height!==feedbackBarHeight){feedbackBarHeight=height;options.motion?.target(feedbackBarKey,feedbackPose(height,Number(height>0)),'conversation feedback summary');options.motion?.wake();}reconcileFeedback();};
-  feedbackToggle.addEventListener('click',()=>{feedbackOpen=!feedbackOpen;feedbackToggle.setAttribute('aria-expanded',String(feedbackOpen));feedbackBody.inert=!feedbackOpen;liveFollow=false;if(feedbackOpen){inspectionReturn=messages.scrollTop;inspectionFollow=true;feedbackBody.hidden=false;feedbackHeight=0;reconcileFeedback();}else{inspectionFollow=false;if(inspectionReturn!==null)messages.scrollTop=inspectionReturn;inspectionReturn=null;if(options.motion){options.motion.target(feedbackKey,feedbackPose(0,0),'conversation feedback close');options.motion.wake();}else feedbackBody.hidden=true;}renderFeedback();});
+  feedbackToggle.addEventListener('click',()=>{feedbackOpen=!feedbackOpen;feedbackToggle.setAttribute('aria-expanded',String(feedbackOpen));feedbackBody.inert=!feedbackOpen;liveFollow=false;if(feedbackOpen){inspectionReturn=messages.scrollTop;inspectionFollow=true;feedbackBody.hidden=false;feedbackHeight=0;reconcileFeedback();}else{inspectionFollow=false;if(inspectionReturn!==null)setScroll(inspectionReturn);inspectionReturn=null;if(options.motion){options.motion.target(feedbackKey,feedbackPose(0,0),'conversation feedback close');options.motion.wake();}else feedbackBody.hidden=true;}renderFeedback();});
   feedbackBody.addEventListener('focusin',()=>{inspectionFollow=false;inspectionReturn=null;});
   feedbackBody.addEventListener('toggle',()=>{reconcileFeedback();},true);
   let providerPicker:ConversationPicker|null=null;
@@ -147,7 +152,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const copy = options.copy ?? (text => navigator.clipboard.writeText(text));
   const report = (text: string,kind:'notice'|'send-accepted'='notice') => { if (!disposed){status.textContent=statusDetail.textContent=text;status.dataset.statusKind=kind;renderFeedback();} };
   const active = () => execution && ['dispatching','running'].includes(execution.state);
-  const viewState = () => options.onViewState?.({resourceId,content:textarea.value,scroll:messages.scrollTop,offset:current?.messages.offset??offset??0});
+  const viewState = () => {
+    let view:ConversationViewCapture|undefined;
+    if(viewWanted&&options.viewPersistence&&persistenceIntent!==undefined&&!options.viewPersistence.isCurrentIntent(resourceId,persistenceIntent))viewWanted=false;
+    if(tracksView&&viewWanted&&!disposed&&!accessRevoked&&current?.conversation.state==='active'&&!composing){const snapshot=session.snapshot();if(snapshot.phase==='clean'&&snapshot.version!==null&&snapshot.content===textarea.value){const position=capturePosition();if(position!==undefined){viewWanted=false;view={resourceId,position,selection:{draftVersion:snapshot.version,start:textarea.selectionStart,end:textarea.selectionEnd,direction:textarea.selectionDirection??'none'},draftReady:true};options.viewPersistence?.remember(view,persistenceIntent);}}}
+    options.onViewState?.({resourceId,content:textarea.value,scroll:messages.scrollTop,offset:current?.messages.offset??offset??0,...(view?{view}:{})});
+  };
+  const markViewIntent=(messageId?:string)=>{if(tracksView){viewIntent++;viewWanted=true;pendingAnchor=null;preferredViewAnchor=messageId;persistenceIntent=options.viewPersistence?.beginIntent(resourceId);}};
   let measuredHeight=layoutHost?.clientHeight??0,measuredWidth=layoutHost?.clientWidth??0,availableHeight=measuredHeight,layoutHidden=!!layoutHost&&measuredHeight===0;
   let measureKey='',naturalHeight=0,resizeFrame:number|undefined,resizeTimer:ReturnType<typeof setTimeout>|undefined;
   const cancelResize=()=>{if(resizeFrame!==undefined){if(typeof cancelAnimationFrame==='function')cancelAnimationFrame(resizeFrame);resizeFrame=undefined;}if(resizeTimer!==undefined){clearTimeout(resizeTimer);resizeTimer=undefined;}};
@@ -171,7 +182,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const next=Math.floor(Math.min(maximum,Math.max(minimum,naturalHeight)))+'px';if(textarea.style.height!==next)textarea.style.height=next;
     renderFeedback();
   };
-  const scheduleResize=()=>{if(disposed||layoutHidden||resizeFrame!==undefined||resizeTimer!==undefined)return;const reconcile=()=>{resizeFrame=undefined;resizeTimer=undefined;resize();drainPendingFollow();};if(typeof requestAnimationFrame==='function')resizeFrame=requestAnimationFrame(reconcile);else resizeTimer=setTimeout(reconcile,0);};
+  const scheduleResize=()=>{if(disposed||layoutHidden||resizeFrame!==undefined||resizeTimer!==undefined)return;const reconcile=()=>{resizeFrame=undefined;resizeTimer=undefined;resize();drainPendingFollow();drainAnchor();};if(typeof requestAnimationFrame==='function')resizeFrame=requestAnimationFrame(reconcile);else resizeTimer=setTimeout(reconcile,0);};
   let observedHost=false;
   const resizeObserver=!layoutHost||typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(entries=>{
     const entry=entries.find(value=>value.target===layoutHost);if(disposed||!entry)return;
@@ -180,7 +191,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   });
   if(layoutHost)resizeObserver?.observe(layoutHost);
   function revokeView() {
-    const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=null;inspectionFollow=liveFollow=false;inspectionReturn=null;root.dataset.resourceAvailable='false';current=null;cache.clear();days.clear();messages.replaceChildren(stream,feedbackBody);
+    const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=pendingAnchor=null;viewWanted=userScroll=false;inspectionFollow=liveFollow=false;inspectionReturn=null;root.dataset.resourceAvailable='false';current=null;cache.clear();days.clear();messages.replaceChildren(stream,feedbackBody);
     streamText.textContent='';stream.hidden=true;paging.hidden=true;capabilityNote.textContent=contextNote.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;
     renderDraft();if(notify)options.onUnavailable?.();report('This conversation is no longer available. Its draft is retained.');
   }
@@ -188,7 +199,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if (disposed) return;
     if(providerPicker){providerPicker.update({items:current?.providers.map(item=>({value:item.id,label:item.label,disabled:!item.available||!item.record,description:item.reason}))??[],value:current?.conversation.providerId??'',disabled:!current||accessRevoked||sending||!!active()||current.conversation.state==='archived'});}
     // Do not assign equal values: native caret, selection and composition remain intact.
-    if (textarea.value !== snapshot.content) { const start = textarea.selectionStart, end = textarea.selectionEnd; textarea.value = snapshot.content; if (document.activeElement === textarea) textarea.setSelectionRange(Math.min(start,snapshot.content.length),Math.min(end,snapshot.content.length)); resize(); }
+    if (textarea.value !== snapshot.content) { const start = textarea.selectionStart, end = textarea.selectionEnd,direction=textarea.selectionDirection??'none'; textarea.value = snapshot.content; if (document.activeElement === textarea) textarea.setSelectionRange(Math.min(start,snapshot.content.length),Math.min(end,snapshot.content.length),direction); resize(); }
     draftStatus.dataset.phase = draftStatus.dataset.draftState = snapshot.phase; draftStatus.dataset.version = snapshot.version === null ? '' : String(snapshot.version);
     draftStatus.textContent = snapshot.phase === 'clean' ? (snapshot.content ? 'Draft saved' : '') : snapshot.phase === 'saving' ? 'Saving draft…' : snapshot.phase === 'dirty' ? 'Unsaved changes' : snapshot.phase === 'loading' ? 'Loading saved draft…' : snapshot.phase === 'conflict' ? 'This draft changed in another view. Choose which text to keep.' : 'Draft recovery needs attention: '+snapshot.error;
     if (snapshot.remote) {
@@ -204,16 +215,17 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   }
   const unsubscribeDraft = session.subscribe(renderDraft);
   async function recover(work: ()=>Promise<void>) { if (recovering) return; recovering = true; renderDraft(); try { await work(); } catch (error) { report(errorText(error)); } finally { recovering = false; renderDraft(); } }
-  keep.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote) void recover(()=>session.resolve('keep-local',remote.version)); });
-  useStored.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote) void recover(()=>session.resolve('use-stored',remote.version)); });
-  retry.addEventListener('click', () => { void recover(async()=>{await session.reload();await session.flush();}); });
+  keep.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('keep-local',remote.version));} });
+  useStored.addEventListener('click', () => { const remote = session.snapshot().remote; if (remote){markViewIntent();void recover(()=>session.resolve('use-stored',remote.version));} });
+  retry.addEventListener('click', () => { markViewIntent();void recover(async()=>{await session.reload();await session.flush();}); });
   reviewed.addEventListener('click', () => { uncertain = false; recovery.replaceChildren(); renderDraft(); });
-  textarea.addEventListener('input', () => { if(status.dataset.statusKind==='send-accepted'&&textarea.value!==session.snapshot().content)report('');session.update(textarea.value);resize(); });
-  textarea.addEventListener('compositionstart',()=>{composing=true;});textarea.addEventListener('compositionend',()=>{composing=false;});
+  textarea.addEventListener('input', () => { markViewIntent();if(status.dataset.statusKind==='send-accepted'&&textarea.value!==session.snapshot().content)report('');session.update(textarea.value);resize();viewState(); });
+  textarea.addEventListener('compositionstart',()=>{composing=true;markViewIntent();});textarea.addEventListener('compositionend',()=>{composing=false;viewState();});
+  for(const name of ['keyup','pointerup'])textarea.addEventListener(name,()=>{markViewIntent();viewState();});
   textarea.addEventListener('keydown', event => { if (!composing && composerShouldSubmit(event)) { event.preventDefault(); if (!send.disabled) composer.requestSubmit(); } });
-  messages.addEventListener('scroll', viewState, {passive:true});
-  for(const name of ['wheel','pointerdown','touchstart'])messages.addEventListener(name,()=>{pendingFollow=null;inspectionFollow=liveFollow=false;inspectionReturn=null;},{passive:true});
-  messages.addEventListener('keydown',event=>{if(['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)){pendingFollow=null;inspectionFollow=liveFollow=false;inspectionReturn=null;}});
+  messages.addEventListener('scroll',()=>{if(userScroll)markViewIntent();viewState();},{passive:true});
+  for(const name of ['wheel','pointerdown','touchstart'])messages.addEventListener(name,event=>{pendingFollow=pendingAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;if(name!=='pointerdown'||event.target===messages){userScroll=true;if(tracksView)viewIntent++;}},{passive:true});
+  messages.addEventListener('keydown',event=>{if(event.target===messages&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)){pendingFollow=pendingAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;userScroll=true;if(tracksView)viewIntent++;}});
   const doAction = (event: ConversationMessageAction) => { Promise.resolve(options.onMessageAction?.(event)).catch(error=>report(errorText(error))); };
   function messageNode(message: MessageView,clock:ReturnType<typeof canonicalClock>): HTMLElement {
     const signature = JSON.stringify([message,clock]), cached = cache.get(message.id); if (cached?.signature === signature) return cached.node;
@@ -249,19 +261,32 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   }
   function followLatestContent(messageId?:string):boolean {
     const viewport=messages.getBoundingClientRect();if(messages.clientHeight<=0||viewport.height<=0)return false;
-    if(presentation!=='workspace'&&!messageId){messages.scrollTop=messages.scrollHeight;return true;}
+    if(presentation!=='workspace'&&!messageId){setScroll(messages.scrollHeight);return true;}
     const content=messageId?messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`)?.querySelector<HTMLElement>('.cp-message-content'):[...messages.querySelectorAll<HTMLElement>('.cp-message-content')].at(-1);if(!content)return !messageId&&current?.messages.items.length===0;
     const box=content.getBoundingClientRect(),scale=viewport.height/(messages.offsetHeight||messages.clientHeight);
     if(!Number.isFinite(scale)||scale<=0||box.height<=0)return false;
     // Action summaries/margins follow the text in flow. Following scrollHeight can show only
     // that footer in a short card. Move this scroller alone to the canonical content's end.
     const bottom=viewport.top+((messages.clientTop||0)+messages.clientHeight)*scale;
-    messages.scrollTop=Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(box.bottom-bottom)/scale));
+    setScroll(Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(box.bottom-bottom)/scale)));
     return true;
   }
   function drainPendingFollow(){if(pendingFollow&&followLatestContent(pendingFollow.messageId))pendingFollow=null;}
-  function render(detail: Detail, around?:string,followMessageId?:string) {
+  function anchorViewport(){const rect=messages.getBoundingClientRect(),scale=rect.height/(messages.offsetHeight||messages.clientHeight);if(messages.clientHeight<=0||!Number.isFinite(scale)||scale<=0)return null;const top=rect.top+(messages.clientTop||0)*scale;return {top,bottom:top+messages.clientHeight*scale,scale};}
+  function capturePosition():ConversationViewPosition|null|undefined{
+    if(!current)return undefined;const conversationRevision=current.conversation.revision;if(!current.messages.items.length)return {conversationRevision,anchor:null};
+    const viewport=anchorViewport();if(!viewport)return undefined;let nearest:NonNullable<ConversationViewPosition['anchor']>|null=null,visible:NonNullable<ConversationViewPosition['anchor']>|null=null;
+    for(const item of current.messages.items){const content=cache.get(item.id)?.node.querySelector<HTMLElement>('.cp-message-content'),box=content?.getBoundingClientRect();if(!box||box.height<=0)continue;const offsetY=(box.top-viewport.top)/viewport.scale;if(!Number.isFinite(offsetY)||Math.abs(offsetY)>1000000)continue;const anchor={messageId:item.id,offsetY};if(item.id===preferredViewAnchor)return {conversationRevision,anchor};if(!visible&&box.bottom>viewport.top&&box.top<viewport.bottom)visible=anchor;if(!nearest||Math.abs(offsetY)<Math.abs(nearest.offsetY))nearest=anchor;}
+    return visible||nearest?{conversationRevision,anchor:visible??nearest}:undefined;
+  }
+  function drainAnchor(){
+    if(!pendingAnchor||disposed||accessRevoked)return;const viewport=anchorViewport(),content=cache.get(pendingAnchor.messageId)?.node.querySelector<HTMLElement>('.cp-message-content'),box=content?.getBoundingClientRect();if(!viewport||!box||box.height<=0)return;
+    const value=messages.scrollTop+(box.top-viewport.top)/viewport.scale-pendingAnchor.offsetY;if(!Number.isFinite(value))return;
+    pendingAnchor=null;setScroll(Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,value)));
+  }
+  function render(detail: Detail, around?:string,followMessageId?:string,restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>) {
     const nearBottom = messages.scrollHeight-messages.scrollTop-messages.clientHeight < 80, scroll = messages.scrollTop;
+    userScroll=false;
     current=detail; const nodes:HTMLElement[]=[],formats={parts:new Intl.DateTimeFormat('en-CA',{year:'numeric',month:'2-digit',day:'2-digit'}),day:new Intl.DateTimeFormat(undefined,{year:'numeric',month:'long',day:'numeric'}),time:new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'})};let previousDay:string|undefined;
     for(const message of detail.messages.items){const clock=canonicalClock(message.createdAt,formats);if(clock.day!==previousDay){let cached=days.get(message.id);if(!cached||cached.day!==clock.day){const divider=el('div',undefined,'cp-chat-day'),label=el('span',clock.dayLabel),line=el('hr');divider.dataset.day=clock.day;divider.dataset.beforeMessageId=message.id;divider.setAttribute('role','separator');divider.setAttribute('aria-label',clock.dayLabel);label.setAttribute('aria-hidden','true');line.setAttribute('aria-hidden','true');divider.append(label,line);cached={day:clock.day,node:divider};days.set(message.id,cached);}nodes.push(cached.node);previousDay=clock.day;}nodes.push(messageNode(message,clock));}
     const copy=providerCopy(detail.conversation.providerId);
@@ -281,23 +306,25 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const attached=detail.shares.filter(s=>s.attached&&s.status==='current').length;contextNote.textContent=attached?`${attached} source excerpt${attached===1?'':'s'} attached for send review. Attachment is not proof of model supply.`:'';
     const before=el('button','Earlier messages'),after=el('button','Later messages');before.type=after.type='button';before.disabled=detail.messages.offset===0;after.disabled=!detail.messages.hasMore;
     decorateConversationControl(before,{identity:'previous'});decorateConversationControl(after,{identity:'next'});paging.dataset.cpGroup='transcript-navigation';
-    before.addEventListener('click',()=>{offset=Math.max(0,detail.messages.offset-50);void refresh().catch(error=>report(errorText(error)));});after.addEventListener('click',()=>{offset=detail.messages.offset+50;void refresh().catch(error=>report(errorText(error)));});
+    const movedPage=()=>{markViewIntent();viewState();};before.addEventListener('click',()=>{offset=Math.max(0,detail.messages.offset-50);void refresh().then(movedPage).catch(error=>report(errorText(error)));});after.addEventListener('click',()=>{offset=detail.messages.offset+50;void refresh().then(movedPage).catch(error=>report(errorText(error)));});
     paging.replaceChildren(before,el('span',`${detail.messages.total?detail.messages.offset+1:0}–${detail.messages.offset+detail.messages.items.length} of ${detail.messages.total}`),after);paging.hidden=detail.messages.total<=detail.messages.limit;
     disclosures?.sync();renderDraft();options.onDetail?.(detail);
-    if(followMessageId){pendingFollow={messageId:followMessageId};drainPendingFollow();}
-    else if(around){pendingFollow=null;messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(around)}"]`)?.scrollIntoView({block:'center'});}
-    else if(pendingFollow)drainPendingFollow();else if(nearBottom)followLatestContent();else messages.scrollTop=scroll;
+    if(restoreAnchor){pendingFollow=null;pendingAnchor=restoreAnchor;drainAnchor();}
+    else if(followMessageId){pendingAnchor=null;pendingFollow={messageId:followMessageId};drainPendingFollow();}
+    else if(around){pendingFollow=pendingAnchor=null;messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(around)}"]`)?.scrollIntoView({block:'center'});markViewIntent(around);viewState();}
+    else if(pendingAnchor&&detail.messages.items.some(item=>item.id===pendingAnchor?.messageId))drainAnchor();else{pendingAnchor=null;if(pendingFollow)drainPendingFollow();else if(nearBottom)followLatestContent();else setScroll(scroll);}
   }
-  async function refresh(input: {aroundMessageId?:string;latest?:boolean;followMessageId?:string}={}) {
+  async function refresh(input: {aroundMessageId?:string;latest?:boolean;followMessageId?:string;restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>;restoreIntent?:number}={}) {
     const request=++generation;
-    const around=input.followMessageId??input.aroundMessageId;
+    const around=input.followMessageId??input.aroundMessageId??input.restoreAnchor?.messageId;
     let d: Detail;
     try { d=await port.command('detail',{resourceId,limit:50,...(around?{aroundMessageId:around}:offset===undefined||input.latest?{offset:Math.max(0,(current?.conversation.messageCount??50)-50)}:{offset})}); }
     catch(error){if(!disposed&&request===generation&&/source_unavailable|access_denied|not_found/.test(errorText(error)))revokeView();throw error;}
     if(disposed||request!==generation)return;
+    if(input.restoreAnchor&&input.restoreIntent!==viewIntent){await refresh({latest:true});return;}
     // Opening uses a bounded page, then fetches the actual latest page when count was not known.
     if((offset===undefined||input.latest)&&!around&&d.messages.hasMore){offset=Math.max(0,d.conversation.messageCount-50);await refresh();return;}
-    accessRevoked=false;root.dataset.resourceAvailable='true';offset=d.messages.offset;render(d,input.aroundMessageId,input.followMessageId);
+    accessRevoked=false;root.dataset.resourceAvailable='true';offset=d.messages.offset;render(d,input.aroundMessageId,input.followMessageId,input.restoreAnchor);
   }
   composer.addEventListener('submit',event=>{event.preventDefault();if(send.disabled||!current)return;const before=current,content=textarea.value,commandId=crypto.randomUUID();sending=true;renderDraft();report(providerCopy(before.conversation.providerId).pending);
     sendTask=(async()=>{
@@ -344,17 +371,27 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
     if(!active())void refresh({latest:true}).catch(error=>report(errorText(error)));
   });
-  const ready=(async()=>{await session.ready;renderDraft();await refresh();resize();if(options.initialScroll!==undefined){pendingFollow=null;messages.scrollTop=options.initialScroll;}else{pendingFollow={};drainPendingFollow();}})().catch(error=>{report(errorText(error));throw error;});
+  const ready=(async()=>{
+    const intent=viewIntent,initialGeneration=generation,reading=options.initialView?Promise.resolve(options.initialView):options.viewPersistence?.restore(resourceId).then(result=>result.view).catch(()=>{report('Saved conversation view is unavailable.');return null;});
+    await session.ready;renderDraft();const saved=await reading;if(disposed||generation!==initialGeneration)return;
+    const view=saved?.resourceId===resourceId&&intent===viewIntent?saved:null,anchor=options.initialScroll===undefined&&!options.initialAroundMessageId?view?.position?.anchor:null;
+    if(anchor){try{await refresh({restoreAnchor:anchor,restoreIntent:intent});}catch(error){if(!/message_unavailable|message_missing|source_revoked/.test(errorText(error)))throw error;await refresh();}}
+    else await refresh(options.initialAroundMessageId?{aroundMessageId:options.initialAroundMessageId}:{});
+    if(disposed)return;resize();
+    if(intent===viewIntent){const snapshot=session.snapshot(),selection=view?.selection;if(selection&&snapshot.phase==='clean'&&snapshot.version===selection.draftVersion&&snapshot.content===textarea.value&&selection.end<=textarea.value.length)textarea.setSelectionRange(selection.start,selection.end,selection.direction);
+      if(options.initialScroll!==undefined&&!options.initialAroundMessageId){pendingFollow=pendingAnchor=null;setScroll(options.initialScroll);}else if(anchor)drainAnchor();else if(!options.initialAroundMessageId){pendingFollow={};drainPendingFollow();}}
+  })().catch(error=>{report(errorText(error));throw error;});
   root.addEventListener('keydown',event=>{if(event.key!=='Escape')return;const details=(event.target as HTMLElement).closest<HTMLDetailsElement>('details[open]');if(details&&root.contains(details)){event.preventDefault();event.stopPropagation();details.open=false;details.querySelector('summary')?.focus();}});
   // The send RPC can remain pending through the entire native provider turn. Draft durability
   // must be independent so a pane can close and the host can offer interruption on quit.
-  const flush=async()=>{await session.flush();viewState();};
+  const flush=async()=>{await session.flush();viewState();try{await options.viewPersistence?.flush(resourceId);}catch{report('View position could not be saved. Your draft remains saved.');}};
   const frame=()=>{if(disposed)return;providerPicker?.frame();disclosures?.frame();controlStates?.frame();reconcileFeedback();let settled=true;if(options.motion){const p=options.motion.pose(feedbackKey),bar=options.motion.pose(feedbackBarKey),height=Math.max(0,p.h)+'px',barHeight=Math.max(0,bar.h)+'px';if(feedbackBody.style.height!==height)feedbackBody.style.height=height;if(feedbackBody.style.opacity!==String(p.opacity))feedbackBody.style.opacity=String(p.opacity);if(feedback.style.height!==barHeight)feedback.style.height=barHeight;if(feedback.style.opacity!==String(bar.opacity))feedback.style.opacity=String(bar.opacity);if(!feedbackOpen&&p.opacity<.001)feedbackBody.hidden=true;settled=Math.abs(p.h-feedbackHeight)<1&&p.opacity>.995;}
-    if(inspectionFollow&&feedbackOpen&&messages.clientHeight>0){const box=messages.getBoundingClientRect(),body=feedbackBody.getBoundingClientRect(),scale=box.height/(messages.offsetHeight||messages.clientHeight);if(Number.isFinite(scale)&&scale>0&&body.height>0){const next=Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(body.top-box.top)/scale));if(messages.scrollTop!==next)messages.scrollTop=next;if(settled)inspectionFollow=false;}}
-    if(liveFollow&&!feedbackOpen&&!stream.hidden&&messages.clientHeight>0){const next=Math.max(0,messages.scrollHeight-messages.clientHeight);if(messages.scrollTop!==next)messages.scrollTop=next;liveFollow=false;}
+    drainAnchor();
+    if(inspectionFollow&&feedbackOpen&&messages.clientHeight>0){const box=messages.getBoundingClientRect(),body=feedbackBody.getBoundingClientRect(),scale=box.height/(messages.offsetHeight||messages.clientHeight);if(Number.isFinite(scale)&&scale>0&&body.height>0){const next=Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(body.top-box.top)/scale));setScroll(next);if(settled)inspectionFollow=false;}}
+    if(liveFollow&&!feedbackOpen&&!stream.hidden&&messages.clientHeight>0){const next=Math.max(0,messages.scrollHeight-messages.clientHeight);setScroll(next);liveFollow=false;}
   };
-  return {ready,refresh,focusComposer:()=>textarea.focus(),frame,setPresentation(mode){if(mode!=='workspace'&&mode!=='focused')throw new Error('invalid_chat_presentation');if(disposed)return;const scroll=messages.scrollTop;presentation=mode;resize();messages.scrollTop=scroll;drainPendingFollow();},flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
-    if(disposed)return;await flush();disposed=true;generation++;pendingFollow=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
+  return {ready,refresh,focusComposer:()=>textarea.focus(),frame,setPresentation(mode){if(mode!=='workspace'&&mode!=='focused')throw new Error('invalid_chat_presentation');if(disposed)return;const scroll=messages.scrollTop;presentation=mode;resize();setScroll(scroll);drainPendingFollow();drainAnchor();},flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
+    if(disposed)return;await flush();disposed=true;generation++;pendingFollow=pendingAnchor=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
     if(!options.draftSession){
       if(sendTask){void sendTask.then(()=>session.dispose(),()=>session.dispose()).catch(()=>{/* Existing durable recovery is untouched; never overwrite or replay a conflict. */});}
       else await session.dispose();
