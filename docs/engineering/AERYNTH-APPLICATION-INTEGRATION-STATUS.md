@@ -2,6 +2,35 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Portable BU 50-card Fit profiling
+
+A bounded Chromium trace of the exact BU renderer covered the Fit
+command and the first 750 ms of the transition. On the renderer main
+thread, UpdateLayoutTree totaled 198 ms across 30 events and Layout
+totaled 168 ms across 24 events. The largest individual style and
+layout events each took about 19 ms. Chromium's nested event totals
+describe overlapping work, so they cannot be added to calculate frame
+or GPU time. Tracing slowed the test and serves only as attribution.
+The 9.4 MB trace and CPU profile are in bu-fit-trace-1793711400503.
+
+Two matched four-run tests used cloned 50-card seeds and inserted one
+temporary renderer change per variant. Both retained the exact fitted
+union of 50 cards and Vela, canonical state, WebGL recovery and
+reduced motion. Neither variant went into the product.
+
+| Trial order | Offscreen Fit paint p95 | Chromium layout calls | Chromium style recalculations |
+| --- | --- | --- | --- |
+| Control, card layout/style containment, containment, control | 58.9, 82.7, 58.3, 49.0 ms | 23, 23, 25, 25 | 154, 154, 156, 156 |
+| Control, changed-property pose writes, changed-property writes, control | 54.0, 61.8, 53.3, 49.6 ms | 25, 25, 24, 24 | 156, 152, 155, 155 |
+
+Settled Fit p95 across the eight runs ranged from 18.1 to 19.4 ms.
+The measured cost is concentrated in the transition. Isolating card
+layout and replacing bulk pose writes with CSSOM property differences
+left layout and style work in the same range. Evidence is in
+bu-fit-containment-1793711500168 and bu-fit-pose-diff-1793711568552.
+All owned processes exited. No provider turn, foreground control,
+physical presentation measurement or product change occurred.
+
 ## November 3 Portable BU scale and combined Codex preflight
 
 All six BU scale receipts passed. Each set of 10, 25, and 50 cards
