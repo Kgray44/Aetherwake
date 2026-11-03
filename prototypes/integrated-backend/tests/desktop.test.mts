@@ -445,6 +445,61 @@ test("canonical workspace archive removes a destination and restore retains its 
   }
 });
 
+test("archiving the last open workspace preserves the current Constellation view", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aerynth-spatial-archive-test-"));
+  const b = new Backend({
+    path: join(dir, "db"),
+    provider: "fixture",
+    contentPolicy: "synthetic-only",
+  });
+  try {
+    const project = (await b.call("desktop", {
+      type: "createProject",
+      title: "Archive project",
+    })).projects[0];
+    const fallback = (await b.call("desktop", {
+      type: "createWorkspace",
+      title: "Remaining workspace",
+      projectId: project.id,
+    })).activeWorkspaceId!;
+    const created = await b.call("desktop", {
+      type: "createWorkspace",
+      title: "Workspace to archive",
+      projectId: project.id,
+    });
+    const workspaceId = created.activeWorkspaceId!;
+    for (const projectId of [project.id, null]) {
+      const target = { kind: "constellation", projectId } as const;
+      const browsing = await b.call("desktop", { type: "navigate", target });
+      assert.equal(browsing.activeWorkspaceId, workspaceId);
+      const archived = await b.call("desktop", {
+        type: "archiveWorkspace",
+        workspaceId,
+        expectedVersion: browsing.workspaces.find(item => item.id === workspaceId)!.version,
+        archived: true,
+      });
+      assert.deepEqual(archived.navigation, target);
+      assert.equal(archived.activeWorkspaceId, fallback);
+      assert(!archived.history.some(item => item.kind === "workspace" && item.workspaceId === workspaceId));
+      await assert.rejects(b.call("desktop", {
+        type: "navigate",
+        target: { kind: "workspace", workspaceId },
+      }));
+      const restored = await b.call("desktop", {
+        type: "archiveWorkspace",
+        workspaceId,
+        expectedVersion: archived.archivedWorkspaces!.find(item => item.id === workspaceId)!.version,
+        archived: false,
+      });
+      assert.deepEqual(restored.navigation, target);
+      await b.call("desktop", { type: "navigate", target: { kind: "workspace", workspaceId } });
+    }
+  } finally {
+    await b.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("archived subjects keep valid unavailable placements and archived projects cannot expose child destinations", async () => {
   const dir = mkdtempSync(join(tmpdir(), "aerynth-eligibility-test-")),
     path = join(dir, "db");

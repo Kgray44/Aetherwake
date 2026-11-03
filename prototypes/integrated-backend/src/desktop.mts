@@ -467,13 +467,18 @@ export class DesktopState {
           if (s.activeWorkspaceId === a.workspaceId) {
             const next = this.visibleWorkspaces()[0];
             s.activeWorkspaceId = next ? String(next.id) : null;
-            this.navigate(
-              s,
-              s.activeWorkspaceId
-                ? { kind: "workspace", workspaceId: s.activeWorkspaceId }
-                : { kind: "constellation", projectId: null },
-              false,
-            );
+            if (s.navigation.kind === "workspace") {
+              this.navigate(
+                s,
+                s.activeWorkspaceId
+                  ? { kind: "workspace", workspaceId: s.activeWorkspaceId }
+                  : { kind: "constellation", projectId: null },
+                false,
+              );
+            } else if (s.activeWorkspaceId) {
+              // Update the return workspace while keeping the current sky view.
+              this.engine.switchWorkspace(s.activeWorkspaceId);
+            }
           }
         }
         break;
