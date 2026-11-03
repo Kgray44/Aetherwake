@@ -122,6 +122,7 @@ exports.velaCommand = async ({
   offerPlanningByDefault = false,
   directMessageSend = false,
   routeNative = directMessageSend,
+  requireInspectionDirectory = false,
   observeNativeRequest,
 }) => {
   const observe = (event) => {
@@ -231,6 +232,7 @@ exports.velaCommand = async ({
         resourceIds: request.resourceIds,
         ...(providerId === undefined ? {} : { providerId }),
         ...(directMessageSend ? { adaptive: true, model, reasoningEffort, mode, budgetLimit, allowEscalation, includeRecentHistory, overrideDefaults } : {}),
+        ...(directMessageSend && requireInspectionDirectory ? { requireInspectionDirectory: true } : {}),
         ...(request.handoffSourceRequestId ? { handoffSourceRequestId: request.handoffSourceRequestId } : {}),
         ...(request.routingAgentId ? { routingAgentId: request.routingAgentId } : {}),
         ...(value.activeCard === undefined ? {} : { activeCard: value.activeCard }),
@@ -239,6 +241,16 @@ exports.velaCommand = async ({
       try { return await call("velaRequestPreview", previewInput); }
       catch (error) {
         const code = error?.code ?? error?.message;
+        if (directMessageSend && requireInspectionDirectory && code === "vela_codex_inspection_target_required") {
+          if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+          const selected = await dialog.showOpenDialog(win, {
+            title: "Select the Git repository to inspect",
+            properties: ["openDirectory", "dontAddToRecent"],
+          });
+          if (selected.canceled || selected.filePaths.length !== 1) throw Error("authorization_cancelled");
+          if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+          return call("velaRequestPreview", { ...previewInput, inspectionDirectory: selected.filePaths[0] });
+        }
         const mixed = code === "vela_codex_mixed_targets_required";
         const replace = mixed || code === "vela_codex_edit_target_required";
         const create = mixed || code === "vela_codex_create_target_required";
@@ -318,7 +330,7 @@ exports.velaCommand = async ({
     const next = await call("velaNextWorkflowStage", { requestId: result.id });
     if (!next) return result;
     try {
-      return await exports.velaCommand({ win, dialog, call, reviewProvider, offerPlanningByDefault, directMessageSend, routeNative,
+      return await exports.velaCommand({ win, dialog, call, reviewProvider, offerPlanningByDefault, directMessageSend, routeNative, requireInspectionDirectory,
         observeNativeRequest, input: { name: "request", input: { intent: next.intent, resourceIds: [], authorizeProvider: true,
           mode: "codex", providerId: "codex-app-server", handoffSourceRequestId: result.id } } });
     } catch (error) {

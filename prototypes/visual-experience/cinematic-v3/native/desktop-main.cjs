@@ -544,6 +544,7 @@ app.whenReady().then(async () => {
           offerPlanningByDefault: !verify || verifyAirLocal,
           directMessageSend: !verify || verifyAirLocal,
           routeNative: true,
+          requireInspectionDirectory: !verify && process.platform === "win32",
         });
       } else if (command === "githubTimeline") {
         if (input?.name === "openCommit") {

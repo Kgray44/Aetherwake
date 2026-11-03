@@ -339,6 +339,8 @@ export interface VelaState {
   routingSettings?: import('./routing-settings.ts').VelaRoutingSettingsView;
   fileEdits?: VelaFileEditView[];
   recoverableProviderRequestIds?: string[];
+  /** Bounded transient excerpt of the active conversational response. */
+  activeAnswer?: { requestId: string; text: string; truncated: boolean };
   capabilities: CapabilityDescriptor[]; requests: VelaRequest[]; plans: VelaPlan[];
   receipts: ActionReceipt[]; preferences: AttentionPreferences; attention: AttentionItem[];
   lastPresenceAt: string | null; coverage: 'authorized-app-events-only';

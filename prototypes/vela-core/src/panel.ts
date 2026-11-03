@@ -382,10 +382,11 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
           renderSelection();
         }
         if (!['provider-unavailable','failed','invalid-plan','unknown'].includes(recorded.state) && draftRevision === revision && intent.value === submitted.intent) intent.value = '';
+        observeLiveAnswer(undefined);
         renderStatus({ requests: [recorded], plans: [], receipts: [] });
         await settleSubmittedView(submittedView);
       }
-      catch (error) { busy = false; try { await refresh(); } catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; status.hidden = false; status.textContent = 'The request could not be checked. Its outcome is unknown; review the activity before trying again.'; } throw error; }
+      catch (error) { observeLiveAnswer(undefined); busy = false; try { await refresh(); } catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; status.hidden = false; status.textContent = 'The request could not be checked. Its outcome is unknown; review the activity before trying again.'; } throw error; }
       finally { busy = false; send.disabled = !intent.value.trim(); form.setAttribute('aria-busy', 'false'); stop.hidden = !current?.requests.some(request => request.state === 'planning'); present(); }
     });
   });
@@ -429,6 +430,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       const selected = connected.find(route => route.providerId === chosenProviderId);
       const inherited = current?.routingSettings;
       const inheritedProvider = inherited?.effective.providerId;
+      const activeMode = useAutomaticOnce ? 'auto' : routeMode.value !== 'auto' ? routeMode.value : inherited?.effective.mode ?? 'auto';
+      const activeProvider = useAutomaticOnce ? null : chosenProviderId ?? inheritedProvider;
+      intent.placeholder = 'Vela · ' + (activeProvider ? providerName(activeProvider)
+        : modes.find(([mode]) => mode === activeMode)?.[1] ?? 'Auto');
       provider.textContent = selected ? providerName(selected.providerId) + (selected.available ? ' · connected' : ' · connection required')
         : useAutomaticOnce ? 'Auto for this send'
         : inheritedProvider ? providerName(inheritedProvider) + ' · ' + inherited?.origins.providerId + ' default'
@@ -693,6 +698,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         vela_deep_model_unavailable: 'The connected catalog has no verified deep reasoning controls. Choose an available model or reconnect. Your draft is still here.',
         vela_pinned_provider_cannot_execute: 'This request needs local tools. Choose Codex or Auto in Provider. Your draft is still here.',
         vela_codex_write_unavailable: 'Vela can review eligible repository edits. This request needs an execution capability that is unavailable here. Your draft is still here.',
+        vela_codex_inspection_target_unavailable: 'Choose the root folder of an accessible Git repository with at least one commit.',
+        vela_codex_inspection_target_changed: 'The selected repository changed after review. Review the current checkout to continue.',
         vela_edit_file_ineligible: 'Choose a supported source file or destination. Existing files must be tracked UTF-8 text of 8 KiB or less.',
         vela_edit_file_limit: 'Choose up to four destinations with at most 10 KiB of text total.',
         vela_edit_repository_mismatch: 'Choose distinct files from the same repository checkout.',
@@ -955,12 +962,26 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     adaptationBody.append(el('p', undefined, 'Reset disables saved overrides and supersedes hypotheses in the chosen scope; it preserves evidence and does not claim to undo a prior application effect. Use an explicit opposite setting to change the application again.'));
   }
   async function refresh() { const sequence = ++readSequence, state = await client.state(); if (sequence === readSequence) render(state); return state; }
+  function observeLiveAnswer(answer: VelaState['activeAnswer']) {
+    if (answer && observing && busy && status.dataset.requestState === 'submitting') {
+      const message = 'Live ChatGPT-plan response · ' + answer.text + (answer.truncated ? '…' : '');
+      if (status.textContent === message) return;
+      status.dataset.liveAnswer = answer.requestId;
+      status.setAttribute('aria-live', 'off');
+      status.textContent = message;
+    } else if (status.dataset.liveAnswer) {
+      delete status.dataset.liveAnswer;
+      status.setAttribute('aria-live', 'polite');
+      if (status.dataset.requestState === 'submitting') status.textContent = 'Waiting for the response…';
+    }
+  }
   void run(refresh);
   return {
     async open() { observing = true; const sequence = ++readSequence, state = await client.open(); if (sequence === readSequence) render(state); return state; },
     refresh,
+    observeLiveAnswer,
     /** Host visibility notification only; no canonical mutation or inference. */
-    close() { observing = false; manifestationSignature = ''; manifestationBaseline = true; try { options.onManifestation?.(null); } catch {} },
+    close() { observing = false; observeLiveAnswer(undefined); manifestationSignature = ''; manifestationBaseline = true; try { options.onManifestation?.(null); } catch {} },
     dispose() { disposed = true; observing = false; readSequence++; shell.remove(); try { options.onManifestation?.(null); } catch {} },
   };
 }

@@ -12,7 +12,7 @@ const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/
 const { validateReview: validateNativeVelaReview, reviewPage: nativeVelaReviewPage } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-review.cjs');
 import type { ConversationSendInput,OrdinaryConnectionPort,StreamEvent } from '../src/contracts.mts';
 import type { ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
-import type { VelaRequest } from '../../vela-core/src/contracts.ts';
+import type { VelaRequest, VelaState } from '../../vela-core/src/contracts.ts';
 import type { VelaRoutingSettingsChange } from '../../vela-core/src/routing-settings.ts';
 import type { VelaRoutingSample } from '../../vela-core/src/routing-calibration.ts';
 import { agentTemplates } from '../../agent-product/service.mts';
@@ -1040,6 +1040,46 @@ test('provider failure/EOF preserves exact user text and partial canonical evide
   await f.reopen();const next=await prepare(f,c.resourceId,'Synthetic explicit new request');assert.deepEqual(next.preview.responses!.messages.filter(m=>m.role!=='developer').map(m=>m.content),['Synthetic gap request','Synthetic explicit new request']);
   f.responses.push(()=>sse([{type:'response.failed',response:{id:'resp-synthetic-quota',status:'failed',error:{code:'subscription_sharing_usage_limit_exceeded'}}}]));const failed=await f.core.command('conversationSend',await grant(f,next.preview));assert.equal(failed.state,'failed');assert.equal(failed.errorCode,'subscription_sharing_usage_limit_exceeded');assert.equal(f.codexCalls,0);
  }finally{await f.close();}
+});
+
+test('Show my live Vela answer and clear it when I stop', async () => {
+  const f = fixture();
+  const state = async () => await f.core.command('vela', { name: 'state', input: {} }) as VelaState;
+  let pending: Promise<VelaRequest> | undefined;
+  try {
+    const text = 'Synthetic partial response. '.repeat(21);
+    f.responses.push(init => new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        const events = [{ type: 'response.created', response: { id: 'resp-vela-stream' } },
+          { type: 'response.output_text.delta', delta: text }];
+        controller.enqueue(new TextEncoder().encode(events.map(event => 'data: ' + JSON.stringify(event) + '\n\n').join('')));
+        init.signal!.addEventListener('abort', () => controller.error(Error('Synthetic cancel')), { once: true });
+      },
+    }), { headers: { 'Content-Type': 'text/event-stream' } }));
+    const sending = velaCommand({ win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } }, dialog: {},
+      directMessageSend: true, offerPlanningByDefault: true, call: (name: any, input: any) => f.core.command(name, input),
+      input: { name: 'request', input: { intent: 'Tell me a short story.', resourceIds: [], authorizeProvider: true } },
+    }) as Promise<VelaRequest>;
+    pending = sending;
+    let live: VelaState['activeAnswer'];
+    for (let i = 0; i < 100 && !live; i++) {
+      live = (await state()).activeAnswer;
+      if (!live) await new Promise(resolve => setTimeout(resolve, 4));
+    }
+    assert(live);
+    assert.equal(live.text, text.slice(0, 480));
+    assert.equal(live.truncated, true);
+    await f.core.command('vela', { name: 'cancel', input: live.requestId });
+    assert.equal((await sending).state, 'cancelled');
+    pending = undefined;
+    assert.equal((await state()).activeAnswer, undefined);
+    await f.reopen();
+    const restored = await state();
+    assert.equal(restored.activeAnswer, undefined);
+    assert.equal(restored.requests.find(request => request.id === live.requestId)?.state, 'cancelled');
+    assert(!restored.conversation?.messages.some(message => message.content.includes(text.slice(0, 50))));
+    assert.equal(f.requests.length, 1);
+  } finally { if (pending) { f.owner.ordinaryController?.abort(); await pending.catch(() => {}); } await f.close(); }
 });
 
 test('ordinary cancellation requests actual abort, retains unknown outcome/partial text and does not invoke Codex interrupt',async()=>{

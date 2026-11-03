@@ -380,6 +380,7 @@ export function installApplication(hooks: Hooks) {
       }
     },
     observed: (value) => {
+      if (velaOpen) velaPanel?.observeLiveAnswer(value.activeAnswer);
       if (
         value.requests.some((r) => r.state === "planning") ||
         value.receipts.some((r) => r.state === "started")

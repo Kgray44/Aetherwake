@@ -42,7 +42,7 @@ import { createSystemMemoryReader, readSystemMemory } from '../../vela-core/src/
 import { validateSystemMemoryMeasurement, type SystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
 import { readCpuUtilization, readGpuUtilization, type SystemUtilization } from '../../vela-core/src/system-utilization.mts';
 import { chooseConversationalModel, classifyVelaRoutingIntent, nativeConversationalWorkflow, nativeInspectionStage, nativeVelaFact, nativeVelaWeather, standaloneVelaProjectCheck, velaEditFollowUpCheck, velaEditIncludesLogInspection, velaFileEditSelection, type VelaRouteDecision, type VelaTurnRouting } from '../../vela-core/src/adaptive-routing.ts';
-import { admitVelaFileEdit, maxEditFiles, observeVelaFileEdit, parseVelaFileEdit, publishVelaFile, readVelaFileEditTargets,
+import { admitVelaFileEdit, maxEditFiles, observeVelaFileEdit, parseVelaFileEdit, publishVelaFile, readVelaFileEditTargets, readVelaInspectionTarget,
   stageVelaFile, upgradeVelaFileEdit, validateVelaFileEditBytes, validateVelaFileEditHead, validateVelaFileEditTarget, velaEditSiblings, verifyVelaReplacement,
   type VelaFileEditRecord, type VelaFileEditTarget, type VelaFileEditView } from './vela-file-edit.mts';
 import { interpretVelaProjectCheck, planVelaProjectCheck, type VelaProjectCheckReview } from './vela-project-check.mts';
@@ -114,6 +114,7 @@ interface PrivateVelaPreview extends VelaRequestPreview {
   agentRoutingDigest?: string;
   calibrationProjectId?: string | null;
   fileEdit?: { target: VelaFileEditTarget; body: string | null }[];
+  inspectionTarget?: ReturnType<typeof readVelaInspectionTarget>;
 }
 
 export class BackendCore {
@@ -155,6 +156,7 @@ export class BackendCore {
   private ordinaryTask:Promise<Execution>|null=null;
   private ordinaryStatus:ProviderConnectionStatus={contract:PROVIDER_CONNECTION_CONTRACT,providerId:CHATGPT_PLAN_PROVIDER,billingRoute:'chatgpt-plan',state:'unavailable',storageAvailable:false,pending:false,registrationVersion:null,planUsageEnabled:false,inferenceVerified:false,nativeAccountHistory:false,nativeAccountMemory:false,nativeAccountSync:false};
   private ordinaryCatalog:{version:number;boundaryDigest:string;expiresAt:number;models:{id:string;label:string}[]}|null=null;
+  private liveVelaAnswer?: { requestId: string; scopeStamp: string };
   private ordinaryGraphAdapter?:GraphAdapter;
   /** One synchronous canonical read only; never retained view authority. */
   private conversationBatch:{active:boolean;access:Map<string,boolean>}|null=null;
@@ -957,7 +959,8 @@ export class BackendCore {
       grant.consumed = true;
       const measure = preview.calibrationProjectId !== undefined && preview.route?.kind === 'conversational' && !!preview.route.effort && !prepared.responses?.webSearch;
       const started = performance.now();
-      const task = this.runOrdinary(send, prepared, {signal, validate: () => this.validateFrozenVelaPreview(preview), countVelaAttempt: !!preview.route, measure});
+      const liveVelaAnswer = preview.route?.kind === 'conversational' ? { requestId: input.requestId, scopeStamp: preview.scopeStamp } : undefined;
+      const task = this.runOrdinary(send, prepared, {signal, validate: () => this.validateFrozenVelaPreview(preview), countVelaAttempt: !!preview.route, measure, liveVelaAnswer});
       this.ordinaryTask = task;
       try {
         const result = await task;
@@ -1010,6 +1013,11 @@ export class BackendCore {
     const validate = () => {
       ensure(!signal.aborted, 'vela_execution_cancelled');
       this.validateFrozenVelaPreview(preview);
+      if (preview.inspectionTarget) {
+        const current = readVelaInspectionTarget(preview.inspectionTarget.root, this.privateRoot);
+        if (current.identity !== preview.inspectionTarget.identity || current.head !== preview.inspectionTarget.head)
+          throw new VelaError('vela_codex_inspection_target_changed');
+      }
     };
     validate();
     ensure(!this.active, 'execution_busy');
@@ -1024,7 +1032,7 @@ export class BackendCore {
     const execution = await this.runExecution({
       resourceId: conversation.resourceId, prompt: preview.prompt, commandId,
       authorized: true, expectedRevision: conversation.revision, model: preview.route.model,
-    }, undefined, undefined, { signal, validate, effort: preview.route.effort, cwd: preview.fileEdit?.[0].target.root }, true);
+    }, undefined, undefined, { signal, validate, effort: preview.route.effort, cwd: preview.fileEdit?.[0].target.root ?? preview.inspectionTarget?.root }, true);
     if (execution.state !== 'provider_completed')
       throw new VelaError(execution.errorCode ?? 'vela_execution_' + execution.state, execution.state === 'unknown' ? 'unknown' : undefined);
     const message = execution.outputMessageId && this.state.graph.messages.find(item => item.id === execution.outputMessageId);
@@ -1095,6 +1103,12 @@ export class BackendCore {
     }
     state.recoverableProviderRequestIds = state.requests.filter(request => request.state === 'unknown' &&
       this.recoverableVelaExecution(request.id)).map(request => request.id);
+    const live = this.liveVelaAnswer;
+    if (live && this.active?.providerId === CHATGPT_PLAN_PROVIDER && this.active.state === 'running' && this.assistantText.trim() &&
+        !this.ordinaryController?.signal.aborted && this.conversationAccess.resource(this.active.resourceId) &&
+        live.scopeStamp === this.velaScopeStamp() && state.requests.some(request => request.id === live.requestId && request.state === 'planning')) {
+      state.activeAnswer = { requestId: live.requestId, text: this.assistantText.slice(0, 480), truncated: this.assistantText.length > 480 };
+    }
     const context=this.velaHost.context(),scope=this.velaHost.scope();
     const references=scope.projectIds.map(id=>this.velaHost.resolve({id,kind:'project'},scope)).filter((r):r is ResourceRef=>r!==null);
     if(context.currentWorkspaceId){const workspace=this.velaHost.resolve({id:context.currentWorkspaceId,kind:'workspace'},scope);if(workspace)references.push(workspace);}
@@ -1495,7 +1509,7 @@ export class BackendCore {
   private velaScopeStamp() {
     const c=this.velaContext();return planningDigest({principalId:c.principalId,policyVersion:c.policyVersion,currentProjectId:c.currentProjectId,currentWorkspaceId:c.currentWorkspaceId,projectVersion:c.currentProjectId?this.db.prepare('SELECT version FROM projects WHERE id=?').get(c.currentProjectId)?.version:null,workspaceVersion:c.currentWorkspaceId?this.db.prepare('SELECT version FROM workspaces WHERE id=?').get(c.currentWorkspaceId)?.version:null,workspaceRevision:c.currentWorkspaceId?(this.velaNative?.workspaceRevision?.(c.currentWorkspaceId)??this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(c.currentWorkspaceId)?.version):null});
   }
-  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery'],review?:PrivateVelaPreview) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:review?.providerId??this.velaPlanner.providerId,connectionVersion:review?.connectionVersion,route:review?.route,routingSettings:review?.routingSettings,routingSettingsStamp:review?.routingSettingsStamp,routingAgent:review?.routingAgent,agentRoutingDigest:review?.agentRoutingDigest,editTargets:review?.fileEdit?.map(file=>file.target),instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{}),...(review?{catalogDigest:review.catalog.projection.digest,promptDigest:planningDigest(review.prompt),historyFenceDigest:review.historyFence?.digest??null,handoff:review.handoff,origin:review.origin,inputAnchor:review.inputAnchor,inputDigest:review.inputDigest}:{})}); }
+  private velaEgress(intent:string,context:ContextManifest,discovery?:VelaRequestPreview['discovery'],review?:PrivateVelaPreview) { const {id:_i,createdAt:_t,...stable}=context;return planningDigest({intent,context:stable,scopeStamp:this.velaScopeStamp(),providerId:review?.providerId??this.velaPlanner.providerId,connectionVersion:review?.connectionVersion,route:review?.route,routingSettings:review?.routingSettings,routingSettingsStamp:review?.routingSettingsStamp,routingAgent:review?.routingAgent,agentRoutingDigest:review?.agentRoutingDigest,editTargets:review?.fileEdit?.map(file=>file.target),inspectionTarget:review?.inspectionTarget,instanceId:this.port.instanceId,accountScope:this.port.accountScope,...(discovery?{discovery}:{}),...(review?{catalogDigest:review.catalog.projection.digest,promptDigest:planningDigest(review.prompt),historyFenceDigest:review.historyFence?.digest??null,handoff:review.handoff,origin:review.origin,inputAnchor:review.inputAnchor,inputDigest:review.inputDigest}:{})}); }
   private velaSemanticPrompt(intent:string,context:ContextManifest,catalog:CapabilityCatalogSnapshot,discovery?:VelaRequestPreview['discovery'],providerId?:string,route?:VelaRouteDecision,nativeStage?:PrivateVelaPreview['nativeStage'],fileEdit?:PrivateVelaPreview['fileEdit']) {
     if (route?.kind === 'conversational' || route?.kind === 'agentic' || route?.kind === 'composite' || route?.kind === 'file-edit') {
       const instruction = route.kind === 'conversational'
@@ -1785,6 +1799,11 @@ export class BackendCore {
     const providerId = decision?.providerId ?? input.providerId ?? this.velaPlanner.providerId;
     const route = decision?.route;
     const agentic = route?.kind === 'agentic' || route?.kind === 'composite' || route?.kind === 'file-edit';
+    const repositoryInspection = route?.kind === 'composite' || route?.kind === 'agentic' && route.reason === 'local-tools-required';
+    ensure(input.inspectionDirectory === undefined || repositoryInspection, 'vela_codex_inspection_target_unavailable');
+    if (repositoryInspection && input.requireInspectionDirectory)
+      ensure(input.inspectionDirectory !== undefined, 'vela_codex_inspection_target_required');
+    const inspectionTarget = input.inspectionDirectory === undefined ? undefined : readVelaInspectionTarget(input.inspectionDirectory, this.privateRoot);
     ensure(input.editTargetPaths === undefined && input.editCreatePaths === undefined || route?.kind === 'file-edit', 'vela_edit_path_ineligible');
     const fileEdit = route?.kind === 'file-edit' ? readVelaFileEditTargets(input.editTargetPaths ?? [], input.editCreatePaths ?? [], this.privateRoot) : undefined;
     if (fileEdit) this.requireReconciledVelaFileEdits(fileEdit.map(file => file.target));
@@ -1837,6 +1856,10 @@ export class BackendCore {
       preview.routingAgent = publicPreview.routingAgent = agent.agent;
       preview.nativeReviewRequired = publicPreview.nativeReviewRequired = true;
     }
+    if (inspectionTarget) {
+      preview.workingDirectory = publicPreview.workingDirectory = inspectionTarget.root;
+      preview.inspectionTarget = inspectionTarget;
+    }
     if (profiles && route?.kind === 'conversational' && !route.nativeMetric && !route.nativeLog && route.effort && this.velaCalibrationInput(input) && resolveVelaCalibration(profiles) !== 'off')
       preview.calibrationProjectId = this.velaContext().currentProjectId;
     preview.signature=this.velaEgress(input.intent,preview.frozenContext,discovery,preview);
@@ -1866,7 +1889,7 @@ export class BackendCore {
       ...(preview.frozenContext.agentInstructions ? { agentInstructions: preview.frozenContext.agentInstructions } : {}),
       ...(preview.routingSettings ? { routingSettings: preview.routingSettings } : {}),
       ...(preview.fileEdit ? { workingDirectory: preview.fileEdit[0].target.root, editPaths: preview.fileEdit.map(file => file.target.path) } : {}),
-      ...(preview.route?.kind === 'agentic' || preview.route?.kind === 'composite' ? { workingDirectory: this.codexWorkingDirectory } : {})};
+      ...(preview.route?.kind === 'agentic' || preview.route?.kind === 'composite' ? { workingDirectory: preview.workingDirectory ?? this.codexWorkingDirectory } : {})};
     const reviewDigest=planningDigest(review),result={...review,reviewDigest};ensure(Buffer.byteLength(JSON.stringify(result))<=65536,'vela_native_review_too_large');preview.nativeReviewed=true;preview.reviewDigest=reviewDigest;return structuredClone(result);
   }
   private authorizeVelaRequest(input:CommandMap['authorizeVelaRequest']['input']) {
@@ -2760,7 +2783,7 @@ export class BackendCore {
     }
     this.conversations.nativeAuthorizeContextSources(input.resourceId,sources);
   }
-  private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean}):Promise<Execution> {
+  private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer']}):Promise<Execution> {
     const measuredStart = authority?.measure ? performance.now() : undefined;
     const p=preview.responses;ensure(p&&preview.providerId===CHATGPT_PLAN_PROVIDER&&!this.active,'ordinary_execution_unavailable');
     ensure(this.conv(input.resourceId).providerId===CHATGPT_PLAN_PROVIDER&&!this.state.bindings[input.resourceId]?.length,'invalid_cross_provider_reference');
@@ -2773,6 +2796,7 @@ export class BackendCore {
     const cancel = () => controller.abort();
     this.atomic(()=>{if(authority?.countVelaAttempt)this.admitVelaAttempt(e);e.inputMessageId=this.graph.addMessage(this.gid(e.resourceId),'user',input.content,{provenance:'user'}).id;this.state.revisions[e.resourceId]++;this.state.executions[e.id]=e;this.state.receipts[input.commandId]={fingerprint,result:e.id};if(handoff)handoff.state='dispatching';});
     this.active=e;this.assistantText='';this.assistantCursor=0;this.ordinaryController=controller;
+    this.liveVelaAnswer = authority?.liveVelaAnswer;
     const catalog=this.ordinaryCatalog!,classification=this.ordinaryTest?'simulated' as const:'reported' as const;
     const fence=async()=>{authority?.validate();ensure(this.active?.id===e.id&&this.conversationAccess.resource(e.resourceId),'source_unavailable');const current=await this.prepareConversationSend(input,1,preview.handoff?.id,p);ensure(current.fingerprint===preview.fingerprint,'stale_send_preview');await this.ordinaryConnections.revalidateCredential(p.connectionVersion,catalog.boundaryDigest);this.finalOrdinaryFence(input,preview);authority?.validate();};
     const supply=async(responseId:string)=>{
@@ -2818,7 +2842,7 @@ export class BackendCore {
         this.state.revisions[e.resourceId]++;if(handoff)handoff.state=e.state==='provider_completed'?'applied':e.state==='unknown'?'unknown':e.state==='interrupted'?'interrupted':'failed';
       });
     }catch(error){this.atomic(()=>{e.state=result?.dispatched?'unknown':'failed';e.errorCode=error instanceof ServiceError?error.code:'ordinary_provider_unavailable';e.endedAt=now();if(handoff)handoff.state=e.state==='unknown'?'unknown':'failed';});}
-    finally{authority?.signal.removeEventListener('abort',cancel);this.record('execution/'+e.state,e.state==='provider_completed'?classification:'inferred',undefined,randomUUID(),{providerId:CHATGPT_PLAN_PROVIDER});this.active=null;this.ordinaryController=null;}
+    finally{authority?.signal.removeEventListener('abort',cancel);this.record('execution/'+e.state,e.state==='provider_completed'?classification:'inferred',undefined,randomUUID(),{providerId:CHATGPT_PLAN_PROVIDER});this.active=null;this.ordinaryController=null;this.liveVelaAnswer=undefined;}
     return structuredClone(e);
   }
   private async runExecution(input: CommandMap['execute']['input'],managed?:{input:ConversationSendInput;preview:Omit<ConversationSendPreview,'id'|'expiresAt'>},discovery?:{requestId:string;previewId:string;expiresAt:string;sourceConversationId:string},inspection?:{signal?:AbortSignal;validate:()=>void;effort?:string;cwd?:string}, countVelaAttempt = false): Promise<Execution> {

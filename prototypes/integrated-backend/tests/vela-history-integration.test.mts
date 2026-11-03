@@ -484,6 +484,44 @@ test("AIR sends authorized inspection through native Codex protocol with discove
   } finally { await f.close(); }
 });
 
+test("Inspect the repository I picked and ask again if its revision changed", { skip: process.platform !== "win32" }, async () => {
+  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
+  admitVelaFileEdit(runtime);
+  mkdirSync(runtime, { recursive: true });
+  const root = realpathSync.native(mkdtempSync(join(runtime, "vela-air-inspection-")));
+  const git = (...args: string[]) => execFileSync("git.exe", ["-C", root, "-c", "core.hooksPath=NUL", ...args],
+    { windowsHide: true, timeout: 6000, stdio: "pipe" });
+  const f = fixture(false, "air-inspection", false);
+  const command = { intent: "Inspect the repository logs for errors", resourceIds: [], adaptive: true as const, requireInspectionDirectory: true as const };
+  const commit = (title: string) => git("-c", "user.name=AIR fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "--allow-empty", "-m", title);
+  try {
+    git("init", "--quiet", "--template=");
+    commit("First synthetic revision");
+    mkdirSync(join(root, "nested"));
+    await assert.rejects(f.core.command("velaRequestPreview", command), /vela_codex_inspection_target_required/);
+    await assert.rejects(f.core.command("velaRequestPreview", { ...command, inspectionDirectory: join(root, "nested") }), /vela_codex_inspection_target_unavailable/);
+    const prepare = async () => {
+      const preview = await f.core.command("velaRequestPreview", { ...command, inspectionDirectory: root });
+      const native = await f.core.command("velaNativeReview", { previewId: preview.id, signature: preview.signature });
+      assert.equal(native.workingDirectory, root);
+      assert.equal(preview.workingDirectory, root);
+      return f.approve({ preview, native });
+    };
+    const stale = await prepare();
+    commit("Second synthetic revision");
+    const refused = await f.vela("request", stale) as VelaRequest;
+    assert.notEqual(refused.state, "responded");
+    assert.equal(refused.errorCode, "vela_codex_inspection_target_changed");
+    assert.equal((await f.core.command("providerActivity", {})).providerRequests, 0);
+    const port = (f.core as any).port as ProviderPort;
+    const open = port.open.bind(port);
+    port.open = options => { assert.equal(options?.cwd, root); return open(options); };
+    const accepted = await f.vela("request", await prepare()) as VelaRequest;
+    assert.equal(accepted.state, "responded", accepted.errorCode);
+    assert.equal((await f.core.command("providerActivity", {})).providerRequests, 1);
+  } finally { await f.close(); }
+});
+
 test("Can you check whether Codex finished without running it again?", async () => {
   const f = fixture(false, "air-inspection", false);
   try {

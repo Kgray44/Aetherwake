@@ -64,6 +64,7 @@ function validateReview(preview, review) {
     review.previewId !== preview.id ||
     review.signature !== preview.signature ||
     review.providerId !== preview.providerId ||
+    (preview.workingDirectory !== undefined && review.workingDirectory !== preview.workingDirectory) ||
     JSON.stringify(review.route) !== JSON.stringify(preview.route) ||
     JSON.stringify(review.routingSettings) !== JSON.stringify(preview.routingSettings) ||
     JSON.stringify(review.routingAgent) !== JSON.stringify(preview.routingAgent) ||

@@ -92,14 +92,19 @@ function git(cwd: string, args: string[], literal = true) {
   return execFileSync('git.exe', ['--no-optional-locks', ...(literal ? ['--literal-pathspecs'] : []), '-C', cwd, ...args], { ...processOptions, env });
 }
 
-function eligibleFilePath(candidate: string, privateRoot?: string) {
-  check(process.platform === 'win32', 'vela_codex_write_unavailable');
+function eligibleLocalPath(candidate: string, privateRoot?: string) {
   check(typeof candidate === 'string' && /^[CD]:[\\/]/iu.test(candidate) &&
     candidate.length <= 180 && !/[:<>"|?*\x00-\x1f]|\p{Bidi_Control}/u.test(candidate.slice(2)), 'vela_edit_path_ineligible');
   const path = resolve(candidate);
   check(!path.split(sep).some(segment => /[. ]$/u.test(segment) || /^(?:\.git|\.codex|\.ssh|appdata|windows|program files(?: \(x86\))?|programdata)$/iu.test(segment)) &&
     (!privateRoot || !within(privateRoot, path)), 'vela_edit_path_ineligible');
   check(!/^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu.test(basename(path)), 'vela_edit_path_ineligible');
+  return path;
+}
+
+function eligibleFilePath(candidate: string, privateRoot?: string) {
+  check(process.platform === 'win32', 'vela_codex_write_unavailable');
+  const path = eligibleLocalPath(candidate, privateRoot);
   check(allowed.has(extname(path).toLowerCase()), 'vela_edit_file_ineligible');
   return path;
 }
@@ -110,6 +115,21 @@ function directoryIdentity(folder: string) {
   const key = fileKey(stat);
   check(stat.isDirectory() && !stat.isSymbolicLink() && key, 'vela_edit_path_ineligible');
   return key;
+}
+
+export function readVelaInspectionTarget(candidate: string, privateRoot?: string) {
+  try {
+    check(process.platform === 'win32', 'vela_codex_inspection_target_unavailable');
+    const root = eligibleLocalPath(candidate, privateRoot);
+    check(!samePath(root, homedir()) && (!privateRoot || !within(root, privateRoot)), 'vela_codex_inspection_target_unavailable');
+    const identity = directoryIdentity(root);
+    const actualRoot = resolve(git(root, ['rev-parse', '--show-toplevel']).trim());
+    const head = git(root, ['rev-parse', '--verify', 'HEAD']).trim();
+    check(samePath(root, actualRoot) && /^[a-f0-9]{40,64}$/u.test(head), 'vela_codex_inspection_target_unavailable');
+    return { root, head, identity };
+  } catch {
+    throw new VelaError('vela_codex_inspection_target_unavailable');
+  }
 }
 
 function requireAbsent(path: string) {
