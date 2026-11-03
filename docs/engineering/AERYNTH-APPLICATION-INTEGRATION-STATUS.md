@@ -30,6 +30,40 @@ and six backend resource-opening tests passed. The journey had zero
 provider executions. The running owner window and portable AH predate
 this correction.
 
+## November 3 Codex App Server recovery and portable AL
+
+The previous backend kept a stale connected flag after App Server died.
+A subsequent check returned a transport error until the application
+restarted. `7692244` clears the lost transport and cached capability
+observation. The next requested check coalesces concurrent callers into
+one new handshake against the installed provider. Unknown executions
+remain unknown. The regression verified thread inspection, exact
+idempotent replay of the existing receipt, and refusal to resend the
+unknown turn. The original fixture emitted just one turn start.
+
+A hidden Electron test used the actual conversation composer, broker,
+activity reader and Connections surface with an isolated synthetic stdio
+App Server. The harness modeled focus for the activity reader and
+approved only the exact synthetic payload. App Server exit surfaced an
+unknown outcome. The draft and single canonical user message remained
+intact. An explicit Connections check recovered the fixture session
+without an additional turn. A fresh process restored the same block,
+conversation, draft and receipt and surfaced the sign-in-required state
+from a separate unauthenticated fixture. The strict backend typecheck,
+248 backend tests and 14 Codex bridge tests passed. This evidence does
+not exercise a live account or native owner consent.
+
+Portable AL freezes `76922446e110ab4dc96b1c78d26f8de8cecc1542`.
+The bundled backend passed 22 initial and five restart commands. An
+independent audit verified all 382 payload files, including 250 exact
+Git blobs, and matched the tested provider source and renderer assets to
+the package. SQLite quick check passed. The synthetic journey and
+independent audit are in `review-block-scale-3-1793693450784`.
+Manifest SHA-256 is
+`7cc7d106bcbe999bb4740b369baebafc812d40546fe930ac561a1c2d78801e51`.
+The normal AL launcher and live Codex remain unverified. The owner
+review stayed open.
+
 ## November 3 portable AK archive and fit verification
 
 The packaged AJ baseline reproduced a navigation defect when the last
