@@ -27,6 +27,7 @@ test("canonical product families expose only explicit operations and classify wr
   for (const [family, name] of [
     ["agents", "create"],
     ["agents", "recordAssignment"],
+    ["agents", "ensureStarters"],
     ["checklists", "mutate"],
     ["timelines", "create"],
     ["timelines", "save"],

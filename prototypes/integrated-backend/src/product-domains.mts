@@ -5,6 +5,8 @@ import {
   AgentLibraryService,
   AgentLibraryError,
   agentTemplates,
+  agentStarterCommands,
+  AGENT_STARTER_COMMAND_PREFIX,
 } from "../../agent-product/service.mts";
 import type {
   AgentHostPort,
@@ -23,6 +25,7 @@ export interface ProductProjectPage {
   coverage: "complete" | "bounded";
 }
 export interface AgentCommandMap {
+  ensureStarters: Command<Record<string, never>, { created: number }>;
   list: Command<
     NonNullable<Parameters<AgentLibraryService["list"]>[0]>,
     ReturnType<AgentLibraryService["list"]>
@@ -117,6 +120,7 @@ export interface DomainEvent {
     groupCount?: number;
     affectedIds?: string[];
     affectedIdsTruncated?: boolean;
+    starterTemplateId?: string;
   };
 }
 export interface ProductDomainsOptions {
@@ -183,6 +187,7 @@ const agentReads = new Set([
 ]);
 const names = new Set([
   ...agentReads,
+  "ensureStarters",
   "create",
   "update",
   "archive",
@@ -621,6 +626,46 @@ export function compositeProductDomains(
     return tx(() => {
       const present = schema("agent");
       switch (value.name) {
+        case "ensureStarters": {
+          empty(value.input);
+          const service = agentService(true);
+          const prior = db.prepare(
+            "SELECT operation,request_digest FROM agent_product_operations WHERE owner_id=? AND command_id=?",
+          );
+          let created = 0;
+          for (const {
+            templateId,
+            input,
+            requestDigest,
+          } of agentStarterCommands()) {
+            const { commandId } = input;
+            const seed = prior.get(identity.principalId, commandId);
+            if (seed) {
+              check(
+                seed.operation === "create" &&
+                  seed.request_digest === requestDigest,
+                "agent_starter_conflict",
+              );
+              continue;
+            }
+            const receipt = service.create(input);
+            options.recordEvent({
+              type: "agent.created",
+              resourceId: receipt.agent.resourceId,
+              resourceVersion: receipt.agent.resourceVersion,
+              commandId,
+              detail: {
+                ...provenance,
+                domain: "agent",
+                operation: "create",
+                profileVersion: receipt.agent.profileVersion,
+                starterTemplateId: templateId,
+              },
+            });
+            created++;
+          }
+          return { created };
+        }
         case "templates":
           empty(value.input);
           return agentTemplates();
@@ -703,6 +748,11 @@ export function compositeProductDomains(
         case "update":
         case "archive":
         case "recordAssignment": {
+          check(
+            typeof value.input?.commandId !== "string" ||
+              !value.input.commandId.startsWith(AGENT_STARTER_COMMAND_PREFIX),
+            "agent_reserved_command_id",
+          );
           const service = agentService(value.name === "create");
           const previous =
             typeof value.input?.commandId === "string"

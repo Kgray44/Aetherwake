@@ -17,6 +17,96 @@ import {
 } from "../src/product-domains.mts";
 import { agentTemplates } from "../../agent-product/service.mts";
 
+test("starter initialization upgrades existing libraries once and preserves archived identities across restart", (t) => {
+  const directory = resolve(".runtime/agent-starters-tests", randomUUID());
+  mkdirSync(directory, { recursive: true });
+  const file = resolve(directory, "canonical.sqlite");
+  const f = fixture(t, file);
+  const custom = f.makeAgent();
+  const initialize = () =>
+    f.domains.agent({ name: "ensureStarters", input: {} });
+  const list = () =>
+    f.domains.agent({ name: "list", input: { includeArchived: true } }).items;
+  assert.equal(isAgentRead({ name: "ensureStarters", input: {} }), false);
+  assert.deepEqual(initialize(), { created: 8 });
+  const seeded = list().filter(
+    (item) => item.resource.id !== custom.agent.resourceId,
+  );
+  assert.equal(new Set(seeded.map((item) => item.resource.id)).size, 8);
+  for (const template of agentTemplates()) {
+    const item = seeded.find(
+      (candidate) => candidate.resource.title === template.title,
+    )!;
+    assert.deepEqual(
+      f.domains.agent({
+        name: "inspect",
+        input: { resourceId: item.resource.id },
+      }).profile,
+      template.profile,
+    );
+  }
+  const archived = seeded[0]!;
+  f.domains.agent({
+    name: "archive",
+    input: { commandId: randomUUID(), agent: archived.ref, archived: true },
+  });
+  const before = list();
+  const eventCount = f.events().length;
+  assert.deepEqual(initialize(), { created: 0 });
+  assert.deepEqual(list(), before);
+  assert.equal(f.events().length, eventCount);
+  assert.equal(
+    f
+      .events()
+      .filter((row) => JSON.parse(String(row.detail_json)).starterTemplateId)
+      .length,
+    8,
+  );
+  assert.equal(f.catalogReads(), 0);
+  assert.equal(f.count("notes"), 0);
+  assert.equal(f.count("blocks"), 0);
+  assert.throws(
+    () => f.makeAgent(null, f.profile(), "aerynth:starter-agent:v1:researcher"),
+    /agent_reserved_command_id/,
+  );
+  f.close();
+  const restored = fixture(t, file);
+  assert.deepEqual(
+    restored.domains.agent({ name: "ensureStarters", input: {} }),
+    { created: 0 },
+  );
+  assert.deepEqual(
+    restored.domains.agent({ name: "list", input: { includeArchived: true } })
+      .items,
+    before,
+  );
+  assert.equal(
+    restored.domains
+      .agent({ name: "list", input: {} })
+      .items.some((item) => item.resource.id === archived.resource.id),
+    false,
+  );
+});
+
+test("failed starter batch rolls back all earlier creations and can retry", (t) => {
+  const f = fixture(t);
+  const before = f.tables();
+  const record = f.options.recordEvent;
+  let writes = 0;
+  f.options.recordEvent = (event) => {
+    record(event);
+    if (++writes === 3) throw Error("starter_batch_failure");
+  };
+  const initialize = () =>
+    f.domains.agent({ name: "ensureStarters", input: {} });
+  assert.throws(initialize, /starter_batch_failure/);
+  assert.deepEqual(f.tables(), before);
+  assert.equal(f.count("resources"), 0);
+  assert.equal(f.events().length, 0);
+  f.options.recordEvent = record;
+  assert.deepEqual(initialize(), { created: 8 });
+});
+
 function fixture(t: any, file = ":memory:") {
   const kernel = WorkspaceKernel.open(file),
     db = kernel.withTransaction((db) => db),

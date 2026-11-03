@@ -43,6 +43,7 @@ export function createProductClients(options: {
       query: (input) => invoke("timelines", "query", input),
     },
     agents: {
+      ensureStarters: () => invoke("agents", "ensureStarters", {}),
       list: (input) => invoke("agents", "list", input),
       inspect: (resourceId) => invoke("agents", "inspect", { resourceId }),
       create: (input) => invoke("agents", "create", input),

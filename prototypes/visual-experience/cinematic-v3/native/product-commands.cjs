@@ -13,7 +13,13 @@ const reads = Object.freeze({
   taskObjectives: Object.freeze(["read", "history", "list", "targets"]),
 });
 const writes = Object.freeze({
-  agents: Object.freeze(["create", "update", "archive", "recordAssignment"]),
+  agents: Object.freeze([
+    "create",
+    "update",
+    "archive",
+    "recordAssignment",
+    "ensureStarters",
+  ]),
   checklists: Object.freeze(["create", "mutate"]),
   timelines: Object.freeze(["create", "save"]),
   taskObjectives: Object.freeze(["create", "mutate"]),

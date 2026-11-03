@@ -181,7 +181,7 @@ function assertNoPlacements(desktop) {
   assert.equal(desktop.blocks.length, 0);
   assert.equal((desktop.navigationBlocks ?? []).length, 0);
   assert(
-    desktop.resources.length <= 2 &&
+    desktop.resources.length <= 10 &&
       desktop.resources.every((r) => r.kind === "agent"),
     "profiles_are_canonical_agents_not_note_or_task_placeholders",
   );
@@ -502,26 +502,17 @@ exports.verify = async function verify({
       });
     };
     const select = async (query, value) => {
-      let index;
-      await wait("Actual available agent option", async () => {
-        index = await js(
-          `(()=>{const n=document.querySelector(${JSON.stringify(query)});return n?[...n.options].findIndex(o=>o.value===${JSON.stringify(value)}&&!o.disabled):-1})()`,
-        );
-        return index >= 0;
-      });
-      assert(index <= 32, "actual_bounded_agent_option_required");
       await click(query);
-      await wait("Actual native select focus", () => js(`(()=>{const n=document.querySelector(${JSON.stringify(query)});return !!n&&document.activeElement===n})()`));
-      key("Home");
-      for (let i = 0; i < index; i++) key("Down");
-      key("Return");
-      await wait("Actual native agent selection", () =>
+      await click(
+        `${query} + .agent-pill-reveal [role="option"][data-value=${JSON.stringify(value)}]`,
+      );
+      await wait("Actual agent pill selection", () =>
         js(
           `document.querySelector(${JSON.stringify(query)})?.value===${JSON.stringify(value)}`,
         ),
       );
     };
-    const list = () => agents("list", { includeArchived: true, limit: 8 });
+    const list = () => agents("list", { includeArchived: true, limit: 16 });
     const inspect = async (id) =>
       assertProfile(await agents("inspect", { resourceId: id }));
     const effective = async (profile) =>
@@ -652,7 +643,7 @@ exports.verify = async function verify({
       const all = await list();
       assert.equal(all.contract, "aerynth.agent-library@1");
       assert.equal(all.coverage, "complete");
-      assert.equal(all.items.length, 2);
+      assert.equal(all.items.length, 10);
       const profiles = [];
       for (const item of all.items)
         profiles.push(await inspect(item.resource.id));
@@ -676,6 +667,12 @@ exports.verify = async function verify({
     );
     const before = await proof();
     receipt.startingCanonical = before;
+    if (!restore)
+      assert.equal(
+        (await list()).items.length,
+        0,
+        "fresh_empty_agent_library_required",
+      );
     await openLibrary();
     const templates = await agents("templates");
     const researcherTemplate = templates.find((t) => t.id === "researcher");
@@ -697,10 +694,18 @@ exports.verify = async function verify({
       await capture("03-agent-restart");
       receipt.canonical = canonical;
     } else {
+      await wait(
+        "Eight canonical starter profiles",
+        async () => (await list()).items.length === 8,
+      );
+      const starterRows = (await list()).items;
+      assert.deepEqual(
+        starterRows.map((item) => item.resource.title).sort(),
+        templates.map((template) => template.title).sort(),
+      );
       assert.equal(
-        (await list()).items.length,
-        0,
-        "fresh_empty_agent_library_required",
+        new Set(starterRows.map((item) => item.resource.id)).size,
+        8,
       );
       await click(action("create"));
       await select(action("template"), "researcher");
@@ -710,8 +715,12 @@ exports.verify = async function verify({
       let researcher;
       await wait("Canonical Researcher created by actual UI", async () => {
         const all = await list();
-        if (all.items.length !== 1) return false;
-        researcher = await inspect(all.items[0].resource.id);
+        if (all.items.length !== 9) return false;
+        const created = all.items.find(
+          (item) => item.resource.title === FIXTURE.researcher,
+        );
+        if (!created) return false;
+        researcher = await inspect(created.resource.id);
         return researcher.resource.title === FIXTURE.researcher;
       });
       assert.deepEqual(researcher.profile, researcherTemplate.profile);
@@ -819,10 +828,11 @@ exports.verify = async function verify({
         "Actual custom profile with explicit additional-instructions preference",
         async () => {
           const all = await list();
-          if (all.items.length !== 2) return false;
+          if (all.items.length !== 10) return false;
           const summary = all.items.find(
-            (p) => p.resource.id !== researcher.resource.id,
+            (p) => p.resource.title === FIXTURE.custom,
           );
+          if (!summary) return false;
           custom = await inspect(summary.resource.id);
           return custom.resource.title === FIXTURE.custom;
         },

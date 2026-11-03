@@ -228,6 +228,7 @@ export function viewFixture(
       node.style[name] = value;
     };
     if (tag === "select") {
+      node.dispatchEvent = (event: Event) => node.fire(event.type);
       let selected: string | undefined;
       Object.defineProperty(node, "value", {
         configurable: true,
@@ -286,6 +287,16 @@ export function viewFixture(
     },
     input(name: string, value: string, event = "input") {
       const node = action(name);
+      if (node.dataset.agentPill === "true") {
+        if (node.getAttribute("aria-expanded") !== "true") node.fire("click");
+        const option = node.parentElement.querySelector(
+          `[data-value="${value}"]`,
+        );
+        if (!option || option.disabled)
+          throw Error("CPU pill option unavailable: " + value);
+        option.fire("click");
+        return node;
+      }
       node.value = value;
       node.fire(event);
       return node;

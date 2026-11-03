@@ -108,6 +108,19 @@ export function agentTemplates() {
     startsExecution: false as const,
   }));
 }
+/** V1 bootstrap receipts share the normal canonical creation ledger. */
+export const AGENT_STARTER_COMMAND_PREFIX = "aerynth:starter-agent:v1:";
+export function agentStarterCommands() {
+  return agentTemplates().map((template) => {
+    const input = {
+      commandId: AGENT_STARTER_COMMAND_PREFIX + template.id,
+      title: template.title,
+      projectId: null,
+      profile: template.profile,
+    };
+    return { templateId: template.id, input, requestDigest: digest(input) };
+  });
+}
 function setting(key: keyof AgentSettings, value: unknown) {
   if (key === "additionalInstructions")
     check(text(value, 16384), "agent_invalid_instructions");

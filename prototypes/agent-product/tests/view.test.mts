@@ -363,7 +363,11 @@ test("all explicit controls participate in Root feedback and no component schedu
     view = viewFixture(f);
   await view.controller.refresh();
   for (const node of view.root.querySelectorAll("button,input,select,textarea"))
-    assert.equal(node.dataset.aerynthMotionControl, "true");
+    if (node.tagName === "SELECT") {
+      assert.equal(node.hidden, true);
+      assert.equal(node.tabIndex, -1);
+      assert.equal(node.getAttribute("aria-hidden"), "true");
+    } else assert.equal(node.dataset.aerynthMotionControl, "true");
   const source = readFileSync(new URL("../view.ts", import.meta.url), "utf8"),
     css = readFileSync(new URL("../view.css", import.meta.url), "utf8");
   assert(
@@ -373,6 +377,56 @@ test("all explicit controls participate in Root feedback and no component schedu
   );
   assert(!/\btransition\s*:|\banimation\s*:/.test(css));
   assert(!/from ['"]node:/.test(source));
+  view.controller.dispose();
+});
+
+test("opening and refreshing share starter initialization before listing", async () => {
+  const canonical = canonicalFixture();
+  const pending = deferred<{ created: number }>();
+  let initializations = 0;
+  let lists = 0;
+  const view = viewFixture(canonical, {
+    ensureStarters() {
+      initializations++;
+      return pending.promise;
+    },
+    list(input) {
+      lists++;
+      return canonical.client.list(input);
+    },
+  });
+  const refresh = view.controller.refresh();
+  await until(() => initializations === 1);
+  assert.equal(lists, 0);
+  pending.resolve({ created: 0 });
+  await refresh;
+  await view.controller.refresh();
+  assert.equal(initializations, 1);
+  assert(lists > 0);
+  view.controller.dispose();
+});
+
+test("pill options support keyboard navigation, selection and Escape focus restoration", async () => {
+  const view = viewFixture(canonicalFixture());
+  await view.controller.refresh();
+  view.click("create");
+  const trigger = view.action("template");
+  trigger.focus();
+  trigger.fire("keydown", { key: "ArrowDown" });
+  assert.equal(trigger.getAttribute("aria-expanded"), "true");
+  assert.equal(view.doc.activeElement.getAttribute("role"), "option");
+  view.doc.activeElement.fire("keydown", { key: "End" });
+  assert.equal(view.doc.activeElement.value, "planner");
+  view.doc.activeElement.fire("click");
+  assert.equal(trigger.value, "planner");
+  assert.equal(view.doc.activeElement, trigger);
+  assert.equal(trigger.getAttribute("aria-expanded"), "false");
+  trigger.fire("keydown", { key: "ArrowDown" });
+  assert.equal(view.doc.activeElement.getAttribute("aria-selected"), "true");
+  const escape = view.doc.activeElement.fire("keydown", { key: "Escape" });
+  assert.equal(escape.defaultPrevented, true);
+  assert.equal(view.doc.activeElement, trigger);
+  assert.equal(trigger.getAttribute("aria-expanded"), "false");
   view.controller.dispose();
 });
 
