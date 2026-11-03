@@ -887,6 +887,12 @@ export function installApplication(hooks: Hooks) {
       }, stage);
     });
   }
+  function revealWorkspace() {
+    waitingForVela = false;
+    el("#stage").inert = false;
+    hooks.motion.target(arrivalId, arrivalPose, "Vela cleared the workspace arrival");
+    hooks.wake();
+  }
   function presenceCard() {
     if (
       state?.navigation.kind !== "workspace" ||
@@ -4961,15 +4967,8 @@ export function installApplication(hooks: Hooks) {
         (policy.reduced || policy.quiet || policy.hidden)
       )
         hooks.motion.snap(presenceId);
-      if (waitingForVela && (
-        policy.reduced || policy.quiet || policy.hidden ||
-        !target || !velaCrossesWorkspace(target)
-      )) {
-        waitingForVela = false;
-        el("#stage").inert = false;
-        hooks.motion.target(arrivalId, arrivalPose, "Vela cleared the workspace arrival");
-        hooks.wake();
-      }
+      if (waitingForVela && (policy.reduced || policy.quiet || policy.hidden || !target))
+        revealWorkspace();
       velaCard.classList.toggle("vela-card", !!presenceCard());
       const card = presenceCard();
       if (card) {
@@ -4995,9 +4994,18 @@ export function installApplication(hooks: Hooks) {
       constellation?.frame(now);
     },
     ready,
+    completeWorkspaceArrival: (unclipped: (pose: ReturnType<MotionCoordinator["pose"]>) => boolean) => {
+      if (!waitingForVela) return;
+      const target = presenceTarget();
+      // A previously saved overlap must still be reachable after travel settles.
+      if (!target || !hooks.motion.bodies.get(presenceId)?.transitioning ||
+          (!velaCrossesWorkspace(target) && unclipped(hooks.motion.pose(presenceId))))
+        revealWorkspace();
+    },
     workspaceSurfacesVisible: () =>
-      !waitingForVela && (state?.navigation.kind !== "constellation" ||
-      (departingWorkspace && hooks.motion.pose(arrivalId).opacity > 0.003)),
+      !waitingForVela &&
+      (state?.navigation.kind !== "constellation" ||
+        (departingWorkspace && hooks.motion.pose(arrivalId).opacity > 0.003)),
     surfaceView: () => ({
       scale: hooks.motion.pose(arrivalId).x,
       opacity: hooks.motion.pose(arrivalId).opacity,

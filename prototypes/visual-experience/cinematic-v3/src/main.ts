@@ -1258,6 +1258,14 @@ declare global {
 }
 window.aerynthHost?.onActive(lifecycle);
 
+function velaPlacementClip({ x, y, w, h }: Pick<ReturnType<typeof motion.pose>, "x" | "y" | "w" | "h">) {
+  return materialCompositor.clipOverlay({
+    id: "vela-dom-presentation", x, y, w, h, lift: 0, yaw: 0, opacity: 1,
+  });
+}
+function velaPlacementUnclipped(pose: ReturnType<typeof motion.pose>) {
+  return !velaPlacementClip(pose);
+}
 function renderDOM() {
   surfaceView = (
     application as (Application & { surfaceView?: () => SurfaceView }) | null
@@ -1294,6 +1302,7 @@ function renderDOM() {
     };
   });
   const composite = materialCompositor.update(projected, surfaceView);
+  application?.completeWorkspaceArrival(velaPlacementUnclipped);
   for (const p of projected) {
     const id = p.id,
       el = elements.get(id)!;
@@ -1628,16 +1637,7 @@ function tick(now: number) {
             document.body.classList.contains("vela-access") ||
             !workspaceSurfacesVisible()
               ? "none"
-              : materialCompositor.clipOverlay({
-                  id: "vela-dom-presentation",
-                  x: presenceX,
-                  y: presenceY,
-                  w: presenceWidth,
-                  h: presenceHeight,
-                  lift: 0,
-                  yaw: 0,
-                  opacity: 1,
-                }) || "none",
+              : velaPlacementClip({ x: presenceX, y: presenceY, w: presenceWidth, h: presenceHeight }) || "none",
         });
         if (lastDraw && metrics.drawIntervals.length < 18000)
           metrics.drawIntervals.push(now - lastDraw);
