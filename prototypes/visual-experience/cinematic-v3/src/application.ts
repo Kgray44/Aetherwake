@@ -909,6 +909,9 @@ export function installApplication(hooks: Hooks) {
     const leavingWorkspace =
       state?.navigation.kind === "workspace" &&
       next.navigation.kind === "constellation";
+    const arrivingWorkspace =
+      state?.navigation.kind === "constellation" &&
+      next.navigation.kind === "workspace";
     const navigated =
       JSON.stringify(state?.navigation) !== JSON.stringify(next.navigation);
     if (
@@ -1094,7 +1097,15 @@ export function installApplication(hooks: Hooks) {
       );
       if (hooks.motion.reduced || constellation?.controller.policy.quiet)
         hooks.motion.snap(arrivalId);
-    } else if (!overview) departingWorkspace = false;
+    } else if (!overview) {
+      departingWorkspace = false;
+      // Direct navigation and interrupted graph travel still apply a canonical
+      // workspace. The graph callback can refine the origin when it has one.
+      if (arrivingWorkspace) {
+        hooks.motion.target(arrivalId, arrivalPose, "canonical workspace arrival", true);
+        hooks.wake();
+      }
+    }
     el("#stage").style.visibility =
       !overview || departingWorkspace ? "" : "hidden";
     const navigationSnapshot = {

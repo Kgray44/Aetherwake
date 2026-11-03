@@ -80,6 +80,13 @@ exports.verify = async ({
     });
   };
   const navigate = (target) => execute({ type: "navigate", target });
+  const visibleWorkspace = () => wait(`(() => {
+    const stage = document.querySelector('#stage');
+    return !stage.inert && Number(getComputedStyle(stage).opacity) >= 0.98 &&
+      (${selected.count} === 0 || [...stage.querySelectorAll('[data-block]')].some(
+        card => card.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && card.getBoundingClientRect().width > 0
+      ));
+  })()`);
   try {
     await wait('document.body.dataset.applicationHydrated === "true"');
     receipt.startupToHydratedMs = performance.now() - moduleStartedMonotonicMs;
@@ -88,6 +95,7 @@ exports.verify = async ({
     const initial = await snapshot();
     if (selected.restore) {
       sameState(JSON.parse(await readFile(expectedPath, "utf8")), initial);
+      await visibleWorkspace();
       await sample("restored-working-workspace");
     } else {
       sameState(seed.expected, initial);
@@ -116,6 +124,7 @@ exports.verify = async ({
         assert.equal(resized.width, block.width + 32);
         assert.equal(resized.height, block.height + 24);
       }
+      await visibleWorkspace();
       await sample("working-workspace");
       const canonical = await snapshot();
       assert.deepEqual(canonical.resources, initial.resources);
@@ -127,6 +136,7 @@ exports.verify = async ({
       await js("window.__aerynth.restoreContext()");
       await wait("window.__aerynth.snapshot().gpu?.contextLost === false && !window.__aerynth.snapshot().graphicsFailed");
       await wait("window.__aerynth.snapshot().metrics.draws > " + drawsBeforeRestore);
+      await visibleWorkspace();
       sameState(projection(canonical), await snapshot());
       await js("window.__aerynth.flush()");
       await writeFile(expectedPath, JSON.stringify(projection(canonical)), { flag: "wx" });
