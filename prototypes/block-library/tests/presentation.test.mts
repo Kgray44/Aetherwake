@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { applyBlockConfiguration } from "../configuration-view.ts";
 import { applyBlockPoseStyle } from "../pose-style.ts";
@@ -7,12 +7,14 @@ import { applyBlockPoseStyle } from "../pose-style.ts";
 // This checks the actual configuration/pose functions, not computed browser CSS.
 class Declaration {
   values = new Map<string, string>();
+  writes = 0;
   set cssText(value: string) {
+    this.writes++;
     this.values.clear();
     for (const declaration of value.split(";")) {
       const separator = declaration.indexOf(":");
       if (separator > 0)
-        this.setProperty(
+        this.values.set(
           declaration.slice(0, separator).trim(),
           declaration.slice(separator + 1).trim(),
         );
@@ -22,9 +24,16 @@ class Declaration {
     return this.values.get(name) ?? "";
   }
   setProperty(name: string, value: string) {
+    this.writes++;
     this.values.set(name, value);
   }
 }
+
+const originalDocument = globalThis.document;
+before(() => {
+  globalThis.document = { createElement: () => ({ style: new Declaration() }) } as unknown as Document;
+});
+after(() => { globalThis.document = originalDocument; });
 
 test("configured typography survives the actual pose writer through focus, movement and resizing", () => {
   const style = new Declaration(),
@@ -47,7 +56,9 @@ test("configured typography survives the actual pose writer through focus, movem
   ]) {
     const expected = new Declaration();
     expected.cssText = pose;
+    const writes = style.writes;
     applyBlockPoseStyle(root.style, pose);
+    assert.equal(style.writes - writes, 1, "Paint the complete pose in one live write");
     assert.equal(style.getPropertyValue("--aw-block-text-scale"), "1.5");
     for (const [property, value] of expected.values)
       assert.equal(

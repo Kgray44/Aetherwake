@@ -1,4 +1,4 @@
-import test from "node:test";
+import test, { after, before } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { applyBlockPoseStyle } from "../pose-style.ts";
@@ -26,6 +26,12 @@ class Declaration {
     return this.values.get(name) ?? "";
   }
 }
+const originalDocument = globalThis.document;
+before(() => {
+  globalThis.document = { createElement: () => ({ style: new Declaration() }) } as unknown as Document;
+});
+after(() => { globalThis.document = originalDocument; });
+
 const inside = (x: number, y: number, polygon: { x: number; y: number }[]) => {
   let result = false;
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
