@@ -5,9 +5,10 @@ import { mountConversationManager } from '../src/ui.ts';
 import { ConversationDraftSession } from '../src/draft-session.ts';
 import { createNativeChatGPTFidelityDescriptor } from '../src/native-chatgpt-fidelity.ts';
 import { markdownBlocks, renderMarkdown } from '../src/markdown.ts';
-import type { ConversationProductPort, Detail, Collection, SearchHit } from '../src/contracts.ts';
+import type { ConversationProductPort, ConversationView, ConversationViewSelected, Detail, Collection, SearchHit } from '../src/contracts.ts';
 import { componentDocument, named, until } from './component-dom.mts';
 import { pickerMotion } from './picker-motion.mts';
+import { ConversationViewPersistence } from '../src/view-persistence.ts';
 
 /** Synthetic port receipts only: these tests make no database, provider, native-window or network claims. */
 function fixture(providerId='local') {
@@ -28,6 +29,55 @@ function fixture(providerId='local') {
 function addChatGPTCompatibility(f:ReturnType<typeof fixture>,report=createNativeChatGPTFidelityDescriptor()){
   f.detail.providers.push({id:'chatgpt',label:'ChatGPT account history',available:false,record:false,execute:false,nativeFork:false,history:'unavailable',reason:report.reason,reasonCode:report.reasonCode,simulated:false,models:[],accountFidelity:report});
 }
+
+function viewPort(f:ReturnType<typeof fixture>){
+ const time='2026-11-03T00:00:00Z',resourceId=f.draft.resourceId,trace:{name:string;input:any}[]=[];let selected:ConversationViewSelected={version:2,resourceId,updatedAt:time},view:ConversationView={resourceId,version:4,position:{conversationRevision:2,anchor:{messageId:'message:user',offsetY:-20}},selection:{draftVersion:f.draft.version,start:2,end:6,direction:'backward'},positionStatus:'current',selectionStatus:'current',updatedAt:time};
+ let before:((name:string,input:any)=>void|Promise<void>)|undefined;
+ const port={async command(name:string,input:any){if(name==='readViewState'){trace.push({name,input});const reply={contract:'aerynth.conversation-view@1',selected:structuredClone(selected),view:structuredClone(view)};await before?.(name,input);return reply;}await before?.(name,input);
+  if(name==='saveViewState'){trace.push({name,input:structuredClone(input)});assert.equal(input.expectedVersion,view.version);assert.equal(input.resourceId,resourceId);assert.equal(input.selection?.draftVersion,f.draft.version,'Selection requires exact canonical draft ACK');assert(input.selection.end<=f.draft.content.length);view={...view,version:view.version+1,position:input.position,selection:input.selection};return structuredClone(view);}
+  if(name==='selectView'){trace.push({name,input});assert.equal(input.expectedVersion,selected.version);selected={...selected,resourceId:input.resourceId,version:selected.version+1};return structuredClone(selected);}
+  return (f.port.command as any)(name,input);
+ }} as ConversationProductPort;
+ return {port,trace,persistence:new ConversationViewPersistence({port}),get view(){return view;},get selected(){return selected;},before(fn:typeof before){before=fn;}};
+}
+
+test('saved anchor and exact draft selection restore on the same mounted view only after positive transcript bounds, without autofocus or writes',async()=>{
+ const f=fixture(),v=viewPort(f);let chat;try{const previous=f.view.doc.createElement('button');f.view.root.append(previous);previous.focus();chat=mountConversationChat(f.view.root,{port:v.port,resourceId:f.draft.resourceId,viewPersistence:v.persistence});const messages=f.view.root.querySelector('.cp-messages');messages.clientHeight=0;await chat.ready;const editor=f.view.root.querySelector('textarea');assert.equal(editor.value,f.draft.content);assert.deepEqual([editor.selectionStart,editor.selectionEnd,editor.selectionDirection],[2,6,'backward']);assert.equal(f.view.doc.activeElement===previous,true);assert.equal(messages.scrollTop,0);assert.deepEqual(f.calls.filter(c=>c.name==='detail').map(c=>c.input.aroundMessageId),['message:user']);
+  messages.clientHeight=messages.offsetHeight=50;messages.scrollHeight=400;messages.getBoundingClientRect=()=>({top:200,bottom:250,height:50});messages.querySelector('.cp-message-content').getBoundingClientRect=()=>({top:300-messages.scrollTop,bottom:370-messages.scrollTop,height:70});chat.frame();assert.equal(messages.scrollTop,120);messages.fire('scroll');await chat.flush();assert.equal(v.trace.filter(c=>c.name==='saveViewState').length,0,'Restoration/programmatic scroll must not write a new view');assert.equal(v.trace.filter(c=>c.name==='selectView').length,0);
+  editor.focus();editor.setSelectionRange(1,4,'forward');editor.fire('pointerup');await chat.flush();assert.equal(v.view.version,5);assert.deepEqual(v.view.selection,{draftVersion:f.draft.version,start:1,end:4,direction:'forward'});assert.deepEqual(v.view.position?.anchor,{messageId:'message:user',offsetY:-20});assert.equal(f.calls.some(c=>['send','interrupt','saveDraft'].includes(c.name)),false);
+ }finally{await chat?.dispose();f.restore();}
+});
+
+test('caret metadata follows only the latest draft ACK through an in-flight older text save',async()=>{
+ const f=fixture(),v=viewPort(f);let chat,release!:()=>void,firstInFlight=false;try{chat=mountConversationChat(f.view.root,{port:v.port,resourceId:f.draft.resourceId,viewPersistence:v.persistence});await chat.ready;const gate=new Promise<void>(resolve=>release=resolve);v.before((name,input)=>{if(name==='saveDraft'&&input.content==='First synthetic edit'){firstInFlight=true;return gate;}});const editor=f.view.root.querySelector('textarea');editor.focus();editor.value='First synthetic edit';editor.setSelectionRange(1,2,'forward');editor.fire('input');const firstFlush=chat.flush();await until(()=>firstInFlight);editor.value='Exact later unsent draft 🧭';editor.setSelectionRange(3,9,'backward');editor.fire('input');editor.fire('pointerup');assert.equal(v.trace.filter(c=>c.name==='saveViewState').length,0);release();await firstFlush;await chat.flush();
+  assert.equal(f.draft.version,5);assert.equal(f.draft.content,editor.value);assert.deepEqual(v.trace.filter(c=>c.name==='saveViewState').map(c=>c.input.selection),[{draftVersion:5,start:3,end:9,direction:'backward'}]);assert.deepEqual([editor.selectionStart,editor.selectionEnd,editor.selectionDirection],[3,9,'backward']);assert.equal(f.calls.some(c=>c.name==='send'),false);
+ }finally{release?.();await chat?.dispose();f.restore();}
+});
+
+test('later actual editor intent suppresses a delayed saved anchor and selection without dropping new text',async()=>{
+ const f=fixture(),v=viewPort(f);let chat,release!:()=>void;try{const gate=new Promise<void>(resolve=>release=resolve);v.before(name=>{if(name==='readViewState')return gate;});chat=mountConversationChat(f.view.root,{port:v.port,resourceId:f.draft.resourceId,viewPersistence:v.persistence});const editor=f.view.root.querySelector('textarea');await until(()=>editor.value===f.draft.content);editor.value='Exact new user intent while view loads';editor.setSelectionRange(4,8,'forward');editor.fire('input');release();await chat.ready;await chat.flush();assert.equal(editor.value,f.draft.content);assert.deepEqual([editor.selectionStart,editor.selectionEnd,editor.selectionDirection],[4,8,'forward']);assert.equal(f.calls.some(c=>c.name==='detail'&&c.input.aroundMessageId),false);assert.equal(v.view.selection?.draftVersion,f.draft.version);assert.equal(v.view.selection?.start,4);
+ }finally{release?.();await chat?.dispose();f.restore();}
+});
+
+test('the newer full-view caret wins an older inline subscriber when both borrow the exact draft and view coordinators',async()=>{
+ const f=fixture(),v=viewPort(f),shared=new ConversationDraftSession({port:v.port,resourceId:f.draft.resourceId});let earlier,later,release!:()=>void,started=false;try{const full=f.view.doc.createElement('section'),inline=f.view.doc.createElement('section');f.view.root.append(full,inline);const options={port:v.port,resourceId:f.draft.resourceId,viewPersistence:v.persistence,draftSession:shared};later=mountConversationChat(full,options);earlier=mountConversationChat(inline,{...options,presentation:'workspace'});await Promise.all([later.ready,earlier.ready]);
+  const gate=new Promise<void>(resolve=>release=resolve);v.before((name,input)=>{if(name==='saveDraft'&&input.content==='Older inline edit'){started=true;return gate;}});const a=inline.querySelector('textarea'),b=full.querySelector('textarea');a.focus();a.value='Older inline edit';a.setSelectionRange(1,2,'forward');a.fire('input');const flushing=earlier.flush();await until(()=>started);b.focus();b.value='Newer full-view exact edit';b.setSelectionRange(5,10,'backward');b.fire('input');release();await flushing;await later.flush();
+  assert.equal(f.draft.content,b.value);assert.deepEqual(v.trace.filter(c=>c.name==='saveViewState').map(c=>c.input.selection),[{draftVersion:f.draft.version,start:5,end:10,direction:'backward'}]);assert.equal(a.value,b.value);assert.deepEqual([b.selectionStart,b.selectionEnd,b.selectionDirection],[5,10,'backward']);assert.equal(v.trace.some(c=>c.name==='selectView'),false);
+ }finally{release?.();await earlier?.dispose();await later?.dispose();await shared.dispose();f.restore();}
+});
+
+test('manager restores selected chat without a mutation, but a newer exact message open wins a delayed restore',async()=>{
+ const f=fixture(),v=viewPort(f);let manager,release!:()=>void;try{manager=mountConversationManager(f.view.root,v.port,{viewPersistence:v.persistence});await manager.ready;assert.equal(manager.state.selectedResourceId,f.draft.resourceId);assert.equal(f.view.root.querySelector('textarea').selectionDirection,'backward');assert.equal(v.trace.filter(c=>c.name==='selectView'||c.name==='saveViewState').length,0);await manager.dispose();manager=undefined;
+  const before=f.calls.length,gate=new Promise<void>(resolve=>release=resolve);v.before((name,input)=>{if(name==='readViewState'&&!input.resourceId)return gate;});manager=mountConversationManager(f.view.root,v.port,{viewPersistence:v.persistence});await until(()=>v.trace.filter(c=>c.name==='readViewState'&&!c.input.resourceId).length>=2);const newer=manager.open(f.draft.resourceId,'message:assistant');release();await Promise.all([manager.ready,newer]);await manager.flush();
+  assert.deepEqual(f.calls.slice(before).filter(c=>c.name==='detail').map(c=>c.input.aroundMessageId),['message:assistant']);assert.equal(manager.state.selectedResourceId,f.draft.resourceId);assert.deepEqual(v.trace.filter(c=>c.name==='selectView').map(c=>c.input),[{resourceId:f.draft.resourceId,expectedVersion:2}]);assert.equal(v.view.position?.anchor?.messageId,'message:assistant');assert.equal(f.calls.some(c=>c.name==='send'),false);
+ }finally{release?.();await manager?.dispose();f.restore();}
+});
+
+test('view and draft drains stay prompt during a pending provider receipt and retain the later exact selection',async()=>{
+ const f=fixture('codex-app-server'),v=viewPort(f);let chat;try{chat=mountConversationChat(f.view.root,{port:v.port,resourceId:f.draft.resourceId,viewPersistence:v.persistence});await chat.ready;f.view.root.querySelector('.cp-composer').fire('submit');await until(()=>!!f.pending);const editor=f.view.root.querySelector('textarea');editor.value='Exact later unsent text during a turn';editor.setSelectionRange(3,7,'backward');editor.fire('input');let closed=false;void chat.dispose().then(()=>closed=true);await until(()=>closed);
+  assert.ok(f.pending);assert.equal(f.draft.content,'Exact later unsent text during a turn');assert.deepEqual(v.view.selection,{draftVersion:f.draft.version,start:3,end:7,direction:'backward'});const saved=structuredClone(v.view);f.accept(true);await chat.whenSubmissionSettled();assert.deepEqual(v.view,saved);assert.equal(f.calls.filter(c=>c.name==='send').length,1);assert.equal(f.calls.some(c=>c.name==='interrupt'),false);
+ }finally{f.pending?.reject(Error('synthetic cleanup'));await chat?.whenSubmissionSettled();await chat?.dispose();f.restore();}
+});
 
 test('empty/composer copy follows exact provider identity: ordinary plan and unknown providers never borrow Codex instructions',async()=>{
  for(const [providerId,placeholder,empty] of [['local','Write a message…','A place to think.'],['mock-ordinary','Write a message…','A place to think.'],['chatgpt-plan-responses','Ask anything…','History is saved in Aerynth.'],['codex-app-server','Ask Codex anything…','Start a conversation with Codex.'],['unverified-provider','Ask anything…','Start a conversation.']] as const){
