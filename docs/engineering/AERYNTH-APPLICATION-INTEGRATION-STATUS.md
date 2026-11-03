@@ -2,6 +2,38 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 selected workspace context and Portable BM
+
+Commit `4f061f0` carries the selected workspace card into Vela's
+reviewed request. The host resolves the resource from the currently
+active canonical placement and adds only its metadata. The native
+review identifies the selected card. Resource contents still require
+explicit selection and consent. The reviewed grant owns the resolved
+identity. A changed layout invalidates its pending review, and
+historical requests hide selection and layout context outside their
+authorized workspace scope.
+
+An integrated SQLite and synthetic App Server test created two
+same-named notes and verified that the approved rename reached only
+the selected one. It also verified stale placement rejection, exact
+note retention and project scope redaction. All 214 Vela tests,
+409 desktop tests and the strict desktop build passed.
+
+Portable BM packages `4f061f0b519f4d0119734b0ae8c7fdfadd4729bc`.
+All 427 payload files were rehashed. Manifest SHA-256 is
+`28bf5dff2571cb7631b290867b9e1303acb9b38bc7899e61d671185dffa3bf5d`.
+A hidden run of the packaged desktop selected an actual note card,
+submitted the Vela composer, verified the native review projection
+and applied the model-selected rename through the plan control.
+The fixture supplied review consent and the scripted App Server
+response. The original content and geometry survived. A packaged
+backend restart recovered the renamed note and exact placement.
+SQLite integrity passed. The private receipt is in
+`vela-selected-card-1793706262828` with SHA-256
+`0f539c1d544aa88daa49ddfa6b23f79a09db008b251e81ff18b76b0779da77ae`.
+All owned test processes exited. The owner account and live model
+were outside this check.
+
 ## November 3 scoped glass styles and Portable BL
 
 Commit `1b0cef7` scopes the physical glass rules to the canvas and its
