@@ -2,6 +2,29 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Portable BT canonical Constellation archive journey
+
+In the exact BT package, the actual Environments controls created a
+workspace and a note. Its new node appeared in the live project
+projection. Archiving it from Project view removed the node, rejected
+stale direct navigation and left the project view and note intact.
+
+A fresh process restored the same Project view with the node absent.
+Restoring the workspace through Environments made the same node
+selectable again. Entering it from Constellation recovered the exact
+resource, placements, note text, camera and Vela geometry. Returning
+to Development recovered its exact prior workspace state. Read-only
+SQLite integrity and the resource, placement and workspace IDs passed.
+Both runs recorded zero provider executions.
+
+The two hidden Electron runs used the real packaged bootstrap,
+renderer and bundled backend with a disposable copy of the BT journey
+profile. Native offscreen stills were inspected. Their receipts are in
+`review-package-motion-1793709709724` with SHA-256 values
+`cee9301f554efb3369c10c804d78fb4bd4176385ff9b496e7653fa8e50eb3db7`
+and `10451985b3ce822f2c17d3fa88597c9966fd4b561321d62b63b31af17683b01a`.
+All owned test processes exited.
+
 ## November 3 Portable BT motion evidence
 
 The BT workspace journey retained 176 actual offscreen Electron paint
