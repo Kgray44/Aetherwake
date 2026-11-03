@@ -71,7 +71,7 @@ const errorText = (error: unknown) => error instanceof Error ? error.message : S
 /** Copy follows the actual provider ID, never the first executable catalog row. */
 function providerCopy(id:string){
   const local=id==='local'||id==='mock-ordinary',codex=id==='codex-app-server'||id==='fixture-codex',plan=id==='chatgpt-plan-responses';
-  return {local,empty:local?'A place to think. Your messages stay in this local chat.':codex?'Start a conversation with Codex. Each send uses the native approval path.':plan?'Start a conversation. History is saved in Aerynth.':'Start a conversation.',
+  return {local,empty:local?'Save messages here without sending them to an AI.':codex?'Start a conversation with Codex. Each send uses the native approval path.':plan?'Start a conversation. History is saved in Aerynth.':'Start a conversation.',
    placeholder:local?'Write a message…':codex?'Ask Codex anything…':'Ask anything…',
    title:local?'Local recording · no model execution':codex?'Native approval is required before a Codex turn':plan?'ChatGPT plan · history saved in Aerynth':'Provider availability is checked before send',
    capability:local?'Local recording · no model responses':codex?'Each send requires native approval.':plan?'ChatGPT plan access · history saved in Aerynth':'Availability is checked before send.',

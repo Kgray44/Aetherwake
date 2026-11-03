@@ -80,7 +80,7 @@ test('view and draft drains stay prompt during a pending provider receipt and re
 });
 
 test('empty/composer copy follows exact provider identity: ordinary plan and unknown providers never borrow Codex instructions',async()=>{
- for(const [providerId,placeholder,empty] of [['local','Write a message…','A place to think.'],['mock-ordinary','Write a message…','A place to think.'],['chatgpt-plan-responses','Ask anything…','History is saved in Aerynth.'],['codex-app-server','Ask Codex anything…','Start a conversation with Codex.'],['unverified-provider','Ask anything…','Start a conversation.']] as const){
+ for(const [providerId,placeholder,empty] of [['local','Write a message…','Save messages here without sending them to an AI.'],['mock-ordinary','Write a message…','Save messages here without sending them to an AI.'],['chatgpt-plan-responses','Ask anything…','History is saved in Aerynth.'],['codex-app-server','Ask Codex anything…','Start a conversation with Codex.'],['unverified-provider','Ask anything…','Start a conversation.']] as const){
   const f=fixture(providerId);let chat;try{f.detail.messages.items=[];f.detail.messages.total=f.detail.conversation.messageCount=0;chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;assert.equal(f.view.root.querySelector('textarea').placeholder,placeholder);assert.ok(f.view.root.querySelector('.cp-chat-empty').textContent.includes(empty));if(!['codex-app-server'].includes(providerId))assert.equal(f.view.root.querySelector('.cp-chat-empty').textContent.includes('Codex'),false);assert.equal(f.calls.some(c=>['send','selectProvider','branch','create'].includes(c.name)),false);}finally{await chat?.dispose();f.restore();}
  }
 });

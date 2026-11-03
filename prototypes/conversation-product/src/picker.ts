@@ -120,7 +120,7 @@ export function conversationHistoryDrawer(root:HTMLElement,catalog:HTMLElement,o
  root.addEventListener('click',onResize);
  const frame=()=>{if(disposed)return;sync();const value=motion.pose(key);css(catalog,'--cp-history-drawer-x',value.x+'px');css(catalog,'--cp-history-drawer-opacity',String(Math.max(0,Math.min(1,value.opacity))));root.dataset.cpHistoryPaint=String(shown||value.opacity>.001);};
  frame();
- return {frame,dispose(){if(disposed)return;disposed=true;root.removeEventListener('click',onResize);media.removeEventListener('change',onResize);motion.remove(key);catalog.inert=false;delete root.dataset.cpHistoryMotion;delete root.dataset.cpHistoryPaint;catalog.style.removeProperty('--cp-history-drawer-x');catalog.style.removeProperty('--cp-history-drawer-opacity');}};
+ return {frame,dispose(){if(disposed)return;disposed=true;root.removeEventListener('click',onResize);media.removeEventListener('change',onResize);motion.remove(key);catalog.inert=false;delete root.dataset.cpHistoryMotion;delete root.dataset.cpHistoryPaint;css(catalog,'--cp-history-drawer-x','');css(catalog,'--cp-history-drawer-opacity','');}};
 }
 
 /** Reveal the current authorized conversation after it is ready. This owns no
@@ -130,6 +130,6 @@ export function conversationDetailReveal(detail:HTMLElement,options:{motion:Expe
  let current:string|null=null,disposed=false,painted=true;
  motion.add(key,pose());
  return {show(resourceId:string){if(disposed||current===resourceId)return;current=resourceId;if(motion.reduced)return;motion.remove(key);motion.add(key,pose({y:7,opacity:.42}));motion.target(key,pose(),'conversation content reveal');painted=false;motion.wake();},
- frame(){if(disposed||painted)return;const value=motion.pose(key);css(detail,'--cp-detail-reveal-y',value.y+'px');css(detail,'--cp-detail-reveal-opacity',String(Math.max(.42,Math.min(1,value.opacity))));if(Math.abs(value.y)<.01&&value.opacity>=.999){painted=true;detail.style.removeProperty('--cp-detail-reveal-y');detail.style.removeProperty('--cp-detail-reveal-opacity');}},
- dispose(){if(disposed)return;disposed=true;motion.remove(key);detail.style.removeProperty('--cp-detail-reveal-y');detail.style.removeProperty('--cp-detail-reveal-opacity');}};
+ frame(){if(disposed||painted)return;const value=motion.pose(key);css(detail,'--cp-detail-reveal-y',value.y+'px');css(detail,'--cp-detail-reveal-opacity',String(Math.max(.42,Math.min(1,value.opacity))));if(Math.abs(value.y)<.01&&value.opacity>=.999){painted=true;css(detail,'--cp-detail-reveal-y','');css(detail,'--cp-detail-reveal-opacity','');}},
+ dispose(){if(disposed)return;disposed=true;motion.remove(key);css(detail,'--cp-detail-reveal-y','');css(detail,'--cp-detail-reveal-opacity','');}};
 }
