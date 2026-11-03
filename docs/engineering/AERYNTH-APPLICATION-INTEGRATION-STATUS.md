@@ -2,6 +2,32 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Portable BT workspace conversation continuity
+
+The exact BT package opened a workspace conversation with six local
+messages, an unsent draft and a backward text selection. Open and Back
+kept the same editor, all six message IDs, exact draft and selection,
+and the same workspace scroll and reading anchor. Canonical block
+geometry, viewport and Vela placement were unchanged. A fresh process
+restored the canonical view record, draft, selection and message IDs.
+Its reading anchor differed from the pre-restart position by less than
+one CSS pixel. SQLite integrity passed and execution count stayed zero.
+
+Opening the wider focused view kept the raw scroll offset while text
+rewrapped, moving the first visible content to the next message. Focus
+entry still needs to preserve the reading anchor through reflow. This
+does not affect the verified return and restart behavior.
+
+Both captures were visually inspected. The isolated profile
+review-package-motion-1793710330944 contains chat-workspace-return.png,
+chat-workspace-restart.png, and the two terminal receipts. Receipt
+SHA-256 values are
+a47258f75fcaff11257a8b53e800270de5647ad1d7b659bbd9519ff32c0053ca
+and f0b2b9ef31a9f8fc0022790db990947f63fc0d5ee2a49122955eac070377d441.
+The normal packaged application ran in hidden Electron with DOM input.
+All owned processes exited. No live turn, physical input or monitor
+presentation was exercised.
+
 ## November 3 Portable BT Vela free-text routing
 
 The open owner window was still Portable AG at 8d05f28. Its Vela
