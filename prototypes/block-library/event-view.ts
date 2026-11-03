@@ -287,7 +287,11 @@ export function mountEventExperience(
       input.tagName === "SELECT" ? "change" : "input",
       () => update(),
     );
-  const rows = new Map<string, HTMLLIElement>();
+  const rows = new Map<string, {
+    element: HTMLLIElement;
+    syncDetails(): void;
+    retire(): void;
+  }>();
   function update() {
     if (disposed || !active) return;
     const raw = port.snapshot();
@@ -353,17 +357,14 @@ export function mountEventExperience(
       ids = new Set(visible.map((event) => event.eventId));
     for (const [id, row] of rows)
       if (!ids.has(id)) {
-        row.remove();
         rows.delete(id);
+        row.retire();
       }
     list.querySelector(".aw-event-empty")?.remove();
     visible.forEach((event, index) => {
       let row = rows.get(event.eventId);
       if (!row) {
-        row = node("li");
-        const details = node("details"),
-          summary = node("summary"),
-          metadata = node("dl");
+        const element = node("li"), details = node("details"), summary = node("summary");
         summary.className = "aw-event-entry";
         const received = node("time"), heading = node("span", event.type),
           evidence = node("span", event.classification),
@@ -379,23 +380,54 @@ export function mountEventExperience(
         recorded.className = "aw-event-recorded-status";
         summary.setAttribute("aria-label", `${event.type} · ${event.classification} · ${event.status ?? "status unavailable"} · received ${event.receivedAt}`);
         summary.append(received, heading, evidence, recorded);
-        row.dataset.eventId = event.eventId;
-        row.dataset.evidenceClass = event.classification;
-        for (const [key, value] of Object.entries(eventMetadata(event)))
-          metadata.append(node("dt", key), node("dd", value));
-        details.append(summary, metadata);
-        if (event.resourceId && port.openResource)
-          details.append(
-            button("Open related resource", () => {
-              if (active && !disposed && rows.has(event.eventId))
-                port.openResource!(event.resourceId!);
-            }),
-          );
-        row.append(details);
+        element.dataset.eventId = event.eventId;
+        element.dataset.evidenceClass = event.classification;
+        details.append(summary);
+        element.append(details);
+
+        let metadata: HTMLDListElement | undefined;
+        let related: HTMLButtonElement | undefined;
+        const isOpen = () =>
+          active && !disposed && details.open && rows.get(event.eventId)?.element === element;
+        const clearDetails = () => {
+          metadata?.remove();
+          related?.remove();
+          metadata = undefined;
+          related = undefined;
+        };
+        const syncDetails = () => {
+          if (!isOpen()) {
+            clearDetails();
+            return;
+          }
+          if (metadata) return;
+          metadata = node("dl");
+          for (const [key, value] of Object.entries(eventMetadata(event)))
+            metadata.append(node("dt", key), node("dd", value));
+          details.append(metadata);
+          const resourceId = event.resourceId;
+          if (resourceId && port.openResource) {
+            const action = button("Open related resource", () => {
+              if (related === action && isOpen()) port.openResource?.(resourceId);
+            });
+            related = action;
+            details.append(action);
+          }
+        };
+        details.addEventListener("toggle", syncDetails);
+        row = {
+          element,
+          syncDetails,
+          retire() {
+            details.removeEventListener("toggle", syncDetails);
+            clearDetails();
+            element.remove();
+          },
+        };
         rows.set(event.eventId, row);
       }
       const current = list.children[index];
-      if (current !== row) list.insertBefore(row, current ?? null);
+      if (current !== row.element) list.insertBefore(row.element, current ?? null);
     });
     if (!visible.length) {
       const empty = node("li", "No matching captured events in this window.");
@@ -410,12 +442,15 @@ export function mountEventExperience(
       section.dataset.presentation = value;
     },
     setActive(value: boolean) {
-      if (active === value) return;
+      if (disposed || active === value) return;
       active = value;
       if (active) update();
+      for (const row of rows.values()) row.syncDetails();
     },
     dispose() {
       disposed = true;
+      for (const row of rows.values()) row.retire();
+      rows.clear();
       section.remove();
     },
   };

@@ -157,6 +157,7 @@ exports.verify = async ({ win, app, privateRoot, source, moduleStarted, startupE
       const selector = await open(roles.stream); await wait(x.exists(selector + ' .aw-event-view')); await button(selector + ' .aw-event-view', 'Refresh retained events');
       await type(selector + ' input[aria-label="Search event metadata"]', event.eventId);
       const row = selector + ' [data-event-id=' + q(event.eventId) + ']'; await wait(x.exists(row)); await click(row + ' summary');
+      await wait(x.exists(row + ' details[open] > dl'));
       const metadata = await js(x.eventMetadata(row)); assert.equal(metadata['Event ID'], event.eventId); assert.equal(metadata.Cursor, String(event.cursor)); assert.equal(metadata.Type, event.type); assert.equal(metadata['Evidence class'], event.classification); assert.equal(metadata.Provider, event.providerId); assert.equal(metadata.Execution, 'Unavailable'); receipt.inspectedEvent = { eventId: event.eventId, cursor: event.cursor, type: event.type, classification: event.classification, resourceId: event.resourceId, executionId: event.executionId, providerId: event.providerId };
       return selector;
     };

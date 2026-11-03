@@ -179,7 +179,7 @@ test("metadata detail allowlist excludes assistant output and private tool paylo
   assert.equal(text.includes("SYNTHETIC_PRIVATE"), false);
 });
 
-test("normal stream exposes search and real metadata details while preserving focus, disclosure and inactive suspension", (t) => {
+test("normal stream loads details only on disclosure and retires inactive or filtered details without changing event identity", (t) => {
   const view = blockDocument();
   t.after(view.install());
   const actual = window(),
@@ -206,15 +206,23 @@ test("normal stream exposes search and real metadata details while preserving fo
   query.setSelectionRange(2, 6);
   query.fire("input");
   const row = view.root.querySelector("[data-event-id]"),
-    details = row.querySelector("details"),
-    open = row.querySelector("button");
+    details = row.querySelector("details");
+  assert.equal(details.children.length, 1, "A closed row contains only its summary");
+  assert.equal(row.querySelector("dl"), null);
+  assert.equal(row.querySelector("button"), null);
   details.open = true;
+  details.fire("toggle");
+  const metadata = row.querySelector("dl"),
+    open = row.querySelector("button");
+  assert.ok(metadata);
+  assert.match(metadata.textContent, /Event IDsynthetic-event-7Cursor7/);
   const before = reads;
   controller.setPresentation("focused");
   controller.setPresentation("workspace");
   assert.equal(reads, before);
   controller.update();
   assert.equal(view.root.querySelector("[data-event-id]"), row);
+  assert.equal(row.querySelector("dl"), metadata, "An unchanged open row retains its details");
   assert.equal(details.open, true);
   assert.equal(view.doc.activeElement, query);
   assert.deepEqual([query.selectionStart, query.selectionEnd], [2, 6]);
@@ -225,20 +233,66 @@ test("normal stream exposes search and real metadata details while preserving fo
   assert.match(row.querySelector("summary").getAttribute("aria-label"), /received 2026-11-01T12:00:00.000Z/);
   open.onclick();
   assert.deepEqual(opened, ["resource-b"]);
+  details.open = false;
+  open.onclick();
+  details.fire("toggle");
+  assert.equal(details.children.length, 1);
+  details.open = true;
+  details.fire("toggle");
+  assert.notEqual(row.querySelector("dl"), metadata);
+  open.onclick();
+  assert.deepEqual(opened, ["resource-b"], "A retired button cannot open a resource after reopening");
   assert.equal(view.root.querySelector(".aw-event-advanced").open, false);
   controller.setActive(false);
+  assert.equal(details.open, true, "Suspension keeps the user's disclosure state");
+  assert.equal(details.children.length, 1);
   const paused = reads;
   controller.update();
   assert.equal(reads, paused);
+  controller.setActive(true);
+  const activeOpen = row.querySelector("button");
+  assert.ok(activeOpen, "The same authorized open row reloads on return");
   actual.resources = actual.resources.filter(
     (resource) => resource.id !== "resource-b",
   );
-  controller.setActive(true);
+  controller.update();
   assert.equal(view.root.querySelectorAll("[data-event-id]").length, 0);
-  open.onclick();
+  assert.equal(details.children.length, 1);
+  activeOpen.onclick();
   assert.deepEqual(
     opened,
     ["resource-b"],
     "An unavailable old row cannot open its resource",
   );
+  actual.resources = [...actual.resources, { id: "resource-b", projectId: "project-b", title: "Synthetic B" }];
+  controller.update();
+  const replacement = view.root.querySelector("[data-event-id]").querySelector("details");
+  replacement.open = true;
+  replacement.fire("toggle");
+  assert.ok(replacement.querySelector("dl"));
+  activeOpen.onclick();
+  assert.deepEqual(opened, ["resource-b"], "Reappearing event IDs do not revive old controls");
+  controller.dispose();
+  replacement.fire("toggle");
+  assert.equal(replacement.children.length, 1, "Disposal drops metadata and prevents pending toggles from restoring it");
+});
+
+test("the capped Stream list keeps all closed rows free of metadata and related-resource controls", (t) => {
+  const view = blockDocument();
+  t.after(view.install());
+  const controller = mountEventExperience(view.root, {
+    snapshot: () => ({ ...window(), latest: 120, events: Array.from({ length: 120 }, (_, i) => event(i + 1)) }),
+    async refresh() {},
+    openResource() {},
+  });
+  t.after(() => controller.dispose());
+  const rows = view.root.querySelectorAll("[data-event-id]");
+  assert.equal(rows.length, 100);
+  assert.equal(rows[0].dataset.eventId, "synthetic-event-120");
+  assert.ok(rows.every(row => row.querySelector("details").children.length === 1));
+  const details = rows[0].querySelector("details");
+  details.open = true;
+  details.fire("toggle");
+  assert.equal(view.root.querySelectorAll("[data-event-id] dl").length, 1);
+  assert.equal(view.root.querySelectorAll("[data-event-id] button").length, 1);
 });
