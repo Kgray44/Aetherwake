@@ -54,9 +54,13 @@ test("cards share exact slab buffers for one frame and keep their own geometry w
   const pose = { x: 0, y: 0, w: 200, h: 140, lift: 0, yaw: 0,
     kind: "note", shape: "rounded", unfold: 0, opacity: 1 };
   const frame = (surfaces) => renderer.updateFolios({ surfaces, quality: "balanced" });
+  const compact = { ...pose, w: 68, h: 42 };
+  frame([{ ...compact, id: "a" }]);
+  assert.equal(renderer.folioById.get("a").structure, null, "compact cards allocate no detailed housing");
   frame([{ ...pose, id: "a" }, { ...pose, id: "b", x: 230, selected: true }]);
   const a = renderer.folioById.get("a");
   const b = renderer.folioById.get("b");
+  assert.equal(a.structure.diagnostics().shapeUpdates, 1, "first housing is built directly at the visible pose");
   assert.equal(a.slabMesh.geometry, b.slabMesh.geometry);
   assert.notEqual(a.slabMesh.material, b.slabMesh.material);
   const positions = (card) => card.slabMesh.geometry.getAttribute("position").array;
@@ -67,6 +71,13 @@ test("cards share exact slab buffers for one frame and keep their own geometry w
   assert.deepEqual(positions(b), original);
   frame([{ ...pose, id: "b" }]);
   assert.deepEqual(positions(b), original, "removing the former owner keeps the remaining slab intact");
+  const housing = b.structure;
+  frame([{ ...compact, id: "b" }]);
+  assert.equal(b.structure, housing);
+  assert.equal(housing.root.visible, false);
+  frame([{ ...pose, id: "b" }]);
+  assert.equal(b.structure, housing, "working detail reuses the housing after zooming back in");
+  assert.equal(housing.root.visible, true);
 });
 
 test("resource faces and rims retain finite unit normals, valid indices and outward winding across transformations", () => {

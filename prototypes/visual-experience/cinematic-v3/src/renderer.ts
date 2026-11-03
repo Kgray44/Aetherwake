@@ -129,7 +129,7 @@ interface FolioVisual {
   edge: THREE.MeshPhysicalMaterial;
   polish: THREE.MeshPhysicalMaterial;
   materials: InstrumentMaterialSet;
-  structure: InstrumentStructure;
+  structure: InstrumentStructure | null;
   contact: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   width: number;
   height: number;
@@ -930,28 +930,13 @@ export class Environment {
       const rim = this.folioGeometry(true);
       const materials = createInstrumentMaterials();
       const { face, edge, polish } = materials;
-      const structure = new InstrumentStructure(materials);
       const slabMesh = new THREE.Mesh(slab, [face, edge]);
       slabMesh.frustumCulled = false;
       slabMesh.renderOrder = 4;
       const rimMesh = new THREE.Mesh(rim, polish);
       rimMesh.frustumCulled = false;
       rimMesh.renderOrder = 4;
-      root.add(slabMesh, rimMesh, structure.root);
-      // Opaque dark backing precedes translucent glass laminate; central text
-      // still sits over the fully opaque face. Explicit ordering is necessary
-      // because these small perimeter meshes share the same object origin.
-      structure.root.traverse((object) => {
-        if (!(object instanceof THREE.Mesh)) return;
-        object.renderOrder =
-          object.material === materials.recess
-            ? 3
-            : object.material === materials.optics
-              ? 6
-              : object.material === materials.accent
-                ? 7
-                : 5;
-      });
+      root.add(slabMesh, rimMesh);
       const contact = new THREE.Mesh(
         new THREE.PlaneGeometry(1, 1),
         new THREE.ShaderMaterial({
@@ -988,7 +973,7 @@ export class Environment {
         edge,
         polish,
         materials,
-        structure,
+        structure: null,
         contact,
         width: 0,
         height: 0,
@@ -996,6 +981,21 @@ export class Environment {
         shape: "folio",
       });
     }
+  }
+
+  private createHousing(visual: FolioVisual) {
+    const { materials } = visual;
+    const structure = new InstrumentStructure(materials);
+    // Layer the perimeter backing below the translucent glass and accents.
+    structure.root.traverse((object) => {
+      if (!(object instanceof THREE.Mesh)) return;
+      object.renderOrder =
+        object.material === materials.recess ? 3 :
+        object.material === materials.optics ? 6 :
+        object.material === materials.accent ? 7 : 5;
+    });
+    visual.root.add(structure.root);
+    return structure;
   }
 
   /** Three front rings reveal shallow optical curvature above a fixed bevel/backing. */
@@ -1302,7 +1302,6 @@ export class Environment {
       const kind = pose.kind ?? "conversation";
       const shape = pose.shape ?? defaultSurfaceShape(kind);
       visual.root.renderOrder = i + 10;
-      visual.structure.root.renderOrder = i + 10;
       const unfold = Number.isFinite(pose.unfold)
         ? THREE.MathUtils.clamp(pose.unfold, 0, 1)
         : 0;
@@ -1363,8 +1362,11 @@ export class Environment {
         unfold,
         selection,
       );
-      visual.structure.root.visible = opacity * housingReveal > 0.01;
-      if (visual.structure.root.visible) {
+      const detailVisible = opacity * housingReveal > 0.01;
+      if (detailVisible) {
+        const structure = visual.structure ??= this.createHousing(visual);
+        structure.root.visible = true;
+        structure.root.renderOrder = i + 10;
         for (const material of [
           visual.materials.frame,
           visual.materials.recess,
@@ -1372,7 +1374,7 @@ export class Environment {
           visual.materials.accent,
         ])
           material.opacity *= housingReveal;
-        visual.structure.update({
+        structure.update({
           kind,
           shape,
           width: pose.w,
@@ -1381,6 +1383,8 @@ export class Environment {
           quality,
           study,
         });
+      } else if (visual.structure) {
+        visual.structure.root.visible = false;
       }
       // Preserve the old buffer for baseline custody, but let the real housing
       // own reflections instead of drawing a second continuous bright outline.
@@ -2043,10 +2047,9 @@ export class Environment {
   }
   stats() {
     const instrumentResources = this.disposed ? [] : this.folios;
-    const structures = instrumentResources.map((folio) => ({
-      id: folio.id,
-      ...folio.structure.diagnostics(),
-    }));
+    const structures = instrumentResources.flatMap((folio) =>
+      folio.structure ? [{ id: folio.id, ...folio.structure.diagnostics() }] : [],
+    );
     return {
       backend: "Three.js WebGL2",
       presenceBounds: { ...this.projectedPresence },
@@ -2089,19 +2092,14 @@ export class Environment {
           note: instrumentResources.filter((folio) => folio.kind === "note")
             .length,
         },
-        geometryAllocations: instrumentResources.reduce(
-          (sum, folio) =>
-            sum + 3 + folio.structure.diagnostics().geometryAllocations,
-          0,
-        ),
+        geometryAllocations: instrumentResources.length * 3 +
+          structures.reduce((sum, structure) => sum + structure.geometryAllocations, 0),
         materialAllocations: instrumentResources.reduce(
           (sum, folio) => sum + Object.values(folio.materials).length + 1,
           0,
         ),
-        meshAllocations: instrumentResources.reduce(
-          (sum, folio) => sum + 3 + folio.structure.diagnostics().meshCount,
-          0,
-        ),
+        meshAllocations: instrumentResources.length * 3 +
+          structures.reduce((sum, structure) => sum + structure.meshCount, 0),
         contactCuesRendered: instrumentResources.filter(
           (folio) => folio.contact.visible && folio.root.visible,
         ).length,
@@ -2150,7 +2148,7 @@ export class Environment {
           .map((folio) => folio.slabMesh.geometry),
       ).size,
       detailedSurfacesRendered: this.folios.filter((folio) =>
-        folio.root.visible && folio.structure.root.visible,
+        folio.root.visible && folio.structure?.root.visible,
       ).length,
       // Submission counters are not presented FPS, GPU utilization, or VRAM usage.
     };
@@ -2192,7 +2190,7 @@ export class Environment {
         materials.add(material);
       // InstrumentStructure owns its geometries and clears its root. Its
       // caller-owned materials join the same exactly-once disposal set.
-      folio.structure.dispose();
+      folio.structure?.dispose();
     }
     const collect = (object: THREE.Object3D) => {
       const mesh = object as THREE.Mesh;

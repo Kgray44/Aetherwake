@@ -234,14 +234,6 @@ export class InstrumentStructure {
     });
     this.retainers.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.inlays.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.update({
-      kind: "conversation",
-      width: 320,
-      height: 220,
-      unfold: 0,
-      quality: "balanced",
-      study: "optical",
-    });
   }
 
   private shape: SurfaceShape = "folio";
