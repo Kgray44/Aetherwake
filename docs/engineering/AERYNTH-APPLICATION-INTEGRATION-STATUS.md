@@ -30,6 +30,43 @@ and six backend resource-opening tests passed. The journey had zero
 provider executions. The running owner window and portable AH predate
 this correction.
 
+## November 3 portable AJ and compact overview
+
+Universal Block System's `9790f0b` is integrated as `5981e7d`. In the
+actual hidden 51-card workspace, all 50 compact overview cards kept
+separate Open and Approach targets. All 500 center and interior hit
+samples reached the intended buttons. The fitted screenshot showed the
+controls inside their card contours. The additional Checklist opened
+before fitting and retained the shared width observer. Resize,
+Constellation travel, reduced motion, graphics recovery and exact restart
+passed. The updated build passed 401 desktop tests. One short fit sample
+observed 727 Chromium style recalculations versus 123 previously, under
+different concurrent load. Physical display timing and a sustained
+performance comparison remain open.
+
+Portable AJ freezes `5981e7d4f3e9ee65431757861981997f4786f02d`. All
+382 payload files, including 250 exact Git blobs, passed an independent
+byte audit. The packaged assets match the dense Electron receipt.
+The bundled Node/backend passed 22 initial and five restart commands on
+a fresh synthetic profile. The packaged bootstrap, renderer, preload,
+host and bundled Node then passed a separate three-process hidden
+Electron journey. The harness used a byte-matched Electron executable
+and suppressed window show and focus. The journey created the resources
+through application controls, edited them across projects via Constellation,
+returned to the original workspace and restored exact state after
+restart. A read-only SQLite check found zero provider executions.
+The normal owner window stayed open. The normal foreground launcher,
+owner review, live Codex and monitor presentation were outside these
+checks. Portable AI is preserved separately at `de4dc87`.
+
+AJ manifest SHA-256 is
+`0b9fa2adff77276838846383c9303cc44038b4db4a67311341e6f70d8b0db494`.
+The hidden journey and independent audit are in private profile
+`review-package-journey-1793692286041`. The dense control and restart
+receipts are in `review-block-scale-50-1793692164791`. The bundled
+backend receipt SHA-256 is
+`1791572130e715200c01f021615d33ade9f21627532127848fa87de2dac1e0f8`.
+
 ## November 3 working-card measurement
 
 The desktop presenter now reuses its shared ResizeObserver measurement
