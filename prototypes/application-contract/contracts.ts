@@ -322,3 +322,18 @@ export type DesktopCommand = DesktopAction & {
   expectedLayoutVersion?: number;
   bounds?: { x: number; y: number; width: number; height: number };
 };
+
+export const WORKSPACE_PANELS = [
+  "environments", "workspace-actions", "conversations", "agents",
+  "resources", "intelligence-stream",
+] as const;
+export type WorkspacePanelId = typeof WORKSPACE_PANELS[number];
+export type WorkspacePanelPreference = {
+  pinned: boolean;
+  size?: { width: number; height: number };
+};
+export type WorkspacePanelPreferences = Partial<Record<WorkspacePanelId, WorkspacePanelPreference>>;
+export type WorkspacePanelRequest = {
+  workspaceId: string;
+  update?: { panel: WorkspacePanelId; preference: WorkspacePanelPreference };
+};

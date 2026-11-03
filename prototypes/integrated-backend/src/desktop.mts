@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { WorkspaceEngine, type EngineOptions } from "../../workspace-engine/engine.mts";
 import type { Command as EngineCommand, WorkspaceProjection } from "../../workspace-engine/contracts.mts";
 import type { WorkspaceKernel } from "../../workspace-kernel/kernel.mts";
+import { WORKSPACE_PANELS } from "../../application-contract/contracts.ts";
 import type {
   DesktopCommand,
   DesktopSnapshot,
@@ -14,6 +15,8 @@ import type {
   CanonicalResourceKind,
   Resource,
   Shape,
+  WorkspacePanelPreferences,
+  WorkspacePanelRequest,
 } from "../../application-contract/contracts.ts";
 
 const check = (v: unknown, code = "invalid_desktop_command"): void => {
@@ -63,7 +66,8 @@ export class DesktopState {
         CREATE TABLE IF NOT EXISTS desktop_session(id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS desktop_undo(id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL REFERENCES workspaces(id), json TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS desktop_checkpoints(workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id), json TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS desktop_view_state(id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL);`);
+        CREATE TABLE IF NOT EXISTS desktop_view_state(id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS desktop_workspace_panels(workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, panel TEXT NOT NULL, json TEXT NOT NULL, PRIMARY KEY(workspace_id,panel));`);
       const versions = db.prepare("SELECT version FROM desktop_schema").all();
       if (!versions.length)
         db.prepare("INSERT INTO desktop_schema VALUES(1)").run();
@@ -193,7 +197,11 @@ export class DesktopState {
       ...(this.commandBounds ? { bounds: this.commandBounds } : {}),
     } as EngineCommand);
   }
-  viewState(a: { state?: unknown }): unknown {
+  viewState(a: { state?: unknown; panels?: WorkspacePanelRequest }): unknown {
+    if (a.panels !== undefined) {
+      check(a.state === undefined, "invalid_view_state");
+      return this.workspacePanels(a.panels);
+    }
     if (a.state === undefined) {
       const row = this.db
         .prepare("SELECT json FROM desktop_view_state WHERE id=1")
@@ -233,6 +241,37 @@ export class DesktopState {
         .run(json),
     );
     return null;
+  }
+  private workspacePanels(input: WorkspacePanelRequest): WorkspacePanelPreferences {
+    const invalid = "invalid_workspace_panel";
+    check(input && typeof input.workspaceId === "string" && input.workspaceId.length <= 256, invalid);
+    this.workspace(input.workspaceId);
+    if (input.update !== undefined) {
+      const update = input.update;
+      check(update && WORKSPACE_PANELS.includes(update.panel), invalid);
+      const p = update.preference;
+      check(p && typeof p.pinned === "boolean", invalid);
+      const size = p.size;
+      check(
+        size === undefined ||
+          (size && [size.width, size.height].every((n) => Number.isInteger(n) && n >= 1 && n <= 4096)),
+        invalid,
+      );
+      const json = JSON.stringify({
+        pinned: p.pinned,
+        ...(size ? { size: { width: size.width, height: size.height } } : {}),
+      });
+      this.kernel.withTransaction(() =>
+        this.db.prepare(
+          "INSERT INTO desktop_workspace_panels VALUES(?,?,?) ON CONFLICT(workspace_id,panel) DO UPDATE SET json=excluded.json",
+        ).run(input.workspaceId, update.panel, json),
+      );
+    }
+    return Object.fromEntries(
+      this.db.prepare("SELECT panel,json FROM desktop_workspace_panels WHERE workspace_id=?").all(input.workspaceId)
+        .filter((row) => WORKSPACE_PANELS.some((panel) => panel === row.panel))
+        .map((row) => [String(row.panel), JSON.parse(String(row.json))]),
+    );
   }
   private session(): Session {
     return JSON.parse(

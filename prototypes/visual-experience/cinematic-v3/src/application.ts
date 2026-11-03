@@ -176,7 +176,10 @@ import type {
   Resource,
   Shape,
   WorkspacePresence,
+  WorkspacePanelId,
+  WorkspacePanelPreferences,
 } from "../../../application-contract/contracts.ts";
+import { WORKSPACE_PANELS } from "../../../application-contract/contracts.ts";
 type Hooks = {
   motion: MotionCoordinator;
   wake(): void;
@@ -360,7 +363,7 @@ export function installApplication(hooks: Hooks) {
     wake: hooks.wake,
   };
   let agentLibrary: ReturnType<typeof mountAgentLibrary> | null = null;
-  let agentSurface: ContextualSurfaceRequest | null = null;
+  let agentSurface: (ContextualSurfaceRequest & { id: "agents" }) | null = null;
   let checklistCreator: ReturnType<typeof mountChecklistCreator> | null = null;
   let checklistCreatorSurface: ContextualSurfaceRequest | null = null;
   let checklistCreatorSerial = 0;
@@ -473,13 +476,14 @@ export function installApplication(hooks: Hooks) {
     null;
   let blockLibrary: ReturnType<typeof mountBlockLibrary> | undefined;
   let state: DesktopSnapshot | null = null;
+  let panelScope: { workspaceId: string; preferences: WorkspacePanelPreferences } | null = null;
   let environmentNavigator: ReturnType<
     typeof mountEnvironmentNavigator
   > | null = null;
-  let environmentSurface: ContextualSurfaceRequest | null = null;
+  let environmentSurface: (ContextualSurfaceRequest & { id: "environments" }) | null = null;
   let environmentPresentation = 0;
   let workspaceActions: ReturnType<typeof mountWorkspaceActions> | null = null;
-  let workspaceActionsSurface: ContextualSurfaceRequest | null = null;
+  let workspaceActionsSurface: (ContextualSurfaceRequest & { id: "workspace-actions" }) | null = null;
   let offset = { x: 0, y: 0 };
   let zoom = 1;
   let previewBase: LayoutState | undefined;
@@ -564,7 +568,7 @@ export function installApplication(hooks: Hooks) {
   const conversationView = createManagerState();
   let conversationManager: ReturnType<typeof mountConversationManager> | null =
     null;
-  let conversationSurface: ContextualSurfaceRequest | null = null;
+  let conversationSurface: (ContextualSurfaceRequest & { id: "conversations" }) | null = null;
   let conversationDisposing: Promise<void> | null = null;
   let connectionsView: ReturnType<typeof mountProviderConnections> | null =
     null;
@@ -1261,6 +1265,56 @@ export function installApplication(hooks: Hooks) {
       decorate(el(`[data-block="${block.id}"]`), block.id);
     hooks.layout();
     document.body.classList.add("application-ready");
+    syncWorkspacePanels(
+      next.navigation.kind === "workspace" ? next.activeWorkspaceId : null,
+    );
+  }
+  function openWorkspacePanel(
+    request: ContextualSurfaceRequest & { id: WorkspacePanelId },
+    restoring = false,
+  ) {
+    const scope = panelScope;
+    if (!scope) return surfaces.open(request);
+    const preference = scope.preferences[request.id] ?? { pinned: false };
+    return surfaces.open({
+      ...request,
+      preferredSize: preference.size ?? request.preferredSize,
+      initialFocus: restoring ? false : request.initialFocus,
+      workspacePanel: {
+        preference,
+        async save(preference) {
+          try {
+            await host.command!("viewState", {
+              panels: {
+                workspaceId: scope.workspaceId,
+                update: { panel: request.id, preference },
+              },
+            });
+            scope.preferences[request.id] = preference;
+          } catch (error) {
+            report(error);
+            throw error;
+          }
+        },
+      },
+    });
+  }
+  function syncWorkspacePanels(workspaceId: string | null) {
+    if ((panelScope?.workspaceId ?? null) === workspaceId) return;
+    for (const panel of WORKSPACE_PANELS) surfaces.close(panel);
+    const scope = workspaceId ? { workspaceId, preferences: {} as WorkspacePanelPreferences } : null;
+    panelScope = scope;
+    if (!scope) return;
+    void (async () => {
+      const saved = await host.command!("viewState", { panels: { workspaceId: scope.workspaceId } });
+      if (panelScope !== scope) return;
+      scope.preferences = (saved ?? {}) as WorkspacePanelPreferences;
+      if (scope.preferences.environments?.pinned) manager(true);
+      if (scope.preferences["workspace-actions"]?.pinned) layouts(true);
+      if (scope.preferences.agents?.pinned) void showAgents(undefined, true).catch(report);
+      if (scope.preferences.conversations?.pinned)
+        void showConversations(undefined, undefined, () => panelScope === scope, undefined, true).catch(report);
+    })().catch(report);
   }
   let flushInFlight: Promise<void> | null = null;
   function flush(): Promise<void> {
@@ -1943,7 +1997,7 @@ export function installApplication(hooks: Hooks) {
       attempt.pending = false;
     }
   }
-  async function showAgents(resourceId?: string): Promise<void> {
+  async function showAgents(resourceId?: string, restoring = false): Promise<void> {
     if (!agentLibrary || !agentSurface) {
       const content = document.createElement("div");
       content.className = "application-agent-content";
@@ -1971,7 +2025,7 @@ export function installApplication(hooks: Hooks) {
         },
       };
     }
-    surfaces.open(agentSurface).classList.add("application-agents");
+    openWorkspacePanel(agentSurface, restoring).classList.add("application-agents");
     if (resourceId) {
       const opened = await agentLibrary.open(resourceId);
       if (opened === "unavailable") hooks.status("This agent is unavailable.");
@@ -1982,6 +2036,7 @@ export function installApplication(hooks: Hooks) {
     messageId?: string,
     current: () => boolean = () => true,
     anchor?: { x: number; y: number; width: number; height: number },
+    restoring = false,
   ) {
     await conversationDisposing;
     if (!current()) return;
@@ -1990,7 +2045,7 @@ export function installApplication(hooks: Hooks) {
     cardConfiguration = null;
     if (conversationManager && conversationSurface) {
       if (anchor) conversationSurface.anchor = anchor;
-      surfaces.open(conversationSurface).id = "conversation-surface";
+      openWorkspacePanel(conversationSurface, restoring).id = "conversation-surface";
       if (resourceId) await conversationManager.open(resourceId, messageId);
       else await conversationManager.refresh();
       return;
@@ -1999,7 +2054,7 @@ export function installApplication(hooks: Hooks) {
     content.id = "conversation-product";
     content.className = "application-conversation-content";
     let controller: ReturnType<typeof mountConversationManager> | undefined;
-    const request: ContextualSurfaceRequest = {
+    const request: ContextualSurfaceRequest & { id: "conversations" } = {
       id: "conversations",
       anchor: anchor ?? el(".brand"),
       content,
@@ -2031,7 +2086,7 @@ export function installApplication(hooks: Hooks) {
             report(error);
             // A failed recovery save keeps the same editor and its draft usable.
             if (conversationManager === closing)
-              surfaces.open(request).id = "conversation-surface";
+              openWorkspacePanel(request).id = "conversation-surface";
           })
           .finally(() => {
             if (conversationDisposing === disposal)
@@ -2041,7 +2096,7 @@ export function installApplication(hooks: Hooks) {
       },
     };
     conversationSurface = request;
-    const surface = surfaces.open(request);
+    const surface = openWorkspacePanel(request, restoring);
     surface.id = "conversation-surface";
     surface.classList.add("aw-optical-controls");
     surface.dataset.awOptics = "workspace";
@@ -2215,16 +2270,15 @@ export function installApplication(hooks: Hooks) {
       }
     };
   }
-  function manager() {
+  function manager(restoring = false) {
     if (!state) return;
     environmentPresentation++;
     dialog.close();
     if (environmentNavigator && environmentSurface) {
       environmentNavigator.update(state);
-      surfaces
-        .open(environmentSurface)
+      openWorkspacePanel(environmentSurface, restoring)
         .classList.add("application-environments");
-      environmentNavigator.focusSearch();
+      if (!restoring) environmentNavigator.focusSearch();
       return;
     }
     const content = document.createElement("div");
@@ -2324,7 +2378,7 @@ export function installApplication(hooks: Hooks) {
       placement: "right",
       initialFocus: 'input[type="search"]',
     };
-    surfaces.open(environmentSurface).classList.add("application-environments");
+    openWorkspacePanel(environmentSurface, restoring).classList.add("application-environments");
   }
   async function newConversation() {
     const created = await composerPort.command("create", {
@@ -2736,7 +2790,7 @@ export function installApplication(hooks: Hooks) {
       initialFocus: "button",
     });
   }
-  function layouts() {
+  function layouts(restoring = false) {
     if (!state?.activeWorkspaceId || state.navigation.kind !== "workspace") {
       manager();
       return;
@@ -2744,8 +2798,7 @@ export function installApplication(hooks: Hooks) {
     dialog.close();
     if (workspaceActions && workspaceActionsSurface) {
       workspaceActions.update(state);
-      surfaces
-        .open(workspaceActionsSurface)
+      openWorkspacePanel(workspaceActionsSurface, restoring)
         .classList.add("application-workspace-actions");
       return;
     }
@@ -2882,8 +2935,7 @@ export function installApplication(hooks: Hooks) {
       maxSize: { width: 520, height: 700 },
       placement: "bottom",
     };
-    surfaces
-      .open(workspaceActionsSurface)
+    openWorkspacePanel(workspaceActionsSurface, restoring)
       .classList.add("application-workspace-actions");
   }
   function reveal(id: string) {
@@ -4258,7 +4310,7 @@ export function installApplication(hooks: Hooks) {
       hooks.vela("unavailable");
     }
   });
-  el("#workspace-manager").onclick = manager;
+  el("#workspace-manager").onclick = () => manager();
   el("#application-resources").onclick = picker;
   el("#application-agents").onclick = () => {
     void showAgents().catch(report);
@@ -4269,7 +4321,7 @@ export function installApplication(hooks: Hooks) {
   el("#application-connections").onclick = connections;
   el("#add-block").onclick = add;
   el("#resource-picker").onclick = picker;
-  el("#layout-manager").onclick = layouts;
+  el("#layout-manager").onclick = () => layouts();
   el("#zoom-out").onclick = () => {
     if (constellation) void constellation.controller.zoomOut().catch(report);
   };

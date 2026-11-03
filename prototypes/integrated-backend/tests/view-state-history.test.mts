@@ -56,10 +56,19 @@ test("canonical view persistence preserves optional Forward/named views and lega
     const state = { ...legacy, future: Array.from({ length: 32 }, () => entry), savedViews: [saved] };
     await core.command("viewState", { state });
     assert.deepEqual(await core.command("viewState", {}), state);
+    const panels = { workspaceId };
+    const preference = { pinned: true, size: { width: 640, height: 520 } };
+    assert.deepEqual(await core.command("viewState", { panels }), {});
+    await core.command("viewState", { panels: { ...panels, update: { panel: "agents", preference } } });
+    await assert.rejects(core.command("viewState", {
+      panels: { ...panels, update: { panel: "resources", preference: { pinned: true, size: { width: 5000, height: 520 } } } },
+    }), /invalid_workspace_panel/);
+    assert.deepEqual(await core.command("viewState", {}), state);
     await core.command("close", {});
     core = new BackendCore(options);
     forbidConnect();
     assert.deepEqual(await core.command("viewState", {}), state);
+    assert.deepEqual(await core.command("viewState", { panels }), { agents: preference });
     for (const invalid of [null, {}, "future", [...state.future, entry]]) {
       await assert.rejects(
         core.command("viewState", { state: { ...state, future: invalid } }),

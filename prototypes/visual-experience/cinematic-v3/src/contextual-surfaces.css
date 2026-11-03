@@ -70,6 +70,51 @@
   scrollbar-width: thin;
   scrollbar-color: #b7b4d666 transparent;
 }
+.aw-contextual-pin,
+.aw-contextual-resize {
+  display: grid;
+  place-items: center;
+  color: inherit;
+}
+.aw-contextual-pin[hidden],
+.aw-contextual-resize[hidden] {
+  display: none;
+}
+.aw-contextual-pin {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  margin-inline-start: auto;
+  margin-inline-end: -8px;
+  background: #bce2e909;
+  border: 1px solid #bce2e926;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.aw-contextual-pin[aria-pressed="true"] {
+  color: #d1f3fa;
+  background: #90c7d440;
+  border-color: #c4ebf075;
+}
+.aw-contextual-resize {
+  position: absolute;
+  inset: auto 2px 2px auto;
+  width: 23px;
+  height: 23px;
+  border-radius: 8px;
+  background: #142028e3;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+:is(.aw-contextual-pin, .aw-contextual-resize) svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 .aw-contextual-content > * {
   min-width: 0;
   max-width: 100%;

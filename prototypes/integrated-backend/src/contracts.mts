@@ -1,7 +1,7 @@
 import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
 import type { GraphData, Message, ContextPackage, Sensitivity } from '../../connected-conversations/src/graph.ts';
 import type { Resource } from '../../workspace-kernel/kernel.mts';
-import type { DesktopCommand, DesktopSnapshot, PublicConversationExecution, ConversationActivitySnapshot, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
+import type { DesktopCommand, DesktopSnapshot, PublicConversationExecution, ConversationActivitySnapshot, WorkspacePresentationContext, WorkspacePanelRequest } from '../../application-contract/contracts.ts';
 import type { ResourceOpeningInput, ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
 import type { ProviderConnectionRequest, ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
 import type { NativeAuthorizationStart,NativeCredential,ReportedUsage,TurnInput,TurnResult,TurnOutcome,TurnHttpDiagnostic } from '../../openai-provider/contracts.mts';
@@ -177,7 +177,7 @@ export interface CommandMap {
   authorizeConversationSend: { input: { previewId:string; fingerprint:string; commandId:string }; output: { grantId:string; expiresAt:string } };
   conversationSend: { input: { previewId:string; grantId:string; fingerprint:string; commandId:string }; output: Execution };
   desktop: { input: DesktopCommand; output: DesktopSnapshot };
-  viewState: { input: { state?: unknown }; output: unknown };
+  viewState: { input: { state?: unknown; panels?: WorkspacePanelRequest }; output: unknown };
   openWorkspace: { input: { workspaceId: string }; output: { workspace: Record<string, unknown>; layout: Record<string, unknown>; blocks: Array<Record<string, unknown>> } };
   selectProvider: { input: { resourceId: string; providerId: string; expectedRevision: number }; output: ConversationView };
   applyOrdinary: { input: { handoffId: string; prompt: string; commandId: string }; output: Message & { resourceId: string; classification: 'simulated' } };

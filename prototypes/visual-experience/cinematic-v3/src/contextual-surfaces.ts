@@ -1,4 +1,5 @@
 import type { MotionCoordinator, Pose } from "./motion";
+import type { WorkspacePanelPreference } from "../../../application-contract/contracts.ts";
 
 export type SurfaceRect = {
   x: number;
@@ -37,6 +38,10 @@ export type ContextualSurfaceRequest = {
   modal?: boolean;
   dismissOnOutside?: boolean;
   initialFocus?: HTMLElement | string | false;
+  workspacePanel?: {
+    preference: WorkspacePanelPreference;
+    save: (preference: WorkspacePanelPreference) => Promise<void>;
+  };
   beforeClose?: (reason: SurfaceCloseReason) => boolean | Promise<boolean>;
   onClose?: (reason: SurfaceCloseReason) => void;
 };
@@ -195,6 +200,7 @@ type Entry = {
   target: SurfaceRect;
   constrained: boolean;
   lastStyle: string;
+  updatePanelControls?: () => void;
 };
 const focusableSelector =
   'button,input,select,textarea,a[href],summary,[tabindex],[contenteditable="true"],audio[controls],video[controls]';
@@ -464,6 +470,168 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
       e.node
     ).focus({ preventScroll: true });
   }
+  function panelControls(e: Entry, header: HTMLElement, dismiss: HTMLElement) {
+    const pin = document.createElement("button");
+    pin.type = "button";
+    pin.className = "aw-contextual-pin";
+    pin.dataset.aerynthMotionControl = "true";
+    pin.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8m-7 0v6l-3 4h12l-3-4V4m-3 10v6"/></svg>';
+    const grip = document.createElement("div");
+    grip.className = "aw-contextual-resize";
+    grip.dataset.aerynthMotionControl = "true";
+    grip.tabIndex = 0;
+    grip.setAttribute("role", "group");
+    grip.setAttribute("aria-label", "Resize panel with arrow keys");
+    grip.title = "Drag to resize · Arrow keys when focused";
+    grip.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 17 17 7m-5 10 5-5"/></svg>';
+    header.insertBefore(pin, dismiss);
+    e.node.append(grip);
+    let saving = false;
+    let drag:
+      | {
+          id: number;
+          x: number;
+          y: number;
+          size: SurfaceSize;
+          previous?: SurfaceSize;
+          panel: ContextualSurfaceRequest["workspacePanel"];
+        }
+      | undefined;
+    const sync = () => {
+      const panel = e.request.workspacePanel;
+      if (drag && drag.panel !== panel) {
+        const { id } = drag;
+        drag = undefined;
+        if (grip.hasPointerCapture(id)) grip.releasePointerCapture(id);
+      }
+      pin.hidden = grip.hidden = !panel;
+      const pinned = panel?.preference.pinned ?? false;
+      pin.setAttribute("aria-pressed", String(pinned));
+      pin.setAttribute(
+        "aria-label",
+        pinned ? "Unpin from workspace" : "Pin to workspace",
+      );
+      pin.title = pin.getAttribute("aria-label")!;
+    };
+    const changeSize = (size: SurfaceSize | undefined) => {
+      e.request.preferredSize = size;
+      e.dirty = true;
+      retarget(e);
+      options.wake();
+    };
+    const dimensions = (width: number, height: number) => {
+      const area = usableArea(options.viewport(), insets());
+      const { min, max } = sizeLimits(e.request);
+      return {
+        width: Math.max(
+          1,
+          Math.round(
+            clamp(
+              width,
+              Math.min(area.width, min.width),
+              Math.min(area.width, max.width),
+            ),
+          ),
+        ),
+        height: Math.max(
+          1,
+          Math.round(
+            clamp(
+              height,
+              Math.min(area.height, min.height),
+              Math.min(area.height, max.height),
+            ),
+          ),
+        ),
+      };
+    };
+    const save = async (
+      change: Partial<WorkspacePanelPreference>,
+      previous?: SurfaceSize,
+    ) => {
+      const panel = e.request.workspacePanel;
+      if (!panel || saving) return;
+      const preference = { ...panel.preference, ...change };
+      saving = true;
+      pin.disabled = true;
+      try {
+        await panel.save(preference);
+        if (e.request.workspacePanel === panel) panel.preference = preference;
+      } catch {
+        if (!e.destroyed && e.request.workspacePanel === panel && change.size)
+          changeSize(previous);
+      } finally {
+        pin.disabled = false;
+        saving = false;
+        sync();
+      }
+    };
+    pin.onclick = () => {
+      const preference = e.request.workspacePanel?.preference;
+      if (preference && !drag) void save({ pinned: !preference.pinned });
+    };
+    grip.onpointerdown = (event) => {
+      if (event.button !== 0 || drag || saving || !e.request.workspacePanel)
+        return;
+      event.preventDefault();
+      grip.focus({ preventScroll: true });
+      grip.setPointerCapture(event.pointerId);
+      const rect = e.node.getBoundingClientRect();
+      drag = {
+        id: event.pointerId,
+        x: event.clientX,
+        y: event.clientY,
+        size: rect,
+        previous: e.request.preferredSize,
+        panel: e.request.workspacePanel,
+      };
+    };
+    grip.onpointermove = (event) => {
+      if (event.pointerId !== drag?.id) return;
+      const dx = event.clientX - drag.x,
+        dy = event.clientY - drag.y;
+      if (dx || dy)
+        changeSize(dimensions(drag.size.width + dx, drag.size.height + dy));
+    };
+    const end = (event: PointerEvent) => {
+      if (event.pointerId !== drag?.id) return;
+      const { previous } = drag;
+      drag = undefined;
+      if (event.type === "pointerup") {
+        const size = e.request.preferredSize;
+        if (size && size !== previous) void save({ size }, previous);
+      } else if (!e.destroyed && !e.closing) changeSize(previous);
+    };
+    grip.onpointerup = grip.onpointercancel = grip.onlostpointercapture = end;
+    grip.onkeydown = (event) => {
+      const directions: Record<string, [number, number]> = {
+        ArrowLeft: [-1, 0],
+        ArrowRight: [1, 0],
+        ArrowUp: [0, -1],
+        ArrowDown: [0, 1],
+      };
+      if (event.key === "Escape" && drag) {
+        event.preventDefault();
+        grip.releasePointerCapture(drag.id);
+        return;
+      }
+      const direction = directions[event.key];
+      if (!direction || drag || saving || !e.request.workspacePanel) return;
+      event.preventDefault();
+      const previous = e.request.preferredSize;
+      const step = event.shiftKey ? 48 : 16;
+      const size = dimensions(
+        e.target.width + step * direction[0],
+        e.target.height + step * direction[1],
+      );
+      changeSize(size);
+      void save({ size }, previous);
+    };
+    sync();
+    return sync;
+  }
   function open(request: ContextualSurfaceRequest): HTMLDialogElement {
     if (disposed) throw new Error("Contextual surfaces disposed");
     if (
@@ -495,6 +663,14 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
       existing.node.inert = false;
       existing.dirty = true;
       existing.title.textContent = request.label ?? "";
+      if (request.workspacePanel && !existing.updatePanelControls) {
+        const header = existing.title.parentElement!;
+        existing.updatePanelControls = panelControls(
+          existing,
+          header,
+          header.lastElementChild as HTMLElement,
+        );
+      } else existing.updatePanelControls?.();
       existing.node.setAttribute(
         "aria-label",
         request.label ?? "Contextual panel",
@@ -572,6 +748,8 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
       constrained: false,
       lastStyle: "",
     };
+    if (request.workspacePanel)
+      e.updatePanelControls = panelControls(e, header, dismiss);
     node.style.visibility = "hidden";
     if (request.modal) node.showModal();
     else node.show();
@@ -597,7 +775,12 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
   }
   const pointer = (event: PointerEvent) => {
     const e = top();
-    if (!e || !(e.request.dismissOnOutside ?? !e.request.modal)) return;
+    if (
+      !e ||
+      e.request.workspacePanel?.preference.pinned ||
+      !(e.request.dismissOnOutside ?? !e.request.modal)
+    )
+      return;
     const path = event.composedPath(),
       r = e.node.getBoundingClientRect();
     if (
@@ -620,6 +803,11 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
     if (event.defaultPrevented) return;
     const e = top();
     if (!e) return;
+    if (
+      e.request.workspacePanel?.preference.pinned &&
+      !e.node.contains(document.activeElement)
+    )
+      return;
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
