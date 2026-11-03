@@ -322,7 +322,7 @@ test("AIR file batch detects a stale later file and reports an actual partial wr
   }
 });
 
-test("standalone AIR check routes without an edit or inference and preserves its canonical result", {
+test("Run the tests and build a file I can review before saving", {
   skip: process.platform !== "win32",
 }, async () => {
   const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
@@ -330,6 +330,7 @@ test("standalone AIR check routes without an edit or inference and preserves its
   mkdirSync(runtime, { recursive: true });
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const path = join(dir, "standalone.test.mjs");
+  const build = join(dir, "sample.build.mjs"), artifact = join(dir, "generated.json");
   const body = "import test from 'node:test'; import assert from 'node:assert/strict'; test('fixture', () => assert.equal(6 * 7, 42));\n";
   const f = fixture(false, "air-file-edit", false);
   const git = (...args: string[]) => execFileSync("git.exe", ["-C", dir, "-c", "core.hooksPath=NUL", ...args],
@@ -338,7 +339,8 @@ test("standalone AIR check routes without an edit or inference and preserves its
   try {
     git("init", "--quiet", "--template=");
     writeFileSync(path, body);
-    git("add", "--", "standalone.test.mjs");
+    writeFileSync(build, "process.stdout.write(JSON.stringify({ sum: [6, 7].reduce((sum, n) => sum + n, 0) }) + '\\n');\n");
+    git("add", "--", "standalone.test.mjs", "sample.build.mjs");
     git("-c", "user.name=AIR fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "Fixture");
     assert.deepEqual(await f.core.command("velaRouteNative", { intent }), { matched: false, projectCheck: "node-test" });
     await assert.rejects(f.core.command("velaRouteNative", { intent, settings: { providerId: "chatgpt-plan-responses" } }),
@@ -405,6 +407,28 @@ test("standalone AIR check routes without an edit or inference and preserves its
     assert.equal(restored?.state, "unknown");
     assert.equal(restored?.projectCheck?.state, "unknown");
     assert.equal(restored?.errorCode, "restart_project_check_outcome_unknown");
+    const buildInput = { intent: "Build this project", paths: [build] };
+    assert.deepEqual(await f.core.command("velaRouteNative", { intent: buildInput.intent }), { matched: false, projectCheck: "node-build" });
+    await assert.rejects(f.core.command("velaStandaloneCheckReview", buildInput), /vela_build_destination_required/);
+    const buildReview = await f.core.command("velaStandaloneCheckReview", { ...buildInput, artifactPath: artifact });
+    assert.equal(buildReview.artifactPath, artifact);
+    assert.deepEqual(buildReview.argv.slice(-2), ["--", "./sample.build.mjs"]);
+    const generated = await f.core.command("velaStandaloneCheckRun", buildReview);
+    assert.equal(generated.projectCheck?.state, "passed");
+    assert.equal(generated.projectCheck?.artifact?.relativePath, "generated.json");
+    assert.equal(existsSync(artifact), false);
+    await f.reopen();
+    const fileReview = await f.core.command("velaFileEditReview", { requestId: generated.id });
+    assert.equal(fileReview.files[0].before, null);
+    assert.equal(fileReview.files[0].after, '{"sum":13}\n');
+    assert.equal(fileReview.files[0].afterDigest, generated.projectCheck?.artifact?.digest);
+    writeFileSync(artifact, '{"external":true}\n', { flag: "wx" });
+    await assert.rejects(f.core.command("velaFileEditApply", fileReview), /vela_edit_destination_exists/);
+    assert.equal(readFileSync(artifact, "utf8"), '{"external":true}\n');
+    rmSync(artifact);
+    const revisedReview = await f.core.command("velaFileEditReview", { requestId: generated.id });
+    assert.equal((await f.core.command("velaFileEditApply", revisedReview)).state, "applied");
+    assert.equal(readFileSync(artifact, "utf8"), '{"sum":13}\n');
     assert.equal((await f.core.command("providerActivity", {})).providerRequests, 0);
   } finally {
     await f.close();
@@ -457,6 +481,48 @@ test("AIR sends authorized inspection through native Codex protocol with discove
     assert.equal(next.state, "responded", next.errorCode);
     assert.equal(next.conversationId, request.conversationId);
     assert.equal((await f.core.command("providerActivity", {})).providerRequests, 2);
+  } finally { await f.close(); }
+});
+
+test("Can you check whether Codex finished without running it again?", async () => {
+  const f = fixture(false, "air-inspection", false);
+  try {
+    const firstPort = (f.core as any).port as ProviderPort;
+    const terminal = firstPort.terminal.bind(firstPort);
+    firstPort.terminal = async (...args) => {
+      await terminal(...args);
+      throw Error("Simulated lost completion");
+    };
+    const preview = await f.core.command("velaRequestPreview", { intent: "Inspect the repository logs for build errors",
+      resourceIds: [], adaptive: true, model: "fixture-model", reasoningEffort: "high" });
+    const native = await f.core.command("velaNativeReview", { previewId: preview.id, signature: preview.signature });
+    const request = await f.vela("request", await f.approve({ preview, native })) as VelaRequest;
+    assert.equal(request.state, "unknown");
+    const execution = Object.values((await f.core.command("snapshot", {})).executions)
+      .find(item => item.commandId === "vela-inspection:" + request.id)!;
+    assert(execution.binding && execution.turnId);
+    await f.reopen();
+    assert.deepEqual((await f.state()).recoverableProviderRequestIds, [request.id]);
+    const port = (f.core as any).port as ProviderPort;
+    const input = { requestId: request.id };
+    port.recentTurns = async () => [{ id: "a different turn", status: "completed" }];
+    assert.equal(await f.vela("reconcileProviderTurn", input), null);
+    port.recentTurns = async threadId => {
+      assert.equal(threadId, execution.binding!.nativeThreadId);
+      return [{ id: execution.turnId, status: "completed" }];
+    };
+    const recovered = await f.vela("reconcileProviderTurn", input);
+    const state = await f.state();
+    const updated = state.requests.find(item => item.id === request.id)!;
+    assert.deepEqual(updated.providerRecovery, recovered);
+    assert.equal(updated.providerRecovery?.state, "provider_completed");
+    assert.equal(updated.state, "unknown", "Provider status does not prove the task outcome");
+    assert.equal(updated.response, undefined);
+    assert.deepEqual(state.recoverableProviderRequestIds, []);
+    assert.equal((await f.core.command("providerActivity", {})).providerRequests, 0);
+    await f.reopen();
+    assert.deepEqual((await f.state()).requests.find(item => item.id === request.id)?.providerRecovery, recovered);
+    await assert.rejects(f.vela("reconcileProviderTurn", input), /vela_provider_recovery_unavailable/);
   } finally { await f.close(); }
 });
 

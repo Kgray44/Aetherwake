@@ -196,11 +196,12 @@ export interface CommandMap {
   taskObjectives: {input:TaskObjectiveRequest|{name:'targets';input:TaskTargetQuery};output:{result:TaskObjectiveResponse|TaskTargetPage;desktop?:DesktopSnapshot}};
   vela: { input: VelaOperation; output: unknown };
   velaRequestPreview: { input: {intent:string;resourceIds:string[];activeCard?:VelaActiveCard;adaptive?:true;editTargetPaths?:string[];editCreatePaths?:string[]} & import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting; output: VelaRequestPreview };
+  velaNextWorkflowStage: { input: { requestId: string }; output: { intent: string } | null };
   velaFileEditReview: { input: {requestId:string}; output: import('./vela-file-edit.mts').VelaFileEditReview };
   velaFileEditApply: { input: {requestId:string;reviewId:string}; output: import('./vela-file-edit.mts').VelaFileEditView };
   velaProjectCheckReview: { input: {requestId:string;kind:import('../../vela-core/src/contracts.ts').VelaProjectCheckKind;paths:string[]}; output: import('./vela-project-check.mts').VelaProjectCheckReview };
   velaProjectCheckRun: { input: {requestId:string;reviewId:string}; output: import('./vela-file-edit.mts').VelaFileEditView };
-  velaStandaloneCheckReview: { input: {intent:string;settings?:import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting;paths:string[]}; output: import('./vela-project-check.mts').VelaProjectCheckReview<null> };
+  velaStandaloneCheckReview: { input: {intent:string;settings?:import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting;paths:string[];artifactPath?:string}; output: import('./vela-project-check.mts').VelaProjectCheckReview<null> };
   velaStandaloneCheckRun: { input: {reviewId:string}; output: import('../../vela-core/src/contracts.ts').VelaRequest };
   velaRouteNative: { input: { intent: string; settings?: import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting }; output: { matched: false; projectCheck?: import('../../vela-core/src/contracts.ts').VelaProjectCheckKind } | { matched: true; request: import('../../vela-core/src/contracts.ts').VelaRequest } };
   velaNativeReview: {input:{previewId:string;signature:string};output:VelaNativeReview};

@@ -506,7 +506,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     manifestation.hidden = projection.kind === 'none' || view() === 'history' && !projection.requiredPlanIds.length;
     const route = selectedRequest?.route;
     manifestationKicker.textContent = route?.kind === 'conversational'
-      ? 'Vela · ' + (route.depth === 'deep' ? 'Deep' : 'Quick')
+      ? route.nativeMetric ? 'Vela · Native + ChatGPT plan' : 'Vela · ' + (route.depth === 'deep' ? 'Deep' : 'Quick')
       : route?.kind === 'agentic' ? 'Vela · Codex · Read-only'
       : route?.kind === 'file-edit' ? 'Vela · Codex file proposal'
       : route?.kind === 'project-check' ? 'Vela · Local project check'
@@ -515,7 +515,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       : projection.kind === 'insight' && message?.source === 'provider' ? providerName(message.providerId) + ' · contribution' : 'Vela';
     if (signature !== responseSignature) { responseSignature = signature; manifestationBody.replaceChildren(); if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content)); }
     manifestationBody.hidden = projection.kind === 'action' || !content;
-    const why = route?.reason === 'routine-answer' ? 'A conversational response can answer this request.'
+    const why = route?.kind === 'conversational' && route.nativeMetric ? 'Vela shared the reviewed local reading for analysis and can offer a separate Codex review.'
+      : route?.reason === 'routine-answer' ? 'A conversational response can answer this request.'
       : route?.reason === 'complex-analysis' ? 'The request calls for deeper conversational analysis.'
       : route?.reason === 'local-tools-required' ? 'This request needs access to a local repository or files.'
       : route?.reason === 'explicit-codex' ? 'You selected Codex for this request.'
@@ -526,11 +527,27 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       : selectedRequest?.local ? 'An authorized native capability can answer directly.' : undefined;
     const edit = current?.fileEdits?.find(record => record.requestId === selectedRequest?.id);
     const standaloneCheck = selectedRequest?.projectCheck;
-    fileEditActions.hidden = !edit && !standaloneCheck;
-    const editSignature = JSON.stringify({ edit, standaloneCheck });
+    const providerRecovery = selectedRequest?.providerRecovery;
+    const canRecoverProvider = !!selectedRequest && !!current?.recoverableProviderRequestIds?.includes(selectedRequest.id) && !!client.reconcileProviderTurn;
+    fileEditActions.hidden = !edit && !standaloneCheck && !providerRecovery && !canRecoverProvider;
+    const editSignature = JSON.stringify({ edit, standaloneCheck, providerRecovery, canRecoverProvider });
     if (fileEditActions.dataset.edit !== editSignature) {
       fileEditActions.dataset.edit = editSignature;
       fileEditActions.replaceChildren();
+      if (providerRecovery) {
+        const outcome = { provider_completed: 'finished', failed: 'failed', interrupted: 'was interrupted' }[providerRecovery.state];
+        fileEditActions.append(el('p', 'vela-core-meta', `The Codex turn ${outcome}. The original task still needs verification.`));
+      } else if (canRecoverProvider) {
+        const control = button('Check Codex outcome', () => void run(async () => {
+          if (fileEditBusy) return;
+          fileEditBusy = control.disabled = true;
+          try {
+            const result = await client.reconcileProviderTurn!({ requestId: selectedRequest.id });
+            if (!result) throw Error('vela_provider_outcome_unavailable');
+          } finally { fileEditBusy = control.disabled = false; await refresh(); }
+        }));
+        fileEditActions.append(control);
+      }
       if (edit) {
         const verified = edit.files.filter(file => file.state === 'applied').length;
         const state = edit.state === 'applied'
@@ -544,8 +561,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         fileEditActions.append(el('p', 'vela-core-meta', state));
         if (edit.state === 'applied' && edit.followUpCheck && !edit.projectChecks?.some(check => check.kind === edit.followUpCheck)) {
           const label = VELA_PROJECT_CHECK_LABELS[edit.followUpCheck];
-          fileEditActions.append(el('p', 'vela-core-meta', edit.projectChecksAvailable
-            ? 'Approve the requested follow-up to run it. ' + label : 'Unavailable follow-up · ' + label));
+          fileEditActions.append(el('p', 'vela-core-meta', !edit.projectChecksAvailable ? 'Unavailable follow-up · ' + label
+            : edit.followUpCheck === 'node-build' ? 'Send “Run the build” to review a build script and destination.' : 'Approve the requested follow-up to run it. ' + label));
         }
         if (edit.state !== 'awaiting-review') {
           const outcomes = el('ul', 'vela-core-meta');
@@ -560,7 +577,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         const apply = edit.state === 'awaiting-review' ? client.applyFileEdit
           : edit.state !== 'applied' ? client.reconcileFileEdit : undefined;
         if (apply) {
-          const control = button(edit.state === 'awaiting-review' ? 'Review file changes' : 'Check file outcomes', () => void run(async () => {
+          const control = button(edit.state === 'awaiting-review' ? standaloneCheck?.artifact ? 'Review generated file' : 'Review file changes' : 'Check file outcomes', () => void run(async () => {
             if (fileEditBusy) return;
             fileEditBusy = control.disabled = true;
             try { await apply({ requestId: edit.requestId }); }
@@ -600,7 +617,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       route, routingSettings: selectedRequest?.routingSettings, routingAgent: selectedRequest?.routingAgent,
       budget: route?.kind === 'project-check' ? 'No model usage' : route ? 'Cost and remaining allowance unknown' : undefined,
       ...(route?.kind === 'agentic' || route?.kind === 'composite' ? { verification: 'unverified' } : {}), edit,
-      projectCheck: standaloneCheck, handoff: selectedRequest?.handoff, local: selectedRequest?.local, response: selectedRequest?.response,
+      projectCheck: standaloneCheck, providerRecovery, handoff: selectedRequest?.handoff, local: selectedRequest?.local, response: selectedRequest?.response,
       provider: message?.providerContribution ?? selectedRequest?.providerId }, null, 2);
     if (manifestationDetails.body.firstElementChild?.textContent !== details) manifestationDetails.body.replaceChildren(el('pre', undefined, details)); manifestationDetails.node.hidden = projection.kind === 'none' || projection.kind === 'action';
     const sources = selectedRequest?.context.included ?? [], sourceSignature = JSON.stringify(sources.map(ref => [ref.id, ref.kind, ref.version, ref.title]));
@@ -705,8 +722,12 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         vela_project_check_native_review_required: 'Use Vela’s desktop Send to select and review this local check.',
         vela_typescript_compiler_unavailable: 'An installed TypeScript compiler in this checkout is required.',
         vela_edit_log_source_required: 'Use Add sources to select one note with the log excerpt you want Codex to inspect.',
+        vela_build_destination_required: 'Choose a tracked build script and an unused destination in the same checkout.',
         unsupported_model: 'The selected model is unavailable in the connected catalog. Your draft is still here.',
         vela_codex_model_unavailable: 'Codex did not offer a model for this request. Check its connection and try again.',
+        vela_provider_outcome_unavailable: 'Codex could not confirm the outcome. The task was not restarted.',
+        vela_workflow_auto_required: 'Use Auto to run this request across ChatGPT plan and Codex.',
+        vela_workflow_context_conflict: 'This sequence needs a new request without attached sources, an agent, or shared history.',
         unsupported_reasoning_effort: 'The selected model does not advertise this effort. Your draft is still here.',
         vela_workspace_unavailable: 'Choose an accessible workspace and try again. Your draft is still here.',
         vela_workspace_ambiguous: 'More than one accessible workspace has that name. Open the intended workspace from the workspace list.',

@@ -19,23 +19,42 @@ export interface VelaTurnRouting {
   budgetLimit?: number;
 }
 type AgenticSelection = { model?: string; effort?: ReasoningEffort; environment: 'local-read-only' };
+type NativePerformanceMetric = 'system.cpu' | 'system.gpu' | 'system.performance' | 'system.memory';
 export type VelaRouteDecision =
   | { kind: 'conversational'; depth: 'quick' | 'deep'; reason: 'routine-answer' | 'complex-analysis'; model: string; effort?: ReasoningEffort;
+      nativeMetric?: NativePerformanceMetric;
       calibration?: VelaCalibrationComparison;
       escalation?: { model: string; effort: ReasoningEffort; trigger: 'output-token-limit' } }
   | { kind: 'app-planning'; reason: 'reviewed-app-action'; model?: string; effort?: ReasoningEffort }
   | { kind: 'file-edit'; reason: 'reviewed-file-replacement' | 'reviewed-file-creation'; environment: 'local-reviewed-replacement'; model?: string; effort?: ReasoningEffort; followUpCheck?: VelaProjectCheckKind; inspectSelectedLogs?: true }
   | { kind: 'project-check'; reason: 'reviewed-local-check'; environment: 'local-read-only'; check: VelaProjectCheckKind; model?: never; effort?: never }
   | ({ kind: 'agentic'; reason: 'local-tools-required' | 'explicit-codex' } & AgenticSelection)
-  | ({ kind: 'composite'; reason: 'native-fact-and-local-inspection'; metric: 'system.cpu' | 'system.gpu' | 'system.performance' | 'system.memory' } & AgenticSelection);
+  | ({ kind: 'composite'; reason: 'native-fact-and-local-inspection'; metric: NativePerformanceMetric } & AgenticSelection);
+
+function inspectionMetric(intent: string): NativePerformanceMetric | undefined {
+  const fact = nativeVelaFact(intent.replace(/^(?:check|show(?: me)?) (?:the )?(?:current )?ram usage$/iu, 'RAM usage'));
+  if (fact === 'system.cpu' || fact === 'system.gpu' || fact === 'system.performance' || fact === 'system.memory') return fact;
+}
 
 /** Use a narrow explicit conjunction for the first native-to-Codex workflow. */
 export function nativeInspectionStage(intent: string) {
   const parts = /^(.*?)[,;.]?\s+(?:and\s+)?then\s+(.+)$/iu.exec(intent);
   if (!parts || classifyVelaRoutingIntent(parts[2]) !== 'local-read') return;
-  const fact = nativeVelaFact(parts[1].replace(/^(?:check|show(?: me)?) (?:the )?(?:current )?ram usage$/iu, 'RAM usage'));
-  if (fact === 'system.cpu' || fact === 'system.gpu' || fact === 'system.performance' || fact === 'system.memory')
-    return fact;
+  return inspectionMetric(parts[1]);
+}
+
+/** Only an explicit measure, explain, then execute sequence stages two providers. */
+export function nativeConversationalWorkflow(intent: string) {
+  const text = intent.trim().replace(/^vela[,:]?\s+/iu, '');
+  const split = text.search(/[,;]/u);
+  if (split < 1) return;
+  const metric = inspectionMetric(text.slice(0, split));
+  if (!metric) return;
+  const parts = /^\s*(?:and\s+)?((?:explain|analyze|summarize)\b.+?)[,;]?\s+(?:and\s+)?then\s+(.+)$/iu.exec(text.slice(split + 1));
+  if (!parts) return;
+  const execution = classifyVelaRoutingIntent(parts[2]);
+  if (execution === 'local-read' || execution === 'local-write' && velaFileEditSelection(parts[2]))
+    return { metric, analysisIntent: parts[1], nextIntent: parts[2] };
 }
 
 /** Only complete, single-purpose device queries can bypass the provider path. */
@@ -90,6 +109,8 @@ export function standaloneVelaProjectCheck(intent: string): VelaProjectCheckKind
     return 'typescript';
   if (/^(?:run (?:the |this |a )?(?:node(?:\.js)? )?benchmark|benchmark (?:this|the) project)$/u.test(text))
     return 'node-benchmark';
+  if (/^(?:run (?:the |this |a )?(?:node(?:\.js)? )?build(?: script)?|build (?:this|the) project)$/u.test(text))
+    return 'node-build';
 }
 
 /** Detect a separately reviewable check explicitly requested after an edit. */

@@ -153,6 +153,66 @@ test('Vela resolves a selected agent after saved defaults and binds its version 
   } finally { await f.close(); }
 });
 
+function allowFixtureHandoffEvidence(f: ReturnType<typeof fixture>) {
+  // Supply the proof shape in this isolated database without changing the transport classification.
+  const runOrdinary = f.owner.runOrdinary.bind(f.owner);
+  f.owner.runOrdinary = async (...args: any[]) => {
+    const execution = await runOrdinary(...args);
+    if (execution.state === 'provider_completed') {
+      const evidence = f.owner.state.messageEvidence[execution.outputMessageId];
+      assert.equal(evidence.classification, 'simulated');
+      f.owner.atomic(() => { evidence.classification = 'reported'; });
+    }
+    return execution;
+  };
+}
+
+test('Check my CPU, explain the number, then look through my repository logs', async () => {
+  for (const approveCodex of [false, true]) {
+    const f = fixture(true);
+    try {
+      allowFixtureHandoffEvidence(f);
+      const intent = 'Check CPU usage, explain what it means, then inspect the repository logs';
+      const nextIntent = 'inspect the repository logs';
+      const reviews: string[] = [];
+      f.responses.push(() => complete('resp_workflow', 'Synthetic CPU analysis for this selected reading.'));
+      await assert.rejects(f.core.command('velaRequestPreview', { intent, resourceIds: [], adaptive: true, providerId }), /vela_workflow_auto_required/);
+      const outcome = await velaCommand({ win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+        dialog: {}, directMessageSend: true, offerPlanningByDefault: true,
+        input: { name: 'request', input: { intent, resourceIds: [], authorizeProvider: true } },
+        async reviewProvider({ review }: any) {
+          reviews.push(review.providerId);
+          const payload = JSON.parse(review.prompt.split('\n').at(-1));
+          if (review.providerId === providerId) {
+            assert.equal(f.requests.length, 0);
+            assert.equal(review.route.nativeMetric, 'system.cpu');
+            assert.equal(payload.intent, 'explain what it means');
+            assert.match(payload.nativeStage.text, /CPU usage was/u);
+            assert.doesNotMatch(review.prompt, /inspect the repository/);
+            return true;
+          }
+          assert.equal(f.requests.length, 1);
+          assert.equal((await f.core.command('providerActivity', {})).providerRequests, 1);
+          assert.equal(payload.intent, nextIntent);
+          assert.equal(review.handoff.sourceProviderId, providerId);
+          assert.match(review.prompt, /Synthetic CPU analysis/);
+          return approveCodex;
+        }, call: (name: any, input: any) => f.core.command(name, input),
+      }) as VelaRequest;
+      assert.equal(outcome.state, 'responded', outcome.errorCode);
+      assert.deepEqual(reviews, [providerId, 'codex-app-server']);
+      const state = await f.core.command('vela', { name: 'state', input: {} }) as { requests: VelaRequest[] };
+      assert.equal(state.requests.length, approveCodex ? 2 : 1);
+      const first = state.requests[0];
+      assert.equal(first.intent, intent);
+      assert.equal(outcome.conversationId, first.conversationId);
+      assert.equal(outcome.handoff?.taskId, approveCodex ? first.id : undefined);
+      assert(f.events.some(event => event.type === 'vela.routing.native_stage_observed' && event.payload.taskId === first.id));
+      assert.equal((await f.core.command('providerActivity', {})).providerRequests, approveCodex ? 2 : 1);
+    } finally { await f.close(); }
+  }
+});
+
 test('Vela hands off exactly the selected exchange in both directions with native consent and canonical provenance', async () => {
   const f = fixture(true), codex = 'codex-app-server';
   const win = { isDestroyed: () => false, webContents: { isDestroyed: () => false } };
@@ -163,18 +223,7 @@ test('Vela hands off exactly the selected exchange in both directions with nativ
       reviewProvider, call: (name: any, input: any) => f.core.command(name, input),
     }) as Promise<VelaRequest>;
   try {
-    // The Responses fixture labels its transport evidence simulated. Supply
-    // the reported proof shape only in this isolated test database.
-    const runOrdinary = f.owner.runOrdinary.bind(f.owner);
-    f.owner.runOrdinary = async (...args: any[]) => {
-      const execution = await runOrdinary(...args);
-      if (execution.state === 'provider_completed') {
-        const evidence = f.owner.state.messageEvidence[execution.outputMessageId];
-        assert.equal(evidence.classification, 'simulated');
-        f.owner.atomic(() => { evidence.classification = 'reported'; });
-      }
-      return execution;
-    };
+    allowFixtureHandoffEvidence(f);
     f.responses.push(() => complete('resp_handoff_source', 'Synthetic selected answer marker.'));
     const source = await send('Explain the synthetic source objective.', { providerId });
     assert.equal(source.state, 'responded', source.errorCode);
@@ -344,6 +393,32 @@ test('Level 0 records local time, date, CPU and arithmetic through the same nati
     await f.reopen();
     const state = await f.core.command('vela', { name: 'state', input: {} });
     assert.equal((state as {requests: VelaRequest[]}).requests.length, 5);
+  } finally { await f.close(); }
+});
+
+test('How much RAM am I using if the first reader is unavailable?', { skip: process.platform !== 'win32' }, async () => {
+  const f = fixture(true);
+  try {
+    const readHost = f.owner.localVelaHost.bind(f.owner);
+    f.owner.localVelaHost = () => ({ ...readHost(), system: { memory() { throw Error('synthetic native failure'); } } });
+    const gib = 2 ** 30;
+    let checks = 0;
+    f.owner.port.projectChecks = { async ready() { return true; }, async execute(argv: string[]) {
+      assert.equal(argv[0], process.execPath);
+      assert.equal(argv[1], '-e');
+      assert.match(argv[2], /os\.totalmem\(\),os\.freemem\(\)/u);
+      return { exitCode: 0, stdout: JSON.stringify(++checks === 1 ? [32 * gib, 8 * gib] : [32 * gib, 'invalid']), stderr: '' };
+    } };
+    const ask = () => f.core.command('velaRouteNative', { intent: 'How much RAM am I using?' });
+    const result = await ask();
+    assert(result.matched && result.request.local?.facts.kind === 'system-memory');
+    assert.equal(result.request.local.facts.measurement.source.executor, 'codex-local-command');
+    assert.equal(result.request.local.facts.measurement.usedBytes, 24 * gib);
+    const unavailable = await ask();
+    assert(unavailable.matched && unavailable.request.local?.facts.kind === 'unavailable');
+    assert.equal(unavailable.request.response?.kind, 'inability');
+    assert.equal(checks, 2);
+    assert.equal((await f.core.command('providerActivity', {})).providerRequests, 0);
   } finally { await f.close(); }
 });
 

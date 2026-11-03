@@ -47,6 +47,8 @@ export interface VelaFileEditRecord {
   state: VelaFileEditView['state'];
   legacySingleOutput?: true;
   followUpCheck?: VelaProjectCheckKind;
+  /** Output from an authorized local script, retained for exact review. */
+  artifactText?: string;
   projectChecks?: VelaProjectCheckReceipt[];
 }
 export interface VelaFileEditReview {
@@ -247,6 +249,7 @@ export function velaEditSiblings(target: VelaFileEditTarget, requestId: string, 
 }
 
 export function verifyVelaReplacement(path: string, body: string): VelaFileEditVerification {
+  check(Buffer.byteLength(body) <= maxBytes && reviewableText(body), 'vela_edit_file_ineligible');
   const suffix = extname(path).toLowerCase();
   if (suffix === '.json') {
     try { JSON.parse(body.replace(/^\uFEFF/u, '')); } catch { throw new VelaError('vela_edit_invalid_json'); }

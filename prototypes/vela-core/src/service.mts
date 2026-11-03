@@ -16,7 +16,7 @@ import type {
   AdaptationPolicy, AdaptationState, ExplicitPreference, PreferenceHypothesis, PreferenceKey,
   PreferenceScope, PreferenceValue, AdaptationReceipt, ProviderContribution, ProviderReplyKind,
   VelaLocalCapabilityId, VelaLocalDispatch, VelaLocalHost, VelaLocalRecord, VelaLocalResult,
-  VelaPresentationState, VelaPresentationPatch, VelaProjectCheckReceipt,
+  VelaPresentationState, VelaPresentationPatch, VelaProjectCheckReceipt, VelaProviderRecovery,
 } from './contracts.ts';
 
 type StoredActionReceipt = ActionReceipt & { foundSubjects?: VelaSubjectRef[] };
@@ -534,7 +534,7 @@ export class VelaService {
     return plan;
   }
   /** Only the host can supply a sampled measurement or select a typed observation. */
-  local(input: { capabilityId: VelaLocalCapabilityId; intent: string; commandId: string }, signal?: AbortSignal, utilization?: import('./system-utilization.mts').SystemUtilization[]): VelaLocalDispatch {
+  local(input: { capabilityId: VelaLocalCapabilityId; intent: string; commandId: string }, signal?: AbortSignal, utilization?: import('./system-utilization.mts').SystemUtilization[], memory?: import('./system-information.ts').SystemMemoryMeasurement | null): VelaLocalDispatch {
     const started = performance.now();
     check(isRecord(input) && Object.keys(input).every(key => ['capabilityId', 'intent', 'commandId'].includes(key)) && text(input.intent, 16000) && identifier(input.commandId), 'invalid_local_request');
     const { capabilityId } = input, classified = performance.now();
@@ -549,7 +549,7 @@ export class VelaService {
       check(message && message.id === previous.response!.messageId && message.requestId === previous.id && message.role === 'assistant' && message.source === 'vela-native' && message.classification === 'observed' && message.providerId === undefined && message.providerContribution === undefined && message.planId === undefined && message.responseKind === previous.response!.kind && digest(message.content) === previous.response!.contentDigest, 'local_response_unavailable');
       const ended = performance.now(); return { matched: true, request: structuredClone(previous), result: { ...structuredClone(previous.local!), messageId: message.id, content: message.content, replayed: true, timing: { classificationMs: classified - started, capabilityMs: ended - classified, persistenceMs: 0, totalMs: ended - started } } };
     }
-    const answer = evaluateLocalCapability(capabilityId, host, input.intent, utilization), recordedAt = this.now(), observedAt = answer.facts.kind === 'time' || answer.facts.kind === 'date' ? answer.facts.utc : answer.facts.kind === 'system-memory' || answer.facts.kind === 'system-utilization' ? answer.facts.measurement.measuredAt : recordedAt; check(!signal?.aborted, 'local_request_cancelled');
+    const answer = evaluateLocalCapability(capabilityId, host, input.intent, utilization, memory), recordedAt = this.now(), observedAt = answer.facts.kind === 'time' || answer.facts.kind === 'date' ? answer.facts.utc : answer.facts.kind === 'system-memory' || answer.facts.kind === 'system-utilization' ? answer.facts.measurement.measuredAt : recordedAt; check(!signal?.aborted, 'local_request_cancelled');
     const record: VelaLocalRecord = { schemaVersion: 1, commandId: input.commandId, capabilityId, classification: 'observed', providerId: null, observedAt, facts: answer.facts }; validateLocalRecord(record);
     const committing = performance.now();
     const value = this.atomic(() => {
@@ -598,7 +598,8 @@ export class VelaService {
       const count = receipt.testCount === undefined ? '' : ' The runner reported ' + receipt.testCount + ' tests.';
       const report = receipt.benchmark;
       const measurement = report ? ` The script reported ${report.samples} samples, with a median of ${report.medianMs} ms and a 95th percentile of ${report.p95Ms} ms.` : '';
-      const content = label + ' ' + details[receipt.state] + '.' + count + measurement;
+      const artifact = receipt.artifact ? ` Review the ${receipt.artifact.bytes}-byte output before saving it as ${receipt.artifact.relativePath}.` : '';
+      const content = label + ' ' + details[receipt.state] + '.' + count + measurement + artifact;
       const kind = receipt.state === 'passed' || receipt.state === 'failed' ? 'answer' : 'inability';
       const message = this.append(content, requestId, 'vela-native', undefined, { kind });
       check(identifier(message.id) && message.requestId === requestId && message.source === 'vela-native' &&
@@ -608,6 +609,14 @@ export class VelaService {
       request.response = { kind, messageId: message.id, contentDigest: historyDigest(content) };
       request.state = 'responded'; request.updatedAt = this.now();
       return structuredClone(request);
+    });
+  }
+  recordProviderRecovery(requestId: string, recovery: VelaProviderRecovery): void {
+    this.atomic(() => {
+      const request = this.getRequest(requestId);
+      check(request.state === 'unknown' && !request.providerRecovery && request.providerId === 'codex-app-server', 'vela_provider_recovery_unavailable');
+      request.providerRecovery = structuredClone(recovery);
+      request.updatedAt = recovery.observedAt;
     });
   }
   async request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean }, frozen?: PrivateFrozenProviderContext, planner = this.opts.planner, routed?: Pick<VelaRequest, 'route' | 'routingSettings' | 'handoff' | 'routingAgent'>): Promise<VelaRequest> {

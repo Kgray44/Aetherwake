@@ -173,6 +173,7 @@ export interface VelaPlanningPort {
   }, signal: AbortSignal): Promise<unknown>;
 }
 export type RequestState = 'planning' | 'checking' | 'awaiting-review' | 'native-ready' | 'provider-unavailable' | 'invalid-plan' | 'failed' | 'cancelled' | 'unknown' | 'completed' | 'responded';
+export type VelaProviderRecovery = { state: 'provider_completed' | 'failed' | 'interrupted'; observedAt: string };
 export interface VelaRequest {
   id: string; conversationId: string; intent: string; state: RequestState;
   createdAt: string; updatedAt: string; providerId: string | null;
@@ -181,6 +182,7 @@ export interface VelaRequest {
   response?: { kind: ProviderReplyKind; messageId: string; contentDigest?: string };
   local?: VelaLocalRecord;
   projectCheck?: VelaProjectCheckReceipt;
+  providerRecovery?: VelaProviderRecovery;
   route?: import('./adaptive-routing.ts').VelaRouteDecision;
   routingSettings?: Pick<import('./routing-settings.ts').VelaRoutingSettingsView, 'effective' | 'origins'>;
   /** Schema-3 provenance is absent on legacy requests; unavailable origin is never inferred as known-null. */
@@ -295,9 +297,9 @@ export interface AttentionItem extends AppAttentionEvent {
   reviewedAt: string | null; dismissedAt: string | null;
 }
 export type VelaFileEditVerification = 'bytes' | 'bytes-and-json-syntax' | 'bytes-and-javascript-syntax';
-export type VelaProjectCheckKind = 'node-test' | 'typescript' | 'node-benchmark';
+export type VelaProjectCheckKind = 'node-test' | 'typescript' | 'node-benchmark' | 'node-build';
 export const VELA_PROJECT_CHECK_LABELS = {
-  'node-test': 'Node tests', typescript: 'TypeScript check', 'node-benchmark': 'Node benchmark',
+  'node-test': 'Node tests', typescript: 'TypeScript check', 'node-benchmark': 'Node benchmark', 'node-build': 'Node build',
 } satisfies Record<VelaProjectCheckKind, string>;
 export interface VelaProjectCheckReceipt {
   id: string;
@@ -312,6 +314,7 @@ export interface VelaProjectCheckReceipt {
   exitCode?: number;
   testCount?: number;
   benchmark?: { samples: number; medianMs: number; p95Ms: number };
+  artifact?: { relativePath: string; bytes: number; digest: string };
 }
 export interface VelaFileEditItemView {
   relativePath: string;
@@ -335,6 +338,7 @@ export interface VelaState {
   planningProviders?: { providerId: string; available: boolean }[];
   routingSettings?: import('./routing-settings.ts').VelaRoutingSettingsView;
   fileEdits?: VelaFileEditView[];
+  recoverableProviderRequestIds?: string[];
   capabilities: CapabilityDescriptor[]; requests: VelaRequest[]; plans: VelaPlan[];
   receipts: ActionReceipt[]; preferences: AttentionPreferences; attention: AttentionItem[];
   lastPresenceAt: string | null; coverage: 'authorized-app-events-only';
@@ -397,6 +401,7 @@ export interface VelaClient {
   rateRoutingResponse?(input: { requestId: string; feedback: import('./routing-calibration.ts').VelaRoutingFeedback }): Promise<void>;
   applyFileEdit?(input: { requestId: string }): Promise<VelaFileEditView>;
   reconcileFileEdit?(input: { requestId: string }): Promise<VelaFileEditView>;
+  reconcileProviderTurn?(input: { requestId: string }): Promise<VelaProviderRecovery | null>;
   verifyFileEdit?(input: { requestId: string; kind: VelaProjectCheckKind }): Promise<VelaFileEditView>;
   presentation?(input: { expectedVersion: number; patch: VelaPresentationPatch }): Promise<VelaPresentationState>;
   native(input: { intent: string; action: VelaNativeAction }): Promise<VelaPlan>;

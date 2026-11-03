@@ -1,4 +1,4 @@
-import { classifyVelaRoutingIntent, nativeInspectionStage, nativeVelaFact } from '../prototypes/vela-core/src/adaptive-routing.ts';
+import { classifyVelaRoutingIntent, nativeConversationalWorkflow, nativeInspectionStage, nativeVelaFact } from '../prototypes/vela-core/src/adaptive-routing.ts';
 import { matchOrdinaryClockQuestion } from '../prototypes/integrated-backend/src/ordinary-clock-questions.mts';
 
 // Fixed synthetic examples. No profile, network, private prompts or provider calls.
@@ -33,11 +33,22 @@ const cases = [
   ['Compute 9^2 + 1', 'native'],
   ['How many active projects are there?', 'native'],
   ['Check the CPU load and then inspect the working tree', 'composite'],
+  ['Check CPU usage, explain what it means, then look through the logs', 'composite'],
+  ['Can you check the GPU usage, please?', 'native'],
+  ['Could you calculate 25% of 48?', 'native'],
+  ['Is this workspace saved?', 'native'],
+  ['Are any executions running?', 'native'],
+  ['Build this project', 'project-check'],
+  ['Run the benchmark', 'project-check'],
+  ['Find the stutter in the logs', 'local-read'],
+  ['Inspect the logs, find the stutter, fix the code, and run the benchmark', 'local-write'],
+  ['Could you rename my Ideas folder to Things to Try?', 'app-planning'],
+  ['Will it rain here tomorrow?', 'app-planning'],
 ] as const;
 
 function evaluate(intent: string) {
   if (nativeVelaFact(intent) || matchOrdinaryClockQuestion(intent)) return 'native';
-  if (nativeInspectionStage(intent)) return 'composite';
+  if (nativeConversationalWorkflow(intent) || nativeInspectionStage(intent)) return 'composite';
   return classifyVelaRoutingIntent(intent);
 }
 

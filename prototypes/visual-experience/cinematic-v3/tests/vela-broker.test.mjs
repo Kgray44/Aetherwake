@@ -388,6 +388,39 @@ test("Fix it and run the tests only when I approve both steps", async () => {
   }
 });
 
+test("Build this project and let me review the output before saving it", async () => {
+  const f = fixture();
+  const intent = "Build this project", script = "C:\\chosen\\sample.build.mjs", output = "C:\\chosen\\generated.json";
+  const reviewId = "22222222-2222-4222-8222-222222222222";
+  const calls = [];
+  const actual = await velaCommand({ ...f, directMessageSend: true,
+    input: { name: "request", input: { intent, resourceIds: [], authorizeProvider: true, artifactPath: "C:\\forged.json" } },
+    dialog: {
+      async showOpenDialog() { return { canceled: false, filePaths: [script] }; },
+      async showSaveDialog() { return { canceled: false, filePath: output }; },
+      async showMessageBox(parent, options) {
+        assert.equal(parent, f.win);
+        assert(options.detail.includes(output));
+        assert.match(options.detail, /requires a separate review/u);
+        return { response: 0 };
+      },
+    }, async call(name, data) {
+      calls.push(name);
+      if (name === "velaRouteNative") return { matched: false, projectCheck: "node-build" };
+      if (name === "velaStandaloneCheckReview") {
+        assert.deepEqual(data, { intent, paths: [script], artifactPath: output });
+        return { requestId: null, reviewId, expiresAt: new Date(Date.now() + 10000).toISOString(), kind: "node-build",
+          cwd: "C:\\chosen", argv: ["C:\\node.exe", "--", script], artifactPath: output };
+      }
+      assert.equal(name, "velaStandaloneCheckRun");
+      assert.deepEqual(data, { reviewId });
+      return { state: "responded" };
+    },
+  });
+  assert.equal(actual.state, "responded");
+  assert.deepEqual(calls, ["velaRouteNative", "velaStandaloneCheckReview", "velaStandaloneCheckRun"]);
+});
+
 test("standalone project check uses Send and a native review without a model preview", async () => {
   const f = fixture();
   const reviewId = "22222222-2222-4222-8222-222222222222";

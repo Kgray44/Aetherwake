@@ -1,6 +1,6 @@
 import { check, identifier, isLocalFact, isRecord, text } from './capabilities.ts';
 import type { VelaLocalCapabilityId, VelaLocalFacts, VelaLocalHost, VelaLocalRecord } from './contracts.ts';
-import { validateSystemMemoryMeasurement } from './system-information.ts';
+import { validateSystemMemoryMeasurement, type SystemMemoryMeasurement } from './system-information.ts';
 import { calculate, calculatorExpression } from './calculator.ts';
 import type { SystemUtilization } from './system-utilization.mts';
 
@@ -50,7 +50,7 @@ function validateUtilization(value: unknown): asserts value is SystemUtilization
     value.observedAdapters > 0 && count(value.observedEngines) && value.observedEngines >= value.observedAdapters, 'invalid_gpu_counters');
 }
 
-export function evaluateLocalCapability(id: VelaLocalCapabilityId, host: VelaLocalHost, intent?: string, utilization: SystemUtilization[] = []): { facts: VelaLocalFacts; content: string; kind: 'answer' | 'inability' } {
+export function evaluateLocalCapability(id: VelaLocalCapabilityId, host: VelaLocalHost, intent?: string, utilization: SystemUtilization[] = [], memory?: SystemMemoryMeasurement | null): { facts: VelaLocalFacts; content: string; kind: 'answer' | 'inability' } {
   check(isLocalFact(id), 'unsupported_local_capability');
   if (id === 'local.calculator') {
     const expression = intent && calculatorExpression(intent);
@@ -94,8 +94,11 @@ export function evaluateLocalCapability(id: VelaLocalCapabilityId, host: VelaLoc
   }
   try {
     if (id === 'system.memory') {
-      const raw = host.system?.memory(); validateSystemMemoryMeasurement(raw); const measurement = structuredClone(raw), gib = (bytes:number) => (bytes / 1073741824).toFixed(2);
-      return { facts: { kind: 'system-memory', measurement }, content: `Your computer is using ${gib(measurement.usedBytes)} GiB of ${gib(measurement.totalBytes)} GiB RAM (${measurement.utilizationPercent.toFixed(2)}%); ${gib(measurement.availableBytes)} GiB is ${measurement.source.platform === 'win32' ? 'available' : 'OS-reported free'}. Measured at ${measurement.measuredAt} using node:os totalmem/freemem. Used is total minus OS-reported ${measurement.source.platform === 'win32' ? 'available' : 'free'} physical memory, not Aerynth process memory or committed memory.`, kind: 'answer' };
+      const raw = memory === undefined ? host.system?.memory() : memory;
+      validateSystemMemoryMeasurement(raw);
+      const measurement = structuredClone(raw), gib = (bytes:number) => (bytes / 1073741824).toFixed(2);
+      const executor = measurement.source.executor ? ' through the local read-only Codex command' : '';
+      return { facts: { kind: 'system-memory', measurement }, content: `Your computer is using ${gib(measurement.usedBytes)} GiB of ${gib(measurement.totalBytes)} GiB RAM (${measurement.utilizationPercent.toFixed(2)}%). ${gib(measurement.availableBytes)} GiB is ${measurement.source.platform === 'win32' ? 'available' : 'OS-reported free'}. Measured at ${measurement.measuredAt} using node:os totalmem/freemem${executor}. Used is total minus OS-reported ${measurement.source.platform === 'win32' ? 'available' : 'free'} physical memory, not Aerynth process memory or committed memory.`, kind: 'answer' };
     }
     if (id === 'local.time' || id === 'local.date') {
       const reading = host.clock(); check(Number.isSafeInteger(reading.epochMs) && text(reading.timeZone, 100) && text(reading.locale, 100), 'invalid_local_clock');

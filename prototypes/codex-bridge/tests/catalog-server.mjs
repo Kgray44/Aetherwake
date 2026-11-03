@@ -156,7 +156,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   }
   if (message.method === 'model/list') {
     const data = [{ id: 'fixture-model', displayName: 'Synthetic protocol model',
-      ...(mode === 'air-inspection' ? { supportedReasoningEfforts: [{ reasoningEffort: 'high' }] } : {}) }];
+      ...(mode === 'air-inspection' ? { supportedReasoningEfforts: [{ reasoningEffort: 'high' }], defaultReasoningEffort: 'high', isDefault: true } : {}) }];
     if (mode === 'air-inspection') data.push({ id: 'hidden-fixture-model', displayName: 'Synthetic hidden model', hidden: true });
     reply({ data, nextCursor: null });
     return;
@@ -171,9 +171,10 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     const nodeTest = JSON.stringify(args.slice(0, 4)) === JSON.stringify(['--test', '--test-isolation=none', '--test-reporter=tap', '--']) &&
       args.length === 5 && ['./sample.test.mjs', './failure.test.mjs', './standalone.test.mjs'].includes(args[4]);
     const benchmark = JSON.stringify(args) === JSON.stringify(['--', './sample.bench.mjs']);
+    const build = JSON.stringify(args) === JSON.stringify(['--', './sample.build.mjs']);
     if (!/[\\/]vela-file-edit-[^\\/]+$/u.test(cwd) || command[0] !== process.execPath || timeoutMs !== 20000 ||
         sandboxPolicy.type !== 'readOnly' || sandboxPolicy.networkAccess !== false || env.NODE_OPTIONS !== null ||
-        (!nodeTest && !benchmark))
+        (!nodeTest && !benchmark && !build))
       throw Error('Project check lost its exact synthetic command or policy');
     // Executes only the fixed synthetic test scripts selected by this fixture.
     // Live Windows sandbox enforcement is verified against the installed server separately.

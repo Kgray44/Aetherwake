@@ -16,6 +16,7 @@ const publicNames = new Set([
   "applyFileEdit",
   "verifyFileEdit",
   "reconcileFileEdit",
+  "reconcileProviderTurn",
   "presentation",
   "review",
   "apply",
@@ -65,31 +66,43 @@ function presentationContext(value) {
 }
 
 async function reviewProjectCheck({ win, dialog, call, requestId, kind, intent, settings }) {
-  if (!["node-test", "typescript", "node-benchmark"].includes(kind)) throw Error("invalid_vela_project_check");
+  if (!["node-test", "typescript", "node-benchmark", "node-build"].includes(kind)) throw Error("invalid_vela_project_check");
   if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
-  const standalone = requestId === null, nodeTest = kind === "node-test", benchmark = kind === "node-benchmark";
+  const standalone = requestId === null, nodeTest = kind === "node-test", benchmark = kind === "node-benchmark", build = kind === "node-build";
+  if (build && !standalone) throw Error("vela_build_destination_required");
   const selected = await dialog.showOpenDialog(win, {
-    title: nodeTest ? "Select up to four tracked Node test files" : benchmark ? "Select a tracked Node .bench script" : "Select a tracked TypeScript project configuration",
+    title: nodeTest ? "Select up to four tracked Node test files" : benchmark ? "Select a tracked Node .bench script"
+      : build ? "Select a tracked Node .build script" : "Select a tracked TypeScript project configuration",
     properties: nodeTest ? ["openFile", "multiSelections", "dontAddToRecent"] : ["openFile", "dontAddToRecent"],
-    filters: [{ name: nodeTest ? "JavaScript and TypeScript" : benchmark ? "JavaScript" : "JSON", extensions: nodeTest ? ["js", "cjs", "mjs", "ts", "mts"] : benchmark ? ["js", "cjs", "mjs"] : ["json"] }],
+    filters: [{ name: nodeTest ? "JavaScript and TypeScript" : benchmark || build ? "JavaScript" : "JSON", extensions: nodeTest ? ["js", "cjs", "mjs", "ts", "mts"] : benchmark || build ? ["js", "cjs", "mjs"] : ["json"] }],
   });
   if (selected.canceled || !selected.filePaths.length) throw Error("authorization_cancelled");
   if (selected.filePaths.length > (nodeTest ? 4 : 1)) throw Error("invalid_vela_project_check");
   if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+  let artifactPath;
+  if (build) {
+    const output = await dialog.showSaveDialog(win, { title: "Choose an unused filename for the build output", buttonLabel: "Select destination",
+      properties: ["dontAddToRecent"] });
+    if (output.canceled || !output.filePath) throw Error("authorization_cancelled");
+    if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+    artifactPath = output.filePath;
+  }
   const paths = selected.filePaths;
-  const review = standalone ? await call("velaStandaloneCheckReview", { intent, ...(settings ? { settings } : {}), paths })
+  const review = standalone ? await call("velaStandaloneCheckReview", { intent, ...(settings ? { settings } : {}), paths, ...(artifactPath ? { artifactPath } : {}) })
     : await call("velaProjectCheckReview", { requestId, kind, paths });
   if (!review || review.requestId !== requestId || review.kind !== kind ||
       typeof review.reviewId !== "string" || !/^[a-f0-9-]{36}$/.test(review.reviewId) ||
       !(Date.parse(review.expiresAt) > Date.now()) || typeof review.cwd !== "string" || !/^[CD]:[\\/]/i.test(review.cwd) ||
-      !Array.isArray(review.argv) || review.argv.length < 2 || review.argv.length > 16 ||
-      ![review.cwd, ...review.argv].every(part => typeof part === "string" && part.length > 0 && part.length <= 512 && !/[\x00-\x1f]|\p{Bidi_Control}/u.test(part)))
+      review.artifactPath !== artifactPath || !Array.isArray(review.argv) || review.argv.length < 2 || review.argv.length > 16 ||
+      ![review.cwd, ...review.argv, ...(artifactPath ? [artifactPath] : [])].every(part => typeof part === "string" && part.length > 0 && part.length <= 512 && !/[\x00-\x1f]|\p{Bidi_Control}/u.test(part)))
     throw Error("invalid_vela_project_check_review");
   if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
   const result = await dialog.showMessageBox(win, {
     type: "question", title: "Vela · Review project check",
-    message: nodeTest ? "Run the selected Node tests?" : benchmark ? "Run the selected benchmark script?" : "Type-check the selected TypeScript project?",
+    message: nodeTest ? "Run the selected Node tests?" : benchmark ? "Run the selected benchmark script?"
+      : build ? "Run the selected build script?" : "Type-check the selected TypeScript project?",
     detail: "Working directory\n" + review.cwd + "\n\nCommand arguments\n" + review.argv.map(part => JSON.stringify(part)).join(" ") +
+      (artifactPath ? "\n\nProposed output file\n" + artifactPath + "\nSaving up to 8 KiB of build output requires a separate review." : "") +
       "\n\nUses the local Codex read-only sandbox with network access disabled. Time limit 20 seconds. Output above 64 KiB cannot produce a verified result.",
     buttons: ["Run check", "Cancel"], defaultId: 1, cancelId: 1, noLink: true,
   });
@@ -269,6 +282,7 @@ exports.velaCommand = async ({
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
     const direct = directMessageSend && (!preview.route || preview.route.kind === "conversational") &&
+      !preview.route?.nativeMetric &&
       preview.resourceIds?.length === 0 &&
       !review.context.included.length && !review.history?.messages.length && !review.handoff && !review.routingAgent;
     const approved = direct || await reviewProvider({
@@ -290,7 +304,7 @@ exports.velaCommand = async ({
     );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    return stage("request", () =>
+    const result = await stage("request", () =>
       call("vela", {
         name: "request",
         input: {
@@ -300,6 +314,17 @@ exports.velaCommand = async ({
         },
       }),
     );
+    if (!directMessageSend || result?.state !== "responded" || !preview.route?.nativeMetric) return result;
+    const next = await call("velaNextWorkflowStage", { requestId: result.id });
+    if (!next) return result;
+    try {
+      return await exports.velaCommand({ win, dialog, call, reviewProvider, offerPlanningByDefault, directMessageSend, routeNative,
+        observeNativeRequest, input: { name: "request", input: { intent: next.intent, resourceIds: [], authorizeProvider: true,
+          mode: "codex", providerId: "codex-app-server", handoffSourceRequestId: result.id } } });
+    } catch (error) {
+      if (error?.message !== "authorization_cancelled") throw error;
+      return result;
+    }
   }
   if (input.name === "applyFileEdit") {
     const requestId = input.input?.requestId;
@@ -313,7 +338,7 @@ exports.velaCommand = async ({
     if (approved !== true) throw Error("authorization_cancelled");
     if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
     const applied = await call("velaFileEditApply", { requestId, reviewId: review.reviewId });
-    if (applied?.state !== "applied" || applied.projectChecksAvailable !== true || !applied.followUpCheck) return applied;
+    if (applied?.state !== "applied" || applied.projectChecksAvailable !== true || !applied.followUpCheck || applied.followUpCheck === "node-build") return applied;
     try {
       return await reviewProjectCheck({ win, dialog, call, requestId, kind: applied.followUpCheck });
     } catch (error) {
