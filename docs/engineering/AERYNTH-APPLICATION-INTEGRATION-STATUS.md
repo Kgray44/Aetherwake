@@ -2,6 +2,34 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 native Codex send review and portable AO
+
+`0062735` removes the unused desktop `send` IPC operation and the legacy
+verification flag that could authorize a hardcoded prompt. The current
+conversation composer uses the existing native review and its scoped
+backend grant. All 402 desktop and 15 package checks passed.
+
+Portable AO packages `0062735d3cdf6c9cab5ea4cf6aad718986c4175d` in 383
+files. Its manifest SHA-256 is
+`ca91ee5df11c80db7c809316999c40c9267352bf0cea6aabe6d0011767aa46bd`.
+Its bundled backend discovered the installed Codex session and prepared
+a disposable workspace with one Codex conversation and an unsent
+`AERYNTH_LIVE_OK` test request. A fresh process restored the exact
+resource and placement identities and draft with zero executions.
+
+An offscreen test loaded the packaged application modules and bundled
+backend with the locked source Electron executable and a separate copy
+of that SQLite profile. The actual composer restored the draft, denied
+the retired operation, reached the real native review with the exact
+prompt and retained the draft when that review denied a hidden owner.
+No provider turn started. Receipt SHA-256 is
+`4edfa598433d4bf9159dbe6751f607f4989dc5aba26c6a9c4700cfc84e8594e9`.
+An initial attempt to run the offscreen operator through the portable
+executable reached no test receipt. The normal portable launcher
+remains available in the prepared private profile for the owner to
+inspect and explicitly send the synthetic prompt. Step 21 requires the
+resulting live turn.
+
 ## November 3 Vela model routing on Windows and portable AN
 
 The normal Windows user and machine PATH exposed an npm `codex.cmd` shim
