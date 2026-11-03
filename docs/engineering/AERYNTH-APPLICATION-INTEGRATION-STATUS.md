@@ -2,6 +2,45 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 fitted workspace rendering
+
+Chromium traced a full workspace style invalidation back to the scene controls
+policy label. The renderer reassigned identical text on each frame. On a
+settled 50-card fit, a 1.2-second sample observed 73 style recalculations and
+0.49 seconds in Chromium style work. At `3cf8cd8`, the same workload observed
+zero recalculations across 72 offscreen paints. The label still updates when
+the mode changes.
+
+At `93fbb43`, retained chat editors defer layout while their cards are
+previews. They reconcile the latest measured bounds when working again.
+Explicit same-presentation scroll restoration remains supported. Universal
+Block System separately removed repeated card-control attribute writes.
+Its release `ec16124` is integrated as `4402865`. A source-owner Chromium
+check observed 600 repeated Restore-label writes per 50-card composition
+state before the change and zero afterward. The native scale harness now
+records the fit transition and settled fit separately.
+
+| Blocks | Fit paint P95 | Settled fit paint P95 | Settled fit style recalculations | Restart paint P95 |
+| ---: | ---: | ---: | ---: | ---: |
+| 10 | 25.91 ms | 18.29 ms | 73 | 19.26 ms |
+| 25 | 49.66 ms | 18.98 ms | 0 | 18.72 ms |
+| 50 | 57.78 ms | 18.49 ms | 0 | 18.61 ms |
+
+The 10- and 25-card measurements used the chat layout change. The 50-card
+repeat included the card-control change and captured all 50 cards and Vela
+centered in the viewport. All three initial and restart pairs passed and
+restored exact canonical workspace state. The preceding 50-card fit measured
+102.05 ms P95 while the conversation suite was also running. These short
+offscreen samples establish the steady-state style fix and show that the
+50-card fit transition still has slow frames. Physical display timing and
+the actual owner-approved Codex reply are still outstanding.
+
+The strict app build, 400 app tests and 158 conversation tests passed. The
+final 50-card initial and restart receipts have SHA-256
+`65334bcb21ab5908756b1ebfe37a01c69c515605fbbad2de8d95b4fb8ea2e620` and
+`7ed45721f641a436c32b3e3051bbdb9965055bd59c6c19475e8a47960b3e96a8`.
+Portable AG remains open on the owner's profile.
+
 ## November 3 working desktop and Codex approval
 
 At `dd1a2ea`, three hidden Electron processes exercised objective steps 1–20
