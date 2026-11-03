@@ -723,6 +723,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         vela_typescript_compiler_unavailable: 'An installed TypeScript compiler in this checkout is required.',
         vela_edit_log_source_required: 'Use Add sources to select one note with the log excerpt you want Codex to inspect.',
         vela_build_destination_required: 'Choose a tracked build script and an unused destination in the same checkout.',
+        vela_native_weather_unavailable: 'The local forecast is unavailable from this app connection.',
         unsupported_model: 'The selected model is unavailable in the connected catalog. Your draft is still here.',
         vela_codex_model_unavailable: 'Codex did not offer a model for this request. Check its connection and try again.',
         vela_provider_outcome_unavailable: 'Codex could not confirm the outcome. The task was not restarted.',

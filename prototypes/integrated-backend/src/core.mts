@@ -41,7 +41,7 @@ import { VelaService, VELA_PLANNING_INSTRUCTION } from '../../vela-core/src/serv
 import { createSystemMemoryReader, readSystemMemory } from '../../vela-core/src/system-memory.mts';
 import { validateSystemMemoryMeasurement, type SystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
 import { readCpuUtilization, readGpuUtilization, type SystemUtilization } from '../../vela-core/src/system-utilization.mts';
-import { chooseConversationalModel, classifyVelaRoutingIntent, nativeConversationalWorkflow, nativeInspectionStage, nativeVelaFact, standaloneVelaProjectCheck, velaEditFollowUpCheck, velaEditIncludesLogInspection, velaFileEditSelection, type VelaRouteDecision, type VelaTurnRouting } from '../../vela-core/src/adaptive-routing.ts';
+import { chooseConversationalModel, classifyVelaRoutingIntent, nativeConversationalWorkflow, nativeInspectionStage, nativeVelaFact, nativeVelaWeather, standaloneVelaProjectCheck, velaEditFollowUpCheck, velaEditIncludesLogInspection, velaFileEditSelection, type VelaRouteDecision, type VelaTurnRouting } from '../../vela-core/src/adaptive-routing.ts';
 import { admitVelaFileEdit, maxEditFiles, observeVelaFileEdit, parseVelaFileEdit, publishVelaFile, readVelaFileEditTargets,
   stageVelaFile, upgradeVelaFileEdit, validateVelaFileEditBytes, validateVelaFileEditHead, validateVelaFileEditTarget, velaEditSiblings, verifyVelaReplacement,
   type VelaFileEditRecord, type VelaFileEditTarget, type VelaFileEditView } from './vela-file-edit.mts';
@@ -1630,11 +1630,15 @@ export class BackendCore {
     const workspace = /^(?:open|go to)\s+(?:the\s+)?(?:(?:workspace)\s+(.+?)|(.+?)\s+workspace)$/iu.exec(text);
     const checklist = /^(?:create|add|make)\s+(?:a\s+)?(?:new\s+)?checklist(?:\s+block)?(?:\s+(?:called|named)\s+(.{1,200}?))?(?:\s+here)?$/iu.exec(text);
     const resource = /^(find|open)\s+(?:the\s+|a\s+|my\s+)?(?:aerynth\s+)?resource\s+(?:named|called)\s+(.{1,200})$/iu.exec(text);
-    if (!workspace && !checklist && !resource) return { matched: false };
+    const weather = nativeVelaWeather(intent);
+    if (!workspace && !checklist && !resource && !weather) return { matched: false };
     ensure(!this.active, 'execution_busy');
     const scope = this.velaHost.scope();
     let action: VelaNativeAction;
-    if (resource) {
+    if (weather) {
+      ensure(this.velaCapability('readWeather'), 'vela_native_weather_unavailable');
+      action = { type: 'readWeather', period: weather };
+    } else if (resource) {
       action = { type: resource[1].toLowerCase() === 'find' ? 'search' : 'openResource', query: resource[2].trim() };
     } else if (workspace) {
       const title = (workspace[1] ?? workspace[2]).toLowerCase();

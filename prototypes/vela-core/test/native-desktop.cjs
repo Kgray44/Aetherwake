@@ -70,6 +70,8 @@ exports.verify = async ({win,app,privateRoot,source}) => {
   const initial=await readVela(),initialReview=reviews(initial);await focus();await open();let state=await readVela();assert.deepEqual(state.identity,{id:'system:vela',name:'Vela',role:'application-assistant'});assert(state.conversation.resourceId);const velaResource=(await desktop()).resources.find(r=>r.id===state.conversation.resourceId);assert(velaResource&&velaResource.kind==='conversation'&&velaResource.providerId==='local','Vela has its own canonical local conversation, never a forwarded provider identity');assert.deepEqual(reviews(state),initialReview,'Opening is not attention review');await offline();
   if(process.argv.includes('--verify-air-local')){
     assert(!restore && state.requests.length === 0, 'Fresh offline AIR profile required');
+    const connection = await js("window.aerynthHost.command('providerConnection',{type:'status',providerId:'chatgpt-plan-responses'})");
+    assert.notEqual(connection.state, 'ready', 'Offline AIR checks require a signed-out ChatGPT plan');
     const questions = [
       ['What time is it right now?', 'local.time'],
       ["What's today's date?", 'local.date'],
@@ -99,6 +101,14 @@ exports.verify = async ({win,app,privateRoot,source}) => {
       checked(question, { capability, outcome: facts.kind });
     }
     await verifyPanelConversation(state);
+    const ordinary = 'Can you explain how a speaker works?';
+    await type('.vela-core-compose textarea', ordinary);
+    await clickText('Send to Vela', '.vela-core-compose');
+    await until(()=>js(`document.querySelector('.vela-core-status')?.textContent.includes('Connect your ChatGPT plan in Connections')`),
+      'A fresh profile explains why the conversational route is unavailable');
+    assert.equal(await js("document.querySelector('.vela-core-compose textarea').value"), ordinary);
+    assert.equal((await readVela()).requests.length, questions.length);
+    checked(ordinary, { outcome: 'sign-in required and draft preserved' });
     await offline();
   }else if(restore){
     const expected=JSON.parse(await fs.readFile(expectedFile,'utf8'));assert.equal(expected.contract,'aerynth.vela-restore@1');assert.deepEqual(receipt.moduleHashes,expected.moduleHashes);assert.deepEqual(receipt.assets,expected.assets);assert.deepEqual(source.hashes,expected.hostSourceHashes,'Restore source snapshot is exact');

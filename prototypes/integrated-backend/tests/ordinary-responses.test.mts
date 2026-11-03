@@ -422,6 +422,26 @@ test('How much RAM am I using if the first reader is unavailable?', { skip: proc
   } finally { await f.close(); }
 });
 
+test('Will it rain here tomorrow? Ask before sharing my location', { skip: process.platform !== 'win32' }, async () => {
+  const f = fixture();
+  try {
+    const ask = () => f.core.command('velaRouteNative', { intent: 'Will it rain here tomorrow?' });
+    await assert.rejects(ask(), /vela_native_weather_unavailable/);
+    f.owner.nativeHostServices = {};
+    const result = await ask();
+    assert(result.matched);
+    assert.equal(result.request.state, 'awaiting-review');
+    assert.equal(result.request.providerId, null);
+    const state = await f.core.command('vela', { name: 'state', input: {} }) as import('../../vela-core/src/contracts.ts').VelaState;
+    const plan = state.plans.find(item => item.id === result.request.planId);
+    assert.deepEqual(plan?.steps.map(step => step.action), [{ type: 'readWeather', period: 'tomorrow' }]);
+    assert.equal(plan?.state, 'prepared');
+    await assert.rejects(f.core.command('vela', { name: 'apply', input: plan!.id }), /review_authorization_required/);
+    assert.equal((await f.core.command('providerActivity', {})).providerRequests, 0);
+    assert.equal(f.requests.length + f.codexCalls, 0);
+  } finally { await f.close(); }
+});
+
 test('Level 0 opens a unique workspace and prepares a checklist without a connected provider', async () => {
   const f = fixture();
   try {

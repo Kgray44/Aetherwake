@@ -74,6 +74,16 @@ export function nativeVelaFact(intent: string): VelaLocalCapabilityId | undefine
   if (calculatorExpression(intent)) return 'local.calculator';
 }
 
+export function nativeVelaWeather(intent: string): 'now' | 'today' | 'tonight' | 'tomorrow' | 'tomorrow-morning' | undefined {
+  const text = fileEditIntent(intent).replaceAll('’', "'").replace(/[?.!]+$/u, '').replace(/,?\s+please$/u, '');
+  const request = /^(?:will it (?:rain|snow)|(?:what(?:'s| is)|show(?: me)?) (?:the |my )?(?:local )?(?:weather|forecast)(?: like)?)(?: here)?(?: (right now|now|today|tonight|tomorrow morning|tomorrow))?$/u.exec(text);
+  const period = request?.[1];
+  if (!request) return;
+  if (period === 'tomorrow morning') return 'tomorrow-morning';
+  if (period === 'today' || period === 'tonight' || period === 'tomorrow') return period;
+  return 'now';
+}
+
 export function classifyVelaRoutingIntent(intent: string): VelaRoutingIntent {
   const text = fileEditIntent(intent);
   const explanatory = /^(?:explain|how (?:can|could|should|do|does|would|to)|what (?:is|are|would)|(?:give|show) (?:me )?an example)\b/u.test(text);

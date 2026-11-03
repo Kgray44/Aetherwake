@@ -872,6 +872,7 @@ async function verifyJourney({
         button: "right",
         clickCount: 1,
       });
+    await textButton("Card settings", ".application-card-actions");
     await wait(
       'document.querySelector("#command-surface").open&&!!document.querySelector("#command-surface select[name=shape]")',
     );

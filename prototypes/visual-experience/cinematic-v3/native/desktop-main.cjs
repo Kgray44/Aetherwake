@@ -18,6 +18,7 @@ const { spawn, execFile, execFileSync } = require("node:child_process");
 const { createStorageAdmission } = require("./storage-admission.cjs");
 const { createInterface } = require("node:readline");
 const {
+  existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -118,6 +119,7 @@ const verify =
   process.argv.includes("--integration-spatial-benchmark");
 const offscreenScale = process.argv.includes("--integration-benchmark") &&
   process.argv.includes("--offscreen-renderer");
+const verifyAirLocal = process.argv.includes("--integration-vela") && process.argv.includes("--verify-air-local");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
 const checkCatalog = process.argv.includes("--check-model-catalog");
 if (process.argv.includes("--integration-live"))
@@ -134,6 +136,8 @@ if (verify && (!profileArg || !path.isAbsolute(profileArg.slice(10)))) {
 const privateRoot = profileArg
   ? path.resolve(profileArg.slice(10))
   : path.join(app.getPath("appData"), "Aerynth", "review");
+if (verifyAirLocal && (!/^review-vela-air-offline-\d+$/u.test(path.basename(privateRoot)) || existsSync(privateRoot)))
+  throw Error("fresh_offline_air_profile_required");
 if (offscreenScale) {
   const scale = require("./integration-block-scale.cjs").options(process.argv);
   if (!/^review-block-scale-(?:0|1|3|10|25|50)-\d+$/.test(path.basename(privateRoot)))
@@ -534,8 +538,8 @@ app.whenReady().then(async () => {
           call,
           input,
           observeNativeRequest: observeVelaRequest,
-          offerPlanningByDefault: !verify,
-          directMessageSend: !verify,
+          offerPlanningByDefault: !verify || verifyAirLocal,
+          directMessageSend: !verify || verifyAirLocal,
           routeNative: true,
         });
       } else if (command === "githubTimeline") {
