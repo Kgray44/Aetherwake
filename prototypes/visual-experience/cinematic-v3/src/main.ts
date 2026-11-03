@@ -9,6 +9,7 @@ import {
 import { installApplication, type Application } from "./application";
 import type { ResourceOpeningInput } from "../../../application-contract/resource-opening.ts";
 import { targetDirectCard, directCardLayer } from "./direct-card-motion.ts";
+import { groupFocusedSideCards } from "../../../block-library/focused-rail.ts";
 import type {
   DesktopSnapshot,
   DesktopCommand,
@@ -150,6 +151,8 @@ for (const node of document.querySelectorAll(".keys,.provenance"))
 let selected: string | null = null,
   expanded: string | null = null,
   quiet = false;
+let focusedRailOffset = 0, focusedRailMax = 0;
+const focusedRailHeadings = new Map<string, HTMLElement>();
 let study: Study = "architecture",
   quality: Quality = "balanced",
   vela: VelaState = "idle";
@@ -362,9 +365,35 @@ function restAt(id: string, slot: number) {
   }
   return pose;
 }
+function focusedRail() {
+  const slots = new Map<string, { y: number; heading?: string }>();
+  if (!desktopMode || !expanded) {
+    focusedRailOffset = focusedRailMax = 0;
+    return slots;
+  }
+  const groups = groupFocusedSideCards(order.filter(id => id !== expanded), id => {
+    const article = elements.get(id);
+    const kind = article?.dataset.blockKind ?? resources.get(id)?.type ?? "resource";
+    return { kind, label: article?.querySelector(".grip span")?.textContent?.trim() || kind.replaceAll("_", " ") };
+  });
+  const row = innerWidth >= 1100 ? 94 : 82;
+  let y = 190;
+  for (const group of groups) {
+    y += 19;
+    for (const [index, id] of group.cards.entries()) {
+      slots.set(id, { y, ...(index === 0 ? { heading: group.label } : {}) });
+      y += row;
+    }
+  }
+  focusedRailMax = Math.max(0, y - (innerHeight - 100));
+  focusedRailOffset = Math.min(focusedRailOffset, focusedRailMax);
+  return slots;
+}
 function layout(cause: string) {
+  const rail = focusedRail();
   for (const id of order) {
     const directGesture = application?.directGesture(id);
+    const side = rail.get(id);
     let p = base(id);
     if (expanded === id) {
       p = {
@@ -379,12 +408,11 @@ function layout(cause: string) {
         yaw: 0,
         opacity: 1,
       };
-    } else if (expanded) {
+    } else if (expanded && !directGesture?.fromFocusedSide) {
       p = {
         ...p,
         x: innerWidth >= 1100 ? 24 : 16,
-        y:
-          238 +
+        y: side ? side.y - focusedRailOffset : 238 +
           order.filter((key) => key !== expanded).indexOf(id) *
             (innerWidth >= 1100 ? 100 : 88),
         w: innerWidth >= 1100 ? 176 : 56,
@@ -423,6 +451,26 @@ function layout(cause: string) {
       selected === id,
     );
     const el = elements.get(id)!;
+    const label = side?.heading && !directGesture?.fromFocusedSide ? side.heading : undefined;
+    if (label) {
+      el.dataset.focusedRailHeading = label;
+      let heading = focusedRailHeadings.get(id);
+      if (!heading) {
+        heading = document.createElement("span");
+        heading.className = "application-focused-rail-heading";
+        heading.setAttribute("aria-hidden", "true");
+        $("#stage").append(heading);
+        focusedRailHeadings.set(id, heading);
+      }
+      if (heading.textContent !== label) heading.textContent = label;
+    } else {
+      delete el.dataset.focusedRailHeading;
+      if (expanded) {
+        focusedRailHeadings.get(id)?.remove();
+        focusedRailHeadings.delete(id);
+      }
+    }
+    el.toggleAttribute("data-focused-side-carried", directGesture?.fromFocusedSide === true);
     el.classList.toggle("selected", selected === id);
     el.classList.toggle("expanded", expanded === id);
     el.classList.toggle("receded", !!expanded && expanded !== id);
@@ -540,6 +588,18 @@ function home() {
   status("Workspace restored.");
 }
 if (desktopMode) {
+  $("#stage").addEventListener("wheel", event => {
+    if (!expanded || !focusedRailMax || event.ctrlKey || event.metaKey ||
+        !(event.target instanceof Element) || !event.target.closest(".receded .resource-anchor") ||
+        application?.directDragging()) return;
+    const scale = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 20 :
+      event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? innerHeight : 1;
+    const next = clamp(focusedRailOffset + event.deltaY * scale, 0, focusedRailMax);
+    if (next === focusedRailOffset) return;
+    event.preventDefault();
+    focusedRailOffset = next;
+    layout("scroll focused cards");
+  }, { passive: false });
   document.addEventListener("click", (event) => {
     if (!expanded || event.defaultPrevented || event.button !== 0) return;
     if (event.target === document.body || event.target === $("#world") || event.target === $("#stage"))
@@ -794,6 +854,8 @@ function replaceWorkspace(state: DesktopSnapshot) {
       motion.bodies.delete(id);
       motion.bodies.delete(materialMotionKey(id));
       poseStyleCache.delete(id);
+      focusedRailHeadings.get(id)?.remove();
+      focusedRailHeadings.delete(id);
     }
   order = state.blocks.map((b) => b.id);
   for (const block of state.blocks) {
@@ -1208,7 +1270,7 @@ function renderDOM() {
       unfold,
       shape: block?.shape ?? defaultSurfaceShape(resources.get(id)?.type),
       rotation: (block?.rotation ?? 0) * (1 - unfold),
-      presentationLayer:
+      presentationLayer: application?.directGesture(id)?.fromFocusedSide ? 2 :
         expanded === id || resourceUnfold(motion, id) > 0.001 ? 1 : 0,
       zIndex:
         expanded === id
@@ -1242,6 +1304,18 @@ function renderDOM() {
       el.dataset.materialCovered = String(compositing.covered);
     const unfold = resourceUnfold(motion, id);
     const dock = resourceDock(motion, id);
+    const heading = focusedRailHeadings.get(id);
+    if (heading) {
+      if (!expanded && dock <= .001) {
+        heading.remove();
+        focusedRailHeadings.delete(id);
+      } else {
+        heading.hidden = p.y < 152 || p.y > innerHeight - 100;
+        heading.style.transform = `translate(${p.x}px, ${p.y - 18}px)`;
+        heading.style.width = `${p.w}px`;
+        heading.style.opacity = String(dock);
+      }
+    }
     presentation.style.setProperty(
       "--card-selection",
       String(resourceSelection(motion, id)),
@@ -1441,7 +1515,7 @@ function tick(now: number) {
                 block?.shape ?? defaultSurfaceShape(resources.get(id)?.type),
               rotation:
                 (block?.rotation ?? 0) * (1 - resourceUnfold(motion, id)),
-              presentationLayer:
+              presentationLayer: application?.directGesture(id)?.fromFocusedSide ? 2 :
                 expanded === id || resourceUnfold(motion, id) > 0.001 ? 1 : 0,
               zIndex:
                 expanded === id

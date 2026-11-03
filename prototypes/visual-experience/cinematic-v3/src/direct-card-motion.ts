@@ -5,6 +5,7 @@ export type DirectCardGesture = Readonly<{
   blockId: string;
   intent: "move" | "resize";
   phase: "active" | "committing";
+  fromFocusedSide?: true;
 }>;
 
 export function targetDirectCard(
@@ -29,5 +30,6 @@ export function directCardLayer(
   savedLayer: number,
   gesture?: DirectCardGesture | null,
 ) {
-  return gesture?.intent === "move" ? Math.max(150000, savedLayer) : savedLayer;
+  if (gesture?.intent !== "move") return savedLayer;
+  return Math.max(gesture.fromFocusedSide ? 230000 : 150000, savedLayer);
 }

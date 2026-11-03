@@ -39,6 +39,36 @@
   box-shadow: none;
   background: transparent;
 }
+.application-card-actions {
+  display: grid;
+  gap: 3px;
+}
+.application-card-actions button {
+  text-align: left;
+  padding-inline: 12px;
+  min-height: 30px;
+}
+.application-focused-rail-heading {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 300;
+  pointer-events: none;
+  padding-inline: 3px;
+  border-bottom: 1px solid #bbd4dc35;
+  color: #cadbdf;
+  font: 500 9px/1.45 "Segoe UI", sans-serif;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.application-ready .folio:not(.expanded) .aw-placement-trash,
+.application-ready .folio[data-locked="true"] .aw-placement-trash,
+.application-ready .folio:is(.expanded,.receded,[data-locked="true"]) .aw-card-edges {
+  display: none;
+}
 .application-environments.aw-contextual-surface,
 .application-workspace-actions.aw-contextual-surface,
 .application-agents.aw-contextual-surface {

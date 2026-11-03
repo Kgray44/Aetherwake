@@ -15,6 +15,7 @@ export type DirectGesturePresentation = Readonly<{
   blockId: string;
   intent: "move" | "resize";
   phase: "active" | "committing";
+  fromFocusedSide?: true;
 }>;
 export type DirectManipulationOptions = {
   blockId: string;
@@ -24,10 +25,14 @@ export type DirectManipulationOptions = {
   cancel(): void;
   failed(error: unknown): void;
   context?(event: MouseEvent): void;
+  remove?(): Promise<void>;
+  canRemove?(): boolean;
+  /** The host resolves an eligible screen point to a world-space drop center. */
+  focusedDrop?(clientX: number, clientY: number): { x: number; y: number } | null;
   onGestureChange?(state: DirectGesturePresentation | null): void;
 };
-const interactive =
-  "input,textarea,select,button,a,[contenteditable=true],[role=log],pre,[data-no-card-drag]";
+const editor = 'input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"]';
+export const cardInteractionTarget = `${editor},button,a,summary,[role="button"],[role="log"],pre,[data-no-card-drag],[data-resize-edge]`;
 /** Native-style surface dragging and invisible edge resizing, using the existing engine gesture math. */
 export function mountDirectManipulation(
   article: HTMLElement,
@@ -74,14 +79,18 @@ export function mountDirectManipulation(
       active: boolean;
       selection: string;
       intent: "move" | "resize";
+      capture: HTMLElement;
+      fromFocusedSide: boolean;
     } | null = null,
     pending = false,
     suppressClick = false;
   let gesturePresentation: DirectGesturePresentation | null = null;
-  const publishGesture = (phase: DirectGesturePresentation["phase"] | null, intent?: "move" | "resize") => {
+  const publishGesture = (phase: DirectGesturePresentation["phase"] | null, intent?: "move" | "resize", fromFocusedSide = false) => {
     if (phase === null && gesturePresentation === null) return;
     if (phase !== null && gesturePresentation?.phase === phase && gesturePresentation.intent === intent) return;
-    gesturePresentation = phase === null ? null : Object.freeze({ blockId: options.blockId, intent: intent!, phase });
+    gesturePresentation = phase === null ? null : Object.freeze({
+      blockId: options.blockId, intent: intent!, phase, ...(fromFocusedSide ? { fromFocusedSide: true } : {}),
+    });
     options.onGestureChange?.(gesturePresentation);
   };
   const release = () => {
@@ -90,21 +99,23 @@ export function mountDirectManipulation(
     gesture = null;
     article.classList.remove("direct-manipulating");
     document.documentElement.style.userSelect = current.selection;
-    if (article.hasPointerCapture(current.pointerId))
-      article.releasePointerCapture(current.pointerId);
+    if (current.capture.hasPointerCapture(current.pointerId))
+      current.capture.releasePointerCapture(current.pointerId);
     return current;
   };
   const cancel = () => {
-    if (!release()) return;
+    const current = release();
+    if (!current) return;
+    if (current.active) suppressClick = true;
     publishGesture(null);
     options.cancel();
   };
-  const commit = async (command: Command, intent: "move" | "resize") => {
+  const commit = async (command: Command, intent: "move" | "resize", fromFocusedSide = false) => {
     if (pending) return;
     pending = true;
     article.setAttribute("aria-busy", "true");
     try {
-      publishGesture("committing", intent);
+      publishGesture("committing", intent, fromFocusedSide);
       await options.commit(command, intent);
     } catch (error) {
       options.failed(error);
@@ -114,6 +125,48 @@ export function mountDirectManipulation(
       article.removeAttribute("aria-busy");
       publishGesture(null);
     }
+  };
+  const canRemove = () => {
+    if (!options.remove || pending || gesture || options.canRemove?.() === false) return false;
+    const block = options.state()?.blocks.find(block => block.blockId === options.blockId);
+    return !!block && !block.locked;
+  };
+  const remove = async () => {
+    if (!canRemove()) return;
+    pending = true;
+    article.setAttribute("aria-busy", "true");
+    try { await options.remove!(); }
+    catch (error) { options.failed(error); }
+    finally { pending = false; article.removeAttribute("aria-busy"); }
+  };
+  const trash = options.remove ? document.createElement("button") : null;
+  if (trash) {
+    trash.type = "button";
+    trash.className = "aw-placement-trash";
+    trash.setAttribute("aria-label", "Remove from workspace");
+    trash.title = "Remove from workspace";
+    trash.dataset.aerynthMotionControl = "true";
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 11v5m4-5v5");
+    icon.append(path);
+    trash.append(icon);
+    trash.addEventListener("click", event => { event.stopPropagation(); void remove(); }, { signal });
+    article.append(trash);
+  }
+  const updateGesture = (current: NonNullable<typeof gesture>, event: PointerEvent) => {
+    let dx = event.clientX - current.x, dy = event.clientY - current.y;
+    if (current.fromFocusedSide) {
+      const point = options.focusedDrop?.(event.clientX, event.clientY);
+      if (!point) return false;
+      const { block, state } = current.value;
+      dx = (point.x - block.width / 2 - block.x) * state.viewport.zoom;
+      dy = (point.y - block.height / 2 - block.y) * state.viewport.zoom;
+    }
+    options.preview(current.value.update(dx, dy, 0, event.shiftKey), current.intent);
+    return true;
   };
   article.addEventListener(
     "pointerdown",
@@ -128,11 +181,15 @@ export function mountDirectManipulation(
         return;
       const target = event.target instanceof Element ? event.target : null;
       if (!target) return;
+      const sideAnchor = options.focusedDrop && article.classList.contains("receded")
+        ? target.closest<HTMLElement>(".resource-anchor") : null;
+      if (article.classList.contains("receded") && !sideAnchor) return;
       const handle = target.closest<HTMLElement>("[data-resize-edge]")?.dataset
         .resizeEdge as Handle | undefined;
-      if (!handle && target.closest(interactive)) return;
+      if (!sideAnchor && !handle && target.closest(cardInteractionTarget)) return;
       const state = options.state();
       if (!state) return;
+      if (sideAnchor && state.blocks.find(block => block.blockId === options.blockId)?.locked) return;
       try {
         const value = new LayoutGesture(
           state,
@@ -147,8 +204,10 @@ export function mountDirectManipulation(
           active: !!handle,
           selection: document.documentElement.style.userSelect,
           intent: handle ? "resize" : "move",
+          capture: sideAnchor ?? article,
+          fromFocusedSide: !!sideAnchor,
         };
-        article.setPointerCapture(event.pointerId);
+        gesture.capture.setPointerCapture(event.pointerId);
         event.stopPropagation();
         if (handle) {
           event.preventDefault();
@@ -185,11 +244,7 @@ export function mountDirectManipulation(
       document.documentElement.style.userSelect = "none";
       article.classList.add("direct-manipulating");
       try {
-        publishGesture("active", current.intent);
-        options.preview(
-          current.value.update(dx, dy, 0, event.shiftKey),
-          current.intent,
-        );
+        if (updateGesture(current, event)) publishGesture("active", current.intent, current.fromFocusedSide);
       } catch (error) {
         options.failed(error);
         cancel();
@@ -217,8 +272,14 @@ export function mountDirectManipulation(
         const dx = event.clientX - gesture.x, dy = event.clientY - gesture.y;
         if (gesture.active || Math.hypot(dx, dy) >= 4) {
           gesture.active = true;
-          publishGesture("active", gesture.intent);
-          options.preview(gesture.value.update(dx, dy, 0, event.shiftKey), gesture.intent);
+          if (!updateGesture(gesture, event)) {
+            suppressClick = true;
+            event.preventDefault();
+            event.stopPropagation();
+            cancel();
+            return;
+          }
+          publishGesture("active", gesture.intent, gesture.fromFocusedSide);
         }
       } catch (error) {
         options.failed(error);
@@ -242,7 +303,7 @@ export function mountDirectManipulation(
         after.width !== before.width ||
         after.height !== before.height;
       if (changed)
-        void commit(current.value.command(crypto.randomUUID()), current.intent);
+        void commit(current.value.command(crypto.randomUUID()), current.intent, current.fromFocusedSide);
       else { publishGesture(null); options.cancel(); }
     },
     { capture: true, signal },
@@ -265,6 +326,14 @@ export function mountDirectManipulation(
       if (event.key === "Escape" && gesture) {
         event.preventDefault();
         cancel();
+      }
+      if (event.key === "Delete" && !event.defaultPrevented && !event.repeat && !event.isComposing &&
+          !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey &&
+          article.classList.contains("selected") &&
+          !(event.target instanceof Element && event.target.closest(editor)) && canRemove()) {
+        event.preventDefault();
+        event.stopPropagation();
+        void remove();
       }
     },
     { signal },
@@ -324,20 +393,23 @@ export function mountDirectManipulation(
     article.addEventListener(
       "contextmenu",
       (event) => {
-        if ((event.target as Element).closest(interactive)) return;
+        if (pending || gesture || !(event.target instanceof Element) || event.target.closest(cardInteractionTarget)) return;
         event.preventDefault();
+        event.stopPropagation();
         options.context!(event);
       },
       { signal },
     );
   return {
     cancel,
+    remove,
     presentation: () => gesturePresentation,
     dispose() {
       cancel();
       publishGesture(null);
       abort.abort();
       edges.remove();
+      trash?.remove();
       delete article.dataset.directManipulation;
       if (oldTabIndex === null) article.removeAttribute("tabindex");
       else article.setAttribute("tabindex", oldTabIndex);

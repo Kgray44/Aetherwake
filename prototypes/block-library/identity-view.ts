@@ -1,4 +1,5 @@
 import type { BlockIdentityModel, IdentityRow } from "./identity-model.ts";
+import { cardInteractionTarget } from './direct-manipulation.ts';
 import { blockComposition, blockApproachTarget, type BlockComposition, type BlockFootprint, type BlockApproachTarget } from './presentation-policy.ts';
 const element = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -183,8 +184,8 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
   article.addEventListener('focusout', focusChanged);
   article.addEventListener('compositionstart', compositionStarted, true);
   article.addEventListener('compositionend', compositionEnded, true);
-  approach.onclick = () => {
-    if (approaching || !model || !actions.approach || disposed) return;
+  const approachCard = () => {
+    if (approaching || model?.phase !== 'ready' || !actions.approach || disposed) return;
     approaching = true;
     approach.disabled = true;
     text(approachStatus, '');
@@ -193,6 +194,16 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
       .catch(() => { if (!disposed) text(approachStatus, 'Could not approach this card.'); })
       .finally(() => { if (!disposed) { approaching = false; approach.disabled = false; } });
   };
+  approach.onclick = approachCard;
+  const doubleClick = (event: MouseEvent) => {
+    if (!actions.approach || event.button !== 0 || event.defaultPrevented ||
+        article.classList.contains('expanded') || article.classList.contains('receded') ||
+        !(event.target instanceof Element) || event.target.closest(cardInteractionTarget)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    approachCard();
+  };
+  article.addEventListener('dblclick', doubleClick);
   restore.onclick = () => {
     if (disposed || restoring || !minimizedPresentation.effectiveMinimized || !actions.restore) return;
     const epoch = minimizedEpoch;
@@ -394,9 +405,7 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
     anchor?.setAttribute("title", anchorName);
     const open = article.querySelector<HTMLButtonElement>(".unfold");
     if (open)
-      open.title = article.classList.contains("expanded")
-        ? "Return to workspace"
-        : "Open " + value.label.toLowerCase();
+      open.title = "Open " + value.label.toLowerCase();
     const next = JSON.stringify(value);
     if (next === fingerprint) return;
     renderOverview(value);
@@ -535,6 +544,7 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
       article.removeEventListener('compositionend', compositionEnded, true);
       releaseWorking();
       releaseOpenName();
+      article.removeEventListener('dblclick', doubleClick);
       overview.remove();
       approach.remove();
       restore.remove();

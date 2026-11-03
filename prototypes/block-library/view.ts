@@ -37,6 +37,7 @@ import {
 import { captureWorkspaceTemplate } from "./model.ts";
 import { blockPreview } from "./preview.ts";
 import type { Geometry } from '../workspace-engine/contracts.mts';
+import { mountLibraryDrop, type LibraryDropOptions } from './placement-drop.ts';
 
 const node = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -88,7 +89,7 @@ const placementKind = (template: WorkspaceTemplate, placement: TemplatePlacement
     : placement.subjectBinding.mode === 'project-context'
       ? placement.subjectBinding.view === 'project' ? 'project_overview' : 'resource_browser'
       : subjectBlockKind(placement.subjectBinding.subject);
-function shell(root: HTMLElement, title: string, onClose: () => void) {
+function shell(root: HTMLElement, title: string, onClose: () => void, showHeader = true) {
   const previousFocus =
     document.activeElement instanceof HTMLElement
       ? document.activeElement
@@ -104,7 +105,8 @@ function shell(root: HTMLElement, title: string, onClose: () => void) {
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
   const body = node("div", "aw-library__body");
-  panel.append(header, status, body);
+  if (showHeader) panel.append(header);
+  panel.append(status, body);
   root.append(panel);
   const escape = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
@@ -139,23 +141,27 @@ export function mountBlockLibrary(
     expectedLayoutVersion: number | (() => number);
     /** Read fresh usable world bounds for this exact workspace when submitting. */
     bounds?(): Geometry | undefined;
-    onCreated(result: CreatedBlock): void | Promise<void>;
-    onSubjectCreated?(result: CreatedSubjectBlock): void | Promise<void>;
+    onCreated(result: CreatedBlock, origin?: 'drop'): void | Promise<void>;
+    onSubjectCreated?(result: CreatedSubjectBlock, origin?: 'drop'): void | Promise<void>;
+    drop?: LibraryDropOptions;
+    showHeader?: boolean;
     context?(): LibraryRecommendationContext | null;
     onClose(): void;
   },
 ) {
-  const ui = shell(root, "Block Library", options.onClose),
+  const ui = shell(root, "Block Library", options.onClose, options.showHeader),
     search = node("input"),
     category = node("select"),
     discovery = node("select"),
-    toolbar = node("div", "aw-library__toolbar"),
+    toolbar = node("details", "aw-library__filters"),
+    filterFields = node("div", "aw-library__toolbar"),
     columns = node("div", "aw-library__columns"),
     list = node("div", "aw-library__list"),
     detail = node("div", "aw-library__detail");
   search.type = "search";
   search.maxLength = 500;
-  search.placeholder = "Search blocks, actions or categories";
+  ui.panel.className += ' aw-library--blocks';
+  search.placeholder = "Find a block…";
   search.setAttribute("aria-label", "Search blocks");
   for (const [value, label] of [
     ["", "All categories"],
@@ -183,7 +189,8 @@ export function mountBlockLibrary(
   }
   category.setAttribute("aria-label", "Block category");
   discovery.setAttribute("aria-label", "Block discovery");
-  toolbar.append(category, discovery);
+  filterFields.append(category, discovery);
+  toolbar.append(node('summary', '', 'Browse filters'), filterFields);
   columns.append(list, detail);
   ui.body.append(search, toolbar, columns);
   let capabilities: LibraryCapabilities | null = null,
@@ -199,6 +206,13 @@ export function mountBlockLibrary(
     typeof options.expectedLayoutVersion === "function"
       ? options.expectedLayoutVersion()
       : options.expectedLayoutVersion;
+  const drop = options.drop && mountLibraryDrop(ui.panel, options.drop, revision, error => {
+    if (!ui.disposed) ui.status.textContent = errorText(error);
+  });
+  type DropPoint = { x: number; y: number };
+  const atDrop = <T extends { width: number; height: number }>(size: T, point?: DropPoint) =>
+    point ? { ...size, x: point.x - size.width / 2, y: point.y - size.height / 2 } : size;
+  if (drop) ui.body.insertBefore(node('p', 'aw-library__grab-hint', 'Drag a ready block onto the workspace, or choose one to configure.'), columns);
   const pendingButtons = new Map<HTMLButtonElement, boolean>();
   const commandButtonState = (button: HTMLButtonElement, disabled: boolean) => {
     if (pending) pendingButtons.set(button, disabled);
@@ -260,8 +274,8 @@ export function mountBlockLibrary(
       pendingButtons.clear();
     }
   }
-  const perform = (work: () => Promise<CreatedBlock>) =>
-    performResult(work, options.onCreated);
+  const perform = (work: () => Promise<CreatedBlock>, point?: DropPoint) =>
+    performResult(work, result => options.onCreated(result, point ? 'drop' : undefined));
   const showDetail = () => {
     const generation = ++detailSequence;
     detail.replaceChildren();
@@ -438,10 +452,9 @@ export function mountBlockLibrary(
           available.reason ?? "Unavailable: " + available.state,
         ),
       );
-    form.prepend(settings);
-    form.onsubmit = (event) => {
-      event.preventDefault();
-      if (!form.reportValidity()) return;
+    form.append(settings);
+    const createBlock = (point?: DropPoint) => {
+      if (create.disabled || !form.reportValidity()) return;
       if (!providerAvailable()) { ui.status.textContent = 'Choose an available conversation type.'; return; }
       void perform(() =>
         port.createBlock({
@@ -450,15 +463,19 @@ export function mountBlockLibrary(
           expectedLayoutVersion: revision(),
           kind,
           title: title.value,
-          presentation: placement(),
+          presentation: atDrop(placement(), point),
           ...placementBounds(),
           ...(port.configureBlock ? { configuration: configuration() } : {}),
           ...(kind === "conversation" && provider.value
             ? { provider: provider.value as "local" | "codex" }
             : {}),
-        }),
+        }), point,
       );
     };
+    form.onsubmit = event => { event.preventDefault(); createBlock(); };
+    if (!definition.creation && kind !== 'file' && kind !== 'link') {
+      drop?.bind(create, { label: definition.title, place: createBlock });
+    }
     const attach = node("details"),
       attachHeading = node("summary", "", "Attach Existing"),
       resourceSearch = node("input"),
@@ -594,7 +611,7 @@ export function mountBlockLibrary(
           const row = node("div", "aw-library__resource-row"),
             label = node("div", "", resource.title);
           label.append(node("small", "", kindTitle(resource.kind)));
-          const action = button("Attach " + resource.title, () => {
+          const placeResource = (point?: DropPoint) => {
             void perform(() =>
               port.attachBlock!({
                 commandId: commandId(),
@@ -603,14 +620,16 @@ export function mountBlockLibrary(
                 kind,
                 resourceId: resource.id,
                 expectedResourceVersion: resource.version,
-                presentation: placement(),
+                presentation: atDrop(placement(), point),
                 ...placementBounds(),
                 ...(port.configureBlock
                   ? { configuration: configuration() }
                   : {}),
-              }),
+              }), point,
             );
-          });
+          };
+          const action = button("Attach " + resource.title, () => placeResource());
+          drop?.bind(action, { label: resource.title, place: placeResource });
           action.dataset.attachResource = resource.id;
           commandButtonState(action, available.state !== "available");
           row.append(label, action);
@@ -649,30 +668,11 @@ export function mountBlockLibrary(
           "This native host has not connected resource attachment to the library.",
         ),
       );
-    detail.append(
-      heading,
-      favorite,
-      description,
-      blockPreview(kind),
-      node("p", "aw-library__hint", definition.preview),
-      node(
-        "p",
-        "aw-library__hint",
-        definition.id +
-          " · v" +
-          definition.version +
-          " · " +
-          definition.defaultPresentation.width +
-          " × " +
-          definition.defaultPresentation.height +
-          " preferred · supports " +
-          definition.compatibleResourceKinds.join(", "),
-      ),
-      node("h4", "", "Current capabilities"),
-      controls,
-      form,
-      attach,
-    );
+    const notes = node('details', 'aw-library__capabilities');
+    notes.append(node('summary', '', 'Preview and capabilities'), blockPreview(kind), node('p', 'aw-library__hint', definition.preview), controls);
+    const detailHeader = node('header', 'aw-library__detail-heading');
+    detailHeader.append(heading, favorite);
+    detail.append(detailHeader, description, form, attach, notes);
     if (definition.creation === 'reference-only') {
       form.onsubmit = event => { event.preventDefault(); };
       create.disabled = true; form.remove(); attach.open = true;
@@ -775,25 +775,12 @@ export function mountBlockLibrary(
         field("Search within resource titles and IDs", query),
         field("Resource kind", resourceKind),
       );
-    form.append(settings, create, status);
-    detail.append(
-      node("h3", "", definition.title),
-      favorite,
-      node("p", "", definition.description),
-      blockPreview(kind),
-      node(
-        "p",
-        "aw-library__hint",
-        definition.id + " · v" + definition.version + " · " + available.state,
-      ),
-      controls,
-      form,
-      node(
-        "p",
-        "aw-library__hint",
-        "This creates a view of a canonical subject. It does not clone project data, collection members or resource content.",
-      ),
-    );
+    form.append(create, settings, status);
+    const notes = node('details', 'aw-library__capabilities');
+    notes.append(node('summary', '', 'Preview and capabilities'), blockPreview(kind), controls);
+    const detailHeader = node('header', 'aw-library__detail-heading');
+    detailHeader.append(node('h3', '', definition.title), favorite);
+    detail.append(detailHeader, node('p', '', definition.description), form, notes);
     const connected =
       !!port.subjectTargets &&
       !!port.createSubjectBlock &&
@@ -864,9 +851,9 @@ export function mountBlockLibrary(
         if (!ui.disposed && generation === detailSequence)
           status.textContent = errorText(error);
       });
-    form.onsubmit = (event) => {
-      event.preventDefault();
+    const createSubject = (point?: DropPoint) => {
       if (
+        create.disabled ||
         !targets ||
         !port.createSubjectBlock ||
         !options.onSubjectCreated ||
@@ -893,15 +880,17 @@ export function mountBlockLibrary(
             kind,
             subject,
             ...placementBounds(),
-            presentation: {
+            presentation: atDrop({
               shape: shape.value as typeof definition.defaultPresentation.shape,
               width: Number(width.value),
               height: Number(height.value),
-            },
+            }, point),
           }),
-        options.onSubjectCreated,
+        result => options.onSubjectCreated!(result, point ? 'drop' : undefined),
       );
     };
+    form.onsubmit = event => { event.preventDefault(); createSubject(); };
+    drop?.bind(create, { label: definition.title, place: createSubject });
   }
   const renderList = () => {
     if (!capabilities) return;
@@ -953,6 +942,19 @@ export function mountBlockLibrary(
             : "No matching block types.",
         ),
       );
+    const groups = new Map<string, HTMLElement>();
+    const groupFor = (category: BlockCategory) => {
+      const recent = discovery.value === 'recent';
+      const key = recent ? 'recent' : category;
+      const existing = groups.get(key);
+      if (existing) return existing;
+      const group = node('section', 'aw-library__group');
+      group.dataset.category = key;
+      group.append(node('h4', '', recent ? 'Recently used' : category[0].toUpperCase() + category.slice(1)));
+      groups.set(key, group);
+      list.append(group);
+      return group;
+    };
     for (const definition of filtered) {
       const item = button(
         (preferences?.favorites.includes(definition.kind) ? "★ " : "") +
@@ -970,7 +972,6 @@ export function mountBlockLibrary(
       item.setAttribute("aria-pressed", String(definition.kind === selected));
       item.dataset.blockKind = definition.kind;
       item.dataset.blockType = definition.id;
-      item.append(node("small", "aw-library__hint", definition.description));
       if (discovery.value === "recommended")
         item.append(
           node(
@@ -979,7 +980,19 @@ export function mountBlockLibrary(
             "Suggested because: " + reasons.get(definition.kind),
           ),
         );
-      list.append(item);
+      const { kind } = definition;
+      if (!isSubjectBlockKind(kind) && kind !== 'file' && kind !== 'link' &&
+          definition.availability.state === 'available' && !blockDefinition(kind).creation &&
+          (kind !== 'conversation' || capabilities.providers.automatic?.state === 'available')) {
+        const { width, height, shape } = blockDefinition(kind).defaultPresentation;
+        drop?.bind(item, { label: definition.title, place: point => {
+          void perform(() => port.createBlock({
+            commandId: commandId(), workspaceId: options.workspaceId, expectedLayoutVersion: revision(),
+            kind, title: definition.title, presentation: atDrop({ width, height, shape }, point), ...placementBounds(),
+          }), point);
+        } });
+      }
+      groupFor(catalogDefinition(kind).category).append(item);
     }
   };
   search.oninput = renderList;
@@ -1003,7 +1016,8 @@ export function mountBlockLibrary(
       if (!ui.disposed) ui.status.textContent = errorText(error);
     });
   return {
-    dispose: ui.dispose,
+    frame: () => drop?.frame(),
+    dispose() { drop?.dispose(); ui.dispose(); },
     refreshCapabilities: async () => {
       const value = await port.capabilities();
       if (!ui.disposed) {

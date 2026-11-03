@@ -471,6 +471,7 @@ export function installApplication(hooks: Hooks) {
   let subjectDataEpoch = 0;
   let cardConfiguration: ReturnType<typeof mountBlockConfiguration> | null =
     null;
+  let blockLibrary: ReturnType<typeof mountBlockLibrary> | undefined;
   let state: DesktopSnapshot | null = null;
   let environmentNavigator: ReturnType<
     typeof mountEnvironmentNavigator
@@ -809,6 +810,22 @@ export function installApplication(hooks: Hooks) {
       height: Math.max(260, innerHeight - 320) / zoom,
     };
   }
+  function workspaceDropPoint(clientX: number, clientY: number) {
+    if (state?.navigation.kind !== "workspace" || !state.activeWorkspaceId)
+      return null;
+    const bounds = viewBounds(), point = {
+      x: (clientX - offset.x) / zoom,
+      y: (clientY - offset.y) / zoom,
+    };
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y) ||
+        point.x < bounds.x || point.x > bounds.x + bounds.width ||
+        point.y < bounds.y || point.y > bounds.y + bounds.height) return null;
+    const target = document.elementFromPoint(clientX, clientY);
+    if (!target || target.closest("[data-surface-id],dialog,#vela") ||
+        !(target === document.body || target.id === "world" ||
+          target.id === "app" || target.closest("#stage"))) return null;
+    return point;
+  }
   const dialog = document.createElement("dialog");
   dialog.id = "command-surface";
   dialog.className = "command-surface";
@@ -934,6 +951,8 @@ export function installApplication(hooks: Hooks) {
     )
       clearApproachReturn();
     if (navigated) {
+      surfaces.close("card-actions");
+      surfaces.close("block-library");
       presenceDrag = null;
       cancelResize?.();
       cancelResize = undefined;
@@ -1351,14 +1370,18 @@ export function installApplication(hooks: Hooks) {
     hooks.layout();
     hooks.wake();
   }
-  function commitLayout(a: DesktopCommand) {
+  function commitLayout(a: DesktopCommand, requireAcknowledgement = false) {
     paintPreview();
     const revision = previewBase?.revision;
     previewCommitting = true;
-    return run({
+    const action = {
       ...a,
       ...(revision === undefined ? {} : { expectedLayoutVersion: revision }),
-    }).finally(() => {
+    };
+    const saving = requireAcknowledgement
+      ? enqueueResult(async () => { await flush(); return command(action); })
+      : run(action);
+    return saving.finally(() => {
       previewCommitting = false;
       cancelPreview();
     });
@@ -2314,10 +2337,11 @@ export function installApplication(hooks: Hooks) {
     });
   }
   function add() {
-    if (!state?.activeWorkspaceId) {
+    if (state?.navigation.kind !== "workspace" || !state.activeWorkspaceId) {
       manager();
       return;
     }
+    if (blockLibrary) return;
     const workspaceId = state.activeWorkspaceId;
     const content = document.createElement("div");
     content.className = "application-library-content";
@@ -2329,10 +2353,19 @@ export function installApplication(hooks: Hooks) {
       label: "Add to workspace",
       minSize: { width: 480, height: 300 },
       maxSize: { width: 960, height: 740 },
-      onClose: () => controller?.dispose(),
+      onClose: () => {
+        controller?.dispose();
+        if (blockLibrary === controller) blockLibrary = undefined;
+      },
     });
     controller = mountBlockLibrary(content, libraryClient, {
       workspaceId,
+      showHeader: false,
+      drop: {
+        motion: experienceMotion,
+        viewId: workspaceId,
+        point: (x, y) => state?.activeWorkspaceId === workspaceId ? workspaceDropPoint(x, y) : null,
+      },
       bounds: () =>
         state?.navigation.kind === "workspace" &&
         state.activeWorkspaceId === workspaceId
@@ -2364,20 +2397,25 @@ export function installApplication(hooks: Hooks) {
             }
           : null,
       expectedLayoutVersion: () => {
-        if (state?.activeWorkspaceId !== workspaceId)
+        if (state?.navigation.kind !== "workspace" || state.activeWorkspaceId !== workspaceId)
           throw Error("workspace_changed");
         return state.layoutVersion;
       },
       onClose: () => surfaces.close("block-library"),
-      onCreated: (result) => {
+      onCreated: (result, origin) => {
         surfaces.close("block-library");
-        revealCreatedPlacement(result.placementId);
+        if (origin === "drop") {
+          if (document.body.classList.contains("focused")) hooks.home();
+        } else revealCreatedPlacement(result.placementId);
       },
-      onSubjectCreated: (result) => {
+      onSubjectCreated: (result, origin) => {
         surfaces.close("block-library");
-        revealCreatedPlacement(result.placementId);
+        if (origin === "drop") {
+          if (document.body.classList.contains("focused")) hooks.home();
+        } else revealCreatedPlacement(result.placementId);
       },
     });
+    blockLibrary = controller;
   }
   function templates(projectId: string | null) {
     const content = document.createElement("div");
@@ -2611,7 +2649,7 @@ export function installApplication(hooks: Hooks) {
     };
     el("#detach-card", dialog).onclick = () => {
       dialog.close();
-      void run({ type: "detach", blockId, expectedVersion: block.version });
+      void removeBlockPlacement(blockId).catch(report);
     };
     el<HTMLInputElement>("#block-lock", dialog).onchange = (event) => {
       dialog.close();
@@ -2639,6 +2677,64 @@ export function installApplication(hooks: Hooks) {
         rotation: block.rotation ?? 0,
       }),
     );
+  }
+  function removablePlacement(blockId: string) {
+    const workspaceId = state?.activeWorkspaceId;
+    const block = state?.blocks.find(item => item.id === blockId);
+    return state?.navigation.kind === "workspace" && workspaceId &&
+      block?.workspace_id === workspaceId && !block.locked ? block : null;
+  }
+  async function removeBlockPlacement(blockId: string) {
+    const before = removablePlacement(blockId);
+    if (!before || !state) throw Error("placement_unavailable");
+    const layoutVersion = state.layoutVersion;
+    await enqueueResult(async () => {
+      await flush();
+      const current = removablePlacement(blockId);
+      if (!current || current.workspace_id !== before.workspace_id ||
+          current.version !== before.version || state?.layoutVersion !== layoutVersion)
+        throw Error("stale_placement");
+      await command({ type: "detach", blockId, expectedVersion: before.version, expectedLayoutVersion: layoutVersion });
+    });
+  }
+  function openCardActions(blockId: string, event: MouseEvent) {
+    const block = state?.blocks.find(item => item.id === blockId);
+    if (state?.navigation.kind !== "workspace" || !block) return;
+    const content = document.createElement("div");
+    content.className = "application-card-actions aw-optical-controls";
+    content.dataset.awOptics = "workspace";
+    const action = (label: string, invoke: () => void, disabled = false) => {
+      const control = document.createElement("button");
+      control.type = "button";
+      control.textContent = label;
+      control.dataset.aerynthMotionControl = "true";
+      control.disabled = disabled;
+      control.onclick = () => {
+        surfaces.close("card-actions");
+        invoke();
+      };
+      content.append(control);
+    };
+    action("Open", () => { reveal(blockId); hooks.focus(blockId); });
+    action("Bring to front", () => { void run({ type: "layerBlock", blockId, direction: "front" }); });
+    action(block.minimized ? "Restore" : "Minimize", () => {
+      void changeBlockMinimized(blockId, !block.minimized, block.version).catch(report);
+    }, block.locked);
+    action("Card settings", () => geometry(blockId));
+    action("Remove from workspace", () => { void directBindings.get(blockId)?.remove(); }, !removablePlacement(blockId));
+    const article = document.querySelector<HTMLElement>(`[data-block="${CSS.escape(blockId)}"]`);
+    const fromKeyboard = event.clientX === 0 && event.clientY === 0;
+    surfaces.open({
+      id: "card-actions",
+      anchor: fromKeyboard && article ? article : { x: event.clientX, y: event.clientY, width: 1, height: 1 },
+      content,
+      label: "Card actions",
+      minSize: { width: 210, height: 220 },
+      maxSize: { width: 260, height: 300 },
+      preferredSize: { width: 220, height: 240 },
+      placement: "bottom",
+      initialFocus: "button",
+    });
   }
   function layouts() {
     if (!state?.activeWorkspaceId || state.navigation.kind !== "workspace") {
@@ -3522,6 +3618,10 @@ export function installApplication(hooks: Hooks) {
         id,
         mountDirectManipulation(article, {
           blockId: id,
+          focusedDrop: workspaceDropPoint,
+          canRemove: () => !!removablePlacement(id) &&
+            !document.querySelector('dialog[open]:not([data-surface-id="card-actions"])'),
+          remove: () => removeBlockPlacement(id),
           onGestureChange: (gesture) => {
             if (gesture) directGestures.set(id, gesture);
             else directGestures.delete(id);
@@ -3559,6 +3659,7 @@ export function installApplication(hooks: Hooks) {
             )
               throw new Error("layout_version_conflict");
             const patch = action.placements[0].presentation;
+            const fromFocusedSide = directGestures.get(id)?.fromFocusedSide;
             await commitLayout({
               type: "geometry",
               blockId: id,
@@ -3573,11 +3674,13 @@ export function installApplication(hooks: Hooks) {
               },
               shape: patch.shape ?? current.shape,
               rotation: patch.rotation ?? current.rotation ?? 0,
-            });
+            }, true);
+            if (fromFocusedSide && state?.activeWorkspaceId === action.workspaceId &&
+                document.body.classList.contains("focused")) hooks.home();
           },
           cancel: cancelPreview,
           failed: report,
-          context: () => geometry(id),
+          context: (event) => openCardActions(id, event),
         }),
       );
     if (paintBlockAvailability(article, b)) return;
@@ -4398,6 +4501,7 @@ export function installApplication(hooks: Hooks) {
         }
       }
       surfaces.frame(now);
+      blockLibrary?.frame();
       environmentNavigator?.frame();
       workspaceActions?.frame();
       agentLibrary?.frame();
