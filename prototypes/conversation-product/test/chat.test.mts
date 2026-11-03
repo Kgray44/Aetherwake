@@ -317,6 +317,36 @@ test('compatibility evidence is text-safe and rejects unsafe links; legacy provi
   }finally{await manager?.dispose();f.restore();}
 });
 
+test('the animated model picker refreshes explicitly and sends the selected catalog ID without switching provider',async()=>{
+ const f=fixture('chatgpt-plan-responses'),m=pickerMotion();
+ const choice={id:'account-model-slug',label:'Account model display name'};
+ const models={selections:new Map(),async refresh(){refreshes++;f.detail.providers[0].modelOptions=[choice];}};
+ let chat,refreshes=0;
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId,motion:m.motion,viewId:'model-selection',models});await chat.ready;
+  const trigger=f.view.root.querySelector('[data-cp-picker-for="Conversation model"]');
+  const editor=f.view.root.querySelector('textarea');
+  assert.equal(refreshes,0);
+  trigger.fire('click');
+  assert.equal(trigger.getAttribute('aria-expanded'),'true');
+  f.view.root.querySelector('[data-cp-option-value="refresh"]').fire('click');
+  await until(()=>!!f.view.root.querySelector('[data-cp-option-value="model:account-model-slug"]'));
+  trigger.fire('click');
+  const row=f.view.root.querySelector('[data-cp-option-value="model:account-model-slug"]');
+  assert.match(row.textContent,/Account model display name/);
+  row.fire('click');
+  assert.equal(models.selections.get(f.draft.resourceId)?.id,choice.id);
+  assert.equal(f.view.root.querySelector('textarea'),editor);
+  assert.equal(f.calls.some(call=>call.name==='send'||call.name==='selectProvider'),false);
+  f.view.root.querySelector('form').fire('submit');
+  await until(()=>!!f.pending);
+  assert.equal(f.pending?.input.model,choice.id);
+  assert.equal(f.detail.conversation.providerId,'chatgpt-plan-responses');
+  f.accept(true);
+  assert.equal(refreshes,1);
+ }finally{await chat?.dispose();f.restore();}
+});
+
 test('the mounted chat submits an explicit web lookup and opens only canonical citation references',async()=>{
  const f=fixture('chatgpt-plan-responses');let chat;
  try{

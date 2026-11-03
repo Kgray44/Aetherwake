@@ -14,16 +14,17 @@ const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthet
 function sse(events:unknown[]){return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});}
 function fixture(){
  const dir=mkdtempSync(join(tmpdir(),'aerynth-ordinary-responses-')),path=join(dir,'canonical.sqlite'),events:StreamEvent[]=[],requests:Record<string,any>[]=[],responses:((init:RequestInit)=>Promise<Response>|Response)[]=[];
+ let listedModels=[{id:model,label:'Synthetic eligible model'}];
  let version=1,ready=true,catalogReads=0,secretReads=0,codexCalls=0,finishResolve:(()=>void)|undefined,pending=false;
  const status=async():Promise<ProviderConnectionStatus>=>({contract:'aerynth.provider-connection@1',providerId,billingRoute:'chatgpt-plan',state:ready?'ready':'disconnected',storageAvailable:true,pending,registrationVersion:version,planUsageEnabled:ready,inferenceVerified:false,nativeAccountHistory:false,nativeAccountMemory:false,nativeAccountSync:false});
  const connection:OrdinaryConnectionPort={status,begin:async()=>{pending=true;return {attemptId:'synthetic-attempt',authorizationUrl:'https://auth.openai.com/synthetic-only',expiresAt:Date.now()+60000};},finish:async()=>new Promise<void>(resolve=>{finishResolve=()=>{pending=false;resolve();};}),cancel:async()=>{pending=false;finishResolve?.();},disconnect:async expected=>{assert.equal(expected,version);version++;ready=false;},refresh:async expected=>{assert.equal(expected,version);version++;},close:async()=>{finishResolve?.();},
   resolveCredential:async expected=>{secretReads++;assert.equal(expected,version,'credential version changed');assert(ready);return {providerId,kind:'chatgpt-plan',boundaryDigest:boundary,bearer:'SYNTHETIC_PLAN_TOKEN',expiresAt:Date.now()+60000,scopes:['chatgpt.tokens.use.direct']};},
-  modelCatalog:async expected=>{catalogReads++;assert.equal(expected,version);assert(ready);return {providerId,boundaryDigest:boundary,observedAt:Date.now(),catalogOnly:true,models:[{id:model,label:'Synthetic eligible model'}]};},
+  modelCatalog:async expected=>{catalogReads++;assert.equal(expected,version);assert(ready);return {providerId,boundaryDigest:boundary,observedAt:Date.now(),catalogOnly:true,models:listedModels};},
   revalidateCredential:async(expected,digest)=>{assert.equal(expected,version,'credential version changed');assert.equal(digest,boundary);assert(ready);},
  };
  const fakeFetch:typeof fetch=async(url,init)=>{assert.equal(url,RESPONSES_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer SYNTHETIC_PLAN_TOKEN');const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);assert.deepEqual(Object.keys(body),['model','instructions','input','store','stream',...(body.tools?['tools','tool_choice']:[])]);requests.push(body);const response=responses.shift();assert(response,'unexpected provider request');return response(init!);};
  let core:BackendCore;const create=()=>{core=new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only'},event=>events.push(event),undefined,{connection,fetch:fakeFetch});const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};};create();
- return {get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(resolve(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
+ return {get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(resolve(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
@@ -200,6 +201,33 @@ test('web search rejection is explicit and causes no fallback inference', async 
     assert.equal(result.outputMessageId, undefined);
     assert.equal(f.requests.length, 1);
     assert.equal(f.codexCalls, 0);
+  } finally { await f.close(); }
+});
+
+test('the selected catalog model reaches ordinary Responses and an unlisted choice fails before dispatch', async () => {
+  const f = fixture();
+  try {
+    const second = { id: 'synthetic-reasoning-model', label: 'Synthetic reasoning model' };
+    const list = [{ id: model, label: 'Synthetic eligible model' }, second];
+    f.setListedModels(list);
+    await f.core.command('ordinaryProviderStatus', {});
+    const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+    const details = () => f.core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as Promise<import('../../conversation-product/src/contracts.ts').Detail>;
+    assert.deepEqual((await details()).providers.find(p => p.id === providerId)?.modelOptions, []);
+    assert.equal(f.catalogReads, 0);
+    await f.core.command('providerConnection', { type: 'refreshModels', providerId });
+    assert.deepEqual((await details()).providers.find(p => p.id === providerId)?.modelOptions, list);
+    assert.equal(f.catalogReads, 1);
+    assert.equal(f.requests.length, 0);
+    const request = { resourceId: chat.resourceId, content: 'A synthetic model-selection test', expectedRevision: chat.revision, commandId: randomUUID(), model: second.id };
+    const send = (input: ConversationSendInput) => conversationCommand({ call: f.core.command.bind(f.core), input: { name: 'send', input } });
+    await assert.rejects(send({ ...request, model: 'absent-catalog-model' }), /unsupported_model/);
+    assert.equal(f.requests.length, 0);
+    assert.equal((await details()).conversation.revision, chat.revision);
+    f.responses.push(() => complete('resp-explicit-model'));
+    assert.equal((await send(request)).state, 'provider_completed');
+    assert.equal(f.requests[0].model, second.id);
+    assert.equal(f.requests.length, 1);
   } finally { await f.close(); }
 });
 

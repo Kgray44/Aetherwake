@@ -111,7 +111,7 @@ import type {
 import "../../../block-library/task-tracker-view.css";
 import "../../../block-library/task-objective-creator.css";
 import "../../../block-library/timeline-view.css";
-import type { ProviderConnectionStatus } from "../../../application-contract/provider-connections.ts";
+import { CHATGPT_PLAN_PROVIDER, type ProviderConnectionStatus } from "../../../application-contract/provider-connections.ts";
 import { mountDirectResourceExperience } from "../../../block-library/direct-resource-view.ts";
 import "../../../block-library/direct-resource-view.css";
 import type {
@@ -521,6 +521,18 @@ export function installApplication(hooks: Hooks) {
   const composerSessions = new Map<string, ConversationDraftSession>();
   const chatViews = new Map<string, ReturnType<typeof mountBlockChat>>();
   const chatRefreshKeys = new Map<string, string>();
+  const ordinaryModelControls = {
+    selections: new Map<string, { id: string; label: string }>(),
+    async refresh() {
+      const status = (await host.command!("providerConnection", {
+        type: "refreshModels",
+        providerId: CHATGPT_PLAN_PROVIDER,
+      })) as ProviderConnectionStatus;
+      if (status.state !== "ready" || status.modelCatalog?.state === "unavailable") {
+        throw new Error("ordinary_model_catalog_unavailable");
+      }
+    },
+  };
   const composerPort: ConversationProductPort = {
     async command<K extends keyof ProductCommandMap>(
       name: K,
@@ -2012,6 +2024,7 @@ export function installApplication(hooks: Hooks) {
       embedded: true,
       motion: experienceMotion,
       viewId: "conversation-manager",
+      models: ordinaryModelControls,
       viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
@@ -3574,6 +3587,7 @@ export function installApplication(hooks: Hooks) {
           copy: copyText,
           motion: experienceMotion,
           viewId: "block:" + b.id + ":conversation",
+          models: ordinaryModelControls,
           viewPersistence: chatViewPersistence,
           onProviderChange: async (change) => {
             if (change.mode === "continuation") {
