@@ -3584,8 +3584,6 @@ export function installApplication(hooks: Hooks) {
           execution: conversationExecution,
           active: true,
           presentation: blockPresentation(b.id),
-          initialScroll: conversationView.scroll[r.id],
-          initialOffset: conversationView.messageOffset[r.id],
           onChanged: async () => {
             await command({ type: "snapshot" });
           },
