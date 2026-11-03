@@ -2,6 +2,39 @@
 
 Snapshot: 2026-11-02 UTC. Integration remains active; full product acceptance is incomplete.
 
+## Direct workspace return and offscreen scale
+
+An integrated 50-block Electron capture exposed a transparent workspace
+after direct return from Universe View. SQLite had already restored the
+placements. The application had left the stage's arrival opacity at its
+departure target because the direct route did not emit a spatial arrival
+callback. The application now targets the same Motion Coordinator body
+on every canonical overview-to-workspace transition. The spatial callback
+can still supply the drawn arrival origin.
+
+At `b666fd003fd22f21daacdcd8ff88a45aa9152d21`, the combined application
+passed 10-, 25-, and 50-block offscreen runs and separate process restarts.
+Each initial run navigated through Universe View, confirmed the workspace
+was inert there, switched through an empty workspace, returned, resized a
+card, enabled reduced motion and verified WebGL recovery with a new draw.
+The harness now requires a visible workspace stage and a painted card before
+taking its capture. The restored layout, viewport, resources and presence
+matched exactly. All six test processes exited and no model ran.
+
+| Blocks | Run / restart | Working callback P95 | Offscreen paint P95 | Paint intervals | Mounted editors after return / restart |
+| --- | --- | --- | --- | ---: | --- |
+| 10 | 7.25 / 3.87 s | 50.0 ms | 44.1 ms | 30 | 9 / 7 |
+| 25 | 8.47 / 3.22 s | 50.0 ms | 47.4 ms | 28 | 22 / 10 |
+| 50 | 27.79 / 4.89 s | 83.4 ms | 76.8 ms | 25 | 43 / 10 |
+
+These are short offscreen renderer and compositor observations on a shared
+host, with no native pointer input or monitor presentation measurement. The
+50-block post-recovery PNG was inspected and confirms visible cards. It also
+shows a separate Vela clipping defect after a collision resolves her saved
+footprint above the viewport. The exact reproduction went to Universal Block
+System. Dense editor retention, foreground motion and current presentation
+performance remain open.
+
 ## Ordinary chat web search
 
 ChatGPT-plan chats offer a separate Search web action on the shared composer.
