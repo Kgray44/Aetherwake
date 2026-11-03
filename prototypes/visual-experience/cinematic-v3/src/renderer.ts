@@ -1305,7 +1305,6 @@ export class Environment {
           unfold,
           shape,
         );
-        this.shapeFolio(visual.rim, pose.w, pose.h, true, kind, unfold, shape);
         visual.width = pose.w;
         visual.height = pose.h;
         visual.unfold = unfold;
@@ -1340,15 +1339,37 @@ export class Environment {
         material.depthWrite = false;
       }
       visual.root.visible = opacity > 0.01;
-      visual.structure.update({
-        kind,
-        shape,
-        width: pose.w,
-        height: pose.h,
+      // The slab keeps the physical face and exact contour at every scale.
+      // Fade the thicker fittings with the existing projected motion rather
+      // than rebuilding and submitting them for distant overview cards.
+      const footprint = Math.min(pose.w, pose.h) * this.surfaceView.scale;
+      const selection = Number.isFinite(pose.selection)
+        ? THREE.MathUtils.clamp(pose.selection!, 0, 1)
+        : 0;
+      const housingReveal = Math.max(
+        THREE.MathUtils.smoothstep(footprint, 88, 132),
         unfold,
-        quality,
-        study,
-      });
+        selection,
+      );
+      visual.structure.root.visible = opacity * housingReveal > 0.01;
+      if (visual.structure.root.visible) {
+        for (const material of [
+          visual.materials.frame,
+          visual.materials.recess,
+          visual.materials.optics,
+          visual.materials.accent,
+        ])
+          material.opacity *= housingReveal;
+        visual.structure.update({
+          kind,
+          shape,
+          width: pose.w,
+          height: pose.h,
+          unfold,
+          quality,
+          study,
+        });
+      }
       // Preserve the old buffer for baseline custody, but let the real housing
       // own reflections instead of drawing a second continuous bright outline.
       visual.rimMesh.visible = false;
@@ -1358,11 +1379,7 @@ export class Environment {
       visual.contact.material.uniforms.uSize.value.set(contactW, contactH);
       visual.contact.material.uniforms.uRect.value.set(pose.w + 6, pose.h + 6);
       visual.contact.material.uniforms.uLift.value = Math.max(0, pose.lift);
-      visual.contact.material.uniforms.uSelected.value = Number.isFinite(
-        pose.selection,
-      )
-        ? THREE.MathUtils.clamp(pose.selection!, 0, 1)
-        : 0;
+      visual.contact.material.uniforms.uSelected.value = selection;
       visual.contact.material.uniforms.uOpacity.value = opacity * livingWeight;
       visual.contact.material.uniforms.uRound.value =
         kind === "research" ? 1 - unfold : 0;
@@ -2116,6 +2133,9 @@ export class Environment {
       surfaceCapacity: this.folios.length,
       surfacesRendered: this.folios.filter((folio) => folio.root.visible)
         .length,
+      detailedSurfacesRendered: this.folios.filter((folio) =>
+        folio.root.visible && folio.structure.root.visible,
+      ).length,
       // Submission counters are not presented FPS, GPU utilization, or VRAM usage.
     };
   }

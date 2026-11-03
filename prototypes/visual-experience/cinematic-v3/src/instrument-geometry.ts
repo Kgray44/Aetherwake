@@ -296,40 +296,46 @@ export class InstrumentStructure {
       this.faceRadial[i] = -dz * reciprocal;
       this.faceAxial[i] = dx * reciprocal;
     }
-    for (let face = 0; face < PROFILE_POINTS; face++) {
-      const next = (face + 1) % PROFILE_POINTS;
-      for (let side = 0; side < 2; side++) {
-        const vertex = side ? next : face;
-        let radial = this.faceRadial[face],
-          axial = this.faceAxial[face];
-        // Optical/composite crowns are one polished laminate. Smooth their
-        // radial normals while retaining finite, crisp side and cavity bevels.
-        if (this.study !== "engineered" && vertex >= 1 && vertex <= 4) {
-          const before = (vertex + PROFILE_POINTS - 1) % PROFILE_POINTS;
-          radial = this.faceRadial[before] + this.faceRadial[vertex];
-          axial = this.faceAxial[before] + this.faceAxial[vertex];
-          const inverse = 1 / Math.hypot(radial, axial);
-          radial *= inverse;
-          axial *= inverse;
-        }
-        for (let j = 0; j <= SEGMENTS; j++) {
-          const point = this.contour(
-            width,
-            height,
-            kind,
-            unfold,
-            j / SEGMENTS,
-            this.profileX[vertex],
-          );
-          const index = (face * (SEGMENTS + 1) + j) * 2 + side;
-          band.position.setXYZ(index, point.x, point.y, this.profileZ[vertex]);
-          band.normal.setXYZ(
-            index,
-            point.nx * radial,
-            point.ny * radial,
-            axial,
-          );
-        }
+    // Adjacent faces share the same contour points. Keep the split vertices
+    // and their independent bevel normals while sampling each ring once.
+    for (let vertex = 0; vertex < PROFILE_POINTS; vertex++) {
+      const before = (vertex + PROFILE_POINTS - 1) % PROFILE_POINTS;
+      let radial = this.faceRadial[vertex],
+        axial = this.faceAxial[vertex];
+      let previousRadial = this.faceRadial[before],
+        previousAxial = this.faceAxial[before];
+      // Optical/composite crowns smooth only the polished laminate.
+      if (this.study !== "engineered" && vertex >= 1 && vertex <= 4) {
+        radial = previousRadial + radial;
+        axial = previousAxial + axial;
+        const inverse = 1 / Math.hypot(radial, axial);
+        radial *= inverse;
+        axial *= inverse;
+        previousRadial = radial;
+        previousAxial = axial;
+      }
+      const nextStart = vertex * (SEGMENTS + 1) * 2;
+      const previousStart = before * (SEGMENTS + 1) * 2 + 1;
+      for (let j = 0; j <= SEGMENTS; j++) {
+        const point = this.contour(
+          width,
+          height,
+          kind,
+          unfold,
+          j / SEGMENTS,
+          this.profileX[vertex],
+        );
+        const next = nextStart + j * 2,
+          previous = previousStart + j * 2;
+        band.position.setXYZ(next, point.x, point.y, this.profileZ[vertex]);
+        band.position.setXYZ(previous, point.x, point.y, this.profileZ[vertex]);
+        band.normal.setXYZ(next, point.nx * radial, point.ny * radial, axial);
+        band.normal.setXYZ(
+          previous,
+          point.nx * previousRadial,
+          point.ny * previousRadial,
+          previousAxial,
+        );
       }
     }
     band.position.needsUpdate = true;

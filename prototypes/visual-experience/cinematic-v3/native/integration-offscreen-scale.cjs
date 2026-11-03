@@ -74,6 +74,7 @@ exports.verify = async ({
       const s = window.__aerynth.snapshot();
       const cards = [...document.querySelectorAll('[data-block]')];
       return { metrics:s.metrics, active:s.active, graphicsFailed:s.graphicsFailed, contextLost:s.gpu?.contextLost,
+        surfacesRendered:s.gpu?.surfacesRendered,detailedSurfacesRendered:s.gpu?.detailedSurfacesRendered,
         unhiddenCardNodes:cards.filter(card=>!card.hidden).length, mountedCards:cards.length,
         interactiveCardNodes:cards.filter(card=>!card.closest('[inert],[hidden]')).length,
         usableCardNodes:cards.filter(card=>card.dataset.workspacePresentation==='usable').length,
@@ -119,6 +120,16 @@ exports.verify = async ({
     }
     throw Error("Offscreen workspace motion did not settle");
   };
+  const capture = async (name) => {
+    assertHidden();
+    const image = await win.webContents.capturePage(undefined, { stayHidden: true });
+    assertHidden();
+    assert(!image.isEmpty(), "offscreen_capture_empty");
+    const png = image.toPNG();
+    assert(png.length <= 4 * 1024 * 1024, "offscreen_capture_capacity");
+    await writeFile(path.join(privateRoot, name), png, { flag: "wx" });
+    return name;
+  };
   try {
     if (profile) {
       devtools.attach("1.3");
@@ -137,6 +148,10 @@ exports.verify = async ({
       sameState(seed.expected, initial);
       await execute({ type: "bringAllIntoView", workspaceId: seed.workspaceId });
       await sample("fitted-workspace");
+      if (process.argv.includes("--offscreen-capture-fit")) {
+        await settledWorkspace();
+        receipt.fitCapture = await capture("offscreen-scale-fitted.png");
+      }
       await navigate({ kind: "constellation", projectId: null });
       assert.equal((await snapshot()).navigation.kind, "constellation");
       await wait("document.querySelector('#stage').inert === true");
@@ -181,15 +196,7 @@ exports.verify = async ({
       receipt.reducedMotion = true;
       receipt.graphicsRecovered = true;
     }
-    assertHidden();
-    const image = await win.webContents.capturePage(undefined, { stayHidden: true });
-    assertHidden();
-    assert(!image.isEmpty(), "offscreen_capture_empty");
-    const png = image.toPNG();
-    assert(png.length <= 4 * 1024 * 1024, "offscreen_capture_capacity");
-    const capture = "offscreen-scale-" + receipt.phase + ".png";
-    await writeFile(path.join(privateRoot, capture), png, { flag: "wx" });
-    receipt.capture = capture;
+    receipt.capture = await capture("offscreen-scale-" + receipt.phase + ".png");
     assert.deepEqual(startupErrors, []);
     assert.deepEqual(Object.keys((await call("snapshot", {})).executions), []);
     receipt.backendMemoryBytes = await call("metrics", {});
