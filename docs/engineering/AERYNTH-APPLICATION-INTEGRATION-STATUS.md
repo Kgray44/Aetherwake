@@ -2,6 +2,63 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Vela model replies and Portable BQ
+
+The recorded workspace organization request stopped at provider
+availability before an AI turn or application action began. Windows
+Codex discovery and preflight draft preservation are documented below
+under Portable AN. Free-text input follows the model path. Aerynth
+exposes the available typed capabilities and dispatches validated
+actions through the canonical host.
+
+Commit `793b32f` separates the lifetime of the send authorization from
+receipt of that exact turn's reply. The existing source, navigation,
+catalog and accepted input checks still apply before a response is
+used. New capability schema reads still require a live lease. Layout
+mutation still requires plan review and uses the existing workspace
+command and motion path.
+
+The 257 backend tests and 20 focused desktop tests passed. Both the
+inline catalog and schema discovery regressions failed on the old
+code after advancing the clock by 61 seconds during an accepted turn.
+Both passed on BQ with the packaged Node backend, scripted stdio and
+disposable SQLite profiles. The proposal left geometry untouched
+until approval. The canonical layout survived restart and Undo
+restored the original placements. SQLite integrity passed in
+`review-vela-slow-model-wjEWei` and `review-vela-slow-model-AT8d0c`.
+This verifies dispatch and persistence with a scripted provider. A
+live Vela interpretation of the organization request on BQ is open.
+
+BQ packages `793b32fc13f8dd2b2cb0abfdba31ec76fcaa9470`.
+All 427 payload files matched the manifest. Manifest SHA-256 is
+`1754470e1c30c9664277bdf908255a4807ed8182d691bd229ba69124d8d3052d`.
+The owner's running window was left in place.
+
+## November 3 Intelligence Stream burst refresh and Portable BP
+
+Commit `bbc07fd` retains canonical events as they arrive and updates
+the Stream panel and workspace card on the existing motion frame.
+The two hidden Electron runs delivered 32 events including duplicates
+and out-of-order deliveries. Both views displayed the same 24
+distinct observed records in canonical order. Each view went from
+32 status writes on BO to 3 on BP. This measures DOM writes. Monitor
+presentation remains unmeasured.
+
+Private receipts are in `stream-burst-control-1793707140513` and
+`stream-burst-1793707157840` with SHA-256 values
+`a251665672dc498f01272c6c4dd05ba0b4473b085f6e3b9b2293dc859b949e01`
+and `95cdf7834bd2741d82e6eef9149c8c43167a8331351ff8e7f0ae0873f7c75c66`.
+Packaged backend restart recovered all 24 observations and ten
+placements with zero provider executions. SQLite integrity passed.
+
+BP packages `bbc07fd5b18f3bf8700529f5203246dcbe1bf489` with 427 verified
+payload files. Manifest SHA-256 is
+`b48a7566f79c29ea88b0eb3abf4d0aa30f2a273039fa9c451eefc2ef756b1448`.
+The strict build and 409 desktop tests passed. A hidden run of the
+packaged app passed the workspace, cross-project Constellation and
+exact restart journey. Five native PNGs are in
+`review-package-motion-1793707177625`. The test processes exited.
+
 ## November 3 backend pipe failure and Portable BO
 
 Commit `da56f4e` handles an Electron backend stdin error through the
