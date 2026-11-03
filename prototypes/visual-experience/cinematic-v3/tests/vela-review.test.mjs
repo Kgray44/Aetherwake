@@ -157,6 +157,19 @@ test("unknown native presentation experiences fail closed", async () => {
   }
 });
 
+test("Codex review renders its full escaped egress and keeps native thread context distinct", () => {
+  const prompt = "&".repeat(65000) + "<end>";
+  const html = reviewPage({
+    providerId: "codex-app-server",
+    context: { included: [] },
+    prompt,
+    promptDigest: "a".repeat(64),
+  }, "Exact request", "codex");
+  assert.match(html, /Send to Codex\?/);
+  assert.match(html, /Existing thread context stays with Codex/);
+  assert(html.includes("&amp;".repeat(65000) + "&lt;end&gt;"));
+});
+
 function runtime({ autoReady = true, autoPaint = true } = {}) {
   const parent = new EventEmitter(),
     ipcMain = new EventEmitter(),
@@ -370,8 +383,7 @@ test("expiry and lost parent ownership cannot create or show a focus-taking appr
   const f = runtime();
   f.defocus();
   assert.equal(await open(f), false);
-  assert(!f.children[0].shown);
-  assert(f.children[0].destroyed);
+  assert.equal(f.children.length, 0);
 });
 
 test("native ownership requires exact authenticated preload readiness and is revoked at close", async () => {

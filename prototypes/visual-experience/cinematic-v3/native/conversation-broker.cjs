@@ -1,6 +1,6 @@
 const { createHash } = require("node:crypto");
 const { isIP } = require("node:net");
-const { showVelaReview } = require("./vela-review.cjs");
+const { showVelaReview, isReviewOwnerAlive } = require("./vela-review.cjs");
 const PLAN = "chatgpt-plan-responses";
 const readNames = new Set([
   "list",
@@ -17,10 +17,30 @@ const readNames = new Set([
 ]);
 exports.isConversationRead = (input) => input && readNames.has(input.name);
 
+function reviewedResources(preview, resources, errorCode) {
+  const grouped = new Map();
+  const include = (id, content) => {
+    if (typeof id !== "string" || typeof content !== "string")
+      throw Error(errorCode);
+    const entry = grouped.get(id) ?? {
+      id,
+      kind: "resource",
+      title: resources.find((item) => item.id === id)?.title ?? "Selected source",
+      content: "",
+    };
+    entry.content += (entry.content ? "\n\n" : "") + content;
+    grouped.set(id, entry);
+  };
+  for (const source of preview.context ?? [])
+    include(source.sourceResourceId, source.content);
+  for (const source of preview.handoff?.items ?? [])
+    include(preview.handoff.sourceResourceId, source.content);
+  return [...grouped.values()];
+}
+
 /** Runs only after the owning IPC handler verifies the exact native main frame. */
 exports.conversationCommand = async ({
   win,
-  dialog,
   call,
   input,
   reviewSources = showVelaReview,
@@ -126,25 +146,6 @@ exports.conversationCommand = async ({
     if (bytes > 262144 || r.bodyBytes !== bytes || r.bodyDigest !== digest)
       throw Error("invalid_native_responses_preview");
     if (r.requiresSourceReview) {
-      const grouped = new Map();
-      const include = (id, content) => {
-        if (typeof id !== "string" || typeof content !== "string")
-          throw Error("invalid_native_responses_preview");
-        const entry = grouped.get(id) ?? {
-          id,
-          kind: "resource",
-          title:
-            state.resources.find((item) => item.id === id)?.title ??
-            "Selected source",
-          content: "",
-        };
-        entry.content += (entry.content ? "\n\n" : "") + content;
-        grouped.set(id, entry);
-      };
-      for (const source of preview.context ?? [])
-        include(source.sourceResourceId, source.content);
-      for (const source of preview.handoff?.items ?? [])
-        include(preview.handoff.sourceResourceId, source.content);
       const approved = await reviewSources({
         parent: win,
         experience: "ordinary",
@@ -155,7 +156,7 @@ exports.conversationCommand = async ({
           providerId: PLAN,
           prompt: body,
           promptDigest: digest,
-          context: { included: [...grouped.values()] },
+          context: { included: reviewedResources(preview, state.resources, "invalid_native_responses_preview") },
           history: {
             messages: r.messages
               .slice(0, r.history.length)
@@ -186,22 +187,35 @@ exports.conversationCommand = async ({
   // in a renderer-provided request can supply its own grant or replace this text.
   const preview = await call("conversationSendPreview", request);
   if (
+    !preview ||
+    preview.resourceId !== request.resourceId ||
+    preview.providerId !== resource.providerId ||
+    preview.commandId !== request.commandId ||
+    preview.expectedRevision !== request.expectedRevision ||
+    preview.prompt !== request.content ||
+    preview.model !== model ||
+    typeof preview.id !== "string" || !preview.id ||
+    typeof preview.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(preview.fingerprint) ||
+    !Number.isFinite(Date.parse(preview.expiresAt)) ||
     typeof preview.executionText !== "string" ||
     !preview.executionText.trim() ||
     Buffer.byteLength(preview.executionText) > 65536
   )
     throw Error("invalid_native_send_preview");
-  const response = await dialog.showMessageBox(win, {
-    type: "question",
-    title: "Authorize Codex conversation",
-    message: `Send this request to Codex in “${resource.title}”?`,
-    detail: `Uses the configured native Codex account and instructions. This review requests a read-only sandbox and denies approval requests. Included excerpts are source data, not additional authority.\n\nComplete outgoing request and included source excerpts:\n${preview.executionText}`,
-    buttons: ["Cancel", "Send once"],
-    defaultId: 0,
-    cancelId: 0,
-    noLink: true,
+  const approved = await reviewSources({
+    parent: win,
+    experience: "codex",
+    intent: request.content,
+    expiresAt: preview.expiresAt,
+    review: {
+      providerId: preview.providerId,
+      prompt: preview.executionText,
+      promptDigest: createHash("sha256").update(preview.executionText).digest("hex"),
+      context: { included: reviewedResources(preview, state.resources, "invalid_native_send_preview") },
+    },
   });
-  if (response.response !== 1) throw Error("authorization_cancelled");
+  if (approved !== true || !isReviewOwnerAlive(win))
+    throw Error("authorization_cancelled");
   const binding = {
     previewId: preview.id,
     fingerprint: preview.fingerprint,
@@ -210,5 +224,6 @@ exports.conversationCommand = async ({
   // This command remains private to the main-process broker. It is never an
   // exposed renderer operation, and the backend rechecks all source versions.
   const grant = await call("authorizeConversationSend", binding);
+  if (!isReviewOwnerAlive(win)) throw Error("authorization_cancelled");
   return call("conversationSend", { ...binding, grantId: grant.grantId });
 };

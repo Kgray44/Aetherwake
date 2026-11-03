@@ -8,7 +8,8 @@ const { conversationCommand, isConversationRead } = createRequire(
 
 function fixture(provider, choice = 1) {
   const calls = [],
-    dialogs = [];
+    reviews = [];
+  let closed = false;
   const call = async (name, input) => {
     calls.push({ name, input });
     if (name === "desktop")
@@ -19,6 +20,7 @@ function fixture(provider, choice = 1) {
             kind: "conversation",
             title: "Synthetic discussion",
             provider,
+            providerId: provider === "codex" ? "codex-app-server" : "local",
             available: true,
           },
         ],
@@ -27,8 +29,13 @@ function fixture(provider, choice = 1) {
       return {
         id: "preview",
         commandId: input.commandId,
-        fingerprint: "source-and-request-fingerprint",
+        resourceId: input.resourceId,
+        providerId: "codex-app-server",
+        expectedRevision: input.expectedRevision,
+        fingerprint: "a".repeat(64),
+        expiresAt: new Date(Date.now() + 30000).toISOString(),
         prompt: "Exact user request",
+        context: [{ sourceResourceId: "source", content: "Reviewed synthetic excerpt" }],
         executionText:
           "Reviewed synthetic excerpt\nUser request:\nExact user request",
       };
@@ -38,13 +45,13 @@ function fixture(provider, choice = 1) {
   };
   return {
     calls,
-    dialogs,
+    reviews,
+    win: { isDestroyed: () => closed, webContents: { isDestroyed: () => closed } },
+    close: () => { closed = true; },
     call,
-    dialog: {
-      showMessageBox: async (_win, options) => {
-        dialogs.push(options);
-        return { response: choice };
-      },
+    reviewSources: async (request) => {
+      reviews.push(request);
+      return choice === 1;
     },
     input: {
       name: "send",
@@ -65,7 +72,7 @@ test("native conversation broker records local messages without provider approva
     f.calls.map((c) => c.name),
     ["desktop", "conversation"],
   );
-  assert.equal(f.dialogs.length, 0);
+  assert.equal(f.reviews.length, 0);
   assert.equal(f.calls[1].input.input.grantId, undefined);
   assert.equal(isConversationRead({ name: "detail" }), true);
   assert.equal(isConversationRead({ name: "send" }), false);
@@ -82,16 +89,17 @@ test("Codex broker approves backend-assembled egress and dispatches only its fre
       "conversationSend",
     ],
   );
-  assert.match(f.dialogs[0].detail, /Reviewed synthetic excerpt/);
-  assert.ok(
-    f.dialogs[0].detail.endsWith(
-      "Reviewed synthetic excerpt\nUser request:\nExact user request",
-    ),
-  );
+  const { experience, review } = f.reviews[0];
+  assert.equal(experience, "codex");
+  assert.equal(review.prompt, "Reviewed synthetic excerpt\nUser request:\nExact user request");
+  assert.equal(review.promptDigest, createHash("sha256").update(review.prompt).digest("hex"));
+  assert.deepEqual(review.context.included, [
+    { id: "source", kind: "resource", title: "Selected source", content: "Reviewed synthetic excerpt" },
+  ]);
   assert.equal(f.calls.at(-1).input.grantId, "host-only-grant");
   assert.equal(
     f.calls.at(-1).input.fingerprint,
-    "source-and-request-fingerprint",
+    "a".repeat(64),
   );
   assert.equal(f.calls.at(-2).input.grantId, undefined);
 });
@@ -107,7 +115,7 @@ test("a missing or oversized assembled request cannot fall back to prompt-only c
         : result;
     };
     await assert.rejects(conversationCommand(f), /invalid_native_send_preview/);
-    assert.equal(f.dialogs.length, 0);
+    assert.equal(f.reviews.length, 0);
     assert.equal(
       f.calls.some(
         (value) =>
@@ -139,6 +147,26 @@ test("source changes after preview fail through the canonical grant boundary wit
     f.calls.some((c) => c.name === "conversationSend"),
     false,
   );
+});
+test("Codex send rejects mismatched previews and a window closed during native authorization", async () => {
+  const mismatch = fixture("codex");
+  const original = mismatch.call;
+  mismatch.call = async (name, input) => {
+    const result = await original(name, input);
+    return name === "conversationSendPreview" ? { ...result, resourceId: "other" } : result;
+  };
+  await assert.rejects(conversationCommand(mismatch), /invalid_native_send_preview/);
+  assert.equal(mismatch.reviews.length, 0);
+
+  const closing = fixture("codex");
+  const call = closing.call;
+  closing.call = async (name, input) => {
+    const result = await call(name, input);
+    if (name === "authorizeConversationSend") closing.close();
+    return result;
+  };
+  await assert.rejects(conversationCommand(closing), /authorization_cancelled/);
+  assert(!closing.calls.some(entry => entry.name === "conversationSend"));
 });
 
 function planFixture({ shared = false, approve = true } = {}) {
@@ -229,7 +257,7 @@ test("ordinary ChatGPT-plan sends use real canonical execution even when the leg
       "conversationSend",
     ],
   );
-  assert.equal(f.dialogs.length, 0);
+  assert.equal(f.reviews.length, 0);
   assert.equal(f.reviews.length, 0);
   assert.equal(f.calls.at(-1).input.grantId, "host-only-grant");
   assert.equal(f.calls[2].input.grantId, undefined);

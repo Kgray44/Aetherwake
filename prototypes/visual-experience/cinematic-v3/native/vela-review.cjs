@@ -66,8 +66,16 @@ function validateReview(preview, review) {
 /** Presentation only. Each trusted native caller validates its own exact DTO,
  * body digest, source policy and capacity before opening this read-only pane. */
 function presentation(experience) {
-  if (!["vela", "ordinary"].includes(experience))
+  if (!["vela", "ordinary", "codex"].includes(experience))
     throw Error("invalid_native_review_experience");
+  if (experience === "codex")
+    return {
+      title: "Aerynth · Authorize Codex conversation",
+      subtitle: "Uses your installed Codex account and native thread context. This review requests a read-only sandbox and denies approval requests.",
+      historyLabel: "Conversation context",
+      emptyHistory: "Existing thread context stays with Codex.",
+      htmlBytes: 2 * 1024 * 1024,
+    };
   return experience === "ordinary"
     ? {
         title: "Aerynth · Review sharing",
@@ -131,11 +139,15 @@ function ownerAlive(parent) {
     return false;
   }
 }
+function ownerCanReview(parent) {
+  return ownerAlive(parent) && parent.isVisible() &&
+    !parent.isMinimized() && parent.isFocused();
+}
 /** A finite, parent-owned native approval surface. It has no application bridge,
  * scripts, network access, credentials, grant, canonical writes or provider port. */
 async function showVelaReview({ parent, review, intent, expiresAt, runtime, experience = "vela" }) {
   const view = presentation(experience);
-  if (!ownerAlive(parent)) return false;
+  if (!ownerCanReview(parent)) return false;
   const remaining = Date.parse(expiresAt) - Date.now();
   if (!Number.isFinite(remaining) || remaining <= 0) return false;
   const url =
@@ -223,12 +235,7 @@ async function showVelaReview({ parent, review, intent, expiresAt, runtime, expe
       value?.token === token;
     const showWhenReady = () => {
       if (done || ownership.shown || !painted || !ownership.ready) return;
-      if (
-        !ownerAlive(parent) ||
-        !parent.isVisible() ||
-        parent.isMinimized() ||
-        !parent.isFocused()
-      )
+      if (!ownerCanReview(parent))
         return finish(false);
       ownership.shown = true;
       try {
