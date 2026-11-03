@@ -190,7 +190,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       const fixture = receipt.fixture = { noteText: 'Synthetic independent Note. Same canonical identity across direct and workspace views.', chatMessage: 'Synthetic local recording only; no model response requested.', chatDraft: 'Synthetic unsent draft retained across a real restart.' };
       if (process.argv.includes('--record-resource-opening')) { assert.equal(budget.videos, 0); recorder = await require('./application-recording.cjs').startWindowRecording(win, session, localURL); slot.check(); }
       // A: the actual visible zero-workspace Resources/New note handlers.
-      await action('#application-resources'); await action('#standalone-note');
+      await action('#application-resources'); await action('.aw-context-create > summary'); await action('#standalone-note');
       await wait('Unplaced Note created', async () => { const d = await desktop(), value = d.resources.find(resource => resource.kind === 'note'); if (value) fixture.noteId = value.id; return !!value; }); await waitNote(fixture.noteId);
       await action(directSelector(fixture.noteId) + ' .aw-direct-editor', 'input', fixture.noteText); await flushEditor(directSelector(fixture.noteId) + ' .aw-direct-editor'); assert.equal((await note(fixture.noteId)).resource.content, fixture.noteText); await close('canonical-resource');
       await viewOnly('A/Resources Open creates no workspace or placement', async () => { const prior = await graphics(); await action('#application-resources'); await action(`[data-open-resource="${fixture.noteId}"]`); await waitNote(fixture.noteId); await capture('01-unplaced-note', directSelector(fixture.noteId), prior); await close('canonical-resource'); });

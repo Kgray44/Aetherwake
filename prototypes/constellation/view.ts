@@ -361,6 +361,8 @@ export function mountConstellation(
     ];
   };
   const controls = spatialControls(root, {
+    motion: controller.motion,
+    guideMotionId: controller.motionId + ":guide",
     commands,
     destinations: (query) =>
       controller.search(query, 6).map((n) => ({
@@ -1045,6 +1047,7 @@ export function mountConstellation(
   document.addEventListener("visibilitychange", visibility);
   function frame(now = performance.now()) {
     if (disposed || controller.policy.hidden) return;
+    controls.frame();
     if (
       layer.enabled &&
       ["project", "universe"].includes(controller.location.kind)

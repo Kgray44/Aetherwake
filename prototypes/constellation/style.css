@@ -313,6 +313,22 @@
   margin-bottom: 6px !important;
   font-size: 23px !important;
 }
+.aw-constellation .aw-navigation-guide,
+.aw-working .aw-constellation-bar {
+  color: #e6edec;
+  border-color: #cadfdc42;
+  background:
+    radial-gradient(ellipse at 12% 0%, #b4d8d01f, transparent 58%),
+    linear-gradient(152deg, #192027da, #0b1018ed 57%, #101a23e0);
+}
+.aw-navigation-guide {
+  --aw-muted: #c2d3d8;
+  opacity: var(--aw-guide-reveal, 0);
+  transform: translateY(calc(7px * (1 - var(--aw-guide-reveal, 0))));
+}
+.aw-navigation-guide[inert] {
+  pointer-events: none;
+}
 .aw-guide-intro {
   font-size: 12px;
   color: var(--aw-muted);

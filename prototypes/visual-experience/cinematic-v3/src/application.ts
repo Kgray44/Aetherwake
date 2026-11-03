@@ -49,6 +49,9 @@ import type {
 import "../../../conversation-product/src/style.css";
 import "./optical-controls.css";
 import "../../../conversation-product/src/picker.css";
+import { conversationDisclosures, enhanceConversationSelect } from "../../../conversation-product/src/picker.ts";
+import { mountContextualResources, mountContextualStream } from "./workspace-context-views.ts";
+import "./workspace-context-views.css";
 import { mountBlockChat } from "../../../block-library/chat-view.ts";
 import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
@@ -477,6 +480,12 @@ export function installApplication(hooks: Hooks) {
   let blockLibrary: ReturnType<typeof mountBlockLibrary> | undefined;
   let state: DesktopSnapshot | null = null;
   let panelScope: { workspaceId: string; preferences: WorkspacePanelPreferences } | null = null;
+  let resourcesView: ReturnType<typeof mountContextualResources> | null = null;
+  let resourcesMotion: ReturnType<typeof conversationDisclosures> | null = null;
+  let streamView: ReturnType<typeof mountContextualStream> | null = null;
+  let streamMotion: ReturnType<typeof conversationDisclosures> | null = null;
+  let streamPickers: ReturnType<typeof enhanceConversationSelect>[] = [];
+  let streamSerial = 0;
   let environmentNavigator: ReturnType<
     typeof mountEnvironmentNavigator
   > | null = null;
@@ -728,6 +737,11 @@ export function installApplication(hooks: Hooks) {
       agentLibrary?.dispose();
       checklistCreator?.dispose();
       taskCreator?.dispose();
+      resourcesMotion?.dispose();
+      resourcesView?.dispose();
+      streamMotion?.dispose();
+      for (const picker of streamPickers) picker.dispose();
+      streamView?.dispose();
       for (const entry of taskTrackerViews.values()) entry.view.dispose();
       taskTrackerViews.clear();
       taskProjections.clear();
@@ -855,11 +869,9 @@ export function installApplication(hooks: Hooks) {
     .querySelector('label[for="vela-expression"]')!.textContent =
     "Visual expression preview (synthetic)";
   el("#demo").hidden = true;
-  el("#stream .synthetic").textContent =
-    "Observed application/provider activity · private reasoning unavailable";
   el("#status").textContent = "Ready.";
   el(".place").innerHTML =
-    '<button id="workspace-manager" title="Projects and workspaces (Ctrl+K)">Workspaces ↗</button><button id="application-new-chat">＋ Chat</button><button id="application-agents" data-aerynth-motion-control="true">Agents</button><button id="application-resources">Resources</button><button id="application-connections" aria-label="Connections" title="Connections">⌁</button>';
+    '<button id="workspace-manager" title="Projects and workspaces (Ctrl+K)">Workspaces ↗</button><button id="application-new-chat">＋ Chat</button><button id="application-agents" data-aerynth-motion-control="true">Agents</button><button id="application-resources" data-aerynth-motion-control="true">Resources</button><button id="application-stream" data-aerynth-motion-control="true" aria-label="Intelligence Stream" aria-expanded="false" title="Intelligence Stream"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.6"><path d="M3 12h4l3-6 4 12 3-6h4"/></svg></button><button id="application-connections" aria-label="Connections" title="Connections">⌁</button>';
   const dock = el(".dock");
   dock.insertAdjacentHTML(
     "afterbegin",
@@ -1268,6 +1280,8 @@ export function installApplication(hooks: Hooks) {
     syncWorkspacePanels(
       next.navigation.kind === "workspace" ? next.activeWorkspaceId : null,
     );
+    resourcesView?.update();
+    streamView?.update();
   }
   function openWorkspacePanel(
     request: ContextualSurfaceRequest & { id: WorkspacePanelId },
@@ -1314,7 +1328,12 @@ export function installApplication(hooks: Hooks) {
       if (scope.preferences.agents?.pinned) void showAgents(undefined, true).catch(report);
       if (scope.preferences.conversations?.pinned)
         void showConversations(undefined, undefined, () => panelScope === scope, undefined, true).catch(report);
+      if (scope.preferences.resources?.pinned) picker(true);
+      if (scope.preferences["intelligence-stream"]?.pinned) showStream(true);
     })().catch(report);
+  }
+  function closeUnpinned(panel: WorkspacePanelId) {
+    if (!panelScope?.preferences[panel]?.pinned) surfaces.close(panel);
   }
   let flushInFlight: Promise<void> | null = null;
   function flush(): Promise<void> {
@@ -2516,107 +2535,97 @@ export function installApplication(hooks: Hooks) {
       onClose: () => surfaces.close("workspace-templates"),
     });
   }
-  function picker() {
+  function picker(restoring = false) {
     if (!state) return;
-    open(
-      "Resources",
-      '<label>Find a resource<input id="resource-search" type="search" placeholder="Search title or type"></label><button id="standalone-note">New note</button><button id="standalone-checklist" data-aerynth-motion-control="true">New checklist</button><button id="standalone-task-objective" data-aerynth-motion-control="true">New task</button><button id="new-activity-timeline" data-aerynth-motion-control="true">Activity timeline</button><div id="resource-results"></div>',
-    );
-    const draw = () => {
-      const q = el<HTMLInputElement>(
-        "#resource-search",
-        dialog,
-      ).value.toLowerCase();
-      el("#resource-results", dialog).innerHTML =
-        state!.resources
-          .filter((r) => r.visible !== false)
-          .filter((r) => `${r.title} ${r.kind}`.toLowerCase().includes(q))
-          .map(
-            (r) =>
-              `<div class="resource-opening-row"><button class="resource-result" data-open-resource="${r.id}">${escape(r.title)}<small>${r.kind}</small></button><button data-attach="${r.id}" ${!state!.activeWorkspaceId || r.available === false || !REGISTERED_BLOCKS.some((def) => def.kind === r.kind) ? "disabled" : ""} aria-label="Add ${escape(r.title)} to this workspace">Add to workspace</button></div>`,
-          )
-          .join("") || "<p>No matching resources.</p>";
-      dialog
-        .querySelectorAll<HTMLElement>("[data-open-resource]")
-        .forEach((button) => {
-          button.onclick = () => {
-            const resourceId = button.dataset.openResource!;
-            dialog.close();
-            void resourceOpener
-              .open({ resourceId, origin: { source: "library" } })
-              .catch(report);
-          };
+    const content = document.createElement("div");
+    const anchor = el("#application-resources");
+    const workspaceId = panelScope?.workspaceId ?? null;
+    const view = mountContextualResources(content, {
+      snapshot: () => ({
+        workspaceId,
+        resources: (state?.resources ?? []).map((resource) => ({
+          id: resource.id,
+          kind: resource.kind,
+          title: resource.title,
+          available: resource.available,
+          visible: resource.visible,
+          canAttach: workspaceId === panelScope?.workspaceId &&
+            BUILTIN_BLOCKS.some((definition) => definition.kind === resource.kind),
+        })),
+      }),
+      async open(resourceId) {
+        const opened = await resourceOpener.open({ resourceId, origin: { source: "library" } });
+        if (opened.status !== "ready") throw Error("resource_unavailable");
+        closeUnpinned("resources");
+      },
+      attach(resourceId) {
+        return enqueueResult(async () => {
+          await flush();
+          if (!workspaceId || state?.activeWorkspaceId !== workspaceId || state.navigation.kind !== "workspace")
+            throw Error("workspace_changed");
+          const resource = state.resources.find((candidate) =>
+            candidate.id === resourceId && candidate.visible !== false && candidate.available !== false);
+          const definition = resource && BUILTIN_BLOCKS.find((item) => item.kind === resource.kind);
+          if (!resource || !definition || !libraryClient.attachBlock)
+            throw Error("resource_attachment_unavailable");
+          await libraryClient.attachBlock({
+            commandId: crypto.randomUUID(),
+            workspaceId,
+            expectedLayoutVersion: state.layoutVersion,
+            resourceId,
+            expectedResourceVersion: resource.version,
+            kind: definition.kind,
+          });
+          closeUnpinned("resources");
         });
-      dialog.querySelectorAll<HTMLElement>("[data-attach]").forEach(
-        (b) =>
-          (b.onclick = () => {
-            if (!state!.activeWorkspaceId) {
-              el("#command-error", dialog).textContent =
-                "Create a workspace first.";
-              return;
-            }
-            dialog.close();
-            void enqueueResult(async () => {
-              await flush();
-              const resource = state?.resources.find(
-                  (r) => r.id === b.dataset.attach,
-                ),
-                workspaceId = state?.activeWorkspaceId;
-              const presentation =
-                resource &&
-                BUILTIN_BLOCKS.find((def) => def.kind === resource.kind);
-              if (!resource || !workspaceId || !presentation)
-                throw Error(
-                  "Resource has no available workspace presentation.",
-                );
-              if (!libraryClient.attachBlock)
-                throw Error("Workspace attachment is unavailable.");
-              await libraryClient.attachBlock({
-                commandId: crypto.randomUUID(),
-                workspaceId,
-                expectedLayoutVersion: state!.layoutVersion,
-                resourceId: resource.id,
-                expectedResourceVersion: resource.version,
-                kind: presentation.kind,
-              });
-            }).catch(report);
+      },
+      actions: [
+        {
+          id: "standalone-note",
+          label: "Note",
+          run: () => enqueueResult(async () => {
+            const known = new Set(state?.resources.map((resource) => resource.id));
+            const next = await command({ type: "createResource", kind: "note", title: "Untitled note", workspaceId: null });
+            const note = next.resources.find((resource) => !known.has(resource.id) && resource.kind === "note");
+            if (!note) throw Error("created_resource_unavailable");
+            await resourceOpener.open({ resourceId: note.id, origin: { source: "library" } });
+            closeUnpinned("resources");
           }),
-      );
-    };
-    el("#resource-search", dialog).oninput = draw;
-    el("#standalone-checklist", dialog).onclick = () => {
-      dialog.close();
-      void newChecklist().catch(report);
-    };
-    el("#new-activity-timeline", dialog).onclick = () => {
-      dialog.close();
-      void newActivityTimeline().catch(report);
-    };
-    el("#standalone-task-objective", dialog).onclick = () => {
-      dialog.close();
-      void newTaskObjective().catch(report);
-    };
-    el("#standalone-note", dialog).onclick = () => {
-      void (async () => {
-        const known = new Set(state!.resources.map((resource) => resource.id));
-        const next = await command({
-          type: "createResource",
-          kind: "note",
-          title: "Untitled note",
-          workspaceId: null,
-        });
-        const resource = next.resources.find(
-          (item) => !known.has(item.id) && item.kind === "note",
-        );
-        if (!resource) throw Error("created_resource_unavailable");
-        dialog.close();
-        await resourceOpener.open({
-          resourceId: resource.id,
-          origin: { source: "library" },
-        });
-      })().catch(report);
-    };
-    draw();
+        },
+        { id: "standalone-checklist", label: "Checklist", run: async () => { await newChecklist(); closeUnpinned("resources"); } },
+        { id: "standalone-task-objective", label: "Task objective", run: async () => { await newTaskObjective(); closeUnpinned("resources"); } },
+        { id: "new-activity-timeline", label: "Activity timeline", run: async () => { await newActivityTimeline(); closeUnpinned("resources"); } },
+      ],
+    });
+    content.querySelector<HTMLElement>(".aw-context-search")!.id = "resource-search";
+    content.querySelector<HTMLElement>(".aw-context-resource-list")!.id = "resource-results";
+    for (const action of content.querySelectorAll<HTMLElement>("[data-resource-action]"))
+      action.id = action.dataset.resourceAction!;
+    const motion = conversationDisclosures(content, { motion: experienceMotion, viewId: "context-resources" });
+    openWorkspacePanel({
+      id: "resources",
+      anchor,
+      content,
+      label: "Resources",
+      placement: "bottom",
+      minSize: { width: 360, height: 310 },
+      maxSize: { width: 790, height: 730 },
+      preferredSize: { width: 500, height: 520 },
+      initialFocus: "#resource-search",
+      onClose: () => {
+        motion.dispose();
+        view.dispose();
+        if (resourcesView === view) {
+          resourcesView = null;
+          resourcesMotion = null;
+        }
+        anchor.setAttribute("aria-expanded", "false");
+      },
+    }, restoring).classList.add("application-resources");
+    resourcesView = view;
+    resourcesMotion = motion;
+    motion.sync();
+    anchor.setAttribute("aria-expanded", "true");
   }
   function taskGroupMembers(groupId: string) {
     const group = state?.resources.find((r) => r.id === groupId);
@@ -2915,8 +2924,8 @@ export function installApplication(hooks: Hooks) {
         surfaces.close("workspace-actions");
       },
       stream: async () => {
-        surfaces.close("workspace-actions");
-        el("#stream-button").click();
+        closeUnpinned("workspace-actions");
+        showStream();
       },
       connections: async () => {
         surfaces.close("workspace-actions");
@@ -4244,23 +4253,53 @@ export function installApplication(hooks: Hooks) {
     retainedLatest = replay.latest;
     eventDisconnected = false;
     for (const event of [...replay.events, ...newer]) rememberEvent(event);
-    fillEvents(el("#events"));
+    streamView?.update();
     updateStreamSummaries();
     for (const view of eventViews.values()) view.update();
   }
-  function fillEvents(list: HTMLElement) {
-    if (document.hidden || list.closest("[hidden]")) return;
-    list.replaceChildren();
-    for (const e of localEvents.slice(-100).reverse()) {
-      const li = document.createElement("li");
-      if (e.eventId) li.dataset.eventId = e.eventId;
-      li.textContent = `${e.classification} · ${e.providerId ?? "application host"} · ${e.type} · cursor ${e.cursor ?? "unavailable"} · ${e.receivedAt ?? "time unavailable"}`;
-      list.append(li);
-    }
+  function showStream(restoring = false) {
+    const content = document.createElement("div");
+    const anchor = el("#application-stream");
+    const view = mountContextualStream(content, {
+      snapshot: eventWindow,
+      refresh: refreshEvents,
+      openResource: openCanonicalResource,
+    });
+    const viewId = "context-stream:" + ++streamSerial;
+    const motion = conversationDisclosures(content, { motion: experienceMotion, viewId });
+    const pickers = [...content.querySelectorAll<HTMLSelectElement>("select")]
+      .map((select, i) => enhanceConversationSelect(select, {
+        motion: experienceMotion,
+        viewId: viewId + ":filter:" + i,
+      }));
+    openWorkspacePanel({
+      id: "intelligence-stream",
+      anchor,
+      content,
+      label: "Intelligence Stream",
+      placement: "bottom",
+      minSize: { width: 360, height: 320 },
+      maxSize: { width: 810, height: 760 },
+      preferredSize: { width: 600, height: 555 },
+      initialFocus: 'input[type="search"]',
+      onClose: () => {
+        for (const picker of pickers) picker.dispose();
+        motion.dispose();
+        view.dispose();
+        if (streamView === view) {
+          streamView = null;
+          streamMotion = null;
+          streamPickers = [];
+        }
+        anchor.setAttribute("aria-expanded", "false");
+      },
+    }, restoring).classList.add("application-stream");
+    streamView = view;
+    streamMotion = motion;
+    streamPickers = pickers;
+    motion.sync();
+    anchor.setAttribute("aria-expanded", "true");
   }
-  el("#stream-button").addEventListener("click", () =>
-    fillEvents(el("#events")),
-  );
   function refreshTaskProjections() {
     if (taskRefreshPending) return;
     taskRefreshPending = true;
@@ -4290,8 +4329,7 @@ export function installApplication(hooks: Hooks) {
     )
       refreshTaskProjections();
     rememberEvent(e);
-    fillEvents(el("#events"));
-    el("#event-count").textContent = String(localEvents.length);
+    streamView?.update();
     updateStreamSummaries();
     for (const view of eventViews.values()) view.update();
     if (e.type === "storage/reserve-admission-denied")
@@ -4302,6 +4340,7 @@ export function installApplication(hooks: Hooks) {
       hooks.status("Storage check passed. Saving is available again.");
     if (e.type === "backend/disconnected") {
       eventDisconnected = true;
+      streamView?.update();
       updateStreamSummaries();
       for (const view of eventViews.values()) view.update();
       hooks.status(
@@ -4311,7 +4350,12 @@ export function installApplication(hooks: Hooks) {
     }
   });
   el("#workspace-manager").onclick = () => manager();
-  el("#application-resources").onclick = picker;
+  el("#application-resources").onclick = () => picker();
+  el("#application-stream").onclick = () => {
+    if (streamView) surfaces.close("intelligence-stream", "close-button");
+    else showStream();
+  };
+  el("#stream-button").onclick = () => showStream();
   el("#application-agents").onclick = () => {
     void showAgents().catch(report);
   };
@@ -4320,7 +4364,7 @@ export function installApplication(hooks: Hooks) {
   };
   el("#application-connections").onclick = connections;
   el("#add-block").onclick = add;
-  el("#resource-picker").onclick = picker;
+  el("#resource-picker").onclick = () => picker();
   el("#layout-manager").onclick = () => layouts();
   el("#zoom-out").onclick = () => {
     if (constellation) void constellation.controller.zoomOut().catch(report);
@@ -4553,6 +4597,9 @@ export function installApplication(hooks: Hooks) {
         }
       }
       surfaces.frame(now);
+      resourcesMotion?.frame();
+      streamMotion?.frame();
+      for (const picker of streamPickers) picker.frame();
       blockLibrary?.frame();
       environmentNavigator?.frame();
       workspaceActions?.frame();

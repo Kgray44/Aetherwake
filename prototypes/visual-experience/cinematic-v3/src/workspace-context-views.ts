@@ -1,4 +1,3 @@
-import type { ExperienceMotionPort } from "../../../application-contract/motion.ts";
 import {
   mountEventExperience,
   type EventWindow,
@@ -381,170 +380,35 @@ export function mountContextualStream(
     ".aw-event-tools > :is(input, button), .aw-event-advanced > summary, .aw-event-about > summary",
   ))
     motionControl(control);
+  function present() {
+    for (const label of section.querySelectorAll<HTMLElement>(".aw-event-type:not([data-recorded-type])")) {
+      const type = label.textContent ?? "";
+      const [domain, ...operation] = type.split(/[/.]/);
+      const title = (value: string) => value
+        .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+        .replace(/[-_]+/g, " ")
+        .replace(/^./, (initial) => initial.toUpperCase());
+      label.dataset.recordedType = type;
+      label.title = type;
+      if (operation.length) {
+        const source = domain === "application" ? "Aerynth" : title(domain);
+        label.textContent = title(operation.join(" ")) + " · " + source;
+      }
+    }
+  }
+  present();
   return {
-    update: view.update,
-    setActive: view.setActive,
+    update() {
+      view.update();
+      present();
+    },
+    setActive(active: boolean) {
+      view.setActive(active);
+      if (active) present();
+    },
     dispose() {
       view.dispose();
       section.remove();
-    },
-  };
-}
-
-export type WorkspaceInfoOptions = Readonly<{
-  motion: ExperienceMotionPort;
-  title?: string;
-  description?: string;
-  items: readonly Readonly<{ label: string; detail: string }>[];
-}>;
-
-let infoSerial = 0;
-const infoPose = (opacity: number) => ({
-  x: 0,
-  y: 0,
-  w: 0,
-  h: 0,
-  lift: 0,
-  yaw: 0,
-  opacity,
-});
-
-/** Read-only hover/focus help. Only the host advances the borrowed MC body. */
-export function mountWorkspaceInfo(
-  root: HTMLElement,
-  options: WorkspaceInfoOptions,
-) {
-  const { node, button, surface } = createNodes(root);
-  const key = "workspace-info:" + ++infoSerial;
-  const wrapper = node("div", "aw-workspace-info"),
-    tooltip = node("div", "aw-workspace-info-tooltip"),
-    pane = node("div", "aw-workspace-info-pane");
-  surface(wrapper);
-  tooltip.id = "workspace-info-tooltip-" + infoSerial;
-  tooltip.setAttribute("role", "tooltip");
-  tooltip.setAttribute("aria-hidden", "true");
-  tooltip.hidden = true;
-  pane.append(
-    node(
-      "strong",
-      "aw-workspace-info-title",
-      options.title ?? "Workspace information",
-    ),
-  );
-  if (options.description) pane.append(node("p", "", options.description));
-  if (options.items.length) {
-    const list = node("dl");
-    for (const item of options.items)
-      list.append(node("dt", "", item.label), node("dd", "", item.detail));
-    pane.append(list);
-  }
-  tooltip.append(pane);
-  let hover = false,
-    focus = false,
-    latched = false,
-    dismissed = false;
-  let open = false,
-    active = true,
-    disposed = false;
-  const motion = options.motion;
-  const trigger = button("i", () => {
-    if (!active || disposed) return;
-    if (latched) dismiss();
-    else {
-      latched = true;
-      dismissed = false;
-      sync();
-    }
-  });
-  trigger.classList.add("aw-workspace-info-trigger");
-  trigger.setAttribute("aria-label", options.title ?? "Workspace information");
-  trigger.setAttribute("aria-describedby", tooltip.id);
-  trigger.setAttribute("aria-expanded", "false");
-  wrapper.append(trigger, tooltip);
-  root.append(wrapper);
-  motion.add(key, infoPose(0));
-
-  function frame() {
-    if (disposed) return;
-    const sample = motion.reduced ? Number(open) : motion.pose(key).opacity;
-    const reveal = Number.isFinite(sample)
-      ? Math.max(0, Math.min(1, sample))
-      : 0;
-    const value = reveal.toFixed(4);
-    if (tooltip.style.getPropertyValue("--aw-info-reveal") !== value)
-      tooltip.style.setProperty("--aw-info-reveal", value);
-    if (!open && reveal < 0.002) tooltip.hidden = true;
-  }
-  function sync() {
-    const next = active && !dismissed && (hover || focus || latched);
-    if (open === next || disposed) return;
-    open = next;
-    if (open) tooltip.hidden = false;
-    tooltip.dataset.open = String(open);
-    tooltip.setAttribute("aria-hidden", String(!open));
-    trigger.setAttribute("aria-expanded", String(open));
-    motion.target(key, infoPose(Number(open)), "workspace information");
-    frame();
-    motion.wake();
-  }
-  function dismiss() {
-    if (!open || disposed) return false;
-    dismissed = true;
-    latched = false;
-    sync();
-    return true;
-  }
-  function resetDismissal() {
-    if (!hover && !focus && !latched) dismissed = false;
-  }
-  wrapper.addEventListener("pointerenter", (event) => {
-    if (event.pointerType === "touch") return;
-    hover = true;
-    sync();
-  });
-  wrapper.addEventListener("pointerleave", () => {
-    hover = false;
-    resetDismissal();
-    sync();
-  });
-  trigger.addEventListener("focus", () => {
-    focus = true;
-    sync();
-  });
-  trigger.addEventListener("blur", () => {
-    focus = false;
-    resetDismissal();
-    sync();
-  });
-  wrapper.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && dismiss()) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  });
-  const document = root.ownerDocument;
-  const outside = (event: PointerEvent) => {
-    if (latched && !event.composedPath().includes(wrapper)) dismiss();
-  };
-  document.addEventListener("pointerdown", outside, true);
-  return {
-    frame,
-    dismiss,
-    setActive(value: boolean) {
-      if (disposed || value === active) return;
-      active = value;
-      if (!active) {
-        hover = focus = latched = dismissed = false;
-      }
-      trigger.disabled = !active;
-      sync();
-    },
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      document.removeEventListener("pointerdown", outside, true);
-      motion.remove(key);
-      wrapper.remove();
     },
   };
 }

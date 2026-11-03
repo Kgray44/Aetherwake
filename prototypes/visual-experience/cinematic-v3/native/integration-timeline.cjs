@@ -222,13 +222,13 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       await capture('03-timeline-restart', value.document.resource.id); receipt.canonical = value;
     } else {
       assert.equal(receipt.startingCanonical.resources.length, 0, 'fresh_empty_timeline_profile_required');
-      await click('#application-resources'); await click('#standalone-checklist'); await fill('.aw-checklist-creator input[aria-label="Checklist title"]', FIXTURE.checklist); await byText('.aw-checklist-creator', 'Create checklist');
+      await click('#application-resources'); await click('.aw-context-create > summary'); await click('#standalone-checklist'); await fill('.aw-checklist-creator input[aria-label="Checklist title"]', FIXTURE.checklist); await byText('.aw-checklist-creator', 'Create checklist');
       let checklistId; await wait('Actual canonical Checklist event producer created', async () => { const resource = (await desktop()).resources.find(r => r.kind === 'checklist' && r.title === FIXTURE.checklist); if (resource) checklistId = resource.id; return !!resource; });
       const producerScope = `.aw-checklist[data-resource-id=${JSON.stringify(checklistId)}]`;
       await fill(producerScope + ' input[aria-label="New checklist item"]', FIXTURE.item); await byText(producerScope + ' .aw-checklist-add', 'Add item');
       let producer; await wait('Actual manual source item saved', async () => { producer = await checklist(checklistId); return producer.entries.length === 1 && producer.entries[0].text === FIXTURE.item; });
       const entryId = producer.entries[0].id; await click(`${producerScope} [data-checklist-entry-id=${JSON.stringify(entryId)}] input[aria-label="Check item manually"]`); await wait('Actual source item manually checked', async () => (await checklist(checklistId)).entries[0].checked); await close();
-      await click('#application-resources'); await click('#new-activity-timeline');
+      await click('#application-resources'); await click('.aw-context-create > summary'); await click('#new-activity-timeline');
       let timelineId, document; await wait('Immediate canonical Recent activity Timeline created by UI', async () => { const resource = (await desktop()).resources.find(r => r.kind === 'timeline'); if (!resource) return false; timelineId = resource.id; document = await read(timelineId); return document.view.mode === 'activity'; });
       const container = timelineScope(timelineId); await wait('Actual Timeline read and query ready', () => js(`document.querySelector(${JSON.stringify(container)})?.getAttribute('aria-busy')==='false'`));
       await readyDocument(document); const initial = document, firstWindow = await query(document); receipt.initialWindow = firstWindow;

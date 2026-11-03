@@ -210,7 +210,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       await openChecklist(expected.manualId); await rendered(value.manual); await close('canonical-resource'); await openChecklist(expected.linkedId); await rendered(value.linked); await capture('03-checklists-restart'); receipt.canonical = value;
     } else {
       assert.equal(receipt.startingCanonical.resources.length, 0, 'fresh_empty_resources_required');
-      await click('#application-resources'); await click('#standalone-checklist');
+      await click('#application-resources'); await click('.aw-context-create > summary'); await click('#standalone-checklist');
       await fill('.aw-checklist-creator input[aria-label="Checklist title"]', FIXTURE.title); await byText('.aw-checklist-creator', 'Create checklist');
       let manualId; await wait('One canonical Checklist created through UI', async () => { const all = (await desktop()).resources; const r = all.find(r => r.kind === 'checklist' && r.title === FIXTURE.title); if (r) manualId = r.id; return !!r; });
       const add = async text => { const before = await read(manualId); await fill(scope(manualId) + ' input[aria-label="New checklist item"]', text); await byText(scope(manualId) + ' .aw-checklist-add', 'Add item'); let document; await wait('Exact manual item saved', async () => { document = await read(manualId); return document.entries.length === before.entries.length + 1 && document.entries.at(-1).text === text; }); assert.equal(document.resource.version, before.resource.version + 1); return document; };

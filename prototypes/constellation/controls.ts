@@ -1,3 +1,5 @@
+import type { MotionCoordinator } from "../visual-experience/cinematic-v3/src/motion.ts";
+
 export type SpatialCommand = {
   id: string;
   title: string;
@@ -19,6 +21,8 @@ export function spatialControls(
     onOpen?: () => void;
     overview: () => boolean;
     afterRun?: () => void;
+    motion: MotionCoordinator;
+    guideMotionId: string;
   },
 ) {
   const element = <K extends keyof HTMLElementTagNameMap>(
@@ -42,6 +46,7 @@ export function spatialControls(
   toggle.title = "Commands and destinations · Ctrl K";
   info.setAttribute("aria-label", "Navigation guide");
   info.title = "Navigation guide · F1";
+  info.dataset.aerynthMotionControl = "true";
   const drawer = element("aside", "", "aw-destinations aw-glass"),
     heading = element("h2", "Go somewhere. Do something."),
     search = element("input"),
@@ -65,6 +70,12 @@ export function spatialControls(
   drawer.append(heading, search, results, footer);
   const guide = element("aside", "", "aw-navigation-guide aw-glass");
   guide.hidden = true;
+  guide.inert = true;
+  guide.setAttribute("aria-hidden", "true");
+  const guidePose = (opacity: number) => ({
+    x: 0, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity,
+  });
+  options.motion.add(options.guideMotionId, guidePose(0));
   guide.tabIndex = -1;
   guide.setAttribute("role", "dialog");
   guide.setAttribute("aria-modal", "false");
@@ -113,15 +124,33 @@ export function spatialControls(
     entries: SpatialCommand[] = [],
     showingHistory = false,
     contextual = false,
-    opener: HTMLElement | null = null;
+    opener: HTMLElement | null = null,
+    guideOpen = false;
+  function frame() {
+    if (guide.hidden) return;
+    const sample = options.motion.reduced ? Number(guideOpen) : options.motion.pose(options.guideMotionId).opacity;
+    const reveal = Math.min(1, Math.max(0, sample));
+    guide.style.setProperty("--aw-guide-reveal", reveal.toFixed(4));
+    if (!guideOpen && reveal < 0.002) guide.hidden = true;
+  }
+  function setGuide(open: boolean) {
+    if (guideOpen === open) return;
+    guideOpen = open;
+    if (open) guide.hidden = false;
+    guide.inert = !open;
+    guide.setAttribute("aria-hidden", String(!open));
+    options.motion.target(options.guideMotionId, guidePose(Number(open)), "navigation guide");
+    frame();
+  }
   const sync = () => {
     toggle.setAttribute("aria-expanded", String(!drawer.hidden));
-    info.setAttribute("aria-expanded", String(!guide.hidden));
+    info.setAttribute("aria-expanded", String(guideOpen));
     options.dirty();
   };
   function close(focus = false) {
-    const wasOpen = !drawer.hidden || !guide.hidden;
-    drawer.hidden = guide.hidden = true;
+    const wasOpen = !drawer.hidden || guideOpen;
+    drawer.hidden = true;
+    setGuide(false);
     sync();
     if (focus && wasOpen) {
       if (opener?.isConnected && opener.getClientRects().length) opener.focus();
@@ -218,7 +247,7 @@ export function spatialControls(
   function openPalette(query?: string, context = false) {
     options.onOpen?.();
     opener = document.activeElement as HTMLElement;
-    guide.hidden = true;
+    setGuide(false);
     drawer.hidden = false;
     showingHistory = false;
     contextual = context;
@@ -238,10 +267,10 @@ export function spatialControls(
     guide.querySelector(".aw-guide-intro")!.textContent = overview
       ? "Explore with your mouse. Keep your place with the keyboard."
       : "Scroll out over empty workspace space to reveal its constellation. You can also choose Constellation from Workspace actions (⋯). The gestures below apply in the spatial view.";
-    const opening = guide.hidden;
+    const opening = !guideOpen;
     opener = document.activeElement as HTMLElement;
     close();
-    guide.hidden = !opening;
+    setGuide(opening);
     sync();
     if (opening) guide.focus();
     else opener?.focus();
@@ -266,7 +295,7 @@ export function spatialControls(
       return;
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
       if (!options.overview() && drawer.hidden) {
-        if (!guide.hidden) close(true);
+        if (guideOpen) close(true);
         return;
       }
       e.preventDefault();
@@ -276,7 +305,7 @@ export function spatialControls(
       e.preventDefault();
       e.stopPropagation();
       openGuide();
-    } else if (e.key === "Escape" && (!drawer.hidden || !guide.hidden)) {
+    } else if (e.key === "Escape" && (!drawer.hidden || guideOpen)) {
       e.preventDefault();
       e.stopPropagation();
       close(true);
@@ -302,6 +331,7 @@ export function spatialControls(
     guide,
     search,
     results,
+    frame,
     refresh,
     openPalette,
     openGuide,
@@ -312,6 +342,7 @@ export function spatialControls(
       refresh();
     },
     dispose() {
+      options.motion.bodies.delete(options.guideMotionId);
       root.ownerDocument.removeEventListener("keydown", keydown, true);
       root.ownerDocument.removeEventListener("pointerdown", outside);
       bar.remove();

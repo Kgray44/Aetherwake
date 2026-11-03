@@ -1,22 +1,21 @@
 /* Content inside the host's anchored glass shell. The shell owns its bounds,
    scroll viewport, resize/pin controls and entrance/exit choreography. */
-:is(.aw-contextual-resources, .aw-contextual-stream, .aw-workspace-info) {
+:is(.aw-contextual-resources, .aw-contextual-stream) {
   min-inline-size: 0;
   color: var(--aw-control-text, #ecf2f4);
   font: 14px/1.5 var(--font-ui, system-ui, sans-serif);
   color-scheme: dark;
 }
-:is(.aw-contextual-resources, .aw-contextual-stream, .aw-workspace-info)
+:is(.aw-contextual-resources, .aw-contextual-stream)
   [hidden] {
   display: none !important;
 }
-:is(.aw-contextual-resources, .aw-contextual-stream, .aw-workspace-info)
+:is(.aw-contextual-resources, .aw-contextual-stream)
   :focus-visible {
   outline: 2px solid var(--aw-control-focus, #d9edf0);
   outline-offset: 2px;
 }
-:is(.aw-contextual-resources, .aw-contextual-stream) p,
-.aw-workspace-info-pane :is(p, dl, dd) {
+:is(.aw-contextual-resources, .aw-contextual-stream) p {
   margin: 0;
 }
 .aw-contextual-resources {
@@ -48,7 +47,7 @@
 .aw-contextual-stream input::placeholder {
   color: var(--aw-control-muted, #b9c4ce);
 }
-:is(.aw-contextual-resources, .aw-workspace-info) .aw-context-control,
+.aw-contextual-resources .aw-context-control,
 .aw-contextual-stream
   .aw-event-view
   :is(button, .aw-event-advanced > summary, .aw-event-about > summary) {
@@ -209,59 +208,9 @@
 .aw-contextual-stream .aw-event-view dl {
   grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
 }
-.aw-workspace-info {
-  position: relative;
-  display: inline-flex;
-  pointer-events: auto;
-}
-.aw-workspace-info .aw-workspace-info-trigger {
-  inline-size: 36px;
-  padding: 0;
-  font:
-    italic 550 18px/1 Georgia,
-    serif;
-}
-.aw-workspace-info-tooltip {
-  position: absolute;
-  z-index: 1;
-  inset-inline-start: 0;
-  inset-block-end: 100%;
-  inline-size: min(21rem, calc(100vw - 28px));
-  padding-block-end: 8px;
-  opacity: var(--aw-info-reveal, 0);
-  transform: translateY(calc(6px * (1 - var(--aw-info-reveal, 0))));
-}
-.aw-workspace-info-tooltip:not([data-open="true"]) {
-  pointer-events: none;
-}
-.aw-workspace-info-pane {
-  display: grid;
-  gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid var(--aw-menu-rim, #cadfdc42);
-  border-radius: var(--aw-menu-radius, 18px);
-  background:
-    radial-gradient(ellipse at 12% 0%, #b4d8d01f, transparent 58%),
-    var(--aw-menu-ink, #0b1018);
-  box-shadow: var(--aw-menu-shadow, 0 14px 36px #02030a40);
-  color: var(--aw-control-muted, #b9c4ce);
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-.aw-workspace-info-title,
-.aw-workspace-info-pane dt {
-  color: var(--aw-control-text, #ecf2f4);
-  font-weight: 550;
-}
-.aw-workspace-info-pane dl {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
-  gap: 5px 10px;
-}
 @media (forced-colors: active) {
   .aw-context-create-menu,
-  .aw-contextual-stream .aw-event-filters,
-  .aw-workspace-info-pane {
+  .aw-contextual-stream .aw-event-filters {
     background: Canvas;
     color: CanvasText;
     border-color: CanvasText;

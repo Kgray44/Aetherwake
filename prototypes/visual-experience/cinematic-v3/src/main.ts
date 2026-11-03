@@ -264,6 +264,7 @@ function event(
   };
   events.push(e);
   if (events.length > 120) events.shift();
+  if (desktopMode) return;
   const li = document.createElement("li");
   li.dataset.evidence = evidence;
   const top = document.createElement("small");
@@ -997,9 +998,10 @@ $("#settings-close").addEventListener("click", () => {
   showDialog("#settings", "#settings-button", false);
   $("#settings-button").focus();
 });
-$("#stream-button").addEventListener("click", () =>
-  showDialog("#stream", "#stream-button", $("#stream").hidden),
-);
+if (!desktopMode)
+  $("#stream-button").addEventListener("click", () =>
+    showDialog("#stream", "#stream-button", $("#stream").hidden),
+  );
 $("#stream-close").addEventListener("click", () => {
   showDialog("#stream", "#stream-button", false);
   $("#stream-button").focus();
@@ -1169,6 +1171,7 @@ $("#demo").addEventListener("click", () => {
   demoTimer = setInterval(demoStep, 1600);
 });
 document.addEventListener("keydown", (e) => {
+  if (e.defaultPrevented) return;
   if (e.key === "Escape") {
     if (!$("#settings").hidden) {
       showDialog("#settings", "#settings-button", false);
