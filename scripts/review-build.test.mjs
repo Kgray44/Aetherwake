@@ -24,8 +24,19 @@ test('actual native closure retains the Electron decision preload and fails if i
  const root=fileURLToPath(new URL('../',import.meta.url)),tracked=new Set(execFileSync('git',['-C',root,'ls-files','-z'],{encoding:'utf8',windowsHide:true}).split('\0').filter(Boolean));
  const result=await nodeClosure(root,tracked,NATIVE_RUNTIME_ENTRIES),preload='prototypes/visual-experience/cinematic-v3/native/vela-review-preload.cjs';
  assert(result.files.includes(preload),'the actual sharing dialog loads a preload outside the Node import graph');
+ assert(result.files.includes('prototypes/openai-provider/model-controls.ts'),'ordinary model controls ship in the actual native runtime closure');
  for(const name of ['vela-review.cjs','vela-broker.cjs','desktop-preload.cjs'])assert(result.files.includes('prototypes/visual-experience/cinematic-v3/native/'+name),name);
  const missing=new Set(tracked);missing.delete(preload);await assert.rejects(nodeClosure(root,missing,NATIVE_RUNTIME_ENTRIES),/untracked_or_missing_runtime_import/);
+});
+
+test('the ordinary Responses runtime resolves its exact reviewed model controls offline', async () => {
+  const root = fileURLToPath(new URL('../', import.meta.url));
+  const tracked = new Set(execFileSync('git', ['-C', root, 'ls-files', '-z'], {
+    encoding: 'utf8', windowsHide: true,
+  }).split('\0').filter(Boolean));
+  const provider = 'prototypes/openai-provider/';
+  const closure = await nodeClosure(root, tracked, [provider + 'responses.mts']);
+  assert.deepEqual(closure.files, ['common.mts', 'model-controls.ts', 'responses.mts'].map(name => provider + name));
 });
 
 test('native synthetic preparation writers are excluded and cannot become a runtime dependency',async()=>{

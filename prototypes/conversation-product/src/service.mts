@@ -427,6 +427,9 @@ export class ConversationProduct implements ConversationProductPort {
    case 'selectProvider': this.resource(v,a.resourceId);check((await this.providers(v)).some(p=>p.id===a.providerId&&p.available),'provider_unavailable');result=await this.host.command('selectProvider',a);break;
    case 'send': {
     this.resource(v,a.resourceId);text(a.content,16384);const c=this.summary(v,a.resourceId);check(c.revision===a.expectedRevision,'stale_resource_version');
+    if (a.reasoningEffort !== undefined || a.webSearch !== undefined) {
+      check(c.providerId === 'chatgpt-plan-responses' && this.host.sendWithContext, 'native_send_approval_required');
+    }
     const p=(await this.providers(v)).find(p=>p.id===c.providerId);check(p?.available,'provider_unavailable');
     if (!p.execute) result=await this.host.command('addMessage',{resourceId:a.resourceId,role:'user',content:a.content,expectedRevision:a.expectedRevision,...{commandId:a.commandId}});
     else { const context=await this.attachedContext(a.resourceId); if(this.host.sendWithContext) result=await this.host.sendWithContext(a,context); else {check(context.length===0,'attachment_transport_unavailable');result=await this.host.command('execute',{resourceId:a.resourceId,prompt:a.content,commandId:a.commandId,model:a.model,authorized:true});} }

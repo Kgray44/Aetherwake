@@ -52,6 +52,7 @@ export interface ConversationSendPreview {
 export interface OrdinaryResponsesPreview {
  executionId:string;configurationId:string;connectionVersion:number;model:string;
  clock: { utc: string; local: string };
+ reasoningEffort?: TurnInput['reasoningEffort'];
  webSearch?: true;
  instructions:string;instructionVersion:string;messages:TurnInput['messages'];
  history:{resourceId:string;messageId:string;digest:string;providerId?:string}[];
@@ -87,6 +88,7 @@ export interface Execution extends PublicConversationExecution {
   responseId?:string;responseOutcome?:TurnOutcome;usage?:ReportedUsage;reportedModel?:string;
   connectionVersion?:number;inputMessageId?:string;outputMessageId?:string;
   requestedModel?:string;requestBodyDigest?:string;contextDigest?:string;instructionVersion?:string;
+  requestedReasoningEffort?:TurnInput['reasoningEffort'];
   cancellation?:{requested:boolean;serverConfirmed:false};
   /** Fixed bodyless transport facts, separate from provider completion. */
   httpDiagnostic?:Readonly<TurnHttpDiagnostic>;

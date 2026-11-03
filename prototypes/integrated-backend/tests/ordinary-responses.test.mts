@@ -11,6 +11,7 @@ import type { ConversationSendInput,OrdinaryConnectionPort,StreamEvent } from '.
 import type { ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
 import { RESPONSES_ENDPOINT } from '../../openai-provider/responses.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
+const documentedModel = { id: 'gpt-6.1-sol', label: 'Synthetic catalog Sol' };
 function sse(events:unknown[]){return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});}
 function fixture(){
  const dir=mkdtempSync(join(tmpdir(),'aerynth-ordinary-responses-')),path=join(dir,'canonical.sqlite'),events:StreamEvent[]=[],requests:Record<string,any>[]=[],responses:((init:RequestInit)=>Promise<Response>|Response)[]=[];
@@ -22,7 +23,7 @@ function fixture(){
   modelCatalog:async expected=>{catalogReads++;assert.equal(expected,version);assert(ready);return {providerId,boundaryDigest:boundary,observedAt:Date.now(),catalogOnly:true,models:listedModels};},
   revalidateCredential:async(expected,digest)=>{assert.equal(expected,version,'credential version changed');assert.equal(digest,boundary);assert(ready);},
  };
- const fakeFetch:typeof fetch=async(url,init)=>{assert.equal(url,RESPONSES_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer SYNTHETIC_PLAN_TOKEN');const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);assert.deepEqual(Object.keys(body),['model','instructions','input','store','stream',...(body.tools?['tools','tool_choice']:[])]);requests.push(body);const response=responses.shift();assert(response,'unexpected provider request');return response(init!);};
+ const fakeFetch:typeof fetch=async(url,init)=>{assert.equal(url,RESPONSES_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer SYNTHETIC_PLAN_TOKEN');const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);assert.deepEqual(Object.keys(body),['model','instructions','input','store','stream',...(body.reasoning?['reasoning']:[]),...(body.tools?['tools','tool_choice']:[])]);requests.push(body);const response=responses.shift();assert(response,'unexpected provider request');return response(init!);};
  let core:BackendCore;const create=()=>{core=new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only'},event=>events.push(event),undefined,{connection,fetch:fakeFetch});const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};};create();
  return {get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(resolve(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
@@ -45,9 +46,10 @@ test('ordinary Send answers direct clock questions locally and keeps their trans
       },
     });
     const startedAt = Date.now();
-    const time = await send(clockInput);
+    const timeInput = { ...clockInput, model: documentedModel.id, reasoningEffort: 'high' as const };
+    const time = await send(timeInput);
     assert.deepEqual(calls, ['desktop', 'conversationClock']);
-    assert.deepEqual(await send(clockInput), time);
+    assert.deepEqual(await send(timeInput), time);
     assert.equal(time.revision, chat.revision + 2);
     const dateInput = { ...clockInput, content: "What's today's date?", expectedRevision: time.revision, commandId: randomUUID() };
     await assert.rejects(send({ ...dateInput, expectedRevision: chat.revision }), /stale_resource_version/);
@@ -70,7 +72,7 @@ test('ordinary Send answers direct clock questions locally and keeps their trans
     assert.deepEqual(Object.keys((await f.core.command('snapshot', {})).executions), []);
     await f.reopen();
     assert.deepEqual((await detail()).messages.items, items);
-    assert.deepEqual(await send(clockInput), time);
+    assert.deepEqual(await send(timeInput), time);
     const remote = 'What time is it in Tokyo?';
     const followUp = { ...clockInput, content: remote, expectedRevision: date.revision, commandId: randomUUID() };
     assert.equal(await f.core.command('conversationClock', followUp), null);
@@ -143,10 +145,11 @@ test('long ordinary chats keep sending within both history bounds and retain the
 test('explicit web search sends only the submitted draft and restores verified citation links after restart', async () => {
   const f = fixture();
   try {
+    f.setListedModels([documentedModel]);
     await f.core.command('ordinaryProviderStatus', {});
     const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
     const prior = await f.core.command('addMessage', { resourceId: chat.resourceId, role: 'user', content: 'PRIVATE earlier transcript', expectedRevision: chat.revision });
-    const input: ConversationSendInput = { resourceId: chat.resourceId, content: 'Look up a public reference for the lunar orbit.', webSearch: true, expectedRevision: prior.revision, commandId: randomUUID() };
+    const input: ConversationSendInput = { resourceId: chat.resourceId, content: 'Look up a public reference for the lunar orbit.', model: documentedModel.id, reasoningEffort: 'high', webSearch: true, expectedRevision: prior.revision, commandId: randomUUID() };
     const answer = '🌙 Moon facts.';
     const safe = { type: 'url_citation', start_index: 2, end_index: 12, url: 'https://science.example.org/moon', title: 'Moon facts' };
     const tool = { type: 'web_search_call', status: 'completed', action: { query: 'RAW_QUERY_DO_NOT_RETAIN' } };
@@ -155,7 +158,7 @@ test('explicit web search sends only the submitted draft and restores verified c
       { type: 'response.output_item.added', item: { type: 'web_search_call', status: 'in_progress' } },
       { type: 'response.web_search_call.completed' },
       { type: 'response.output_text.delta', delta: answer },
-      { type: 'response.completed', response: { id: 'resp-web-fixture', status: 'completed', model, output: [tool, { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: answer, annotations: [safe, { ...safe, url: 'javascript:alert(1)' }, { ...safe, url: 'https://user:pass@science.example.org/moon' }, { ...safe, end_index: 99 }] }] }] } },
+      { type: 'response.completed', response: { id: 'resp-web-fixture', status: 'completed', model: documentedModel.id, output: [tool, { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: answer, annotations: [safe, { ...safe, url: 'javascript:alert(1)' }, { ...safe, url: 'https://user:pass@science.example.org/moon' }, { ...safe, end_index: 99 }] }] }] } },
     ]));
     const calls: string[] = [];
     const call = (name: Parameters<BackendCore['command']>[0], data: never) => { calls.push(name); return f.core.command(name, data); };
@@ -164,6 +167,8 @@ test('explicit web search sends only the submitted draft and restores verified c
     assert.equal(sent.state, 'provider_completed');
     assert.deepEqual(f.requests[0].input, [{ role: 'user', content: input.content }]);
     assert.deepEqual(f.requests[0].tools, [{ type: 'web_search' }]);
+    assert.deepEqual(f.requests[0].reasoning, { effort: 'high' });
+    assert.equal(sent.requestedReasoningEffort, 'high');
     assert.equal(f.requests[0].tool_choice, 'required');
     assert.doesNotMatch(f.requests[0].instructions, /local date|PRIVATE/);
     const detail = () => f.core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as Promise<import('../../conversation-product/src/contracts.ts').Detail>;
@@ -192,6 +197,7 @@ test('explicit web search sends only the submitted draft and restores verified c
 test('web search rejection is explicit and causes no fallback inference', async () => {
   const f = fixture();
   try {
+    f.setListedModels([documentedModel]);
     await f.core.command('ordinaryProviderStatus', {});
     const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
     const input: ConversationSendInput = { resourceId: chat.resourceId, content: 'Synthetic public lookup', webSearch: true, expectedRevision: chat.revision, commandId: randomUUID() };
@@ -203,6 +209,37 @@ test('web search rejection is explicit and causes no fallback inference', async 
     assert.equal(result.outputMessageId, undefined);
     assert.equal(f.requests.length, 1);
     assert.equal(f.codexCalls, 0);
+  } finally { await f.close(); }
+});
+
+test('visible plan models receive only exact documented controls and unsupported sends stop before approval', async () => {
+  const f = fixture();
+  try {
+    const unknown = { id: 'gpt-6.1-sol-undocumented', label: 'Synthetic undocumented alias' };
+    f.setListedModels([documentedModel, unknown]);
+    await f.core.command('ordinaryProviderStatus', {});
+    const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+    await f.core.command('providerConnection', { type: 'refreshModels', providerId });
+    const detail = await f.core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as import('../../conversation-product/src/contracts.ts').Detail;
+    assert.deepEqual(detail.providers.find(item => item.id === providerId)?.modelOptions, [
+      { ...documentedModel, reasoningEfforts: ['low', 'medium', 'high', 'xhigh', 'max'], eligibleTools: ['web_search'] },
+      unknown,
+    ]);
+    const input: ConversationSendInput = { resourceId: chat.resourceId, content: 'Synthetic test', expectedRevision: chat.revision, commandId: randomUUID() };
+    await assert.rejects(f.core.command('conversationSendPreview', { ...input, reasoningEffort: 'high' }), /unsupported_reasoning_effort/);
+    await assert.rejects(f.core.command('conversationSendPreview', { ...input, model: documentedModel.id, reasoningEffort: 'none' }), /unsupported_reasoning_effort/);
+    await assert.rejects(f.core.command('conversationSendPreview', { ...input, model: unknown.id, reasoningEffort: 'low' }), /unsupported_reasoning_effort/);
+    await assert.rejects(f.core.command('conversationSendPreview', { ...input, model: unknown.id, webSearch: true }), /unsupported_web_search_model/);
+    assert.equal(f.requests.length, 0);
+    assert.equal(f.secretReads, 0);
+    const snapshot = await f.core.command('snapshot', {});
+    assert.equal(Object.keys(snapshot.executions).length, 0);
+    assert.equal(snapshot.graph.messages.length, 0);
+    const preview = await f.core.command('conversationSendPreview', { ...input, model: documentedModel.id, reasoningEffort: 'low' });
+    f.setListedModels([unknown]);
+    await f.core.command('providerConnection', { type: 'refreshModels', providerId });
+    await assert.rejects(grant(f, preview), /unsupported_model/);
+    assert.equal(f.requests.length, 0);
   } finally { await f.close(); }
 });
 

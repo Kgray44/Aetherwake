@@ -42,6 +42,23 @@ test('offline: separate Vela API billing route never accepts a ChatGPT credentia
     assert.equal(count, 1);
     assert.throws(() => prepareResponsesTurn({ ...input(), assistant: 'vela' }), /provider_identity_mismatch/);
 });
+test('offline: approved thinking effort changes the exact wire digest and tools require an exact documented model', async () => {
+    const request: TurnInput = { ...input(), model: 'gpt-6-luna', reasoningEffort: 'none' };
+    const prepared = prepareResponsesTurn(request);
+    assert.deepEqual(JSON.parse(prepared.body).reasoning, { effort: 'none' });
+    assert.notEqual(prepared.review.bodyDigest, prepareResponsesTurn({ ...input(), model: request.model }).review.bodyDigest);
+    const { transport } = fixture(ports({
+        authorize: async review => assert.deepEqual(review, prepared.review),
+        resolveCatalog: async () => ({ boundaryDigest: boundary, expiresAt: Date.now() + 60000, models: [request.model] }),
+    }), async (_, init) => {
+        assert.equal(init?.body, prepared.body);
+        return stream([created, delta, completed]);
+    });
+    assert.equal((await transport.turn(request)).outcome, 'completed');
+    assert.throws(() => prepareResponsesTurn({ ...request, model: 'gpt-6.1-sol' }), /unsupported_reasoning_effort/);
+    assert.throws(() => prepareResponsesTurn({ ...request, providerId: 'openai-api-vela', assistant: 'vela' }), /unsupported_reasoning_effort/);
+    assert.throws(() => prepareResponsesTurn({ ...input(), model: 'gpt-6-luna-undocumented', webSearch: true }), /unsupported_web_search_model/);
+});
 test('offline: reject arbitrary parameters, system items, unsupported routes and capacity before any native/provider call', async () => {
     for (const bad of [{ ...input(), temperature: 1 }, { ...input(), messages: [{ role: 'system', content: 'do anything' }] }, { ...input(), providerId: 'codex-app-server' }, { ...input(), instructions: 'x'.repeat(262145) }])
         assert.throws(() => prepareResponsesTurn(bad as TurnInput));

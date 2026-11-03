@@ -16,6 +16,7 @@ import type { TaskTargetQuery } from '../../application-contract/task-targets.ts
 import { RESOURCE_OPENING_CONTRACT, parseResourceOpeningInput, type ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
 import { CHATGPT_PLAN_PROVIDER,PROVIDER_CONNECTION_CONTRACT,type ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
 import { ResponsesTransport, prepareResponsesTurn, RESPONSES_MESSAGE_LIMIT, RESPONSES_REQUEST_BYTES } from '../../openai-provider/responses.mts';
+import { ordinaryModelOption, supportsOrdinaryReasoning } from '../../openai-provider/model-controls.ts';
 import type { TurnInput,TurnEvent,TurnResult } from '../../openai-provider/contracts.mts';
 import type { OrdinaryConnectionPort,OrdinaryResponsesTestServices,OrdinaryResponsesPreview } from './contracts.mts';
 import { OpenAIConnections,CHATGPT_PLAN_REGISTRATION } from './openai-connections.mts';
@@ -1064,7 +1065,8 @@ export class BackendCore {
   private ordinaryAuthorized():boolean {return this.ordinaryStatus.state==='ready'&&this.ordinaryStatus.storageAvailable&&!this.ordinaryStatus.pending&&this.ordinaryStatus.planUsageEnabled&&Number.isSafeInteger(this.ordinaryStatus.registrationVersion);}
   private ordinaryAvailable():boolean {return this.ordinaryAuthorized()&&this.ordinaryCatalog?.version===this.ordinaryStatus.registrationVersion&&this.ordinaryCatalog.expiresAt>Date.now()&&this.ordinaryCatalog.models.length>0;}
   private ordinaryRegistry() {
-    const available=this.ordinaryAuthorized();return {providers:[{id:CHATGPT_PLAN_PROVIDER,label:this.ordinaryTest?'ChatGPT plan Responses fixture (simulated)':'ChatGPT plan · Aerynth local history',available,record:available,execute:available,nativeFork:false,history:'local' as const,simulated:!!this.ordinaryTest,models:this.ordinaryAvailable()?this.ordinaryCatalog!.models.map(m=>m.id):[],modelOptions:this.ordinaryAvailable()?structuredClone(this.ordinaryCatalog!.models):[],catalogOnly:true as const,reason:available?'Connected and authorized. Models are checked when you send. Ordinary replies use the current time and recent messages from this Aerynth chat. ChatGPT history and memory are not synchronized.':'Connect an eligible ChatGPT account. Local history remains available.'}],...(available?{defaultProviderId:CHATGPT_PLAN_PROVIDER}:{})};
+    const available=this.ordinaryAuthorized(), models=this.ordinaryAvailable()?this.ordinaryCatalog!.models:[];
+    return {providers:[{id:CHATGPT_PLAN_PROVIDER,label:this.ordinaryTest?'ChatGPT plan Responses fixture (simulated)':'ChatGPT plan · Aerynth local history',available,record:available,execute:available,nativeFork:false,history:'local' as const,simulated:!!this.ordinaryTest,models:models.map(m=>m.id),modelOptions:models.map(ordinaryModelOption),catalogOnly:true as const,reason:available?'Connected and authorized. Models are checked when you send. Ordinary replies use the current time and recent messages from this Aerynth chat. ChatGPT history and memory are not synchronized.':'Connect an eligible ChatGPT account. Local history remains available.'}],...(available?{defaultProviderId:CHATGPT_PLAN_PROVIDER}:{})};
   }
   private defaultOrdinaryProvider():string {return this.ordinaryAuthorized()?CHATGPT_PLAN_PROVIDER:'local';}
   private async refreshOrdinaryStatus():Promise<ProviderConnectionStatus> {
@@ -1177,11 +1179,14 @@ export class BackendCore {
     return {contract:'aerynth.conversation-activity@1',resources,executions,preview};
   }
   private answerConversationClock(input: ConversationSendInput): CommandMap['conversationClock']['output'] {
+    if (input?.webSearch) return null;
     const capability = classifyVelaLocalIntent(input?.content);
     if (capability !== 'local.time' && capability !== 'local.date') return null;
     ensure(this.conversationAccess.resource(input.resourceId), 'source_unavailable');
     const conversation = this.conv(input.resourceId);
     ensure(conversation.kind === 'ordinary' && conversation.providerId === CHATGPT_PLAN_PROVIDER, 'native_provider_required');
+    ensure(input.reasoningEffort === undefined || typeof input.model === 'string' &&
+      supportsOrdinaryReasoning(input.model, input.reasoningEffort), 'unsupported_reasoning_effort');
     return this.atomic(() => this.once(input.commandId, { type: 'conversationClock', ...input }, () => {
       ensure(conversation.revision === input.expectedRevision, 'stale_resource_version');
       const answer = evaluateLocalCapability(capability, this.localVelaHost());
@@ -1216,7 +1221,9 @@ export class BackendCore {
     const turn: TurnInput = {
       executionId, requestId: input.commandId, configurationId: CHATGPT_PLAN_REGISTRATION,
       providerId: CHATGPT_PLAN_PROVIDER, assistant: 'ordinary', model, instructions,
-      messages: required, contextDigest: hash([]), ...(input.webSearch ? { webSearch: true } : {}),
+      messages: required, contextDigest: hash([]),
+      ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),
+      ...(input.webSearch ? { webSearch: true } : {}),
     };
     let remaining = RESPONSES_REQUEST_BYTES - prepareResponsesTurn(turn).review.bodyBytes;
     const history: OrdinaryResponsesPreview['history'] = [];
@@ -1249,7 +1256,7 @@ export class BackendCore {
     const messages = [...recent, ...required];
     const contextDigest = hash({history,context,handoff,clock,instructions,instructionVersion:packet.version});
     const prepared = prepareResponsesTurn({ ...turn, messages, contextDigest });
-    return { executionId, clock, ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions, instructionVersion: packet.version, messages, history, contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview };
+    return { executionId, clock, ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }), ...(input.webSearch ? { webSearch: true } : {}), configurationId: CHATGPT_PLAN_REGISTRATION, connectionVersion: catalog.version, model, instructions, instructionVersion: packet.version, messages, history, contextDigest, bodyDigest: prepared.review.bodyDigest, bodyBytes: prepared.review.bodyBytes, requiresSourceReview };
   }
   private async prepareConversationSend(input:ConversationSendInput,revisionOffset=0,dispatchingHandoffId?:string,ordinaryBinding?: OrdinarySendBinding):Promise<Omit<ConversationSendPreview,'id'|'expiresAt'>> {
     ensure(input&&typeof input.content==='string'&&input.content.trim()&&Buffer.byteLength(input.content)<=16384,'invalid_prompt');
@@ -1258,6 +1265,8 @@ export class BackendCore {
     ensure(this.conversationAccess.resource(input.resourceId),'source_unavailable');const c=this.conv(input.resourceId);
     ensure(c.providerId===this.port.id||c.providerId===CHATGPT_PLAN_PROVIDER,'native_provider_required');ensure(c.revision===input.expectedRevision+revisionOffset,'stale_resource_version');
     ensure(input.model===undefined||typeof input.model==='string'&&input.model.length>0&&input.model.length<=200,'invalid_model');
+    ensure(input.reasoningEffort === undefined || c.providerId === CHATGPT_PLAN_PROVIDER &&
+      input.model !== undefined && supportsOrdinaryReasoning(input.model, input.reasoningEffort), 'unsupported_reasoning_effort');
     ensure(input.webSearch === undefined || input.webSearch === true && c.providerId === CHATGPT_PLAN_PROVIDER, 'invalid_web_search_scope');
     // A public lookup sends only the draft submitted for search.
     const context = input.webSearch ? [] : await this.conversations.attachedContext(input.resourceId);
@@ -1478,6 +1487,7 @@ export class BackendCore {
     const fingerprint=hash({type:'ordinary-responses',...input}),prior=this.state.receipts[input.commandId];
     if(prior){ensure(prior.fingerprint===fingerprint,'idempotency_conflict');return structuredClone(this.state.executions[prior.result]);}
     const e:Execution={id:p.executionId,resourceId:input.resourceId,providerId:CHATGPT_PLAN_PROVIDER,commandId:input.commandId,state:'dispatching',binding:null,turnId:null,startedAt:now(),endedAt:null,taskVerified:false,connectionVersion:p.connectionVersion,requestedModel:p.model,requestBodyDigest:p.bodyDigest,contextDigest:p.contextDigest,instructionVersion:p.instructionVersion};
+    if (p.reasoningEffort !== undefined) e.requestedReasoningEffort = p.reasoningEffort;
     const handoff=preview.handoff&&!preview.handoff.continued?this.package(preview.handoff.id):null,controller=new AbortController();
     this.atomic(()=>{e.inputMessageId=this.graph.addMessage(this.gid(e.resourceId),'user',input.content,{provenance:'user'}).id;this.state.revisions[e.resourceId]++;this.state.executions[e.id]=e;this.state.receipts[input.commandId]={fingerprint,result:e.id};if(handoff)handoff.state='dispatching';});
     this.active=e;this.assistantText='';this.assistantCursor=0;this.ordinaryController=controller;
@@ -1507,7 +1517,7 @@ export class BackendCore {
         revalidate:async(review,boundary)=>{ensure(review.bodyDigest===p.bodyDigest&&boundary===catalog.boundaryDigest,'approval_scope_mismatch');await fence();},
       }});
       this.providerActivity.providerRequests=Math.min(Number.MAX_SAFE_INTEGER,this.providerActivity.providerRequests+1);
-      result=await transport.turn({executionId:e.id,requestId:input.commandId,configurationId:p.configurationId,providerId:CHATGPT_PLAN_PROVIDER,assistant:'ordinary',model:p.model,instructions:p.instructions,messages:p.messages,contextDigest:p.contextDigest,...(p.webSearch?{webSearch:true}:{})},controller.signal);
+      result=await transport.turn({executionId:e.id,requestId:input.commandId,configurationId:p.configurationId,providerId:CHATGPT_PLAN_PROVIDER,assistant:'ordinary',model:p.model,instructions:p.instructions,messages:p.messages,contextDigest:p.contextDigest,...(p.reasoningEffort === undefined ? {} : { reasoningEffort: p.reasoningEffort }),...(p.webSearch?{webSearch:true}:{})},controller.signal);
       let valid=true;try{await fence();}catch{valid=false;}
       if(result.responseId&&!e.responseId&&valid)await supply(result.responseId);
       this.atomic(()=>{

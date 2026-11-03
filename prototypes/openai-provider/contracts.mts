@@ -1,4 +1,5 @@
 /** Native-process module contracts. No secret-bearing type is a renderer RPC. */
+import type { ReasoningEffort } from './model-controls.ts';
 export type ProviderId = 'chatgpt-plan-responses' | 'openai-api-vela';
 export type AssistantId = 'ordinary' | 'vela';
 /** Safe catalog observation only. No credentials, raw body/header object,
@@ -34,6 +35,7 @@ export interface TurnInput {
         readonly content: string;
     }[];
     readonly contextDigest: string;
+    readonly reasoningEffort?: ReasoningEffort;
     readonly webSearch?: true;
 }
 export type WebCitation = { url: string; title: string; start: number; end: number };

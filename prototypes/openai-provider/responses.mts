@@ -1,6 +1,7 @@
 import { MIMEType } from 'node:util';
 import type { DispatchReview, ModelCatalogDiagnostic, NativeCredential, ProviderId, ReportedUsage, TransportOptions, TurnHttpDiagnostic, TurnInput, TurnResult, WebCitation } from './contracts.mts';
 import { abortable, boundedJSON, digest, exact, knownRemoteCode, ProviderError, record, requireValue, text } from './common.mts';
+import { supportsOrdinaryReasoning, supportsOrdinaryWebSearch } from './model-controls.ts';
 export const RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses';
 export const MODELS_ENDPOINT = 'https://api.openai.com/v1/models';
 export const RESPONSES_REQUEST_BYTES = 262144;
@@ -11,10 +12,13 @@ export function prepareResponsesTurn(input: TurnInput, maxBytes = defaults.reque
     review: DispatchReview;
 } {
     requireValue(Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= defaults.requestBytes, 'invalid_request_limit');
-    requireValue(record(input) && exact(input, ['executionId', 'requestId', 'configurationId', 'providerId', 'assistant', 'model', 'instructions', 'messages', 'contextDigest', ...(Object.hasOwn(input, 'webSearch') ? ['webSearch'] : [])]), 'invalid_turn');
+    requireValue(record(input) && exact(input, ['executionId', 'requestId', 'configurationId', 'providerId', 'assistant', 'model', 'instructions', 'messages', 'contextDigest', ...(Object.hasOwn(input, 'reasoningEffort') ? ['reasoningEffort'] : []), ...(Object.hasOwn(input, 'webSearch') ? ['webSearch'] : [])]), 'invalid_turn');
     requireValue(!Object.hasOwn(input, 'webSearch') || input.webSearch === true && input.providerId === 'chatgpt-plan-responses' && input.assistant === 'ordinary', 'invalid_web_search_scope');
     requireValue(['executionId', 'requestId', 'configurationId', 'model'].every(key => text(input[key as keyof TurnInput])), 'invalid_turn_identity');
     requireValue(input.providerId === 'chatgpt-plan-responses' && input.assistant === 'ordinary' || input.providerId === 'openai-api-vela' && input.assistant === 'vela', 'provider_identity_mismatch');
+    requireValue(!Object.hasOwn(input, 'reasoningEffort') ||
+        input.providerId === 'chatgpt-plan-responses' && supportsOrdinaryReasoning(input.model, input.reasoningEffort), 'unsupported_reasoning_effort');
+    requireValue(!input.webSearch || supportsOrdinaryWebSearch(input.model), 'unsupported_web_search_model');
     requireValue(typeof input.contextDigest === 'string' && /^[a-f0-9]{64}$/.test(input.contextDigest), 'invalid_context_digest');
     requireValue(typeof input.instructions === 'string' && Array.isArray(input.messages) && input.messages.length > 0 && input.messages.length <= RESPONSES_MESSAGE_LIMIT, 'invalid_context');
     let units = input.instructions.length;
@@ -24,7 +28,15 @@ export function prepareResponsesTurn(input: TurnInput, maxBytes = defaults.reque
         requireValue(units <= maxBytes, 'request_capacity_exceeded');
     }
     // The only supported hosted tool is explicitly requested ordinary web search.
-    const body = JSON.stringify({ model: input.model, instructions: input.instructions, input: input.messages.map(({ role, content }) => ({ role, content })), store: false, stream: true, ...(input.webSearch ? { tools: [{ type: 'web_search' }], tool_choice: 'required' } : {}) });
+    const body = JSON.stringify({
+        model: input.model,
+        instructions: input.instructions,
+        input: input.messages.map(({ role, content }) => ({ role, content })),
+        store: false,
+        stream: true,
+        ...(input.reasoningEffort === undefined ? {} : { reasoning: { effort: input.reasoningEffort } }),
+        ...(input.webSearch ? { tools: [{ type: 'web_search' }], tool_choice: 'required' } : {}),
+    });
     const bodyBytes = Buffer.byteLength(body);
     requireValue(bodyBytes <= maxBytes, 'request_capacity_exceeded');
     return { body, review: { executionId: input.executionId, requestId: input.requestId, configurationId: input.configurationId, providerId: input.providerId, model: input.model, contextDigest: input.contextDigest, bodyDigest: digest(body), bodyBytes } };

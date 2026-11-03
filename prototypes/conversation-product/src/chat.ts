@@ -5,7 +5,11 @@ import { renderMarkdown } from './markdown.ts';
 import type { ExperienceMotionPort, ExperiencePose } from '../../application-contract/motion.ts';
 import { mountConversationPicker, conversationControlStates, conversationDisclosures, type ConversationPicker } from './picker.ts';
 import type { ConversationViewCapture, ConversationViewPersistence } from './view-persistence.ts';
+import type { ReasoningEffort } from '../../openai-provider/model-controls.ts';
 let chatSerial=0;
+const effortLabels: Record<ReasoningEffort, string> = {
+  none: 'None', low: 'Low', medium: 'Medium', high: 'High', xhigh: 'Extra high', max: 'Maximum',
+};
 
 export type ConversationExecution = PublicConversationExecution;
 export type ConversationControlIdentity = 'action'|'new-chat'|'create-chat'|'history'|'close'|'search'|'clear-search'|'filters'|'organize'|'chat-options'|'branches'|'branch-policy'|'lineage'|'providers'|'shares'|'new-folder'|'manage-folder'|'favorite'|'history-result'|'previous'|'next'|'send'|'stop'|'message-actions'|'copy'|'quote'|'source'|'branch'|'publish'|'source-excerpt'|'draft-conflict'|'draft-recovery';
@@ -146,7 +150,19 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   feedbackToggle.addEventListener('click',()=>{feedbackOpen=!feedbackOpen;feedbackToggle.setAttribute('aria-expanded',String(feedbackOpen));feedbackBody.inert=!feedbackOpen;liveFollow=false;if(feedbackOpen){inspectionReturn=messages.scrollTop;inspectionFollow=true;feedbackBody.hidden=false;feedbackHeight=0;reconcileFeedback();}else{inspectionFollow=false;if(inspectionReturn!==null)setScroll(inspectionReturn);inspectionReturn=null;if(options.motion){options.motion.target(feedbackKey,feedbackPose(0,0),'conversation feedback close');options.motion.wake();}else feedbackBody.hidden=true;}renderFeedback();});
   feedbackBody.addEventListener('focusin',()=>{inspectionFollow=false;inspectionReturn=null;});
   feedbackBody.addEventListener('toggle',()=>{reconcileFeedback();},true);
-  let providerPicker:ConversationPicker|null=null, modelPicker:ConversationPicker|null=null, loadingModels=false;
+  let providerPicker: ConversationPicker | null = null;
+  let modelPicker: ConversationPicker | null = null;
+  let thinkingPicker: ConversationPicker | null = null;
+  let thinking: { modelId: string; effort: ReasoningEffort } | undefined;
+  let loadingModels = false;
+  const ordinaryPlan = () => current?.conversation.providerId === 'chatgpt-plan-responses'
+    ? current.providers.find(item => item.id === 'chatgpt-plan-responses')
+    : undefined;
+  const effectiveModel = () => {
+    const catalog = ordinaryPlan()?.modelOptions ?? [];
+    const selected = options.models?.selections.get(resourceId);
+    return selected ? catalog.find(item => item.id === selected.id) : catalog[0];
+  };
   if(options.motion&&options.onProviderChange){provider.hidden=true;providerPicker=mountConversationPicker(providerSlot,{motion:options.motion,viewId:options.viewId!+':provider',label:'Conversation provider',identity:'providers',async onSelect(targetProviderId){
     const before=current;if(!before||accessRevoked||sending||active()||before.conversation.state==='archived')return;
     const empty=before.messages.total===0&&before.messages.items.length===0&&['local','mock-ordinary','chatgpt-plan-responses'].includes(before.conversation.providerId),mode=empty?'empty':'continuation';
@@ -171,10 +187,25 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           if (!choice) return;
           models.selections.set(resourceId, { ...choice });
         }
+        thinking = undefined;
         renderDraft();
       },
       onError: () => report('Could not refresh the model list. Your draft is still here.'),
     });
+    thinkingPicker = mountConversationPicker(modelSlot, {
+      motion: options.motion, viewId: options.viewId! + ':thinking', label: 'Thinking for next message', identity: 'providers',
+      onSelect(value) {
+        if (value === 'default') thinking = undefined;
+        else {
+          const model = effectiveModel();
+          const effort = model?.reasoningEfforts?.find(option => option === value);
+          if (!model || effort === undefined) return;
+          thinking = { modelId: model.id, effort };
+        }
+        renderDraft();
+      },
+    });
+    thinkingPicker.trigger.title = 'Thinking effort for the next send';
   }
   const session = options.draftSession ?? new ConversationDraftSession({ resourceId, port, ...(options.initialDraft === undefined ? {} : { initialContent: options.initialDraft }) });
   const copy = options.copy ?? (text => navigator.clipboard.writeText(text));
@@ -219,16 +250,18 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   });
   if(layoutHost)resizeObserver?.observe(layoutHost);
   function revokeView() {
-    const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=pendingAnchor=null;viewWanted=userScroll=false;inspectionFollow=liveFollow=false;inspectionReturn=null;root.dataset.resourceAvailable='false';current=null;cache.clear();days.clear();messages.replaceChildren(stream,feedbackBody);
+    const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=pendingAnchor=null;viewWanted=userScroll=false;inspectionFollow=liveFollow=false;inspectionReturn=null;root.dataset.resourceAvailable='false';current=null;thinking=undefined;cache.clear();days.clear();messages.replaceChildren(stream,feedbackBody);
     streamText.textContent='';stream.hidden=true;paging.hidden=true;capabilityNote.textContent=contextNote.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;
     renderDraft();if(notify)options.onUnavailable?.();report('This conversation is no longer available. Its draft is retained.');
   }
   function renderDraft(snapshot: DraftSessionSnapshot = session.snapshot()) {
     if (disposed) return;
+    const plan = ordinaryPlan();
+    const selectedModel = effectiveModel();
+    const modelControlsDisabled = !plan?.available || sending || !!active() || accessRevoked || current?.conversation.state !== 'active';
     if(providerPicker){providerPicker.update({items:current?.providers.map(item=>({value:item.id,label:item.label,disabled:!item.available||!item.record,description:item.reason}))??[],value:current?.conversation.providerId??'',disabled:!current||accessRevoked||sending||!!active()||current.conversation.state==='archived'});}
     if (modelPicker) {
-      const plan = current?.providers.find(item => item.id === 'chatgpt-plan-responses');
-      modelSlot.hidden = current?.conversation.providerId !== plan?.id || !plan;
+      modelSlot.hidden = !plan;
       const chosen = options.models?.selections.get(resourceId);
       const catalog = plan?.modelOptions ?? [];
       modelPicker.update({
@@ -239,7 +272,23 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
           { value: 'refresh', label: loadingModels ? 'Loading models…' : catalog.length ? 'Refresh model list' : 'Load available models', disabled: loadingModels },
         ],
         value: chosen ? 'model:' + chosen.id : 'automatic',
-        disabled: modelSlot.hidden || !plan?.available || sending || !!active() || accessRevoked || current?.conversation.state !== 'active',
+        disabled: modelControlsDisabled,
+      });
+    }
+    if (thinkingPicker) {
+      const choices = selectedModel?.reasoningEfforts ?? [];
+      const stale = !!thinking && (thinking.modelId !== selectedModel?.id || !choices.includes(thinking.effort));
+      thinkingPicker.element.hidden = !choices.length && !thinking;
+      thinkingPicker.update({
+        items: [
+          { value: 'default', label: 'Default thinking' },
+          ...choices.map(effort => ({
+            value: effort, label: 'Thinking · ' + effortLabels[effort],
+          })),
+          ...(stale ? [{ value: 'stale', label: 'Thinking · unavailable', disabled: true }] : []),
+        ],
+        value: stale ? 'stale' : thinking?.effort ?? 'default',
+        disabled: modelControlsDisabled,
       });
     }
     // Do not assign equal values: native caret, selection and composition remain intact.
@@ -254,8 +303,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if (uncertain && reviewed.parentNode !== recovery) recovery.append(el('p','Send acceptance is not confirmed. Your draft is retained; inspect the chat before retrying.'),reviewed);
     keep.disabled = useStored.disabled = retry.disabled = recovering;
     send.disabled = sending || !!active() || uncertain || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
-    web.hidden = current?.conversation.providerId !== 'chatgpt-plan-responses';
-    web.disabled = send.disabled || !current?.providers.some(item => item.id === current?.conversation.providerId && item.execute);
+    web.hidden = !plan?.execute || !selectedModel?.eligibleTools?.includes('web_search');
+    web.disabled = send.disabled || web.hidden || !plan?.available;
     send.dataset.state=uncertain?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=cancelPending?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = cancelPending || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
   }
@@ -349,6 +398,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   function render(detail: Detail, around?:string,followMessageId?:string,restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>) {
     const nearBottom = messages.scrollHeight-messages.scrollTop-messages.clientHeight < 80, scroll = messages.scrollTop;
     userScroll=false;
+    if (current?.conversation.providerId !== detail.conversation.providerId) thinking = undefined;
     current=detail; const nodes:HTMLElement[]=[],formats={parts:new Intl.DateTimeFormat('en-CA',{year:'numeric',month:'2-digit',day:'2-digit'}),day:new Intl.DateTimeFormat(undefined,{year:'numeric',month:'long',day:'numeric'}),time:new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'})};let previousDay:string|undefined;
     for(const message of detail.messages.items){const clock=canonicalClock(message.createdAt,formats);if(clock.day!==previousDay){let cached=days.get(message.id);if(!cached||cached.day!==clock.day){const divider=el('div',undefined,'cp-chat-day'),label=el('span',clock.dayLabel),line=el('hr');divider.dataset.day=clock.day;divider.dataset.beforeMessageId=message.id;divider.setAttribute('role','separator');divider.setAttribute('aria-label',clock.dayLabel);label.setAttribute('aria-hidden','true');line.setAttribute('aria-hidden','true');divider.append(label,line);cached={day:clock.day,node:divider};days.set(message.id,cached);}nodes.push(cached.node);previousDay=clock.day;}nodes.push(messageNode(message,clock));}
     const copy=providerCopy(detail.conversation.providerId);
@@ -388,18 +438,43 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if((offset===undefined||input.latest)&&!around&&d.messages.hasMore){offset=Math.max(0,d.conversation.messageCount-50);await refresh();return;}
     accessRevoked=false;root.dataset.resourceAvailable='true';offset=d.messages.offset;render(d,input.aroundMessageId,input.followMessageId,input.restoreAnchor);
   }
-  composer.addEventListener('submit',event=>{event.preventDefault();const webSearch=event.submitter===web;if(send.disabled||!current||webSearch&&web.disabled)return;const before=current,content=textarea.value,commandId=crypto.randomUUID(),model=before.conversation.providerId==='chatgpt-plan-responses'?options.models?.selections.get(resourceId)?.id:undefined;sending=true;renderDraft();report(webSearch?'Searching the web…':providerCopy(before.conversation.providerId).pending);
+  composer.addEventListener('submit',event=>{
+    event.preventDefault();
+    const webSearch = event.submitter === web;
+    if (send.disabled || !current || webSearch && web.disabled) return;
+    const before = current, content = textarea.value, commandId = crypto.randomUUID();
+    const plan = ordinaryPlan(), selectedModel = effectiveModel();
+    const reasoningEffort = plan ? thinking?.effort : undefined;
+    if (reasoningEffort !== undefined && (selectedModel?.id !== thinking?.modelId ||
+        !selectedModel?.reasoningEfforts?.includes(reasoningEffort))) {
+      report('That thinking level is unavailable for this model. Choose a model or reset thinking. Your draft is still here.');
+      return;
+    }
+    const model = webSearch || reasoningEffort !== undefined
+      ? selectedModel?.id
+      : plan && options.models?.selections.get(resourceId)?.id;
+    sending = true;
+    renderDraft();
+    report(webSearch?'Searching the web…':providerCopy(before.conversation.providerId).pending);
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
-      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(webSearch?{webSearch:true}:{})});
+      if (reasoningEffort !== undefined) thinking = undefined;
+      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(reasoningEffort === undefined ? {} : { reasoningEffort }),...(webSearch?{webSearch:true}:{})});
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
       const receipt = result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
       const failed = receipt?.state === 'failed' && receipt.commandId === commandId && receipt.resourceId === resourceId && receipt.providerId === input.providerId;
       if(!failed&&!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
       let followMessageId:string|undefined;
-      if(acceptedConversationSubmission(input,result,evidence)) { const receipt=result as Record<string,unknown>;followMessageId=typeof receipt.deviceClockMessageId==='string'?receipt.deviceClockMessageId:receipt.role==='user'?String(receipt.id):evidence?.messages.items.find(m=>m.resourceId===resourceId&&!m.inherited&&m.role==='user'&&m.content===content&&!input.priorMessageIds.includes(m.id))?.id;const cleared=await session.acknowledgeSent(checkpoint);report(cleared?'Message accepted.':'Message accepted. Later draft edits were retained.','send-accepted'); }
-      else if (failed) {
+      if (receipt && acceptedConversationSubmission(input, result, evidence)) {
+        const clockMessageId = typeof receipt.deviceClockMessageId === 'string' ? receipt.deviceClockMessageId : undefined;
+        followMessageId = clockMessageId ?? (receipt.role === 'user' ? String(receipt.id) :
+          evidence?.messages.items.find(m => m.resourceId === resourceId && !m.inherited &&
+            m.role === 'user' && m.content === content && !input.priorMessageIds.includes(m.id))?.id);
+        const cleared = await session.acknowledgeSent(checkpoint);
+        const accepted = clockMessageId ? 'Answered from this device’s clock.' : 'Message accepted.';
+        report(cleared ? accepted : accepted + ' Later draft edits were retained.', 'send-accepted');
+      } else if (failed) {
         const unavailable = receipt?.errorCode === 'subscription_sharing_unsupported_capability';
         const reason = unavailable
           ? webSearch ? 'This ChatGPT plan or model could not use web search.' : 'This ChatGPT plan or model could not complete the request.'
@@ -410,7 +485,14 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
         await refresh({latest:true,...(followMessageId?{followMessageId}:{})}).catch(error => { if (!failed) throw error; });
         if(!disposed)await options.onChanged?.();
       }
-    })().catch(error=>{if(errorText(error)==='authorization_cancelled')report('Send cancelled. Your saved draft was retained.');else if(errorText(error)==='unsupported_model')report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');else{uncertain=true;report('Send could not be confirmed: '+errorText(error));}}).finally(()=>{sending=false;sendTask=null;renderDraft();});
+    })().catch(error=>{
+      const code = errorText(error);
+      if (code === 'authorization_cancelled') report('Send cancelled. Your saved draft was retained.');
+      else if (code === 'unsupported_model') report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');
+      else if (code === 'unsupported_reasoning_effort') report('This model cannot use the requested thinking level. Your draft is still here.');
+      else if (code === 'unsupported_web_search_model') report('This model cannot use web search. Your draft is still here.');
+      else { uncertain=true;report('Send could not be confirmed: '+code); }
+    }).finally(()=>{sending=false;sendTask=null;renderDraft();});
   });
   stop.addEventListener('click',()=>{if(!execution||!options.execution||!active()||cancelPending||connection==='unavailable')return;cancelPending=true;renderDraft();const id=execution.id;void options.execution.cancel(id).then(()=>report('Stop requested. Waiting for the provider to confirm.'),error=>report('Stop could not be requested: '+errorText(error))).finally(()=>{cancelPending=false;renderDraft();});});
   if(options.execution)unsubscribeExecution=options.execution.observe(resourceId,observation=>{
@@ -458,13 +540,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   // The send RPC can remain pending through the entire native provider turn. Draft durability
   // must be independent so a pane can close and the host can offer interruption on quit.
   const flush=async()=>{await session.flush();viewState();try{await options.viewPersistence?.flush(resourceId);}catch{report('View position could not be saved. Your draft remains saved.');}};
-  const frame=()=>{if(disposed)return;providerPicker?.frame();modelPicker?.frame();disclosures?.frame();controlStates?.frame();reconcileFeedback();let settled=true;if(options.motion){const p=options.motion.pose(feedbackKey),bar=options.motion.pose(feedbackBarKey),height=Math.max(0,p.h)+'px',barHeight=Math.max(0,bar.h)+'px';if(feedbackBody.style.height!==height)feedbackBody.style.height=height;if(feedbackBody.style.opacity!==String(p.opacity))feedbackBody.style.opacity=String(p.opacity);if(feedback.style.height!==barHeight)feedback.style.height=barHeight;if(feedback.style.opacity!==String(bar.opacity))feedback.style.opacity=String(bar.opacity);if(!feedbackOpen&&p.opacity<.001)feedbackBody.hidden=true;settled=Math.abs(p.h-feedbackHeight)<1&&p.opacity>.995;}
+  const frame=()=>{if(disposed)return;providerPicker?.frame();modelPicker?.frame();thinkingPicker?.frame();disclosures?.frame();controlStates?.frame();reconcileFeedback();let settled=true;if(options.motion){const p=options.motion.pose(feedbackKey),bar=options.motion.pose(feedbackBarKey),height=Math.max(0,p.h)+'px',barHeight=Math.max(0,bar.h)+'px';if(feedbackBody.style.height!==height)feedbackBody.style.height=height;if(feedbackBody.style.opacity!==String(p.opacity))feedbackBody.style.opacity=String(p.opacity);if(feedback.style.height!==barHeight)feedback.style.height=barHeight;if(feedback.style.opacity!==String(bar.opacity))feedback.style.opacity=String(bar.opacity);if(!feedbackOpen&&p.opacity<.001)feedbackBody.hidden=true;settled=Math.abs(p.h-feedbackHeight)<1&&p.opacity>.995;}
     drainAnchor();
     if(inspectionFollow&&feedbackOpen&&messages.clientHeight>0){const box=messages.getBoundingClientRect(),body=feedbackBody.getBoundingClientRect(),scale=box.height/(messages.offsetHeight||messages.clientHeight);if(Number.isFinite(scale)&&scale>0&&body.height>0){const next=Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(body.top-box.top)/scale));setScroll(next);if(settled)inspectionFollow=false;}}
     if(liveFollow&&!feedbackOpen&&!stream.hidden&&messages.clientHeight>0){const next=Math.max(0,messages.scrollHeight-messages.clientHeight);setScroll(next);liveFollow=false;}
   };
   return {ready,refresh,focusComposer:()=>textarea.focus(),frame,setPresentation(mode){if(mode!=='workspace'&&mode!=='focused')throw new Error('invalid_chat_presentation');if(disposed)return;const scroll=messages.scrollTop;presentation=mode;resize();setScroll(scroll);drainPendingFollow();drainAnchor();},flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
-    if(disposed)return;await flush();disposed=true;generation++;pendingFollow=pendingAnchor=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();modelPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
+    if(disposed)return;await flush();disposed=true;generation++;pendingFollow=pendingAnchor=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();modelPicker?.dispose();thinkingPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
     if(!options.draftSession){
       if(sendTask){void sendTask.then(()=>session.dispose(),()=>session.dispose()).catch(()=>{/* Existing durable recovery is untouched; never overwrite or replay a conflict. */});}
       else await session.dispose();
