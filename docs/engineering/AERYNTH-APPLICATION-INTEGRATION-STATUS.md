@@ -29,6 +29,28 @@ disposable profile. The private receipt SHA-256 is
 The user's open candidate was left in place. Live interpretation of the
 workspace request on this revision remains unverified.
 
+## November 3 Portable AR and direct Codex readiness
+
+Portable AR packages `e35ebdf45e14686ea58e5a6e55aa332940eba8dc`.
+All 384 payload files matched the manifest and the two changed backend
+sources matched Git. The manifest SHA-256 is
+`373eb837a21b5327f1ce9161cad5170155261a3cb77beac67d453c6bb63ad995`.
+The bundled Node and canonical host passed 22 initial calls and five
+restart calls with no provider execution. A hidden Electron run loaded
+the exact bundled app modules, renderer assets, and Node backend.
+With an external test harness and a scripted stdio planner, a real
+Vela Send and review click changed canonical workspace geometry.
+The private receipt SHA-256 is
+`9a5ef319fb0aa897ab3de502ea4bdca43730e89d68f19a41bdcb90abcb1cd58c`.
+
+A separate disposable AR profile observed an already signed-in native
+Codex capability and restored a synthetic draft, workspace, and
+conversation after backend restart. Its execution count was zero.
+The launcher in `review-live-codex-1793696549238` is ready for an
+explicit native Send review. Both checks used disposable profiles.
+The user window remained open and live direct Codex acceptance is
+pending. SQLite integrity checks passed for the three closed profiles.
+
 ## November 3 shared glass geometry during Fit
 
 `6bb8f93` shares a WebGL glass slab within a draw when card dimensions,
