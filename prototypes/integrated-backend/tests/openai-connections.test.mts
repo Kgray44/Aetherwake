@@ -662,9 +662,10 @@ test("wrong same-db transaction is rejected before migration; listener expiry re
         .get(),
       undefined,
     );
-    short = new OpenAIConnections({ ...f.options, listenerTimeoutMs: 30 });
+    // Allow real loopback setup to finish under concurrent test load.
+    short = new OpenAIConnections({ ...f.options, listenerTimeoutMs: 1000 });
     const start = await short.begin();
-    await new Promise((resolve) => setTimeout(resolve, 45));
+    await new Promise((resolve) => setTimeout(resolve, Math.max(1, start.expiresAt - Date.now() + 25)));
     const status = await short.status();
     assert.equal(status.pending, false);
     assert.equal(status.state, "disconnected");

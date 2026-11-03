@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { resolve } from "node:path";
+import path, { posix, resolve, win32 } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { WorkspaceKernel } from "../../workspace-kernel/kernel.mts";
 import { DesktopState } from "../src/desktop.mts";
@@ -16,6 +16,24 @@ import {
   type ProductDomainsOptions,
 } from "../src/product-domains.mts";
 import { agentTemplates } from "../../agent-product/service.mts";
+
+function isFixtureSubdirectory(root: string, directory: string, paths = path) {
+  const child = paths.relative(root, directory);
+  return child !== "" && child !== ".." &&
+    !child.startsWith(".." + paths.sep) && !paths.isAbsolute(child);
+}
+
+test("fixture containment rejects siblings and traversal on Windows and POSIX", () => {
+  for (const [paths, root] of [[posix, "/tmp/fixtures"], [win32, "C:\\tmp\\fixtures"]] as const) {
+    assert.equal(isFixtureSubdirectory(root, paths.join(root, "case"), paths), true);
+    assert.equal(isFixtureSubdirectory(root, paths.join(root, "..allowed"), paths), true);
+    assert.equal(isFixtureSubdirectory(root, root, paths), false);
+    assert.equal(isFixtureSubdirectory(root, paths.dirname(root), paths), false);
+    assert.equal(isFixtureSubdirectory(root, root + "-sibling", paths), false);
+    assert.equal(isFixtureSubdirectory(root, paths.resolve(root, "case", "..", "..", "outside"), paths), false);
+  }
+  assert.equal(isFixtureSubdirectory("C:\\tmp\\fixtures", "D:\\tmp\\fixtures\\case", win32), false);
+});
 
 function fixture(t: any, file = ":memory:") {
   const kernel = WorkspaceKernel.open(file),
@@ -224,10 +242,9 @@ test("read-only empty domains do not initialize schemas or phantom resources; DT
 });
 
 test("independent Agent and Checklist identities use canonical generic resources with zero Notes/chats/workspaces/placements and survive SQLite restart", (t) => {
-  const directory = resolve(".runtime/product-domains-tests", randomUUID());
-  assert(
-    directory.startsWith(resolve(".runtime/product-domains-tests") + "\\"),
-  );
+  const root = resolve(".runtime/product-domains-tests");
+  const directory = resolve(root, randomUUID());
+  assert(isFixtureSubdirectory(root, directory));
   mkdirSync(directory, { recursive: true });
   t.diagnostic("Retained synthetic-only canonical SQLite: " + directory);
   const file = resolve(directory, "canonical.sqlite"),
