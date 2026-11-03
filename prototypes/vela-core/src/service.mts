@@ -63,7 +63,7 @@ function validatePresentation(value: unknown): asserts value is VelaPresentation
   check(isRecord(value) && value.schemaVersion === 1, 'unsupported_vela_presentation_schema');
   check(Object.keys(value).sort().join(',') === 'dismissedRequestIds,pinnedRequestIds,schemaVersion,selectedRequestId,version,view' && Number.isSafeInteger(value.version) && Number(value.version) >= 1 && (value.view === 'current' || value.view === 'history') && (value.selectedRequestId === null || identifier(value.selectedRequestId)) && presentationIds(value.dismissedRequestIds) && presentationIds(value.pinnedRequestIds), 'invalid_vela_presentation_state');
 }
-export const VELA_PLANNING_INSTRUCTION = `Lead with one or two short sentences. Use a typed tool for app actions and live facts. Resolve references like here or my workspace from activeSurface. Use a capability that produces the requested effect. If no active workspace is available and the user did not name one, ask which workspace they mean. Clarify ambiguity that changes the outcome. A proposal is not a completed action. Delegation requires separate execution approval.`;
+export const VELA_PLANNING_INSTRUCTION = `Be brief. Resolve “here” from activeSurface. Choose typed tools by their effects and activeWorkspaceLayout. Avoid no-ops for requests to rearrange. Ask about ambiguity that changes the outcome, including an unresolved workspace. Report plans as proposals. Delegation requires separate approval.`;
 
 export class VelaService {
   private data!: StoredState;
@@ -383,6 +383,10 @@ export class VelaService {
         projectId: discoveredId(active.currentProjectId, 'project'),
         workspaceId: discoveredId(active.currentWorkspaceId, 'workspace'),
       };
+      if (manifest.activeSurface.workspaceId) {
+        const layout = this.opts.host.activeWorkspaceLayout?.(manifest.activeSurface.workspaceId);
+        if (layout) manifest.activeWorkspaceLayout = layout;
+      }
     }
     return manifest;
   }
@@ -700,7 +704,7 @@ export class VelaService {
           if (step.action.type === 'openResource' && receipt.foundSubjects.length === 1 && receipt.foundSubjects[0].kind === 'resource')
             receipt.openResourceId = receipt.foundSubjects[0].id;
         }
-        if ((step.action.type === 'readWeather' || step.action.type === 'readLocalFact') && text(result.responseText, 1000)) {
+        if (text(result.responseText, 1000)) {
           this.append(result.responseText, request.id, 'vela-native', plan);
           explicitResponse = true;
         }

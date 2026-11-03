@@ -27,10 +27,20 @@ export interface ContextManifest {
   discovered: ResourceRef[]; included: ContextEntry[];
   /** Reviewed working context. Non-null IDs must refer to authorized entries in discovered. */
   activeSurface?: { projectId: string | null; workspaceId: string | null };
+  /** Bounded layout metadata for the authorized active workspace. No card identities or content. */
+  activeWorkspaceLayout?: VelaWorkspaceLayoutContext;
   omitted: { id: string; reason: string }[];
   contentBytes: number; coverage: 'explicit-resources-only';
   /** Exact reviewed egress only. Persisted request context never copies these canonical message bodies. */
   history?: ProviderHistory;
+}
+export interface VelaWorkspaceLayoutContext {
+  mode: 'fluid' | 'freeform' | 'structured';
+  placementCount: number;
+  lockedPlacementCount: number;
+  velaLocked: boolean;
+  /** Null when the canonical layout solver cannot produce a valid preview. */
+  resolveWouldMovePlacements: boolean | null;
 }
 export type VelaNativeAction =
   | { type: 'search'; query: string }
@@ -207,6 +217,7 @@ export interface VelaHostPort {
   context?(): { currentProjectId: string | null; currentWorkspaceId: string | null };
   /** Explicit metadata only, inserted into the actual consent/planner manifest before authorization. */
   contextReferences?(selectedResourceIds: readonly string[]): ResourceRef[];
+  activeWorkspaceLayout?(workspaceId: string): VelaWorkspaceLayoutContext | undefined;
   /** Both conversation operations use the canonical host resource/graph, on the injected db transaction. */
   ensureConversation(key: 'system:vela'): string;
   readConversation(resourceId: string): CanonicalConversation;

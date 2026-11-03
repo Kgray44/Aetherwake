@@ -24,6 +24,8 @@ import { readLocalWeather } from './local-weather.mts';
 import { mediaDefaultGeometry } from '../../block-library/media-policy.ts';
 import { inspectMediaSelection, mediaCapabilities, mediaExternalTarget, readMediaChunk, readMediaSource } from './media-sources.mts';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
+import { WorkspaceError } from '../../workspace-engine/geometry.mts';
+import { previewLayout } from '../../workspace-engine/organization.mts';
 import { ConversationGraph, type GraphData, type MessageMetadata, type ProviderAdapter as GraphAdapter } from '../../connected-conversations/src/graph.ts';
 import { localConversationAdapter, mockOrdinaryAdapter } from '../../connected-conversations/src/adapters.ts';
 import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
@@ -567,7 +569,28 @@ export class BackendCore {
         this.desktop.apply({...a,bounds:presentation.bounds},()=>{throw new ServiceError('unexpected_vela_conversation_creation');});
         this.record('vela.native.'+a.type,'observed');return {status:'applied',receiptId:input.commandId};
       }
-      if(a.type==='taskPriority'||a.type==='resolveLayout') {
+      if(a.type==='resolveLayout'||a.type==='applyStructuredPreset') {
+        const before = engine.inspectWorkspace(a.workspaceId);
+        this.desktop.apply(a, () => { throw new ServiceError('unexpected_vela_conversation_creation'); });
+        const after = engine.inspectWorkspace(a.workspaceId);
+        const positions = new Map(before.blocks.map(block => [block.blockId, block]));
+        const moved = after.blocks.filter(block => {
+          const previous = positions.get(block.blockId)!;
+          return block.x !== previous.x || block.y !== previous.y ||
+            block.width !== previous.width || block.height !== previous.height;
+        }).length;
+        const movedVela = after.presence.x !== before.presence.x || after.presence.y !== before.presence.y;
+        const changes: string[] = [];
+        if (moved) changes.push(moved + (moved === 1 ? ' card' : ' cards'));
+        if (movedVela) changes.push('Vela');
+        const layout = a.type === 'applyStructuredPreset' ? 'Applied the ' + a.preset + ' Structured layout. ' : '';
+        const responseText = layout + (changes.length
+          ? 'Repositioned ' + changes.join(' and ') + '. You can undo it.'
+          : 'No placements needed to move.');
+        this.record('vela.native.' + a.type, 'observed');
+        return {status:'applied',receiptId:input.commandId,responseText};
+      }
+      if(a.type==='taskPriority') {
         this.desktop.apply(a,()=>{throw new ServiceError('unexpected_vela_conversation_creation');});
         this.record('vela.native.'+a.type,'observed');return {status:'applied',receiptId:input.commandId};
       }
@@ -582,7 +605,7 @@ export class BackendCore {
       if(a.type==='attach') {
         const row=host.readResource(a.resourceId);ensure(row?.authorized,'resource_unavailable');this.library.attachBlock({commandId:input.commandId,workspaceId:a.workspaceId,expectedLayoutVersion:engine.project(a.workspaceId).revision,resourceId:a.resourceId,expectedResourceVersion:row.version,kind:row.kind});bridge.navigateWorkspace(a.workspaceId);return {status:'applied',receiptId:input.commandId};
       }
-      ensure(a.type==='applyStructuredPreset','unsupported_released_vela_action');this.desktop.apply(a,()=>{throw new ServiceError('unexpected_library_conversation_creation');});return {status:'applied',receiptId:input.commandId};
+      throw new ServiceError('unsupported_released_vela_action');
     }});
   }
   private async libraryCommand(operation:LibraryRequest):Promise<LibraryResponse> {
@@ -761,6 +784,29 @@ export class BackendCore {
       add(context.currentProjectId,'project');add(context.currentWorkspaceId,'workspace');
       for(const id of selectedIds){if(!scope.resourceIds.includes(id))continue;const owner=this.db.prepare('SELECT project_id FROM resources WHERE id=?').get(id)?.project_id;if(typeof owner==='string')add(owner,'project');}
       return refs;
+    };
+    this.velaHost.activeWorkspaceLayout = workspaceId => {
+      if (!this.libraryAuthorized({kind:'workspace',id:workspaceId})) return undefined;
+      const engine = this.desktop.nativeBlockServices().engine;
+      try {
+        const workspace = engine.inspectWorkspace(workspaceId);
+        let resolveWouldMovePlacements: boolean | null = null;
+        try {
+          resolveWouldMovePlacements = previewLayout(workspace, {intent:'resolve'}).affectedPlacementIds.length > 0;
+        } catch (error) {
+          if (!(error instanceof WorkspaceError)) throw error;
+        }
+        return {
+          mode: workspace.organization.mode,
+          placementCount: workspace.blocks.length,
+          lockedPlacementCount: workspace.blocks.filter(block => block.locked).length,
+          velaLocked: workspace.presence.locked,
+          resolveWouldMovePlacements,
+        };
+      } catch (error) {
+        if (error instanceof WorkspaceError && error.code === 'UNAVAILABLE') return undefined;
+        throw error;
+      }
     };
     const adapter=new CodexPlanningAdapter({backend:{command:(name,input)=>this.command(name,input)},availability:()=>{
       const cap=this.capabilityCache.snapshot();return {available:!!cap&&!cap.mock&&cap.providerId==='codex-app-server'&&cap.authentication==='available',busy:!!this.active,reason:cap?'Codex must be a real authenticated observed provider':'Provider capability has not been observed; native actions remain available'};

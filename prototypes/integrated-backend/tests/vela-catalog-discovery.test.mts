@@ -29,11 +29,13 @@ function fixture(mode = 'normal', enabled = true) {
   port().onEvent((event) => events.push(event));
   const vela = (name: VelaOperation['name'], input: unknown = {}) => core.command('vela', { name, input } as VelaOperation);
   const state = () => vela('state') as Promise<VelaBackendState>;
-  const granted = async (resourceIds: string[] = [], intent = 'Synthetic protocol request to propose one folder.') => {
+  const granted = async (resourceIds: string[] = [], intent = 'Synthetic protocol request to propose one folder.', reviewNatively = false) => {
     await core.command('capabilities', {});
-    const preview = await core.command('velaRequestPreview', { intent, resourceIds }),
-      grant = await core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature });
-    return { preview, input: { intent: preview.intent, resourceIds, authorizeProvider: true, previewId: preview.id, grantId: grant.grantId } };
+    const preview = await core.command('velaRequestPreview', { intent, resourceIds });
+    const identity = { previewId: preview.id, signature: preview.signature };
+    const review = reviewNatively ? await core.command('velaNativeReview', identity) : undefined;
+    const grant = await core.command('authorizeVelaRequest', { ...identity, ...(review ? { reviewDigest: review.reviewDigest } : {}) });
+    return { preview, review, input: { intent: preview.intent, resourceIds, authorizeProvider: true, previewId: preview.id, grantId: grant.grantId } };
   };
   return {
     get core() {
@@ -196,8 +198,14 @@ test(`reviewed Vela text reaches the model adapter and arranges the exact active
     await f.core.command('desktop', { type: 'createResource', kind: 'task', title: 'Synthetic build', workspaceId });
     const baseline = await f.core.command('desktop', { type: 'snapshot' });
 
-    const { preview, input } = await f.granted([], discovery ? 'Can you organize my workspace?' : 'These cards could use a tidier arrangement.');
+    const { preview, review, input } = await f.granted([], discovery ? 'Can you organize my workspace?' : 'These cards could use a tidier arrangement.', true);
     assert.deepEqual(preview.context.activeSurface, { projectId: project.id, workspaceId });
+    assert.deepEqual(preview.context.activeWorkspaceLayout, {
+      mode: 'fluid', placementCount: 2, lockedPlacementCount: 0, velaLocked: false, resolveWouldMovePlacements: false,
+    });
+    assert(review);
+    assert(review.prompt.includes(JSON.stringify(preview.context.activeWorkspaceLayout)));
+    assert(!review.prompt.includes(content) && !review.prompt.includes(note.id));
     assert.equal(preview.context.contentBytes, 0);
     const request = await f.vela('request', input) as { id: string; planId: string; state: string };
     assert.equal(request.state, 'awaiting-review');
@@ -231,6 +239,9 @@ test(`reviewed Vela text reaches the model adapter and arranges the exact active
     assert.deepEqual(arranged.blocks.map(block => [block.id, block.resource_id]), baseline.blocks.map(block => [block.id, block.resource_id]));
     assert.equal(arranged.resources.find(resource => resource.id === note.id)?.content, content);
     assert.equal((await f.state()).receipts.find(receipt => receipt.requestId === request.id)?.state, 'applied');
+    assert((await f.state()).conversation?.messages.some(message =>
+      message.requestId === request.id && message.source === 'vela-native' &&
+      /Applied the balanced Structured layout\. Repositioned .+\. You can undo it\./.test(message.content)));
 
     await f.reopen();
     const restored = await f.core.command('desktop', { type: 'snapshot' });
@@ -239,6 +250,11 @@ test(`reviewed Vela text reaches the model adapter and arranges the exact active
     const undone = await f.core.command('desktop', { type: 'undo' });
     assert.deepEqual(geometry(undone), geometry(baseline));
     assert.equal(undone.organization?.mode, baseline.organization?.mode);
+    const noOp = await f.vela('native', { intent: 'Resolve collisions', action: { type: 'resolveLayout', workspaceId } }) as typeof plan;
+    await f.vela('apply', noOp.id);
+    assert((await f.state()).conversation?.messages.some(message =>
+      message.requestId === noOp.requestId && message.source === 'vela-native' && message.content === 'No placements needed to move.'));
+    assert.equal((await f.core.command('desktop', { type: 'snapshot' })).layoutVersion, undone.layoutVersion);
   } finally { await f.close(); }
 });
 
