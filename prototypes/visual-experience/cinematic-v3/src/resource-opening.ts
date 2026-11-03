@@ -24,12 +24,17 @@ export function createResourceOpener(options: {
     async open(input: ResourceOpeningInput) {
       const revision = ++intent;
       const current = () => revision === intent;
-      const result = await options.resolve(input);
-      if (!current()) return { status: "superseded" } as const;
-      if (result.status === "ready")
-        await options.present(result, input, current);
-      else options.unavailable(result);
-      return current() ? result : ({ status: "superseded" } as const);
+      try {
+        const result = await options.resolve(input);
+        if (!current()) return { status: "superseded" } as const;
+        if (result.status === "ready")
+          await options.present(result, input, current);
+        else options.unavailable(result);
+        if (current()) return result;
+      } catch (error) {
+        if (current()) throw error;
+      }
+      return { status: "superseded" } as const;
     },
   };
 }

@@ -2,6 +2,34 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 workspace navigation and resource opening
+
+A workspace switch previously cancelled newer resource opens when the
+queued command reached the backend. Back had the inverse failure and
+could leave an earlier pending resource free to open over the destination.
+The desktop and Constellation now invalidate older opens at navigation
+intent. A superseded lookup also drops its late error.
+
+The hidden Electron regression reproduced both failures and passed all
+three corrected sequences. Opening a note after a queued switch or
+Constellation departure reached the canonical note, and Back cancelled
+a held older note lookup. The race receipt SHA-256 is
+`a52e066ea90d6a3c1d3fa2d64f55d765ef586ab0c869117c197f6034bc72e9a7`.
+
+The full application journey passed again in three hidden Electron
+processes. They created the required project and workspace, created and
+edited blocks, detached and reattached the exact note, switched workspaces,
+travelled to another project through Constellation, edited its workspace,
+returned, and restored exact geometry, identities and content after
+restart. The build, travel and restore receipt SHA-256 values are
+`087f99e8e408e4ddd5852b366d0e5c6d3ee6ea1f27045ecd8dab4c771be172cb`,
+`8f62ab09c7f55d6c2e3cae91765df708d57bb490a2c511406f5854054127ecf6` and
+`a7505558d89f3c707e2027b3e803bf6b4453fe79a91dbc1cb0a1cc507722c839`.
+The strict desktop build, 401 desktop tests, 160 Constellation tests
+and six backend resource-opening tests passed. The journey had zero
+provider executions. The running owner window and portable AH predate
+this correction.
+
 ## November 3 shared card projection and portable AH
 
 The DOM and WebGL now use the same projected card poses per frame. Glass

@@ -697,13 +697,10 @@ export function installApplication(hooks: Hooks) {
         const placement = result.placement;
         await enqueueResult(async () => {
           if (!current()) return;
-          await command(
-            {
-              type: "navigate",
-              target: { kind: "workspace", workspaceId: placement.workspaceId },
-            },
-            true,
-          );
+          await command({
+            type: "navigate",
+            target: { kind: "workspace", workspaceId: placement.workspaceId },
+          });
           if (!current()) return;
           surfaces.close("canonical-resource");
           surfaces.close("conversations");
@@ -913,11 +910,7 @@ export function installApplication(hooks: Hooks) {
       ? "Storage check paused saving. Your data is retained."
       : `Action not saved: ${message}. Your current data is retained.`);
   }
-  async function command(
-    a: DesktopCommand,
-    resourceOpening = false,
-  ): Promise<DesktopSnapshot> {
-    if (a.type === "navigate" && !resourceOpening) resourceOpener.cancel();
+  async function command(a: DesktopCommand): Promise<DesktopSnapshot> {
     const knownWorkspaces = new Set(
       state?.workspaces.map((workspace) => workspace.id),
     );
@@ -1175,13 +1168,13 @@ export function installApplication(hooks: Hooks) {
           ].slice(0, 32),
         snapshot: navigationSnapshot,
         motion: hooks.motion,
-        navigate: async (target) => {
-          await flush();
-          await command({ type: "navigate", target });
-        },
-        openResource: async (target) => {
-          await resourceOpener.open(target);
-        },
+        onNavigationIntent: () => resourceOpener.cancel(),
+        navigate: (target) =>
+          enqueueResult(async () => {
+            await flush();
+            return command({ type: "navigate", target });
+          }),
+        openResource: (target) => resourceOpener.open(target),
         persistence: {
           load: () => host.command!("viewState", {}),
           save: async (state) => {
@@ -1385,12 +1378,17 @@ export function installApplication(hooks: Hooks) {
       }
     }
   }
-  function run(a: DesktopCommand) {
-    if (a.type === "navigate") resourceOpener.cancel();
-    return enqueue(async () => {
+  function queueDesktop(a: DesktopCommand) {
+    // Navigation cancels older reads when requested, before flushing drafts or
+    // waiting for other commands. Dispatch must not cancel a newer open.
+    if (a.type === "navigate" || a.type === "back") resourceOpener.cancel();
+    return enqueueResult(async () => {
       await flush();
       return command(a);
     });
+  }
+  function run(a: DesktopCommand) {
+    return queueDesktop(a).then(() => {}, () => {});
   }
   function queuePreview(request: LayoutPreviewRequest) {
     if (!state || previewCommitting) return;
@@ -1457,7 +1455,7 @@ export function installApplication(hooks: Hooks) {
       ...(revision === undefined ? {} : { expectedLayoutVersion: revision }),
     };
     const saving = requireAcknowledgement
-      ? enqueueResult(async () => { await flush(); return command(action); })
+      ? queueDesktop(action)
       : run(action);
     return saving.finally(() => {
       previewCommitting = false;
@@ -2306,11 +2304,7 @@ export function installApplication(hooks: Hooks) {
       return;
     }
     const content = document.createElement("div");
-    const mutate = (action: DesktopCommand) =>
-      enqueueResult(async () => {
-        await flush();
-        return command(action);
-      });
+    const mutate = queueDesktop;
     environmentNavigator = mountEnvironmentNavigator(content, {
       snapshot: state,
       motion: hooks.motion,

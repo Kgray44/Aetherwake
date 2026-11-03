@@ -10,9 +10,12 @@ const ready = (id) => ({
   presentation: { kind: "note", mode: "direct" },
 });
 const deferred = () => {
-  let resolve;
-  const promise = new Promise((done) => (resolve = done));
-  return { promise, resolve };
+  let resolve, reject;
+  const promise = new Promise((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 };
 
 test("a newer open wins even when the earlier canonical lookup completes last", async () => {
@@ -59,6 +62,19 @@ test("closing while a lookup is pending never opens a late resource", async () =
   pending.resolve(ready("unplaced"));
   assert.deepEqual(await operation, { status: "superseded" });
   assert.deepEqual(presented, []);
+});
+
+test("a failed superseded lookup does not report an error over the current view", async () => {
+  const pending = deferred();
+  const opener = createResourceOpener({
+    resolve: () => pending.promise,
+    present: async () => assert.fail("A superseded resource cannot open"),
+    unavailable: () => assert.fail("A superseded resource cannot report unavailability"),
+  });
+  const operation = opener.open({ resourceId: "earlier" });
+  opener.cancel();
+  pending.reject(Error("native_service_unavailable"));
+  assert.deepEqual(await operation, { status: "superseded" });
 });
 
 test("unavailable resources stay unavailable and a failed lookup does not poison later opens", async () => {
