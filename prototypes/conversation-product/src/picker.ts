@@ -103,3 +103,33 @@ export function enhanceConversationSelect(select:HTMLSelectElement,options:{moti
   const sync=(force=true)=>{if(disposed)return;if(force||dirty||!observer){items=[...select.options].map(option=>({value:option.value,label:option.textContent??'',disabled:option.disabled}));dirty=false;}else if(value===select.value&&disabled===select.disabled)return;value=select.value;disabled=select.disabled;picker.update({items,value,disabled});};sync();
   return {sync:()=>sync(),frame(){sync(false);picker.frame();},dispose(){if(disposed)return;disposed=true;observer?.disconnect();picker.dispose();host.remove();select.hidden=previous.hidden;select.tabIndex=previous.tabIndex;if(previous.aria===null)select.removeAttribute('aria-hidden');else select.setAttribute('aria-hidden',previous.aria);if(previous.marker===undefined)delete select.dataset.cpNativePicker;else select.dataset.cpNativePicker=previous.marker;},picker};
 }
+
+/** The narrow history drawer is a second view over a retained chat. The host
+ * samples its position and opacity on the same frame as the other surfaces. */
+export function conversationHistoryDrawer(root:HTMLElement,catalog:HTMLElement,options:{motion:ExperienceMotionPort;viewId:string}){
+ const {motion}=options,key=options.viewId+':history-drawer',media=root.ownerDocument.defaultView?.matchMedia?.('(max-width: 760px)');
+ if(!media)return null;
+ const open=()=>root.classList.contains('cp-history-open');
+ const desired=()=>media.matches&&open();
+ let shown=desired(),disposed=false;
+ const drawerPose=(visible:boolean)=>pose({x:visible?0:-14,opacity:Number(visible)});
+ motion.add(key,drawerPose(shown));root.dataset.cpHistoryMotion='true';
+ const sync=()=>{if(disposed)return;const next=desired();catalog.inert=media.matches&&!open();if(next!==shown){shown=next;motion.target(key,drawerPose(shown),'conversation history drawer');motion.wake();}};
+ const onResize=()=>{sync();motion.wake();};
+ media.addEventListener('change',onResize);
+ root.addEventListener('click',onResize);
+ const frame=()=>{if(disposed)return;sync();const value=motion.pose(key);css(catalog,'--cp-history-drawer-x',value.x+'px');css(catalog,'--cp-history-drawer-opacity',String(Math.max(0,Math.min(1,value.opacity))));root.dataset.cpHistoryPaint=String(shown||value.opacity>.001);};
+ frame();
+ return {frame,dispose(){if(disposed)return;disposed=true;root.removeEventListener('click',onResize);media.removeEventListener('change',onResize);motion.remove(key);catalog.inert=false;delete root.dataset.cpHistoryMotion;delete root.dataset.cpHistoryPaint;catalog.style.removeProperty('--cp-history-drawer-x');catalog.style.removeProperty('--cp-history-drawer-opacity');}};
+}
+
+/** Reveal the current authorized conversation after it is ready. This owns no
+ * transcript or focus state, and refreshes of the same chat do not restart it. */
+export function conversationDetailReveal(detail:HTMLElement,options:{motion:ExperienceMotionPort;viewId:string}){
+ const {motion}=options,key=options.viewId+':detail-reveal';
+ let current:string|null=null,disposed=false,painted=true;
+ motion.add(key,pose());
+ return {show(resourceId:string){if(disposed||current===resourceId)return;current=resourceId;if(motion.reduced)return;motion.remove(key);motion.add(key,pose({y:7,opacity:.42}));motion.target(key,pose(),'conversation content reveal');painted=false;motion.wake();},
+ frame(){if(disposed||painted)return;const value=motion.pose(key);css(detail,'--cp-detail-reveal-y',value.y+'px');css(detail,'--cp-detail-reveal-opacity',String(Math.max(.42,Math.min(1,value.opacity))));if(Math.abs(value.y)<.01&&value.opacity>=.999){painted=true;detail.style.removeProperty('--cp-detail-reveal-y');detail.style.removeProperty('--cp-detail-reveal-opacity');}},
+ dispose(){if(disposed)return;disposed=true;motion.remove(key);detail.style.removeProperty('--cp-detail-reveal-y');detail.style.removeProperty('--cp-detail-reveal-opacity');}};
+}

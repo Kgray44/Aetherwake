@@ -69,3 +69,13 @@
 .cp-chat.aw-optical-controls .cp-composer.aw-control-motion{border-color:rgb(var(--control-edge-rgb,212 184 245) / calc(.2 + var(--control-focus,0)*.27));box-shadow:inset 0 1px 0 rgb(var(--control-sheen-rgb,240 221 255) / calc(.08 + var(--control-focus,0)*.06))}
 
 .aw-optical-controls :is(.cp-results,.cp-switcher-results) button[data-resource-id]>.cp-control-glyph{display:none}
+
+@media (max-width: 760px){
+ .cp-manager[data-cp-history-motion]>.cp-body{position:relative}
+ .cp-manager[data-cp-history-motion]>.cp-body>.cp-detail{visibility:visible}
+ .cp-manager[data-cp-history-motion]>.cp-body>.cp-catalog{display:flex;position:absolute;inset:0 auto 0 0;width:min(100%,340px);z-index:8;box-sizing:border-box;padding:12px;border:1px solid var(--aw-menu-rim,#d4b8f52b);border-radius:var(--aw-menu-radius,18px);background:linear-gradient(125deg,#e0d1f20c,#c4b2e802),color-mix(in srgb,var(--aw-menu-ink,#10111d) 96%,transparent);box-shadow:var(--aw-menu-shadow,0 14px 36px #02030a40);opacity:var(--cp-history-drawer-opacity,0);transform:translateX(var(--cp-history-drawer-x,0px))}
+ .cp-manager[data-cp-history-motion][data-cp-history-paint=false]>.cp-body>.cp-catalog{visibility:hidden}
+ .cp-manager[data-cp-history-motion]>.cp-body>.cp-catalog[inert]{pointer-events:none}
+}
+
+.cp-manager .cp-detail{opacity:var(--cp-detail-reveal-opacity,1);translate:0 var(--cp-detail-reveal-y,0px)}
