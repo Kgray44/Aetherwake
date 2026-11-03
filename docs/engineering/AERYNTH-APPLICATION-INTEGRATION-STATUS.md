@@ -60,6 +60,25 @@ The strict build, 400 desktop tests and 19 packaging and focused block
 tests passed. AG remains open on the owner's profile. Live Codex and
 packaged visible acceptance remain outstanding.
 
+## November 3 Vela workspace organization
+
+The reviewed model context now identifies the active project and workspace
+using IDs already present in its authorized metadata. The tool catalog
+distinguishes rearranging cards with an undoable preset from changing the
+grid or clearing overlaps. Free text continues through the model adapter.
+The host validates the typed proposal and uses the existing layout
+command and motion path after the user approves it.
+
+A hidden Electron run used the actual composer and approval controls with
+a scripted stdio provider. The exact question reached the protocol, the
+layout stayed untouched until approval, and the same blocks moved in the
+real SQLite workspace. The private receipt SHA-256 is
+`67a7eb8a4c1b6f0a7f934a826107546979ade41105e80b4e35891c9d8529dac2`.
+A separate backend regression verified the same command across restart
+and Undo, including preserved note content. The strict desktop build,
+246 backend tests, 147 Vela tests and 401 desktop tests passed. Live
+model interpretation of the request remains unverified.
+
 ## November 3 Vela resource search
 
 Vela can run a model-selected search across authorized Aerynth resource

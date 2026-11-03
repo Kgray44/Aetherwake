@@ -100,6 +100,56 @@ test('a model-selected search opens canonical results, persists references only,
   } finally { await f.close(); }
 });
 
+test('reviewed Vela text reaches the model adapter and arranges the exact active workspace with canonical undo', async () => {
+  const f = fixture('layout');
+  try {
+    const project = (await f.core.command('desktop', { type: 'createProject', title: 'Synthetic project' })).projects[0];
+    const createWorkspace = async () => (await f.core.command('desktop', {
+      type: 'createWorkspace', title: 'Synthetic studio', projectId: project.id,
+    })).activeWorkspaceId!;
+    const otherId = await createWorkspace();
+    const workspaceId = await createWorkspace();
+    assert.notEqual(workspaceId, otherId);
+    const first = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Synthetic draft', workspaceId });
+    const note = first.resources.find(resource => resource.title === 'Synthetic draft')!;
+    const content = 'Synthetic text survives rearrangement.';
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content });
+    await f.core.command('desktop', { type: 'createResource', kind: 'task', title: 'Synthetic build', workspaceId });
+    const baseline = await f.core.command('desktop', { type: 'snapshot' });
+
+    const { preview, input } = await f.granted([], 'Can you organize my workspace?');
+    assert.deepEqual(preview.context.activeSurface, { projectId: project.id, workspaceId });
+    assert.equal(preview.context.contentBytes, 0);
+    const request = await f.vela('request', input) as { id: string; planId: string; state: string };
+    assert.equal(request.state, 'awaiting-review');
+    const proposed = await f.state();
+    const plan = proposed.plans.find(item => item.id === request.planId)!;
+    assert.deepEqual(plan.steps[0].action, { type: 'applyStructuredPreset', workspaceId, preset: 'balanced' });
+    assert.equal(proposed.receipts.length, 0);
+    assert.equal((await f.core.command('desktop', { type: 'snapshot' })).layoutVersion, baseline.layoutVersion);
+    assert.equal(f.events.filter(event => event.method === 'fixture/catalogResult' && event.payload.success === true).length, 1);
+
+    await f.vela('review', { planId: plan.id, fingerprint: plan.fingerprint, decision: 'approve' });
+    const applied = await f.vela('apply', plan.id) as { state: string };
+    assert.equal(applied.state, 'applied');
+    const arranged = await f.core.command('desktop', { type: 'snapshot' });
+    const geometry = (value: typeof baseline) => value.blocks.map(block => [block.id, block.resource_id, block.x, block.y, block.width, block.height]);
+    assert.equal(arranged.organization?.mode, 'structured');
+    assert.notDeepEqual(geometry(arranged), geometry(baseline));
+    assert.deepEqual(arranged.blocks.map(block => [block.id, block.resource_id]), baseline.blocks.map(block => [block.id, block.resource_id]));
+    assert.equal(arranged.resources.find(resource => resource.id === note.id)?.content, content);
+    assert.equal((await f.state()).receipts.find(receipt => receipt.requestId === request.id)?.state, 'applied');
+
+    await f.reopen();
+    const restored = await f.core.command('desktop', { type: 'snapshot' });
+    assert.deepEqual(geometry(restored), geometry(arranged));
+    assert.equal(restored.resources.find(resource => resource.id === note.id)?.content, content);
+    const undone = await f.core.command('desktop', { type: 'undo' });
+    assert.deepEqual(geometry(undone), geometry(baseline));
+    assert.equal(undone.organization?.mode, baseline.organization?.mode);
+  } finally { await f.close(); }
+});
+
 test('the native planning adapter executes a single typed clock read after the synthetic protocol turn completes', async () => {
   const f = fixture('clock');
   try {

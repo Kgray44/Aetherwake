@@ -23,6 +23,13 @@ const session = (id) => ({
 });
 const readAction = mode === 'search' ? { type: 'search', query: 'calibration' }
   : mode === 'clock' ? { type: 'readLocalFact', capabilityId: 'local.time' } : null;
+const selectedAction = () => {
+  if (mode !== 'layout') return readAction;
+  const workspaceId = task.context?.activeSurface?.workspaceId;
+  if (!workspaceId || !task.context.discovered.some(ref => ref.kind === 'workspace' && ref.id === workspaceId))
+    throw new Error('The synthetic protocol turn requires an authorized active workspace in its reviewed prompt');
+  return { type: 'applyStructuredPreset', workspaceId, preset: 'balanced' };
+};
 const complete = (status = 'completed') => send({ method: 'turn/completed', params: { threadId: currentThread, turn: { id: currentTurn, status } } });
 const finish = () => {
   const response = ['answer', 'answer-catalog'].includes(mode)
@@ -30,12 +37,12 @@ const finish = () => {
     : {
         schemaVersion: 2,
         kind: 'plan',
-        summary: readAction ? 'Synthetic local lookup.' : 'Synthetic folder proposal.',
+        summary: mode === 'layout' ? 'Synthetic arrangement proposal.' : readAction ? 'Synthetic local lookup.' : 'Synthetic folder proposal.',
         steps: [
           {
             id: 'create',
             explanation: 'Explicit protocol regression, not live model qualification.',
-            action: readAction ?? { type: 'createCollection', title: 'Synthetic proposed folder', projectId: null },
+            action: selectedAction() ?? { type: 'createCollection', title: 'Synthetic proposed folder', projectId: null },
           },
         ],
       };
@@ -51,7 +58,7 @@ const requestTool = (patch = {}) => {
     callId: 'catalog-call:1',
     namespace: null,
     tool: 'aerynth_capability_schemas',
-    arguments: { catalogDigest: task.capabilityCatalog?.digest ?? '0'.repeat(64), ids: [readAction?.type ?? 'createCollection'] },
+    arguments: { catalogDigest: task.capabilityCatalog?.digest ?? '0'.repeat(64), ids: [selectedAction()?.type ?? 'createCollection'] },
     ...patch,
   };
   pending.set(requestId, params);

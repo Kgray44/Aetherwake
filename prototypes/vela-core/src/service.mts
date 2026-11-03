@@ -63,7 +63,7 @@ function validatePresentation(value: unknown): asserts value is VelaPresentation
   check(isRecord(value) && value.schemaVersion === 1, 'unsupported_vela_presentation_schema');
   check(Object.keys(value).sort().join(',') === 'dismissedRequestIds,pinnedRequestIds,schemaVersion,selectedRequestId,version,view' && Number.isSafeInteger(value.version) && Number(value.version) >= 1 && (value.view === 'current' || value.view === 'history') && (value.selectedRequestId === null || identifier(value.selectedRequestId)) && presentationIds(value.dismissedRequestIds) && presentationIds(value.pinnedRequestIds), 'invalid_vela_presentation_state');
 }
-export const VELA_PLANNING_INSTRUCTION = `Lead with one or two short sentences. Use a typed tool for app actions and live facts. For current-layout requests, use the active workspace's exact ID. Clarify ambiguity that changes the outcome. A proposal is not a completed action. Delegation requires separate execution approval.`;
+export const VELA_PLANNING_INSTRUCTION = `Lead with one or two short sentences. Use a typed tool for app actions and live facts. Resolve references like here or my workspace from activeSurface. Use a capability that produces the requested effect. If no active workspace is available and the user did not name one, ask which workspace they mean. Clarify ambiguity that changes the outcome. A proposal is not a completed action. Delegation requires separate execution approval.`;
 
 export class VelaService {
   private data!: StoredState;
@@ -201,6 +201,10 @@ export class VelaService {
       discovered: r.context.discovered.filter(ref => this.permitted(ref.id, ref.kind, scope)),
       included: r.context.included.filter(ref => this.permitted(ref.id, ref.kind, scope)),
       omitted: r.context.omitted.filter(ref => scope.resourceIds.includes(ref.id)),
+      ...(r.context.activeSurface ? { activeSurface: {
+        projectId: r.context.activeSurface.projectId && scope.projectIds.includes(r.context.activeSurface.projectId) ? r.context.activeSurface.projectId : null,
+        workspaceId: r.context.activeSurface.workspaceId && scope.workspaceIds.includes(r.context.activeSurface.workspaceId) ? r.context.activeSurface.workspaceId : null,
+      } } : {}),
     } }));
     const restorationScopes=new Map<string,VelaScope>();
     const planVisible = (p: VelaPlan) => {
@@ -368,6 +372,15 @@ export class VelaService {
       check(supplied.kind==='project'||supplied.kind==='workspace','invalid_application_context_reference');
       const actual=this.resolve(supplied.id,supplied.kind,scope);check(actual.version===supplied.version,'stale_application_context_reference');
       if(!manifest.discovered.some(ref=>ref.id===actual.id&&ref.kind===actual.kind))manifest.discovered.push(actual);
+    }
+    const active = this.contextIdentity();
+    if (active) {
+      const discoveredId = (id: string | null, kind: 'project' | 'workspace') =>
+        manifest.discovered.find(ref => ref.id === id && ref.kind === kind)?.id ?? null;
+      manifest.activeSurface = {
+        projectId: discoveredId(active.currentProjectId, 'project'),
+        workspaceId: discoveredId(active.currentWorkspaceId, 'workspace'),
+      };
     }
     return manifest;
   }

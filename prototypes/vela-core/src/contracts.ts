@@ -25,6 +25,8 @@ export interface ContextManifest {
   id: string; createdAt: string; policyVersion: string;
   /** Metadata discovery does not imply that content was read or sent to a provider. */
   discovered: ResourceRef[]; included: ContextEntry[];
+  /** Reviewed working context. Non-null IDs must refer to authorized entries in discovered. */
+  activeSurface?: { projectId: string | null; workspaceId: string | null };
   omitted: { id: string; reason: string }[];
   contentBytes: number; coverage: 'explicit-resources-only';
   /** Exact reviewed egress only. Persisted request context never copies these canonical message bodies. */
