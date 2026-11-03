@@ -2,6 +2,40 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 media retention and Portable BA
+
+The workspace retains its three most recently used inactive media readers.
+Older inactive readers release their canvases, decoder state, and any
+playback lease. Reactivating an evicted card remounts its reader at the
+initial page. Canonical resources and placement geometry are independent
+of this cache. Active readers and retained recent pages remain available.
+
+The hidden 50-block run visited eight identical synthetic PDFs at eight
+separate positions. Portable AZ retained eight canvases and ended the
+sequence at 333,308 KiB renderer working set. Portable BA retained four
+canvases, including the active one, and ended at 280,644 KiB. The BA run
+revisited a recent PDF on page 2, remounted the evicted first reader,
+and made a Universe round trip without changing canonical resource or
+placement records. These are short offscreen process-memory samples.
+Baseline and BA media receipts are in `review-block-scale-50-1793700677596`
+and `review-block-scale-50-1793700875601`, with SHA-256 values
+`5aec3ca490fddb700beb6967ea09d8897868422d1b4fd80d92b66ec14864e750` and
+`fea0bea2a0a3edc48e9249aecd4142bb3740869417c3c2f460badc465ceb9f2a`.
+
+Portable BA packages `d97215dba33150ea09e62c12108cf54448a9dff7`.
+All 427 payload hashes matched. Manifest SHA-256 is
+`a1fab6493932b072f46c2415626614011d2774638f874425a8fad8776c5f8653`.
+The packaged app also passed separate 10-, 25-, and 50-block runs and
+restarts, including Fit, Universe, return through an empty workspace,
+resize, reduced motion, WebGL recovery, and exact canonical restoration.
+The corresponding initial Fit paint P95 values were 27.0, 74.6, and 90.4 ms.
+Settled working paint P95 after the same runs was 18.9, 19.4, and 20.0 ms.
+The 50-block resize command took 362 ms in this run. Receipts are in
+`review-block-scale-10-1793700891510`, `review-block-scale-25-1793700903933`,
+and `review-block-scale-50-1793700915914`. Offscreen paints are distinct
+from monitor presentation. Dense Fit pacing and physical performance
+remain open. Strict build and 405 desktop tests passed.
+
 ## November 3 standalone media and Portable AZ
 
 Resources now imports files and saves web links from its Create menu.
