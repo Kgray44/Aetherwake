@@ -39,6 +39,13 @@
   box-shadow: none;
   background: transparent;
 }
+.application-direct-resource .aw-media-title {
+  display: none;
+}
+/* PDF text is painted on the canvas. The selectable text above it must stay invisible. */
+.aw-media-pdf-text {
+  text-shadow: none;
+}
 .application-card-actions {
   display: grid;
   gap: 3px;
