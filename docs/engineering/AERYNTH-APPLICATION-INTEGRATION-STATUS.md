@@ -2,6 +2,40 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Portable BT scale and compositing measurements
+
+The same BT package ran synthetic 10-, 25-, and 50-card workspaces
+with the packaged renderer and bundled backend in hidden Electron.
+All three passed Fit, Universe navigation, travel through an empty
+workspace, resize, reduced motion, WebGL recovery, and exact
+fresh-process restoration. All three SQLite profiles passed integrity
+with zero provider executions. The initial and restart receipts and
+native PNGs are in `bt-exact-scale-1793708959187`.
+
+| Cards | Initial / restart hydration | Fit / resize round trip | Fit callback / paint p95 | Settled Fit / restart paint p95 | Restart renderer working set |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 2.02 / 1.38 s | 42 / 41 ms | 33.3 / 26.5 ms | 19.7 / 19.2 ms | 172 MiB |
+| 25 | 2.01 / 1.42 s | 88 / 113 ms | 33.4 / 46.3 ms | 18.6 / 18.6 ms | 179 MiB |
+| 50 | 2.06 / 1.51 s | 136 / 196 ms | 50.0 / 56.0 ms | 19.6 / 18.7 ms | 185 MiB |
+
+Fit drew all 50 cards without allocating detailed surfaces for that
+overview. The 10-card Universe sample had a 109.2 ms offscreen paint
+p95 over 32 intervals, despite a 16.8 ms callback p95. The inspected
+50-card Fit capture showed all cards and Vela. The restored working
+viewport still clips Vela at its top edge with this fixture's camera.
+These short samples measure callbacks, offscreen paints and process
+working sets. They leave physical presentation and VRAM unmeasured.
+
+A separate four-run hidden trial used copies of the same 50-card seed
+in control, `will-change: auto`, `will-change: auto`, control order.
+The temporary stylesheet changed only the browser compositing hint.
+Fit paint p95 was 89.2, 70.9, 54.0 and 62.3 ms respectively. The paired
+measurements moved in the same direction, with overlapping absolute
+results. Fit layout time ranged from 133.9 to 137.3 ms and settled
+return working sets from 437 to 462 MiB with no consistent reduction.
+No CSS change was adopted. The receipts and captures are in
+`bt-fit-layer-hint-1793709076406`. All owned processes exited.
+
 ## November 3 Portable BT live Codex preflight
 
 BT's bundled desktop backend observed available authentication from
