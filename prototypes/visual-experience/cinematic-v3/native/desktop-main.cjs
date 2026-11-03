@@ -219,6 +219,7 @@ if (deadlineArgument) {
   deadline.unref();
 }
 const pending = new Map();
+let backendFailed = false;
 let nativeSecretBroker;
 let providerConnections;
 let nativeClipboard;
@@ -239,12 +240,41 @@ const storage = createStorageAdmission({
     }).catch(() => {});
   },
 });
+function failBackend() {
+  if (backendFailed) return;
+  backendFailed = true;
+  nativeSecretBroker?.close();
+  providerConnections?.close();
+  for (const request of pending.values()) {
+    clearTimeout(request.timer);
+    request.reject(new Error("backend_disconnected"));
+  }
+  pending.clear();
+  if (!closing)
+    sendToWindow(win, "application-event", {
+      type: "backend/disconnected",
+      classification: "observed",
+    });
+}
+function backendWritable() {
+  return !backendFailed && child && !child.killed && child.stdin.writable;
+}
+function writeBackend(line) {
+  try {
+    if (!backendWritable()) throw new Error("backend_disconnected");
+    child.stdin.write(line);
+  } catch {
+    failBackend();
+    throw new Error("backend_disconnected");
+  }
+}
 function call(command, input) {
-  if (!child || child.killed || !child.stdin.writable)
+  if (!backendWritable())
     return Promise.reject(new Error("backend_disconnected"));
   if (pending.size >= 64) return Promise.reject(new Error("backpressure"));
   const id = ++serial;
   return new Promise((resolve, reject) => {
+    const line = JSON.stringify({ id, command, input }) + "\n";
     const timer = setTimeout(
       () => {
         pending.delete(id);
@@ -259,7 +289,7 @@ function call(command, input) {
       command === "conversationSend" ? 120000 : 90000,
     );
     pending.set(id, { resolve, reject, timer });
-    child.stdin.write(JSON.stringify({ id, command, input }) + "\n");
+    writeBackend(line);
   });
 }
 app.whenReady().then(async () => {
@@ -277,39 +307,23 @@ app.whenReady().then(async () => {
     ],
     { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
   );
+  child.stdin.on("error", failBackend);
+  child.on("error", failBackend);
+  child.on("exit", failBackend);
   nativeSecretBroker = createProtectedStorageBroker({
     safeStorage,
     isReady: () => app.isReady(),
     platform: process.platform,
-    send: (wire) => {
-      if (!child || child.killed || !child.stdin.writable)
-        throw Error("native_secret_closed");
-      child.stdin.write(JSON.stringify(wire) + "\n");
-    },
+    send: (wire) => writeBackend(JSON.stringify(wire) + "\n"),
   });
   providerConnections = createProviderConnectionBroker({
     call,
     openExternal: (url) => shell.openExternal(url),
   });
-  const fail = () => {
-    nativeSecretBroker?.close();
-    providerConnections?.close();
-    for (const p of pending.values()) {
-      clearTimeout(p.timer);
-      p.reject(new Error("backend_disconnected"));
-    }
-    pending.clear();
-    if (!closing)
-      sendToWindow(win, "application-event", {
-        type: "backend/disconnected",
-        classification: "observed",
-      });
-  };
-  child.on("error", fail);
-  child.on("exit", fail);
   // Native diagnostics may contain private paths; never forward stderr to the renderer or public evidence.
   child.stderr.on("data", () => {});
   createInterface({ input: child.stdout }).on("line", (line) => {
+    if (backendFailed) return;
     try {
       const m = JSON.parse(line);
       if (nativeSecretBroker.handle(m)) return;
@@ -323,7 +337,7 @@ app.whenReady().then(async () => {
       pending.delete(m.id);
       m.error ? p.reject(new Error(m.error)) : p.resolve(m.result);
     } catch {
-      fail();
+      failBackend();
     }
   });
   session.defaultSession.setPermissionRequestHandler(
