@@ -41,6 +41,7 @@ import {
   ConversationDraftSession,
   flushConversationDraftSessions,
 } from "../../../conversation-product/src/draft-session.ts";
+import { ConversationViewPersistence } from "../../../conversation-product/src/view-persistence.ts";
 import type {
   ConversationProductPort,
   ProductCommandMap,
@@ -531,6 +532,10 @@ export function installApplication(hooks: Hooks) {
       })) as ProductCommandMap[K]["output"];
     },
   };
+  const chatViewPersistence = new ConversationViewPersistence({
+    port: composerPort,
+    onError: (error) => report(error),
+  });
   type Activity = Partial<StreamEvent> & { type: string };
   const localEvents: StreamEvent[] = [];
   const eventViews = new Map<string, ReturnType<typeof mountEventExperience>>();
@@ -1219,6 +1224,7 @@ export function installApplication(hooks: Hooks) {
     await directResources.flush();
     for (;;) {
       await flushConversationDraftSessions(() => composerSessions.values());
+      await chatViewPersistence.flush();
       await conversationManager?.flush();
       const ids = new Set([
         ...drafts.keys(),
@@ -2006,6 +2012,7 @@ export function installApplication(hooks: Hooks) {
       embedded: true,
       motion: experienceMotion,
       viewId: "conversation-manager",
+      viewPersistence: chatViewPersistence,
       copy: copyText,
       onCreateChecklist: (resourceId) => newChecklist(resourceId),
       onOpenChatGPT: async (reference) => {
@@ -2030,7 +2037,7 @@ export function installApplication(hooks: Hooks) {
       execution: conversationExecution,
       draftSession: composerSession,
       state: conversationView,
-      ...(resourceId ? { resourceId } : {}),
+      ...(resourceId ? { resourceId, initialMessageId: messageId } : {}),
       onClose: () => surfaces.close("conversations"),
       onResource: (id, selectedMessageId) => {
         // Manager selection also emits this callback. Its own canonical chat
@@ -2040,8 +2047,6 @@ export function installApplication(hooks: Hooks) {
       },
     });
     await controller.ready;
-    if (current() && resourceId && messageId)
-      await controller.open(resourceId, messageId);
   }
   function openVela() {
     if (velaOpen) {
@@ -3556,6 +3561,7 @@ export function installApplication(hooks: Hooks) {
           copy: copyText,
           motion: experienceMotion,
           viewId: "block:" + b.id + ":conversation",
+          viewPersistence: chatViewPersistence,
           onProviderChange: async (change) => {
             if (change.mode === "continuation") {
               await showConversations(change.resourceId);

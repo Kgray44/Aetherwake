@@ -93,8 +93,9 @@ discovery and native cross-workspace interaction still need acceptance.
 | Research Notebook | Existing note-like Research identity/content is preserved under the clearer presentation name. It is not a Research Agent. |
 | Manual Task / Task Group | Compatibility presentations remain. A checkbox is not an agentic task objective or verification. |
 | Resource Explorer | Existing resource/collection meanings remain distinct under common Explorer presentation. Broader hierarchy/search refinement remains. |
-| Timeline | Activity/Execution service and actual native/Core/stdio commands are connected. They persist view configuration and query existing event headers with permission checks, frozen pagination and explicit evidence gaps. They copy no event database. The retained viewer is supplied; presentation/creation integration and native acceptance remain pending. |
-| Workflow / rich Task Tracker | Not implemented by these profile, checklist or timeline foundations. No synthetic execution is advertised. |
+| Timeline | Activity/Execution service and actual native/Core/stdio commands are connected. They persist view configuration and query existing event headers with permission checks, frozen pagination and explicit evidence gaps. They copy no event database. The actual desktop opened a standalone Timeline, changed its time window and filters, opened the exact Checklist source, and restored both after restart at 2ae19e8. Block placement and visual acceptance remain open. |
+| Task Tracker | Canonical task objectives, direct creation and opening, policy-checked reference targets, manual verification, separate acceptance, history and reference-only placement are wired. A native attempt reached the accepted state but did not finish the history visibility check. Full restart and placement are still open. |
+| Workflow | No executable workflow product is supplied by these foundations. |
 | Vela integration | General authorized orchestration and reviewed checklist suggestions remain incomplete. Vela remains separate from Codex and ChatGPT. |
 
 Timeline planning, forecasts, dependency scheduling, state reconstruction,
@@ -115,6 +116,6 @@ bindings, screenshots and process-exit observations. No user profile,
 credentials, private conversations or host measurements are committed here.
 
 Next acceptance must demonstrate saved Agent block identity after removal,
-Timeline navigation/restart, and authorized real execution through the existing
+Task history/restart and workspace placement, Timeline block placement, and authorized real execution through the existing
 task/provider boundary. No whole-product, native ChatGPT account
 history/memory, performance or artistic acceptance follows from this record.

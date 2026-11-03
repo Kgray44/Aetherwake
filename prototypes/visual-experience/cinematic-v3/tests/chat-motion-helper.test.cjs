@@ -29,7 +29,7 @@ test('wrong actual Chromium profile performs zero control, RPC, evidence or app 
 });
 
 test('only bounded actual canonical reads are admitted; all creation/provider/auth/save paths require UI and never helper RPC', () => {
- for (const name of ['detail', 'readDraft']) helper.assertRead('conversation', { name, input: { resourceId: 'synthetic-chat', ...(name === 'detail' ? { limit: 50 } : {}) } });
+ for (const name of ['detail', 'readDraft', 'readViewState']) helper.assertRead('conversation', { name, input: { resourceId: 'synthetic-chat', ...(name === 'detail' ? { limit: 50 } : {}) } });
  helper.assertRead('conversation', { name: 'collections', input: {} }); helper.assertRead('conversation', { name: 'list', input: { limit: 50 } }); helper.assertRead('desktop', { type: 'snapshot' }); helper.assertRead('snapshot', {}); helper.assertRead('replay', { after: 0 });
  for (const name of ['send', 'create', 'saveDraft', 'branch', 'organize', 'selectProvider']) assert.throws(() => helper.assertRead('conversation', { name, input: {} }));
  for (const name of ['execute', 'providerConnection', 'providerAuth', 'ordinaryProviderCheck', 'notes', 'vela']) assert.throws(() => helper.assertRead(name, {}));
@@ -108,6 +108,6 @@ test('stop respects the canonical close reserve, and late/failed stop cannot adm
 test('helper has only native actual UI mutations, FALSE evaluation, observed input barriers, positive draw and guarded cleanup', () => {
  const source = fs.readFileSync(require.resolve('../native/integration-chat-motion.cjs'), 'utf8'); assert(source.includes('executeJavaScript(code, false)')); assert(source.includes('fillNative({ click, key, js, wait')); assert(source.includes('native reading scroll delivery and settling'));
  assert(!/executeJavaScript\([^\n]+, true\)|createDriver\(|driver\.js\(|win\.focus\(|webContents\.focus\(|globalShortcut|setCursorPos|\.click\(\)|\.focus\(\)|window\.__aerynth\.(?:execute|openResource|setReduced)\(/.test(source));
- assert(source.includes('assertRead(name, input)')); assert(source.includes('next.frames > before.frames && next.draws > before.draws')); assert(source.includes('original_passing_chat_motion_receipt_required')); assert(source.includes("call('close', {})")); assert(source.indexOf("win.removeListener('blur'") > source.indexOf("call('close'")); assert(source.includes('Fresh-process caret/selection/scroll are not durably implemented'));
+ assert(source.includes('assertRead(name, input)')); assert(source.includes('next.frames > before.frames && next.draws > before.draws')); assert(source.includes('original_passing_chat_motion_receipt_required')); assert(source.includes("call('close', {})")); assert(source.indexOf("win.removeListener('blur'") > source.indexOf("call('close'")); assert(source.includes('Exact saved caret, selection and authorized message anchor restored'));
  assert.equal(source.match(/\.startWindowRecording\(/g).length, 1); assert(source.includes("process.argv.includes('--record-chat-motion')")); assert(source.indexOf('recording?.finish(') < source.indexOf("call('close'")); assert(source.includes('(record && !restore ? 64 : 32) * MiB'));
 });
