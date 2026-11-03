@@ -28,6 +28,7 @@ import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
 import { BridgeError } from '../../codex-bridge/src/transport.ts';
 import { projectTurnHttpDiagnostic } from '../../application-contract/provider-diagnostics.ts';
 import { nativeProvider, fixtureProvider } from './providers.mts';
+import { CodexTurnOutput } from './codex-turn-output.mts';
 import { ConversationProduct, type AttachedContext, type ConversationReadView } from '../../conversation-product/src/service.mts';
 import type { NativeHostServices } from './native-host.mts';
 import { createCanonicalOrganizationAdapter, createCanonicalAccessHelper, createObservedCapabilityCache } from '../../conversation-product/src/canonical-host.mts';
@@ -101,6 +102,7 @@ export class BackendCore {
   private active: Execution | null = null;
   private assistantText = '';
   private assistantCursor = 0;
+  private codexOutput: CodexTurnOutput | null = null;
   private streamFailure = false;
   private stopEvents: () => void;
   private emit: (event: StreamEvent) => void;
@@ -1472,7 +1474,7 @@ export class BackendCore {
       if(this.mutationDepth>0){ensure(this.pendingEventDelivery.length<this.maxEvents,'observation_backpressure');this.pendingEventDelivery.push(e);}
       else this.publishRecordedEvent(e);
     }
-    return inserted;
+    return inserted ? e : null;
   }
   private publishRecordedEvent(e:StreamEvent) {
     try{this.emit(e);}catch{/* Replay remains authoritative after a delivery failure. */}
@@ -1491,20 +1493,9 @@ export class BackendCore {
       if (e.sequence > this.sequence + 1 || e.sequence <= this.sequence) this.record('stream/gap-or-reorder', 'inferred');
       this.sequence = Math.max(this.sequence, e.sequence);
       const classification = this.port.mock ? 'simulated' : e.evidence === 'inferred' ? 'inferred' : e.method.includes('agentMessage') ? 'reported' : 'observed';
-      this.record(e.method, classification, e, dedupe);
-      if (this.active && e.method === 'item/agentMessage/delta' && typeof e.payload.delta === 'string') {
-        ensure(Buffer.byteLength(this.assistantText) + Buffer.byteLength(e.payload.delta) <= 65536, 'provider_output_too_large');
-        this.assistantText += e.payload.delta;
-        // Only assistant output is forwarded live. Durable stream records remain metadata-only.
-        // Private reasoning/tool payloads never cross this desktop boundary.
-        const recorded=this.recordedEventForDelta();this.assistantCursor=recorded.cursor;
-        if(this.conversationAccess.resource(this.active.resourceId))this.emit({ ...recorded, payload: { redacted: true, delta: e.payload.delta } });
-      }
+      const recorded = this.record(e.method, classification, e, dedupe);
+      if (recorded) this.codexOutput?.ingest(e, recorded);
     } catch { this.streamFailure = true; } // Never throw into transport callbacks; fail the execution closed.
-  }
-  private recordedEventForDelta(): StreamEvent {
-    const row = this.db.prepare('SELECT json FROM intelligence_events ORDER BY cursor DESC LIMIT 1').get();
-    return JSON.parse(String(row!.json));
   }
   private package(id: string) { const r = this.state.reviews[id]; ensure(r, 'handoff_not_found'); return r; }
   private validateReview(r: HandoffReview) {
@@ -1554,8 +1545,8 @@ export class BackendCore {
       else if(event.type==='provider/usage'){this.atomic(()=>{e.usage=event.usage;});this.record(event.type,classification,undefined,randomUUID(),{providerId:CHATGPT_PLAN_PROVIDER,payload:{redacted:true,usage:event.usage}});}
       else{
         ensure(Buffer.byteLength(this.assistantText)+Buffer.byteLength(event.delta)<=65536,'provider_output_too_large');this.assistantText+=event.delta;
-        this.record('item/agentMessage/delta',classification,undefined,randomUUID(),{providerId:CHATGPT_PLAN_PROVIDER,payload:{redacted:true,textBytes:Buffer.byteLength(event.delta)}});
-        const recorded=this.recordedEventForDelta();this.assistantCursor=recorded.cursor;this.emit({...recorded,payload:{redacted:true,delta:event.delta}});
+        const recorded=this.record('item/agentMessage/delta',classification,undefined,randomUUID(),{providerId:CHATGPT_PLAN_PROVIDER,payload:{redacted:true,textBytes:Buffer.byteLength(event.delta)}});
+        ensure(recorded,'provider_event_not_recorded');this.assistantCursor=recorded.cursor;this.emit({...recorded,payload:{redacted:true,delta:event.delta}});
       }
     };
     let result:TurnResult|undefined;
@@ -1655,6 +1646,14 @@ export class BackendCore {
       }
       this.atomic(() => { e.state = 'running'; });
       if(managed){const current=await this.prepareConversationSend(managed.input,1,managed.preview.handoff?.id);ensure(current.fingerprint===managed.preview.fingerprint,'stale_send_preview');}
+      const output = new CodexTurnOutput(binding.nativeThreadId, (delta, recorded) => {
+        this.assistantText += delta;
+        this.assistantCursor = recorded.cursor;
+        // Only assistant output is forwarded live. Durable events remain metadata-only.
+        if (this.conversationAccess.resource(e.resourceId))
+          this.emit({ ...recorded, payload: { redacted: true, delta } });
+      });
+      this.codexOutput = output;
       remoteDispatched = true;
       let turnId: string;
       try {
@@ -1672,17 +1671,19 @@ export class BackendCore {
       this.atomic(() => { e.turnId = turnId;
         if(managed)this.state.contextSupplies![e.id]={resourceId:e.resourceId,turnId,suppliedAt:now(),items:managed.preview.context.map(i=>({shareId:i.shareId,digest:i.digest,sourceResourceId:i.sourceResourceId,sourceMessageId:i.sourceMessageId}))};
       });
+      output.bind(turnId);
       if(discovery){const entry=this.velaCatalogLeases.get(discovery.requestId)!;if(!entry.revoked)entry.lease.bind(binding.nativeThreadId,turnId);entry.resolveReady();}
       if(managed)for(const item of managed.preview.context)await this.conversations.confirmSupplied(e.resourceId,item.shareId,e.id);
       const terminal = await this.port.terminal(binding.nativeThreadId, turnId);
       ensure(terminal && terminal.providerTurnId === turnId && terminal.providerThreadId === binding.nativeThreadId && ['completed','interrupted','failed'].includes(terminal.terminalStatus ?? ''), 'invalid_provider_response');
       ensure(!this.streamFailure, 'event_ingestion_failed');
+      const finalText = terminal.terminalStatus === 'completed' ? output.finish(terminal) : '';
       this.atomic(() => {
         e.state = terminal.terminalStatus === 'completed' ? 'provider_completed' : terminal.terminalStatus === 'interrupted' ? 'interrupted' : 'failed';
         e.endedAt = now();
         if (!this.privateMode&&!managed) this.graph.addMessage(this.gid(e.resourceId), 'user', input.prompt);
-        if (e.state === 'provider_completed' && this.assistantText.trim()) {
-          const m = this.graph.addMessage(this.gid(e.resourceId), 'assistant', this.assistantText, { provenance: this.port.mock ? 'mock_adapter' : 'application', providerTurnId: turnId, referenceIds: r ? [r.id] : [], sensitivity: 'public' });
+        if (finalText.trim()) {
+          const m = this.graph.addMessage(this.gid(e.resourceId), 'assistant', finalText, { provenance: this.port.mock ? 'mock_adapter' : 'application', providerTurnId: turnId, referenceIds: r ? [r.id] : [], sensitivity: 'public' });
           this.state.messageEvidence[m.id] = { classification: this.port.mock ? 'simulated' : 'reported', executionId: e.id, providerId: this.port.id, nativeTurnId: turnId, nativeThreadId: binding.nativeThreadId };
         }
         this.state.revisions[e.resourceId]++;
@@ -1693,7 +1694,7 @@ export class BackendCore {
       e = this.state.executions[e.id]; r = input.handoffId ? this.package(input.handoffId) : null;
       this.atomic(() => { e.state = remoteDispatched ? 'unknown' : 'failed'; e.errorCode = code; e.endedAt = now(); if (r) r.state = e.state === 'unknown' ? 'unknown' : 'failed'; });
       this.record('execution/' + e.state, 'inferred');
-    } finally { if(discovery){const entry=this.velaCatalogLeases.get(discovery.requestId);if(entry){entry.lease.close();entry.resolveReady();if(entry.threadId)this.port.catalogDiscovery?.release(entry.threadId);}}this.active = null; }
+    } finally { if(discovery){const entry=this.velaCatalogLeases.get(discovery.requestId);if(entry){entry.lease.close();entry.resolveReady();if(entry.threadId)this.port.catalogDiscovery?.release(entry.threadId);}}this.codexOutput = null; this.active = null; }
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {

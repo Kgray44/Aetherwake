@@ -30,7 +30,10 @@ const selectedAction = () => {
     throw new Error('The synthetic protocol turn requires an authorized active workspace in its reviewed prompt');
   return { type: 'applyStructuredPreset', workspaceId, preset: 'balanced' };
 };
-const complete = (status = 'completed') => send({ method: 'turn/completed', params: { threadId: currentThread, turn: { id: currentTurn, status } } });
+const complete = (status = 'completed', items = []) => send({ method: 'turn/completed', params: { threadId: currentThread, turn: { id: currentTurn, status, items } } });
+const delta = (text, itemId, turnId = currentTurn, threadId = currentThread) =>
+  send({ method: 'item/agentMessage/delta', params: { threadId, turnId, itemId, delta: text } });
+const completedItem = (item) => send({ method: 'item/completed', params: { threadId: currentThread, turnId: currentTurn, item } });
 const finish = () => {
   const response = ['answer', 'answer-catalog'].includes(mode)
     ? { schemaVersion: 2, kind: 'answer', content: 'Synthetic observed protocol answer.' }
@@ -46,7 +49,23 @@ const finish = () => {
           },
         ],
       };
-  send({ method: 'item/agentMessage/delta', params: { threadId: currentThread, turnId: currentTurn, delta: JSON.stringify(response) } });
+  if (mode === 'layout') {
+    delta('Post-bind foreign turn text.', 'foreign-item', 'foreign:turn');
+    delta('Foreign thread text.', 'foreign-item', currentTurn, 'foreign:thread');
+    completedItem({ type: 'agentMessage', id: 'commentary', phase: 'commentary', text: 'Checking the workspace.' });
+    const item = { type: 'agentMessage', id: 'final', phase: 'final_answer', text: JSON.stringify(response) };
+    // Exercise independent final delivery paths. Repeated completion of
+    // the same item must still persist exactly one final response.
+    if (experimental) {
+      completedItem(item);
+      completedItem(item);
+      complete();
+    } else {
+      complete('completed', [item]);
+    }
+    return;
+  }
+  delta(JSON.stringify(response), 'response');
   complete();
 };
 const requestTool = (patch = {}) => {
@@ -141,12 +160,17 @@ createInterface({ input: process.stdin }).on('line', (line) => {
       task = {};
     }
     if (mode === 'early-call') requestTool();
+    if (mode === 'layout') {
+      delta('Pre-bind foreign turn text.', 'foreign-item', 'foreign:turn');
+      delta('Checking the workspace.', 'commentary');
+    }
     reply({ turn: { id: currentTurn } });
     send({ method: 'turn/started', params: { threadId: currentThread, turn: { id: currentTurn, status: 'inProgress' } } });
     send({ method: 'fixture/catalogReady', params: { threadId: currentThread, turnId: currentTurn } });
     if (mode === 'early-call') return;
     if (!task.capabilityDiscovery || mode === 'no-fetch' || mode === 'answer') {
-      finish();
+      if (mode === 'layout') setTimeout(finish, 30);
+      else finish();
       return;
     }
     if (mode === 'wrong-turn') requestTool({ turnId: 'foreign:turn' });

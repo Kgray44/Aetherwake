@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { join, resolve, relative, isAbsolute } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { BackendCore } from '../src/core.mts';
-import type { ProviderPort, VelaBackendState, VelaOperation } from '../src/contracts.mts';
+import type { ProviderPort, StreamEvent, VelaBackendState, VelaOperation } from '../src/contracts.mts';
 import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
 
 /** Real Core/SQLite, explicit synthetic stdio process only: no native Codex/model/account connection. */
@@ -21,7 +21,9 @@ function fixture(mode = 'normal', enabled = true) {
     codexArgs: [fileURLToPath(new URL('../../codex-bridge/tests/catalog-server.mjs', import.meta.url)), mode],
     velaCatalogDiscovery: enabled,
   };
-  let core = new BackendCore(options);
+  const presented: StreamEvent[] = [];
+  const create = () => new BackendCore(options, event => presented.push(event));
+  let core = create();
   const events: EventEnvelope[] = [];
   const port = () => (core as unknown as { port: ProviderPort }).port;
   port().onEvent((event) => events.push(event));
@@ -39,6 +41,7 @@ function fixture(mode = 'normal', enabled = true) {
     },
     port,
     events,
+    presented,
     vela,
     state,
     granted,
@@ -46,7 +49,7 @@ function fixture(mode = 'normal', enabled = true) {
     db: () => (core as unknown as { db: DatabaseSync }).db,
     async reopen() {
       await core.command('close', {});
-      core = new BackendCore(options);
+      core = create();
       port().onEvent((event) => events.push(event));
     },
     async close() {
@@ -126,6 +129,19 @@ test(`reviewed Vela text reaches the model adapter and arranges the exact active
     const proposed = await f.state();
     const plan = proposed.plans.find(item => item.id === request.planId)!;
     assert.deepEqual(plan.steps[0].action, { type: 'applyStructuredPreset', workspaceId, preset: 'balanced' });
+    const previewDeltas = f.presented.filter(event => typeof event.payload.delta === 'string');
+    assert.deepEqual(previewDeltas.map(event => event.payload.delta), ['Checking the workspace.']);
+    const snapshot = await f.core.command('snapshot', {});
+    const execution = Object.values(snapshot.executions)[0];
+    assert.equal(previewDeltas[0].turnId, execution.turnId);
+    const replay = await f.core.command('replay', { after: 0, limit: 250 });
+    const recorded = replay.events.find(event => event.cursor === previewDeltas[0].cursor);
+    assert.equal(recorded?.eventId, previewDeltas[0].eventId);
+    assert.equal(recorded?.payload.delta, undefined);
+    const messages = snapshot.graph.messages.filter(message => message.conversationId === snapshot.resourceMap[execution.resourceId]);
+    const replies = messages.filter(message => message.role === 'assistant');
+    assert.equal(replies.length, 1);
+    assert.equal(JSON.parse(replies[0].content).summary, 'Synthetic arrangement proposal.');
     assert.equal(proposed.receipts.length, 0);
     assert.equal((await f.core.command('desktop', { type: 'snapshot' })).layoutVersion, baseline.layoutVersion);
     assert.equal(f.events.filter(event => event.method === 'fixture/catalogResult' && event.payload.success === true).length, discovery ? 1 : 0);

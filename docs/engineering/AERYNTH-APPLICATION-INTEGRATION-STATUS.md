@@ -2,6 +2,33 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 model replies and native Vela actions
+
+Free-text Vela requests already go through the configured AI planner.
+The planner receives the scoped capability catalog and selects typed
+actions. The canonical host validates each action and applies reviewed
+workspace changes through the existing layout and motion path.
+
+Aerynth had been building saved native replies exclusively from deltas.
+A completed proposal could be lost if it arrived only as a completed
+item, and streamed commentary or another turn could corrupt its JSON.
+The backend now binds output to the accepted thread and turn, prefers
+finalized messages, and keeps commentary and other-turn output out of the
+saved proposal. Live previews still use the original event identity and
+durable stream rows remain metadata-only.
+
+Both workspace regressions reproduced the failure before the fix. The
+standard catalog case now reads the final from the terminal. The dynamic
+catalog case reads it from a completed item and deduplicates repeated
+completion. Both verify review, canonical placement changes, restart,
+and Undo. Backend typecheck, 251 backend tests, 14 bridge tests, and the
+strict desktop build passed. A hidden Electron run exercised the composer,
+native broker, and approval control using the scripted stdio model in a
+disposable profile. The private receipt SHA-256 is
+`fffc0a77868c4fa887234997cf7024c64751a6799c33a1b8cfe0aff8cbd609da`.
+The user's open candidate was left in place. Live interpretation of the
+workspace request on this revision remains unverified.
+
 ## November 3 shared glass geometry during Fit
 
 `6bb8f93` shares a WebGL glass slab within a draw when card dimensions,
