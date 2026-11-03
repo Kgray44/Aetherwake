@@ -1480,6 +1480,8 @@ export class BackendCore {
   }
   private ingest(e: EventEnvelope) {
     try {
+      if (e.method === 'bridge/transportFailed' || e.method === 'bridge/closed')
+        this.capabilityCache.clear();
       if(this.active&&this.active.providerId!==this.port.id)return;
       ensure(e.schemaVersion === 1 && Number.isInteger(e.sequence) && e.sequence > 0 && typeof e.method === 'string', 'invalid_provider_event');
       if (this.active?.binding && e.providerThreadId && e.providerThreadId !== this.active.binding.nativeThreadId) return;

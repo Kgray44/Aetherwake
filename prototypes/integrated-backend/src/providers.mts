@@ -11,14 +11,29 @@ export function nativeProvider(options: Options): ProviderPort {
   const bridge = new CodexAdapter(options.codexExecutable, options.codexArgs,{experimentalApi:options.velaCatalogDiscovery===true});
   const mock = options.provider === 'bridge-fixture';
   const id = mock ? 'codex-app-server-fixture' : 'codex-app-server';
-  let connected = false;
+  let connection: Promise<void> | undefined;
   let catalogAvailable=options.velaCatalogDiscovery===true;
   const catalogHandlers=new Map<string,(call:CapabilityNativeCall)=>Promise<CapabilityToolReply>>();
+  // Losing the child invalidates the session, not the installed account.
+  // A later caller may reconnect without replaying any provider operation.
+  bridge.on('failure', () => {
+    connection = undefined;
+    catalogHandlers.clear();
+  });
   if(options.velaCatalogDiscovery===true)bridge.setDynamicToolHandler(async call=>catalogHandlers.get(call.threadId)?.(call)??capabilityToolFailure('capability_discovery_not_authorized'));
   return {
     id, mock,
     instanceId: options.instanceId ?? 'local-codex', accountScope: options.accountScope ?? 'local-configured-account',
-    async connect() { if (!connected) { await bridge.connect(); connected = true; } },
+    async connect() {
+      if (connection) return connection;
+      const attempt = bridge.connect().then(() => {});
+      connection = attempt;
+      try { await attempt; }
+      catch (error) {
+        if (connection === attempt) connection = undefined;
+        throw error;
+      }
+    },
     async capabilities() { const c = await bridge.capabilities(); return { providerId: id, mock, authentication: c.authentication, models: c.models.map(m => m.id), catalogOnly: true, nativeFork: false, chatgptHistory: false }; },
     open: () => bridge.newThread({ cwd: options.cwd ?? process.cwd(), sandbox: 'read-only', approvalPolicy: 'never', serviceName: 'aerynth_integration_prototype' }),
     resume: threadId => bridge.resumeThread({ threadId }),
@@ -37,7 +52,7 @@ export function nativeProvider(options: Options): ProviderPort {
         catalogHandlers.set(threadId,onCall);return threadId;
       },release(threadId){catalogHandlers.delete(threadId);}
     } satisfies NonNullable<ProviderPort['catalogDiscovery']>} :{}),
-    close() { catalogHandlers.clear();bridge.close(); connected = false; }
+    close() { catalogHandlers.clear();bridge.close(); connection = undefined; }
   };
 }
 
