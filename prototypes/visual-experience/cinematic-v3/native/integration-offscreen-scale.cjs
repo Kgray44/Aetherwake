@@ -13,6 +13,7 @@ exports.verify = async ({
 }) => {
   const selected = options(process.argv);
   const profile = process.argv.includes("--offscreen-profile");
+  const memoryCycles = process.argv.includes("--offscreen-memory-cycles");
   const devtools = win.webContents.debugger;
   const receipt = {
     contract: "aerynth.offscreen-block-scale@1",
@@ -215,6 +216,31 @@ exports.verify = async ({
       await sample("settled-return-workspace");
       const canonical = await snapshot();
       assert.deepEqual(canonical.resources, initial.resources);
+      if (memoryCycles) {
+        // Repeat the same scene lifecycle without capturing images between
+        // samples. Each return must retain the same committed workspace.
+        for (let cycle = 1; cycle <= 3; cycle++) {
+          await navigate({ kind: "constellation", projectId: null });
+          await wait("document.querySelector('#stage').inert === true");
+          await navigate({ kind: "workspace", workspaceId: seed.alternateWorkspaceId });
+          await wait("document.querySelectorAll('[data-block]').length === 0");
+          await navigate({ kind: "workspace", workspaceId: seed.workspaceId });
+          await visibleWorkspace();
+          await settledWorkspace();
+          sameState(projection(canonical), await snapshot());
+          await sample("memory-revisit-" + cycle);
+        }
+        await js("window.__aerynth.setActive(false)");
+        await wait("window.__aerynth.snapshot().active === false");
+        await pause(200);
+        const before = await js("window.__aerynth.snapshot().metrics.draws");
+        await pause(selected.sampleMs);
+        const after = await js("window.__aerynth.snapshot().metrics.draws");
+        assert.equal(after, before, "inactive_workspace_draws_continued");
+        receipt.inactiveDraws = after - before;
+        await js("window.__aerynth.setActive(true)");
+        await wait("window.__aerynth.snapshot().metrics.draws > " + after);
+      }
       await js("window.__aerynth.setReduced(true)");
       await wait("window.__aerynth.snapshot().reduced === true");
       await js("window.__aerynth.simulateContextLoss()");
