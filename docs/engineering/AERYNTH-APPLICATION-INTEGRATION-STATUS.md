@@ -4,6 +4,28 @@ Snapshot: 2026-11-02 UTC. Integration remains active; full product acceptance is
 
 ## November 3 workspace scale checkpoint
 
+At `864c64d`, the desktop uses the existing readable-body thresholds to delay
+new editors when the current or destination card cannot fit them. Focused
+editors retain their working view. Card titles, previews, selection and direct
+opening remain available at overview scale. The desktop passed the 397 app
+tests and fresh hidden Electron runs and restarts at all three fixture sizes.
+
+| Blocks | Visible cards after fit | Mounted editors after fit | Usable cards after settling on return | Editors after settling on return |
+| ---: | ---: | ---: | ---: | ---: |
+| 10 | 10 | 9 | 8 | 9 |
+| 25 | 25 | 10 | 12 | 19 |
+| 50 | 50 | 10 | 12 | 18 |
+
+At 50 blocks the fitted view retained 10 editors instead of 43 in the earlier
+run below. The nominal one-second fit sample took 1.04 seconds to collect,
+compared with 4.30 seconds earlier. It had only four offscreen paint
+intervals, so fit pacing remains uneven. Settled return paint P95 was 25.8 ms
+with 55 intervals. The repeat is a shared-host comparison of renderer and
+offscreen compositor behavior, with no physical display presentation
+measurement. The 50-block initial and restart receipts have SHA-256
+`ae99816cc673813ae58b86497b6e66381d9954cb89ba05ced7d5de9b10ee8325` and
+`78e21bfa212e74c248560036313542e08410bd755fb9ee067025c4b50eb50565`.
+
 Review candidate `525a134` passed hidden Electron navigation, resize, reduced
 motion, WebGL recovery, and fresh-process restoration at 10, 25, and 50 blocks.
 The run used synthetic workspaces and the real renderer, desktop host and
