@@ -143,7 +143,7 @@ export class BackendCore {
   private velaPresentations=new Map<string,WorkspacePresentationContext|null>();
   private velaPreviews=new Map<string,PrivateVelaPreview>();
   private velaGrants=new Map<string,{previewId:string;expiresAt:string;requestId?:string;consumed:boolean;planning?:CodexPlanningGrant;reviewDigest?:string}>();
-  private velaCatalogLeases=new Map<string,{catalog:CapabilityCatalogSnapshot;lease:CapabilityCatalogLease;previewId:string;executionId:string;sourceConversationId:string;expiresAt:string;revoked:boolean;threadId?:string;ready:Promise<void>;resolveReady():void}>();
+  private velaCatalogLeases=new Map<string,{catalog:CapabilityCatalogSnapshot;lease:CapabilityCatalogLease;previewId:string;executionId:string;sourceConversationId:string;revoked:boolean;threadId?:string;ready:Promise<void>;resolveReady():void}>();
   private velaPolicyGrants=new Map<string,{requestId:string;planId?:string;fingerprint?:string;phase:string;expiresAt:string}>();
   private velaDelegationGrants=new Map<string,{planId:string;stepId:string;fingerprint:string;actionDigest:string;contextDigest:string;expiresAt:string;consumed:boolean}>();
   private pendingVelaGrant:string|null=null;
@@ -827,7 +827,8 @@ export class BackendCore {
       if(!preview.discovery)return undefined;this.validateFrozenVelaPreview(preview);const catalog=createCapabilityCatalog(capabilities);validateCatalogDeclaration(catalog,preview.discovery);return {projection:catalog.projection,declaration:catalog.declaration};
     },assertFetched:(requestId,ids,declaration)=>{
       const entry=this.velaCatalogLeases.get(requestId);ensure(entry,'capability_discovery_lease_unavailable');validateCatalogDeclaration(entry.catalog,declaration);
-      this.validateFrozenVelaPreview(this.velaPreviews.get(entry.previewId)!);ensure(!entry.revoked&&Date.parse(entry.expiresAt)>Date.now()&&entry.sourceConversationId===this.state.vela!.conversationId&&this.velaHost.resolve({id:entry.sourceConversationId,kind:'resource'},this.velaHost.scope()),'capability_discovery_source_unavailable');ensure(this.state.executions[entry.executionId]?.state==='provider_completed'&&ids.every(id=>entry.lease.fetchedIds().includes(id)),'planning_capability_schema_not_discovered');
+      // The lease checks expiry on each read. A completed turn can still cite schemas read before expiry.
+      this.validateFrozenVelaPreview(this.velaPreviews.get(entry.previewId)!);ensure(!entry.revoked&&entry.sourceConversationId===this.state.vela!.conversationId&&this.velaHost.resolve({id:entry.sourceConversationId,kind:'resource'},this.velaHost.scope()),'capability_discovery_source_unavailable');ensure(this.state.executions[entry.executionId]?.state==='provider_completed'&&ids.every(id=>entry.lease.fetchedIds().includes(id)),'planning_capability_schema_not_discovered');
     },finish:requestId=>this.finishVelaCatalog(requestId)},observe:observation=>this.atomic(()=>{const {executionState:_state,...references}=observation;this.state.vela!.planning[observation.requestId]=references;this.record('vela.planning.'+observation.stage,'observed');})});
     const selected=testPlanner??adapter;
     this.velaPlanner={providerId:selected.providerId,availability:()=>selected.availability(),propose:(input,signal)=>{
@@ -941,7 +942,10 @@ export class BackendCore {
     ensure(preview.nativeReviewed&&typeof preview.reviewDigest==='string'&&preview.reviewDigest.length>0&&grant.reviewDigest===preview.reviewDigest,'vela_native_review_required');
     return {context:preview.frozenContext,...(preview.historyFence?{historyFence:preview.historyFence}:{}),
       validate:(phase,append)=>{
-        ensure(this.velaGrants.get(grantId)===grant&&Date.parse(grant.expiresAt)>Date.now(),'native_vela_grant_expired');
+        // Sending requires a live grant. A response to that exact, already dispatched request
+        // is still subject to the reviewed context and accepted input fences below.
+        if(phase!=='before-response'||!grant.consumed)
+          ensure(this.velaGrants.get(grantId)===grant&&Date.parse(grant.expiresAt)>Date.now(),'native_vela_grant_expired');
         if(phase==='before-append')ensure(!grant.consumed&&!grant.requestId&&!preview.acceptedAppend&&!append,'native_vela_grant_consumed');
         else ensure(preview.acceptedAppend&&append&&planningDigest(append)===planningDigest(preview.acceptedAppend)&&(!grant.requestId||grant.requestId===append.requestId),'invalid_history_append');
         if(phase==='before-response')ensure(grant.requestId===append?.requestId,'native_vela_grant_mismatch');
@@ -1812,7 +1816,7 @@ export class BackendCore {
           this.validateFrozenVelaPreview(preview,{metadataOnly:true});
           ensure(discovery.sourceConversationId===this.state.vela!.conversationId&&this.velaHost.resolve({id:discovery.sourceConversationId,kind:'resource'},this.velaHost.scope()),'capability_discovery_source_unavailable');
         }});
-        this.velaCatalogLeases.set(discovery.requestId,{catalog,lease,previewId:discovery.previewId,executionId:e.id,sourceConversationId:discovery.sourceConversationId,expiresAt:discovery.expiresAt,revoked:false,ready,resolveReady});
+        this.velaCatalogLeases.set(discovery.requestId,{catalog,lease,previewId:discovery.previewId,executionId:e.id,sourceConversationId:discovery.sourceConversationId,revoked:false,ready,resolveReady});
       }
       await this.port.connect();
       const cap = await this.port.capabilities();

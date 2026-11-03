@@ -181,7 +181,7 @@ test('a model-selected resource opening resolves only a unique scoped target wit
 });
 
 for (const discovery of [false, true])
-test(`reviewed Vela text reaches the model adapter and arranges the exact active workspace with canonical undo (schema discovery: ${discovery})`, async () => {
+test(`a slow model can propose a reviewed arrangement of the active workspace with canonical undo (schema discovery: ${discovery})`, async () => {
   const f = fixture('layout', discovery);
   try {
     const project = (await f.core.command('desktop', { type: 'createProject', title: 'Synthetic project' })).projects[0];
@@ -207,7 +207,25 @@ test(`reviewed Vela text reaches the model adapter and arranges the exact active
     assert(review.prompt.includes(JSON.stringify(preview.context.activeWorkspaceLayout)));
     assert(!review.prompt.includes(content) && !review.prompt.includes(note.id));
     assert.equal(preview.context.contentBytes, 0);
-    const request = await f.vela('request', input) as { id: string; planId: string; state: string };
+    const clock = Date.now;
+    let providerStarted = false;
+    f.port().onEvent((event) => {
+      if (discovery
+        ? event.method === 'fixture/catalogResult' && event.payload.success === true
+        : event.method === 'fixture/catalogReady') {
+        providerStarted = true;
+        // Consent has been consumed and any discovery happened while its lease was valid.
+        Date.now = () => clock() + 61000;
+      }
+    });
+    const request = await (async () => {
+      try {
+        return await f.vela('request', input) as { id: string; planId: string; state: string };
+      } finally {
+        Date.now = clock;
+      }
+    })();
+    assert(providerStarted);
     assert.equal(request.state, 'awaiting-review');
     const proposed = await f.state();
     const plan = proposed.plans.find(item => item.id === request.planId)!;
