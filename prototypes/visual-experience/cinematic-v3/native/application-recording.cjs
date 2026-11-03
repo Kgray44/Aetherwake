@@ -5,6 +5,7 @@ const { createHash } = require("node:crypto");
 async function startWindowRecording(win, session, localURL) {
   if (
     !process.argv.includes("--integration-environments") &&
+    !process.argv.includes("--integration-chat-motion") &&
     !process.argv.includes("--integration-resource-opening") &&
     !process.argv.includes("--integration-constellation") &&
     !process.argv.includes("--integration-organization") &&
@@ -14,7 +15,10 @@ async function startWindowRecording(win, session, localURL) {
   )
     throw new Error("recording_mode_required");
   const maxBytes =
-    (process.argv.includes("--integration-environments") ? 32 : 48) *
+    (process.argv.includes("--integration-environments") ||
+    process.argv.includes("--integration-chat-motion")
+      ? 32
+      : 48) *
     1024 *
     1024;
   const sourceId = win.getMediaSourceId(),

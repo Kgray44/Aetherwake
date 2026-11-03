@@ -87,6 +87,8 @@ const source = {
   ),
 };
 const verify =
+  process.argv.includes("--integration-chat-motion") ||
+  process.argv.includes("--integration-task-objectives") ||
   process.argv.includes("--integration-timeline") ||
   process.argv.includes("--integration-checklists") ||
   process.argv.includes("--integration-agents") ||
@@ -603,6 +605,34 @@ app.whenReady().then(async () => {
     );
   }
   if (verify) {
+    if (process.argv.includes("--integration-chat-motion")) {
+      await require("./integration-chat-motion.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        call,
+        source,
+        startupErrors,
+        moduleStartedMonotonicMs,
+        observeProviderActivity: () => call("providerActivity", {}),
+        session: session.defaultSession,
+        localURL,
+      });
+      return;
+    }
+    if (process.argv.includes("--integration-task-objectives")) {
+      await require("./integration-task-objectives.cjs").verify({
+        win,
+        app,
+        privateRoot,
+        call,
+        source,
+        startupErrors,
+        moduleStartedMonotonicMs,
+        observeProviderActivity: () => call("providerActivity", {}),
+      });
+      return;
+    }
     if (process.argv.includes("--integration-timeline")) {
       await require("./integration-timeline.cjs").verify({
         win,
