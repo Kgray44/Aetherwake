@@ -6,6 +6,7 @@ import { join, resolve, relative, isAbsolute } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { BackendCore } from "../src/core.mts";
 import type { ProviderPort } from "../src/contracts.mts";
+import { CAPABILITIES } from "../../vela-core/src/capabilities.ts";
 
 /** Evaluate only the helper's known string-concatenation grammar, never require/execute the GUI helper. */
 function livePayload(projectId: string, chatId: string, noteId: string) {
@@ -81,7 +82,7 @@ function livePayload(projectId: string, chatId: string, noteId: string) {
 }
 
 for (const authenticated of [false, true])
-  test(`exact native-live ${authenticated ? 30 : 29}-capability complete catalog fits with full source/context and no provider or preview writes`, async (t) => {
+  test(`exact native-live complete catalog fits with full source/context and ${authenticated ? "authenticated" : "disconnected"} policy`, async (t) => {
     const dir = mkdtempSync(join(tmpdir(), "aerynth-vela-live-budget-")),
       file = join(dir, "canonical.sqlite");
     let core: BackendCore | undefined,
@@ -205,7 +206,8 @@ for (const authenticated of [false, true])
       assert.equal(Buffer.byteLength(exact.intent), 669);
       assert.equal(Buffer.byteLength(exact.sourceChat), 40);
       assert.equal(Buffer.byteLength(exact.sourceNote), 60);
-      assert.equal(data.capabilities.length, authenticated ? 30 : 29);
+      assert.equal(data.capabilities.length, CAPABILITIES.length - (authenticated ? 0 : 1));
+      assert(data.capabilities.some((capability: { id: string }) => capability.id === "createTimeline"));
       assert.equal(data.schemaAvailability, "complete-approved-catalog");
       assert(!data.capabilityDiscovery);
       assert(!data.context.history);

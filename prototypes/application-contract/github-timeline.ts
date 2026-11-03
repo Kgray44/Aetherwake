@@ -5,7 +5,14 @@ export function githubRepository(value: string): string | null {
   const repo = match?.[2]?.replace(/\.git$/i, "");
   return match && repo && repo !== "." && repo !== ".." ? `${match[1]}/${repo}`.toLowerCase() : null;
 }
-export const AERYNTH_SOURCE_REPOSITORY = "https://github.com/Kgray44/Aetherwake";
+export function namedGitHubRepositories(intent: string): string[] {
+  return [...new Set([...intent.matchAll(/https:\/\/github\.com\/[a-z\d-]+\/[a-z\d_.-]+\/?/gi)]
+    .filter(match => !/[\w/@?&#%]/.test(intent[(match.index ?? 0) + match[0].length] ?? ""))
+    .flatMap(match => {
+      const repository = githubRepository(match[0].replace(/\.+$/, ""));
+      return repository ? [repository] : [];
+    }))];
+}
 
 export interface GitHubTimelineOpen {
   name: "openCommit";

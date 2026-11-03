@@ -27,9 +27,11 @@ function rehydrateCatalog(data:any) {
     return Object.fromEntries(Object.entries(value).map(([key,entry])=>[key,expand(entry)]));
   };
   return data.capabilities.map((capability:any)=>{
-    const schema=expand({...data.capabilitySchemaDefaults,...capability.schema});
+    const { actionType, ...entry }=capability;
+    const schema=expand({...data.capabilitySchemaDefaults,...entry.schema});
+    if(actionType)schema.properties={type:{const:entry.id},...schema.properties};
     if(data.capabilityRequiredDefault==='all-root-properties'&&!Object.hasOwn(schema,'required'))schema.required=Object.keys(schema.properties??{});
-    return {...data.capabilityDefaults,...capability,schema};
+    return {...data.capabilityDefaults,...entry,schema};
   });
 }
 
@@ -39,7 +41,7 @@ test('current catalog prompt expands to every exact action schema, scope, effect
   request.context.included[0].content='Synthetic canonical note with preserved provenance and current resource identifiers. '.repeat(4);
   request.context.contentBytes=Buffer.byteLength(request.context.included[0].content);
   const prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
-  assert(Buffer.byteLength(prompt)<=16384);assert(prompt.includes('inherits authorization and reversible'));
+  assert(Buffer.byteLength(prompt)<=16384);assert(prompt.includes('with explicit fields winning'));
   assert.deepEqual(data.context,request.context,'No source text, source metadata or omission record is truncated');
   assert(data.$defs&&Object.keys(data.$defs).length>0);
   assert.deepEqual(rehydrateCatalog(data),request.capabilities.map(({label:_label,...capability})=>capability));
@@ -71,7 +73,7 @@ test('root schema defaults rehydrate every original field, explicit override and
     assert.deepEqual(restored,before.map(({label:_label,...capability})=>capability));
     assert.deepEqual(request.capabilities,before);assert.equal(createCapabilityCatalog(request.capabilities).projection.digest,catalogDigest);
     for(const key of ['type','additionalProperties'])if(schemas.some(schema=>!Object.hasOwn(schema,key)))assert(!Object.hasOwn(data.capabilitySchemaDefaults,key));
-    assert(prompt.includes('nested schemas do not inherit'));
+    assert(prompt.includes('Nested schemas inherit no defaults'));
   }
 });
 

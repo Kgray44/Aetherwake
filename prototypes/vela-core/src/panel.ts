@@ -115,7 +115,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const timelineAction = (source: Extract<VelaNativeAction, { type: 'createTimeline' }>['source']) => {
     const title = nativeTitle.value.trim() || (source.kind === 'github-commits' ? 'Development Timeline' : 'Activity Timeline');
     return act({ type: 'createTimeline', title, source, projectId: current?.applicationContext?.currentProjectId ?? null,
-      workspaceId: current?.applicationContext?.currentWorkspaceId ?? null }, 'Create ' + title);
+      workspaceId: current?.applicationContext?.currentWorkspaceId ?? null },
+      'Create ' + title + (source.kind === 'github-commits' ? ' from ' + source.repositoryUrl.trim() : ''));
   };
   const activityTimeline = button('Review activity Timeline', () => timelineAction({ kind: 'application-activity' }));
   const developmentTimeline = button('Review GitHub Timeline', () => timelineAction({ kind: 'github-commits', repositoryUrl: repositoryInput.value }));

@@ -49,7 +49,8 @@ test('Vela discovers Timeline creation, composes with approved GitHub evidence, 
     providerId:'synthetic-timeline-planner',
     availability:()=>({available:true,busy:false}),
     async propose(input) {
-      assert(input.capabilities.some(capability=>capability.id==='createTimeline'));
+      const capability=input.capabilities.find(capability=>capability.id==='createTimeline');
+      assert(capability?.scope.includes('Linked repository: https://github.com/synthetic/example'));
       return {schemaVersion:2,kind:'plan',summary:'Save the reviewed development history',steps:[{id:'timeline',explanation:'Use the selected public repository',action:proposed}],
         contribution:{providerId:'synthetic-timeline-planner',classification:'reported'}};
     },
@@ -83,6 +84,10 @@ test('Vela discovers Timeline creation, composes with approved GitHub evidence, 
     const workspaceId=desktop.activeWorkspaceId!;
     proposed={type:'createTimeline',title:'Development history',projectId:project.id,workspaceId,source:{kind:'github-commits',repositoryUrl:'https://github.com/Synthetic/Example'}};
     await assert.rejects(core.command('vela',{name:'native',input:{intent:'Invalid repository',action:{...proposed,source:{kind:'github-commits',repositoryUrl:'https://github.com.evil.invalid/Synthetic/Example'}}}}),/unsupported_or_invalid_action/);
+    await assert.rejects(core.command('vela',{name:'native',input:{intent:'Unspecified repository',action:proposed}}),/host_policy_denied/);
+    const withReference=await core.command('desktop',{type:'createResource',kind:'reference',title:'Development source',workspaceId});
+    const reference=withReference.resources.find(resource=>resource.title==='Development source')!;
+    await core.command('desktop',{type:'content',resourceId:reference.id,expectedVersion:reference.version,content:'https://github.com/Synthetic/Example/'});
     assert.equal(calls.length,0);
     const intent='Give me a development history from the public source we discussed';
     const preview=await core.command('velaRequestPreview',{intent,resourceIds:[]});
@@ -107,8 +112,11 @@ test('Vela discovers Timeline creation, composes with approved GitHub evidence, 
     const window=(await core.command('timelines',query)).result as TimelineWindow;
     assert.equal(window.timeAxis,'reportedAt');
     assert.equal(window.sourceCoverage?.status,'partial');
+    assert(Date.parse(read.view.viewport.from)>Date.parse(window.sourceCoverage!.requestedFrom));
+    assert(Date.parse(read.view.viewport.to)-Date.parse(read.view.viewport.from)<86400000);
     const item=window.items[0]!;
     assert.equal(item.externalEvidence?.title,'Public commit title');assert.equal(item.evidenceClass,'reported');
+    assert.equal(item.externalEvidence?.source.ref,reference.id);
     assert.doesNotMatch(JSON.stringify(window),/Private fixture body|SYNTHETIC_EMAIL/);
     const target={timelineId:result.resourceId,eventId:item.event.eventId,cursor:item.event.cursor};
     const url='https://github.com/Synthetic/Example/commit/'+sha;

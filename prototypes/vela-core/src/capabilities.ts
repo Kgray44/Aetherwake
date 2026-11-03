@@ -1,7 +1,7 @@
 import type { CapabilityDescriptor, DelegateTaskAction, PlanStep, ProviderContribution, ProviderProposal, ProviderResult, VelaNativeAction } from './contracts.ts';
 import { defaultOrganization, updateOrganization } from '../../workspace-engine/organization.mts';
 import type { OrganizationUpdate } from '../../workspace-engine/contracts.mts';
-import { AERYNTH_SOURCE_REPOSITORY, githubRepository } from '../../application-contract/github-timeline.ts';
+import { githubRepository } from '../../application-contract/github-timeline.ts';
 
 export class VelaError extends Error {
   readonly code: string;
@@ -60,7 +60,7 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
     type: { const: 'createTimeline' }, title: stringSchema, projectId: nullableIdSchema, workspaceId: nullableIdSchema,
     source: { oneOf: [objectSchema({ kind: { const: 'application-activity' } }),
       objectSchema({ kind: { const: 'github-commits' }, repositoryUrl: { ...stringSchema, maxLength: 180 } })] },
-  }, 'Current project; optionally place in current workspace. Use canonical app events or reviewed public GitHub default-branch commits. Ask which repository if unclear. Aerynth product source: ' + AERYNTH_SOURCE_REPOSITORY, 'reviewed-action'),
+  }, 'Current project, optional current workspace placement. Use app activity or public GitHub commits. Use an explicit repository URL or a matching linked repository. Ask when the source is missing or ambiguous.', 'reviewed-action'),
   capability('renameWorkspace', 'Rename a workspace', 'mutate', { type: { const: 'renameWorkspace' }, workspaceId: idSchema, title: stringSchema }, 'One authorized workspace; current entity and layout revisions are bound by the target manifest'),
   capability('bringAllIntoView', 'Frame the current workspace', 'mutate', { type: { const: 'bringAllIntoView' }, workspaceId: idSchema }, 'Frame the current authorized workspace using actual presenter bounds supplied outside the model action; does not create or duplicate resources'),
   capability('resolveLayout', 'Resolve workspace layout collisions', 'mutate', { type: { const: 'resolveLayout' }, workspaceId: idSchema }, 'One authorized workspace and its existing canonical layout participants, including Vela'),

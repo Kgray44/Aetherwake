@@ -408,6 +408,7 @@ export function installApplication(hooks: Hooks) {
       width: number;
     }
   >();
+  const timelineProjections = new Map<string, NonNullable<Parameters<typeof blockIdentity>[0]["timeline"]>>();
   const noteSessions = new Map<string, NoteSession>();
   const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
   const groupViews = new Map<
@@ -455,6 +456,7 @@ export function installApplication(hooks: Hooks) {
       content: string;
       projection?: SubjectIdentity;
       taskObjective?: TaskObjectiveDocument | null;
+      timeline?: NonNullable<Parameters<typeof blockIdentity>[0]["timeline"]>;
       model: BlockIdentityModel;
     }
   >();
@@ -731,6 +733,7 @@ export function installApplication(hooks: Hooks) {
       agentProjections.clear();
       for (const entry of timelineViews.values()) entry.view.dispose();
       timelineViews.clear();
+      timelineProjections.clear();
       controlMotion.dispose();
       resourceOpener.cancel();
       directResources.dispose();
@@ -1020,6 +1023,7 @@ export function installApplication(hooks: Hooks) {
       if (!next.blocks.some((block) => block.id === id)) {
         entry.view.dispose();
         timelineViews.delete(id);
+        timelineProjections.delete(id);
       }
     for (const [id, entry] of taskTrackerViews)
       if (!next.blocks.some((block) => block.id === id)) {
@@ -3372,12 +3376,14 @@ export function installApplication(hooks: Hooks) {
       agentProjections.get(id),
     ]);
     const cached = identityModels.get(id);
+    const timeline = timelineProjections.get(id);
     const model =
       cached &&
       cached.key === key &&
       cached.content === content &&
       cached.projection === projection &&
-      cached.taskObjective === taskProjections.get(id)
+      cached.taskObjective === taskProjections.get(id) &&
+      cached.timeline === timeline
         ? cached.model
         : blockIdentity({
             kind: knownKind,
@@ -3388,6 +3394,7 @@ export function installApplication(hooks: Hooks) {
             disconnected: eventDisconnected,
             agent: agentProjections.get(id),
             taskObjective: taskProjections.get(id),
+            timeline,
           });
     identityModels.set(id, {
       key,
@@ -3395,6 +3402,7 @@ export function installApplication(hooks: Hooks) {
       projection,
       model,
       taskObjective: taskProjections.get(id),
+      timeline,
     });
     view.update(model);
     view.setMinimized(block.minimized === true);
@@ -3725,9 +3733,14 @@ export function installApplication(hooks: Hooks) {
               viewId: "block:" + id,
               motion: experienceMotion,
               active: true,
+              showTitle: false,
               presentation: blockPresentation(id),
               onOpenResource: openCanonicalResource,
               onOpenExternalSource: openGitHubCommit,
+              onProjection: (document, window) => {
+                timelineProjections.set(id, { document, window });
+                if (article.isConnected) refreshBlockIdentity(article, id);
+              },
               resourceTitle: (resourceId) =>
                 state?.resources.find(
                   (resource) =>

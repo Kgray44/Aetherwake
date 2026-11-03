@@ -7,7 +7,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
 import { compositeTimelineDomain,isTimelineRead,type TimelineRequest } from './timeline-domain.mts';
-import { githubRepository, type GitHubTimelineCommand } from '../../application-contract/github-timeline.ts';
+import { githubRepository, namedGitHubRepositories, type GitHubTimelineCommand } from '../../application-contract/github-timeline.ts';
 import type { GitHubCommitEvidence, TimelineSourceCoverage } from '../../timeline-product/contracts.ts';
 import { readPublicGitHubCommits } from './github-timeline.mts';
 import { createTaskObjectiveCommands,isTaskObjectiveRead,type TaskObjectiveCommandsOptions } from './task-objectives.mts';
@@ -322,12 +322,13 @@ export class BackendCore {
     ensure(!projectId || this.libraryAuthorized({kind:'project',id:projectId}), 'github_timeline_scope_unavailable');
     return { workspaceId, projectId };
   }
-  private githubReferences(projectId: string | null, url?: string) {
+  private githubReferences(projectId: string | null) {
     return this.db.prepare(
-      "SELECT r.id,n.content FROM resources r JOIN notes n ON n.resource_id=r.id JOIN desktop_resources d ON d.resource_id=r.id WHERE d.kind='reference' AND r.state='active' AND r.project_id IS ? AND " +
-      (url ? "n.content=?" : "length(n.content)<=180 AND n.content LIKE 'https://github.com/%'") +
-      " ORDER BY r.id LIMIT 24"
-    ).all(...(url ? [projectId,url] : [projectId])).filter(row=>this.productResourceAccess(String(row.id)));
+      "SELECT r.id,n.content FROM resources r JOIN notes n ON n.resource_id=r.id JOIN desktop_resources d ON d.resource_id=r.id WHERE d.kind='reference' AND r.state='active' AND r.project_id IS ? AND length(n.content)<=180 AND trim(n.content) LIKE 'https://github.com/%' ORDER BY r.id LIMIT 24"
+    ).all(projectId).flatMap(row=>{
+      const id=String(row.id),repository=githubRepository(String(row.content));
+      return repository&&this.productResourceAccess(id)?[{id,repository}]:[];
+    });
   }
   private async githubTimelineCommand(operation:GitHubTimelineCommand):Promise<CommandMap['githubTimeline']['output']> {
     ensure(operation && Object.keys(operation).length===2 && operation.input && typeof operation.input==='object' && !Array.isArray(operation.input), 'invalid_github_timeline_request');
@@ -338,9 +339,7 @@ export class BackendCore {
     }
     if(operation.name==='sources'){
       ensure(Object.keys(operation.input).length===0,'invalid_github_timeline_request');
-      return {repositories:[...new Set(this.githubReferences(this.githubScope().projectId).flatMap(row=>{
-        const repository=githubRepository(String(row.content));return repository?['https://github.com/'+repository]:[];
-      }))]};
+      return {repositories:[...new Set(this.githubReferences(this.githubScope().projectId).map(ref=>'https://github.com/'+ref.repository))]};
     }
     throw new ServiceError('invalid_github_timeline_request');
   }
@@ -349,13 +348,17 @@ export class BackendCore {
     ensure(action.projectId===scope.projectId && (action.workspaceId===null||action.workspaceId===scope.workspaceId),'timeline_scope_changed');
     return scope;
   }
+  private timelineRepositoryAllowed(repository:string,projectId:string|null,intent:string) {
+    return namedGitHubRepositories(intent).includes(repository)||
+      this.githubReferences(projectId).some(ref=>ref.repository===repository);
+  }
   private prepareVelaNative(input:Parameters<CanonicalVelaHost['applyNative']>[0],cancel:AbortSignal) {
     const action=input.action;
     if(action.type!=='createTimeline'||action.source.kind!=='github-commits')return;
     this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
     const scope=this.timelineScope(action);
     const repo=githubRepository(action.source.repositoryUrl);
-    ensure(repo,'invalid_github_repository');
+    ensure(repo&&this.timelineRepositoryAllowed(repo,scope.projectId,input.intent),'github_repository_not_authorized');
     ensure(!this.active&&!this.githubImport,'github_timeline_busy');
     const controller=new AbortController();
     this.githubImport=controller;
@@ -370,6 +373,7 @@ export class BackendCore {
         this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
         const latest=this.timelineScope(action);
         ensure(latest.workspaceId===scope.workspaceId,'timeline_scope_changed');
+        ensure(this.timelineRepositoryAllowed(repo,latest.projectId,input.intent),'github_repository_not_authorized');
         return this.once<HostActionResult>(input.commandId,{type:'velaNative',...input},()=>{
           if(!batch.commits.length)return {status:'failed',receiptId:input.commandId,errorCode:'github_no_usable_commits'};
           return this.commitVelaTimeline(action,input.commandId,batch);
@@ -382,8 +386,10 @@ export class BackendCore {
     const scope={projectId,resourceIds:[] as string[]};
     if(action.source.kind==='github-commits'){
       ensure(batch,'github_reviewed_preparation_required');
-      const url='https://github.com/'+githubRepository(action.source.repositoryUrl);
-      let sourceId=this.githubReferences(projectId,url)[0]?.id as string|undefined;
+      const repository=githubRepository(action.source.repositoryUrl);
+      ensure(repository,'invalid_github_repository');
+      const url='https://github.com/'+repository;
+      let sourceId=this.githubReferences(projectId).find(ref=>ref.repository===repository)?.id;
       if(!sourceId){
         sourceId=this.kernel.createNote(batch.coverage.sourceLabel+' · GitHub',url,projectId).id;
         this.db.prepare("INSERT INTO desktop_resources(resource_id,kind) VALUES(?,'reference')").run(sourceId);
@@ -391,12 +397,19 @@ export class BackendCore {
       scope.resourceIds.push(sourceId);
     }
     const capture=Date.now(),coverage=batch?.coverage;
+    let from=capture-86400000,to=capture+60000;
+    if(batch&&coverage){
+      const dates=batch.commits.map(commit=>Date.parse(commit.evidence.reportedAt!));
+      const first=Math.min(...dates),last=Math.max(...dates);
+      const pad=Math.max(6*3600000,Math.ceil((last-first)*0.08));
+      from=Math.max(Date.parse(coverage.requestedFrom),first-pad);
+      to=Math.min(Date.parse(coverage.requestedTo)+1,last+pad);
+    }
     const timeline=this.timelineDomain().dispatch({name:'create',input:{
       commandId,title:action.title,projectId,
       view:{schemaVersion:1,mode:'activity',...(batch?{timeAxis:'reportedAt' as const}:{}),scope,
         sources:batch?{providerIds:['github'],eventTypes:['github.commit'],classifications:['reported']}:{providerIds:[],eventTypes:[],classifications:['observed','reported','inferred']},
-        viewport:{from:coverage?.requestedFrom??new Date(capture-86400000).toISOString(),
-          to:new Date(coverage?Date.parse(coverage.requestedTo)+1:capture+60000).toISOString(),
+        viewport:{from:new Date(from).toISOString(),to:new Date(to).toISOString(),
           displayTimeZone:Intl.DateTimeFormat().resolvedOptions().timeZone||'UTC'},selection:null},
     }});
     if(batch){
@@ -762,6 +775,10 @@ export class BackendCore {
     const providers=this.port.id==='codex-app-server'&&!this.port.mock?['local','codex-app-server']:['local'];
     return capabilities.filter(c=>this.velaCapability(c.id)).map(c=>{
       if(c.id==='setAttentionMode'){const version=this.vela.attentionPreferenceVersion();ensure(version!==null,'vela_attention_preferences_unavailable');return {...c,schema:{...c.schema,properties:{...(c.schema.properties as Record<string,unknown>),expectedVersion:{type:'integer',const:version}}}};}
+      if(c.id==='createTimeline'){
+        const repositories=[...new Set(this.githubReferences(this.githubScope().projectId).map(ref=>ref.repository))].sort();
+        return repositories.length===1?{...c,scope:c.scope+' Linked repository: https://github.com/'+repositories[0]}:c;
+      }
       return c.id!=='createConversation'?c:{...c,schema:{...c.schema,properties:{...(c.schema.properties as Record<string,unknown>),providerId:{enum:providers}}}};
     });
   }
@@ -859,7 +876,14 @@ export class BackendCore {
     if(request.actions.some(a=>a.type==='renameProject'&&!this.conversationAccess.project(a.projectId,'organize')||(a.type==='renameResource'||a.type==='associateResourceProject')&&(!this.conversationAccess.resource(a.resourceId,'organize')||a.type==='associateResourceProject'&&!this.conversationAccess.project(a.projectId,'organize'))))return {decision:'deny',reason:'Canonical organization permission is unavailable',policyVersion:request.scope.policyVersion};
     if(request.actions.some(a=>a.type==='createConversation'&&a.providerId==='codex-app-server'&&(this.port.id!=='codex-app-server'||this.port.mock)))return {decision:'deny',reason:'A real Codex conversation provider is not configured',policyVersion:request.scope.policyVersion};
     if(request.actions.some(a=>a.type==='createResource'&&a.workspaceId!==null&&!this.velaNative?.supportedActions.includes('createResource')))return {decision:'deny',reason:'Placement capability is unavailable',policyVersion:request.scope.policyVersion};
-    for(const action of request.actions)if(action.type==='createTimeline')this.timelineScope(action);
+    for(const action of request.actions)if(action.type==='createTimeline'){
+      const scope=this.timelineScope(action);
+      if(action.source.kind==='github-commits'){
+        const repository=githubRepository(action.source.repositoryUrl);
+        if(!repository||!this.timelineRepositoryAllowed(repository,scope.projectId,request.intent))
+          return {decision:'deny',reason:'Choose an explicit or linked repository',policyVersion:request.scope.policyVersion};
+      }
+    }
     if(request.phase==='provider-context') {
       ensure(this.pendingVelaGrant,'native_vela_grant_required');const grant=this.validateVelaGrant(this.pendingVelaGrant),preview=this.velaPreviews.get(grant.previewId)!;
       this.validateFrozenVelaPreview(preview);ensure(!grant.requestId&&request.contextManifest&&this.velaEgress(request.intent,request.contextManifest,preview.discovery,preview)===preview.signature&&(!preview.acceptedAppend||preview.acceptedAppend.requestId===request.requestId),'stale_vela_preview');grant.requestId=request.requestId;
