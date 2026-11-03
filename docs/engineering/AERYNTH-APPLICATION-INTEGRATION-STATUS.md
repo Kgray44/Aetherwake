@@ -2,6 +2,47 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Stream disclosures and Portable BS
+
+Universal Block System's `9caf7f0` landed on integration as
+`574cee7c8a17e68903f651b0e47457feffdb9937`. The shared Stream view
+builds allowlisted metadata and the scoped resource action when an
+event opens. Closing, hiding or removing the row retires its detail.
+The existing canonical event identity, provenance, row cap and
+native disclosure keyboard behavior are preserved.
+
+Matched hidden Electron runs loaded the BQ and BS package modules,
+renderer and bundled backend. After the third 50-card workspace
+return, both displayed 188 closed event rows. BQ mounted 3,948
+closed metadata pairs and BS mounted zero. A page-scoped Space key
+opened one row with all 21 pairs, then closed it with zero pairs
+and the same event ID. The DOM node count rose by 120 on each of
+the last two BS revisits, down from 630 on BQ, while retaining
+new legitimate event summaries. The third-revisit total dropped
+from 27,318 to 11,338. This establishes less mounted DOM.
+The short samples do not establish a renderer memory or physical
+presentation improvement.
+
+BS passed exact state through navigation and fresh-process restart,
+inactive draw suspension, reduced motion and WebGL recovery. SQLite
+integrity passed with zero provider executions. Strict build,
+409 desktop tests and 24 focused block tests passed. Private receipts
+are in `bq-stream-disclosure-1793708209683` and
+`bs-stream-disclosure-1793708322456`. Their initial SHA-256 values are
+`0cbc38a5e99eeDE2ead600d9aa43f291fdda3a8fb380a9bcc9f897673689acad`
+and `42a284ab87b4c062bc5e8173cf688c9c1f4154ec0d8d452d960bea707921adc5`.
+The BS restart hash is
+`7d7884eeb920952421603fc5c2b5adf52572e8f243a06c1985909d60df1ba7ee`.
+
+BR bundled the new source with the previous compiled renderer and
+reproduced BQ's result. It is preserved and rejected for review.
+BS compiled from the clean integration commit first and packages
+`index-CChFWz1-.js`, distinct from the BQ/BR renderer. All 427 BS
+payload files matched the manifest. Manifest SHA-256 is
+`a6758fca1263d6e21c701b1b8745bdad3be900c8c4795fafffb6543827cce855`.
+The test processes exited and the owner's window stayed open.
+Current physical display and live authorized Codex checks remain open.
+
 ## November 3 Portable BQ workspace journey and Stream memory diagnosis
 
 The BQ modules, renderer and bundled backend passed the exact local
