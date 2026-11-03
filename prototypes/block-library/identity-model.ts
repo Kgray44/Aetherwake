@@ -7,7 +7,8 @@ import type {
 import { sourceLinks } from "./source-links.ts";
 import type { ChecklistDocument } from '../application-contract/checklist.ts';
 import type { AgentBlockProjection } from './agent-view.ts';
-import type { TimelineDocument, TimelineWindow } from '../timeline-product/contracts.ts';
+import type { TimelineDocument } from '../timeline-product/contracts.ts';
+import { timelineItemTime, timelineItemTitle, type TimelinePresentationWindow } from './timeline-presentation.ts';
 import type { TaskObjectiveDocument } from '../task-product/contracts.ts';
 
 export type SubjectIdentity =
@@ -109,7 +110,7 @@ export function blockIdentity(input: {
   events?: IdentityEvent[];
   checklist?: ChecklistDocument;
   agent?: AgentBlockProjection;
-  timeline?: { document: TimelineDocument | null; window: TimelineWindow | null };
+  timeline?: { document: TimelineDocument | null; window: TimelinePresentationWindow | null };
   taskObjective?: TaskObjectiveDocument | null;
   disconnected?: boolean;
 }): BlockIdentityModel {
@@ -231,9 +232,17 @@ export function blockIdentity(input: {
       model.phase = projection && !timeline ? 'unavailable' : 'loading'; model.subtitle = model.phase === 'loading' ? 'Loading saved timeline…' : 'Timeline unavailable';
       model.empty = 'Open the saved timeline to inspect its authorized retained events.';
     } else {
-      model.heading = timeline.resource.title; model.subtitle = window.source.state === 'unavailable' ? 'Retained source unavailable' : 'Loaded captures' + (window.gaps.length ? ' · evidence gaps' : '');
+      model.heading = timeline.resource.title;
+      const basis = window.timeAxis === 'reportedAt' ? 'Loaded reported events' : 'Loaded captures';
+      model.subtitle = window.source.state === 'unavailable' ? 'Retained source unavailable' : basis + (window.gaps.length ? ' · evidence gaps' : '');
+      if (window.sourceCoverage) model.subtitle += ' · ' + window.sourceCoverage.status + ' source coverage';
       model.metrics = [{ label: 'Loaded events', value: String(window.items.length) }];
-      model.rows = window.items.slice(-4).reverse().map(item => ({ id: String(item.event.cursor) + ':' + item.event.eventId, title: item.event.type.replaceAll('.', ' ').replaceAll('_', ' '), detail: item.evidenceClass + ' · ' + item.event.providerId, time: item.event.receivedAt }));
+      model.rows = window.items.slice(-4).reverse().map(item => ({
+        id: String(item.event.cursor) + ':' + item.event.eventId,
+        title: timelineItemTitle(item),
+        detail: item.evidenceClass + ' · ' + (item.externalEvidence?.source.label ?? item.event.providerId),
+        time: timelineItemTime(item, window.timeAxis),
+      }));
       model.empty = window.source.state === 'unavailable' ? 'The retained event source is unavailable.' : 'No authorized captures in the loaded time window.';
     }
   } else if (kind === 'agent') {

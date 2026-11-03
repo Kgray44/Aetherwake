@@ -1,7 +1,7 @@
 import type { Resource } from '../application-contract/contracts.ts';
 import type { NoteExperiencePort } from './note-contracts.ts';
 import type { NoteSession } from './note-session.ts';
-import type { TimelinePort } from '../timeline-product/contracts.ts';
+import type { TimelineExternalOpen, TimelinePresentationPort } from './timeline-presentation.ts';
 import { mountTimelineExperience, type TimelineExperience } from './timeline-view.ts';
 import type { TaskObjectivePort } from '../task-product/contracts.ts';
 import { mountTaskTrackerExperience, type TaskTrackerExperience } from './task-tracker-view.ts';
@@ -15,7 +15,13 @@ import { mountEventExperience, type EventWindow } from './event-view.ts';
 export interface DirectResourcePorts {
   notes: NoteExperiencePort;
   noteSession(resourceId: string): NoteSession;
-  timelines?: { port: TimelinePort; motion: ExperienceMotionPort; viewId: string; resourceTitle?(resourceId: string): string | undefined };
+  timelines?: {
+    port: TimelinePresentationPort;
+    motion: ExperienceMotionPort;
+    viewId: string;
+    resourceTitle?(resourceId: string): string | undefined;
+    onOpenExternalSource?(target: TimelineExternalOpen): void | Promise<void>;
+  };
   taskObjectives?: Omit<Parameters<typeof mountTaskTrackerExperience>[3], 'active' | 'presentation' | 'openResource'> & { port: TaskObjectivePort };
   checklists?: {
     port: ChecklistPort;
@@ -191,7 +197,8 @@ export function mountDirectResourceExperience(
       const source = ports.timelines;
       if (!source) { status.textContent = 'Timeline access is unavailable in this surface.'; return; }
       timeline = mountTimelineExperience(body, resourceId, source.port, { motion: source.motion, viewId: source.viewId,
-        active, presentation: 'focused', showTitle: false, onOpenResource: ports.openResource, resourceTitle: source.resourceTitle });
+        active, presentation: 'focused', showTitle: false, onOpenResource: ports.openResource,
+        onOpenExternalSource: source.onOpenExternalSource, resourceTitle: source.resourceTitle });
       timelineWasActive = active; refreshVersion = resource.version; mounted = true;
       return;
     }

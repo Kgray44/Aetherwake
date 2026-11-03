@@ -3,26 +3,87 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { timelineFixture } from './timeline-view-fixture.mts';
 import { mountTimelineExperience } from '../timeline-view.ts';
+import { blockIdentity } from '../identity-model.ts';
+import type { TimelineExternalOpen, TimelineExternalEvidence, TimelinePresentationPort, TimelinePresentationWindow, TimelineSourceCoverage, TimelineTimeAxis } from '../timeline-presentation.ts';
 import { blockDocument } from './component-dom.mts';
 import { until } from '../../conversation-product/test/component-dom.mts';
 import { MotionCoordinator } from '../../visual-experience/cinematic-v3/src/motion.ts';
 import type { ExperienceMotionPort } from '../../application-contract/motion.ts';
-import type { SaveTimeline, TimelineDocument, TimelinePort, TimelineWindow } from '../../timeline-product/contracts.ts';
+import type { SaveTimeline, TimelineDocument } from '../../timeline-product/contracts.ts';
 const button = (root: any, text: string) => root.querySelectorAll('button').find((value: any) => value.textContent === text);
 const input = (root: any, name: string) => root.querySelectorAll('input').find((value: any) => value.getAttribute('aria-label') === name);
 const deferred = <T,>() => { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; };
-async function setup(t: any, configure?: (f: ReturnType<typeof timelineFixture>) => { port?: TimelinePort; active?: boolean; showTitle?: boolean }) {
+async function setup(t: any, configure?: (f: ReturnType<typeof timelineFixture>) => { port?: TimelinePresentationPort; active?: boolean; showTitle?: boolean; externalOpen?: boolean }) {
   const f = timelineFixture(t); f.add(); const configured = configure?.(f) ?? {}, dom = blockDocument(), restore = dom.install(), coordinator = new MotionCoordinator();
   const motion: ExperienceMotionPort = { get reduced() { return coordinator.reduced; }, add: (key, pose) => coordinator.add(key, pose), target: (key, pose, cause) => coordinator.target(key, pose, cause), pose: key => coordinator.pose(key), remove: key => { coordinator.bodies.delete(key); }, wake() {} };
-  const opened: string[] = []; let document: TimelineDocument | null = null, window: TimelineWindow | null = null;
+  const opened: string[] = [], external: TimelineExternalOpen[] = []; let document: TimelineDocument | null = null, window: TimelinePresentationWindow | null = null;
   const controller = mountTimelineExperience(dom.root, f.created.resourceId, configured.port ?? f.port, { motion, viewId: 'synthetic:timeline-view', active: configured.active, showTitle: configured.showTitle,
-    onOpenResource: id => { opened.push(id); }, onProjection: (doc, value) => { document = doc; window = value; } });
+    onOpenResource: id => { opened.push(id); },
+    ...(configured.externalOpen ? { onOpenExternalSource: (target: TimelineExternalOpen) => { external.push(target); } } : {}),
+    onProjection: (doc, value) => { document = doc; window = value; } });
   t.after(() => { controller.dispose(); restore(); });
   const settled = () => dom.root.querySelector('.aw-timeline').getAttribute('aria-busy') === 'false';
   const ready = () => until(() => !!document && settled());
   const frame = () => { for (let i = 0; i < 100; i++) { coordinator.step(1 / 60); controller.frame(); } };
-  return { f, dom, controller, coordinator, opened, ready, frame, settled, get document() { return document; }, get window() { return window; } };
+  return { f, dom, controller, coordinator, opened, external, ready, frame, settled, get document() { return document; }, get window() { return window; } };
 }
+
+test('typed GitHub evidence uses the saved axis, independent coverage, and an identity-only host open', async t => {
+  const externalEvidence: TimelineExternalEvidence = {
+    kind: 'github-commit', title: 'Preserve placement history',
+    source: { ref: 'synthetic:retained-commit', label: 'fixture/repository · main', permalink: 'https://github.com/fixture/repository/commit/0123456789abcdef0123456789abcdef01234567' },
+    reportedAt: '2026-11-02T03:00:00+01:00', timeSource: 'github-committer',
+  };
+  const sourceCoverage: TimelineSourceCoverage = {
+    kind: 'github-commits', sourceLabel: externalEvidence.source.label, requestedFrom: '2026-11-01T00:00:00Z',
+    requestedTo: '2026-11-03T00:00:00Z', fetchedAt: '2026-11-02T12:00:00Z', status: 'partial', omissionReason: 'Source page limit reached.',
+  };
+  let timeAxis: TimelineTimeAxis = 'receivedAt';
+  const s = await setup(t, f => {
+    f.add({ type: 'github.commit', providerId: 'github', classification: 'reported' });
+    return { externalOpen: true, port: { ...f.port, query: async input => {
+      const actual = f.service.query(input);
+      return {
+        ...actual, timeAxis, sourceCoverage,
+        gaps: timeAxis === 'reportedAt' ? [...actual.gaps, { kind: 'evidence-gap', reason: 'reported-time-unavailable', cause: 'unavailable' }] : actual.gaps,
+        items: actual.items.map(item => item.event.type === 'github.commit' ? { ...item, externalEvidence } : item),
+      };
+    } } };
+  });
+  await s.ready(); s.frame();
+  const item = s.window!.items.find(item => item.externalEvidence)!;
+  const rendered = () => s.dom.root.querySelectorAll('.aw-timeline-items li').find((row: any) => row.dataset.eventId === item.event.eventId);
+  const dotKey = 'timeline:synthetic:timeline-view:event:' + item.event.cursor + ':' + item.event.eventId + ':dot';
+  const capturedX = s.coordinator.pose(dotKey).x;
+  assert.match(s.dom.root.querySelector('.aw-timeline-range').textContent, /capture time/);
+  assert.equal(rendered().querySelector('time').getAttribute('datetime'), item.event.receivedAt);
+  assert.match(s.dom.root.querySelector('.aw-timeline-source-coverage').textContent, /partial source coverage.*Source page limit reached/);
+  assert.match(s.dom.root.querySelector('.aw-timeline-coverage').textContent, /retained page scanned/);
+  rendered().querySelector('button').onclick();
+  assert.match(s.dom.root.querySelector('.aw-timeline-selection').textContent, /Preserve placement history.*Reported time.*GitHub committer time.*2026-11-02T03:00:00\+01:00.*Captured/);
+  assert.equal(s.dom.root.querySelectorAll('a').length, 0, 'External opens use the host action');
+  const open = button(s.dom.root, 'Open commit on GitHub');
+  open.onclick(); await until(() => s.external.length === 1);
+  assert.deepEqual(s.external[0], { timelineId: s.f.created.resourceId, eventId: item.event.eventId, cursor: item.event.cursor });
+
+  timeAxis = 'reportedAt'; await s.controller.refresh(); s.frame();
+  assert.match(s.dom.root.querySelector('.aw-timeline-range').textContent, /reported time/);
+  assert.match(s.dom.root.querySelector('.aw-timeline-legend').textContent, /Reported event positions/);
+  assert.match(s.dom.root.querySelector('.aw-timeline-gaps').textContent, /no usable reported time/);
+  assert.equal(rendered().querySelector('time').getAttribute('datetime'), externalEvidence.reportedAt);
+  assert.ok(s.coordinator.pose(dotKey).x < capturedX);
+  assert.equal(s.dom.root.querySelectorAll('.aw-timeline-dot').filter((marker: any) => marker.hidden).length, 1, 'Missing reported time has no track position');
+  const resource = { ...s.document!.resource, kind: 'timeline' as const, provider: 'local' as const, content: '', messages: [] };
+  const compact = blockIdentity({ kind: 'timeline', resource, timeline: { document: s.document, window: s.window } });
+  assert.deepEqual(compact.rows.map(row => row.time), [externalEvidence.reportedAt, undefined]);
+  assert.equal(compact.rows[0].title, externalEvidence.title);
+  assert.match(compact.subtitle, /reported events.*partial source coverage/);
+  open.onclick();
+  assert.equal(s.external.length, 1, 'An action retained from a prior window is stale');
+  s.f.setDenied(true); await s.controller.refresh();
+  assert.doesNotMatch(s.dom.root.textContent, /fixture\/repository|Preserve placement history/);
+  assert.equal(s.dom.root.querySelector('.aw-timeline-source-coverage').hidden, true);
+});
 
 test('Timeline reads real retained headers, saves pan/zoom/back/selection through canonical commands and uses only shared motion', async t => {
   const s = await setup(t); await s.ready(); s.frame();

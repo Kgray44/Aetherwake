@@ -12,5 +12,8 @@
 .aw-timeline-items > li > button { display:grid; grid-template-columns:3px minmax(0,1fr); gap:.2rem .65rem; width:100%; height:100%; text-align:left; border:0; border-radius:0; background:none; padding:.4rem 0; }
 .aw-timeline-items > li > button::before { content:''; grid-row:1/4; width:2px; border-radius:2px; background:#b6c7d84f; }.aw-timeline-items > li > button[aria-pressed=true]::before { background:#e4d5b7; }
 .aw-timeline-items time,.aw-timeline-items small { grid-column:2; font-size:.72rem; opacity:.7; }.aw-timeline-items strong { grid-column:2; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; font-size:.85rem; }
+.aw-timeline-event-time { grid-column:2; font-size:.72rem; opacity:.7; }
+.aw-timeline-source-coverage { border-left:2px solid #b6c7d852; padding-left:.6rem; font-size:.75rem; line-height:1.5; overflow-wrap:anywhere; }
+.aw-timeline-selection h4 { overflow-wrap:anywhere; }
 .aw-timeline-selection { padding:.65rem; border:1px solid #b6c7d825; border-radius:.75rem; font-size:.8rem; }.aw-timeline-selection dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:.3rem .6rem; }.aw-timeline-selection dd { margin:0; overflow-wrap:anywhere; }.aw-timeline-selection p { font-size:.75rem; line-height:1.5; margin-bottom:.5rem; }
 .aw-timeline-gaps { margin:0; padding-left:1.2rem; }.aw-timeline-review > p { width:100%; font-size:.8rem; }.aw-timeline [hidden] { display:none; }

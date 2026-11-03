@@ -17,6 +17,8 @@ export interface TimelineSelection {
 export interface TimelineView {
   schemaVersion: 1;
   mode: "activity" | "execution";
+  /** Missing on existing views, which continue to use capture time. */
+  timeAxis?: "receivedAt" | "reportedAt";
   /** Empty resourceIds means the authorized project/application scope, not all data. */
   scope: { projectId: string | null; resourceIds: string[] };
   sources: {
@@ -24,7 +26,7 @@ export interface TimelineView {
     eventTypes: string[];
     classifications: EvidenceClass[];
   };
-  /** Pan/zoom changes the capture-time interval; source timestamps are never rewritten. */
+  /** Pan/zoom changes the selected time interval. Source timestamps are never rewritten. */
   viewport: { from: string; to: string; displayTimeZone: string };
   selection: TimelineSelection | null;
 }
@@ -85,7 +87,15 @@ export interface RecordedTimelineItem {
     schemaVersion: 1;
   };
   navigation: { resourceId: string; state: "active" | "archived" } | null;
+  externalEvidence?: GitHubCommitEvidence;
   taskVerification: "not-established-by-this-projection";
+}
+export interface GitHubCommitEvidence {
+  kind: "github-commit";
+  title: string;
+  source: { ref: string; label: string; permalink: string | null };
+  reportedAt: string | null;
+  timeSource: "github-committer" | "github-author" | null;
 }
 export type TimelineGapReason =
   | "source-unavailable"
@@ -95,6 +105,7 @@ export type TimelineGapReason =
   | "invalid-event"
   | "access-filtered"
   | "scan-limit"
+  | "reported-time-unavailable"
   | "selection-unavailable";
 export interface TimelineEvidenceGap {
   kind: "evidence-gap";
@@ -109,16 +120,27 @@ export interface TimelinePage {
   afterCursor: number;
   throughCursor: number;
 }
+export interface TimelineSourceCoverage {
+  kind: "github-commits";
+  sourceLabel: string;
+  requestedFrom: string;
+  requestedTo: string;
+  fetchedAt: string | null;
+  status: "bounded" | "partial" | "unavailable";
+  omissionReason?: string;
+}
 export interface TimelineWindow {
   contract: "aerynth.timeline-window@1";
   resourceId: string;
   resourceVersion: number;
   viewDigest: string;
   order: "capture-cursor";
-  timeAxis: "receivedAt";
+  timeAxis: NonNullable<TimelineView["timeAxis"]>;
   scopeBasis: "current-authorized-canonical-resources";
   items: RecordedTimelineItem[];
   gaps: TimelineEvidenceGap[];
+  /** External fetch coverage is independent of the retained event page. */
+  sourceCoverage?: TimelineSourceCoverage;
   next: TimelinePage | null;
   source: {
     store: "intelligence_events";

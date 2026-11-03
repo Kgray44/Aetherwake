@@ -141,6 +141,7 @@ function fixture(t: any, path = ":memory:") {
   const add = (
     patch: Partial<TimelineEventHeader> = {},
     payload: unknown = { redacted: true, delta: "SYNTHETIC_PRIVATE_PAYLOAD" },
+    externalEvidence?: unknown,
   ) => {
     source();
     const header: TimelineEventHeader = {
@@ -171,7 +172,7 @@ function fixture(t: any, path = ":memory:") {
       .run(randomUUID(), "{}");
     header.cursor = Number(inserted.lastInsertRowid);
     db.prepare("UPDATE intelligence_events SET json=? WHERE cursor=?").run(
-      JSON.stringify({ ...header, payload }),
+      JSON.stringify({ ...header, payload, externalEvidence }),
       header.cursor,
     );
     db.prepare("UPDATE integration_meta SET latest=? WHERE id=1").run(
@@ -234,6 +235,47 @@ const query = (
     expectedVersion: r.version,
     ...(limit === undefined ? {} : { limit }),
   });
+
+test("GitHub-reported time uses the saved scope, preserves capture ordering, and never bypasses source policy", (t) => {
+  const f = fixture(t);
+  const project = f.kernel.createProject("Synthetic repository project");
+  const source = f.kernel.createGenericResource("Synthetic repository source", project.id);
+  const scope = { projectId: project.id, resourceIds: [source.id] };
+  const sources = { providerIds: ["github"], eventTypes: ["github.commit"], classifications: ["reported"] as const };
+  const filters = { ...sources, classifications: [...sources.classifications] };
+  const base = { resourceId: source.id, providerId: "github", type: "github.commit", classification: "reported" as const };
+  const evidence = (sha: string, time: string) => ({
+    kind: "github-commit", title: "Synthetic public commit",
+    source: { ref: source.id, label: "synthetic/example", permalink: "https://github.com/synthetic/example/commit/" + sha },
+    reportedAt: time, timeSource: "github-committer",
+  });
+  const add = (sha: string, time: string, data = evidence(sha, time)) =>
+    f.add({ ...base, nativeEventId: sha, providerTime: Date.parse(time), providerTimeSource: "github-committer" }, undefined, data);
+  const later = add("a".repeat(40), "2026-10-30T12:00:00.000Z");
+  const earlier = add("b".repeat(40), "2026-10-30T08:00:00.000Z");
+  const spoof = evidence("c".repeat(40), "2026-10-30T09:00:00.000Z");
+  spoof.source.permalink = "https://github.com.evil.invalid/commit";
+  add("c".repeat(40), spoof.reportedAt, spoof);
+  const timeline = f.create(view({
+    timeAxis: "reportedAt", scope, sources: filters,
+    viewport: { from: "2026-10-30T00:00:00.000Z", to: "2026-10-31T00:00:00.000Z", displayTimeZone: "UTC" },
+  }), randomUUID(), project.id);
+  const window = query(f, timeline);
+  assert.equal(window.timeAxis, "reportedAt");
+  assert.equal(window.order, "capture-cursor");
+  assert.deepEqual(window.items.map((item) => item.event.eventId), [later.eventId, earlier.eventId]);
+  assert.equal(window.items[0]!.event.receivedAt, later.receivedAt);
+  assert.deepEqual(window.items[0]!.externalEvidence, evidence("a".repeat(40), "2026-10-30T12:00:00.000Z"));
+  assert(window.gaps.some((gap) => gap.reason === "reported-time-unavailable"));
+  assert.doesNotMatch(JSON.stringify(window), /SYNTHETIC_PRIVATE_PAYLOAD|evil.invalid/);
+  const capture = f.create(view({ scope, sources: filters }), randomUUID(), project.id);
+  assert.equal(query(f, capture).timeAxis, "receivedAt");
+  assert.equal(query(f, capture).items.length, 3);
+  f.deniedEvents.add(later.eventId);
+  assert.deepEqual(query(f, timeline).items.map((item) => item.event.eventId), [earlier.eventId]);
+  f.deniedResources.add(source.id);
+  assert.throws(() => query(f, timeline), /timeline_scope_unavailable/);
+});
 
 test("unknown reads do no DDL; explicit creation makes one canonical generic Timeline and no note/chat/workspace/placement", (t) => {
   const f = fixture(t),

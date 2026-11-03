@@ -17,6 +17,7 @@ import {
   type TimelineGapReason,
   type TimelinePage,
   type RecordedTimelineItem,
+  type GitHubCommitEvidence,
 } from "./contracts.ts";
 
 export interface TimelineHostPort {
@@ -182,7 +183,35 @@ const projection =
       (key) =>
         `CASE WHEN json_valid(json) THEN CASE WHEN ${fieldShape(key)} THEN json_extract(json,'$.${key}') END END AS ${key}`,
     )
-    .join(",");
+    .join(",") +
+  ",CASE WHEN json_valid(json) THEN CASE WHEN " +
+  "json_extract(json,'$.providerId')='github' AND " +
+  "json_type(json,'$.externalEvidence')='object' AND " +
+  "length(CAST(json_extract(json,'$.externalEvidence') AS BLOB))<=1536 " +
+  "THEN json_extract(json,'$.externalEvidence') END END AS externalEvidence";
+
+function githubEvidence(value: unknown, event: TimelineEventHeader): GitHubCommitEvidence | undefined {
+  if (typeof value !== "string" || event.providerId !== "github" ||
+      event.type !== "github.commit" || event.classification !== "reported" ||
+      !event.resourceId || !event.nativeEventId || !/^[a-f0-9]{40}$/.test(event.nativeEventId))
+    return;
+  const evidence: unknown = JSON.parse(value);
+  if (!fields(evidence, ["kind", "title", "source", "reportedAt", "timeSource"]) ||
+      evidence.kind !== "github-commit" || !id(evidence.title, 200) ||
+      !fields(evidence.source, ["ref", "label", "permalink"]) ||
+      evidence.source.ref !== event.resourceId || !id(evidence.source.label, 140) ||
+      !/^[A-Za-z0-9-]{1,39}\/[A-Za-z0-9_.-]{1,100}$/.test(evidence.source.label) ||
+      (evidence.source.permalink !== null &&
+        evidence.source.permalink !== `https://github.com/${evidence.source.label}/commit/${event.nativeEventId}`))
+    return;
+  if (evidence.reportedAt === null
+    ? evidence.timeSource !== null || event.providerTime !== null || event.providerTimeSource !== null
+    : !iso(evidence.reportedAt) ||
+      !["github-committer", "github-author"].includes(evidence.timeSource) ||
+      event.providerTime !== Date.parse(evidence.reportedAt) || event.providerTimeSource !== evidence.timeSource)
+    return;
+  return evidence as unknown as GitHubCommitEvidence;
+}
 
 /** Durable view configuration, never a mirror of source events. Unknown reads
  * do no DDL. Only explicit create initializes this versioned additive schema. */
@@ -359,17 +388,12 @@ export class TimelineService {
       : null;
   }
   private view(input: unknown): TimelineView {
+    const required = ["schemaVersion", "mode", "scope", "sources", "viewport", "selection"];
     check(
-      fields(input, [
-        "schemaVersion",
-        "mode",
-        "scope",
-        "sources",
-        "viewport",
-        "selection",
-      ]) &&
+      fields(input, [...required, "timeAxis"], required) &&
         input.schemaVersion === 1 &&
-        ["activity", "execution"].includes(input.mode),
+        ["activity", "execution"].includes(input.mode) &&
+        (!Object.hasOwn(input, "timeAxis") || ["receivedAt", "reportedAt"].includes(input.timeAxis)),
       "timeline_invalid_view",
     );
     check(
@@ -398,6 +422,10 @@ export class TimelineService {
           ),
         "timeline_invalid_filters",
       );
+    if (input.timeAxis === "reportedAt")
+      check(input.mode === "activity" && input.scope.resourceIds.length > 0 &&
+        input.sources.providerIds.length === 1 && input.sources.providerIds[0] === "github" &&
+        input.sources.classifications.includes("reported"), "timeline_invalid_reported_time_scope");
     check(
       input.sources.classifications.length > 0 &&
         fields(input.viewport, ["from", "to", "displayTimeZone"]) &&
@@ -620,7 +648,8 @@ export class TimelineService {
     return (
       typeof header !== "string" &&
       header.eventId === view.selection.eventId &&
-      this.visible(header, view).allowed
+      this.visible(header, view).allowed &&
+      (view.timeAxis !== "reportedAt" || !!githubEvidence(row.externalEvidence, header)?.reportedAt)
     );
   }
   read(resourceId: string): TimelineDocument {
@@ -898,7 +927,7 @@ export class TimelineService {
         resourceVersion: value.resource.version,
         viewDigest: value.viewDigest,
         order: "capture-cursor",
-        timeAxis: "receivedAt",
+        timeAxis: value.view.timeAxis ?? "receivedAt",
         scopeBasis: "current-authorized-canonical-resources",
         items,
         gaps,
@@ -976,11 +1005,15 @@ export class TimelineService {
           scanned = header.cursor;
           continue;
         }
-        if (
-          Date.parse(header.receivedAt) <
-            Date.parse(value.view.viewport.from) ||
-          Date.parse(header.receivedAt) >= Date.parse(value.view.viewport.to)
-        ) {
+        const externalEvidence = githubEvidence(raw.externalEvidence, header);
+        const timestamp = result.timeAxis === "reportedAt" ? externalEvidence?.reportedAt : header.receivedAt;
+        if (!timestamp) {
+          gap("reported-time-unavailable");
+          scanned = header.cursor;
+          continue;
+        }
+        const time = Date.parse(timestamp);
+        if (time < Date.parse(value.view.viewport.from) || time >= Date.parse(value.view.viewport.to)) {
           scanned = header.cursor;
           continue;
         }
@@ -998,6 +1031,7 @@ export class TimelineService {
           navigation: visible.resource
             ? { resourceId: visible.resource.id, state: visible.resource.state }
             : null,
+          ...(externalEvidence ? { externalEvidence } : {}),
           taskVerification: "not-established-by-this-projection",
         };
         // Reserve bounded envelope/gap/page metadata inside the total response cap.
