@@ -859,9 +859,10 @@ export function installApplication(hooks: Hooks) {
     failed: report,
   });
   function report(e: unknown) {
-    hooks.status(
-      `Action not saved: ${e instanceof Error ? e.message : "operation_failed"}. Your current data is retained.`,
-    );
+    const message = e instanceof Error ? e.message : "operation_failed";
+    hooks.status(message === "storage_reserve_admission_denied"
+      ? "Storage check paused saving. Your data is retained."
+      : `Action not saved: ${message}. Your current data is retained.`);
   }
   async function command(
     a: DesktopCommand,
@@ -4100,8 +4101,10 @@ export function installApplication(hooks: Hooks) {
     for (const view of eventViews.values()) view.update();
     if (e.type === "storage/reserve-admission-denied")
       hooks.status(
-        "Storage reserve reached. Saving and new execution are stopped; data is retained. External applications are outside this guard.",
+        "Storage check paused saving and new runs. Your data is retained.",
       );
+    if (e.type === "storage/reserve-admission-restored")
+      hooks.status("Storage check passed. Saving is available again.");
     if (e.type === "backend/disconnected") {
       eventDisconnected = true;
       updateStreamSummaries();

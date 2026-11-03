@@ -539,6 +539,13 @@ function home() {
     elements.get(id)!.querySelector<HTMLButtonElement>(".unfold")!.focus();
   status("Workspace restored.");
 }
+if (desktopMode) {
+  document.addEventListener("click", (event) => {
+    if (!expanded || event.defaultPrevented || event.button !== 0) return;
+    if (event.target === document.body || event.target === $("#world") || event.target === $("#stage"))
+      home();
+  });
+}
 function move(id: string, to: number) {
   const block = application?.block(id);
   if (block) {

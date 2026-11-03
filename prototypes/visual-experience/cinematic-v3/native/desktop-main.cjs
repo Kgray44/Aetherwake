@@ -9,7 +9,8 @@ const {
   safeStorage,
   clipboard,
 } = require("electron");
-const { spawn, execFileSync } = require("node:child_process");
+const { spawn, execFile, execFileSync } = require("node:child_process");
+const { createStorageAdmission } = require("./storage-admission.cjs");
 const { createInterface } = require("node:readline");
 const {
   mkdirSync,
@@ -135,36 +136,31 @@ if (offscreenScale) {
   if (marker.contract !== "aerynth.native-block-scale@1" || marker.syntheticData !== true || marker.count !== scale.count)
     throw Error("synthetic_block_scale_seed_required");
 }
-let admitted = false;
-function reserveGuard() {
-  if (process.platform !== "win32") return true;
-  try {
-    const guard = path.join(
-      app.getPath("home"),
-      "AppData/Local/AeroStorageWatch/ReserveGuard.ps1",
-    );
-    const receipt = JSON.parse(
-      execFileSync(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-File",
-          guard,
-          "-EstimatedCBytes",
-          "1073741824",
-          "-EstimatedDBytes",
-          privateRoot.toUpperCase().startsWith("D:") ? "536870912" : "0",
-        ],
-        { windowsHide: true, encoding: "utf8", timeout: 15000 },
-      ),
-    );
-    return receipt.allowed === true;
-  } catch {
-    return false;
-  }
+const reserveArguments = [
+  "-NoProfile", "-File",
+  path.join(app.getPath("home"), "AppData/Local/AeroStorageWatch/ReserveGuard.ps1"),
+  "-EstimatedCBytes", "1073741824",
+  "-EstimatedDBytes", privateRoot.toUpperCase().startsWith("D:") ? "536870912" : "0",
+];
+const reserveOptions = { windowsHide: true, encoding: "utf8", timeout: 15000, maxBuffer: 65536 };
+function admittedBy(receipt) {
+  try { return JSON.parse(receipt)?.allowed === true; }
+  catch { return false; }
 }
-admitted = reserveGuard();
-if (!admitted) {
+function startupReserve() {
+  if (process.platform !== "win32") return true;
+  try { return admittedBy(execFileSync("powershell.exe", reserveArguments, reserveOptions)); }
+  catch { return false; }
+}
+function runtimeReserve() {
+  if (process.platform !== "win32") return Promise.resolve(true);
+  return new Promise((resolve) => {
+    execFile("powershell.exe", reserveArguments, reserveOptions, (error, stdout) =>
+      resolve(!error && admittedBy(stdout)),
+    );
+  });
+}
+if (!startupReserve()) {
   console.error("storage_reserve_admission_denied");
   app.exit(1);
 }
@@ -221,6 +217,23 @@ const pending = new Map();
 let nativeSecretBroker;
 let providerConnections;
 let nativeClipboard;
+const storage = createStorageAdmission({
+  probe: runtimeReserve,
+  initiallyAdmitted: true,
+  changed(admitted) {
+    if (closing) return;
+    sendToWindow(win, "application-event", {
+      type: admitted ? "storage/reserve-admission-restored" : "storage/reserve-admission-denied",
+      classification: "observed",
+    });
+    if (admitted) return;
+    call("snapshot", {}).then((snapshot) => {
+      for (const execution of Object.values(snapshot.executions))
+        if (execution.state === "running" && execution.turnId)
+          void call("interrupt", { executionId: execution.id }).catch(() => {});
+    }).catch(() => {});
+  },
+});
 function call(command, input) {
   if (!child || child.killed || !child.stdin.writable)
     return Promise.reject(new Error("backend_disconnected"));
@@ -409,7 +422,6 @@ app.whenReady().then(async () => {
       )
         throw new Error("command_too_large");
       if (
-        !admitted &&
         ![
           "replay",
           "executionStatus",
@@ -440,9 +452,13 @@ app.whenReady().then(async () => {
             "browseResources",
           ].includes(input?.name)
         ) &&
-        !(command === "desktop" && input?.type === "snapshot")
+        !(command === "desktop" && input?.type === "snapshot") &&
+        !(await storage.allowWrite())
       )
         throw new Error("storage_reserve_admission_denied");
+      if (win.isDestroyed() || win.webContents.isDestroyed() ||
+          event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
+        throw new Error("unauthorized_sender");
       let result;
       if (command === "desktop") result = await call("desktop", input);
       else if (command === "openResource")
@@ -582,22 +598,7 @@ app.whenReady().then(async () => {
   win.show();
   win.focus();
   active();
-  const reserveTimer = setInterval(() => {
-    admitted = reserveGuard();
-    if (!admitted) {
-      sendToWindow(win, "application-event", {
-        type: "storage/reserve-admission-denied",
-        classification: "observed",
-      });
-      call("snapshot", {})
-        .then((snapshot) => {
-          for (const e of Object.values(snapshot.executions))
-            if (e.state === "running" && e.turnId)
-              void call("interrupt", { executionId: e.id }).catch(() => {});
-        })
-        .catch(() => {});
-    }
-  }, 240000);
+  const reserveTimer = setInterval(() => { void storage.recheck(); }, 240000);
   reserveTimer.unref();
   if (checkCatalog) {
     // Explicit CLI support action uses this normal app's existing managed
