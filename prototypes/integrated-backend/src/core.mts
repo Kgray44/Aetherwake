@@ -148,7 +148,7 @@ export class BackendCore {
       this.kernel.withTransaction(db => {
         this.db = db;
         if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_schema'").get()){
-          const versions=db.prepare('SELECT version FROM cp_schema').all();ensure(versions.length===1&&[1,2].includes(Number(versions[0].version)),'unsupported_conversation_product_schema');
+          const versions=db.prepare('SELECT version FROM cp_schema').all();ensure(versions.length===1&&[1,2,3].includes(Number(versions[0].version)),'unsupported_conversation_product_schema');
         }
         if(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='vela_state'").get()){
           const versions=db.prepare('SELECT schema_version FROM vela_state').all();ensure(versions.length<=1&&versions.every(row=>[1,2,3].includes(Number(row.schema_version))),'unsupported_vela_schema');
@@ -1429,14 +1429,14 @@ export class BackendCore {
     if(name==='vela'&&a?.name==='presentation')return this.vela.presentation(a.input) as any;
     // Reads, interruption and durable draft recovery remain available during
     // execution. Canonical mutations retain source/approval fences.
-    const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft'];
+    const productReads=['list','search','detail','collections','projects','providers','discover','inspectShare','export','readDraft','readViewState'];
     if(name==='timelines'){ensure(isTimelineRead(a)||!this.active,'execution_busy');return this.timelineCommand(a) as any;}
     if(name==='taskObjectives'){ensure(a?.name==='targets'||isTaskObjectiveRead(a)||!this.active,'execution_busy');return this.taskObjectiveCommand(a) as any;}
     if(name==='agents'||name==='checklists'){
       ensure((name==='agents'?isAgentRead(a):isChecklistRead(a))||!this.active,'execution_busy');
       return this.productCommand(name,a) as any;
     }
-    if (!(name==='close'&&this.active?.providerId===CHATGPT_PLAN_PROVIDER)&&!(name==='conversation'&&a?.name==='saveDraft')&&!['providerActivity','providerConnection','providerAuth','ordinaryProviderStatus','ordinaryProviderCheck','openResource','snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['inspectWorkspace','capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
+    if (!(name==='close'&&this.active?.providerId===CHATGPT_PLAN_PROVIDER)&&!(name==='conversation'&&['saveDraft','saveViewState','selectView'].includes(a?.name))&&!['providerActivity','providerConnection','providerAuth','ordinaryProviderStatus','ordinaryProviderCheck','openResource','snapshot','replay','interrupt','execute','desktop','viewState','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['inspectWorkspace','capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {
       case 'providerAuth':return this.providerAuth(a) as any;
       case 'providerConnection':{

@@ -58,7 +58,12 @@
 .aw-optical-controls .cp-chat-extras[data-cp-disclosure-layout=menu]>.cp-motion-disclosure-body{width:min(480px,calc(100vw - 64px))}
 .aw-optical-controls .cp-chat-extras[data-cp-disclosure-layout=menu]>.cp-motion-disclosure-body>.cp-motion-disclosure-content{padding:8px 12px;box-sizing:border-box;border:1px solid var(--aw-menu-rim,#d4b8f52b);border-radius:var(--aw-menu-radius,18px)}
 .aw-optical-controls .cp-new-chat[data-cp-motion-disclosure],.aw-optical-controls .cp-chat-options[data-cp-motion-disclosure]{width:auto;flex-basis:auto}
-.aw-optical-controls .cp-switcher[data-cp-motion-disclosure]>.cp-motion-disclosure-body{inset-inline-start:auto}
+/* Left-side menus open into the glass surface. Embedded selectors expand
+   within the same bounded disclosure instead of escaping its clip. */
+.aw-optical-controls :is(.cp-new-chat,.cp-switcher,.cp-filters,.cp-history-tools)[data-cp-disclosure-layout=menu]>.cp-motion-disclosure-body{inset-inline-start:0;inset-inline-end:auto;width:min(320px,calc(100vw - 64px))}
+.aw-optical-controls .cp-motion-disclosure-content .cp-picker{flex-direction:column;align-items:stretch}
+.aw-optical-controls .cp-motion-disclosure-content .cp-picker-panel{position:relative;inset:auto;margin-block-start:4px;min-width:0;max-width:100%;box-shadow:none}
+:root body .aw-optical-controls.cp-manager :is(.cp-disclosure-panel input:not([type=checkbox]):not([type=radio]),.cp-toolbar>input[type=search]){border:1px solid rgb(var(--control-edge-rgb,212 184 245) / calc(.15 + var(--control-focus,0)*.27));border-radius:var(--aw-control-radius,999px);padding-inline:12px;background:rgb(var(--control-film-rgb,212 184 245) / calc(.025 + var(--control-hover,0)*.04 + var(--control-focus,0)*.045))}
 .aw-optical-controls .cp-message-actions[data-cp-motion-disclosure]{width:fit-content}
 .cp-chat.aw-optical-controls .cp-message.aw-control-motion>.cp-message-actions[data-cp-motion-disclosure]{opacity:max(var(--control-hover,0),var(--control-focus,0),var(--cp-disclosure-open,0))}
 .cp-chat.aw-optical-controls .cp-composer.aw-control-motion{border-color:rgb(var(--control-edge-rgb,212 184 245) / calc(.2 + var(--control-focus,0)*.27));box-shadow:inset 0 1px 0 rgb(var(--control-sheen-rgb,240 221 255) / calc(.08 + var(--control-focus,0)*.06))}

@@ -11,6 +11,7 @@ const readNames = new Set([
   "discover",
   "export",
   "readDraft",
+  "readViewState",
 ]);
 exports.isConversationRead = (input) => input && readNames.has(input.name);
 
