@@ -60,7 +60,7 @@ import type { CapabilityCatalogSnapshot, CapabilityNativeCall, CapabilityToolRep
 import { historyDigest } from '../../vela-core/src/bounded-history.mts';
 import type { AcceptedHistoryAppend, HistoryFence, HistoryOrigin, HistoryOmission, PrivateFrozenProviderContext, HistoryMessageMetadata, HistoryRequestRecord, HistorySnapshot, HistoryTail } from '../../vela-core/src/bounded-history.mts';
 import type { VelaMessage, VelaLocalHost, ContextManifest, AuthorizationRequest, AuthorizationDecision, VelaNativeAction, VelaPlanningPort, ResourceRef, VelaPlan, HostActionResult, CapabilityDescriptor, VelaScopePurpose } from '../../vela-core/src/contracts.ts';
-import type { VelaRequestPreview, VelaNativeReview, VelaNativeCapabilities, VelaBackendState } from './contracts.mts';
+import type { VelaRequestPreview, VelaNativeReview, VelaNativeCapabilities, VelaBackendState, VelaRouteTiming } from './contracts.mts';
 import { TemplateService } from '../../block-library/service.mts';
 import { createCanonicalTemplateHost } from '../../block-library/canonical-host.mts';
 import { NoteExperienceService } from '../../block-library/note-service.mts';
@@ -109,6 +109,7 @@ interface PrivateVelaPreview extends VelaRequestPreview {
   inputAnchor:{conversationId:string|null;revision:number|null};inputDigest:string;
   acceptedInputBase?:{conversationId:string;revision:number};
   nativeStage?: { observedAt: string; text: string };
+  timing?: VelaRouteTiming;
   routingSettingsStamp?: string;
   agentRoutingDigest?: string;
   calibrationProjectId?: string | null;
@@ -1672,7 +1673,12 @@ export class BackendCore {
       capability.modelEfforts?.[model]?.includes(defaultEffort) ? defaultEffort as TurnInput['reasoningEffort'] : undefined);
     return { model, ...(effort ? { effort } : {}) };
   }
-  private async selectVelaRoute(input: CommandMap['velaRequestPreview']['input']): Promise<{providerId: string; route: VelaRouteDecision}> {
+  private async selectVelaRoute(input: CommandMap['velaRequestPreview']['input'], timing: { capabilityMs: number }): Promise<{providerId: string; route: VelaRouteDecision}> {
+    const observeCapabilities = async <T,>(work: () => Promise<T>) => {
+      const started = performance.now();
+      try { return await work(); }
+      finally { timing.capabilityMs += performance.now() - started; }
+    };
     ensure(input.providerId === undefined || input.providerId === CHATGPT_PLAN_PROVIDER || input.providerId === 'codex-app-server', 'invalid_vela_provider');
     ensure(input.mode === undefined || ['auto', 'fast', 'deep', 'codex', 'custom'].includes(input.mode), 'invalid_vela_mode');
     ensure(input.mode !== 'custom' || input.providerId !== undefined, 'vela_custom_provider_required');
@@ -1708,7 +1714,7 @@ export class BackendCore {
           expected ? Array.isArray(paths) && paths.length > 0 : paths === undefined;
         ensure(validPaths(replacements, input.editTargetPaths) && validPaths(creations, input.editCreatePaths), 'vela_edit_path_ineligible');
       }
-      const model = await this.selectVelaCodexModel(input);
+      const model = await observeCapabilities(() => this.selectVelaCodexModel(input));
       if (intent === 'app-planning') return { providerId: this.port.id, route: { kind: 'app-planning', reason: 'reviewed-app-action', ...model } };
       const selection = { environment: 'local-read-only' as const, ...model };
       if (intent === 'local-write') {
@@ -1722,13 +1728,13 @@ export class BackendCore {
         ? { kind: 'composite', reason: 'native-fact-and-local-inspection', metric, ...selection }
         : { kind: 'agentic', reason: intent === 'local-read' ? 'local-tools-required' : 'explicit-codex', ...selection } };
     }
-    await this.maintainOrdinarySession();
+    await observeCapabilities(() => this.maintainOrdinarySession());
     if (!this.ordinaryAuthorized() && intent === 'app-planning' && !input.providerId && !input.model && !input.reasoningEffort) {
-      const model = await this.selectVelaCodexModel(input);
+      const model = await observeCapabilities(() => this.selectVelaCodexModel(input));
       return { providerId: this.port.id, route: { kind: 'app-planning', reason: 'reviewed-app-action', ...model } };
     }
     ensure(this.ordinaryAuthorized(), 'vela_chatgpt_sign_in_required');
-    if (!this.ordinaryAvailable()) await this.checkOrdinaryModels();
+    if (!this.ordinaryAvailable()) await observeCapabilities(() => this.checkOrdinaryModels());
     ensure(this.ordinaryAvailable(), 'ordinary_model_catalog_unavailable');
     const models = this.ordinaryCatalog!.models.map(ordinaryModelOption);
     ensure(input.model === undefined || models.some(model => model.id === input.model), 'unsupported_model');
@@ -1755,6 +1761,7 @@ export class BackendCore {
         ...(calibration ? { calibration } : {}), ...(escalation ? { escalation } : {}) } };
   }
   private async previewVelaRequest(input:CommandMap['velaRequestPreview']['input']):Promise<VelaRequestPreview> {
+    const previewStarted = performance.now();
     this.pruneVelaGrants();ensure(typeof input.intent==='string'&&input.intent.trim()&&input.intent.length<=16000,'invalid_vela_intent');ensure(this.velaPreviews.size<64,'approval_backpressure');
     const handoffRequestId = input.handoffSourceRequestId;
     if (handoffRequestId !== undefined) {
@@ -1769,9 +1776,11 @@ export class BackendCore {
     const routingSettingsStamp = profiles && this.velaRoutingSettingsStamp(profiles);
     const initialScope = profiles && this.velaScopeStamp();
     const effective = routingSettings?.effective;
+    const routeStarted = performance.now(), timing = { capabilityMs: 0, routingMs: 0, contextMs: 0, previewMs: 0 };
     const decision = effective ? await this.selectVelaRoute({ ...input, mode: effective.mode,
       providerId: effective.providerId ?? undefined, model: effective.model ?? undefined,
-      reasoningEffort: effective.reasoningEffort ?? undefined }) : undefined;
+      reasoningEffort: effective.reasoningEffort ?? undefined }, timing) : undefined;
+    timing.routingMs = Math.max(0, performance.now() - routeStarted - timing.capabilityMs);
     if (decision) ensure(!this.velaQuotaExhausted(decision.providerId, now().slice(0, 10)), 'vela_daily_attempt_limit_reached');
     const providerId = decision?.providerId ?? input.providerId ?? this.velaPlanner.providerId;
     const route = decision?.route;
@@ -1809,6 +1818,7 @@ export class BackendCore {
         if (identifier(row?.resource_id)) activeResourceId = row.resource_id;
       }
     }
+    const contextStarted = performance.now();
     const includeHistory = handoffRequestId === undefined && (this.historyContextEnabled || (input.adaptive === true && input.includeRecentHistory === true));
     const catalog=createCapabilityCatalog(this.velaCapabilities(CAPABILITIES)),discovery=!usingChatGPT&&!agentic&&this.port.catalogDiscovery&&this.port.catalogDiscovery.available!==false?catalog.declaration:undefined;
     const selected=this.vela.previewProviderContext(input.resourceIds,{includeHistory,activeResourceId,
@@ -1829,7 +1839,13 @@ export class BackendCore {
     }
     if (profiles && route?.kind === 'conversational' && !route.nativeMetric && !route.nativeLog && route.effort && this.velaCalibrationInput(input) && resolveVelaCalibration(profiles) !== 'off')
       preview.calibrationProjectId = this.velaContext().currentProjectId;
-    preview.signature=this.velaEgress(input.intent,preview.frozenContext,discovery,preview);publicPreview.signature=preview.signature;this.velaPreviews.set(preview.id,preview);return structuredClone(publicPreview);
+    preview.signature=this.velaEgress(input.intent,preview.frozenContext,discovery,preview);
+    if (route) {
+      timing.contextMs = performance.now() - contextStarted;
+      timing.previewMs = performance.now() - previewStarted;
+      preview.timing = timing;
+    }
+    publicPreview.signature=preview.signature;this.velaPreviews.set(preview.id,preview);return structuredClone(publicPreview);
   }
   private nextVelaWorkflowStage(requestId: string): { intent: string } | null {
     ensure(identifier(requestId), 'invalid_vela_request');
@@ -1903,6 +1919,7 @@ export class BackendCore {
       this.validateFrozenVelaPreview(preview);ensure(!grant.requestId&&request.contextManifest&&this.velaEgress(request.intent,request.contextManifest,preview.discovery,preview)===preview.signature&&(!preview.acceptedAppend||preview.acceptedAppend.requestId===request.requestId),'stale_vela_preview');grant.requestId=request.requestId;
       if (preview.route) this.recordVelaRoute('stage_started', request.requestId, preview.providerId, {
         previewId: preview.id, route: preview.route, includedSources: preview.context.included.length, historyMessages: preview.history?.messageCount ?? 0,
+        ...(preview.timing ? { timing: preview.timing } : {}),
       });
       if (preview.handoff) this.recordVelaRoute('handoff_authorized', request.requestId, preview.providerId, { ...preview.handoff });
       if (preview.nativeStage && preview.route)

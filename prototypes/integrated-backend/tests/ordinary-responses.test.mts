@@ -205,6 +205,10 @@ test('Check my CPU, explain the number, then look through my repository logs', a
       assert.equal(state.requests.length, approveCodex ? 2 : 1);
       const first = state.requests[0];
       assert.equal(first.intent, intent);
+      const stage = f.events.find(event => event.type === 'vela.routing.stage_started' && event.payload.taskId === first.id);
+      const timing = stage?.payload.timing;
+      assert(timing && [timing.routingMs, timing.capabilityMs, timing.contextMs, timing.previewMs].every(ms => Number.isFinite(ms) && ms >= 0));
+      assert(timing.previewMs >= timing.routingMs + timing.capabilityMs + timing.contextMs);
       assert.equal(outcome.conversationId, first.conversationId);
       assert.equal(outcome.handoff?.taskId, approveCodex ? first.id : undefined);
       assert(f.events.some(event => event.type === 'vela.routing.native_stage_observed' && event.payload.taskId === first.id));

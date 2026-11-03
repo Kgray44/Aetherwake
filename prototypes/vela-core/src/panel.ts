@@ -367,7 +367,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     ...(connected && routingAgentSelection ? { routingAgentId: routingAgentSelection.id } : {}),
     ...(connected && (useAutomaticOnce || handoffSelection && !routingAgentSelection) ? { overrideDefaults: true as const } : {}),
   }, revision = draftRevision, submittedView = ++viewRevision; transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
-    void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Thinking…'; present();
+    void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
       try {
         const recorded = await client.request(submitted);
         if (disposed) return;
@@ -667,7 +667,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     if (!errorBox.hidden) phase = 'error';
     else if (applyingLocally || applyingPlans.size || current?.plans.some(plan => plan.state === 'applying')) phase = 'applying';
     else if (current?.requests.some(request => request.state === 'planning')) phase = 'planning';
-    else if (busy && status.dataset.requestState === 'submitting') phase = 'thinking';
+    else if (busy && status.dataset.requestState === 'submitting') phase = 'receiving';
     else if (latest && ['failed', 'unknown', 'invalid-plan', 'provider-unavailable'].includes(latest.state)) phase = 'error';
     else if (current?.plans.some(plan => ['prepared', 'approved'].includes(plan.state))) phase = 'review';
     else if (activeContext === 'attention' && pendingAttention) phase = 'attention';

@@ -23,12 +23,14 @@ const cases = [
 ];
 const clean = value => value.toLowerCase().trim().replace(/["'`*\s]/gu, '').replace(/[.!?]+$/u, '');
 const allowed = new Set([initialQuestion, deepQuestion, ...cases.map(([question]) => question)]);
+const mixedIntent = 'Read the log note, explain why the screen stuttered, then edit sample.json so the count is two and run the benchmark';
+const mixedNext = 'edit sample.json so the count is two and run the benchmark';
 
 async function runMixed({ win, app, privateRoot, call }) {
   const directory = join(privateRoot, 'air-plan-evaluation');
   const output = join(directory, 'mixed.jsonl');
   const record = value => appendFileSync(output, JSON.stringify(value) + '\n');
-  const intent = 'Read the log note, explain why the screen stuttered, then edit sample.json so the count is two and run the benchmark';
+  const intent = mixedIntent;
   const log = 'Synthetic frame 41 took 80 ms when count was 1. The known stable value is 2.';
   const before = '{"count":1}\n';
   let passed = false;
@@ -131,8 +133,98 @@ console.log(JSON.stringify({ samples: times.length, medianMs: times[5], p95Ms: t
   }
 }
 
+async function runHeldOut({ win, app, privateRoot, call }, batch) {
+  const { cases: heldOut } = require('./air-held-out-live.cjs');
+  const directory = join(privateRoot, 'air-plan-evaluation'), output = join(directory, `held-out-${batch}.jsonl`);
+  const entry = row => appendFileSync(output, JSON.stringify(row) + '\n');
+  let passed = false;
+  try {
+    assert(Number.isInteger(batch) && batch >= 1 && batch <= heldOut.length / 4, 'Explicit held-out batch number required');
+    const start = await call('vela', { name: 'state', input: {} });
+    const synthetic = new Set([...allowed, mixedIntent, mixedNext, ...heldOut.map(([, intent]) => intent)]);
+    assert(start.requests.every(request => synthetic.has(request.intent)), 'Synthetic test profile only');
+    assert.equal(start.routingSettings.calibration.mode, 'off');
+    const ready = await call('ordinaryProviderStatus', {});
+    assert(ready.state === 'ready' && ready.planUsageEnabled);
+    const options = await call('vela', { name: 'routingOptions', input: { providerId } });
+    const previous = [1, 2, 3].flatMap(number => {
+      const receipt = readFileSync(join(directory, `batch-${number}.jsonl`), 'utf8');
+      assert(receipt.length <= 16000);
+      return receipt.trimEnd().split('\n').map(line => JSON.parse(line))
+        .filter(row => row.type === 'turn' && row.arm !== 'deep');
+    });
+    const first = previous.find(row => row.arm === 'baseline');
+    assert.equal(previous.length, 24);
+    assert(first && previous.every(row => row.state === 'provider_completed' && row.effort === first.effort));
+    const { compareVelaCalibration } = await import('../src/routing-calibration.ts');
+    const quick = compareVelaCalibration({ mode: 'adaptive', depth: 'quick', projectId: null, effort: first.effort,
+      baseline: first.model, candidates: options.filter(model => model.reasoningEfforts?.includes(first.effort)).map(model => model.id),
+      samples: previous.map((row, index) => ({ requestId: 'synthetic-prior-' + index, projectId: null, model: row.model,
+        effort: row.effort, depth: 'quick', evidence: 'observed', completed: true, modelConfirmed: true,
+        elapsedMs: row.elapsedMs, totalTokens: row.totalTokens, feedback: row.correct ? 'useful' : 'needs-correction' })),
+    });
+    assert(quick, 'Previously observed Quick candidate no longer qualifies against the current catalog');
+    const source = resolve(__dirname, '../../..');
+    const git = (...args) => execFileSync('git.exe', args, { cwd: source, encoding: 'utf8', windowsHide: true, timeout: 5000 }).trim();
+    assert.equal(git('status', '--porcelain'), '', 'Live evaluation requires a clean source revision');
+    writeFileSync(output, JSON.stringify({ type: 'begin', contract: 'aerynth.air-held-out-plan@1', batch,
+      revision: git('rev-parse', 'HEAD'), qualification: 'prior paired evidence, replayed through the production ranker',
+      upstreamCache: 'unknown', catalogBeforeFirstTurn: 'probed' }) + '\n', { flag: 'wx' });
+    let indexInProcess = 0;
+    for (let index = (batch - 1) * 4; index < batch * 4; index++) {
+      const [suite, intent, grade] = heldOut[index];
+      const preview = await call('velaRequestPreview', { intent, resourceIds: [], adaptive: true, overrideDefaults: true });
+      assert(preview.route?.kind === 'conversational' && preview.providerId === providerId && preview.route.effort);
+      const { depth, model: baseline, effort } = preview.route;
+      const expectedDepth = suite === 'reasoning' ? 'deep' : 'quick';
+      // Held-out observations do not feed back into the selection. Deep has no qualified prior alternative.
+      const alternative = depth === 'quick' && baseline === quick.baseline.model && effort === first.effort ? quick.alternative.model : baseline;
+      const arms = index % 2 === 0 ? ['baseline', 'adaptive'] : ['adaptive', 'baseline'];
+      for (const arm of arms) {
+        const condition = indexInProcess++ === 0 ? 'first-turn-in-process' : 'subsequent-turn';
+        const selected = arm === 'baseline' ? baseline : alternative;
+        const started = performance.now();
+        let request, row;
+        try {
+          request = await velaCommand({ win, call, directMessageSend: true, offerPlanningByDefault: true,
+            input: { name: 'request', input: { intent, resourceIds: [], authorizeProvider: true, overrideDefaults: true,
+              providerId, model: selected, reasoningEffort: effort } },
+            reviewProvider() { throw Error('Unexpected attached or private context in held-out evaluation'); },
+          });
+          const taskMs = performance.now() - started;
+          const current = await call('vela', { name: 'state', input: {} });
+          const response = current.conversation.messages.find(item => item.id === request.response?.messageId);
+          const snapshot = await call('snapshot', {});
+          const execution = snapshot.executions[response?.providerContribution?.executionId];
+          const verified = request.state === 'responded' && execution?.state === 'provider_completed' &&
+            execution.providerId === providerId && response.classification === 'reported' &&
+            execution.reportedModel === selected && execution.requestedReasoningEffort === effort;
+          row = { state: request.state, requestId: request.id, executionId: execution?.id, errorCode: request.errorCode,
+            taskMs, verified, correct: verified && grade(response.content),
+            totalTokens: execution?.usage?.source === 'provider-reported' ? execution.usage.totalTokens : null };
+        } catch (error) {
+          row = { state: 'request-error', taskMs: performance.now() - started, verified: false, correct: false,
+            errorCode: typeof error?.code === 'string' ? error.code : 'request_failed', totalTokens: null };
+        }
+        entry({ type: 'turn', caseNumber: index + 1, suite, arm, condition, model: selected, effort, depth,
+          routeCorrect: depth === expectedDepth, escalationsRequested: 0, ...row });
+      }
+    }
+    entry({ type: 'complete', batch });
+    passed = true;
+  } catch (error) {
+    console.log(JSON.stringify({ type: 'failure', batch, reason: error instanceof Error ? error.message : 'Unknown error' }));
+  } finally {
+    console.log(JSON.stringify({ passed, batch, output }));
+    process.exitCode = passed ? 0 : 1;
+    app.quit();
+  }
+}
+
 exports.run = async ({ win, app, privateRoot, call }) => {
   if (process.argv.includes('--air-plan-mixed')) return runMixed({ win, app, privateRoot, call });
+  const heldOut = process.argv.find(value => value.startsWith('--air-plan-held-out='));
+  if (heldOut) return runHeldOut({ win, app, privateRoot, call }, Number(heldOut.slice('--air-plan-held-out='.length)));
   const argument = process.argv.find(value => value.startsWith('--air-plan-batch='));
   const batch = Number(argument?.slice('--air-plan-batch='.length));
   assert([1, 2, 3].includes(batch), 'Explicit live batch number 1, 2, or 3 required');

@@ -84,8 +84,8 @@ export function evaluateLocalCapability(id: VelaLocalCapabilityId, host: VelaLoc
       validateUtilization(reading);
       const measurement = structuredClone(reading);
       const detail = measurement.metric === 'cpu'
-        ? `averaged across ${measurement.logicalCpus} logical processors over ${measurement.sampleMs} ms`
-        : `the busiest measured GPU engine across ${measurement.observedAdapters} observed adapter(s)`;
+        ? `system CPU counters averaged across ${measurement.logicalCpus} logical processors over ${measurement.sampleMs} ms`
+        : `Windows GPU Engine counter snapshot of the busiest engine across ${measurement.observedAdapters} observed adapter(s)`;
       return { facts: { kind: 'system-utilization', measurement }, content: `${name} usage was ${measurement.percent}% (${detail}).`, kind: 'answer' };
     } catch {
       return { facts: { kind: 'unavailable', code: 'local_system_' + name.toLowerCase() + '_unavailable' },

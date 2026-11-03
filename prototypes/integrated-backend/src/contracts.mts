@@ -128,6 +128,12 @@ export interface ProviderPort {
   /** Trusted optional read-only planning transport; never exposed as an RPC or ordinary chat tool. */
   catalogDiscovery?: {readonly available?:boolean;open(projection:CapabilityCatalogProjection,onCall:(call:CapabilityNativeCall)=>Promise<CapabilityToolReply>):Promise<string>;release(threadId:string):void};
 }
+export interface VelaRouteTiming {
+  routingMs: number;
+  capabilityMs: number;
+  contextMs: number;
+  previewMs: number;
+}
 export interface StreamEvent {
   schemaVersion: 1; eventId: string; cursor: number;
   resourceId: string | null; executionId: string | null;
@@ -137,7 +143,7 @@ export interface StreamEvent {
   correlationId: string | null; causationId: string | null;
   receivedAt: string; providerTime: number | null; providerTimeSource: string | null;
   type: string; classification: Classification;
-  status: string | null; payload: { redacted: true; taskId?: string; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'> };
+  status: string | null; payload: { redacted: true; taskId?: string; timing?: VelaRouteTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'> };
 }
 export interface HandoffReview {
   id: string; resourceId: string; sourceResourceId: string; targetProviderId: string;

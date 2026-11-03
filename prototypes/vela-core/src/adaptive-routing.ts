@@ -38,7 +38,8 @@ function inspectionMetric(intent: string): NativePerformanceMetric | undefined {
 
 /** Use a narrow explicit conjunction for the first native-to-Codex workflow. */
 export function nativeInspectionStage(intent: string) {
-  const parts = /^(.*?)[,;.]?\s+(?:and\s+)?then\s+(.+)$/iu.exec(intent);
+  const text = intent.normalize('NFKC').trim().replace(/^vela[,:]?\s+/iu, '');
+  const parts = /^(.*?)[,;.]?\s+(?:and\s+)?then\s+(.+)$/iu.exec(text);
   if (!parts || classifyVelaRoutingIntent(parts[2]) !== 'local-read') return;
   return inspectionMetric(parts[1]);
 }
