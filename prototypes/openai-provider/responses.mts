@@ -168,6 +168,13 @@ export class ResponsesTransport {
             const decoder = new TextDecoder('utf-8', { fatal: true });
             let buffer = '', streamBytes = 0, outputBytes = 0;
             const emit = async (event: Parameters<TransportOptions['onEvent']>[0]) => { await abortable(Promise.resolve(this.options.onEvent(event)), controller.signal); };
+            const terminalError = (payload: unknown) => {
+                const failure = knownRemoteCode(ownData(payload, 'code') ?? ownData(payload, 'type'));
+                result.httpDiagnostic = Object.freeze(Object.assign(Object.create(null), result.httpDiagnostic, {
+                    bodyShape: 'error', remoteCode: failure === 'provider_failed' ? null : failure,
+                }));
+                return failure;
+            };
             const consume = async (block: string) => {
                 const lines = block.split('\n');
                 if (verifyFraming)
@@ -220,14 +227,14 @@ export class ResponsesTransport {
                     if (result.usage)
                         await emit({ type: 'provider/usage', providerId: frozen.providerId, executionId: frozen.executionId, usage: result.usage });
                     if (expected === 'failed')
-                        result.errorCode = knownRemoteCode(record(event.response.error) ? event.response.error.code : null);
+                        result.errorCode = terminalError(event.response.error);
                     if (expected === 'incomplete')
                         result.errorCode = 'provider_incomplete';
                     terminal = true;
                 }
                 else if (event.type === 'error') {
                     result.outcome = 'failed';
-                    result.errorCode = knownRemoteCode(event.code);
+                    result.errorCode = terminalError(record(event.error) ? event.error : event);
                     terminal = true;
                 }
                 else if (['response.output_item.added', 'response.output_item.done'].includes(event.type) && !isAllowedOutputItem(event.item))

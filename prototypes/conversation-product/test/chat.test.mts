@@ -317,6 +317,24 @@ test('compatibility evidence is text-safe and rejects unsafe links; legacy provi
   }finally{await manager?.dispose();f.restore();}
 });
 
+test('an exact failed ordinary reply keeps its draft and enables a new explicit send',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat;
+ try{
+  chat=mountConversationChat(f.view.root,{port:f.port,resourceId:f.draft.resourceId});await chat.ready;
+  const form=f.view.root.querySelector('form'),send=named(form,'Send');
+  form.fire('submit');await until(()=>!!f.pending);
+  f.pending?.resolve({id:'execution:failed',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:f.pending?.input.commandId,state:'failed',errorCode:'server_error'});
+  await until(()=>!send.disabled);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent,/ended the reply with an error/);
+  assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
+  assert.equal(f.calls.filter(call=>call.name==='send').length,1);
+  form.fire('submit');await until(()=>!!f.pending);
+  f.accept(true);
+  await until(()=>!f.view.root.querySelector('textarea').value);
+  assert.equal(f.calls.filter(call=>call.name==='send').length,2);
+ }finally{await chat?.dispose();f.restore();}
+});
+
 test('the animated model picker refreshes explicitly and sends the selected catalog ID without switching provider',async()=>{
  const f=fixture('chatgpt-plan-responses'),m=pickerMotion();
  const choice={id:'account-model-slug',label:'Account model display name'};

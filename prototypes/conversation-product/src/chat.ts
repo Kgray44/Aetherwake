@@ -394,14 +394,22 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
       const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(model?{model}:{}),...(webSearch?{webSearch:true}:{})});
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
-      if(!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
+      const receipt = result && typeof result === 'object' ? result as Record<string, unknown> : undefined;
+      const failed = receipt?.state === 'failed' && receipt.commandId === commandId && receipt.resourceId === resourceId && receipt.providerId === input.providerId;
+      if(!failed&&!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
       let followMessageId:string|undefined;
       if(acceptedConversationSubmission(input,result,evidence)) { const receipt=result as Record<string,unknown>;followMessageId=typeof receipt.deviceClockMessageId==='string'?receipt.deviceClockMessageId:receipt.role==='user'?String(receipt.id):evidence?.messages.items.find(m=>m.resourceId===resourceId&&!m.inherited&&m.role==='user'&&m.content===content&&!input.priorMessageIds.includes(m.id))?.id;const cleared=await session.acknowledgeSent(checkpoint);report(cleared?'Message accepted.':'Message accepted. Later draft edits were retained.','send-accepted'); }
-      else if (webSearch && result && typeof result === 'object' && 'state' in result && result.state === 'failed' && 'commandId' in result && result.commandId === commandId && 'resourceId' in result && result.resourceId === resourceId && 'providerId' in result && result.providerId === input.providerId) {
-        const unavailable = 'errorCode' in result && result.errorCode === 'subscription_sharing_unsupported_capability';
-        report(unavailable ? 'This ChatGPT plan or model could not use web search. Your draft is still here.' : 'Web search failed. Your draft is still here.');
+      else if (failed) {
+        const unavailable = receipt?.errorCode === 'subscription_sharing_unsupported_capability';
+        const reason = unavailable
+          ? webSearch ? 'This ChatGPT plan or model could not use web search.' : 'This ChatGPT plan or model could not complete the request.'
+          : webSearch ? 'Web search failed.' : 'The provider ended the reply with an error.';
+        report(reason + ' Your draft is still here.');
       } else { uncertain=true;report('Send acceptance is not confirmed. Inspect the chat before retrying.'); }
-      if(!disposed){await refresh({latest:true,...(followMessageId?{followMessageId}:{})});if(!disposed)await options.onChanged?.();}
+      if(!disposed){
+        await refresh({latest:true,...(followMessageId?{followMessageId}:{})}).catch(error => { if (!failed) throw error; });
+        if(!disposed)await options.onChanged?.();
+      }
     })().catch(error=>{if(errorText(error)==='authorization_cancelled')report('Send cancelled. Your saved draft was retained.');else if(errorText(error)==='unsupported_model')report('This model is no longer in your account’s catalog. Choose another model. Your draft is still here.');else{uncertain=true;report('Send could not be confirmed: '+errorText(error));}}).finally(()=>{sending=false;sendTask=null;renderDraft();});
   });
   stop.addEventListener('click',()=>{if(!execution||!options.execution||!active()||cancelPending||connection==='unavailable')return;cancelPending=true;renderDraft();const id=execution.id;void options.execution.cancel(id).then(()=>report('Stop requested. Waiting for the provider to confirm.'),error=>report('Stop could not be requested: '+errorText(error))).finally(()=>{cancelPending=false;renderDraft();});});

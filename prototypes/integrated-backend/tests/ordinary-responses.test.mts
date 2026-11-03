@@ -77,7 +77,7 @@ test('ordinary Send answers direct clock questions locally and keeps their trans
     f.responses.push(() => complete('resp-synthetic-remote-clock'));
     const execution = await send(followUp);
     assert.equal(execution.state, 'provider_completed');
-    assert.deepEqual(f.requests[0].input, [{ role: 'user', content: remote }]);
+    assert.deepEqual(f.requests[0].input.filter((item: { role: string }) => item.role !== 'developer'), [{ role: 'user', content: remote }]);
   } finally { await f.close(); }
 });
 
@@ -91,18 +91,20 @@ test('arbitrary date and reasoning questions reach the provider with a frozen cu
     const clock = preview.responses!.clock;
     assert(Date.parse(clock.utc) >= started && Date.parse(clock.utc) <= Date.now());
     assert(Math.abs(Date.parse(clock.local) - Date.parse(clock.utc)) < 1000);
-    assert(preview.responses!.instructions.includes(clock.local));
-    assert(preview.responses!.instructions.includes(clock.utc));
+    const grounding = preview.responses!.messages.at(-2)!;
+    assert.equal(grounding.role, 'developer');
+    assert(grounding.content.includes(clock.local));
+    assert(grounding.content.includes(clock.utc));
     assert.equal(await f.core.command('conversationClock', input), null);
     await new Promise(resolve => setTimeout(resolve, 30));
     f.responses.push(() => complete('resp-synthetic-grounded-turn'));
     const sent = await f.core.command('conversationSend', await grant(f, preview));
     assert.equal(sent.state, 'provider_completed');
     assert.equal(f.requests[0].instructions, preview.responses!.instructions);
-    assert.deepEqual(f.requests[0].input, [{ role: 'user', content: input.content }]);
+    assert.deepEqual(f.requests[0].input, [grounding, { role: 'user', content: input.content }]);
     const later = await prepare(f, chat.resourceId, 'Now write a short story about that date.');
     assert(Date.parse(later.preview.responses!.clock.utc) > Date.parse(clock.utc));
-    assert.equal(later.preview.responses!.messages.length, 3);
+    assert.equal(later.preview.responses!.messages.length, 4);
     assert.equal(f.requests.length, 1);
   } finally { await f.close(); }
 });
@@ -119,7 +121,7 @@ test('long ordinary chats keep sending within both history bounds and retain the
     }
     const countBound = await prepare(f, chat.resourceId, 'A question after a long chat');
     assert.equal(countBound.preview.responses!.messages.length, 128);
-    assert.equal(countBound.preview.responses!.messages[0].content, 'Synthetic context 3');
+    assert.equal(countBound.preview.responses!.messages[0].content, 'Synthetic context 4');
     const oversizedHistory = String.fromCharCode(34).repeat(60000);
     for (let i = 0; i < 4; i++) {
       const message = await f.core.command('addMessage', { resourceId: chat.resourceId, role: 'user', content: oversizedHistory + i, expectedRevision: revision });
@@ -127,7 +129,7 @@ test('long ordinary chats keep sending within both history bounds and retain the
     }
     const byteBound = await prepare(f, chat.resourceId, 'A new question after large messages');
     const messages = byteBound.preview.responses!.messages;
-    assert.equal(messages.length, 3);
+    assert.equal(messages.length, 4);
     assert.equal(messages[0].content, oversizedHistory + '2');
     assert.equal(messages[1].content, oversizedHistory + '3');
     f.responses.push(() => complete('resp-synthetic-bounded-context'));
@@ -249,6 +251,23 @@ test('populated provider changes require a reviewed continuation and stale branc
  }finally{await f.close();}
 });
 
+test('a provider terminal error preserves its safe category and an explicit new send can succeed',async()=>{
+ const f=fixture();try{
+  await f.core.command('ordinaryProviderCheck',{});
+  const chat=await f.core.command('createConversation',{providerId,commandId:randomUUID()});
+  const first=await prepare(f,chat.resourceId,'Synthetic calendar question');
+  f.responses.push(()=>{const reply=sse([{type:'response.created',response:{id:'resp-terminal-rejected'}},{type:'response.failed',response:{id:'resp-terminal-rejected',status:'failed',error:{code:'server_error',message:'PRIVATE terminal payload'}}}]);reply.headers.delete('content-type');return reply;});
+  const failed=await f.core.command('conversationSend',await grant(f,first.preview));
+  assert.equal(failed.state,'failed');assert.equal(failed.errorCode,'server_error');assert.equal(failed.httpDiagnostic?.remoteCode,'server_error');
+  assert.equal(failed.httpDiagnostic?.bodyShape,'error');assert.equal(failed.outputMessageId,undefined);assert.equal(f.requests.length,1);
+  assert.doesNotMatch(JSON.stringify(await f.core.command('snapshot',{})),/PRIVATE terminal payload/);
+  const again=await prepare(f,chat.resourceId,'Synthetic explicit retry');
+  f.responses.push(()=>complete('resp-explicit-retry'));
+  assert.equal((await f.core.command('conversationSend',await grant(f,again.preview))).state,'provider_completed');
+  assert.equal(f.requests.length,2);
+ }finally{await f.close();}
+});
+
 test('ordinary unknown non-stream HTTP facts persist without response bodies, false completion or retry',async()=>{
  const f=fixture();try{
   await f.core.command('ordinaryProviderCheck',{});const c=await f.core.command('createConversation',{commandId:randomUUID()}),p=await prepare(f,c.resourceId,'Synthetic inspectable transport test'),g=await grant(f,p.preview);
@@ -265,12 +284,12 @@ test('ordinary unknown non-stream HTTP facts persist without response bodies, fa
 test('ordinary Responses uses canonical identity, exact grant and stateless local continuity across follow-up and SQLite restart',async()=>{
  const f=fixture();try{
   await f.core.command('ordinaryProviderCheck',{});const c=await f.core.command('createConversation',{commandId:randomUUID()});assert.equal(c.providerId,providerId);assert.equal(c.kind,'ordinary');assert.equal(c.title,'New conversation');assert.equal(f.owner.db.prepare('SELECT count(*) AS n FROM workspaces').get().n,0);
-  const first=await prepare(f,c.resourceId,'Synthetic first question');assert(first.preview.responses);assert.deepEqual(first.preview.responses.messages,[{role:'user',content:'Synthetic first question'}]);
+  const first=await prepare(f,c.resourceId,'Synthetic first question');assert(first.preview.responses);assert.deepEqual(first.preview.responses.messages.filter(m=>m.role!=='developer'),[{role:'user',content:'Synthetic first question'}]);
   await assert.rejects(f.core.command('conversationSend',{previewId:first.preview.id,fingerprint:first.preview.fingerprint,commandId:first.input.commandId,grantId:'missing'}),/native_send_grant_required/);assert.equal(f.requests.length,0);
   f.responses.push(()=>{const reply=complete('resp-synthetic-first','Synthetic first answer');reply.headers.delete('content-type');return reply;});const firstGrant=await grant(f,first.preview),e1=await f.core.command('conversationSend',firstGrant);assert.equal(e1.state,'provider_completed');assert.equal(e1.binding,null);assert.equal(e1.turnId,null);assert.equal(e1.responseId,'resp-synthetic-first');assert.equal(e1.httpDiagnostic?.contentType,'missing');assert.equal(e1.usage?.source,'provider-reported');assert.equal(e1.taskVerified,false);await assert.rejects(f.core.command('conversationSend',firstGrant),/native_send_grant_consumed/);
-  f.responses.push(()=>complete('resp-synthetic-second','Synthetic follow-up answer'));const second=await prepare(f,c.resourceId,'Synthetic follow-up');assert.deepEqual(second.preview.responses!.messages.map(m=>[m.role,m.content]),[['user','Synthetic first question'],['assistant','Synthetic first answer'],['user','Synthetic follow-up']]);await f.core.command('conversationSend',await grant(f,second.preview));
+  f.responses.push(()=>complete('resp-synthetic-second','Synthetic follow-up answer'));const second=await prepare(f,c.resourceId,'Synthetic follow-up');assert.deepEqual(second.preview.responses!.messages.filter(m=>m.role!=='developer').map(m=>[m.role,m.content]),[['user','Synthetic first question'],['assistant','Synthetic first answer'],['user','Synthetic follow-up']]);await f.core.command('conversationSend',await grant(f,second.preview));
   const before=await f.core.command('snapshot',{}),beforeIds=before.graph.messages.map(m=>m.id);assert.equal(before.bindings[c.resourceId],undefined);assert.equal(before.graph.messages.length,4);await f.reopen();
-  const third=await prepare(f,c.resourceId,'Synthetic after restart');assert.equal(third.preview.responses!.messages.length,5);f.responses.push(()=>complete('resp-synthetic-third','Synthetic restored answer'));await f.core.command('conversationSend',await grant(f,third.preview));
+  const third=await prepare(f,c.resourceId,'Synthetic after restart');assert.equal(third.preview.responses!.messages.length,6);f.responses.push(()=>complete('resp-synthetic-third','Synthetic restored answer'));await f.core.command('conversationSend',await grant(f,third.preview));
   const after=await f.core.command('snapshot',{});assert.deepEqual(after.graph.messages.slice(0,4).map(m=>m.id),beforeIds);assert.equal(after.graph.conversations.length,1);assert.equal(after.graph.conversations[0].kind,'ordinary');assert.equal(after.graph.messages.length,6);assert.equal(Object.values(after.executions).length,3);assert.equal(f.codexCalls,0);
   const delta=f.events.find(e=>e.payload.delta);assert.equal(delta?.providerId,providerId);assert.equal(delta?.threadId,null);assert.equal(delta?.turnId,null);assert(f.events.some(e=>e.payload.usage?.source==='provider-reported'));assert(!JSON.stringify(after).includes('SYNTHETIC_PLAN_TOKEN'));
  }finally{await f.close();}
@@ -355,7 +374,7 @@ test('provider failure/EOF preserves exact user text and partial canonical evide
   await f.core.command('ordinaryProviderCheck',{});const c=await f.core.command('createConversation',{commandId:randomUUID()});
   f.responses.push(()=>sse([{type:'response.created',response:{id:'resp-synthetic-gap'}},{type:'response.output_text.delta',delta:'Synthetic partial only'}]));const p=await prepare(f,c.resourceId,'Synthetic gap request'),e=await f.core.command('conversationSend',await grant(f,p.preview));assert.equal(e.state,'unknown');assert.equal(e.responseOutcome,'unknown');assert.equal(e.errorCode,'stream_terminal_unobserved');
   const d=await f.core.command('conversation',{name:'detail',input:{resourceId:c.resourceId}}) as any;assert.equal(d.messages.items[0].content,'Synthetic gap request');assert.equal(d.messages.items[1].content,'Synthetic partial only');assert.equal(d.messages.items[1].outputState,'partial');assert.equal(d.messages.items[1].executionId,e.id);
-  await f.reopen();const next=await prepare(f,c.resourceId,'Synthetic explicit new request');assert.deepEqual(next.preview.responses!.messages.map(m=>m.content),['Synthetic gap request','Synthetic explicit new request']);
+  await f.reopen();const next=await prepare(f,c.resourceId,'Synthetic explicit new request');assert.deepEqual(next.preview.responses!.messages.filter(m=>m.role!=='developer').map(m=>m.content),['Synthetic gap request','Synthetic explicit new request']);
   f.responses.push(()=>sse([{type:'response.failed',response:{id:'resp-synthetic-quota',status:'failed',error:{code:'subscription_sharing_usage_limit_exceeded'}}}]));const failed=await f.core.command('conversationSend',await grant(f,next.preview));assert.equal(failed.state,'failed');assert.equal(failed.errorCode,'subscription_sharing_usage_limit_exceeded');assert.equal(f.codexCalls,0);
  }finally{await f.close();}
 });

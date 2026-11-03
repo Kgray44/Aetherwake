@@ -20,6 +20,11 @@ const codes = new Set([
   "insufficient_quota",
   "rate_limit_exceeded",
   "invalid_api_key",
+  "server_error",
+  "invalid_prompt",
+  "invalid_request_error",
+  "invalid_value",
+  "model_not_found",
 ]);
 /** Copy only bodyless observations. Persisted/transport objects cannot supply
  * getters, arbitrary error text, headers or outcome authority to a public view. */
