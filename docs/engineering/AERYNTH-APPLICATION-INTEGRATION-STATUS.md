@@ -2,6 +2,36 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Portable AT workspace and Constellation journey
+
+The Resources panel now passes the current canvas bounds to the existing
+placement solver. The panned-workspace regression in Portable AS found the
+reattached note absent from the viewport. The same action in Portable AT
+put the new placement fully in view at x=20–460 and y=492–852 in the
+1602×1002 capture. The canonical note and content retained their identity.
+The strict build and 403 desktop tests passed.
+
+Portable AT packages `b5a0c0850ed1350b3bbd4a2e7dc9d09a40605607` and
+includes the earlier native Codex recovery. All 384 files matched its
+manifest, SHA-256
+`09b4c0f6b4acf0f1dd1450b2975eace5056a61f2052e7a88d63a2374f29b6e25`.
+Three hidden Electron processes ran the packaged UI with real controls and
+SQLite. They created the requested project, workspace and blocks, changed
+layout, detached and reattached the note, switched workspaces, entered
+Constellation and Universe, moved and edited the Engineering note, returned
+to Development, and verified both workspaces after restart. SQLite
+integrity passed and the test profile recorded zero provider executions.
+
+Private profile `review-package-motion-1793697426428` holds five PNGs
+and a 10.851-second recording made from 175 offscreen Electron paints.
+Every frame decoded and the recording SHA-256 is
+`39391eb0cc2ffca8525b5041ed4ec7428ecf22a242b78a2bab9b8ceecf525436`.
+Visual inspection showed the shared orbital backdrop, Vela moving to the
+upper-right, and the glass workspace returning. The attached note remained
+visible. The restored Freeform camera still cropped the tall chat at the
+bottom. These results demonstrate application interactions and offscreen
+motion. Physical presentation and live Codex acceptance remain pending.
+
 ## November 3 recovery for a lost Codex turn
 
 A direct Codex conversation with an unknown outcome can explicitly
