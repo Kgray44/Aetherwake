@@ -2,6 +2,42 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 desktop scale and process memory
+
+`ce0b87a` adds per-process working set and private memory, optional
+Chromium JavaScript heap readings, and monotonic command timing to the
+existing hidden desktop benchmark. Separate runs and restarts at 10, 25,
+and 50 blocks passed. The real desktop returned from Universe through
+an empty workspace, resized a note, restored WebGL, and preserved exact
+canonical content, placement, camera, and Vela state after restart.
+
+| Blocks | Hydration / fresh restart | Fit / resize command | Fit / settled fit paint P95 | Settled return / fresh restart renderer working set |
+| ---: | ---: | ---: | ---: | ---: |
+| 10 | 2.19 / 1.41 s | 67 / 86 ms | 32.9 / 18.3 ms | 264 / 173 MiB |
+| 25 | 2.08 / 1.44 s | 108 / 113 ms | 70.4 / 18.5 ms | 327 / 182 MiB |
+| 50 | 2.05 / 1.56 s | 164 / 201 ms | 92.5 / 19.2 ms | 487 / 188 MiB |
+
+Fit commands include renderer-to-host round trips. Paint observations are
+from offscreen Electron windows in roughly 650-ms samples. The initial
+50-block fit observed 15 paints and the settled fit 39. These intervals
+are separate from physical presentation. Electron process working sets
+are system memory, and the GPU process reading does not establish VRAM
+use. The 50-block fitted capture keeps all 50 cards and Vela in view.
+At working scale the deliberately restored camera crops Vela against
+the top chrome. The synthetic placement command omitted presenter
+bounds and collision resolution saved Vela at y = -32.
+
+A separate `5c098c0` run revisited the same 50-block workspace three more
+times without intervening captures. Renderer working set after the first
+return and the three subsequent returns was 400, 400, 407, and 394 MiB.
+This bounded series did not show monotonic memory growth. The inactive
+renderer drew zero frames during the 650-ms probe and resumed on
+activation. Sustained retention and monitor presentation remain open.
+Private receipts are in the three `review-block-scale-*-1793694635158`
+profiles and `review-block-scale-50-1793694793899`. A separate read-only
+audit checked all seven receipts, current renderer asset hashes, SQLite
+integrity, and zero provider executions across the four profiles.
+
 ## November 3 native Codex send review and portable AO
 
 `0062735` removes the unused desktop `send` IPC operation and the legacy
