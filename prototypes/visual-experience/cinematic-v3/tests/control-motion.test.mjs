@@ -240,7 +240,7 @@ test("disabled mutation has immediate native semantics and a shared-MC fade; red
       childList: true,
       subtree: true,
       attributes: true,
-      attributeFilter: ["disabled"],
+      attributeFilter: ["disabled", "aria-pressed"],
     });
     copy.fire("pointerdown", { button: 0 });
     f.tick(view, 3);
@@ -256,6 +256,16 @@ test("disabled mutation has immediate native semantics and a shared-MC fade; red
     f.tick(view);
     assert.equal(copy.style["--control-press"], "0");
     assert.equal(copy.style["--control-disabled"], "1");
+    copy.setAttribute("aria-pressed", "true");
+    observer.deliver([
+      { type: "attributes", attributeName: "aria-pressed", target: copy },
+    ]);
+    assert.equal(copy.style["--control-toggled"], "0");
+    f.tick(view, 2);
+    const midway = Number(copy.style["--control-toggled"]);
+    assert(midway > 0 && midway < 1);
+    f.tick(view);
+    assert.equal(copy.style["--control-toggled"], "1");
     f.motion.reduced = true;
     copy.disabled = false;
     observer.deliver([

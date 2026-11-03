@@ -183,6 +183,8 @@ export class OpenAIConnections {
   } | null = null;
   private pending: Flight | null = null;
   private mutation: Operation | null = null;
+  private renewal: Promise<PublicConnectionStatus> | null = null;
+  private nextRenewalAttempt = 0;
   constructor(options: OpenAIConnectionsOptions) {
     this.options = {
       ...options,
@@ -654,6 +656,33 @@ export class OpenAIConnections {
     );
     return this.status();
   }
+  renewIfDue(): Promise<PublicConnectionStatus> {
+    if (this.renewal) return this.renewal;
+    const task = (async () => {
+      const current = await this.status();
+      const now = (this.options.now ?? Date.now)();
+      if (
+        current.state !== "expired" ||
+        !current.sessionRefreshAvailable ||
+        current.registrationVersion === null ||
+        this.closed ||
+        this.mutation ||
+        now < this.nextRenewalAttempt
+      ) return current;
+      this.nextRenewalAttempt = now + 30000;
+      try {
+        return await this.refresh(current.registrationVersion);
+      } catch {
+        // The session manager distinguishes a rejected grant from transient
+        // network errors. Read its durable result without starting sign-in.
+        return this.status();
+      }
+    })().finally(() => {
+      if (this.renewal === task) this.renewal = null;
+    });
+    this.renewal = task;
+    return task;
+  }
   async disconnect(expectedVersion: number): Promise<{
     status: PublicConnectionStatus;
     remoteRevocation: "confirmed" | "unconfirmed" | "not-needed";
@@ -771,6 +800,9 @@ export class OpenAIConnections {
   }
   async close(): Promise<void> {
     if (this.closed) return;
+    // A rotating token may already have been issued. Give the bounded renewal
+    // time to seal the replacement before tearing down native secret storage.
+    await this.renewal?.catch(() => {});
     this.closed = true;
     this.stopped.abort();
     const flight = this.pending;

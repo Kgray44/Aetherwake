@@ -37,6 +37,7 @@ export type VelaNativeAction =
   | { type: 'renameResource'; resourceId: string; title: string }
   | { type: 'associateResourceProject'; resourceId: string; projectId: string | null }
   | { type: 'createWorkspace'; title: string; projectId: string | null }
+  | { type: 'readWeather'; period: 'now' | 'today' | 'tonight' | 'tomorrow' | 'tomorrow-morning' }
   | { type: 'createTimeline'; title: string; projectId: string | null; workspaceId: string | null;
       source: { kind: 'application-activity' } | { kind: 'github-commits'; repositoryUrl: string } }
   | { type: 'renameWorkspace'; workspaceId: string; title: string }
@@ -187,6 +188,7 @@ export type AuthorizationDecision =
 export interface HostActionResult {
   status: 'applied' | 'failed' | 'cancelled' | 'unknown'; receiptId: string;
   errorCode?: string; createdResourceId?: string; createdWorkspaceId?: string; createdProjectId?: string; createdCollectionId?: string;
+  responseText?: string;
 }
 export interface VelaHostPort {
   /** Trusted current policy metadata only; absent adapters cannot expose attention-version authority. */

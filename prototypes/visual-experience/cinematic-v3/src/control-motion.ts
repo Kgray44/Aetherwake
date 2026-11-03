@@ -12,6 +12,7 @@ const variables = [
   "--control-focus",
   "--control-press",
   "--control-disabled",
+  "--control-toggled",
 ] as const;
 const materialClass = "aw-control-motion";
 const owners = new WeakMap<HTMLElement, object>();
@@ -22,6 +23,7 @@ type Entry = {
   focus: boolean;
   press: boolean;
   disabled: boolean;
+  toggled: boolean;
   signature: string;
   hadClass: boolean;
   restore: { value: string; priority: string }[];
@@ -30,11 +32,11 @@ type Entry = {
 const disabled = (node: HTMLElement) =>
   (node as HTMLButtonElement).disabled === true || node.matches(":disabled");
 const pose = (
-  entry: Pick<Entry, "hover" | "focus" | "press" | "disabled">,
+  entry: Pick<Entry, "hover" | "focus" | "press" | "disabled" | "toggled">,
 ): Pose => ({
   x: Number(entry.hover),
   y: Number(entry.focus),
-  w: 0,
+  w: Number(entry.toggled),
   h: Number(entry.press && !entry.disabled),
   lift: Number(entry.disabled),
   yaw: 0,
@@ -61,12 +63,12 @@ export function createControlMotion({
     globalThis.MutationObserver;
   if (!Observer) throw Error("control_motion_observer_unavailable");
   const signature = (entry: Entry) =>
-    [entry.hover, entry.focus, entry.press && !entry.disabled, entry.disabled]
+    [entry.hover, entry.focus, entry.press && !entry.disabled, entry.disabled, entry.toggled]
       .map(Number)
       .join(":");
   function paint(node: HTMLElement, entry: Entry) {
     const p = motion.pose(entry.key),
-      values = [p.x, p.y, p.h, p.lift];
+      values = [p.x, p.y, p.h, p.lift, p.w];
     variables.forEach((name, index) => {
       const value = String(Math.max(0, Math.min(1, values[index])));
       if (node.style.getPropertyValue(name) !== value)
@@ -103,6 +105,7 @@ export function createControlMotion({
       focus: node.contains(node.ownerDocument.activeElement),
       press: false,
       disabled: disabled(node),
+      toggled: node.getAttribute("aria-pressed") === "true",
       signature: "",
       hadClass: node.classList.contains(materialClass),
       restore: variables.map((name) => ({
@@ -194,11 +197,14 @@ export function createControlMotion({
   const observer = new Observer((records) => {
     if (disposed) return;
     const added = new Set<HTMLElement>(),
+      toggled = new Set<Node>(),
       disabledScopes: Node[] = [];
     let removed = false;
     for (const record of records) {
       if (record.type === "attributes" && record.attributeName === "disabled")
         disabledScopes.push(record.target);
+      if (record.type === "attributes" && record.attributeName === "aria-pressed")
+        toggled.add(record.target);
       if (record.type !== "childList") continue;
       // Text deltas/Copy feedback labels never trigger a body-wide selector scan.
       for (const node of record.addedNodes)
@@ -213,7 +219,11 @@ export function createControlMotion({
         if (!root.contains(node)) retire(node, entry);
     for (const node of added)
       if (!entries.has(node) && root.contains(node)) register(node);
-    for (const [node, entry] of entries)
+    for (const [node, entry] of entries) {
+      if (toggled.has(node)) {
+        entry.toggled = node.getAttribute("aria-pressed") === "true";
+        retarget(entry, "toggle state");
+      }
       if (
         disabledScopes.some((scope) => scope === node || scope.contains(node))
       ) {
@@ -221,6 +231,7 @@ export function createControlMotion({
         if (entry.disabled) entry.press = false;
         retarget(entry, "disabled state");
       }
+    }
   });
   // Validate selector and bind the baseline before observing our own additions.
   for (const node of candidates(root)) register(node);
@@ -228,7 +239,7 @@ export function createControlMotion({
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ["disabled"],
+    attributeFilter: ["disabled", "aria-pressed"],
   });
   return {
     frame() {

@@ -11,7 +11,7 @@ export const RESOURCE = 'https://api.openai.com/v1';
 const SCOPES = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct';
 const DIRECT = 'chatgpt.tokens.use.direct';
 const asymmetric = ['RS256', 'PS256', 'ES256', 'EdDSA'];
-const terminalRefresh = new Set(['invalid_grant', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused', 'invalid_client']);
+const terminalRefresh = new Set(['invalid_grant', 'invalid_refresh_token', 'token_expired', 'refresh_token_expired', 'refresh_token_invalidated', 'refresh_token_reused']);
 interface Discovery {
     algorithms: string[];
     revocation: string | null;

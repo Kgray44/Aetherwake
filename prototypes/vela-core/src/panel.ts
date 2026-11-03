@@ -320,6 +320,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       case 'renameResource': return 'Rename ' + name(action.resourceId, 'resource') + ' to “' + action.title + '”';
       case 'associateResourceProject': return 'Change ' + name(action.resourceId, 'resource') + ' project to ' + (action.projectId ? name(action.projectId, 'project') : 'No project');
       case 'createWorkspace': return 'Create workspace “' + action.title + '”' + (action.projectId ? ' in ' + name(action.projectId) : '');
+      case 'readWeather': return 'Read your Windows location once and send an approximate point to the US National Weather Service for ' + (action.period === 'now' ? 'the current hour' : action.period.replace('-', ' '));
       case 'createTimeline': {
         const destination = action.workspaceId ? name(action.workspaceId, 'workspace') : action.projectId ? name(action.projectId, 'project') : 'Resources';
         const source = action.source.kind === 'application-activity' ? 'recent Aerynth activity' :

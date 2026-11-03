@@ -129,6 +129,25 @@ const request = (authorizeProvider) => ({
     grantId: "forged",
   },
 });
+test("ordinary Vela Send discovers the installed provider and opens the exact native review before planning", async () => {
+  const f = fixture(0);
+  const probes = [];
+  await assert.rejects(velaCommand({
+    ...f,
+    input: request(false),
+    offerPlanningByDefault: true,
+    call(name, input) {
+      if (name === "capabilities") {
+        probes.push(name);
+        return Promise.resolve({ providerId: "codex-app-server", mock: false, authentication: "available" });
+      }
+      return f.call(name, input);
+    },
+  }), /authorization_cancelled/);
+  assert.deepEqual(probes, ["capabilities"]);
+  assert.deepEqual(f.calls.map(call => call.name), ["velaRequestPreview", "velaNativeReview"]);
+  assert.equal(f.reviews.length, 1);
+});
 test("unapproved Vela requests cannot smuggle renderer grants or contact a provider", async () => {
   const f = fixture();
   await velaCommand({ ...f, input: request(false) });

@@ -121,7 +121,8 @@ export function mountProviderConnections(
     if (disposed) return;
     root.dataset.connectionState = current?.state ?? "unknown";
     root.dataset.modelCatalogState = catalogRecoveryUnconfirmed ? "unconfirmed" : current?.modelCatalog?.state ?? "unobserved";
-    connect.hidden = current?.pending === true || current?.state === "ready";
+    connect.hidden = current?.pending === true || current?.state === "ready" ||
+      current?.state === "expired" && current.sessionRefreshAvailable === true;
     cancel.hidden = current?.pending !== true;
     chat.hidden = current?.state !== "ready";
     connect.disabled =
@@ -153,8 +154,8 @@ export function mountProviderConnections(
           ? modelFailureLabel()
           : "Signed in. Models have not been checked.",
       expired: current.sessionRefreshAvailable
-        ? "Your ChatGPT session expired. Refresh it to continue."
-        : "Your ChatGPT session expired. Sign in again to continue.",
+        ? "Your sign-in is saved. Aerynth is renewing access automatically."
+        : "The saved ChatGPT session ended. Sign in again to continue.",
       "recovery-required":
         "This connection needs native recovery before it can be used.",
     };
@@ -338,7 +339,11 @@ export function mountProviderConnections(
       .then(
         (value) => {
           if (!disposed)
-            codexStatus.textContent = `Authentication: ${value.authentication}. ${value.models.length} catalog entries; account access is checked on send.`;
+            codexStatus.textContent = value.authentication === "available"
+              ? "Using your existing Codex sign-in."
+              : value.authentication === "required"
+                ? "The installed Codex session requires sign-in."
+                : "Could not verify the installed Codex session.";
         },
         () => {
           if (!disposed) codexStatus.textContent = "Codex is unavailable.";

@@ -476,7 +476,7 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
     pin.className = "aw-contextual-pin";
     pin.dataset.aerynthMotionControl = "true";
     pin.innerHTML =
-      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4h8m-7 0v6l-3 4h12l-3-4V4m-3 10v6"/></svg>';
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="aw-pin-head" d="M8 4h8l-1 2v4l3 4H6l3-4V6Z"/><path d="M12 14v6"/></svg>';
     const grip = document.createElement("div");
     grip.className = "aw-contextual-resize";
     grip.dataset.aerynthMotionControl = "true";
@@ -508,7 +508,8 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
       }
       pin.hidden = grip.hidden = !panel;
       const pinned = panel?.preference.pinned ?? false;
-      pin.setAttribute("aria-pressed", String(pinned));
+      if (pin.getAttribute("aria-pressed") !== String(pinned))
+        pin.setAttribute("aria-pressed", String(pinned));
       pin.setAttribute(
         "aria-label",
         pinned ? "Unpin from workspace" : "Pin to workspace",

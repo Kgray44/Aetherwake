@@ -27,7 +27,26 @@ export interface ContextualResourcesPort {
 }
 
 const PAGE_SIZE = 24;
-const kindLabel = (kind: string) =>
+const categories = [
+  { label: "Conversations", kinds: ["conversation"] },
+  { label: "Knowledge", kinds: ["note", "research", "reference", "document", "file", "video", "link"] },
+  { label: "Planning", kinds: ["checklist", "task_objective", "task", "task_group", "timeline", "workflow"] },
+  { label: "Intelligence", kinds: ["agent", "stream"] },
+  { label: "Other resources", kinds: [] },
+] as const;
+const categoryIndex = (kind: string) => {
+  const index = categories.findIndex((category) =>
+    category.kinds.some((candidate) => candidate === kind),
+  );
+  return index === -1 ? categories.length - 1 : index;
+};
+const kindNames: Readonly<Partial<Record<string, string>>> = {
+  research: "Research Notebook",
+  task: "Manual task",
+  task_group: "Manual task group",
+  stream: "Intelligence Stream",
+};
+const kindLabel = (kind: string) => kindNames[kind] ??
   kind.replace(/[_.-]+/g, " ").replace(/^./, (letter) => letter.toUpperCase());
 
 /** This is a display projection. The host owns identity, eligibility and writes. */
@@ -39,11 +58,11 @@ export function contextualResourcePage(
   const terms = query.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   const matches = snapshot.resources.filter((resource) => {
     if (resource.visible === false) return false;
-    const searchable = [resource.title, resource.kind, kindLabel(resource.kind)]
+    const searchable = [resource.title, resource.kind, kindLabel(resource.kind), categories[categoryIndex(resource.kind)].label]
       .join(" ")
       .toLocaleLowerCase();
     return terms.every((term) => searchable.includes(term));
-  });
+  }).sort((left, right) => categoryIndex(left.kind) - categoryIndex(right.kind));
   const pages = Math.max(1, Math.ceil(matches.length / PAGE_SIZE));
   const index = Math.max(
     0,
@@ -106,7 +125,7 @@ export function mountContextualResources(
     createMenu = node("div", "aw-context-create-menu"),
     status = node("p", "aw-context-count"),
     failure = node("p", "aw-context-error"),
-    list = node("ul", "aw-context-resource-list"),
+    list = node("div", "aw-context-resource-list"),
     empty = node("p", "aw-context-empty", "No matching resources."),
     navigation = node("nav", "aw-context-pages"),
     position = node("span");
@@ -120,7 +139,21 @@ export function mountContextualResources(
   status.setAttribute("role", "status");
   failure.setAttribute("role", "alert");
   failure.hidden = true;
-  list.setAttribute("aria-label", "Matching resources");
+  list.setAttribute("role", "group");
+  list.setAttribute("aria-label", "Resources by category");
+  const groups = categories.map(({ label }) => {
+    const disclosure = node("details", "aw-context-resource-group");
+    const summary = node("summary", "aw-context-group-heading");
+    const heading = node("span", "", label);
+    const count = node("span", "aw-context-group-count");
+    const items = node("ul", "aw-context-group-items");
+    motionControl(summary);
+    disclosure.open = true;
+    summary.append(heading, count);
+    disclosure.append(summary, items);
+    list.append(disclosure);
+    return { disclosure, summary, count, items };
+  });
   navigation.setAttribute("aria-label", "Resource results pages");
   const createSummary = node("summary", "aw-context-control", "Create");
   motionControl(createSummary);
@@ -241,7 +274,8 @@ export function mountContextualResources(
       row.element.remove();
       rows.delete(id);
     }
-    result.items.forEach((resource, index) => {
+    const counts = groups.map(() => 0);
+    result.items.forEach((resource) => {
       let row = rows.get(resource.id);
       if (!row) {
         row = makeRow(resource.id);
@@ -266,8 +300,16 @@ export function mountContextualResources(
         : "Workspace placement unavailable";
       row.open.setAttribute("aria-disabled", String(pending));
       row.attach.setAttribute("aria-disabled", String(pending || !attachable));
-      const reference = list.children[index] ?? null;
-      if (reference !== row.element) list.insertBefore(row.element, reference);
+      const category = categoryIndex(resource.kind);
+      const items = groups[category].items;
+      const reference = items.children[counts[category]++] ?? null;
+      if (reference !== row.element) items.insertBefore(row.element, reference);
+    });
+    groups.forEach((group, index) => {
+      const count = counts[index];
+      if (!count && group.disclosure.contains(focus)) focusRetired = true;
+      group.disclosure.hidden = count === 0;
+      if (group.count.textContent !== String(count)) group.count.textContent = String(count);
     });
     for (const item of actions)
       item.setAttribute("aria-disabled", String(pending));
@@ -291,7 +333,9 @@ export function mountContextualResources(
   }
   function commitQuery() {
     if (composing || committedQuery === query.value) return;
+    const startSearch = !committedQuery.trim() && !!query.value.trim();
     committedQuery = query.value;
+    if (startSearch) for (const group of groups) group.disclosure.open = true;
     page = 0;
     update();
   }

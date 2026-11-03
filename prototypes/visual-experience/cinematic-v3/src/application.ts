@@ -4351,6 +4351,12 @@ export function installApplication(hooks: Hooks) {
       );
     if (e.type === "storage/reserve-admission-restored")
       hooks.status("Storage check passed. Saving is available again.");
+    if (e.type === "provider/connection") {
+      void connectionsView?.refresh();
+      void conversationManager?.refresh().catch(report);
+      for (const view of chatViews.values())
+        void view.refresh({ latest: false }).catch(report);
+    }
     if (e.type === "backend/disconnected") {
       eventDisconnected = true;
       streamView?.update();

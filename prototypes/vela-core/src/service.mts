@@ -578,6 +578,7 @@ export class VelaService {
     this.validatePlan(plan);
     const authorizationRef = this.authorize(this.authInput(plan, 'apply', plan.authorizationRef));
     let request = this.getRequest(plan.requestId);
+    let explicitResponse = false;
     this.atomic(() => { plan.state = 'applying'; });
     for (const step of plan.steps) {
       if (this.getPlan(planId).state !== 'applying') break;
@@ -647,13 +648,18 @@ export class VelaService {
         if (result.createdWorkspaceId) receipt.createdWorkspaceId = result.createdWorkspaceId;
         if (result.createdProjectId) receipt.createdProjectId = result.createdProjectId;
         if (result.createdCollectionId) receipt.createdCollectionId = result.createdCollectionId;
+        if (step.action.type === 'readWeather' && text(result.responseText, 1000)) {
+          this.append(result.responseText, request.id, 'vela-native', plan);
+          explicitResponse = true;
+        }
         if (result.status !== 'applied') { plan.state = result.status; request.state = result.status === 'failed' ? 'failed' : result.status; request.errorCode = result.errorCode; }
       });
     }
     this.atomic(() => {
       if (plan.state === 'applying') { plan.state = 'applied'; request.state = 'completed'; }
       request.updatedAt = this.now();
-      this.append(plan.state === 'applied' ? 'The reviewed native plan was applied. Host receipts are available for inspection; delegated task outcomes remain owned by the execution service.' : 'Plan execution stopped with state: ' + plan.state + '. Inspect receipts before retrying.', request.id, 'vela-native', plan);
+      if (!explicitResponse || plan.steps.length !== 1)
+        this.append(plan.state === 'applied' ? 'The reviewed native plan was applied. Host receipts are available for inspection; delegated task outcomes remain owned by the execution service.' : 'Plan execution stopped with state: ' + plan.state + '. Inspect receipts before retrying.', request.id, 'vela-native', plan);
     });
     return structuredClone(plan);
   }

@@ -206,7 +206,10 @@ for (const authenticated of [false, true])
       assert.equal(Buffer.byteLength(exact.intent), 669);
       assert.equal(Buffer.byteLength(exact.sourceChat), 40);
       assert.equal(Buffer.byteLength(exact.sourceNote), 60);
-      assert.equal(data.capabilities.length, CAPABILITIES.length - (authenticated ? 0 : 1));
+      const expectedIds = CAPABILITIES.filter(capability =>
+        capability.id !== "readWeather" && (authenticated || capability.id !== "delegateTask"),
+      ).map(capability => capability.id).sort();
+      assert.deepEqual(data.capabilities.map((capability: { id: string }) => capability.id).sort(), expectedIds);
       assert(data.capabilities.some((capability: { id: string }) => capability.id === "createTimeline"));
       assert.equal(data.schemaAvailability, "complete-approved-catalog");
       assert(!data.capabilityDiscovery);

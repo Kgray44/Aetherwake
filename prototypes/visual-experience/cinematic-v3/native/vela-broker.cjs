@@ -65,6 +65,7 @@ exports.velaCommand = async ({
   call,
   input,
   reviewProvider = showVelaReview,
+  offerPlanningByDefault = false,
   observeNativeRequest,
 }) => {
   const observe = (event) => {
@@ -124,6 +125,13 @@ exports.velaCommand = async ({
     if (local?.matched === true) return local.request;
     if (!local || local.matched !== false)
       throw Error("invalid_local_vela_response");
+    if (offerPlanningByDefault) {
+      // Launching App Server to observe its installed sign-in is not a model
+      // turn. The exact prompt still requires the trusted review below.
+      const capability = await call("capabilities", {}).catch(() => null);
+      request.authorizeProvider = capability?.providerId === "codex-app-server" &&
+        capability.mock === false && capability.authentication === "available";
+    }
     if (!request.authorizeProvider)
       return call("vela", { name: "request", input: request });
     if (!isReviewOwnerAlive(win))

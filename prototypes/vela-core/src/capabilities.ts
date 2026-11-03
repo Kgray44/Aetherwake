@@ -56,6 +56,9 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('renameResource', 'Rename a local resource', 'mutate', { type: { const: 'renameResource' }, resourceId: idSchema, title: stringSchema }, 'One authorized active note, task, task group or reference; preserves content, drafts and placements'),
   capability('associateResourceProject', 'Change a local resource project', 'mutate', { type: { const: 'associateResourceProject' }, resourceId: idSchema, projectId: nullableIdSchema }, 'One authorized active non-chat local resource and exact authorized destination project or null; grants no content or sharing access'),
   capability('createWorkspace', 'Create an empty workspace', 'create', { type: { const: 'createWorkspace' }, title: stringSchema, projectId: nullableIdSchema }, 'One canonical workspace in the exact authorized project or without a project; opens the new workspace'),
+  capability('readWeather', 'Read a live local forecast', 'read', {
+    type: { const: 'readWeather' }, period: { enum: ['now', 'today', 'tonight', 'tomorrow', 'tomorrow-morning'] },
+  }, 'Uses the current Windows device location once. Shares rounded coordinates with the US National Weather Service after review. Use only for local weather requests.', 'reviewed-action'),
   capability('createTimeline', 'Create and show a saved Timeline', 'create', {
     type: { const: 'createTimeline' }, title: stringSchema, projectId: nullableIdSchema, workspaceId: nullableIdSchema,
     source: { oneOf: [objectSchema({ kind: { const: 'application-activity' } }),
@@ -100,6 +103,7 @@ export function validateAction(value: unknown): VelaNativeAction | DelegateTaskA
     case 'renameResource': valid = fields(v, ['type', 'resourceId', 'title']) && identifier(v.resourceId) && text(v.title); break;
     case 'associateResourceProject': valid = fields(v, ['type', 'resourceId', 'projectId']) && identifier(v.resourceId) && nullableId(v.projectId); break;
     case 'createWorkspace': valid = fields(v, ['type', 'title', 'projectId']) && text(v.title) && nullableId(v.projectId); break;
+    case 'readWeather': valid = fields(v, ['type', 'period']) && typeof v.period === 'string' && ['now', 'today', 'tonight', 'tomorrow', 'tomorrow-morning'].includes(v.period); break;
     case 'createTimeline': valid = fields(v, ['type', 'title', 'projectId', 'workspaceId', 'source']) && text(v.title) &&
       nullableId(v.projectId) && nullableId(v.workspaceId) && isRecord(v.source) &&
       ((v.source.kind === 'application-activity' && fields(v.source, ['kind'])) ||

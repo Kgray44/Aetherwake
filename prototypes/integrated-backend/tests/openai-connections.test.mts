@@ -693,6 +693,65 @@ test("expired persisted session fails closed without model call or silent refres
     await f.close();
   }
 });
+test("background maintenance renews an expired saved session once and waits for protected storage on close", async () => {
+  const f = fixture();
+  let reopened: OpenAIConnections | undefined;
+  try {
+    await f.connect();
+    await f.coordinator.close();
+    const options = { ...f.options, now: () => Date.now() + 3600001 };
+    reopened = new OpenAIConnections(options);
+    const count = f.calls.length;
+    const first = reopened.renewIfDue();
+    assert.equal(reopened.renewIfDue(), first);
+    const closing = reopened.close();
+    assert.equal((await first).state, "ready");
+    await closing;
+    assert.equal(f.calls.slice(count).filter(call => call.method === "POST").length, 1);
+    reopened = new OpenAIConnections(options);
+    const status = await reopened.status();
+    assert.equal(status.state, "ready");
+    assert.equal(status.registrationVersion, 3);
+    const before = f.calls.length;
+    assert.equal((await reopened.renewIfDue()).state, "ready");
+    assert.equal(f.calls.length, before);
+    assertSafe(status);
+  } finally {
+    await reopened?.close();
+    await f.close();
+  }
+});
+test("temporary refresh rejection retains the same saved session and backs off", async () => {
+  const f = fixture();
+  let reopened: OpenAIConnections | undefined;
+  try {
+    await f.connect();
+    await f.coordinator.close();
+    let now = Date.now() + 3600001, attempts = 0;
+    reopened = new OpenAIConnections({
+      ...f.options,
+      now: () => now,
+      fetch: async (input, init) => {
+        if (String(input).endsWith("/oauth/token") && ++attempts === 1)
+          return Response.json({ error: "invalid_client" }, { status: 401 });
+        return f.options.fetch!(input, init);
+      },
+    });
+    const paused = await reopened.renewIfDue();
+    assert.equal(paused.state, "expired");
+    assert.equal(paused.sessionRefreshAvailable, true);
+    assert.equal(paused.registrationVersion, 2);
+    await reopened.renewIfDue();
+    assert.equal(attempts, 1);
+    now += 30001;
+    f.setClaims({ exp: Math.floor(now / 1000) + 3600 });
+    assert.equal((await reopened.renewIfDue()).state, "ready");
+    assert.equal(attempts, 2);
+  } finally {
+    await reopened?.close();
+    await f.close();
+  }
+});
 test("recovery status reads only scalar metadata; unauthorized repair denies, approved repair clears actual authority", async () => {
   const f = fixture();
   let repaired: OpenAIConnections | undefined;

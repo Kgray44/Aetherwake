@@ -96,6 +96,17 @@
   background: #90c7d440;
   border-color: #c4ebf075;
 }
+.aw-contextual-pin svg {
+  --pin-state: var(--control-toggled, 0);
+  transform: rotate(calc(-35deg * (1 - var(--pin-state))));
+}
+.aw-contextual-pin[aria-pressed="true"] svg {
+  --pin-state: var(--control-toggled, 1);
+}
+.aw-contextual-pin .aw-pin-head {
+  fill: currentColor;
+  fill-opacity: var(--pin-state);
+}
 .aw-contextual-resize {
   position: absolute;
   inset: auto 2px 2px auto;

@@ -550,6 +550,7 @@ app.whenReady().then(async () => {
           call,
           input,
           observeNativeRequest: observeVelaRequest,
+          offerPlanningByDefault: !verify,
         });
       } else if (command === "githubTimeline") {
         if (input?.name === "openCommit") {
@@ -606,6 +607,29 @@ app.whenReady().then(async () => {
       win, app, privateRoot, call, source, moduleStartedMonotonicMs, startupErrors,
     });
     return;
+  }
+  if (!verify && !checkCatalog) {
+    let renewing = false;
+    const maintainSession = async () => {
+      if (closing || renewing || win.isDestroyed()) return;
+      renewing = true;
+      try {
+        if (await storage.allowWrite())
+          await call("providerAuth", {
+            type: "maintain",
+            providerId: "chatgpt-plan-responses",
+          });
+      } catch {
+        // Background recovery never opens a browser or retries a chat turn.
+      } finally {
+        renewing = false;
+      }
+    };
+    win.on("focus", maintainSession);
+    const sessionTimer = setInterval(maintainSession, 30000);
+    sessionTimer.unref();
+    win.once("closed", () => clearInterval(sessionTimer));
+    void maintainSession();
   }
   win.show();
   win.focus();

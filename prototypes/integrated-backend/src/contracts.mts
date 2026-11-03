@@ -59,11 +59,12 @@ export interface OrdinaryResponsesPreview {
  contextDigest:string;bodyDigest:string;bodyBytes:number;requiresSourceReview:boolean;
 }
 export type ProviderAuthRequest={providerId:'chatgpt-plan-responses'}&(
- |{type:'begin'}|{type:'finish';attemptId:string}|{type:'cancel';attemptId?:string}
+ |{type:'begin'}|{type:'maintain'}|{type:'finish';attemptId:string}|{type:'cancel';attemptId?:string}
  |{type:'disconnect'|'refresh';expectedVersion:number});
 /** Native-process connection port. Never a renderer payload or workerData. */
 export interface OrdinaryConnectionPort {
  status():Promise<ProviderConnectionStatus>;
+ renewIfDue?():Promise<ProviderConnectionStatus>;
  begin():Promise<NativeAuthorizationStart>;finish(attemptId:string):Promise<unknown>;cancel(attemptId?:string):Promise<unknown>;
  disconnect(expectedVersion:number):Promise<unknown>;refresh(expectedVersion:number):Promise<unknown>;close():Promise<void>|void;
  resolveCredential(expectedVersion:number):Promise<NativeCredential>;

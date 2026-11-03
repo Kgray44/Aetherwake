@@ -20,6 +20,7 @@ import { ordinaryModelOption, supportsOrdinaryReasoning } from '../../openai-pro
 import type { TurnInput,TurnEvent,TurnResult } from '../../openai-provider/contracts.mts';
 import type { OrdinaryConnectionPort,OrdinaryResponsesTestServices,OrdinaryResponsesPreview } from './contracts.mts';
 import { OpenAIConnections,CHATGPT_PLAN_REGISTRATION } from './openai-connections.mts';
+import { readLocalWeather } from './local-weather.mts';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { ConversationGraph, type GraphData, type MessageMetadata, type ProviderAdapter as GraphAdapter } from '../../connected-conversations/src/graph.ts';
 import { localConversationAdapter, mockOrdinaryAdapter } from '../../connected-conversations/src/adapters.ts';
@@ -112,6 +113,7 @@ export class BackendCore {
   private ordinaryConnections!:OrdinaryConnectionPort;
   private ordinaryTest?:OrdinaryResponsesTestServices;
   private ordinaryAuth=new Map<string,Promise<void>>();
+  private ordinaryRenewal:Promise<ProviderConnectionStatus>|null=null;
   private ordinaryController:AbortController|null=null;
   private ordinaryTask:Promise<Execution>|null=null;
   private ordinaryStatus:ProviderConnectionStatus={contract:PROVIDER_CONNECTION_CONTRACT,providerId:CHATGPT_PLAN_PROVIDER,billingRoute:'chatgpt-plan',state:'unavailable',storageAvailable:false,pending:false,registrationVersion:null,planUsageEnabled:false,inferenceVerified:false,nativeAccountHistory:false,nativeAccountMemory:false,nativeAccountSync:false};
@@ -355,6 +357,17 @@ export class BackendCore {
   }
   private prepareVelaNative(input:Parameters<CanonicalVelaHost['applyNative']>[0],cancel:AbortSignal) {
     const action=input.action;
+    if(action.type==='readWeather'){
+      ensure(this.velaCapability(action.type),'vela_native_capability_unavailable');
+      this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
+      return readLocalWeather(action.period,cancel).then(forecast=>()=>{
+        this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
+        return this.once<HostActionResult>(input.commandId,{type:'velaNative',...input},()=>({
+          status:forecast.ok?'applied':'failed',receiptId:input.commandId,responseText:forecast.content,
+          ...(!forecast.ok?{errorCode:'local_forecast_unavailable'}:{}),
+        }));
+      });
+    }
     if(action.type!=='createTimeline'||action.source.kind!=='github-commits')return;
     this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
     const scope=this.timelineScope(action);
@@ -728,7 +741,7 @@ export class BackendCore {
     this.velaHost=createCanonicalVelaHost({db:this.db,transaction:work=>this.atomic(()=>work(this.db)),readTransaction:work=>this.kernel.withTransaction(work),metadata:purpose=>this.velaMetadata(purpose),currentContext:()=>this.velaContext(),
       permissions:{attentionPreferences:(_intent,c)=>c.principalId==='local-owner'&&c.policyVersion==='aerynth.local-owner@1',scope:(c,m)=>this.velaScope(c,m),metadata:(ref,_c,m)=>ref.kind==='resource'?!!m.resources.find(r=>r.id===ref.id&&r.visible!==false):ref.kind==='workspace'?m.workspaces.some(w=>w.id===ref.id):ref.kind==='collection'?!!m.collections?.some(c=>c.id===ref.id)&&this.conversationAccess.collection(ref.id,'read',ref.state==='archived'):m.projects.some(p=>p.id===ref.id),content:ref=>ref.kind==='resource'&&!!this.conversationAccess.resource(ref.id),authorize:request=>this.authorizeVelaPolicy(request),restoreCollection:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'organize',true),inspectCollectionArchiveReceipt:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'read',true)},
       revisions:{attentionPreferences:()=>this.vela.attentionPreferenceVersion(),conversation:id=>this.state.revisions[id]??null,workspace:id=>this.velaNative?.workspaceRevision?.(id)??Number(this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(id)?.version??0),collection:id=>Number(this.db.prepare('SELECT version FROM cp_collection_rules WHERE collection_id=?').get(id)?.version??0)},
-      conversations:{ensure:()=>this.ensureVelaConversation(),read:id=>this.readVelaConversation(id),append:(id,message)=>this.appendVelaMessage(id,message)},dispatch:{native:input=>this.applyVelaNative(input),prepareNative:{supports:action=>action.type==='createTimeline'&&action.source.kind==='github-commits',prepare:(input,signal)=>this.prepareVelaNative(input,signal)},delegateTask:input=>this.executeVelaDelegation(input),preference:input=>{
+      conversations:{ensure:()=>this.ensureVelaConversation(),read:id=>this.readVelaConversation(id),append:(id,message)=>this.appendVelaMessage(id,message)},dispatch:{native:input=>this.applyVelaNative(input),prepareNative:{supports:action=>action.type==='readWeather'||action.type==='createTimeline'&&action.source.kind==='github-commits',prepare:(input,signal)=>this.prepareVelaNative(input,signal)},delegateTask:input=>this.executeVelaDelegation(input),preference:input=>{
         ensure(this.velaNative?.applyPreference,'vela_preference_capability_unavailable');this.requireVelaPolicyGrant(input.authorizationRef,undefined,'adaptation');return this.velaNative.applyPreference(input);
       }}});
     this.velaHost.contextReferences=selectedIds=>{
@@ -767,6 +780,7 @@ export class BackendCore {
     this.vela=new VelaService({db:this.db,transaction:work=>this.atomic(work),readTransaction:work=>this.kernel.withTransaction(work),host:this.velaHost,local:this.localVelaHost(),planner:this.velaPlanner,history:{snapshot:(id,limit)=>this.velaHistorySnapshot(id,limit),message:(id,messageId,maxBytes)=>this.velaHistoryMessage(id,messageId,maxBytes),content:(ref,maxBytes)=>this.velaHistoryContent(ref,maxBytes),messageMetadata:(id,messageId)=>this.velaHistoryMessageMetadata(id,messageId),verifyProviderContribution:(contribution,message,request)=>this.verifyVelaHistoryContribution(contribution,message,request)}});
   }
   private velaCapability(id:string) {
+    if(id==='readWeather')return process.platform==='win32'&&!!this.nativeHostServices;
     if(id==='createTimeline')return true;
     if(id==='setAttentionMode')return this.velaNative?.supportedActions.includes('setAttentionMode')===true&&this.vela?.attentionPreferenceVersion()!=null;
     if(id==='bringAllIntoView')return this.velaContext().currentWorkspaceId!==null&&this.velaNative?.supportedActions.includes('bringAllIntoView')===true;
@@ -902,6 +916,7 @@ export class BackendCore {
     ensure(!this.active,'execution_busy');this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
     return this.once(input.commandId,{type:'velaNative',...input},()=>{
       const a=input.action;
+      ensure(a.type!=='readWeather','weather_reviewed_preparation_required');
       if(a.type==='createTimeline'){
         this.timelineScope(a);
         ensure(a.source.kind==='application-activity','github_reviewed_preparation_required');
@@ -1069,10 +1084,27 @@ export class BackendCore {
     return {providers:[{id:CHATGPT_PLAN_PROVIDER,label:this.ordinaryTest?'ChatGPT plan Responses fixture (simulated)':'ChatGPT plan · Aerynth local history',available,record:available,execute:available,nativeFork:false,history:'local' as const,simulated:!!this.ordinaryTest,models:models.map(m=>m.id),modelOptions:models.map(ordinaryModelOption),catalogOnly:true as const,reason:available?'Connected and authorized. Models are checked when you send. Ordinary replies use the current time and recent messages from this Aerynth chat. ChatGPT history and memory are not synchronized.':'Connect an eligible ChatGPT account. Local history remains available.'}],...(available?{defaultProviderId:CHATGPT_PLAN_PROVIDER}:{})};
   }
   private defaultOrdinaryProvider():string {return this.ordinaryAuthorized()?CHATGPT_PLAN_PROVIDER:'local';}
-  private async refreshOrdinaryStatus():Promise<ProviderConnectionStatus> {
-    const status=await this.ordinaryConnections.status();this.ordinaryStatus=structuredClone(status);
+  private setOrdinaryStatus(status:ProviderConnectionStatus):ProviderConnectionStatus {
+    this.ordinaryStatus=structuredClone(status);
     if(status.state!=='ready'||status.registrationVersion!==this.ordinaryCatalog?.version)this.ordinaryCatalog=null;
     this.updateOrdinaryAdapter();return structuredClone(status);
+  }
+  private async refreshOrdinaryStatus():Promise<ProviderConnectionStatus> {
+    return this.setOrdinaryStatus(await this.ordinaryConnections.status());
+  }
+  private maintainOrdinarySession():Promise<ProviderConnectionStatus> {
+    if(this.ordinaryRenewal)return this.ordinaryRenewal;
+    if(this.active||!this.ordinaryConnections.renewIfDue)
+      return this.refreshOrdinaryStatus();
+    const previous=this.ordinaryStatus;
+    const task=(async()=>{
+      const status=this.setOrdinaryStatus(await this.ordinaryConnections.renewIfDue!());
+      if(previous.state!==status.state||previous.registrationVersion!==status.registrationVersion)
+        this.record('provider/connection','observed',undefined,randomUUID(),{providerId:CHATGPT_PLAN_PROVIDER,detached:true,payload:{redacted:true,connection:status}});
+      return status;
+    })().finally(()=>{if(this.ordinaryRenewal===task)this.ordinaryRenewal=null;});
+    this.ordinaryRenewal=task;
+    return task;
   }
   private async checkOrdinaryModels():Promise<ProviderConnectionStatus> {
     const status=await this.refreshOrdinaryStatus();ensure(status.state==='ready'&&status.planUsageEnabled&&!status.pending&&Number.isSafeInteger(status.registrationVersion),'chatgpt_plan_grant_required');
@@ -1084,7 +1116,8 @@ export class BackendCore {
   private async providerAuth(input:CommandMap['providerAuth']['input']):Promise<CommandMap['providerAuth']['output']> {
     ensure(input&&typeof input==='object'&&!Array.isArray(input)&&input.providerId===CHATGPT_PLAN_PROVIDER,'invalid_provider_auth_request');
     const keys=input.type==='finish'?['providerId','type','attemptId']:input.type==='cancel'?['providerId','type','attemptId']:input.type==='disconnect'||input.type==='refresh'?['providerId','type','expectedVersion']:['providerId','type'];
-    ensure(Object.keys(input).every(k=>keys.includes(k))&&['begin','finish','cancel','disconnect','refresh'].includes(input.type),'invalid_provider_auth_request');
+    ensure(Object.keys(input).every(k=>keys.includes(k))&&['begin','maintain','finish','cancel','disconnect','refresh'].includes(input.type),'invalid_provider_auth_request');
+    if(input.type==='maintain')return this.maintainOrdinarySession();
     if(input.type==='finish'||input.type==='cancel'&&input.attemptId!==undefined)ensure(typeof input.attemptId==='string'&&input.attemptId.trim()&&input.attemptId.length<=256,'invalid_provider_auth_request');
     if(input.type==='disconnect'||input.type==='refresh')ensure(Number.isSafeInteger(input.expectedVersion)&&input.expectedVersion>=1,'invalid_provider_auth_request');
     if(input.type==='begin'){this.ordinaryCatalog=null;const start=await this.ordinaryConnections.begin();await this.refreshOrdinaryStatus();return start;}
@@ -1268,6 +1301,8 @@ export class BackendCore {
     ensure(input.reasoningEffort === undefined || c.providerId === CHATGPT_PLAN_PROVIDER &&
       input.model !== undefined && supportsOrdinaryReasoning(input.model, input.reasoningEffort), 'unsupported_reasoning_effort');
     ensure(input.webSearch === undefined || input.webSearch === true && c.providerId === CHATGPT_PLAN_PROVIDER, 'invalid_web_search_scope');
+    if(c.providerId===CHATGPT_PLAN_PROVIDER&&!ordinaryBinding)
+      await this.maintainOrdinarySession();
     // A public lookup sends only the draft submitted for search.
     const context = input.webSearch ? [] : await this.conversations.attachedContext(input.resourceId);
     const pending=(input.webSearch ? [] : Object.values(this.state.reviews)).filter(r=>r.resourceId===input.resourceId&&!['applied','rejected'].includes(r.state));
