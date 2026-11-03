@@ -1,8 +1,8 @@
 /* Actual combined desktop / local-only chat motion. Main alone dispatches
  * --integration-chat-motion --profile=<C:absolute review-chat-motion-DIGITS>.
  * --verify-restore binds the original passing source/assets and canonical IDs.
- * 45s /12s including cleanup; <=3 PNG /16MiB combined; no video (existing
- * recorder does not authorize this mode). App-only software native input is
+ * 45s /12s including cleanup; <=3 PNG /16MiB combined. Optional initial-only
+ * --record-chat-motion uses one existing exact-window video <=32MiB. Software input is
  * not physical OS input. No refocus, global hooks, auth, provider or fixture RPC.
  */
 const fs = require('node:fs/promises');
@@ -71,6 +71,10 @@ function assertMotionSample(value, kind, state) {
 function passingCheckpoint(checkpoint, receipt) {
   assert(checkpoint?.contract === 'aerynth.chat-motion-checkpoint@1' && receipt?.contract === 'aerynth.chat-motion-integration@1' && receipt.passed === true && receipt.restore === false && receipt.nativeCloseConfirmed === true, 'original_passing_chat_motion_receipt_required');
   assert.deepEqual(sourceIdentity(receipt.source), checkpoint.source); assert.deepEqual(receipt.moduleHashes, checkpoint.moduleHashes); assert.deepEqual(receipt.canonical, checkpoint.canonical);
+  if (receipt.recording?.requested) {
+    assert(receipt.recording.status === 'complete' && receipt.video, 'original_requested_recording_ack_required');
+    admitVideo({ count: 0, bytes: 0, files: [], videos: 0, videoBytes: 0 }, receipt.video, 'chat-motion.webm');
+  } else assert(!receipt.video, 'unexpected_original_chat_motion_recording');
 }
 function motionScript(selector, kind) {
   return `(${function(selector, kind) { const node = document.querySelector(selector); if (!node) return null; const body = node.querySelector(kind === 'picker' ? '.cp-picker-panel' : ':scope>.cp-motion-disclosure-body'); if (!body) return null; const style = getComputedStyle(body), rect = body.getBoundingClientRect(), trigger = kind === 'picker' ? node.querySelector('.cp-picker-trigger') : node.querySelector(':scope>summary'); let paintable = true; for (let p = body; p; p = p.parentElement) { const s = getComputedStyle(p); if (s.display === 'none' || s.visibility === 'hidden') paintable = false; } return { semanticOpen: trigger?.getAttribute('aria-expanded') === 'true', nativeOpen: kind === 'details' ? node.open : null, contentVisibility: kind === 'details' ? getComputedStyle(node, '::details-content').contentVisibility : null, inert: body.inert, hidden: body.hidden, height: rect.height, opacity: Number(style.opacity), paintable, cssSample: kind === 'picker' ? style.getPropertyValue('--cp-picker-opacity') : getComputedStyle(node).getPropertyValue('--cp-disclosure-open'), heightStyle: body.style.height }; }.toString()})(${JSON.stringify(selector)},${JSON.stringify(kind)})`;
@@ -89,23 +93,76 @@ function assertGeometry(value) {
 }
 async function bounded(promise, ms, code) { assert(ms > 0, code); let timer; try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Error(code)), ms); })]); } finally { clearTimeout(timer); } }
 async function readJson(file) { assert((await fs.stat(file)).size <= MiB, 'bounded_chat_motion_checkpoint_required'); return JSON.parse(await fs.readFile(file, 'utf8')); }
-Object.assign(exports, { assertOwnedProfile, assertRead, assertNoProvider, canonicalChat, assertMotionSample, assertGeometry, passingCheckpoint, motionScript, viewScript, geometryScript, FIXTURE });
+function validateMotionBudget(budget) {
+  validateBudget(budget); assert(Number.isSafeInteger(budget.videos) && budget.videos >= 0 && budget.videos <= 1 && Number.isSafeInteger(budget.videoBytes) && budget.videoBytes >= 0 && budget.videoBytes <= 32 * MiB && (budget.videos === 0) === (budget.videoBytes === 0), 'chat_motion_video_budget_invalid'); return budget;
+}
+function admitVideo(budget, video, destination) {
+  validateMotionBudget(budget); assert(budget.videos === 0 && video && video.file === path.basename(destination) && path.basename(video.file) === video.file && Number.isSafeInteger(video.byteCount) && video.byteCount > 0 && video.byteCount <= 32 * MiB && /^[a-f0-9]{64}$/.test(video.sha256) && Number.isFinite(video.durationMs) && video.durationMs > 0 && video.durationMs <= 45000 && Number.isFinite(video.startedAt) && Number.isFinite(video.readyAt) && video.startedAt > 0 && video.readyAt >= video.startedAt && ['video/webm;codecs=vp9', 'video/webm;codecs=vp8'].includes(video.mimeType) && video.source === 'Exact application BrowserWindow' && video.audio === false && video.requestedFrameRate === 30, 'chat_motion_video_ack_invalid');
+  const value = Object.fromEntries(['file', 'byteCount', 'sha256', 'durationMs', 'startedAt', 'readyAt', 'mimeType', 'source', 'audio', 'requestedFrameRate'].map(key => [key, video[key]]));
+  budget.videos = 1; budget.videoBytes = video.byteCount; return value;
+}
+/** Existing recorder only. Late completion cannot resume the journey, create a
+ * second recording or admit media after a deadline. Native exit remains final
+ * cleanup when no recorder handle/stop acknowledgement is available. */
+function optionalRecording({ requested, restore, slot, win, session, localURL, out, budget, start }) {
+  const state = { requested, status: !requested ? 'not-requested' : restore ? 'skipped-restore' : 'not-started' };
+  const eligible = requested && !restore; let attempted = false, active, stopping, finishing = false, startFailed = false;
+  const incomplete = code => { state.status = 'incomplete'; state.errorCode = code; };
+  const stopOnce = (recorder, complete, cleanupOnly = false) => {
+    if (stopping) return stopping;
+    const destination = path.join(out, complete ? 'chat-motion.webm' : 'partial-chat-motion.webm'), available = Math.min(2000, Math.max(0, slot.remaining() - 1500)), until = performance.now() + available;
+    // Ask the same handle to stop even if no await budget remains. Never wait
+    // past the canonical-close reserve or publish a late success.
+    const operation = Promise.resolve().then(() => recorder.stop(destination));
+    const acknowledgement = available > 0 ? bounded(operation, available, 'chat_motion_recording_stop_deadline') : Promise.reject(Error('chat_motion_recording_stop_deadline'));
+    if (available === 0) operation.catch(() => {});
+    stopping = acknowledgement.then(video => {
+      if (cleanupOnly) return;
+      assert(performance.now() < until && slot.remaining() >= 1500, 'chat_motion_recording_stop_deadline');
+      const accepted = admitVideo(budget, video, destination);
+      if (complete && !startFailed) state.status = 'complete'; else incomplete('chat_motion_recording_journey_incomplete');
+      return accepted;
+    })
+      .catch(() => { if (!cleanupOnly) incomplete('chat_motion_recording_stop_incomplete'); throw Error('chat_motion_recording_stop_incomplete'); });
+    stopping.catch(() => {}); return stopping;
+  };
+  return { state,
+    async begin() {
+      if (!eligible) return; assert(!attempted && !finishing, 'chat_motion_recording_once_only'); attempted = true; state.status = 'starting';
+      try {
+        slot.check(); validateMotionBudget(budget); assert(budget.videos === 0 && session && typeof localURL === 'string' && localURL && typeof start === 'function', 'chat_motion_recording_host_required');
+        const available = Math.min(4000, slot.workRemaining()), until = performance.now() + available; assert(available > 0, 'chat_motion_recording_start_deadline');
+        const pending = Promise.resolve().then(() => start(win, session, localURL));
+        pending.then(value => { active = value; if ((startFailed || finishing) && typeof active?.stop === 'function') void stopOnce(active, false, true); }, () => {});
+        const value = await bounded(pending, available, 'chat_motion_recording_start_deadline');
+        assert(typeof value?.stop === 'function', 'chat_motion_recording_handle_required'); slot.check(); assert(!finishing && performance.now() < until, 'chat_motion_recording_closed_or_late'); state.status = 'recording';
+      } catch { startFailed = true; incomplete('chat_motion_recording_start_incomplete'); if (typeof active?.stop === 'function') void stopOnce(active, false, true); throw Error('chat_motion_recording_start_incomplete'); }
+    },
+    async finish(complete) {
+      if (!eligible) return; finishing = true;
+      if (typeof active?.stop !== 'function') { startFailed = true; incomplete('chat_motion_recording_start_incomplete'); return; }
+      return stopOnce(active, complete && !startFailed, startFailed);
+    },
+  };
+}
+Object.assign(exports, { assertOwnedProfile, assertRead, assertNoProvider, canonicalChat, assertMotionSample, assertGeometry, passingCheckpoint, motionScript, viewScript, geometryScript, validateMotionBudget, admitVideo, optionalRecording, FIXTURE });
 
-exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs, observeProviderActivity }) {
-  const restore = process.argv.includes('--verify-restore'), limitMs = restore ? 12000 : 45000, root = path.resolve(privateRoot), out = path.join(root, 'chat-motion-evidence', `${restore ? 'restore' : 'initial'}-${Date.now()}`), expectedFile = path.join(root, 'chat-motion-expected.json'), budgetFile = path.join(root, 'chat-motion-capture-budget.json');
-  const receipt = { contract: 'aerynth.chat-motion-integration@1', source, restore, passed: false, syntheticOnly: true, inputMethod: 'App-only software native-window mouse/key/wheel/insertText; universally executeJavaScript FALSE. Renderer writes only temporary observation references, never product state or activation.', limits: { milliseconds: limitMs, combinedPNGs: 3, combinedPNGBytes: 16 * MiB, videos: 0 }, actions: [], samples: [], captures: [], checks: [], errors: [], limitations: ['No provider/handoff/account/native-thread or generated-title proof.', 'Shared-MC CSS samples and native-window capture are not physical input, monitor-presentation, artistic or performance acceptance.', 'Fresh-process caret/selection/scroll are not durably implemented; only IDs/messages/draft restart is claimed.', 'No recording: existing exact-window recorder does not authorize this flag.', 'Root must inspect PNGs and independently confirm all test processes exited.'] };
-  let owned = false, admitted = false, installed = false, budgetWritable = false, passed = false, slot, expected, pendingExpected, workTimer, hardTimer, rejectAbort, failureCapture, budget = { count: 0, bytes: 0, files: [] };
+exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs, observeProviderActivity, session, localURL }) {
+  const restore = process.argv.includes('--verify-restore'), record = process.argv.includes('--record-chat-motion'), limitMs = restore ? 12000 : 45000, root = path.resolve(privateRoot), out = path.join(root, 'chat-motion-evidence', `${restore ? 'restore' : 'initial'}-${Date.now()}`), expectedFile = path.join(root, 'chat-motion-expected.json'), budgetFile = path.join(root, 'chat-motion-capture-budget.json');
+  const receipt = { contract: 'aerynth.chat-motion-integration@1', source, restore, passed: false, syntheticOnly: true, inputMethod: 'App-only software native-window mouse/key/wheel/insertText; all journey evaluations FALSE. Optional recorder alone uses the existing exact-window media authority. Renderer writes only temporary observation references, never product state or activation.', limits: { milliseconds: limitMs, combinedPNGs: 3, combinedPNGBytes: 16 * MiB, videos: record && !restore ? 1 : 0, combinedVideoBytes: 32 * MiB }, actions: [], samples: [], captures: [], checks: [], errors: [], limitations: ['No provider/handoff/account/native-thread or generated-title proof.', 'Shared-MC CSS samples and native-window capture are not physical input, monitor-presentation, artistic or performance acceptance.', 'Fresh-process caret/selection/scroll are not durably implemented; only IDs/messages/draft restart is claimed.', 'Optional initial-only exact-window/no-audio recording needs successful bounded stop acknowledgement; capture overhead is included and requested30fps is not monitor performance.', 'Root must inspect PNGs/optional WebM and independently confirm all test processes exited.'] };
+  let owned = false, admitted = false, installed = false, budgetWritable = false, passed = false, slot, expected, pendingExpected, workTimer, hardTimer, rejectAbort, failureCapture, recording, budget = { count: 0, bytes: 0, files: [], videos: 0, videoBytes: 0 };
   const aborted = new Promise((_, reject) => { rejectAbort = reject; }); aborted.catch(() => {});
   const abort = code => rejectAbort(slot?.abort(code) ?? Error(code)), blur = () => abort('chat_motion_focus_lost'), escape = (_event, input) => { if (input?.type === 'keyDown' && input.key === 'Escape') abort('chat_motion_operator_escape'); }, consoleError = (_event, details) => { if ((details?.level === 'error' || details?.level === 3) && receipt.errors.length < 24) receipt.errors.push(String(details.message).slice(0, 1000)); };
   const run = async () => {
     assertOwnedProfile(privateRoot, process.argv, win.getTitle()); assertOwnedApplicationProfile(privateRoot, app.getPath('userData'), process.argv); sourceIdentity(source); owned = true;
     slot = createSlot({ win, startedAt: moduleStartedMonotonicMs, limitMs, cleanupMs: restore ? 2500 : 4000 }); slot.check(); hardTimer = setTimeout(() => { receipt.hardDeadline = true; abort('chat_motion_hard_deadline'); app.exit(1); }, slot.remaining()); workTimer = setTimeout(() => abort('chat_motion_work_deadline'), slot.workRemaining());
     installed = true; win.on('blur', blur); win.on('hide', blur); win.on('minimize', blur); win.webContents.on('before-input-event', escape); win.webContents.on('console-message', consoleError);
-    receipt.reserve = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', path.join(process.env.LOCALAPPDATA || '', 'AeroStorageWatch', 'ReserveGuard.ps1'), '-EstimatedCBytes', String(32 * MiB), '-EstimatedDBytes', '0'], { windowsHide: true, timeout: Math.floor(Math.min(4000, slot.workRemaining())), maxBuffer: 8192, encoding: 'utf8' })); assert.equal(receipt.reserve.allowed, true); admitted = true; await fs.mkdir(out, { recursive: true });
-    receipt.moduleHashes = { helper: hash(await fs.readFile(__filename)) }; for (const relative of ['chat.ts', 'ui.ts', 'style.css', 'picker.ts', 'picker.css', 'draft-session.ts']) receipt.moduleHashes[relative] = hash(await fs.readFile(path.resolve(__dirname, '../../../conversation-product/src', relative))); for (const name of ['integration-agents.cjs', 'integration-checklists.cjs', 'integration-resource-opening.cjs', 'integration-desktop-basics.cjs']) receipt.moduleHashes[name] = hash(await fs.readFile(path.join(__dirname, name)));
+    receipt.reserve = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-File', path.join(process.env.LOCALAPPDATA || '', 'AeroStorageWatch', 'ReserveGuard.ps1'), '-EstimatedCBytes', String((record && !restore ? 64 : 32) * MiB), '-EstimatedDBytes', '0'], { windowsHide: true, timeout: Math.floor(Math.min(4000, slot.workRemaining())), maxBuffer: 8192, encoding: 'utf8' })); assert.equal(receipt.reserve.allowed, true); admitted = true; await fs.mkdir(out, { recursive: true });
+    receipt.moduleHashes = { helper: hash(await fs.readFile(__filename)) }; for (const relative of ['chat.ts', 'ui.ts', 'style.css', 'picker.ts', 'picker.css', 'draft-session.ts']) receipt.moduleHashes[relative] = hash(await fs.readFile(path.resolve(__dirname, '../../../conversation-product/src', relative))); for (const name of ['integration-agents.cjs', 'integration-checklists.cjs', 'integration-resource-opening.cjs', 'integration-desktop-basics.cjs', 'application-recording.cjs']) receipt.moduleHashes[name] = hash(await fs.readFile(path.join(__dirname, name)));
     for (const [name, digest] of Object.entries(source.buildAssets)) { assert.equal(path.basename(name), name); assert.equal(hash(await fs.readFile(path.join(__dirname, '../dist/assets', name))), digest, 'actual_build_asset_binding'); }
-    if (restore) { expected = await readJson(expectedFile); assert.deepEqual(expected.source, sourceIdentity(source)); assert.deepEqual(expected.moduleHashes, receipt.moduleHashes); const prior = path.resolve(root, expected.initialReceipt), relative = path.relative(root, prior); assert(relative && !relative.startsWith('..') && !path.isAbsolute(relative)); passingCheckpoint(expected, await readJson(prior)); budget = validateBudget(await readJson(budgetFile)); budgetWritable = true; }
+    if (restore) { expected = await readJson(expectedFile); assert.deepEqual(expected.source, sourceIdentity(source)); assert.deepEqual(expected.moduleHashes, receipt.moduleHashes); const prior = path.resolve(root, expected.initialReceipt), relative = path.relative(root, prior); assert(relative && !relative.startsWith('..') && !path.isAbsolute(relative)); const initial = await readJson(prior); passingCheckpoint(expected, initial); budget = validateMotionBudget(await readJson(budgetFile)); assert.equal(budget.videos, initial.video ? 1 : 0); assert.equal(budget.videoBytes, initial.video?.byteCount ?? 0); budgetWritable = true; }
     else { await assert.rejects(fs.stat(expectedFile), { code: 'ENOENT' }); await assert.rejects(fs.stat(budgetFile), { code: 'ENOENT' }); budgetWritable = true; }
+    recording = optionalRecording({ requested: record, restore, slot, win, session, localURL, out, budget, start: (ownedWin, ownedSession, ownedURL) => require('./application-recording.cjs').startWindowRecording(ownedWin, ownedSession, ownedURL) }); receipt.recording = recording.state;
     const js = async code => { slot.check(); const result = await bounded(win.webContents.executeJavaScript(code, false), slot.workRemaining(), 'chat_motion_renderer_deadline'); slot.check(); return result; };
     const rpc = async (name, input) => { assertRead(name, input); slot.check(); const result = await bounded(call(name, input), slot.workRemaining(), 'chat_motion_read_deadline'); slot.check(); return result; };
     const wait = (label, check) => { receipt.phase = label; return waitForCondition({ slot, label, check, diagnose: () => js("({status:document.querySelector('.cp-status')?.textContent,chatStatus:document.querySelector('.cp-chat-status')?.textContent,surfaces:[...document.querySelectorAll('[data-surface-id]')].map(n=>n.dataset.surfaceId),pickers:[...document.querySelectorAll('.cp-picker-trigger')].map(n=>({label:n.getAttribute('aria-label'),open:n.getAttribute('aria-expanded')})),errors:window.__aerynth?.snapshot?.().metrics.errors})") }); };
@@ -122,7 +179,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     let id;
     if (restore) { id = expected.resourceId; receipt.canonical = await canonical(id); assert.deepEqual(receipt.canonical, expected.canonical, 'exact_local_chat_draft_message_identity_restart_without_replay'); await openManager(); await click(`.cp-results [data-resource-id=${JSON.stringify(id)}]`); await wait('Same canonical chat selected by actual history row', () => js(`document.querySelector('.cp-manager')?.dataset.resourceId===${JSON.stringify(id)}`)); await verifyRendered(id, receipt.canonical); win.setContentSize(780, 700); await wait('Restored tight actual layout', async () => { const g = await js(geometryScript(id)); try { assertGeometry(g); receipt.restoreGeometry = g; return true; } catch { return false; } }); await capture('03-chat-motion-restart'); }
     else {
-      assert.equal(start.desktop.resources.length, 0, 'fresh_empty_chat_motion_profile_required'); assert.equal(start.core.conversations.length, 0); win.setContentSize(1100, 800); await openManager(); await click('.cp-new-chat>summary'); await fill('input[aria-label="New conversation title"]', FIXTURE.title);
+      assert.equal(start.desktop.resources.length, 0, 'fresh_empty_chat_motion_profile_required'); assert.equal(start.core.conversations.length, 0); win.setContentSize(1100, 800); await recording.begin(); await openManager(); await click('.cp-new-chat>summary'); await fill('input[aria-label="New conversation title"]', FIXTURE.title);
       if (await js("document.querySelector('select[aria-label=\"New conversation provider\"]')?.value!=='local'")) { await click('[data-cp-picker-for="New conversation provider"]'); await click('.cp-new-chat [data-cp-option-value="local"]'); }
       assert.equal(await js("document.querySelector('select[aria-label=\"New conversation provider\"]')?.value"), 'local'); await click('.cp-new-chat [data-cp-control="create-chat"]'); await wait('One actual canonical local conversation', async () => { const d = await desktop(); const r = d.resources.find(r => r.kind === 'conversation' && r.title === FIXTURE.title); if (r) id = r.id; return !!r; }); await wait('Canonical manager chat selected', () => js(`document.querySelector('.cp-manager')?.dataset.resourceId===${JSON.stringify(id)}`));
       for (const [index, content] of [FIXTURE.first, FIXTURE.second].entries()) { await fill(chat(id) + ' textarea', content); await click(chat(id) + ' [data-cp-control="send"]'); await wait('Exact manual user message durable ' + index, async () => { const d = await detail(id); return d.messages.items.length === index + 1 && d.messages.items[index].content === content && d.messages.items[index].role === 'user'; }); }
@@ -147,6 +204,26 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     await proof(); assert.equal(startupErrors.length, 0); assert.equal(receipt.errors.length, 0); slot.check(); passed = true;
   };
   try { await Promise.race([run(), aborted]); } catch (error) { receipt.error = { message: String(error.message).slice(0, 1200), ...(error.diagnostics ? { diagnostics: error.diagnostics } : {}) }; if (admitted && failureCapture && !slot.failure()) try { await failureCapture(); } catch {} }
-  finally { clearTimeout(workTimer); try { if (!owned) { console.log(JSON.stringify({ passed: false, error: receipt.error?.message, cleanup: 'Unowned profile/window: no writes or control' })); return receipt; } try { assert.equal(await bounded(call('close', {}), Math.min(1500, slot?.remaining() ?? 1500), 'chat_motion_close_deadline'), null); receipt.nativeCloseConfirmed = true; } catch (error) { passed = false; receipt.nativeCloseError = String(error.message).slice(0, 1000); } receipt.elapsedMs = performance.now() - moduleStartedMonotonicMs; receipt.slotFailure = slot?.failure() ?? null; receipt.startupErrors = startupErrors.slice(0, 24); receipt.passed = passed && receipt.nativeCloseConfirmed === true && !receipt.slotFailure && !receipt.errors.length && !startupErrors.length; if (admitted) { if (receipt.passed && pendingExpected) await fs.writeFile(expectedFile, encode(pendingExpected), { flag: 'wx' }); if (budgetWritable) await fs.writeFile(budgetFile, encode(validateBudget(budget))); await fs.mkdir(out, { recursive: true }); const file = path.join(out, restore ? 'restore.json' : 'journey.json'); await fs.writeFile(file, encode(receipt), { flag: 'wx' }); if (slot?.failure() || receipt.errors.length || startupErrors.length) { receipt.passed = false; receipt.slotFailure = slot?.failure() ?? null; await fs.writeFile(file, encode(receipt)); } } console.log(JSON.stringify({ passed: receipt.passed, restore, evidence: admitted ? out : null, error: receipt.error?.message, elapsedMs: receipt.elapsedMs })); } catch (error) { receipt.passed = false; console.log(JSON.stringify({ passed: false, error: String(error.message).slice(0, 1000) })); } finally { if (installed) { win.removeListener('blur', blur); win.removeListener('hide', blur); win.removeListener('minimize', blur); win.webContents.removeListener('before-input-event', escape); win.webContents.removeListener('console-message', consoleError); } clearTimeout(hardTimer); if (owned) app.exit(receipt.passed ? 0 : 1); } }
+  finally {
+    clearTimeout(workTimer);
+    try {
+      if (!owned) { console.log(JSON.stringify({ passed: false, error: receipt.error?.message, cleanup: 'Unowned profile/window: no writes or control' })); return receipt; }
+      if (record && !restore) {
+        if (!recording) receipt.recording = { requested: true, status: 'incomplete', errorCode: 'chat_motion_recording_start_incomplete' };
+        try { const video = await recording?.finish(passed && !slot.failure() && !receipt.errors.length && !startupErrors.length); if (video) receipt.video = video; } catch { /* Recording state contains the bounded failure code. */ }
+        if (receipt.recording?.status !== 'complete' || !receipt.video) { passed = false; receipt.recordingError = receipt.recording?.errorCode ?? 'chat_motion_recording_incomplete'; }
+      }
+      try { assert.equal(await bounded(call('close', {}), Math.min(1500, slot?.remaining() ?? 1500), 'chat_motion_close_deadline'), null); receipt.nativeCloseConfirmed = true; } catch (error) { passed = false; receipt.nativeCloseError = String(error.message).slice(0, 1000); }
+      receipt.elapsedMs = performance.now() - moduleStartedMonotonicMs; receipt.slotFailure = slot?.failure() ?? null; receipt.startupErrors = startupErrors.slice(0, 24); receipt.passed = passed && receipt.nativeCloseConfirmed === true && !receipt.slotFailure && !receipt.errors.length && !startupErrors.length;
+      if (admitted) {
+        if (receipt.passed && pendingExpected) await fs.writeFile(expectedFile, encode(pendingExpected), { flag: 'wx' });
+        if (budgetWritable) await fs.writeFile(budgetFile, encode(validateMotionBudget(budget)));
+        await fs.mkdir(out, { recursive: true }); const file = path.join(out, restore ? 'restore.json' : 'journey.json'); await fs.writeFile(file, encode(receipt), { flag: 'wx' });
+        if (slot?.failure() || receipt.errors.length || startupErrors.length) { receipt.passed = false; receipt.slotFailure = slot?.failure() ?? null; await fs.writeFile(file, encode(receipt)); }
+      }
+      console.log(JSON.stringify({ passed: receipt.passed, restore, evidence: admitted ? out : null, error: receipt.error?.message, recording: receipt.recording?.status, recordingError: receipt.recordingError, elapsedMs: receipt.elapsedMs }));
+    } catch (error) { receipt.passed = false; console.log(JSON.stringify({ passed: false, error: String(error.message).slice(0, 1000) })); }
+    finally { if (installed) { win.removeListener('blur', blur); win.removeListener('hide', blur); win.removeListener('minimize', blur); win.webContents.removeListener('before-input-event', escape); win.webContents.removeListener('console-message', consoleError); } clearTimeout(hardTimer); if (owned) app.exit(receipt.passed ? 0 : 1); }
+  }
   return receipt;
 };
