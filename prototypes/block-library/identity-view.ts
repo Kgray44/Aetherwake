@@ -14,6 +14,9 @@ const element = <K extends keyof HTMLElementTagNameMap>(
 const text = (node: Element | null, value: string) => {
   if (node && node.textContent !== value) node.textContent = value;
 };
+const setAccessibleName = (node: HTMLElement, value: string) => {
+  if (node.getAttribute('aria-label') !== value) node.setAttribute('aria-label', value);
+};
 const glyphs: Record<BlockIdentityModel["layout"], string> = {
   chat: "M4 4h16v12H9l-5 4zM8 8h8M8 12h5",
   execution: "M4 5h16v14H4zM7 9l3 3-3 3M12 15h5",
@@ -146,13 +149,21 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
     composition = next;
     if (article.dataset.blockComposition !== next) article.dataset.blockComposition = next;
     if (overview.parentElement !== working) working.append(overview);
-    overview.hidden = next !== 'overview';
-    approach.hidden = next !== 'overview' || observation.effectiveMinimized;
-    restore.hidden = !observation.effectiveMinimized;
-    restore.disabled = restoring || !actions.restore;
-    restore.setAttribute('aria-label', 'Restore ' + (model?.label.toLowerCase() ?? 'block'));
-    restore.title = actions.restore ? 'Restore this card' : 'Restore is unavailable';
-    article.dataset.blockMinimized = String(observation.effectiveMinimized);
+    // Footprint updates can arrive every frame. Only write reflected attributes
+    // when the controls or their semantics actually change.
+    const overviewHidden = next !== 'overview';
+    const approachHidden = overviewHidden || observation.effectiveMinimized;
+    const restoreHidden = !observation.effectiveMinimized;
+    const restoreDisabled = restoring || !actions.restore;
+    const restoreTitle = actions.restore ? 'Restore this card' : 'Restore is unavailable';
+    const minimized = String(observation.effectiveMinimized);
+    if (overview.hidden !== overviewHidden) overview.hidden = overviewHidden;
+    if (approach.hidden !== approachHidden) approach.hidden = approachHidden;
+    if (restore.hidden !== restoreHidden) restore.hidden = restoreHidden;
+    if (restore.disabled !== restoreDisabled) restore.disabled = restoreDisabled;
+    setAccessibleName(restore, 'Restore ' + (model?.label.toLowerCase() ?? 'block'));
+    if (restore.title !== restoreTitle) restore.title = restoreTitle;
+    if (article.dataset.blockMinimized !== minimized) article.dataset.blockMinimized = minimized;
     if (next === 'overview') {
       if (openControl && !heldOpenName) {
         heldOpenName = { previous: openControl.getAttribute('aria-label'), assigned: 'Open ' + model!.label.toLowerCase() + ' in focused view' };
@@ -213,10 +224,11 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
       .finally(() => { if (!disposed) { restoring = false; reconcileComposition(); } });
   };
   function renderOverview(value: BlockIdentityModel) {
-    overview.dataset.layout = value.layout;
-    overview.setAttribute('aria-label', value.label + ' overview');
-    approach.setAttribute('aria-label', 'Approach ' + value.label.toLowerCase());
-    approach.title = 'Approach ' + value.label.toLowerCase();
+    if (overview.dataset.layout !== value.layout) overview.dataset.layout = value.layout;
+    setAccessibleName(overview, value.label + ' overview');
+    const approachName = 'Approach ' + value.label.toLowerCase();
+    setAccessibleName(approach, approachName);
+    if (approach.title !== approachName) approach.title = approachName;
     const content: HTMLElement[] = [], paragraph = (text: string, className = '') => { if (text) content.push(element('p', className, text)); };
     if (value.phase !== 'ready') paragraph(value.empty || value.subtitle);
     else if (value.kind === 'conversation') {
@@ -404,8 +416,8 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
     anchor?.setAttribute("aria-label", "Open " + anchorName);
     anchor?.setAttribute("title", anchorName);
     const open = article.querySelector<HTMLButtonElement>(".unfold");
-    if (open)
-      open.title = "Open " + value.label.toLowerCase();
+    const openTitle = "Open " + value.label.toLowerCase();
+    if (open && open.title !== openTitle) open.title = openTitle;
     const next = JSON.stringify(value);
     if (next === fingerprint) return;
     renderOverview(value);
