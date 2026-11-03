@@ -121,6 +121,49 @@ const request = (authorizeProvider) => ({
     grantId: "forged",
   },
 });
+test("ordinary Vela Send uses the connected ChatGPT plan without opening a second dialog", async () => {
+  const f = fixture();
+  const input = request(true);
+  input.input.resourceIds = [];
+  await velaCommand({
+    ...f,
+    input,
+    offerPlanningByDefault: true,
+    directMessageSend: true,
+    async call(name, data) {
+      if (name === "ordinaryProviderStatus") return { state: "ready", planUsageEnabled: true };
+      assert.notEqual(name, "capabilities");
+      const result = await f.call(name, data);
+      if (name === "velaRequestPreview") {
+        assert.equal(data.providerId, "chatgpt-plan-responses");
+        return { ...result, providerId: data.providerId, resourceIds: [] };
+      }
+      if (name === "velaNativeReview") {
+        const prompt = "Exact intent and workspace labels";
+        return { ...result, providerId: "chatgpt-plan-responses", context: { included: [] }, history: undefined,
+          prompt, promptDigest: createHash("sha256").update(JSON.stringify(prompt)).digest("hex") };
+      }
+      if (name === "authorizeVelaRequest") assert.equal(data.directSend, true);
+      return result;
+    },
+  });
+  assert.equal(f.reviews.length, 0);
+  assert.equal(f.calls.at(-1).input.input.grantId, "private-native-grant");
+});
+
+test("ordinary Vela Send still requires review when the prompt includes attached sources", async () => {
+  const f = fixture(0);
+  await assert.rejects(velaCommand({
+    ...f, input: request(true), directMessageSend: true,
+    async call(name, data) {
+      const result = await f.call(name, data);
+      return name === "velaRequestPreview" ? { ...result, resourceIds: data.resourceIds } : result;
+    },
+  }), /authorization_cancelled/);
+  assert.equal(f.reviews.length, 1);
+  assert.equal(f.calls.at(-1).name, "velaNativeReview");
+});
+
 test("ordinary Vela Send discovers the installed provider and opens the exact native review before planning", async () => {
   const f = fixture(0);
   const probes = [];

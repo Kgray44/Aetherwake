@@ -90,7 +90,6 @@ export function createVelaExperience(options: {
         });
   function clear() {
     options.motion.bodies.delete(phaseKey);
-    options.anchor?.style.removeProperty("--vela-presence-signal");
     for (const entry of entries.values())
       options.motion.bodies.delete(entry.key);
     entries.clear();
@@ -108,8 +107,7 @@ export function createVelaExperience(options: {
       ...neutral,
       x: active || working() ? energy[latest.phase] : 0,
       y: active && latest.context ? 1 : 0,
-      lift: working() ? 1 : 0,
-      h: working() ? 1 : 0,
+      h: latest.phase === "thinking" || latest.phase === "planning" ? 1 : 0,
     };
     if (!options.motion.bodies.has(phaseKey))
       options.motion.add(phaseKey, neutral);
@@ -149,6 +147,9 @@ export function createVelaExperience(options: {
   }
   return {
     size,
+    ribbonThinking() {
+      return options.motion.bodies.has(phaseKey) ? options.motion.pose(phaseKey).h : 0;
+    },
     observe(value: VelaPanelPresentation) {
       latest = {
         ...value,
@@ -174,7 +175,8 @@ export function createVelaExperience(options: {
       } else {
         sizeDirty = false;
         resizeObserver?.disconnect();
-        if (!working() || !options.anchor) clear();
+        if (options.anchor && (working() || this.ribbonThinking() > 0)) reconcile();
+        else clear();
       }
     },
     frame(policy: Policy) {
@@ -196,13 +198,6 @@ export function createVelaExperience(options: {
         for (const entry of entries.values()) options.motion.snap(entry.key);
       }
       const phase = options.motion.pose(phaseKey);
-      if (working() && !snap && !body.transitioning) {
-        options.motion.target(phaseKey, { ...phase, lift: phase.lift < 0.5 ? 1 : 0 }, "Vela activity sweep");
-        options.wake();
-      }
-      const pulse = snap ? 0.5 : phase.lift;
-      options.root.style.setProperty("--vela-pulse", String(pulse));
-      options.anchor?.style.setProperty("--vela-presence-signal", String(phase.h * (0.4 + 0.6 * pulse)));
       if (!active && !working() && !body.transitioning) {
         clear();
         return;

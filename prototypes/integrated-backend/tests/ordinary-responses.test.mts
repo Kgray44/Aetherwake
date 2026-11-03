@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 const { conversationCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/conversation-broker.cjs');
 import type { ConversationSendInput,OrdinaryConnectionPort,StreamEvent } from '../src/contracts.mts';
 import type { ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
+import type { VelaRequest } from '../../vela-core/src/contracts.ts';
 import { RESPONSES_ENDPOINT } from '../../openai-provider/responses.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
 const documentedModel = { id: 'gpt-6.1-sol', label: 'Synthetic catalog Sol' };
@@ -30,6 +31,28 @@ function fixture(){
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}
+
+test('Vela routes a single frozen prompt through the connected ChatGPT plan without invoking Codex', async () => {
+  const f = fixture();
+  try {
+    const intent = 'Give a brief greeting.';
+    const preview = await f.core.command('velaRequestPreview', { intent, resourceIds: [], providerId });
+    const approval = { previewId: preview.id, signature: preview.signature };
+    const review = await f.core.command('velaNativeReview', approval);
+    const { grantId } = await f.core.command('authorizeVelaRequest', { ...approval, reviewDigest: review.reviewDigest, directSend: true });
+    f.responses.push(() => complete('resp_synthetic_vela', JSON.stringify({ schemaVersion: 2, kind: 'answer', content: 'Hello.' })));
+    const request = await f.core.command('vela', { name: 'request', input: { intent, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId } }) as VelaRequest;
+    assert.equal(f.requests.length, 1);
+    assert(JSON.stringify(f.requests[0].input).includes(intent));
+    assert.match(f.requests[0].instructions, /contribute to Vela/);
+    assert.equal(f.codexCalls, 0);
+    assert.equal(request.providerId, providerId);
+    assert.equal(request.state, 'failed', 'simulated output must not be attributed to a real provider');
+    const execution = Object.values(f.owner.state.executions as Record<string, {state: string; responseId?: string}>)
+      .find(item => item.responseId === 'resp_synthetic_vela');
+    assert.equal(execution?.state, 'provider_completed');
+  } finally { await f.close(); }
+});
 
 test('ordinary Send answers direct clock questions locally and keeps their transcript out of later provider egress', async () => {
   const f = fixture();

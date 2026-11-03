@@ -85,7 +85,7 @@ export function parseCodexPlanningOutput(output: string, contribution: ProviderC
   try { value = JSON.parse(json); } catch { throw new VelaError('planning_output_not_json'); }
   check(isRecord(value), 'invalid_provider_proposal');
   // Provider-written identity/IDs are untrusted and discarded. Every returned identifier below is canonical evidence.
-  return validateProviderResult({ ...value, contribution }, 'codex-app-server');
+  return validateProviderResult({ ...value, contribution }, contribution.providerId);
 }
 
 /** Lossless schema references and explicit policy defaults leave room for actual source data. */
@@ -130,10 +130,13 @@ function planningCapabilityCatalog(capabilities:PlanningInput['capabilities']) {
   };
 }
 
-export function buildCodexPlanningPrompt(input: SemanticPlanningInput,discovery?:{projection:CapabilityCatalogProjection;declaration:CapabilityDiscoveryDeclaration}): string {
+export function buildCodexPlanningPrompt(input: SemanticPlanningInput,discovery?:{projection:CapabilityCatalogProjection;declaration:CapabilityDiscoveryDeclaration}, providerId = 'codex-app-server'): string {
   check(text(input.intent, 16000), 'invalid_planning_request');
   if(discovery){const catalog=createCapabilityCatalog(input.capabilities);validateCatalogDeclaration(catalog,discovery.declaration);check(planningDigest(catalog.projection)===planningDigest(discovery.projection),'stale_capability_catalog');}
-  const prompt = `You remain Codex. Contribute to Vela, Aerynth's assistant, under your native instructions, configuration and controls.
+  const identity = providerId === 'chatgpt-plan-responses'
+    ? 'Contribute to Vela, Aerynth’s assistant, through the connected ChatGPT plan.'
+    : 'You remain Codex. Contribute to Vela, Aerynth\'s assistant, under your native instructions, configuration and controls.';
+  const prompt = `${identity}
 
 ${discovery?'Only '+CAPABILITY_SCHEMA_TOOL+' is permitted. Fetch each proposed action schema.':'Do not invoke tools.'} Aerynth validates and dispatches proposals. Never change the app, run commands, inspect files or contact services.
 

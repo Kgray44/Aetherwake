@@ -51,6 +51,7 @@ export interface ConversationSendPreview {
 }
 export interface OrdinaryResponsesPreview {
  executionId:string;configurationId:string;connectionVersion:number;model:string;
+ purpose?: 'vela-planning';
  clock: { utc: string; local: string };
  reasoningEffort?: TurnInput['reasoningEffort'];
  webSearch?: true;
@@ -181,10 +182,10 @@ export interface CommandMap {
   githubTimeline: {input:GitHubTimelineCommand;output:{url:string}|{repositories:string[]}};
   taskObjectives: {input:TaskObjectiveRequest|{name:'targets';input:TaskTargetQuery};output:{result:TaskObjectiveResponse|TaskTargetPage;desktop?:DesktopSnapshot}};
   vela: { input: VelaOperation; output: unknown };
-  velaRequestPreview: { input: {intent:string;resourceIds:string[];activeCard?:VelaActiveCard}; output: VelaRequestPreview };
+  velaRequestPreview: { input: {intent:string;resourceIds:string[];activeCard?:VelaActiveCard;providerId?:string}; output: VelaRequestPreview };
   velaNativeReview: {input:{previewId:string;signature:string};output:VelaNativeReview};
   /** TRUSTED NATIVE HOST ONLY. Renderer/tool allow-lists MUST exclude this authorization command. */
-  authorizeVelaRequest: { input: {previewId:string;signature:string;reviewDigest?:string}; output: {grantId:string;expiresAt:string} };
+  authorizeVelaRequest: { input: {previewId:string;signature:string;reviewDigest?:string;directSend?:true}; output: {grantId:string;expiresAt:string} };
   /** TRUSTED NATIVE HOST ONLY. Separate approval of the exact delegated provider step. */
   authorizeVelaDelegation: { input: {planId:string;stepId:string;fingerprint:string}; output: {grantId:string;expiresAt:string} };
   conversation: { input: ConversationProductRequest; output: ConversationProductOutput };

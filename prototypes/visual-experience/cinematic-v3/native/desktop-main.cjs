@@ -535,6 +535,7 @@ app.whenReady().then(async () => {
           input,
           observeNativeRequest: observeVelaRequest,
           offerPlanningByDefault: !verify,
+          directMessageSend: !verify,
         });
       } else if (command === "githubTimeline") {
         if (input?.name === "openCommit") {

@@ -2325,6 +2325,7 @@ export function installApplication(hooks: Hooks) {
         onPresentation: (value) => velaExperience.observe(value),
         onManifestation: (value) => velaManifestation.observe(value),
         onConnectProvider: () => host.command!("capabilities", {}),
+        onOpenConnections: () => { surfaces.close("vela"); connections(); },
         listTimelineRepositories: async () => {
           const { repositories } = await host.command!("githubTimeline", { name: "sources", input: {} }) as { repositories: string[] };
           return repositories;
@@ -4897,6 +4898,7 @@ export function installApplication(hooks: Hooks) {
     }
   }
   return {
+    ribbonThinking: velaExperience.ribbonThinking,
     frame(now: number, policy: Policy) {
       paintStreamRefresh();
       if (

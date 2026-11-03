@@ -497,7 +497,7 @@ export class VelaService {
       timing: { classificationMs: classified - started, capabilityMs: committing - classified, persistenceMs: ended - committing, totalMs: ended - started } };
     return { matched: true, request: value.request, result };
   }
-  async request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean }, frozen?: PrivateFrozenProviderContext): Promise<VelaRequest> {
+  async request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean }, frozen?: PrivateFrozenProviderContext, planner = this.opts.planner): Promise<VelaRequest> {
     check(text(input.intent, 16000) && typeof input.authorizeProvider === 'boolean', 'invalid_request');
     const scope = this.scope(), navigation = this.contextIdentity();
     if (frozen) check(typeof frozen.validate === 'function' && typeof frozen.onAcceptedAppend === 'function', 'private_provider_context_required');
@@ -516,7 +516,7 @@ export class VelaService {
       const conversationId=this.conversationId(),baseRevision=frozen?this.opts.host.conversationRevision?.(conversationId):undefined;
       if(frozen)check(Number.isSafeInteger(baseRevision)&&Number(baseRevision)>=1&&Number(baseRevision)<Number.MAX_SAFE_INTEGER,'canonical_history_revision_required');
       const r: VelaRequest = { id: randomUUID(), conversationId, intent: input.intent,
-        state: 'planning', createdAt: this.now(), updatedAt: this.now(), providerId: this.opts.planner?.providerId ?? null,
+        state: 'planning', createdAt: this.now(), updatedAt: this.now(), providerId: planner?.providerId ?? null,
         context: storedContext, origin: this.historyOrigin(scope), inputContentDigest: historyDigest(input.intent),
         ...(reviewed?.historyFence ? { history: { schemaVersion: 1, fenceDigest: reviewed.historyFence.digest, historyDigest: reviewed.historyFence.historyDigest, messages: reviewed.historyFence.messages } } : {}) };
       this.data.requests.push(r); const message = this.append(r.intent, r.id, 'user');
@@ -538,7 +538,7 @@ export class VelaService {
     let providerOutput: unknown, providerOutputReceived = false;
     let localReadPlanId: string | undefined;
     try {
-      const planner = this.opts.planner, status = planner?.availability();
+      const status = planner?.availability();
       if (!planner || !status?.available || status.busy || input.authorizeProvider !== true) {
         this.atomic(() => {
           request.state = 'provider-unavailable'; request.errorCode = !planner || !status?.available ? 'provider_unavailable' : status.busy ? 'provider_busy' : 'provider_authorization_required';

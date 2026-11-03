@@ -10,6 +10,7 @@ export interface RibbonPose {
   time: number;
   ambient: number;
   expression: { x: number; y: number; z: number; w: number };
+  thinking?: number;
 }
 interface Samples {
   along: number[];
@@ -56,7 +57,8 @@ export class PresenceProjection {
       };
       this.caches.set(attribute, s);
     }
-    const { time, ambient: gain, expression: e } = pose;
+    const { time, ambient: gain, expression: e, thinking = 0 } = pose;
+    const morph = (seed: number, coil: number) => seed + (coil - seed) * thinking;
     const breathe = 1 + Math.sin(time * 0.56) * 0.03 * gain;
     const ex = (1 + e.x * 0.065) * (1 + e.w * 0.025) * breathe;
     const ey = (1 + e.y * 0.035) * (1 + e.w * 0.025) * breathe;
@@ -64,19 +66,22 @@ export class PresenceProjection {
     for (let i = 0; i < s.along.length; i++) {
       const t = s.along[i],
         f = i * 13;
-      const cx = 1.13 * Math.sin(2 * t) * (0.88 + 0.12 * Math.cos(t)) * ex;
-      const cy = (1.18 * Math.cos(t) + 0.12 * Math.sin(3 * t)) * ey;
+      const sin = Math.sin(t), cos = Math.cos(t);
+      const sinDouble = Math.sin(2 * t), cosDouble = Math.cos(2 * t);
+      const radius = 0.93 + 0.23 * cos, radiusDerivative = -0.23 * sin;
+      const cx = morph(1.13 * sinDouble * (0.88 + 0.12 * cos), radius * sinDouble) * ex;
+      const cy = morph(1.18 * cos + 0.12 * Math.sin(3 * t), radius * cosDouble) * ey;
       const cz =
-        0.5 * Math.sin(t) * ez +
+        morph(0.5 * sin, 0.52 * sin) * ez +
         0.012 * Math.sin(3 * t) +
         0.065 * Math.sin(3 * t + time * 0.62) * gain;
       let tx =
-        (2.26 * Math.cos(2 * t) * (0.88 + 0.12 * Math.cos(t)) -
-          0.1356 * Math.sin(2 * t) * Math.sin(t)) *
-        ex;
-      let ty = (-1.18 * Math.sin(t) + 0.36 * Math.cos(3 * t)) * ey;
+        morph(2.26 * cosDouble * (0.88 + 0.12 * cos) - 0.1356 * sinDouble * sin,
+          radiusDerivative * sinDouble + 2 * radius * cosDouble) * ex;
+      let ty = morph(-1.18 * sin + 0.36 * Math.cos(3 * t),
+        radiusDerivative * cosDouble - 2 * radius * sinDouble) * ey;
       let tz =
-        0.5 * Math.cos(t) * ez +
+        morph(0.5 * cos, 0.52 * cos) * ez +
         0.036 * Math.cos(3 * t) +
         0.195 * Math.cos(3 * t + time * 0.62) * gain;
       const length = Math.hypot(tx, ty, tz);

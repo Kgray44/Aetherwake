@@ -15,6 +15,7 @@ export interface VelaPanelOptions {
   onOpenSubject?: (subject: { id: string; kind: ResourceRef['kind'] }) => void;
   /** Explicit user action only; the host checks its actual planning connection. */
   onConnectProvider?: () => Promise<unknown>;
+  onOpenConnections?: () => void;
   /** Observational only. The first hydrated value is a baseline, not a history-arrival event. */
   onPresentation?: (value: VelaPanelPresentation) => void;
   /** Real stable nodes for the host's existing MotionCoordinator/geometry; observational only, null retires them. */
@@ -25,7 +26,7 @@ export interface VelaPanelManifestation {
   projection: Readonly<VelaManifestationState>; view: 'current' | 'history'; baseline: boolean;
   elements: { shell: HTMLElement; reading: HTMLElement; manifestation: HTMLElement; composer: HTMLFormElement };
 }
-const providerName = (id: string | null | undefined) => id === 'codex-app-server' ? 'Codex' : id || 'Provider';
+const providerName = (id: string | null | undefined) => id === 'codex-app-server' ? 'Codex' : id === 'chatgpt-plan-responses' ? 'ChatGPT plan' : id || 'Provider';
 let panelSequence = 0;
 /** Content for the existing host-anchored surface. Mount/open never starts inference or applies actions. */
 export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: VelaPanelOptions = {}) {
@@ -151,11 +152,26 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   allowProvider.type = 'checkbox'; const providerConsent = label('Use the planning provider for this request', allowProvider); providerConsent.className += ' vela-core-consent';
   connection.body.prepend(providerConsent); const providerChoice = icon('Remove planning provider from next request', '×', 'close', () => { allowProvider.checked = false; chosenProviderId = null; renderProviderChoice(); intent.focus(); }); providerChoice.className += ' vela-core-provider-choice'; providerChoice.hidden = true;
   const providerChoiceName = el('span', 'vela-core-provider-choice-name'); providerChoice.prepend(providerChoiceName);
+  const providerRoutes = el('div', 'vela-core-provider-routes');
+  providerRoutes.hidden = true;
+  for (const [id, title] of [['', 'Automatic'], ['chatgpt-plan-responses', 'ChatGPT plan'], ['codex-app-server', 'Codex']]) {
+    const route = button(title, () => {
+      chosenProviderId = id || null;
+      renderProviderChoice();
+      closeContext(false);
+      intent.focus();
+    });
+    route.dataset.providerRoute = id;
+    route.dataset.aerynthMotionControl = 'true';
+    providerRoutes.append(route);
+  }
+  if (options.onOpenConnections) providerRoutes.append(button('Manage connections', options.onOpenConnections));
+  connection.body.prepend(providerRoutes);
   allowProvider.addEventListener('change', () => { chosenProviderId = allowProvider.checked ? current?.planner.providerId ?? null : null; renderProviderChoice(); });
   const selection = el('div', 'vela-core-selection'); selection.setAttribute('aria-label', 'Selected sources'); selection.hidden = true;
   const send = markIcon(el('button', 'vela-core-button vela-core-primary'), 'Send to Vela', '↑', 'send'); send.type = 'submit'; send.disabled = true;
   const stop = icon('Stop', '■', 'stop', async () => { const state = await client.state(), pending = state.requests.findLast(request => request.state === 'planning' || state.plans.some(plan => plan.requestId === request.id && plan.state === 'applying')); if (pending) { await client.cancel(pending.id); await refresh(); } else { status.textContent = 'No request is running.'; } }); stop.hidden = true;
-  const sourcesControl = icon('Add sources', '+', 'sources', () => reveal('sources', search)), toolsControl = icon('Local tools', '⋯', 'tools', () => reveal('tools', nativeTitle)), preferencesControl = icon('Vela preferences', '⚙', 'preferences', () => reveal('preferences')), providerControl = icon('Provider', '◇', 'provider', () => reveal('provider', allowProvider)), attentionControl = icon('Attention', '·', 'attention', () => reveal('attention'));
+  const sourcesControl = icon('Add sources', '+', 'sources', () => reveal('sources', search)), toolsControl = icon('Local tools', '⋯', 'tools', () => reveal('tools', nativeTitle)), preferencesControl = icon('Vela preferences', '⚙', 'preferences', () => reveal('preferences')), providerControl = icon('Provider', '◇', 'provider', () => reveal('provider', providerRoutes.hidden ? allowProvider : providerRoutes.querySelector('button') ?? undefined)), attentionControl = icon('Attention', '·', 'attention', () => reveal('attention'));
   const historyControl = icon('History', '↶', 'history', () => setView(view() === 'history' ? 'current' : 'history')); historyControl.setAttribute('aria-expanded', 'false'); historyControl.setAttribute('aria-controls', history.id);
   const contextPanels = new Map([
     ['sources', { panel: sourcePanel, trigger: sourcesControl }], ['tools', { panel: native, trigger: toolsControl }], ['preferences', { panel: preferencesPanel, trigger: preferencesControl }], ['provider', { panel: connection, trigger: providerControl }], ['attention', { panel: attentionPanel, trigger: attentionControl }],
@@ -165,12 +181,12 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   form.append(intent, selection, providerChoice, composeActions);
   intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
-  form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return; const submitted = { intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: allowProvider.checked && chosenProviderId === current?.planner.providerId }, revision = draftRevision, submittedView = ++viewRevision; transientView = 'current'; allowProvider.checked = false; chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
+  form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return; const connected = !!current?.planningProviders, submitted = { intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: connected || allowProvider.checked && chosenProviderId === current?.planner.providerId, ...(connected && chosenProviderId ? { providerId: chosenProviderId } : {}) }, revision = draftRevision, submittedView = ++viewRevision; transientView = 'current'; allowProvider.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Thinking…'; present();
       try {
         const recorded = await client.request(submitted);
         if (disposed) return;
-        if (recorded.state !== 'provider-unavailable' && draftRevision === revision && intent.value === submitted.intent) intent.value = '';
+        if (!['provider-unavailable','failed','invalid-plan','unknown'].includes(recorded.state) && draftRevision === revision && intent.value === submitted.intent) intent.value = '';
         renderStatus({ requests: [recorded], plans: [], receipts: [] });
         await settleSubmittedView(submittedView);
       }
@@ -187,7 +203,23 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     if (selected.size) { selection.append(el('span', 'vela-core-meta', selected.size + (selected.size === 1 ? ' source' : ' sources'))); for (const ref of selected.values()) { const chip = button(ref.title + ' ×', () => { selected.delete(ref.id); const control = sourceControls.get(ref.id); if (control) control.checked = false; renderSelection(); intent.focus(); }); chip.className = 'vela-core-chip'; chip.setAttribute('aria-label', 'Remove source ' + ref.title); selection.append(chip); } }
     updateWorkspaceAvailability();
   }
-  function renderProviderChoice() { const chosen = allowProvider.checked && chosenProviderId && chosenProviderId === current?.planner.providerId; providerChoice.hidden = !chosen; providerChoiceName.textContent = chosen ? providerName(chosenProviderId) : ''; providerChoice.setAttribute('aria-label', 'Remove ' + providerName(chosenProviderId) + ' from next request'); providerControl.dataset.selected = String(!!chosen); }
+  function renderProviderChoice() {
+    const connected = current?.planningProviders;
+    if (connected) {
+      const selected = connected.find(route => route.providerId === chosenProviderId);
+      provider.textContent = selected ? providerName(selected.providerId) + (selected.available ? ' · connected' : ' · connection required') : 'Automatic';
+    }
+    const chosen = chosenProviderId && (connected || allowProvider.checked && chosenProviderId === current?.planner.providerId);
+    providerChoice.hidden = !chosen;
+    providerChoiceName.textContent = chosen ? providerName(chosenProviderId) : '';
+    providerChoice.setAttribute('aria-label', connected ? 'Use automatic provider selection' : 'Remove planning provider from next request');
+    providerControl.dataset.selected = String(!!chosen);
+    for (const route of providerRoutes.querySelectorAll<HTMLButtonElement>('[data-provider-route]')) {
+      const id = route.dataset.providerRoute;
+      route.setAttribute('aria-pressed', String(id === (chosenProviderId ?? '')));
+      route.title = connected?.find(item => item.providerId === id)?.available === false ? 'Connection required' : '';
+    }
+  }
   function presentation(): VelaPresentationState { return current?.presentation ?? { schemaVersion: 1, version: 1, view: 'current', selectedRequestId: null, dismissedRequestIds: [], pinnedRequestIds: [] }; }
   function view() { return transientView ?? presentation().view; }
   function toggle(ids: readonly string[], id: string | null) { return id === null ? [...ids] : ids.includes(id) ? ids.filter(value => value !== id) : [...ids, id]; }
@@ -224,7 +256,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     manifestationKicker.textContent = projection.kind === 'insight' && message?.source === 'provider' ? providerName(message.providerId) + ' · contribution' : 'Vela';
     if (signature !== responseSignature) { responseSignature = signature; manifestationBody.replaceChildren(); if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content)); }
     manifestationBody.hidden = projection.kind === 'action' || !content;
-    const details = JSON.stringify({ requestId: selectedRequest?.id, local: selectedRequest?.local, response: selectedRequest?.response, provider: message?.providerContribution }, null, 2);
+    const details = JSON.stringify({ requestId: selectedRequest?.id, issue: selectedRequest?.errorCode, local: selectedRequest?.local, response: selectedRequest?.response, provider: message?.providerContribution ?? selectedRequest?.providerId }, null, 2);
     if (manifestationDetails.body.firstElementChild?.textContent !== details) manifestationDetails.body.replaceChildren(el('pre', undefined, details)); manifestationDetails.node.hidden = projection.kind === 'none' || projection.kind === 'action';
     const sources = selectedRequest?.context.included ?? [], sourceSignature = JSON.stringify(sources.map(ref => [ref.id, ref.kind, ref.version, ref.title]));
     if (manifestationSources.dataset.signature !== sourceSignature) { manifestationSources.dataset.signature = sourceSignature; manifestationSources.replaceChildren(); for (const ref of sources) manifestationSources.append(options.onOpenSubject ? button(ref.title, () => options.onOpenSubject?.({ id: ref.id, kind: ref.kind })) : el('span', undefined, ref.title)); } manifestationSources.hidden = !manifestationSources.children.length;
@@ -280,7 +312,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       const code = error instanceof Error ? error.message : String(error);
       const messages: Record<string, string> = {
         vela_planner_unavailable: 'Vela couldn’t reach the AI. Your draft is still here.',
-        vela_planner_sign_in_required: 'Connect Codex to use Vela’s AI. Your draft is still here.',
+        vela_planner_sign_in_required: 'Connect Codex or choose ChatGPT plan. Your draft is still here.',
+        vela_chatgpt_sign_in_required: 'Connect your ChatGPT plan in Connections. Your draft is still here.',
         vela_planner_busy: 'The AI is busy. Your draft is ready to send when it frees up.',
         authorization_cancelled: 'Your request wasn’t shared. Your draft is still here.',
       };
@@ -417,9 +450,11 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function render(state: VelaState) {
     if (disposed) return; current = state;
     provider.textContent = state.planner.available ? providerName(state.planner.providerId) + (state.planner.busy ? ' · busy' : ' · available') : 'Provider unavailable';
-    providerHint.textContent = state.planner.available ? 'Context sharing needs approval.' : 'Provider unavailable.';
+    providerRoutes.hidden = !state.planningProviders;
+    providerConsent.hidden = !!state.planningProviders;
+    providerHint.textContent = state.planningProviders ? 'Automatic prefers your connected ChatGPT plan, then Codex. Send shares current workspace labels. Attached sources are reviewed separately.' : state.planner.available ? 'Context sharing needs approval.' : 'Provider unavailable.';
     providerConsent.firstElementChild!.textContent = 'Use ' + providerName(state.planner.providerId) + ' for this request';
-    allowProvider.disabled = !state.planner.available || state.planner.busy; if (chosenProviderId !== state.planner.providerId) { allowProvider.checked = false; chosenProviderId = null; } renderProviderChoice();
+    allowProvider.disabled = !state.planner.available || state.planner.busy; if (!state.planningProviders && chosenProviderId !== state.planner.providerId) { allowProvider.checked = false; chosenProviderId = null; } renderProviderChoice();
     const chosen = projectChosen ? nativeProject.value : state.applicationContext?.currentProjectId ?? ''; nativeProject.replaceChildren(); const global = el('option', undefined, 'No project'); global.value = ''; nativeProject.append(global);
     for (const ref of state.applicationContext?.references.filter(ref => ref.kind === 'project') ?? []) { const option = el('option', undefined, ref.title); option.value = ref.id; nativeProject.append(option); }
     if (chosen && !Array.from(nativeProject.options).some(option => option.value === chosen)) { const unavailable = el('option', undefined, 'Previously selected project · unavailable'); unavailable.value = chosen; unavailable.disabled = true; nativeProject.append(unavailable); } nativeProject.value = chosen; updateWorkspaceAvailability();

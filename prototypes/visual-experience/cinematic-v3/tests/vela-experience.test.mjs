@@ -38,28 +38,25 @@ function fixture(phaseOnly = false, anchor) {
   return { motion, root, properties, sizes, experience };
 }
 
-test("a submitted request keeps its presence signal after closing and settles when the request ends", () => {
-  const style = new Map();
-  const { motion, experience } = fixture(true, {
-    style: { setProperty: (key, value) => style.set(key, value), removeProperty: (key) => style.delete(key) },
-  });
+test("a submitted request keeps the ribbon morphing after closing and settles when the request ends", () => {
+  const { motion, experience } = fixture(true, {});
   experience.setActive(true);
   experience.observe(observation({ phase: "thinking" }));
   experience.setActive(false);
   const frame = (overrides = {}) => {
     motion.step(0.12);
     experience.frame({ ...policy, ...overrides });
-    return Number(style.get("--vela-presence-signal"));
+    return experience.ribbonThinking();
   };
   const first = frame();
   const samples = Array.from({ length: 16 }, () => frame());
-  assert(first > 0);
-  assert(Math.max(...samples) - Math.min(...samples) > 0.4);
+  assert(first > 0 && first < 1);
+  assert.equal(samples.at(-1), 1);
   const reduced = frame({ reduced: true });
   assert.equal(frame({ reduced: true }), reduced);
   experience.observe(observation());
   for (let i = 0; i < 12; i++) frame();
-  assert.equal(style.size, 0);
+  assert.equal(experience.ribbonThinking(), 0);
   assert.equal(motion.bodies.size, 0);
 });
 

@@ -1571,6 +1571,7 @@ function tick(now: number) {
           interaction: scene.interaction,
           vela,
           study,
+          velaThinking: application?.ribbonThinking(),
           sceneWeights: sceneWeights(motion),
           architectureConcept,
           celestialStudy,

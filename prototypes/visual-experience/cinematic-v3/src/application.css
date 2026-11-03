@@ -661,16 +661,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.application-ready #vela .vela-label::after {
-  content: "";
-  position: absolute;
-  inset: auto 18% 0;
-  height: 2px;
-  pointer-events: none;
-  background: linear-gradient(90deg, transparent, #efe0ff, transparent);
-  box-shadow: 0 0 14px 2px #c29bfd;
-  opacity: var(--vela-presence-signal, 0);
-}
 .application-ready.constellation-overview .study-caption {
   visibility: hidden;
 }

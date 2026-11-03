@@ -281,6 +281,7 @@ export interface VelaState {
   contract: typeof VELA_CONTRACT; identity: { id: 'system:vela'; name: 'Vela'; role: 'application-assistant' };
   conversation: CanonicalConversation | null;
   planner: { providerId: string | null; available: boolean; busy: boolean; reason?: string };
+  planningProviders?: { providerId: string; available: boolean }[];
   capabilities: CapabilityDescriptor[]; requests: VelaRequest[]; plans: VelaPlan[];
   receipts: ActionReceipt[]; preferences: AttentionPreferences; attention: AttentionItem[];
   lastPresenceAt: string | null; coverage: 'authorized-app-events-only';
@@ -337,7 +338,7 @@ export interface VelaClient {
   state(): Promise<VelaState>;
   open(): Promise<VelaState>;
   search(query: string): Promise<ResourceRef[]>;
-  request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean }): Promise<VelaRequest>;
+  request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean; providerId?: string }): Promise<VelaRequest>;
   presentation?(input: { expectedVersion: number; patch: VelaPresentationPatch }): Promise<VelaPresentationState>;
   native(input: { intent: string; action: VelaNativeAction }): Promise<VelaPlan>;
   review(input: { planId: string; fingerprint: string; decision: 'approve' | 'reject' }): Promise<VelaPlan>;

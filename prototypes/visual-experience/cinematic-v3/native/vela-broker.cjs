@@ -65,6 +65,7 @@ exports.velaCommand = async ({
   input,
   reviewProvider = showVelaReview,
   offerPlanningByDefault = false,
+  directMessageSend = false,
   observeNativeRequest,
 }) => {
   const observe = (event) => {
@@ -105,19 +106,31 @@ exports.velaCommand = async ({
       !value ||
       typeof value.intent !== "string" ||
       !Array.isArray(value.resourceIds) ||
-      typeof value.authorizeProvider !== "boolean"
+      typeof value.authorizeProvider !== "boolean" ||
+      (value.providerId !== undefined && !["codex-app-server", "chatgpt-plan-responses"].includes(value.providerId))
     )
       throw Error("invalid_vela_request");
-    // A checkbox expresses intent to review egress. It cannot carry authorization.
+    // Renderer intent carries no grant. The host binds the exact prompt below.
     const request = {
       intent: value.intent,
       resourceIds: value.resourceIds,
       authorizeProvider: value.authorizeProvider,
     };
+    let providerId = value.providerId;
     if (offerPlanningByDefault) {
-      // Launching App Server to observe its installed sign-in is not a model
-      // turn. The exact prompt still requires the trusted review below.
+      // Observing a connection does not start a model turn.
       await stage("connection", async () => {
+        if (directMessageSend && providerId === undefined) {
+          const status = await call("ordinaryProviderStatus", {}).catch(() => null);
+          if (status?.state === "ready" && status.planUsageEnabled)
+            providerId = "chatgpt-plan-responses";
+        }
+        if (providerId === "chatgpt-plan-responses") {
+          const status = await call("ordinaryProviderStatus", {});
+          if (status?.state !== "ready" || !status.planUsageEnabled)
+            throw Error("vela_chatgpt_sign_in_required");
+          return;
+        }
         const status = await call("capabilities", {}).catch((error) => {
           throw Error(error?.message === "execution_busy" ? "vela_planner_busy" : "vela_planner_unavailable");
         });
@@ -138,6 +151,7 @@ exports.velaCommand = async ({
       call("velaRequestPreview", {
         intent: request.intent,
         resourceIds: request.resourceIds,
+        ...(providerId === undefined ? {} : { providerId }),
         ...(value.activeCard === undefined ? {} : { activeCard: value.activeCard }),
       }),
     );
@@ -152,7 +166,9 @@ exports.velaCommand = async ({
     );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    const approved = await reviewProvider({
+    const direct = directMessageSend && preview.resourceIds?.length === 0 &&
+      !review.context.included.length && !review.history?.messages.length;
+    const approved = direct || await reviewProvider({
       parent: win,
       review,
       intent: preview.intent,
@@ -166,6 +182,7 @@ exports.velaCommand = async ({
         previewId: preview.id,
         signature: preview.signature,
         reviewDigest: review.reviewDigest,
+        ...(direct ? { directSend: true } : {}),
       }),
     );
     if (!isReviewOwnerAlive(win))

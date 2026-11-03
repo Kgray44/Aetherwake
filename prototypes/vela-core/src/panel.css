@@ -836,18 +836,13 @@
 .vela-core-status[data-request-state="submitting"],
 .vela-core-status[data-request-state="planning"] {
   color: #efe2ff;
-  text-shadow: 0 0 calc(4px + 10px * var(--vela-pulse, 0)) #be91f8;
 }
 
 .vela-core[data-phase="receiving"] .vela-core-compose {
   border-color: #dcc2f160;
 }
-.vela-core[data-phase="thinking"] .vela-core-compose::after,
-.vela-core[data-phase="planning"] .vela-core-compose::after,
-.vela-core[data-phase="applying"] .vela-core-compose::after {
-  height: 2px;
-  background: radial-gradient(ellipse at calc(20% + 60% * var(--vela-pulse, 0.5)) center, #f3ddff, #b387f59c 18%, transparent 58%);
-}
+.vela-core-provider-routes { display: flex; flex-wrap: wrap; gap: 6px; }
+.vela-core-provider-routes[hidden] { display: none; }
 .vela-core[data-phase="review"] .vela-core-plan {
   border-left-color: #e2c4ff99;
 }

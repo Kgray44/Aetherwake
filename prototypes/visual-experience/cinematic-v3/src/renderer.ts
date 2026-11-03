@@ -82,6 +82,7 @@ export interface EnvironmentFrame {
   /** Explicit environmental salience, e.g. dragging=1. Plain selection is local. */
   interaction?: number;
   vela: VelaState;
+  velaThinking?: number;
   study: Study;
   sceneWeights?: SceneWeights;
   architectureConcept?: ArchitectureConcept;
@@ -141,15 +142,18 @@ interface FolioVisual {
 }
 
 const ribbonVertex = /* glsl */ `
-  uniform float uTime, uEnergy, uAmbient;
+  uniform float uTime, uEnergy, uAmbient, uThinking;
   uniform vec4 uExpression;
   varying vec3 vNormal, vView, vTangent;
   varying float vAcross, vAlong;
   vec3 surface(float t, float section) {
     // Ambient expression has its own gain; idle semantic energy never gates it.
     float ambient = sin(uTime * .56);
+    float r = .93 + .23 * cos(t);
+    float dr = -.23 * sin(t);
     // One continuous asymmetrical double-loop. Its central crossing is separated in Z.
     vec3 center = vec3(1.13 * sin(2. * t) * (.88 + .12 * cos(t)), 1.18 * cos(t) + .12 * sin(3. * t), .5 * sin(t));
+    center = mix(center, vec3(r * sin(2. * t), r * cos(2. * t), .52 * sin(t)), uThinking);
     center *= 1. + ambient * .03 * uAmbient;
     center.x *= 1. + uExpression.x * .065;
     center.y *= 1. + uExpression.y * .035;
@@ -157,6 +161,8 @@ const ribbonVertex = /* glsl */ `
     // Differentiate the deformed centerline, rather than the undeformed seed.
     // Its transported frame therefore stays tangent during breathing and expression.
     vec3 derivative = vec3(2.26 * cos(2. * t) * (.88 + .12 * cos(t)) - .1356 * sin(2. * t) * sin(t), -1.18 * sin(t) + .36 * cos(3. * t), .5 * cos(t));
+    derivative = mix(derivative, vec3(dr * sin(2. * t) + 2. * r * cos(2. * t),
+      dr * cos(2. * t) - 2. * r * sin(2. * t), .52 * cos(t)), uThinking);
     derivative *= 1. + ambient * .03 * uAmbient;
     derivative.x *= 1. + uExpression.x * .065;
     derivative.y *= 1. + uExpression.y * .035;
@@ -851,6 +857,7 @@ export class Environment {
           uEnergy: { value: 0.3 },
           uAmbient: { value: 1 },
           uExpression: { value: this.expression },
+          uThinking: { value: 0 },
           uSceneLight: { value: this.ribbonLightDirection },
           uTint: { value: new THREE.Color(0x7067dc) },
           uUnavailable: { value: 0 },
@@ -1655,6 +1662,7 @@ export class Environment {
       maskHeight: height,
       maskBytes: pixels.byteLength,
       shaderPhase: this.ribbons[0].material.uniforms.uTime.value as number,
+      thinkingMorph: this.ribbons[0].material.uniforms.uThinking.value as number,
       ambientGain: this.ribbons[0].material.uniforms.uAmbient.value as number,
       meaning:
         "Independent raster mask from current production GPU vertex shader, active LOD, uniforms, world matrix and camera; CPU bounds and DOM are not used to generate pixels.",
@@ -1783,11 +1791,13 @@ export class Environment {
       frame.reduced || frame.vela === "unavailable"
         ? 0
         : THREE.MathUtils.clamp(frame.ambientStrength ?? 1, 0, 1.5);
+    const thinking = THREE.MathUtils.clamp(frame.velaThinking ?? 0, 0, 1);
     for (let i = 0; i < this.ribbons.length; i++) {
       const ribbon = this.ribbons[i];
       ribbon.material.uniforms.uTime.value = presenceTime;
       ribbon.material.uniforms.uEnergy.value = energy;
       ribbon.material.uniforms.uAmbient.value = ambientGain;
+      ribbon.material.uniforms.uThinking.value = thinking;
       ribbon.material.uniforms.uUnavailable.value =
         frame.vela === "unavailable" ? 1 : 0;
       ribbon.material.uniforms.uTint.value.copy(this.semanticTint);
@@ -1819,7 +1829,8 @@ export class Environment {
       Math.sin(presenceTime * 0.49) * 0.08 * ambientGain +
       (frame.vela === "unavailable" ? 0 : pointerY * 0.025);
     this.vela.rotation.z =
-      -0.13 + Math.sin(presenceTime * 0.67) * 0.05 * ambientGain;
+      -0.13 + Math.sin(presenceTime * 0.67) * 0.05 * ambientGain +
+      thinking * (frame.reduced || frame.quiet ? 0.3 : 0.3 + 0.38 * Math.sin(presenceTime * 2.2));
     this.fill.intensity =
       (12 + energy * 15) *
       (1 - focus * 0.72) *
@@ -1893,6 +1904,7 @@ export class Environment {
         time: presenceTime,
         ambient: ambientGain,
         expression: this.expression,
+        thinking,
       },
     );
     const p = frame.presencePlacement;

@@ -18,7 +18,11 @@ export function velaPanelStatus(state: Pick<VelaState, 'requests' | 'plans' | 'r
   const priorEffects = appliedCount ? ' ' + appliedCount + (appliedCount === 1 ? ' earlier step was confirmed.' : ' earlier steps were confirmed.') + ' Review the details.' : '';
   const result = (message: string): VelaPanelStatus => ({ requestState: request.state, requestId: request.id, ...(plan ? { planState: plan.state } : {}), message });
   if (request.state === 'unknown' || plan?.state === 'unknown') return result('The outcome is unknown. Review the activity details before trying again.' + priorEffects);
-  if (request.state === 'failed' || plan?.state === 'failed') return result('This request stopped. Review what happened before trying again.' + priorEffects);
+  if (request.state === 'failed' || plan?.state === 'failed') {
+    if (request.errorCode === 'planning_execution_failed')
+      return result((request.providerId === 'codex-app-server' ? 'Codex' : 'The provider') + ' stopped before returning a reply.' + priorEffects);
+    return result('This request stopped. Review what happened before trying again.' + priorEffects);
+  }
   if (request.state === 'cancelled' || plan?.state === 'cancelled') return result('This request was cancelled. Review any earlier changes in the details.' + priorEffects);
   if (request.state === 'invalid-plan') return result('The provider response could not be used. No proposed changes were applied.');
   if (request.state === 'provider-unavailable') {
