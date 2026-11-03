@@ -27,7 +27,19 @@ export type LibraryResponse = {result:unknown;desktop?:DesktopSnapshot};
 export type VelaOperationName = keyof VelaClient;
 export type VelaRequestInput = Parameters<VelaClient['request']>[0] & { previewId?:string;grantId?:string };
 export type VelaOperation = { [K in VelaOperationName]: { name: K; input: K extends 'request' ? VelaRequestInput : Parameters<NonNullable<VelaClient[K]>>[0] extends undefined ? Record<string,never> : Parameters<NonNullable<VelaClient[K]>>[0] } & (K extends 'apply' ? { presentation?:WorkspacePresentationContext } : {}) }[VelaOperationName] | { name: 'local'; input: { capabilityId: VelaLocalCapabilityId; intent: string; commandId: string } };
-export interface VelaRequestPreview { id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};handoff?:import('../../vela-core/src/history-contracts.ts').VelaHandoff;nativeReviewRequired?:boolean; workingDirectory?:string; route?:import('../../vela-core/src/adaptive-routing.ts').VelaRouteDecision; routingSettings?:import('../../vela-core/src/contracts.ts').VelaRequest['routingSettings'];routingAgent?:import('../../vela-core/src/contracts.ts').VelaRoutingAgent }
+export interface VelaWorkflowScope {
+  selection: 'replace' | 'create' | 'mixed';
+  check: Exclude<import('../../vela-core/src/contracts.ts').VelaProjectCheckKind, 'node-build'>;
+}
+export interface VelaWorkflowReview {
+  id: string;
+  expiresAt: string;
+  analysis: VelaNativeReview;
+  codex: { model: string; effort?: string; intent: string };
+  files: { path: string; operation: 'create' | 'replace' }[];
+  check: { cwd: string; argv: string[] };
+}
+export interface VelaRequestPreview { workflowScope?: VelaWorkflowScope; id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};handoff?:import('../../vela-core/src/history-contracts.ts').VelaHandoff;nativeReviewRequired?:boolean; workingDirectory?:string; route?:import('../../vela-core/src/adaptive-routing.ts').VelaRouteDecision; routingSettings?:import('../../vela-core/src/contracts.ts').VelaRequest['routingSettings'];routingAgent?:import('../../vela-core/src/contracts.ts').VelaRoutingAgent }
 /** Trusted host inspection only; never registered in renderer command/subcommand allowlists. */
 export interface VelaNativeReview {previewId:string;signature:string;providerId:string;prompt:string;promptDigest:string;reviewDigest:string;context:ContextManifest;history?:ProviderHistory;handoff?:VelaRequestPreview['handoff'];historyOmissions:{reason:HistoryOmissionReason;count?:number}[];route?:VelaRequestPreview['route'];workingDirectory?:string;routingSettings?:VelaRequestPreview['routingSettings'];routingAgent?:VelaRequestPreview['routingAgent'];agentInstructions?:string;editPaths?:string[]}
 export interface VelaNativeCapabilities {
@@ -202,6 +214,8 @@ export interface CommandMap {
   taskObjectives: {input:TaskObjectiveRequest|{name:'targets';input:TaskTargetQuery};output:{result:TaskObjectiveResponse|TaskTargetPage;desktop?:DesktopSnapshot}};
   vela: { input: VelaOperation; output: unknown };
   velaRequestPreview: { input: {intent:string;resourceIds:string[];activeCard?:VelaActiveCard;adaptive?:true;editTargetPaths?:string[];editCreatePaths?:string[];requireInspectionDirectory?:true;inspectionDirectory?:string} & import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting; output: VelaRequestPreview };
+  velaWorkflowReview: { input: { previewId: string; signature: string; editTargetPaths?: string[]; editCreatePaths?: string[]; checkPaths: string[] }; output: VelaWorkflowReview };
+  velaWorkflowRun: { input: { id: string }; output: import('../../vela-core/src/contracts.ts').VelaRequest };
   velaNextWorkflowStage: { input: { requestId: string }; output: { intent: string } | null };
   velaFileEditReview: { input: {requestId:string}; output: import('./vela-file-edit.mts').VelaFileEditReview };
   velaFileEditApply: { input: {requestId:string;reviewId:string}; output: import('./vela-file-edit.mts').VelaFileEditView };

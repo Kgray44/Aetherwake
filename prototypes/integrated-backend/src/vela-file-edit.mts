@@ -50,6 +50,8 @@ export interface VelaFileEditRecord {
   /** Output from an authorized local script, retained for exact review. */
   artifactText?: string;
   projectChecks?: VelaProjectCheckReceipt[];
+  /** Bounded before/after snapshots shown only for writes this workflow verified. */
+  workflowChanges?: { before: string | null; after: string }[];
 }
 export interface VelaFileEditReview {
   requestId: string; reviewId: string; expiresAt: string;

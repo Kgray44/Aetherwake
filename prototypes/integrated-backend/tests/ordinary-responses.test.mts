@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync,rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { admitVelaFileEdit } from '../src/vela-file-edit.mts';
 import { tmpdir } from 'node:os';
 import { join,resolve,relative,isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -21,7 +23,7 @@ import { RESPONSES_ENDPOINT } from '../../openai-provider/responses.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
 const documentedModel = { id: 'gpt-6.1-sol', label: 'Synthetic catalog Sol' };
 function sse(events:unknown[]){return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});}
-function fixture(useCodexProtocolDouble = false){
+function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection'){
  const dir=mkdtempSync(join(tmpdir(),'aerynth-ordinary-responses-')),path=join(dir,'canonical.sqlite'),events:StreamEvent[]=[],requests:Record<string,any>[]=[],responses:((init:RequestInit)=>Promise<Response>|Response)[]=[];
  let listedModels=[{id:model,label:'Synthetic eligible model'}];
  let version=1,ready=true,catalogReads=0,secretReads=0,codexCalls=0,finishResolve:(()=>void)|undefined,pending=false;
@@ -33,7 +35,7 @@ function fixture(useCodexProtocolDouble = false){
  };
  const fakeFetch:typeof fetch=async(url,init)=>{assert.equal(url,RESPONSES_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer SYNTHETIC_PLAN_TOKEN');const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);assert.deepEqual(Object.keys(body),['model','instructions','input','store','stream',...(body.reasoning?['reasoning']:[]),...(body.tools?['tools','tool_choice']:[])]);requests.push(body);const response=responses.shift();assert(response,'unexpected provider request');return response(init!);};
  const provider = useCodexProtocolDouble ? { provider: 'codex' as const, codexExecutable: process.execPath,
-   codexArgs: [fileURLToPath(new URL('../../codex-bridge/tests/catalog-server.mjs', import.meta.url)), 'air-inspection'] } : { provider: 'fixture' as const };
+   codexArgs: [fileURLToPath(new URL('../../codex-bridge/tests/catalog-server.mjs', import.meta.url)), codexMode] } : { provider: 'fixture' as const };
  let core:BackendCore;const create=()=>{core=new BackendCore({path,...provider,contentPolicy:'synthetic-only'},event=>events.push(event),undefined,{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
  return {get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(resolve(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
@@ -237,6 +239,96 @@ test('Read this log, tell me what happened, then fix the code and benchmark it',
       reviewDigest: review.reviewDigest, directSend: true }), /vela_attached_context_review_required/);
     assert.equal((await f.core.command('providerActivity', {})).providerRequests, 0);
   } finally { await f.close(); }
+});
+
+test('Read the log, explain the slowdown, fix the count, and run the tests after I approve once', {
+  skip: process.platform !== 'win32',
+}, async () => {
+  const runtime = fileURLToPath(new URL('../.runtime/', import.meta.url));
+  admitVelaFileEdit(runtime);
+  mkdirSync(runtime, { recursive: true });
+  const dir = mkdtempSync(join(runtime, 'vela-file-edit-'));
+  const file = join(dir, 'sample.json');
+  const testFile = join(dir, 'sample.test.mjs');
+  const original = '{"count":1}\n';
+  const testSource = "import test from 'node:test'; import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs';" +
+    "test('count is two', () => assert.equal(JSON.parse(readFileSync('sample.json', 'utf8')).count, 2));\n";
+  const git = (...args: string[]) => execFileSync('git.exe', ['-C', dir, '-c', 'core.hooksPath=NUL', ...args],
+    { windowsHide: true, timeout: 6000, stdio: 'pipe' });
+  const f = fixture(true, 'air-file-edit');
+  try {
+    git('init', '--quiet', '--template=');
+    writeFileSync(file, original);
+    writeFileSync(testFile, testSource);
+    git('add', '--', 'sample.json', 'sample.test.mjs');
+    git('-c', 'user.name=AIR fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--quiet', '-m', 'Fixture');
+    allowFixtureHandoffEvidence(f);
+    const notes = await f.core.command('desktop', { type: 'createResource', title: 'Synthetic workflow log', kind: 'note', workspaceId: null });
+    const note = notes.resources.find(resource => resource.title === 'Synthetic workflow log')!;
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: 'A frame took 80 ms.' });
+    const intent = 'Read the log note, explain the slowdown, then edit sample.json to set the count to two and run the tests';
+    const send = (decide: (workflow: import('../src/contracts.mts').VelaWorkflowReview) => boolean) => {
+      let selections = 0, reviews = 0;
+      return velaCommand({ win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+        directMessageSend: true, offerPlanningByDefault: true,
+        dialog: {
+          showOpenDialog: async () => ({ canceled: false, filePaths: [selections++ === 0 ? file : testFile] }),
+          showMessageBox: async () => assert.fail('An approved workflow may not ask again'),
+        },
+        input: { name: 'request', input: { intent, resourceIds: [note.id], authorizeProvider: true } },
+        async reviewProvider({ workflow }: { workflow: import('../src/contracts.mts').VelaWorkflowReview }) {
+          assert.equal(++reviews, 1);
+          assert.equal(selections, 2);
+          assert.match(workflow.analysis.prompt, /A frame took 80 ms/u);
+          assert.deepEqual(workflow.files, [{ path: file, operation: 'replace' }]);
+          assert.equal(workflow.check.argv.at(-1), './sample.test.mjs');
+          return decide(workflow);
+        },
+        call: (name: any, input: any) => f.core.command(name, input),
+      }) as Promise<VelaRequest>;
+    };
+    await assert.rejects(send(() => false), /authorization_cancelled/u);
+    await assert.rejects(send(() => { writeFileSync(testFile, testSource + '// changed\n'); return true; }), /vela_workflow_scope_changed/u);
+    assert.equal((await f.core.command('providerActivity', {})).providerRequests, 0);
+    assert.equal(readFileSync(file, 'utf8'), original);
+    writeFileSync(testFile, testSource);
+    f.responses.push(() => complete('resp_workflow_stale', 'Synthetic frame analysis before the test changed.'));
+    await assert.rejects(send(() => {
+      const respond = f.responses.shift()!;
+      f.responses.push(init => { writeFileSync(testFile, testSource + '// changed mid-run\n'); return respond(init); });
+      return true;
+    }), /vela_workflow_scope_changed/u);
+    assert.equal((await f.core.command('providerActivity', {})).providerRequests, 1);
+    assert.equal(readFileSync(file, 'utf8'), original);
+    writeFileSync(testFile, testSource);
+    f.responses.push(() => complete('resp_workflow_single', 'Synthetic frame analysis.'));
+    let approvedId = '';
+    const result = await send(workflow => { approvedId = workflow.id; return true; });
+    assert.equal(result.state, 'responded', result.errorCode);
+    assert.equal(result.handoff?.destinationProviderId, 'codex-app-server');
+    const assertApplied = async () => {
+      const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaState;
+      assert.equal(state.requests.at(-2)?.conversationId, result.conversationId);
+      assert.equal(state.requests.at(-2)?.id, result.handoff?.taskId);
+      const edit = state.fileEdits?.find(item => item.requestId === result.id);
+      assert.equal(edit?.state, 'applied');
+      assert.equal(edit?.projectChecks?.[0]?.state, 'passed');
+      assert.equal(edit?.projectChecks?.[0]?.testCount, 1);
+      assert.deepEqual(edit?.files[0].change, { before: original, after: '{"count":2}\n' });
+      assert.equal(readFileSync(edit!.files[0].backupPath!, 'utf8'), original);
+    };
+    assert.equal(readFileSync(file, 'utf8'), '{"count":2}\n');
+    assert.equal((await f.core.command('providerActivity', {})).providerRequests, 3);
+    await assert.rejects(f.core.command('velaWorkflowRun', { id: approvedId }), /vela_workflow_review_required/u);
+    await assertApplied();
+    await f.reopen();
+    await assertApplied();
+  } finally {
+    await f.close();
+    assert.equal(resolve(dir, '..'), resolve(runtime));
+    assert.match(dir, /[\\/]vela-file-edit-[^\\/]+$/u);
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('Vela hands off exactly the selected exchange in both directions with native consent and canonical provenance', async () => {

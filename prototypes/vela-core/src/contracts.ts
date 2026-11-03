@@ -317,6 +317,7 @@ export interface VelaProjectCheckReceipt {
   artifact?: { relativePath: string; bytes: number; digest: string };
 }
 export interface VelaFileEditItemView {
+  change?: { before: string | null; after: string };
   relativePath: string;
   state: 'pending' | 'applied' | 'unchanged' | 'conflict' | 'unknown';
   verification?: VelaFileEditVerification;

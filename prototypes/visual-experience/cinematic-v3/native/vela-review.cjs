@@ -142,7 +142,7 @@ function presentation(experience) {
         htmlBytes: 524288,
       };
 }
-function reviewPage(review, intent = "", experience = "vela") {
+function reviewPage(review, intent = "", experience = "vela", workflow) {
   const view = presentation(experience);
   if (experience === "file-edit") {
     const styleHash = createHash("sha256").update(css).digest("base64");
@@ -184,7 +184,8 @@ function reviewPage(review, intent = "", experience = "vela") {
       : route.kind === "composite" ? "Native reading shared with Codex in a read-only sandbox"
       : route.kind === "agentic" ? "Local read-only sandbox"
       : route.kind === "conversational" ? route.nativeMetric || route.nativeLog
-        ? "Share this local evidence for analysis. The Codex step will require its own review."
+        ? workflow ? "ChatGPT will analyze the selected evidence. Codex will receive this exchange and the selected file contents."
+          : "Share this local evidence for analysis. The Codex step will require its own review."
         : route.depth + " conversation" : "Reviewed app proposal",
     route.model && "Requested model " + route.model + (origins?.model ? " (" + origins.model + ")" : ""),
     route.effort && "Requested effort " + route.effort + (origins?.reasoningEffort ? " (" + origins.reasoningEffort + ")" : ""),
@@ -214,11 +215,17 @@ function reviewPage(review, intent = "", experience = "vela") {
         `<article><h2>${escape(message.role === "user" ? "You" : providerLabel(message.providerId ?? review.providerId))}</h2><pre>${escape(message.content)}</pre></article>`,
     )
     .join("");
+  const workflowScope = workflow ? `<details open><summary>Files and test command</summary><section>
+    <p>Codex will propose the changes using ${escape(workflow.codex.model)}${workflow.codex.effort ? " · " + escape(workflow.codex.effort) : ""}. Aerynth will apply changes to these files and keep backups of replacements.</p>
+    <ul>${workflow.files.map(file => `<li>${file.operation === "create" ? "Create" : "Edit"} <small>${escape(file.path)}</small></li>`).join("")}</ul>
+    <p>Then Aerynth will run this check in a read-only sandbox with networking disabled.</p>
+    <small>${escape(workflow.check.cwd)}</small><pre>${escape(workflow.check.argv.map(part => JSON.stringify(part)).join(" "))}</pre>
+    </section></details>` : "";
   const historyLabel = review.handoff ? "Selected prior exchange" : view.historyLabel;
   const agentInstructions = review.agentInstructions
     ? `<details open><summary>Additional agent instructions</summary><section><pre>${escape(review.agentInstructions)}</pre></section></details>` : "";
   const styleHash = createHash("sha256").update(css).digest("base64");
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">Send to ${escape(provider)}?</h1><p>${escape(view.subtitle)}</p>${routeSummary ? `<p>${escape(routeSummary)}</p>` : ""}</header><div class="content" tabindex="0" aria-label="Review what will be shared"><p class="intent">${escape(intent)}</p>${agentInstructions}<details${sources ? " open" : ""}><summary>Shared resources (${resources.length})</summary><section>${sources || "No selected source content."}</section></details><details${history ? " open" : ""}><summary>${escape(historyLabel)} (${review.history?.messages.length ?? 0})</summary><section>${history || escape(view.emptyHistory)}</section></details><details><summary>Exact provider request</summary><section><pre>${escape(review.prompt)}</pre><small>Request digest: ${escape(review.promptDigest)}</small></section></details></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">Send once</button></footer></main></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'sha256-${styleHash}'; base-uri 'none'; form-action 'none'"><title>${escape(view.title)}</title><style>${css}</style></head><body><main class="review" role="dialog" aria-modal="true" aria-labelledby="review-title"><header><h1 id="review-title">${workflow ? "Run this workflow?" : "Send to " + escape(provider) + "?"}</h1><p>${workflow ? "Review once to share the selected evidence, make the listed edits, and run the check." : escape(view.subtitle)}</p>${routeSummary ? `<p>${escape(routeSummary)}</p>` : ""}</header><div class="content" tabindex="0" aria-label="Review what will be shared"><p class="intent">${escape(intent)}</p>${agentInstructions}${workflowScope}<details${sources ? " open" : ""}><summary>Shared resources (${resources.length})</summary><section>${sources || "No selected source content."}</section></details><details${history ? " open" : ""}><summary>${escape(historyLabel)} (${review.history?.messages.length ?? 0})</summary><section>${history || escape(view.emptyHistory)}</section></details><details><summary>Exact provider request</summary><section><pre>${escape(review.prompt)}</pre><small>Request digest: ${escape(review.promptDigest)}</small></section></details></div><footer><button id="cancel" type="button" autofocus>Cancel</button><button id="approve" type="button">${workflow ? "Run workflow" : "Send once"}</button></footer></main></body></html>`;
   if (Buffer.byteLength(html) > view.htmlBytes)
     throw Error(experience === "vela" ? "native_vela_review_capacity_exceeded" : "native_ordinary_review_capacity_exceeded");
   return html;
@@ -238,14 +245,14 @@ function ownerCanReview(parent) {
 }
 /** A finite, parent-owned native approval surface. It has no application bridge,
  * scripts, network access, credentials, grant, canonical writes or provider port. */
-async function showVelaReview({ parent, review, intent, expiresAt, runtime, experience = "vela" }) {
+async function showVelaReview({ parent, review, intent, expiresAt, runtime, experience = "vela", workflow }) {
   const view = presentation(experience);
   if (!ownerCanReview(parent)) return false;
   const remaining = Date.parse(expiresAt) - Date.now();
   if (!Number.isFinite(remaining) || remaining <= 0) return false;
   const url =
     "data:text/html;charset=utf-8," +
-    encodeURIComponent(reviewPage(review, intent, experience));
+    encodeURIComponent(reviewPage(review, intent, experience, workflow));
   const { BrowserWindow, ipcMain, session } = runtime ?? require("electron");
   const token = randomUUID(),
     channel = "vela-review-decision",

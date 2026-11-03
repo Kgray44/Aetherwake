@@ -293,7 +293,8 @@ function call(command, input) {
           ),
         );
       },
-      command === "conversationSend" || command === "velaFileEditApply" ? 120000 : 90000,
+      command === "velaWorkflowRun" ? 360000
+        : command === "conversationSend" || command === "velaFileEditApply" ? 120000 : 90000,
     );
     pending.set(id, { resolve, reject, timer });
     writeBackend(line);

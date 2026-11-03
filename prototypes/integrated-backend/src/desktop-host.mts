@@ -75,6 +75,8 @@ lines.on("line", async (line) => {
         "taskObjectives",
         "velaRequestPreview",
         "velaNextWorkflowStage",
+        "velaWorkflowReview",
+        "velaWorkflowRun",
         "velaRouteNative",
         "velaNativeReview",
         "velaFileEditReview",

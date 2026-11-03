@@ -65,11 +65,10 @@ function presentationContext(value) {
   };
 }
 
-async function reviewProjectCheck({ win, dialog, call, requestId, kind, intent, settings }) {
+async function pickCheckPaths(win, dialog, kind) {
   if (!["node-test", "typescript", "node-benchmark", "node-build"].includes(kind)) throw Error("invalid_vela_project_check");
   if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
-  const standalone = requestId === null, nodeTest = kind === "node-test", benchmark = kind === "node-benchmark", build = kind === "node-build";
-  if (build && !standalone) throw Error("vela_build_destination_required");
+  const nodeTest = kind === "node-test", benchmark = kind === "node-benchmark", build = kind === "node-build";
   const selected = await dialog.showOpenDialog(win, {
     title: nodeTest ? "Select up to four tracked Node test files" : benchmark ? "Select a tracked Node .bench script"
       : build ? "Select a tracked Node .build script" : "Select a tracked TypeScript project configuration",
@@ -79,6 +78,41 @@ async function reviewProjectCheck({ win, dialog, call, requestId, kind, intent, 
   if (selected.canceled || !selected.filePaths.length) throw Error("authorization_cancelled");
   if (selected.filePaths.length > (nodeTest ? 4 : 1)) throw Error("invalid_vela_project_check");
   if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+  return selected.filePaths;
+}
+
+async function pickEditPaths(win, dialog, selection) {
+  if (!["replace", "create", "mixed"].includes(selection)) throw Error("invalid_vela_edit_request");
+  if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+  const paths = {};
+  if (selection !== "create") {
+    const limit = selection === "mixed" ? 3 : 4;
+    const selected = await dialog.showOpenDialog(win, {
+      title: "Select up to " + limit + " tracked files from one repository",
+      properties: ["openFile", "multiSelections"],
+    });
+    if (selected.canceled || !selected.filePaths.length) throw Error("authorization_cancelled");
+    if (selected.filePaths.length > limit) throw Error("vela_edit_file_limit");
+    paths.editTargetPaths = selected.filePaths;
+  }
+  if (selection !== "replace") {
+    if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+    const selected = await dialog.showSaveDialog(win, {
+      title: "Choose an unused filename inside the repository",
+      buttonLabel: "Select destination",
+      properties: ["dontAddToRecent"],
+    });
+    if (selected.canceled || !selected.filePath) throw Error("authorization_cancelled");
+    paths.editCreatePaths = [selected.filePath];
+  }
+  if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+  return paths;
+}
+
+async function reviewProjectCheck({ win, dialog, call, requestId, kind, intent, settings }) {
+  const standalone = requestId === null, nodeTest = kind === "node-test", benchmark = kind === "node-benchmark", build = kind === "node-build";
+  if (build && !standalone) throw Error("vela_build_destination_required");
+  const paths = await pickCheckPaths(win, dialog, kind);
   let artifactPath;
   if (build) {
     const output = await dialog.showSaveDialog(win, { title: "Choose an unused filename for the build output", buttonLabel: "Select destination",
@@ -87,7 +121,6 @@ async function reviewProjectCheck({ win, dialog, call, requestId, kind, intent, 
     if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
     artifactPath = output.filePath;
   }
-  const paths = selected.filePaths;
   const review = standalone ? await call("velaStandaloneCheckReview", { intent, ...(settings ? { settings } : {}), paths, ...(artifactPath ? { artifactPath } : {}) })
     : await call("velaProjectCheckReview", { requestId, kind, paths });
   if (!review || review.requestId !== requestId || review.kind !== kind ||
@@ -255,33 +288,29 @@ exports.velaCommand = async ({
         const replace = mixed || code === "vela_codex_edit_target_required";
         const create = mixed || code === "vela_codex_create_target_required";
         if (!directMessageSend || !(replace || create)) throw error;
-        if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
-        const paths = {};
-        if (replace) {
-          const selected = await dialog.showOpenDialog(win, {
-            title: mixed ? "Select up to three tracked files from one repository" : "Select up to four tracked files from one repository",
-            properties: ["openFile", "multiSelections"],
-          });
-          if (selected.canceled || !selected.filePaths.length) throw Error("authorization_cancelled");
-          if (selected.filePaths.length > (mixed ? 3 : 4)) throw Error("vela_edit_file_limit");
-          paths.editTargetPaths = selected.filePaths;
-        }
-        if (create) {
-          if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
-          const selected = await dialog.showSaveDialog(win, {
-            title: "Choose an unused filename inside the repository",
-            buttonLabel: "Select destination",
-            properties: ["dontAddToRecent"],
-          });
-          if (selected.canceled || !selected.filePath) throw Error("authorization_cancelled");
-          paths.editCreatePaths = [selected.filePath];
-        }
-        if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+        const paths = await pickEditPaths(win, dialog, mixed ? "mixed" : replace ? "replace" : "create");
         return call("velaRequestPreview", { ...previewInput, ...paths });
       }
     });
     if (preview.handoff?.sourceRequestId !== request.handoffSourceRequestId) throw Error("invalid_native_vela_review");
     if (preview.routingAgent?.resourceId !== request.routingAgentId) throw Error("invalid_native_vela_review");
+    if (directMessageSend && preview.workflowScope) {
+      const paths = await pickEditPaths(win, dialog, preview.workflowScope.selection);
+      const checkPaths = await pickCheckPaths(win, dialog, preview.workflowScope.check);
+      const workflow = await stage("review", async () => {
+        const prepared = await call("velaWorkflowReview", { previewId: preview.id, signature: preview.signature, ...paths, checkPaths });
+        validateReview(preview, prepared.analysis);
+        if (typeof prepared.id !== "string" || !/^[a-f0-9-]{36}$/.test(prepared.id) || prepared.expiresAt !== preview.expiresAt)
+          throw Error("invalid_native_vela_review");
+        return prepared;
+      });
+      if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+      const approved = await reviewProvider({ parent: win, review: workflow.analysis, workflow,
+        intent: preview.intent, expiresAt: workflow.expiresAt });
+      if (approved !== true) throw Error("authorization_cancelled");
+      if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+      return stage("request", () => call("velaWorkflowRun", { id: workflow.id }));
+    }
     const review = await stage("review", async () =>
       validateReview(
         preview,

@@ -575,7 +575,16 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
             const outcome = file.state === 'applied' ? 'write verified'
               : file.state === 'unchanged' ? 'unchanged'
               : file.state === 'conflict' ? 'conflict' : 'outcome unknown';
-            outcomes.append(el('li', undefined, file.relativePath + ' · ' + outcome));
+            const row = el('li', undefined, file.relativePath + ' · ' + outcome);
+            if (file.change) {
+              const contents = el('details', 'vela-core-meta');
+              contents.append(el('summary', undefined, 'Show file changes'),
+                el('p', undefined, file.change.before === null ? 'New file' : 'Before'));
+              if (file.change.before !== null) contents.append(el('pre', undefined, file.change.before));
+              contents.append(el('p', undefined, 'After'), el('pre', undefined, file.change.after));
+              row.append(contents);
+            }
+            outcomes.append(row);
           }
           fileEditActions.append(outcomes);
         }
@@ -734,6 +743,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         unsupported_model: 'The selected model is unavailable in the connected catalog. Your draft is still here.',
         vela_codex_model_unavailable: 'Codex did not offer a model for this request. Check its connection and try again.',
         vela_provider_outcome_unavailable: 'Codex could not confirm the outcome. The task was not restarted.',
+        vela_workflow_scope_changed: 'The approved files, check, or workspace changed. Review the latest state before running the workflow again.',
+        vela_workflow_check_scope_conflict: 'Select check files in the same checkout that the workflow will leave as they are.',
+        vela_workflow_review_required: 'Review the workflow again to start it.',
+        vela_workflow_busy: 'A Vela workflow is already running.',
         vela_workflow_auto_required: 'Use Auto to run this request across ChatGPT plan and Codex.',
         vela_workflow_context_conflict: 'Start this sequence without an agent or shared history. Attach a note only when the sequence starts with log inspection.',
         unsupported_reasoning_effort: 'The selected model does not advertise this effort. Your draft is still here.',

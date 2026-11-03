@@ -83,6 +83,14 @@ function ordinaryTurnClock(): OrdinaryResponsesPreview['clock'] {
   return { utc: instant.toISOString(), local: local + (offset < 0 ? '-' : '+') + hours + ':' + minutes };
 }
 type OrdinarySendBinding = Pick<OrdinaryResponsesPreview, 'executionId' | 'clock' | 'purpose'>;
+type PendingVelaWorkflow = {
+  analysis: PrivateVelaPreview;
+  codex: PrivateVelaPreview;
+  targets: Pick<CommandMap['velaRequestPreview']['input'], 'editTargetPaths' | 'editCreatePaths'>;
+  checkPaths: string[];
+  checkDigest: string;
+  reviewDigest: string;
+};
 type PendingVelaProjectCheck = {
   review: VelaProjectCheckReview<string | null>;
   paths: string[];
@@ -175,6 +183,8 @@ export class BackendCore {
   private velaPresentations=new Map<string,WorkspacePresentationContext|null>();
   private velaPreviews=new Map<string,PrivateVelaPreview>();
   private velaEditReviews = new Map<string, { requestId: string; expiresAt: string; digest: string }>();
+  private velaWorkflows = new Map<string, PendingVelaWorkflow>();
+  private velaWorkflowRunning = false;
   private velaProjectCheckReviews = new Map<string, PendingVelaProjectCheck>();
   private velaProjectCheckTask?: { id: string; task: Promise<VelaFileEditView | VelaRequest> };
   private velaGrants=new Map<string,{previewId:string;expiresAt:string;requestId?:string;consumed:boolean;planning?:CodexPlanningGrant;reviewDigest?:string}>();
@@ -1115,7 +1125,8 @@ export class BackendCore {
     return {...state,nativeCapabilities,planningReferences:structuredClone(this.state.vela!.planning),applicationContext:{currentProjectId:context.currentProjectId,currentWorkspaceId:context.currentWorkspaceId,references}};
   }
   private velaFileEditView(record: VelaFileEditRecord): VelaFileEditView {
-    return { requestId: record.requestId, state: record.state, files: record.files.map(file => ({
+    return { requestId: record.requestId, state: record.state, files: record.files.map((file, index) => ({
+      ...(file.state === 'applied' && record.workflowChanges?.[index] ? { change: structuredClone(record.workflowChanges[index]) } : {}),
       relativePath: file.target.relativePath, state: file.state ?? 'pending',
       ...(file.verification ? { verification: file.verification } : {}),
       ...(file.backupPath ? { backupPath: file.backupPath } : {}),
@@ -1193,7 +1204,7 @@ export class BackendCore {
     this.velaEditReviews.set(reviewId, { requestId, expiresAt, digest: planningDigest(record) });
     return { requestId, reviewId, expiresAt, files };
   }
-  private applyVelaFileEdit(input: CommandMap['velaFileEditApply']['input']): VelaFileEditView {
+  private applyVelaFileEdit(input: CommandMap['velaFileEditApply']['input'], showChanges = false): VelaFileEditView {
     ensure(!this.velaProjectCheckTask, 'vela_project_check_busy');
     const record = this.requireVelaFileEdit(input.requestId);
     const review = this.velaEditReviews.get(input.reviewId);
@@ -1204,17 +1215,18 @@ export class BackendCore {
     const checkTime = () => ensure(performance.now() < deadline, 'vela_edit_deadline_reached');
     const edits = this.velaFileEditReplacements(record);
     this.requireReconciledVelaFileEdits(edits.map(edit => edit.target), record.requestId);
-    for (const { target, replacement } of edits) {
+    const changes = edits.map(({ target, replacement }) => {
       checkTime();
       verifyVelaReplacement(target.path, replacement);
-      validateVelaFileEditTarget(target, this.privateRoot);
-    }
+      return { before: validateVelaFileEditTarget(target, this.privateRoot), after: replacement };
+    });
     checkTime();
     admitVelaFileEdit(record.files[0].target.path, this.privateRoot);
     checkTime();
     this.atomic(() => {
       record.files.forEach((file, index) => Object.assign(file, velaEditSiblings(file.target, record.requestId,
         record.files.length > 1 ? index : undefined)));
+      if (showChanges) record.workflowChanges = changes;
       record.state = 'applying';
     });
     // The filesystem is external to SQLite. Once started, every failure leaves
@@ -1239,11 +1251,12 @@ export class BackendCore {
     catch { /* Determine the outcome from the destination and captured original. */ }
     return this.reconcileVelaFileEdit(record.requestId);
   }
-  private reviewVelaProjectCheck(input: CommandMap['velaProjectCheckReview']['input']): VelaProjectCheckReview {
+  private reviewVelaProjectCheck(input: CommandMap['velaProjectCheckReview']['input'], expectedPlanDigest?: string): VelaProjectCheckReview {
     ensure(this.port.projectChecks, 'vela_project_check_unavailable');
     ensure(!this.velaProjectCheckTask, 'vela_project_check_busy');
     const record = this.requireVelaFileEdit(input.requestId);
     const plan = planVelaProjectCheck(record, input.kind, input.paths, this.privateRoot);
+    ensure(expectedPlanDigest === undefined || expectedPlanDigest === planningDigest(plan), 'vela_workflow_scope_changed');
     return this.storeVelaProjectCheckReview(record.requestId, input.kind, input.paths, plan,
       planningDigest({ plan, files: record.files, scope: record.scopeStamp }));
   }
@@ -1807,6 +1820,20 @@ export class BackendCore {
     ensure(input.editTargetPaths === undefined && input.editCreatePaths === undefined || route?.kind === 'file-edit', 'vela_edit_path_ineligible');
     const fileEdit = route?.kind === 'file-edit' ? readVelaFileEditTargets(input.editTargetPaths ?? [], input.editCreatePaths ?? [], this.privateRoot) : undefined;
     if (fileEdit) this.requireReconciledVelaFileEdits(fileEdit.map(file => file.target));
+    const sequence = route?.kind === 'conversational' && (route.nativeLog || route.nativeMetric)
+      ? nativeConversationalWorkflow(input.intent) : undefined;
+    const selection = sequence && velaFileEditSelection(sequence.nextIntent);
+    const check = sequence && velaEditFollowUpCheck(sequence.nextIntent);
+    const workflowScope = selection && check && check !== 'node-build' && process.platform === 'win32' &&
+      this.port.projectChecks && !this.historyContextEnabled && !input.includeRecentHistory && !agent &&
+      route?.kind === 'conversational' && !route.escalation ? { selection, check } : undefined;
+    // Discover Codex before freezing the analysis capability catalog. First
+    // connection can change the app capabilities even without running a turn.
+    if (workflowScope) {
+      const started = performance.now();
+      await this.selectVelaCodexModel({});
+      timing.capabilityMs += performance.now() - started;
+    }
     let nativeStage: PrivateVelaPreview['nativeStage'];
     const metric = route?.kind === 'composite' ? route.metric : route?.kind === 'conversational' ? route.nativeMetric : undefined;
     if (metric) {
@@ -1850,6 +1877,7 @@ export class BackendCore {
     const {history,agentInstructions:_agentInstructions,...context}=selected.context,summary=history?{messageCount:history.messages.length,encodedBytes:Buffer.byteLength(JSON.stringify(history)),digest:historyDigest(history)}:undefined;
     const publicPreview:VelaRequestPreview={id:randomUUID(),intent:input.intent,resourceIds:[...input.resourceIds],context,providerId,signature:'',scopeStamp:this.velaScopeStamp(),expiresAt:new Date(Date.now()+300000).toISOString(),...(route?{route,routingSettings}:{}),...(discovery?{discovery}:{}),...(summary?{history:summary}:{}),...(selected.handoff?{handoff:selected.handoff}:{}),...(includeHistory||selected.handoff||context.activeResourceId||usingChatGPT||agentic?{nativeReviewRequired:true}:{})};
     const conversationId=this.state.vela!.conversationId,inputAnchor={conversationId,revision:conversationId?this.velaHost.conversationRevision?.(conversationId)??null:null};
+    if (workflowScope && !context.activeResourceId) publicPreview.workflowScope = workflowScope;
     const preview:PrivateVelaPreview={...publicPreview,...(usingChatGPT?{connectionVersion:this.ordinaryStatus.registrationVersion!}:{}),...(nativeStage?{nativeStage}:{}),...(fileEdit?{fileEdit}:{}),...(routingSettingsStamp?{routingSettingsStamp}:{}),frozenContext:structuredClone(selected.context),origin:selected.origin,...(selected.historyFence?{historyFence:selected.historyFence}:{}),historyOmissions:selected.historyOmissions,catalog,prompt:this.velaSemanticPrompt(input.intent,selected.context,catalog,discovery,providerId,route,nativeStage,fileEdit),nativeReviewed:false,inputAnchor,inputDigest:historyDigest(input.intent)};
     if (agent) {
       preview.agentRoutingDigest = agentRoutingDigest;
@@ -1869,6 +1897,98 @@ export class BackendCore {
       preview.timing = timing;
     }
     publicPreview.signature=preview.signature;this.velaPreviews.set(preview.id,preview);return structuredClone(publicPreview);
+  }
+  private async reviewVelaWorkflow(input: CommandMap['velaWorkflowReview']['input']): Promise<CommandMap['velaWorkflowReview']['output']> {
+    this.pruneVelaGrants();
+    const analysis = this.velaPreviews.get(input.previewId);
+    const scope = analysis?.workflowScope;
+    ensure(analysis && scope && analysis.signature === input.signature, 'vela_workflow_review_required');
+    const intent = nativeConversationalWorkflow(analysis.intent)!.nextIntent;
+    const targets = structuredClone({ editTargetPaths: input.editTargetPaths, editCreatePaths: input.editCreatePaths });
+    const preview = await this.previewVelaRequest({ intent, resourceIds: [], adaptive: true, mode: 'codex',
+      providerId: 'codex-app-server', overrideDefaults: true, ...targets });
+    const codex = this.velaPreviews.get(preview.id)!;
+    // This preview freezes the future route and file bytes. Only the eventual handoff may dispatch.
+    this.velaPreviews.delete(preview.id);
+    ensure(codex.route?.kind === 'file-edit' && codex.route.model && codex.fileEdit?.length && codex.route.followUpCheck === scope.check &&
+      !codex.frozenContext.included.length && !codex.history, 'vela_workflow_scope_changed');
+    const checkPaths = structuredClone(input.checkPaths);
+    const plan = planVelaProjectCheck(undefined, scope.check, checkPaths, this.privateRoot);
+    ensure(codex.fileEdit.every(({ target }) => target.root === plan.cwd && target.head === plan.head &&
+      !plan.targets.some(item => item.path.toLowerCase() === target.path.toLowerCase())), 'vela_workflow_check_scope_conflict');
+    ensure(await this.port.projectChecks?.ready(), 'vela_project_check_sandbox_unavailable');
+    const native = this.nativeVelaReview({ previewId: analysis.id, signature: analysis.signature });
+    for (const [id, pending] of this.velaWorkflows) {
+      if (pending.analysis.id === analysis.id || Date.parse(pending.analysis.expiresAt) <= Date.now())
+        this.velaWorkflows.delete(id);
+    }
+    ensure(this.velaWorkflows.size < 32, 'approval_backpressure');
+    const id = randomUUID();
+    const review = { id, expiresAt: analysis.expiresAt, analysis: native,
+      codex: { model: codex.route.model, effort: codex.route.effort, intent },
+      files: codex.fileEdit.map(({ target }) => ({ path: target.path, operation: target.beforeDigest === null ? 'create' as const : 'replace' as const })),
+      check: { cwd: plan.cwd, argv: plan.argv } };
+    this.velaWorkflows.set(id, { analysis, codex, targets, checkPaths, checkDigest: planningDigest(plan), reviewDigest: planningDigest(review) });
+    return review;
+  }
+  private async runVelaWorkflow(id: string): Promise<VelaRequest> {
+    const pending = this.velaWorkflows.get(id);
+    ensure(pending, 'vela_workflow_review_required');
+    ensure(!this.velaWorkflowRunning, 'vela_workflow_busy');
+    this.velaWorkflows.delete(id);
+    this.velaWorkflowRunning = true;
+    const { analysis, codex, targets, checkPaths, checkDigest } = pending;
+    const check = analysis.workflowScope!.check;
+    const editTargets = codex.fileEdit!.map(item => item.target);
+    const validateScope = () => {
+      ensure(!this.closed && Date.parse(analysis.expiresAt) > Date.now() && analysis.scopeStamp === this.velaScopeStamp() &&
+        analysis.routingSettingsStamp === this.velaRoutingSettingsStamp() && this.ordinaryAuthorized() &&
+        analysis.connectionVersion === this.ordinaryStatus.registrationVersion, 'vela_workflow_scope_changed');
+      ensure(planningDigest(planVelaProjectCheck(undefined, check, checkPaths, this.privateRoot)) === checkDigest,
+        'vela_workflow_scope_changed');
+    };
+    const send = (preview: PrivateVelaPreview, sourceId?: string) => {
+      const { id: previewId, signature, reviewDigest, intent, resourceIds } = preview;
+      const { grantId } = this.authorizeVelaRequest({ previewId, signature, reviewDigest });
+      return this.velaCommand({ name: 'request', input: { intent, resourceIds, authorizeProvider: true, previewId, grantId,
+        ...(sourceId ? { handoffSourceRequestId: sourceId } : {}) } }) as Promise<VelaRequest>;
+    };
+    try {
+      validateScope();
+      for (const target of editTargets) validateVelaFileEditTarget(target, this.privateRoot);
+      const first = await send(analysis);
+      this.recordVelaRoute('workflow_authorized', first.id, analysis.providerId, {
+        reviewDigest: pending.reviewDigest, check, fileCount: editTargets.length,
+      });
+      const next = this.nextVelaWorkflowStage(first.id);
+      if (!next) return first;
+      const revision = this.velaHost.conversationRevision?.(first.conversationId);
+      const preview = await this.previewVelaRequest({ intent: next.intent, resourceIds: [], adaptive: true, mode: 'codex',
+        providerId: 'codex-app-server', overrideDefaults: true, ...targets, handoffSourceRequestId: first.id });
+      const handoff = this.velaPreviews.get(preview.id)!;
+      validateScope();
+      ensure(first.conversationId === this.state.vela!.conversationId && revision === this.velaHost.conversationRevision?.(first.conversationId) &&
+        handoff.handoff?.sourceRequestId === first.id && handoff.intent === codex.intent && handoff.providerId === codex.providerId &&
+        planningDigest(handoff.route) === planningDigest(codex.route) &&
+        planningDigest(handoff.fileEdit) === planningDigest(codex.fileEdit), 'vela_workflow_scope_changed');
+      this.nativeVelaReview({ previewId: handoff.id, signature: handoff.signature });
+      const second = await send(handoff, first.id);
+      if (second.state !== 'responded' || !this.state.vela!.edits?.[second.id]) return second;
+      validateScope();
+      const record = this.requireVelaFileEdit(second.id);
+      ensure(record.followUpCheck === check && record.files.every(file => editTargets.some(
+        target => planningDigest(target) === planningDigest(file.target))), 'vela_workflow_scope_changed');
+      // Use the same bounded publisher and sandbox as the individually reviewed workflow.
+      const edit = this.reviewVelaFileEdit(second.id);
+      const applied = this.applyVelaFileEdit({ requestId: second.id, reviewId: edit.reviewId }, true);
+      if (applied.state === 'applied') {
+        const selected = this.reviewVelaProjectCheck({ requestId: second.id, kind: check, paths: checkPaths }, checkDigest);
+        await this.runVelaProjectCheck(second.id, selected.reviewId);
+      }
+      return second;
+    } finally {
+      this.velaWorkflowRunning = false;
+    }
   }
   private nextVelaWorkflowStage(requestId: string): { intent: string } | null {
     ensure(identifier(requestId), 'invalid_vela_request');
@@ -3025,6 +3145,8 @@ export class BackendCore {
       case 'velaRequestPreview':
         if (a?.adaptive !== true && a?.providerId === CHATGPT_PLAN_PROVIDER) await this.maintainOrdinarySession();
         return await this.previewVelaRequest(a) as any;
+      case 'velaWorkflowReview':return await this.reviewVelaWorkflow(a) as any;
+      case 'velaWorkflowRun':return await this.runVelaWorkflow(a?.id) as any;
       case 'velaNextWorkflowStage':return this.nextVelaWorkflowStage(a?.requestId) as any;
       case 'velaNativeReview':return this.nativeVelaReview(a) as any;
       case 'velaFileEditReview':return this.reviewVelaFileEdit(a?.requestId) as any;
