@@ -2,6 +2,27 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Vela resource search
+
+Vela can run a model-selected search across authorized Aerynth resource
+metadata and open matching resources. The action uses the existing
+canonical search and resource opener. Receipts retain stable references.
+Display resolves those references again against current scope, including
+after restart. Resource content and results stay local.
+
+Two synthetic stdio tests exercised the actual Codex planning adapter,
+per-turn capability schema discovery and the canonical backend for search
+and device time. The search test also confirmed that switching to another
+project removes the original result. The model responses were scripted.
+Two hidden Electron processes used an explicit typed search through native
+IPC and opened the same note from Vela before and after restart. Both
+kept the same placement and layout and recorded zero provider executions.
+The private receipts have SHA-256 values
+`740020b56daba05e6f9b69ff59ae2bc608f5f5d1a30ea8461e790a75170e406d` and
+`87c1755b0f5ac6635967fb0b940db2d3cce4145cee5b243e149c22147b77c0d6`.
+The strict builds and 147 Vela, 245 backend and 400 desktop tests passed.
+Live model interpretation and visible owner review remain outstanding.
+
 ## November 3 Vela model routing
 
 Vela's composer sends free text through the configured planning model.

@@ -96,6 +96,37 @@ test('status distinguishes review, applied receipts, partial failure and unknown
   canonical.requests = [request({ state: 'planning', providerId: 'codex-app-server' })]; canonical.plans = []; assert.match(velaPanelStatus(canonical).message, /with Codex/); assert.doesNotMatch(velaPanelStatus(canonical).message, /codex-app-server/);
 });
 
+test('model-selected search renders an openable canonical result and removes it when scope changes', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const plan: VelaPlan = {
+    id: 'plan:search', requestId: 'request:synthetic', version: 1, fingerprint: 'synthetic',
+    summary: 'Find measurements', steps: [{ id: 'search', explanation: 'Local lookup', action: { type: 'search', query: 'calibration' } }],
+    targets: [], scope: { principalId: 'synthetic', policyVersion: 'synthetic', resourceIds: [], workspaceIds: [], projectIds: [] },
+    state: 'applied', createdAt: manifest.createdAt, expiresAt: manifest.createdAt,
+    contribution: { providerId: 'codex-app-server', classification: 'reported' },
+  };
+  const receipt: ActionReceipt = {
+    id: 'receipt:search', planId: plan.id, requestId: plan.requestId, stepId: 'search', commandId: 'command:search',
+    source: 'vela', providerId: null, state: 'applied', startedAt: manifest.createdAt, hostReceiptId: 'host:search', taskVerified: false,
+  };
+  const ref = { id: 'note:calibration', kind: 'resource' as const, title: 'Calibration measurements', version: 1 };
+  canonical.requests = [request({ state: 'completed', planId: plan.id, providerId: 'codex-app-server' })];
+  canonical.plans = [plan]; canonical.receipts = [receipt];
+  canonical.conversation = { resourceId: canonical.requests[0].conversationId, revision: 2, messages: [] };
+  canonical.searchResults = { [receipt.id]: [ref] };
+  const opened: unknown[] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical), { onOpenSubject: value => opened.push(value) });
+  await settles(() => !!named(root, ref.title));
+  assert.equal(displayed(named(root, ref.title)), true);
+  named(root, ref.title).fire('click');
+  assert.deepEqual(opened, [ref]);
+  canonical.searchResults = { [receipt.id]: [] };
+  await panel.refresh();
+  assert.equal(named(root, ref.title), undefined);
+  assert.match(root.textContent, /No matching resources are available/);
+  panel.dispose();
+});
+
 test('a model-selected local observation is visible on the completed action', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   const plan: VelaPlan = {

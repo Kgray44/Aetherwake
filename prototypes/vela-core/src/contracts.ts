@@ -7,6 +7,7 @@ export type EvidenceClass = 'observed' | 'reported' | 'inferred' | 'unknown';
 export type AttentionMode = 'normal' | 'quiet' | 'focused' | 'collaborative' | 'proactive';
 export type SubjectKind = 'resource' | 'workspace' | 'project' | 'collection';
 export interface ResourceRef { id: string; kind: SubjectKind; version: number; title: string; resourceKind?: string; projectId?: string | null; state?: 'active' | 'archived' }
+export type VelaSubjectRef = Pick<ResourceRef, 'id' | 'kind'>;
 export interface VelaScope {
   principalId: string; policyVersion: string;
   resourceIds: string[]; workspaceIds: string[]; projectIds: string[];
@@ -30,6 +31,7 @@ export interface ContextManifest {
   history?: ProviderHistory;
 }
 export type VelaNativeAction =
+  | { type: 'search'; query: string }
   | { type: 'setAttentionMode'; mode: AttentionMode; expectedVersion: number }
   | { type: 'navigate'; target: { kind: 'workspace'; workspaceId: string } | { kind: 'constellation'; projectId: string | null } }
   | { type: 'createProject'; title: string }
@@ -63,7 +65,7 @@ export type VelaNativeAction =
   | { type: 'relate'; sourceId: string; targetId: string; kind: string }
   | { type: 'applyStructuredPreset'; workspaceId: string; preset: 'balanced' | 'focus' | 'development' | 'research' };
 export interface CapabilityDescriptor {
-  id: VelaNativeAction['type'] | 'search' | 'delegateTask'; label: string;
+  id: VelaNativeAction['type'] | 'delegateTask'; label: string;
   effect: 'read' | 'navigate' | 'create' | 'mutate' | 'provider-execution';
   scope: string; authorization: 'host-policy' | 'reviewed-action' | 'explicit-execution-authorization';
   /** JSON-schema-shaped public contract; runtime validation also rejects unknown fields. */
@@ -190,6 +192,7 @@ export interface HostActionResult {
   status: 'applied' | 'failed' | 'cancelled' | 'unknown'; receiptId: string;
   errorCode?: string; createdResourceId?: string; createdWorkspaceId?: string; createdProjectId?: string; createdCollectionId?: string;
   responseText?: string;
+  foundSubjects?: VelaSubjectRef[];
 }
 export interface VelaHostPort {
   /** Trusted current policy metadata only; absent adapters cannot expose attention-version authority. */
@@ -206,7 +209,8 @@ export interface VelaHostPort {
   conversationRevision?(resourceId: string): number | null;
   appendMessage(resourceId: string, message: Omit<VelaMessage, 'id'>): VelaMessage;
   search(query: string, scope: VelaScope, limit: number): ResourceRef[];
-  resolve(ref: Pick<ResourceRef, 'id' | 'kind'>, scope: VelaScope, purpose?: { restoreCollection?: boolean }): ResourceRef | null;
+  resolve(ref: VelaSubjectRef, scope: VelaScope, purpose?: { restoreCollection?: boolean }): ResourceRef | null;
+  resolveMany?(refs: readonly VelaSubjectRef[], scope: VelaScope): ResourceRef[];
   /** Only for a persisted applied archive action/receipt; does not rediscover archived metadata. */
   canInspectCollectionArchiveReceipt?(ref:ResourceRef,scope:VelaScope):boolean;
   readContent(id: string, scope: VelaScope): { ref: ResourceRef; content: string; source: string } | null;
@@ -262,6 +266,8 @@ export interface VelaState {
   lastPresenceAt: string | null; coverage: 'authorized-app-events-only';
   adaptation?: AdaptationState;
   presentation?: VelaPresentationState;
+  /** Current authorized metadata, keyed by search receipt ID. Saved receipts hold only references. */
+  searchResults?: Record<string, ResourceRef[]>;
   applicationContext?: { currentProjectId:string|null;currentWorkspaceId:string|null;references:ResourceRef[] };
 }
 /** Durable view references only; dismissing a manifestation never changes canonical history or action state. */

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { CAPABILITIES, VelaError, check, identifier, isLocalFact, isRecord, text, validateAction, validateProviderResult } from './capabilities.ts';
+import { CAPABILITIES, VelaError, check, identifier, isHostPolicyRead, isLocalFact, isRecord, text, validateAction, validateProviderResult } from './capabilities.ts';
 import { defaultAdaptation, effectivePreference, observePreference, preferenceCategory, samePreferenceScope, setExplicitPreference, validatePreference } from './adaptation.ts';
 import { VELA_CONTRACT } from './contracts.ts';
 import { evaluateLocalCapability, validateLocalRecord } from './local-capabilities.mts';
@@ -10,16 +10,19 @@ import type { AcceptedHistoryAppend, HistoryFence, HistoryMessageMetadata, Histo
 import type {
   ActionReceipt, AppAttentionEvent, AttentionItem, AttentionPreferences, AuthorizationRequest,
   ContextManifest, DelegateTaskAction, HostActionResult, PlanStep, ResourceRef, VelaHostPort,
-  VelaNativeAction, VelaPlan, VelaPlanningPort, VelaRequest, VelaScope, VelaState,
+  VelaNativeAction, VelaPlan, VelaPlanningPort, VelaRequest, VelaScope, VelaState, VelaSubjectRef,
   AdaptationPolicy, AdaptationState, ExplicitPreference, PreferenceHypothesis, PreferenceKey,
   PreferenceScope, PreferenceValue, AdaptationReceipt, ProviderContribution, ProviderReplyKind,
   VelaLocalCapabilityId, VelaLocalDispatch, VelaLocalHost, VelaLocalRecord, VelaLocalResult,
   VelaPresentationState, VelaPresentationPatch,
 } from './contracts.ts';
 
+type StoredActionReceipt = ActionReceipt & { foundSubjects?: VelaSubjectRef[] };
+const subjectKey = ({ id, kind }: VelaSubjectRef) => kind + ':' + id;
+
 interface StoredState {
   schemaVersion: 3; conversationId: string | null; requests: VelaRequest[];
-  plans: VelaPlan[]; receipts: ActionReceipt[]; preferences: AttentionPreferences;
+  plans: VelaPlan[]; receipts: StoredActionReceipt[]; preferences: AttentionPreferences;
   attention: AttentionItem[]; lastPresenceAt: string | null;
   adaptation: AdaptationState;
   presentation?: VelaPresentationState;
@@ -212,11 +215,23 @@ export class VelaService {
     };
     const plans = this.data.plans.filter(planVisible);
     const planIds = new Set(plans.map(p => p.id));
+    const receipts = this.data.receipts.filter(r => planIds.has(r.planId));
+    const resultRefs = new Map<string, VelaSubjectRef>();
+    for (const receipt of receipts) {
+      if (receipt.state !== 'applied') continue;
+      for (const ref of receipt.foundSubjects ?? []) {
+        if (this.permitted(ref.id, ref.kind, scope)) resultRefs.set(subjectKey(ref), ref);
+      }
+    }
+    const currentRefs = new Map(this.resolveSubjects([...resultRefs.values()], scope).map(ref => [subjectKey(ref), ref]));
+    const searchResults = Object.fromEntries(receipts.filter(r => r.state === 'applied' && r.foundSubjects).map(r =>
+      [r.id, r.foundSubjects!.flatMap(ref => currentRefs.get(subjectKey(ref)) ?? [])]));
     const result: VelaState = {
       contract: VELA_CONTRACT, identity: { id: 'system:vela', name: 'Vela', role: 'application-assistant' },
       conversation: this.data.conversationId ? this.opts.host.readConversation(this.data.conversationId) : null,
       planner: { providerId: this.opts.planner?.providerId ?? null, ...available },
-      capabilities: CAPABILITIES, requests, plans, receipts: this.data.receipts.filter(r => planIds.has(r.planId)),
+      capabilities: CAPABILITIES, requests, plans, receipts: receipts.map(({ foundSubjects: _refs, ...receipt }) => receipt),
+      searchResults,
       preferences: this.data.preferences, attention: this.data.attention.filter(visible),
       lastPresenceAt: this.data.lastPresenceAt, coverage: 'authorized-app-events-only',
       adaptation: this.visibleAdaptation(scope),
@@ -253,7 +268,15 @@ export class VelaService {
   search(query: string): ResourceRef[] {
     check(typeof query === 'string' && query.length <= 200, 'invalid_search');
     const scope = this.scope();
-    return this.opts.host.search(query, scope, 30).slice(0, 30).filter(ref => this.permitted(ref.id, ref.kind, scope)).map(ref => this.resolve(ref.id, ref.kind, scope));
+    return this.resolveSubjects(this.opts.host.search(query, scope, 30).slice(0, 30), scope);
+  }
+  private resolveSubjects(refs: readonly VelaSubjectRef[], scope: VelaScope): ResourceRef[] {
+    const allowed = new Map(refs.filter(ref => this.permitted(ref.id, ref.kind, scope)).map(ref => [subjectKey(ref), ref]));
+    if (!allowed.size) return [];
+    const list = [...allowed.values()];
+    const found = this.opts.host.resolveMany?.(list, scope) ??
+      list.flatMap(ref => this.opts.host.resolve(ref, scope) ?? []);
+    return found.filter(ref => allowed.has(subjectKey(ref)) && Number.isSafeInteger(ref.version) && ref.version >= 1 && text(ref.title));
   }
   /** Exact prospective context for native consent. No conversation/message/request/provider side effects. */
   previewContext(resourceIds: string[]): ContextManifest {
@@ -512,7 +535,7 @@ export class VelaService {
         for (const ref of active.context.included) check(this.resolve(ref.id, ref.kind, currentScope).version === ref.version, 'stale_context_version');
         if (parsed.kind === 'plan') {
           const plan = this.prepare(active, parsed.summary, parsed.steps, parsed.contribution);
-          if (plan.steps.length === 1 && plan.steps[0].action.type === 'readLocalFact') {
+          if (plan.steps.length === 1 && isHostPolicyRead(plan.steps[0].action.type)) {
             plan.authorizationRef = this.authorize(this.authInput(plan, 'review'));
             plan.reviewedAt = this.now();
             plan.state = 'approved';
@@ -590,7 +613,7 @@ export class VelaService {
     this.atomic(() => { plan.state = 'applying'; });
     for (const step of plan.steps) {
       if (this.getPlan(planId).state !== 'applying') break;
-      let receipt: ActionReceipt = { id: randomUUID(), planId, requestId: plan.requestId, stepId: step.id,
+      let receipt: StoredActionReceipt = { id: randomUUID(), planId, requestId: plan.requestId, stepId: step.id,
         commandId: 'vela:' + planId + ':' + step.id, source: 'vela', providerId: step.action.type === 'delegateTask' ? step.action.providerId : null,
         state: 'started', startedAt: this.now(), taskVerified: false };
       this.atomic(() => { this.data.receipts.push(receipt); });
@@ -656,6 +679,9 @@ export class VelaService {
         if (result.createdWorkspaceId) receipt.createdWorkspaceId = result.createdWorkspaceId;
         if (result.createdProjectId) receipt.createdProjectId = result.createdProjectId;
         if (result.createdCollectionId) receipt.createdCollectionId = result.createdCollectionId;
+        if (step.action.type === 'search' && result.status === 'applied' && result.foundSubjects) {
+          receipt.foundSubjects = result.foundSubjects.slice(0, 12).map(({ id, kind }) => ({ id, kind }));
+        }
         if ((step.action.type === 'readWeather' || step.action.type === 'readLocalFact') && text(result.responseText, 1000)) {
           this.append(result.responseText, request.id, 'vela-native', plan);
           explicitResponse = true;
@@ -666,8 +692,11 @@ export class VelaService {
     this.atomic(() => {
       if (plan.state === 'applying') { plan.state = 'applied'; request.state = 'completed'; }
       request.updatedAt = this.now();
-      if (!explicitResponse || plan.steps.length !== 1)
-        this.append(plan.state === 'applied' ? 'The reviewed native plan was applied. Host receipts are available for inspection; delegated task outcomes remain owned by the execution service.' : 'Plan execution stopped with state: ' + plan.state + '. Inspect receipts before retrying.', request.id, 'vela-native', plan);
+      if (!explicitResponse || plan.steps.length !== 1) {
+        const observed = plan.steps.length === 1 && isHostPolicyRead(plan.steps[0].action.type);
+        const applied = observed ? 'The local lookup is complete.' : 'The reviewed native plan was applied. Host receipts are available for inspection; delegated task outcomes remain owned by the execution service.';
+        this.append(plan.state === 'applied' ? applied : 'Plan execution stopped with state: ' + plan.state + '. Inspect receipts before retrying.', request.id, 'vela-native', plan);
+      }
     });
     return structuredClone(plan);
   }

@@ -10,6 +10,12 @@ consent. The observation stays in Aerynth and is displayed from its canonical
 message and receipt. Plans that change the workspace still require action
 review. The weather capability has its own location-sharing review.
 
+The model can also select the typed search action. Aerynth searches the
+current scope by title, ID, or resource type and displays up to 12 results
+that can be opened directly. The receipt stores only canonical references.
+Aerynth resolves them again against current permissions on every display,
+including after restart. Search results stay in the local application.
+
 The trusted backend also accepts an explicit typed
 `VelaService.local({capabilityId, intent, commandId}, signal?)` call. The
 desktop renderer has no direct route to this operation. The host supplies

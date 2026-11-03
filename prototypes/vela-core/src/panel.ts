@@ -307,6 +307,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       case 'renameResource': return 'Rename ' + name(action.resourceId, 'resource') + ' to “' + action.title + '”';
       case 'associateResourceProject': return 'Change ' + name(action.resourceId, 'resource') + ' project to ' + (action.projectId ? name(action.projectId, 'project') : 'No project');
       case 'createWorkspace': return 'Create workspace “' + action.title + '”' + (action.projectId ? ' in ' + name(action.projectId) : '');
+      case 'search': return 'Find Aerynth resources matching “' + action.query + '”';
       case 'readLocalFact': return 'Read ' + LOCAL_FACT_LABELS[action.capabilityId];
       case 'readWeather': return 'Read your Windows location once and send an approximate point to the US National Weather Service for ' + (action.period === 'now' ? 'the current hour' : action.period.replace('-', ' '));
       case 'createTimeline': {
@@ -341,14 +342,23 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       const lookup = plan.steps.length === 1 && ['readLocalFact', 'readWeather'].includes(plan.steps[0].action.type);
       const observation = lookup && ['applied', 'failed'].includes(plan.state) ? state.conversation.messages.findLast(message =>
         message.requestId === plan.requestId && message.planId === plan.id && message.source === 'vela-native' && message.classification === 'observed') : undefined;
-      const signature = JSON.stringify({ plan, receipts, effects, observationId: observation?.id }), cached = planCards.get(plan.id); visible.add(plan.id);
+      const matches = receipts.flatMap(receipt => state.searchResults?.[receipt.id] ?? []);
+      const searched = receipts.some(receipt => state.searchResults?.[receipt.id] !== undefined);
+      const signature = JSON.stringify({ plan, receipts, effects, observationId: observation?.id, matches, searched }), cached = planCards.get(plan.id); visible.add(plan.id);
       if (cached?.signature === signature) { target.push(cached.node); continue; }
       const card = el('article', 'vela-core-plan'); card.dataset.planId = plan.id; card.dataset.planState = plan.state; card.tabIndex = -1;
       const confirmed = receipts.filter(receipt => receipt.state === 'applied' && receipt.hostReceiptId).length;
       const complete = plan.steps.length > 0 && plan.steps.every(step => receipts.some(receipt => receipt.stepId === step.id && receipt.state === 'applied' && receipt.hostReceiptId));
-      const stateLabel = { prepared: 'Ready for your review', approved: 'Approved · ready to apply', rejected: 'Not applied', applying: 'Applying reviewed changes', applied: complete ? 'Applied' : 'Results need review', failed: 'Stopped · review needed', cancelled: 'Cancelled', unknown: 'Outcome unknown · review needed' }[plan.state];
+      const stateLabel = { prepared: 'Ready for your review', approved: 'Approved · ready to apply', rejected: 'Not applied', applying: 'Applying reviewed changes', applied: complete ? (searched ? 'Search complete' : 'Applied') : 'Results need review', failed: 'Stopped · review needed', cancelled: 'Cancelled', unknown: 'Outcome unknown · review needed' }[plan.state];
       card.append(el('p', 'vela-core-plan-state', stateLabel), el('h3', undefined, plan.summary), el('p', 'vela-core-meta', plan.contribution ? 'Proposed with ' + providerName(plan.contribution.providerId) : 'Local app action'));
       if (observation) card.append(el('p', 'vela-manifestation-value', observation.content));
+      if (searched) {
+        const results = el('div', 'vela-core-actions');
+        for (const ref of matches) results.append(options.onOpenSubject
+          ? button(ref.title, () => options.onOpenSubject?.(ref)) : el('span', undefined, ref.title));
+        if (!matches.length) results.append(el('p', undefined, 'No matching resources are available in this scope.'));
+        card.append(results);
+      }
       const steps = el('ol', 'vela-core-effects'); for (const [index, step] of plan.steps.entries()) { const item = el('li'); item.append(el('p', undefined, effects[index])); if (step.action.type === 'content') item.append(el('pre', 'vela-core-change-preview', step.action.content)); if (step.action.type === 'delegateTask') item.append(el('p', undefined, step.action.objective), el('p', 'vela-core-secondary', 'Starting this work requires a separate execution approval. A finished provider turn does not verify the task.')); steps.append(item); } card.append(steps);
       if (plan.targets.length) card.append(el('p', 'vela-core-targets', 'Uses: ' + plan.targets.map(ref => ref.title).join(', ')));
       const controls = el('div', 'vela-core-actions');

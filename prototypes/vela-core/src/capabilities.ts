@@ -60,7 +60,7 @@ export const isLocalFact = (id: unknown): id is VelaLocalCapabilityId =>
   typeof id === 'string' && Object.hasOwn(LOCAL_FACT_LABELS, id);
 
 export const CAPABILITIES: CapabilityDescriptor[] = [
-  capability('search', 'Search authorized application resources', 'read', { query: stringSchema }, 'Authorized metadata only; content requires separate retrieval'),
+  capability('search', 'Find Aerynth resources by title or type', 'read', { type: { const: 'search' }, query: stringSchema }, 'Search current authorized metadata by title, ID or resource type. Use a short search term. Results stay local.'),
   capability('navigate', 'Open a workspace or project constellation', 'navigate', { type: { const: 'navigate' }, target: { oneOf: [objectSchema({ kind: { const: 'workspace' }, workspaceId: idSchema }), objectSchema({ kind: { const: 'constellation' }, projectId: nullableIdSchema })] } }, 'One authorized navigation target'),
   capability('createProject', 'Create a project', 'create', { type: { const: 'createProject' }, title: stringSchema }, 'One new canonical project; does not change the authorized scope or grant access to another project'),
   capability('renameProject', 'Rename a project', 'mutate', { type: { const: 'renameProject' }, projectId: idSchema, title: stringSchema }, 'One authorized active project and its exact manifest version'),
@@ -103,11 +103,15 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('delegateTask', 'Request an explicitly authorized provider execution', 'provider-execution', { type: { const: 'delegateTask' }, title: stringSchema, objective: { type: 'string', minLength: 1, maxLength: 16000 }, providerId: idSchema, resourceIds: arraySchema, constraints: { type: 'array', maxItems: 30, items: { type: 'string', maxLength: 1000 } } }, 'Original intent, source conversation, exact resource manifest, provider identity, and host-issued execution authorization'),
 ];
 
+export const isHostPolicyRead = (type: CapabilityDescriptor['id']) =>
+  CAPABILITIES.some(item => item.id === type && item.effect === 'read' && item.authorization === 'host-policy');
+
 export function validateAction(value: unknown): VelaNativeAction | DelegateTaskAction {
   check(isRecord(value), 'invalid_action');
   const v = value;
   let valid = false;
   switch (v.type) {
+    case 'search': valid = fields(v, ['type', 'query']) && text(v.query); break;
     case 'setAttentionMode': valid = fields(v, ['type','mode','expectedVersion']) && typeof v.mode==='string' && ['normal','quiet','focused','collaborative','proactive'].includes(v.mode) && version(v.expectedVersion); break;
     case 'navigate': valid = fields(v, ['type', 'target']) && isRecord(v.target) && (
       (fields(v.target, ['kind', 'workspaceId']) && v.target.kind === 'workspace' && identifier(v.target.workspaceId)) ||

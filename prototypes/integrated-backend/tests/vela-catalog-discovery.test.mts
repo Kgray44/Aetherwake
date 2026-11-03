@@ -27,9 +27,9 @@ function fixture(mode = 'normal', enabled = true) {
   port().onEvent((event) => events.push(event));
   const vela = (name: VelaOperation['name'], input: unknown = {}) => core.command('vela', { name, input } as VelaOperation);
   const state = () => vela('state') as Promise<VelaBackendState>;
-  const granted = async (resourceIds: string[] = []) => {
+  const granted = async (resourceIds: string[] = [], intent = 'Synthetic protocol request to propose one folder.') => {
     await core.command('capabilities', {});
-    const preview = await core.command('velaRequestPreview', { intent: 'Synthetic protocol request to propose one folder.', resourceIds }),
+    const preview = await core.command('velaRequestPreview', { intent, resourceIds }),
       grant = await core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature });
     return { preview, input: { intent: preview.intent, resourceIds, authorizeProvider: true, previewId: preview.id, grantId: grant.grantId } };
   };
@@ -58,6 +58,63 @@ function fixture(mode = 'normal', enabled = true) {
     },
   };
 }
+
+test('a model-selected search opens canonical results, persists references only, and rechecks visibility after switching scope', async () => {
+  const f = fixture('search');
+  try {
+    const project = (await f.core.command('desktop', { type: 'createProject', title: 'Synthetic instruments' })).projects[0];
+    const workspace = (await f.core.command('desktop', {
+      type: 'createWorkspace', title: 'Synthetic workshop', projectId: project.id,
+    })).activeWorkspaceId!;
+    const title = 'Synthetic calibration measurements';
+    const seeded = await f.core.command('desktop', { type: 'createResource', kind: 'note', title, workspaceId: workspace });
+    const resource = seeded.resources.find(item => item.title === title)!;
+    assert.equal(resource.project_id, project.id);
+
+    const { preview, input } = await f.granted([], 'Where did I put the data from calibrating the instrument?');
+    assert.equal(preview.context.contentBytes, 0);
+    assert(!JSON.stringify(preview.context).includes(resource.id));
+    const request = await f.vela('request', input) as { id: string; planId: string; state: string };
+    assert.equal(request.state, 'completed');
+    const state = await f.state();
+    const receipt = state.receipts.find(value => value.requestId === request.id)!;
+    assert.equal(receipt.state, 'applied');
+    assert.equal(receipt.providerId, null);
+    assert.equal(state.plans.find(plan => plan.id === request.planId)?.steps[0].action.type, 'search');
+    assert.deepEqual(state.searchResults?.[receipt.id].map(ref => [ref.id, ref.title]), [[resource.id, title]]);
+    assert(!state.conversation?.messages.some(message => message.content.includes(title)));
+    const saved = f.db().prepare('SELECT json FROM vela_state').get()!;
+    assert.deepEqual(JSON.parse(String(saved.json)).receipts[0].foundSubjects, [{ id: resource.id, kind: 'resource' }]);
+    assert(!String(saved.json).includes(title));
+    assert.equal(f.events.filter(event => event.method === 'fixture/catalogResult' && event.payload.success === true).length, 1);
+    assert.equal(Object.keys((await f.core.command('snapshot', {})).executions).length, 1);
+
+    await f.reopen();
+    assert.equal((await f.state()).searchResults?.[receipt.id][0].id, resource.id);
+    const other = (await f.core.command('desktop', { type: 'createProject', title: 'Synthetic other scope' })).projects.find(item => item.id !== project.id)!;
+    await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic other workspace', projectId: other.id });
+    const otherState = await f.state();
+    assert.deepEqual(otherState.searchResults?.[receipt.id], []);
+    assert(!JSON.stringify(otherState.searchResults).includes(resource.id));
+    assert.equal(f.leases(), 0);
+  } finally { await f.close(); }
+});
+
+test('the native planning adapter executes a single typed clock read after the synthetic protocol turn completes', async () => {
+  const f = fixture('clock');
+  try {
+    const { input } = await f.granted([], 'What time is it?');
+    const request = await f.vela('request', input) as { id: string; state: string };
+    assert.equal(request.state, 'completed');
+    const state = await f.state();
+    const observed = state.conversation!.messages.find(message => message.requestId === request.id && message.source === 'vela-native');
+    assert.match(observed?.content ?? '', /It.s \d{1,2}:\d{2}/u);
+    assert.equal(observed?.providerId, undefined);
+    assert.equal(state.receipts.find(receipt => receipt.requestId === request.id)?.state, 'applied');
+    assert.equal(f.events.filter(event => event.method === 'fixture/catalogResult' && event.payload.success === true).length, 1);
+    assert.equal(Object.keys((await f.core.command('snapshot', {})).executions).length, 1);
+  } finally { await f.close(); }
+});
 
 test('same authorized protocol turn discovers exact schemas from a frozen resource manifest, proposes without applying, and survives SQLite restart with no lease replay', async () => {
   const f = fixture('early-call');

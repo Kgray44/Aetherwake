@@ -1,3 +1,4 @@
+import { isHostPolicyRead } from './capabilities.ts';
 import type { PlanState, RequestState, VelaState } from './contracts.ts';
 
 export interface VelaPanelStatus {
@@ -34,6 +35,7 @@ export function velaPanelStatus(state: Pick<VelaState, 'requests' | 'plans' | 'r
   if (request.state === 'completed' || plan?.state === 'applied') {
     const confirmed = plan?.state === 'applied' && plan.steps.length > 0 && plan.steps.every(step => receipts.some(r => r.stepId === step.id && r.state === 'applied' && r.hostReceiptId));
     if (!confirmed) return result('The plan is marked complete, but some results are missing. Review the details before trying again.');
+    if (plan.steps.length === 1 && isHostPolicyRead(plan.steps[0].action.type)) return result('The local result is ready.');
     return result('The reviewed plan was applied.' + (plan.steps.some(step => step.action.type === 'delegateTask') ? ' Delegated task completion remains unverified.' : ''));
   }
   if (plan?.state === 'approved') return result('Approved and ready to apply. No changes have run yet.');

@@ -238,6 +238,13 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
     }),
     appendMessage: (id, message) => within(() => { const current = view(); requireConversation(id, current); return options.conversations.append(id, structuredClone(message)); }),
     resolve: (ref, scope,purpose) => readWithin(() => structuredClone(resolve(ref, scope, view(purpose?.restoreCollection===true&&ref.kind==='collection'?[ref.id]:[])))),
+    resolveMany: (refs, scope) => readWithin(() => {
+      const current = view();
+      return structuredClone(refs.flatMap(ref => {
+        const match = resolve(ref, scope, current);
+        return match ? [match] : [];
+      }));
+    }),
     canInspectCollectionArchiveReceipt:(ref,scope)=>readWithin(()=>{
       if(ref.kind!=='collection'||!identifier(ref.id)||!scope.collectionIds?.includes(ref.id))return false;
       const current=view();selectedScope(scope,current);

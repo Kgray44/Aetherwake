@@ -21,6 +21,8 @@ const session = (id) => ({
   approvalPolicy: 'never',
   instructionSources: ['C:\\synthetic\\AGENTS.md'],
 });
+const readAction = mode === 'search' ? { type: 'search', query: 'calibration' }
+  : mode === 'clock' ? { type: 'readLocalFact', capabilityId: 'local.time' } : null;
 const complete = (status = 'completed') => send({ method: 'turn/completed', params: { threadId: currentThread, turn: { id: currentTurn, status } } });
 const finish = () => {
   const response = ['answer', 'answer-catalog'].includes(mode)
@@ -28,12 +30,12 @@ const finish = () => {
     : {
         schemaVersion: 2,
         kind: 'plan',
-        summary: 'Synthetic folder proposal.',
+        summary: readAction ? 'Synthetic local lookup.' : 'Synthetic folder proposal.',
         steps: [
           {
             id: 'create',
             explanation: 'Explicit protocol regression, not live model qualification.',
-            action: { type: 'createCollection', title: 'Synthetic proposed folder', projectId: null },
+            action: readAction ?? { type: 'createCollection', title: 'Synthetic proposed folder', projectId: null },
           },
         ],
       };
@@ -49,7 +51,7 @@ const requestTool = (patch = {}) => {
     callId: 'catalog-call:1',
     namespace: null,
     tool: 'aerynth_capability_schemas',
-    arguments: { catalogDigest: task.capabilityCatalog?.digest ?? '0'.repeat(64), ids: ['createCollection'] },
+    arguments: { catalogDigest: task.capabilityCatalog?.digest ?? '0'.repeat(64), ids: [readAction?.type ?? 'createCollection'] },
     ...patch,
   };
   pending.set(requestId, params);

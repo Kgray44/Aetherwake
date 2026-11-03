@@ -919,6 +919,11 @@ export class BackendCore {
     return this.once(input.commandId,{type:'velaNative',...input},()=>{
       const a=input.action;
       ensure(a.type!=='readWeather','weather_reviewed_preparation_required');
+      if(a.type==='search'){
+        const foundSubjects=this.vela.search(a.query.trim()).slice(0,12).map(({id,kind})=>({id,kind}));
+        this.record('vela.native.search','observed');
+        return {status:'applied',receiptId:input.commandId,foundSubjects};
+      }
       if(a.type==='readLocalFact'){
         const fact=evaluateLocalCapability(a.capabilityId,this.localVelaHost());
         this.record('vela.native.readLocalFact','observed');
