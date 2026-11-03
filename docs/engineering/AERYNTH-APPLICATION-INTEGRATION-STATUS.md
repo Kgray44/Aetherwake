@@ -2,6 +2,35 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 clipping projection and Portable BB
+
+The compositor now uses the exact axis bounds of unrotated cards and
+builds the full clipping outline when an overlap needs it. Rotated and
+yawed cards retain their projected outlines. A deterministic comparison
+against BA matched clip paths, stacking and bounds over 1,800 mixed
+frames, including 5,037 clipped-card cases and moving presence overlays.
+It skipped 2,015 outlines across those frames. The geometry regression
+also exercises a card that first moves into overlap and then away.
+
+Two BA and two changed hidden runs used copies of the same 50-card
+SQLite seed in BA, changed, changed, BA order. Offscreen Fit paint P95
+was 75.5–80.3 ms on BA and 70.8–78.8 ms with the change. Fit scripting
+was 213–215 ms and 212–222 ms, respectively, in the 900 ms samples.
+The trace still attributes substantial time to layout and paint. The
+evidence establishes less contour work and equivalent clipping. Overall
+Fit pacing and physical display presentation remain unqualified.
+
+Portable BB packages `a8f3a97fd70f555797dfd36cd860c582f848f538`.
+All 427 payload hashes matched. Manifest SHA-256 is
+`e6f04f92c35524a8ac23687f39c3945868c2825f854996f63917784ebbfdd17b`.
+The packaged application passed 50-card Fit, Universe travel, return,
+resize, reduced motion, WebGL recovery, and exact restart restoration.
+Packaged Fit paint P95 was 79.1 ms and restart paint P95 was 20.0 ms.
+Private profile `review-block-scale-50-1793701407902` holds the receipts
+with SHA-256 values `6d760b88dea5b638cf328bf98086d9bcee67bc45e24560db3dba8b6e30393746`
+and `f89e840d98d38a784eff452da7e44d43b4e4d832cb2c8c2b2c26d01f43c2389a`.
+Strict build and 406 desktop tests passed. No provider requests occurred.
+
 ## November 3 media retention and Portable BA
 
 The workspace retains its three most recently used inactive media readers.
