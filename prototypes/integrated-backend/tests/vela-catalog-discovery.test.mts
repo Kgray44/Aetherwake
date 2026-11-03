@@ -100,8 +100,9 @@ test('a model-selected search opens canonical results, persists references only,
   } finally { await f.close(); }
 });
 
-test('reviewed Vela text reaches the model adapter and arranges the exact active workspace with canonical undo', async () => {
-  const f = fixture('layout');
+for (const discovery of [false, true])
+test(`reviewed Vela text reaches the model adapter and arranges the exact active workspace with canonical undo (schema discovery: ${discovery})`, async () => {
+  const f = fixture('layout', discovery);
   try {
     const project = (await f.core.command('desktop', { type: 'createProject', title: 'Synthetic project' })).projects[0];
     const createWorkspace = async () => (await f.core.command('desktop', {
@@ -117,7 +118,7 @@ test('reviewed Vela text reaches the model adapter and arranges the exact active
     await f.core.command('desktop', { type: 'createResource', kind: 'task', title: 'Synthetic build', workspaceId });
     const baseline = await f.core.command('desktop', { type: 'snapshot' });
 
-    const { preview, input } = await f.granted([], 'Can you organize my workspace?');
+    const { preview, input } = await f.granted([], discovery ? 'Can you organize my workspace?' : 'These cards could use a tidier arrangement.');
     assert.deepEqual(preview.context.activeSurface, { projectId: project.id, workspaceId });
     assert.equal(preview.context.contentBytes, 0);
     const request = await f.vela('request', input) as { id: string; planId: string; state: string };
@@ -127,7 +128,7 @@ test('reviewed Vela text reaches the model adapter and arranges the exact active
     assert.deepEqual(plan.steps[0].action, { type: 'applyStructuredPreset', workspaceId, preset: 'balanced' });
     assert.equal(proposed.receipts.length, 0);
     assert.equal((await f.core.command('desktop', { type: 'snapshot' })).layoutVersion, baseline.layoutVersion);
-    assert.equal(f.events.filter(event => event.method === 'fixture/catalogResult' && event.payload.success === true).length, 1);
+    assert.equal(f.events.filter(event => event.method === 'fixture/catalogResult' && event.payload.success === true).length, discovery ? 1 : 0);
 
     await f.vela('review', { planId: plan.id, fingerprint: plan.fingerprint, decision: 'approve' });
     const applied = await f.vela('apply', plan.id) as { state: string };

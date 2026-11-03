@@ -170,7 +170,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       try {
         const recorded = await client.request(submitted);
         if (disposed) return;
-        if (draftRevision === revision && intent.value === submitted.intent) intent.value = ''; renderStatus({ requests: [recorded], plans: [], receipts: [] });
+        if (recorded.state !== 'provider-unavailable' && draftRevision === revision && intent.value === submitted.intent) intent.value = '';
+        renderStatus({ requests: [recorded], plans: [], receipts: [] });
         await settleSubmittedView(submittedView);
       }
       catch (error) { busy = false; try { await refresh(); } catch { status.dataset.requestState = 'unknown'; delete status.dataset.requestId; delete status.dataset.planState; status.hidden = false; status.textContent = 'The request could not be checked. Its outcome is unknown; review the activity before trying again.'; } throw error; }
@@ -270,7 +271,25 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     try { options.onPresentation?.(value); } catch { /* Presentation observers cannot fail a canonical request or editor action. */ }
     emitManifestation();
   }
-  async function run(action: () => unknown) { if (disposed) return; try { await action(); } catch (error) { if (!disposed) { status.dataset.actionState = 'failed'; errorBox.hidden = false; const details = disclosure('Error details', 'vela-core-error-details'); details.body.append(el('pre', undefined, error instanceof Error ? error.message : String(error))); errorBox.replaceChildren(el('p', undefined, 'That could not be completed. Your text is still here.'), details.node, button('Dismiss', () => { errorBox.hidden = true; present(); })); present(); } } }
+  async function run(action: () => unknown) {
+    if (disposed) return;
+    try { await action(); }
+    catch (error) {
+      if (disposed) return;
+      status.dataset.actionState = 'failed'; errorBox.hidden = false;
+      const code = error instanceof Error ? error.message : String(error);
+      const messages: Record<string, string> = {
+        vela_planner_unavailable: 'Vela couldn’t reach the AI. Your draft is still here.',
+        vela_planner_sign_in_required: 'Connect Codex to use Vela’s AI. Your draft is still here.',
+        vela_planner_busy: 'The AI is busy. Your draft is ready to send when it frees up.',
+        authorization_cancelled: 'Your request wasn’t shared. Your draft is still here.',
+      };
+      const details = disclosure('Error details', 'vela-core-error-details');
+      details.body.append(el('pre', undefined, code));
+      errorBox.replaceChildren(el('p', undefined, (Object.hasOwn(messages, code) ? messages[code] : undefined) ?? 'That could not be completed. Your text is still here.'), details.node, button('Dismiss', () => { errorBox.hidden = true; present(); }));
+      present();
+    }
+  }
   function available(action: VelaNativeAction['type']) { const advertised = (current as (VelaState & { nativeCapabilities?: Record<string, { available: boolean }> }) | null)?.nativeCapabilities; return advertised ? advertised[action]?.available === true : !!current?.capabilities.some(capability => capability.id === action); }
   function updateWorkspaceAvailability() {
     createNote.disabled = createTask.disabled = nativeBusy || !available('createResource');

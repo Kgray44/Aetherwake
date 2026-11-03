@@ -117,9 +117,18 @@ exports.velaCommand = async ({
     if (offerPlanningByDefault) {
       // Launching App Server to observe its installed sign-in is not a model
       // turn. The exact prompt still requires the trusted review below.
-      const capability = await call("capabilities", {}).catch(() => null);
-      request.authorizeProvider = capability?.providerId === "codex-app-server" &&
-        capability.mock === false && capability.authentication === "available";
+      await stage("connection", async () => {
+        const status = await call("capabilities", {}).catch((error) => {
+          throw Error(error?.message === "execution_busy" ? "vela_planner_busy" : "vela_planner_unavailable");
+        });
+        if (status?.providerId !== "codex-app-server" || status.mock !== false)
+          throw Error("vela_planner_unavailable");
+        if (status.authentication === "required")
+          throw Error("vela_planner_sign_in_required");
+        if (status.authentication !== "available")
+          throw Error("vela_planner_unavailable");
+      });
+      request.authorizeProvider = true;
     }
     if (!request.authorizeProvider)
       return call("vela", { name: "request", input: request });

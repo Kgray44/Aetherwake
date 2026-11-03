@@ -72,10 +72,15 @@ test('terminal status survives request completion and refresh; connection probe 
   form.fire('submit'); assert.equal(status.dataset.requestState, 'submitting'); assert.doesNotMatch(status.textContent, /provider.*running|Waiting for the identified planning provider/);
   canonical = { ...canonical, requests: [request({ errorCode: 'provider_authorization_required' })] }; resolveRequest(canonical.requests[0]);
   await settles(() => status.dataset.requestState === 'provider-unavailable'); assert.match(status.textContent, /Provider access was not enabled/); assert.equal(status.dataset.requestId, 'request:synthetic');
+  assert.equal(composer.value, 'Synthetic request');
   const terminal = status.textContent; await panel.refresh(); await panel.refresh(); assert.equal(status.textContent, terminal); assert.doesNotMatch(status.textContent, /^Ready|Request:/);
   named(root, 'Provider').fire('click'); assert.equal(displayed(named(root, 'Check connection')), true); named(root, 'Check connection').fire('click');
   await settles(() => connections === 1 && root.find(node => node.className === 'vela-core-provider')!.textContent.includes('· available'));
   assert.equal(status.dataset.requestState, 'provider-unavailable'); assert.equal(status.textContent, terminal, 'connecting does not rewrite a historical request outcome');
+  client.request = async () => { throw new Error('vela_planner_unavailable'); };
+  composer.value = 'Can you organize my workspace?'; composer.fire('input');
+  form.fire('submit'); await settles(() => root.find(node => node.className === 'vela-core-error')!.textContent.includes('couldn’t reach the AI'));
+  assert.equal(composer.value, 'Can you organize my workspace?');
   client.request = async () => { canonical = { ...canonical, requests: [request({ state: 'unknown' })] }; throw new Error('Synthetic lost command response'); };
   composer.value = 'Synthetic retry request'; composer.fire('input');
   form.fire('submit'); await settles(() => status.dataset.actionState === 'failed' && status.dataset.requestState === 'unknown');
@@ -267,7 +272,7 @@ test('free text takes the same request path and provider consent is one-shot', a
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planner = { providerId: 'codex-app-server', available: true, busy: false };
   const requests: Parameters<VelaClient['request']>[0][] = [];
-  const client = clientFor(async () => canonical, { request: async input => { requests.push(input); return request(); } });
+  const client = clientFor(async () => canonical, { request: async input => { requests.push(input); return request({ state: 'responded' }); } });
   const panel = mountVelaPanel(root as unknown as HTMLElement, client);
   await settles(() => root.find(node => node.className === 'vela-core-status')!.dataset.requestState === 'idle');
   const editor = root.find(node => node.tagName === 'textarea')!, consent = root.find(node => node.tagName === 'input' && !!node.parent?.className.includes('vela-core-consent'))!;

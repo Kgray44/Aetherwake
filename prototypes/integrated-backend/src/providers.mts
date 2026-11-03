@@ -4,11 +4,17 @@ import { BridgeError } from '../../codex-bridge/src/transport.ts';
 import type { Options, ProviderPort } from './contracts.mts';
 import { capabilitySchemaTool, capabilityToolFailure } from '../../vela-core/src/capability-catalog.mts';
 import type { CapabilityNativeCall, CapabilityToolReply } from '../../vela-core/src/capability-catalog.mts';
+import { windowsCodexLaunch } from './codex-launch.mts';
 
 /** Thin wrapper deliberately leaves native identity, base instructions, developer
  * instructions, model defaults and configuration loading to installed Codex. */
 export function nativeProvider(options: Options): ProviderPort {
-  const bridge = new CodexAdapter(options.codexExecutable, options.codexArgs,{experimentalApi:options.velaCatalogDiscovery===true});
+  const windowsDefault = process.platform === 'win32' && !options.codexExecutable;
+  const args = options.codexArgs ?? ['app-server', '--listen', 'stdio://'];
+  const launch = windowsDefault ? windowsCodexLaunch(
+    Object.entries(process.env).find(([key]) => key.toUpperCase() === 'PATH')?.[1] ?? '', process.execPath, args,
+  ) : undefined;
+  const bridge = new CodexAdapter(launch?.executable ?? options.codexExecutable, launch?.args ?? args,{experimentalApi:options.velaCatalogDiscovery===true});
   const mock = options.provider === 'bridge-fixture';
   const id = mock ? 'codex-app-server-fixture' : 'codex-app-server';
   let connection: Promise<void> | undefined;
@@ -25,6 +31,7 @@ export function nativeProvider(options: Options): ProviderPort {
     id, mock,
     instanceId: options.instanceId ?? 'local-codex', accountScope: options.accountScope ?? 'local-configured-account',
     async connect() {
+      if (windowsDefault && !launch) throw new BridgeError('missing-executable','Codex CLI is not on the installed PATH');
       if (connection) return connection;
       const attempt = bridge.connect().then(() => {});
       connection = attempt;

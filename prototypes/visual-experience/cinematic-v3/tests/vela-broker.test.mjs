@@ -161,6 +161,26 @@ test("unapproved Vela requests cannot smuggle renderer grants or contact a provi
   assert.equal(isVelaRead({ name: "local" }), false, "Canonical local replies still require storage admission");
 });
 
+test("desktop Vela Send stops before recording a request when the AI could not start", async () => {
+  for (const [status, code] of [
+    [new Error("missing-executable"), "vela_planner_unavailable"],
+    [new Error("execution_busy"), "vela_planner_busy"],
+    [{ providerId: "codex-app-server", mock: false, authentication: "required" }, "vela_planner_sign_in_required"],
+  ]) {
+    const f = fixture();
+    await assert.rejects(velaCommand({
+      ...f, input: request(false), offerPlanningByDefault: true,
+      async call(name, input) {
+        if (name !== "capabilities") return f.call(name, input);
+        if (status instanceof Error) throw status;
+        return status;
+      },
+    }), { message: code });
+    assert.deepEqual(f.calls, []);
+    assert.deepEqual(f.reviews, []);
+  }
+});
+
 test("a former clock shortcut uses the same consent and request path as other free text", async () => {
   const f = fixture(), intent = "What time is it?";
   await velaCommand({
