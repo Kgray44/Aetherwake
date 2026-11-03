@@ -953,6 +953,7 @@ function setVela(state: VelaState) {
 }
 function showDialog(id: string, button: string, show: boolean) {
   $(id).hidden = !show;
+  if (id === "#stream") $("#vela").toggleAttribute("data-demo-stream-visible", show);
   $(button).setAttribute("aria-expanded", String(show));
   if (show)
     $(id)

@@ -629,7 +629,7 @@ body.writing #vela .vela-label > span {
 body.focused .stream {
   height: min(340px, 40vh);
 }
-body:not(.focused):has(#stream:not([hidden])) #vela .vela-label {
+body:not(.focused) #vela[data-demo-stream-visible] .vela-label {
   top: auto;
   bottom: calc(100% + 8px);
 }
@@ -1146,17 +1146,17 @@ body:not(.focused):has(#stream:not([hidden])) #vela .vela-label {
    clipped by the canonical front silhouette. Ordinary overlap never changes
    this optical veil. Focus uses one continuous absorptive film across the
    same glass face, rather than opaque rectangles behind individual sections. */
-body:has(#world[data-materials="physical"]):not(.graphics-fallback) .folio {
+body:not(.graphics-fallback) #world[data-materials="physical"] ~ :where(#stage) .folio {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
 }
-body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+body:not(.graphics-fallback) #world[data-materials="physical"] ~ :where(#stage)
   .folio:not(.receded)
   .working-content {
   background: transparent;
 }
-body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+body:not(.graphics-fallback) #world[data-materials="physical"] ~ :where(#stage)
   .folio:not(.receded)
   .folio-top {
   background: transparent;
@@ -1164,7 +1164,7 @@ body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   padding: 4px 6px;
   margin: -4px -6px 0;
 }
-body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+body:not(.graphics-fallback) #world[data-materials="physical"] ~ :where(#stage)
   .folio::before {
   opacity: 1;
   background: rgba(8, 13, 21, 0.06);
@@ -1177,7 +1177,7 @@ body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   clip-path: var(--resource-content-clip, none);
   container-type: size;
 }
-body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+body:not(.graphics-fallback) #world[data-materials="physical"] ~ :where(#stage)
   .resource-presentation {
   /* Preserve the actual GPU light response everywhere, including under
      text. This full-face tint follows the existing semantic material spring. */
@@ -1231,16 +1231,16 @@ body:has(#world[data-materials="physical"]):not(.graphics-fallback)
   right: 50%;
   transform: translateX(50%);
 }
-body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+body:not(.graphics-fallback) #world[data-materials="physical"] ~ :where(#stage)
   .folio:not(.receded)::after {
   opacity: 0;
 }
-body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+body:not(.graphics-fallback) #world[data-materials="physical"] ~ :where(#stage)
   .folio:not(.receded)
   .folio-edge {
   opacity: 0;
 }
-body:has(#world[data-materials="physical"]):not(.graphics-fallback)
+body:not(.graphics-fallback) #world[data-materials="physical"] ~ :where(#stage)
   .folio.selected:not(.receded) {
   border-color: transparent;
 }
