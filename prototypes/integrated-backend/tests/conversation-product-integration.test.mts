@@ -15,6 +15,22 @@ function fixture(mode='normal'){
 async function product<K extends keyof ProductCommandMap>(core:BackendCore,name:K,input:ProductCommandMap[K]['input']):Promise<ProductCommandMap[K]['output']>{return core.command('conversation',{name,input} as ConversationProductRequest) as Promise<ProductCommandMap[K]['output']>;}
 async function approved(core:BackendCore,input:ConversationSendInput){const preview=await core.command('conversationSendPreview',input),grant=await core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:input.commandId});return {preview,dispatch:{previewId:preview.id,fingerprint:preview.fingerprint,commandId:input.commandId,grantId:grant.grantId}};}
 
+test('desktop shutdown snapshot copies the graph once while returning every canonical conversation header', async () => {
+ const f=fixture();
+ try {
+  const created=[];
+  for(const title of ['Synthetic first chat','Synthetic second chat','Synthetic third chat'])
+   created.push(await f.core.command('createConversation',{title,providerId:'local',commandId:crypto.randomUUID()}));
+  const graph=(f.core as any).graph, snapshot=graph.snapshot.bind(graph);
+  let copies=0;
+  graph.snapshot=()=>{copies++;return snapshot();};
+  const result=await f.core.command('snapshot',{});
+  assert.equal(copies,1);
+  assert.deepEqual(result.conversations,created);
+  assert.equal(result.graph.conversations.length,created.length);
+ } finally {await f.close();}
+});
+
 test('canonical read batches memoize only this synchronous authority check and fence every escaped lazy read',async()=>{
  const f=fixture();try{
   const c=await f.core.command('createConversation',{title:'Synthetic read-batch chat',providerId:'local',commandId:crypto.randomUUID()}),m=await f.core.command('addMessage',{resourceId:c.resourceId,role:'user',content:'Synthetic exact authorized body',expectedRevision:1});

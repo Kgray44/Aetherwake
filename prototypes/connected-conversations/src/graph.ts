@@ -190,6 +190,10 @@ export class ConversationGraph {
     this.data.artifacts.push(a);
     return copy(a);
   }
+  conversationHeader(id: string): Pick<Conversation, 'title' | 'providerId' | 'kind'> {
+    const { title, providerId, kind } = this.conversation(id);
+    return { title, providerId, kind };
+  }
   messageHeader(id: string): { id: string; conversationId: string; createdAt: string; unavailable: boolean } | null {
     const message = this.messagesById.get(id);
     return message ? { id, conversationId: message.conversationId, createdAt: message.createdAt, unavailable: this.unavailableMessages.has(id) } : null;

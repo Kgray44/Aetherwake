@@ -1572,8 +1572,8 @@ export class BackendCore {
     const result = fn(); this.state.receipts[commandId] = { fingerprint, result }; return result;
   }
   private conv(resourceId: string) {
-    const c = this.graph.snapshot().conversations.find(c => c.id === this.gid(resourceId))!;
-    return { resourceId, revision: this.state.revisions[resourceId], title: c.title, providerId: c.providerId, kind: c.kind, taskId: null, projectId: this.kernel.getResource(resourceId).resource.project_id };
+    const header = this.graph.conversationHeader(this.gid(resourceId));
+    return { resourceId, revision: this.state.revisions[resourceId], ...header, taskId: null, projectId: this.kernel.getResource(resourceId).resource.project_id };
   }
   private create(title: string, providerId: string, projectId: string | null = null) {
     if(providerId===CHATGPT_PLAN_PROVIDER)ensure(this.ordinaryAuthorized(),'ordinary_provider_unavailable');
