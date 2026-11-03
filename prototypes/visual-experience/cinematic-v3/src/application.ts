@@ -4588,6 +4588,27 @@ export function installApplication(hooks: Hooks) {
       resourceId?: string;
       payload?: { delta?: string };
     };
+    if (e.type === "storage/reserve-admission-denied") {
+      hooks.status("Storage check paused saving and new runs. Your data is retained.");
+      return;
+    }
+    if (e.type === "storage/reserve-admission-restored") {
+      hooks.status("Storage check passed. Saving is available again.");
+      void enqueue(async () => {
+        for (const session of composerSessions.values()) {
+          if (session.snapshot().error !== "storage_reserve_admission_denied") continue;
+          // Re-read before retrying so an intervening draft becomes a conflict,
+          // while the retained local text and the canonical version stay intact.
+          try {
+            await session.reload();
+            if (session.snapshot().phase === "dirty") await session.flush();
+          } catch (error) {
+            report(error);
+          }
+        }
+      });
+      return;
+    }
     // Assistant text is handled by the one shared execution adapter. It is not
     // copied into a second transcript, activity payload cache or frame path.
     if (e.payload?.delta && e.resourceId) return;
@@ -4601,12 +4622,6 @@ export function installApplication(hooks: Hooks) {
     streamView?.update();
     updateStreamSummaries();
     for (const view of eventViews.values()) view.update();
-    if (e.type === "storage/reserve-admission-denied")
-      hooks.status(
-        "Storage check paused saving and new runs. Your data is retained.",
-      );
-    if (e.type === "storage/reserve-admission-restored")
-      hooks.status("Storage check passed. Saving is available again.");
     if (e.type === "provider/connection") {
       void connectionsView?.refresh();
       void conversationManager?.refresh().catch(report);
