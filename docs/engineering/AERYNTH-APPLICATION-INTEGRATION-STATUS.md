@@ -2,6 +2,30 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Portable BT physical display review preflight
+
+The owner-triggered display review is staged in
+`bt-physical-display-review-1793709349076`. It loads BT's unchanged
+application modules, renderer and backend with a byte-matching Electron
+runtime and a separately pinned copy of the existing benchmark helpers.
+The private input record binds the package, helper, PresentMon and initial
+database hashes. Its SHA-256 is
+`d757a12e7f55a9cf2f2f0cf958cb71cc2080383be641817757134f36158726ed`.
+
+The canonical SQLite seed passed integrity with three projects, six
+workspaces, 250 resources, 249 relationships and 50 placements.
+The launcher preflight verified all 427 BT payloads and the separate
+input hashes. All 22 focused benchmark and presentation tests passed.
+The existing benchmark captures project and Universe presentation
+separately with PresentMon pinned to the owned GPU process. Its native
+input is limited to the review window and its guard stops on focus loss
+or Escape. The launcher sets a 65-second application deadline.
+
+No app or ETW capture started in preflight. Current physical
+presentation remains unmeasured. This staged case covers Constellation
+on a representative corpus. The BT workspace Fit timings below remain
+offscreen measurements.
+
 ## November 3 Portable BT scale and compositing measurements
 
 The same BT package ran synthetic 10-, 25-, and 50-card workspaces
