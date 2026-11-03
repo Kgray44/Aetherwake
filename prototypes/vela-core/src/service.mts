@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { CAPABILITIES, VelaError, check, identifier, isHostPolicyRead, isLocalFact, isRecord, text, validateAction, validateProviderResult } from './capabilities.ts';
+import { CAPABILITIES, VelaError, check, identifier, isHostPolicyRead, isImmediateNativeAction, isLocalFact, isRecord, text, validateAction, validateProviderResult } from './capabilities.ts';
 import { defaultAdaptation, effectivePreference, observePreference, preferenceCategory, samePreferenceScope, setExplicitPreference, validatePreference } from './adaptation.ts';
 import { VELA_CONTRACT } from './contracts.ts';
 import { evaluateLocalCapability, validateLocalRecord } from './local-capabilities.mts';
@@ -548,7 +548,7 @@ export class VelaService {
         for (const ref of active.context.included) check(this.resolve(ref.id, ref.kind, currentScope).version === ref.version, 'stale_context_version');
         if (parsed.kind === 'plan') {
           const plan = this.prepare(active, parsed.summary, parsed.steps, parsed.contribution);
-          if (plan.steps.length === 1 && isHostPolicyRead(plan.steps[0].action.type)) {
+          if (plan.steps.length === 1 && isImmediateNativeAction(plan.steps[0].action.type)) {
             plan.authorizationRef = this.authorize(this.authInput(plan, 'review'));
             plan.reviewedAt = this.now();
             plan.state = 'approved';
@@ -706,8 +706,10 @@ export class VelaService {
       if (plan.state === 'applying') { plan.state = 'applied'; request.state = 'completed'; }
       request.updatedAt = this.now();
       if (!explicitResponse || plan.steps.length !== 1) {
-        const observed = plan.steps.length === 1 && isHostPolicyRead(plan.steps[0].action.type);
-        const applied = observed ? 'The local lookup is complete.' : 'The reviewed native plan was applied. Host receipts are available for inspection; delegated task outcomes remain owned by the execution service.';
+        const action = plan.steps.length === 1 ? plan.steps[0].action : undefined;
+        let applied = 'The reviewed native plan was applied. Host receipts are available for inspection; delegated task outcomes remain owned by the execution service.';
+        if (action?.type === 'navigate') applied = 'Opened the requested view.';
+        else if (action && isHostPolicyRead(action.type)) applied = 'The local lookup is complete.';
         this.append(plan.state === 'applied' ? applied : 'Plan execution stopped with state: ' + plan.state + '. Inspect receipts before retrying.', request.id, 'vela-native', plan);
       }
     });

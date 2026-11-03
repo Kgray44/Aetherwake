@@ -2,6 +2,22 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 model-selected Vela navigation
+
+An authorized single navigation action now runs through the same host policy
+as a local read. The model selects the typed action, the backend records the
+result, and the desktop uses its existing Motion Coordinator to change views.
+Layout changes still show the proposed effect for review. The workspace
+organization tests continue to exercise the original user request, saved
+geometry, restart and undo.
+
+The hidden Electron source build accepted a natural-language request, ran the
+actual broker and backend against a scripted App Server, switched the renderer
+to Universe and recorded one native receipt. The isolated review callback was
+simulated and no live model or account was contacted. Receipt SHA-256 is
+`e216973f06a07f6f1b7f6f58658c0cb3966b0f945950bcf07669bef9efad1f33`.
+Backend, Vela and desktop passed 254, 147 and 403 tests with strict typing.
+
 ## November 3 Fluid insertion and Portable AV
 
 The integrated Universal Block System release `adcb1d7` (source

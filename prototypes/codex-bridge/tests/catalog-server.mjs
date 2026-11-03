@@ -24,6 +24,7 @@ const session = (id) => ({
 const readAction = mode === 'search' ? { type: 'search', query: 'calibration' }
   : mode === 'clock' ? { type: 'readLocalFact', capabilityId: 'local.time' } : null;
 const selectedAction = () => {
+  if (mode === 'navigate') return { type: 'navigate', target: { kind: 'constellation', projectId: null } };
   if (mode !== 'layout') return readAction;
   const workspaceId = task.context?.activeSurface?.workspaceId;
   if (!workspaceId || !task.context.discovered.some(ref => ref.kind === 'workspace' && ref.id === workspaceId))
@@ -40,7 +41,7 @@ const finish = () => {
     : {
         schemaVersion: 2,
         kind: 'plan',
-        summary: mode === 'layout' ? 'Synthetic arrangement proposal.' : readAction ? 'Synthetic local lookup.' : 'Synthetic folder proposal.',
+        summary: mode === 'layout' ? 'Synthetic arrangement proposal.' : mode === 'navigate' ? 'Synthetic navigation proposal.' : readAction ? 'Synthetic local lookup.' : 'Synthetic folder proposal.',
         steps: [
           {
             id: 'create',

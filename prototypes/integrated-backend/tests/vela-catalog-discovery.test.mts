@@ -103,6 +103,32 @@ test('a model-selected search opens canonical results, persists references only,
   } finally { await f.close(); }
 });
 
+test('a model-selected navigation uses the canonical view and back stack without a second confirmation', async () => {
+  const f = fixture('navigate');
+  try {
+    const workspaceId = (await f.core.command('desktop', {
+      type: 'createWorkspace', title: 'Synthetic studio', projectId: null,
+    })).activeWorkspaceId!;
+    await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Synthetic draft', workspaceId });
+    const before = await f.core.command('desktop', { type: 'snapshot' });
+    const { input } = await f.granted([], 'Pull back and let me see the whole sky.');
+    const request = await f.vela('request', input) as { id: string; planId: string; state: string };
+    assert.equal(request.state, 'completed');
+    const state = await f.state();
+    assert.equal(state.plans.find(plan => plan.id === request.planId)?.steps[0].action.type, 'navigate');
+    const receipt = state.receipts.find(item => item.requestId === request.id);
+    assert.equal(receipt?.state, 'applied');
+    assert.equal(receipt?.providerId, null);
+    assert.equal(f.events.filter(event => event.method === 'fixture/catalogResult' && event.payload.success === true).length, 1);
+    assert.deepEqual((await f.core.command('desktop', { type: 'snapshot' })).navigation, { kind: 'constellation', projectId: null });
+
+    const restored = await f.core.command('desktop', { type: 'back' });
+    assert.deepEqual(restored.navigation, before.navigation);
+    assert.deepEqual(restored.blocks, before.blocks);
+    assert.equal(restored.layoutVersion, before.layoutVersion);
+  } finally { await f.close(); }
+});
+
 for (const discovery of [false, true])
 test(`reviewed Vela text reaches the model adapter and arranges the exact active workspace with canonical undo (schema discovery: ${discovery})`, async () => {
   const f = fixture('layout', discovery);

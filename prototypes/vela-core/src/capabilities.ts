@@ -106,6 +106,10 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
 export const isHostPolicyRead = (type: CapabilityDescriptor['id']) =>
   CAPABILITIES.some(item => item.id === type && item.effect === 'read' && item.authorization === 'host-policy');
 
+/** A single host-policy navigation or read can run once the user has sent the request. */
+export const isImmediateNativeAction = (type: CapabilityDescriptor['id']) =>
+  CAPABILITIES.some(item => item.id === type && item.authorization === 'host-policy' && (item.effect === 'read' || item.effect === 'navigate'));
+
 export function validateAction(value: unknown): VelaNativeAction | DelegateTaskAction {
   check(isRecord(value), 'invalid_action');
   const v = value;
