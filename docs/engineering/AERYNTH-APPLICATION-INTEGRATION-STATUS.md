@@ -2,6 +2,51 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Vela model routing on Windows and portable AN
+
+The normal Windows user and machine PATH exposed an npm `codex.cmd` shim
+without a directly spawnable `codex.exe`. Bare Node spawn reproduced
+`ENOENT`; the desktop then fell through to recording a request that the AI
+never received. `bf3a092` resolves the installed CLI from absolute PATH
+entries and starts the official npm Node entry point when needed, using
+stdio without a shell. Default Vela Send now reports an unavailable,
+busy, or signed-out planner and preserves the draft without recording a
+request. Free text stays model-interpreted. The existing host policy,
+review, typed capability dispatch and Motion Coordinator path remain in use.
+
+Two hidden Electron processes using disposable workspaces exercised the
+default broker path. One verified the unavailable planner retained the
+exact composer draft, with no request or layout change. The other used a
+scripted stdio provider on a shim-only PATH: its typed layout proposal
+targeted the active workspace and canonical geometry changed only after the
+review control was invoked. The respective private receipt SHA-256 values
+are `5a527db1115c6e4254a3a3da4b71429f0c684f5616f0a19aed9e8b71dc32400a`
+and `abbcec951e4a8f550ef9fc23cf646ca51f4895cc64ec04693924650669947b71`.
+The standard and experimental catalog paths passed the real backend layout,
+restart and undo regression with scripted provider output. Strict typing and
+build passed, with 251 backend, 147 Vela and 402 desktop tests.
+
+Portable AN packages `bf3a092cf67d8db7faef1091e383bffb8dd6a99a` with
+383 files and manifest SHA-256
+`aaa742af4f5ba39c8b89a1446ab51b7cae6075cad5a2d5b681f8f9374f4a64dd`.
+Its bundled backend passed 22 operations and five restart checks. With
+the standard Windows PATH it initialized real App Server, observed an
+already signed-in account and obtained four catalog entries without
+dispatching a turn. This does not establish model entitlement or live
+interpretation of a Vela request. Portable AN's foreground review and
+live provider turn remain unverified.
+
+## November 3 confirmed Codex refusals and portable AM
+
+Explicit App Server rejections now settle as failed, allowing a new
+explicitly authorized request. A dropped connection or missing
+receipt remains unknown and fences duplicate dispatch. Hidden Electron
+checks with scripted stdio verified the failed send preserved the draft,
+and an approved revised send after restart reused the same thread with one
+turn start. The 249 backend tests passed. Portable AM packages `8cf0cc1`;
+its 382-file independent inventory audit passed with manifest SHA-256
+`224eb8037d5a61bd6fa396e2b0eb9b79b10bd471f2cae340e37f455a8c287472`.
+
 ## November 3 workspace navigation and resource opening
 
 A workspace switch previously cancelled newer resource opens when the
