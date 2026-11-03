@@ -111,6 +111,8 @@ const verify =
   process.argv.includes("--integration-vela-live") ||
   process.argv.includes("--integration-expanded") ||
   process.argv.includes("--integration-spatial-benchmark");
+const offscreenScale = process.argv.includes("--integration-benchmark") &&
+  process.argv.includes("--offscreen-renderer");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
 const checkCatalog = process.argv.includes("--check-model-catalog");
 if (
@@ -125,6 +127,14 @@ if (verify && (!profileArg || !path.isAbsolute(profileArg.slice(10)))) {
 const privateRoot = profileArg
   ? path.resolve(profileArg.slice(10))
   : path.join(app.getPath("appData"), "Aerynth", "review");
+if (offscreenScale) {
+  const scale = require("./integration-block-scale.cjs").options(process.argv);
+  if (!/^review-block-scale-(?:0|1|3|10|25|50)-\d+$/.test(path.basename(privateRoot)))
+    throw Error("isolated_block_scale_profile_required");
+  const marker = JSON.parse(readFileSync(path.join(privateRoot, "block-scale-seed.json"), "utf8"));
+  if (marker.contract !== "aerynth.native-block-scale@1" || marker.syntheticData !== true || marker.count !== scale.count)
+    throw Error("synthetic_block_scale_seed_required");
+}
 let admitted = false;
 function reserveGuard() {
   if (process.platform !== "win32") return true;
@@ -311,7 +321,7 @@ app.whenReady().then(async () => {
     useContentSize: process.argv.includes("--integration-drag-glide"),
     minWidth: 800,
     minHeight: 650,
-    show: true,
+    show: !offscreenScale,
     backgroundColor: "#05060c",
     title: verify
       ? "Aerynth · Automated check"
@@ -324,6 +334,7 @@ app.whenReady().then(async () => {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      ...(offscreenScale ? { offscreen: true, backgroundThrottling: false } : {}),
       additionalArguments: process.argv.includes("--integration-drag-glide")
         ? ["--aerynth-geometry-observation"]
         : [],
@@ -562,6 +573,12 @@ app.whenReady().then(async () => {
   for (const event of ["focus", "blur", "show", "hide", "minimize", "restore"])
     win.on(event, active);
   await win.loadURL(localURL);
+  if (offscreenScale) {
+    await require("./integration-offscreen-scale.cjs").verify({
+      win, app, privateRoot, call, source, moduleStartedMonotonicMs, startupErrors,
+    });
+    return;
+  }
   win.show();
   win.focus();
   active();
