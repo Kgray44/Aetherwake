@@ -858,6 +858,11 @@ export function installApplication(hooks: Hooks) {
     more: () => layouts(),
     failed: report,
   });
+  const layoutBar = el(".aw-workspace-layout");
+  layoutBar.classList.add("aw-optical-controls");
+  layoutBar.dataset.awOptics = "workspace";
+  for (const button of layoutBar.querySelectorAll("button"))
+    button.dataset.aerynthMotionControl = "true";
   function report(e: unknown) {
     const message = e instanceof Error ? e.message : "operation_failed";
     hooks.status(message === "storage_reserve_admission_denied"
@@ -2005,6 +2010,8 @@ export function installApplication(hooks: Hooks) {
     conversationSurface = request;
     const surface = surfaces.open(request);
     surface.id = "conversation-surface";
+    surface.classList.add("aw-optical-controls");
+    surface.dataset.awOptics = "workspace";
     const port: ConversationProductPort = {
       async command<K extends keyof ProductCommandMap>(
         name: K,

@@ -107,7 +107,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const layoutHost=options.layoutHost??container.closest<HTMLElement>('.cp-manager');
   if(layoutHost&&(!layoutHost.contains(container)||layoutHost.matches('.cp-chat')||(layoutHost.style.height??'').trim()==='auto'||!Number.isFinite(layoutHost.clientHeight)||layoutHost.clientHeight<0||(layoutHost.clientWidth!==undefined&&(!Number.isFinite(layoutHost.clientWidth)||layoutHost.clientWidth<0))))throw new Error('invalid_chat_layout_host');
   if (options.draftSession && options.draftSession.resourceId !== resourceId) throw new Error('draft_resource_mismatch');
-  const root = el('section', undefined, 'cp-chat aw-optical-controls'); root.dataset.resourceId = resourceId; root.setAttribute('aria-label', 'Chat');
+  const root = el('section', undefined, 'cp-chat aw-optical-controls'); root.dataset.resourceId = resourceId; root.dataset.awOptics = 'workspace'; root.setAttribute('aria-label', 'Chat');
   const top=el('div',undefined,'cp-chat-top'),providerSlot=el('div',undefined,'cp-chat-provider-slot'),modelSlot=el('div',undefined,'cp-chat-model-slot');modelSlot.hidden=true;top.append(providerSlot,modelSlot);
   const messages = el('div', undefined, 'cp-messages'); messages.tabIndex = 0; messages.setAttribute('aria-label', 'Conversation messages');
   const paging = el('div', undefined, 'cp-paging'), stream = el('article', undefined, 'cp-stream'), streamText = el('pre', '', 'cp-stream-text'); stream.append(el('p', 'Observed live output', 'cp-message-source'), streamText); stream.hidden = true;

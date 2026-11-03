@@ -47,7 +47,7 @@ const renderChatGPTCompatibility=(report:NativeChatGPTFidelityDescriptor,onOpenE
 export function mountConversationManager(container: HTMLElement, port: ConversationProductPort, options: ManagerOptions = {}) {
  if(options.motion&&!options.viewId?.trim())throw new Error('conversation_motion_identity_required');
  const state=options.state??createManagerState();if(options.resourceId)state.selectedResourceId=options.resourceId;
- const root=el('section',undefined,'cp-manager aw-optical-controls'+(options.embedded===false?' cp-standalone':' cp-embedded'));root.setAttribute('role','region');root.setAttribute('aria-label','Conversations');
+ const root=el('section',undefined,'cp-manager aw-optical-controls'+(options.embedded===false?' cp-standalone':' cp-embedded'));root.dataset.awOptics='workspace';root.setAttribute('role','region');root.setAttribute('aria-label','Conversations');
  const pickers=new Map<HTMLSelectElement,ReturnType<typeof enhanceConversationSelect>>();let pickerSerial=0;
  const controlStates=options.motion?conversationControlStates(root,{motion:options.motion,viewId:options.viewId!}):null;
  const disclosures=options.motion?conversationDisclosures(root,{motion:options.motion,viewId:options.viewId!}):null;

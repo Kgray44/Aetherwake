@@ -98,6 +98,21 @@
   white-space: normal;
   overflow-wrap: anywhere;
 }
+#conversation-surface.aw-contextual-surface,
+.application-ready .aw-workspace-layout {
+  color: var(--aw-surface-text);
+  border-color: var(--aw-surface-rim);
+  background: var(--aw-surface-fill);
+  box-shadow: var(--aw-surface-shadow);
+}
+#conversation-surface > .aw-contextual-heading {
+  color: var(--aw-surface-heading);
+}
+.application-ready .aw-workspace-layout button[aria-pressed="true"] {
+  color: var(--aw-control-text);
+  border-color: var(--aw-control-rim);
+  background: var(--aw-option-selected-film);
+}
 .application-conversation-content {
   display: flex;
   flex-direction: column;
