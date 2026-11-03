@@ -4218,15 +4218,14 @@ export function installApplication(hooks: Hooks) {
       const view = mediaViews.get(id);
       const media = { ...r, kind: r.kind };
       if (view) view.update(media);
-      else if (activeBlocks.get(id))
+      else if (activeBlocks.get(id)) {
+        const content = el(".working-content", article);
+        content.inert = false;
         mediaViews.set(
           id,
-          mountMediaExperience(
-            el(".working-content", article),
-            media,
-            mediaClient,
-          ),
+          mountMediaExperience(content, media, mediaClient),
         );
+      }
     } else if (r.kind === "stream") {
       const content = el(".working-content", article);
       if (!eventViews.has(id) && activeBlocks.get(id)) {
@@ -4752,7 +4751,19 @@ export function installApplication(hooks: Hooks) {
     taskTrackerViews.get(id)?.view.setPresentation(presentation);
     chatViews.get(id)?.setActive(active);
     noteViews.get(id)?.setActive(active);
-    mediaViews.get(id)?.setActive(active);
+    const media = mediaViews.get(id);
+    media?.setActive(active);
+    if (media && previous && !active) {
+      // Keep recently used reading positions. Older offscreen readers release
+      // their decoders and canvases while their canonical placements stay put.
+      mediaViews.delete(id);
+      mediaViews.set(id, media);
+      const inactive = [...mediaViews].filter(([key]) => !activeBlocks.get(key));
+      for (const [key, view] of inactive.slice(0, -3)) {
+        view.dispose();
+        mediaViews.delete(key);
+      }
+    }
     subjectViews.get(id)?.setActive(active);
     eventViews.get(id)?.setActive(active);
     groupViews.get(id)?.setActive(active);
