@@ -49,6 +49,8 @@ exports.conversationCommand = async ({
   );
   if (!resource) throw Error("resource_not_found");
   if (resource.providerId === PLAN) {
+    const local = await call("conversationClock", request);
+    if (local !== null) return local;
     const preview = await call("conversationSendPreview", request);
     const r = preview?.responses;
     if (

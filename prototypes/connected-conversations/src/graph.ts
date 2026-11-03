@@ -6,7 +6,7 @@ export type Role = 'user' | 'assistant' | 'system';
 export type Gate = 'available' | 'requires_auth' | 'disabled' | 'unsupported' | 'unknown';
 export type Usage = 'included' | 'metered' | 'unknown';
 export type HandoffState = 'ready' | 'failed' | 'interrupted';
-export type Provenance = 'user' | 'mock_adapter' | 'application';
+export type Provenance = 'user' | 'mock_adapter' | 'application' | 'device_clock';
 export type Sensitivity = 'public' | 'internal' | 'sensitive' | 'restricted';
 export interface Capability { supported: boolean; authorized: boolean; availability: Gate }
 export interface ModelOption { id: string; availability: Gate; usage: Usage; quota?: string; lastError?: string }

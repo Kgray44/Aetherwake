@@ -166,6 +166,7 @@ export interface CommandMap {
   /** TRUSTED NATIVE HOST ONLY. Separate approval of the exact delegated provider step. */
   authorizeVelaDelegation: { input: {planId:string;stepId:string;fingerprint:string}; output: {grantId:string;expiresAt:string} };
   conversation: { input: ConversationProductRequest; output: ConversationProductOutput };
+  conversationClock: { input: ConversationSendInput; output: { id: string; resourceId: string; role: 'user'; content: string; revision: number; deviceClockMessageId: string } | null };
   conversationSendPreview: { input: ConversationSendInput; output: ConversationSendPreview };
   /** Trusted native host only; MUST NOT be exposed to a renderer or tool caller. */
   authorizeConversationSend: { input: { previewId:string; fingerprint:string; commandId:string }; output: { grantId:string; expiresAt:string } };

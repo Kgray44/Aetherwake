@@ -93,7 +93,7 @@ test("Codex broker approves backend-assembled egress and dispatches only its fre
     f.calls.at(-1).input.fingerprint,
     "source-and-request-fingerprint",
   );
-  assert.equal(f.calls[2].input.grantId, undefined);
+  assert.equal(f.calls.at(-2).input.grantId, undefined);
 });
 
 test("a missing or oversized assembled request cannot fall back to prompt-only consent", async () => {
@@ -153,6 +153,7 @@ function planFixture({ shared = false, approve = true } = {}) {
           { ...result.resources[0], providerId: "chatgpt-plan-responses" },
         ],
       };
+    if (name === "conversationClock") return null;
     if (name === "conversationSendPreview") {
       const messages = [
         { role: "user", content: "An earlier question" },
@@ -220,6 +221,7 @@ test("ordinary ChatGPT-plan sends use real canonical execution even when the leg
     f.calls.map((value) => value.name),
     [
       "desktop",
+      "conversationClock",
       "conversationSendPreview",
       "authorizeConversationSend",
       "conversationSend",

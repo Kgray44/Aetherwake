@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { join,resolve,relative,isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { BackendCore } from '../src/core.mts';
+import { createRequire } from 'node:module';
+const { conversationCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/conversation-broker.cjs');
 import type { ConversationSendInput,OrdinaryConnectionPort,StreamEvent } from '../src/contracts.mts';
 import type { ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
 import { RESPONSES_ENDPOINT } from '../../openai-provider/responses.mts';
@@ -26,6 +28,57 @@ function fixture(){
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}
+
+test('ordinary Send answers direct clock questions locally and keeps their transcript out of later provider egress', async () => {
+  const f = fixture();
+  try {
+    await f.core.command('ordinaryProviderStatus', {});
+    const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+    const clockInput = { resourceId: chat.resourceId, content: 'what time is it?', expectedRevision: chat.revision, commandId: randomUUID() };
+    const calls: string[] = [];
+    const send = (input: ConversationSendInput) => conversationCommand({
+      input: { name: 'send', input },
+      call: (name: Parameters<BackendCore['command']>[0], data: never) => {
+        calls.push(name);
+        return f.core.command(name, data);
+      },
+    });
+    const startedAt = Date.now();
+    const time = await send(clockInput);
+    assert.deepEqual(calls, ['desktop', 'conversationClock']);
+    assert.deepEqual(await send(clockInput), time);
+    assert.equal(time.revision, chat.revision + 2);
+    const dateInput = { ...clockInput, content: "What's today's date?", expectedRevision: time.revision, commandId: randomUUID() };
+    await assert.rejects(send({ ...dateInput, expectedRevision: chat.revision }), /stale_resource_version/);
+    const date = await send(dateInput);
+    const detail = () => f.core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as Promise<{ messages: { items: { id: string; content: string; provenance: string; createdAt: string }[] } }>;
+    const { messages: { items } } = await detail();
+    assert.deepEqual(items.map(item => item.id), [time.id, time.deviceClockMessageId, date.id, date.deviceClockMessageId]);
+    const { timeZone, locale } = new Intl.DateTimeFormat().resolvedOptions();
+    const now = Date.parse(items[1].createdAt);
+    const clock = new Intl.DateTimeFormat(locale, { timeZone, calendar: 'gregory', hour: 'numeric', minute: '2-digit', second: '2-digit', timeZoneName: 'short' });
+    assert.equal(items[1].provenance, 'device_clock');
+    assert(now >= startedAt && now <= Date.now());
+    assert([now, now - 1000].some(instant => items[1].content === `It’s ${clock.format(instant)}.`));
+    assert.equal(items[3].provenance, 'device_clock');
+    assert.match(items[3].content, /^Today is /);
+    assert.equal(f.requests.length, 0);
+    assert.equal(f.catalogReads, 0);
+    assert.equal(f.secretReads, 0);
+    assert.equal(f.codexCalls, 0);
+    assert.deepEqual(Object.keys((await f.core.command('snapshot', {})).executions), []);
+    await f.reopen();
+    assert.deepEqual((await detail()).messages.items, items);
+    assert.deepEqual(await send(clockInput), time);
+    const remote = 'What time is it in Tokyo?';
+    const followUp = { ...clockInput, content: remote, expectedRevision: date.revision, commandId: randomUUID() };
+    assert.equal(await f.core.command('conversationClock', followUp), null);
+    f.responses.push(() => complete('resp-synthetic-remote-clock'));
+    const execution = await send(followUp);
+    assert.equal(execution.state, 'provider_completed');
+    assert.deepEqual(f.requests[0].input, [{ role: 'user', content: remote }]);
+  } finally { await f.close(); }
+});
 
 test('populated provider changes require a reviewed continuation and stale branch creation cannot relabel or clone history',async()=>{
  const f=fixture();try{

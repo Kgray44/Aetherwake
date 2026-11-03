@@ -28,7 +28,7 @@ import { createCanonicalOrganizationAdapter, createCanonicalAccessHelper, create
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import { VelaService, VELA_PLANNING_INSTRUCTION } from '../../vela-core/src/service.mts';
 import { readSystemMemory } from '../../vela-core/src/system-memory.mts';
-import { readSystemClock } from '../../vela-core/src/local-capabilities.mts';
+import { classifyVelaLocalIntent, evaluateLocalCapability, readSystemClock } from '../../vela-core/src/local-capabilities.mts';
 import { createCanonicalVelaHost, type CanonicalVelaHost, type CanonicalVelaMetadata } from '../../vela-core/src/canonical-host.mts';
 import { CodexPlanningAdapter, planningDigest, buildCodexPlanningPrompt, type CodexPlanningGrant, type PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
 import { CAPABILITIES } from '../../vela-core/src/capabilities.ts';
@@ -1027,6 +1027,22 @@ export class BackendCore {
       : null;
     return {contract:'aerynth.conversation-activity@1',resources,executions,preview};
   }
+  private answerConversationClock(input: ConversationSendInput): CommandMap['conversationClock']['output'] {
+    const capability = classifyVelaLocalIntent(input?.content);
+    if (capability !== 'local.time' && capability !== 'local.date') return null;
+    ensure(this.conversationAccess.resource(input.resourceId), 'source_unavailable');
+    const conversation = this.conv(input.resourceId);
+    ensure(conversation.kind === 'ordinary' && conversation.providerId === CHATGPT_PLAN_PROVIDER, 'native_provider_required');
+    return this.atomic(() => this.once(input.commandId, { type: 'conversationClock', ...input }, () => {
+      ensure(conversation.revision === input.expectedRevision, 'stale_resource_version');
+      const answer = evaluateLocalCapability(capability, this.localVelaHost());
+      const graphId = this.gid(input.resourceId);
+      const message = this.graph.addMessage(graphId, 'user', input.content);
+      const reply = this.graph.addMessage(graphId, 'assistant', answer.content, { provenance: 'device_clock' });
+      this.state.revisions[input.resourceId] += 2;
+      return { id: message.id, resourceId: input.resourceId, role: 'user', content: message.content, revision: this.state.revisions[input.resourceId], deviceClockMessageId: reply.id };
+    }));
+  }
   private async ordinaryEgress(input:ConversationSendInput,revisionOffset:number,executionId:string,context:AttachedContext[],handoff:ConversationSendPreview['handoff']):Promise<OrdinaryResponsesPreview> {
     await this.refreshOrdinaryStatus();if(!this.ordinaryAvailable())await this.checkOrdinaryModels();
     const catalog=this.ordinaryCatalog!,model=input.model??catalog.models[0].id;ensure(catalog.models.some(m=>m.id===model),'unsupported_model');
@@ -1035,8 +1051,13 @@ export class BackendCore {
     const gid=this.gid(input.resourceId),conversation=this.state.graph.conversations.find(c=>c.id===gid)!;ensure(conversation.ownMessageIds.length<=1024,'ordinary_history_budget_exceeded');
     const accepted=revisionOffset?this.state.executions[executionId]?.inputMessageId:undefined;ensure(!revisionOffset||!!accepted,'ordinary_input_anchor_missing');
     const history:OrdinaryResponsesPreview['history']=[],messages:{role:'user'|'assistant'|'developer';content:string}[]=[];let requiresSourceReview=!!context.length||!!handoff;
-    for(const id of conversation.ownMessageIds){
-      if(id===accepted)continue;const message=this.state.graph.messages.find(m=>m.id===id&&m.conversationId===gid);ensure(message,'ordinary_history_corrupt');
+    const ownMessages = new Map(this.state.graph.messages.filter(message => message.conversationId === gid).map(message => [message.id, message]));
+    for (const [index, id] of conversation.ownMessageIds.entries()) {
+      if (id === accepted) continue;
+      const message = ownMessages.get(id);
+      ensure(message, 'ordinary_history_corrupt');
+      // The clock writes both messages atomically. Device-local turns are excluded from automatic provider history.
+      if (message.provenance === 'device_clock' || (message.role === 'user' && ownMessages.get(conversation.ownMessageIds[index + 1])?.provenance === 'device_clock')) continue;
       const evidence=this.state.messageEvidence[id];if(evidence?.outputState==='partial')continue;
       if(this.state.graph.unavailableMessageIds.includes(id)||!this.conversationReadAccess(input.resourceId,id))continue;
       ensure(message.role==='user'||message.role==='assistant','ordinary_history_role_unsupported');
@@ -1464,6 +1485,7 @@ export class BackendCore {
         }
         return this.conversations.command(a.name,a.input) as any;
       }
+      case 'conversationClock': return this.answerConversationClock(a) as any;
       case 'conversationSendPreview': return this.previewConversationSend(a) as any;
       case 'authorizeConversationSend': return this.authorizeConversationSend(a) as any;
       case 'conversationSend': return this.sendConversation(a) as any;
