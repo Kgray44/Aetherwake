@@ -8,8 +8,47 @@ import { execFileSync } from 'node:child_process';
 import {createHash} from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { LIMITS, NATIVE_RUNTIME_ENTRIES, JOSE_RUNTIME, joseRuntime, contained, runtimeSource, electronRuntimeFile, allocation, destination, nodeClosure, bootstrap, readme, argumentsFor } from './review-build.mjs';
+import { readRendererReceipt, rendererReceiptName, reviewRendererReceipt } from './review-renderer.mjs';
 
 async function fixture(work){const dir=await fs.mkdtemp(path.join(tmpdir(),'aerynth-review-packager-'));try{return await work(dir);}finally{const rel=path.relative(path.resolve(tmpdir()),path.resolve(dir));assert(rel&&!rel.startsWith('..')&&!path.isAbsolute(rel)&&path.basename(dir).startsWith('aerynth-review-packager-'));await fs.rm(dir,{recursive:true,force:true});}}
+
+test('renderer review requires a completed build for the same clean candidate and exact asset bytes', async () => {
+  await fixture(async root => {
+    const git = (...args) => execFileSync('git', ['-C', root, ...args], { encoding: 'utf8', windowsHide: true }).trim();
+    const commit = message => git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+      'commit', '--quiet', '--no-gpg-sign', '-m', message);
+    const identity = () => ({ head: git('rev-parse', 'HEAD'), tree: git('rev-parse', 'HEAD^{tree}') });
+    const source = path.join(root, 'renderer.ts'), dist = path.join(root, 'dist');
+    await fs.writeFile(path.join(root, '.gitignore'), 'dist/\n');
+    await fs.writeFile(source, 'export const candidate = 1;');
+    git('init', '--quiet', '--template=');
+    git('add', '.');
+    commit('initial renderer');
+    const first = identity();
+    const plugin = reviewRendererReceipt();
+    plugin.configResolved({ root, build: { outDir: 'dist' } });
+    await fs.mkdir(path.join(dist, 'assets'), { recursive: true });
+    const asset = 'assets/entry.js', built = path.join(dist, asset);
+    await fs.writeFile(built, 'export const candidate=1;');
+    await assert.rejects(readRendererReceipt(dist, first, [asset]), /renderer_receipt_missing/);
+    await plugin.writeBundle.handler();
+    assert.match((await readRendererReceipt(dist, first, [asset])).sha256, /^[a-f0-9]{64}$/);
+    await assert.rejects(readRendererReceipt(dist, first, [asset, 'untracked.js']), /renderer_receipt_inventory_mismatch/);
+    await fs.appendFile(built, '\n// replaced after compilation');
+    await assert.rejects(readRendererReceipt(dist, first, [asset]), /renderer_output_changed_since_build/);
+
+    await fs.writeFile(source, 'export const candidate = 2;');
+    git('add', 'renderer.ts');
+    commit('changed renderer');
+    await assert.rejects(readRendererReceipt(dist, identity(), [asset]), /renderer_receipt_candidate_mismatch/);
+
+    await fs.unlink(path.join(dist, rendererReceiptName));
+    plugin.configResolved({ root, build: { outDir: 'dist' } });
+    await fs.appendFile(source, '\n// edit during compilation');
+    await plugin.writeBundle.handler();
+    await assert.rejects(readRendererReceipt(dist, identity(), [asset]), /renderer_receipt_missing/);
+  });
+});
 
 test('runtime selection excludes profiles, historical evidence, synthetic setup and developer entries',()=>{
  for(const name of ['prototypes/integrated-backend/src/core.mts','prototypes/conversation-product/src/contracts.ts','prototypes/workspace-kernel/migrations/003-block-subjects.sql','prototypes/visual-experience/cinematic-v3/src/application.ts'])assert(runtimeSource(name),name);

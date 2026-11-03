@@ -5,7 +5,12 @@ binary and licenses, current built renderer, and actual canonical application
 sources. It performs no npm install, download, build, native launch, provider call,
 profile seeding, or account migration.
 
-Run an allocation-only plan from the clean final source checkout:
+Run `npm run build` in `prototypes/visual-experience/cinematic-v3` from the
+clean final checkout. The Vite build records the source HEAD and tree and hashes
+the renderer files it wrote. The packager requires that receipt to match the
+current checkout and every dist file. Build again after changing commits.
+
+Then run an allocation-only plan from the repository root:
 
 ```powershell
 node scripts/review-build.mjs --plan --output=C:\PrivateReviewBuilds\Aerynth-review-new --archive
@@ -59,9 +64,9 @@ OS quota and cannot control unrelated writers.
 `manifest.json` and `manifest.sha256` bind candidate HEAD/tree, runtime versions,
 every shipped byte, source hashes, dist assets, original-asset preservation and
 licenses. They contain no absolute source/profile paths or live free-byte telemetry.
-They prove packaged bytes, not that an existing dist was compiled from that source,
-publisher authenticity, native behavior, security/artistic acceptance, or performance.
-The parent must bind its final build/native receipts separately. This is a portable
+They bind the packaged bytes to the local renderer build receipt. Publisher
+authenticity, native behavior, security and artistic acceptance, and performance
+require separate evidence. This is a portable
 review directory/ZIP, not an MSI, signed Aerynth release or production delivery.
 
 Focused checks: `node --test scripts/review-build.test.mjs`. These use tiny temporary

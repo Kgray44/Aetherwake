@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { builtinModules, stripTypeScriptTypes } from 'node:module';
 import { execFileSync, spawn } from 'node:child_process';
 import { gunzipSync } from 'node:zlib';
+import { readRendererReceipt, rendererReceiptName } from './review-renderer.mjs';
 
 export const LIMITS = Object.freeze({ totalBytes:1024*1024*1024, fileBytes:512*1024*1024, files:4096, manifestBytes:2*1024*1024, metadataBytes:8*1024*1024, reserveBytes:32212254720 });
 const APP = 'prototypes/visual-experience/cinematic-v3';
@@ -153,15 +154,19 @@ export async function plan(options={}) {
   for(const file of closure.vendorFiles){await addFile(files,targets,file.origin,file.file,file.target,closure.vendorRoots[0]);files.at(-1).expectedSha256=file.sha256;}
   for(const file of ['package.json','package-lock.json'])if(tracked.has(file))await addFile(files,targets,'repository:'+file,path.join(sourceRoot,file),'resources/app/source-metadata/'+file,sourceRoot);
   const dist=await fs.realpath(path.join(sourceRoot,APP,'dist'));check(await exists(path.join(dist,'index.html'))&&await exists(path.join(dist,'assets')),'built_application_dist_missing');
+  const rendererFiles=(await walk(dist)).filter(file=>file!==path.join(dist,rendererReceiptName));
+  const rendererReceipt=await readRendererReceipt(dist,{head,tree},rendererFiles.map(file=>slash(path.relative(dist,file))));
   const pdfWorker=path.join(sourceRoot,BLOCKS,'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs');
-  for(const file of await walk(dist)){
+  for(const file of rendererFiles){
     const relative=slash(path.relative(dist,file)),worker=/^assets\/pdf\.worker-[A-Za-z0-9_-]+\.mjs$/.test(relative);
     check(!OMITTED.test(relative)&&(worker||/\.(?:html|js|css|png|svg|jpg|jpeg|woff2?|ico|txt)$/.test(relative)),'unexpected_dist_payload',relative);
     const canonicalAsset=APP+'/public/'+relative;
     check(!/\.(?:png|svg|jpe?g|woff2?|ico)$/.test(relative)||tracked.has(canonicalAsset),'unreviewed_static_asset_origin',relative);
     await addFile(files,targets,'built-dist:'+relative,file,'resources/app/'+APP+'/dist/'+relative,dist);
+    const expected=rendererReceipt.assets[relative];
+    files.at(-1).expectedSha256=expected;
     if(tracked.has(canonicalAsset))files.at(-1).canonicalAsset=canonicalAsset;
-    if(worker){const expected=await hashFile(pdfWorker);check(await hashFile(file)===expected,'unexpected_pdf_worker_bytes');files.at(-1).expectedSha256=expected;}
+    if(worker)check(expected===await hashFile(pdfWorker),'unexpected_pdf_worker_bytes');
   }
   for(const file of await walk(electronRoot)){const relative=slash(path.relative(electronRoot,file));if(!electronRuntimeFile(relative))continue;await addFile(files,targets,'electron-runtime:'+relative,file,relative==='electron.exe'?'AerynthReview.exe':relative,electronRoot);}
   await addFile(files,targets,'node-runtime:node.exe',node,'vendor/node.exe',nodeRoot);await addFile(files,targets,'node-runtime:LICENSE',license,'vendor/node-LICENSE.txt',nodeRoot);
@@ -187,9 +192,9 @@ export async function plan(options={}) {
   const tar=path.join(process.env.SystemRoot??'C:\\Windows','System32/tar.exe');check(!options.archive||await exists(tar),'system_tar_unavailable');
   const guard=path.join(process.env.LOCALAPPDATA??'','AeroStorageWatch/ReserveGuard.ps1');check(path.isAbsolute(guard)&&await exists(guard),'ReserveGuard_unavailable');
   const drive=path.parse(output).root[0].toUpperCase(),blockers=[...(dirty?['source_worktree_not_clean']:[]),...(!hostNodeSeam?['bundled_Node_host_seam_missing']:[])];
-  return {contract:'aerynth.review-build-plan@1',sourceRoot,vendorRoots:[electronRoot,nodeRoot,...closure.vendorRoots],output,head,tree,version:app.version,runtimes:{electron:electronVersion,node:process.version,platform:process.platform,arch:process.arch},files:files.sort((a,b)=>a.target.localeCompare(b.target)),generated,closure,runtimeDependencies:closure.vendors,bytes,archive:!!options.archive,tar,guard,drive,blockers,externalPrerequisites:['installed AeroStorageWatch ReserveGuard.ps1; separate30GiB C/D reserves','installed Codex only for explicitly authorized Codex features','eligible ChatGPT account/user consent and actual native OS protection for optional ChatGPT-plan inference; no account is bundled'],excluded:['private runtime/profile/data/credentials/receipts','historical visual evidence/assets not used by dist','tests/fixtures/synthetic setup and verification/recording entry points','node_modules development trees except the SRI-verified locked jose runtime'],rootPackagePresent:tracked.has('package.json')};
+  return {contract:'aerynth.review-build-plan@1',sourceRoot,vendorRoots:[electronRoot,nodeRoot,...closure.vendorRoots],output,head,tree,rendererReceiptSha256:rendererReceipt.sha256,version:app.version,runtimes:{electron:electronVersion,node:process.version,platform:process.platform,arch:process.arch},files:files.sort((a,b)=>a.target.localeCompare(b.target)),generated,closure,runtimeDependencies:closure.vendors,bytes,archive:!!options.archive,tar,guard,drive,blockers,externalPrerequisites:['installed AeroStorageWatch ReserveGuard.ps1; separate30GiB C/D reserves','installed Codex only for explicitly authorized Codex features','eligible ChatGPT account/user consent and actual native OS protection for optional ChatGPT-plan inference; no account is bundled'],excluded:['private runtime/profile/data/credentials/receipts','historical visual evidence/assets not used by dist','tests/fixtures/synthetic setup and verification/recording entry points','node_modules development trees except the SRI-verified locked jose runtime'],rootPackagePresent:tracked.has('package.json')};
 }
-export function summary(plan) {return {contract:plan.contract,candidate:{head:plan.head,tree:plan.tree,clean:!plan.blockers.includes('source_worktree_not_clean')},runtimes:plan.runtimes,runtimeDependencies:plan.runtimeDependencies,output:plan.output,fileCount:plan.files.length,generatedCount:plan.generated.length,bytes:plan.bytes,estimatedCBytes:plan.drive==='C'?plan.bytes.totalBound:0,estimatedDBytes:plan.drive==='D'?plan.bytes.totalBound:0,blockers:plan.blockers,externalPrerequisites:plan.externalPrerequisites,excluded:plan.excluded,archive:plan.archive,sourceFolders:REQUIRED_FOLDERS};}
+export function summary(plan) {return {contract:plan.contract,candidate:{head:plan.head,tree:plan.tree,clean:!plan.blockers.includes('source_worktree_not_clean')},rendererReceiptSha256:plan.rendererReceiptSha256,runtimes:plan.runtimes,runtimeDependencies:plan.runtimeDependencies,output:plan.output,fileCount:plan.files.length,generatedCount:plan.generated.length,bytes:plan.bytes,estimatedCBytes:plan.drive==='C'?plan.bytes.totalBound:0,estimatedDBytes:plan.drive==='D'?plan.bytes.totalBound:0,blockers:plan.blockers,externalPrerequisites:plan.externalPrerequisites,excluded:plan.excluded,archive:plan.archive,sourceFolders:REQUIRED_FOLDERS};}
 export function reserve(plan, remaining=plan.bytes.totalBound) {
   check(Number.isSafeInteger(remaining)&&remaining>=0&&remaining<=LIMITS.totalBytes,'invalid_remaining_allocation');
   const c=plan.drive==='C'?remaining:0,d=plan.drive==='D'?remaining:0;
@@ -238,7 +243,7 @@ export async function build(plan) {
   check(git(plan.sourceRoot,'rev-parse','HEAD')===plan.head&&git(plan.sourceRoot,'status','--porcelain=v1')==='','source_changed_during_copy');
   const sourceHashes=Object.fromEntries(files.filter(f=>f.origin.startsWith('repository:')).map(f=>[f.origin.slice(11),f.sha256]));
   const buildAssets=Object.fromEntries(files.filter(f=>f.origin.startsWith('built-dist:')).map(f=>[f.origin.slice(11),f.sha256]));
-  const manifest={contract:'aerynth.portable-review@1',complete:true,createdAt:new Date().toISOString(),candidate:{head:plan.head,tree:plan.tree,clean:true},runtimes:plan.runtimes,sourceHashes,buildAssets,runtimeDependencies:plan.runtimeDependencies,files:files.sort((a,b)=>a.path.localeCompare(b.path)),licenses:['LICENSE','LICENSES.chromium.html','vendor/node-LICENSE.txt',...files.filter(file=>file.origin.startsWith('frontend-license:')).map(file=>file.path),...(plan.runtimeDependencies??[]).map(dependency=>dependency.licensePath)],bounds:plan.bytes,reserve:firstAdmission,externalPrerequisites:plan.externalPrerequisites,exclusions:plan.excluded,acceptance:'Byte-preserving offline packaging only; no native/provider/performance/production acceptance is inferred.',buildProvenance:'Existing dist bytes are bound; packaging does not rebuild or independently prove their source compilation.'};
+  const manifest={contract:'aerynth.portable-review@1',complete:true,createdAt:new Date().toISOString(),candidate:{head:plan.head,tree:plan.tree,clean:true},runtimes:plan.runtimes,sourceHashes,buildAssets,runtimeDependencies:plan.runtimeDependencies,files:files.sort((a,b)=>a.path.localeCompare(b.path)),licenses:['LICENSE','LICENSES.chromium.html','vendor/node-LICENSE.txt',...files.filter(file=>file.origin.startsWith('frontend-license:')).map(file=>file.path),...(plan.runtimeDependencies??[]).map(dependency=>dependency.licensePath)],bounds:plan.bytes,reserve:firstAdmission,externalPrerequisites:plan.externalPrerequisites,exclusions:plan.excluded,acceptance:'Byte-preserving offline packaging only; no native/provider/performance/production acceptance is inferred.',rendererReceiptSha256:plan.rendererReceiptSha256,buildProvenance:'Renderer output matches the local Vite build receipt for the clean candidate.'};
   const bytes=json(manifest);check(Buffer.byteLength(bytes)<=LIMITS.manifestBytes,'manifest_size_exceeded');admit();await writeExclusive(plan.output,'manifest.json',bytes);await writeExclusive(plan.output,'manifest.sha256',sha(bytes)+'  manifest.json\n');
   const zip=plan.archive?await archive(plan,bytes):null;return {contract:'aerynth.review-build-result@1',candidate:manifest.candidate,files:files.length,payloadBytes:copied,manifestSha256:sha(bytes),archive:zip,output:plan.output,acceptance:manifest.acceptance};
 }
