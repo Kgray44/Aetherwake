@@ -2,6 +2,38 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 shared glass geometry during Fit
+
+`6bb8f93` shares a WebGL glass slab within a draw when card dimensions,
+shape, kind, and unfold are identical. Cards retain their own material
+and transform. The renderer owns and disposes each backing buffer even
+when a mesh used a peer's buffer in the last frame. A geometry regression
+verified equal vertex positions, independent materials, and correct
+buffers after resizing or removing the former owner.
+
+In both hidden 50-card runs, the scene submitted all 50 cards using
+three distinct slab geometries. At working scale, 12 visible cards used
+four after resizing the note. Fit paint P95 was 76.5 and 82.7 ms against
+77.9 and 79.2 ms for two same-seed controls. The 900-ms samples overlap,
+so the demonstrated change is less duplicate geometry work. The
+separate CSS layout containment experiment was discarded after it
+failed to improve pacing consistently.
+
+The strict build and 403 desktop tests passed. Eight hidden runs and
+restarts at 10, 25, and 50 blocks passed workspace navigation, resize,
+graphics recovery, and exact restoration. The 50-card fitted still
+was inspected with all cards and Vela visible. Receipts are in
+`fit-slabs-1793695807511` and the controls in
+`fit-isolation-1793695657829`. Physical presentation remains unqualified.
+
+Portable AQ packages `6bb8f93a15e98c2a1b0a3e19504c8771026a3879`.
+An independent audit checked all 383 file hashes, bound the renderer
+assets to all eight hidden receipts, and verified SQLite integrity and
+zero executions across their profiles. The bundled backend passed 22
+initial and five restart calls. Manifest SHA-256 is
+`a7e26d0097d55084e17170ca24ee549f4622ef69922600122d35d49f550fc686`.
+Normal foreground launch and live provider execution were outside these checks.
+
 ## November 3 chat composer measurement during Fit
 
 A Chromium trace on the 50-block workspace attributed 31
