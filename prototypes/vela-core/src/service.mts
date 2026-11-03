@@ -677,25 +677,23 @@ export class VelaService {
         intent: request.intent, context: structuredClone(providerContext), capabilities: structuredClone(CAPABILITIES), instruction: VELA_PLANNING_INSTRUCTION }, controller.signal);
       providerOutput = proposal; providerOutputReceived = true;
       if (controller.signal.aborted || this.getRequest(request.id).state !== 'planning') return structuredClone(this.getRequest(request.id));
-      // Never retain a rejected provider body from a request whose reviewed scope has changed.
-      validate('before-response');
-      check(digest(this.contextIdentity()) === digest(navigation), 'stale_context_scope');
-      let parsed;
-      try { parsed = validateProviderResult(proposal, planner.providerId); }
-      catch (e) {
-        this.atomic(() => {
-          const active = this.getRequest(request.id); active.state = 'invalid-plan'; active.errorCode = errorCode(e, 'invalid_provider_proposal'); active.updatedAt = this.now();
-          active.invalidProposal = preserveProposal(proposal);
-          this.append('The provider response could not be used. No actions were run. The rejected output is retained for inspection.', active.id, 'vela-native');
-        }); return structuredClone(this.getRequest(request.id));
-      }
       localReadPlanId = this.atomic(() => {
         const active = this.getRequest(request.id); if (controller.signal.aborted || active.state !== 'planning') return;
         validate('before-response');
+        // Never retain a rejected provider body from a request whose reviewed scope has changed.
+        check(digest(this.contextIdentity()) === digest(navigation), 'stale_context_scope');
         // This transaction fences the actual canonical message/plan and request together after inference.
         const currentScope = this.scope();
         check(currentScope.policyVersion === scope.policyVersion && currentScope.principalId === scope.principalId, 'stale_policy_version');
         for (const ref of active.context.included) check(this.resolve(ref.id, ref.kind, currentScope).version === ref.version, 'stale_context_version');
+        let parsed;
+        try { parsed = validateProviderResult(proposal, planner.providerId); }
+        catch (e) {
+          active.state = 'invalid-plan'; active.errorCode = errorCode(e, 'invalid_provider_proposal'); active.updatedAt = this.now();
+          active.invalidProposal = preserveProposal(proposal);
+          this.append('The provider response could not be used. No actions were run. The rejected output is retained for inspection.', active.id, 'vela-native');
+          return;
+        }
         if (parsed.kind === 'plan') {
           retainInvalidProposal = true;
           const plan = this.prepare(active, parsed.summary, parsed.steps, parsed.contribution);
@@ -708,7 +706,6 @@ export class VelaService {
             this.append('Proposed plan from ' + planner.providerId + ': ' + parsed.summary + '\nReview the typed actions before applying them.', active.id, 'provider', plan);
           }
         } else {
-          check(digest(this.contextIdentity()) === digest(navigation), 'stale_context_scope');
           for (const ref of active.context.discovered) check(this.resolve(ref.id, ref.kind, currentScope).version === ref.version, 'stale_context_version');
           for (const entry of active.context.included) {
             const content = this.opts.host.readContent(entry.id, currentScope);
