@@ -2,6 +2,57 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 current Constellation journey and Portable BF
+
+The original worker synchronization and label-culling patches have the
+same stable patch IDs as their integration counterparts `c811ca4` and
+`57948f9`. Worker `5b25e5a` and integration `1117c15` have identical
+Constellation trees. The later navigation-intent release also has a
+patch-equivalent ancestor in the integration branch.
+
+Current BE captures showed washed-out project stars. Integration
+`31d8738e4adcf7078972e3cd9fefdea2d925d1ef` adopted the exact stellar
+material file from worker `915f3d8`. A paired hidden desktop review
+used copies of the same closed SQLite profile. The same two project
+bodies were visible with less than 0.006 CSS pixels of center or radius
+difference. Near-white pixels within the sampled stellar interiors
+fell from 94.2% and 98.0% to zero. Surface color and detail were visible
+in the reviewed BF capture. In both candidates, archiving Planning
+removed its rendered body and selectable label. Restoring the same
+workspace ID returned both, and the workspace opened with Development
+unchanged. See private profiles `review-package-motion-1793703081116`
+and `review-package-motion-1793703112357`.
+
+Portable BF includes 427 rehashed payload files. Manifest SHA-256 is
+`5cd612a64d8b304b10913e57a0a88728f8a9e963211fd116fa606a6a7e0bab7d`.
+The strict desktop build, 407 desktop tests and 160 Constellation tests
+passed. Three hidden launches of the packaged app exercised the 20
+local steps of the original journey through the desktop controls.
+The setup, travel and restart took 6.23, 14.67 and 2.47 seconds from
+launch to exit. Both projects, exact workspace IDs, saved geometry,
+note edits, viewport and Vela placement survived restart. The closed
+SQLite profile passed integrity checks and recorded zero provider
+executions.
+
+Private profile `review-package-motion-1793703140746` holds five PNGs
+and a 10.870-second animated WebP with 177 verified offscreen Electron
+paints. Recording SHA-256 is
+`557cfa7473102c121ab141b09721ae10cd83a1394409f1f96b09c95f792ae3a2`.
+The sampled frames show the same orbital backdrop, Vela docking in the
+upper-right and the glass workspace returning. Vela briefly crosses
+behind the note during the return and settles clear of it. The overlap
+during motion remains an open visual finding.
+
+Packaged scale checks passed at 10, 25 and 50 blocks, including Fit,
+Universe travel, return, resize, reduced motion and WebGL recovery.
+Fit offscreen paint p95 was 23.0, 49.2 and 104.4 ms. Corresponding
+renderer callback p95 was 33.3, 33.4 and 83.3 ms. Renderer working sets
+at Fit were 238.9, 241.1 and 279.5 MiB. Evidence is in the three
+`review-block-scale-*-1793703218330` profiles. Dense Fit pacing remains
+open. These measurements do not qualify physical display performance.
+The direct live Codex step remains pending for this package. Every
+owned test process exited and the owner's window was untouched.
+
 ## November 3 conversation scale, exact-message opening, and Portable BE
 
 Canonical graph lookups now use in-memory indices over existing records.
