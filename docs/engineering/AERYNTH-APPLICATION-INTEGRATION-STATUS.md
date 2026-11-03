@@ -2,6 +2,41 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 scoped glass styles and Portable BL
+
+Commit `1b0cef7` scopes the physical glass rules to the canvas and its
+workspace sibling. The demonstration Stream sets Vela's label state
+when it opens or closes. Neither rule needs to search descendants of
+the entire document. A same-seed Chromium trace recorded 371 body
+invalidation schedules from those descendant selectors in BK and zero
+in BL. Total style invalidation records fell from 8,163 to 3,247.
+Those shorter instrumented traces are in `fit-style-bk-1793705539129`
+and `fit-style-bl-1793705769320`.
+
+Four separate hidden runs used identical copies of the 50-card seed
+in BK/BL/BL/BK order. Fit style recalculation totaled 338.8 and
+352.8 ms in BK and 266.3 and 251.2 ms in BL. The two paired
+reductions were 21% and 29%. Fit offscreen paint p95 improved from
+76.6 and 70.7 ms to 66.4 and 57.3 ms. Callback p95 measured
+66.7 ms in both BK runs and 50.1 ms in both BL runs. Settled offscreen
+paint p95 stayed around 19 ms. The four runs returned identical
+computed glass, veil and border styles in normal operation, during
+graphics loss and after recovery. A fitted BL screenshot was visually
+checked. The comparison, screenshots and successful 50-card restart
+are in `fit-local-glass-style-1793705700968`. These short offscreen
+samples do not establish physical presentation performance.
+
+Portable BL packages `1b0cef7d2c5b5e077186fa9d333e01197bba82b0`.
+All 427 payloads were rehashed. Manifest SHA-256 is
+`e42a8fea35df991562e0b0241d5865a3984395f6c20969c74ce29241247a09c3`.
+The strict build and all 409 desktop tests passed. The exact package
+also passed the complete local journey through project and workspace
+creation, cross-project travel, editing and exact fresh process
+restoration. Launch-to-exit times were 6.37, 14.62 and 2.41 seconds.
+The five PNGs and receipts are in `review-package-motion-1793705797834`.
+All owned hidden test processes exited. Live Codex and physical
+display pacing remain outstanding.
+
 ## November 3 shared contour samples and Portable BK
 
 Commit `00fa04a` reuses fixed angle samples across the GPU glass,
