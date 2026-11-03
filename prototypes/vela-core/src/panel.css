@@ -843,6 +843,11 @@
 }
 .vela-core-provider-routes { display: flex; flex-wrap: wrap; gap: 6px; }
 .vela-core-provider-routes[hidden] { display: none; }
+/* Native select popups need an opaque surface for their light labels. */
+.vela-core-provider-routes option {
+  color: #ede8f5;
+  background-color: #10111d;
+}
 .vela-core[data-phase="review"] .vela-core-plan {
   border-left-color: #e2c4ff99;
 }
