@@ -5105,6 +5105,7 @@ export function installApplication(hooks: Hooks) {
       false,
     setBlockMinimized: changeBlockMinimized,
     setBlockActive(id: string, active: boolean) {
+      if (focusedBlocks.get(id) === active) return;
       focusedBlocks.set(id, active);
       syncBlockActivity(id);
     },

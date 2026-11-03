@@ -480,25 +480,22 @@ function layout(cause: string) {
       drag?.id === id || directGesture?.intent === "move",
     );
     const receded = !!expanded && expanded !== id;
-    (el.querySelector(".folio-inner") as HTMLElement).inert = receded;
-    el.querySelector(".folio-inner")!.setAttribute(
-      "aria-hidden",
-      String(receded),
-    );
-    el.querySelector<HTMLButtonElement>(".resource-anchor")!.tabIndex = receded
-      ? 0
-      : -1;
-    el.querySelector(".resource-anchor")!.setAttribute(
-      "aria-hidden",
-      String(!receded),
-    );
-    el.inert = false;
-    el.querySelector(".unfold")!.textContent =
-      expanded === id ? "Back ↙" : "Open ↗";
-    el.querySelector(".unfold")!.setAttribute(
-      "aria-expanded",
-      String(expanded === id),
-    );
+    const inner = el.querySelector<HTMLElement>(".folio-inner")!;
+    if (inner.inert !== receded) inner.inert = receded;
+    if (inner.getAttribute("aria-hidden") !== String(receded))
+      inner.setAttribute("aria-hidden", String(receded));
+    const anchor = el.querySelector<HTMLButtonElement>(".resource-anchor")!;
+    const tabIndex = receded ? 0 : -1;
+    if (anchor.tabIndex !== tabIndex) anchor.tabIndex = tabIndex;
+    if (anchor.getAttribute("aria-hidden") !== String(!receded))
+      anchor.setAttribute("aria-hidden", String(!receded));
+    if (el.inert) el.inert = false;
+    const unfold = el.querySelector(".unfold")!;
+    const isExpanded = expanded === id;
+    const labelText = isExpanded ? "Back ↙" : "Open ↗";
+    if (unfold.textContent !== labelText) unfold.textContent = labelText;
+    if (unfold.getAttribute("aria-expanded") !== String(isExpanded))
+      unfold.setAttribute("aria-expanded", String(isExpanded));
     application?.setBlockActive(
       id,
       nativeActive && !document.hidden && expanded === id,
@@ -901,21 +898,26 @@ function replaceWorkspace(state: DesktopSnapshot) {
         : subjectKind,
       text: summary,
     };
+    const anchorChanged = !r || r.title !== title ||
+      r.subtitle !== data.subtitle || r.canonicalId !== data.canonicalId;
     if (!r) {
       r = data;
       resources.set(block.id, r);
       mountResource(block.id, r);
     } else {
-      Object.assign(r, data);
       const article = elements.get(block.id)!;
-      article.classList.remove("conversation", "research", "note");
-      article.classList.add(displayType);
-      article.querySelector("h2")!.textContent = title;
-      article.querySelector(".folio-preview")!.textContent =
-        summary.split("\n\n")[0];
+      if (r.type !== displayType) {
+        article.classList.remove(r.type);
+        article.classList.add(displayType);
+      }
+      if (r.title !== title) article.querySelector("h2")!.textContent = title;
+      if (r.text !== summary)
+        article.querySelector(".folio-preview")!.textContent = summary.split("\n\n")[0];
+      Object.assign(r, data);
     }
     // Surface material classes are intentionally broader than resource kinds.
     // The accessible peripheral label always describes the canonical resource.
+    if (!anchorChanged) continue;
     const article = elements.get(block.id)!;
     const anchor =
       article.querySelector<HTMLButtonElement>(".resource-anchor")!;
