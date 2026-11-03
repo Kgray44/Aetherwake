@@ -25,6 +25,7 @@ import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { ConversationGraph, type GraphData, type MessageMetadata, type ProviderAdapter as GraphAdapter } from '../../connected-conversations/src/graph.ts';
 import { localConversationAdapter, mockOrdinaryAdapter } from '../../connected-conversations/src/adapters.ts';
 import type { EventEnvelope } from '../../codex-bridge/src/adapter.ts';
+import { BridgeError } from '../../codex-bridge/src/transport.ts';
 import { projectTurnHttpDiagnostic } from '../../application-contract/provider-diagnostics.ts';
 import { nativeProvider, fixtureProvider } from './providers.mts';
 import { ConversationProduct, type AttachedContext, type ConversationReadView } from '../../conversation-product/src/service.mts';
@@ -1655,7 +1656,18 @@ export class BackendCore {
       this.atomic(() => { e.state = 'running'; });
       if(managed){const current=await this.prepareConversationSend(managed.input,1,managed.preview.handoff?.id);ensure(current.fingerprint===managed.preview.fingerprint,'stale_send_preview');}
       remoteDispatched = true;
-      const turnId = await this.port.turn(binding.nativeThreadId, text, input.model);
+      let turnId: string;
+      try {
+        turnId = await this.port.turn(binding.nativeThreadId, text, input.model);
+      } catch (error) {
+        // Only an explicit rejection of turn/start clears the uncertain send.
+        // A lost response can still mean the provider accepted the prompt.
+        if (error instanceof BridgeError && error.code !== undefined &&
+            (['rate-limit', 'auth-required', 'unavailable-model'].includes(error.kind) ||
+             error.code === -32602 || error.code === -32601))
+          remoteDispatched = false;
+        throw error;
+      }
       ensure(typeof turnId === 'string' && turnId.length > 0, 'invalid_provider_response');
       this.atomic(() => { e.turnId = turnId;
         if(managed)this.state.contextSupplies![e.id]={resourceId:e.resourceId,turnId,suppliedAt:now(),items:managed.preview.context.map(i=>({shareId:i.shareId,digest:i.digest,sourceResourceId:i.sourceResourceId,sourceMessageId:i.sourceMessageId}))};

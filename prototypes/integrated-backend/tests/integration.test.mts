@@ -157,6 +157,39 @@ test('an explicit capability check recovers a lost App Server without replaying 
   } finally { await b.close(); }
 });
 
+test('an explicit App Server rejection does not leave a Codex conversation blocked as unknown', async t => {
+  const fake = fileURLToPath(new URL('../../codex-bridge/tests/fake-server.mjs', import.meta.url));
+  for (const mode of ['rate-limit', 'unavailable-model']) {
+    const path = temp(t);
+    const options: Options = {
+      ...config(path),
+      provider: 'bridge-fixture',
+      codexExecutable: process.execPath,
+      codexArgs: [fake, mode],
+    };
+    let b = new Backend(options);
+    try {
+      const chat = await b.call('createConversation', { title: 'Synthetic Codex chat', providerId: 'codex-app-server-fixture', commandId: 'chat' });
+      const send = { resourceId: chat.resourceId, prompt: 'First synthetic request', commandId: 'first', authorized: true };
+      const refused = await b.call('execute', send);
+      assert.equal(refused.state, 'failed');
+      assert.equal(refused.errorCode, mode);
+      assert.equal(refused.turnId, null);
+      assert(refused.binding);
+      assert.deepEqual(await b.call('execute', send), refused);
+      await b.close();
+      b = new Backend({ ...options, codexArgs: [fake, 'normal'] });
+      const completed = await b.call('execute', { ...send, prompt: 'Second explicit request', commandId: 'second' });
+      assert.equal(completed.state, 'provider_completed');
+      assert.equal(completed.binding?.nativeThreadId, refused.binding.nativeThreadId);
+      const ledger = await b.call('snapshot', {});
+      assert.deepEqual(Object.values(ledger.executions), [refused, completed]);
+      const events = (await b.call('replay', {})).events;
+      assert.equal(events.filter(e => e.type === 'turn/started').length, 1);
+    } finally { await b.close(); }
+  }
+});
+
 test('requested interruption is confirmed only by provider terminal event', async t => {
   const b = new Backend(config(temp(t), 'wait-interrupt')); try {
     const { request } = await setup(b); const running = b.call('execute', request);
