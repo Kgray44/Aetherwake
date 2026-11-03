@@ -1331,12 +1331,15 @@ function renderDOM() {
       !hidden &&
       !el.classList.contains("receded") &&
       p.opacity > 0.01;
-    // A visible normal card is a working surface, including partial cards and
-    // narrow layouts. Expansion changes available space, never permissions.
+    const target = motion.bodies.get(id)!.channels;
+    const usable = visible && (application?.blockWorkingEligible(
+      id, el, p, { w: target.w.target, h: target.h.target },
+    ) ?? true);
+    // Readable cards are working surfaces even when partly outside the window.
     application?.setBlockPresentation(
       id,
       visible,
-      visible,
+      usable,
       expanded === id ? "focused" : "workspace",
     );
     workingFootprints?.setVisible(id, visible);

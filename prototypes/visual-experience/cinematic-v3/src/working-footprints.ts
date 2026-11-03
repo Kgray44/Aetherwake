@@ -1,3 +1,24 @@
+import type { BlockInstanceKind } from "../../../block-library/contracts.ts";
+import { blockComposition } from "../../../block-library/presentation-policy.ts";
+
+/** The full projected card is an upper bound on the usable editor body.
+ * ResizeObserver still supplies the actual body measurement for card layout. */
+export function workspaceBodyEligible(
+  kind: BlockInstanceKind,
+  textScale: number,
+  projected: { w: number; h: number },
+  target: { w: number; h: number },
+  active: boolean,
+) {
+  const fits = ({ w, h }: { w: number; h: number }) =>
+    blockComposition(kind, {
+      width: w, height: h, bodyWidth: w, bodyHeight: h, textScale,
+    }) === "working";
+  // A newly exposed card headed for an overview can stay lightweight during
+  // the glide. Retained editors continue to follow their actual footprint.
+  return fits(projected) && (active || fits(target));
+}
+
 type Size = { width: number; height: number };
 type Observer = Pick<ResizeObserver, "observe" | "unobserve" | "disconnect">;
 type Observe = (

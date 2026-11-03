@@ -76,6 +76,7 @@ exports.verify = async ({
       return { metrics:s.metrics, active:s.active, graphicsFailed:s.graphicsFailed, contextLost:s.gpu?.contextLost,
         unhiddenCardNodes:cards.filter(card=>!card.hidden).length, mountedCards:cards.length,
         interactiveCardNodes:cards.filter(card=>!card.closest('[inert],[hidden]')).length,
+        usableCardNodes:cards.filter(card=>card.dataset.workspacePresentation==='usable').length,
         editorNodes:document.querySelectorAll('[data-block] textarea').length };
     })()`);
     assert.equal(result.active, true);

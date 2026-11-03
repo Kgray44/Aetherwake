@@ -1,6 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createWorkingFootprints } from "../src/working-footprints.ts";
+import { createWorkingFootprints, workspaceBodyEligible } from "../src/working-footprints.ts";
+
+test("camera fit delays new editors that cannot fit while preserving readable cards and text scale", () => {
+  const readable = { w: 300, h: 180 };
+  const distant = { w: 140, h: 65 };
+  assert.equal(workspaceBodyEligible("conversation", 1, readable, distant, false), false);
+  assert.equal(workspaceBodyEligible("conversation", 1, readable, distant, true), true);
+  assert.equal(workspaceBodyEligible("conversation", 1, distant, readable, false), false);
+  assert.equal(workspaceBodyEligible("conversation", 1, readable, readable, false), true);
+  assert.equal(workspaceBodyEligible("conversation", 1.5, readable, readable, false), false);
+});
 
 function fixture() {
   let deliver,

@@ -141,6 +141,7 @@ import {
   approachWorkspaceCard,
   type WorkspaceView,
 } from "./workspace-approach";
+import { workspaceBodyEligible } from "./working-footprints.ts";
 import {
   BUILTIN_BLOCKS,
   REGISTERED_BLOCKS,
@@ -3988,7 +3989,7 @@ export function installApplication(hooks: Hooks) {
       const surface = el(".working-content", article);
       const members = r.taskMembers ?? [];
       let group = groupViews.get(id);
-      if (!group) {
+      if (!group && activeBlocks.get(id)) {
         const primary = document.createElement("div");
         primary.className = "task-group-primary";
         primary.style.display = "contents";
@@ -4021,7 +4022,7 @@ export function installApplication(hooks: Hooks) {
         });
         groupViews.set(id, group);
       }
-      group.update(members);
+      group?.update(members);
       el(".folio-preview", article).textContent = members.length
         ? members
             .map((t) => `${t.status === "done" ? "✓" : "○"} ${t.title}`)
@@ -4041,7 +4042,7 @@ export function installApplication(hooks: Hooks) {
       }
     } else if (r.kind === "stream") {
       const content = el(".working-content", article);
-      if (!eventViews.has(id)) {
+      if (!eventViews.has(id) && activeBlocks.get(id)) {
         content.replaceChildren();
         eventViews.set(
           id,
@@ -4058,7 +4059,7 @@ export function installApplication(hooks: Hooks) {
             },
           ),
         );
-      } else eventViews.get(id)!.update();
+      } else eventViews.get(id)?.update();
       updateStreamSummaries();
     } else {
       el(".synthetic", article).textContent =
@@ -4836,6 +4837,27 @@ export function installApplication(hooks: Hooks) {
     setBlockActive(id: string, active: boolean) {
       focusedBlocks.set(id, active);
       syncBlockActivity(id);
+    },
+    blockWorkingEligible(
+      id: string,
+      article: HTMLElement,
+      projected: { w: number; h: number },
+      target: { w: number; h: number },
+    ) {
+      const kind = identityModels.get(id)?.model.kind;
+      if (
+        !kind ||
+        focusedBlocks.get(id) ||
+        (article.contains(document.activeElement) &&
+          document.activeElement?.closest(".working-content"))
+      ) return true;
+      return workspaceBodyEligible(
+        kind,
+        blockSettings.get(id)?.configuration.textScale ?? 1,
+        projected,
+        target,
+        activeBlocks.get(id) ?? false,
+      );
     },
     setBlockFootprint(id: string, measured: Omit<BlockFootprint, "textScale">) {
       if (!state?.blocks.some((block) => block.id === id)) return;
