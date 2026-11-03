@@ -2,6 +2,31 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 model-selected resource opening and Portable BC
+
+Vela's natural-language path uses the authorized model to select
+registered typed actions. Two different workspace organization requests
+exercised the model protocol and produced reviewed layout changes that
+preserved resource identity and content through restart and undo.
+A new resource-opening action sends a unique, currently authorized
+match to the same desktop opener used by other app surfaces. Duplicate
+titles produce selectable matches. A newer navigation supersedes a
+pending presentation. The tool does not change workspace placement.
+
+Portable BC packages `3798e028175bedd7e9a0897b68ca1f919634a214`.
+All 427 payload hashes matched. Manifest SHA-256 is
+`fb17ba0b565d7f922f1380d7b5efdc48869812a2dc86d3e2c1c88e09268550ab`.
+Hidden Electron verification exercised the packaged host, renderer and
+bundled backend with an isolated SQLite profile and a scripted App
+Server. The Vela composer opened the exact note and retained its saved
+text, workspace navigation and block geometry. Private profile
+`review-block-scale-1-1793701975985` holds the native receipt with
+SHA-256 `7dd6ae75df25ccf90a30db75c8ec833f1eb5dee34aa3024f476947843379322b`.
+Strict build, 407 desktop, 255 backend and 147 Vela tests passed. The
+backend count uses the lower-concurrency rerun after a connection
+expiry test failed in the parallel run and passed on its own. Live
+model selection and foreground interaction remain unverified.
+
 ## November 3 clipping projection and Portable BB
 
 The compositor now uses the exact axis bounds of unrotated cards and
