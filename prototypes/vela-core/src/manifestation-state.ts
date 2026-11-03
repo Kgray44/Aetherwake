@@ -36,6 +36,9 @@ function responseMessage(request: VelaRequest, messages: Map<string, VelaMessage
   const message = messages.get(request.response.messageId);
   if (!message || message.role !== 'assistant' || message.requestId !== request.id || message.responseKind !== request.response.kind || message.planId !== undefined) return null;
   if (request.local) return request.providerId === null && request.local.schemaVersion === 1 && request.local.providerId === null && request.local.classification === 'observed' && message.source === 'vela-native' && message.classification === 'observed' && message.providerId === undefined && message.providerContribution === undefined ? message : null;
+  if (request.route?.kind === 'project-check' && request.projectCheck?.kind === request.route.check && request.projectCheck.state !== 'running')
+    return request.providerId === null && message.source === 'vela-native' && message.classification === 'observed' &&
+      message.providerId === undefined && message.providerContribution === undefined ? message : null;
   const contribution = message.providerContribution;
   return id(request.providerId) && message.source === 'provider' && message.classification === 'reported' && message.providerId === request.providerId && contribution?.classification === 'reported' && contribution.providerId === request.providerId ? message : null;
 }

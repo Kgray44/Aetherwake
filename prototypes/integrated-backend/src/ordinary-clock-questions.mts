@@ -1,4 +1,4 @@
-/** Legacy ordinary-chat device clock shortcut. Vela's composer never uses it. */
+/** Recognize complete device clock questions shared by ordinary chat and Vela. */
 export function matchOrdinaryClockQuestion(intent: unknown): 'local.time' | 'local.date' | null {
   if (typeof intent !== 'string' || intent.length > 16000) return null;
   const normalized = intent.normalize('NFKC').trim().toLowerCase().replaceAll('’', "'").replace(/\s+/gu, ' ').replace(/^vela[,:]?\s+/u, '').replace(/[?!.]+$/u, '').trim();

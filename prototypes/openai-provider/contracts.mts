@@ -118,6 +118,7 @@ export interface TurnResult {
     executionId: string;
     requestId: string;
     outcome: TurnOutcome;
+    incompleteReason?: 'max_output_tokens' | 'content_filter';
     dispatched: boolean;
     partialText: string;
     refusalText?: string;

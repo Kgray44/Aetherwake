@@ -271,7 +271,7 @@ function taskGroupChecklistReady(blockId, expected) {
   const root = document.querySelector(
     '[data-block="' +
       CSS.escape(blockId) +
-      '"] .aw-task-group[aria-label="Task group checklist"]',
+      '"] .aw-task-group[aria-label="Manual task group"]',
   );
   if (
     !root ||
@@ -572,9 +572,15 @@ async function verifyJourney({
     await click(`[data-expanded-target="${token}"]`);
   };
   const closeGraph = () => textButton("Close", ".aw-graph-dialog");
+  const openEnvironments = async () => {
+    if (!(await js('!!document.querySelector(".en-navigator")?.getClientRects().length'))) await click("#workspace-manager");
+  };
   const selectWorkspace = async (id) => {
-    await click("#workspace-manager");
-    await click(`[data-workspace="${id}"]`);
+    const workspace = (await snapshot()).workspaces.find(item => item.id === id);
+    assert.ok(workspace, "Canonical workspace must exist before opening its control");
+    await openEnvironments();
+    await fill('.en-navigator input[name="query"]', workspace.title);
+    await click(`.en-tree .en-workspace-row[data-workspace-id=${JSON.stringify(id)}] [data-action="open-workspace"]`);
     await wait(
       `window.__aerynth.application().navigation.kind==='workspace'&&window.__aerynth.application().activeWorkspaceId===${JSON.stringify(id)}`,
     );
@@ -599,21 +605,25 @@ async function verifyJourney({
     );
     await pause(550);
   };
+  const beginEnvironment = async kind => {
+    await openEnvironments();
+    const toggle = '.en-navigator [data-action="toggle-create"]';
+    if (!(await js(`document.querySelector(${JSON.stringify(toggle)})?.getAttribute('aria-expanded')==='true'`))) await click(toggle);
+    await click(`.en-navigator [data-action="create-${kind}"]`);
+    return `.en-editor[data-mode="${kind}-create"]:not([hidden])`;
+  };
   const createProject = async (title) => {
-    await click("#workspace-manager");
-    await click("#new-project");
-    await fill("#project-title", title);
-    await click('#command-surface button[type="submit"]');
-    await wait('!document.querySelector("#command-surface").open');
+    const editor = await beginEnvironment("project");
+    await fill(editor + ' input[name="title"]', title);
+    await click(editor + ' [data-action="submit-project-create"]');
+    await wait(`window.__aerynth.application().projects.some(p=>p.title===${JSON.stringify(title)})`);
     return (await snapshot()).projects.find((p) => p.title === title).id;
   };
   const createWorkspace = async (title, projectId) => {
-    await click("#workspace-manager");
-    await click("#new-workspace");
-    await fill("#workspace-title", title);
-    await fill('#command-surface select[name="projectId"]', projectId);
-    await click('#command-surface button[type="submit"]');
-    await wait('!document.querySelector("#command-surface").open');
+    const editor = await beginEnvironment("workspace");
+    await fill(editor + ' input[name="title"]', title);
+    await fill(editor + ' select[name="projectId"]', projectId);
+    await click(editor + ' [data-action="submit-workspace-create"]');
     await wait(
       `window.__aerynth.application().workspaces.some(w=>w.title===${JSON.stringify(title)})`,
     );
@@ -681,8 +691,13 @@ async function verifyJourney({
     await key("Escape");
     await wait('!document.querySelector(".folio.expanded")');
   };
-  const workspaceActions = () =>
-    click('.aw-workspace-layout [aria-label="Workspace actions"]');
+  const workspaceActionsPanel = '[data-surface-id="workspace-actions"]';
+  const workspaceAction = action => `.aw-workspace-actions [data-action="${action}"]`;
+  const workspaceActions = async () => {
+    if (!(await js(`!!document.querySelector(${JSON.stringify(workspaceActionsPanel)})&&!document.querySelector(${JSON.stringify(workspaceActionsPanel)}).inert`)))
+      await click('.aw-workspace-layout [aria-label="Workspace actions"]');
+    await wait(`document.querySelector('.aw-workspace-actions')?.dataset.state==='ready'`);
+  };
   const workspaceOut = async (wheel = false) => {
     await workingHome();
     if (wheel) {
@@ -702,7 +717,7 @@ async function verifyJourney({
       );
     } else {
       await workspaceActions();
-      await click("#workspace-constellation");
+      await click(workspaceAction("constellation"));
     }
     await pause(350);
   };
@@ -733,7 +748,11 @@ async function verifyJourney({
   const openBlock = async (id) => {
     await workingHome();
     await workspaceActions();
-    await click(`[data-locate="${id}"]`);
+    const find = workspaceAction("find-toggle");
+    if (!(await js(`document.querySelector(${JSON.stringify(find)})?.getAttribute('aria-expanded')==='true'`))) await click(find);
+    await click(`${workspaceAction("find-block")}[data-block-id=${JSON.stringify(id)}]`);
+    if (await js(`!!document.querySelector(${JSON.stringify(workspaceActionsPanel)})&&!document.querySelector(${JSON.stringify(workspaceActionsPanel)}).inert`))
+      await click(workspaceActionsPanel + ' .aw-contextual-dismiss');
     await wait(`!!document.querySelector('[data-block="${id}"].expanded')`);
   };
   const editDocument = async (id, content) => {
@@ -1185,7 +1204,7 @@ async function verifyJourney({
           await openBlock(taskGroup.block.id);
           await textButton(
             "Manage tasks",
-            `[data-block="${taskGroup.block.id}"] .aw-task-group[aria-label="Task group checklist"]`,
+            `[data-block="${taskGroup.block.id}"] .aw-task-group[aria-label="Manual task group"]`,
           );
           for (const taskId of [row.task.resource.id, extraTask.resource.id])
             await click(
@@ -1285,7 +1304,7 @@ async function verifyJourney({
         observedGroup.taskMembers,
       );
       const renderedMembers = await js(
-        `(()=>{const root=document.querySelector('[data-block="${receipt.taskGroups[2].blockId}"] .aw-task-group[aria-label="Task group checklist"]');if(!root||!root.getClientRects().length)return null;return [...root.querySelectorAll('[data-task-id]')].map(row=>{const input=row.querySelector('input[type="checkbox"]');return{id:row.dataset.taskId,checked:input?.checked??null,label:input?.getAttribute('aria-label')??null,visible:!!input?.getClientRects().length}})})()`,
+        `(()=>{const root=document.querySelector('[data-block="${receipt.taskGroups[2].blockId}"] .aw-task-group[aria-label="Manual task group"]');if(!root||!root.getClientRects().length)return null;return [...root.querySelectorAll('[data-task-id]')].map(row=>{const input=row.querySelector('input[type="checkbox"]');return{id:row.dataset.taskId,checked:input?.checked??null,label:input?.getAttribute('aria-label')??null,visible:!!input?.getClientRects().length}})})()`,
       );
       assert.ok(
         renderedMembers?.length,

@@ -286,7 +286,7 @@ function call(command, input) {
           ),
         );
       },
-      command === "conversationSend" ? 120000 : 90000,
+      command === "conversationSend" || command === "velaFileEditApply" ? 120000 : 90000,
     );
     pending.set(id, { resolve, reject, timer });
     writeBackend(line);
@@ -536,6 +536,7 @@ app.whenReady().then(async () => {
           observeNativeRequest: observeVelaRequest,
           offerPlanningByDefault: !verify,
           directMessageSend: !verify,
+          routeNative: true,
         });
       } else if (command === "githubTimeline") {
         if (input?.name === "openCommit") {

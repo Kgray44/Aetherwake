@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
 import { randomUUID } from 'node:crypto';
 import { VelaService } from '../src/service.mts';
-import { VelaError, validateAction, validateProposal, validateProviderResult } from '../src/capabilities.ts';
+import { CAPABILITIES, VelaError, validateAction, validateProposal, validateProviderResult } from '../src/capabilities.ts';
+import { classifyVelaRoutingIntent, nativeVelaFact } from '../src/adaptive-routing.ts';
 import { velaPanelStatus } from '../src/panel-status.ts';
-import type { AuthorizationRequest, CanonicalConversation, ContextManifest, HostActionResult, ProviderReplyKind, ResourceRef, VelaHostPort, VelaMessage, VelaNativeAction, VelaPlanningPort, VelaScope } from '../src/contracts.ts';
+import type { AuthorizationRequest, CanonicalConversation, ContextManifest, DelegateTaskAction, HostActionResult, ProviderReplyKind, ResourceRef, VelaHostPort, VelaMessage, VelaNativeAction, VelaPlanningPort, VelaScope } from '../src/contracts.ts';
 
 /** Synthetic canonical host: resources, placements, conversations and command receipts share ONE db. */
-function fixture(options: { planner?: VelaPlanningPort; preferenceAdapter?: boolean } = {}) {
+function fixture(options: { planner?: VelaPlanningPort; preferenceAdapter?: boolean; allTools?: boolean } = {}) {
   const db = new DatabaseSync(':memory:');
   db.exec(`CREATE TABLE canonical_resources(id TEXT PRIMARY KEY,kind TEXT,title TEXT,version INTEGER,content TEXT);
     CREATE TABLE canonical_messages(id TEXT PRIMARY KEY,conversation_id TEXT,json TEXT);
@@ -21,6 +22,15 @@ function fixture(options: { planner?: VelaPlanningPort; preferenceAdapter?: bool
   seed.run('note:private', 'resource', 'Excluded synthetic note', 1, 'Must never enter the planning context.');
   seed.run('workspace:a', 'workspace', 'Synthetic workspace', 1, '');
   let scope: VelaScope = { principalId: 'synthetic:user', policyVersion: 'policy:1', resourceIds: ['note:a', 'task:b'], workspaceIds: ['workspace:a'], projectIds: [] };
+  if (options.allTools) {
+    seed.run('project:a', 'project', 'Home', 1, '');
+    seed.run('collection:a', 'collection', 'Ideas', 1, '');
+    seed.run('group:a', 'resource', 'Weekend tasks', 1, '');
+    seed.run('chat:a', 'resource', 'Kitchen chat', 1, '');
+    scope.projectIds.push('project:a');
+    scope.collectionIds = ['collection:a'];
+    scope.resourceIds.push('group:a', 'chat:a');
+  }
   let txId = 0, nativeCalls = 0, contentReads = 0, delegateCalls = 0, preferenceCalls = 0, hostThrowsAfterEffect = false;
   const authRequests: AuthorizationRequest[] = [], authorizations = new Set<string>(), denied = new Set<string>();
   const delegated: unknown[] = [];
@@ -31,9 +41,11 @@ function fixture(options: { planner?: VelaPlanningPort; preferenceAdapter?: bool
   }
   const ref = (id: string): ResourceRef | null => {
     const row = db.prepare('SELECT * FROM canonical_resources WHERE id=?').get(id);
-    return row ? { id: String(row.id), kind: row.kind as ResourceRef['kind'], title: String(row.title), version: Number(row.version) } : null;
+    return row ? { id: String(row.id), kind: row.kind as ResourceRef['kind'], title: String(row.title), version: Number(row.version),
+      ...(options.allTools && id === 'note:a' ? { resourceKind: 'note' } : {}) } : null;
   };
-  const allowed = (id: string, kind: ResourceRef['kind'], s: VelaScope) => (kind === 'resource' ? s.resourceIds : kind === 'workspace' ? s.workspaceIds : s.projectIds).includes(id);
+  const allowed = (id: string, kind: ResourceRef['kind'], s: VelaScope) => (kind === 'resource' ? s.resourceIds
+    : kind === 'workspace' ? s.workspaceIds : kind === 'collection' ? s.collectionIds ?? [] : s.projectIds).includes(id);
   const host: VelaHostPort = {
     scope: () => structuredClone(scope),
     ensureConversation: () => {
@@ -87,6 +99,7 @@ function fixture(options: { planner?: VelaPlanningPort; preferenceAdapter?: bool
       return { status: 'applied', receiptId: 'execution-receipt:synthetic' };
     },
   };
+  if (options.allTools) host.canReadAttentionPreferences = () => true;
   if (options.preferenceAdapter) host.applyPreference = input => {
     assert.ok(authorizations.has(input.authorizationRef)); preferenceCalls++;
     db.prepare('INSERT INTO canonical_settings VALUES(?,?,?) ON CONFLICT(scope,key) DO UPDATE SET value=excluded.value').run(input.action.scope.id ?? 'global', input.action.key, input.action.value);
@@ -99,6 +112,73 @@ function fixture(options: { planner?: VelaPlanningPort; preferenceAdapter?: bool
     throwAfterEffect: () => { hostThrowsAfterEffect = true; },
     ref, close: () => db.close() };
 }
+
+type CatalogAction = VelaNativeAction | DelegateTaskAction;
+const everydayToolRequests = [
+  ['Can you find my research note?', { type: 'search', query: 'research' }],
+  ['Open my research note, please.', { type: 'openResource', query: 'Synthetic research' }],
+  ['Take me back to my workspace.', { type: 'navigate', target: { kind: 'workspace', workspaceId: 'workspace:a' } }],
+  ['Make me a project called Home Repairs.', { type: 'createProject', title: 'Home Repairs' }],
+  ['Call the Home project House Plans instead.', { type: 'renameProject', projectId: 'project:a', title: 'House Plans' }],
+  ['Rename my research note to Kitchen Notes.', { type: 'renameResource', resourceId: 'note:a', title: 'Kitchen Notes' }],
+  ['Put the research note in my Home project.', { type: 'associateResourceProject', resourceId: 'note:a', projectId: 'project:a' }],
+  ['Make a new workspace called Weekend.', { type: 'createWorkspace', title: 'Weekend', projectId: null }],
+  ['How much RAM am I using?', { type: 'readLocalFact', capabilityId: 'system.memory' }],
+  ['Will it rain here tomorrow?', { type: 'readWeather', period: 'tomorrow' }],
+  ['Make a timeline of what happened in my project.', { type: 'createTimeline', title: 'Project activity', projectId: 'project:a', workspaceId: 'workspace:a', source: { kind: 'application-activity' } }],
+  ['Rename this workspace to Weekend Plans.', { type: 'renameWorkspace', workspaceId: 'workspace:a', title: 'Weekend Plans' }],
+  ['Bring all my cards into view.', { type: 'bringAllIntoView', workspaceId: 'workspace:a' }],
+  ['Move the cards apart so they stop overlapping.', { type: 'resolveLayout', workspaceId: 'workspace:a' }],
+  ['Switch this workspace to Fluid.', { type: 'setOrganization', workspaceId: 'workspace:a', organization: { mode: 'fluid' } }],
+  ['Start an empty local chat called Kitchen Ideas.', { type: 'createConversation', title: 'Kitchen Ideas', providerId: 'local' }],
+  ['Favorite my kitchen chat.', { type: 'conversationFavorite', resourceId: 'chat:a', favorite: true }],
+  ['Rename the kitchen chat to Paint Colors.', { type: 'renameConversation', resourceId: 'chat:a', title: 'Paint Colors' }],
+  ['Put my kitchen chat in the Home project.', { type: 'associateConversationProject', resourceId: 'chat:a', projectId: 'project:a' }],
+  ['Make a folder called Ideas.', { type: 'createCollection', title: 'Ideas', projectId: null }],
+  ['Rename my Ideas folder to Things to Try.', { type: 'renameCollection', collectionId: 'collection:a', title: 'Things to Try' }],
+  ['Archive the Ideas folder.', { type: 'archiveCollection', collectionId: 'collection:a', archived: true }],
+  ['Add the research note to the Ideas folder.', { type: 'collectionMembership', collectionId: 'collection:a', resourceId: 'note:a', member: true }],
+  ['Make a workspace with my research note in it.', { type: 'workspaceFromResources', title: 'Research', projectId: null, resourceIds: ['note:a'] }],
+  ['Add a checklist called Shopping here.', { type: 'createResource', kind: 'checklist', title: 'Shopping', workspaceId: 'workspace:a' }],
+  ['Put my research note on this workspace.', { type: 'attach', workspaceId: 'workspace:a', resourceId: 'note:a' }],
+  ['Change the research note to say we need two samples.', { type: 'content', resourceId: 'note:a', expectedVersion: 1, content: 'We need two samples.' }],
+  ['Mark the task done.', { type: 'taskStatus', resourceId: 'task:b', expectedVersion: 1, status: 'done' }],
+  ['Make this task high priority.', { type: 'taskPriority', resourceId: 'task:b', expectedVersion: 1, priority: 'high' }],
+  ['Add this task to Weekend Tasks.', { type: 'setTaskGroupMembers', groupId: 'group:a', expectedVersion: 1, taskIds: ['task:b'] }],
+  ['Link the research note to this task.', { type: 'relate', sourceId: 'note:a', targetId: 'task:b', kind: 'related' }],
+  ['Tidy the workspace and spread the cards out evenly.', { type: 'applyStructuredPreset', workspaceId: 'workspace:a', preset: 'balanced' }],
+  ['Keep things quiet for a while.', { type: 'setAttentionMode', mode: 'quiet', expectedVersion: 1 }],
+  ['Ask Codex to look into the failing test.', { type: 'delegateTask', title: 'Check failing test', objective: 'Find the cause of the failing test.', providerId: 'codex-app-server', resourceIds: [], constraints: ['Read only'] }],
+] as const satisfies readonly (readonly [string, CatalogAction])[];
+
+test('There is a plain-language test for every Vela tool', () => {
+  assert.deepEqual(everydayToolRequests.map(([, action]) => action.type).sort(), CAPABILITIES.map(tool => tool.id).sort());
+  for (const [intent, action] of everydayToolRequests) {
+    if (action.type === 'readLocalFact') assert.equal(nativeVelaFact(intent), action.capabilityId, intent);
+    else assert.equal(classifyVelaRoutingIntent(intent), 'app-planning', intent);
+  }
+});
+for (const [intent, action] of everydayToolRequests) test(intent, async () => {
+  const p = planner({ schemaVersion: 2, kind: 'plan', summary: intent,
+    steps: [{ id: 'first', explanation: 'Do what I asked for.', action }],
+    contribution: { providerId: 'synthetic-planner', classification: 'reported' } });
+  const f = fixture({ allTools: true, planner: p.port });
+  try {
+    if (action.type === 'delegateTask') f.service.preferences({ expectedVersion: 1, patch: { delegationEnabled: true } });
+    const request = await f.service.request({ intent, resourceIds: [], authorizeProvider: true });
+    assert.equal(p.captured()?.intent, intent);
+    const plan = f.service.state().plans.find(candidate => candidate.id === request.planId);
+    assert(plan, request.errorCode);
+    assert.deepEqual(plan.steps[0].action, action);
+    if (plan.state === 'prepared') {
+      assert.equal(f.counts().nativeCalls + f.counts().delegateCalls, 0, 'Wait for review before changing anything.');
+      f.service.review({ planId: plan.id, fingerprint: plan.fingerprint, decision: 'approve' });
+      await f.service.apply(plan.id);
+    }
+    assert.equal(f.service.state().receipts.find(receipt => receipt.planId === plan.id)?.state, 'applied');
+    assert.equal(f.counts().nativeCalls + f.counts().delegateCalls, 1);
+  } finally { f.close(); }
+});
 function proposal(action: VelaNativeAction = { type: 'workspaceFromResources', title: 'Research', projectId: null, resourceIds: ['note:a'] }) {
   return { schemaVersion: 1, summary: 'Create a workspace for the selected research.',
     steps: [{ id: 'organize', explanation: 'Reference the existing research note without duplicating it.', action }],

@@ -31,6 +31,9 @@ export function createVelaClient(options: {
       [
         "native",
         "request",
+        "applyFileEdit",
+        "verifyFileEdit",
+        "reconcileFileEdit",
         "apply",
         "review",
         "preferences",
@@ -54,6 +57,12 @@ export function createVelaClient(options: {
       return invoke("request", activeCard ? { ...input, activeCard } : input);
     },
     native: (input) => invoke("native", input),
+    routingOptions: (input) => invoke("routingOptions", input),
+    saveRoutingSettings: (input) => invoke("saveRoutingSettings", input),
+    rateRoutingResponse: (input) => invoke("rateRoutingResponse", input),
+    applyFileEdit: (input) => invoke("applyFileEdit", input),
+    verifyFileEdit: (input) => invoke("verifyFileEdit", input),
+    reconcileFileEdit: (input) => invoke("reconcileFileEdit", input),
     review: (input) => invoke("review", input),
     apply: (input) => invoke("apply", input),
     cancel: (input) => invoke("cancel", input),

@@ -41,15 +41,36 @@ export function nativeProvider(options: Options): ProviderPort {
         throw error;
       }
     },
-    async capabilities() { const c = await bridge.capabilities(); return { providerId: id, mock, authentication: c.authentication, models: c.models.map(m => m.id), catalogOnly: true, nativeFork: false, chatgptHistory: false }; },
-    open: () => bridge.newThread({ cwd: options.cwd ?? process.cwd(), sandbox: 'read-only', approvalPolicy: 'never', serviceName: 'aerynth_integration_prototype' }),
+    async capabilities() {
+      const c = await bridge.capabilities();
+      const models = c.models.filter(model => !model.hidden), preferred = models.find(model => model.isDefault);
+      return { providerId: id, mock, authentication: c.authentication, models: c.models.map(m => m.id),
+        selectableModels: models.map(model => model.id),
+        ...(preferred ? { defaultModel: preferred.id } : {}),
+        modelEfforts: Object.fromEntries(models.filter(model => model.efforts?.length).map(model => [model.id, model.efforts!])),
+        defaultModelEfforts: Object.fromEntries(models.flatMap(model => model.defaultEffort ? [[model.id, model.defaultEffort]] : [])),
+        catalogOnly: true, nativeFork: false, chatgptHistory: false };
+    },
+    open: target => bridge.newThread({ cwd: target?.cwd ?? options.cwd ?? process.cwd(), ...(target?.model ? { model: target.model } : {}),
+      sandbox: 'read-only', approvalPolicy: 'never', serviceName: 'aerynth_integration_prototype' }),
     resume: threadId => bridge.resumeThread({ threadId }),
     read: threadId => bridge.readThread(threadId),
     recentTurns: async threadId => (await bridge.listTurns({ threadId, limit: 20, itemsView: 'notLoaded' })).data,
     items: async (threadId, turnId) => { const page = await bridge.readItems(threadId, turnId); return { data: page.data, nextCursor: page.nextCursor, backwardsCursor: page.backwardsCursor }; },
-    turn: (threadId, text, model) => bridge.beginTurn({ threadId, input: [{ type: 'text', text, text_elements: [] }], ...(model ? { model } : {}) }),
+    turn: (threadId, text, model, inspection) => bridge.beginTurn({
+      threadId, input: [{ type: 'text', text, text_elements: [] }], ...(model ? { model } : {}),
+      ...(inspection ? { approvalPolicy: 'never', sandboxPolicy: { type: 'readOnly', networkAccess: false },
+        ...(inspection.effort ? { effort: inspection.effort } : {}) } : {}),
+    }),
     terminal: (threadId, turnId) => bridge.waitForTerminal(threadId, turnId, 60000),
     interrupt: (threadId, turnId) => bridge.interrupt({ threadId, turnId }),
+    ...(!mock && process.platform === 'win32' ? { projectChecks: {
+      ready: () => bridge.windowsSandboxReady(),
+      execute: (command: string[], cwd: string) => bridge.execReadOnly({ command, cwd, timeoutMs: 20000, env: {
+        NODE_OPTIONS: null, NODE_PATH: null, NODE_V8_COVERAGE: null, NODE_COMPILE_CACHE: null,
+        NODE_TEST_CONTEXT: null, NODE_DISABLE_COMPILE_CACHE: '1', FORCE_COLOR: '0',
+      } }),
+    } } : {}),
     onEvent(listener) { bridge.on('event', listener); return () => bridge.off('event', listener); },
     ...(options.velaCatalogDiscovery===true?{catalogDiscovery:{
       get available(){return catalogAvailable;},

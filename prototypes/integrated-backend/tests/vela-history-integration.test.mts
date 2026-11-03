@@ -1,9 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { once } from "node:events";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { join, resolve, relative, isAbsolute } from "node:path";
+import { join, resolve, relative, isAbsolute, dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { BackendCore } from "../src/core.mts";
 import type {
@@ -13,6 +16,449 @@ import type {
 } from "../src/contracts.mts";
 import type { VelaRequest } from "../../vela-core/src/contracts.ts";
 import { planningDigest } from "../../vela-core/src/codex-planning-adapter.mts";
+import { admitVelaFileEdit, parseVelaFileEdit, upgradeVelaFileEdit } from "../src/vela-file-edit.mts";
+
+test("Check my logs, fix the code, and keep the original file until I approve", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
+  admitVelaFileEdit(runtime);
+  mkdirSync(runtime, { recursive: true });
+  const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
+  const file = join(dir, "sample.json"), alias = join(dir, "linked.json");
+  const f = fixture(false, "air-file-edit", false);
+  const git = (...args: string[]) => execFileSync("git.exe", ["-C", dir, "-c", "core.hooksPath=NUL", ...args], { windowsHide: true, timeout: 6000, stdio: "pipe" });
+  try {
+    git("init", "--quiet", "--template=");
+    writeFileSync(file, '{"count":1}\n');
+    git("add", "--", "sample.json");
+    git("-c", "user.name=AIR fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "Fixture");
+    const intent = "Edit sample.json to set the count to two";
+    const input = { intent, resourceIds: [], adaptive: true as const };
+    await assert.rejects(f.core.command("velaRequestPreview", input), /vela_codex_edit_target_required/);
+    linkSync(file, alias);
+    await assert.rejects(f.core.command("velaRequestPreview", { ...input, editTargetPaths: [file] }), /vela_edit_file_ineligible/);
+    rmSync(alias);
+    await assert.rejects(f.core.command("velaRequestPreview", { ...input, editTargetPaths: [f.path] }), /vela_edit_path_ineligible|vela_edit_file_ineligible/);
+    const logIntent = "Inspect the logs, find the stutter, fix the code, and run the benchmark";
+    const logBody = "Synthetic frame 123 took 80 ms after config count changed";
+    const proposal = async (logId?: string) => {
+      const preview = await f.core.command("velaRequestPreview", { ...input,
+        ...(logId ? { intent: logIntent, resourceIds: [logId] } : {}), editTargetPaths: [file] });
+      assert.equal(preview.route?.kind, "file-edit");
+      if (logId && preview.route?.kind === "file-edit") {
+        assert.equal(preview.route.inspectSelectedLogs, true);
+        assert.equal(preview.route.followUpCheck, "node-benchmark");
+      }
+      const native = await f.core.command("velaNativeReview", { previewId: preview.id, signature: preview.signature });
+      assert.deepEqual(native.editPaths, [file]);
+      assert.equal(native.workingDirectory, dir);
+      assert(!native.prompt.includes(dir));
+      assert.match(native.prompt, /Do not write, run tests/u);
+      if (logId) assert(native.prompt.includes(logBody));
+      await assert.rejects(f.core.command("authorizeVelaRequest", {
+        previewId: preview.id, signature: preview.signature, reviewDigest: native.reviewDigest, directSend: true,
+      }), /vela_attached_context_review_required/);
+      return f.vela("request", await f.approve({ preview, native })) as Promise<VelaRequest>;
+    };
+    const first = await proposal();
+    assert.equal(first.state, "responded", first.errorCode);
+    assert.equal(readFileSync(file, "utf8"), '{"count":1}\n');
+    const stale = await f.core.command("velaFileEditReview", { requestId: first.id });
+    writeFileSync(file, '{"count":3}\n');
+    await assert.rejects(f.core.command("velaFileEditApply", { requestId: first.id, reviewId: stale.reviewId }), /vela_edit_file_changed/);
+    assert.equal(readFileSync(file, "utf8"), '{"count":3}\n');
+    await assert.rejects(f.core.command("velaRequestPreview", { ...input, intent: logIntent, editTargetPaths: [file] }), /vela_edit_log_source_required/);
+    const workspace = await f.core.command("desktop", { type: "createWorkspace", title: "Synthetic log review", projectId: null });
+    const notes = await f.core.command("desktop", { type: "createResource", kind: "note", title: "Frame timing excerpt", workspaceId: workspace.activeWorkspaceId! });
+    const log = notes.resources.find(resource => resource.title === "Frame timing excerpt")!;
+    await f.core.command("desktop", { type: "content", resourceId: log.id, expectedVersion: log.version, content: logBody });
+    const second = await proposal(log.id);
+    await assert.rejects(f.core.command("velaFileEditApply", { requestId: second.id, reviewId: stale.reviewId }), /vela_edit_review_required/);
+    await f.reopen();
+    const review = await f.core.command("velaFileEditReview", { requestId: second.id });
+    assert.equal(review.files[0].before, '{"count":3}\n');
+    assert.equal(review.files[0].after, '{"count":2}\n');
+    const applied = await f.core.command("velaFileEditApply", { requestId: second.id, reviewId: review.reviewId });
+    assert.equal(applied.state, "applied");
+    assert.equal(applied.followUpCheck, "node-benchmark");
+    assert.equal(applied.files[0].verification, "bytes-and-json-syntax");
+    assert.equal(readFileSync(file, "utf8"), '{"count":2}\n');
+    assert.equal(readFileSync(applied.files[0].backupPath!, "utf8"), '{"count":3}\n');
+    assert.equal((await f.state()).fileEdits?.find(edit => edit.requestId === second.id)?.state, "applied");
+    await assert.rejects(f.core.command("velaFileEditApply", { requestId: second.id, reviewId: review.reviewId }), /vela_edit_review_required/);
+    const edits = (f.core as any).state.vela.edits;
+    // Simulate losing the final SQLite receipt after the external replacement.
+    (f.core as any).atomic(() => { edits[second.id].state = "applying"; delete edits[second.id].files[0].verification; });
+    await f.reopen();
+    await assert.rejects(f.core.command("velaRequestPreview", { ...input, editTargetPaths: [file] }), /vela_edit_reconciliation_required/);
+    const recovered = await f.vela("reconcileFileEdit", { requestId: second.id });
+    assert.equal((recovered as typeof applied).files[0].verification, "bytes-and-json-syntax");
+    assert.equal((await f.core.command("providerActivity", {})).providerRequests, 0);
+  } finally {
+    await f.close();
+    const canonical = realpathSync(dir);
+    assert.equal(dirname(canonical), realpathSync(runtime));
+    assert(relative(runtime, canonical).startsWith("vela-file-edit-"));
+    rmSync(canonical, { recursive: true, force: true });
+  }
+});
+
+test("AIR batch parser permits an exact selected subset and rejects duplicates or new destinations", () => {
+  const targets = ["sample.json", "second.json"].map(relativePath => ({
+    relativePath, path: "C:\\synthetic\\" + relativePath, root: "C:\\synthetic",
+    head: "a".repeat(40), beforeDigest: "b".repeat(64), identity: "synthetic",
+  }));
+  const output = (paths: string[]) => JSON.stringify({ summary: "Fixture", files: paths.map(path => ({ path, replacement: "{}" })) });
+  assert.deepEqual(parseVelaFileEdit(output(["second.json", "sample.json"]), targets).map(edit => edit.target.relativePath), ["sample.json", "second.json"]);
+  assert.equal(parseVelaFileEdit(output(["second.json"]), targets).length, 1);
+  assert.throws(() => parseVelaFileEdit(output(["sample.json", "sample.json"]), targets), /vela_edit_invalid_proposal/);
+  assert.throws(() => parseVelaFileEdit(output(["../second.json"]), targets), /vela_edit_invalid_proposal/);
+  const legacy = upgradeVelaFileEdit({ requestId: "fixture", executionId: "fixture", outputMessageId: "fixture",
+    scopeStamp: "fixture", target: targets[0], afterDigest: "c".repeat(64), state: "awaiting-review" });
+  assert.equal(legacy.legacySingleOutput, true);
+  assert.equal(legacy.files[0].state, "pending");
+  assert.equal(parseVelaFileEdit('{"summary":"Fixture","replacement":"{}"}', [legacy.files[0].target], true)[0].replacement, "{}");
+});
+
+test("Edit this file, create the other one, and run the tests", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
+  admitVelaFileEdit(runtime);
+  mkdirSync(runtime, { recursive: true });
+  const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
+  const original = join(dir, "sample.json"), created = join(dir, "created.json");
+  const f = fixture(false, "air-file-edit", false);
+  const git = (...args: string[]) => execFileSync("git.exe", ["-C", dir, "-c", "core.hooksPath=NUL", ...args],
+    { windowsHide: true, timeout: 6000, stdio: "pipe" });
+  const input = { intent: "Create created.json with a count of two", resourceIds: [], adaptive: true as const };
+  const editCreatePaths = [created];
+  const approvedBytes = '{"count":2}\n';
+  const testFile = join(dir, "sample.test.mjs"), failureFile = join(dir, "failure.test.mjs");
+  const testBody = `import test from 'node:test'; import assert from 'node:assert/strict'; import {readFileSync} from 'node:fs';\n` +
+    `test('checks the created file', () => assert.equal(JSON.parse(readFileSync('created.json','utf8')).count, 2));\n`;
+  try {
+    git("init", "--quiet", "--template=");
+    writeFileSync(original, '{"count":1}\n');
+    writeFileSync(join(dir, ".gitignore"), "ignored.json\n");
+    writeFileSync(join(dir, "tracked.json"), "{}");
+    writeFileSync(testFile, testBody);
+    writeFileSync(failureFile, testBody.replace("count, 2", "count, 3"));
+    const benchPath = join(dir, "sample.bench.mjs");
+    writeFileSync(benchPath, `import { readFileSync } from 'node:fs';
+const times = Array.from({ length: 12 }, () => {
+  const start = performance.now();
+  if (JSON.parse(readFileSync('created.json', 'utf8')).count !== 2) throw Error('Wrong count');
+  return performance.now() - start;
+}).sort((a, b) => a - b);
+console.log(JSON.stringify({ samples: times.length, medianMs: times[5], p95Ms: times[11] }));
+`);
+    git("add", "--", "sample.json", "tracked.json", ".gitignore", "sample.test.mjs", "failure.test.mjs", "sample.bench.mjs");
+    git("-c", "user.name=AIR fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "Fixture");
+    rmSync(join(dir, "tracked.json"));
+    await assert.rejects(f.core.command("velaRequestPreview", input), /vela_codex_create_target_required/);
+    await assert.rejects(f.core.command("velaRequestPreview", { ...input, editCreatePaths: [join(dir, "TRACKED.json")] }),
+      /vela_edit_destination_tracked/);
+    git("add", "-u", "--", "tracked.json");
+    await assert.rejects(f.core.command("velaRequestPreview", { ...input, editCreatePaths: [join(dir, "TRACKED.json")] }),
+      /vela_edit_destination_tracked/);
+    await assert.rejects(f.core.command("velaRequestPreview", { ...input, editCreatePaths: [join(dir, "ignored.json")] }),
+      /vela_edit_destination_ignored/);
+    await assert.rejects(f.core.command("velaRequestPreview", { ...input, editCreatePaths: [original] }), /vela_edit_destination_exists/);
+    const propose = async (mixed: boolean) => {
+      const selected = mixed ? { ...input, intent: "Edit sample.json, create created.json, and run the tests", editTargetPaths: [original] } : input;
+      if (mixed) await assert.rejects(f.core.command("velaRequestPreview", selected), /vela_codex_mixed_targets_required/);
+      const preview = await f.core.command("velaRequestPreview", { ...selected, editCreatePaths });
+      assert.equal(preview.route?.reason, "reviewed-file-creation");
+      assert.equal(preview.route?.kind === "file-edit" && preview.route.followUpCheck, mixed ? "node-test" : undefined);
+      const native = await f.core.command("velaNativeReview", { previewId: preview.id, signature: preview.signature });
+      assert.deepEqual(native.editPaths, mixed ? [original, created] : [created]);
+      assert(!native.prompt.includes(dir));
+      assert.match(native.prompt, /"path":"created.json","operation":"create","content":null/u);
+      const request = await f.vela("request", await f.approve({ preview, native })) as VelaRequest;
+      assert.equal(request.state, "responded", request.errorCode);
+      assert.equal(existsSync(created), false);
+      const review = await f.core.command("velaFileEditReview", { requestId: request.id });
+      assert.deepEqual(review.files.map(file => file.before), mixed ? ['{"count":1}\n', null] : [null]);
+      assert.equal(review.files.at(-1)?.beforeDigest, null);
+      return { requestId: request.id, reviewId: review.reviewId };
+    };
+    const stale = await propose(false);
+    writeFileSync(created, approvedBytes, { flag: "wx" });
+    await assert.rejects(f.core.command("velaFileEditApply", stale), /vela_edit_destination_exists/);
+    assert.equal(readFileSync(created, "utf8"), approvedBytes);
+    rmSync(created);
+    const mixed = await propose(true);
+    const applied = await f.core.command("velaFileEditApply", mixed);
+    assert.equal(applied.state, "applied");
+    assert.deepEqual(applied.files.map(file => file.verification), ["bytes-and-json-syntax", "bytes-and-json-syntax"]);
+    assert.equal(applied.files[1].backupPath, undefined);
+    assert.equal(readFileSync(created, "utf8"), approvedBytes);
+    assert.equal(readFileSync(applied.files[0].backupPath!, "utf8"), '{"count":1}\n');
+    assert.equal(applied.projectChecksAvailable, true);
+    assert.equal(applied.followUpCheck, "node-test");
+    assert.equal(applied.projectChecks, undefined);
+    const inferenceBeforeChecks = (await f.core.command("providerActivity", {})).providerRequests;
+    const reviewCheck = (path: string) => f.core.command("velaProjectCheckReview", {
+      requestId: mixed.requestId, kind: "node-test", paths: [path],
+    });
+    await assert.rejects(reviewCheck(original), /vela_project_check_invalid_input/);
+    await assert.rejects(f.core.command("velaProjectCheckRun", { requestId: mixed.requestId, reviewId: "forged" }), /vela_project_check_review_required/);
+    const staleCheck = await reviewCheck(testFile);
+    writeFileSync(testFile, testBody + "// stale after review\n");
+    await assert.rejects(f.core.command("velaProjectCheckRun", staleCheck), /vela_project_check_stale/);
+    writeFileSync(testFile, testBody);
+    const failingCheck = await reviewCheck(failureFile);
+    const failed = await f.core.command("velaProjectCheckRun", failingCheck);
+    assert.equal(failed.projectChecks?.[0].state, "failed");
+    assert.equal(failed.projectChecks?.[0].exitCode, 1);
+    const freshCheck = await reviewCheck(testFile);
+    assert.deepEqual(freshCheck.argv.slice(-2), ["--", "./sample.test.mjs"]);
+    const checked = await f.core.command("velaProjectCheckRun", freshCheck);
+    assert.deepEqual(checked.projectChecks?.map(check => [check.state, check.testCount, check.exitCode]), [["passed", 1, 0]]);
+    assert.equal(checked.projectChecks?.[0].inputs[0], "sample.test.mjs");
+    assert.match(checked.projectChecks?.[0].sourceHead ?? "", /^[a-f0-9]{40,64}$/u);
+    assert.equal((await f.core.command("providerActivity", {})).providerRequests, inferenceBeforeChecks);
+    await assert.rejects(f.core.command("velaProjectCheckRun", freshCheck), /vela_project_check_review_required/);
+    const bench = await f.core.command("velaProjectCheckReview", { requestId: mixed.requestId, kind: "node-benchmark", paths: [benchPath] });
+    assert.deepEqual(bench.argv.slice(-2), ["--", "./sample.bench.mjs"]);
+    const benchmarked = await f.core.command("velaProjectCheckRun", bench);
+    const observation = benchmarked.projectChecks?.find(check => check.kind === "node-benchmark");
+    assert.equal(observation?.state, "passed");
+    assert.equal(observation?.benchmark?.samples, 12);
+    assert(observation!.benchmark!.p95Ms >= observation!.benchmark!.medianMs);
+    // Lose the final receipt while retaining the pre-publication file identities.
+    (f.core as any).atomic(() => { (f.core as any).state.vela.edits[mixed.requestId].state = "applying"; });
+    await f.reopen();
+    assert.deepEqual(await f.vela("reconcileFileEdit", { requestId: mixed.requestId }), benchmarked);
+    // Keep the published object alive under a different name to avoid inode reuse.
+    linkSync(created, join(dir, "moved.json"));
+    rmSync(created);
+    writeFileSync(created, approvedBytes, { flag: "wx" });
+    (f.core as any).atomic(() => { (f.core as any).state.vela.edits[mixed.requestId].state = "applying"; });
+    const conflict = await f.vela("reconcileFileEdit", { requestId: mixed.requestId }) as typeof applied;
+    assert.equal(conflict.state, "partial");
+    assert.equal(conflict.files[1].state, "conflict");
+    assert.equal((await f.core.command("providerActivity", {})).providerRequests, 0);
+  } finally {
+    await f.close();
+    const canonical = realpathSync(dir);
+    assert.equal(dirname(canonical), realpathSync(runtime));
+    assert(relative(runtime, canonical).startsWith("vela-file-edit-"));
+    rmSync(canonical, { recursive: true, force: true });
+  }
+});
+
+test("AIR file batch detects a stale later file and reports an actual partial write across restart", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
+  admitVelaFileEdit(runtime);
+  mkdirSync(runtime, { recursive: true });
+  const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
+  const names = ["sample.json", "second.json", "third.json"], paths = names.map(name => join(dir, name));
+  const f = fixture(false, "air-file-edit", false);
+  let lock: ReturnType<typeof spawn> | undefined;
+  const git = (...args: string[]) => execFileSync("git.exe", ["-C", dir, "-c", "core.hooksPath=NUL", ...args], { windowsHide: true, timeout: 6000, stdio: "pipe" });
+  try {
+    git("init", "--quiet", "--template=");
+    for (const file of paths) writeFileSync(file, '{"count":1}\n');
+    git("add", "--", ...names);
+    git("-c", "user.name=AIR fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "Fixture");
+    const input = { intent: "Edit the source files to set the counts to two", resourceIds: [], adaptive: true as const, editTargetPaths: paths };
+    const proposal = async (editTargetPaths = paths) => {
+      const preview = await f.core.command("velaRequestPreview", { ...input, editTargetPaths });
+      const native = await f.core.command("velaNativeReview", { previewId: preview.id, signature: preview.signature });
+      assert.deepEqual(native.editPaths, editTargetPaths);
+      const request = await f.vela("request", await f.approve({ preview, native })) as VelaRequest;
+      assert.equal(request.state, "responded", request.errorCode);
+      return f.core.command("velaFileEditReview", { requestId: request.id });
+    };
+    await assert.rejects(f.core.command("velaRequestPreview", { ...input, editTargetPaths: [paths[0], paths[0]] }), /vela_edit_repository_mismatch/);
+    const stale = await proposal();
+    writeFileSync(paths[2], '{"count":3}\n');
+    await assert.rejects(f.core.command("velaFileEditApply", { requestId: stale.requestId, reviewId: stale.reviewId }), /vela_edit_file_changed/);
+    assert.equal(readFileSync(paths[0], "utf8"), '{"count":1}\n');
+    assert.equal(readFileSync(paths[1], "utf8"), '{"count":1}\n');
+    const review = await proposal();
+    assert.deepEqual(review.files.map(file => file.path), paths);
+    lock = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+      "$ErrorActionPreference='Stop'; $f=[IO.File]::Open($env:VELA_FIXTURE_LOCK_PATH,'Open','Read','Read'); [Console]::WriteLine('locked'); try { [void][Console]::ReadLine() } finally { $f.Dispose() }"],
+      { windowsHide: true, env: { ...process.env, VELA_FIXTURE_LOCK_PATH: paths[1] } });
+    const lockTimeout = AbortSignal.timeout(5000);
+    const [message] = await once(lock.stdout!, "data", { signal: lockTimeout });
+    assert.match(String(message), /locked/);
+    const applied = await f.core.command("velaFileEditApply", { requestId: review.requestId, reviewId: review.reviewId });
+    assert.equal(applied.state, "partial");
+    assert.deepEqual(applied.files.map(file => file.state), ["applied", "unchanged", "unchanged"]);
+    assert.equal(readFileSync(paths[0], "utf8"), '{"count":2}\n');
+    assert.equal(readFileSync(applied.files[0].backupPath!, "utf8"), '{"count":1}\n');
+    assert.equal(readFileSync(paths[1], "utf8"), '{"count":1}\n');
+    assert.equal(readFileSync(paths[2], "utf8"), '{"count":3}\n');
+    lock.stdin!.end();
+    await once(lock, "exit", { signal: AbortSignal.timeout(5000) });
+    await f.reopen();
+    assert.deepEqual(await f.vela("reconcileFileEdit", { requestId: review.requestId }), applied);
+    assert.equal((await f.core.command("providerActivity", {})).providerRequests, 0);
+    const next = await proposal(paths.slice(1));
+    const finished = await f.core.command("velaFileEditApply", { requestId: next.requestId, reviewId: next.reviewId });
+    assert.equal(finished.state, "applied");
+    assert.deepEqual(finished.files.map(file => file.verification), ["bytes-and-json-syntax", "bytes-and-json-syntax"]);
+    assert.equal(readFileSync(finished.files[0].backupPath!, "utf8"), '{"count":1}\n');
+    assert.equal(readFileSync(finished.files[1].backupPath!, "utf8"), '{"count":3}\n');
+    assert(paths.every(path => readFileSync(path, "utf8") === '{"count":2}\n'));
+  } finally {
+    if (lock?.exitCode === null && lock.signalCode === null) {
+      const exit = once(lock, "exit", { signal: AbortSignal.timeout(5000) });
+      lock.kill();
+      await exit;
+    }
+    await f.close();
+    const canonical = realpathSync(dir);
+    assert.equal(dirname(canonical), realpathSync(runtime));
+    assert(relative(runtime, canonical).startsWith("vela-file-edit-"));
+    rmSync(canonical, { recursive: true, force: true });
+  }
+});
+
+test("standalone AIR check routes without an edit or inference and preserves its canonical result", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
+  admitVelaFileEdit(runtime);
+  mkdirSync(runtime, { recursive: true });
+  const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
+  const path = join(dir, "standalone.test.mjs");
+  const body = "import test from 'node:test'; import assert from 'node:assert/strict'; test('fixture', () => assert.equal(6 * 7, 42));\n";
+  const f = fixture(false, "air-file-edit", false);
+  const git = (...args: string[]) => execFileSync("git.exe", ["-C", dir, "-c", "core.hooksPath=NUL", ...args],
+    { windowsHide: true, timeout: 6000, stdio: "pipe" });
+  const intent = "Run the Node tests in this repository";
+  try {
+    git("init", "--quiet", "--template=");
+    writeFileSync(path, body);
+    git("add", "--", "standalone.test.mjs");
+    git("-c", "user.name=AIR fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "-m", "Fixture");
+    assert.deepEqual(await f.core.command("velaRouteNative", { intent }), { matched: false, projectCheck: "node-test" });
+    await assert.rejects(f.core.command("velaRouteNative", { intent, settings: { providerId: "chatgpt-plan-responses" } }),
+      /vela_pinned_provider_cannot_execute/);
+    await assert.rejects(f.core.command("velaRouteNative", { intent, settings: { model: "fixture-model" } }),
+      /vela_project_check_model_pin/);
+    await assert.rejects(f.core.command("velaRequestPreview", { intent, resourceIds: ["attached-note"], adaptive: true }),
+      /vela_project_check_attached_sources/);
+    await assert.rejects(f.core.command("velaStandaloneCheckRun", { reviewId: "forged" }), /vela_project_check_review_required/);
+    const review = () => f.core.command("velaStandaloneCheckReview", { intent, paths: [path], settings: { mode: "codex", budgetLimit: 0 } });
+    const stale = await review();
+    assert.equal(stale.requestId, null);
+    assert.equal((await f.state()).requests.length, 0);
+    writeFileSync(path, body + "// changed after review\n");
+    await assert.rejects(f.core.command("velaStandaloneCheckRun", { reviewId: stale.reviewId }), /vela_project_check_stale/);
+    assert.equal((await f.state()).requests.length, 0);
+    writeFileSync(path, body);
+    const approved = await review();
+    const runner = (f.core as any).port.projectChecks as NonNullable<ProviderPort["projectChecks"]>;
+    const execute = runner.execute;
+    let markStarted!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const released = new Promise<void>(resolve => { release = resolve; });
+    runner.execute = async (command, cwd) => {
+      markStarted();
+      await released;
+      return execute(command, cwd);
+    };
+    const running = f.core.command("velaStandaloneCheckRun", { reviewId: approved.reviewId });
+    try {
+      await Promise.race([started, running]);
+      const pending = (await f.state()).requests[0];
+      assert.equal(pending.state, "checking");
+      assert.equal(pending.projectCheck?.state, "running");
+      await assert.rejects(f.vela("cancel", pending.id), /vela_project_check_wait_for_result/);
+      await assert.rejects(review(), /vela_project_check_busy/);
+    } finally { release(); }
+    const result = await running;
+    assert.equal(result.state, "responded");
+    assert.equal(result.providerId, null);
+    assert.equal(result.route?.kind, "project-check");
+    assert.equal(result.routingSettings?.effective.mode, "codex");
+    assert.equal(result.projectCheck?.state, "passed");
+    assert.equal(result.projectCheck?.testCount, 1);
+    assert.deepEqual(result.projectCheck?.inputs, ["standalone.test.mjs"]);
+    assert.equal((await f.core.command("providerActivity", {})).providerRequests, 0);
+    await assert.rejects(f.core.command("velaStandaloneCheckRun", { reviewId: approved.reviewId }), /vela_project_check_review_required/);
+    await f.reopen();
+    const reopened = await f.state();
+    assert.equal(reopened.fileEdits?.length ?? 0, 0);
+    assert.deepEqual(reopened.requests[0].projectCheck, result.projectCheck);
+    const response = reopened.conversation?.messages.find(message => message.id === result.response?.messageId);
+    assert.equal(response?.source, "vela-native");
+    assert.equal(response?.classification, "observed");
+    assert.match(response?.content ?? "", /Node tests passed/u);
+    // Reopen after a committed dispatch marker with no terminal observation.
+    const interrupted = (f.core as any).vela.beginProjectCheck(intent, {
+      id: randomUUID(), kind: "node-test", state: "running", inputs: result.projectCheck?.inputs,
+      sourceHead: result.projectCheck?.sourceHead, inputDigest: result.projectCheck?.inputDigest,
+      startedAt: new Date().toISOString(),
+    }, result.routingSettings) as VelaRequest;
+    await f.reopen();
+    const restored = (await f.state()).requests.find(request => request.id === interrupted.id);
+    assert.equal(restored?.state, "unknown");
+    assert.equal(restored?.projectCheck?.state, "unknown");
+    assert.equal(restored?.errorCode, "restart_project_check_outcome_unknown");
+    assert.equal((await f.core.command("providerActivity", {})).providerRequests, 0);
+  } finally {
+    await f.close();
+    const canonical = realpathSync(dir);
+    assert.equal(dirname(canonical), realpathSync(runtime));
+    assert(relative(runtime, canonical).startsWith("vela-file-edit-"));
+    rmSync(canonical, { recursive: true, force: true });
+  }
+});
+
+test("AIR sends authorized inspection through native Codex protocol with discovered controls", async () => {
+  const f = fixture(false, "air-inspection", false);
+  try {
+    const intent = "Inspect the repository logs for recent build errors";
+    assert.deepEqual(await f.vela("routingOptions", { providerId: "codex-app-server" }),
+      [{ id: "fixture-model", label: "fixture-model", reasoningEfforts: ["high"] }]);
+    await assert.rejects(f.core.command("velaRequestPreview", {
+      intent, resourceIds: [], adaptive: true, model: "hidden-fixture-model",
+    }), /unsupported_model/);
+    const preview = await f.core.command("velaRequestPreview", {
+      intent, resourceIds: [], adaptive: true, model: "fixture-model", reasoningEffort: "high",
+    });
+    assert.deepEqual(preview.route, {
+      kind: "agentic", reason: "local-tools-required", environment: "local-read-only",
+      model: "fixture-model", effort: "high",
+    });
+    const native = await f.core.command("velaNativeReview", { previewId: preview.id, signature: preview.signature });
+    await assert.rejects(f.core.command("authorizeVelaRequest", {
+      previewId: preview.id, signature: preview.signature, reviewDigest: native.reviewDigest, directSend: true,
+    }), /vela_attached_context_review_required/);
+    assert.equal((await f.core.command("providerActivity", {})).providerRequests, 0);
+    const request = await f.vela("request", await f.approve({ preview, native })) as VelaRequest;
+    assert.equal(request.state, "responded", request.errorCode);
+    assert.equal(request.providerId, "codex-app-server");
+    assert.equal((await f.core.command("providerActivity", {})).providerRequests, 1);
+    const snapshot = await f.core.command("snapshot", {});
+    const execution = Object.values(snapshot.executions).find(item => item.commandId === "vela-inspection:" + request.id);
+    assert.equal(execution?.state, "provider_completed");
+    assert.equal(execution?.taskVerified, false);
+    const mixed = await f.core.command("velaRequestPreview", {
+      intent: "Check CPU usage, then inspect the repository logs", resourceIds: [], adaptive: true,
+      model: "fixture-model", reasoningEffort: "high", includeRecentHistory: true,
+    });
+    assert(mixed.route?.kind === "composite");
+    assert.equal(mixed.route.metric, "system.cpu");
+    const reviewed = await f.core.command("velaNativeReview", { previewId: mixed.id, signature: mixed.signature });
+    assert.match(reviewed.prompt, /"nativeStage":\{.*CPU usage was [\d.]+%/u);
+    assert.equal(reviewed.history?.messages.length, 2);
+    const next = await f.vela("request", await f.approve({ preview: mixed, native: reviewed })) as VelaRequest;
+    assert.equal(next.state, "responded", next.errorCode);
+    assert.equal(next.conversationId, request.conversationId);
+    assert.equal((await f.core.command("providerActivity", {})).providerRequests, 2);
+  } finally { await f.close(); }
+});
 
 /** Actual Core/SQLite with an explicit local stdio protocol double. No Codex/account/model connection. */
 function fixture(history = true, mode = "answer-catalog", discovery = true) {

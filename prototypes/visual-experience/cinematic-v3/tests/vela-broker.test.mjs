@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 const { velaCommand, isVelaRead } = createRequire(import.meta.url)(
   "../native/vela-broker.cjs",
 );
+const { reviewPage } = createRequire(import.meta.url)("../native/vela-review.cjs");
 function fixture(choice = 1) {
   const calls = [],
     dialogs = [],
@@ -131,16 +132,17 @@ test("ordinary Vela Send uses the connected ChatGPT plan without opening a secon
     offerPlanningByDefault: true,
     directMessageSend: true,
     async call(name, data) {
-      if (name === "ordinaryProviderStatus") return { state: "ready", planUsageEnabled: true };
-      assert.notEqual(name, "capabilities");
+      if (name === "velaRouteNative") return { matched: false };
+      assert(!["capabilities", "ordinaryProviderStatus"].includes(name));
       const result = await f.call(name, data);
       if (name === "velaRequestPreview") {
-        assert.equal(data.providerId, "chatgpt-plan-responses");
-        return { ...result, providerId: data.providerId, resourceIds: [] };
+        assert.equal(data.adaptive, true);
+        assert.equal(data.providerId, undefined);
+        return { ...result, providerId: "chatgpt-plan-responses", resourceIds: [], route: { kind: "conversational" } };
       }
       if (name === "velaNativeReview") {
         const prompt = "Exact intent and workspace labels";
-        return { ...result, providerId: "chatgpt-plan-responses", context: { included: [] }, history: undefined,
+        return { ...result, providerId: "chatgpt-plan-responses", route: { kind: "conversational" }, context: { included: [] }, history: undefined,
           prompt, promptDigest: createHash("sha256").update(JSON.stringify(prompt)).digest("hex") };
       }
       if (name === "authorizeVelaRequest") assert.equal(data.directSend, true);
@@ -149,6 +151,149 @@ test("ordinary Vela Send uses the connected ChatGPT plan without opening a secon
   });
   assert.equal(f.reviews.length, 0);
   assert.equal(f.calls.at(-1).input.input.grantId, "private-native-grant");
+});
+
+test("a native match returns a canonical response before any provider probe or review", async () => {
+  const f = fixture();
+  const intent = "How much RAM is my computer using?";
+  const recorded = { id: "local-request", providerId: null };
+  const result = await velaCommand({
+    ...f, offerPlanningByDefault: true, directMessageSend: true,
+    input: { name: "request", input: { intent, resourceIds: [], authorizeProvider: true } },
+    async call(name, data) {
+      assert.equal(name, "velaRouteNative");
+      assert.deepEqual(data, { intent });
+      return { matched: true, request: recorded };
+    },
+  });
+  assert.deepEqual(result, recorded);
+  assert.equal(f.reviews.length, 0);
+});
+
+test("file proposal picks its own target and cancelling review prevents provider dispatch", async () => {
+  const f = fixture(0);
+  const input = request(true);
+  input.input.editTargetPaths = ["C:\\forged\\secret.json"];
+  let picks = 0, previews = 0;
+  await assert.rejects(velaCommand({
+    ...f, input, directMessageSend: true, offerPlanningByDefault: true,
+    dialog: { async showOpenDialog(_win, options) {
+      picks++;
+      assert(options.properties.includes("multiSelections"));
+      return { canceled: false, filePaths: ["C:\\chosen\\sample.json", "C:\\chosen\\second.json"] };
+    } },
+    async call(name, data) {
+      if (name === "velaRequestPreview") {
+        if (++previews === 1) {
+          assert.equal(data.editTargetPaths, undefined);
+          throw Error("vela_codex_edit_target_required");
+        }
+        assert.deepEqual(data.editTargetPaths, ["C:\\chosen\\sample.json", "C:\\chosen\\second.json"]);
+      }
+      const result = await f.call(name, data);
+      return ["velaRequestPreview", "velaNativeReview"].includes(name)
+        ? { ...result, route: { kind: "file-edit" } } : result;
+    },
+  }), /authorization_cancelled/);
+  assert.equal(picks, 1);
+  assert.equal(f.reviews.length, 1);
+  assert.deepEqual(f.calls.map(call => call.name), ["velaRequestPreview", "velaNativeReview"]);
+});
+
+test("new-file proposal uses only the native Save dialog destination", async () => {
+  const f = fixture(0);
+  const input = request(true);
+  input.input.intent = "Create created.json";
+  input.input.editCreatePaths = ["C:\\forged\\secret.json"];
+  for (const canceled of [true, false]) {
+    let previews = 0, saves = 0;
+    await assert.rejects(velaCommand({
+      ...f, input, directMessageSend: true, offerPlanningByDefault: true,
+      dialog: { async showSaveDialog(parent, options) {
+        assert.equal(parent, f.win);
+        assert.equal(options.buttonLabel, "Select destination");
+        saves++;
+        return canceled ? { canceled } : { canceled, filePath: "C:\\chosen\\created.json" };
+      } },
+      async call(name, data) {
+        if (name === "velaRequestPreview") {
+          if (++previews === 1) {
+            assert.equal(data.editCreatePaths, undefined);
+            throw Error("vela_codex_create_target_required");
+          }
+          assert.deepEqual(data.editCreatePaths, ["C:\\chosen\\created.json"]);
+          assert.equal(data.editTargetPaths, undefined);
+        }
+        const result = await f.call(name, data);
+        return ["velaRequestPreview", "velaNativeReview"].includes(name)
+          ? { ...result, route: { kind: "file-edit" } } : result;
+      },
+    }), /authorization_cancelled/);
+    assert.equal(previews, canceled ? 1 : 2);
+    assert.equal(saves, 1);
+  }
+  assert.equal(f.reviews.length, 1);
+});
+
+test("file replacement validates native review bytes and never forwards a renderer review token", async () => {
+  const f = fixture();
+  const requestId = "11111111-1111-4111-8111-111111111111";
+  const before = "old", after = "new";
+  const sha = text => createHash("sha256").update(text).digest("hex");
+  const files = ["sample.txt", "second.txt"].map(file => ({
+    path: "C:\\chosen\\" + file, before, after, beforeDigest: sha(before), afterDigest: sha(after),
+  }));
+  const review = { requestId, reviewId: "22222222-2222-4222-8222-222222222222",
+    expiresAt: new Date(Date.now() + 60000).toISOString(), files };
+  const input = { name: "applyFileEdit", input: { requestId, reviewId: "forged", replacement: "forged" } };
+  for (const valid of [false, true]) {
+    const seen = [];
+    const running = velaCommand({
+      ...f, input,
+      async call(name, data) {
+        seen.push({ name, data });
+        return name === "velaFileEditReview" ? (valid ? review : { ...review, files: [files[0], { ...files[1], after: "tampered" }] }) : { state: "applied" };
+      },
+    });
+    if (valid) {
+      assert.deepEqual(await running, { state: "applied" });
+      assert.deepEqual(seen.at(-1), { name: "velaFileEditApply", data: { requestId, reviewId: review.reviewId } });
+    } else {
+      await assert.rejects(running, /invalid_vela_edit_review/);
+      assert.equal(seen.length, 1);
+    }
+  }
+  assert.equal(f.reviews.length, 1);
+  assert.equal(f.reviews[0].experience, "file-edit");
+  const html = reviewPage({ ...review, files: [{ ...files[0], before: "<script>alert(1)</script>\r\n" }, files[1]] }, "", "file-edit");
+  assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
+  assert.match(html, /1 CRLF · 0 LF/);
+  assert.match(html, /Apply 2 replacements/);
+  assert.match(html, /Apply reviewed files/);
+  assert.doesNotMatch(html, /<script>/);
+
+  const create = { ...files[0], before: null, beforeDigest: null };
+  const createReview = { ...review, files: [create, files[1]] };
+  const createHtml = reviewPage(createReview, "", "file-edit");
+  assert.match(createHtml, /Apply 2 file changes/);
+  assert.match(createHtml, /The destination is absent/);
+  assert.match(createHtml, /Proposed new contents/);
+  await assert.rejects(velaCommand({
+    ...f, input,
+    async call(name) {
+      assert.equal(name, "velaFileEditReview");
+      return { ...createReview, files: [{ ...create, before: "" }] };
+    },
+  }), /invalid_vela_edit_review/);
+  assert.deepEqual(await velaCommand({
+    ...f, input,
+    async call(name, data) {
+      if (name === "velaFileEditReview") return createReview;
+      assert.equal(name, "velaFileEditApply");
+      assert.equal(data.reviewId, createReview.reviewId);
+      return { state: "applied" };
+    },
+  }), { state: "applied" });
 });
 
 test("ordinary Vela Send still requires review when the prompt includes attached sources", async () => {
@@ -162,6 +307,130 @@ test("ordinary Vela Send still requires review when the prompt includes attached
   }), /authorization_cancelled/);
   assert.equal(f.reviews.length, 1);
   assert.equal(f.calls.at(-1).name, "velaNativeReview");
+});
+
+test("project check uses a native test picker and review before dispatching its private token", async () => {
+  const f = fixture();
+  const requestId = "11111111-1111-4111-8111-111111111111";
+  const reviewId = "22222222-2222-4222-8222-222222222222";
+  const chosen = "C:\\chosen\\sample.test.mjs";
+  const input = { name: "verifyFileEdit", input: {
+    requestId, kind: "node-test", paths: ["C:\\forged\\test.mjs"], reviewId: "forged", argv: ["forged"],
+  } };
+  for (const response of [1, 0]) {
+    const seen = [];
+    const run = velaCommand({ ...f, input, dialog: {
+      async showOpenDialog(parent, options) {
+        assert.equal(parent, f.win);
+        assert(options.properties.includes("multiSelections"));
+        return { canceled: false, filePaths: [chosen] };
+      },
+      async showMessageBox(parent, options) {
+        assert.equal(parent, f.win);
+        assert.match(options.detail, /read-only sandbox/);
+        assert.match(options.detail, /sample\.test\.mjs/);
+        assert.doesNotMatch(options.detail, /forged/);
+        assert.equal(options.defaultId, 1);
+        return { response };
+      },
+    }, async call(name, data) {
+      seen.push({ name, data });
+      if (name === "velaProjectCheckReview") {
+        assert.deepEqual(data, { requestId, kind: "node-test", paths: [chosen] });
+        return { requestId, reviewId, expiresAt: new Date(Date.now() + 10000).toISOString(), kind: "node-test",
+          cwd: "C:\\chosen", argv: ["C:\\node.exe", "--test", "--", "./sample.test.mjs"] };
+      }
+      assert.equal(name, "velaProjectCheckRun");
+      assert.deepEqual(data, { requestId, reviewId });
+      return { state: "applied" };
+    } });
+    if (response === 0) assert.deepEqual(await run, { state: "applied" });
+    else await assert.rejects(run, /authorization_cancelled/);
+    assert.equal(seen.length, response === 0 ? 2 : 1);
+  }
+});
+
+test("Fix it and run the tests only when I approve both steps", async () => {
+  const f = fixture();
+  const requestId = "11111111-1111-4111-8111-111111111111";
+  const reviewId = "22222222-2222-4222-8222-222222222222";
+  const expiresAt = new Date(Date.now() + 60000).toISOString();
+  const path = "C:\\chosen\\sample.test.mjs";
+  const after = "test contents";
+  const files = [{ path, before: null, beforeDigest: null, after, afterDigest: createHash("sha256").update(after).digest("hex") }];
+  for (const [state, response] of [["partial", 0], ["applied", 1], ["applied", 0]]) {
+    const seen = [];
+    const applied = { requestId, state, followUpCheck: "node-test", projectChecksAvailable: true };
+    const passed = { ...applied, projectChecks: [{ kind: "node-test", state: "passed" }] };
+    const actual = await velaCommand({ ...f, input: { name: "applyFileEdit", input: { requestId, kind: "typescript" } },
+      dialog: {
+        async showOpenDialog() { seen.push("pick"); return { canceled: false, filePaths: [path] }; },
+        async showMessageBox() { seen.push("approve check"); return { response }; },
+      },
+      async reviewProvider() { seen.push("approve edit"); return true; },
+      async call(name, data) {
+        seen.push(name);
+        if (name === "velaFileEditReview") return { requestId, reviewId, expiresAt, files };
+        if (name === "velaFileEditApply") return applied;
+        if (name === "velaProjectCheckReview") {
+          assert.deepEqual(data, { requestId, kind: "node-test", paths: [path] });
+          return { requestId, reviewId, expiresAt, kind: "node-test", cwd: "C:\\chosen", argv: ["C:\\node.exe", "--test", path] };
+        }
+        assert.equal(name, "velaProjectCheckRun");
+        return passed;
+      },
+    });
+    const expected = ["velaFileEditReview", "approve edit", "velaFileEditApply"];
+    if (state === "applied") expected.push("pick", "velaProjectCheckReview", "approve check");
+    if (state === "applied" && response === 0) expected.push("velaProjectCheckRun");
+    assert.deepEqual(seen, expected);
+    assert.equal(actual, expected.at(-1) === "velaProjectCheckRun" ? passed : applied);
+  }
+});
+
+test("standalone project check uses Send and a native review without a model preview", async () => {
+  const f = fixture();
+  const reviewId = "22222222-2222-4222-8222-222222222222";
+  const intent = "Type-check this project";
+  const chosen = "C:\\chosen\\tsconfig.json";
+  const input = { name: "request", input: {
+    intent, resourceIds: [], authorizeProvider: true, mode: "codex", budgetLimit: 0,
+    paths: ["C:\\forged\\tsconfig.json"], reviewId: "forged",
+  } };
+  for (const response of [1, 0]) {
+    const seen = [];
+    const run = velaCommand({ ...f, input, directMessageSend: true, offerPlanningByDefault: true, dialog: {
+      async showOpenDialog(parent, options) {
+        assert.equal(parent, f.win);
+        assert.equal(options.properties.includes("multiSelections"), false);
+        return { canceled: false, filePaths: [chosen] };
+      },
+      async showMessageBox(parent, options) {
+        assert.equal(parent, f.win);
+        assert.match(options.message, /Type-check/);
+        assert.match(options.detail, /tsconfig\.json/);
+        return { response };
+      },
+    }, async call(name, data) {
+      seen.push(name);
+      const settings = { mode: "codex", budgetLimit: 0 };
+      if (name === "velaRouteNative") {
+        assert.deepEqual(data, { intent, settings });
+        return { matched: false, projectCheck: "typescript" };
+      }
+      if (name === "velaStandaloneCheckReview") {
+        assert.deepEqual(data, { intent, settings, paths: [chosen] });
+        return { requestId: null, reviewId, expiresAt: new Date(Date.now() + 10000).toISOString(), kind: "typescript",
+          cwd: "C:\\chosen", argv: ["C:\\node.exe", "./node_modules/typescript/lib/tsc.js", "--noEmit", "--project", "./tsconfig.json"] };
+      }
+      assert.equal(name, "velaStandaloneCheckRun");
+      assert.deepEqual(data, { reviewId });
+      return { id: "standalone-check", state: "responded" };
+    } });
+    if (response === 0) assert.deepEqual(await run, { id: "standalone-check", state: "responded" });
+    else await assert.rejects(run, /authorization_cancelled/);
+    assert.deepEqual(seen, ["velaRouteNative", "velaStandaloneCheckReview", ...(response === 0 ? ["velaStandaloneCheckRun"] : [])]);
+  }
 });
 
 test("ordinary Vela Send discovers the installed provider and opens the exact native review before planning", async () => {

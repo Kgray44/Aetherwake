@@ -35,7 +35,7 @@ function fixture() {
       querySelector: (selector) => {
         assert.equal(
           selector,
-          '[data-block="canonical-block"] .aw-task-group[aria-label="Task group checklist"]',
+          '[data-block="canonical-block"] .aw-task-group[aria-label="Manual task group"]',
         );
         return mounted ? root : null;
       },

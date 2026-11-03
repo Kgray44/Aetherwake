@@ -32,8 +32,10 @@ export function velaPanelStatus(state: Pick<VelaState, 'requests' | 'plans' | 'r
   }
   if (request.state === 'responded') {
     if (request.planId || plan || state.receipts.some(receipt => receipt.requestId === request.id) || !request.response?.messageId) return result('The response record needs review. No applied result is confirmed.');
+    if (request.route?.kind === 'project-check') return result('The local project check result is ready.');
     return result(request.response.kind === 'clarification' ? 'A clarification is ready.' : request.response.kind === 'inability' ? 'The provider explained its limitation.' : 'A response is ready.');
   }
+  if (request.state === 'checking') return result('The approved local project check is running.');
   if (plan?.state === 'rejected') return result('The plan was rejected. Its proposed actions were not applied.');
   if (plan?.state === 'applying') return result('Applying the changes you reviewed.' + priorEffects);
   if (request.state === 'completed' || plan?.state === 'applied') {

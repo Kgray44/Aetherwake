@@ -303,13 +303,33 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
       const current=await state(); assert.deepEqual(current.identity,{id:'system:vela',name:'Vela',role:'application-assistant'}); assert(current.conversation?.resourceId); return current;
     };
     const closeVela = async () => { await click('#vela-assistant-surface .aw-contextual-dismiss'); await until(() => js(`!document.querySelector(${JSON.stringify(velaSurface)})`), 'actual Vela surface closed'); };
+    const openEnvironments = async () => {
+      if (!await js('!!document.querySelector(".en-navigator")?.getClientRects().length')) await click('#workspace-manager');
+    };
+    const createEnvironment = async (kind, title, projectId) => {
+      await openEnvironments();
+      const toggle='.en-navigator [data-action="toggle-create"]';
+      if (!await js(`document.querySelector(${JSON.stringify(toggle)})?.getAttribute('aria-expanded')==='true'`)) await click(toggle);
+      await click(`.en-navigator [data-action="create-${kind}"]`);
+      const editor=`.en-editor[data-mode="${kind}-create"]:not([hidden])`;
+      await type(editor+' input[name="title"]',title);
+      if(kind==='workspace')await choose(editor+' select[name="projectId"]',projectId);
+      await click(`${editor} [data-action="submit-${kind}-create"]`);
+      await until(async()=>(await desktop())[kind==='project'?'projects':'workspaces'].some(row=>row.title===title),'actual '+kind+' created');
+    };
     const navigate = async workspaceId => {
-      await click('#workspace-manager'); await click(`[data-workspace="${workspaceId}"]`);
+      const workspace=(await desktop()).workspaces.find(row=>row.id===workspaceId);assert(workspace);
+      await openEnvironments();await type('.en-navigator input[name="query"]',workspace.title);
+      await click(`.en-tree .en-workspace-row[data-workspace-id="${workspaceId}"] [data-action="open-workspace"]`);
       await until(async () => {const d=await desktop(); return d.navigation.kind==='workspace'&&d.navigation.workspaceId===workspaceId;}, 'actual workspace navigation');
     };
     const workingBlock = async (workspaceId, resourceId) => {
       const d=await desktop(); assert.equal(d.activeWorkspaceId,workspaceId); const block=d.blocks.find(b=>b.resource_id===resourceId); assert(block,'Canonical placement unavailable');
-      await click('.aw-workspace-layout button[aria-label="Workspace actions"]'); await click(`[data-locate="${block.id}"]`);
+      const panel='[data-surface-id="workspace-actions"]', find=panel+' [data-action="find-toggle"]';
+      if(!await js(`!!document.querySelector(${JSON.stringify(panel)})&&!document.querySelector(${JSON.stringify(panel)}).inert`))await click('.aw-workspace-layout button[aria-label="Workspace actions"]');
+      if(!await js(`document.querySelector(${JSON.stringify(find)})?.getAttribute('aria-expanded')==='true'`))await click(find);
+      await click(`${panel} [data-action="find-block"][data-block-id="${block.id}"]`);
+      if(await js(`!!document.querySelector(${JSON.stringify(panel)})&&!document.querySelector(${JSON.stringify(panel)}).inert`))await click(panel+' .aw-contextual-dismiss');
       await until(() => js(`!!document.querySelector(${JSON.stringify(`[data-block="${block.id}"]`)})`), 'actual canonical block mounted');
       if (!await js(`document.querySelector(${JSON.stringify(`[data-block="${block.id}"]`)})?.classList.contains('expanded')`)) await click(`[data-block="${block.id}"] .unfold`);
       await until(() => js(`(()=>{const e=document.querySelector(${JSON.stringify(`[data-block="${block.id}"] textarea`)});return !!e&&!e.disabled&&!e.hidden&&e.getClientRects().length>0})()`), 'working canonical block editor');
@@ -391,9 +411,9 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
       const initial=await desktop(), initialVela=await state(), initialExecutionIds=(await executions()).map(e=>e.id);
       assert.equal(initialExecutionIds.length,0,'Live journey requires a fresh owned profile'); assert.equal(initial.projects.length,0,'Do not mix acceptance egress with existing projects'); assert.equal(initial.workspaces.length,0); assert(initial.resources.every(r=>r.id===initialVela.conversation?.resourceId),'Only the canonical Vela identity may pre-exist'); assert.equal(initialVela.requests.length,0);
       const token=Date.now().toString(36), names={project:'Synthetic Vela live project '+token,origin:'Synthetic Vela source workspace '+token,chat:'Synthetic Vela source chat '+token,note:'Synthetic Vela source note '+token,target:'Synthetic Vela planned workspace '+token};
-      await click('#workspace-manager'); await click('#new-project'); await type('#project-title',names.project); await click('dialog[open] button[type="submit"]'); await until(() => js(`!document.querySelector('dialog[open]')`),'actual project created');
+      await createEnvironment('project',names.project);
       const project=(await desktop()).projects.find(p=>p.title===names.project); assert(project); receipt.partial.project=project;
-      await click('#workspace-manager'); await click('#new-workspace'); await type('#workspace-title',names.origin); await choose('dialog[open] select[name="projectId"]',project.id); await click('dialog[open] button[type="submit"]'); await until(() => js(`!document.querySelector('dialog[open]')`),'actual source workspace created');
+      await createEnvironment('workspace',names.origin,project.id);
       const origin=(await desktop()).workspaces.find(w=>w.title===names.origin); assert(origin&&origin.project_id===project.id); if((await desktop()).activeWorkspaceId!==origin.id)await navigate(origin.id);
       const createResource=async(kind,title)=>{
         const before=new Set((await desktop()).resources.map(r=>r.id)); await click('.aw-workspace-add');
@@ -418,9 +438,11 @@ async function run({win, app, privateRoot, source, startupErrors = [], cancelOwn
       }
       await openContext('Provider','provider','.vela-core-provider-controls');await clickText('Check connection','.vela-core-provider-controls');
       await until(() => js(`(()=>{const b=[...document.querySelectorAll('.vela-core-provider-controls button')].find(e=>e.textContent==='Check connection');return !!b&&!b.disabled})()`),'explicit planning connection check settled',30000);
-      current=await state(); receipt.partial.planner=current.planner; assert.equal(current.planner.providerId,'codex-app-server'); assert(current.planner.available&&!current.planner.busy,'Actual identified planning provider unavailable'); assert.deepEqual(await executions(),[],'Connection probe starts no model turn'); assert.equal(await js(`document.querySelector('.vela-core-provider').textContent`),'Codex · available'); await capture('02-selected-sources-real-planner');
+      current=await state(); receipt.partial.planner=current.planner; assert.equal(current.planner.providerId,'codex-app-server'); assert(current.planner.available&&!current.planner.busy,'Actual identified planning provider unavailable'); assert.deepEqual(await executions(),[],'Connection probe starts no model turn');
+      await click('.vela-core-provider-controls [data-provider-route="codex-app-server"]');
+      assert.equal(await js(`document.querySelector('.vela-core-provider').textContent`),'Codex · connected'); await capture('02-selected-sources-real-planner');
       const intent='Propose exactly one workspaceFromResources action to create a workspace titled '+JSON.stringify(names.target)+' in the current synthetic project '+JSON.stringify(names.project)+' (canonical project ID '+project.id+'). Reuse exactly the two selected existing resources, chat '+localChat.id+' and note '+localNote.id+', with no resource copies or content changes. Use their exact authorized IDs from the context manifest. No delegation, other actions, tools, shell, file access, file writes, or network actions. Return the required typed JSON proposal only; do not claim any action is applied.';
-      await type('.vela-core-compose textarea',intent); await toggle(await field('.vela-core-provider-controls','Use Codex for this request'),true);
+      await type('.vela-core-compose textarea',intent);
       const priorRequests=new Set(current.requests.map(r=>r.id)); receipt.operatorRequired={phase:'workspace-planning',at:new Date().toISOString(),providerId:current.planner.providerId,resourceIds:[localChat.id,localNote.id],instruction:'Parent must inspect the actual focused Vela sharing child and choose Send once only if its exact request/context is acceptable. The helper never clicks or grants native consent.'};
       console.log(JSON.stringify({status:'vela-live-native-consent-operator-required',...receipt.operatorRequired})); await submitForNativeReview(await control('.vela-core-compose','Send to Vela'));
       await observeNativeReview({intent,resourceIds:[localChat.id,localNote.id],projectId:project.id,chatId:localChat.id,chatContent:sourceChat,noteId:localNote.id,noteContent:sourceNote});

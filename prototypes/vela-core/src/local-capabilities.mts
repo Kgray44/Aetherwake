@@ -1,6 +1,8 @@
 import { check, identifier, isLocalFact, isRecord, text } from './capabilities.ts';
 import type { VelaLocalCapabilityId, VelaLocalFacts, VelaLocalHost, VelaLocalRecord } from './contracts.ts';
 import { validateSystemMemoryMeasurement } from './system-information.ts';
+import { calculate, calculatorExpression } from './calculator.ts';
+import type { SystemUtilization } from './system-utilization.mts';
 
 /** Node/native host system facts. No provider, credentials, files or network are consulted. */
 export function readSystemClock(): ReturnType<VelaLocalHost['clock']> {
@@ -14,7 +16,23 @@ export function validateLocalRecord(value: unknown): asserts value is VelaLocalR
   check(identifier(value.commandId) && isLocalFact(value.capabilityId) && value.classification === 'observed' && value.providerId === null && typeof value.observedAt === 'string' && Number.isFinite(Date.parse(value.observedAt)), 'corrupt_vela_local_record');
   const f = value.facts; check(isRecord(f), 'corrupt_vela_local_facts');
   if (f.kind === 'unavailable') { check(typeof f.code === 'string' && /^local_[a-z_]+_unavailable$/u.test(f.code), 'corrupt_vela_local_facts'); return; }
+  if (f.kind === 'system-utilization') {
+    validateUtilization(f.measurement);
+    check(value.capabilityId === 'system.' + f.measurement.metric && value.observedAt === f.measurement.measuredAt, 'corrupt_vela_local_facts');
+    return;
+  }
+  if (f.kind === 'system-performance') {
+    check(value.capabilityId === 'system.performance' && Array.isArray(f.measurements) &&
+      f.measurements.length > 0 && f.measurements.length <= 2, 'corrupt_vela_local_facts');
+    for (const measurement of f.measurements) validateUtilization(measurement);
+    check(new Set(f.measurements.map(m => m.metric)).size === f.measurements.length, 'corrupt_vela_local_facts');
+    return;
+  }
   check(value.capabilityId === (f.kind === 'system-memory' ? 'system.memory' : 'local.' + f.kind), 'corrupt_vela_local_facts');
+  if (f.kind === 'calculator') {
+    check(text(f.expression, 256) && Number.isFinite(f.value) && calculate(f.expression) === f.value, 'corrupt_vela_local_facts');
+    return;
+  }
   if (f.kind === 'system-memory') { try { validateSystemMemoryMeasurement(f.measurement); } catch { check(false, 'corrupt_vela_local_facts'); } check(value.observedAt === (f.measurement as {measuredAt:string}).measuredAt, 'corrupt_vela_local_facts'); return; }
   if (f.kind === 'time' || f.kind === 'date') check(Number.isSafeInteger(f.epochMs) && Number.isFinite(Date.parse(String(f.utc))) && new Date(Number(f.epochMs)).toISOString() === f.utc && text(f.timeZone, 100) && text(f.locale, 100) && Number.isInteger(f.utcOffsetMinutes) && Math.abs(Number(f.utcOffsetMinutes)) <= 24 * 60 && typeof f.calendarDate === 'string' && /^\d{4,6}-\d{2}-\d{2}$/u.test(f.calendarDate) && text(f.formatted, 300), 'corrupt_vela_local_facts');
   else if (f.kind === 'workspace-status') check(workspace(f.workspace) && ['persisted', 'pending', 'unknown'].includes(String(f.persistence)) && f.coverage === 'canonical-workspace-layout', 'corrupt_vela_local_facts');
@@ -22,8 +40,58 @@ export function validateLocalRecord(value: unknown): asserts value is VelaLocalR
   else if (f.kind === 'execution-status') check(count(f.running) && count(f.unknown) && f.coverage === 'aerynth-owned-executions', 'corrupt_vela_local_facts');
   else check(false, 'corrupt_vela_local_facts');
 }
-export function evaluateLocalCapability(id: VelaLocalCapabilityId, host: VelaLocalHost): { facts: VelaLocalFacts; content: string; kind: 'answer' | 'inability' } {
+function validateUtilization(value: unknown): asserts value is SystemUtilization {
+  check(isRecord(value) && typeof value.measuredAt === 'string' && Number.isFinite(Date.parse(value.measuredAt)) &&
+    typeof value.percent === 'number' && Number.isFinite(value.percent) && value.percent >= 0 && value.percent <= 100,
+  'invalid_system_utilization');
+  if (value.metric === 'cpu') check(value.source === 'node:os.cpus' && count(value.sampleMs) && value.sampleMs > 0 &&
+    count(value.logicalCpus) && value.logicalCpus > 0, 'invalid_cpu_counters');
+  else check(value.metric === 'gpu' && value.source === 'windows:gpu-engine' && count(value.observedAdapters) &&
+    value.observedAdapters > 0 && count(value.observedEngines) && value.observedEngines >= value.observedAdapters, 'invalid_gpu_counters');
+}
+
+export function evaluateLocalCapability(id: VelaLocalCapabilityId, host: VelaLocalHost, intent?: string, utilization: SystemUtilization[] = []): { facts: VelaLocalFacts; content: string; kind: 'answer' | 'inability' } {
   check(isLocalFact(id), 'unsupported_local_capability');
+  if (id === 'local.calculator') {
+    const expression = intent && calculatorExpression(intent);
+    try {
+      check(expression, 'invalid_expression');
+      const value = calculate(expression);
+      return { facts: { kind: 'calculator', expression, value }, content: expression + ' = ' + value, kind: 'answer' };
+    } catch (error) {
+      const code = error instanceof Error ? error.message : '';
+      const content = code === 'division_by_zero' ? 'Division by zero is undefined.'
+        : code === 'square_root_domain' ? 'That square root has no real-valued result.'
+        : code === 'result_out_of_range' ? 'The result is outside the calculator’s numeric range.'
+        : 'I couldn’t parse that arithmetic. Try parentheses and operators such as +, −, ×, ÷, %, or ^.';
+      return { facts: { kind: 'unavailable', code: 'local_calculator_unavailable' }, content, kind: 'inability' };
+    }
+  }
+  if (id === 'system.performance') {
+    const cpu = evaluateLocalCapability('system.cpu', host, undefined, utilization);
+    const gpu = evaluateLocalCapability('system.gpu', host, undefined, utilization);
+    const measurements = [cpu.facts, gpu.facts].flatMap(fact => fact.kind === 'system-utilization' ? [fact.measurement] : []);
+    return {
+      facts: measurements.length ? { kind: 'system-performance', measurements } : { kind: 'unavailable', code: 'local_system_performance_unavailable' },
+      content: cpu.content + ' ' + gpu.content,
+      kind: measurements.length ? 'answer' : 'inability',
+    };
+  }
+  if (id === 'system.cpu' || id === 'system.gpu') {
+    const name = id === 'system.cpu' ? 'CPU' : 'GPU';
+    try {
+      const reading = utilization.find(value => id === 'system.' + value.metric);
+      validateUtilization(reading);
+      const measurement = structuredClone(reading);
+      const detail = measurement.metric === 'cpu'
+        ? `averaged across ${measurement.logicalCpus} logical processors over ${measurement.sampleMs} ms`
+        : `the busiest measured GPU engine across ${measurement.observedAdapters} observed adapter(s)`;
+      return { facts: { kind: 'system-utilization', measurement }, content: `${name} usage was ${measurement.percent}% (${detail}).`, kind: 'answer' };
+    } catch {
+      return { facts: { kind: 'unavailable', code: 'local_system_' + name.toLowerCase() + '_unavailable' },
+        content: `Current ${name} usage is unavailable from this device’s native performance counters.`, kind: 'inability' };
+    }
+  }
   try {
     if (id === 'system.memory') {
       const raw = host.system?.memory(); validateSystemMemoryMeasurement(raw); const measurement = structuredClone(raw), gib = (bytes:number) => (bytes / 1073741824).toFixed(2);

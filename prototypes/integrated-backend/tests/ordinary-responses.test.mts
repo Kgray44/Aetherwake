@@ -4,17 +4,24 @@ import { mkdtempSync,rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join,resolve,relative,isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { BackendCore } from '../src/core.mts';
 import { createRequire } from 'node:module';
 const { conversationCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/conversation-broker.cjs');
+const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
+const { validateReview: validateNativeVelaReview, reviewPage: nativeVelaReviewPage } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-review.cjs');
 import type { ConversationSendInput,OrdinaryConnectionPort,StreamEvent } from '../src/contracts.mts';
 import type { ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
 import type { VelaRequest } from '../../vela-core/src/contracts.ts';
+import type { VelaRoutingSettingsChange } from '../../vela-core/src/routing-settings.ts';
+import type { VelaRoutingSample } from '../../vela-core/src/routing-calibration.ts';
+import { agentTemplates } from '../../agent-product/service.mts';
+import type { AgentMutationReceipt, AgentProviderCatalog } from '../../agent-product/contracts.ts';
 import { RESPONSES_ENDPOINT } from '../../openai-provider/responses.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
 const documentedModel = { id: 'gpt-6.1-sol', label: 'Synthetic catalog Sol' };
 function sse(events:unknown[]){return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});}
-function fixture(){
+function fixture(useCodexProtocolDouble = false){
  const dir=mkdtempSync(join(tmpdir(),'aerynth-ordinary-responses-')),path=join(dir,'canonical.sqlite'),events:StreamEvent[]=[],requests:Record<string,any>[]=[],responses:((init:RequestInit)=>Promise<Response>|Response)[]=[];
  let listedModels=[{id:model,label:'Synthetic eligible model'}];
  let version=1,ready=true,catalogReads=0,secretReads=0,codexCalls=0,finishResolve:(()=>void)|undefined,pending=false;
@@ -25,12 +32,249 @@ function fixture(){
   revalidateCredential:async(expected,digest)=>{assert.equal(expected,version,'credential version changed');assert.equal(digest,boundary);assert(ready);},
  };
  const fakeFetch:typeof fetch=async(url,init)=>{assert.equal(url,RESPONSES_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer SYNTHETIC_PLAN_TOKEN');const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);assert.deepEqual(Object.keys(body),['model','instructions','input','store','stream',...(body.reasoning?['reasoning']:[]),...(body.tools?['tools','tool_choice']:[])]);requests.push(body);const response=responses.shift();assert(response,'unexpected provider request');return response(init!);};
- let core:BackendCore;const create=()=>{core=new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only'},event=>events.push(event),undefined,{connection,fetch:fakeFetch});const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};};create();
+ const provider = useCodexProtocolDouble ? { provider: 'codex' as const, codexExecutable: process.execPath,
+   codexArgs: [fileURLToPath(new URL('../../codex-bridge/tests/catalog-server.mjs', import.meta.url)), 'air-inspection'] } : { provider: 'fixture' as const };
+ let core:BackendCore;const create=()=>{core=new BackendCore({path,...provider,contentPolicy:'synthetic-only'},event=>events.push(event),undefined,{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
  return {get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(resolve(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}
+
+test('Compare faster answers only when I turn it on, and keep my model choice', async () => {
+  const f = fixture();
+  try {
+    const baseline = 'gpt-6-sol', alternative = 'gpt-6-luna';
+    f.setListedModels([{ id: baseline, label: 'Baseline model' }, { id: alternative, label: 'Alternative model' }]);
+    const rows = (model: string, elapsedMs: number, totalTokens: number, projectId: string | null = null): VelaRoutingSample[] =>
+      Array.from({ length: 12 }, (_, i) => ({ requestId: randomUUID(), projectId, model, effort: 'none', depth: 'quick',
+        evidence: 'observed', completed: true, modelConfirmed: true, elapsedMs: elapsedMs + i, totalTokens, feedback: 'useful' }));
+    const seed = (samples: VelaRoutingSample[]) => f.owner.atomic(() => { f.owner.state.velaRoutingSamples = samples; });
+    seed([...rows(baseline, 1500, 70), ...rows(alternative, 600, 50, 'synthetic-other-project')]);
+    const input = { intent: 'Could you explain how a speaker works?', resourceIds: [], adaptive: true as const };
+    const sendPreview = (overrides = {}) => f.core.command('velaRequestPreview', { ...input, ...overrides });
+    const save = (expectedVersion: number, calibration: 'shadow' | 'adaptive' | 'off') => f.core.command('vela', {
+      name: 'saveRoutingSettings', input: { scope: 'global', id: null, expectedVersion, defaults: { calibration } },
+    });
+    assert.equal((await sendPreview()).route?.model, baseline);
+    await save(0, 'shadow');
+    assert.equal((await sendPreview()).route?.kind, 'conversational');
+    const sameScope = rows(alternative, 700, 60);
+    seed([...rows(baseline, 1500, 70), ...sameScope.map(row => ({ ...row, evidence: 'simulated' as const }))]);
+    const withoutEvidence = await sendPreview();
+    assert(withoutEvidence.route?.kind === 'conversational');
+    assert.equal(withoutEvidence.route.calibration, undefined);
+    seed([...rows(baseline, 1500, 70), ...sameScope]);
+    const shadow = await sendPreview();
+    assert(shadow.route?.kind === 'conversational');
+    assert.equal(shadow.route.model, baseline);
+    assert.equal(shadow.route.calibration?.alternative.model, alternative);
+    assert.equal(shadow.route.calibration?.mode, 'shadow');
+    assert.equal(f.requests.length, 0, 'Comparing existing evidence starts no extra turn.');
+    await save(1, 'adaptive');
+    const adaptive = await sendPreview();
+    assert(adaptive.route?.kind === 'conversational');
+    assert.equal(adaptive.route.model, alternative);
+    assert.equal(adaptive.route.calibration?.mode, 'adaptive');
+    assert.equal((await sendPreview({ model: baseline })).route?.model, baseline);
+    assert.equal((await sendPreview({ overrideDefaults: true })).route?.model, baseline);
+    seed([...rows(baseline, 1500, 70), ...sameScope.map(row => ({ ...row, feedback: 'needs-correction' as const }))]);
+    assert.equal((await sendPreview()).route?.model, baseline);
+    await save(2, 'off');
+    assert.equal((await sendPreview()).route?.model, baseline);
+  } finally { await f.close(); }
+});
+
+test('Vela resolves a selected agent after saved defaults and binds its version to the native send', async () => {
+  const f = fixture(true), codex = 'codex-app-server';
+  try {
+    f.setListedModels([documentedModel, { id: model, label: 'Synthetic second model' }]);
+    await f.core.command('capabilities', {});
+    await f.core.command('vela', { name: 'saveRoutingSettings', input: { scope: 'global', id: null, expectedVersion: 0,
+      defaults: { mode: 'codex', providerId: codex, model: 'fixture-model', reasoningEffort: 'high' } } });
+    const profile = structuredClone(agentTemplates()[0].profile);
+    profile.settings.providerId = { source: 'override', value: providerId };
+    profile.settings.modelId = { source: 'override', value: documentedModel.id };
+    profile.settings.reasoningEffort = { source: 'override', value: 'high' };
+    profile.settings.additionalInstructions = { source: 'override', value: 'SYNTHETIC_AGENT_INSTRUCTIONS_v1' };
+    const created = (await f.core.command('agents', { name: 'create', input: {
+      commandId: randomUUID(), title: 'Synthetic routing agent', projectId: null, profile,
+    } })).result as AgentMutationReceipt;
+    const routingAgentId = created.agent.resourceId;
+    const intent = 'Explain a synthetic feedback circuit.';
+    const input = { intent, resourceIds: [], routingAgentId, adaptive: true as const };
+    const preview = await f.core.command('velaRequestPreview', input);
+    assert.equal(preview.providerId, providerId);
+    assert.equal(preview.routingSettings?.effective.mode, 'auto');
+    assert.equal(preview.routingSettings?.origins.providerId, 'agent');
+    assert.equal(preview.route?.model, documentedModel.id);
+    assert.equal(preview.route?.effort, 'high');
+    assert.equal(preview.routingAgent?.profileVersion, 1);
+    assert.equal(preview.context.agentInstructions, undefined);
+    const approval = { previewId: preview.id, signature: preview.signature };
+    const reviewed = await f.core.command('velaNativeReview', approval);
+    assert.equal(reviewed.agentInstructions, 'SYNTHETIC_AGENT_INSTRUCTIONS_v1');
+    assert.match(nativeVelaReviewPage(reviewed, intent), /Additional agent instructions/);
+    await assert.rejects(f.core.command('authorizeVelaRequest', { ...approval, reviewDigest: reviewed.reviewDigest, directSend: true }),
+      /vela_attached_context_review_required/);
+    const catalog = (await f.core.command('agents', { name: 'catalog', input: {} })).result as AgentProviderCatalog;
+    assert(catalog.providers.find(item => item.id === providerId)?.models.find(entry => entry.id === documentedModel.id)?.reasoningEfforts.includes('high'));
+    const changed = (await f.core.command('agents', { name: 'update', input: { commandId: randomUUID(), agent: created.agent,
+      title: 'Synthetic routing agent', profile: { ...profile, settings: { ...profile.settings,
+        additionalInstructions: { source: 'override', value: 'SYNTHETIC_AGENT_INSTRUCTIONS_v2' } } } } })).result as AgentMutationReceipt;
+    await assert.rejects(f.core.command('authorizeVelaRequest', { ...approval, reviewDigest: reviewed.reviewDigest }), /stale_vela_agent_routing/);
+    assert.equal(f.requests.length, 0);
+
+    const replacement = await f.core.command('velaRequestPreview', { ...input, model });
+    assert.equal(replacement.route?.model, model);
+    assert.equal(replacement.routingSettings?.origins.model, 'turn');
+    assert.equal(replacement.routingSettings?.effective.reasoningEffort, undefined);
+    const codexTurn = { intent: 'Inspect the repository for a synthetic finding.', routingAgentId, resourceIds: [], authorizeProvider: true,
+      providerId: codex, mode: 'codex', model: 'fixture-model', reasoningEffort: 'high' };
+    const sent = await velaCommand({
+      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } }, dialog: {},
+      directMessageSend: true, offerPlanningByDefault: true, input: { name: 'request', input: codexTurn },
+      reviewProvider: async ({ review }: any) => {
+        assert.equal(review.routingAgent.profileVersion, 2);
+        assert.equal(review.agentInstructions, 'SYNTHETIC_AGENT_INSTRUCTIONS_v2');
+        assert.match(review.prompt, /SYNTHETIC_AGENT_INSTRUCTIONS_v2/);
+        assert.doesNotMatch(review.prompt, /SYNTHETIC_AGENT_INSTRUCTIONS_v1/);
+        return true;
+      },
+      call: (name: any, data: any) => f.core.command(name, data),
+    }) as VelaRequest;
+    assert.equal(sent.state, 'responded', sent.errorCode);
+    assert.equal(sent.providerId, codex);
+    assert.equal(sent.routingSettings?.origins.providerId, 'turn');
+    assert.deepEqual(sent.routingAgent, { ...changed.agent, title: 'Synthetic routing agent' });
+    assert.equal(sent.context.agentInstructions, undefined);
+    assert.equal(f.requests.length, 0);
+    assert.equal(JSON.stringify(f.events).includes('SYNTHETIC_AGENT_INSTRUCTIONS'), false);
+  } finally { await f.close(); }
+});
+
+test('Vela hands off exactly the selected exchange in both directions with native consent and canonical provenance', async () => {
+  const f = fixture(true), codex = 'codex-app-server';
+  const win = { isDestroyed: () => false, webContents: { isDestroyed: () => false } };
+  const send = (intent: string, options: { providerId: string; mode?: 'codex'; model?: string; reasoningEffort?: 'high'; handoffSourceRequestId?: string },
+    reviewProvider = async (_value: any) => true) =>
+    velaCommand({ win, dialog: {}, directMessageSend: true, offerPlanningByDefault: true,
+      input: { name: 'request', input: { intent, resourceIds: [], authorizeProvider: true, ...options } },
+      reviewProvider, call: (name: any, input: any) => f.core.command(name, input),
+    }) as Promise<VelaRequest>;
+  try {
+    // The Responses fixture labels its transport evidence simulated. Supply
+    // the reported proof shape only in this isolated test database.
+    const runOrdinary = f.owner.runOrdinary.bind(f.owner);
+    f.owner.runOrdinary = async (...args: any[]) => {
+      const execution = await runOrdinary(...args);
+      if (execution.state === 'provider_completed') {
+        const evidence = f.owner.state.messageEvidence[execution.outputMessageId];
+        assert.equal(evidence.classification, 'simulated');
+        f.owner.atomic(() => { evidence.classification = 'reported'; });
+      }
+      return execution;
+    };
+    f.responses.push(() => complete('resp_handoff_source', 'Synthetic selected answer marker.'));
+    const source = await send('Explain the synthetic source objective.', { providerId });
+    assert.equal(source.state, 'responded', source.errorCode);
+    f.responses.push(() => complete('resp_handoff_neighbor', 'Synthetic unrelated answer marker.'));
+    const neighbor = await send('Explain the unrelated synthetic task.', { providerId });
+    assert.equal(neighbor.state, 'responded', neighbor.errorCode);
+
+    const nextIntent = 'Inspect the repository for the selected finding.';
+    const codexChoice = { providerId: codex, mode: 'codex' as const, model: 'fixture-model', reasoningEffort: 'high' as const,
+      handoffSourceRequestId: source.id };
+    await assert.rejects(f.core.command('velaRequestPreview', { ...codexChoice, providerId, mode: 'auto', model: undefined,
+      reasoningEffort: undefined, intent: 'Summarize the selected exchange.', resourceIds: [], adaptive: true }), /vela_handoff_same_provider/);
+    await assert.rejects(f.core.command('velaRequestPreview', { ...codexChoice, intent: nextIntent, resourceIds: [],
+      adaptive: true, includeRecentHistory: true }), /vela_handoff_history_conflict/);
+    await assert.rejects(f.core.command('velaRequestPreview', { ...codexChoice, intent: 'Run the Node tests', resourceIds: [],
+      adaptive: true }), /vela_project_check_handoff_conflict/);
+    const stale = await f.core.command('velaRequestPreview', { ...codexChoice, intent: nextIntent, resourceIds: [], adaptive: true });
+    const staleInput = { previewId: stale.id, signature: stale.signature };
+    const staleReview = await f.core.command('velaNativeReview', staleInput);
+    const reviewHtml = nativeVelaReviewPage(staleReview, nextIntent);
+    assert.match(reviewHtml, /Selected prior exchange/);
+    assert.match(reviewHtml, /Handoff from ChatGPT plan to Codex/);
+    assert.doesNotMatch(reviewHtml, /unrelated answer marker/i);
+    const substituted = structuredClone(staleReview);
+    (substituted.history!.messages[1] as { content: string }).content = 'Different text in the review';
+    assert.throws(() => validateNativeVelaReview(stale, substituted), /invalid_native_vela_review/);
+    await assert.rejects(f.core.command('authorizeVelaRequest', { ...staleInput, reviewDigest: staleReview.reviewDigest, directSend: true }),
+      /vela_attached_context_review_required/);
+    await f.core.command('velaRouteNative', { intent: 'What time is it?' });
+    await assert.rejects(f.core.command('authorizeVelaRequest', { ...staleInput, reviewDigest: staleReview.reviewDigest }),
+      /stale-history-revision|stale_vela_input_revision/);
+
+    let nativeReviews = 0;
+    const checkReview = async ({ review }: any, approve: boolean) => {
+      nativeReviews++;
+      assert.equal(review.providerId, codex);
+      assert.deepEqual(review.history.messages.map((message: any) => message.requestId), [source.id, source.id]);
+      assert.equal(review.handoff.sourceMessageId, source.response?.messageId);
+      assert.equal(review.handoff.sourceProviderId, providerId);
+      assert.match(review.prompt, /Synthetic selected answer marker/);
+      assert.doesNotMatch(review.prompt, /unrelated synthetic task|unrelated answer marker/i);
+      return approve;
+    };
+    const beforeCancel = (await f.core.command('providerActivity', {})).providerRequests;
+    await assert.rejects(send(nextIntent, codexChoice, value => checkReview(value, false)), /authorization_cancelled/);
+    assert.equal((await f.core.command('providerActivity', {})).providerRequests, beforeCancel);
+    const continued = await send(nextIntent, codexChoice, value => checkReview(value, true));
+    assert.equal(continued.state, 'responded', continued.errorCode);
+    assert.equal(continued.conversationId, source.conversationId);
+    assert.equal(continued.handoff?.sourceRequestId, source.id);
+    assert.equal(continued.handoff?.taskId, source.id);
+    assert.equal(continued.handoff?.destinationProviderId, codex);
+    const snapshot = await f.core.command('snapshot', {});
+    const execution = Object.values(snapshot.executions).find(item => item.commandId === 'vela-inspection:' + continued.id);
+    assert(execution?.binding?.nativeThreadId);
+    const codexInput = snapshot.graph.messages.find(message => message.conversationId === snapshot.resourceMap[execution.resourceId] &&
+      message.role === 'user');
+    assert.match(codexInput?.content ?? '', /Synthetic selected answer marker/);
+    assert.doesNotMatch(codexInput?.content ?? '', /Synthetic unrelated answer marker/);
+
+    f.responses.push(() => complete('resp_handoff_reverse', 'Synthetic summary of the Codex finding.'));
+    const reversed = await send('Summarize the selected finding.', { providerId, handoffSourceRequestId: continued.id }, async ({ review }) => {
+      nativeReviews++;
+      assert.equal(review.handoff.sourceProviderId, codex);
+      assert.deepEqual(review.history.messages.map((message: any) => message.requestId), [continued.id, continued.id]);
+      return true;
+    });
+    assert.equal(reversed.state, 'responded', reversed.errorCode);
+    assert.equal(reversed.conversationId, source.conversationId);
+    assert.equal(reversed.handoff?.sourceRequestId, continued.id);
+    assert.equal(reversed.handoff?.taskId, source.id);
+    assert.match(JSON.stringify(f.requests.at(-1)?.input), /Synthetic repository finding/);
+    assert.doesNotMatch(JSON.stringify(f.requests.at(-1)?.input), /Synthetic selected answer marker|Synthetic unrelated answer marker/);
+    assert.equal(nativeReviews, 3);
+    assert.equal(f.events.filter(event => event.type === 'vela.routing.handoff_authorized').length, 2);
+    for (const stage of [source, continued, reversed])
+      assert(f.events.some(event => event.type === 'vela.routing.stage_completed' && event.correlationId === stage.id && event.payload.taskId === source.id));
+
+    f.owner.atomic(() => f.owner.graph.markUnavailable(neighbor.response!.messageId));
+    await assert.rejects(f.core.command('velaRequestPreview', { ...codexChoice, intent: nextIntent, resourceIds: [],
+      adaptive: true, handoffSourceRequestId: neighbor.id }), /vela_handoff_source_unavailable/);
+    f.responses.push(() => {
+      f.disconnect();
+      return complete('resp_handoff_uncertain', 'Synthetic result after destination revocation.');
+    });
+    const uncertain = await send('Summarize the selected finding after a reconnect.',
+      { providerId, handoffSourceRequestId: continued.id });
+    assert.equal(uncertain.state, 'unknown', uncertain.errorCode);
+    assert.equal(uncertain.handoff?.sourceRequestId, continued.id);
+    const attempts = f.requests.length;
+    await f.reopen();
+    const state = await f.core.command('vela', { name: 'state', input: {} }) as { requests: VelaRequest[] };
+    assert.deepEqual(state.requests.find(request => request.id === reversed.id)?.handoff, reversed.handoff);
+    const restored = state.requests.find(request => request.id === uncertain.id);
+    assert.equal(restored?.state, 'unknown');
+    assert.deepEqual(restored?.handoff, uncertain.handoff);
+    assert.equal((await f.core.command('providerActivity', {})).providerRequests, 0);
+    assert.equal(f.requests.length, attempts);
+  } finally { await f.close(); }
+});
 
 test('Vela routes a single frozen prompt through the connected ChatGPT plan without invoking Codex', async () => {
   const f = fixture();
@@ -51,6 +295,244 @@ test('Vela routes a single frozen prompt through the connected ChatGPT plan with
     const execution = Object.values(f.owner.state.executions as Record<string, {state: string; responseId?: string}>)
       .find(item => item.responseId === 'resp_synthetic_vela');
     assert.equal(execution?.state, 'provider_completed');
+  } finally { await f.close(); }
+});
+
+test('the native Vela Send broker returns real RAM facts while disconnected and never contacts either model provider', async () => {
+  const f = fixture();
+  try {
+    f.disconnect();
+    const calls: string[] = [];
+    const result = await velaCommand({
+      directMessageSend: true, offerPlanningByDefault: true,
+      input: { name: 'request', input: { intent: 'Vela, how much physical memory is currently in use?', resourceIds: [], authorizeProvider: true } },
+      call(name: Parameters<BackendCore['command']>[0], data: never) {
+        calls.push(name);
+        return f.core.command(name, data);
+      },
+    }) as VelaRequest;
+    assert.deepEqual(calls, ['velaRouteNative']);
+    assert.equal(result.state, 'responded');
+    assert.equal(result.local?.facts.kind, 'system-memory');
+    assert.equal(result.providerId, null);
+    assert.equal(f.codexCalls + f.catalogReads + f.secretReads + f.requests.length, 0);
+  } finally { await f.close(); }
+});
+
+test('Level 0 records local time, date, CPU and arithmetic through the same native conversation', async () => {
+  const f = fixture();
+  try {
+    f.disconnect();
+    let conversationId: string | undefined;
+    for (const [intent, expected] of [
+      ['What time is it right now?', 'time'], ['What day is it today?', 'date'],
+      ['What is the current CPU usage?', 'system-utilization'], ['What is 15% of 240?', 'calculator'],
+    ]) {
+      const result = await f.core.command('velaRouteNative', { intent });
+      assert(result.matched);
+      const { request } = result;
+      assert.equal(request.state, 'responded');
+      assert.equal(request.response?.kind, 'answer');
+      assert.equal(request.local?.facts.kind, expected);
+      conversationId ??= request.conversationId;
+      assert.equal(request.conversationId, conversationId);
+      if (request.local?.facts.kind === 'calculator') assert.equal(request.local.facts.value, 36);
+    }
+    const invalid = await f.core.command('velaRouteNative', { intent: 'Calculate 10/0' });
+    assert(invalid.matched && invalid.request.response?.kind === 'inability');
+    assert.equal(f.codexCalls + f.catalogReads + f.secretReads + f.requests.length, 0);
+    await f.reopen();
+    const state = await f.core.command('vela', { name: 'state', input: {} });
+    assert.equal((state as {requests: VelaRequest[]}).requests.length, 5);
+  } finally { await f.close(); }
+});
+
+test('Level 0 opens a unique workspace and prepares a checklist without a connected provider', async () => {
+  const f = fixture();
+  try {
+    f.disconnect();
+    const workspace = await f.core.command('workspace', { title: 'Synthetic checklist workspace' });
+    const opened = await f.core.command('velaRouteNative', { intent: 'Open the workspace Synthetic checklist workspace' });
+    assert(opened.matched);
+    assert.equal(opened.request.state, 'completed');
+    const proposed = await f.core.command('velaRouteNative', { intent: 'Could you add a checklist called Shopping here?' });
+    assert(proposed.matched && proposed.request.planId);
+    assert.equal(proposed.request.providerId, null);
+    const applied = await f.core.command('vela', { name: 'apply', input: proposed.request.planId }) as { state: string };
+    assert.equal(applied.state, 'applied');
+    const desktop = await f.core.command('desktop', { type: 'snapshot' });
+    const shopping = desktop.resources.find(resource => resource.kind === 'checklist' && resource.title === 'Shopping');
+    assert(shopping);
+    assert(desktop.blocks.some(block => block.workspace_id === workspace.id && 'resource_id' in block && block.resource_id === shopping.id));
+    const found = await f.core.command('velaRouteNative', { intent: 'Can you find a resource called Shopping?' });
+    const resource = await f.core.command('velaRouteNative', { intent: 'Open the resource called Shopping, please.' });
+    assert(found.matched && resource.matched);
+    const state = await f.core.command('vela', { name: 'state', input: {} }) as import('../../vela-core/src/contracts.ts').VelaState;
+    const foundReceipt = state.receipts.find(receipt => receipt.requestId === found.request.id);
+    assert(state.searchResults?.[foundReceipt!.id]?.some(ref => ref.id === shopping.id));
+    assert(state.receipts.some(receipt => receipt.requestId === resource.request.id && receipt.openResourceId === shopping.id));
+    assert.equal(f.codexCalls + f.requests.length, 0);
+  } finally { await f.close(); }
+});
+
+test('Vela AIR binds supported quick and deep efforts to the actual Responses body', async () => {
+  const f = fixture();
+  try {
+    f.setListedModels([documentedModel, { id: 'gpt-6-luna', label: 'Synthetic catalog Luna' }]);
+    for (const [intent, depth, expectedModel, effort] of [
+      ['How does a speaker crossover work?', 'quick', 'gpt-6-luna', 'none'],
+      ['Derive the stability conditions for coupled oscillators.', 'deep', documentedModel.id, 'high'],
+    ] as const) {
+      const preview = await f.core.command('velaRequestPreview', { intent, resourceIds: [], adaptive: true });
+      assert.equal(preview.providerId, providerId);
+      assert.deepEqual(preview.route, { kind: 'conversational', depth, reason: depth === 'quick' ? 'routine-answer' : 'complex-analysis', model: expectedModel, effort });
+      const approval = { previewId: preview.id, signature: preview.signature };
+      const review = await f.core.command('velaNativeReview', approval);
+      assert(!review.prompt.includes('capabilityCatalog'));
+      const { grantId } = await f.core.command('authorizeVelaRequest', { ...approval, reviewDigest: review.reviewDigest, directSend: true });
+      f.responses.push(() => complete('resp_synthetic_' + depth, 'Provider fixture output'));
+      const request = await f.core.command('vela', { name: 'request', input: { intent, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId } }) as VelaRequest;
+      assert.deepEqual(request.route, preview.route);
+      assert.equal(request.state, 'failed', 'fixture output retains simulated provenance');
+      const body = f.requests.at(-1)!;
+      assert.equal(body.model, expectedModel);
+      assert.deepEqual(body.reasoning, { effort });
+      assert.equal(body.tools, undefined);
+    }
+    const pinned = await f.core.command('velaRequestPreview', { intent: 'Hi Vela', resourceIds: [], adaptive: true, model: documentedModel.id, reasoningEffort: 'high' });
+    assert(pinned.route?.kind === 'conversational');
+    assert.equal(pinned.route.model, documentedModel.id);
+    assert.equal(pinned.route.effort, 'high');
+    assert.equal(f.codexCalls, 0);
+  } finally { await f.close(); }
+});
+
+test('AIR refuses invalid pins, execution through the conversation provider and unknown write authorization', async () => {
+  const f = fixture();
+  try {
+    f.setListedModels([documentedModel]);
+    const ask = { adaptive: true as const, intent: 'Tell me a joke', resourceIds: [] };
+    await assert.rejects(f.core.command('velaRequestPreview', { ...ask, model: 'missing' }), /unsupported_model/);
+    await assert.rejects(f.core.command('velaRequestPreview', { ...ask, model: documentedModel.id, reasoningEffort: 'none' }), /unsupported_reasoning_effort/);
+    await assert.rejects(f.core.command('velaRequestPreview', { ...ask, budgetLimit: 10 }), /vela_budget_unverifiable/);
+    await assert.rejects(f.core.command('velaRequestPreview', { ...ask, intent: 'Inspect the repository logs', providerId }), /vela_pinned_provider_cannot_execute/);
+    await assert.rejects(f.core.command('velaRequestPreview', { ...ask, intent: 'Fix the resize bug and test it' }), /vela_codex_write_unavailable/);
+    f.disconnect();
+    await assert.rejects(f.core.command('velaRequestPreview', ask), /vela_chatgpt_sign_in_required/);
+    assert.equal(f.requests.length + f.codexCalls + f.secretReads, 0);
+  } finally { await f.close(); }
+});
+
+test('AIR resolves saved scope defaults, preserves turn overrides, and invalidates stale approval across restart', async () => {
+  const f = fixture();
+  try {
+    f.setListedModels([documentedModel]);
+    await f.core.command('ordinaryProviderCheck', {});
+    const save = (input: VelaRoutingSettingsChange) => f.core.command('vela', { name: 'saveRoutingSettings', input });
+    const workspace = await f.core.command('workspace', { title: 'Scoped AIR workspace', projectTitle: 'Scoped AIR project' });
+    assert(workspace.project_id);
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
+    const local = await f.core.command('velaRouteNative', { intent: 'What is 2 + 2?' });
+    assert(local.matched);
+    const chat = local.request.conversationId;
+    await save({ scope: 'global', id: null, expectedVersion: 0, defaults: { mode: 'fast' } });
+    await save({ scope: 'project', id: workspace.project_id, expectedVersion: 0, defaults: { providerId, model: documentedModel.id } });
+    await save({ scope: 'workspace', id: workspace.id, expectedVersion: 0, defaults: { mode: 'deep' } });
+    await save({ scope: 'chat', id: chat, expectedVersion: 0, defaults: { reasoningEffort: 'medium' } });
+    assert.deepEqual(await f.core.command('velaRouteNative', { intent: 'What is 2 + 2?' }), { matched: false });
+    assert((await f.core.command('velaRouteNative', { intent: 'What is 2 + 2?', settings: { overrideDefaults: true } })).matched);
+    const input = { adaptive: true as const, intent: 'Say hello', resourceIds: [] };
+    const preview = await f.core.command('velaRequestPreview', input);
+    assert.deepEqual(preview.routingSettings, {
+      effective: { mode: 'deep', providerId, model: documentedModel.id, reasoningEffort: 'medium' },
+      origins: { mode: 'workspace', providerId: 'project', model: 'project', reasoningEffort: 'chat' },
+    });
+    const override = await f.core.command('velaRequestPreview', { ...input, reasoningEffort: 'high' });
+    assert.equal(override.routingSettings?.origins.reasoningEffort, 'turn');
+    const approval = { previewId: preview.id, signature: preview.signature };
+    const review = await f.core.command('velaNativeReview', approval);
+    await assert.rejects(save({ scope: 'workspace', id: 'wrong-workspace', expectedVersion: 0, defaults: { mode: 'auto' } }), /vela_routing_scope_unavailable/);
+    await assert.rejects(save({ scope: 'workspace', id: workspace.id, expectedVersion: 0, defaults: {} }), /stale_vela_routing_defaults/);
+    await save({ scope: 'workspace', id: workspace.id, expectedVersion: 1, defaults: {} });
+    await assert.rejects(f.core.command('authorizeVelaRequest', { ...approval, reviewDigest: review.reviewDigest }), /stale_vela_routing_defaults/);
+    assert.equal(f.requests.length, 0);
+    await f.reopen();
+    const reopened = await f.core.command('velaRequestPreview', input);
+    assert.equal(reopened.routingSettings?.effective.mode, 'fast');
+    assert.equal(reopened.routingSettings?.origins.reasoningEffort, 'chat');
+    const reset = await f.core.command('velaRequestPreview', { ...input, overrideDefaults: true });
+    assert.equal(reset.routingSettings?.effective.providerId, null);
+    assert.equal(reset.routingSettings?.origins.mode, 'turn');
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'constellation', projectId: null } });
+    const elsewhere = await f.core.command('velaRequestPreview', input);
+    assert.equal(elsewhere.routingSettings?.effective.providerId, undefined);
+  } finally { await f.close(); }
+});
+
+test('AIR enforces durable project and provider attempt limits without counting previews or blocking Level 0', async () => {
+  const f = fixture();
+  try {
+    f.setListedModels([documentedModel]);
+    const save = (input: VelaRoutingSettingsChange) => f.core.command('vela', { name: 'saveRoutingSettings', input });
+    const workspace = await f.core.command('workspace', { title: 'Synthetic limited workspace', projectTitle: 'Synthetic limited project' });
+    assert(workspace.project_id);
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
+    await save({ scope: 'global', id: null, expectedVersion: 0, defaults: { attemptLimits: { [providerId]: 2 } } });
+    await save({ scope: 'project', id: workspace.project_id, expectedVersion: 0, defaults: { attemptLimits: { total: 1 } } });
+    await assert.rejects(save({ scope: 'workspace', id: workspace.id, expectedVersion: 0, defaults: { attemptLimits: { total: 5 } } }), /invalid_vela_attempt_limit_scope/);
+    const ask = { adaptive: true as const, allowEscalation: true as const, intent: 'Explain AM versus FM', resourceIds: [] };
+    const send = async () => {
+      const preview = await f.core.command('velaRequestPreview', ask);
+      const approval = { previewId: preview.id, signature: preview.signature };
+      const review = await f.core.command('velaNativeReview', approval);
+      const { grantId } = await f.core.command('authorizeVelaRequest', { ...approval, reviewDigest: review.reviewDigest });
+      return f.core.command('vela', { name: 'request', input: { intent: ask.intent, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId } });
+    };
+    await f.core.command('velaRequestPreview', ask);
+    f.responses.push(() => sse([
+      { type: 'response.created', response: { id: 'resp_quota_incomplete' } },
+      { type: 'response.incomplete', response: { id: 'resp_quota_incomplete', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [] } },
+    ]));
+    await send();
+    assert.equal(f.requests.length, 1);
+    assert(f.events.some(event => event.type === 'vela.routing.escalation_blocked'));
+    await f.reopen();
+    await assert.rejects(f.core.command('velaRequestPreview', { ...ask, overrideDefaults: true }), /vela_daily_attempt_limit_reached/);
+    assert((await f.core.command('velaRouteNative', { intent: 'Calculate 5 * 5' })).matched);
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'constellation', projectId: null } });
+    f.responses.push(() => sse([{ type: 'response.created', response: { id: 'resp_quota_global_unknown' } }]));
+    const uncertain = await send() as VelaRequest;
+    assert.equal(uncertain.state, 'unknown');
+    await assert.rejects(f.core.command('velaRequestPreview', ask), /vela_daily_attempt_limit_reached/);
+    assert.equal(f.requests.length, 2);
+    assert.equal(f.codexCalls, 0);
+  } finally { await f.close(); }
+});
+
+test('AIR escalates an opted-in incomplete informational response once without replaying partial output', async () => {
+  const f = fixture();
+  try {
+    f.setListedModels([documentedModel]);
+    const intent = 'Explain the difference between AM and FM';
+    const preview = await f.core.command('velaRequestPreview', { adaptive: true, allowEscalation: true, intent, resourceIds: [] });
+    assert(preview.route?.kind === 'conversational');
+    assert.deepEqual(preview.route.escalation, { model: documentedModel.id, effort: 'high', trigger: 'output-token-limit' });
+    const approval = { previewId: preview.id, signature: preview.signature };
+    const review = await f.core.command('velaNativeReview', approval);
+    const { grantId } = await f.core.command('authorizeVelaRequest', { ...approval, reviewDigest: review.reviewDigest });
+    f.responses.push(
+      () => sse([
+        { type: 'response.created', response: { id: 'resp_synthetic_limited' } },
+        { type: 'response.output_text.delta', delta: 'Partial output never replayed' },
+        { type: 'response.incomplete', response: { id: 'resp_synthetic_limited', status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output: [] } },
+      ]),
+      () => complete('resp_synthetic_escalated', 'Complete fixture response'),
+    );
+    const request = await f.core.command('vela', { name: 'request', input: { intent, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId } }) as VelaRequest;
+    assert.deepEqual(f.requests.map(body => body.reasoning.effort), ['low', 'high']);
+    assert(f.requests.every(body => !JSON.stringify(body.input).includes('Partial output never replayed')));
+    assert(f.events.some(event => event.type === 'vela.routing.route_escalated' && event.correlationId === request.id));
+    assert.equal(f.codexCalls, 0);
   } finally { await f.close(); }
 });
 

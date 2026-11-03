@@ -58,6 +58,80 @@ async function settles(check: () => boolean) { for (let i = 0; i < 50 && !check(
 const named = (root: Node, text: string) => root.find(node => node.tagName === 'button' && (node.getAttribute('aria-label') === text || node.textContent === text))!;
 function displayed(node: Node) { for (let parent: Node | null = node; parent; parent = parent.parent) { if (parent.hidden) return false; if (parent.tagName === 'details' && !parent.open && !parent.children[0]?.contains(node)) return false; } return true; }
 
+test('saved routing controls show origins, preserve preferences when editing limits and offer one-send Auto', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.planningProviders = [{ providerId: 'chatgpt-plan-responses', available: true }];
+  canonical.routingSettings = {
+    profiles: [{ scope: 'global', id: null, version: 2, defaults: { providerId: 'chatgpt-plan-responses' } }],
+    effective: { mode: 'auto', providerId: 'chatgpt-plan-responses' }, origins: { mode: 'default', providerId: 'global' },
+  };
+  const changes: Parameters<NonNullable<VelaClient['saveRoutingSettings']>>[0][] = [];
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const client = clientFor(async () => canonical, {
+    saveRoutingSettings: async change => {
+      changes.push(change);
+      const profile = { scope: change.scope, id: change.id, version: change.expectedVersion + 1, defaults: change.defaults };
+      canonical.routingSettings!.profiles = [profile];
+      return profile;
+    },
+    request: async input => { turns.push(input); return request(); },
+  });
+  const panel = mountVelaPanel(root as unknown as HTMLElement, client);
+  await settles(() => root.textContent.includes('Provider ChatGPT plan (global)'));
+  const limit = root.find(node => node.tagName === 'label' && node.textContent === 'All provider attempts')!.children[1];
+  limit.value = '3';
+  named(root, 'Save attempt limits').fire('click');
+  await settles(() => changes.length === 1);
+  assert.deepEqual(changes[0], { scope: 'global', id: null, expectedVersion: 2,
+    defaults: { providerId: 'chatgpt-plan-responses', attemptLimits: { total: 3 } } });
+  const composer = root.find(node => node.tagName === 'textarea')!;
+  named(root, 'Provider').fire('click');
+  named(root, 'Automatic').fire('click');
+  composer.value = 'First request';
+  composer.fire('input');
+  composer.fire('keydown', { key: 'Enter' });
+  await settles(() => turns.length === 1 && root.find(node => node.className === 'vela-core-status')?.dataset.requestState !== 'submitting');
+  assert.equal(turns[0].overrideDefaults, true);
+  composer.value = 'Second request';
+  composer.fire('input');
+  composer.fire('keydown', { key: 'Enter' });
+  await settles(() => turns.length === 2);
+  assert.equal(turns[1].overrideDefaults, undefined);
+  panel.dispose();
+});
+
+test('continuing an answer selects one exchange and preserves that selection after cancelling review', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const source = request({ id: '11111111-1111-4111-8111-111111111111', state: 'responded',
+    providerId: 'chatgpt-plan-responses', response: { kind: 'answer', messageId: 'synthetic:answer' },
+    provenance: { schemaVersion: 1, dependencies: [], digest: 'a'.repeat(64) } });
+  canonical.requests = [source];
+  canonical.conversation!.messages = [{ id: source.response!.messageId, requestId: source.id, role: 'assistant',
+    content: 'Synthetic earlier answer', source: 'provider', classification: 'reported', responseKind: 'answer',
+    providerId: source.providerId!, providerContribution: { providerId: source.providerId!, classification: 'reported', executionId: 'synthetic:execution' } }];
+  canonical.planningProviders = [{ providerId: 'chatgpt-plan-responses', available: true }, { providerId: 'codex-app-server', available: false }];
+  const turns: Parameters<VelaClient['request']>[0][] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, {
+    request: async input => { turns.push(input); throw Error('authorization_cancelled'); },
+  }));
+  await settles(() => !!named(root, 'Continue with Codex'));
+  named(root, 'Continue with Codex').fire('click');
+  assert.equal(turns.length, 0);
+  assert.equal(displayed(named(root, 'Remove selected provider exchange')), true);
+  const composer = root.find(node => node.tagName === 'textarea')!;
+  composer.value = 'Inspect this finding in the repository.';
+  composer.fire('input');
+  composer.fire('keydown', { key: 'Enter' });
+  await settles(() => turns.length === 1 && root.textContent.includes('Your draft is still here.'));
+  assert.equal(turns[0].providerId, 'codex-app-server');
+  assert.equal(turns[0].handoffSourceRequestId, source.id);
+  assert.equal(turns[0].includeRecentHistory, undefined);
+  assert.equal(composer.value, turns[0].intent);
+  named(root, 'Remove selected provider exchange').fire('click');
+  assert.equal(named(root, 'Remove selected provider exchange'), undefined);
+  panel.dispose();
+});
+
 test('terminal status survives request completion and refresh; connection probe is explicit and state is observed afterward', async () => {
   const doc = new Document(), root = doc.createElement('main'); let canonical = state(), connections = 0;
   let resolveRequest!: (value: VelaRequest) => void;

@@ -17,3 +17,13 @@ export interface ProviderHistoryMessage {
   providerId?: string; classification: 'observed' | 'reported'; content: string; contentDigest: string;
 }
 export interface ProviderHistory { schemaVersion: 1; messages: readonly ProviderHistoryMessage[]; coverage: 'bounded-authorized-whole-messages' }
+/** References to the canonical exchange. The receipt contains no message bodies. */
+export interface VelaHandoff {
+  /** Stable across reviewed stages of the same Vela task. */
+  taskId?: string;
+  sourceRequestId: string;
+  sourceMessageId: string;
+  sourceProviderId: string;
+  destinationProviderId: string;
+  contextDigest: string;
+}

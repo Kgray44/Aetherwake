@@ -12,6 +12,8 @@ import type { ThreadItemsListParams } from "../protocol-generated/v2/ThreadItems
 import type { DynamicToolSpec } from "../protocol-generated/v2/DynamicToolSpec.ts";
 import type { DynamicToolCallParams } from "../protocol-generated/v2/DynamicToolCallParams.ts";
 import type { DynamicToolCallResponse } from "../protocol-generated/v2/DynamicToolCallResponse.ts";
+import type { CommandExecParams } from "../protocol-generated/v2/CommandExecParams.ts";
+import type { CommandExecResponse } from "../protocol-generated/v2/CommandExecResponse.ts";
 
 export interface ProviderAdapter {
   readonly provider: string;
@@ -76,7 +78,7 @@ export interface CapabilityReport {
   provider: "codex-app-server";
   authentication: "available" | "required" | "unavailable";
   accountType: string | null;
-  models: Array<{ id: string; displayName: string; hidden: boolean; entitlement: "unverified" }>;
+  models: Array<{ id: string; displayName: string; hidden: boolean; entitlement: "unverified"; efforts?: string[]; defaultEffort?: string; isDefault?: true }>;
   /** Implemented RPC wrappers; individual method support is verified per call. */
   adapterMethods: string[];
   /** @deprecated Compatibility alias for adapterMethods; not a server capability probe. */
@@ -146,7 +148,15 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
       for (const raw of Array.isArray(result.data) ? result.data : []) {
         if (!raw || typeof raw !== "object") continue;
         const model = raw as Wire;
-        if (typeof model.id === "string") models.push({ id: model.id, displayName: String(model.displayName ?? model.id), hidden: model.hidden === true, entitlement: "unverified" });
+        if (typeof model.id === "string") {
+          const efforts = (Array.isArray(model.supportedReasoningEfforts) ? model.supportedReasoningEfforts : [])
+            .flatMap(option => option && typeof option.reasoningEffort === "string" ? [option.reasoningEffort] : []);
+          models.push({ id: model.id, displayName: String(model.displayName ?? model.id), hidden: model.hidden === true,
+            entitlement: "unverified", ...(efforts.length ? { efforts: [...new Set(efforts)] } : {}),
+            ...(typeof model.defaultReasoningEffort === "string" && efforts.includes(model.defaultReasoningEffort)
+              ? { defaultEffort: model.defaultReasoningEffort } : {}),
+            ...(model.isDefault === true ? { isDefault: true as const } : {}) });
+        }
       }
       cursor = typeof result.nextCursor === "string" ? result.nextCursor : null;
       if (!cursor) break;
@@ -259,6 +269,21 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
     return turn.id;
   }
   async interrupt(params: TurnInterruptParams): Promise<void> { await this.rpc("turn/interrupt", params as Wire); }
+  async windowsSandboxReady(): Promise<boolean> {
+    return (await this.rpc("windowsSandbox/readiness", {}, 5000)).status === "ready";
+  }
+  async execReadOnly(params: Pick<CommandExecParams, "command" | "cwd" | "env"> & { timeoutMs: number }): Promise<CommandExecResponse> {
+    const { command, cwd, env, timeoutMs } = params;
+    if (!command.length || !cwd || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000)
+      throw new BridgeError("invalid-command", "Invalid bounded command");
+    const result = await this.rpc("command/exec", {
+      command, cwd, env, timeoutMs, sandboxPolicy: { type: "readOnly", networkAccess: false },
+    }, timeoutMs + 7000);
+    const { exitCode, stdout, stderr } = result;
+    if (typeof exitCode !== "number" || !Number.isSafeInteger(exitCode) || typeof stdout !== "string" || typeof stderr !== "string")
+      throw new BridgeError("protocol", "Invalid command result");
+    return { exitCode, stdout, stderr };
+  }
   close(): void { this.transport?.close(); this.transport = undefined; }
 
   waitForTerminal(threadId: string, turnId: string, timeoutMs = 90000): Promise<EventEnvelope> {

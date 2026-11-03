@@ -68,7 +68,39 @@ exports.verify = async ({win,app,privateRoot,source}) => {
   const capture=async(name)=>{assert(budget.count<4,'Combined four-PNG profile budget exhausted');await focus();const before=await js('(()=>{const s=window.__aerynth.snapshot();return {frames:s.gpu?.framesRendered,draws:s.metrics.draws}})()');assert(Number.isFinite(before.frames),'Actual GPU renderer unavailable');let acknowledgement;const end=Date.now()+6000;while(Date.now()<end){await pause(80);const next=await js('(()=>{const s=window.__aerynth.snapshot();return {frames:s.gpu?.framesRendered,draws:s.metrics.draws,active:s.active,failed:s.graphicsFailed}})()');if(win.isFocused()&&next.active&&!next.failed&&next.frames>before.frames&&next.draws>before.draws){acknowledgement=next;break;}}assert(acknowledgement,'new_focused_gpu_draw_not_acknowledged');const overview=await overviewBounds();assert(win.isFocused(),'Focus lost before capture');const png=(await win.webContents.capturePage()).toPNG();assert(win.isFocused(),'Focus lost during capture');assert(budget.bytes+png.length<=8*1024*1024,'Combined PNG byte budget exceeded');const file=path.join(out,name+'.png');await fs.writeFile(file,png);const item={file,bytes:png.length,sha256:sha(png),focused:true,before,acknowledgement,overview};budget.count++;budget.bytes+=png.length;budget.files.push(item);receipt.captures.push(item);await fs.writeFile(budgetFile,encode(budget));};
   const verifyPanelConversation=async state=>{assert.deepEqual(await js('[...document.querySelectorAll(".vela-core-message")].map(e=>e.querySelector("p").textContent)'),state.conversation.messages.slice(-80).map(m=>m.content),'Panel presents exact canonical conversation content');};
   const initial=await readVela(),initialReview=reviews(initial);await focus();await open();let state=await readVela();assert.deepEqual(state.identity,{id:'system:vela',name:'Vela',role:'application-assistant'});assert(state.conversation.resourceId);const velaResource=(await desktop()).resources.find(r=>r.id===state.conversation.resourceId);assert(velaResource&&velaResource.kind==='conversation'&&velaResource.providerId==='local','Vela has its own canonical local conversation, never a forwarded provider identity');assert.deepEqual(reviews(state),initialReview,'Opening is not attention review');await offline();
-  if(restore){
+  if(process.argv.includes('--verify-air-local')){
+    assert(!restore && state.requests.length === 0, 'Fresh offline AIR profile required');
+    const questions = [
+      ['What time is it right now?', 'local.time'],
+      ["What's today's date?", 'local.date'],
+      ['How much RAM am I using?', 'system.memory'],
+      ['How busy is my CPU right now?', 'system.cpu'],
+      ['How busy is my GPU right now?', 'system.gpu'],
+      ['Show me the CPU and GPU usage.', 'system.performance'],
+      ['What is (8 + 4) / 3?', 'local.calculator'],
+      ['Which workspace is open?', 'local.workspace-status'],
+      ['How many projects do I have?', 'local.project-count'],
+      ['Are any executions running?', 'local.execution-status'],
+    ];
+    for(const [question, capability] of questions){
+      await focus();
+      await type('.vela-core-compose textarea', question);
+      await clickText('Send to Vela', '.vela-core-compose');
+      let request;
+      await until(async()=>{state=await readVela();request=state.requests.find(item=>item.intent===question);return request?.state==='responded';}, question);
+      assert.equal(request.local?.capabilityId, capability);
+      assert.equal(request.local?.providerId, null);
+      const { facts } = request.local;
+      if(capability === 'local.calculator') assert.equal(facts.value, 4);
+      if(capability === 'system.cpu' || capability === 'system.gpu'){
+        if(facts.kind !== 'unavailable') assert(facts.measurement.percent >= 0 && facts.measurement.percent <= 100);
+      } else assert.notEqual(facts.kind, 'unavailable', question);
+      await until(()=>js(`document.querySelector('.vela-core-compose textarea')?.value===''`), 'The composer clears after a response');
+      checked(question, { capability, outcome: facts.kind });
+    }
+    await verifyPanelConversation(state);
+    await offline();
+  }else if(restore){
     const expected=JSON.parse(await fs.readFile(expectedFile,'utf8'));assert.equal(expected.contract,'aerynth.vela-restore@1');assert.deepEqual(receipt.moduleHashes,expected.moduleHashes);assert.deepEqual(receipt.assets,expected.assets);assert.deepEqual(source.hashes,expected.hostSourceHashes,'Restore source snapshot is exact');
     assert.deepEqual(canonicalVela(state),expected.vela,'Persistent identity, canonical conversation, plans, receipts and explicit preferences survive restart');const data=await desktop();assert.deepEqual(canonicalNote(data.resources.find(r=>r.id===expected.note.id)),expected.note,'Canonical note ID/content/version survives restart');
     for(const item of expected.attention)assert.deepEqual(state.attention.find(a=>a.id===item.id),item,'Existing attention/review record is exact');

@@ -1,5 +1,6 @@
 const {
   validateReview,
+  validateFileEditReview,
   showVelaReview,
   isReviewOwnerAlive,
 } = require("./vela-review.cjs");
@@ -9,6 +10,12 @@ const publicNames = new Set([
   "search",
   "native",
   "request",
+  "routingOptions",
+  "saveRoutingSettings",
+  "rateRoutingResponse",
+  "applyFileEdit",
+  "verifyFileEdit",
+  "reconcileFileEdit",
   "presentation",
   "review",
   "apply",
@@ -57,6 +64,41 @@ function presentationContext(value) {
   };
 }
 
+async function reviewProjectCheck({ win, dialog, call, requestId, kind, intent, settings }) {
+  if (!["node-test", "typescript", "node-benchmark"].includes(kind)) throw Error("invalid_vela_project_check");
+  if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+  const standalone = requestId === null, nodeTest = kind === "node-test", benchmark = kind === "node-benchmark";
+  const selected = await dialog.showOpenDialog(win, {
+    title: nodeTest ? "Select up to four tracked Node test files" : benchmark ? "Select a tracked Node .bench script" : "Select a tracked TypeScript project configuration",
+    properties: nodeTest ? ["openFile", "multiSelections", "dontAddToRecent"] : ["openFile", "dontAddToRecent"],
+    filters: [{ name: nodeTest ? "JavaScript and TypeScript" : benchmark ? "JavaScript" : "JSON", extensions: nodeTest ? ["js", "cjs", "mjs", "ts", "mts"] : benchmark ? ["js", "cjs", "mjs"] : ["json"] }],
+  });
+  if (selected.canceled || !selected.filePaths.length) throw Error("authorization_cancelled");
+  if (selected.filePaths.length > (nodeTest ? 4 : 1)) throw Error("invalid_vela_project_check");
+  if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+  const paths = selected.filePaths;
+  const review = standalone ? await call("velaStandaloneCheckReview", { intent, ...(settings ? { settings } : {}), paths })
+    : await call("velaProjectCheckReview", { requestId, kind, paths });
+  if (!review || review.requestId !== requestId || review.kind !== kind ||
+      typeof review.reviewId !== "string" || !/^[a-f0-9-]{36}$/.test(review.reviewId) ||
+      !(Date.parse(review.expiresAt) > Date.now()) || typeof review.cwd !== "string" || !/^[CD]:[\\/]/i.test(review.cwd) ||
+      !Array.isArray(review.argv) || review.argv.length < 2 || review.argv.length > 16 ||
+      ![review.cwd, ...review.argv].every(part => typeof part === "string" && part.length > 0 && part.length <= 512 && !/[\x00-\x1f]|\p{Bidi_Control}/u.test(part)))
+    throw Error("invalid_vela_project_check_review");
+  if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+  const result = await dialog.showMessageBox(win, {
+    type: "question", title: "Vela · Review project check",
+    message: nodeTest ? "Run the selected Node tests?" : benchmark ? "Run the selected benchmark script?" : "Type-check the selected TypeScript project?",
+    detail: "Working directory\n" + review.cwd + "\n\nCommand arguments\n" + review.argv.map(part => JSON.stringify(part)).join(" ") +
+      "\n\nUses the local Codex read-only sandbox with network access disabled. Time limit 20 seconds. Output above 64 KiB cannot produce a verified result.",
+    buttons: ["Run check", "Cancel"], defaultId: 1, cancelId: 1, noLink: true,
+  });
+  if (result.response !== 0) throw Error("authorization_cancelled");
+  if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+  return standalone ? call("velaStandaloneCheckRun", { reviewId: review.reviewId })
+    : call("velaProjectCheckRun", { requestId, reviewId: review.reviewId });
+}
+
 /** Called only after the host verifies its exact local main frame. Grants never enter IPC results. */
 exports.velaCommand = async ({
   win,
@@ -66,6 +108,7 @@ exports.velaCommand = async ({
   reviewProvider = showVelaReview,
   offerPlanningByDefault = false,
   directMessageSend = false,
+  routeNative = directMessageSend,
   observeNativeRequest,
 }) => {
   const observe = (event) => {
@@ -107,7 +150,18 @@ exports.velaCommand = async ({
       typeof value.intent !== "string" ||
       !Array.isArray(value.resourceIds) ||
       typeof value.authorizeProvider !== "boolean" ||
-      (value.providerId !== undefined && !["codex-app-server", "chatgpt-plan-responses"].includes(value.providerId))
+      (value.providerId !== undefined && !["codex-app-server", "chatgpt-plan-responses"].includes(value.providerId)) ||
+      (value.mode !== undefined && !["auto", "fast", "deep", "codex", "custom"].includes(value.mode)) ||
+      (value.allowEscalation !== undefined && value.allowEscalation !== true) ||
+      (value.includeRecentHistory !== undefined && value.includeRecentHistory !== true) ||
+      (value.handoffSourceRequestId !== undefined && (!directMessageSend ||
+        typeof value.handoffSourceRequestId !== "string" || !/^[a-f0-9-]{36}$/.test(value.handoffSourceRequestId))) ||
+      (value.routingAgentId !== undefined && (!directMessageSend ||
+        typeof value.routingAgentId !== "string" || !/^[a-f0-9-]{36}$/.test(value.routingAgentId))) ||
+      (value.overrideDefaults !== undefined && value.overrideDefaults !== true) ||
+      (value.budgetLimit !== undefined && (!Number.isSafeInteger(value.budgetLimit) || value.budgetLimit < 0)) ||
+      (value.model !== undefined && (typeof value.model !== "string" || !value.model.trim() || value.model.length > 200)) ||
+      (value.reasoningEffort !== undefined && !["none", "low", "medium", "high", "xhigh", "max"].includes(value.reasoningEffort))
     )
       throw Error("invalid_vela_request");
     // Renderer intent carries no grant. The host binds the exact prompt below.
@@ -115,16 +169,27 @@ exports.velaCommand = async ({
       intent: value.intent,
       resourceIds: value.resourceIds,
       authorizeProvider: value.authorizeProvider,
+      ...(value.handoffSourceRequestId === undefined ? {} : { handoffSourceRequestId: value.handoffSourceRequestId }),
+      ...(value.routingAgentId === undefined ? {} : { routingAgentId: value.routingAgentId }),
     };
-    let providerId = value.providerId;
-    if (offerPlanningByDefault) {
+    const { providerId, model, reasoningEffort, mode, budgetLimit, allowEscalation, includeRecentHistory, overrideDefaults } = value;
+    if (routeNative && !request.handoffSourceRequestId && !request.routingAgentId && !request.resourceIds.length && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
+      const settings = directMessageSend
+        ? Object.fromEntries(Object.entries({ providerId, mode, model, reasoningEffort, overrideDefaults, budgetLimit }).filter(([, option]) => option !== undefined))
+        : {};
+      const local = await stage("native-route", () => call("velaRouteNative", {
+        intent: request.intent,
+        ...(Object.keys(settings).length ? { settings } : {}),
+      }));
+      if (local?.matched === true) return local.request;
+      if (directMessageSend && local?.projectCheck) {
+        return stage("project-check", () => reviewProjectCheck({ win, dialog, call, requestId: null,
+          kind: local.projectCheck, intent: request.intent, settings: Object.keys(settings).length ? settings : undefined }));
+      }
+    }
+    if (offerPlanningByDefault && !directMessageSend) {
       // Observing a connection does not start a model turn.
       await stage("connection", async () => {
-        if (directMessageSend && providerId === undefined) {
-          const status = await call("ordinaryProviderStatus", {}).catch(() => null);
-          if (status?.state === "ready" && status.planUsageEnabled)
-            providerId = "chatgpt-plan-responses";
-        }
         if (providerId === "chatgpt-plan-responses") {
           const status = await call("ordinaryProviderStatus", {});
           if (status?.state !== "ready" || !status.planUsageEnabled)
@@ -141,20 +206,57 @@ exports.velaCommand = async ({
         if (status.authentication !== "available")
           throw Error("vela_planner_unavailable");
       });
-      request.authorizeProvider = true;
     }
+    if (offerPlanningByDefault) request.authorizeProvider = true;
+    if ((request.handoffSourceRequestId || request.routingAgentId) && !request.authorizeProvider) throw Error("native_vela_review_required");
     if (!request.authorizeProvider)
       return call("vela", { name: "request", input: request });
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    const preview = await stage("preview", () =>
-      call("velaRequestPreview", {
+    const previewInput = {
         intent: request.intent,
         resourceIds: request.resourceIds,
         ...(providerId === undefined ? {} : { providerId }),
+        ...(directMessageSend ? { adaptive: true, model, reasoningEffort, mode, budgetLimit, allowEscalation, includeRecentHistory, overrideDefaults } : {}),
+        ...(request.handoffSourceRequestId ? { handoffSourceRequestId: request.handoffSourceRequestId } : {}),
+        ...(request.routingAgentId ? { routingAgentId: request.routingAgentId } : {}),
         ...(value.activeCard === undefined ? {} : { activeCard: value.activeCard }),
-      }),
-    );
+    };
+    const preview = await stage("preview", async () => {
+      try { return await call("velaRequestPreview", previewInput); }
+      catch (error) {
+        const code = error?.code ?? error?.message;
+        const mixed = code === "vela_codex_mixed_targets_required";
+        const replace = mixed || code === "vela_codex_edit_target_required";
+        const create = mixed || code === "vela_codex_create_target_required";
+        if (!directMessageSend || !(replace || create)) throw error;
+        if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+        const paths = {};
+        if (replace) {
+          const selected = await dialog.showOpenDialog(win, {
+            title: mixed ? "Select up to three tracked files from one repository" : "Select up to four tracked files from one repository",
+            properties: ["openFile", "multiSelections"],
+          });
+          if (selected.canceled || !selected.filePaths.length) throw Error("authorization_cancelled");
+          if (selected.filePaths.length > (mixed ? 3 : 4)) throw Error("vela_edit_file_limit");
+          paths.editTargetPaths = selected.filePaths;
+        }
+        if (create) {
+          if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+          const selected = await dialog.showSaveDialog(win, {
+            title: "Choose an unused filename inside the repository",
+            buttonLabel: "Select destination",
+            properties: ["dontAddToRecent"],
+          });
+          if (selected.canceled || !selected.filePath) throw Error("authorization_cancelled");
+          paths.editCreatePaths = [selected.filePath];
+        }
+        if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+        return call("velaRequestPreview", { ...previewInput, ...paths });
+      }
+    });
+    if (preview.handoff?.sourceRequestId !== request.handoffSourceRequestId) throw Error("invalid_native_vela_review");
+    if (preview.routingAgent?.resourceId !== request.routingAgentId) throw Error("invalid_native_vela_review");
     const review = await stage("review", async () =>
       validateReview(
         preview,
@@ -166,8 +268,9 @@ exports.velaCommand = async ({
     );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    const direct = directMessageSend && preview.resourceIds?.length === 0 &&
-      !review.context.included.length && !review.history?.messages.length;
+    const direct = directMessageSend && (!preview.route || preview.route.kind === "conversational") &&
+      preview.resourceIds?.length === 0 &&
+      !review.context.included.length && !review.history?.messages.length && !review.handoff && !review.routingAgent;
     const approved = direct || await reviewProvider({
       parent: win,
       review,
@@ -197,6 +300,32 @@ exports.velaCommand = async ({
         },
       }),
     );
+  }
+  if (input.name === "applyFileEdit") {
+    const requestId = input.input?.requestId;
+    if (typeof requestId !== "string" || !/^[a-f0-9-]{36}$/.test(requestId))
+      throw Error("invalid_vela_edit_request");
+    if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+    const review = validateFileEditReview(requestId, await call("velaFileEditReview", { requestId }));
+    const approved = await reviewProvider({
+      parent: win, review, expiresAt: review.expiresAt, experience: "file-edit",
+    });
+    if (approved !== true) throw Error("authorization_cancelled");
+    if (!isReviewOwnerAlive(win)) throw Error("native_review_owner_unavailable");
+    const applied = await call("velaFileEditApply", { requestId, reviewId: review.reviewId });
+    if (applied?.state !== "applied" || applied.projectChecksAvailable !== true || !applied.followUpCheck) return applied;
+    try {
+      return await reviewProjectCheck({ win, dialog, call, requestId, kind: applied.followUpCheck });
+    } catch (error) {
+      if (error?.message !== "authorization_cancelled") throw error;
+      return applied;
+    }
+  }
+  if (input.name === "verifyFileEdit") {
+    const { requestId, kind } = input.input ?? {};
+    if (typeof requestId !== "string" || !/^[a-f0-9-]{36}$/.test(requestId))
+      throw Error("invalid_vela_project_check");
+    return reviewProjectCheck({ win, dialog, call, requestId, kind });
   }
   if (input.name === "apply") {
     if (typeof input.input !== "string") throw Error("invalid_vela_plan");

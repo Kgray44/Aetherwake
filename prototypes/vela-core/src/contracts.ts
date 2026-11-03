@@ -35,6 +35,14 @@ export interface ContextManifest {
   contentBytes: number; coverage: 'explicit-resources-only';
   /** Exact reviewed egress only. Persisted request context never copies these canonical message bodies. */
   history?: ProviderHistory;
+  /** Exact additional instructions from an explicitly selected, reviewed agent profile. */
+  agentInstructions?: string;
+}
+export interface VelaRoutingAgent {
+  resourceId: string;
+  resourceVersion: number;
+  profileVersion: number;
+  title: string;
 }
 /** Untrusted presenter hint. The host resolves the resource from its active workspace. */
 export interface VelaActiveCard { workspaceId: string; blockId: string }
@@ -56,7 +64,7 @@ export type VelaNativeAction =
   | { type: 'renameResource'; resourceId: string; title: string }
   | { type: 'associateResourceProject'; resourceId: string; projectId: string | null }
   | { type: 'createWorkspace'; title: string; projectId: string | null }
-  | { type: 'readLocalFact'; capabilityId: VelaLocalCapabilityId }
+  | { type: 'readLocalFact'; capabilityId: VelaInstantCapabilityId }
   | { type: 'readWeather'; period: 'now' | 'today' | 'tonight' | 'tomorrow' | 'tomorrow-morning' }
   | { type: 'createTimeline'; title: string; projectId: string | null; workspaceId: string | null;
       source: { kind: 'application-activity' } | { kind: 'github-commits'; repositoryUrl: string } }
@@ -73,7 +81,7 @@ export type VelaNativeAction =
   | { type: 'archiveCollection'; collectionId: string; archived: boolean }
   | { type: 'collectionMembership'; collectionId: string; resourceId: string; member: boolean }
   | { type: 'workspaceFromResources'; title: string; projectId: string | null; resourceIds: string[] }
-  | { type: 'createResource'; kind: 'note' | 'task' | 'task_group'; title: string; workspaceId: string | null }
+  | { type: 'createResource'; kind: 'note' | 'task' | 'task_group' | 'checklist'; title: string; workspaceId: string | null }
   | { type: 'attach'; workspaceId: string; resourceId: string }
   | { type: 'content'; resourceId: string; expectedVersion: number; content: string }
   | { type: 'taskStatus'; resourceId: string; expectedVersion: number; status: 'open' | 'done' }
@@ -112,13 +120,17 @@ export interface ProviderProposal {
   contribution: ProviderContribution;
 }
 export type ProviderReplyKind = 'answer' | 'clarification' | 'inability';
-export type VelaLocalCapabilityId = 'local.time' | 'local.date' | 'local.workspace-status' | 'local.project-count' | 'local.execution-status' | 'system.memory';
+export type VelaInstantCapabilityId = 'local.time' | 'local.date' | 'local.workspace-status' | 'local.project-count' | 'local.execution-status' | 'system.memory';
+export type VelaLocalCapabilityId = VelaInstantCapabilityId | 'system.cpu' | 'system.gpu' | 'system.performance' | 'local.calculator';
 export type VelaLocalFacts =
   | { kind: 'time' | 'date'; epochMs: number; utc: string; timeZone: string; locale: string; utcOffsetMinutes: number; calendarDate: string; formatted: string }
   | { kind: 'workspace-status'; workspace: ResourceRef | null; persistence: 'persisted' | 'pending' | 'unknown'; coverage: 'canonical-workspace-layout' }
   | { kind: 'project-count'; count: number; coverage: 'authorized-active-projects' }
   | { kind: 'execution-status'; running: number; unknown: number; coverage: 'aerynth-owned-executions' }
   | { kind: 'system-memory'; measurement: SystemMemoryMeasurement }
+  | { kind: 'system-utilization'; measurement: import('./system-utilization.mts').SystemUtilization }
+  | { kind: 'system-performance'; measurements: import('./system-utilization.mts').SystemUtilization[] }
+  | { kind: 'calculator'; expression: string; value: number }
   | { kind: 'unavailable'; code: string };
 /** Facts/provenance only. Answer content lives exclusively in the canonical message. */
 export interface VelaLocalRecord {
@@ -160,7 +172,7 @@ export interface VelaPlanningPort {
     instruction: string;
   }, signal: AbortSignal): Promise<unknown>;
 }
-export type RequestState = 'planning' | 'awaiting-review' | 'native-ready' | 'provider-unavailable' | 'invalid-plan' | 'failed' | 'cancelled' | 'unknown' | 'completed' | 'responded';
+export type RequestState = 'planning' | 'checking' | 'awaiting-review' | 'native-ready' | 'provider-unavailable' | 'invalid-plan' | 'failed' | 'cancelled' | 'unknown' | 'completed' | 'responded';
 export interface VelaRequest {
   id: string; conversationId: string; intent: string; state: RequestState;
   createdAt: string; updatedAt: string; providerId: string | null;
@@ -168,10 +180,15 @@ export interface VelaRequest {
   /** Reference only: content lives in the SAME canonical conversation, never a second transcript. */
   response?: { kind: ProviderReplyKind; messageId: string; contentDigest?: string };
   local?: VelaLocalRecord;
+  projectCheck?: VelaProjectCheckReceipt;
+  route?: import('./adaptive-routing.ts').VelaRouteDecision;
+  routingSettings?: Pick<import('./routing-settings.ts').VelaRoutingSettingsView, 'effective' | 'origins'>;
   /** Schema-3 provenance is absent on legacy requests; unavailable origin is never inferred as known-null. */
   origin?: HistoryOrigin; inputMessageId?: string; inputContentDigest?: string; provenance?: HistoryProvenance;
   /** References/proofs only; actual history text remains in the canonical conversation. */
   history?: { schemaVersion: 1; fenceDigest: string; historyDigest: string; messages: readonly HistoryMessageDependency[] };
+  handoff?: import('./history-contracts.ts').VelaHandoff;
+  routingAgent?: VelaRoutingAgent;
   /** Raw provider plans are preserved locally, including invalid plans; never interpreted as commands. */
   invalidProposal?: unknown;
 }
@@ -277,11 +294,47 @@ export interface AttentionItem extends AppAttentionEvent {
   receivedAt: string; disposition: 'silent' | 'digest' | 'interrupt'; reason: string;
   reviewedAt: string | null; dismissedAt: string | null;
 }
+export type VelaFileEditVerification = 'bytes' | 'bytes-and-json-syntax' | 'bytes-and-javascript-syntax';
+export type VelaProjectCheckKind = 'node-test' | 'typescript' | 'node-benchmark';
+export const VELA_PROJECT_CHECK_LABELS = {
+  'node-test': 'Node tests', typescript: 'TypeScript check', 'node-benchmark': 'Node benchmark',
+} satisfies Record<VelaProjectCheckKind, string>;
+export interface VelaProjectCheckReceipt {
+  id: string;
+  kind: VelaProjectCheckKind;
+  state: 'running' | 'passed' | 'failed' | 'stale' | 'limited' | 'unknown';
+  inputs: string[];
+  sourceHead: string;
+  inputDigest: string;
+  startedAt: string;
+  finishedAt?: string;
+  elapsedMs?: number;
+  exitCode?: number;
+  testCount?: number;
+  benchmark?: { samples: number; medianMs: number; p95Ms: number };
+}
+export interface VelaFileEditItemView {
+  relativePath: string;
+  state: 'pending' | 'applied' | 'unchanged' | 'conflict' | 'unknown';
+  verification?: VelaFileEditVerification;
+  backupPath?: string;
+  stagedPath?: string;
+}
+export interface VelaFileEditView {
+  requestId: string;
+  state: 'awaiting-review' | 'applying' | 'applied' | 'partial' | 'unchanged' | 'conflict' | 'unknown';
+  files: VelaFileEditItemView[];
+  followUpCheck?: VelaProjectCheckKind;
+  projectChecks?: VelaProjectCheckReceipt[];
+  projectChecksAvailable?: true;
+}
 export interface VelaState {
   contract: typeof VELA_CONTRACT; identity: { id: 'system:vela'; name: 'Vela'; role: 'application-assistant' };
   conversation: CanonicalConversation | null;
   planner: { providerId: string | null; available: boolean; busy: boolean; reason?: string };
   planningProviders?: { providerId: string; available: boolean }[];
+  routingSettings?: import('./routing-settings.ts').VelaRoutingSettingsView;
+  fileEdits?: VelaFileEditView[];
   capabilities: CapabilityDescriptor[]; requests: VelaRequest[]; plans: VelaPlan[];
   receipts: ActionReceipt[]; preferences: AttentionPreferences; attention: AttentionItem[];
   lastPresenceAt: string | null; coverage: 'authorized-app-events-only';
@@ -338,7 +391,13 @@ export interface VelaClient {
   state(): Promise<VelaState>;
   open(): Promise<VelaState>;
   search(query: string): Promise<ResourceRef[]>;
-  request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean; providerId?: string }): Promise<VelaRequest>;
+  request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean } & import('./adaptive-routing.ts').VelaTurnRouting): Promise<VelaRequest>;
+  routingOptions?(input: { providerId: string }): Promise<import('../../openai-provider/model-controls.ts').OrdinaryModelOption[]>;
+  saveRoutingSettings?(input: import('./routing-settings.ts').VelaRoutingSettingsChange): Promise<import('./routing-settings.ts').VelaRoutingProfile>;
+  rateRoutingResponse?(input: { requestId: string; feedback: import('./routing-calibration.ts').VelaRoutingFeedback }): Promise<void>;
+  applyFileEdit?(input: { requestId: string }): Promise<VelaFileEditView>;
+  reconcileFileEdit?(input: { requestId: string }): Promise<VelaFileEditView>;
+  verifyFileEdit?(input: { requestId: string; kind: VelaProjectCheckKind }): Promise<VelaFileEditView>;
   presentation?(input: { expectedVersion: number; patch: VelaPresentationPatch }): Promise<VelaPresentationState>;
   native(input: { intent: string; action: VelaNativeAction }): Promise<VelaPlan>;
   review(input: { planId: string; fingerprint: string; decision: 'approve' | 'reject' }): Promise<VelaPlan>;

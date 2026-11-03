@@ -34,6 +34,21 @@ test('attributed answer/clarification/inability are Insight; missing or spoofed 
   }
   const { r, message } = reply('synthetic:bad-local', true), s = source(r); message.classification = 'reported'; s.conversation!.messages.push(message); assert.equal(projectVelaManifestation(s).kind, 'insight'); assert.equal(projectVelaManifestation(s).currentMessageId, null);
 });
+test('standalone check surfaces only the matching observed terminal response', () => {
+  const { r, message } = reply('synthetic:check', true), s = source(r);
+  delete r.local;
+  r.route = { kind: 'project-check', reason: 'reviewed-local-check', environment: 'local-read-only', check: 'node-test' };
+  r.projectCheck = { id: 'synthetic:check-receipt', kind: 'node-test', state: 'passed', inputs: ['synthetic.test.mjs'],
+    sourceHead: 'a'.repeat(40), inputDigest: 'b'.repeat(64), startedAt: context.createdAt, testCount: 1 };
+  s.conversation!.messages.push(message);
+  assert.equal(projectVelaManifestation(s).kind, 'insight');
+  assert.equal(projectVelaManifestation(s).currentMessageId, message.id);
+  r.projectCheck.state = 'running';
+  assert.equal(projectVelaManifestation(s).currentMessageId, null);
+  r.projectCheck.state = 'passed';
+  message.source = 'provider';
+  assert.equal(projectVelaManifestation(s).currentMessageId, null);
+});
 test('pending/error canonical requests remain references with no invented answer, plan, progress, provider or receipt', () => {
   for (const state of ['planning', 'provider-unavailable', 'invalid-plan', 'failed', 'cancelled', 'unknown'] as const) { const r = request('synthetic:' + state, { state }), result = projectVelaManifestation(source(r)); assert.equal(result.kind, 'insight'); assert.equal(result.currentMessageId, null); assert.equal(result.currentPlanId, null); assert.equal(result.currentRequestId, r.id); }
 });

@@ -27,9 +27,9 @@ export type LibraryResponse = {result:unknown;desktop?:DesktopSnapshot};
 export type VelaOperationName = keyof VelaClient;
 export type VelaRequestInput = Parameters<VelaClient['request']>[0] & { previewId?:string;grantId?:string };
 export type VelaOperation = { [K in VelaOperationName]: { name: K; input: K extends 'request' ? VelaRequestInput : Parameters<NonNullable<VelaClient[K]>>[0] extends undefined ? Record<string,never> : Parameters<NonNullable<VelaClient[K]>>[0] } & (K extends 'apply' ? { presentation?:WorkspacePresentationContext } : {}) }[VelaOperationName] | { name: 'local'; input: { capabilityId: VelaLocalCapabilityId; intent: string; commandId: string } };
-export interface VelaRequestPreview { id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};nativeReviewRequired?:boolean }
+export interface VelaRequestPreview { id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};handoff?:import('../../vela-core/src/history-contracts.ts').VelaHandoff;nativeReviewRequired?:boolean; route?:import('../../vela-core/src/adaptive-routing.ts').VelaRouteDecision; routingSettings?:import('../../vela-core/src/contracts.ts').VelaRequest['routingSettings'];routingAgent?:import('../../vela-core/src/contracts.ts').VelaRoutingAgent }
 /** Trusted host inspection only; never registered in renderer command/subcommand allowlists. */
-export interface VelaNativeReview {previewId:string;signature:string;providerId:string;prompt:string;promptDigest:string;reviewDigest:string;context:ContextManifest;history?:ProviderHistory;historyOmissions:{reason:HistoryOmissionReason;count?:number}[]}
+export interface VelaNativeReview {previewId:string;signature:string;providerId:string;prompt:string;promptDigest:string;reviewDigest:string;context:ContextManifest;history?:ProviderHistory;handoff?:VelaRequestPreview['handoff'];historyOmissions:{reason:HistoryOmissionReason;count?:number}[];route?:VelaRequestPreview['route'];workingDirectory?:string;routingSettings?:VelaRequestPreview['routingSettings'];routingAgent?:VelaRequestPreview['routingAgent'];agentInstructions?:string;editPaths?:string[]}
 export interface VelaNativeCapabilities {
   supportedActions: VelaNativeAction['type'][];
   /** Registered released Universal Block/application capability; no fallback implementation is supplied by Vela. */
@@ -51,7 +51,7 @@ export interface ConversationSendPreview {
 }
 export interface OrdinaryResponsesPreview {
  executionId:string;configurationId:string;connectionVersion:number;model:string;
- purpose?: 'vela-planning';
+ purpose?: 'vela-planning' | 'vela-response';
  clock: { utc: string; local: string };
  reasoningEffort?: TurnInput['reasoningEffort'];
  webSearch?: true;
@@ -88,6 +88,10 @@ export interface Execution extends PublicConversationExecution {
   binding: Binding | null; turnId: string | null;
   /** Actual Responses facts, never a fabricated Codex thread/turn binding. */
   responseId?:string;responseOutcome?:TurnOutcome;usage?:ReportedUsage;reportedModel?:string;
+  velaFirstOutputMs?: number;
+  incompleteReason?: import('../../openai-provider/contracts.mts').TurnResult['incompleteReason'];
+  /** Canonical admission counted once per AIR provider stage, including unknown outcomes. */
+  velaAdmission?: { projectId: string | null; utcDay: string };
   connectionVersion?:number;inputMessageId?:string;outputMessageId?:string;
   requestedModel?:string;requestBodyDigest?:string;contextDigest?:string;instructionVersion?:string;
   requestedReasoningEffort?:TurnInput['reasoningEffort'];
@@ -98,18 +102,27 @@ export interface Execution extends PublicConversationExecution {
 export interface Capability {
   providerId: string; mock: boolean; authentication: string;
   models: string[]; catalogOnly: true; nativeFork: false; chatgptHistory: false;
+  modelEfforts?: Record<string, string[]>;
+  selectableModels?: string[];
+  defaultModel?: string;
+  defaultModelEfforts?: Record<string, string>;
 }
 export interface ProviderPort {
   readonly id: string; readonly mock: boolean;
   readonly instanceId: string; readonly accountScope: string;
   connect(): Promise<void>; capabilities(): Promise<Capability>;
-  open(): Promise<string>; resume(threadId: string): Promise<string>;
+  open(options?: { cwd?: string; model?: string }): Promise<string>; resume(threadId: string): Promise<string>;
   read(threadId: string): Promise<Record<string, unknown>>;
   items(threadId: string, turnId: string): Promise<Record<string, unknown>>;
   recentTurns?(threadId: string): Promise<readonly Record<string, unknown>[]>;
-  turn(threadId: string, text: string, model?: string): Promise<string>;
+  turn(threadId: string, text: string, model?: string, inspection?: { effort?: string }): Promise<string>;
   terminal(threadId: string, turnId: string): Promise<EventEnvelope>;
   interrupt(threadId: string, turnId: string): Promise<void>;
+  /** Standalone local App Server command transport. No inference or provider quota. */
+  projectChecks?: {
+    ready(): Promise<boolean>;
+    execute(command: string[], cwd: string): Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  };
   onEvent(listener: (event: EventEnvelope) => void): () => void;
   close(): void;
   /** Trusted optional read-only planning transport; never exposed as an RPC or ordinary chat tool. */
@@ -124,7 +137,7 @@ export interface StreamEvent {
   correlationId: string | null; causationId: string | null;
   receivedAt: string; providerTime: number | null; providerTimeSource: string | null;
   type: string; classification: Classification;
-  status: string | null; payload: { redacted: true; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'> };
+  status: string | null; payload: { redacted: true; taskId?: string; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'> };
 }
 export interface HandoffReview {
   id: string; resourceId: string; sourceResourceId: string; targetProviderId: string;
@@ -182,7 +195,14 @@ export interface CommandMap {
   githubTimeline: {input:GitHubTimelineCommand;output:{url:string}|{repositories:string[]}};
   taskObjectives: {input:TaskObjectiveRequest|{name:'targets';input:TaskTargetQuery};output:{result:TaskObjectiveResponse|TaskTargetPage;desktop?:DesktopSnapshot}};
   vela: { input: VelaOperation; output: unknown };
-  velaRequestPreview: { input: {intent:string;resourceIds:string[];activeCard?:VelaActiveCard;providerId?:string}; output: VelaRequestPreview };
+  velaRequestPreview: { input: {intent:string;resourceIds:string[];activeCard?:VelaActiveCard;adaptive?:true;editTargetPaths?:string[];editCreatePaths?:string[]} & import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting; output: VelaRequestPreview };
+  velaFileEditReview: { input: {requestId:string}; output: import('./vela-file-edit.mts').VelaFileEditReview };
+  velaFileEditApply: { input: {requestId:string;reviewId:string}; output: import('./vela-file-edit.mts').VelaFileEditView };
+  velaProjectCheckReview: { input: {requestId:string;kind:import('../../vela-core/src/contracts.ts').VelaProjectCheckKind;paths:string[]}; output: import('./vela-project-check.mts').VelaProjectCheckReview };
+  velaProjectCheckRun: { input: {requestId:string;reviewId:string}; output: import('./vela-file-edit.mts').VelaFileEditView };
+  velaStandaloneCheckReview: { input: {intent:string;settings?:import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting;paths:string[]}; output: import('./vela-project-check.mts').VelaProjectCheckReview<null> };
+  velaStandaloneCheckRun: { input: {reviewId:string}; output: import('../../vela-core/src/contracts.ts').VelaRequest };
+  velaRouteNative: { input: { intent: string; settings?: import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting }; output: { matched: false; projectCheck?: import('../../vela-core/src/contracts.ts').VelaProjectCheckKind } | { matched: true; request: import('../../vela-core/src/contracts.ts').VelaRequest } };
   velaNativeReview: {input:{previewId:string;signature:string};output:VelaNativeReview};
   /** TRUSTED NATIVE HOST ONLY. Renderer/tool allow-lists MUST exclude this authorization command. */
   authorizeVelaRequest: { input: {previewId:string;signature:string;reviewDigest?:string;directSend?:true}; output: {grantId:string;expiresAt:string} };

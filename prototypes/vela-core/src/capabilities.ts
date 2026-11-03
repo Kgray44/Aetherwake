@@ -1,4 +1,4 @@
-import type { VelaLocalCapabilityId, CapabilityDescriptor, DelegateTaskAction, PlanStep, ProviderContribution, ProviderProposal, ProviderResult, VelaNativeAction } from './contracts.ts';
+import type { VelaInstantCapabilityId, VelaLocalCapabilityId, CapabilityDescriptor, DelegateTaskAction, PlanStep, ProviderContribution, ProviderProposal, ProviderResult, VelaNativeAction } from './contracts.ts';
 import { defaultOrganization, updateOrganization } from '../../workspace-engine/organization.mts';
 import type { OrganizationUpdate } from '../../workspace-engine/contracts.mts';
 import { githubRepository } from '../../application-contract/github-timeline.ts';
@@ -55,9 +55,9 @@ export const LOCAL_FACT_LABELS = {
   'local.project-count': 'active project count',
   'local.execution-status': 'Aerynth execution status',
   'system.memory': 'physical memory usage',
-} satisfies Record<VelaLocalCapabilityId, string>;
+} satisfies Record<VelaInstantCapabilityId, string>;
 export const isLocalFact = (id: unknown): id is VelaLocalCapabilityId =>
-  typeof id === 'string' && Object.hasOwn(LOCAL_FACT_LABELS, id);
+  typeof id === 'string' && (Object.hasOwn(LOCAL_FACT_LABELS, id) || ['system.cpu', 'system.gpu', 'system.performance', 'local.calculator'].includes(id));
 
 export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('search', 'Find Aerynth resources by title or type', 'read', { type: { const: 'search' }, query: stringSchema }, 'Search current authorized metadata by title, ID or resource type. Use a short search term. Results stay local.'),
@@ -92,7 +92,7 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('archiveCollection', 'Archive or restore a collection', 'mutate', { type: { const: 'archiveCollection' }, collectionId: idSchema, archived: { type: 'boolean' } }, 'One authorized collection; archived metadata is resolved only for explicit restoration with current host permission; resources and history remain intact'),
   capability('collectionMembership', 'Add or remove a resource in a collection', 'mutate', { type: { const: 'collectionMembership' }, collectionId: idSchema, resourceId: idSchema, member: { type: 'boolean' } }, 'One authorized active collection and exact authorized resource; changes canonical membership references without moving or copying the resource'),
   capability('workspaceFromResources', 'Create a workspace from existing resources', 'create', { type: { const: 'workspaceFromResources' }, title: stringSchema, projectId: nullableIdSchema, resourceIds: arraySchema }, 'Create one workspace; attach references to the exact existing resource IDs; never duplicate resources'),
-  capability('createResource', 'Create a note, task, or task group', 'create', { type: { const: 'createResource' }, kind: { enum: ['note', 'task', 'task_group'] }, title: stringSchema, workspaceId: nullableIdSchema }, 'One local canonical resource; optional authorized workspace placement'),
+  capability('createResource', 'Create a note, task, task group, or checklist', 'create', { type: { const: 'createResource' }, kind: { enum: ['note', 'task', 'task_group', 'checklist'] }, title: stringSchema, workspaceId: nullableIdSchema }, 'One local canonical resource; optional authorized workspace placement. Checklists require a workspace.'),
   capability('attach', 'Place an existing resource', 'mutate', { type: { const: 'attach' }, workspaceId: idSchema, resourceId: idSchema }, 'One existing canonical resource and one workspace'),
   capability('content', 'Edit a local resource', 'mutate', { type: { const: 'content' }, resourceId: idSchema, expectedVersion: versionSchema, content: { type: 'string', maxLength: 100000 } }, 'One versioned resource; host validates resource type'),
   capability('taskStatus', 'Update task status', 'mutate', { type: { const: 'taskStatus' }, resourceId: idSchema, expectedVersion: versionSchema, status: { enum: ['open', 'done'] } }, 'One versioned task; status does not assert verified outcome'),
@@ -127,7 +127,7 @@ export function validateAction(value: unknown): VelaNativeAction | DelegateTaskA
     case 'renameResource': valid = fields(v, ['type', 'resourceId', 'title']) && identifier(v.resourceId) && text(v.title); break;
     case 'associateResourceProject': valid = fields(v, ['type', 'resourceId', 'projectId']) && identifier(v.resourceId) && nullableId(v.projectId); break;
     case 'createWorkspace': valid = fields(v, ['type', 'title', 'projectId']) && text(v.title) && nullableId(v.projectId); break;
-    case 'readLocalFact': valid = fields(v, ['type', 'capabilityId']) && isLocalFact(v.capabilityId); break;
+    case 'readLocalFact': valid = fields(v, ['type', 'capabilityId']) && typeof v.capabilityId === 'string' && Object.hasOwn(LOCAL_FACT_LABELS, v.capabilityId); break;
     case 'readWeather': valid = fields(v, ['type', 'period']) && typeof v.period === 'string' && ['now', 'today', 'tonight', 'tomorrow', 'tomorrow-morning'].includes(v.period); break;
     case 'createTimeline': valid = fields(v, ['type', 'title', 'projectId', 'workspaceId', 'source']) && text(v.title) &&
       nullableId(v.projectId) && nullableId(v.workspaceId) && isRecord(v.source) &&
@@ -146,7 +146,7 @@ export function validateAction(value: unknown): VelaNativeAction | DelegateTaskA
     case 'archiveCollection': valid = fields(v, ['type', 'collectionId', 'archived']) && identifier(v.collectionId) && typeof v.archived==='boolean'; break;
     case 'collectionMembership': valid = fields(v, ['type', 'collectionId', 'resourceId', 'member']) && identifier(v.collectionId) && identifier(v.resourceId) && typeof v.member==='boolean'; break;
     case 'workspaceFromResources': valid = fields(v, ['type', 'title', 'projectId', 'resourceIds']) && text(v.title) && nullableId(v.projectId) && ids(v.resourceIds); break;
-    case 'createResource': valid = fields(v, ['type', 'kind', 'title', 'workspaceId']) && ['note', 'task', 'task_group'].includes(String(v.kind)) && text(v.title) && nullableId(v.workspaceId); break;
+    case 'createResource': valid = fields(v, ['type', 'kind', 'title', 'workspaceId']) && ['note', 'task', 'task_group', 'checklist'].includes(String(v.kind)) && text(v.title) && nullableId(v.workspaceId) && (v.kind !== 'checklist' || identifier(v.workspaceId)); break;
     case 'attach': valid = fields(v, ['type', 'workspaceId', 'resourceId']) && identifier(v.workspaceId) && identifier(v.resourceId); break;
     case 'content': valid = fields(v, ['type', 'resourceId', 'expectedVersion', 'content']) && identifier(v.resourceId) && version(v.expectedVersion) && typeof v.content === 'string' && v.content.length <= 100000; break;
     case 'taskStatus': valid = fields(v, ['type', 'resourceId', 'expectedVersion', 'status']) && identifier(v.resourceId) && version(v.expectedVersion) && ['open', 'done'].includes(String(v.status)); break;

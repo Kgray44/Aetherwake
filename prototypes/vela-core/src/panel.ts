@@ -1,4 +1,5 @@
 import { LOCAL_FACT_LABELS } from './capabilities.ts';
+import { VELA_PROJECT_CHECK_LABELS } from './contracts.ts';
 import type { ResourceRef, VelaClient, VelaNativeAction, VelaState, VelaPlan, PlanStep, VelaPresentationState, VelaPresentationPatch } from './contracts.ts';
 import { velaPanelStatus } from './panel-status.ts';
 import { projectVelaManifestation, type VelaManifestationState } from './manifestation-state.ts';
@@ -33,6 +34,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const doc = root.ownerDocument;
   let current: VelaState | null = null, disposed = false, busy = false, nativeBusy = false, composing = false, draftRevision = 0, lastDisclosure: HTMLDetailsElement | null = null;
   let activeContext: string | null = null, contextTrigger: HTMLButtonElement | null = null, chosenProviderId: string | null = null, presentationSignature = '';
+  let handoffSelection: { requestId: string; sourceProviderId: string } | null = null;
+  let routingAgentSelection: ResourceRef | null = null;
   let manifestationSignature = '', manifestationBaseline = true, observing = true, presentationBusy = false, readSequence = 0, viewRevision = 0, transientView: 'current' | 'history' | null = null;
   const instanceId = 'vela-context-' + ++panelSequence;
   const selected = new Map<string, ResourceRef>(), sourceControls = new Map<string, HTMLInputElement>();
@@ -60,6 +63,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const manifestationKicker = el('p', 'vela-manifestation-kicker'), manifestationBody = el('div', 'vela-manifestation-content'), manifestationSources = el('div', 'vela-manifestation-sources');
   const localAlongsidePlan = el('p', 'vela-manifestation-inline-local vela-manifestation-value'); localAlongsidePlan.setAttribute('aria-label', 'Latest local response'); localAlongsidePlan.hidden = true;
   const manifestationDetails = disclosure('Response details', 'vela-core-response-details');
+  const fileEditActions = el('div', 'vela-manifestation-actions');
+  fileEditActions.hidden = true;
+  let fileEditBusy = false;
   let responseSignature = '';
   const conversation = el('div', 'vela-core-conversation'); conversation.setAttribute('aria-label', 'Vela conversation');
   const plans = el('section', 'vela-core-plans'); plans.setAttribute('aria-label', 'Plans to review');
@@ -72,8 +78,30 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   history.append(historyBack, openHistory, historyRequests, conversation, planHistory.node, historyEmpty);
   const pin = icon('Pin response', '◇', 'pin', () => updatePresentation({ pinnedRequestIds: toggle(presentation().pinnedRequestIds, project().currentRequestId) }));
   const dismiss = icon('Dismiss response', '×', 'dismiss', () => { const id = project().currentRequestId; if (id) return updatePresentation({ dismissedRequestIds: [...new Set([...presentation().dismissedRequestIds, id])], selectedRequestId: null }); });
-  const responseActions = el('div', 'vela-manifestation-actions'); responseActions.append(pin, dismiss);
-  manifestation.tabIndex = -1; manifestation.append(manifestationKicker, localAlongsidePlan, manifestationBody, plans, manifestationSources, manifestationDetails.node, responseActions);
+  const handoffButton = button('Continue with another provider', () => {
+    const request = current?.requests.find(item => item.id === project().currentRequestId);
+    const destination = handoffButton.dataset.destination;
+    if (busy || !request?.providerId || !destination) return;
+    handoffSelection = { requestId: request.id, sourceProviderId: request.providerId };
+    if (chosenProviderId !== destination) clearModelOptions();
+    chosenProviderId = destination;
+    if (routeMode.value === 'codex' && destination !== 'codex-app-server') routeMode.value = 'auto';
+    routeHistory.checked = false;
+    renderProviderChoice();
+    renderSelection();
+    intent.focus();
+  });
+  handoffButton.hidden = true;
+  const rateResponse = (feedback: 'useful' | 'needs-correction') => async () => {
+    const requestId = project().currentRequestId;
+    if (!requestId || !client.rateRoutingResponse) return;
+    await client.rateRoutingResponse({ requestId, feedback });
+    await refresh();
+  };
+  const useful = button('Mark useful', rateResponse('useful')), needsCorrection = button('Mark needs correction', rateResponse('needs-correction'));
+  useful.hidden = needsCorrection.hidden = true;
+  const responseActions = el('div', 'vela-manifestation-actions'); responseActions.append(handoffButton, useful, needsCorrection, pin, dismiss);
+  manifestation.tabIndex = -1; manifestation.append(manifestationKicker, localAlongsidePlan, manifestationBody, plans, manifestationSources, fileEditActions, manifestationDetails.node, responseActions);
   const more = el('section', 'vela-core-contextual vela-core-more'); more.hidden = true; more.id = instanceId; more.setAttribute('aria-label', 'Vela controls');
   const contextualClose = icon('Close Vela controls', '×', 'close', () => closeContext()); contextualClose.className += ' vela-core-contextual-close';
   const sourcePanel = disclosure('Find and add sources', 'vela-core-source-panel');
@@ -88,6 +116,13 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       for (const ref of results) { const row = el('div', 'vela-core-result');
         if (ref.kind === 'resource') { const include = el('input'); include.type = 'checkbox'; include.checked = selected.has(ref.id); sourceControls.set(ref.id, include); include.addEventListener('change', () => { if (include.checked) selected.set(ref.id, ref); else selected.delete(ref.id); renderSelection(); }); row.append(label(ref.title, include), el('span', 'vela-core-meta', ref.resourceKind || 'Item')); }
         else row.append(el('span', undefined, ref.title), el('span', 'vela-core-meta', ref.kind));
+        if (ref.resourceKind === 'agent' && current?.planningProviders) row.append(button('Use agent profile', () => {
+          if (busy) return;
+          routingAgentSelection = ref;
+          renderSelection();
+          closeContext(false);
+          intent.focus();
+        }));
         if (options.onOpenSubject) row.append(button('Open', () => options.onOpenSubject?.(ref))); searchResults.append(row);
       }
     } finally { searchButton.disabled = false; }
@@ -150,13 +185,63 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const form = el('form', 'vela-core-compose'), intent = el('textarea'), allowProvider = el('input');
   intent.rows = 2; intent.maxLength = 16000; intent.required = true; intent.placeholder = 'Vela…'; intent.setAttribute('aria-label', 'Message Vela');
   allowProvider.type = 'checkbox'; const providerConsent = label('Use the planning provider for this request', allowProvider); providerConsent.className += ' vela-core-consent';
-  connection.body.prepend(providerConsent); const providerChoice = icon('Remove planning provider from next request', '×', 'close', () => { allowProvider.checked = false; chosenProviderId = null; renderProviderChoice(); intent.focus(); }); providerChoice.className += ' vela-core-provider-choice'; providerChoice.hidden = true;
+  let useAutomaticOnce = false;
+  connection.body.prepend(providerConsent); const providerChoice = icon('Remove planning provider from next request', '×', 'close', () => { allowProvider.checked = false; chosenProviderId = null; useAutomaticOnce = !!current?.routingSettings; routeMode.value = 'auto'; clearModelOptions(); renderProviderChoice(); intent.focus(); }); providerChoice.className += ' vela-core-provider-choice'; providerChoice.hidden = true;
   const providerChoiceName = el('span', 'vela-core-provider-choice-name'); providerChoice.prepend(providerChoiceName);
   const providerRoutes = el('div', 'vela-core-provider-routes');
   providerRoutes.hidden = true;
+  const routeMode = el('select', 'vela-core-input'), routeModel = el('select', 'vela-core-input'), routeEffort = el('select', 'vela-core-input');
+  const routeEscalation = el('input');
+  routeEscalation.type = 'checkbox';
+  const routeHistory = el('input');
+  routeHistory.type = 'checkbox';
+  const modes = [['auto', 'Auto'], ['fast', 'Fast'], ['deep', 'Deep'], ['codex', 'Codex'], ['custom', 'Custom']] as const;
+  function setOptions(select: HTMLSelectElement, values: readonly (readonly [string, string])[]) {
+    select.replaceChildren(...values.map(([id, title]) => {
+      const option = el('option', undefined, title);
+      option.value = id;
+      return option;
+    }));
+  }
+  setOptions(routeMode, modes);
+  let modelOptions: Awaited<ReturnType<NonNullable<VelaClient['routingOptions']>>> = [];
+  const updateEfforts = () => {
+    const efforts = modelOptions.find(model => model.id === routeModel.value)?.reasoningEfforts ?? [];
+    setOptions(routeEffort, [['', 'Provider default'], ...efforts.map(effort => [effort, effort] as const)]);
+    routeEffort.disabled = efforts.length === 0;
+  };
+  const clearModelOptions = () => {
+    modelOptions = [];
+    setOptions(routeModel, [['', 'Automatic model']]);
+    routeModel.disabled = true;
+    updateEfforts();
+  };
+  clearModelOptions();
+  routeModel.addEventListener('change', updateEfforts);
+  const refreshModels = button('Load connected models', () => {
+    const providerId = chosenProviderId ?? (routeMode.value === 'codex' ? 'codex-app-server' : null);
+    if (!providerId || !client.routingOptions) return;
+    void run(async () => {
+      const options = await client.routingOptions!({ providerId });
+      if (providerId !== (chosenProviderId ?? (routeMode.value === 'codex' ? 'codex-app-server' : null))) return;
+      modelOptions = options;
+      setOptions(routeModel, [['', 'Automatic model'], ...options.map(model => [model.id, model.label] as const)]);
+      routeModel.disabled = options.length === 0;
+      updateEfforts();
+    });
+  });
+  routeMode.addEventListener('change', () => {
+    useAutomaticOnce = routeMode.value === 'auto' && !!current?.routingSettings;
+    if (routeMode.value === 'codex') chosenProviderId = 'codex-app-server';
+    clearModelOptions();
+    renderProviderChoice();
+  });
   for (const [id, title] of [['', 'Automatic'], ['chatgpt-plan-responses', 'ChatGPT plan'], ['codex-app-server', 'Codex']]) {
     const route = button(title, () => {
       chosenProviderId = id || null;
+      useAutomaticOnce = !id && !!current?.routingSettings;
+      if (!id || routeMode.value === 'codex') routeMode.value = 'auto';
+      clearModelOptions();
       renderProviderChoice();
       closeContext(false);
       intent.focus();
@@ -166,6 +251,97 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     providerRoutes.append(route);
   }
   if (options.onOpenConnections) providerRoutes.append(button('Manage connections', options.onOpenConnections));
+  if (client.routingOptions) providerRoutes.append(label('Routing mode', routeMode), refreshModels, label('Model', routeModel),
+    label('Reasoning effort', routeEffort), label('Allow one deeper attempt if Auto hits an output limit', routeEscalation),
+    label('Review recent Vela messages for this send', routeHistory));
+  const savedRoutes = disclosure('Saved routing defaults', 'vela-core-routing-defaults');
+  const scopeChoice = el('select', 'vela-core-input');
+  const effectiveRoute = el('p', 'vela-core-meta');
+  effectiveRoute.setAttribute('aria-live', 'polite');
+  const selectedRoutingProfile = () => current?.routingSettings?.profiles.find(item => item.scope === (scopeChoice.value || 'global'));
+  const saveDefaults = (reset: boolean) => void run(async () => {
+    const profile = selectedRoutingProfile();
+    if (!profile || !client.saveRoutingSettings) return;
+    const defaults: import('./routing-settings.ts').VelaRoutingDefaults = reset ? {} : {
+      mode: (routeMode.value || 'auto') as typeof modes[number][0],
+      providerId: chosenProviderId as import('./routing-settings.ts').VelaRoutingDefaults['providerId'] ?? null,
+      model: routeModel.value || null,
+      reasoningEffort: (routeEffort.value || null) as import('./routing-settings.ts').VelaRoutingDefaults['reasoningEffort'],
+    };
+    if (profile.defaults.attemptLimits) defaults.attemptLimits = profile.defaults.attemptLimits;
+    if (profile.defaults.calibration) defaults.calibration = profile.defaults.calibration;
+    await client.saveRoutingSettings({ scope: profile.scope, id: profile.id, expectedVersion: profile.version, defaults });
+    chosenProviderId = null;
+    useAutomaticOnce = false;
+    routeMode.value = 'auto';
+    clearModelOptions();
+    await refresh();
+  });
+  savedRoutes.body.append(effectiveRoute, label('Save defaults for', scopeChoice),
+    button('Save current mode and pins', () => saveDefaults(false)),
+    button('Reset this scope to inherited', () => saveDefaults(true)));
+  const quotaEditor = disclosure('Daily provider attempt limits', 'vela-core-routing-limits');
+  const quotaUsage = el('p', 'vela-core-meta');
+  const quotaFields = (['total', 'chatgpt-plan-responses', 'codex-app-server'] as const).map(provider => {
+    const control = el('input', 'vela-core-input');
+    control.type = 'number'; control.min = '0'; control.max = '10000'; control.step = '1';
+    quotaEditor.body.append(label(provider === 'total' ? 'All provider attempts' : providerName(provider) + ' attempts', control));
+    return { provider, control };
+  });
+  quotaEditor.body.append(el('p', 'vela-core-meta', 'Global and project limits both apply. Counts reset at midnight UTC. Blank leaves that limit unset.'),
+    quotaUsage, button('Save attempt limits', () => void run(async () => {
+      const profile = selectedRoutingProfile();
+      if (!profile || !client.saveRoutingSettings || (profile.scope !== 'global' && profile.scope !== 'project')) return;
+      const attemptLimits: NonNullable<import('./routing-settings.ts').VelaRoutingDefaults['attemptLimits']> = {};
+      for (const { provider, control } of quotaFields) {
+        if (control.value !== '') attemptLimits[provider] = Number(control.value);
+      }
+      const { attemptLimits: _previous, ...defaults } = profile.defaults;
+      await client.saveRoutingSettings({ scope: profile.scope, id: profile.id, expectedVersion: profile.version,
+        defaults: Object.keys(attemptLimits).length ? { ...defaults, attemptLimits } : defaults });
+      await refresh();
+    })));
+  savedRoutes.body.append(quotaEditor.node);
+  const calibrationEditor = disclosure('Routing measurements', 'vela-core-routing-calibration');
+  const calibrationSelect = el('select', 'vela-core-input');
+  setOptions(calibrationSelect, [['', 'Use inherited setting'], ['off', 'Off'], ['observe', 'Record local measurements'],
+    ['shadow', 'Compare without switching'], ['adaptive', 'Choose a qualified faster model']]);
+  const calibrationStatus = el('p', 'vela-core-meta');
+  calibrationEditor.body.append(label('Measurement mode', calibrationSelect),
+    el('p', 'vela-core-meta', 'Off by default. Eligible conversations record local timing, token counts and your feedback. Project settings can limit the global mode.'),
+    calibrationStatus, button('Save measurement mode', () => void run(async () => {
+      const profile = selectedRoutingProfile();
+      if (!profile || !client.saveRoutingSettings || (profile.scope !== 'global' && profile.scope !== 'project')) return;
+      const { calibration: _previous, ...defaults } = profile.defaults;
+      const calibration = calibrationSelect.value as NonNullable<typeof profile.defaults.calibration> | '';
+      await client.saveRoutingSettings({ scope: profile.scope, id: profile.id, expectedVersion: profile.version,
+        defaults: calibration ? { ...defaults, calibration } : defaults });
+      await refresh();
+    })));
+  savedRoutes.body.append(calibrationEditor.node);
+  scopeChoice.addEventListener('change', () => renderRoutingQuotas());
+  function renderRoutingQuotas() {
+    const profile = selectedRoutingProfile();
+    quotaEditor.node.hidden = !profile || (profile.scope !== 'global' && profile.scope !== 'project');
+    calibrationEditor.node.hidden = quotaEditor.node.hidden;
+    if (!profile || quotaEditor.node.hidden) return;
+    const signature = [profile.scope, profile.id, profile.version].join(':');
+    if (quotaEditor.node.dataset.settingsSignature !== signature) {
+      for (const { provider, control } of quotaFields) {
+        const limit = profile.defaults.attemptLimits?.[provider];
+        control.value = limit === undefined ? '' : String(limit);
+      }
+      quotaEditor.node.dataset.settingsSignature = signature;
+      calibrationSelect.value = profile.defaults.calibration ?? '';
+    }
+    const calibration = current?.routingSettings?.calibration;
+    calibrationStatus.textContent = calibration ? 'Current mode ' + calibration.mode + ' · ' + calibration.samples + ' observed turns in this project scope.' : '';
+    const usage = current?.routingSettings?.attempts;
+    quotaUsage.textContent = usage?.limits.filter(item => item.scope === profile.scope).map(item =>
+      (item.provider === 'total' ? 'All providers' : providerName(item.provider)) + ' ' + item.used + '/' + item.limit).join(' · ') || 'No attempt limits configured for this scope.';
+  }
+  savedRoutes.node.hidden = true;
+  if (client.saveRoutingSettings) connection.body.append(savedRoutes.node);
   connection.body.prepend(providerRoutes);
   allowProvider.addEventListener('change', () => { chosenProviderId = allowProvider.checked ? current?.planner.providerId ?? null : null; renderProviderChoice(); });
   const selection = el('div', 'vela-core-selection'); selection.setAttribute('aria-label', 'Selected sources'); selection.hidden = true;
@@ -181,11 +357,30 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   form.append(intent, selection, providerChoice, composeActions);
   intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
-  form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return; const connected = !!current?.planningProviders, submitted = { intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: connected || allowProvider.checked && chosenProviderId === current?.planner.providerId, ...(connected && chosenProviderId ? { providerId: chosenProviderId } : {}) }, revision = draftRevision, submittedView = ++viewRevision; transientView = 'current'; allowProvider.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
+  form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return; const connected = !!current?.planningProviders, submitted = { intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: connected || allowProvider.checked && chosenProviderId === current?.planner.providerId, ...(connected && chosenProviderId ? { providerId: chosenProviderId } : {}),
+    ...(connected && routeMode.value && routeMode.value !== 'auto' ? { mode: routeMode.value as typeof modes[number][0] } : {}),
+    ...(connected && routeModel.value ? { model: routeModel.value } : {}),
+    ...(connected && routeEffort.value ? { reasoningEffort: routeEffort.value as import('../../openai-provider/model-controls.ts').ReasoningEffort } : {}),
+    ...(connected && !routeEscalation.disabled && routeEscalation.checked ? { allowEscalation: true as const } : {}),
+    ...(connected && routeHistory.checked ? { includeRecentHistory: true as const } : {}),
+    ...(connected && handoffSelection ? { handoffSourceRequestId: handoffSelection.requestId } : {}),
+    ...(connected && routingAgentSelection ? { routingAgentId: routingAgentSelection.id } : {}),
+    ...(connected && (useAutomaticOnce || handoffSelection && !routingAgentSelection) ? { overrideDefaults: true as const } : {}),
+  }, revision = draftRevision, submittedView = ++viewRevision; transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Thinking…'; present();
       try {
         const recorded = await client.request(submitted);
         if (disposed) return;
+        if (recorded.handoff?.sourceRequestId === handoffSelection?.requestId && recorded.handoff &&
+            !['provider-unavailable', 'failed', 'invalid-plan', 'unknown', 'cancelled'].includes(recorded.state)) {
+          handoffSelection = null;
+          renderSelection();
+        }
+        if (recorded.routingAgent?.resourceId === routingAgentSelection?.id && recorded.routingAgent &&
+            !['provider-unavailable', 'failed', 'invalid-plan', 'unknown', 'cancelled'].includes(recorded.state)) {
+          routingAgentSelection = null;
+          renderSelection();
+        }
         if (!['provider-unavailable','failed','invalid-plan','unknown'].includes(recorded.state) && draftRevision === revision && intent.value === submitted.intent) intent.value = '';
         renderStatus({ requests: [recorded], plans: [], receipts: [] });
         await settleSubmittedView(submittedView);
@@ -199,15 +394,71 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function closeContext(restoreFocus = true) { if (more.hidden) return; const previous = contextTrigger; for (const entry of contextPanels.values()) { entry.panel.node.hidden = true; entry.trigger.setAttribute('aria-expanded', 'false'); } activeContext = null; more.hidden = true; lastDisclosure = null; updatePresence(); if (restoreFocus) previous?.focus(); present(); }
   shell.addEventListener('keydown', event => { if (event.key !== 'Escape') return; const target = event.target as HTMLElement, opened = target.closest<HTMLDetailsElement>('details[open]') ?? (lastDisclosure?.open && shell.contains(lastDisclosure) && !lastDisclosure.closest('[hidden]') ? lastDisclosure : null); if (!more.hidden && (!opened || opened === contextPanels.get(activeContext!)?.panel.node)) { event.preventDefault(); event.stopPropagation(); closeContext(); } else if (opened) { event.preventDefault(); event.stopPropagation(); opened.open = false; opened.querySelector('summary')?.focus(); } });
   function renderSelection() {
-    selection.replaceChildren(); selection.hidden = !selected.size;
+    selection.replaceChildren(); selection.hidden = !selected.size && !handoffSelection && !routingAgentSelection;
+    routeHistory.disabled = !!handoffSelection;
+    if (handoffSelection) {
+      const chip = button(providerName(handoffSelection.sourceProviderId) + ' exchange ×', () => {
+        if (busy) return;
+        handoffSelection = null;
+        renderSelection();
+        intent.focus();
+      });
+      chip.className = 'vela-core-chip';
+      chip.setAttribute('aria-label', 'Remove selected provider exchange');
+      selection.append(chip);
+    }
+    if (routingAgentSelection) {
+      const chip = button(routingAgentSelection.title + ' profile ×', () => {
+        if (busy) return;
+        routingAgentSelection = null;
+        renderSelection();
+        intent.focus();
+      });
+      chip.className = 'vela-core-chip';
+      chip.setAttribute('aria-label', 'Remove selected agent profile');
+      selection.append(chip);
+    }
     if (selected.size) { selection.append(el('span', 'vela-core-meta', selected.size + (selected.size === 1 ? ' source' : ' sources'))); for (const ref of selected.values()) { const chip = button(ref.title + ' ×', () => { selected.delete(ref.id); const control = sourceControls.get(ref.id); if (control) control.checked = false; renderSelection(); intent.focus(); }); chip.className = 'vela-core-chip'; chip.setAttribute('aria-label', 'Remove source ' + ref.title); selection.append(chip); } }
     updateWorkspaceAvailability();
   }
   function renderProviderChoice() {
     const connected = current?.planningProviders;
+    refreshModels.disabled = !connected || (!chosenProviderId && routeMode.value !== 'codex');
+    routeEscalation.disabled = !connected || !!chosenProviderId || (!!routeMode.value && routeMode.value !== 'auto');
     if (connected) {
       const selected = connected.find(route => route.providerId === chosenProviderId);
-      provider.textContent = selected ? providerName(selected.providerId) + (selected.available ? ' · connected' : ' · connection required') : 'Automatic';
+      const inherited = current?.routingSettings;
+      const inheritedProvider = inherited?.effective.providerId;
+      provider.textContent = selected ? providerName(selected.providerId) + (selected.available ? ' · connected' : ' · connection required')
+        : useAutomaticOnce ? 'Auto for this send'
+        : inheritedProvider ? providerName(inheritedProvider) + ' · ' + inherited?.origins.providerId + ' default'
+        : inherited?.effective.mode && inherited.effective.mode !== 'auto' ? inherited.effective.mode + ' · ' + inherited.origins.mode + ' default'
+        : 'Automatic';
+    }
+    const settings = current?.routingSettings;
+    savedRoutes.node.hidden = !settings;
+    if (settings) {
+      const { effective, origins, profiles } = settings;
+      const source = (key: keyof typeof origins) => ' (' + (origins[key] ?? 'default') + ')';
+      effectiveRoute.textContent = [
+        'Mode ' + effective.mode + source('mode'),
+        'Provider ' + (effective.providerId ? providerName(effective.providerId) : 'automatic') + source('providerId'),
+        'Model ' + (effective.model ?? 'automatic') + source('model'),
+        'Effort ' + (effective.reasoningEffort ?? 'automatic') + source('reasoningEffort'),
+      ].join(' · ');
+      const choices = profiles.map(profile => {
+        const name = current?.applicationContext?.references.find(item => item.kind === profile.scope && item.id === profile.id)?.title;
+        const label = profile.scope === 'global' ? 'Global' : profile.scope === 'chat' ? 'Vela chat' : profile.scope;
+        return [profile.scope, label + (name ? ' · ' + name : '') + (Object.keys(profile.defaults).length ? ' · customized' : '')] as const;
+      });
+      const signature = JSON.stringify(choices);
+      if (scopeChoice.dataset.routingScopes !== signature) {
+        const previous = scopeChoice.value;
+        setOptions(scopeChoice, choices);
+        scopeChoice.value = choices.some(([scope]) => scope === previous) ? previous : 'global';
+        scopeChoice.dataset.routingScopes = signature;
+      }
+      renderRoutingQuotas();
     }
     const chosen = chosenProviderId && (connected || allowProvider.checked && chosenProviderId === current?.planner.providerId);
     providerChoice.hidden = !chosen;
@@ -253,10 +504,104 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     manifestationBody.dataset.density = content.length > 140 ? 'reading' : 'signal';
     shell.dataset.manifestationKind = projection.kind; shell.dataset.presentationView = view(); manifestation.dataset.requestId = projection.currentRequestId ?? ''; manifestation.dataset.currentMessageId = projection.currentMessageId ?? '';
     manifestation.hidden = projection.kind === 'none' || view() === 'history' && !projection.requiredPlanIds.length;
-    manifestationKicker.textContent = projection.kind === 'insight' && message?.source === 'provider' ? providerName(message.providerId) + ' · contribution' : 'Vela';
+    const route = selectedRequest?.route;
+    manifestationKicker.textContent = route?.kind === 'conversational'
+      ? 'Vela · ' + (route.depth === 'deep' ? 'Deep' : 'Quick')
+      : route?.kind === 'agentic' ? 'Vela · Codex · Read-only'
+      : route?.kind === 'file-edit' ? 'Vela · Codex file proposal'
+      : route?.kind === 'project-check' ? 'Vela · Local project check'
+      : route?.kind === 'composite' ? 'Vela · Native + Codex'
+      : selectedRequest?.local ? 'Vela · Native'
+      : projection.kind === 'insight' && message?.source === 'provider' ? providerName(message.providerId) + ' · contribution' : 'Vela';
     if (signature !== responseSignature) { responseSignature = signature; manifestationBody.replaceChildren(); if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content)); }
     manifestationBody.hidden = projection.kind === 'action' || !content;
-    const details = JSON.stringify({ requestId: selectedRequest?.id, issue: selectedRequest?.errorCode, local: selectedRequest?.local, response: selectedRequest?.response, provider: message?.providerContribution ?? selectedRequest?.providerId }, null, 2);
+    const why = route?.reason === 'routine-answer' ? 'A conversational response can answer this request.'
+      : route?.reason === 'complex-analysis' ? 'The request calls for deeper conversational analysis.'
+      : route?.reason === 'local-tools-required' ? 'This request needs access to a local repository or files.'
+      : route?.reason === 'explicit-codex' ? 'You selected Codex for this request.'
+      : route?.reason === 'reviewed-app-action' ? 'The requested app action needs a typed proposal and review.'
+      : route?.reason === 'native-fact-and-local-inspection' ? 'Vela measured a local fact and shared the reviewed result with Codex for inspection.'
+      : route?.kind === 'file-edit' ? 'Codex proposes file changes. Aerynth applies only the exact contents you approve.'
+      : route?.kind === 'project-check' ? 'The approved command runs locally in the Codex read-only sandbox without inference.'
+      : selectedRequest?.local ? 'An authorized native capability can answer directly.' : undefined;
+    const edit = current?.fileEdits?.find(record => record.requestId === selectedRequest?.id);
+    const standaloneCheck = selectedRequest?.projectCheck;
+    fileEditActions.hidden = !edit && !standaloneCheck;
+    const editSignature = JSON.stringify({ edit, standaloneCheck });
+    if (fileEditActions.dataset.edit !== editSignature) {
+      fileEditActions.dataset.edit = editSignature;
+      fileEditActions.replaceChildren();
+      if (edit) {
+        const verified = edit.files.filter(file => file.state === 'applied').length;
+        const state = edit.state === 'applied'
+          ? 'Written bytes verified for ' + verified + (verified === 1 ? ' file.' : ' files.') +
+            (!edit.followUpCheck && edit.projectChecksAvailable && !edit.projectChecks?.length ? ' Project checks are available.' : '')
+          : edit.state === 'awaiting-review' ? 'File changes ready for review.'
+          : edit.state === 'partial' ? verified + ' of ' + edit.files.length + ' writes verified. Review each file outcome before taking further action.'
+          : edit.state === 'unchanged' ? 'The selected destinations still match their state before the approved write.'
+          : edit.state === 'conflict' ? 'One or more destinations conflict with the approved write. Review recovery details.'
+          : 'The file outcomes need checking.';
+        fileEditActions.append(el('p', 'vela-core-meta', state));
+        if (edit.state === 'applied' && edit.followUpCheck && !edit.projectChecks?.some(check => check.kind === edit.followUpCheck)) {
+          const label = VELA_PROJECT_CHECK_LABELS[edit.followUpCheck];
+          fileEditActions.append(el('p', 'vela-core-meta', edit.projectChecksAvailable
+            ? 'Approve the requested follow-up to run it. ' + label : 'Unavailable follow-up · ' + label));
+        }
+        if (edit.state !== 'awaiting-review') {
+          const outcomes = el('ul', 'vela-core-meta');
+          for (const file of edit.files) {
+            const outcome = file.state === 'applied' ? 'write verified'
+              : file.state === 'unchanged' ? 'unchanged'
+              : file.state === 'conflict' ? 'conflict' : 'outcome unknown';
+            outcomes.append(el('li', undefined, file.relativePath + ' · ' + outcome));
+          }
+          fileEditActions.append(outcomes);
+        }
+        const apply = edit.state === 'awaiting-review' ? client.applyFileEdit
+          : edit.state !== 'applied' ? client.reconcileFileEdit : undefined;
+        if (apply) {
+          const control = button(edit.state === 'awaiting-review' ? 'Review file changes' : 'Check file outcomes', () => void run(async () => {
+            if (fileEditBusy) return;
+            fileEditBusy = control.disabled = true;
+            try { await apply({ requestId: edit.requestId }); }
+            finally { fileEditBusy = control.disabled = false; await refresh(); }
+          }));
+          fileEditActions.append(control);
+        }
+        const verify = client.verifyFileEdit;
+        if (verify && edit.projectChecksAvailable) {
+          for (const kind of ['node-test', 'typescript', 'node-benchmark'] as const) {
+            const control = button(kind === 'typescript' ? 'Type-check TypeScript' : 'Run ' + VELA_PROJECT_CHECK_LABELS[kind], () => void run(async () => {
+              if (fileEditBusy) return;
+              fileEditBusy = control.disabled = true;
+              try { await verify({ requestId: edit.requestId, kind }); }
+              finally { fileEditBusy = control.disabled = false; await refresh(); }
+            }));
+            fileEditActions.append(control);
+          }
+        }
+      }
+      for (const receipt of standaloneCheck ? [standaloneCheck] : edit?.projectChecks ?? []) {
+        const checkLabel = VELA_PROJECT_CHECK_LABELS[receipt.kind];
+        const detail = {
+          running: 'running', passed: 'passed', failed: 'failed',
+          stale: 'reviewed inputs or scope changed', limited: 'time or output exceeded the verification limit',
+          unknown: 'outcome unavailable',
+        }[receipt.state];
+        const count = receipt.testCount === undefined ? '' : ' · ' + receipt.testCount + ' tests reported';
+        fileEditActions.append(el('p', 'vela-core-meta', checkLabel + ' · ' + detail + count + ' · ' + receipt.inputs.join(', ')));
+        if (receipt.benchmark) {
+          const { samples, medianMs, p95Ms } = receipt.benchmark;
+          fileEditActions.append(el('p', 'vela-core-meta', `The script reported ${samples} samples, a median of ${medianMs} ms, and a 95th percentile of ${p95Ms} ms.`));
+        }
+      }
+    }
+    const details = JSON.stringify({ requestId: selectedRequest?.id, taskId: selectedRequest?.handoff?.taskId ?? selectedRequest?.id, issue: selectedRequest?.errorCode, why,
+      route, routingSettings: selectedRequest?.routingSettings, routingAgent: selectedRequest?.routingAgent,
+      budget: route?.kind === 'project-check' ? 'No model usage' : route ? 'Cost and remaining allowance unknown' : undefined,
+      ...(route?.kind === 'agentic' || route?.kind === 'composite' ? { verification: 'unverified' } : {}), edit,
+      projectCheck: standaloneCheck, handoff: selectedRequest?.handoff, local: selectedRequest?.local, response: selectedRequest?.response,
+      provider: message?.providerContribution ?? selectedRequest?.providerId }, null, 2);
     if (manifestationDetails.body.firstElementChild?.textContent !== details) manifestationDetails.body.replaceChildren(el('pre', undefined, details)); manifestationDetails.node.hidden = projection.kind === 'none' || projection.kind === 'action';
     const sources = selectedRequest?.context.included ?? [], sourceSignature = JSON.stringify(sources.map(ref => [ref.id, ref.kind, ref.version, ref.title]));
     if (manifestationSources.dataset.signature !== sourceSignature) { manifestationSources.dataset.signature = sourceSignature; manifestationSources.replaceChildren(); for (const ref of sources) manifestationSources.append(options.onOpenSubject ? button(ref.title, () => options.onOpenSubject?.({ id: ref.id, kind: ref.kind })) : el('span', undefined, ref.title)); } manifestationSources.hidden = !manifestationSources.children.length;
@@ -266,6 +611,20 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const adjacent = adjacentContent && adjacentFacts?.kind === 'system-memory' ? summarizeSystemMemory(adjacentFacts.measurement) : adjacentContent;
     localAlongsidePlan.hidden = !projection.requiredPlanIds.length || !adjacent || view() === 'history'; if (adjacent && localAlongsidePlan.textContent !== adjacent) localAlongsidePlan.textContent = adjacent;
     pin.hidden = dismiss.hidden = projection.currentRequestId === null; pin.disabled = presentationBusy || !persistent(); dismiss.disabled = presentationBusy || !persistent() || !projection.canDismiss;
+    const sourceProvider = selectedRequest?.providerId;
+    const destination = (sourceProvider === 'chatgpt-plan-responses' || sourceProvider === 'codex-app-server') &&
+      selectedRequest?.provenance && selectedRequest.response?.kind === 'answer' && message?.source === 'provider'
+      ? current?.planningProviders?.find(item => item.providerId !== sourceProvider &&
+        (item.providerId === 'chatgpt-plan-responses' || item.providerId === 'codex-app-server')) : undefined;
+    handoffButton.hidden = !destination;
+    handoffButton.disabled = busy;
+    handoffButton.title = destination?.available === false ? 'The destination connection will be checked on Send.' : '';
+    handoffButton.dataset.destination = destination?.providerId ?? '';
+    if (destination) handoffButton.textContent = 'Continue with ' + providerName(destination.providerId);
+    const canRate = !!client.rateRoutingResponse && !!selectedRequest &&
+      current?.routingSettings?.calibration?.feedbackRequestIds.includes(selectedRequest.id) === true;
+    useful.hidden = needsCorrection.hidden = !canRate;
+    useful.disabled = needsCorrection.disabled = busy;
     pin.setAttribute('aria-label', projection.pinned ? 'Unpin response' : 'Pin response'); pin.setAttribute('aria-pressed', String(projection.pinned)); pin.title = persistent() ? (projection.pinned ? 'Unpin response' : 'Pin response') : 'Saved response choices are unavailable in this host'; dismiss.title = !projection.canDismiss ? 'This plan needs review before it can be dismissed' : persistent() ? 'Dismiss response' : 'Saved response choices are unavailable in this host';
     history.hidden = view() !== 'history'; historyControl.disabled = presentationBusy; historyControl.setAttribute('aria-expanded', String(!history.hidden)); historyControl.title = persistent() ? 'History' : 'History · view changes are temporary in this host';
     historyEmpty.hidden = !!current?.conversation?.messages.length || !!current?.requests.length; openHistory.hidden = !options.onOpenSubject || !projection.historyResource;
@@ -314,6 +673,55 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
         vela_planner_unavailable: 'Vela couldn’t reach the AI. Your draft is still here.',
         vela_planner_sign_in_required: 'Connect Codex or choose ChatGPT plan. Your draft is still here.',
         vela_chatgpt_sign_in_required: 'Connect your ChatGPT plan in Connections. Your draft is still here.',
+        vela_deep_model_unavailable: 'The connected catalog has no verified deep reasoning controls. Choose an available model or reconnect. Your draft is still here.',
+        vela_pinned_provider_cannot_execute: 'This request needs local tools. Choose Codex or Auto in Provider. Your draft is still here.',
+        vela_codex_write_unavailable: 'Vela can review eligible repository edits. This request needs an execution capability that is unavailable here. Your draft is still here.',
+        vela_edit_file_ineligible: 'Choose a supported source file or destination. Existing files must be tracked UTF-8 text of 8 KiB or less.',
+        vela_edit_file_limit: 'Choose up to four destinations with at most 10 KiB of text total.',
+        vela_edit_repository_mismatch: 'Choose distinct files from the same repository checkout.',
+        vela_edit_reconciliation_required: 'Check the earlier file outcomes before reviewing another edit to the same files.',
+        vela_edit_path_ineligible: 'Choose a tracked file to replace or an unused filename to create in an eligible local repository.',
+        vela_edit_destination_exists: 'That destination now exists. Choose an unused filename and review the change again.',
+        vela_edit_destination_tracked: 'That name belongs to a tracked file. Choose an unused filename.',
+        vela_edit_destination_ignored: 'Git ignores that filename. Choose a destination that is eligible for this repository edit.',
+        vela_edit_file_changed: 'The selected file changed since review. Send the edit request again to review its current contents.',
+        vela_edit_review_required: 'Open a fresh file review before applying.',
+        vela_handoff_same_provider: 'Choose a different provider to carry over this exchange.',
+        vela_handoff_context_limit: 'The selected exchange exceeds the handoff limit. Use a shorter exchange.',
+        vela_handoff_source_unavailable: 'This exchange cannot be shared under the current scope or its source evidence is unavailable.',
+        vela_handoff_history_conflict: 'Choose one exchange or recent messages for this send.',
+        vela_project_check_unavailable: 'Project checks are unavailable on this execution host.',
+        vela_project_check_sandbox_unavailable: 'A ready Windows Codex sandbox is required for this check.',
+        vela_project_check_invalid_input: 'Choose tracked Node test files or a tracked tsconfig file for this check.',
+        vela_project_check_repository_mismatch: 'Choose project check files from the same checkout as the applied edit.',
+        vela_project_check_stale: 'The checkout changed since approval. Review the current files and check again.',
+        vela_project_check_review_required: 'Open a fresh project check review.',
+        vela_project_check_busy: 'A project check is already running.',
+        vela_project_check_wait_for_result: 'This Windows project check is bounded by the sandbox deadline. Wait for its result.',
+        vela_project_check_model_pin: 'Clear the model and reasoning pins to run this local check.',
+        vela_project_check_attached_sources: 'Remove attached sources and select the project check files in the native picker.',
+        vela_project_check_handoff_conflict: 'Remove the selected exchange before running a standalone project check.',
+        vela_project_check_agent_conflict: 'Remove the selected agent profile before running a standalone project check.',
+        vela_project_check_native_review_required: 'Use Vela’s desktop Send to select and review this local check.',
+        vela_typescript_compiler_unavailable: 'An installed TypeScript compiler in this checkout is required.',
+        vela_edit_log_source_required: 'Use Add sources to select one note with the log excerpt you want Codex to inspect.',
+        unsupported_model: 'The selected model is unavailable in the connected catalog. Your draft is still here.',
+        vela_codex_model_unavailable: 'Codex did not offer a model for this request. Check its connection and try again.',
+        unsupported_reasoning_effort: 'The selected model does not advertise this effort. Your draft is still here.',
+        vela_workspace_unavailable: 'Choose an accessible workspace and try again. Your draft is still here.',
+        vela_workspace_ambiguous: 'More than one accessible workspace has that name. Open the intended workspace from the workspace list.',
+        vela_custom_provider_required: 'Choose a provider before using Custom routing.',
+        vela_budget_unverifiable: 'The selected provider cannot verify this spending cap. Local capabilities remain available.',
+        vela_native_stage_unavailable: 'The local reading is unavailable. The inspection has not started.',
+        stale_vela_routing_defaults: 'The saved routing defaults changed. Review the current settings and try again.',
+        stale_vela_agent_routing: 'The selected agent profile changed. Review its current settings and send again.',
+        vela_routing_agent_unavailable: 'The selected agent is unavailable in the current project.',
+        vela_agent_capability_unavailable: 'A required capability in the selected agent profile could not be verified for this route.',
+        vela_routing_feedback_unavailable: 'Feedback is available for measured responses in the current project.',
+        vela_routing_scope_unavailable: 'The settings scope is no longer active. Open it again before saving.',
+        vela_routing_pin_requires_provider_model: 'Choose a connected provider and model before saving an effort pin.',
+        vela_daily_attempt_limit_reached: 'Vela has reached a daily provider attempt limit. Local tools remain available.',
+        invalid_vela_attempt_limit: 'Enter a whole-number daily attempt limit between 0 and 10,000.',
         vela_planner_busy: 'The AI is busy. Your draft is ready to send when it frees up.',
         authorization_cancelled: 'Your request wasn’t shared. Your draft is still here.',
       };
@@ -452,7 +860,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     provider.textContent = state.planner.available ? providerName(state.planner.providerId) + (state.planner.busy ? ' · busy' : ' · available') : 'Provider unavailable';
     providerRoutes.hidden = !state.planningProviders;
     providerConsent.hidden = !!state.planningProviders;
-    providerHint.textContent = state.planningProviders ? 'Automatic prefers your connected ChatGPT plan, then Codex. Send shares current workspace labels. Attached sources are reviewed separately.' : state.planner.available ? 'Context sharing needs approval.' : 'Provider unavailable.';
+    providerHint.textContent = state.planningProviders ? 'Auto uses local capabilities, a connected conversational model, or Codex according to the request. Attached sources and Codex work require review.' : state.planner.available ? 'Context sharing needs approval.' : 'Provider unavailable.';
     providerConsent.firstElementChild!.textContent = 'Use ' + providerName(state.planner.providerId) + ' for this request';
     allowProvider.disabled = !state.planner.available || state.planner.busy; if (!state.planningProviders && chosenProviderId !== state.planner.providerId) { allowProvider.checked = false; chosenProviderId = null; } renderProviderChoice();
     const chosen = projectChosen ? nativeProject.value : state.applicationContext?.currentProjectId ?? ''; nativeProject.replaceChildren(); const global = el('option', undefined, 'No project'); global.value = ''; nativeProject.append(global);

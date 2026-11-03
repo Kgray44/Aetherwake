@@ -240,8 +240,11 @@ export class ResponsesTransport {
                         await emit({ type: 'provider/usage', providerId: frozen.providerId, executionId: frozen.executionId, usage: result.usage });
                     if (expected === 'failed')
                         result.errorCode = terminalError(event.response.error);
-                    if (expected === 'incomplete')
+                    if (expected === 'incomplete') {
                         result.errorCode = 'provider_incomplete';
+                        const reason = record(event.response.incomplete_details) ? event.response.incomplete_details.reason : undefined;
+                        if (reason === 'max_output_tokens' || reason === 'content_filter') result.incompleteReason = reason;
+                    }
                     terminal = true;
                 }
                 else if (event.type === 'error') {
