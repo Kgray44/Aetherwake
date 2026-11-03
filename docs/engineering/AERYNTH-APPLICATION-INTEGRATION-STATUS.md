@@ -2,6 +2,50 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Portable BQ workspace journey and Stream memory diagnosis
+
+The BQ modules, renderer and bundled backend passed the exact local
+workspace journey in three hidden Electron processes. The UI created
+A World for Two and Development, added and rearranged the three blocks,
+reattached the same note, travelled through project and Universe views,
+edited a block in a different project, and restored both workspaces.
+Setup, travel and fresh-process restore took 6.37, 14.46 and 2.58 seconds
+from launch to exit. SQLite integrity passed with zero provider
+executions. Five PNGs and the three receipts are in
+`review-package-motion-1793707594874`. The inspected captures show the
+orbital backdrop across both views, Vela at the upper right in Universe
+and the restored glass workspace. The project capture is mid-transition.
+
+A separate packaged 50-card run cycled through Universe, an empty
+workspace and the original workspace three times. It retained the
+exact canonical state, drew no additional frames while inactive,
+recovered WebGL under reduced motion and restored the resized layout
+in a fresh process. Fit paint p95 was 71.4 ms and callback p95 was
+50.1 ms. Settled offscreen paint p95 ranged from 18.2 to 20.2 ms.
+The working-set sample after revisit three was 442 MiB and the fresh
+restart sample was 189 MiB. These are process working sets and offscreen
+timings, without physical presentation or VRAM measurements. Initial
+and restart receipts in `bq-workspace-memory-1793707671718` have SHA-256
+`d00fa69794ac9a5743cd825e044168d63cfb345e23d8fd2d438d66bd25d0dc2c` and
+`fcd1fa42e462c9e9bf56d85efff60032763685065315bf149373f6a7e43a8450`.
+
+After forced collection, three revisits measured a 14.5–14.7 MiB
+JavaScript heap with stable document and listener counts. Two separate
+GC runs showed the same DOM counts across settled revisits
+(26,058, 26,688, 27,318). The connected-element breakdown attributed
+the growth to Stream cards rendering real new event rows, including
+126 extra metadata label/value pairs per revisit inside closed
+disclosures. Repeated detached-node inspection itself retained nodes,
+so its totals are excluded from the growth comparison. The exact
+connected-element receipt is in `bq-workspace-connected-1793707899503`
+with SHA-256
+`263b112f84ce31a6c559d7ffec2a39e12ada8fbaab7dce53a53b80339240e649`.
+The first GC helper launch failed on its source anchor before measurement.
+It was corrected and rerun in a fresh profile. The shared event view
+change was handed to Universal Block System. All owned test processes
+exited. Current physical display pacing and a live authorized Codex
+conversation remain open.
+
 ## November 3 Vela model replies and Portable BQ
 
 The recorded workspace organization request stopped at provider
