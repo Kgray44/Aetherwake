@@ -18,9 +18,9 @@ export function planetAppearance(
   const palette =
     role === "project"
       ? [
-          [stellarHue, 0.75, 0.46],
-          [stellarHue, 0.58, 0.72],
-          [stellarHue, 0.16, 0.96],
+          [stellarHue, 0.68, 0.3],
+          [stellarHue, 0.5, 0.52],
+          [stellarHue, 0.3, 0.76],
         ]
       : type === 1
         ? [
@@ -137,7 +137,8 @@ void main(){
  float limb=pow(max(dot(N,V),0.),.32);
  vec3 plasma=mix(uMid,uHigh,.28+cells*.45*uDetail);
  plasma=mix(plasma,uLow,spots*.55);
- gl_FragColor=vec4(plasma*(.85+limb*.85),1.);
+ // Keep stellar temperature and granulation distinct through tone mapping.
+ gl_FragColor=vec4(plasma*(.64+limb*.38),1.);
  #include <tonemapping_fragment>
  #include <colorspace_fragment>
 }
