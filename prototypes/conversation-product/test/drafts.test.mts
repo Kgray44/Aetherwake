@@ -23,13 +23,13 @@ test('v1 migration preserves canonical IDs and metadata; unknown versions never 
   const c=await f.create(),m=await f.core.command('addMessage',{resourceId:c.resourceId,role:'user',content:'Synthetic durable source',expectedRevision:1});
   await f.product.command('favorite',{resourceId:c.resourceId,favorite:true});
   const share=await f.product.command('publish',{sourceResourceId:c.resourceId,sourceMessageId:m.id,evidence:'excerpt'}),before=await f.core.command('snapshot',{});
-  // Exact v1 table layout: v2's empty draft table is absent, all v1 records survive.
-  f.db.exec('DROP TABLE cp_drafts; UPDATE cp_schema SET version=1 WHERE id=1');
-  const upgraded=new ConversationProduct(f.db,f.host);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,2);
+  // Exact v1 table layout: later draft/view tables are absent, all v1 records survive.
+  f.db.exec('DROP TABLE cp_view_selection; DROP TABLE cp_views; DROP TABLE cp_drafts; UPDATE cp_schema SET version=1 WHERE id=1');
+  const upgraded=new ConversationProduct(f.db,f.host);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,3);
   assert.deepEqual(await upgraded.command('readDraft',{resourceId:c.resourceId}),{resourceId:c.resourceId,version:0,content:'',updatedAt:null});
   assert.equal((await upgraded.command('detail',{resourceId:c.resourceId})).conversation.favorite,true);assert.equal((await upgraded.command('detail',{resourceId:c.resourceId})).shares[0].id,share.id);assert.deepEqual((await f.core.command('snapshot',{})).graph,before.graph);
   const draft=await upgraded.command('saveDraft',{resourceId:c.resourceId,expectedVersion:0,content:'Synthetic retained draft'});
-  f.db.prepare('UPDATE cp_schema SET version=99').run();assert.throws(()=>new ConversationProduct(f.db,f.host),/unsupported_conversation_product_schema/);assert.equal(f.db.prepare('SELECT content FROM cp_drafts WHERE resource_id=?').get(c.resourceId)!.content,draft.content);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,99);f.db.prepare('UPDATE cp_schema SET version=2').run();
+  f.db.prepare('UPDATE cp_schema SET version=99').run();assert.throws(()=>new ConversationProduct(f.db,f.host),/unsupported_conversation_product_schema/);assert.equal(f.db.prepare('SELECT content FROM cp_drafts WHERE resource_id=?').get(c.resourceId)!.content,draft.content);assert.equal(f.db.prepare('SELECT version FROM cp_schema').get()!.version,99);f.db.prepare('UPDATE cp_schema SET version=3').run();
   assert.deepEqual(await new ConversationProduct(f.db,f.host).command('readDraft',{resourceId:c.resourceId}),draft);
  }finally{await f.close();cleanup(f.dir);}
 });

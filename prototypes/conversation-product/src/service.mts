@@ -4,7 +4,7 @@ import { ConversationGraph, type GraphData, type Message } from '../../connected
 import type { Snapshot, CommandMap } from '../../integrated-backend/src/contracts.mts';
 import type { DesktopSnapshot, PublicConversationExecution, Resource } from '../../application-contract/contracts.ts';
 import type { BranchPolicy, CanonicalOrganizationCommand, Collection, ConversationProductPort, ConversationSummary, Detail, Evidence, MessageView, Page, ProductCommandMap, ProviderCapability, SearchHit, SearchQuery, Share } from './contracts.ts';
-import { CONVERSATION_DRAFT_LIMITS, type ConversationDraft } from './contracts.ts';
+import { CONVERSATION_DRAFT_LIMITS, CONVERSATION_VIEW_LIMITS, type ConversationDraft, type ConversationView, type ConversationViewPosition, type ConversationViewSelection, type ConversationViewSelected } from './contracts.ts';
 import { createNativeChatGPTFidelityDescriptor } from './native-chatgpt-fidelity.ts';
 
 export interface CanonicalConversationHost {
@@ -23,7 +23,8 @@ export interface CanonicalConversationHost {
  capabilitySnapshot?(): CommandMap['capabilities']['output'] | undefined;
  /** Side-effect-free, explicit canonical registry; history reads never connect. */
  providerRegistrySnapshot?():{providers:readonly ProviderCapability[];defaultProviderId?:string};
- /** Host policy authority: connections/family membership never grant access. */
+ /** Current host authority. A message check includes its canonical visibility
+  * from the given conversation and its source policy, not merely owner ACL. */
  access?(resourceId: string, messageId?: string): boolean;
  /** Uses existing canonical execution service, with context receipt after actual dispatch. */
  sendWithContext?(input: ProductCommandMap['send']['input'], context: AttachedContext[]): Promise<unknown>;
@@ -36,6 +37,21 @@ const hash = (content: string) => createHash('sha256').update(content).digest('h
 const stamp = () => new Date().toISOString();
 const evidence: Evidence[] = ['excerpt', 'reported', 'observed', 'hypothesis', 'decision', 'disputed'];
 const text = (value: unknown, limit = 500) => { check(typeof value === 'string' && value.trim() && value.length <= limit, 'invalid_text'); return value.trim(); };
+const fields=(value:unknown,keys:readonly string[],code:string,optional=false)=>{
+ check(value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).every(k=>keys.includes(k))&&(optional||keys.every(k=>Object.hasOwn(value,k))),code);
+ return value as Record<string,unknown>;
+};
+const viewId=(value:unknown,code='invalid_conversation_view_id')=>{check(typeof value==='string'&&!!value.trim()&&value.length<=CONVERSATION_VIEW_LIMITS.idUnits,code);return value;};
+const viewVersion=(value:unknown,code='invalid_conversation_view_version',minimum=0)=>{check(typeof value==='number'&&Number.isSafeInteger(value)&&value>=minimum,code);return value;};
+function parseViewPosition(value:unknown,code='invalid_conversation_view_position'):ConversationViewPosition|null{
+ if(value===null)return null;const a=fields(value,['conversationRevision','anchor'],code),conversationRevision=viewVersion(a.conversationRevision,code,1);
+ if(a.anchor===null)return {conversationRevision,anchor:null};const p=fields(a.anchor,['messageId','offsetY'],code),messageId=viewId(p.messageId,code),offsetY=p.offsetY;
+ check(typeof offsetY==='number'&&Number.isFinite(offsetY)&&Math.abs(offsetY)<=CONVERSATION_VIEW_LIMITS.offsetY,code);return {conversationRevision,anchor:{messageId,offsetY}};
+}
+function parseViewSelection(value:unknown,code='invalid_conversation_view_selection'):ConversationViewSelection|null{
+ if(value===null)return null;const a=fields(value,['draftVersion','start','end','direction'],code),draftVersion=viewVersion(a.draftVersion,code),start=viewVersion(a.start,code),end=viewVersion(a.end,code),direction=a.direction;
+ check(start<=end&&end<=CONVERSATION_DRAFT_LIMITS.contentUnits&&(direction==='forward'||direction==='backward'||direction==='none'),code);return {draftVersion,start,end,direction};
+}
 const page = <T,>(items: T[], q: { offset?: number; limit?: number }): Page<T> => {
  const offset = q.offset ?? 0, limit = q.limit ?? 50;
  check(Number.isInteger(offset) && offset >= 0 && Number.isInteger(limit) && limit > 0 && limit <= 200, 'invalid_page');
@@ -68,7 +84,7 @@ export class ConversationProduct implements ConversationProductPort {
   this.db=db;this.host=host;
   this.tx(() => {
    const installed=!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_schema'").get();
-   if(installed){const versions=db.prepare('SELECT id,version FROM cp_schema').all();check(versions.length===1&&versions[0].id===1&&(versions[0].version===1||versions[0].version===2),'unsupported_conversation_product_schema');}
+   if(installed){const versions=db.prepare('SELECT id,version FROM cp_schema').all();check(versions.length===1&&versions[0].id===1&&(versions[0].version===1||versions[0].version===2||versions[0].version===3),'unsupported_conversation_product_schema');}
    db.exec(`CREATE TABLE IF NOT EXISTS cp_schema(id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL);
     CREATE TABLE IF NOT EXISTS cp_flags(resource_id TEXT PRIMARY KEY REFERENCES resources(id), favorite INTEGER NOT NULL CHECK(favorite IN(0,1)));
     CREATE TABLE IF NOT EXISTS cp_collection_rules(collection_id TEXT PRIMARY KEY REFERENCES collections(id), parent_id TEXT REFERENCES collections(id), rule TEXT, version INTEGER NOT NULL);
@@ -82,6 +98,11 @@ export class ConversationProduct implements ConversationProductPort {
     db.exec(`CREATE TABLE cp_drafts(resource_id TEXT PRIMARY KEY REFERENCES resources(id), version INTEGER NOT NULL CHECK(version>=1 AND version<=9007199254740991), content TEXT NOT NULL, content_bytes INTEGER NOT NULL CHECK(content_bytes>=0 AND content_bytes<=65536 AND content_bytes=length(CAST(content AS BLOB))), updated_at TEXT NOT NULL) STRICT;`);
     db.prepare('UPDATE cp_schema SET version=2 WHERE id=1 AND version=1').run();
    }else check(!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cp_drafts'").get(),'conversation_draft_storage_unavailable');
+   if(Number(db.prepare('SELECT version FROM cp_schema WHERE id=1').get()!.version)===2){
+    db.exec(`CREATE TABLE cp_views(resource_id TEXT PRIMARY KEY REFERENCES resources(id),version INTEGER NOT NULL CHECK(version>=1 AND version<=9007199254740991),json TEXT NOT NULL,bytes INTEGER NOT NULL CHECK(bytes>=0 AND bytes<=2048 AND bytes=length(CAST(json AS BLOB))),updated_at TEXT NOT NULL) STRICT;
+     CREATE TABLE cp_view_selection(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER NOT NULL CHECK(version>=1 AND version<=9007199254740991),resource_id TEXT REFERENCES resources(id),updated_at TEXT NOT NULL) STRICT;`);
+    db.prepare('UPDATE cp_schema SET version=3 WHERE id=1 AND version=2').run();
+   }else for(const table of ['cp_views','cp_view_selection'])check(!!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table),'conversation_view_storage_unavailable');
   });
  }
  private tx<T>(fn: () => T): T { this.db.exec('SAVEPOINT conversation_product'); try { const result = fn(); this.db.exec('RELEASE conversation_product'); return result; } catch (error) { this.db.exec('ROLLBACK TO conversation_product'); this.db.exec('RELEASE conversation_product'); throw error; } }
@@ -153,6 +174,59 @@ export class ConversationProduct implements ConversationProductPort {
    const updatedAt=stamp(),version=previous.version+1;
    const result=this.db.prepare('INSERT INTO cp_drafts(resource_id,version,content,content_bytes,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(resource_id) DO UPDATE SET version=excluded.version,content=excluded.content,content_bytes=excluded.content_bytes,updated_at=excluded.updated_at WHERE cp_drafts.version=?').run(input.resourceId,version,input.content,encoded.length,updatedAt,input.expectedVersion);
    check(Number(result.changes)===1,'stale_draft_version');return {resourceId:input.resourceId,version,content:input.content,updatedAt};
+  });
+ }
+ /** View metadata requires explicit current host authority, including for an
+  * inherited anchor. The host already owns canonical lineage visibility. */
+ private viewResource(v:View,id:string){this.draftResource(v,id);check(this.host.access?.(id)===true,'source_unavailable');const revision=v.indices.conversations.get(id)?.revision;return viewVersion(revision,'source_unavailable',1);}
+ private viewAvailable(v:View,id:string){try{this.viewResource(v,id);return true;}catch(error){if(error instanceof ProductError&&error.code==='source_unavailable')return false;throw error;}}
+ private viewAnchor(v:View,id:string,messageId:string):boolean{
+  if(v.indices.unavailable.has(messageId)||this.host.access?.(id,messageId)!==true)return false;
+  const metadata=v.messageMetadata(messageId),source=metadata&&v.publicIds.get(metadata.conversationId);
+  return !!source&&this.readable(v,source,messageId)&&this.host.access?.(source,messageId)===true;
+ }
+ private storedViewSelected():ConversationViewSelected{
+  const row=this.db.prepare('SELECT version,resource_id,updated_at FROM cp_view_selection WHERE id=1').get();if(!row)return {version:0,resourceId:null,updatedAt:null};
+  const code='corrupt_conversation_view_selection',version=viewVersion(row.version,code,1),resourceId=row.resource_id===null?null:viewId(row.resource_id,code),updatedAt=row.updated_at;
+  check(typeof updatedAt==='string'&&Number.isFinite(Date.parse(updatedAt)),code);return {version,resourceId,updatedAt};
+ }
+ private viewRecord(v:View,id:string):ConversationView{
+  const revision=this.viewResource(v,id),row=this.db.prepare('SELECT version,json,bytes,updated_at FROM cp_views WHERE resource_id=?').get(id);
+  if(!row)return {resourceId:id,version:0,position:null,selection:null,positionStatus:'none',selectionStatus:'none',updatedAt:null};
+  const code='corrupt_conversation_view',version=viewVersion(row.version,code,1),updatedAt=row.updated_at;
+  check(typeof row.json==='string'&&row.bytes===Buffer.byteLength(row.json,'utf8')&&Number(row.bytes)<=CONVERSATION_VIEW_LIMITS.entryBytes&&typeof updatedAt==='string'&&Number.isFinite(Date.parse(updatedAt)),code);
+  let stored:unknown;try{stored=JSON.parse(row.json);}catch{throw new ProductError(code);}
+  const a=fields(stored,['position','selection'],code);let position=parseViewPosition(a.position,code),selection=parseViewSelection(a.selection,code);
+  let positionStatus:ConversationView['positionStatus']='none',selectionStatus:ConversationView['selectionStatus']='none';
+  if(position){if(position.anchor&&!this.viewAnchor(v,id,position.anchor.messageId)||!position.anchor&&position.conversationRevision!==revision){position=null;positionStatus='unavailable';}else if(position.conversationRevision!==revision){position={...position,conversationRevision:revision};positionStatus='anchor-revalidated';}else positionStatus='current';}
+  if(selection){const storedVersion=Number(this.db.prepare('SELECT version FROM cp_drafts WHERE resource_id=?').get(id)?.version??0);if(selection.draftVersion!==storedVersion){selection=null;selectionStatus='draft-changed';}else{check(selection.end<=this.draft(id).content.length,code);selectionStatus='current';}}
+  return {resourceId:id,version,position,selection,positionStatus,selectionStatus,updatedAt};
+ }
+ private readViewState(v:View,input:ProductCommandMap['readViewState']['input']):ProductCommandMap['readViewState']['output']{
+  const a=fields(input,['resourceId'],'invalid_conversation_view_input',true),stored=this.storedViewSelected(),selected=stored.resourceId&&!this.viewAvailable(v,stored.resourceId)?{version:stored.version,resourceId:null,updatedAt:null}:stored;
+  const id=a.resourceId===undefined?selected.resourceId:viewId(a.resourceId);return {contract:'aerynth.conversation-view@1',selected,view:id===null?null:this.viewRecord(v,id)};
+ }
+ private saveViewState(v:View,input:ProductCommandMap['saveViewState']['input']):ConversationView{
+  const a=fields(input,['resourceId','expectedVersion','position','selection'],'invalid_conversation_view_input'),id=viewId(a.resourceId),expected=viewVersion(a.expectedVersion),position=parseViewPosition(a.position),selection=parseViewSelection(a.selection);
+  this.viewResource(v,id);
+  return this.tx(()=>{
+   const revision=this.viewResource(v,id),previous=this.db.prepare('SELECT version,bytes FROM cp_views WHERE resource_id=?').get(id),version=viewVersion(previous?.version??0,'corrupt_conversation_view');
+   check(version===expected,'stale_conversation_view_version');check(version<Number.MAX_SAFE_INTEGER,'conversation_view_revision_exhausted');
+   if(position){check(position.conversationRevision===revision,'stale_view_conversation_revision');if(position.anchor)check(this.viewAnchor(v,id,position.anchor.messageId),'view_anchor_unavailable');}
+   if(selection){const draft=this.draft(id);check(selection.draftVersion===draft.version,'stale_view_draft_version');check(selection.end<=draft.content.length,'invalid_conversation_view_selection');}
+   const json=JSON.stringify({position,selection}),bytes=Buffer.byteLength(json,'utf8'),usage=this.db.prepare('SELECT COUNT(*) AS records,COALESCE(SUM(bytes),0) AS bytes FROM cp_views').get()!;
+   check(bytes<=CONVERSATION_VIEW_LIMITS.entryBytes&&(previous||Number(usage.records)<CONVERSATION_VIEW_LIMITS.records)&&Number(usage.bytes)-Number(previous?.bytes??0)+bytes<=CONVERSATION_VIEW_LIMITS.aggregateBytes,'conversation_view_capacity_exceeded');
+   const updatedAt=stamp(),result=this.db.prepare('INSERT INTO cp_views(resource_id,version,json,bytes,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(resource_id) DO UPDATE SET version=excluded.version,json=excluded.json,bytes=excluded.bytes,updated_at=excluded.updated_at WHERE cp_views.version=?').run(id,version+1,json,bytes,updatedAt,expected);
+   check(Number(result.changes)===1,'stale_conversation_view_version');return {resourceId:id,version:version+1,position,selection,positionStatus:position?'current':'none',selectionStatus:selection?'current':'none',updatedAt};
+  });
+ }
+ private selectView(v:View,input:ProductCommandMap['selectView']['input']):ConversationViewSelected{
+  const a=fields(input,['resourceId','expectedVersion'],'invalid_conversation_view_input'),resourceId=a.resourceId===null?null:viewId(a.resourceId),expected=viewVersion(a.expectedVersion);
+  if(resourceId!==null)this.viewResource(v,resourceId);
+  return this.tx(()=>{
+   if(resourceId!==null)this.viewResource(v,resourceId);const previous=this.storedViewSelected();check(previous.version===expected,'stale_conversation_view_selection_version');check(previous.version<Number.MAX_SAFE_INTEGER,'conversation_view_revision_exhausted');
+   const version=previous.version+1,updatedAt=stamp(),result=this.db.prepare('INSERT INTO cp_view_selection(id,version,resource_id,updated_at) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET version=excluded.version,resource_id=excluded.resource_id,updated_at=excluded.updated_at WHERE cp_view_selection.version=?').run(version,resourceId,updatedAt,expected);
+   check(Number(result.changes)===1,'stale_conversation_view_selection_version');return {version,resourceId,updatedAt};
   });
  }
  private message(v: View, resourceId: string, messageId: string): Message {
@@ -309,8 +383,8 @@ export class ConversationProduct implements ConversationProductPort {
  }
  async command<K extends keyof ProductCommandMap>(name: K, input: ProductCommandMap[K]['input']): Promise<ProductCommandMap[K]['output']> {
   const a = input as any;
-  if(this.host.canonicalReadBatch&&(name==='list'||name==='search'||name==='collections')){
-   const result=this.host.canonicalReadBatch(view=>this.readProjection(this.indexed(view,true),name,a));
+  if(this.host.canonicalReadBatch&&(name==='list'||name==='search'||name==='collections'||name==='readViewState')){
+   const result=this.host.canonicalReadBatch(view=>name==='readViewState'?this.readViewState(this.indexed(view,true),a):this.readProjection(this.indexed(view,true),name,a));
    check(!result||typeof (result as {then?:unknown}).then!=='function','synchronous_canonical_callback_required');
    return result as ProductCommandMap[K]['output'];
   }
@@ -325,6 +399,9 @@ export class ConversationProduct implements ConversationProductPort {
    }
    case 'readDraft': this.draftResource(v,a.resourceId);result=this.draft(a.resourceId);break;
    case 'saveDraft': result=this.saveDraft(v,a);break;
+   case 'readViewState': result=this.tx(()=>this.readViewState(v,a));break;
+   case 'saveViewState': result=this.saveViewState(v,a);break;
+   case 'selectView': result=this.selectView(v,a);break;
    case 'projects': result=v.desktop.projects;break;
    case 'organize': {
     if (a.resourceId) this.resource(v,a.resourceId,undefined,true);

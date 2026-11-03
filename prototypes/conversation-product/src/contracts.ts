@@ -19,6 +19,13 @@ export type Detail = { conversation: ConversationSummary & {messageCount:number}
 /** Unsent local text. Its revision is independent from the canonical transcript. */
 export type ConversationDraft = { resourceId: string; version: number; content: string; updatedAt: string | null };
 export const CONVERSATION_DRAFT_LIMITS = { contentUnits: 16384, contentBytes: 65536, aggregateBytes: 8 * 1024 * 1024, records: 4096 } as const;
+/** Local recovery metadata only. No draft text, transcript, provider or title copy. */
+export type ConversationViewPosition = { conversationRevision:number;anchor:{messageId:string;offsetY:number}|null };
+export type ConversationViewSelection = { draftVersion:number;start:number;end:number;direction:'forward'|'backward'|'none' };
+export type ConversationViewSelected = { version:number;resourceId:string|null;updatedAt:string|null };
+export type ConversationView = { resourceId:string;version:number;position:ConversationViewPosition|null;selection:ConversationViewSelection|null;positionStatus:'none'|'current'|'anchor-revalidated'|'unavailable';selectionStatus:'none'|'current'|'draft-changed';updatedAt:string|null };
+export type ConversationViewState = { contract:'aerynth.conversation-view@1';selected:ConversationViewSelected;view:ConversationView|null };
+export const CONVERSATION_VIEW_LIMITS = { records:4096,entryBytes:2048,aggregateBytes:2*1024*1024,idUnits:256,offsetY:1000000 } as const;
 export type CanonicalOrganizationCommand =
  | { type: 'createCollection'; title: string; projectId: string | null }
  | { type: 'renameCollection'; collectionId: string; title: string; expectedVersion: number }
@@ -32,6 +39,9 @@ export interface ProductCommandMap {
  detail: { input: { resourceId: string; offset?: number; limit?: number; aroundMessageId?: string }; output: Detail };
  readDraft: { input: { resourceId: string }; output: ConversationDraft };
  saveDraft: { input: { resourceId: string; expectedVersion: number; content: string }; output: ConversationDraft };
+ readViewState: {input:{resourceId?:string};output:ConversationViewState};
+ saveViewState: {input:{resourceId:string;expectedVersion:number;position:ConversationViewPosition|null;selection:ConversationViewSelection|null};output:ConversationView};
+ selectView: {input:{expectedVersion:number;resourceId:string|null};output:ConversationViewSelected};
  collections: { input: Record<string, never>; output: Collection[] };
  projects: { input: Record<string, never>; output: { id: string; title: string; version: number }[] };
  organize: { input: CanonicalOrganizationCommand; output: unknown };
