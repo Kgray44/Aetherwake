@@ -269,6 +269,17 @@ export class MaterialCompositor {
       rear.covered = true;
       return;
     }
+    let nearest = this.ordered.length - 1;
+    while (nearest >= firstFront) {
+      const front = this.ordered[nearest];
+      if (front.valid && intersects(rear, front)) break;
+      nearest--;
+    }
+    if (nearest < firstFront) {
+      rear.clipPath = "";
+      return;
+    }
+    if (rear.polygon.count === 0) this.project(rear, view, true);
     this.pool.cursor = 0;
     this.fragments.length = 0;
     const initial = this.pool.take();
@@ -279,7 +290,7 @@ export class MaterialCompositor {
     this.fragments.push(initial);
     let clipped = false;
     for (
-      let j = this.ordered.length - 1;
+      let j = nearest;
       j >= firstFront && this.fragments.length;
       j--
     ) {
@@ -290,6 +301,7 @@ export class MaterialCompositor {
         !intersects(rear, front)
       )
         continue;
+      if (front.polygon.count === 0) this.project(front, this.view, true);
       this.next.length = 0;
       for (const fragment of this.fragments) {
         let outsideEdge = false,
@@ -414,7 +426,7 @@ export class MaterialCompositor {
     this.clipRear(e, 0, IDENTITY_VIEW);
     return e.clipPath;
   }
-  private project(e: Entry, view = this.view) {
+  private project(e: Entry, view = this.view, outline = false) {
     const p = e.pose;
     e.valid =
       e.key.every(Number.isFinite) &&
@@ -439,6 +451,21 @@ export class MaterialCompositor {
         ? Math.min(p.w, p.h) * 0.5
         : 22;
     const guard = 4.3 + (radius + 4) * (1 / Math.cos(Math.PI / segments) - 1);
+    // The unrotated outline reaches all four axes exactly. Its bounds are
+    // enough for status placement and overlap rejection. Build the polygon
+    // only when another card needs to clip against it.
+    if (!outline && p.yaw === 0 && !p.rotation && p.lift < 1500) {
+      const halfWidth = Math.max(1, p.w * 0.5 + guard);
+      const halfHeight = Math.max(1, p.h * 0.5 + guard);
+      const scale = 1500 / (1500 - p.lift);
+      const x = p.x + p.w * 0.5 - view.originX;
+      const y = p.y + p.h * 0.5 - view.originY;
+      e.left = view.originX + (x - halfWidth * scale) * view.scale;
+      e.right = view.originX + (x + halfWidth * scale) * view.scale;
+      e.top = view.originY + (y - halfHeight * scale) * view.scale;
+      e.bottom = view.originY + (y + halfHeight * scale) * view.scale;
+      return;
+    }
     for (let i = 0; i < segments; i++) {
       const v = contourPoint(
         p.w,

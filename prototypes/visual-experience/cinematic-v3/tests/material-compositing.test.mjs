@@ -82,6 +82,24 @@ test("minor, quarter, major and complete overlaps clip only covered rear content
     if (x === 100) assert.equal(a.covered, true);
   }
 });
+test("disjoint unrotated cards defer outlines and keep exact bounds for a later overlap", () => {
+  const c = new MaterialCompositor();
+  const back = surface("back", 20, 30, { shape: "lens", lift: 34 });
+  const front = surface("front", 400, 30, { zIndex: 1 });
+  const view = { scale: 0.73, originX: 140, originY: 90 };
+  c.update([back, front], view);
+  const entry = c.get(back.id);
+  const bounds = ({ left, right, top, bottom }) => [left, right, top, bottom];
+  const disjoint = bounds(entry);
+  assert.equal(entry.polygon.count, 0);
+  assert.equal(c.diagnostics().scratchPolygons, 0);
+  c.update([back, { ...front, x: 80 }], view);
+  assert(entry.polygon.count > 0);
+  assert(entry.clipPath);
+  bounds(entry).forEach((edge, index) => assert(Math.abs(edge - disjoint[index]) < 1e-9));
+  c.update([back, front], view);
+  assert.equal(entry.clipPath, "");
+});
 test("overlapping foreground masks form a union and never reopen rear text in their shared area", () => {
   const c = new MaterialCompositor();
   const rows = c.update([
