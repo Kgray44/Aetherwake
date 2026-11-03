@@ -5133,6 +5133,11 @@ export function installApplication(hooks: Hooks) {
       identityViews.get(id)?.minimizedPresentation().effectiveMinimized ??
       false,
     setBlockMinimized: changeBlockMinimized,
+    captureChatPresentation(id: string, expanded: boolean) {
+      chatViews.get(id)?.setPresentation(expanded ? "focused" : "workspace", {
+        captureOnly: true,
+      });
+    },
     setBlockActive(id: string, active: boolean) {
       if (focusedBlocks.get(id) === active) return;
       focusedBlocks.set(id, active);

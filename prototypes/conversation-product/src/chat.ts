@@ -75,7 +75,7 @@ export interface ConversationChatOptions {
 export interface ConversationChat {
   ready: Promise<void>; refresh(options?: { aroundMessageId?: string; latest?: boolean }): Promise<void>;
   focusComposer(): void; flush(): Promise<void>; dispose(): Promise<void>;
-  setPresentation(mode: ConversationChatPresentation): void;
+  setPresentation(mode: ConversationChatPresentation, options?: { captureOnly: boolean }): void;
   frame():void;
   /** Explicit receipt/lifecycle observation only. Closing or editor draining must not await a provider turn. */
   whenSubmissionSettled(): Promise<void>;
@@ -141,6 +141,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   let sendTask: Promise<void>|null = null, cancelPending = false, streamLimited = false, accessRevoked = false;
   let pendingFollow:{messageId?:string}|null=null;
   let pendingAnchor:NonNullable<ConversationViewPosition['anchor']>|null=null,viewIntent=0,viewWanted=false,userScroll=false,preferredViewAnchor:string|undefined,persistenceIntent:number|undefined;
+  let presentationAnchor: NonNullable<ConversationViewPosition['anchor']> | null = null;
   const tracksView=!!(options.viewPersistence||options.initialView);
   const setScroll=(value:number)=>{userScroll=false;if(messages.scrollTop!==value)messages.scrollTop=value;};
   let execution: ConversationExecution|null = null, unsubscribeExecution: (()=>void)|undefined, streamExecution = '', lastCursor = -1, connection: 'available'|'unavailable' = 'available';
@@ -153,7 +154,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   options.motion?.add(feedbackKey,feedbackPose(0,0));options.motion?.add(feedbackBarKey,feedbackPose(0,0));
   const reconcileFeedback=()=>{if(feedbackOpen){const height=feedbackContents.scrollHeight;if(height!==feedbackHeight){feedbackHeight=height;options.motion?.target(feedbackKey,feedbackPose(height,1),'conversation feedback content');options.motion?.wake();}}};
   const renderFeedback=()=>{const phase=session.snapshot().phase,notice=!!status.textContent&&status.dataset.statusKind!=='send-accepted';feedbackToggle.textContent=phase==='conflict'?'Review draft conflict':phase==='error'?'Review draft recovery':uncertain?'Review send outcome':'Details';feedbackToggle.hidden=!feedbackOpen&&!uncertain&&phase==='clean'&&!notice&&!contextNote.textContent&&current?.providers.find(p=>p.id===current?.conversation.providerId)?.available!==false;const cap=presentation==='workspace'?22:availableHeight>0&&availableHeight<280?28:48,height=feedbackToggle.hidden&&!status.textContent?0:Math.min(cap,feedbackLine.scrollHeight);if(height!==feedbackBarHeight){feedbackBarHeight=height;options.motion?.target(feedbackBarKey,feedbackPose(height,Number(height>0)),'conversation feedback summary');options.motion?.wake();}reconcileFeedback();};
-  feedbackToggle.addEventListener('click',()=>{feedbackOpen=!feedbackOpen;feedbackToggle.setAttribute('aria-expanded',String(feedbackOpen));feedbackBody.inert=!feedbackOpen;liveFollow=false;if(feedbackOpen){inspectionReturn=messages.scrollTop;inspectionFollow=true;feedbackBody.hidden=false;feedbackHeight=0;reconcileFeedback();}else{inspectionFollow=false;if(inspectionReturn!==null)setScroll(inspectionReturn);inspectionReturn=null;if(options.motion){options.motion.target(feedbackKey,feedbackPose(0,0),'conversation feedback close');options.motion.wake();}else feedbackBody.hidden=true;}renderFeedback();});
+  feedbackToggle.addEventListener('click',()=>{presentationAnchor=null;feedbackOpen=!feedbackOpen;feedbackToggle.setAttribute('aria-expanded',String(feedbackOpen));feedbackBody.inert=!feedbackOpen;liveFollow=false;if(feedbackOpen){inspectionReturn=messages.scrollTop;inspectionFollow=true;feedbackBody.hidden=false;feedbackHeight=0;reconcileFeedback();}else{inspectionFollow=false;if(inspectionReturn!==null)setScroll(inspectionReturn);inspectionReturn=null;if(options.motion){options.motion.target(feedbackKey,feedbackPose(0,0),'conversation feedback close');options.motion.wake();}else feedbackBody.hidden=true;}renderFeedback();});
   feedbackBody.addEventListener('focusin',()=>{inspectionFollow=false;inspectionReturn=null;});
   feedbackBody.addEventListener('toggle',()=>{reconcileFeedback();},true);
   feedbackContents.insertBefore(checkOutcome, capabilityNote);
@@ -249,6 +250,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const minimum=compact?34:56,cap=compact?96:200,maximum=height>0?Math.max(minimum,Math.min(cap,height*(compact ? .25 : .35))):cap;
     const next=Math.floor(Math.min(maximum,Math.max(minimum,naturalHeight)))+'px';if(textarea.style.height!==next)textarea.style.height=next;
     renderFeedback();
+    if (presentationAnchor && !pendingFollow && !pendingAnchor) alignReadingAnchor(presentationAnchor);
   };
   const scheduleResize=()=>{
     if(disposed||layoutHidden||resizeFrame!==undefined||resizeTimer!==undefined)return;
@@ -269,7 +271,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   });
   if(layoutHost)resizeObserver?.observe(layoutHost);
   function revokeView() {
-    const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=pendingAnchor=null;viewWanted=userScroll=false;inspectionFollow=liveFollow=false;inspectionReturn=null;root.dataset.resourceAvailable='false';current=null;thinking=undefined;cache.clear();days.clear();messages.replaceChildren(stream,feedbackBody);
+    const notify=!accessRevoked;accessRevoked=true;generation++;pendingFollow=pendingAnchor=presentationAnchor=null;viewWanted=userScroll=false;inspectionFollow=liveFollow=false;inspectionReturn=null;root.dataset.resourceAvailable='false';current=null;thinking=undefined;cache.clear();days.clear();messages.replaceChildren(stream,feedbackBody);
     streamText.textContent='';stream.hidden=true;paging.hidden=true;capabilityNote.textContent=contextNote.textContent='';seenEvents.clear();lastCursor=-1;streamLimited=false;
     renderDraft();if(notify)options.onUnavailable?.();report('This conversation is no longer available. Its draft is retained.');
   }
@@ -358,8 +360,13 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   for(const name of ['keyup','pointerup'])textarea.addEventListener(name,()=>{markViewIntent();viewState();});
   textarea.addEventListener('keydown', event => { if (!composing && composerShouldSubmit(event)) { event.preventDefault(); if (!send.disabled) composer.requestSubmit(); } });
   messages.addEventListener('scroll',()=>{if(userScroll)markViewIntent();viewState();},{passive:true});
-  for(const name of ['wheel','pointerdown','touchstart'])messages.addEventListener(name,event=>{pendingFollow=pendingAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;if(name!=='pointerdown'||event.target===messages){userScroll=true;if(tracksView)viewIntent++;}},{passive:true});
-  messages.addEventListener('keydown',event=>{if(event.target===messages&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)){pendingFollow=pendingAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;userScroll=true;if(tracksView)viewIntent++;}});
+  const beginTranscriptScroll = () => {
+    presentationAnchor = null;
+    userScroll = true;
+    if (tracksView) viewIntent++;
+  };
+  for(const name of ['wheel','pointerdown','touchstart'])messages.addEventListener(name,event=>{pendingFollow=pendingAnchor=presentationAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;if(name!=='pointerdown'||event.target===messages)beginTranscriptScroll();},{passive:true});
+  messages.addEventListener('keydown',event=>{if(event.target===messages&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(event.key)){pendingFollow=pendingAnchor=null;inspectionFollow=liveFollow=false;inspectionReturn=null;beginTranscriptScroll();}});
   const doAction = (event: ConversationMessageAction) => { Promise.resolve(options.onMessageAction?.(event)).catch(error=>report(errorText(error))); };
   function messageNode(message: MessageView,clock:ReturnType<typeof canonicalClock>): HTMLElement {
     const signature = JSON.stringify([message,clock]), cached = cache.get(message.id); if (cached?.signature === signature) return cached.node;
@@ -429,10 +436,18 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     for(const item of current.messages.items){const content=cache.get(item.id)?.node.querySelector<HTMLElement>('.cp-message-content'),box=content?.getBoundingClientRect();if(!box||box.height<=0)continue;const offsetY=(box.top-viewport.top)/viewport.scale;if(!Number.isFinite(offsetY)||Math.abs(offsetY)>1000000)continue;const anchor={messageId:item.id,offsetY};if(item.id===preferredViewAnchor)return {conversationRevision,anchor};if(!visible&&box.bottom>viewport.top&&box.top<viewport.bottom)visible=anchor;if(!nearest||Math.abs(offsetY)<Math.abs(nearest.offsetY))nearest=anchor;}
     return visible||nearest?{conversationRevision,anchor:visible??nearest}:undefined;
   }
+  function alignReadingAnchor(anchor: NonNullable<ConversationViewPosition['anchor']>) {
+    if (disposed || accessRevoked) return false;
+    const viewport = anchorViewport();
+    const box = cache.get(anchor.messageId)?.node.querySelector<HTMLElement>('.cp-message-content')?.getBoundingClientRect();
+    if (!viewport || !box || box.height <= 0) return false;
+    const value = messages.scrollTop + (box.top - viewport.top) / viewport.scale - anchor.offsetY;
+    if (!Number.isFinite(value)) return false;
+    setScroll(Math.max(0, Math.min(messages.scrollHeight - messages.clientHeight, value)));
+    return true;
+  }
   function drainAnchor(){
-    if(!pendingAnchor||disposed||accessRevoked)return;const viewport=anchorViewport(),content=cache.get(pendingAnchor.messageId)?.node.querySelector<HTMLElement>('.cp-message-content'),box=content?.getBoundingClientRect();if(!viewport||!box||box.height<=0)return;
-    const value=messages.scrollTop+(box.top-viewport.top)/viewport.scale-pendingAnchor.offsetY;if(!Number.isFinite(value))return;
-    pendingAnchor=null;setScroll(Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,value)));
+    if (pendingAnchor && alignReadingAnchor(pendingAnchor)) pendingAnchor = null;
   }
   function render(detail: Detail, around?:string,followMessageId?:string,restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>) {
     const nearBottom = messages.scrollHeight-messages.scrollTop-messages.clientHeight < 80, scroll = messages.scrollTop;
@@ -460,10 +475,20 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const movedPage=()=>{markViewIntent();viewState();};before.addEventListener('click',()=>{offset=Math.max(0,detail.messages.offset-50);void refresh().then(movedPage).catch(error=>report(errorText(error)));});after.addEventListener('click',()=>{offset=detail.messages.offset+50;void refresh().then(movedPage).catch(error=>report(errorText(error)));});
     paging.replaceChildren(before,el('span',`${detail.messages.total?detail.messages.offset+1:0}–${detail.messages.offset+detail.messages.items.length} of ${detail.messages.total}`),after);paging.hidden=detail.messages.total<=detail.messages.limit;
     disclosures?.sync();renderDraft();options.onDetail?.(detail);
+    if (restoreAnchor || followMessageId || around) presentationAnchor = null;
     if(restoreAnchor){pendingFollow=null;pendingAnchor=restoreAnchor;drainAnchor();}
     else if(followMessageId){pendingAnchor=null;pendingFollow={messageId:followMessageId};drainPendingFollow();}
     else if(around){pendingFollow=pendingAnchor=null;messages.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(around)}"]`)?.scrollIntoView({block:'center'});markViewIntent(around);viewState();}
-    else if(pendingAnchor&&detail.messages.items.some(item=>item.id===pendingAnchor?.messageId))drainAnchor();else{pendingAnchor=null;if(pendingFollow)drainPendingFollow();else if(nearBottom)followLatestContent();else setScroll(scroll);}
+    else if(pendingAnchor&&detail.messages.items.some(item=>item.id===pendingAnchor?.messageId))drainAnchor();
+    else {
+      pendingAnchor = null;
+      if (pendingFollow) drainPendingFollow();
+      else if (!presentationAnchor || !alignReadingAnchor(presentationAnchor)) {
+        presentationAnchor = null;
+        if (nearBottom) followLatestContent();
+        else setScroll(scroll);
+      }
+    }
   }
   async function refresh(input: {aroundMessageId?:string;latest?:boolean;followMessageId?:string;restoreAnchor?:NonNullable<ConversationViewPosition['anchor']>;restoreIntent?:number}={}) {
     const request=++generation;
@@ -559,7 +584,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     }
     root.dataset.executionState=next.state;stream.hidden=!streamText.textContent||!active();
     if(!active())liveFollow=false;
-    if(streamText.textContent!==previousPreview&&wasFollowing&&!feedbackOpen&&!stream.hidden){liveFollow=true;options.motion?.wake();}
+    if(streamText.textContent!==previousPreview&&wasFollowing&&!feedbackOpen&&!stream.hidden){presentationAnchor=null;liveFollow=true;options.motion?.wake();}
     const label=current?.providers.find(p=>p.id===next.providerId)?.label??next.providerId;
     report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
@@ -581,19 +606,29 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const flush=async()=>{await session.flush();viewState();try{await options.viewPersistence?.flush(resourceId);}catch{report('View position could not be saved. Your draft remains saved.');}};
   const frame=()=>{
     if(disposed||options.layoutActive?.()===false)return;
-    if(layoutDeferred)scheduleResize();
+    if (layoutDeferred) {
+      scheduleResize();
+      // The host can defer composer measurement while its card is moving.
+      // Keep the reading anchor on those same coordinator frames.
+      if (presentationAnchor && !pendingFollow && !pendingAnchor)
+        alignReadingAnchor(presentationAnchor);
+    }
     providerPicker?.frame();modelPicker?.frame();thinkingPicker?.frame();disclosures?.frame();controlStates?.frame();reconcileFeedback();let settled=true;if(options.motion){const p=options.motion.pose(feedbackKey),bar=options.motion.pose(feedbackBarKey),height=Math.max(0,p.h)+'px',barHeight=Math.max(0,bar.h)+'px';if(feedbackBody.style.height!==height)feedbackBody.style.height=height;if(feedbackBody.style.opacity!==String(p.opacity))feedbackBody.style.opacity=String(p.opacity);if(feedback.style.height!==barHeight)feedback.style.height=barHeight;if(feedback.style.opacity!==String(bar.opacity))feedback.style.opacity=String(bar.opacity);if(!feedbackOpen&&p.opacity<.001)feedbackBody.hidden=true;settled=Math.abs(p.h-feedbackHeight)<1&&p.opacity>.995;}
     drainAnchor();
     if(inspectionFollow&&feedbackOpen&&messages.clientHeight>0){const box=messages.getBoundingClientRect(),body=feedbackBody.getBoundingClientRect(),scale=box.height/(messages.offsetHeight||messages.clientHeight);if(Number.isFinite(scale)&&scale>0&&body.height>0){const next=Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(body.top-box.top)/scale));setScroll(next);if(settled)inspectionFollow=false;}}
     if(liveFollow&&!feedbackOpen&&!stream.hidden&&messages.clientHeight>0){const next=Math.max(0,messages.scrollHeight-messages.clientHeight);setScroll(next);liveFollow=false;}
   };
-  return {ready,refresh,focusComposer:()=>textarea.focus(),frame,setPresentation(mode){
+  return {ready,refresh,focusComposer:()=>textarea.focus(),frame,setPresentation(mode, transition){
     if(mode!=='workspace'&&mode!=='focused')throw new Error('invalid_chat_presentation');
     if(disposed)return;
+    // Hold the same visible message through the host's measured reflow.
+    if (presentation !== mode && !pendingFollow && !pendingAnchor)
+      presentationAnchor ??= capturePosition()?.anchor ?? null;
+    if (transition?.captureOnly) return;
     presentation=mode;
     if(options.layoutActive?.()===false){layoutDeferred=true;return;}
     const scroll=messages.scrollTop;
-    resize();setScroll(scroll);drainPendingFollow();drainAnchor();
+    resize();if(!presentationAnchor)setScroll(scroll);drainPendingFollow();drainAnchor();
   },flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
     if(disposed)return;await flush();disposed=true;generation++;pendingFollow=pendingAnchor=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();modelPicker?.dispose();thinkingPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
     if(!options.draftSession){

@@ -692,6 +692,45 @@ test('workspace/focused presentation switches preserve one canonical chat, draft
   }finally{await chat?.dispose();await session.dispose();f.restore();}
 });
 
+test('presentation reflow keeps the visible message and yields to transcript scrolling', async () => {
+  const f = fixture();
+  let chat;
+  try {
+    chat = mountConversationChat(f.view.root, {
+      port: f.port, resourceId: f.draft.resourceId, presentation: 'workspace',
+    });
+    await chat.ready;
+    const root = f.view.root.querySelector('.cp-chat');
+    const messages = root.querySelector('.cp-messages');
+    const content = messages.querySelector('.cp-message-content');
+    messages.clientHeight = messages.offsetHeight = 100;
+    messages.scrollHeight = 500;
+    messages.getBoundingClientRect = () => ({ top: 0, bottom: 100, height: 100 });
+    let contentTop = 180;
+    content.getBoundingClientRect = () => ({
+      top: contentTop - messages.scrollTop, bottom: contentTop - messages.scrollTop + 60, height: 60,
+    });
+    messages.scrollTop = 165;
+    chat.setPresentation('focused', { captureOnly: true });
+    assert.equal(root.dataset.presentation, 'workspace');
+    contentTop = 80;
+    chat.setPresentation('focused');
+    assert.equal(messages.scrollTop, 65);
+    contentTop = 112;
+    chat.setPresentation('focused');
+    assert.equal(messages.scrollTop, 97);
+    messages.fire('wheel');
+    messages.scrollTop = 45;
+    contentTop = 125;
+    chat.setPresentation('focused');
+    assert.equal(messages.scrollTop, 45);
+    assert.ok(f.calls.every(call => ['readDraft', 'detail'].includes(call.name)));
+  } finally {
+    await chat?.dispose();
+    f.restore();
+  }
+});
+
 test('short workspace follows canonical text above its in-flow action footer, preserves reading/around targets and never scrolls its page',async()=>{
   const f=fixture();let chat,around=0;const copies:string[]=[];f.detail.messages.items=f.detail.messages.items.filter(message=>message.role==='user');f.detail.messages.total=f.detail.conversation.messageCount=1;
   const geometry=()=>{const messages=f.view.root.querySelector('.cp-messages'),content=messages.querySelector('.cp-message-content'),article=messages.querySelector('.cp-message');messages.clientHeight=messages.offsetHeight=50;messages.scrollHeight=164;messages.getBoundingClientRect=()=>({top:200,bottom:250,height:50});content.getBoundingClientRect=()=>({top:140-(messages.scrollTop-96),bottom:210-(messages.scrollTop-96),height:70});article.scrollIntoView=()=>{around++;};};

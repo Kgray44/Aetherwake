@@ -471,9 +471,12 @@ function layout(cause: string) {
         focusedRailHeadings.delete(id);
       }
     }
+    const isExpanded = expanded === id;
+    if (el.classList.contains("expanded") !== isExpanded)
+      application?.captureChatPresentation(id, isExpanded);
     el.toggleAttribute("data-focused-side-carried", directGesture?.fromFocusedSide === true);
     el.classList.toggle("selected", selected === id);
-    el.classList.toggle("expanded", expanded === id);
+    el.classList.toggle("expanded", isExpanded);
     el.classList.toggle("receded", !!expanded && expanded !== id);
     el.classList.toggle(
       "dragging",
@@ -491,7 +494,6 @@ function layout(cause: string) {
       anchor.setAttribute("aria-hidden", String(!receded));
     if (el.inert) el.inert = false;
     const unfold = el.querySelector(".unfold")!;
-    const isExpanded = expanded === id;
     const labelText = isExpanded ? "Back ↙" : "Open ↗";
     if (unfold.textContent !== labelText) unfold.textContent = labelText;
     if (unfold.getAttribute("aria-expanded") !== String(isExpanded))
