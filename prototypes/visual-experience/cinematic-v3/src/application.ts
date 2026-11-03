@@ -1402,28 +1402,11 @@ export function installApplication(hooks: Hooks) {
       intent: "move",
       bounds,
     });
-    return { dx, dy, placement, bounds };
+    return { placement, bounds };
   }
   velaCard.addEventListener("pointermove", (event) => {
-    const d = presenceDrag;
-    if (!d || d.pointerId !== event.pointerId) return;
-    const point = queuePresencePoint(d, event);
-    if (!point) return;
-    const { dx, dy } = point;
-    hooks.motion.target(
-      presenceId,
-      {
-        x: d.origin.x * zoom + offset.x + dx,
-        y: d.origin.y * zoom + offset.y + dy,
-        w: d.origin.width * zoom,
-        h: d.origin.height * zoom,
-        lift: 8,
-        yaw: 0,
-        opacity: 1,
-      },
-      "Vela drag preview",
-    );
-    hooks.wake();
+    const drag = presenceDrag;
+    if (drag?.pointerId === event.pointerId) queuePresencePoint(drag, event);
   });
   velaCard.addEventListener("pointerup", (event) => {
     const d = presenceDrag;
@@ -2964,10 +2947,8 @@ export function installApplication(hooks: Hooks) {
       resource = block?.resource_id
         ? state?.resources.find((r) => r.id === block.resource_id)
         : undefined;
-    const editor = article?.querySelector<HTMLTextAreaElement>("textarea");
     if (
       !article ||
-      !editor ||
       !resource ||
       resource.available === false ||
       !["note", "research", "reference", "task", "task_group"].includes(
@@ -2975,6 +2956,17 @@ export function installApplication(hooks: Hooks) {
       )
     )
       return;
+    const editor = document.createElement("textarea");
+    editor.spellcheck = false;
+    editor.maxLength = 100000;
+    editor.setAttribute("aria-label", resource.title + " content");
+    editor.addEventListener("input", () => {
+      if (editor.value.length > editor.maxLength)
+        editor.value = editor.value.slice(0, editor.maxLength);
+      saveContent(resource.id, editor.value, article);
+      el(".folio-preview", article).textContent = editor.value.split("\n\n")[0];
+      hooks.wake();
+    });
     editor.placeholder =
       resource.kind === "note"
         ? "Start writing…"
@@ -3005,6 +2997,10 @@ export function installApplication(hooks: Hooks) {
       }
       documentRoot = body;
     }
+    const label = document.createElement("label");
+    label.textContent = "Working draft";
+    label.append(editor);
+    documentRoot.append(label);
     const session = noteSession(resource.id),
       view = mountNoteExperience(documentRoot, editor, session, notesClient, {
         copyText,
@@ -4272,6 +4268,7 @@ export function installApplication(hooks: Hooks) {
           "checklist",
           "agent",
           "timeline",
+          "task_objective",
         ].includes(resource?.kind ?? "")
       ) {
         const article = document.querySelector<HTMLElement>(
@@ -4337,8 +4334,12 @@ export function installApplication(hooks: Hooks) {
       workspaceActions?.frame();
       agentLibrary?.frame();
       conversationManager?.frame();
-      for (const view of chatViews.values()) view.frame();
+      // Retain editors and their drafts when their cards are outside the view.
+      // The coordinator still advances their poses without repainting hidden DOM.
+      for (const [id, view] of chatViews)
+        if (blockPresentations.get(id)?.visible) view.frame();
       for (const [id, entry] of timelineViews) {
+        if (!blockPresentations.get(id)?.visible) continue;
         const width =
           document.querySelector<HTMLElement>(
             `[data-block="${id}"] .working-content`,
@@ -4350,6 +4351,7 @@ export function installApplication(hooks: Hooks) {
         entry.view.frame();
       }
       for (const [id, entry] of agentBlockViews) {
+        if (!blockPresentations.get(id)?.visible) continue;
         const width =
           document.querySelector<HTMLElement>(
             `[data-block="${id}"] .working-content`,
@@ -4363,6 +4365,7 @@ export function installApplication(hooks: Hooks) {
       checklistCreator?.frame();
       taskCreator?.frame();
       for (const [id, entry] of taskTrackerViews) {
+        if (!blockPresentations.get(id)?.visible) continue;
         const width =
           document.querySelector<HTMLElement>(
             `[data-block="${id}"] .working-content`,
@@ -4375,6 +4378,7 @@ export function installApplication(hooks: Hooks) {
       }
       directResources.frame();
       for (const [id, entry] of checklistViews) {
+        if (!blockPresentations.get(id)?.visible) continue;
         const width =
           document.querySelector<HTMLElement>(
             `[data-block="${id}"] .working-content`,
@@ -4419,8 +4423,14 @@ export function installApplication(hooks: Hooks) {
       )
         previewGuides.replaceChildren();
       const target = presenceTarget();
-      if (target && !presenceDrag)
-        hooks.motion.target(presenceId, target, "Vela workspace view");
+      if (target) {
+        const dragging = presenceDrag?.moved === true && !!preview;
+        hooks.motion.target(
+          presenceId,
+          dragging ? { ...target, lift: 8 } : target,
+          dragging ? "Vela placement preview" : "Vela workspace view",
+        );
+      }
       if (
         hooks.motion.bodies.has(presenceId) &&
         (policy.reduced || policy.quiet || policy.hidden)

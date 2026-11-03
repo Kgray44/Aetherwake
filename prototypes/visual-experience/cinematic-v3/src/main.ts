@@ -583,7 +583,7 @@ function mountResource(id: string, r: Resource) {
   article.dataset.resource = r.canonicalId ?? id;
   article.dataset.block = id;
   article.setAttribute("aria-label", r.title);
-  article.innerHTML = `<button class="resource-anchor" aria-label="Open ${r.type}" title="${r.type}" tabindex="-1"><span class="anchor-glyph" aria-hidden="true">${r.type === "research" ? "◌" : r.type === "note" ? "⌁" : "≋"}</span><span class="anchor-label"><small>${r.type}</small><b></b></span></button><div class="folio-edge" aria-hidden="true"></div><div class="folio-inner"><div class="folio-top"><button class="grip" aria-label="Move ${r.type}. Alt plus arrow keys reorders; Escape cancels drag." title="Drag to move · Alt+←/→">⠿ <span>${r.type.toUpperCase()}</span></button><span class="folio-number">${String(order.indexOf(id) + 1).padStart(2, "0")}</span></div><button class="title-select"><h2></h2></button><div class="folio-subtitle"></div><div class="folio-preview"></div><div class="working-content"><p class="synthetic">SYNTHETIC EXAMPLE CONTENT · EDITS STAY LOCAL</p><label>Working draft<textarea spellcheck="false" aria-label="${r.type} working draft"></textarea></label><p class="saved">Saved locally on this device</p></div><div class="folio-actions"><button class="unfold" aria-expanded="false">Unfold ↗</button><div class="move-controls"><button class="earlier" aria-label="Move ${r.type} earlier">←</button><button class="later" aria-label="Move ${r.type} later">→</button></div></div></div>`;
+  article.innerHTML = `<button class="resource-anchor" aria-label="Open ${r.type}" title="${r.type}" tabindex="-1"><span class="anchor-glyph" aria-hidden="true">${r.type === "research" ? "◌" : r.type === "note" ? "⌁" : "≋"}</span><span class="anchor-label"><small>${r.type}</small><b></b></span></button><div class="folio-edge" aria-hidden="true"></div><div class="folio-inner"><div class="folio-top"><button class="grip" aria-label="Move ${r.type}. Alt plus arrow keys reorders; Escape cancels drag." title="Drag to move · Alt+←/→">⠿ <span>${r.type.toUpperCase()}</span></button><span class="folio-number">${String(order.indexOf(id) + 1).padStart(2, "0")}</span></div><button class="title-select"><h2></h2></button><div class="folio-subtitle"></div><div class="folio-preview"></div><div class="working-content"><p class="synthetic">SYNTHETIC EXAMPLE CONTENT · EDITS STAY LOCAL</p>${desktopMode ? "" : `<label>Working draft<textarea spellcheck="false" aria-label="${r.type} working draft"></textarea></label>`}<p class="saved">Saved locally on this device</p></div><div class="folio-actions"><button class="unfold" aria-expanded="false">Unfold ↗</button><div class="move-controls"><button class="earlier" aria-label="Move ${r.type} earlier">←</button><button class="later" aria-label="Move ${r.type} later">→</button></div></div></div>`;
   const presentation = document.createElement("div");
   presentation.className = "resource-presentation";
   while (article.firstChild) presentation.append(article.firstChild);
@@ -600,32 +600,26 @@ function mountResource(id: string, r: Resource) {
   article.querySelector(".folio-subtitle")!.textContent = r.subtitle;
   article.querySelector(".folio-preview")!.textContent =
     r.text.split("\n\n")[0];
-  const editor = article.querySelector("textarea")!;
-  editor.value = r.text;
-  editor.maxLength = 100000;
-  editor.addEventListener("input", () => {
-    const oversized = editor.value.length > 100000;
-    editor.value = editor.value.slice(0, 100000);
-    r.text = editor.value;
-    if (application) {
-      application.saveContent(r.canonicalId!, r.text, article);
+  const editor = article.querySelector("textarea");
+  if (editor) {
+    editor.value = r.text;
+    editor.maxLength = 100000;
+    editor.addEventListener("input", () => {
+      const oversized = editor.value.length > 100000;
+      editor.value = editor.value.slice(0, 100000);
+      r.text = editor.value;
+      const ok = persist();
+      article.querySelector(".saved")!.textContent = ok
+        ? "Saved locally on this device"
+        : "Storage unavailable · kept in this open window";
+      if (oversized)
+        status("Draft limit is 100,000 characters. Excess input was not saved.");
       article.querySelector(".folio-preview")!.textContent =
         r.text.split("\n\n")[0];
       interaction();
-      return;
-    }
-    const ok = persist();
-    article.querySelector(".saved")!.textContent = ok
-      ? "Saved locally on this device"
-      : "Storage unavailable · kept in this open window";
-    if (oversized)
-      status("Draft limit is 100,000 characters. Excess input was not saved.");
-    article.querySelector(".folio-preview")!.textContent =
-      r.text.split("\n\n")[0];
-    interaction();
-  });
-  // Delegate to the card so the shared chat composer receives the same writing
-  // motion policy even though it replaces the bootstrap textarea.
+    });
+  }
+  // Delegate to the card so lazily mounted editors share the writing motion policy.
   article.addEventListener("focusin", (event) => {
     if (!(event.target instanceof HTMLTextAreaElement)) return;
     quiet = true;
@@ -643,7 +637,7 @@ function mountResource(id: string, r: Resource) {
     document.body.classList.remove("writing");
     wake();
   });
-  if (r.type === "conversation" && !desktopMode) {
+  if (r.type === "conversation" && editor) {
     installConversation(
       article.querySelector<HTMLElement>(".working-content")!,
       editor,
