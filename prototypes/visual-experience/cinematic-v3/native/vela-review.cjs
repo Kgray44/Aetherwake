@@ -182,7 +182,9 @@ function reviewPage(review, intent = "", experience = "vela") {
       (route.followUpCheck ? " The requested project check also requires a separate review." : "")
       : route.kind === "composite" ? "Native reading shared with Codex in a read-only sandbox"
       : route.kind === "agentic" ? "Local read-only sandbox"
-      : route.kind === "conversational" ? route.nativeMetric ? "Share this local measurement for analysis. The Codex step will require its own review." : route.depth + " conversation" : "Reviewed app proposal",
+      : route.kind === "conversational" ? route.nativeMetric || route.nativeLog
+        ? "Share this local evidence for analysis. The Codex step will require its own review."
+        : route.depth + " conversation" : "Reviewed app proposal",
     route.model && "Requested model " + route.model + (origins?.model ? " (" + origins.model + ")" : ""),
     route.effort && "Requested effort " + route.effort + (origins?.reasoningEffort ? " (" + origins.reasoningEffort + ")" : ""),
     review.workingDirectory && "Starting directory " + review.workingDirectory,

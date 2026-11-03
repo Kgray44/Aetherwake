@@ -1434,12 +1434,12 @@ async function verifyJourney({
         "resource:" + sourceRow.conversation.block.id,
       );
       await node("resource:" + sourceRow.conversation.block.id);
-      const conversationComposer = `[data-block="${sourceRow.conversation.block.id}"] .cp-chat[data-resource-id="${sourceRow.conversation.resource.id}"] .cp-composer`,
+      const conversationComposer = `#conversation-surface .cp-chat[data-resource-id="${sourceRow.conversation.resource.id}"] .cp-composer`,
         conversationInput =
           conversationComposer + ' textarea[aria-label="Message"]',
         conversationSend =
           conversationComposer +
-          ' button[type="submit"][aria-label="Send message"]';
+          ' button[type="submit"][aria-label="Record message"]';
       await wait(
         `(()=>{const e=document.querySelector(${JSON.stringify(conversationInput)});return !!e&&!e.disabled&&e.getClientRects().length>0})()`,
       );
@@ -1457,6 +1457,7 @@ async function verifyJourney({
           `window.__aerynth.application().resources.find(r=>r.id===${JSON.stringify(sourceRow.conversation.resource.id)}).messages.some(m=>m.content===${JSON.stringify(content)})`,
         );
       }
+      await textButton("Close", "#conversation-surface");
       await workingHome();
       await projectView();
       const sourceConversation = (await snapshot()).resources.find(

@@ -282,7 +282,7 @@ exports.velaCommand = async ({
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
     const direct = directMessageSend && (!preview.route || preview.route.kind === "conversational") &&
-      !preview.route?.nativeMetric &&
+      !preview.route?.nativeMetric && !preview.route?.nativeLog &&
       preview.resourceIds?.length === 0 &&
       !review.context.included.length && !review.history?.messages.length && !review.handoff && !review.routingAgent;
     const approved = direct || await reviewProvider({
@@ -314,7 +314,7 @@ exports.velaCommand = async ({
         },
       }),
     );
-    if (!directMessageSend || result?.state !== "responded" || !preview.route?.nativeMetric) return result;
+    if (!directMessageSend || result?.state !== "responded" || !(preview.route?.nativeMetric || preview.route?.nativeLog)) return result;
     const next = await call("velaNextWorkflowStage", { requestId: result.id });
     if (!next) return result;
     try {

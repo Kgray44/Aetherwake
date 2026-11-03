@@ -22,7 +22,7 @@ type AgenticSelection = { model?: string; effort?: ReasoningEffort; environment:
 type NativePerformanceMetric = 'system.cpu' | 'system.gpu' | 'system.performance' | 'system.memory';
 export type VelaRouteDecision =
   | { kind: 'conversational'; depth: 'quick' | 'deep'; reason: 'routine-answer' | 'complex-analysis'; model: string; effort?: ReasoningEffort;
-      nativeMetric?: NativePerformanceMetric;
+      nativeMetric?: NativePerformanceMetric; nativeLog?: true;
       calibration?: VelaCalibrationComparison;
       escalation?: { model: string; effort: ReasoningEffort; trigger: 'output-token-limit' } }
   | { kind: 'app-planning'; reason: 'reviewed-app-action'; model?: string; effort?: ReasoningEffort }
@@ -48,13 +48,15 @@ export function nativeConversationalWorkflow(intent: string) {
   const text = intent.trim().replace(/^vela[,:]?\s+/iu, '');
   const split = text.search(/[,;]/u);
   if (split < 1) return;
-  const metric = inspectionMetric(text.slice(0, split));
-  if (!metric) return;
+  const first = text.slice(0, split);
+  const metric = inspectionMetric(first);
+  const nativeLog = /^(?:inspect|read|review|check|look (?:at|through)) (?:the |my )?(?:selected )?(?:log note|log excerpt|logs)$/iu.test(first);
+  if (!metric && !nativeLog) return;
   const parts = /^\s*(?:and\s+)?((?:explain|analyze|summarize)\b.+?)[,;]?\s+(?:and\s+)?then\s+(.+)$/iu.exec(text.slice(split + 1));
   if (!parts) return;
   const execution = classifyVelaRoutingIntent(parts[2]);
   if (execution === 'local-read' || execution === 'local-write' && velaFileEditSelection(parts[2]))
-    return { metric, analysisIntent: parts[1], nextIntent: parts[2] };
+    return { metric, nativeLog, analysisIntent: parts[1], nextIntent: parts[2] };
 }
 
 /** Only complete, single-purpose device queries can bypass the provider path. */

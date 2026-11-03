@@ -506,7 +506,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     manifestation.hidden = projection.kind === 'none' || view() === 'history' && !projection.requiredPlanIds.length;
     const route = selectedRequest?.route;
     manifestationKicker.textContent = route?.kind === 'conversational'
-      ? route.nativeMetric ? 'Vela · Native + ChatGPT plan' : 'Vela · ' + (route.depth === 'deep' ? 'Deep' : 'Quick')
+      ? route.nativeMetric || route.nativeLog ? 'Vela · Native + ChatGPT plan' : 'Vela · ' + (route.depth === 'deep' ? 'Deep' : 'Quick')
       : route?.kind === 'agentic' ? 'Vela · Codex · Read-only'
       : route?.kind === 'file-edit' ? 'Vela · Codex file proposal'
       : route?.kind === 'project-check' ? 'Vela · Local project check'
@@ -515,7 +515,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       : projection.kind === 'insight' && message?.source === 'provider' ? providerName(message.providerId) + ' · contribution' : 'Vela';
     if (signature !== responseSignature) { responseSignature = signature; manifestationBody.replaceChildren(); if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content)); }
     manifestationBody.hidden = projection.kind === 'action' || !content;
-    const why = route?.kind === 'conversational' && route.nativeMetric ? 'Vela shared the reviewed local reading for analysis and can offer a separate Codex review.'
+    const why = route?.kind === 'conversational' && (route.nativeMetric || route.nativeLog) ? 'Vela shared the reviewed local evidence for analysis and can offer a separate Codex review.'
       : route?.reason === 'routine-answer' ? 'A conversational response can answer this request.'
       : route?.reason === 'complex-analysis' ? 'The request calls for deeper conversational analysis.'
       : route?.reason === 'local-tools-required' ? 'This request needs access to a local repository or files.'

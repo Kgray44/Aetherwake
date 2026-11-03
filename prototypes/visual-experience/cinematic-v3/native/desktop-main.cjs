@@ -93,7 +93,8 @@ const source = {
     ]),
   ),
 };
-const verify =
+const verifyAirPlan = process.argv.includes("--integration-vela-air-plan");
+const verify = verifyAirPlan ||
   process.argv.includes("--integration-chat-motion") ||
   process.argv.includes("--integration-task-objectives") ||
   process.argv.includes("--integration-timeline") ||
@@ -138,6 +139,8 @@ const privateRoot = profileArg
   : path.join(app.getPath("appData"), "Aerynth", "review");
 if (verifyAirLocal && (!/^review-vela-air-offline-\d+$/u.test(path.basename(privateRoot)) || existsSync(privateRoot)))
   throw Error("fresh_offline_air_profile_required");
+if (verifyAirPlan && (!/^review-vela-air-plan-\d+$/u.test(path.basename(privateRoot)) || !existsSync(privateRoot)))
+  throw Error("signed_in_air_test_profile_required");
 if (offscreenScale) {
   const scale = require("./integration-block-scale.cjs").options(process.argv);
   if (!/^review-block-scale-(?:0|1|3|10|25|50)-\d+$/.test(path.basename(privateRoot)))
@@ -354,7 +357,7 @@ app.whenReady().then(async () => {
     useContentSize: process.argv.includes("--integration-drag-glide"),
     minWidth: 800,
     minHeight: 650,
-    show: !offscreenScale,
+    show: !offscreenScale && !verifyAirPlan,
     backgroundColor: "#05060c",
     title: verify
       ? "Aerynth · Automated check"
@@ -592,6 +595,10 @@ app.whenReady().then(async () => {
   for (const event of ["focus", "blur", "show", "hide", "minimize", "restore"])
     win.on(event, active);
   await win.loadURL(localURL);
+  if (verifyAirPlan) {
+    await require("../../../vela-core/test/native-plan-evaluation.cjs").run({ win, app, privateRoot, call });
+    return;
+  }
   if (offscreenScale) {
     await require("./integration-offscreen-scale.cjs").verify({
       win, app, privateRoot, call, source, moduleStartedMonotonicMs, startupErrors,

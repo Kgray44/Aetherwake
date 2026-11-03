@@ -213,6 +213,28 @@ test('Check my CPU, explain the number, then look through my repository logs', a
   }
 });
 
+test('Read this log, tell me what happened, then fix the code and benchmark it', async () => {
+  const f = fixture(true);
+  try {
+    const intent = 'Read the log note, explain the slowdown, then fix the code and run the benchmark';
+    const request = { intent, resourceIds: [], adaptive: true as const };
+    await assert.rejects(f.core.command('velaRequestPreview', request), /vela_edit_log_source_required/);
+    const notes = await f.core.command('desktop', { type: 'createResource', title: 'Synthetic slow frame', kind: 'note', workspaceId: null });
+    const note = notes.resources.find(resource => resource.title === 'Synthetic slow frame')!;
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: 'Synthetic frame took 80 ms.' });
+    const preview = await f.core.command('velaRequestPreview', { ...request, resourceIds: [note.id] });
+    const review = await f.core.command('velaNativeReview', { previewId: preview.id, signature: preview.signature });
+    assert.equal(review.route?.kind, 'conversational');
+    assert.equal(review.route.nativeLog, true);
+    assert.deepEqual(review.context.included.map(source => source.id), [note.id]);
+    assert.match(review.prompt, /Synthetic frame took 80 ms/u);
+    assert.doesNotMatch(review.prompt, /fix the code/u);
+    await assert.rejects(f.core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature,
+      reviewDigest: review.reviewDigest, directSend: true }), /vela_attached_context_review_required/);
+    assert.equal((await f.core.command('providerActivity', {})).providerRequests, 0);
+  } finally { await f.close(); }
+});
+
 test('Vela hands off exactly the selected exchange in both directions with native consent and canonical provenance', async () => {
   const f = fixture(true), codex = 'codex-app-server';
   const win = { isDestroyed: () => false, webContents: { isDestroyed: () => false } };
