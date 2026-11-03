@@ -79,3 +79,6 @@
 }
 
 .cp-manager .cp-detail{opacity:var(--cp-detail-reveal-opacity,1);translate:0 var(--cp-detail-reveal-y,0px)}
+/* Chat-header menus paint over the transcript, within their own measured cap. */
+.cp-manager[data-cp-history-motion] .cp-detail-header{position:relative;z-index:3;flex:0 0 auto;max-height:none;overflow:visible}
+.cp-manager[data-cp-history-motion] .cp-chat-identity h3{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:3;overflow:hidden;overflow-wrap:anywhere}
