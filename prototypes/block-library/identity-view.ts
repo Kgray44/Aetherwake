@@ -39,6 +39,18 @@ export type BlockMinimizedPresentation = Readonly<{
   effectiveMinimized: boolean;
   deferredReason: 'composition' | 'uninitialized' | 'loading' | 'unavailable' | null;
 }>;
+
+function overviewActionLayout(footprint: BlockFootprint | undefined) {
+  if (!footprint || footprint.width <= 0 || footprint.height <= 0) return undefined;
+  // The projected dimensions include the card's border. Leave a pixel at each
+  // side when choosing which controls fit inside the presentation surface.
+  const { width, height } = footprint;
+  if (width <= 69 || height <= 41) return 'single';
+  if (height <= 90 || (width <= 118 && height <= 122)) return 'centered';
+  if (width <= 158) return 'inline';
+  return undefined;
+}
+
 type Actions = {
   approach?(target: BlockApproachTarget): void | Promise<void>;
   restore?(): Promise<void>;
@@ -155,6 +167,11 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
         ? blockComposition(model.kind, footprint, composition, composing || hasWorkingFocus()) : 'working';
     composition = next;
     if (article.dataset.blockComposition !== next) article.dataset.blockComposition = next;
+    const actionLayout = next === 'overview' ? overviewActionLayout(footprint) : undefined;
+    if (article.dataset.overviewActions !== actionLayout) {
+      if (actionLayout) article.dataset.overviewActions = actionLayout;
+      else delete article.dataset.overviewActions;
+    }
     if (overview.parentElement !== working) working.append(overview);
     // Footprint updates can arrive every frame. Only write reflected attributes
     // when the controls or their semantics actually change.
@@ -571,6 +588,7 @@ export function mountBlockIdentity(article: HTMLElement, actions: Actions) {
       restore.remove();
       openMark.remove();
       delete article.dataset.blockComposition;
+      delete article.dataset.overviewActions;
       delete article.dataset.blockMinimized;
       root.remove();
       mark.remove();
