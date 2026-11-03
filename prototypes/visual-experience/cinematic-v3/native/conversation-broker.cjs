@@ -43,15 +43,21 @@ exports.conversationCommand = async ({
     return { requested: true };
   }
   if (input.name !== "send") return call("conversation", input);
-  const { resourceId, content, expectedRevision, commandId, model, webSearch } =
+  const { resourceId, content, expectedRevision, commandId, model, reasoningEffort, webSearch } =
     input.input;
   if (webSearch !== undefined && webSearch !== true) throw Error("invalid_web_search_scope");
+  if (model !== undefined && (typeof model !== "string" || !model || model.length > 200))
+    throw Error("invalid_model");
+  if (reasoningEffort !== undefined && (!model ||
+      !["none", "low", "medium", "high", "xhigh", "max"].includes(reasoningEffort)))
+    throw Error("unsupported_reasoning_effort");
   const request = {
     resourceId,
     content,
     expectedRevision,
     commandId,
     ...(model ? { model } : {}),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     ...(webSearch ? { webSearch: true } : {}),
   };
   const state = await call("desktop", { type: "snapshot" });
@@ -63,6 +69,8 @@ exports.conversationCommand = async ({
   );
   if (!resource) throw Error("resource_not_found");
   if (webSearch && resource.providerId !== PLAN) throw Error("invalid_web_search_scope");
+  if (reasoningEffort !== undefined && resource.providerId !== PLAN)
+    throw Error("unsupported_reasoning_effort");
   if (resource.providerId === PLAN) {
     if (!webSearch) {
       const local = await call("conversationClock", request);
@@ -77,6 +85,8 @@ exports.conversationCommand = async ({
       preview.commandId !== commandId ||
       typeof r.model !== "string" ||
       !r.model ||
+      (model !== undefined && r.model !== model) ||
+      r.reasoningEffort !== reasoningEffort ||
       typeof r.instructions !== "string" ||
       r.configurationId !== "aerynth.chatgpt-plan.primary" ||
       !Number.isSafeInteger(r.connectionVersion) ||
@@ -108,6 +118,7 @@ exports.conversationCommand = async ({
       input: r.messages.map(({ role, content }) => ({ role, content })),
       store: false,
       stream: true,
+      ...(reasoningEffort === undefined ? {} : { reasoning: { effort: reasoningEffort } }),
       ...(webSearch ? { tools: [{ type: "web_search" }], tool_choice: "required" } : {}),
     });
     const bytes = Buffer.byteLength(body),

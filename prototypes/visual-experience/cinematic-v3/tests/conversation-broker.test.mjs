@@ -163,7 +163,7 @@ function planFixture({ shared = false, approve = true } = {}) {
           : []),
         { role: "user", content: input.content },
       ];
-      const model = "synthetic-catalog-model",
+      const model = input.model ?? "synthetic-catalog-model",
         instructions = "Synthetic ordinary instructions";
       const body = JSON.stringify({
         model,
@@ -171,6 +171,7 @@ function planFixture({ shared = false, approve = true } = {}) {
         input: messages,
         store: false,
         stream: true,
+        ...(input.reasoningEffort === undefined ? {} : { reasoning: { effort: input.reasoningEffort } }),
       });
       return {
         ...result,
@@ -187,6 +188,7 @@ function planFixture({ shared = false, approve = true } = {}) {
           : [],
         responses: {
           model,
+          ...(input.reasoningEffort === undefined ? {} : { reasoningEffort: input.reasoningEffort }),
           instructions,
           configurationId: "aerynth.chatgpt-plan.primary",
           connectionVersion: 1,
@@ -256,6 +258,30 @@ test("ordinary selected-source sharing uses the full exact request in the native
       f.calls.some((value) => value.name === "authorizeConversationSend"),
       approve,
     );
+  }
+});
+
+test("native review binds the explicit model and thinking effort to the exact approved body", async () => {
+  const accepted = planFixture({ shared: true });
+  Object.assign(accepted.input.input, { model: "gpt-6.1-sol", reasoningEffort: "high" });
+  await conversationCommand(accepted);
+  assert.deepEqual(JSON.parse(accepted.reviews[0].review.prompt).reasoning, { effort: "high" });
+  assert.equal(accepted.calls.some(call => call.name === "conversationClock"), true);
+  for (const mutate of [
+    response => { response.reasoningEffort = "low"; },
+    response => { response.model = "gpt-6-luna"; },
+    response => { response.bodyDigest = "a".repeat(64); },
+  ]) {
+    const f = planFixture();
+    Object.assign(f.input.input, { model: "gpt-6.1-sol", reasoningEffort: "high" });
+    const original = f.call;
+    f.call = async (name, input) => {
+      const result = await original(name, input);
+      if (name === "conversationSendPreview") mutate(result.responses);
+      return result;
+    };
+    await assert.rejects(conversationCommand(f), /invalid_native_responses_preview/);
+    assert.equal(f.calls.some(call => call.name === "authorizeConversationSend"), false);
   }
 });
 

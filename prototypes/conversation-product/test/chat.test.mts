@@ -368,6 +368,7 @@ test('the animated model picker refreshes explicitly and sends the selected cata
 test('the mounted chat submits an explicit web lookup and opens only canonical citation references',async()=>{
  const f=fixture('chatgpt-plan-responses');let chat;
  try{
+  f.detail.providers[0].modelOptions=[{id:'gpt-6.1-sol',label:'Synthetic Sol catalog entry',eligibleTools:['web_search']}];
   const message=f.detail.messages.items[1];
   message.webSearch={completed:true,citations:[{url:'https://science.example.org/moon',title:'Moon facts',start:0,end:1},{url:'https://science.example.org/second',title:'Second source',start:1,end:message.content.length-1}]};
   const port={command:async(name:string,input:any)=>name==='openCitation'?(f.calls.push({name,input}),{requested:true}):(f.port.command as any)(name,input)} as ConversationProductPort;
@@ -383,11 +384,78 @@ test('the mounted chat submits an explicit web lookup and opens only canonical c
   form.fire('submit',{submitter:web});
   await until(()=>!!f.pending);
   assert.equal(f.pending?.input.webSearch,true);
+  assert.equal(f.pending?.input.model,'gpt-6.1-sol');
   f.pending?.resolve({id:'execution:search-failed',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:f.pending?.input.commandId,state:'failed',errorCode:'subscription_sharing_unsupported_capability'});
   await until(()=>f.view.root.querySelector('.cp-chat-status').textContent.includes('could not use web search'));
   assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
   assert.equal(f.calls.filter(call=>call.name==='send').length,1);
  }finally{await chat?.dispose();f.restore();}
+});
+
+test('thinking is bound to the observed model and applies only to the next submitted message', async () => {
+ const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
+ f.detail.providers[0].modelOptions = [{ id: 'gpt-6.1-sol', label: 'Synthetic Sol', reasoningEfforts: ['low', 'high'] }];
+ let chat;
+ try {
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId,
+   motion: motion.motion, viewId: 'thinking-selection', models: { selections: new Map(), async refresh() {} } });
+  await chat.ready;
+  const trigger = f.view.root.querySelector('[data-cp-picker-for="Thinking for next message"]');
+  const editor = f.view.root.querySelector('textarea'), form = f.view.root.querySelector('form');
+  trigger.fire('click');
+  assert.equal(f.view.root.querySelector('[data-cp-option-value="max"]'), null);
+  f.view.root.querySelector('[data-cp-option-value="high"]').fire('click');
+  assert.match(trigger.textContent, /High/);
+  assert.equal(f.calls.some(call => call.name === 'selectProvider' || call.name === 'send'), false);
+  form.fire('submit');
+  await until(() => !!f.pending);
+  assert.equal(f.pending?.input.model, 'gpt-6.1-sol');
+  assert.equal(f.pending?.input.reasoningEffort, 'high');
+  f.accept(true);
+  await chat.whenSubmissionSettled();
+  assert.match(trigger.textContent, /Default thinking/);
+  assert.equal(f.view.root.querySelector('textarea'), editor);
+  editor.value = 'Synthetic second message';
+  editor.fire('input');
+  form.fire('submit');
+  await until(() => !!f.pending);
+  assert.equal(Object.hasOwn(f.pending?.input, 'reasoningEffort'), false);
+  assert.equal(Object.hasOwn(f.pending?.input, 'model'), false);
+  f.accept(true);
+  await chat.whenSubmissionSettled();
+ } finally { await chat?.dispose(); f.restore(); }
+});
+
+test('an undocumented catalog model offers no tool and a stale thinking choice cannot silently send', async () => {
+ const f = fixture('chatgpt-plan-responses'), motion = pickerMotion();
+ f.detail.providers[0].modelOptions = [{ id: 'gpt-6.1-sol', label: 'Synthetic Sol', reasoningEfforts: ['low'], eligibleTools: ['web_search'] }];
+ let chat;
+ try {
+  chat = mountConversationChat(f.view.root, { port: f.port, resourceId: f.draft.resourceId,
+   motion: motion.motion, viewId: 'thinking-stale', models: { selections: new Map(), async refresh() {} } });
+  await chat.ready;
+  const trigger = f.view.root.querySelector('[data-cp-picker-for="Thinking for next message"]');
+  const form = f.view.root.querySelector('form'), web = named(form, 'Search web');
+  assert.equal(web.hidden, false);
+  trigger.fire('click');
+  f.view.root.querySelector('[data-cp-option-value="low"]').fire('click');
+  f.detail.providers[0].modelOptions = [{ id: 'gpt-6.1-sol-undocumented', label: 'Synthetic other model' }];
+  await chat.refresh();
+  assert.equal(web.hidden, true);
+  form.fire('submit', { submitter: web });
+  form.fire('submit');
+  assert.equal(f.calls.some(call => call.name === 'send'), false);
+  assert.match(f.view.root.querySelector('.cp-chat-status').textContent, /thinking level is unavailable/);
+  assert.equal(f.view.root.querySelector('textarea').value, f.draft.content);
+  trigger.fire('click');
+  f.view.root.querySelector('[data-cp-option-value="default"]').fire('click');
+  form.fire('submit');
+  await until(() => !!f.pending);
+  assert.equal(Object.hasOwn(f.pending?.input, 'reasoningEffort'), false);
+  assert.equal(Object.hasOwn(f.pending?.input, 'webSearch'), false);
+  f.accept(true);
+  await chat.whenSubmissionSettled();
+ } finally { await chat?.dispose(); f.restore(); }
 });
 
 test('safe Markdown supports readable code/list/inline text without executing HTML, script links or remote media',async()=>{

@@ -1,6 +1,7 @@
 /** Browser-safe product contracts; IDs always refer to the canonical application. */
 import type { NativeChatGPTFidelityDescriptor } from './native-chatgpt-fidelity.ts';
 import type { PublicConversationExecution } from '../../application-contract/contracts.ts';
+import type { OrdinaryModelOption, ReasoningEffort } from '../../openai-provider/model-controls.ts';
 export type { FidelityStatus, NativeChatGPTAimId, NativeChatGPTAimAssessment, NativeChatGPTFidelityDescriptor } from './native-chatgpt-fidelity.ts';
 export type SharingMode = 'independent' | 'connected' | 'collaborative';
 export type Evidence = 'excerpt' | 'reported' | 'observed' | 'hypothesis' | 'decision' | 'disputed';
@@ -14,7 +15,7 @@ export type Page<T> = { items: T[]; total: number; offset: number; limit: number
 export type Collection = { id: string; title: string; projectId: string | null; version: number; ruleRevision: number; state: string; parentId: string | null; rule: SearchQuery | null; memberIds: string[]; pinnedIds: string[] };
 export type BranchPolicy = { resourceId: string; revision: number; mode: SharingMode; allowedSourceIds: string[]; allowCrossProject: boolean; maxSensitivity: 'public' | 'internal' | 'sensitive'; categories: Evidence[] };
 export type Share = { id: string; sourceResourceId: string; sourceMessageId: string; sourceTime: string; digest: string; range: { start: number; end: number }; evidence: Evidence; createdAt: string; status: 'current' | 'stale' | 'revoked' | 'unavailable' | 'superseded'; supersedes: string | null; supersededBy: string[]; state: 'discoverable' | 'inspected' | 'attached' | 'sent'; attached: boolean; content?: string; targetResourceId?: string; executionId?: string };
-export type ProviderCapability = { id: string; label: string; available: boolean; record: boolean; execute: boolean; nativeFork: boolean; history: 'local' | 'unavailable'; reason?: string; reasonCode?: string; simulated: boolean; models: string[]; modelOptions?: { id: string; label: string }[];default?:boolean;catalogOnly?:true; /** Documentation support is separate from the runtime booleans above. */ accountFidelity?: NativeChatGPTFidelityDescriptor };
+export type ProviderCapability = { id: string; label: string; available: boolean; record: boolean; execute: boolean; nativeFork: boolean; history: 'local' | 'unavailable'; reason?: string; reasonCode?: string; simulated: boolean; models: string[]; modelOptions?: OrdinaryModelOption[];default?:boolean;catalogOnly?:true; /** Documentation support is separate from the runtime booleans above. */ accountFidelity?: NativeChatGPTFidelityDescriptor };
 export type Detail = { conversation: ConversationSummary & {messageCount:number}; messages: Page<MessageView>; lineage: { id: string; parentResourceId: string; childResourceId: string; sourceMessageId: string; mode: string; createdAt: string }[]; policy: BranchPolicy; shares: Share[]; providers: ProviderCapability[] };
 /** Unsent local text. Its revision is independent from the canonical transcript. */
 export type ConversationDraft = { resourceId: string; version: number; content: string; updatedAt: string | null };
@@ -49,7 +50,7 @@ export interface ProductCommandMap {
  favorite: { input: { resourceId: string; favorite: boolean }; output: boolean };
  create: { input: { title?: string; providerId?: string; commandId: string }; output: { resourceId: string } };
  archive: { input: { resourceId: string; archived: boolean; expectedVersion: number }; output: unknown };
- send: { input: { resourceId: string; content: string; expectedRevision: number; commandId: string; model?: string; webSearch?: true }; output: unknown };
+ send: { input: { resourceId: string; content: string; expectedRevision: number; commandId: string; model?: string; reasoningEffort?: ReasoningEffort; webSearch?: true }; output: unknown };
  openCitation: { input: { resourceId: string; messageId: string; index: number }; output: { requested: true } };
  branch: { input: { resourceId: string; messageId: string; includeMessageIds: string[]; providerId: string; title: string; commandId: string; tokenBudget: number; expectedRevision: number }; output: { resourceId: string; handoffId: string; fingerprint: string; mode: string } };
  reviewBranch: { input: { handoffId: string; fingerprint: string; approve: boolean }; output: unknown };
