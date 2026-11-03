@@ -2,6 +2,32 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Portable BT Vela free-text routing
+
+The open owner window was still Portable AG at 8d05f28. Its Vela
+composer can consult a local phrase matcher before offering model
+planning. BT's ordinary Vela Send uses the configured planning model.
+Direct native controls continue to issue typed commands.
+
+A hidden run of the exact BT application sent “Can you organize my
+workspace?” and “Could you give these cards a tidier arrangement?”
+through the actual composer. Both reached the installed Codex planning
+review with the same active workspace, three card placements and the
+typed layout, search and local-fact capabilities. No resource contents
+were included. The normal native consent guard refused the hidden
+owner, both drafts were preserved, and there were no provider turns,
+plans, receipts or geometry changes. The receipt in
+review-package-motion-1793710121282 has SHA-256
+6b47f2e5e25d46a654701a89e11688cce42f339cacb4d6d4b6211107e4a6c00d.
+The process exited without foreground interaction.
+
+All 39 focused broker and backend checks passed. With scripted provider
+responses, they verified typed layout dispatch, persisted geometry and
+resource identity after restart, and canonical undo. An isolated BT
+launcher at review-live-vela-bt-1793710138952/Open-Vela-Live-Check.cmd
+is ready for the exact natural-language request with synthetic data.
+Live model interpretation of that request remains unverified.
+
 ## November 3 Portable BT canonical Constellation archive journey
 
 In the exact BT package, the actual Environments controls created a
