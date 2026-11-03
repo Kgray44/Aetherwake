@@ -2,6 +2,54 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Vela layout context and Portable BJ
+
+The running owner window was identified by its executable manifest as
+Portable AG at `8d05f28`. That build calls the legacy local phrase
+matcher before offering model planning. The current free-text path
+uses the authorized model and typed capability catalog. The exact
+outcome of the owner's earlier request was not inspected.
+
+Commit `216c175` includes the current authorized workspace's mode,
+placement counts, lock state and canonical collision preview in the
+reviewed provider context. The projection contains no block identities
+or content. The host applies reviewed layout changes through the
+existing workspace engine, then reports observed placement changes
+or that nothing needed to move. Direct controls and the model use
+the same persisted layouts and undo history. Search, resource opening,
+navigation and local facts retain their existing typed dispatch.
+
+213 Vela tests passed. Two actual backend and SQLite runs used the
+synthetic App Server protocol provider to exercise distinct phrasings
+with complete and dynamically fetched tool catalogs. Each verified
+the exact sharing preview, approved arrangement, stable resource IDs,
+restart, undo and a no-change response. A live model response and the
+owner's account were not exercised.
+
+Portable BJ packages `8a50066a879c6f9d65cb511aeddb42b06b314d4d`.
+All 427 payload files were rehashed. Manifest SHA-256 is
+`ceaa69f4e98074513ed8bb70d0040ca7189639dfcd323114a7614ddb4b3a7c69`.
+The strict build and all 409 desktop tests passed. In the hidden
+desktop journey, setup, cross-project travel and restart passed in
+6.23, 14.49 and 2.38 seconds from launch to exit. The profile
+`review-package-motion-1793704938518` contains the native PNGs and
+terminal receipts. All owned test processes exited. The owner window
+was left open.
+
+The first matched four-run dense workspace trial reduced observed
+control text mutations from 186 to 7 and attribute writes from 400 to
+100 through `e1c86e3`. The two paired Fit commands returned 24–30 ms
+sooner. The subsequent BJ renderer defers detailed card housings until
+visible. A same-seed BI/BJ/BJ/BI run verified Fit, travel, resize,
+reduced motion and WebGL recovery. BJ drew 50 compact surfaces with
+zero detailed housings in Fit, then 12 detailed surfaces in the
+working view. Its two Fit offscreen paint p95s were 70.3 and 77.4 ms.
+BI measured 76.4 and 110.4 ms. Both variants settled around 19 ms.
+The small samples overlap and do not establish a presentation gain.
+The fitted BJ PNG was reviewed in
+`fit-deferred-housings-1793704882730`. These are offscreen paints,
+separate from callback timing and physical presentation.
+
 ## November 3 Vela return clearance and Portable BH
 
 On a return after the workspace has faded out, the existing Motion
