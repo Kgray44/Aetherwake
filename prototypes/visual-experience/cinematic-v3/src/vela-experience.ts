@@ -7,6 +7,7 @@ let instances = 0;
 const energy: Record<VelaPanelPresentation["phase"], number> = {
   idle: 0,
   receiving: 0.18,
+  thinking: 0.6,
   planning: 0.6,
   review: 0.35,
   applying: 0.75,
@@ -19,6 +20,7 @@ const energy: Record<VelaPanelPresentation["phase"], number> = {
 export function createVelaExperience(options: {
   motion: MotionCoordinator;
   root: HTMLElement;
+  anchor?: HTMLElement;
   wake(): void;
   resize(size: { width: number; height: number }): void;
   /** The manifestation host owns sizing and ready content; keep phase only. */
@@ -34,6 +36,7 @@ export function createVelaExperience(options: {
     baseline = false,
     sizeDirty = false,
     latest: VelaPanelPresentation | null = null;
+  const working = () => latest?.phase === "thinking" || latest?.phase === "planning" || latest?.phase === "applying";
   const size = () => {
     const feedback = Math.min(
       160,
@@ -87,6 +90,7 @@ export function createVelaExperience(options: {
         });
   function clear() {
     options.motion.bodies.delete(phaseKey);
+    options.anchor?.style.removeProperty("--vela-presence-signal");
     for (const entry of entries.values())
       options.motion.bodies.delete(entry.key);
     entries.clear();
@@ -99,15 +103,17 @@ export function createVelaExperience(options: {
     }
   }
   function reconcile() {
-    if (!active || !latest) return;
+    if (!latest || (!active && !(options.anchor && working()) && !options.motion.bodies.has(phaseKey))) return;
     const target = {
       ...neutral,
-      x: energy[latest.phase],
-      y: latest.context ? 1 : 0,
+      x: active || working() ? energy[latest.phase] : 0,
+      y: active && latest.context ? 1 : 0,
+      lift: working() ? 1 : 0,
+      h: working() ? 1 : 0,
     };
     if (!options.motion.bodies.has(phaseKey))
-      options.motion.add(phaseKey, target);
-    else options.motion.target(phaseKey, target, "observed Vela phase/context");
+      options.motion.add(phaseKey, neutral);
+    options.motion.target(phaseKey, target, "observed Vela phase/context");
     // Limit decorative ownership independently of canonical history length.
     const desired = options.phaseOnly
       ? []
@@ -168,11 +174,12 @@ export function createVelaExperience(options: {
       } else {
         sizeDirty = false;
         resizeObserver?.disconnect();
-        clear();
+        if (!working() || !options.anchor) clear();
       }
     },
     frame(policy: Policy) {
-      if (!active || !latest || !options.motion.bodies.has(phaseKey)) return;
+      const body = options.motion.bodies.get(phaseKey);
+      if (!latest || !body) return;
       // Contextual resize measures and writes layout. Keep it outside observer
       // delivery and coalesce notifications into the existing application frame.
       if (sizeDirty) {
@@ -189,6 +196,17 @@ export function createVelaExperience(options: {
         for (const entry of entries.values()) options.motion.snap(entry.key);
       }
       const phase = options.motion.pose(phaseKey);
+      if (working() && !snap && !body.transitioning) {
+        options.motion.target(phaseKey, { ...phase, lift: phase.lift < 0.5 ? 1 : 0 }, "Vela activity sweep");
+        options.wake();
+      }
+      const pulse = snap ? 0.5 : phase.lift;
+      options.root.style.setProperty("--vela-pulse", String(pulse));
+      options.anchor?.style.setProperty("--vela-presence-signal", String(phase.h * (0.4 + 0.6 * pulse)));
+      if (!active && !working() && !body.transitioning) {
+        clear();
+        return;
+      }
       options.root.style.setProperty("--vela-reveal", "1");
       options.root.style.setProperty(
         "--vela-activity",

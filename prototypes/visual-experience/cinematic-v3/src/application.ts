@@ -261,6 +261,7 @@ export function installApplication(hooks: Hooks) {
   const velaExperience = createVelaExperience({
     motion: hooks.motion,
     root: velaContent,
+    anchor: el("#vela"),
     wake: hooks.wake,
     resize: (size) => surfaces.resize("vela", size),
     phaseOnly: true,

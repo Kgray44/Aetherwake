@@ -1,9 +1,10 @@
 import type { ResourceRef, VelaClient, VelaNativeAction, VelaState, VelaPlan, PlanStep, VelaPresentationState, VelaPresentationPatch, VelaLocalDispatch } from './contracts.ts';
 import { velaPanelStatus } from './panel-status.ts';
 import { projectVelaManifestation, type VelaManifestationState } from './manifestation-state.ts';
+import { summarizeSystemMemory } from './system-information.ts';
 
 export interface VelaPanelPresentation {
-  phase: 'idle' | 'receiving' | 'planning' | 'review' | 'applying' | 'attention' | 'error';
+  phase: 'idle' | 'receiving' | 'thinking' | 'planning' | 'review' | 'applying' | 'attention' | 'error';
   context: string | null;
   messageIds: readonly string[];
   planIds: readonly string[];
@@ -132,7 +133,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
   form.addEventListener('submit', event => { event.preventDefault(); if (busy || !intent.value.trim() || composing) return; const submitted = { intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: allowProvider.checked && chosenProviderId === current?.planner.providerId }, revision = draftRevision, submittedView = ++viewRevision; transientView = 'current'; allowProvider.checked = false; chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
-    void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Sending…'; present();
+    void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Thinking…'; present();
       try {
         const commandId = globalThis.crypto.randomUUID(), local = client.local ? await client.local({ intent: submitted.intent, commandId }) : undefined;
         const recorded = local?.matched ? local.request : await client.request({ ...submitted, ...(client.local ? { commandId } : {}) });
@@ -193,7 +194,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   }
   function renderReading() {
     const projection = project(), selectedRequest = immediateLocal?.request.id === projection.currentRequestId ? immediateLocal.request : current?.requests.find(request => request.id === projection.currentRequestId), message = current?.conversation?.messages.find(message => message.id === projection.currentMessageId), local = immediateLocal?.request.id === projection.currentRequestId ? immediateLocal.result : null;
-    const content = local?.content ?? message?.content ?? '', signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind, content });
+    const facts = selectedRequest?.local?.facts;
+    const content = facts?.kind === 'system-memory' && (local || message) ? summarizeSystemMemory(facts.measurement) : local?.content ?? message?.content ?? '';
+    const signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind, content });
     manifestationBody.dataset.density = content.length > 140 ? 'reading' : 'signal';
     shell.dataset.manifestationKind = projection.kind; shell.dataset.presentationView = view(); manifestation.dataset.requestId = projection.currentRequestId ?? ''; manifestation.dataset.currentMessageId = projection.currentMessageId ?? '';
     manifestation.hidden = projection.kind === 'none' || view() === 'history' && !projection.requiredPlanIds.length;
@@ -205,7 +208,9 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const sources = selectedRequest?.context.included ?? [], sourceSignature = JSON.stringify(sources.map(ref => [ref.id, ref.kind, ref.version, ref.title]));
     if (manifestationSources.dataset.signature !== sourceSignature) { manifestationSources.dataset.signature = sourceSignature; manifestationSources.replaceChildren(); for (const ref of sources) manifestationSources.append(options.onOpenSubject ? button(ref.title, () => options.onOpenSubject?.({ id: ref.id, kind: ref.kind })) : el('span', undefined, ref.title)); } manifestationSources.hidden = !manifestationSources.children.length;
     const recent = current?.requests.at(-1), recentMessage = recent?.response && current?.conversation?.messages.find(message => message.id === recent.response!.messageId && message.requestId === recent.id && message.source === 'vela-native' && message.classification === 'observed' && message.providerId === undefined && message.providerContribution === undefined);
-    const adjacent = immediateLocal?.result.content ?? (recent?.state === 'responded' && recent.local?.classification === 'observed' && recent.providerId === null ? recentMessage?.content : undefined);
+    const adjacentFacts = immediateLocal?.result.facts ?? recent?.local?.facts;
+    const adjacentContent = immediateLocal?.result.content ?? (recent?.state === 'responded' && recent.local?.classification === 'observed' && recent.providerId === null ? recentMessage?.content : undefined);
+    const adjacent = adjacentContent && adjacentFacts?.kind === 'system-memory' ? summarizeSystemMemory(adjacentFacts.measurement) : adjacentContent;
     localAlongsidePlan.hidden = !projection.requiredPlanIds.length || !adjacent || view() === 'history'; if (adjacent && localAlongsidePlan.textContent !== adjacent) localAlongsidePlan.textContent = adjacent;
     pin.hidden = dismiss.hidden = projection.currentRequestId === null; pin.disabled = presentationBusy || !persistent(); dismiss.disabled = presentationBusy || !persistent() || !projection.canDismiss;
     pin.setAttribute('aria-label', projection.pinned ? 'Unpin response' : 'Pin response'); pin.setAttribute('aria-pressed', String(projection.pinned)); pin.title = persistent() ? (projection.pinned ? 'Unpin response' : 'Pin response') : 'Saved response choices are unavailable in this host'; dismiss.title = !projection.canDismiss ? 'This plan needs review before it can be dismissed' : persistent() ? 'Dismiss response' : 'Saved response choices are unavailable in this host';
@@ -233,7 +238,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     if (!errorBox.hidden) phase = 'error';
     else if (applyingLocally || applyingPlans.size || current?.plans.some(plan => plan.state === 'applying')) phase = 'applying';
     else if (current?.requests.some(request => request.state === 'planning')) phase = 'planning';
-    else if (busy) phase = 'receiving';
+    else if (busy && status.dataset.requestState === 'submitting') phase = 'thinking';
     else if (latest && ['failed', 'unknown', 'invalid-plan', 'provider-unavailable'].includes(latest.state)) phase = 'error';
     else if (current?.plans.some(plan => ['prepared', 'approved'].includes(plan.state))) phase = 'review';
     else if (activeContext === 'attention' && pendingAttention) phase = 'attention';

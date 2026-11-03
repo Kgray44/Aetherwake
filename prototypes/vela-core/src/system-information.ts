@@ -20,6 +20,12 @@ export interface SystemMemoryMeasurement {
  * require their own typed contract and native authorization; no generic exec. */
 export interface VelaReadOnlySystemHost { memory(): SystemMemoryMeasurement }
 
+export function summarizeSystemMemory(measurement: SystemMemoryMeasurement): string {
+  const gib = (bytes: number) => (bytes / 2 ** 30).toFixed(2);
+  const available = measurement.source.platform === 'win32' ? 'available' : 'free';
+  return `${gib(measurement.usedBytes)} of ${gib(measurement.totalBytes)} GiB RAM in use (${measurement.utilizationPercent}%). ${gib(measurement.availableBytes)} GiB ${available}.`;
+}
+
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const keys = (value: Record<string, unknown>, expected: string[]) => Object.keys(value).sort().join(',') === expected.sort().join(',');
 export function validateSystemMemoryMeasurement(value: unknown): asserts value is SystemMemoryMeasurement {

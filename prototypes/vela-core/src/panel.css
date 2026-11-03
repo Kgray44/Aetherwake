@@ -822,16 +822,31 @@
 .vela-core-icon-mark[data-icon="send"] {
   --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.4%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M12%2020V4M5%2011l7-7%207%207%22%2F%3E%3C%2Fsvg%3E");
 }
+.vela-core-icon-mark[data-icon="dismiss"],
 .vela-core-icon-mark[data-icon="close"] {
   --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.4%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M6%206l12%2012M18%206L6%2018%22%2F%3E%3C%2Fsvg%3E");
+}
+.vela-core-icon-mark[data-icon="pin"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M9%204h6l-1%206%204%204v2H6v-2l4-4-1-6M12%2016v5%22%2F%3E%3C%2Fsvg%3E");
+}
+.vela-core-icon-mark[data-icon="history"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M4%2012a8%208%200%201%201%202%205M4%205v7h6M12%208v5l3%202%22%2F%3E%3C%2Fsvg%3E");
+}
+
+.vela-core-status[data-request-state="submitting"],
+.vela-core-status[data-request-state="planning"] {
+  color: #efe2ff;
+  text-shadow: 0 0 calc(4px + 10px * var(--vela-pulse, 0)) #be91f8;
 }
 
 .vela-core[data-phase="receiving"] .vela-core-compose {
   border-color: #dcc2f160;
 }
+.vela-core[data-phase="thinking"] .vela-core-compose::after,
 .vela-core[data-phase="planning"] .vela-core-compose::after,
 .vela-core[data-phase="applying"] .vela-core-compose::after {
-  background: linear-gradient(90deg, transparent, #e4c8ffb3, transparent);
+  height: 2px;
+  background: radial-gradient(ellipse at calc(20% + 60% * var(--vela-pulse, 0.5)) center, #f3ddff, #b387f59c 18%, transparent 58%);
 }
 .vela-core[data-phase="review"] .vela-core-plan {
   border-left-color: #e2c4ff99;
