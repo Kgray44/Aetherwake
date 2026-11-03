@@ -32,6 +32,9 @@ export type MediaImportRequest = {
   workspaceId?: string;
   expectedLayoutVersion?: number;
   projectId?: string | null;
+  /** User-entered HTTP(S) link. Local files always come from the native picker. */
+  url?: string;
+  bounds?: { x: number; y: number; width: number; height: number };
 };
 /** Explicit user creation, separate from read-only opening. Cancellation has
  * no effects. An optional explicit placement is committed atomically with its

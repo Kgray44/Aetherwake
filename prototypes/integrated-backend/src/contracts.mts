@@ -132,11 +132,15 @@ export interface HandoffReview {
   state: 'prepared' | 'approved' | 'rejected' | 'dispatching' | 'applied' | 'failed' | 'interrupted' | 'unknown';
   expiresAt: string; approvedAt?: string;
 }
+import type { MediaCapabilities, MediaImportRequest, MediaMetadata, MediaReadRequest } from '../../application-contract/media.ts';
+import type { MediaSelection } from './media-sources.mts';
+
 export interface Options {
   path: string; provider?: 'fixture' | 'codex' | 'bridge-fixture'; fixtureMode?: string;
   codexExecutable?: string; codexArgs?: string[]; cwd?: string;
   /** Trusted host opt-in only. Experimental wire fields remain disabled by default. */
   velaCatalogDiscovery?:boolean;
+  nativeMedia?: boolean;
   /** Trusted native-reviewed bounded context; disabled until native consent integration is qualified. */
   velaHistoryContext?:boolean;
   instanceId?: string; accountScope?: string;
@@ -148,6 +152,15 @@ export interface Options {
   velaPlanningPort?: VelaPlanningPort;
 }
 export interface CommandMap {
+  /** Private desktop-host command. Local paths never cross renderer IPC. */
+  mediaImportTrusted: {
+    input: Omit<MediaImportRequest, 'url'> & { commandId: string; selection: MediaSelection };
+    output: { resource: import('../../application-contract/contracts.ts').Resource; placementId?: string; desktop: DesktopSnapshot };
+  };
+  mediaDescribe: { input: { resourceId: string }; output: { metadata: MediaMetadata; capabilities: MediaCapabilities } };
+  mediaReadChunk: { input: MediaReadRequest & { offset: number; length: number }; output: { base64: string } };
+  /** Private desktop-host command. The native shell consumes the target. */
+  mediaExternalTarget: { input: { resourceId: string; expectedVersion: number }; output: MediaSelection };
   providerConnection:{input:ProviderConnectionRequest;output:ProviderConnectionStatus};
   /** Explicit catalog read. Also available as providerConnection.refreshModels. */
   ordinaryProviderCheck:{input:Record<string,never>;output:ProviderConnectionStatus};

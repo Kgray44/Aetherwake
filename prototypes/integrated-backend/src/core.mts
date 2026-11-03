@@ -21,6 +21,8 @@ import type { TurnInput,TurnEvent,TurnResult } from '../../openai-provider/contr
 import type { OrdinaryConnectionPort,OrdinaryResponsesTestServices,OrdinaryResponsesPreview } from './contracts.mts';
 import { OpenAIConnections,CHATGPT_PLAN_REGISTRATION } from './openai-connections.mts';
 import { readLocalWeather } from './local-weather.mts';
+import { mediaDefaultGeometry } from '../../block-library/media-policy.ts';
+import { inspectMediaSelection, mediaCapabilities, mediaExternalTarget, readMediaChunk, readMediaSource } from './media-sources.mts';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { ConversationGraph, type GraphData, type MessageMetadata, type ProviderAdapter as GraphAdapter } from '../../connected-conversations/src/graph.ts';
 import { localConversationAdapter, mockOrdinaryAdapter } from '../../connected-conversations/src/adapters.ts';
@@ -144,9 +146,11 @@ export class BackendCore {
   private velaDelegationGrants=new Map<string,{planId:string;stepId:string;fingerprint:string;actionDigest:string;contextDigest:string;expiresAt:string;consumed:boolean}>();
   private pendingVelaGrant:string|null=null;
   private library!:TemplateService;
+  private readonly nativeMedia: boolean;
   private notes!:NoteExperienceService;
   constructor(options: Options, emit: (event: StreamEvent) => void = () => {}, nativeHostServices?:NativeHostServices,ordinaryTest?:OrdinaryResponsesTestServices) {
     this.nativeHostServices=nativeHostServices;
+    this.nativeMedia = options.nativeMedia === true;
     this.privateMode = options.contentPolicy === 'local-private';
     ensure(!ordinaryTest||!this.privateMode,'synthetic_ordinary_services_forbidden');this.ordinaryTest=ordinaryTest;
     this.historyContextEnabled=options.velaHistoryContext===true;
@@ -184,6 +188,9 @@ export class BackendCore {
           CREATE TABLE IF NOT EXISTS integration_state(id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS intelligence_events(
             cursor INTEGER PRIMARY KEY AUTOINCREMENT, dedupe TEXT NOT NULL UNIQUE, json TEXT NOT NULL);
+          CREATE TABLE IF NOT EXISTS media_sources(
+            resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+            metadata_json TEXT NOT NULL, selected_path TEXT);
           CREATE TABLE IF NOT EXISTS integration_meta(id INTEGER PRIMARY KEY CHECK(id=1), latest INTEGER NOT NULL);`);
         const versions = db.prepare('SELECT version FROM integration_schema').all();
         if (!versions.length) db.prepare('INSERT INTO integration_schema VALUES(1)').run();
@@ -468,8 +475,8 @@ export class BackendCore {
   }
   private libraryCapabilities():LibraryCapabilities {
     const cap=this.capabilityCache.snapshot(),codex=!!cap&&!cap.mock&&cap.authentication==='available'&&cap.providerId===this.port.id;
-    const mediaUnavailable={state:'unsupported' as const,reason:'File and link access is not available in this build.'};
-    return {revision:1,kinds:{...Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),file:mediaUnavailable,link:mediaUnavailable},subjects:Object.fromEntries(SUBJECT_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{automatic:this.ordinaryAuthorized()?{state:'available'}:{state:'setup_required',reason:'Connect ChatGPT to start an AI conversation.'},local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'unsupported',reason:'A typed template planning port is not registered; reviewed Vela native workspace proposals remain separate'}};
+    const media=this.nativeMedia?{state:'available' as const}:{state:'unsupported' as const,reason:'File and link access is not available in this build.'};
+    return {revision:1,kinds:{...Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),file:media,link:media},subjects:Object.fromEntries(SUBJECT_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{automatic:this.ordinaryAuthorized()?{state:'available'}:{state:'setup_required',reason:'Connect ChatGPT to start an AI conversation.'},local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'unsupported',reason:'A typed template planning port is not registered; reviewed Vela native workspace proposals remain separate'}};
   }
   private createLibraryResource(kind:BlockKind,title:string,provider:'local'|'codex'|undefined,projectId:string|null):string {
     ensure(!['file','link'].includes(kind),'media_import_required');
@@ -1171,7 +1178,7 @@ export class BackendCore {
     return this.kernel.withTransaction(()=>{
       const row=this.db.prepare('SELECT r.*,d.kind AS desktop_kind,d.metadata_json FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=?').get(resourceId);
       if(!row||row.state!=='active'||!this.libraryAuthorized({kind:'resource',id:resourceId})||!this.conversationReadAccess(resourceId))return unavailable();
-      const actualKind=row.kind==='conversation'?'conversation':row.desktop_kind??(row.kind==='generic'?'reference':row.kind),kinds:CanonicalResourceKind[]=['conversation','note','research','task','task_group','reference','stream','agent','checklist','timeline','task_objective'];
+      const actualKind=row.kind==='conversation'?'conversation':row.desktop_kind??(row.kind==='generic'?'reference':row.kind),kinds:CanonicalResourceKind[]=['conversation','note','research','task','task_group','reference','stream','agent','checklist','timeline','task_objective','file','link'];
       if(!kinds.includes(actualKind as BlockKind)||actualKind==='conversation'&&row.kind!=='conversation')return {...base,status:'unsupported',reason:'resource-kind-unsupported',kind:String(actualKind).slice(0,64)};
       const kind=actualKind as CanonicalResourceKind;
       if(kind==='agent'||kind==='checklist')try{const domains=this.productDomains();if(kind==='agent')domains.agent({name:'inspect',input:{resourceId}});else domains.checklist({name:'read',input:{resourceId}});}catch{return unavailable();}
@@ -1185,6 +1192,11 @@ export class BackendCore {
       // is an opening projection, not a second transcript or a guessed count.
       const resource:PublicResource={id:resourceId,title:String(row.title),kind,version:Number(row.version),project_id:row.project_id===null?null:String(row.project_id),state:'active',visible:true,available:true,content:'',provider:conversation?.kind==='codex'?'codex':'local',messages:[],...(conversation?{providerId:conversation.providerId,conversationRevision:this.state.revisions[resourceId]}:{})};
       if(kind!=='conversation'&&kind!=='agent'&&kind!=='checklist'&&kind!=='timeline'&&kind!=='task_objective')resource.content=this.kernel.getResource(resourceId).note?.content??'';
+      if(kind==='file'||kind==='link'){
+        const media=readMediaSource(this.db,resourceId)?.metadata;
+        if(!media)return unavailable();
+        resource.media=media;
+      }
       if(kind==='task'||kind==='task_group'){
         let metadata:Record<string,unknown>;try{metadata=JSON.parse(String(row.metadata_json??'{}'));if(!metadata||typeof metadata!=='object'||Array.isArray(metadata))return unavailable();}catch{return unavailable();}
         if(kind==='task'){
@@ -1208,6 +1220,58 @@ export class BackendCore {
       return {...base,status:'ready',resource,presentation:{kind,mode:placement?'existing-placement':'direct'},...(placement?{placement}:{}),...(request.preferredPresentation==='existing-placement'?{placementStatus:placement?'verified' as const:'unavailable' as const}:{}),...(request.selection?{selection:{messageId:request.selection.messageId}}:{})};
     });
   }
+  private scopedMedia(resourceId: string, expectedVersion?: number, sourceRevision?: string) {
+    ensure(this.nativeMedia, 'media_capability_unavailable');
+    ensure(typeof resourceId === 'string' && this.productResourceAccess(resourceId), 'media_source_unavailable');
+    const row = this.db.prepare('SELECT version FROM resources WHERE id=?').get(resourceId);
+    ensure(row && (expectedVersion === undefined || row.version === expectedVersion), 'source_changed');
+    const source = readMediaSource(this.db, resourceId);
+    ensure(source, 'media_source_unavailable');
+    ensure(sourceRevision === undefined || source.metadata.sourceRevision === sourceRevision, 'source_changed');
+    return source;
+  }
+
+  private async importSelectedMedia(input: CommandMap['mediaImportTrusted']['input']) {
+    ensure(this.nativeMedia, 'media_capability_unavailable');
+    ensure(input && ['file','link'].includes(input.kind) && input.kind === input.selection?.kind &&
+      typeof input.commandId === 'string', 'invalid_media_request');
+    const source = await inspectMediaSelection(input.selection, input.variant);
+    const result = this.atomic(() => this.once(input.commandId, { operation: 'mediaImport', ...input }, () => {
+      ensure(!this.closed && !this.active, 'execution_busy');
+      let projectId = input.projectId ?? null;
+      const engine = this.desktop.nativeBlockServices().engine;
+      if (input.workspaceId !== undefined) {
+        ensure(typeof input.workspaceId === 'string' && this.libraryAuthorized({ kind: 'workspace', id: input.workspaceId }), 'workspace_unavailable');
+        const workspace = engine.project(input.workspaceId);
+        ensure(Number.isSafeInteger(input.expectedLayoutVersion) && workspace.revision === input.expectedLayoutVersion, 'layout_version_conflict');
+        ensure(input.projectId === undefined || input.projectId === workspace.projectId, 'invalid_media_request');
+        projectId = workspace.projectId;
+      } else ensure(input.expectedLayoutVersion === undefined && input.bounds === undefined, 'invalid_media_request');
+      ensure(projectId === null || this.libraryAuthorized({ kind: 'project', id: projectId }), 'project_unavailable');
+      const canonical = this.kernel.createGenericResource(source.metadata.name, projectId);
+      this.db.prepare('INSERT INTO desktop_resources(resource_id,kind) VALUES(?,?)').run(canonical.id,input.kind);
+      this.db.prepare('INSERT INTO media_sources(resource_id,metadata_json,selected_path) VALUES(?,?,?)')
+        .run(canonical.id, JSON.stringify(source.metadata), source.path);
+      let placementId: string | undefined;
+      if (input.workspaceId !== undefined) {
+        const { width, height, shape } = mediaDefaultGeometry(source.metadata);
+        const next = engine.execute({
+          type: 'attachResource', resourceId: canonical.id, workspaceId: input.workspaceId,
+          commandId: input.commandId + ':media-placement', expectedRevision: input.expectedLayoutVersion!,
+          presentation: { width, height, shape }, placement: 'nearest-free',
+          ...(input.bounds ? { bounds: input.bounds } : {}),
+        });
+        placementId = next.blocks.find(block => block.resourceId === canonical.id)?.blockId;
+        ensure(placementId, 'media_placement_unavailable');
+      }
+      const opened = this.openResource({ resourceId: canonical.id, origin: { source: 'library' } });
+      ensure(opened.status === 'ready', 'media_source_unavailable');
+      this.record('application/media.imported','observed',undefined,randomUUID(),{providerId:'aerynth-native',detached:true,resourceId:canonical.id});
+      return { resource: opened.resource, ...(placementId ? { placementId } : {}) };
+    }));
+    return { ...result, desktop: await this.command('desktop', { type:'snapshot' }) };
+  }
+
   private pruneSendApprovals() {
     const time=Date.now();for(const [id,value] of this.sendPreviews)if(Date.parse(value.preview.expiresAt)<=time)this.sendPreviews.delete(id);
     for(const [id,value] of this.sendGrants)if(Date.parse(value.expiresAt)<=time)this.sendGrants.delete(id);
@@ -1823,6 +1887,27 @@ export class BackendCore {
       case 'authorizeConversationSend': return this.authorizeConversationSend(a) as any;
       case 'conversationSend': return this.sendConversation(a) as any;
       case 'conversationActivity': return this.conversationActivity(a) as any;
+      case 'mediaImportTrusted': return this.importSelectedMedia(a) as any;
+      case 'mediaDescribe': {
+        const source = this.scopedMedia(a.resourceId);
+        return { metadata: source.metadata, capabilities: mediaCapabilities(source) } as any;
+      }
+      case 'mediaReadChunk': {
+        ensure(Number.isSafeInteger(a.expectedVersion) && typeof a.sourceRevision === 'string', 'invalid_media_request');
+        const source = this.scopedMedia(a.resourceId, a.expectedVersion, a.sourceRevision);
+        const base64 = await readMediaChunk(source, a);
+        ensure(!this.closed, 'media_source_unavailable');
+        this.scopedMedia(a.resourceId, a.expectedVersion, a.sourceRevision);
+        return { base64 } as any;
+      }
+      case 'mediaExternalTarget': {
+        ensure(Number.isSafeInteger(a.expectedVersion), 'invalid_media_request');
+        const source = this.scopedMedia(a.resourceId, a.expectedVersion);
+        const target = await mediaExternalTarget(source);
+        ensure(!this.closed, 'media_source_unavailable');
+        this.scopedMedia(a.resourceId, a.expectedVersion, source.metadata.sourceRevision);
+        return target as any;
+      }
       case 'reconcileConversationTurn': return this.reconcileConversationTurn(a) as any;
       case 'viewState': return this.desktop.viewState(a) as any;
       case 'desktop': {

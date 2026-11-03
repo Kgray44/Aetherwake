@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld(
           "executionStatus",
           "conversationActivity",
           "reconcileConversationTurn",
+          "media",
           "openResource",
           "providerConnection",
           "interrupt",
@@ -74,6 +75,10 @@ contextBridge.exposeInMainWorld(
       if (name === "reconcileConversationTurn" &&
           navigator.userActivation?.isActive !== true)
         throw new Error("turn_recovery_user_gesture_required");
+      if (name === "media" &&
+          ["chooseMediaForAdd", "openExternal"].includes(input?.name) &&
+          navigator.userActivation?.isActive !== true)
+        throw new Error("media_user_gesture_required");
       const reply = await ipcRenderer.invoke(
         "application-command",
         name,

@@ -3,13 +3,16 @@ import { Backend } from "./service.mts";
 import {createNativeHostClient,isNativeHostEnvelope} from './native-host.mts';
 const [path, privateRoot, cwd,...flags] = process.argv.slice(2);
 const write = (v: unknown) => process.stdout.write(JSON.stringify(v) + "\n");
-const nativeClient=flags.length===1&&flags[0]==='--native-secrets'?createNativeHostClient(write):undefined;
+if (flags.some(flag => !["--native-secrets", "--native-media"].includes(flag)) || new Set(flags).size !== flags.length)
+  throw Error("invalid_native_host_flags");
+const nativeClient=flags.includes('--native-secrets')?createNativeHostClient(write):undefined;
 const backend = new Backend({
   path,
   privateRoot,
   cwd,
   contentPolicy: "local-private",
   provider: "codex",
+  nativeMedia: flags.includes("--native-media"),
   retention: { maxEvents: 10000 },
 },nativeClient?.services);
 let closeTask:Promise<void>|null=null;
@@ -50,6 +53,10 @@ lines.on("line", async (line) => {
         "conversationActivity",
         "reconcileConversationTurn",
         "openResource",
+        "mediaImportTrusted",
+        "mediaDescribe",
+        "mediaReadChunk",
+        "mediaExternalTarget",
         "providerConnection",
         "providerAuth",
         "ordinaryProviderStatus",

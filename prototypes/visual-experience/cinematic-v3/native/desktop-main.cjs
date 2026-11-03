@@ -353,6 +353,7 @@ app.whenReady().then(async () => {
         : [],
     },
   });
+  const mediaCommand = require("./media-broker.cjs").createMediaBroker({ win, dialog, shell, call });
   const startupErrors = [];
   if (verify) win.on("page-title-updated", (event) => event.preventDefault());
   const velaRequestDiagnostics = [];
@@ -431,6 +432,7 @@ app.whenReady().then(async () => {
           "firstPartyChat",
         ].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
+        !(command === "media" && ["describe", "readBytes"].includes(input?.name)) &&
         !(command === "vela" && isVelaRead(input)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&
@@ -480,6 +482,8 @@ app.whenReady().then(async () => {
         result.truncated ||= bounds.latest > 250;
       } else if (command === "conversationActivity")
         result = await call("conversationActivity", input);
+      else if (command === "media")
+        result = await mediaCommand(input);
       else if (command === "reconcileConversationTurn")
         result = await call("reconcileConversationTurn", input);
       else if (command === "executionStatus")

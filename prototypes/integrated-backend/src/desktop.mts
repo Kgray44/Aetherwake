@@ -1,3 +1,4 @@
+import { readMediaSource } from "./media-sources.mts";
 import { randomUUID } from "node:crypto";
 import { BUILTIN_BLOCKS } from "../../block-library/registry.ts";
 import type { DatabaseSync } from "node:sqlite";
@@ -863,6 +864,8 @@ export class DesktopState {
           visible,
           available: visible,
           content: visible ? (entry.note?.content ?? "") : "",
+          ...(visible && (kind === "file" || kind === "link")
+            ? { media: readMediaSource(this.db, r.id)?.metadata } : {}),
           ...(kind === "task"
             ? {
                 taskStatus:
