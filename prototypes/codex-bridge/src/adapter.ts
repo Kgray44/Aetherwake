@@ -96,7 +96,7 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
   private transport?: JsonlTransport;
   private sequence = 0;
   private droppedEvents = 0;
-  private readonly activeTurns = new Map<string, string>();
+  private readonly activeTurns = new Map<string, { threadId: string; started: boolean }>();
   private approvalHandler?: ServerRequestHandler;
   private readonly events: EventEnvelope[] = [];
   private readonly maxEvents = 512;
@@ -120,7 +120,7 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
     transport.on("failure", (error: BridgeError) => {
       const expectedClose = error.kind === "closed";
       this.record({ method: expectedClose ? "bridge/closed" : "bridge/transportFailed", params: { kind: error.kind, message: error.message } }, expectedClose ? "observed" : "inferred");
-      if (!expectedClose) for (const [turnId, threadId] of this.activeTurns) {
+      if (!expectedClose) for (const [turnId, { threadId }] of this.activeTurns) {
         this.record({ method: "bridge/gap", params: { threadId, turnId, reason: "Transport failed; turn outcome is unknown" } }, "inferred");
       }
       this.activeTurns.clear();
@@ -263,12 +263,40 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
     }
     const turn = result.turn as Wire | undefined;
     if (!turn || typeof turn.id !== "string") throw new BridgeError("protocol", "Missing turn id");
-    if (!this.events.some(event => event.providerThreadId === params.threadId && event.providerTurnId === turn.id && event.terminalStatus !== null)) {
-      this.activeTurns.set(turn.id, params.threadId);
+    const matchesTurn = (event: EventEnvelope) => event.providerThreadId === params.threadId && event.providerTurnId === turn.id;
+    if (!this.events.some(event => matchesTurn(event) && event.terminalStatus !== null)) {
+      this.activeTurns.set(turn.id, {
+        threadId: params.threadId,
+        started: this.events.some(event => matchesTurn(event) && event.method === "turn/started"),
+      });
     }
     return turn.id;
   }
-  async interrupt(params: TurnInterruptParams): Promise<void> { await this.rpc("turn/interrupt", params as Wire); }
+  async interrupt(params: TurnInterruptParams): Promise<void> {
+    const { threadId, turnId } = params;
+    const matchesTurn = (event: EventEnvelope) => event.providerThreadId === threadId && event.providerTurnId === turnId;
+    const active = this.activeTurns.get(turnId);
+    // App Server can acknowledge turn/start before making the turn interruptible.
+    if (active?.threadId === threadId && !active.started) {
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => {
+          clearTimeout(timer);
+          this.off("event", onEvent);
+          this.off("failure", onFailure);
+        };
+        const ready = () => { cleanup(); resolve(); };
+        const onEvent = (event: EventEnvelope) => {
+          if (matchesTurn(event) && (event.method === "turn/started" || event.terminalStatus !== null)) ready();
+        };
+        const onFailure = (error: Error) => { cleanup(); reject(error); };
+        const timer = setTimeout(ready, 5000);
+        this.on("event", onEvent);
+        this.on("failure", onFailure);
+      });
+      if (this.activeTurns.get(turnId) !== active) throw new BridgeError("turn-not-active", "Turn already ended");
+    }
+    await this.rpc("turn/interrupt", params as Wire);
+  }
   async windowsSandboxReady(): Promise<boolean> {
     return (await this.rpc("windowsSandbox/readiness", {}, 5000)).status === "ready";
   }
@@ -378,7 +406,13 @@ export class CodexAdapter extends EventEmitter implements ProviderAdapter {
     const event: EventEnvelope = { schemaVersion: 1, eventId: randomUUID(), sequence: ++this.sequence, provider: "codex-app-server", providerThreadId, providerTurnId, method, observedAt: new Date().toISOString(), observedAtSource: "bridge-clock", providerTime, providerTimeSource: providerTime === null ? null : "turn.timestamp.unix-seconds", evidence, terminalStatus: status, payload: params };
     this.events.push(event);
     if (this.events.length > this.maxEvents) { this.events.shift(); this.droppedEvents++; }
-    if (status && providerTurnId) this.activeTurns.delete(providerTurnId);
+    if (providerTurnId) {
+      const active = this.activeTurns.get(providerTurnId);
+      if (active && active.threadId === providerThreadId) {
+        if (status) this.activeTurns.delete(providerTurnId);
+        else if (method === "turn/started") active.started = true;
+      }
+    }
     this.emit("event", event);
   }
 }

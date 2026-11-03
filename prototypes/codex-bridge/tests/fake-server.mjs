@@ -4,6 +4,7 @@ const lines = createInterface({ input: process.stdin });
 const send = message => process.stdout.write(JSON.stringify(message) + "\n");
 let initialized = false;
 let currentModel = "fixture-model";
+let interruptReady = false;
 const session = (id = "fixture-thread", overrides = {}) => ({ thread: { id, forkedFromId: id === "fixture-fork" ? "fixture-thread" : null, ephemeral: false }, cwd: "C:\\fixture", model: currentModel, modelProvider: "openai", serviceTier: null, reasoningEffort: "medium", approvalPolicy: "never", instructionSources: mode === "missing-instructions" ? [] : ["C:\\fixture\\AGENTS.md"], ...overrides });
 lines.on("line", line => {
   const message = JSON.parse(line);
@@ -35,6 +36,14 @@ lines.on("line", line => {
     if (mode === "rate-limit") { send({ id: message.id, error: { code: 429, message: "Rate limit exceeded" } }); return; }
     if (mode === "unavailable-model") { send({ id: message.id, error: { code: -32000, message: "Model unavailable" } }); return; }
     send({ id: message.id, result: { turn: { id: "fixture-turn" } } });
+    if (mode === "wait-interrupt-start") {
+      send({ method: "turn/started", params: { threadId: "other-thread", turn: { id: "fixture-turn", status: "inProgress" } } });
+      setTimeout(() => {
+        interruptReady = true;
+        send({ method: "turn/started", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "inProgress", startedAt: 123 } } });
+      }, 120);
+      return;
+    }
     send({ method: "turn/started", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "inProgress", startedAt: 123 } } });
     if (mode === "approval" || mode === "explicit-denial" || mode === "cancel") send({ id: 88, method: "item/commandExecution/requestApproval", params: { threadId: "fixture-thread", turnId: "fixture-turn", command: "echo harmless" } });
     else if (mode === "file-approval") send({ id: 88, method: "item/fileChange/requestApproval", params: { threadId: "fixture-thread", turnId: "fixture-turn", reason: "fixture" } });
@@ -52,5 +61,12 @@ lines.on("line", line => {
     send({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "interrupted", completedAt: 124 } } });
     return;
   }
-  if (message.method === "turn/interrupt") { send({ id: message.id, result: {} }); send({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "interrupted" } } }); }
+  if (message.method === "turn/interrupt") {
+    if (mode === "wait-interrupt-start" && !interruptReady) {
+      send({ id: message.id, error: { code: -32600, message: "no active turn to interrupt" } });
+      return;
+    }
+    send({ id: message.id, result: {} });
+    send({ method: "turn/completed", params: { threadId: "fixture-thread", turn: { id: "fixture-turn", status: "interrupted" } } });
+  }
 });

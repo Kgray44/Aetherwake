@@ -73,6 +73,17 @@ test("default refusal and explicit cancellation answer server requests", async (
   }
 });
 
+test("an early interrupt waits for the matching native turn to start", async () => {
+  const adapter = make("wait-interrupt-start");
+  try {
+    await adapter.connect();
+    const threadId = "fixture-thread";
+    const turnId = await adapter.beginTurn({ threadId, input });
+    await adapter.interrupt({ threadId, turnId });
+    assert.equal((await adapter.waitForTerminal(threadId, turnId)).terminalStatus, "interrupted");
+  } finally { adapter.close(); }
+});
+
 test("interrupt and explicit reconnect resume", async () => {
   const interrupt = make("wait-interrupt");
   try {
