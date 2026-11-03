@@ -7,6 +7,61 @@ import { footprint, intersects, resolveCollisions } from '../collisions.mts';
 import { previewLayout } from '../organization.mts';
 import type { Command, WorkspaceProjection } from '../contracts.mts';
 
+test('Fluid automatic insertion keeps visible cards fixed when only the new card needs overflow', () => {
+  const kernel = WorkspaceKernel.open(':memory:');
+  try {
+    const engine = new WorkspaceEngine(kernel);
+    let state = engine.createWorkspace('Synthetic crowded Library insertion');
+    const run = (action: object) => {
+      state = engine.execute({ ...action, workspaceId: state.workspaceId, expectedRevision: state.revision, commandId: randomUUID() } as Command);
+    };
+    const bounds = { x: -197, y: -96, width: 1562, height: 682 };
+    const viewport = { x: -217, y: -266, zoom: 1 };
+    run({ type: 'saveLayout', placements: [], viewport });
+    run({
+      type: 'createBlock',
+      resource: { kind: 'conversation', title: 'Synthetic visible chat' },
+      presentation: { x: 32, y: -65, width: 380, height: 600 },
+    });
+    run({
+      type: 'createBlock',
+      resource: { kind: 'note', title: 'Synthetic visible note', content: 'Keep this note' },
+      presentation: { x: 700, y: 32, width: 440, height: 360 },
+    });
+    const before = state;
+    const task = kernel.createGenericResource('Synthetic Library task');
+    const command: Command = {
+      type: 'attachResource', workspaceId: before.workspaceId, expectedRevision: before.revision,
+      commandId: randomUUID(), resourceId: task.id, placement: 'nearest-free', bounds,
+      presentation: { x: 32, y: 32, width: 320, height: 260 },
+    };
+    state = engine.execute(command);
+    assert.equal(state.revision, before.revision + 1);
+    assert.deepEqual(state.viewport, before.viewport);
+    assert.deepEqual(state.presence, before.presence);
+    assert.deepEqual(state.blocks.filter(block => block.resourceId !== task.id), before.blocks);
+    const added = state.blocks.find(block => block.resourceId === task.id)!;
+    assert.equal(added.version, 1);
+    assert.equal(added.width, 320);
+    assert.equal(added.height, 260);
+    const inBounds = ({ x, y, width, height }: typeof bounds) =>
+      x >= bounds.x && y >= bounds.y && x + width <= bounds.x + bounds.width && y + height <= bounds.y + bounds.height;
+    assert.ok(before.blocks.every(inBounds));
+    assert.equal(inBounds(added), false, 'Only the Task uses pannable overflow');
+    for (const existing of [...before.blocks, before.presence]) {
+      assert.equal(intersects(footprint({ ...added, id: added.blockId }), footprint({ ...existing, id: 'existing' }), before.organization.gap), false);
+    }
+    assert.deepEqual(engine.execute(command), state, 'Retry preserves the result and history');
+    const positions = (s: WorkspaceProjection) => s.blocks.map(({ blockId, resourceId, x, y, width, height }) => ({ blockId, resourceId, x, y, width, height }));
+    const after = state;
+    run({ type: 'undoLayout' });
+    assert.deepEqual(positions(state), positions(before));
+    assert.equal(kernel.getResource(task.id).resource.id, task.id);
+    run({ type: 'redoLayout' });
+    assert.deepEqual(positions(state), positions(after));
+  } finally { kernel.close(); }
+});
+
 test('Fluid keeps a valid in-bounds collision candidate ahead of a lower-disruption offscreen candidate',()=>{
   const bounds={x:0,y:0,width:800,height:500},input=[{id:'0',x:282,y:342,width:235,height:156},{id:'1',x:481,y:291,width:171,height:170},{id:'2',x:480,y:239,width:274,height:159},{id:'3',x:33,y:32,width:264,height:134}].map(p=>({...p,locked:false})),result=resolveCollisions(input,['0'],bounds,{protectNeighbors:true,yieldVisible:true});
   for(const item of result){const box=footprint(item);assert.ok(box.x>=0&&box.y>=0&&box.x+box.width<=800&&box.y+box.height<=500,JSON.stringify(item));assert.equal(item.width,input.find(p=>p.id===item.id)!.width);assert.equal(item.height,input.find(p=>p.id===item.id)!.height);for(const other of result)if(other.id!==item.id)assert.equal(intersects(box,footprint(other),12),false);}

@@ -473,7 +473,11 @@ export class WorkspaceEngine {
       }
       policy.targets = targets; policy.resizeIds = resizeIds; policy.intent ??= resizeIds.length ? 'resize' : targets.length ? 'move' : 'resolve';
       const resolve = ['createBlock', 'attachResource', 'attachSubject', 'duplicateBlock', 'moveBlock', 'resizeBlock', 'setBlockShape', 'setBlockPresentation', 'setPresence', 'saveLayout', 'applyPreset', 'resolveLayout', 'restoreCheckpoint', 'setOrganization', 'applyStructuredPreset', 'reorderPlacements', 'bringAllIntoView'].includes(command.type);
-      const resolved = resolve ? this.resolve(workspaceId, { ...policy, before: state }, state.organization.revision) : { changed: [], viewport: state.viewport };
+      // Fluid's nearest-free search already reserved every existing footprint.
+      // A second pass would treat a valid overflow placement like a drag and
+      // pull it into bounds by moving cards the user didn't touch.
+      const fluidVacancy = state.organization.mode === 'fluid' && 'placement' in command && command.placement === 'nearest-free';
+      const resolved = resolve && !fluidVacancy ? this.resolve(workspaceId, { ...policy, before: state }, state.organization.revision) : { changed: [], viewport: state.viewport };
       const rearrangedPlacementIds = resolved.changed;
       const noOp = ['resolveLayout', 'setOrganization', 'bringAllIntoView', 'reorderPlacements', 'setBlockMinimized'].includes(command.type) && hash(before) === hash(this.snapshot(workspaceId)) && hash(state.viewport) === hash(resolved.viewport);
       if (!noOp && this.kernel.openWorkspace(workspaceId).layout.version === state.revision)
