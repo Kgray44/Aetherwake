@@ -50,8 +50,8 @@ function usage(value: unknown): ReportedUsage | undefined {
 }
 function turnContentType(response: Response): TurnHttpDiagnostic['contentType'] {
     let value: string | null;
-    try { value = response.headers.get('content-type'); } catch { return 'missing'; }
-    if (!value) return 'missing';
+    try { value = response.headers.get('content-type'); } catch { return 'other'; }
+    if (value === null) return 'missing';
     let essence: string;
     try { essence = new MIMEType(value).essence; } catch { return 'other'; }
     // MIME type/subtype are case-insensitive; parameters do not change the
@@ -125,13 +125,25 @@ export class ResponsesTransport {
                 result.errorCode = controller.signal.aborted ? 'provider_timeout' : code;
                 return result;
             }
-            requireValue(result.httpDiagnostic.contentType === 'event-stream' && response.body, 'invalid_stream_response');
+            // The live ChatGPT plan endpoint can omit Content-Type on HTTP 200.
+            // For that case, establish stream identity from the actual SSE frames.
+            const verifyFraming =
+                frozen.providerId === 'chatgpt-plan-responses' &&
+                response.status === 200 &&
+                result.httpDiagnostic.contentType === 'missing';
+            requireValue(
+                response.body && (result.httpDiagnostic.contentType === 'event-stream' || verifyFraming),
+                'invalid_stream_response',
+            );
             reader = response.body.getReader();
             const decoder = new TextDecoder('utf-8', { fatal: true });
             let buffer = '', streamBytes = 0, outputBytes = 0;
             const emit = async (event: Parameters<TransportOptions['onEvent']>[0]) => { await abortable(Promise.resolve(this.options.onEvent(event)), controller.signal); };
             const consume = async (block: string) => {
-                const lines = block.split('\n'), data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).replace(/^ /, '')).join('\n');
+                const lines = block.split('\n');
+                if (verifyFraming)
+                    requireValue(lines.every(line => !line || /^(?::|data:|event:|id:|retry:)/.test(line)), 'invalid_stream_response');
+                const data = lines.filter(line => line.startsWith('data:')).map(line => line.slice(5).replace(/^ /, '')).join('\n');
                 if (!data || data === '[DONE]')
                     return;
                 requireValue(Buffer.byteLength(data) <= this.limits.eventBytes, 'event_capacity_exceeded');
@@ -145,6 +157,8 @@ export class ResponsesTransport {
                 requireValue(record(event) && typeof event.type === 'string', 'invalid_stream_event');
                 const declared = lines.find(line => line.startsWith('event:'))?.slice(6).trim();
                 requireValue(!declared || declared === event.type, 'stream_event_type_mismatch');
+                if (verifyFraming && !result.responseId)
+                    requireValue(event.type === 'response.created', 'invalid_stream_response');
                 if (event.type === 'response.output_text.delta' || event.type === 'response.refusal.delta') {
                     requireValue(typeof event.delta === 'string', 'invalid_text_delta');
                     outputBytes += Buffer.byteLength(event.delta);
@@ -212,7 +226,10 @@ export class ResponsesTransport {
             }
             if (!terminal) {
                 result.outcome = 'unknown';
-                result.errorCode = timedOut ? 'provider_timeout' : result.cancellation.requested ? 'cancellation_unconfirmed' : 'stream_terminal_unobserved';
+                result.errorCode = timedOut ? 'provider_timeout'
+                    : result.cancellation.requested ? 'cancellation_unconfirmed'
+                    : verifyFraming && !result.responseId ? 'invalid_stream_response'
+                    : 'stream_terminal_unobserved';
             }
             return result;
         }

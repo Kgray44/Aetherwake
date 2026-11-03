@@ -142,9 +142,9 @@ function assertTurnDiagnostic(value: TurnHttpDiagnostic | undefined): asserts va
     assert(Object.values(value).every(v => v === null || ['string', 'boolean', 'number'].includes(typeof v)));
 }
 test('offline: HTTP200 non-SSE diagnostics are bodyless unknown facts, never JSON success or a second request', async () => {
-    for (const [type, category] of [['application/json', 'json'], ['application/problem+json', 'json'], ['text/plain', 'text'], ['text/html; charset=utf-8', 'html'], ['application/octet-stream', 'other'], ['', 'missing']] as const) {
+    for (const [type, category] of [['application/json', 'json'], ['application/problem+json', 'json'], ['text/plain', 'text'], ['text/html; charset=utf-8', 'html'], ['application/octet-stream', 'other']] as const) {
         const response = new Response('{"PRIVATE_message":"synthetic-plan-token https://private.invalid/account","output_text":"Do not accept"}');
-        if (type) response.headers.set('content-type', type); else response.headers.delete('content-type'); response.headers.set('x-request-id', 'req_http200');
+        response.headers.set('content-type', type); response.headers.set('x-request-id', 'req_http200');
         let calls = 0;
         const f = fixture(ports(), async (url, init) => { calls++; assert.equal(url, RESPONSES_ENDPOINT); assert.equal(init?.method, 'POST'); return response; });
         const result = await f.transport.turn(input()), diagnostic = result.httpDiagnostic; assertTurnDiagnostic(diagnostic);
@@ -155,6 +155,40 @@ test('offline: HTTP200 non-SSE diagnostics are bodyless unknown facts, never JSO
     }
     const response = new Response(null, { headers: { 'Content-Type': 'text/event-stream' } }), result = await fixture(ports(), async () => response).transport.turn(input());
     assert.equal(result.outcome, 'unknown'); assert.equal(result.errorCode, 'invalid_stream_response'); assert.equal(result.httpDiagnostic?.hasBody, false); assert.equal(result.httpDiagnostic?.contentType, 'event-stream');
+});
+test('offline: absent Content-Type requires a real ChatGPT-plan SSE start and matching completion', async () => {
+    const reply = stream([created, delta, completed], 1);
+    reply.headers.delete('content-type');
+    let calls = 0;
+    const accepted = fixture(ports(), async () => { calls++; return reply; });
+    const result = await accepted.transport.turn(input());
+    assert.equal(result.outcome, 'completed');
+    assert.equal(result.partialText, delta.delta);
+    assert.equal(result.httpDiagnostic?.contentType, 'missing');
+    assert.equal(calls, 1);
+
+    const unexpectedBodies = [
+        JSON.stringify({ output_text: 'PRIVATE unexpected JSON' }),
+        '<html>PRIVATE unexpected HTML</html>\n\n' + frame(created) + frame(completed),
+        frame(completed),
+        frame(created) + frame({ ...completed, response: { ...completed.response, id: 'other-response' } }),
+    ];
+    for (const body of unexpectedBodies) {
+        const response = new Response(Buffer.from(body), { status: 200 });
+        const rejected = fixture(ports(), async () => response);
+        const result = await rejected.transport.turn(input());
+        assert.equal(result.outcome, 'unknown');
+        assert.equal(result.partialText, '');
+        assert.equal(result.httpDiagnostic?.contentType, 'missing');
+        assert.equal(JSON.stringify(result).includes('PRIVATE'), false);
+        assert.equal(rejected.events.some(event => event.type === 'provider/text-delta'), false);
+    }
+
+    const truncated = stream([created, delta]);
+    truncated.headers.delete('content-type');
+    const unknown = await fixture(ports(), async () => truncated).transport.turn(input());
+    assert.equal(unknown.outcome, 'unknown');
+    assert.equal(unknown.errorCode, 'stream_terminal_unobserved');
 });
 test('offline: SSE essence is case-insensitive and parameter-aware; MIME lookalikes or lists never qualify', async () => {
     for (const type of ['Text/Event-Stream; Charset=UTF-8', 'TEXT/EVENT-STREAM', 'text/event-stream; label="application/json"', ' text/event-stream ']) {
