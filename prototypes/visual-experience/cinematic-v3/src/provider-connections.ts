@@ -131,7 +131,12 @@ export function mountProviderConnections(
     cancel.disabled = busy;
     chat.disabled = busy || !modelsReady();
     refresh.disabled = busy || current?.state !== "ready";
-    refreshSession.disabled = busy || current?.registrationVersion == null;
+    const sessionExpired = current?.state === "expired";
+    refreshSession.hidden = current?.sessionRefreshAvailable !== true;
+    refreshSession.disabled = busy || refreshSession.hidden || current?.registrationVersion == null;
+    const sessionControls = sessionExpired ? actions : details;
+    if (refreshSession.parentElement !== sessionControls)
+      sessionControls.insertBefore(refreshSession, sessionExpired ? connect : disconnect);
     disconnect.disabled = busy || current?.registrationVersion == null;
     paintCatalog();
     if (!current) {
@@ -147,7 +152,9 @@ export function mountProviderConnections(
         : current.modelCatalog?.state === "unavailable"
           ? modelFailureLabel()
           : "Signed in. Models have not been checked.",
-      expired: "Sign in again or refresh this session.",
+      expired: current.sessionRefreshAvailable
+        ? "Your ChatGPT session expired. Refresh it to continue."
+        : "Your ChatGPT session expired. Sign in again to continue.",
       "recovery-required":
         "This connection needs native recovery before it can be used.",
     };
@@ -204,6 +211,23 @@ export function mountProviderConnections(
     paint();
     await notifyChanged(recoveryRevision);
   }
+  async function recoverSessionFailure(revision: number) {
+    try {
+      const value = await options.command({ type: "status", providerId: CHATGPT_PLAN_PROVIDER });
+      if (disposed || revision !== requestRevision) return;
+      current = value;
+      catalogRecoveryUnconfirmed = false;
+      schedule();
+      errorLabel = value.state === "disconnected"
+        ? "The saved ChatGPT session ended. Sign in again to continue."
+        : "Could not refresh the ChatGPT session. Your local conversations are preserved.";
+      paint();
+      await notifyChanged(revision);
+    } catch {
+      if (!disposed && revision === requestRevision)
+        failed(null);
+    }
+  }
   async function update(input: ProviderConnectionRequest) {
     const revision = ++requestRevision;
     let value: ProviderConnectionStatus;
@@ -212,6 +236,7 @@ export function mountProviderConnections(
       if (disposed || revision !== requestRevision) return null;
       if (input.type === "connect") connectRequested = false;
       if (input.type === "refreshModels") await recoverModelFailure(revision);
+      else if (input.type === "refreshSession") await recoverSessionFailure(revision);
       else failed(error);
       return null;
     }
@@ -233,6 +258,10 @@ export function mountProviderConnections(
           await update({ type: "refreshModels", providerId: CHATGPT_PLAN_PROVIDER });
         } finally { busy = wasBusy; paint(); }
       }
+    }
+    if (input.type === "refreshSession" && value.state === "ready" && !value.pending) {
+      await update({ type: "refreshModels", providerId: CHATGPT_PLAN_PROVIDER });
+      return value;
     }
     if (!disposed && input.type !== "status" && input.type !== "connect")
       await notifyChanged(revision);
@@ -267,7 +296,7 @@ export function mountProviderConnections(
     void run({ type: "refreshModels", providerId: CHATGPT_PLAN_PROVIDER });
   };
   refreshSession.onclick = () => {
-    if (current?.registrationVersion != null)
+    if (!refreshSession.disabled && !refreshSession.hidden && current?.registrationVersion != null)
       void run({
         type: "refreshSession",
         providerId: CHATGPT_PLAN_PROVIDER,

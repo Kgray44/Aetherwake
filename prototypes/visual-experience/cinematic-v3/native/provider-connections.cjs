@@ -132,6 +132,8 @@ function safeStatus(value) {
     typeof value.pending !== "boolean" ||
     typeof value.storageAvailable !== "boolean" ||
     typeof value.planUsageEnabled !== "boolean" ||
+    (value.sessionRefreshAvailable !== undefined &&
+      typeof value.sessionRefreshAvailable !== "boolean") ||
     !(
       value.registrationVersion === null || version(value.registrationVersion)
     ) ||
@@ -150,6 +152,9 @@ function safeStatus(value) {
     pending: value.pending,
     registrationVersion: value.registrationVersion,
     planUsageEnabled: value.planUsageEnabled,
+    ...(value.sessionRefreshAvailable === undefined
+      ? {}
+      : { sessionRefreshAvailable: value.sessionRefreshAvailable }),
     inferenceVerified: false,
     nativeAccountHistory: false,
     nativeAccountMemory: false,

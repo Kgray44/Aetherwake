@@ -103,3 +103,52 @@ test("host view-refresh failure cannot relabel a known model restriction as fail
   try { await f.view.ready; f.action("refreshModels").onclick(); await until(() => f.status().includes("not permitted")); await until(() => !f.action("refreshModels").disabled); assert.equal(f.status(), "Signed in. Model discovery was not permitted."); assert.equal(f.action("connect").hidden, true); }
   finally { f.close(); }
 });
+
+test("expired ChatGPT sessions offer refresh first and discover models after successful renewal", async () => {
+  const expired = { ...signedIn(), state: "expired", planUsageEnabled: false, sessionRefreshAvailable: true };
+  let changed = 0;
+  const f = fixture(async input => {
+    if (input.type === "status") return expired;
+    if (input.type === "refreshSession") {
+      assert.equal(input.expectedVersion, 4);
+      return { ...signedIn(), registrationVersion: 5, sessionRefreshAvailable: true };
+    }
+    assert.equal(input.type, "refreshModels");
+    return { ...catalogReady(), registrationVersion: 5, sessionRefreshAvailable: true };
+  }, async () => { changed++; });
+  try {
+    await f.view.ready;
+    const refresh = f.action("refreshSession");
+    assert.equal(refresh.parentElement.className, "connection-actions");
+    assert.equal(refresh.hidden, false);
+    assert.equal(refresh.disabled, false);
+    assert.deepEqual(f.calls.map(c => c.type), ["status"]);
+    refresh.onclick();
+    await until(() => !f.action("chat").disabled);
+    assert.deepEqual(f.calls.map(c => c.type), ["status", "refreshSession", "refreshModels"]);
+    assert.equal(changed, 1);
+    assert.equal(refresh.parentElement.tagName, "DETAILS");
+    assert.equal(f.chats, 0);
+  } finally { f.close(); }
+});
+
+test("a rejected renewal rereads local status once and offers sign-in when the saved session ended", async () => {
+  let ended = false;
+  const f = fixture(async input => {
+    if (input.type === "refreshSession") {
+      ended = true;
+      throw Error("PRIVATE refresh failure");
+    }
+    assert.equal(input.type, "status");
+    return ended ? baseStatus() : { ...signedIn(), state: "expired", planUsageEnabled: false, sessionRefreshAvailable: true };
+  });
+  try {
+    await f.view.ready;
+    f.action("refreshSession").onclick();
+    await until(() => !f.action("connect").disabled);
+    assert.deepEqual(f.calls.map(c => c.type), ["status", "refreshSession", "status"]);
+    assert.equal(f.status(), "The saved ChatGPT session ended. Sign in again to continue.");
+    assert.equal(f.action("refreshSession").hidden, true);
+    assert.equal(f.action("connect").hidden, false);
+  } finally { f.close(); }
+});

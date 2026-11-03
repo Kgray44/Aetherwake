@@ -197,6 +197,7 @@ export interface PublicAuthStatus {
     registrationId: string;
     state: 'disconnected' | 'identity-only' | 'ready' | 'expired';
     planUsageEnabled: boolean;
+    sessionRefreshAvailable: boolean;
     nativeAccountHistory: false;
     nativeAccountMemory: false;
     billingRoute: 'chatgpt-plan';

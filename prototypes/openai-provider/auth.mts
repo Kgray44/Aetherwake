@@ -53,7 +53,7 @@ function validateStored(value: PrivateRegistration | null, id: string): void {
 }
 function publicStatus(id: string, value: PrivateRegistration | null, now: number): PublicAuthStatus {
     const connected = !!(value?.enabled && value.identity && value.accessToken), plan = connected && value!.scopes.includes(DIRECT), expired = connected && value!.expiresAt <= now;
-    return { providerId: 'chatgpt-plan-responses', registrationId: id, state: !connected ? 'disconnected' : expired ? 'expired' : plan ? 'ready' : 'identity-only', planUsageEnabled: !!plan && !expired, nativeAccountHistory: false, nativeAccountMemory: false, billingRoute: 'chatgpt-plan', version: value?.version ?? null };
+    return { providerId: 'chatgpt-plan-responses', registrationId: id, state: !connected ? 'disconnected' : expired ? 'expired' : plan ? 'ready' : 'identity-only', planUsageEnabled: !!plan && !expired, sessionRefreshAvailable: !!(connected && value?.refreshToken), nativeAccountHistory: false, nativeAccountMemory: false, billingRoute: 'chatgpt-plan', version: value?.version ?? null };
 }
 function cleared(value: PrivateRegistration): PrivateRegistration { return { ...value, version: value.version + 1, accessToken: null, refreshToken: null, idToken: null, scopes: [], expiresAt: 0, nonce: '', enabled: false }; }
 function nextVersion(value: PrivateRegistration): void { requireValue(Number.isSafeInteger(value.version + 1), 'registration_version_exhausted'); }

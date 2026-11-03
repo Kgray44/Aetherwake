@@ -478,6 +478,7 @@ export class OpenAIConnections {
         state: current.state,
         registrationVersion: current.version,
         planUsageEnabled: current.planUsageEnabled,
+        sessionRefreshAvailable: current.sessionRefreshAvailable && lock.state === "unlocked" && !this.pending,
         ...(this.catalogObservation
           ? {
               modelCatalog: {

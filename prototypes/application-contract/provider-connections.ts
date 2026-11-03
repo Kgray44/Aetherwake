@@ -19,6 +19,8 @@ export interface ProviderConnectionStatus {
   pending: boolean;
   registrationVersion: number | null;
   planUsageEnabled: boolean;
+  /** Local capability only. The provider can still reject a saved session. */
+  sessionRefreshAvailable?: boolean;
   inferenceVerified: false;
   nativeAccountHistory: false;
   nativeAccountMemory: false;
