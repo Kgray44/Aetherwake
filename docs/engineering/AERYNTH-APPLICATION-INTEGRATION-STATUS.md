@@ -2,6 +2,24 @@
 
 Snapshot: 2026-11-02 UTC. Integration remains active; full product acceptance is incomplete.
 
+## Ordinary chat web search
+
+ChatGPT-plan chats offer a separate Search web action on the shared composer.
+It sends the submitted message and a UTC timestamp with the documented
+`web_search` tool. Other messages, reviewed branch excerpts and attachments
+stay out of that lookup. The exact request remains bound to the native
+authorization and final source checks. Normal Send keeps its existing
+conversation context and does not enable search.
+
+A matching completed provider response can supply bounded citations.
+The native host opens the canonical HTTPS citation only on explicit selection.
+Citations survive SQLite restart with their answer. Provider rejection retains
+the draft, reports the known failure and starts no fallback turn.
+Controlled transport, Core, SQLite, native broker and mounted chat component
+tests cover the send and citation paths. The [official preview limits](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+make web search conditional on model and account policy. Actual search on the
+owner's account and native visual acceptance remain open.
+
 ## Current ordinary chat and packaged backend evidence
 
 The S review completed a real ChatGPT-plan Responses turn after the native

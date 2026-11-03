@@ -308,6 +308,18 @@
   width: fit-content;
   max-width: 92%;
 }
+.cp-markdown .cp-web-citation {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.55em;
+  min-height: 1.55em;
+  margin-inline: .28em .12em;
+  padding: 0 .25em;
+  border-radius: 100vw;
+  font-size: .78em;
+  vertical-align: baseline;
+}
 .cp-message-assistant > .cp-message-content {
   white-space: normal;
 }
@@ -432,6 +444,7 @@
 }
 .cp-composer-tools {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   width: 100%;

@@ -34,12 +34,20 @@ export function markdownBlocks(source: string): MarkdownBlock[] {
 }
 
 /** Only http(s) and mailto links; no HTML parsing, script URLs, remote image requests or highlighting execution. */
-export function appendInlineMarkdown(target: HTMLElement, text: string) {
-  const pattern = /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\))/g;
+export function appendInlineMarkdown(target: HTMLElement, text: string, citation?: (index: number) => HTMLElement | null) {
+  const pattern = /(\uE000\d{1,2}\uE001|`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|\[[^\]\n]+\]\([^\s)]+\))/g;
   let start = 0;
   for (const match of text.matchAll(pattern)) {
     target.append(document.createTextNode(text.slice(start, match.index)));
-    const token = match[0]; let node: HTMLElement;
+    const original = match[0]; let node: HTMLElement;
+    if (original.startsWith('\uE000')) {
+      const source = citation?.(Number(original.slice(1, -1)));
+      if (source) target.append(source);
+      if (!citation) target.append(document.createTextNode(original));
+      start = match.index! + original.length;
+      continue;
+    }
+    const token = citation ? original.replace(/\uE000\d{1,2}\uE001/g, '') : original;
     if (token[0] === '`') { node = document.createElement('code'); node.textContent = token.slice(1, -1); }
     else if (token.startsWith('**')) { node = document.createElement('strong'); node.textContent = token.slice(2, -2); }
     else if (token[0] === '*') { node = document.createElement('em'); node.textContent = token.slice(1, -1); }
@@ -48,28 +56,57 @@ export function appendInlineMarkdown(target: HTMLElement, text: string) {
       if (/^(https?:\/\/|mailto:)/i.test(link[2])) { const a = document.createElement('a'); a.href = link[2]; a.rel = 'noreferrer noopener'; a.target = '_blank'; a.textContent = link[1]; node = a; }
       else { node = document.createElement('span'); node.textContent = token; }
     }
-    target.append(node); start = match.index! + token.length;
+    target.append(node); start = match.index! + original.length;
   }
   target.append(document.createTextNode(text.slice(start)));
 }
 
-export function renderMarkdown(source: string, copy: (text: string) => Promise<void>, report: (message: string) => void): HTMLElement {
+export function renderMarkdown(source: string, copy: (text: string) => Promise<void>, report: (message: string) => void, citations?: { offsets: readonly number[]; element(index: number): HTMLElement }): HTMLElement {
   const root = document.createElement('div'); root.className = 'cp-markdown';
+  const shown = new Set<number>();
+  const marker = citations ? (index: number) => {
+    if (shown.has(index) || index >= citations.offsets.length) return null;
+    shown.add(index);
+    return citations.element(index);
+  } : undefined;
+  if (citations) {
+    // Remove any provider-supplied marker characters before assigning our own.
+    // Match UTF-16 offsets from the canonical answer before Markdown reflows it.
+    source = source.replace(/[\uE000\uE001]/g, '\uFFFD');
+    const fences = Array.from(source.matchAll(/^```[^\n]*(?:\n|$)/gm));
+    const fenced: { start: number; end: number }[] = [];
+    for (let index = 0; index < fences.length; index += 2) {
+      const opening = fences[index], closing = fences[index + 1];
+      fenced.push({ start: opening.index, end: closing ? closing.index + closing[0].length : source.length });
+    }
+    const placements = citations.offsets.map((offset, index) => ({ offset, index })).sort((a, b) => b.offset - a.offset || b.index - a.index);
+    for (const { offset, index } of placements) {
+      if (Number.isSafeInteger(offset) && offset > 0 && offset <= source.length && !fenced.some(range => offset >= range.start && offset <= range.end))
+        source = source.slice(0, offset) + '\uE000' + index + '\uE001' + source.slice(offset);
+    }
+  }
+  const clean = (value: string) => citations ? value.replace(/\uE000\d{1,2}\uE001/g, '') : value;
   for (const block of markdownBlocks(source)) {
     if (block.kind === 'code') {
       const section = document.createElement('div'), header = document.createElement('div'), language = document.createElement('span'), button = document.createElement('button'), pre = document.createElement('pre'), code = document.createElement('code');
-      section.className = 'cp-code'; header.className = 'cp-code-header'; language.textContent = block.language || 'Code'; button.type = 'button'; button.textContent = 'Copy code';
+      section.className = 'cp-code'; header.className = 'cp-code-header'; language.textContent = clean(block.language || 'Code'); button.type = 'button'; button.textContent = 'Copy code';
       button.dataset.nativeCopyControl='true';
-      button.addEventListener('click', () => { void copy(block.text).then(() => report('Code copied'), error => report(String(error))); });
-      code.textContent = block.text; pre.append(code); header.append(language, button); section.append(header, pre); root.append(section);
+      button.addEventListener('click', () => { void copy(clean(block.text)).then(() => report('Code copied'), error => report(String(error))); });
+      code.textContent = clean(block.text); pre.append(code); header.append(language, button); section.append(header, pre); root.append(section);
     } else if (block.kind === 'list') {
       const list = document.createElement(block.ordered ? 'ol' : 'ul');
       if(block.ordered)list.setAttribute('start',String(block.start));
-      for (const item of block.items!) { const li = document.createElement('li'); appendInlineMarkdown(li, item); list.append(li); } root.append(list);
+      for (const item of block.items!) { const li = document.createElement('li'); appendInlineMarkdown(li, item, marker); list.append(li); } root.append(list);
     } else {
       const node = document.createElement(block.kind === 'heading' ? `h${Math.min(4, block.level! + 1)}` : block.kind === 'quote' ? 'blockquote' : 'p');
-      appendInlineMarkdown(node, block.text); root.append(node);
+      appendInlineMarkdown(node, block.text, marker); root.append(node);
     }
+  }
+  // Markup such as fenced code can contain an annotated span. Its source
+  // remains clickable after the answer instead of altering the code itself.
+  if (citations) for (let i = 0; i < citations.offsets.length; i++) {
+    const source = marker?.(i);
+    if (source) root.append(source);
   }
   return root;
 }

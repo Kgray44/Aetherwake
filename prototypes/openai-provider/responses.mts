@@ -1,5 +1,5 @@
 import { MIMEType } from 'node:util';
-import type { DispatchReview, ModelCatalogDiagnostic, NativeCredential, ProviderId, ReportedUsage, TransportOptions, TurnHttpDiagnostic, TurnInput, TurnResult } from './contracts.mts';
+import type { DispatchReview, ModelCatalogDiagnostic, NativeCredential, ProviderId, ReportedUsage, TransportOptions, TurnHttpDiagnostic, TurnInput, TurnResult, WebCitation } from './contracts.mts';
 import { abortable, boundedJSON, digest, exact, knownRemoteCode, ProviderError, record, requireValue, text } from './common.mts';
 export const RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses';
 export const MODELS_ENDPOINT = 'https://api.openai.com/v1/models';
@@ -11,7 +11,8 @@ export function prepareResponsesTurn(input: TurnInput, maxBytes = defaults.reque
     review: DispatchReview;
 } {
     requireValue(Number.isSafeInteger(maxBytes) && maxBytes > 0 && maxBytes <= defaults.requestBytes, 'invalid_request_limit');
-    requireValue(record(input) && exact(input, ['executionId', 'requestId', 'configurationId', 'providerId', 'assistant', 'model', 'instructions', 'messages', 'contextDigest']), 'invalid_turn');
+    requireValue(record(input) && exact(input, ['executionId', 'requestId', 'configurationId', 'providerId', 'assistant', 'model', 'instructions', 'messages', 'contextDigest', ...(Object.hasOwn(input, 'webSearch') ? ['webSearch'] : [])]), 'invalid_turn');
+    requireValue(!Object.hasOwn(input, 'webSearch') || input.webSearch === true && input.providerId === 'chatgpt-plan-responses' && input.assistant === 'ordinary', 'invalid_web_search_scope');
     requireValue(['executionId', 'requestId', 'configurationId', 'model'].every(key => text(input[key as keyof TurnInput])), 'invalid_turn_identity');
     requireValue(input.providerId === 'chatgpt-plan-responses' && input.assistant === 'ordinary' || input.providerId === 'openai-api-vela' && input.assistant === 'vela', 'provider_identity_mismatch');
     requireValue(typeof input.contextDigest === 'string' && /^[a-f0-9]{64}$/.test(input.contextDigest), 'invalid_context_digest');
@@ -22,12 +23,37 @@ export function prepareResponsesTurn(input: TurnInput, maxBytes = defaults.reque
         units += message.content.length;
         requireValue(units <= maxBytes, 'request_capacity_exceeded');
     }
-    // No arbitrary parameters, system-message items, tools, server-side conversation,
-    // previous response ID, token cap or silently changed billing route.
-    const body = JSON.stringify({ model: input.model, instructions: input.instructions, input: input.messages.map(({ role, content }) => ({ role, content })), store: false, stream: true });
+    // The only supported hosted tool is explicitly requested ordinary web search.
+    const body = JSON.stringify({ model: input.model, instructions: input.instructions, input: input.messages.map(({ role, content }) => ({ role, content })), store: false, stream: true, ...(input.webSearch ? { tools: [{ type: 'web_search' }], tool_choice: 'required' } : {}) });
     const bodyBytes = Buffer.byteLength(body);
     requireValue(bodyBytes <= maxBytes, 'request_capacity_exceeded');
     return { body, review: { executionId: input.executionId, requestId: input.requestId, configurationId: input.configurationId, providerId: input.providerId, model: input.model, contextDigest: input.contextDigest, bodyDigest: digest(body), bodyBytes } };
+}
+/** Inspect provider metadata only. Search queries and tool payloads are not retained. */
+function webSearchEvidence(output: readonly Record<string, unknown>[], streamedText: string): NonNullable<TurnResult['webSearch']> {
+    const completed = output.some(item => item.type === 'web_search_call' && item.status === 'completed');
+    const parts = output.flatMap(item => item.type === 'message' && item.role === 'assistant' && Array.isArray(item.content) ? item.content.filter(part => record(part) && part.type === 'output_text' && typeof part.text === 'string') : []);
+    const citations: WebCitation[] = [];
+    // Citation offsets refer to the associated text part. Keep them only when
+    // the terminal content is the same text that will appear in the transcript.
+    if (!completed || parts.map(part => part.text).join('') !== streamedText) return { completed, citations };
+    let offset = 0;
+    for (const part of parts) {
+        const characters = Array.from(part.text as string);
+        const annotations = Array.isArray(part.annotations) ? part.annotations.slice(0, 64) : [];
+        for (const entry of annotations) {
+            if (citations.length === 32) return { completed, citations };
+            if (!record(entry) || entry.type !== 'url_citation' || !text(entry.url, 2048) || !text(entry.title, 300)) continue;
+            const start = Number(entry.start_index), end = Number(entry.end_index);
+            if (typeof entry.start_index !== 'number' || typeof entry.end_index !== 'number' || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end <= start || end > characters.length) continue;
+            let url: URL;
+            try { url = new URL(entry.url); } catch { continue; }
+            if (url.protocol !== 'https:' || url.username || url.password || !url.hostname) continue;
+            citations.push({ url: url.href, title: entry.title, start: offset + characters.slice(0, start).join('').length, end: offset + characters.slice(0, end).join('').length });
+        }
+        offset += (part.text as string).length;
+    }
+    return { completed, citations };
 }
 function credentialHeaders(credential: NativeCredential, providerId: ProviderId, now: number): Record<string, string> {
     requireValue(credential.providerId === providerId && text(credential.bearer, 65536) && typeof credential.boundaryDigest === 'string' && /^[a-f0-9]{64}$/.test(credential.boundaryDigest), 'credential_boundary_mismatch');
@@ -84,6 +110,7 @@ export class ResponsesTransport {
         requireValue(!this.active.has(frozen.executionId), 'execution_already_in_flight');
         this.active.add(frozen.executionId);
         const controller = new AbortController(), result: TurnResult = { providerId: frozen.providerId, executionId: frozen.executionId, requestId: frozen.requestId, outcome: 'unknown', dispatched: false, partialText: '', cancellation: { requested: false, serverConfirmed: false }, taskVerified: false };
+        const isAllowedOutputItem = (item: unknown): item is Record<string, unknown> => record(item) && (item.type === 'message' || item.type === 'reasoning' || frozen.webSearch === true && item.type === 'web_search_call');
         let reader: ReadableStreamDefaultReader<Uint8Array> | undefined, timedOut = false, terminal = false;
         const cancelled = () => { result.cancellation.requested = true; controller.abort(); void reader?.cancel().catch(() => { }); };
         signal?.addEventListener('abort', cancelled, { once: true });
@@ -183,10 +210,11 @@ export class ResponsesTransport {
                     requireValue(record(event.response) && text(event.response.id, 256) && (!result.responseId || result.responseId === event.response.id), 'response_identity_mismatch');
                     result.responseId = event.response.id;
                     if (event.response.output !== undefined)
-                        requireValue(Array.isArray(event.response.output) && event.response.output.length <= 128 && event.response.output.every(item => record(item) && ['message', 'reasoning'].includes(String(item.type))), 'unsupported_provider_output');
+                        requireValue(Array.isArray(event.response.output) && event.response.output.length <= 128 && event.response.output.every(isAllowedOutputItem), 'unsupported_provider_output');
                     const expected = event.type.slice('response.'.length);
                     requireValue(event.response.status === expected, 'response_terminal_mismatch');
                     result.outcome = expected as 'completed' | 'incomplete' | 'failed';
+                    if (frozen.webSearch && expected === 'completed') result.webSearch = webSearchEvidence((event.response.output as Record<string, unknown>[] | undefined) ?? [], result.partialText);
                     result.reportedModel = typeof event.response.model === 'string' ? event.response.model : undefined;
                     result.usage = usage(event.response.usage);
                     if (result.usage)
@@ -202,9 +230,9 @@ export class ResponsesTransport {
                     result.errorCode = knownRemoteCode(event.code);
                     terminal = true;
                 }
-                else if (['response.output_item.added', 'response.output_item.done'].includes(event.type) && (!record(event.item) || !['message', 'reasoning'].includes(String(event.item.type))))
+                else if (['response.output_item.added', 'response.output_item.done'].includes(event.type) && !isAllowedOutputItem(event.item))
                     throw new ProviderError('unsupported_provider_output');
-                else if (event.type.startsWith('response.function_call_arguments.') || event.type.startsWith('response.mcp_') || event.type.startsWith('response.web_search_call.'))
+                else if (event.type.startsWith('response.function_call_arguments.') || event.type.startsWith('response.mcp_') || !frozen.webSearch && event.type.startsWith('response.web_search_call.'))
                     throw new ProviderError('unsupported_provider_output');
             };
             while (!terminal) {

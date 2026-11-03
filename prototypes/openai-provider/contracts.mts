@@ -34,7 +34,9 @@ export interface TurnInput {
         readonly content: string;
     }[];
     readonly contextDigest: string;
+    readonly webSearch?: true;
 }
+export type WebCitation = { url: string; title: string; start: number; end: number };
 export interface DispatchReview {
     readonly executionId: string;
     readonly requestId: string;
@@ -119,6 +121,7 @@ export interface TurnResult {
     refusalText?: string;
     responseId?: string;
     reportedModel?: string;
+    webSearch?: { completed: boolean; citations: WebCitation[] };
     usage?: ReportedUsage;
     errorCode?: string;
     /** Absent until an HTTP response was actually received; not outcome proof. */

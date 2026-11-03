@@ -21,7 +21,7 @@ function fixture(){
   modelCatalog:async expected=>{catalogReads++;assert.equal(expected,version);assert(ready);return {providerId,boundaryDigest:boundary,observedAt:Date.now(),catalogOnly:true,models:[{id:model,label:'Synthetic eligible model'}]};},
   revalidateCredential:async(expected,digest)=>{assert.equal(expected,version,'credential version changed');assert.equal(digest,boundary);assert(ready);},
  };
- const fakeFetch:typeof fetch=async(url,init)=>{assert.equal(url,RESPONSES_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer SYNTHETIC_PLAN_TOKEN');const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);assert.deepEqual(Object.keys(body),['model','instructions','input','store','stream']);requests.push(body);const response=responses.shift();assert(response,'unexpected provider request');return response(init!);};
+ const fakeFetch:typeof fetch=async(url,init)=>{assert.equal(url,RESPONSES_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer SYNTHETIC_PLAN_TOKEN');const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);assert.deepEqual(Object.keys(body),['model','instructions','input','store','stream',...(body.tools?['tools','tool_choice']:[])]);requests.push(body);const response=responses.shift();assert(response,'unexpected provider request');return response(init!);};
  let core:BackendCore;const create=()=>{core=new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only'},event=>events.push(event),undefined,{connection,fetch:fakeFetch});const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};};create();
  return {get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(resolve(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
@@ -134,6 +134,72 @@ test('long ordinary chats keep sending within both history bounds and retain the
     assert.equal(result.state, 'provider_completed');
     assert.deepEqual(f.requests[0].input, messages);
     assert.equal((await f.core.command('snapshot', {})).graph.messages.length, 136);
+  } finally { await f.close(); }
+});
+
+test('explicit web search sends only the submitted draft and restores verified citation links after restart', async () => {
+  const f = fixture();
+  try {
+    await f.core.command('ordinaryProviderStatus', {});
+    const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+    const prior = await f.core.command('addMessage', { resourceId: chat.resourceId, role: 'user', content: 'PRIVATE earlier transcript', expectedRevision: chat.revision });
+    const input: ConversationSendInput = { resourceId: chat.resourceId, content: 'Look up a public reference for the lunar orbit.', webSearch: true, expectedRevision: prior.revision, commandId: randomUUID() };
+    const answer = '🌙 Moon facts.';
+    const safe = { type: 'url_citation', start_index: 2, end_index: 12, url: 'https://science.example.org/moon', title: 'Moon facts' };
+    const tool = { type: 'web_search_call', status: 'completed', action: { query: 'RAW_QUERY_DO_NOT_RETAIN' } };
+    f.responses.push(() => sse([
+      { type: 'response.created', response: { id: 'resp-web-fixture' } },
+      { type: 'response.output_item.added', item: { type: 'web_search_call', status: 'in_progress' } },
+      { type: 'response.web_search_call.completed' },
+      { type: 'response.output_text.delta', delta: answer },
+      { type: 'response.completed', response: { id: 'resp-web-fixture', status: 'completed', model, output: [tool, { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: answer, annotations: [safe, { ...safe, url: 'javascript:alert(1)' }, { ...safe, url: 'https://user:pass@science.example.org/moon' }, { ...safe, end_index: 99 }] }] }] } },
+    ]));
+    const calls: string[] = [];
+    const call = (name: Parameters<BackendCore['command']>[0], data: never) => { calls.push(name); return f.core.command(name, data); };
+    const sent = await conversationCommand({ call, input: { name: 'send', input } });
+    assert.deepEqual(calls, ['desktop', 'conversationSendPreview', 'authorizeConversationSend', 'conversationSend']);
+    assert.equal(sent.state, 'provider_completed');
+    assert.deepEqual(f.requests[0].input, [{ role: 'user', content: input.content }]);
+    assert.deepEqual(f.requests[0].tools, [{ type: 'web_search' }]);
+    assert.equal(f.requests[0].tool_choice, 'required');
+    assert.doesNotMatch(f.requests[0].instructions, /local date|PRIVATE/);
+    const detail = () => f.core.command('conversation', { name: 'detail', input: { resourceId: chat.resourceId } }) as Promise<import('../../conversation-product/src/contracts.ts').Detail>;
+    const response = (await detail()).messages.items.at(-1)!;
+    assert.equal(response.content, answer);
+    assert.deepEqual(response.webSearch, { completed: true, citations: [{ url: safe.url, title: safe.title, start: 3, end: 13 }] });
+    const stored = await f.core.command('snapshot', {});
+    assert.doesNotMatch(JSON.stringify(stored), /RAW_QUERY_DO_NOT_RETAIN|javascript:alert|user:pass/);
+    await f.reopen();
+    assert.deepEqual((await detail()).messages.items.at(-1), response);
+    const launched: string[] = [];
+    const openExternal = async (url: string) => { launched.push(url); };
+    const open = { name: 'openCitation', input: { resourceId: chat.resourceId, messageId: response.id, index: 0, url: 'https://forged.invalid' } };
+    assert.deepEqual(await conversationCommand({ call, openExternal, input: open }), { requested: true });
+    assert.deepEqual(launched, [safe.url]);
+    await assert.rejects(conversationCommand({ call, openExternal, input: { ...open, input: { ...open.input, index: 1 } } }), /source_unavailable/);
+    const other = await f.core.command('createConversation', { providerId: 'local', commandId: randomUUID() });
+    await assert.rejects(conversationCommand({ call, openExternal, input: { ...open, input: { ...open.input, resourceId: other.resourceId } } }), /source_unavailable/);
+    await assert.rejects(conversationCommand({ call, input: { name: 'send', input: { ...input, resourceId: other.resourceId } } }), /invalid_web_search_scope/);
+    assert.deepEqual(launched, [safe.url]);
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.codexCalls, 0);
+  } finally { await f.close(); }
+});
+
+test('web search rejection is explicit and causes no fallback inference', async () => {
+  const f = fixture();
+  try {
+    await f.core.command('ordinaryProviderStatus', {});
+    const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+    const input: ConversationSendInput = { resourceId: chat.resourceId, content: 'Synthetic public lookup', webSearch: true, expectedRevision: chat.revision, commandId: randomUUID() };
+    const preview = await f.core.command('conversationSendPreview', input);
+    f.responses.push(() => Response.json({ error: { code: 'subscription_sharing_unsupported_capability' } }, { status: 403 }));
+    const result = await f.core.command('conversationSend', await grant(f, preview));
+    assert.equal(result.state, 'failed');
+    assert.equal(result.errorCode, 'subscription_sharing_unsupported_capability');
+    assert.equal(result.outputMessageId, undefined);
+    assert.equal(f.requests.length, 1);
+    assert.equal(f.codexCalls, 0);
   } finally { await f.close(); }
 });
 

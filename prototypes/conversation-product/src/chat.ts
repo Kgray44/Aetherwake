@@ -107,11 +107,11 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   const messages = el('div', undefined, 'cp-messages'); messages.tabIndex = 0; messages.setAttribute('aria-label', 'Conversation messages');
   const paging = el('div', undefined, 'cp-paging'), stream = el('article', undefined, 'cp-stream'), streamText = el('pre', '', 'cp-stream-text'); stream.append(el('p', 'Observed live output', 'cp-message-source'), streamText); stream.hidden = true;
   const status = el('p', '', 'cp-chat-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
-  const composer = el('form', undefined, 'cp-composer'), textarea = el('textarea'), tools = el('div', undefined, 'cp-composer-tools'), provider = el('span', '', 'cp-composer-provider'), send = el('button', 'Send'), stop = el('button', 'Stop'), hint = el('span', 'Enter to send · Shift+Enter for a new line', 'cp-composer-hint');
+  const composer = el('form', undefined, 'cp-composer'), textarea = el('textarea'), tools = el('div', undefined, 'cp-composer-tools'), provider = el('span', '', 'cp-composer-provider'), send = el('button', 'Send'), web = el('button', 'Search web'), stop = el('button', 'Stop'), hint = el('span', 'Enter to send · Shift+Enter for a new line', 'cp-composer-hint');
   composer.dataset.aerynthMotionControl='true';
   textarea.setAttribute('aria-label', 'Message'); textarea.placeholder = 'Ask anything, or share an idea'; textarea.rows = 2;
-  send.type = 'submit'; send.setAttribute('aria-label', 'Send message'); stop.type = 'button'; stop.hidden = true; tools.append(hint, stop, send); composer.append(textarea, tools);providerSlot.append(provider);provider.classList.add('cp-chat-provider-label');
-  decorateConversationControl(send,{identity:'send',emphasis:'primary'});decorateConversationControl(stop,{identity:'stop',emphasis:'secondary'});tools.dataset.cpGroup='composer';tools.setAttribute('role','group');tools.setAttribute('aria-label','Message controls');
+  send.type = 'submit'; send.setAttribute('aria-label', 'Send message'); stop.type = 'button'; stop.hidden = true; web.type = 'submit'; web.hidden = true; web.title = 'Search the public web using only this message'; web.setAttribute('aria-label', web.title); tools.append(hint, stop, send, web); composer.append(textarea, tools);providerSlot.append(provider);provider.classList.add('cp-chat-provider-label');
+  decorateConversationControl(send,{identity:'send',emphasis:'primary'});decorateConversationControl(stop,{identity:'stop',emphasis:'secondary'});decorateConversationControl(web,{identity:'search',emphasis:'secondary'});tools.dataset.cpGroup='composer';tools.setAttribute('role','group');tools.setAttribute('aria-label','Message controls');
   const capabilityNote=el('p','','cp-capability-note'),contextNote=el('p','','cp-context-note'),draftStatus = el('p', '', 'cp-draft-status'), recovery = el('div', undefined, 'cp-draft-recovery'); draftStatus.setAttribute('role', 'status');
   const recoveryDetails = el('details', undefined, 'cp-draft-conflict'), recoverySummary = el('summary', 'Review draft conflict'), localText = el('pre'), storedText = el('pre');
   const keep = el('button', 'Keep this editor’s draft'), useStored = el('button', 'Use the stored draft'), retry = el('button', 'Retry draft recovery'), reviewed = el('button', 'I reviewed the send outcome');
@@ -210,6 +210,8 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if (uncertain && reviewed.parentNode !== recovery) recovery.append(el('p','Send acceptance is not confirmed. Your draft is retained; inspect the chat before retrying.'),reviewed);
     keep.disabled = useStored.disabled = retry.disabled = recovering;
     send.disabled = sending || !!active() || uncertain || !current || current.conversation.state !== 'active' || ['loading','conflict','error'].includes(snapshot.phase) || !snapshot.content.trim();
+    web.hidden = current?.conversation.providerId !== 'chatgpt-plan-responses';
+    web.disabled = send.disabled || !current?.providers.some(item => item.id === current?.conversation.providerId && item.execute);
     send.dataset.state=uncertain?'review-required':sending?'pending':active()?'executing':send.disabled?'unavailable':'ready';stop.dataset.state=cancelPending?'requested':active()?'available':'inactive';
     stop.hidden = !active() || !options.execution; stop.disabled = cancelPending || connection==='unavailable';composer.hidden = !current || current.conversation.state === 'archived'; recovery.hidden = draftStatus.hidden = !current; renderFeedback();viewState();
   }
@@ -234,7 +236,23 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const attribution = message.role === 'user' ? 'You' : message.role === 'assistant' ? (message.provenance==='device_clock'?'Device clock':message.provenance==='mock_adapter'?'Assistant · simulated source':'Assistant') : message.role;
     const by = el('p', attribution+(message.inherited?' · inherited source':'')+(message.outputState==='partial'?' · partial response':''), 'cp-message-source'); by.title = message.provenance+' · '+message.createdAt;article.dataset.outputState=message.outputState??'';
     const time=el('time',clock.time,'cp-message-time');if(clock.day!=='unavailable')time.setAttribute('datetime',message.createdAt);by.append(document.createTextNode(' · '),time);
-    const content = message.role === 'assistant' ? renderMarkdown(message.content,copy,report) : el('div',message.content); content.classList.add('cp-message-content');
+    const sources = message.webSearch?.citations;
+    const citationControls = sources?.length ? {
+      offsets: sources.map(source => source.end),
+      element: (index: number) => {
+        const source = sources[index], button = el('button', String(index + 1), 'cp-web-citation');
+        button.type = 'button'; button.title = source.title; button.setAttribute('aria-label', 'Open source ' + (index + 1) + ', ' + source.title);
+        button.dataset.aerynthMotionControl = 'true';
+        button.addEventListener('click', () => {
+          void port.command('openCitation', { resourceId, messageId: message.id, index }).catch(error => report(errorText(error)));
+        });
+        return button;
+      },
+    } : undefined;
+    const content = message.role === 'assistant' ? renderMarkdown(message.content, copy, report, citationControls) : el('div', message.content);
+    content.classList.add('cp-message-content');
+    if (message.webSearch && !sources?.length)
+      content.append(el('p', message.webSearch.completed ? 'Search returned no usable citations.' : 'The provider returned no completed web search.', 'cp-message-source'));
     const actions = el('details', undefined, 'cp-message-actions'), summary = el('summary','Message actions'), panel = el('div',undefined,'cp-disclosure-panel'); actions.append(summary,panel);
     decorateConversationDisclosure(actions,summary,'message-actions',panel);
     const action = (label:string, work:()=>void|Promise<void>,identity:ConversationControlIdentity='action') => { const b = el('button',label); b.type='button';decorateConversationControl(b,{identity}); b.addEventListener('click',()=>{if(!b.disabled)Promise.resolve(work()).catch(error=>report(errorText(error)));});panel.append(b);return b; };
@@ -326,16 +344,19 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if((offset===undefined||input.latest)&&!around&&d.messages.hasMore){offset=Math.max(0,d.conversation.messageCount-50);await refresh();return;}
     accessRevoked=false;root.dataset.resourceAvailable='true';offset=d.messages.offset;render(d,input.aroundMessageId,input.followMessageId,input.restoreAnchor);
   }
-  composer.addEventListener('submit',event=>{event.preventDefault();if(send.disabled||!current)return;const before=current,content=textarea.value,commandId=crypto.randomUUID();sending=true;renderDraft();report(providerCopy(before.conversation.providerId).pending);
+  composer.addEventListener('submit',event=>{event.preventDefault();const webSearch=event.submitter===web;if(send.disabled||!current||webSearch&&web.disabled)return;const before=current,content=textarea.value,commandId=crypto.randomUUID();sending=true;renderDraft();report(webSearch?'Searching the web…':providerCopy(before.conversation.providerId).pending);
     sendTask=(async()=>{
       const checkpoint=await session.checkpoint();
-      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId});
+      const result=await port.command('send',{resourceId,content:checkpoint.record.content,expectedRevision:before.conversation.revision,commandId,...(webSearch?{webSearch:true}:{})});
       let evidence:Detail|undefined;
       const input={resourceId,providerId:before.conversation.providerId,content,commandId,revision:before.conversation.revision,priorMessageIds:before.messages.items.map(m=>m.id)};
       if(!acceptedConversationSubmission(input,result))evidence=await port.command('detail',{resourceId,limit:50,offset:Math.max(0,before.conversation.messageCount-1)});
       let followMessageId:string|undefined;
       if(acceptedConversationSubmission(input,result,evidence)) { const receipt=result as Record<string,unknown>;followMessageId=typeof receipt.deviceClockMessageId==='string'?receipt.deviceClockMessageId:receipt.role==='user'?String(receipt.id):evidence?.messages.items.find(m=>m.resourceId===resourceId&&!m.inherited&&m.role==='user'&&m.content===content&&!input.priorMessageIds.includes(m.id))?.id;const cleared=await session.acknowledgeSent(checkpoint);report(cleared?'Message accepted.':'Message accepted. Later draft edits were retained.','send-accepted'); }
-      else { uncertain=true;report('Send acceptance is not confirmed. Inspect the chat before retrying.'); }
+      else if (webSearch && result && typeof result === 'object' && 'state' in result && result.state === 'failed' && 'commandId' in result && result.commandId === commandId && 'resourceId' in result && result.resourceId === resourceId && 'providerId' in result && result.providerId === input.providerId) {
+        const unavailable = 'errorCode' in result && result.errorCode === 'subscription_sharing_unsupported_capability';
+        report(unavailable ? 'This ChatGPT plan or model could not use web search. Your draft is still here.' : 'Web search failed. Your draft is still here.');
+      } else { uncertain=true;report('Send acceptance is not confirmed. Inspect the chat before retrying.'); }
       if(!disposed){await refresh({latest:true,...(followMessageId?{followMessageId}:{})});if(!disposed)await options.onChanged?.();}
     })().catch(error=>{if(errorText(error)==='authorization_cancelled')report('Send cancelled. Your saved draft was retained.');else{uncertain=true;report('Send could not be confirmed: '+errorText(error));}}).finally(()=>{sending=false;sendTask=null;renderDraft();});
   });
@@ -367,7 +388,7 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     if(!active())liveFollow=false;
     if(streamText.textContent!==previousPreview&&wasFollowing&&!feedbackOpen&&!stream.hidden){liveFollow=true;options.motion?.wake();}
     const label=current?.providers.find(p=>p.id===next.providerId)?.label??next.providerId;
-    report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
+    report(connection==='unavailable'?'Connection unavailable. Last observed: '+next.state+'. Outcome unconfirmed.':next.state==='running'?label+' is running':next.state==='dispatching'?'Sending to '+label+'…':next.state==='provider_completed'?'Provider turn completed':next.state==='interrupted'?'Provider confirmed the turn stopped':next.state==='unknown'?'Execution outcome is unknown. Inspect history before retrying.':next.errorCode==='subscription_sharing_unsupported_capability'&&next.providerId==='chatgpt-plan-responses'?'This ChatGPT plan or model could not use the requested capability.':'Provider turn failed'+(next.errorCode?': '+next.errorCode:''));renderDraft();
     if(streamLimited)report(status.textContent+' · Live preview limit reached; canonical history remains available.');
     if(!active())void refresh({latest:true}).catch(error=>report(errorText(error)));
   });

@@ -4,7 +4,7 @@ import type { Resource } from '../../workspace-kernel/kernel.mts';
 import type { DesktopCommand, DesktopSnapshot, PublicConversationExecution, ConversationActivitySnapshot, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import type { ResourceOpeningInput, ResourceOpeningResult } from '../../application-contract/resource-opening.ts';
 import type { ProviderConnectionRequest, ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
-import type { NativeAuthorizationStart,NativeCredential,ReportedUsage,TurnInput,TurnOutcome,TurnHttpDiagnostic } from '../../openai-provider/contracts.mts';
+import type { NativeAuthorizationStart,NativeCredential,ReportedUsage,TurnInput,TurnResult,TurnOutcome,TurnHttpDiagnostic } from '../../openai-provider/contracts.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import type { AttachedContext } from '../../conversation-product/src/service.mts';
 import type { VelaClient, VelaState, ContextManifest, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
@@ -51,6 +51,7 @@ export interface ConversationSendPreview {
 export interface OrdinaryResponsesPreview {
  executionId:string;configurationId:string;connectionVersion:number;model:string;
  clock: { utc: string; local: string };
+ webSearch?: true;
  instructions:string;instructionVersion:string;messages:TurnInput['messages'];
  history:{resourceId:string;messageId:string;digest:string;providerId?:string}[];
  contextDigest:string;bodyDigest:string;bodyBytes:number;requiresSourceReview:boolean;
@@ -167,6 +168,7 @@ export interface CommandMap {
   /** TRUSTED NATIVE HOST ONLY. Separate approval of the exact delegated provider step. */
   authorizeVelaDelegation: { input: {planId:string;stepId:string;fingerprint:string}; output: {grantId:string;expiresAt:string} };
   conversation: { input: ConversationProductRequest; output: ConversationProductOutput };
+  conversationCitation: { input: ProductCommandMap['openCitation']['input']; output: { url: string } };
   conversationClock: { input: ConversationSendInput; output: { id: string; resourceId: string; role: 'user'; content: string; revision: number; deviceClockMessageId: string } | null };
   conversationSendPreview: { input: ConversationSendInput; output: ConversationSendPreview };
   /** Trusted native host only; MUST NOT be exposed to a renderer or tool caller. */
@@ -199,7 +201,7 @@ export interface Snapshot {
   contract: typeof CONTRACT; schemaVersion: 1; conversations: ConversationView[];
   graph: GraphData; resourceMap: Record<string, string>; bindings: Record<string, Binding[]>;
   handoffs: Record<string, HandoffReview>; executions: Record<string, Execution>;
-  messageEvidence: Record<string, { classification: 'reported' | 'simulated'; executionId: string; providerId: string; nativeTurnId?: string; nativeThreadId?: string;responseId?:string;outputState?:'complete'|'partial' }>;
+  messageEvidence: Record<string, { classification: 'reported' | 'simulated'; executionId: string; providerId: string; nativeTurnId?: string; nativeThreadId?: string;responseId?:string;outputState?:'complete'|'partial'; webSearch?: TurnResult['webSearch'] }>;
   resources: Array<{ resource: Resource; conversation?: unknown; externalRefs: unknown[] }>;
   relationships: Array<{ id: string; source_id: string; target_id: string; kind: string; provenance: string }>;
 }

@@ -53,6 +53,7 @@ lines.on("line", async (line) => {
         "providerAuth",
         "ordinaryProviderStatus",
         "ordinaryProviderCheck",
+        "conversationCitation",
         "conversationClock",
         "conversationSendPreview",
         "authorizeConversationSend",

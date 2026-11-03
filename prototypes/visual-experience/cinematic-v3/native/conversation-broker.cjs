@@ -1,4 +1,5 @@
 const { createHash } = require("node:crypto");
+const { isIP } = require("node:net");
 const { showVelaReview } = require("./vela-review.cjs");
 const PLAN = "chatgpt-plan-responses";
 const readNames = new Set([
@@ -12,6 +13,7 @@ const readNames = new Set([
   "export",
   "readDraft",
   "readViewState",
+  "openCitation",
 ]);
 exports.isConversationRead = (input) => input && readNames.has(input.name);
 
@@ -22,6 +24,7 @@ exports.conversationCommand = async ({
   call,
   input,
   reviewSources = showVelaReview,
+  openExternal,
 }) => {
   if (
     !input ||
@@ -30,15 +33,26 @@ exports.conversationCommand = async ({
     typeof input.input !== "object"
   )
     throw Error("invalid_conversation_command");
+  if (input.name === "openCitation") {
+    const { resourceId, messageId, index } = input.input;
+    const { url: source } = await call("conversationCitation", { resourceId, messageId, index });
+    const url = new URL(source);
+    if (url.protocol !== "https:" || url.username || url.password || url.port || !url.hostname.includes(".") || /\.(?:localhost|local|internal)\.?$/i.test(url.hostname) || isIP(url.hostname))
+      throw Error("citation_url_not_supported");
+    await openExternal(url.href);
+    return { requested: true };
+  }
   if (input.name !== "send") return call("conversation", input);
-  const { resourceId, content, expectedRevision, commandId, model } =
+  const { resourceId, content, expectedRevision, commandId, model, webSearch } =
     input.input;
+  if (webSearch !== undefined && webSearch !== true) throw Error("invalid_web_search_scope");
   const request = {
     resourceId,
     content,
     expectedRevision,
     commandId,
     ...(model ? { model } : {}),
+    ...(webSearch ? { webSearch: true } : {}),
   };
   const state = await call("desktop", { type: "snapshot" });
   const resource = state.resources.find(
@@ -48,9 +62,12 @@ exports.conversationCommand = async ({
       r.available !== false,
   );
   if (!resource) throw Error("resource_not_found");
+  if (webSearch && resource.providerId !== PLAN) throw Error("invalid_web_search_scope");
   if (resource.providerId === PLAN) {
-    const local = await call("conversationClock", request);
-    if (local !== null) return local;
+    if (!webSearch) {
+      const local = await call("conversationClock", request);
+      if (local !== null) return local;
+    }
     const preview = await call("conversationSendPreview", request);
     const r = preview?.responses;
     if (
@@ -76,6 +93,8 @@ exports.conversationCommand = async ({
       ) ||
       !Array.isArray(r.history) ||
       r.history.length >= r.messages.length ||
+      r.webSearch !== webSearch ||
+      (webSearch && (r.messages.length !== 1 || r.history.length || r.requiresSourceReview)) ||
       typeof r.requiresSourceReview !== "boolean" ||
       r.messages.at(-1).role !== "user" ||
       r.messages.at(-1).content !== request.content ||
@@ -89,6 +108,7 @@ exports.conversationCommand = async ({
       input: r.messages.map(({ role, content }) => ({ role, content })),
       store: false,
       stream: true,
+      ...(webSearch ? { tools: [{ type: "web_search" }], tool_choice: "required" } : {}),
     });
     const bytes = Buffer.byteLength(body),
       digest = createHash("sha256").update(body).digest("hex");

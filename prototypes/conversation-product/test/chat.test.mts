@@ -317,6 +317,31 @@ test('compatibility evidence is text-safe and rejects unsafe links; legacy provi
   }finally{await manager?.dispose();f.restore();}
 });
 
+test('the mounted chat submits an explicit web lookup and opens only canonical citation references',async()=>{
+ const f=fixture('chatgpt-plan-responses');let chat;
+ try{
+  const message=f.detail.messages.items[1];
+  message.webSearch={completed:true,citations:[{url:'https://science.example.org/moon',title:'Moon facts',start:0,end:1},{url:'https://science.example.org/second',title:'Second source',start:1,end:message.content.length-1}]};
+  const port={command:async(name:string,input:any)=>name==='openCitation'?(f.calls.push({name,input}),{requested:true}):(f.port.command as any)(name,input)} as ConversationProductPort;
+  chat=mountConversationChat(f.view.root,{port,resourceId:f.draft.resourceId});await chat.ready;
+  const form=f.view.root.querySelector('form'),web=named(form,'Search web'),refs=f.view.root.querySelectorAll('.cp-web-citation');
+  assert(web && !web.hidden && !web.disabled);
+  assert.equal(refs.length,2);
+  assert.equal(refs[0].parentNode?.tagName,'P','ordinary annotated text has an inline source');
+  assert.equal(refs[1].textContent,'2','fenced code keeps its source outside the code');
+  assert.equal(f.view.root.querySelector('.cp-code').querySelector('code').textContent,'const answer = 42;');
+  refs[0].fire('click');
+  assert.deepEqual(f.calls.find(call=>call.name==='openCitation')?.input,{resourceId:f.draft.resourceId,messageId:message.id,index:0});
+  form.fire('submit',{submitter:web});
+  await until(()=>!!f.pending);
+  assert.equal(f.pending?.input.webSearch,true);
+  f.pending?.resolve({id:'execution:search-failed',resourceId:f.draft.resourceId,providerId:'chatgpt-plan-responses',commandId:f.pending?.input.commandId,state:'failed',errorCode:'subscription_sharing_unsupported_capability'});
+  await until(()=>f.view.root.querySelector('.cp-chat-status').textContent.includes('could not use web search'));
+  assert.equal(f.view.root.querySelector('textarea').value,f.draft.content);
+  assert.equal(f.calls.filter(call=>call.name==='send').length,1);
+ }finally{await chat?.dispose();f.restore();}
+});
+
 test('safe Markdown supports readable code/list/inline text without executing HTML, script links or remote media',async()=>{
   const view=componentDocument(),restore=view.install();try{
     assert.deepEqual(markdownBlocks('# Heading\n\n- one\n- two\n\n```ts\nconst x = 1;\n```').map(b=>b.kind),['heading','list','code']);

@@ -514,7 +514,7 @@ app.whenReady().then(async () => {
           openExternal: (url) => shell.openExternal(url),
         });
       } else if (command === "conversation") {
-        result = await conversationCommand({ win, dialog, call, input });
+        result = await conversationCommand({ win, dialog, call, input, openExternal: (url) => shell.openExternal(url) });
       } else if (command === "vela") {
         result = await velaCommand({
           win,

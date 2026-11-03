@@ -8,7 +8,7 @@ export type ConversationSort = 'activity' | 'created' | 'title' | 'active';
 export type ConversationSearchMode = 'conversations' | 'messages' | 'resources' | 'all';
 export type SearchQuery = { text?: string; projectId?: string | null; collectionId?: string; familyOf?: string; providerId?: string; favorite?: boolean; archived?: boolean; after?: string; before?: string; sort?: ConversationSort; searchMode?: ConversationSearchMode; offset?: number; limit?: number };
 export type ConversationSummary = { resourceId: string; conversationId: string; title: string; providerId: string; revision: number; version: number; projectId: string | null; projectIds: string[]; state: 'active' | 'archived'; createdAt: string; lastActivityAt?: string | null; historyMetadataStatus?: 'complete' | 'limited' | 'unavailable'; execution?: PublicConversationExecution; favorite: boolean; messageCount: number | null; collectionIds: string[] };
-export type MessageView = { id: string; resourceId: string; role: string; content: string; createdAt: string; provenance: string; inherited: boolean; sensitivity: string;executionId?:string;outputState?:'complete'|'partial' };
+export type MessageView = { id: string; resourceId: string; role: string; content: string; createdAt: string; provenance: string; inherited: boolean; sensitivity: string;executionId?:string;outputState?:'complete'|'partial'; webSearch?: import('../../openai-provider/contracts.mts').TurnResult['webSearch'] };
 export type SearchHit = { kind: 'conversation' | 'message' | 'resource'; resourceId: string; messageId?: string; title: string; excerpt: string; sourceTime?: string; providerId?:string; summary?:ConversationSummary };
 export type Page<T> = { items: T[]; total: number; offset: number; limit: number; hasMore: boolean };
 export type Collection = { id: string; title: string; projectId: string | null; version: number; ruleRevision: number; state: string; parentId: string | null; rule: SearchQuery | null; memberIds: string[]; pinnedIds: string[] };
@@ -49,7 +49,8 @@ export interface ProductCommandMap {
  favorite: { input: { resourceId: string; favorite: boolean }; output: boolean };
  create: { input: { title?: string; providerId?: string; commandId: string }; output: { resourceId: string } };
  archive: { input: { resourceId: string; archived: boolean; expectedVersion: number }; output: unknown };
- send: { input: { resourceId: string; content: string; expectedRevision: number; commandId: string; model?: string }; output: unknown };
+ send: { input: { resourceId: string; content: string; expectedRevision: number; commandId: string; model?: string; webSearch?: true }; output: unknown };
+ openCitation: { input: { resourceId: string; messageId: string; index: number }; output: { requested: true } };
  branch: { input: { resourceId: string; messageId: string; includeMessageIds: string[]; providerId: string; title: string; commandId: string; tokenBudget: number; expectedRevision: number }; output: { resourceId: string; handoffId: string; fingerprint: string; mode: string } };
  reviewBranch: { input: { handoffId: string; fingerprint: string; approve: boolean }; output: unknown };
  policy: { input: Omit<BranchPolicy, 'revision'> & { expectedRevision: number }; output: BranchPolicy };
