@@ -35,6 +35,40 @@ const shapeGeometry = (geometry, w, h, rim, kind, unfold) =>
     unfold,
   );
 
+test("cards share exact slab buffers for one frame and keep their own geometry when their poses diverge", () => {
+  const renderer = Object.assign(Object.create(Environment.prototype), {
+    folios: [],
+    folioById: new Map(),
+    frameSlabs: new Map(),
+    surfaceOrder: [],
+    surfaceView: { scale: 1 },
+    folioContour: { x: 0, y: 0, nx: 0, ny: 0 },
+    folioRingSamples: new Float64Array(64 * 2),
+    scene: new THREE.Scene(),
+    fieldUniforms: { uEnergy: { value: 0 } },
+    sceneMaterialTint: new THREE.Color(),
+    contactScale: new THREE.Vector3(),
+    canvas: { dataset: {} },
+    surfaceMatrix: () => new THREE.Matrix4(),
+  });
+  const pose = { x: 0, y: 0, w: 200, h: 140, lift: 0, yaw: 0,
+    kind: "note", shape: "rounded", unfold: 0, opacity: 1 };
+  const frame = (surfaces) => renderer.updateFolios({ surfaces, quality: "balanced" });
+  frame([{ ...pose, id: "a" }, { ...pose, id: "b", x: 230, selected: true }]);
+  const a = renderer.folioById.get("a");
+  const b = renderer.folioById.get("b");
+  assert.equal(a.slabMesh.geometry, b.slabMesh.geometry);
+  assert.notEqual(a.slabMesh.material, b.slabMesh.material);
+  const positions = (card) => card.slabMesh.geometry.getAttribute("position").array;
+  const original = positions(a).slice();
+  frame([{ ...pose, id: "a", w: 300 }, { ...pose, id: "b", x: 230 }]);
+  assert.notEqual(a.slabMesh.geometry, b.slabMesh.geometry);
+  assert.notDeepEqual(positions(a), original);
+  assert.deepEqual(positions(b), original);
+  frame([{ ...pose, id: "b" }]);
+  assert.deepEqual(positions(b), original, "removing the former owner keeps the remaining slab intact");
+});
+
 test("resource faces and rims retain finite unit normals, valid indices and outward winding across transformations", () => {
   const a = new THREE.Vector3();
   const b = new THREE.Vector3();

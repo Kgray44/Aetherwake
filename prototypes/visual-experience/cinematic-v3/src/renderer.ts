@@ -121,6 +121,8 @@ interface FolioVisual {
   id: string | null;
   root: THREE.Group;
   slab: THREE.BufferGeometry;
+  slabMesh: THREE.Mesh;
+  slabKey: string;
   rim: THREE.BufferGeometry;
   rimMesh: THREE.Mesh;
   face: THREE.MeshPhysicalMaterial;
@@ -131,7 +133,6 @@ interface FolioVisual {
   contact: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
   width: number;
   height: number;
-  unfold: number;
   kind: NonNullable<SurfacePose["kind"]>;
   shape: SurfaceShape;
 }
@@ -410,6 +411,7 @@ export class Environment {
   >();
   private readonly folios: FolioVisual[] = [];
   private readonly folioById = new Map<string, FolioVisual>();
+  private readonly frameSlabs = new Map<string, THREE.BufferGeometry>();
   private readonly surfaceProjection = new THREE.Matrix4();
   private readonly surfaceRotation = new THREE.Matrix4();
   private readonly surfaceYaw = new THREE.Matrix4();
@@ -978,6 +980,8 @@ export class Environment {
         id: null,
         root,
         slab,
+        slabMesh,
+        slabKey: "",
         rim,
         rimMesh,
         face,
@@ -988,7 +992,6 @@ export class Environment {
         contact,
         width: 0,
         height: 0,
-        unfold: -1,
         kind: "conversation",
         shape: "folio",
       });
@@ -1246,6 +1249,7 @@ export class Environment {
     const livingWeight =
       frame.sceneWeights?.living ?? (frame.study === "living" ? 1 : 0);
     this.instrumentStudy = study;
+    this.frameSlabs.clear();
     for (const visual of this.folios) {
       visual.root.visible = false;
       visual.contact.visible = false;
@@ -1302,28 +1306,23 @@ export class Environment {
       const unfold = Number.isFinite(pose.unfold)
         ? THREE.MathUtils.clamp(pose.unfold, 0, 1)
         : 0;
-      if (
-        visual.width !== pose.w ||
-        visual.height !== pose.h ||
-        visual.unfold !== unfold ||
-        visual.kind !== kind ||
-        visual.shape !== shape
-      ) {
-        this.shapeFolio(
-          visual.slab,
-          pose.w,
-          pose.h,
-          false,
-          kind,
-          unfold,
-          shape,
-        );
-        visual.width = pose.w;
-        visual.height = pose.h;
-        visual.unfold = unfold;
-        visual.kind = kind;
-        visual.shape = shape;
+      // Identical slabs share a submission buffer for this frame. Each visual
+      // keeps its own backing for the next pose, and its own material and matrix.
+      const slabKey = `${kind}:${shape}:${pose.w}:${pose.h}:${unfold}`;
+      let slab = this.frameSlabs.get(slabKey);
+      if (!slab) {
+        slab = visual.slab;
+        if (visual.slabKey !== slabKey) {
+          this.shapeFolio(slab, pose.w, pose.h, false, kind, unfold, shape);
+          visual.slabKey = slabKey;
+        }
+        this.frameSlabs.set(slabKey, slab);
       }
+      visual.slabMesh.geometry = slab;
+      visual.width = pose.w;
+      visual.height = pose.h;
+      visual.kind = kind;
+      visual.shape = shape;
       visual.root.matrix.copy(
         this.surfaceMatrix(
           pose.x + pose.w * 0.5,
@@ -2146,6 +2145,10 @@ export class Environment {
       surfaceCapacity: this.folios.length,
       surfacesRendered: this.folios.filter((folio) => folio.root.visible)
         .length,
+      distinctSlabGeometries: new Set(
+        this.folios.filter((folio) => folio.root.visible)
+          .map((folio) => folio.slabMesh.geometry),
+      ).size,
       detailedSurfacesRendered: this.folios.filter((folio) =>
         folio.root.visible && folio.structure.root.visible,
       ).length,
@@ -2183,6 +2186,8 @@ export class Environment {
     const geometries = new Set<THREE.BufferGeometry>(),
       materials = new Set<THREE.Material>();
     for (const folio of this.folios) {
+      // A private backing may be unattached when this visual borrowed a slab.
+      geometries.add(folio.slab);
       for (const material of Object.values(folio.materials))
         materials.add(material);
       // InstrumentStructure owns its geometries and clears its root. Its

@@ -92,6 +92,7 @@ exports.verify = async ({
       const cards = [...document.querySelectorAll('[data-block]')];
       return { metrics:s.metrics, active:s.active, graphicsFailed:s.graphicsFailed, contextLost:s.gpu?.contextLost,
         surfacesRendered:s.gpu?.surfacesRendered,detailedSurfacesRendered:s.gpu?.detailedSurfacesRendered,
+        distinctSlabGeometries:s.gpu?.distinctSlabGeometries,
         unhiddenCardNodes:cards.filter(card=>!card.hidden).length, mountedCards:cards.length,
         interactiveCardNodes:cards.filter(card=>!card.closest('[inert],[hidden]')).length,
         usableCardNodes:cards.filter(card=>card.dataset.workspacePresentation==='usable').length,
