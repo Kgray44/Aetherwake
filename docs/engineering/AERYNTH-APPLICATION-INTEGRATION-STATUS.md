@@ -2,6 +2,45 @@
 
 Snapshot: 2026-11-02 UTC. Integration remains active; full product acceptance is incomplete.
 
+## Current ordinary chat and packaged backend evidence
+
+The S review completed a real ChatGPT-plan Responses turn after the native
+transport learned to accept the documented stream events on a successful
+response with no Content-Type. The earlier unknown outcomes remain in history.
+The T review uses the same profile and the owner confirmed its Device clock
+reply in the desktop. Their next ordinary question confirmed a general gap in
+the remote request context. The model received the question without a date.
+
+The shared ChatGPT-plan send path now includes a timestamp from Aerynth for
+every model turn, in UTC and local time with its numeric offset. The same
+observation is bound into preview, approval and dispatch. Direct local clock
+replies remain local. Long chats retain their transcript and continue sending
+using a recent, ordered window bounded by the actual serialized request size
+and item limit. Current input and reviewed excerpts are kept, and every
+included source still passes the existing final permission check. Arbitrary
+calendar prompts and long-chat sends passed the controlled Responses transport
+tests. Live model behavior on this update still needs an explicit Send.
+[Sign in with ChatGPT preview limits](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+document account/model-dependent web search and other capability boundaries.
+
+The packaged T host at `d5b210163374edee3793468d046df95fe27472fc`
+passed one headless backend trial at each size below. All three restored exact
+placements, note content and canonical identities after a separate process
+restart. Universe and empty-workspace navigation preserved the source
+workspace. Vela's saved footprint intersected zero saved cards before and after
+resize and restart. No model ran and all trial processes exited.
+
+| Blocks | First snapshot | Return to workspace | Resize | Edit note | Restart to snapshot | Backend RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 488 ms | 28 ms | 42 ms | 30 ms | 445 ms | 106 MiB |
+| 25 | 471 ms | 38 ms | 59 ms | 35 ms | 491 ms | 108 MiB |
+| 50 | 324 ms | 42 ms | 81 ms | 36 ms | 348 ms | 122 MiB |
+
+These are monotonic packaged backend timings on isolated synthetic profiles.
+The private receipt has SHA-256
+`62afaff9a2cde2d24e787de13438d191e6dad0376aaa42d96db969ac31a4be3d`.
+Current visual drag and display presentation still require desktop evidence.
+
 ## Native workspace scale at 10, 25, and 50 blocks
 
 The same integration source `ecdc05eb0a1fb44c2857e77408e8924ed9381e79`
@@ -30,7 +69,7 @@ the actual Freeform placement command to put her 208 × 260 footprint at
 overlap survives restart. Universal Block System has the reproduction and
 owns the workspace policy correction.
 
-## Current connection and conversation follow-up
+## Earlier connection and conversation checkpoints
 
 The P review at `1ddc0cf` preserves the owner's existing private profile.
 Official sign-in and plan authorization were already valid. Model discovery

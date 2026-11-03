@@ -50,6 +50,7 @@ export interface ConversationSendPreview {
 }
 export interface OrdinaryResponsesPreview {
  executionId:string;configurationId:string;connectionVersion:number;model:string;
+ clock: { utc: string; local: string };
  instructions:string;instructionVersion:string;messages:TurnInput['messages'];
  history:{resourceId:string;messageId:string;digest:string;providerId?:string}[];
  contextDigest:string;bodyDigest:string;bodyBytes:number;requiresSourceReview:boolean;

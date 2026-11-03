@@ -3,7 +3,9 @@ import type { DispatchReview, ModelCatalogDiagnostic, NativeCredential, Provider
 import { abortable, boundedJSON, digest, exact, knownRemoteCode, ProviderError, record, requireValue, text } from './common.mts';
 export const RESPONSES_ENDPOINT = 'https://api.openai.com/v1/responses';
 export const MODELS_ENDPOINT = 'https://api.openai.com/v1/models';
-const defaults = { requestBytes: 262144, eventBytes: 262144, streamBytes: 2 * 1024 * 1024, outputBytes: 262144, timeoutMs: 90000 };
+export const RESPONSES_REQUEST_BYTES = 262144;
+export const RESPONSES_MESSAGE_LIMIT = 128;
+const defaults = { requestBytes: RESPONSES_REQUEST_BYTES, eventBytes: 262144, streamBytes: 2 * 1024 * 1024, outputBytes: 262144, timeoutMs: 90000 };
 export function prepareResponsesTurn(input: TurnInput, maxBytes = defaults.requestBytes): {
     body: string;
     review: DispatchReview;
@@ -13,7 +15,7 @@ export function prepareResponsesTurn(input: TurnInput, maxBytes = defaults.reque
     requireValue(['executionId', 'requestId', 'configurationId', 'model'].every(key => text(input[key as keyof TurnInput])), 'invalid_turn_identity');
     requireValue(input.providerId === 'chatgpt-plan-responses' && input.assistant === 'ordinary' || input.providerId === 'openai-api-vela' && input.assistant === 'vela', 'provider_identity_mismatch');
     requireValue(typeof input.contextDigest === 'string' && /^[a-f0-9]{64}$/.test(input.contextDigest), 'invalid_context_digest');
-    requireValue(typeof input.instructions === 'string' && Array.isArray(input.messages) && input.messages.length > 0 && input.messages.length <= 128, 'invalid_context');
+    requireValue(typeof input.instructions === 'string' && Array.isArray(input.messages) && input.messages.length > 0 && input.messages.length <= RESPONSES_MESSAGE_LIMIT, 'invalid_context');
     let units = input.instructions.length;
     for (const message of input.messages) {
         requireValue(record(message) && exact(message, ['role', 'content']) && typeof message.role === 'string' && ['user', 'assistant', 'developer'].includes(message.role) && typeof message.content === 'string', 'invalid_input_message');

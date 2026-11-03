@@ -80,6 +80,63 @@ test('ordinary Send answers direct clock questions locally and keeps their trans
   } finally { await f.close(); }
 });
 
+test('arbitrary date and reasoning questions reach the provider with a frozen current clock', async () => {
+  const f = fixture();
+  try {
+    await f.core.command('ordinaryProviderStatus', {});
+    const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+    const started = Date.now();
+    const { input, preview } = await prepare(f, chat.resourceId, "whats the year, and what's the date 40 days from today?");
+    const clock = preview.responses!.clock;
+    assert(Date.parse(clock.utc) >= started && Date.parse(clock.utc) <= Date.now());
+    assert(Math.abs(Date.parse(clock.local) - Date.parse(clock.utc)) < 1000);
+    assert(preview.responses!.instructions.includes(clock.local));
+    assert(preview.responses!.instructions.includes(clock.utc));
+    assert.equal(await f.core.command('conversationClock', input), null);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    f.responses.push(() => complete('resp-synthetic-grounded-turn'));
+    const sent = await f.core.command('conversationSend', await grant(f, preview));
+    assert.equal(sent.state, 'provider_completed');
+    assert.equal(f.requests[0].instructions, preview.responses!.instructions);
+    assert.deepEqual(f.requests[0].input, [{ role: 'user', content: input.content }]);
+    const later = await prepare(f, chat.resourceId, 'Now write a short story about that date.');
+    assert(Date.parse(later.preview.responses!.clock.utc) > Date.parse(clock.utc));
+    assert.equal(later.preview.responses!.messages.length, 3);
+    assert.equal(f.requests.length, 1);
+  } finally { await f.close(); }
+});
+
+test('long ordinary chats keep sending within both history bounds and retain their full local transcript', async () => {
+  const f = fixture();
+  try {
+    await f.core.command('ordinaryProviderStatus', {});
+    const chat = await f.core.command('createConversation', { providerId, commandId: randomUUID() });
+    let revision = chat.revision;
+    for (let i = 0; i < 130; i++) {
+      const message = await f.core.command('addMessage', { resourceId: chat.resourceId, role: 'user', content: 'Synthetic context ' + i, expectedRevision: revision });
+      revision = message.revision;
+    }
+    const countBound = await prepare(f, chat.resourceId, 'A question after a long chat');
+    assert.equal(countBound.preview.responses!.messages.length, 128);
+    assert.equal(countBound.preview.responses!.messages[0].content, 'Synthetic context 3');
+    const oversizedHistory = String.fromCharCode(34).repeat(60000);
+    for (let i = 0; i < 4; i++) {
+      const message = await f.core.command('addMessage', { resourceId: chat.resourceId, role: 'user', content: oversizedHistory + i, expectedRevision: revision });
+      revision = message.revision;
+    }
+    const byteBound = await prepare(f, chat.resourceId, 'A new question after large messages');
+    const messages = byteBound.preview.responses!.messages;
+    assert.equal(messages.length, 3);
+    assert.equal(messages[0].content, oversizedHistory + '2');
+    assert.equal(messages[1].content, oversizedHistory + '3');
+    f.responses.push(() => complete('resp-synthetic-bounded-context'));
+    const result = await f.core.command('conversationSend', await grant(f, byteBound.preview));
+    assert.equal(result.state, 'provider_completed');
+    assert.deepEqual(f.requests[0].input, messages);
+    assert.equal((await f.core.command('snapshot', {})).graph.messages.length, 136);
+  } finally { await f.close(); }
+});
+
 test('populated provider changes require a reviewed continuation and stale branch creation cannot relabel or clone history',async()=>{
  const f=fixture();try{
   await f.core.command('ordinaryProviderStatus',{});
