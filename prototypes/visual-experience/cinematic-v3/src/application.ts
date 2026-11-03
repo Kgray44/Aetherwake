@@ -75,6 +75,10 @@ import "../../../block-library/style.css";
 import { createLibraryClient } from "./library-client";
 import { createMediaClient } from "./media-client";
 import {
+  canonicalMediaUrl,
+  mediaDefaultGeometry,
+} from "../../../block-library/media-policy.ts";
+import {
   mountMediaExperience,
   type MediaExperience,
 } from "../../../block-library/media-view.ts";
@@ -2614,6 +2618,7 @@ export function installApplication(hooks: Hooks) {
           const definition = resource && BUILTIN_BLOCKS.find((item) => item.kind === resource.kind);
           if (!resource || !definition || !libraryClient.attachBlock)
             throw Error("resource_attachment_unavailable");
+          const geometry = resource.media && mediaDefaultGeometry(resource.media);
           await libraryClient.attachBlock({
             commandId: crypto.randomUUID(),
             workspaceId,
@@ -2622,6 +2627,9 @@ export function installApplication(hooks: Hooks) {
             resourceId,
             expectedResourceVersion: resource.version,
             kind: definition.kind,
+            ...(geometry
+              ? { presentation: { width: geometry.width, height: geometry.height, shape: geometry.shape } }
+              : {}),
           });
           closeUnpinned("resources");
         });
@@ -2642,6 +2650,25 @@ export function installApplication(hooks: Hooks) {
         { id: "standalone-checklist", label: "Checklist", run: async () => { await newChecklist(); closeUnpinned("resources"); } },
         { id: "standalone-task-objective", label: "Task objective", run: async () => { await newTaskObjective(); closeUnpinned("resources"); } },
         { id: "new-activity-timeline", label: "Activity timeline", run: async () => { await newActivityTimeline(); closeUnpinned("resources"); } },
+        {
+          id: "standalone-file",
+          label: "Import file",
+          run: async () => {
+            const imported = await mediaClient.chooseMediaForAdd({
+              kind: "file",
+              variant: "any",
+            });
+            if (imported) await showImportedResource(imported.resource.id);
+          },
+        },
+        {
+          id: "standalone-link",
+          label: "Save web link",
+          run: () => {
+            content.querySelector<HTMLDetailsElement>(".aw-context-create")!.open = false;
+            importResourceLink(anchor);
+          },
+        },
       ],
     });
     content.querySelector<HTMLElement>(".aw-context-search")!.id = "resource-search";
@@ -2673,6 +2700,86 @@ export function installApplication(hooks: Hooks) {
     resourcesMotion = motion;
     motion.sync();
     anchor.setAttribute("aria-expanded", "true");
+  }
+  async function showImportedResource(resourceId: string) {
+    try {
+      const opened = await resourceOpener.open({
+        resourceId,
+        origin: { source: "library" },
+      });
+      if (opened.status === "ready") closeUnpinned("resources");
+      else if (opened.status !== "superseded")
+        hooks.status("Saved. Open it again from Resources.");
+    } catch {
+      hooks.status("Saved. Open it again from Resources.");
+    }
+  }
+  function importResourceLink(anchor: HTMLElement) {
+    const content = document.createElement("div");
+    content.className = "aw-contextual-resources aw-optical-controls";
+    content.dataset.awOptics = "workspace";
+    const form = document.createElement("form");
+    form.className = "aw-context-toolbar";
+    const address = document.createElement("input");
+    address.type = "url";
+    address.required = true;
+    address.maxLength = 8192;
+    address.className = "aw-context-search";
+    address.placeholder = "https://…";
+    address.setAttribute("aria-label", "Web address");
+    const submit = document.createElement("button");
+    submit.type = "submit";
+    submit.className = "aw-context-control";
+    submit.textContent = "Save link";
+    for (const control of [address, submit])
+      control.dataset.aerynthMotionControl = "true";
+    const failure = document.createElement("p");
+    failure.className = "aw-context-error";
+    failure.setAttribute("role", "alert");
+    failure.hidden = true;
+    form.append(address, submit);
+    content.append(form, failure);
+    const surface = surfaces.open({
+      id: "resource-link-import",
+      anchor,
+      label: "Save a web link",
+      content,
+      placement: "bottom",
+      preferredSize: { width: 390, height: 148 },
+      initialFocus: 'input[type="url"]',
+    });
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (submit.disabled) return;
+      failure.hidden = true;
+      let url: string;
+      try {
+        url = canonicalMediaUrl(address.value).href;
+      } catch {
+        failure.textContent = "Enter a web address starting with https:// or http://.";
+        failure.hidden = false;
+        address.focus();
+        return;
+      }
+      submit.disabled = true;
+      address.readOnly = true;
+      try {
+        const imported = await mediaClient.chooseMediaForAdd({
+          kind: "link",
+          url,
+        });
+        if (imported && surface.isConnected && surface.open && !surface.inert) {
+          surfaces.close("resource-link-import");
+          await showImportedResource(imported.resource.id);
+        }
+      } catch {
+        failure.textContent = "Could not save the link. The address is still here.";
+        failure.hidden = false;
+      } finally {
+        submit.disabled = false;
+        address.readOnly = false;
+      }
+    });
   }
   function taskGroupMembers(groupId: string) {
     const group = state?.resources.find((r) => r.id === groupId);
