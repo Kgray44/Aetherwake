@@ -9,6 +9,7 @@ import {
 import "../../../constellation/style.css";
 import type { Policy } from "../../../constellation/types.ts";
 import type { MotionCoordinator } from "./motion";
+import { footprint } from "../../../workspace-engine/collisions.mts";
 import { previewLayout } from "../../../workspace-engine/organization.mts";
 import type {
   LayoutState,
@@ -3098,12 +3099,32 @@ export function installApplication(hooks: Hooks) {
   }
   function revealCreatedPlacement(id: string) {
     hooks.home();
-    reveal(id);
-    const article = document.querySelector<HTMLElement>(`[data-block="${id}"]`);
-    if (article) {
-      article.tabIndex = -1;
-      article.focus({ preventScroll: true });
-    }
+    const workspaceId = state?.activeWorkspaceId;
+    void enqueue(async () => {
+      if (!workspaceId || state?.activeWorkspaceId !== workspaceId ||
+          state.navigation.kind !== "workspace") return;
+      const added = state.blocks.find((block) => block.id === id);
+      if (!added) return;
+      const bounds = viewBounds();
+      const isInView = (block: Block) => {
+        const box = footprint({ ...block, locked: !!block.locked });
+        return box.x >= bounds.x && box.y >= bounds.y &&
+          box.x + box.width <= bounds.x + bounds.width &&
+          box.y + box.height <= bounds.y + bounds.height;
+      };
+      if (!isInView(added)) {
+        if (state.blocks.every((block) => block.id === id || isInView(block)))
+          await command({ type: "bringAllIntoView", workspaceId });
+        else
+          reveal(id);
+      }
+      if (state?.activeWorkspaceId !== workspaceId || state.navigation.kind !== "workspace") return;
+      const article = document.querySelector<HTMLElement>(`[data-block="${id}"]`);
+      if (article) {
+        article.tabIndex = -1;
+        article.focus({ preventScroll: true });
+      }
+    });
   }
   function saveView() {
     return state?.activeWorkspaceId
