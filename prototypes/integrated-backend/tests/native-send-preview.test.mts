@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { BackendCore } from "../src/core.mts";
 import type { CommandMap, ConversationSendPreview, ProviderPort } from "../src/contracts.mts";
@@ -34,18 +34,23 @@ test("native confirmation shows the actual canonical assembled context and cance
         return result;
       },
       input: { name: "send", input: { resourceId: parent.resourceId, content, expectedRevision: 2, commandId: randomUUID(), grantId: "ignored-renderer-forgery" } },
-      dialog: { showMessageBox: async (_window: unknown, options: { detail: string; defaultId: number; cancelId: number }) => {
+      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false } },
+      reviewSources: async ({ experience, review }: {
+        experience: string; review: { prompt: string; promptDigest: string; context: { included: unknown[] } };
+      }) => {
         reviews++;
         assert.ok(shownPreview);
         assert.equal(shownPreview.prompt, content, "The ordinary prompt alone omits selected source context");
         assert.equal(shownPreview.context.length, 1);
-        assert.ok(options.detail.endsWith(shownPreview.executionText), "Native review includes the complete actual assembled request");
-        assert.match(options.detail, /pressure is 12/);
-        assert.match(options.detail, new RegExp(finding.id));
-        assert.doesNotMatch(options.detail, /omitted source content|ignored-renderer-forgery/);
-        assert.equal(options.defaultId, 0); assert.equal(options.cancelId, 0);
-        return { response: 0 };
-      } },
+        assert.equal(experience, "codex");
+        assert.equal(review.prompt, shownPreview.executionText, "Native review includes the complete actual assembled request");
+        assert.equal(review.promptDigest, createHash("sha256").update(review.prompt).digest("hex"));
+        assert.equal(review.context.included.length, 1);
+        assert.match(review.prompt, /pressure is 12/);
+        assert.match(review.prompt, new RegExp(finding.id));
+        assert.doesNotMatch(review.prompt, /omitted source content|ignored-renderer-forgery/);
+        return false;
+      },
     }), /authorization_cancelled/);
     assert.deepEqual(calls, ["desktop", "conversationSendPreview"]);
     assert.equal(reviews, 1); assert.equal(connections, 0);
