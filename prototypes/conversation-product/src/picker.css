@@ -67,3 +67,5 @@
 .aw-optical-controls .cp-message-actions[data-cp-motion-disclosure]{width:fit-content}
 .cp-chat.aw-optical-controls .cp-message.aw-control-motion>.cp-message-actions[data-cp-motion-disclosure]{opacity:max(var(--control-hover,0),var(--control-focus,0),var(--cp-disclosure-open,0))}
 .cp-chat.aw-optical-controls .cp-composer.aw-control-motion{border-color:rgb(var(--control-edge-rgb,212 184 245) / calc(.2 + var(--control-focus,0)*.27));box-shadow:inset 0 1px 0 rgb(var(--control-sheen-rgb,240 221 255) / calc(.08 + var(--control-focus,0)*.06))}
+
+.aw-optical-controls :is(.cp-results,.cp-switcher-results) button[data-resource-id]>.cp-control-glyph{display:none}
