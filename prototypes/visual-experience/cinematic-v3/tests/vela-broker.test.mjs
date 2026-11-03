@@ -195,7 +195,9 @@ test("a former clock shortcut uses the same consent and request path as other fr
 
 test("Vela planning reviews backend context then uses only a newly issued native grant", async () => {
   const f = fixture();
-  await velaCommand({ ...f, input: request(true) });
+  const input = request(true);
+  input.input.activeCard = { workspaceId: "workspace", blockId: "placement" };
+  await velaCommand({ ...f, input });
   assert.deepEqual(
     f.calls.map((c) => c.name),
     ["velaRequestPreview", "velaNativeReview", "authorizeVelaRequest", "vela"],
@@ -215,6 +217,8 @@ test("Vela planning reviews backend context then uses only a newly issued native
     reviewDigest: "a".repeat(64),
   });
   assert.equal(f.calls[3].input.input.grantId, "private-native-grant");
+  assert.deepEqual(f.calls[0].input.activeCard, input.input.activeCard);
+  assert.equal(f.calls[3].input.input.activeCard, undefined, "only the reviewed manifest can carry selection");
 });
 test("cancelled planning consent never grants or dispatches", async () => {
   const f = fixture(0);

@@ -26,6 +26,13 @@ const readAction = mode === 'search' ? { type: 'search', query: 'calibration' }
   : mode === 'clock' ? { type: 'readLocalFact', capabilityId: 'local.time' } : null;
 const selectedAction = () => {
   if (mode === 'navigate') return { type: 'navigate', target: { kind: 'constellation', projectId: null } };
+  if (mode === 'selected-note') {
+    const resourceId = task.context?.activeResourceId;
+    if (!resourceId || !task.context.discovered.some(ref => ref.kind === 'resource' && ref.id === resourceId) ||
+        task.context.included.some(ref => ref.id === resourceId))
+      throw Error('The synthetic turn requires the selected note metadata without its body');
+    return { type: 'renameResource', resourceId, title: 'Synthetic renamed card' };
+  }
   if (mode !== 'layout') return readAction;
   const workspaceId = task.context?.activeSurface?.workspaceId;
   if (!workspaceId || !task.context.discovered.some(ref => ref.kind === 'workspace' && ref.id === workspaceId))
@@ -42,7 +49,7 @@ const finish = () => {
     : {
         schemaVersion: 2,
         kind: 'plan',
-        summary: mode === 'layout' ? 'Synthetic arrangement proposal.' : mode === 'navigate' ? 'Synthetic navigation proposal.' : readAction ? 'Synthetic local lookup.' : 'Synthetic folder proposal.',
+        summary: mode === 'layout' ? 'Synthetic arrangement proposal.' : mode === 'navigate' ? 'Synthetic navigation proposal.' : mode === 'selected-note' ? 'Synthetic selected note proposal.' : readAction ? 'Synthetic local lookup.' : 'Synthetic folder proposal.',
         steps: [
           {
             id: 'create',

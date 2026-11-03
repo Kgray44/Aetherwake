@@ -1877,6 +1877,7 @@ if (desktopMode)
     motion,
     wake,
     workingBodyWidth: (id) => workingFootprints?.read(id)?.width,
+    selectedCard: () => selected,
     replace: replaceWorkspace,
     status,
     layout: () => layout("application state"),

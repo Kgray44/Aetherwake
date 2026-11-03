@@ -27,6 +27,8 @@ export interface ContextManifest {
   discovered: ResourceRef[]; included: ContextEntry[];
   /** Reviewed working context. Non-null IDs must refer to authorized entries in discovered. */
   activeSurface?: { projectId: string | null; workspaceId: string | null };
+  /** Canonical resource of an explicitly selected card, with metadata in discovered. */
+  activeResourceId?: string;
   /** Bounded layout metadata for the authorized active workspace. No card identities or content. */
   activeWorkspaceLayout?: VelaWorkspaceLayoutContext;
   omitted: { id: string; reason: string }[];
@@ -34,6 +36,8 @@ export interface ContextManifest {
   /** Exact reviewed egress only. Persisted request context never copies these canonical message bodies. */
   history?: ProviderHistory;
 }
+/** Untrusted presenter hint. The host resolves the resource from its active workspace. */
+export interface VelaActiveCard { workspaceId: string; blockId: string }
 export interface VelaWorkspaceLayoutContext {
   mode: 'fluid' | 'freeform' | 'structured';
   placementCount: number;

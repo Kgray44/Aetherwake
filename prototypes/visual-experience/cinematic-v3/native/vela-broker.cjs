@@ -138,6 +138,7 @@ exports.velaCommand = async ({
       call("velaRequestPreview", {
         intent: request.intent,
         resourceIds: request.resourceIds,
+        ...(value.activeCard === undefined ? {} : { activeCard: value.activeCard }),
       }),
     );
     const review = await stage("review", async () =>

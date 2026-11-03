@@ -63,7 +63,7 @@ function validatePresentation(value: unknown): asserts value is VelaPresentation
   check(isRecord(value) && value.schemaVersion === 1, 'unsupported_vela_presentation_schema');
   check(Object.keys(value).sort().join(',') === 'dismissedRequestIds,pinnedRequestIds,schemaVersion,selectedRequestId,version,view' && Number.isSafeInteger(value.version) && Number(value.version) >= 1 && (value.view === 'current' || value.view === 'history') && (value.selectedRequestId === null || identifier(value.selectedRequestId)) && presentationIds(value.dismissedRequestIds) && presentationIds(value.pinnedRequestIds), 'invalid_vela_presentation_state');
 }
-export const VELA_PLANNING_INSTRUCTION = `Be brief. Resolve “here” from activeSurface. Choose typed tools by their effects and activeWorkspaceLayout. Avoid no-ops for requests to rearrange. Ask about ambiguity that changes the outcome, including an unresolved workspace. Report plans as proposals. Delegation requires separate approval.`;
+export const VELA_PLANNING_INSTRUCTION = `Be brief. Resolve “here” or “this” using activeSurface and activeResourceId. Choose typed tools by effect and activeWorkspaceLayout. Avoid no-ops when rearranging. Clarify unresolved targets or consequential ambiguity. Report plans as proposals. Delegation requires separate approval.`;
 
 export class VelaService {
   private data!: StoredState;
@@ -197,15 +197,22 @@ export class VelaService {
     const available = this.opts.planner?.availability() ?? { available: false, busy: false, reason: 'No planning provider connected' };
     const visible = (item: AttentionItem) => item.subject === null || (this.permitted(item.subject.id, item.subject.kind, scope) && !!this.opts.host.resolve(item.subject, scope));
     // Revoke content visibility as well as future collection. Persisted private history remains host-owned.
-    const requests = structuredClone(this.data.requests).map(r => ({ ...r, context: { ...r.context,
-      discovered: r.context.discovered.filter(ref => this.permitted(ref.id, ref.kind, scope)),
-      included: r.context.included.filter(ref => this.permitted(ref.id, ref.kind, scope)),
-      omitted: r.context.omitted.filter(ref => scope.resourceIds.includes(ref.id)),
-      ...(r.context.activeSurface ? { activeSurface: {
-        projectId: r.context.activeSurface.projectId && scope.projectIds.includes(r.context.activeSurface.projectId) ? r.context.activeSurface.projectId : null,
-        workspaceId: r.context.activeSurface.workspaceId && scope.workspaceIds.includes(r.context.activeSurface.workspaceId) ? r.context.activeSurface.workspaceId : null,
-      } } : {}),
-    } }));
+    const requests = structuredClone(this.data.requests).map(r => {
+      const { activeSurface, activeResourceId, activeWorkspaceLayout, ...context } = r.context;
+      const projectId = activeSurface?.projectId ?? null, workspaceId = activeSurface?.workspaceId ?? null;
+      const visibleWorkspaceId = workspaceId && scope.workspaceIds.includes(workspaceId) ? workspaceId : null;
+      return { ...r, context: { ...context,
+        discovered: context.discovered.filter(ref => this.permitted(ref.id, ref.kind, scope)),
+        included: context.included.filter(ref => this.permitted(ref.id, ref.kind, scope)),
+        omitted: context.omitted.filter(ref => scope.resourceIds.includes(ref.id)),
+        ...(activeSurface ? { activeSurface: {
+          projectId: projectId && scope.projectIds.includes(projectId) ? projectId : null,
+          workspaceId: visibleWorkspaceId,
+        } } : {}),
+        ...(activeWorkspaceLayout && visibleWorkspaceId ? { activeWorkspaceLayout } : {}),
+        ...(activeResourceId && visibleWorkspaceId && scope.resourceIds.includes(activeResourceId) ? { activeResourceId } : {}),
+      } };
+    });
     const restorationScopes=new Map<string,VelaScope>();
     const planVisible = (p: VelaPlan) => {
       if(p.scope.principalId!==scope.principalId)return false;
@@ -322,9 +329,9 @@ export class VelaService {
     return { full, metadata };
   }
   /** Core-only prospective egress. Opening/selection never appends, creates a conversation or invokes a provider. */
-  previewProviderContext(resourceIds: string[], options: { includeHistory: boolean; fits(context: ContextManifest): boolean }): { context: ContextManifest; origin: HistoryOrigin; historyFence?: HistoryFence; historyOmissions: readonly HistoryOmission[] } {
+  previewProviderContext(resourceIds: string[], options: { includeHistory: boolean; activeResourceId?: string; fits(context: ContextManifest): boolean }): { context: ContextManifest; origin: HistoryOrigin; historyFence?: HistoryFence; historyOmissions: readonly HistoryOmission[] } {
     return this.read(() => {
-      const scope = this.scope(), origin = this.historyOrigin(scope), context = this.context(resourceIds, scope);
+      const scope = this.scope(), origin = this.historyOrigin(scope), context = this.context(resourceIds, scope, options.activeResourceId);
       check(typeof options.includeHistory === 'boolean' && typeof options.fits === 'function', 'invalid_history_preview');
       check(options.fits(context), 'planning_prompt_capacity_exceeded');
       if (!options.includeHistory) return { context, origin, historyOmissions: [{ reason: 'disabled' }] };
@@ -355,7 +362,7 @@ export class VelaService {
       else validateFrozenHistory({ ...input, history: preview.context.history, reader: readers.full });
     });
   }
-  private context(ids: string[], scope: VelaScope): ContextManifest {
+  private context(ids: string[], scope: VelaScope, activeResourceId?: string): ContextManifest {
     check(Array.isArray(ids) && ids.length <= 12 && ids.every(identifier) && new Set(ids).size === ids.length, 'invalid_context_selection');
     const manifest: ContextManifest = { id: randomUUID(), createdAt: this.now(), policyVersion: scope.policyVersion,
       discovered: [], included: [], omitted: [], contentBytes: 0, coverage: 'explicit-resources-only' };
@@ -386,6 +393,14 @@ export class VelaService {
       if (manifest.activeSurface.workspaceId) {
         const layout = this.opts.host.activeWorkspaceLayout?.(manifest.activeSurface.workspaceId);
         if (layout) manifest.activeWorkspaceLayout = layout;
+        if (activeResourceId) {
+          const resource = this.opts.host.resolve({ id: activeResourceId, kind: 'resource' }, scope);
+          if (resource) {
+            manifest.activeResourceId = resource.id;
+            if (!manifest.discovered.some(ref => ref.kind === resource.kind && ref.id === resource.id))
+              manifest.discovered.push(resource);
+          }
+        }
       }
     }
     return manifest;

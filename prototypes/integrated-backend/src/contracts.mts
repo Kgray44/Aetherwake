@@ -7,7 +7,7 @@ import type { ProviderConnectionRequest, ProviderConnectionStatus } from '../../
 import type { NativeAuthorizationStart,NativeCredential,ReportedUsage,TurnInput,TurnResult,TurnOutcome,TurnHttpDiagnostic } from '../../openai-provider/contracts.mts';
 import type { ProductCommandMap } from '../../conversation-product/src/contracts.ts';
 import type { AttachedContext } from '../../conversation-product/src/service.mts';
-import type { VelaLocalCapabilityId, VelaClient, VelaState, ContextManifest, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
+import type { VelaLocalCapabilityId, VelaClient, VelaState, ContextManifest, VelaActiveCard, VelaPlanningPort, VelaNativeAction, HostActionResult, ResourceRef, VelaHostPort } from '../../vela-core/src/contracts.ts';
 import type { PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
 import type { TemplateService } from '../../block-library/service.mts';
 import type { NoteExperienceService } from '../../block-library/note-service.mts';
@@ -181,7 +181,7 @@ export interface CommandMap {
   githubTimeline: {input:GitHubTimelineCommand;output:{url:string}|{repositories:string[]}};
   taskObjectives: {input:TaskObjectiveRequest|{name:'targets';input:TaskTargetQuery};output:{result:TaskObjectiveResponse|TaskTargetPage;desktop?:DesktopSnapshot}};
   vela: { input: VelaOperation; output: unknown };
-  velaRequestPreview: { input: {intent:string;resourceIds:string[]}; output: VelaRequestPreview };
+  velaRequestPreview: { input: {intent:string;resourceIds:string[];activeCard?:VelaActiveCard}; output: VelaRequestPreview };
   velaNativeReview: {input:{previewId:string;signature:string};output:VelaNativeReview};
   /** TRUSTED NATIVE HOST ONLY. Renderer/tool allow-lists MUST exclude this authorization command. */
   authorizeVelaRequest: { input: {previewId:string;signature:string;reviewDigest?:string}; output: {grantId:string;expiresAt:string} };

@@ -200,6 +200,7 @@ type Hooks = {
   motion: MotionCoordinator;
   wake(): void;
   workingBodyWidth(id: string): number | undefined;
+  selectedCard(): string | null;
   replace(s: DesktopSnapshot): void;
   status(s: string): void;
   layout(): void;
@@ -298,6 +299,12 @@ export function installApplication(hooks: Hooks) {
   );
   const velaClient = createVelaClient({
     command: (name, input) => host.command!(name, input),
+    activeCard: () => {
+      const blockId = hooks.selectedCard();
+      return blockId && state?.navigation.kind === "workspace"
+        ? { workspaceId: state.navigation.workspaceId, blockId }
+        : undefined;
+    },
     presentation: () =>
       state?.navigation.kind === "workspace" && state.activeWorkspaceId
         ? { workspaceId: state.activeWorkspaceId, bounds: viewBounds() }

@@ -258,6 +258,63 @@ test(`reviewed Vela text reaches the model adapter and arranges the exact active
   } finally { await f.close(); }
 });
 
+test('Vela resolves a selected card in the current workspace, reviews metadata only, and renames its exact canonical resource', async () => {
+  const f = fixture('selected-note');
+  try {
+    const projectId = (await f.core.command('desktop', { type: 'createProject', title: 'Synthetic project' })).projects[0].id;
+    const workspaceId = (await f.core.command('desktop', {
+      type: 'createWorkspace', title: 'Synthetic studio', projectId,
+    })).activeWorkspaceId!;
+    const addNote = () => f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Synthetic note', workspaceId });
+    const first = (await addNote()).blocks[0];
+    const second = (await addNote()).blocks.find(block => block.id !== first.id)!;
+    const resource = (await f.core.command('desktop', { type: 'snapshot' })).resources.find(item => item.id === second.resource_id)!;
+    const content = 'Synthetic unshared note content';
+    const baseline = await f.core.command('desktop', { type: 'content', resourceId: resource.id, expectedVersion: resource.version, content });
+    const activeCard = { workspaceId, blockId: second.id };
+    const intent = 'Rename this note to Synthetic renamed card.';
+    await f.core.command('capabilities', {});
+    const missing = await f.core.command('velaRequestPreview', { intent, resourceIds: [], activeCard: { ...activeCard, workspaceId: 'stale-workspace' } });
+    assert.equal(missing.context.activeResourceId, undefined);
+    assert(!missing.context.discovered.some(ref => ref.kind === 'resource'));
+    const draftPreview = () => f.core.command('velaRequestPreview', { intent, resourceIds: [], activeCard });
+    const preview = await draftPreview();
+    assert.equal(preview.context.activeResourceId, resource.id);
+    assert.deepEqual(preview.context.discovered.filter(ref => ref.kind === 'resource').map(ref => ref.id), [resource.id]);
+    assert.deepEqual(preview.context.included, []);
+    const identity = { previewId: preview.id, signature: preview.signature };
+    await assert.rejects(f.core.command('authorizeVelaRequest', identity), /vela_native_review_required/);
+    const review = await f.core.command('velaNativeReview', identity);
+    assert(!review.prompt.includes(content));
+    const grant = await f.core.command('authorizeVelaRequest', { ...identity, reviewDigest: review.reviewDigest });
+    const request = await f.vela('request', { ...identity, grantId: grant.grantId, intent, resourceIds: [], authorizeProvider: true }) as { id: string; planId: string; state: string };
+    assert.equal(request.state, 'awaiting-review');
+    const plan = (await f.state()).plans.find(item => item.id === request.planId)!;
+    assert.deepEqual(plan.steps[0].action, { type: 'renameResource', resourceId: resource.id, title: 'Synthetic renamed card' });
+    await f.vela('review', { planId: plan.id, fingerprint: plan.fingerprint, decision: 'approve' });
+    assert.equal((await f.vela('apply', plan.id) as {state:string}).state, 'applied');
+    const updated = await f.core.command('desktop', { type: 'snapshot' });
+    assert.deepEqual(updated.blocks, baseline.blocks);
+    assert.equal(updated.resources.find(item => item.id === first.resource_id)?.title, 'Synthetic note');
+    assert.equal(updated.resources.find(item => item.id === resource.id)?.title, 'Synthetic renamed card');
+    assert.equal(updated.resources.find(item => item.id === resource.id)?.content, content);
+
+    const stale = await draftPreview();
+    await f.core.command('desktop', { type: 'detach', blockId: second.id, expectedVersion: second.version });
+    await assert.rejects(f.core.command('velaNativeReview', { previewId: stale.id, signature: stale.signature }), /stale_vela_preview/);
+    const detached = await draftPreview();
+    assert.equal(detached.context.activeResourceId, undefined);
+    await f.reopen();
+    assert.equal((await f.core.command('desktop', { type: 'snapshot' })).resources.find(item => item.id === resource.id)?.title, 'Synthetic renamed card');
+    const other = (await f.core.command('desktop', { type: 'createProject', title: 'Synthetic other scope' })).projects.find(item => item.id !== projectId)!;
+    await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic other studio', projectId: other.id });
+    const historical = (await f.state()).requests.find(item => item.id === request.id)!;
+    assert.equal(historical.context.activeResourceId, undefined);
+    assert.equal(historical.context.activeWorkspaceLayout, undefined);
+    assert(!historical.context.discovered.some(item => item.id === resource.id));
+  } finally { await f.close(); }
+});
+
 test('the native planning adapter executes a single typed clock read after the synthetic protocol turn completes', async () => {
   const f = fixture('clock');
   try {

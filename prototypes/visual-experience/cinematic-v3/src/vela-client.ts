@@ -1,4 +1,5 @@
 import type {
+  VelaActiveCard,
   VelaClient,
   VelaState,
 } from "../../../vela-core/src/contracts.ts";
@@ -11,6 +12,7 @@ export function createVelaClient(options: {
   presentationFence?(): () => boolean;
   observed(state: VelaState): void;
   presentation?(): WorkspacePresentationContext | null;
+  activeCard?(): VelaActiveCard | undefined;
 }): VelaClient {
   const invoke = async <T>(name: string, input: unknown): Promise<T> => {
     const mayPresent =
@@ -47,7 +49,10 @@ export function createVelaClient(options: {
     open: () => invoke("open", {}),
     search: (input) => invoke("search", input),
     presentation: (input) => invoke("presentation", input),
-    request: (input) => invoke("request", input),
+    request: (input) => {
+      const activeCard = options.activeCard?.();
+      return invoke("request", activeCard ? { ...input, activeCard } : input);
+    },
     native: (input) => invoke("native", input),
     review: (input) => invoke("review", input),
     apply: (input) => invoke("apply", input),

@@ -43,7 +43,7 @@ import { matchOrdinaryClockQuestion } from './ordinary-clock-questions.mts';
 import { evaluateLocalCapability, readSystemClock } from '../../vela-core/src/local-capabilities.mts';
 import { createCanonicalVelaHost, type CanonicalVelaHost, type CanonicalVelaMetadata } from '../../vela-core/src/canonical-host.mts';
 import { CodexPlanningAdapter, planningDigest, buildCodexPlanningPrompt, type CodexPlanningGrant, type PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
-import { CAPABILITIES } from '../../vela-core/src/capabilities.ts';
+import { CAPABILITIES, identifier } from '../../vela-core/src/capabilities.ts';
 import { CapabilityCatalogLease, createCapabilityCatalog, validateCatalogDeclaration, capabilityToolFailure } from '../../vela-core/src/capability-catalog.mts';
 import type { CapabilityCatalogSnapshot, CapabilityNativeCall, CapabilityToolReply } from '../../vela-core/src/capability-catalog.mts';
 import { historyDigest } from '../../vela-core/src/bounded-history.mts';
@@ -904,10 +904,22 @@ export class BackendCore {
   private pruneVelaGrants() {const time=Date.now();for(const [id,p] of this.velaPreviews)if(Date.parse(p.expiresAt)<=time)this.velaPreviews.delete(id);for(const map of [this.velaGrants,this.velaPolicyGrants,this.velaDelegationGrants])for(const [id,g] of map)if(Date.parse(g.expiresAt)<=time)map.delete(id);}
   private previewVelaRequest(input:CommandMap['velaRequestPreview']['input']):VelaRequestPreview {
     this.pruneVelaGrants();ensure(typeof input.intent==='string'&&input.intent.trim()&&input.intent.length<=16000,'invalid_vela_intent');ensure(this.velaPreviews.size<64,'approval_backpressure');
+    let activeResourceId: string | undefined;
+    const card = input.activeCard;
+    if (card !== undefined) {
+      ensure(card && typeof card === 'object' && !Array.isArray(card) &&
+        Object.keys(card).length === 2 && Object.hasOwn(card, 'workspaceId') && Object.hasOwn(card, 'blockId') &&
+        identifier(card.workspaceId) && identifier(card.blockId), 'invalid_vela_active_card');
+      const navigation = this.velaSession().navigation;
+      if (navigation.kind === 'workspace' && navigation.workspaceId === card.workspaceId) {
+        const row = this.db.prepare('SELECT resource_id FROM blocks WHERE workspace_id=? AND id=?').get(card.workspaceId, card.blockId);
+        if (identifier(row?.resource_id)) activeResourceId = row.resource_id;
+      }
+    }
     const catalog=createCapabilityCatalog(this.velaCapabilities(CAPABILITIES)),discovery=this.port.catalogDiscovery&&this.port.catalogDiscovery.available!==false?catalog.declaration:undefined;
-    const selected=this.vela.previewProviderContext(input.resourceIds,{includeHistory:this.historyContextEnabled,fits:context=>{try{this.velaSemanticPrompt(input.intent,context,catalog,discovery);return true;}catch(error){if((error as {code?:string}).code==='planning_prompt_capacity_exceeded')return false;throw error;}}});
+    const selected=this.vela.previewProviderContext(input.resourceIds,{includeHistory:this.historyContextEnabled,activeResourceId,fits:context=>{try{this.velaSemanticPrompt(input.intent,context,catalog,discovery);return true;}catch(error){if((error as {code?:string}).code==='planning_prompt_capacity_exceeded')return false;throw error;}}});
     const {history,...context}=selected.context,summary=history?{messageCount:history.messages.length,encodedBytes:Buffer.byteLength(JSON.stringify(history)),digest:historyDigest(history)}:undefined;
-    const publicPreview:VelaRequestPreview={id:randomUUID(),intent:input.intent,resourceIds:[...input.resourceIds],context,providerId:this.velaPlanner.providerId,signature:'',scopeStamp:this.velaScopeStamp(),expiresAt:new Date(Date.now()+300000).toISOString(),...(discovery?{discovery}:{}),...(summary?{history:summary}:{}),...(this.historyContextEnabled?{nativeReviewRequired:true}:{})};
+    const publicPreview:VelaRequestPreview={id:randomUUID(),intent:input.intent,resourceIds:[...input.resourceIds],context,providerId:this.velaPlanner.providerId,signature:'',scopeStamp:this.velaScopeStamp(),expiresAt:new Date(Date.now()+300000).toISOString(),...(discovery?{discovery}:{}),...(summary?{history:summary}:{}),...(this.historyContextEnabled||context.activeResourceId?{nativeReviewRequired:true}:{})};
     const conversationId=this.state.vela!.conversationId,inputAnchor={conversationId,revision:conversationId?this.velaHost.conversationRevision?.(conversationId)??null:null};
     const preview:PrivateVelaPreview={...publicPreview,frozenContext:structuredClone(selected.context),origin:selected.origin,...(selected.historyFence?{historyFence:selected.historyFence}:{}),historyOmissions:selected.historyOmissions,catalog,prompt:this.velaSemanticPrompt(input.intent,selected.context,catalog,discovery),nativeReviewed:false,inputAnchor,inputDigest:historyDigest(input.intent)};
     preview.signature=this.velaEgress(input.intent,preview.frozenContext,discovery,preview);publicPreview.signature=preview.signature;this.velaPreviews.set(preview.id,preview);return structuredClone(publicPreview);

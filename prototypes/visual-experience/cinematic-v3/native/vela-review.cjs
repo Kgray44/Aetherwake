@@ -115,7 +115,7 @@ function reviewPage(review, intent = "", experience = "vela") {
   const sources = resources
     .map(
       (source) =>
-        `<article><h2>${escape(source.title ?? source.id ?? "Selected resource")}</h2><small>${included.has(sourceKey(source)) ? "Selected excerpt" : "Metadata only"}</small>${included.has(sourceKey(source)) ? `<pre>${escape(included.get(sourceKey(source)).content)}</pre>` : ""}</article>`,
+        `<article><h2>${escape(source.title ?? source.id ?? "Selected resource")}</h2><small>${source.kind === "resource" && source.id === review.context.activeResourceId ? "Selected card · " : ""}${included.has(sourceKey(source)) ? "Selected excerpt" : "Metadata only"}</small>${included.has(sourceKey(source)) ? `<pre>${escape(included.get(sourceKey(source)).content)}</pre>` : ""}</article>`,
     )
     .join("");
   const history = (review.history?.messages ?? [])
