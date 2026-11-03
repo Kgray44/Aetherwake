@@ -122,6 +122,7 @@ interface PrivateVelaPreview extends VelaRequestPreview {
   agentRoutingDigest?: string;
   calibrationProjectId?: string | null;
   fileEdit?: { target: VelaFileEditTarget; body: string | null }[];
+  workflowApproved?: true;
   inspectionTarget?: ReturnType<typeof readVelaInspectionTarget>;
 }
 
@@ -1064,10 +1065,13 @@ export class BackendCore {
       });
       content = proposals.length === 1 ? 'Codex prepared proposed contents for ' + proposals[0].target.relativePath + '.'
         : 'Codex prepared proposed contents for ' + proposals.length + ' files.';
-      content += ' Review the exact file contents before applying.';
-      if (followUpCheck) content += !this.port.projectChecks ? ' The requested check is unavailable in this environment.'
-        : followUpCheck === 'node-build' ? ' After the write is verified, send “Run the build” to review a script and output destination.'
-        : ' After the write is verified, Vela will ask you to select and approve the check.';
+      if (preview.workflowApproved) content += ' Your workflow approval covers the changes and the selected check. See the results below.';
+      else {
+        content += ' Review the exact file contents before applying.';
+        if (followUpCheck) content += !this.port.projectChecks ? ' The requested check is unavailable in this environment.'
+          : followUpCheck === 'node-build' ? ' After the write is verified, send “Run the build” to review a script and output destination.'
+          : ' After the write is verified, Vela will ask you to select and approve the check.';
+      }
     }
     return { schemaVersion: 2, kind: 'answer', content, contribution: {
       providerId: this.port.id, classification: 'reported', executionId: execution.id,
@@ -1972,6 +1976,7 @@ export class BackendCore {
         planningDigest(handoff.route) === planningDigest(codex.route) &&
         planningDigest(handoff.fileEdit) === planningDigest(codex.fileEdit), 'vela_workflow_scope_changed');
       this.nativeVelaReview({ previewId: handoff.id, signature: handoff.signature });
+      handoff.workflowApproved = true;
       const second = await send(handoff, first.id);
       if (second.state !== 'responded' || !this.state.vela!.edits?.[second.id]) return second;
       validateScope();

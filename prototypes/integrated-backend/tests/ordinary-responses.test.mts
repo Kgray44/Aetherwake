@@ -306,6 +306,11 @@ test('Read the log, explain the slowdown, fix the count, and run the tests after
     const result = await send(workflow => { approvedId = workflow.id; return true; });
     assert.equal(result.state, 'responded', result.errorCode);
     assert.equal(result.handoff?.destinationProviderId, 'codex-app-server');
+    assert(result.response?.kind === 'answer');
+    const message = (await f.core.command('snapshot', {})).graph.messages.find(item => item.id === result.response!.messageId);
+    assert(message);
+    assert.match(message.content, /workflow approval covers the changes/u);
+    assert.doesNotMatch(message.content, /Vela will ask/u);
     const assertApplied = async () => {
       const state = await f.core.command('vela', { name: 'state', input: {} }) as VelaState;
       assert.equal(state.requests.at(-2)?.conversationId, result.conversationId);
