@@ -478,7 +478,11 @@ export function installApplication(hooks: Hooks) {
   let subjectDataEpoch = 0;
   let cardConfiguration: ReturnType<typeof mountBlockConfiguration> | null =
     null;
-  let blockLibrary: ReturnType<typeof mountBlockLibrary> | undefined;
+  let blockLibrary: {
+    workspaceId: string;
+    request: ContextualSurfaceRequest;
+    view: ReturnType<typeof mountBlockLibrary>;
+  } | undefined;
   let state: DesktopSnapshot | null = null;
   let panelScope: { workspaceId: string; preferences: WorkspacePanelPreferences } | null = null;
   let resourcesView: ReturnType<typeof mountContextualResources> | null = null;
@@ -2415,12 +2419,15 @@ export function installApplication(hooks: Hooks) {
       manager();
       return;
     }
-    if (blockLibrary) return;
     const workspaceId = state.activeWorkspaceId;
+    if (blockLibrary?.workspaceId === workspaceId) {
+      surfaces.open(blockLibrary.request);
+      return;
+    }
     const content = document.createElement("div");
     content.className = "application-library-content";
     let controller: ReturnType<typeof mountBlockLibrary> | undefined;
-    surfaces.open({
+    const request: ContextualSurfaceRequest = {
       id: "block-library",
       anchor: el(".aw-workspace-add"),
       content,
@@ -2429,9 +2436,10 @@ export function installApplication(hooks: Hooks) {
       maxSize: { width: 960, height: 740 },
       onClose: () => {
         controller?.dispose();
-        if (blockLibrary === controller) blockLibrary = undefined;
+        if (blockLibrary?.view === controller) blockLibrary = undefined;
       },
-    });
+    };
+    surfaces.open(request);
     controller = mountBlockLibrary(content, libraryClient, {
       workspaceId,
       showHeader: false,
@@ -2475,21 +2483,25 @@ export function installApplication(hooks: Hooks) {
           throw Error("workspace_changed");
         return state.layoutVersion;
       },
-      onClose: () => surfaces.close("block-library"),
+      onClose: () => {
+        if (blockLibrary?.view === controller) surfaces.close("block-library");
+      },
       onCreated: (result, origin) => {
+        if (blockLibrary?.view !== controller || state?.activeWorkspaceId !== workspaceId) return;
         surfaces.close("block-library");
         if (origin === "drop") {
           if (document.body.classList.contains("focused")) hooks.home();
         } else revealCreatedPlacement(result.placementId);
       },
       onSubjectCreated: (result, origin) => {
+        if (blockLibrary?.view !== controller || state?.activeWorkspaceId !== workspaceId) return;
         surfaces.close("block-library");
         if (origin === "drop") {
           if (document.body.classList.contains("focused")) hooks.home();
         } else revealCreatedPlacement(result.placementId);
       },
     });
-    blockLibrary = controller;
+    blockLibrary = { workspaceId, request, view: controller };
   }
   function templates(projectId: string | null) {
     const content = document.createElement("div");
@@ -4601,7 +4613,7 @@ export function installApplication(hooks: Hooks) {
       resourcesMotion?.frame();
       streamMotion?.frame();
       for (const picker of streamPickers) picker.frame();
-      blockLibrary?.frame();
+      blockLibrary?.view.frame();
       environmentNavigator?.frame();
       workspaceActions?.frame();
       agentLibrary?.frame();

@@ -150,6 +150,17 @@ exports.verify = async ({
       await sample("fitted-workspace");
       if (process.argv.includes("--offscreen-capture-fit")) {
         await settledWorkspace();
+        receipt.fittedBounds = await js(`(() => {
+          const cards = [...document.querySelectorAll('#stage [data-block]'), document.querySelector('#vela')];
+          const rects = cards.filter(node => node && !node.hidden).map(node => node.getBoundingClientRect());
+          return {
+            width: innerWidth, height: innerHeight, count: rects.length,
+            left: Math.min(...rects.map(rect => rect.left)),
+            right: Math.max(...rects.map(rect => rect.right)),
+            top: Math.min(...rects.map(rect => rect.top)),
+            bottom: Math.max(...rects.map(rect => rect.bottom))
+          };
+        })()`);
         receipt.fitCapture = await capture("offscreen-scale-fitted.png");
       }
       await navigate({ kind: "constellation", projectId: null });
