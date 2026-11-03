@@ -73,6 +73,11 @@ import {
 } from "../../../block-library/view.ts";
 import "../../../block-library/style.css";
 import { createLibraryClient } from "./library-client";
+import { createMediaClient } from "./media-client";
+import {
+  mountMediaExperience,
+  type MediaExperience,
+} from "../../../block-library/media-view.ts";
 import { createNotesClient } from "./notes-client";
 import { NoteSession } from "../../../block-library/note-session.ts";
 import { mountNoteExperience } from "../../../block-library/note-view.ts";
@@ -344,10 +349,17 @@ export function installApplication(hooks: Hooks) {
       else hooks.vela("idle");
     },
   });
-  const libraryClient = createLibraryClient({
+  const mediaClient = createMediaClient({
     command: (name, input) => host.command!(name, input),
     apply: (snapshot) => apply(snapshot),
   });
+  const libraryClient = {
+    ...createLibraryClient({
+      command: (name, input) => host.command!(name, input),
+      apply: (snapshot) => apply(snapshot),
+    }),
+    mediaImport: mediaClient,
+  };
   const notesClient = createNotesClient({
     command: (name, input) => host.command!(name, input),
     apply: (snapshot) => apply(snapshot),
@@ -420,6 +432,7 @@ export function installApplication(hooks: Hooks) {
   const timelineProjections = new Map<string, NonNullable<Parameters<typeof blockIdentity>[0]["timeline"]>>();
   const noteSessions = new Map<string, NoteSession>();
   const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
+  const mediaViews = new Map<string, MediaExperience>();
   const groupViews = new Map<
     string,
     ReturnType<typeof mountTaskGroupExperience>
@@ -601,6 +614,7 @@ export function installApplication(hooks: Hooks) {
     mount: (root, resource) =>
       mountDirectResourceExperience(root, resource, {
         notes: notesClient,
+        media: mediaClient,
         checklists: {
           port: productClients.checklists,
           motion: experienceMotion,
@@ -1081,6 +1095,19 @@ export function installApplication(hooks: Hooks) {
         view.dispose();
         eventViews.delete(id);
       }
+    for (const [id, view] of mediaViews) {
+      const block = next.blocks.find((item) => item.id === id);
+      const resource =
+        block && next.resources.find((item) => item.id === block.resource_id);
+      if (
+        !resource ||
+        resource.available === false ||
+        resource.visible === false
+      ) {
+        view.dispose();
+        mediaViews.delete(id);
+      }
+    }
     for (const id of blockSettings.keys())
       if (!next.blocks.some((block) => block.id === id))
         blockSettings.delete(id);
@@ -2488,6 +2515,16 @@ export function installApplication(hooks: Hooks) {
         if (origin === "drop") {
           if (document.body.classList.contains("focused")) hooks.home();
         } else revealCreatedPlacement(result.placementId);
+      },
+      onMediaCreated: (result) => {
+        if (
+          blockLibrary?.view !== controller ||
+          state?.activeWorkspaceId !== workspaceId ||
+          !result.placementId
+        )
+          return;
+        surfaces.close("block-library");
+        revealCreatedPlacement(result.placementId);
       },
       onSubjectCreated: (result, origin) => {
         if (blockLibrary?.view !== controller || state?.activeWorkspaceId !== workspaceId) return;
@@ -4070,6 +4107,19 @@ export function installApplication(hooks: Hooks) {
           r.content;
         if (editor.value !== content) editor.value = content;
       }
+    } else if (r.kind === "file" || r.kind === "link") {
+      const view = mediaViews.get(id);
+      const media = { ...r, kind: r.kind };
+      if (view) view.update(media);
+      else if (activeBlocks.get(id))
+        mediaViews.set(
+          id,
+          mountMediaExperience(
+            el(".working-content", article),
+            media,
+            mediaClient,
+          ),
+        );
     } else if (r.kind === "stream") {
       const content = el(".working-content", article);
       if (!eventViews.has(id) && activeBlocks.get(id)) {
@@ -4573,6 +4623,8 @@ export function installApplication(hooks: Hooks) {
           "agent",
           "timeline",
           "task_objective",
+          "file",
+          "link",
         ].includes(resource?.kind ?? "")
       ) {
         const article = document.querySelector<HTMLElement>(
@@ -4593,6 +4645,7 @@ export function installApplication(hooks: Hooks) {
     taskTrackerViews.get(id)?.view.setPresentation(presentation);
     chatViews.get(id)?.setActive(active);
     noteViews.get(id)?.setActive(active);
+    mediaViews.get(id)?.setActive(active);
     subjectViews.get(id)?.setActive(active);
     eventViews.get(id)?.setActive(active);
     groupViews.get(id)?.setActive(active);

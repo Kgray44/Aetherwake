@@ -268,6 +268,7 @@ app.whenReady().then(async () => {
       privateRoot,
       root,
       "--native-secrets",
+      "--native-media",
     ],
     { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
   );

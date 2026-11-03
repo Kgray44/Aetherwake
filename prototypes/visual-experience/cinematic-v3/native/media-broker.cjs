@@ -18,7 +18,7 @@ exports.createMediaBroker = ({ win, dialog, shell, call }) => {
         const { kind, variant, workspaceId, expectedLayoutVersion, projectId, bounds, url } = input;
         if (!["file", "link"].includes(kind) ||
             Object.keys(input).some(key => !["kind", "variant", "workspaceId", "expectedLayoutVersion", "projectId", "bounds", "url"].includes(key)) ||
-            (kind === "link" ? typeof url !== "string" || url.length > 8192 || variant !== undefined
+            (kind === "link" ? typeof url !== "string" || url.length > 8192 || (variant !== undefined && variant !== "any")
               : url !== undefined || (variant !== undefined && !["any", "pdf", "document", "video"].includes(variant))))
           throw Error("invalid_media_request");
         let selection;
@@ -38,7 +38,7 @@ exports.createMediaBroker = ({ win, dialog, shell, call }) => {
           } finally { choosing = false; }
         } else selection = { kind, url };
         return call("mediaImportTrusted", {
-          kind, variant, workspaceId, expectedLayoutVersion, projectId, bounds,
+          kind, ...(kind === "file" ? { variant } : {}), workspaceId, expectedLayoutVersion, projectId, bounds,
           commandId: randomUUID(), selection,
         });
       }

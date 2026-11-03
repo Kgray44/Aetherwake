@@ -11,6 +11,7 @@ import { gunzipSync } from 'node:zlib';
 
 export const LIMITS = Object.freeze({ totalBytes:1024*1024*1024, fileBytes:512*1024*1024, files:4096, manifestBytes:2*1024*1024, metadataBytes:8*1024*1024, reserveBytes:32212254720 });
 const APP = 'prototypes/visual-experience/cinematic-v3';
+const BLOCKS = 'prototypes/block-library';
 const OPENAI = 'prototypes/openai-provider';
 const OPENAI_SOURCE = new Set(['auth.mts','common.mts','contracts.mts','responses.mts','model-controls.ts','native-storage.mts','loopback.mts'].map(name=>OPENAI+'/'+name));
 export const JOSE_RUNTIME = Object.freeze({name:'jose',version:'6.2.15',integrity:'sha512-qdF6ewcZARtef63fJ9AKKZPgxw+t7USH6HLXYcD4CrdmSvDp79rpJSPFEKc90QBeGS63u1KQtN2MZQHC0yDIzA==',resolved:'https://registry.npmjs.org/jose/-/jose-6.2.15.tgz',importer:OPENAI+'/auth.mts',entry:'dist/webapi/index.js',files:128,bytes:1024*1024,tarBytes:2*1024*1024});
@@ -152,11 +153,32 @@ export async function plan(options={}) {
   for(const file of closure.vendorFiles){await addFile(files,targets,file.origin,file.file,file.target,closure.vendorRoots[0]);files.at(-1).expectedSha256=file.sha256;}
   for(const file of ['package.json','package-lock.json'])if(tracked.has(file))await addFile(files,targets,'repository:'+file,path.join(sourceRoot,file),'resources/app/source-metadata/'+file,sourceRoot);
   const dist=await fs.realpath(path.join(sourceRoot,APP,'dist'));check(await exists(path.join(dist,'index.html'))&&await exists(path.join(dist,'assets')),'built_application_dist_missing');
-  for(const file of await walk(dist)){const relative=slash(path.relative(dist,file));check(!OMITTED.test(relative)&&/\.(?:html|js|css|png|svg|jpg|jpeg|woff2?|ico|txt)$/.test(relative),'unexpected_dist_payload',relative);const canonicalAsset=APP+'/public/'+relative;check(!/\.(?:png|svg|jpe?g|woff2?|ico)$/.test(relative)||tracked.has(canonicalAsset),'unreviewed_static_asset_origin',relative);await addFile(files,targets,'built-dist:'+relative,file,'resources/app/'+APP+'/dist/'+relative,dist);if(tracked.has(canonicalAsset))files.at(-1).canonicalAsset=canonicalAsset;}
+  const pdfWorker=path.join(sourceRoot,BLOCKS,'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs');
+  for(const file of await walk(dist)){
+    const relative=slash(path.relative(dist,file)),worker=/^assets\/pdf\.worker-[A-Za-z0-9_-]+\.mjs$/.test(relative);
+    check(!OMITTED.test(relative)&&(worker||/\.(?:html|js|css|png|svg|jpg|jpeg|woff2?|ico|txt)$/.test(relative)),'unexpected_dist_payload',relative);
+    const canonicalAsset=APP+'/public/'+relative;
+    check(!/\.(?:png|svg|jpe?g|woff2?|ico)$/.test(relative)||tracked.has(canonicalAsset),'unreviewed_static_asset_origin',relative);
+    await addFile(files,targets,'built-dist:'+relative,file,'resources/app/'+APP+'/dist/'+relative,dist);
+    if(tracked.has(canonicalAsset))files.at(-1).canonicalAsset=canonicalAsset;
+    if(worker){const expected=await hashFile(pdfWorker);check(await hashFile(file)===expected,'unexpected_pdf_worker_bytes');files.at(-1).expectedSha256=expected;}
+  }
   for(const file of await walk(electronRoot)){const relative=slash(path.relative(electronRoot,file));if(!electronRuntimeFile(relative))continue;await addFile(files,targets,'electron-runtime:'+relative,file,relative==='electron.exe'?'AerynthReview.exe':relative,electronRoot);}
   await addFile(files,targets,'node-runtime:node.exe',node,'vendor/node.exe',nodeRoot);await addFile(files,targets,'node-runtime:LICENSE',license,'vendor/node-LICENSE.txt',nodeRoot);
   check(Object.keys(app.dependencies??{}).every(name=>name==='three'),'unreviewed_frontend_dependency_license');
   const threeRoot=await fs.realpath(path.join(sourceRoot,APP,'node_modules/three'));await addFile(files,targets,'frontend-license:three',path.join(threeRoot,'LICENSE'),'licenses/three-LICENSE.txt',threeRoot);
+  const mediaLock=JSON.parse(await fs.readFile(path.join(sourceRoot,BLOCKS,'package-lock.json'),'utf8'));
+  for(const [key,entry] of Object.entries(mediaLock.packages)){
+    if(!key||entry.optional)continue;
+    const name=key.slice('node_modules/'.length);
+    check(/^node_modules\/(?:@[\w.-]+\/)?[\w.-]+$/.test(key),'unexpected_media_dependency_path',key);
+    const packageRoot=path.join(sourceRoot,BLOCKS,key);
+    const installed=JSON.parse(await fs.readFile(path.join(packageRoot,'package.json'),'utf8'));
+    check(installed.name===name&&installed.version===entry.version,'locked_media_dependency_mismatch',name);
+    const notices=(await fs.readdir(packageRoot)).filter(file=>/^licen[cs]e(?:\.[\w-]+)?$|^notice(?:\.[\w-]+)?$/i.test(file)||name==='isarray'&&file==='README.md');
+    check(notices.length>0,'media_dependency_license_missing',name);
+    for(const file of notices)await addFile(files,targets,'frontend-license:'+name+'/'+file,path.join(packageRoot,file),'licenses/media/'+name+'/'+file,packageRoot);
+  }
   for(const name of ['LICENSE','LICENSES.chromium.html'])check(files.some(file=>file.target===name),'Electron_vendor_license_missing',name);
   const generated=[{target:'resources/app/package.json',content:json({name:'aerynth-portable-review',version:app.version,private:true,type:'module',main:'portable-review-bootstrap.cjs'})},{target:'resources/app/portable-review-bootstrap.cjs',content:bootstrap(head)},{target:'README-portable-review.txt',content:readme(head,app.version)},{target:'Launch-Aerynth.cmd',content:'@echo off\r\nsetlocal\r\nset "ELECTRON_RUN_AS_NODE="\r\n"%~dp0AerynthReview.exe" %*\r\nexit /b %ERRORLEVEL%\r\n'}];
   for(const file of generated){check(!targets.has(file.target.toLowerCase()),'generated_target_collision');targets.add(file.target.toLowerCase());}
@@ -208,7 +230,7 @@ export async function build(plan) {
   const admit=(partial=0)=>{if(Date.now()-lastGuard>=240000){reserve(plan,Math.max(0,plan.bytes.totalBound-copied-partial));lastGuard=Date.now();}};
   for(const file of plan.files){admit();
     const before=await fs.lstat(file.file);check(before.isFile()&&!before.isSymbolicLink()&&before.size===file.bytes&&before.mtimeMs===file.mtimeMs&&before.ino===file.ino,'input_changed_since_plan',file.origin);
-    const target=path.join(plan.output,file.target);check(contained(plan.output,target),'copy_outside_owned_output');await fs.mkdir(path.dirname(target),{recursive:true});const parent=await fs.realpath(path.dirname(target));check(same(plan.output,parent)||contained(plan.output,parent),'output_parent_link_escapes_owned_directory');const sourceSha256=await copyBounded(file,target,admit),copiedSha256=await hashFile(target);check(sourceSha256===copiedSha256,'copied_bytes_mismatch',file.origin);if(file.origin.startsWith('npm-runtime:'))check(typeof file.expectedSha256==='string'&&sourceSha256===file.expectedSha256,'locked_vendor_bytes_changed_since_plan',file.origin);if(file.canonicalAsset)check(await hashFile(path.join(plan.sourceRoot,file.canonicalAsset))===copiedSha256,'original_public_asset_changed_in_dist',file.canonicalAsset);copied+=file.bytes;files.push({path:file.target,origin:file.origin,bytes:file.bytes,sha256:copiedSha256,...(file.canonicalAsset?{originalAsset:file.canonicalAsset,originalBytesPreserved:true}:{})});
+    const target=path.join(plan.output,file.target);check(contained(plan.output,target),'copy_outside_owned_output');await fs.mkdir(path.dirname(target),{recursive:true});const parent=await fs.realpath(path.dirname(target));check(same(plan.output,parent)||contained(plan.output,parent),'output_parent_link_escapes_owned_directory');const sourceSha256=await copyBounded(file,target,admit),copiedSha256=await hashFile(target);check(sourceSha256===copiedSha256,'copied_bytes_mismatch',file.origin);if(file.expectedSha256||file.origin.startsWith('npm-runtime:'))check(sourceSha256===file.expectedSha256,'locked_vendor_bytes_changed_since_plan',file.origin);if(file.canonicalAsset)check(await hashFile(path.join(plan.sourceRoot,file.canonicalAsset))===copiedSha256,'original_public_asset_changed_in_dist',file.canonicalAsset);copied+=file.bytes;files.push({path:file.target,origin:file.origin,bytes:file.bytes,sha256:copiedSha256,...(file.canonicalAsset?{originalAsset:file.canonicalAsset,originalBytesPreserved:true}:{})});
   }
   for(const file of plan.generated){admit();const entry=await writeExclusive(plan.output,file.target,file.content);files.push({...entry,origin:'generated-review-bootstrap'});copied+=entry.bytes;}
   // The native host hashes these folders at startup; each exists in the portable layout.
@@ -216,7 +238,7 @@ export async function build(plan) {
   check(git(plan.sourceRoot,'rev-parse','HEAD')===plan.head&&git(plan.sourceRoot,'status','--porcelain=v1')==='','source_changed_during_copy');
   const sourceHashes=Object.fromEntries(files.filter(f=>f.origin.startsWith('repository:')).map(f=>[f.origin.slice(11),f.sha256]));
   const buildAssets=Object.fromEntries(files.filter(f=>f.origin.startsWith('built-dist:')).map(f=>[f.origin.slice(11),f.sha256]));
-  const manifest={contract:'aerynth.portable-review@1',complete:true,createdAt:new Date().toISOString(),candidate:{head:plan.head,tree:plan.tree,clean:true},runtimes:plan.runtimes,sourceHashes,buildAssets,runtimeDependencies:plan.runtimeDependencies,files:files.sort((a,b)=>a.path.localeCompare(b.path)),licenses:['LICENSE','LICENSES.chromium.html','vendor/node-LICENSE.txt','licenses/three-LICENSE.txt',...(plan.runtimeDependencies??[]).map(dependency=>dependency.licensePath)],bounds:plan.bytes,reserve:firstAdmission,externalPrerequisites:plan.externalPrerequisites,exclusions:plan.excluded,acceptance:'Byte-preserving offline packaging only; no native/provider/performance/production acceptance is inferred.',buildProvenance:'Existing dist bytes are bound; packaging does not rebuild or independently prove their source compilation.'};
+  const manifest={contract:'aerynth.portable-review@1',complete:true,createdAt:new Date().toISOString(),candidate:{head:plan.head,tree:plan.tree,clean:true},runtimes:plan.runtimes,sourceHashes,buildAssets,runtimeDependencies:plan.runtimeDependencies,files:files.sort((a,b)=>a.path.localeCompare(b.path)),licenses:['LICENSE','LICENSES.chromium.html','vendor/node-LICENSE.txt',...files.filter(file=>file.origin.startsWith('frontend-license:')).map(file=>file.path),...(plan.runtimeDependencies??[]).map(dependency=>dependency.licensePath)],bounds:plan.bytes,reserve:firstAdmission,externalPrerequisites:plan.externalPrerequisites,exclusions:plan.excluded,acceptance:'Byte-preserving offline packaging only; no native/provider/performance/production acceptance is inferred.',buildProvenance:'Existing dist bytes are bound; packaging does not rebuild or independently prove their source compilation.'};
   const bytes=json(manifest);check(Buffer.byteLength(bytes)<=LIMITS.manifestBytes,'manifest_size_exceeded');admit();await writeExclusive(plan.output,'manifest.json',bytes);await writeExclusive(plan.output,'manifest.sha256',sha(bytes)+'  manifest.json\n');
   const zip=plan.archive?await archive(plan,bytes):null;return {contract:'aerynth.review-build-result@1',candidate:manifest.candidate,files:files.length,payloadBytes:copied,manifestSha256:sha(bytes),archive:zip,output:plan.output,acceptance:manifest.acceptance};
 }
