@@ -8,7 +8,7 @@ import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { WorkspaceEngine } from '../engine.mts';
 import { previewLayout, defaultOrganization } from '../organization.mts';
 import { footprint, intersects } from '../collisions.mts';
-import type { Command, WorkspaceProjection, Geometry, OrganizationMode, LayoutPreview } from '../contracts.mts';
+import type { Command, WorkspaceProjection, Geometry, OrganizationMode, LayoutPreview, Viewport } from '../contracts.mts';
 const bounds = { x: 20, y: 170, width: 1240, height: 650 };
 let serial = 0;
 const code = (value: string) => (error: any) => error.code === value;
@@ -210,23 +210,69 @@ test('all six mode transitions preserve identities and can be undone', t => {
   }
 });
 
-test('camera-only save and Bring All Into View preserve raw overlap and are reversible', t => {
+const safeWorld = (safe: Geometry, camera: Viewport) => ({
+  x: camera.x + safe.x / camera.zoom, y: camera.y + safe.y / camera.zoom,
+  width: safe.width / camera.zoom, height: safe.height / camera.zoom,
+});
+const near = (actual: number, expected: number, message: string) => assert.ok(Math.abs(actual - expected) < 1e-7, `${message}: ${actual} vs ${expected}`);
+function assertCenteredFit(view: LayoutPreview, safe: Geometry) {
+  const { x, y, zoom } = view.viewport;
+  const boxes = [...view.blocks.map(b => footprint({ ...b, id: b.blockId })), footprint(view.presence)];
+  const left = Math.min(...boxes.map(b => b.x)), right = Math.max(...boxes.map(b => b.x + b.width));
+  const top = Math.min(...boxes.map(b => b.y)), bottom = Math.max(...boxes.map(b => b.y + b.height));
+  near(((left + right) / 2 - x) * zoom, safe.x + safe.width / 2, 'Horizontal center');
+  near(((top + bottom) / 2 - y) * zoom, safe.y + safe.height / 2, 'Vertical center');
+  near(zoom, Math.min(1, safe.width / (right - left + 32), safe.height / (bottom - top + 32)), 'Fit zoom with original padding and cap');
+  assert.ok((left - 16 - x) * zoom >= safe.x - 1e-7 && (right + 16 - x) * zoom <= safe.x + safe.width + 1e-7);
+  assert.ok((top - 16 - y) * zoom >= safe.y - 1e-7 && (bottom + 16 - y) * zoom <= safe.y + safe.height + 1e-7);
+}
+
+test('camera-only save and centered recovery preserve raw overlap, resources and one undo step', t => {
   const { engine: e, kernel: k, state } = fixture(t); const resource = k.createNote('Legacy synthetic', 'kept');
   for (let i = 0; i < 2; i++) k.attachBlock(state.workspaceId, resource.id, { x: 6000, y: 5000, width: 320, height: 240, z: 0 });
-  let s = e.project(state.workspaceId), before = layouts(s);
-  const viewport = { x: 100, y: 120, zoom: 1 };
+  let s = e.project(state.workspaceId); const before = layouts(s), canonical = k.getResource(resource.id);
+  const viewport = { x: -99.25, y: 120.125, zoom: .8, displayId: 'synthetic:display' };
   const predicted = previewLayout(s, { viewport, bounds });
   s = run(e, s, { type: 'saveLayout', placements: [], viewport }); assert.deepEqual(layouts(s), before); assert.deepEqual(layouts(predicted), before);
-  const fit = previewLayout(s, { intent: 'recover', bounds });
-  s = run(e, s, { type: 'bringAllIntoView' }); assert.deepEqual(layouts(s), before); assert.deepEqual(s.viewport, fit.viewport);
-  const safeX = (bounds.x - viewport.x) * viewport.zoom, safeY = (bounds.y - viewport.y) * viewport.zoom;
-  for (const b of [...s.blocks, s.presence]) {
-    assert.ok((b.x - s.viewport.x) * s.viewport.zoom >= safeX - 1e-7);
-    assert.ok((b.y - s.viewport.y) * s.viewport.zoom >= safeY - 1e-7);
-    assert.ok((b.x + b.width - s.viewport.x) * s.viewport.zoom <= safeX + bounds.width * viewport.zoom + 1e-7);
-    assert.ok((b.y + b.height - s.viewport.y) * s.viewport.zoom <= safeY + bounds.height * viewport.zoom + 1e-7);
-  }
-  s = run(e, s, { type: 'undoLayout' }); assert.deepEqual(s.viewport, viewport); assert.deepEqual(layouts(s), before);
+  const original = s, safe = { x: 23.75, y: 181.125, width: 1175.4, height: 541.7 }, world = safeWorld(safe, viewport);
+  const fit = previewLayout(s, { intent: 'recover', bounds: world });
+  assertCenteredFit(fit, safe); assert.deepEqual(fit.affectedPlacementIds, []);
+  assert.deepEqual(e.project(s.workspaceId), original, 'Preview leaves canonical state alone');
+  s = run(e, s, { type: 'bringAllIntoView', bounds: world });
+  assert.equal(s.revision, original.revision + 1); assert.deepEqual(s.viewport, fit.viewport);
+  assert.equal(s.viewport.displayId, viewport.displayId);
+  assert.deepEqual(s.blocks, original.blocks); assert.deepEqual(s.presence, original.presence);
+  assert.deepEqual(s.organization, original.organization); assert.deepEqual(k.getResource(resource.id), canonical);
+  assert.deepEqual(run(e, s, { type: 'bringAllIntoView', bounds: safeWorld(safe, s.viewport) }), s, 'Repeated fit leaves no extra history entry');
+  const undone = run(e, s, { type: 'undoLayout' });
+  assert.deepEqual(undone.viewport, viewport); assert.deepEqual(layouts(undone), before);
+  const redone = run(e, undone, { type: 'redoLayout' });
+  assert.deepEqual(redone.viewport, s.viewport); assert.deepEqual(layouts(redone), before);
+});
+
+test('recovery centers Vela in a workspace with no cards and caps zoom at original size', t => {
+  const { engine: e, state } = fixture(t);
+  const viewport = { x: 12, y: -319, zoom: 2.75 };
+  const s = run(e, state, { type: 'saveLayout', placements: [], viewport });
+  const safe = { x: 117.2, y: 83.3, width: 900, height: 700 };
+  const fit = previewLayout(s, { intent: 'recover', bounds: safeWorld(safe, viewport) });
+  assertCenteredFit(fit, safe);
+  assert.equal(fit.viewport.zoom, 1);
+  assert.deepEqual(fit.blocks, []); assert.deepEqual(fit.presence, s.presence);
+  assert.deepEqual(fit.affectedPlacementIds, []);
+  assert.throws(() => previewLayout(s, { intent: 'recover' }), code('BOUNDS_REQUIRED'));
+});
+
+test('recovery fits the rotated footprint of an oversized locked card within the supplied safe area', t => {
+  const { engine: e, state } = fixture(t);
+  let s = run(e, state, { type: 'setOrganization', organization: { mode: 'freeform' } });
+  s = add(e, s, { x: -6000, y: -1500, width: 4096, height: 3000, rotation: 35, locked: true });
+  assert.equal(s.blocks[0].rotation, 35); assert.equal(s.blocks[0].locked, true);
+  const safe = { x: 73, y: 94, width: 202, height: 305 };
+  const fit = previewLayout(s, { intent: 'recover', bounds: safeWorld(safe, s.viewport) });
+  assertCenteredFit(fit, safe); assert.ok(fit.viewport.zoom < .1);
+  assert.deepEqual(fit.blocks, s.blocks); assert.deepEqual(fit.presence, s.presence);
+  assert.deepEqual(fit.affectedPlacementIds, []);
 });
 
 test('locked geometry, invalid policies and stale organization revisions fail without partial changes', t => {

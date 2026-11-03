@@ -150,12 +150,21 @@ export function applyOrganizationPolicy(state: LayoutState, options: PolicyOptio
     ensure(options.bounds, 'BOUNDS_REQUIRED');
     const boxes = input.map(footprint), left = Math.min(...boxes.map(b => b.x)), top = Math.min(...boxes.map(b => b.y));
     const right = Math.max(...boxes.map(b => b.x + b.width)), bottom = Math.max(...boxes.map(b => b.y + b.height));
-    const width = right - left + 32, height = bottom - top + 32;
-    const zoom = Math.min(1, options.bounds.width * state.viewport.zoom / width, options.bounds.height * state.viewport.zoom / height);
+    const width = right - left, height = bottom - top;
+    const safeWidth = options.bounds.width * viewport.zoom, safeHeight = options.bounds.height * viewport.zoom;
+    const zoom = Math.min(1, safeWidth / (width + 32), safeHeight / (height + 32));
     ensure(Number.isFinite(zoom) && zoom > 0, 'INVALID_VIEWPORT');
-    const safeX = (options.bounds.x - state.viewport.x) * state.viewport.zoom;
-    const safeY = (options.bounds.y - state.viewport.y) * state.viewport.zoom;
-    viewport = { ...viewport, x: left - 16 - safeX / zoom, y: top - 16 - safeY / zoom, zoom };
+    // Bounds arrive in the old camera's world space. Center the padded footprint
+    // in the same screen area under the new camera.
+    const safeCenterX = (options.bounds.x - viewport.x) * viewport.zoom + safeWidth / 2;
+    const safeCenterY = (options.bounds.y - viewport.y) * viewport.zoom + safeHeight / 2;
+    const x = left + width / 2 - safeCenterX / zoom;
+    const y = top + height / 2 - safeCenterY / zoom;
+    // A repeated fit can round differently after the screen bounds round-trip.
+    // Preserve an already fitted pose so that roundoff cannot create an undo step.
+    const alreadyFitted = viewport.zoom <= 1 && Math.abs(viewport.zoom - zoom) <= 4 * Number.EPSILON * zoom
+      && Math.abs(viewport.x - x) * zoom < 1e-7 && Math.abs(viewport.y - y) * zoom < 1e-7;
+    if (!alreadyFitted) viewport = { ...viewport, x, y, zoom };
   } else if (options.intent === 'view') {
     // Camera-only operations cannot reinterpret or repair legacy/manual geometry.
   } else if (organization.mode === 'fluid') {
