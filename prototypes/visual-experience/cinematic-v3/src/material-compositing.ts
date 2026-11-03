@@ -179,6 +179,9 @@ export class MaterialCompositor {
   private outside: Polygon = { points: new Float64Array(512), count: 0 };
   recomputations = 0;
   private view: SurfaceView = { scale: 1, originX: 0, originY: 0 };
+  get(id: string) {
+    return this.entries.get(id);
+  }
   update(
     surfaces: readonly CompositeSurface[],
     view: SurfaceView = { scale: 1, originX: 0, originY: 0 },

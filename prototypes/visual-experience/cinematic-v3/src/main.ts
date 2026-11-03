@@ -1262,10 +1262,9 @@ function renderDOM() {
   surfaceView = (
     application as (Application & { surfaceView?: () => SurfaceView }) | null
   )?.surfaceView?.() ?? { scale: 1, originX: 0, originY: 0 };
+  const workspaceVisible = workspaceSurfacesVisible();
   const projected = order.map((id) => {
-    const p = motion.pose(id),
-      rest = base(id),
-      block = presentationBlock(id);
+    const p = motion.pose(id), block = presentationBlock(id);
     const unfold = resourceUnfold(motion, id);
     return {
       id,
@@ -1274,7 +1273,7 @@ function renderDOM() {
       shape: block?.shape ?? defaultSurfaceShape(resources.get(id)?.type),
       rotation: (block?.rotation ?? 0) * (1 - unfold),
       presentationLayer: application?.directGesture(id)?.fromFocusedSide ? 2 :
-        expanded === id || resourceUnfold(motion, id) > 0.001 ? 1 : 0,
+        expanded === id || unfold > 0.001 ? 1 : 0,
       zIndex:
         expanded === id
           ? 200000
@@ -1302,10 +1301,10 @@ function renderDOM() {
         if (child !== presentation) presentation.append(child);
         child = next;
       }
-    const compositing = composite.find((entry) => entry.id === id)!;
+    const compositing = materialCompositor.get(id)!;
     if (el.dataset.materialCovered !== String(compositing.covered))
       el.dataset.materialCovered = String(compositing.covered);
-    const unfold = resourceUnfold(motion, id);
+    const unfold = p.unfold;
     const dock = resourceDock(motion, id);
     const heading = focusedRailHeadings.get(id);
     if (heading) {
@@ -1319,20 +1318,17 @@ function renderDOM() {
         heading.style.opacity = String(dock);
       }
     }
-    presentation.style.setProperty(
-      "--card-selection",
-      String(resourceSelection(motion, id)),
-    );
-    el.hidden =
+    const hidden =
       p.x + p.w < 0 ||
       p.y + p.h < 120 ||
       p.x > innerWidth ||
       p.y > innerHeight - 100;
+    if (el.hidden !== hidden) el.hidden = hidden;
     const visible =
       nativeActive &&
       !document.hidden &&
-      workspaceSurfacesVisible() &&
-      !el.hidden &&
+      workspaceVisible &&
+      !hidden &&
       !el.classList.contains("receded") &&
       p.opacity > 0.01;
     // A visible normal card is a working surface, including partial cards and
@@ -1344,6 +1340,12 @@ function renderDOM() {
       expanded === id ? "focused" : "workspace",
     );
     workingFootprints?.setVisible(id, visible);
+    // Keep the mounted editor and its view state while offscreen. Paint its
+    // latest pose on re-entry, without updating invisible CSS on each frame.
+    if (hidden || !workspaceVisible) continue;
+    const selection = String(resourceSelection(motion, id));
+    if (presentation.style.getPropertyValue("--card-selection") !== selection)
+      presentation.style.setProperty("--card-selection", selection);
     const body = visible ? workingFootprints?.read(id) : undefined;
     if (body)
       application?.setBlockFootprint(id, {
@@ -1386,7 +1388,7 @@ function renderDOM() {
         right: presence.x + presence.w,
         bottom: presence.y + presence.h,
       });
-    if (workspaceSurfacesVisible())
+    if (workspaceVisible)
       for (const entry of composite) {
         const node = elements.get(entry.id);
         if (

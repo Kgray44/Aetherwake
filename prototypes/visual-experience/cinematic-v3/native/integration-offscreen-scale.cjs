@@ -100,6 +100,24 @@ exports.verify = async ({
         card => card.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && card.getBoundingClientRect().width > 0
       ));
   })()`);
+  const settledWorkspace = async () => {
+    const until = performance.now() + 5500;
+    let previous, unchanged = 0;
+    while (performance.now() < until) {
+      const current = await js(`(() => {
+        const { poses } = window.__aerynth.snapshot();
+        const stage = document.querySelector('#stage');
+        return JSON.stringify([stage.style.transform, stage.style.opacity,
+          ...Object.values(poses).map(pose =>
+            Object.values(pose).map(value => Number(value).toFixed(3)))]);
+      })()`);
+      unchanged = current === previous ? unchanged + 1 : 0;
+      if (unchanged >= 3) return;
+      previous = current;
+      await pause(50);
+    }
+    throw Error("Offscreen workspace motion did not settle");
+  };
   try {
     if (profile) {
       devtools.attach("1.3");
@@ -143,6 +161,8 @@ exports.verify = async ({
       }
       await visibleWorkspace();
       await sample("working-workspace");
+      await settledWorkspace();
+      await sample("settled-return-workspace");
       const canonical = await snapshot();
       assert.deepEqual(canonical.resources, initial.resources);
       await js("window.__aerynth.setReduced(true)");
