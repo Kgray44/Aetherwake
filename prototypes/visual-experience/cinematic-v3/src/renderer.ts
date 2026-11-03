@@ -222,10 +222,14 @@ const ribbonFragment = /* glsl */ `
     body *= .88 + .12 * abs(vAcross);
     vec3 pearl = vec3(.74, .72, 1.);
     vec3 optical = mix(vec3(.35,.28,.55), vec3(.39,.48,.59), pow(1. - facing, 2.));
-    // A modest polished pearl coat, preserving the purple body and filtered
-    // soft lobes. Geometry, optical fit and semantic energy stay unchanged.
-    vec3 color = body + pearl * (spec * 1.02 + broad * .29 + silk * .17 + fresnel * .20 + rim * .24);
-    color += optical * fresnel * .13 + pearl * edge * diffuse * .045;
+    // Thin grazing folds retain a colored Fresnel edge. Gate the white lobes
+    // by face angle and the normal footprint, leaving the broad pearl lobe.
+    float resolved = 1. - smoothstep(.015, .20, normalVariance);
+    float face = smoothstep(.05, .34, facing);
+    float gloss = mix(.32, 1., resolved * face);
+    vec3 color = body + pearl * (broad * .29 + (spec * 1.02 + silk * .17 + rim * .24) * gloss);
+    color += mix(optical, pearl, face) * fresnel * .20;
+    color += optical * fresnel * .13 + pearl * edge * diffuse * .045 * gloss;
     color += uTint * uEnergy * (.035 + .045 * sin(vAlong * 2. - uTime * .5));
     color = mix(color, vec3(dot(color, vec3(.2126,.7152,.0722))) * .43, uUnavailable);
     gl_FragColor = vec4(color, 1.);
