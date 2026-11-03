@@ -2,6 +2,31 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Portable BT motion evidence
+
+The BT workspace journey retained 176 actual offscreen Electron paint
+captures. Every JPEG matched the source receipt byte count and SHA-256.
+The source receipt matched BT's candidate, tree and package manifest.
+Its SHA-256 is
+`4f083d5a14b951de7446256b67805447d9734deb2605db6e3684ebb8a8076bb2`.
+
+`Aerynth-BT-Constellation-journey.webp` in
+`review-package-motion-1793708611344` encodes those frames without
+interpolation. All 176 frames decoded. The captured span is 10.750
+seconds and playback is 11.350 seconds, including a 600 ms final hold.
+Its SHA-256 is
+`a686240c3464064856d7bd13cd27af4f123ca2af47567ab9d16025c70301d3f7`.
+The nine action marks and the frame audit remain beside the originals.
+
+Inspection sampled the initial glass workspace, fading project
+departure, Universe, arrival in Engineering and restored Development.
+The orbit remains visible through the journey, Vela moves to the
+upper right in Universe, and the original cards return to the same
+places. The recording uses the existing 20 fps capture ceiling and
+deliberate review holds. It provides visual continuity evidence for
+this journey. Physical presentation and native input timing remain
+outside this check. No new application window was opened for encoding.
+
 ## November 3 Portable BT physical display review preflight
 
 The owner-triggered display review is staged in
