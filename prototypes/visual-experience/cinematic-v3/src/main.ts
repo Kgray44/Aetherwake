@@ -1722,7 +1722,9 @@ function tick(now: number) {
       inputAt = 0;
     }
     metrics.policy = `${activeQuality} / ${motion.reduced ? "reduced" : quiet ? "quiet" : !ambient ? "ambient off" : idle ? "ambient idle" : "active"}`;
-    $("#policy").textContent = metrics.policy;
+    const policyLabel = $("#policy");
+    if (policyLabel.textContent !== metrics.policy)
+      policyLabel.textContent = metrics.policy;
     if (transitioning || policy.continuous || pointerDirty || wakeRequested) {
       if (
         !transitioning &&
