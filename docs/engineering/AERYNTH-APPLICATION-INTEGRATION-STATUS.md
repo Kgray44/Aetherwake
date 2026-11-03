@@ -2,6 +2,27 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Portable BT live Codex preflight
+
+BT's bundled desktop backend observed available authentication from
+the installed Codex App Server and prepared a disposable workspace
+with a single Codex conversation block. A fresh process recovered
+the exact workspace, resource, placement and unsent synthetic draft.
+The normal launcher in `review-live-codex-bt-1793708762556` opens the
+owner-review profile and leaves sending to the user.
+
+A separate hidden Electron process loaded BT's packaged application
+modules, renderer and bundled backend with a copy of the prepared
+profile. The actual composer Send reached the native Codex review
+handler with the exact synthetic prompt and zero shared resources.
+The real hidden-owner guard denied approval before a review window
+opened. The composer and SQLite retained the exact draft. Both
+profiles passed SQLite integrity checks with zero executions.
+The private preflight receipt SHA-256 is
+`801bd45d470b11735818434a11c0b5c2076c12108659feacba3900aad7980bac`.
+All test processes exited. Completion of the live turn still requires
+the owner to approve the normal native Send review.
+
 ## November 3 renderer build verification and Portable BT
 
 Commit `b5d67f6` makes the portable packager require a completed Vite
