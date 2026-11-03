@@ -187,6 +187,7 @@ import { WORKSPACE_PANELS } from "../../../application-contract/contracts.ts";
 type Hooks = {
   motion: MotionCoordinator;
   wake(): void;
+  workingBodyWidth(id: string): number | undefined;
   replace(s: DesktopSnapshot): void;
   status(s: string): void;
   layout(): void;
@@ -379,7 +380,7 @@ export function installApplication(hooks: Hooks) {
     {
       view: ReturnType<typeof mountTaskTrackerExperience>;
       version: number;
-      width: number;
+      width?: number;
     }
   >();
   const taskProjections = new Map<string, TaskObjectiveDocument | null>();
@@ -395,7 +396,7 @@ export function installApplication(hooks: Hooks) {
     {
       view: ReturnType<typeof mountChecklistExperience>;
       version: number;
-      width: number;
+      width?: number;
     }
   >();
   const agentBlockViews = new Map<
@@ -403,7 +404,7 @@ export function installApplication(hooks: Hooks) {
     {
       view: ReturnType<typeof mountAgentBlockExperience>;
       version: number;
-      width: number;
+      width?: number;
     }
   >();
   const agentProjections = new Map<string, AgentBlockProjection>();
@@ -412,7 +413,7 @@ export function installApplication(hooks: Hooks) {
     {
       view: ReturnType<typeof mountTimelineExperience>;
       version: number;
-      width: number;
+      width?: number;
     }
   >();
   const timelineProjections = new Map<string, NonNullable<Parameters<typeof blockIdentity>[0]["timeline"]>>();
@@ -3884,7 +3885,6 @@ export function installApplication(hooks: Hooks) {
             },
           ),
           version: r.version,
-          width: content.clientWidth,
         };
         taskTrackerViews.set(id, entry);
       } else if (entry && entry.version !== r.version) {
@@ -3923,7 +3923,6 @@ export function installApplication(hooks: Hooks) {
             },
           ),
           version: r.version,
-          width: content.clientWidth,
         };
         timelineViews.set(id, entry);
       } else if (entry && entry.version !== r.version) {
@@ -3958,7 +3957,6 @@ export function installApplication(hooks: Hooks) {
             },
           }),
           version: r.version,
-          width: content.clientWidth,
         };
         agentBlockViews.set(id, entry);
       } else if (entry && entry.version !== r.version) {
@@ -3985,7 +3983,6 @@ export function installApplication(hooks: Hooks) {
             },
           ),
           version: r.version,
-          width: content.clientWidth,
         };
         checklistViews.set(id, entry);
       } else if (entry && entry.version !== r.version) {
@@ -4578,6 +4575,27 @@ export function installApplication(hooks: Hooks) {
     timelineViews.get(id)?.view.setActive(active);
     taskTrackerViews.get(id)?.view.setActive(active);
   }
+  function frameBlockViews(
+    entries: ReadonlyMap<string, { width?: number; view: { reflow(): void; frame(): void } }>,
+  ) {
+    for (const [id, entry] of entries) {
+      if (!blockPresentations.get(id)?.visible) continue;
+      if (activeBlocks.get(id)) {
+        // The shared observer supplies the last measured content box without
+        // forcing layout after the coordinator paints card geometry.
+        const measured = hooks.workingBodyWidth(id);
+        if (measured !== undefined) {
+          const width = Math.round(measured);
+          if (width !== entry.width) {
+            entry.width = width;
+            entry.view.reflow();
+          }
+        }
+      }
+      // Retained previews still need to finish their exit motion.
+      entry.view.frame();
+    }
+  }
   return {
     frame(now: number, policy: Policy) {
       if (
@@ -4623,57 +4641,13 @@ export function installApplication(hooks: Hooks) {
       // The coordinator still advances their poses without repainting hidden DOM.
       for (const [id, view] of chatViews)
         if (blockPresentations.get(id)?.visible) view.frame();
-      for (const [id, entry] of timelineViews) {
-        if (!blockPresentations.get(id)?.visible) continue;
-        const width =
-          document.querySelector<HTMLElement>(
-            `[data-block="${id}"] .working-content`,
-          )?.clientWidth ?? 0;
-        if (width !== entry.width) {
-          entry.width = width;
-          entry.view.reflow();
-        }
-        entry.view.frame();
-      }
-      for (const [id, entry] of agentBlockViews) {
-        if (!blockPresentations.get(id)?.visible) continue;
-        const width =
-          document.querySelector<HTMLElement>(
-            `[data-block="${id}"] .working-content`,
-          )?.clientWidth ?? 0;
-        if (width !== entry.width) {
-          entry.width = width;
-          entry.view.reflow();
-        }
-        entry.view.frame();
-      }
+      frameBlockViews(timelineViews);
+      frameBlockViews(agentBlockViews);
       checklistCreator?.frame();
       taskCreator?.frame();
-      for (const [id, entry] of taskTrackerViews) {
-        if (!blockPresentations.get(id)?.visible) continue;
-        const width =
-          document.querySelector<HTMLElement>(
-            `[data-block="${id}"] .working-content`,
-          )?.clientWidth ?? 0;
-        if (width !== entry.width) {
-          entry.width = width;
-          entry.view.reflow();
-        }
-        entry.view.frame();
-      }
+      frameBlockViews(taskTrackerViews);
       directResources.frame();
-      for (const [id, entry] of checklistViews) {
-        if (!blockPresentations.get(id)?.visible) continue;
-        const width =
-          document.querySelector<HTMLElement>(
-            `[data-block="${id}"] .working-content`,
-          )?.clientWidth ?? 0;
-        if (width !== entry.width) {
-          entry.width = width;
-          entry.view.reflow();
-        }
-        entry.view.frame();
-      }
+      frameBlockViews(checklistViews);
       controlMotion.frame();
       velaExperience.frame(policy);
       velaManifestation.frame(policy);

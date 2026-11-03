@@ -30,6 +30,36 @@ and six backend resource-opening tests passed. The journey had zero
 provider executions. The running owner window and portable AH predate
 this correction.
 
+## November 3 working-card measurement
+
+The desktop presenter now reuses its shared ResizeObserver measurement
+for Timeline, Agent, Checklist and Task Tracker reflow. It stops reading
+each working body's width synchronously on every frame. Retained previews
+continue to finish their existing Motion Coordinator exit.
+
+A hidden comparison added one canonical Checklist to the standard
+50-card fixture and opened it before fitting. Direct Checklist width reads
+over each 1.2-second sample fell from 72 to zero while focused and from
+65 to zero after the fit settled. The fitted screenshots included all 51
+cards and Vela. Navigation, resize, reduced motion, graphics recovery and
+exact same-profile restart passed. The strict build and 401 desktop tests
+passed, as did the standard 10- and 25-card hidden checks.
+
+Hidden compositor paint P95 while fitting was 24.32 ms for 10 cards,
+51.27 ms for 25 and 54.19 ms for 51. Settled fit P95 was 19.30, 18.73
+and 21.97 ms, respectively. The instrumented baseline had 67.99 ms P95
+during the 51-card fit, while the updated working return was slower.
+The comparison establishes removal of repeated reads. Sustained timing
+and monitor presentation remain unqualified. The fitted capture showed
+clipped approach affordances on small cards. The evidence and corrective
+scope were handed to Universal Block System.
+
+Private initial baseline, updated initial and updated restart receipts
+have SHA-256 values
+`2bce1acaebba58272f408694ab6785c379deca6d07a6613cffa29c9439b2f60d`,
+`12af1999420ff5055d313fcf0a00602ae7c5229c78561f353f2ce0d35b361d2c`
+and `7183923f98f2b80b8816b8a0eac7b557eda506dae7aba05483900b5c562f1c32`.
+
 ## November 3 shared card projection and portable AH
 
 The DOM and WebGL now use the same projected card poses per frame. Glass

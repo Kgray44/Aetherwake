@@ -1874,6 +1874,7 @@ if (desktopMode)
   application = installApplication({
     motion,
     wake,
+    workingBodyWidth: (id) => workingFootprints?.read(id)?.width,
     replace: replaceWorkspace,
     status,
     layout: () => layout("application state"),
