@@ -2,6 +2,31 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 standalone media and Portable AZ
+
+Resources now imports files and saves web links from its Create menu.
+The existing native media service creates the canonical identity, and the
+resource opener displays it directly in the current view. Explicit
+attachment uses the original resource ID and the source format's default
+size. Link entry uses the shared contextual surface and Motion Coordinator.
+
+Portable AZ packages `560de70f4f936039e225544719a8389e7a058c05`.
+All 427 payload hashes matched. Manifest SHA-256 is
+`9c750af47b99213de3d30daf9116d75d127d167c4ffdb8faa73fb8b1b2d008ee`.
+Two hidden Electron processes used the packaged application and bundled
+backend. The test canceled the picker, imported and read a PDF in Universe,
+refused a file URL, and saved an HTTPS link. The successful imports created
+zero placements and did not launch a browser. The same PDF was then attached
+to two workspaces under distinct placement IDs. A fresh process restored
+both exact placements, the same two resource IDs, and the readable PDF.
+The picker results and input were synthetic. No provider calls occurred.
+
+Private profile `review-block-scale-0-1793700543537` contains the native
+capture and initial/restart receipts. Receipt SHA-256 values are
+`bb7f30eb861824699d99e28689421f6a52634542c6ae02324e473cccd9b931cc` and
+`69d20a3d0acddfdbb42eced256a416abcb6a66f3b2a53fb88974b69c3525c2cb`.
+Strict build and 405 desktop tests passed.
+
 ## November 3 local video playback and Portable AY
 
 Portable AY packages `31dd12deeb4b493bcdf6ddb4a81f6c1c216abcf3`.
