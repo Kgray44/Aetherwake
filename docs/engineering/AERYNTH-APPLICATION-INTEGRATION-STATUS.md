@@ -30,6 +30,47 @@ and six backend resource-opening tests passed. The journey had zero
 provider executions. The running owner window and portable AH predate
 this correction.
 
+## November 3 portable AK archive and fit verification
+
+The packaged AJ baseline reproduced a navigation defect when the last
+open workspace was archived from the project's sky view. The application
+opened the sibling workspace even though the project remained valid.
+`3ef6f3d` changes the canonical return workspace while retaining the
+project or Universe view. Archiving from inside a workspace keeps the
+existing fallback navigation behavior. A regression exercises both
+Constellation scopes, prunes archived history and rejects stale workspace
+navigation.
+
+In a fresh packaged AK profile, actual Environments controls created a
+workspace whose node appeared alongside its sibling. Archiving it
+removed the node without leaving the project. The node remained absent
+after a fresh process restarted in the same view. Restoration made the
+same workspace selectable again and returned the exact saved note,
+placement geometry, camera and Vela placement. The two hidden receipts
+are in `review-package-archive-1793692911984`. The packaged smoke passed
+22 initial and five restart commands. Strict builds, 247 backend tests
+and 401 desktop tests passed.
+
+Universal Block System's `f6749c9` is integrated as `f3cb79d`. It uses
+existing measured footprints to select compact controls. Three AK runs
+used fresh copies of the exact 50-card seed used by the earlier AI/AJ
+comparison. AK measured 171–189 fit style recalculations and 421–436 ms
+of style work, down from AJ's 769–819 and 629–642 ms. All three settled
+to zero style recalculations and passed 500 Open and Approach hit samples
+each. Fit offscreen paint P95 ranged from 86.46 to 91.64 ms. The earlier
+AI interval ranged from 75.68 to 91.68 ms. These are short hidden samples.
+Physical presentation and sustained performance remain unqualified.
+Private fit receipts and screenshots are in `fit-correction-1793692949096`.
+
+Portable AK freezes `3ef6f3d26a962ed9a687267b841fb404fc041831`.
+Independent checks matched all 382 payload files, including 250 exact
+Git blobs, to the package manifest and bound the hidden receipts to the
+same package. The archive/restore database passed SQLite quick check and
+recorded zero provider executions. Manifest SHA-256 is
+`84b3781df328dd580518bdb9dbbdc0ecff4cb13e0b229123ab798173214b534d`.
+The owner window stayed open. The normal foreground launcher, live
+Codex and owner acceptance were outside these checks.
+
 ## November 3 packaged motion and fit comparison
 
 The same synthetic 50-card SQLite seed was copied into six fresh profiles.
