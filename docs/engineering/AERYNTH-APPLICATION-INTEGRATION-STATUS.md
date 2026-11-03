@@ -2,6 +2,36 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 shared card projection and portable AH
+
+The DOM and WebGL now use the same projected card poses per frame. Glass
+slab rebuilds sample the three distinct contours once each rather than
+sampling all six rings independently. A comparison of the old and new
+renderer methods across 900 geometry cases found identical Float32
+vertices and normals. Universal Block System's release `76bfcdc` is
+integrated as `4d59497`. Its hidden Chromium comparison measured 600
+live style mutations where the previous writer performed 2,400 and
+matched declaration values, geometry, hit areas, editor identity, draft
+and selection across the exercised cases.
+
+The 50-card fit and SQLite restart passed in hidden Electron. The baseline
+and combined build each had a 1.2-second fit sample. Scripting fell from
+351 ms to 318 ms, while style work remained around 0.47 seconds and
+compositor paint P95 moved from 52.25 ms to 65.62 ms. The settled fit had
+19.18 ms paint P95 and zero style recalculations. Restart paint P95 was
+18.31 ms. The samples establish fewer repeated operations and exact
+restoration. A faster fit and physical display timing remain unverified.
+
+Portable AH packages `4d59497`. All 382 declared payload files matched
+their hashes in an independent audit. The packaged renderer assets match
+both hidden Electron receipts. The bundled backend passed 22 initial and
+five restart commands on its own synthetic SQLite profile, with zero
+provider executions. The package manifest SHA-256 is
+`51fcbd1b6d28e58775497337b68e6083a3dfba055bc7f52674a4bc7a3ca91568`.
+The strict build, 400 desktop tests and 19 packaging and focused block
+tests passed. AG remains open on the owner's profile. Live Codex and
+packaged visible acceptance remain outstanding.
+
 ## November 3 Vela resource search
 
 Vela can run a model-selected search across authorized Aerynth resource
