@@ -636,6 +636,8 @@ export function installApplication(hooks: Hooks) {
   type Activity = Partial<StreamEvent> & { type: string };
   const localEvents: StreamEvent[] = [];
   const eventViews = new Map<string, ReturnType<typeof mountEventExperience>>();
+  let streamBlockIds: string[] = [];
+  let streamRefreshPending = false;
   let retainedEarliest: number | null = null,
     retainedLatest = 0,
     eventDisconnected = false;
@@ -1067,6 +1069,15 @@ export function installApplication(hooks: Hooks) {
     )
       cancelPreview();
     state = next;
+    const streamResources = new Set(
+      next.resources.filter((resource) =>
+        resource.kind === "stream" && resource.available !== false && resource.visible !== false,
+      ).map((resource) => resource.id),
+    );
+    streamBlockIds = next.blocks
+      .filter((block) => block.resource_id && streamResources.has(block.resource_id))
+      .map((block) => block.id);
+    scheduleStreamRefresh();
     const taskStamp = JSON.stringify(
       next.resources.map((resource) => [
         resource.id,
@@ -4327,8 +4338,7 @@ export function installApplication(hooks: Hooks) {
             },
           ),
         );
-      } else eventViews.get(id)?.update();
-      updateStreamSummaries();
+      }
     } else {
       el(".synthetic", article).textContent =
         r.kind === "task"
@@ -4455,8 +4465,17 @@ export function installApplication(hooks: Hooks) {
         )?.project_id ?? null,
     };
   }
-  function updateStreamSummaries() {
-    if (document.hidden || !document.hasFocus()) return;
+  function scheduleStreamRefresh() {
+    if (streamRefreshPending || (!streamView && !streamBlockIds.length)) return;
+    streamRefreshPending = true;
+    hooks.wake();
+  }
+  function paintStreamRefresh() {
+    if (!streamRefreshPending) return;
+    streamRefreshPending = false;
+    streamView?.update();
+    for (const view of eventViews.values()) view.update();
+    if (!streamBlockIds.length) return;
     const events = filterRecordedEvents(eventWindow(), {
       scope: "all",
       classification: "",
@@ -4465,24 +4484,17 @@ export function installApplication(hooks: Hooks) {
       executionId: "",
       query: "",
     });
-    for (const block of state?.blocks ?? [])
-      if (
-        state!.resources.find((resource) => resource.id === block.resource_id)
-          ?.kind === "stream"
-      ) {
-        const article = document.querySelector<HTMLElement>(
-          `[data-block="${block.id}"]`,
-        );
-        if (article && blockPresentations.get(block.id)?.visible !== false) {
-          el(".folio-preview", article).textContent =
-            events
-              .slice(0, 3)
-              .map((event) => event.classification + " · " + event.type)
-              .join(" · ") ||
-            "No accessible captured events in this retained window.";
-          refreshBlockIdentity(article, block.id);
-        }
-      }
+    const summary = events.slice(0, 3)
+      .map((event) => event.classification + " · " + event.type).join(" · ") ||
+      "No accessible captured events in this retained window.";
+    for (const id of streamBlockIds) {
+      const article = document.querySelector<HTMLElement>(`[data-block="${id}"]`);
+      if (!article || blockPresentations.get(id)?.visible === false) continue;
+      const preview = el(".folio-preview", article);
+      if (preview.textContent === summary) continue;
+      preview.textContent = summary;
+      refreshBlockIdentity(article, id);
+    }
   }
   function rememberEvent(e: Activity) {
     if (
@@ -4496,8 +4508,8 @@ export function installApplication(hooks: Hooks) {
         e.classification ?? "",
       )
     )
-      return;
-    if (seenEvents.has(e.eventId)) return;
+      return false;
+    if (seenEvents.has(e.eventId)) return false;
     seenEvents.add(e.eventId);
     if (e.type.toLocaleLowerCase().includes("collection")) {
       subjectDataEpoch++;
@@ -4510,6 +4522,7 @@ export function installApplication(hooks: Hooks) {
       const expired = localEvents.shift();
       if (expired) seenEvents.delete(expired.eventId);
     }
+    return true;
   }
   async function refreshEvents() {
     const replay = await readRecentEvents(
@@ -4522,9 +4535,7 @@ export function installApplication(hooks: Hooks) {
     retainedLatest = replay.latest;
     eventDisconnected = false;
     for (const event of [...replay.events, ...newer]) rememberEvent(event);
-    streamView?.update();
-    updateStreamSummaries();
-    for (const view of eventViews.values()) view.update();
+    scheduleStreamRefresh();
   }
   function showStream(restoring = false) {
     const content = document.createElement("div");
@@ -4618,10 +4629,7 @@ export function installApplication(hooks: Hooks) {
       )
     )
       refreshTaskProjections();
-    rememberEvent(e);
-    streamView?.update();
-    updateStreamSummaries();
-    for (const view of eventViews.values()) view.update();
+    if (rememberEvent(e)) scheduleStreamRefresh();
     if (e.type === "provider/connection") {
       void connectionsView?.refresh();
       void conversationManager?.refresh().catch(report);
@@ -4630,9 +4638,7 @@ export function installApplication(hooks: Hooks) {
     }
     if (e.type === "backend/disconnected") {
       eventDisconnected = true;
-      streamView?.update();
-      updateStreamSummaries();
-      for (const view of eventViews.values()) view.update();
+      scheduleStreamRefresh();
       hooks.status(
         "Backend disconnected. Current surfaces are retained; restart to recover persisted data. Execution outcomes may be unknown.",
       );
@@ -4892,6 +4898,7 @@ export function installApplication(hooks: Hooks) {
   }
   return {
     frame(now: number, policy: Policy) {
+      paintStreamRefresh();
       if (
         approachFocus &&
         (now > approachFocus.deadline ||
@@ -5188,6 +5195,8 @@ export function installApplication(hooks: Hooks) {
       )
         return;
       blockPresentations.set(id, { visible, usable, presentation });
+      if (visible && !previous?.visible && streamBlockIds.includes(id))
+        scheduleStreamRefresh();
       const article = document.querySelector<HTMLElement>(
         `[data-block="${id}"]`,
       );
