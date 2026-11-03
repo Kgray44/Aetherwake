@@ -1,6 +1,48 @@
 # Aerynth integration status
 
-Snapshot: 2026-11-02 UTC. Integration remains active; full product acceptance is incomplete.
+Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
+
+## November 3 working desktop and Codex approval
+
+At `dd1a2ea`, three hidden Electron processes exercised objective steps 1–20
+through the current application UI, real native host and SQLite. They created
+A World for Two and Development, added and manipulated Conversation, Note and
+Task blocks, removed and reattached the same Note, switched workspaces, travelled
+to another project through Constellation and returned. Restart preserved both
+projects' exact resource identities, placements, geometry, camera, Vela
+placement and note content. The run also reversed an in-progress Block Library
+close on an immediate second Add click. The separate 50-block fit centered the
+rendered union of all 50 cards and Vela at approximately (800, 510) in the
+1600 × 1000 viewport, and the exact workspace state survived a separate restart.
+
+Portable candidate AG at `8d05f28` is open on the owner's existing profile.
+Its manifest SHA-256 is
+`c639a59ccfde8182ef5d192d62c7bc0c203685fb3012ae64ae225fd40fcfe414`.
+It adds animated Resource categories and a distinct animated pinned state.
+The hidden desktop verified category collapse and reopen, exact pinned panel
+dimensions after restart, and both the standalone Resources and Intelligence
+Stream actions. The live profile reported a renewable ChatGPT session as
+ready after restart. The installed Codex App Server reported available
+authentication and accepted Vela's typed workspace and weather capabilities
+into the exact planning preview. No model turn was needed for that preview.
+The weather adapter returned a real National Weather Service forecast for a
+public test point. The Windows device location path still needs an owner check.
+
+At `6550483`, Codex conversation sends use the existing native review window
+with scrollable, exact outgoing text and fixed decision controls. The native
+broker checks the request, resource, provider, version, fingerprint and owner
+before dispatch. A hidden Electron trial created the canonical Codex block
+through the Block Library using the installed provider's authenticated
+availability. The real broker reached review with the exact draft and denied
+the send because the parent was hidden. A separate hidden capture verified
+that the final line and decision controls fit at 150% zoom. Restart restored
+the unsent draft and placement, with zero executions in both processes.
+The initial and restart receipt SHA-256 values are
+`8be22b1a88b3b810609d021b0eab2de5f799893ea869cb5ce9c063876867ffc7` and
+`f4e76c59e3e063d27e93577caa2532c00cdc2cf91c616be3e42d4beb67478246`.
+The app suite passed 400 checks and the packaging suite passed 15. Objective
+step 21 still needs a current real turn through the owner-approved Codex
+conversation. The offscreen captures do not measure physical display presentation.
 
 ## November 3 workspace scale checkpoint
 
