@@ -2,6 +2,35 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 local video playback and Portable AY
+
+Portable AY packages `31dd12deeb4b493bcdf6ddb4a81f6c1c216abcf3`.
+All 427 payload hashes matched. Manifest SHA-256 is
+`4003e51af8877698dc81f8023c0967e930e23959256eef9d35b388e59c6b4e60`.
+The existing video block opens a local player after a user gesture.
+Electron serves an opaque window-scoped URL in ranges of up to 256 KiB
+per backend read. Each read revalidates the canonical resource version,
+access, and selected file revision. Closing the viewer releases the URL
+and cancels its streams. Local video has no autoplay. YouTube still opens
+externally.
+
+The packaged desktop imported an eight-second synthetic VP9 WebM through
+a test picker, decoded and played it, and sought to 6.5 seconds. A fresh
+process restored the exact placement, reopened the video from Resources,
+and repeated playback and seeking. The initial run requested a nonzero
+byte range. The restart run verified that closing the reader invalidated
+the URL. No provider requests or external player launches occurred.
+Private profile `review-block-scale-0-1793700056331` holds the capture and
+initial/restart receipts with SHA-256 values
+`cd203988623595d0f18e2ccd16e2ecdfd7c844e534d1ca528bd87b8cb8edd691` and
+`1432bae79c713cc1d034eaa8bef1930b402f598ff28647205047341ddc93aaa6`.
+
+The same package passed PDF/DOCX import, YouTube external routing, and
+PDF reopen/second-page rendering after restart in private profile
+`review-block-scale-0-1793700067558`. Strict builds, 405 desktop, 254
+backend, and 15 packaging tests passed. Other video codecs and physical
+display or audio quality remain unqualified.
+
 ## November 3 native media import and Portable AX
 
 The desktop now uses the Universal Block System media readers from
