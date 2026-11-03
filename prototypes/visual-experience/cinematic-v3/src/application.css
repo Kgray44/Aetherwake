@@ -39,7 +39,8 @@
   box-shadow: none;
   background: transparent;
 }
-.application-direct-resource .aw-media-title {
+.application-direct-resource .aw-media-title,
+.working-content.aw-media .aw-media-heading {
   display: none;
 }
 /* PDF text is painted on the canvas. The selectable text above it must stay invisible. */

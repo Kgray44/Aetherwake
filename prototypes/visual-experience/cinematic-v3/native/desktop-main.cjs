@@ -3,12 +3,17 @@ const {
   BrowserWindow,
   ipcMain,
   session,
+  protocol,
   dialog,
   nativeTheme,
   shell,
   safeStorage,
   clipboard,
 } = require("electron");
+const { createMediaPlayback, scheme: mediaScheme } = require("./media-playback.cjs");
+protocol.registerSchemesAsPrivileged([
+  { scheme: mediaScheme, privileges: { standard: true, secure: true, stream: true } },
+]);
 const { spawn, execFile, execFileSync } = require("node:child_process");
 const { createStorageAdmission } = require("./storage-admission.cjs");
 const { createInterface } = require("node:readline");
@@ -325,10 +330,6 @@ app.whenReady().then(async () => {
     (_wc, _permission, callback) => callback(false),
   );
   session.defaultSession.setPermissionCheckHandler(() => false);
-  session.defaultSession.webRequest.onBeforeRequest(
-    { urls: ["http://*/*", "https://*/*", "ws://*/*", "wss://*/*"] },
-    (_d, callback) => callback({ cancel: true }),
-  );
   win = new BrowserWindow({
     width: 1600,
     height: 1000,
@@ -354,7 +355,20 @@ app.whenReady().then(async () => {
         : [],
     },
   });
-  const mediaCommand = require("./media-broker.cjs").createMediaBroker({ win, dialog, shell, call });
+  const owner = win.webContents;
+  const mediaOwnerAlive = () => !owner.isDestroyed() && owner.getURL() === localURL;
+  const playback = createMediaPlayback({ call, ownerAlive: mediaOwnerAlive });
+  session.defaultSession.protocol.handle(mediaScheme, playback.handle);
+  session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
+    const external = /^(https?|wss?):/i.test(details.url);
+    const foreignMedia = details.url.startsWith(`${mediaScheme}:`) &&
+      (!mediaOwnerAlive() || details.webContentsId !== owner.id || details.resourceType !== "media");
+    callback({ cancel: external || foreignMedia });
+  });
+  owner.on("render-process-gone", playback.clear);
+  owner.on("destroyed", playback.clear);
+  owner.on("did-start-loading", playback.clear);
+  const mediaCommand = require("./media-broker.cjs").createMediaBroker({ win, dialog, shell, call, playback });
   const startupErrors = [];
   if (verify) win.on("page-title-updated", (event) => event.preventDefault());
   const velaRequestDiagnostics = [];
@@ -433,7 +447,7 @@ app.whenReady().then(async () => {
           "firstPartyChat",
         ].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
-        !(command === "media" && ["describe", "readBytes"].includes(input?.name)) &&
+        !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && isVelaRead(input)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&

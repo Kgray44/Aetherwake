@@ -90,7 +90,7 @@ export function mediaCapabilities(source: MediaSource) {
   const max = m.source === 'file' ? previewFormats[m.format] : undefined;
   return {
     read: m.source === 'file' && max !== undefined && m.byteLength <= max,
-    play: false,
+    play: m.source === 'file' && m.format === 'video' && m.byteLength > 0,
     embed: false,
     openExternal: m.source === 'link' || !!(source.path && playableExtensions[m.format]?.includes(extname(source.path).toLowerCase())),
   };
@@ -118,9 +118,10 @@ async function withCurrentFile<T>(source: MediaSource, inspect: (file: Awaited<R
   }
 }
 
-export async function readMediaChunk(source: MediaSource, input: MediaReadRequest & { offset: number; length: number }): Promise<string> {
+export async function readMediaChunk(source: MediaSource, input: MediaReadRequest & { offset: number; length: number; playback?: true }): Promise<string> {
   const m = source.metadata;
-  ensure(m.source === 'file' && mediaCapabilities(source).read, 'unsupported_media_read');
+  const capabilities = mediaCapabilities(source);
+  ensure(m.source === 'file' && (input.playback === true ? capabilities.play : capabilities.read), 'unsupported_media_read');
   ensure(Number.isSafeInteger(input.offset) && input.offset >= 0 &&
     Number.isSafeInteger(input.length) && input.length > 0 && input.length <= MEDIA_LIMITS.chunkBytes &&
     input.offset <= m.byteLength - input.length, 'invalid_media_range');

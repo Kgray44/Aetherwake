@@ -5,7 +5,7 @@ const fileFilters = [
   { name: "All files", extensions: ["*"] },
 ];
 
-exports.createMediaBroker = ({ win, dialog, shell, call }) => {
+exports.createMediaBroker = ({ win, dialog, shell, call, playback }) => {
   let choosing = false;
   const ownerAlive = () => !win.isDestroyed() && !win.webContents.isDestroyed();
   return async (request) => {
@@ -46,6 +46,13 @@ exports.createMediaBroker = ({ win, dialog, shell, call }) => {
         if (Object.keys(input).length !== 1 || typeof input.resourceId !== "string")
           throw Error("invalid_media_request");
         return call("mediaDescribe", { resourceId: input.resourceId });
+      case "acquirePlayback":
+        return playback.acquire(input);
+      case "releasePlayback":
+        if (Object.keys(input).length !== 1 || typeof input.leaseId !== "string")
+          throw Error("invalid_media_request");
+        playback.release(input.leaseId);
+        return null;
       case "readBytes": {
         const { resourceId, expectedVersion, sourceRevision, offset, length } = input;
         if (Object.keys(input).length !== 5 || typeof resourceId !== "string" ||

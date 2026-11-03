@@ -76,7 +76,7 @@ contextBridge.exposeInMainWorld(
           navigator.userActivation?.isActive !== true)
         throw new Error("turn_recovery_user_gesture_required");
       if (name === "media" &&
-          ["chooseMediaForAdd", "openExternal"].includes(input?.name) &&
+          ["chooseMediaForAdd", "openExternal", "acquirePlayback"].includes(input?.name) &&
           navigator.userActivation?.isActive !== true)
         throw new Error("media_user_gesture_required");
       const reply = await ipcRenderer.invoke(

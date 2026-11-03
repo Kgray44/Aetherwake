@@ -158,7 +158,7 @@ export interface CommandMap {
     output: { resource: import('../../application-contract/contracts.ts').Resource; placementId?: string; desktop: DesktopSnapshot };
   };
   mediaDescribe: { input: { resourceId: string }; output: { metadata: MediaMetadata; capabilities: MediaCapabilities } };
-  mediaReadChunk: { input: MediaReadRequest & { offset: number; length: number }; output: { base64: string } };
+  mediaReadChunk: { input: MediaReadRequest & { offset: number; length: number; playback?: true }; output: { base64: string } };
   /** Private desktop-host command. The native shell consumes the target. */
   mediaExternalTarget: { input: { resourceId: string; expectedVersion: number }; output: MediaSelection };
   providerConnection:{input:ProviderConnectionRequest;output:ProviderConnectionStatus};

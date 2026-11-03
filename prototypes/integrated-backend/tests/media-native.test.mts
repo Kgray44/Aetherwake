@@ -44,6 +44,17 @@ test('selected local media attaches and reopens with safe metadata, range and re
     if (opened.status === 'ready') assert.deepEqual(opened.resource.media, imported.resource.media);
     const bytes = await core.command('mediaReadChunk', request);
     assert.equal(Buffer.from(bytes.base64, 'base64').toString(), 'media');
+    await assert.rejects(core.command('mediaReadChunk', { ...request, playback:true }), /unsupported_media_read/);
+    const videoPath = join(directory, 'synthetic.webm');
+    const videoHeader = Buffer.from([0x1a, 0x45, 0xdf, 0xa3, ...Buffer.from('webm')]);
+    writeFileSync(videoPath, videoHeader);
+    const video = await core.command('mediaImportTrusted', { kind:'file', variant:'video', commandId:'synthetic-video', selection:{kind:'file', path:videoPath} });
+    assert.deepEqual((await core.command('mediaDescribe', {resourceId:video.resource.id})).capabilities, {read:false, play:true, embed:false, openExternal:true});
+    const videoRead = {resourceId:video.resource.id, expectedVersion:video.resource.version, sourceRevision:video.resource.media!.sourceRevision, offset:4, length:4};
+    await assert.rejects(core.command('mediaReadChunk', videoRead), /unsupported_media_read/);
+    assert.equal(Buffer.from((await core.command('mediaReadChunk', { ...videoRead, playback:true })).base64, 'base64').toString(), 'webm');
+    writeFileSync(videoPath, 'changed');
+    await assert.rejects(core.command('mediaReadChunk', { ...videoRead, playback:true }), /source_changed/);
     await assert.rejects(core.command('mediaReadChunk', { ...request, expectedVersion:request.expectedVersion + 1 }), /source_changed/);
     await assert.rejects(core.command('mediaReadChunk', { ...request, length:1_048_577 }), /invalid_media_range/);
     await assert.rejects(core.command('mediaReadChunk', { ...request, offset:100 }), /invalid_media_range/);
