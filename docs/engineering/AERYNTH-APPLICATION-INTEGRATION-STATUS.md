@@ -2,6 +2,39 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 Fluid insertion and Portable AV
+
+The integrated Universal Block System release `adcb1d7` (source
+`cb9e8830`) preserves existing Fluid placements when a new block needs
+pannable overflow. The reproduced AT journey had moved the Chat from
+(32,-65) to (32,304) while adding the Task. The engine release leaves the
+Chat, Note, Vela, and camera unchanged in the insertion transaction.
+
+The first combined check then exposed a separate presenter issue.
+Centering the new Task panned the previously visible Note outside the
+window. `be689bb` uses the existing Frame all camera command when a
+Library addition needs overflow and all existing cards still fit in the
+current safe bounds. It keeps existing world geometry. A Library addition
+that already fits leaves the current camera alone.
+
+Portable AV packages `be689bbbd13e38b146bcc8e99e2a7ebe932b3e03`.
+Its 384 files passed hash verification. The manifest SHA-256 is
+`37bbfabdedf75e28a1b3d84bfad489e0325db4a952da05bf9243a4ac188365d9`.
+The controlled hidden desktop reproduction kept both original placements
+and their versions exact, shifted the camera at zoom 1, and showed all
+three cards. The Chat composer rendered fully within y=705–791 in the
+1602×1002 viewport. Constellation travel and a separate fresh process
+restored the exact layout, camera, resources and notes. The SQLite
+integrity check passed with zero provider executions. The six captures
+and receipts are in `review-package-journey-1793698011849`.
+Engine, backend and desktop suites passed 90, 252 and 403 tests.
+
+A separate hidden AT check confirmed that the explicit Frame all command
+reveals a previously clipped Chat without changing the canonical blocks,
+resources or Vela placement. The original affected profile and the open
+owner window were preserved. Live Codex and monitor presentation remain
+pending.
+
 ## November 3 Portable AT workspace and Constellation journey
 
 The Resources panel now passes the current canvas bounds to the existing
