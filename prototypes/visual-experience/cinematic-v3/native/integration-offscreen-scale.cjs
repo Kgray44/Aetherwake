@@ -150,6 +150,7 @@ exports.verify = async ({
       await sample("fitted-workspace");
       if (process.argv.includes("--offscreen-capture-fit")) {
         await settledWorkspace();
+        await sample("settled-fitted-workspace");
         receipt.fittedBounds = await js(`(() => {
           const cards = [...document.querySelectorAll('#stage [data-block]'), document.querySelector('#vela')];
           const rects = cards.filter(node => node && !node.hidden).map(node => node.getBoundingClientRect());

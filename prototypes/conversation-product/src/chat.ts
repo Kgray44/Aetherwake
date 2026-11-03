@@ -55,6 +55,8 @@ export interface ConversationChatOptions {
   presentation?: ConversationChatPresentation;
   /** Externally sized ancestor (for example the canonical folio), never an auto-sized chat/content node. */
   layoutHost?: HTMLElement;
+  /** Retained previews can defer editor layout until their host is usable again. */
+  layoutActive?: () => boolean;
   /** Externally supplied sessions remain owned by the caller. */
   draftSession?: ConversationDraftSession; initialDraft?: string; initialScroll?: number; initialOffset?: number;
   viewPersistence?:ConversationViewPersistence;initialView?:ConversationView;initialAroundMessageId?:string;
@@ -219,10 +221,12 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   };
   const markViewIntent=(messageId?:string)=>{if(tracksView){viewIntent++;viewWanted=true;pendingAnchor=null;preferredViewAnchor=messageId;persistenceIntent=options.viewPersistence?.beginIntent(resourceId);}};
   let measuredHeight=layoutHost?.clientHeight??0,measuredWidth=layoutHost?.clientWidth??0,availableHeight=measuredHeight,layoutHidden=!!layoutHost&&measuredHeight===0;
-  let measureKey='',naturalHeight=0,resizeFrame:number|undefined,resizeTimer:ReturnType<typeof setTimeout>|undefined;
+  let measureKey='',naturalHeight=0,layoutDeferred=false,resizeFrame:number|undefined,resizeTimer:ReturnType<typeof setTimeout>|undefined;
   const cancelResize=()=>{if(resizeFrame!==undefined){if(typeof cancelAnimationFrame==='function')cancelAnimationFrame(resizeFrame);resizeFrame=undefined;}if(resizeTimer!==undefined){clearTimeout(resizeTimer);resizeTimer=undefined;}};
   const resize = () => {
     if(disposed||layoutHidden)return;
+    if(options.layoutActive?.()===false){layoutDeferred=true;return;}
+    layoutDeferred=false;
     // Bounds belong to the external host. Reading our auto-sized root here creates a feedback edge.
     let height=measuredHeight;const manager=layoutHost?.matches('.cp-manager');
     if(layoutHost&&height>0){const host=layoutHost.getBoundingClientRect(),slot=container.getBoundingClientRect(),scale=host.height/(layoutHost.offsetHeight||layoutHost.clientHeight||height);if(Number.isFinite(scale)&&scale>0)height=Math.max(0,height-Math.max(0,(slot.top-host.top)/scale));}
@@ -241,7 +245,16 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
     const next=Math.floor(Math.min(maximum,Math.max(minimum,naturalHeight)))+'px';if(textarea.style.height!==next)textarea.style.height=next;
     renderFeedback();
   };
-  const scheduleResize=()=>{if(disposed||layoutHidden||resizeFrame!==undefined||resizeTimer!==undefined)return;const reconcile=()=>{resizeFrame=undefined;resizeTimer=undefined;resize();drainPendingFollow();drainAnchor();};if(typeof requestAnimationFrame==='function')resizeFrame=requestAnimationFrame(reconcile);else resizeTimer=setTimeout(reconcile,0);};
+  const scheduleResize=()=>{
+    if(disposed||layoutHidden||resizeFrame!==undefined||resizeTimer!==undefined)return;
+    if(options.layoutActive?.()===false){layoutDeferred=true;return;}
+    const reconcile=()=>{
+      resizeFrame=undefined;resizeTimer=undefined;
+      resize();
+      if(!layoutDeferred){drainPendingFollow();drainAnchor();}
+    };
+    if(typeof requestAnimationFrame==='function')resizeFrame=requestAnimationFrame(reconcile);else resizeTimer=setTimeout(reconcile,0);
+  };
   let observedHost=false;
   const resizeObserver=!layoutHost||typeof ResizeObserver==='undefined'?undefined:new ResizeObserver(entries=>{
     const entry=entries.find(value=>value.target===layoutHost);if(disposed||!entry)return;
@@ -540,12 +553,22 @@ export function mountConversationChat(container: HTMLElement, options: Conversat
   // The send RPC can remain pending through the entire native provider turn. Draft durability
   // must be independent so a pane can close and the host can offer interruption on quit.
   const flush=async()=>{await session.flush();viewState();try{await options.viewPersistence?.flush(resourceId);}catch{report('View position could not be saved. Your draft remains saved.');}};
-  const frame=()=>{if(disposed)return;providerPicker?.frame();modelPicker?.frame();thinkingPicker?.frame();disclosures?.frame();controlStates?.frame();reconcileFeedback();let settled=true;if(options.motion){const p=options.motion.pose(feedbackKey),bar=options.motion.pose(feedbackBarKey),height=Math.max(0,p.h)+'px',barHeight=Math.max(0,bar.h)+'px';if(feedbackBody.style.height!==height)feedbackBody.style.height=height;if(feedbackBody.style.opacity!==String(p.opacity))feedbackBody.style.opacity=String(p.opacity);if(feedback.style.height!==barHeight)feedback.style.height=barHeight;if(feedback.style.opacity!==String(bar.opacity))feedback.style.opacity=String(bar.opacity);if(!feedbackOpen&&p.opacity<.001)feedbackBody.hidden=true;settled=Math.abs(p.h-feedbackHeight)<1&&p.opacity>.995;}
+  const frame=()=>{
+    if(disposed||options.layoutActive?.()===false)return;
+    if(layoutDeferred)scheduleResize();
+    providerPicker?.frame();modelPicker?.frame();thinkingPicker?.frame();disclosures?.frame();controlStates?.frame();reconcileFeedback();let settled=true;if(options.motion){const p=options.motion.pose(feedbackKey),bar=options.motion.pose(feedbackBarKey),height=Math.max(0,p.h)+'px',barHeight=Math.max(0,bar.h)+'px';if(feedbackBody.style.height!==height)feedbackBody.style.height=height;if(feedbackBody.style.opacity!==String(p.opacity))feedbackBody.style.opacity=String(p.opacity);if(feedback.style.height!==barHeight)feedback.style.height=barHeight;if(feedback.style.opacity!==String(bar.opacity))feedback.style.opacity=String(bar.opacity);if(!feedbackOpen&&p.opacity<.001)feedbackBody.hidden=true;settled=Math.abs(p.h-feedbackHeight)<1&&p.opacity>.995;}
     drainAnchor();
     if(inspectionFollow&&feedbackOpen&&messages.clientHeight>0){const box=messages.getBoundingClientRect(),body=feedbackBody.getBoundingClientRect(),scale=box.height/(messages.offsetHeight||messages.clientHeight);if(Number.isFinite(scale)&&scale>0&&body.height>0){const next=Math.max(0,Math.min(messages.scrollHeight-messages.clientHeight,messages.scrollTop+(body.top-box.top)/scale));setScroll(next);if(settled)inspectionFollow=false;}}
     if(liveFollow&&!feedbackOpen&&!stream.hidden&&messages.clientHeight>0){const next=Math.max(0,messages.scrollHeight-messages.clientHeight);setScroll(next);liveFollow=false;}
   };
-  return {ready,refresh,focusComposer:()=>textarea.focus(),frame,setPresentation(mode){if(mode!=='workspace'&&mode!=='focused')throw new Error('invalid_chat_presentation');if(disposed)return;const scroll=messages.scrollTop;presentation=mode;resize();setScroll(scroll);drainPendingFollow();drainAnchor();},flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
+  return {ready,refresh,focusComposer:()=>textarea.focus(),frame,setPresentation(mode){
+    if(mode!=='workspace'&&mode!=='focused')throw new Error('invalid_chat_presentation');
+    if(disposed)return;
+    presentation=mode;
+    if(options.layoutActive?.()===false){layoutDeferred=true;return;}
+    const scroll=messages.scrollTop;
+    resize();setScroll(scroll);drainPendingFollow();drainAnchor();
+  },flush,whenSubmissionSettled:()=>sendTask??Promise.resolve(),async dispose(){
     if(disposed)return;await flush();disposed=true;generation++;pendingFollow=pendingAnchor=null;unsubscribeDraft();unsubscribeExecution?.();providerPicker?.dispose();modelPicker?.dispose();thinkingPicker?.dispose();controlStates?.dispose();disclosures?.dispose();options.motion?.remove(feedbackKey);options.motion?.remove(feedbackBarKey);cancelResize();resizeObserver?.disconnect();viewState();root.remove();
     if(!options.draftSession){
       if(sendTask){void sendTask.then(()=>session.dispose(),()=>session.dispose()).catch(()=>{/* Existing durable recovery is untouched; never overwrite or replay a conflict. */});}

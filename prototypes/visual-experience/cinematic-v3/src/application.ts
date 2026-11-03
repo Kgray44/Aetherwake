@@ -3833,6 +3833,7 @@ export function installApplication(hooks: Hooks) {
           draftSession: session,
           execution: conversationExecution,
           active: true,
+          layoutActive: () => activeBlocks.get(b.id) === true,
           presentation: blockPresentation(b.id),
           onChanged: async () => {
             await command({ type: "snapshot" });
