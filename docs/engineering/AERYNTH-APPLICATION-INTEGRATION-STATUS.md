@@ -4,6 +4,33 @@ Snapshot: 2026-11-02 UTC. Integration remains active; full product acceptance is
 
 ## November 3 workspace scale checkpoint
 
+At `5b19389`, adjacent housing faces reuse their contour samples while retaining
+separate bevel normals. Five local CPU trials of 12 updates across 50
+instruments had a median of 155.2 ms, compared with 278.5 ms on the same
+benchmark before the change. The sampled final position, normal and instance
+buffers shared SHA-256
+`6dfadd0fc0ee22ae48ee930a898dac171fd794afff1c64751487729f4ec9ec58`.
+This isolates CPU geometry generation.
+
+The renderer now fades the detailed fittings as the projected card shrinks,
+using the existing camera and selection motion. The glass slab still uses
+the exact contour. At 50 blocks, the fitted desktop submitted all 50 slabs
+with zero detailed housings. All 12 visible working cards regained full
+housing after return and restart. The 50-block fit sample recorded six
+offscreen paint intervals at 314.1 ms P95. The previous same-workload run
+recorded four at 377.9 ms. These short samples show that the fit still
+stutters and do not establish monitor presentation performance. The actual
+fitted screenshot retains the orbital background and all 50 cards but
+clusters the cards against the left edge.
+
+The strict build, 397 app tests, and separate hidden Electron initial and
+restart checks at 10, 25 and 50 blocks passed. All verification windows
+closed. The 50-block initial receipt has SHA-256
+`2728e489b47f2e6aaddac738dfd48efcec5692b62c69f9f7ffc04733d504ba2c`.
+Portable review AE is staged for `5b19389` with manifest SHA-256
+`ca92d82a121c5c66964dd3fa026c2b321f9c2c2ec6bed3d0dfd1da3b336cfe1e`.
+The existing owner window continues to run `525a134`.
+
 At `864c64d`, the desktop uses the existing readable-body thresholds to delay
 new editors when the current or destination card cannot fit them. Focused
 editors retain their working view. Card titles, previews, selection and direct
