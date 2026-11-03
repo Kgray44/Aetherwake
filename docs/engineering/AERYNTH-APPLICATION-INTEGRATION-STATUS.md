@@ -2,6 +2,56 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 conversation scale, exact-message opening, and Portable BE
+
+Canonical graph lookups now use in-memory indices over existing records.
+SQL permission checks reuse prepared statements and still evaluate current
+resource and message visibility. The saved schema and history are unchanged.
+
+At `dddf0db2b7aed86979b2690693655b07befa6bca`, the existing scale runner
+completed all 13 operations at 572 conversations and 8,072 messages, and
+again at 1,072 conversations and 12,072 messages. Neither fixture was
+capped. Recent-list p95 was 42.9 and 67.4 ms, and empty-browse p95 was
+41.5 and 61.0 ms. Rare body search p95 was 150.6 and 176.2 ms. Each
+operation had 20 measured samples, zero read writes, and zero provider
+calls. Both runs exercised a 64-level branch chain and source denial and
+revocation. Receipts are in `library-scale-1793702181484-de9c19cf`.
+
+A separate BC, changed, changed, BC comparison used copies of the same
+closed synthetic database. The four measured responses matched by digest
+across all trials. Recent-list median improved from 527.9 to 32.2 ms,
+empty browse from 528.6 to 31.7 ms, rare body search from 643.0 to
+127.8 ms, and absent search from 849.9 to 131.3 ms. Each median uses
+eight samples per version after warmup. Private comparison receipt
+`library-compare-1793702325969/receipt.json` SHA-256 is
+`e81496f3bf8f10a13c0bc205af55c59ad89d6d854c0e3d90bd3da028a91fe201`.
+Both timings are in-process backend measurements.
+
+BD reached the exact message through the packaged desktop, then missed
+the 25-second shutdown deadline. During a snapshot each conversation
+summary was making a full copy of the graph. The corrected summary reads
+only its canonical header, and a regression asserts that a full snapshot
+copies the graph once. BE packages `8c34e948a3a119827c5ffd6eb89eb79ca06aa8cc`.
+All 427 payload hashes matched. Manifest SHA-256 is
+`a10d5057101ab442adaba437cde47224edce060782b1d35db81c796d7a35b3ad`.
+
+The hidden BE desktop opened a conversation, populated 50 library rows,
+found a matching message through the search field, and opened that
+message through its result button. The action-to-DOM observations were
+949 ms for the initial surface, 533 ms for search, and 370 ms for opening
+the match. It shut down normally in a 7.32-second launch-to-exit run.
+A fresh process confirmed the selected conversation and exact message
+persisted, then closed normally in 5.18 seconds. Both had zero provider
+executions and zero remaining owned processes. Native source and renderer
+hashes matched the package. Receipts are in
+`review-block-scale-0-1793702637743`, with SHA-256 values
+`75def93b08a6b49c1708d88ba76ac80b558dda4d0aedcbe85b418f3d38a61335`
+and `3311fbd8292809c85d18fd50ca1607c76c6b798591315b7db881777dd26efa20`.
+The strict desktop build and 255 backend tests passed before the final
+backend-only shutdown fix. After it, backend typing and 29 focused
+graph and integration tests passed. This does not measure physical
+input, presentation timing, or live provider behavior.
+
 ## November 3 model-selected resource opening and Portable BC
 
 Vela's natural-language path uses the authorized model to select
