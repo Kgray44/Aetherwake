@@ -48,6 +48,7 @@ function setup(hooks = {}) {
   c = new ConstellationController({
     snapshot: hooks.snapshot ?? fixture(),
     motion,
+    onNavigationIntent: hooks.onNavigationIntent,
     navigate: async (destination) => {
       calls.navigated.push(destination);
       await hooks.navigate?.(destination, c);
@@ -86,6 +87,26 @@ const context = (c, n) =>
     desired: n.bookmark(),
   });
 const tick = () => new Promise(setImmediate);
+
+test("navigation intent reaches the host before queued navigation dispatch", async () => {
+  let intents = 0;
+  const { c, calls, dispose } = setup({
+    onNavigationIntent: () => {
+      assert.equal(calls.navigated.length, 0);
+      intents++;
+    },
+  });
+  try {
+    const navigation = c.go({ kind: "workspace", workspaceId: "w" });
+    assert.equal(c.pending, true);
+    assert.equal(intents, 1);
+    assert.deepEqual(calls.navigated, []);
+    await navigation;
+    assert.deepEqual(calls.navigated, [{ kind: "workspace", workspaceId: "w" }]);
+  } finally {
+    dispose();
+  }
+});
 
 test("unplaced Open dispatches canonical identity and preserves exact spatial context without organization or persistence", async () => {
   const { c, n, calls, settle, dispose } = setup();

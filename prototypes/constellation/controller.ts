@@ -77,6 +77,8 @@ export type ControllerOptions = GraphActions & {
   snapshot: Snapshot;
   motion: MotionCoordinator;
   navigate(target: Destination): Promise<unknown>;
+  /** Synchronous acceptance of a navigation intent, before queued dispatch. */
+  onNavigationIntent?(): void;
   persistence?: ViewPersistence;
   openResource?(target: ResourceOpeningInput): Promise<unknown>;
   onTransition?(transition: Transition): void;
@@ -727,6 +729,7 @@ export class ConstellationController {
     const old = this.bookmark();
     this.error = "";
     this.pending = true;
+    this.options.onNavigationIntent?.();
     this.changed();
     // Arrival is usable immediately after service success; camera never gates input.
     try {
