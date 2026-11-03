@@ -2,6 +2,36 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 chat draft storage recovery and Portable BN
+
+Commit `5901d71` resumes a chat draft paused by native storage
+admission. The restoration signal triggers the existing canonical
+draft reload and version check before retrying a save. A newer
+competing draft goes to conflict review. The scope is live chat
+composers with the exact storage denial error.
+
+The hidden packaged comparison used an injected denial while the
+actual C: and D: reserve guard continued to admit the bounded
+synthetic profiles. Recovery used the real reserve probe. BM left
+the draft in error with no canonical change. BN saved the newest
+retained text without another keystroke. With a competing canonical
+draft, BN retained the local editor text and left the competing
+draft and version intact through packaged backend restart. SQLite
+integrity passed. Both checks recorded zero provider executions.
+Private receipts are in `storage-draft-control-1793706557511` and
+`storage-draft-1793706531182`. The BN receipt SHA-256 is
+`ef7a3048893e79c2389aeabf1117deac1517195f1551fd5178011ff6eed270e1`.
+
+Portable BN packages `5901d7156fadb5e6949b9ff1ec1daf804d0f73d6`.
+All 427 payloads were rehashed. Manifest SHA-256 is
+`d649633f32f0d73f0ac559c7ebd4336a57815448085a39176cfb1b5809485fd3`.
+The strict build, 409 desktop tests and 18 targeted draft and storage
+tests passed. The exact package passed the local workspace and
+cross-project Constellation journey through restart, with all hidden
+test processes exited. The five screenshots and receipts are in
+`review-package-motion-1793706588916`. Physical display timing and
+live Codex acceptance remain separate.
+
 ## November 3 selected workspace context and Portable BM
 
 Commit `4f061f0` carries the selected workspace card into Vela's
