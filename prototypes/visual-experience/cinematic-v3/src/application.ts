@@ -730,6 +730,7 @@ export function installApplication(hooks: Hooks) {
   hooks.motion.add(arrivalId, arrivalPose);
   const presenceId = "application:vela-presence";
   let presenceDrag: {
+    pointerId: number;
     workspaceId: string;
     version: number;
     startX: number;
@@ -1361,10 +1362,19 @@ export function installApplication(hooks: Hooks) {
   );
   velaCard.addEventListener("pointerdown", (event) => {
     const p = state?.presence;
-    if (!p || !presenceCard() || p.locked || event.button !== 0) return;
+    if (
+      !p ||
+      !presenceCard() ||
+      p.locked ||
+      presenceDrag ||
+      previewCommitting ||
+      event.button !== 0
+    )
+      return;
     event.preventDefault();
     velaCard.focus();
     presenceDrag = {
+      pointerId: event.pointerId,
       workspaceId: p.workspaceId,
       version: p.version,
       startX: event.clientX,
@@ -1374,12 +1384,32 @@ export function installApplication(hooks: Hooks) {
     };
     velaCard.setPointerCapture(event.pointerId);
   });
+  function queuePresencePoint(
+    drag: NonNullable<typeof presenceDrag>,
+    event: PointerEvent,
+  ) {
+    const dx = event.clientX - drag.startX;
+    const dy = event.clientY - drag.startY;
+    if (!drag.moved && Math.hypot(dx, dy) <= 4) return;
+    drag.moved = true;
+    const placement = {
+      x: Math.round(drag.origin.x + dx / zoom),
+      y: Math.round(drag.origin.y + dy / zoom),
+    };
+    const bounds = viewBounds();
+    queuePreview({
+      presence: { expectedVersion: drag.version, presentation: placement },
+      intent: "move",
+      bounds,
+    });
+    return { dx, dy, placement, bounds };
+  }
   velaCard.addEventListener("pointermove", (event) => {
-    if (!presenceDrag) return;
-    const d = presenceDrag,
-      dx = event.clientX - d.startX,
-      dy = event.clientY - d.startY;
-    d.moved ||= Math.hypot(dx, dy) > 4;
+    const d = presenceDrag;
+    if (!d || d.pointerId !== event.pointerId) return;
+    const point = queuePresencePoint(d, event);
+    if (!point) return;
+    const { dx, dy } = point;
     hooks.motion.target(
       presenceId,
       {
@@ -1393,41 +1423,26 @@ export function installApplication(hooks: Hooks) {
       },
       "Vela drag preview",
     );
-    queuePreview({
-      presence: {
-        expectedVersion: d.version,
-        presentation: {
-          x: Math.round(d.origin.x + dx / zoom),
-          y: Math.round(d.origin.y + dy / zoom),
-        },
-      },
-      intent: "move",
-    });
     hooks.wake();
   });
   velaCard.addEventListener("pointerup", (event) => {
-    if (!presenceDrag) return;
     const d = presenceDrag;
+    if (!d || d.pointerId !== event.pointerId) return;
+    const release = queuePresencePoint(d, event);
     presenceDrag = null;
     document.body.classList.remove("vela-access");
-    suppressPresenceClick = d.moved;
-    if (d.moved)
+    suppressPresenceClick = !!release;
+    if (release)
       void commitLayout({
         type: "setPresence",
         workspaceId: d.workspaceId,
         expectedVersion: d.version,
-        placement: {
-          x: Math.round(d.origin.x + (event.clientX - d.startX) / zoom),
-          y: Math.round(d.origin.y + (event.clientY - d.startY) / zoom),
-        },
+        placement: release.placement,
+        bounds: release.bounds,
       });
-    else {
-      const target = presenceTarget();
-      if (target)
-        hooks.motion.target(presenceId, target, "Vela drag cancelled");
-    }
   });
-  velaCard.addEventListener("pointercancel", () => {
+  const cancelPresenceDrag = (event: PointerEvent) => {
+    if (presenceDrag?.pointerId !== event.pointerId) return;
     presenceDrag = null;
     suppressPresenceClick = false;
     cancelPreview();
@@ -1435,7 +1450,9 @@ export function installApplication(hooks: Hooks) {
     if (target)
       hooks.motion.target(presenceId, target, "Vela pointer cancelled");
     hooks.wake();
-  });
+  };
+  velaCard.addEventListener("pointercancel", cancelPresenceDrag);
+  velaCard.addEventListener("lostpointercapture", cancelPresenceDrag);
   velaCard.addEventListener("keydown", (event) => {
     const p = state?.presence;
     if (
