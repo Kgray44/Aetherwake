@@ -2,6 +2,41 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 backend pipe failure and Portable BO
+
+Commit `da56f4e` handles an Electron backend stdin error through the
+same terminal path as a child exit. It closes the native brokers,
+rejects pending requests, blocks subsequent writes and ignores late
+replies. The renderer receives a single disconnect notice and keeps
+its existing surfaces available.
+
+A hidden run of the exact package injected an EPIPE on its real
+child stream with three renderer requests pending. All three
+returned the disconnect error in 4.08 ms. A later request was
+rejected without a fourth pipe write, and the renderer still held
+all three workspace cards after child exit. The packaged backend
+reopened the exact saved workspace and SQLite integrity passed.
+The private receipt is in `backend-pipe-1793706860097` with SHA-256
+`2d520582866b65088e6f29b757f12e033528363eab611924b1429dd6a8728821`.
+
+In a separate disposable profile, two fresh packaged backend
+processes observed available authentication through the installed
+Codex App Server and four catalog entries. The second process
+recovered the exact Codex conversation, placement and unsent
+draft. Both prepared the same outbound text for review and
+recorded zero executions. The readiness receipts are in
+`review-codex-ready-1793706895121`. Catalog discovery establishes
+readiness for review. A live authorized turn remains outstanding.
+
+Portable BO packages `da56f4eb22a4e1bbdee9c8aa24835cf00f2448f2`.
+All 427 payloads were rehashed. Manifest SHA-256 is
+`875bbb58360014d9cb5cbce3777334d07f0c4c6639ec85231edf6587bb146623`.
+All 409 desktop tests passed. The package passed the full local
+workspace and Constellation journey through restart again.
+The five PNGs and receipts are in `review-package-motion-1793706921804`.
+All owned desktop test processes exited. The owner's existing
+window was left open.
+
 ## November 3 chat draft storage recovery and Portable BN
 
 Commit `5901d71` resumes a chat draft paused by native storage
