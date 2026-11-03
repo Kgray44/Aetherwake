@@ -1,7 +1,7 @@
 import type { WorkspaceOrganization, OrganizationUpdate, LayoutState, LayoutPreview, LayoutPreviewRequest, Geometry, BlockProjection, GridSpan, StructuredPreset, LayoutIntent, StructuredOrganization } from './contracts.mts';
 import { ensure, defaults, presentation } from './geometry.mts';
-import { footprint, resolveCollisions, validateBounds, type CollisionPlacement } from './collisions.mts';
-import { snapStructuredTargets, structuredGridGuides } from './structured-grid.mts';
+import { findVacantPlacement, footprint, intersects, resolveCollisions, validateBounds, type CollisionPlacement } from './collisions.mts';
+import { findVacantGridPlacement, snapStructuredTargets, structuredGridGuides } from './structured-grid.mts';
 
 const idOrder = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const presets = ['balanced', 'focus', 'development', 'research'];
@@ -35,6 +35,42 @@ const entries = (state: LayoutState): CollisionPlacement[] => [
   { ...state.presence, keepVisible: true },
 ];
 const changedGeometry = (a: Geometry, b: Geometry) => a.x !== b.x || a.y !== b.y || a.width !== b.width || a.height !== b.height;
+
+/** Freeform allows card/card overlap. A gesture may move its own footprint
+ * around Vela, and a Vela gesture treats all stationary cards as obstacles. */
+function protectPresence(state: LayoutState, input: CollisionPlacement[], options: PolicyOptions): CollisionPlacement[] {
+  const repair = state.organization.mode === 'freeform' && options.intent === 'resolve';
+  if (!repair && !options.targets?.length) return input;
+
+  const prior = new Map((options.before ? entries(options.before) : []).map(item => [item.id, item]));
+  const targets = new Set(options.targets);
+  const changed = (item: CollisionPlacement) => {
+    if (!targets.has(item.id)) return false;
+    const old = prior.get(item.id);
+    return !old || changedGeometry(item, old) || item.rotation !== old.rotation;
+  };
+  const { gap, mode } = state.organization;
+  const findVacant = mode === 'structured' ? findVacantGridPlacement : findVacantPlacement;
+  const separate = (item: CollisionPlacement, obstacles: CollisionPlacement[], clearance = obstacles) => {
+    const box = footprint(item);
+    if (!obstacles.some(obstacle => intersects(box, footprint(obstacle), gap))) return item;
+    ensure(!item.locked, 'LOCKED_COLLISION');
+    return findVacant(item, clearance, options.bounds, gap);
+  };
+
+  let presence = input.find(item => item.id === 'system:vela')!;
+  if (changed(presence) || repair && !presence.locked) {
+    presence = separate(presence, input.filter(item => item.id !== presence.id));
+  }
+  return input.map(item => {
+    if (item.id === presence.id) return presence;
+    if (changed(item) || repair && presence.locked) {
+      const clearance = mode === 'structured' ? [presence, ...input.filter(other => other.id !== presence.id && other.id !== item.id)] : [presence];
+      return separate(item, [presence], clearance);
+    }
+    return item;
+  });
+}
 
 function structured(state: LayoutState, input: CollisionPlacement[], options: PolicyOptions): { items: CollisionPlacement[]; organization: WorkspaceOrganization; guides: LayoutPreview['guides'] } {
   const organization = updateOrganization(state.organization), cfg = organization.structured;
@@ -128,6 +164,8 @@ export function applyOrganizationPolicy(state: LayoutState, options: PolicyOptio
     // Unchanged offscreen/manual positions and camera-only operations stay exact.
     if(options.intent==='mode'&&options.bounds&&items.some(item=>{const box=footprint(item);return (box.x<options.bounds!.x||box.y<options.bounds!.y||box.x+box.width>options.bounds!.x+options.bounds!.width||box.y+box.height>options.bounds!.y+options.bounds!.height);})){const boxes=items.map(footprint),left=Math.min(...boxes.map(box=>box.x)),top=Math.min(...boxes.map(box=>box.y)),width=Math.max(...boxes.map(box=>box.x+box.width))-left+32,height=Math.max(...boxes.map(box=>box.y+box.height))-top+32;
       const nextZoom=Math.min(state.viewport.zoom,options.bounds.width*state.viewport.zoom/width,options.bounds.height*state.viewport.zoom/height);ensure(Number.isFinite(nextZoom)&&nextZoom>0,'INVALID_VIEWPORT');const safeX=(options.bounds.x-state.viewport.x)*state.viewport.zoom,safeY=(options.bounds.y-state.viewport.y)*state.viewport.zoom;viewport={...viewport,x:left-16-safeX/nextZoom,y:top-16-safeY/nextZoom,zoom:nextZoom};}
+  } else if (organization.mode === 'freeform') {
+    if (options.intent !== 'mode') items = protectPresence(state, input, options);
   } else if (organization.mode === 'structured') {
     if (options.preset || options.order || options.intent === 'resolve' || options.intent === 'reorder') {
       const result = structured(state, input, options); items = result.items; organization = result.organization; guides = result.guides;
@@ -135,7 +173,10 @@ export function applyOrganizationPolicy(state: LayoutState, options: PolicyOptio
       // Mode/configuration selection enables the grid; it never arranges the
       // current workspace. Only the user's later active geometry is snapped.
       guides = structuredGridGuides(options.bounds);
-      if (options.intent !== 'mode') items = snapStructuredTargets(state, input, options.before, options.targets ?? [], options.bounds);
+      if (options.intent !== 'mode') {
+        items = snapStructuredTargets(state, input, options.before, options.targets ?? [], options.bounds);
+        items = protectPresence(state, items, options);
+      }
       if (options.resizeIds?.length) {
         const cfg = organization.structured, area = options.bounds ?? { x: 0, y: 0, width: 1280, height: 720 };
         const columns = cfg.columnCount ?? Math.max(1, Math.min(12, Math.floor((area.width - cfg.margin * 2 + cfg.columnGap) / (320 + cfg.columnGap))));
@@ -185,7 +226,14 @@ export function previewLayout(state: LayoutState, request: LayoutPreviewRequest 
   }
   if (request.structuredPreset) next.organization = updateOrganization(next.organization, { mode: 'structured', structured: { preset: request.structuredPreset } });
   if (request.order) ensure(next.organization.mode === 'structured', 'UNSUPPORTED_POLICY');
-  const intent = request.intent ?? (request.organization || request.structuredPreset ? 'mode' : resizeIds.length ? 'resize' : targets.length ? 'move' : request.viewport || request.placements && next.organization.mode === 'structured' ? 'view' : 'resolve');
+  let intent = request.intent;
+  if (!intent) {
+    if (request.organization || request.structuredPreset) intent = 'mode';
+    else if (resizeIds.length) intent = 'resize';
+    else if (targets.length) intent = 'move';
+    else if (request.viewport || next.organization.mode === 'freeform' || request.placements && next.organization.mode === 'structured') intent = 'view';
+    else intent = 'resolve';
+  }
   const result = applyOrganizationPolicy(next, { targets, resizeIds, bounds: request.bounds, intent, order: request.order, preset: request.structuredPreset, spanOverrides: Object.keys(request.organization?.structured?.spans ?? {}), before: state });
   const old = entries(state), output = [...result.blocks.map(b => ({ ...b, id: b.blockId })), result.presence];
   result.affectedPlacementIds = output.filter(p => changedGeometry(p, old.find(b => b.id === p.id)!)).map(p => p.id);

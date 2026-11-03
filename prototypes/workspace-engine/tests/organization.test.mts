@@ -65,6 +65,8 @@ test('Freeform preserves intentional overlaps, neighbors, Vela and all four laye
     assert.deepEqual(geometry(s.blocks.find(x => x.blockId === b.blockId)!), unchanged);
   }
   s = run(e, s, { type: 'setPresence', expectedVersion: s.presence.version, presentation: { x: b.x, y: b.y } });
+  assert.deepEqual(geometry(s.blocks.find(x => x.blockId === b.blockId)!), unchanged);
+  assert.ok(s.blocks.every(block => !intersects(footprint({ ...block, id: block.blockId }), s.presence, s.organization.gap)));
   const reopened = WorkspaceKernel.open(path);
   try { assert.deepEqual(new WorkspaceEngine(reopened).project(s.workspaceId), s); } finally { reopened.close(); }
 });
@@ -262,18 +264,68 @@ test('schema3 migration preserves raw geometry/history, defaults Fluid and honor
   } finally { reopened.close(); }
 });
 
-test('Vela previews match commits in all modes and Structured circular resize preserves its shape', t => {
+test('Vela and card gestures clear each other with matching previews in all modes and preserve Structured circle shape', t => {
   const { engine: e, kernel: k, state } = fixture(t); let s = add(e, state, { x: 50, y: 400 });
   for (const mode of ['fluid', 'freeform', 'structured']) {
     s = run(e, s, { type: 'setOrganization', organization: { mode } }); const b = s.blocks[0];
     const update = { expectedVersion: s.presence.version, presentation: { x: b.x + 20, y: b.y + 20 } };
     const predicted = previewLayout(s, { presence: update, bounds });
     s = run(e, s, { type: 'setPresence', ...update }); assert.deepEqual(layouts(s), layouts(predicted));
+    disjoint(s);
     assert.equal(s.presence.id, 'system:vela'); assert.equal(k.searchResources().length, 1);
+
+    const card = s.blocks[0];
+    const placements = [{ blockId: card.blockId, expectedVersion: card.version, presentation: { x: s.presence.x, y: s.presence.y } }];
+    const cardPreview = previewLayout(s, { placements, bounds });
+    assert.deepEqual(e.project(s.workspaceId), s, 'Preview never persists the candidate');
+    s = run(e, s, { type: 'saveLayout', placements });
+    assert.deepEqual(layouts(s), layouts(cardPreview)); disjoint(s);
+
+    const moved = s.blocks[0];
+    const resize = [{ blockId: moved.blockId, expectedVersion: moved.version, presentation: {
+      x: s.presence.x, y: s.presence.y, width: moved.width + 48, height: moved.height + 32,
+    } }];
+    const resizePreview = previewLayout(s, { placements: resize, bounds });
+    s = run(e, s, { type: 'saveLayout', placements: resize });
+    assert.deepEqual(layouts(s), layouts(resizePreview)); disjoint(s);
   }
   const b = s.blocks[0], predicted = previewLayout(s, { bounds, placements: [{ blockId: b.blockId, expectedVersion: b.version, presentation: { shape: 'circle' } }] });
   s = run(e, s, { type: 'setBlockShape', blockId: b.blockId, shape: 'circle' });
   assert.deepEqual(layouts(s), layouts(predicted)); assert.equal(s.blocks[0].height, s.blocks[0].width); assert.equal(s.blocks[0].contentMode, 'summary');
+});
+
+test('legacy Freeform overlaps survive opening and history, and Make room repairs only the Vela collision', t => {
+  const { engine: e, kernel: k, state } = fixture(t);
+  let s = run(e, state, { type: 'setOrganization', organization: { mode: 'freeform' } });
+  s = add(e, s, { x: 80, y: 400, width: 200, height: 150, locked: true });
+  s = add(e, s, { x: 80, y: 400, width: 200, height: 150, locked: true });
+  k.withTransaction(db => db.prepare('UPDATE workspace_engine_layouts SET presence_json=? WHERE workspace_id=?')
+    .run(JSON.stringify({ ...s.presence, x: 80, y: 400 }), s.workspaceId));
+  s = e.project(s.workspaceId);
+  assert.ok(intersects(s.blocks[0], s.presence));
+  assert.deepEqual(e.switchWorkspace(s.workspaceId), s);
+  assert.deepEqual(layouts(previewLayout(s, { bounds })), layouts(s));
+  const view = run(e, s, { type: 'saveLayout', placements: [], viewport: { ...s.viewport, x: 3 } });
+  assert.deepEqual(layouts(view), layouts(s));
+
+  const preview = previewLayout(view, { intent: 'resolve', bounds });
+  const arranged = run(e, view, { type: 'resolveLayout' });
+  assert.deepEqual(layouts(arranged), layouts(preview));
+  assert.deepEqual(arranged.blocks, s.blocks);
+  assert.ok(arranged.blocks.every(block => !intersects(block, arranged.presence, arranged.organization.gap)));
+  assert.deepEqual(layouts(run(e, arranged, { type: 'undoLayout' })), layouts(view));
+});
+
+test('Structured placement cannot introduce Vela overlap and a conflicting newly locked drop fails atomically', t => {
+  const { engine: e, state } = fixture(t);
+  let s = run(e, state, { type: 'setOrganization', organization: { mode: 'structured' } });
+  s = add(e, s, { x: s.presence.x, y: s.presence.y }); disjoint(s);
+  const card = s.blocks[0];
+  const placements = [{ blockId: card.blockId, expectedVersion: card.version,
+    presentation: { x: s.presence.x, y: s.presence.y, locked: true } }];
+  assert.throws(() => previewLayout(s, { placements, bounds }), code('LOCKED_COLLISION'));
+  assert.throws(() => run(e, s, { type: 'saveLayout', placements }), code('LOCKED_COLLISION'));
+  assert.deepEqual(e.project(s.workspaceId), s);
 });
 
 test('a named checkpoint restores mode, variable geometry, overlap and identity after restart', t => {

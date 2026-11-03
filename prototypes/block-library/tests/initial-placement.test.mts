@@ -33,7 +33,7 @@ test('actual Core attaches a Chat clear of Collection Browser, overlapping fixed
   let state = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic initial placement', projectId: null });
   const workspaceId = state.activeWorkspaceId!;
   state = await f.core.command('desktop', { type: 'setOrganization', workspaceId, expectedOrganizationRevision: state.organization!.revision, organization: { mode: 'freeform' } });
-  state = await f.core.command('desktop', { type: 'setPresence', workspaceId, expectedVersion: state.presence!.version, placement: { x: 450, y: 180 } });
+  state = await f.core.command('desktop', { type: 'setPresence', workspaceId, expectedVersion: state.presence!.version, placement: { x: 650, y: 180 } });
   await f.core.command('conversation', { name: 'organize', input: { type: 'createCollection', title: 'Synthetic collection', projectId: null } });
   const collections: any = await f.core.command('conversation', { name: 'collections', input: {} });
   await library(f.core, 'createSubjectBlock', { commandId: randomUUID(), workspaceId, expectedLayoutVersion: state.layoutVersion, kind: 'collection_browser', subject: { kind: 'collection', collectionId: collections[0].id }, presentation: { x: 90, y: 160, locked: true } });

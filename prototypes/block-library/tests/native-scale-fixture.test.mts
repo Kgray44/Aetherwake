@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { randomUUID, createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { BackendCore } from "../../integrated-backend/src/core.mts";
+import { footprint, intersects } from '../../workspace-engine/collisions.mts';
 import {
   prepareNativeScale,
   scaleState,
@@ -60,6 +61,11 @@ test("offline native-scale profiles use actual canonical identities and restore 
       try {
         const actual = await core.command("desktop", { type: "snapshot" });
         assert.equal(actual.blocks.length, count);
+        assert.ok(actual.presence && actual.organization);
+        for (const block of actual.blocks) {
+          const box = footprint({ ...block, locked: block.locked ?? false });
+          assert.equal(intersects(box, actual.presence, actual.organization.gap), false, 'Restored scale cards must clear Vela');
+        }
         assert.equal(actual.resources.length, count);
         assert.deepEqual(scaleState(actual), seed.expected);
         sameState(seed.expected, actual);

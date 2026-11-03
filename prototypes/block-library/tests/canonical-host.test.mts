@@ -223,8 +223,10 @@ test("vacant initial placement honors host bounds while keeping fixed overlappin
 });
 
 test("legacy hosts fail automatic placement before creating a resource; either explicit coordinate retains exact overlap", t => {
-  const f = fixture(t), workspace = f.engine.createWorkspace('Synthetic legacy placement', null, { mode: 'freeform' }),
+  const f = fixture(t), createdWorkspace = f.engine.createWorkspace('Synthetic legacy placement', null, { mode: 'freeform' }),
     legacy = new TemplateService(f.db, { ...f.host, initialPlacement: undefined });
+  const workspace = f.engine.execute({ type: 'setPresence', commandId: randomUUID(), workspaceId: createdWorkspace.workspaceId,
+    expectedRevision: createdWorkspace.revision, expectedVersion: createdWorkspace.presence.version, presentation: { x: 900, y: 64 } });
   const input = { commandId: randomUUID(), workspaceId: workspace.workspaceId, expectedLayoutVersion: workspace.revision, kind: 'note' as const, title: 'Synthetic legacy note' };
   assert.throws(() => legacy.createBlock(input), /initial_placement_unavailable/);
   assert.equal(f.factoryCalls.length, 0);
@@ -511,7 +513,7 @@ test("Freeform overlap, presentation, viewport and same-ID shared placements sur
     presentation: {
       ...p.presentation,
       x: 120,
-      y: 140,
+      y: 400,
       shape: i ? "lens" : "folio",
       rotation: i ? 15 : 0,
       minimized: i === 1,
@@ -533,7 +535,7 @@ test("Freeform overlap, presentation, viewport and same-ID shared placements sur
   assert.equal(new Set(state.blocks.map((b) => b.blockId)).size, 2);
   assert.equal(
     state.blocks.every(
-      (b) => b.resourceId === resource.id && b.x === 120 && b.y === 140,
+      (b) => b.resourceId === resource.id && b.x === 120 && b.y === 400,
     ),
     true,
   );

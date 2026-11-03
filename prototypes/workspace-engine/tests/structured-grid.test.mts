@@ -29,7 +29,10 @@ test('Structured mode and settings only enable the grid: exact overlapping/locke
   const f = fixture(t, true); let s = f.state;
   s = add(f, s, { x: 77, y: 303, width: 367, height: 291, rotation: 17, shape: 'folio', zIndex: 4 });
   s = add(f, s, { x: 85, y: 311, width: 251, height: 251, shape: 'circle', zIndex: -3, locked: true });
-  s = run(f.engine, s, { type: 'setPresence', expectedVersion: s.presence.version, presentation: { x: 85, y: 311, locked: true } });
+  // Emulate a saved pre-guard layout with a locked Vela covering a locked card.
+  f.kernel.withTransaction(db => db.prepare('UPDATE workspace_engine_layouts SET presence_json=? WHERE workspace_id=?')
+    .run(JSON.stringify({ ...s.presence, x: 85, y: 311, locked: true }), s.workspaceId));
+  s = f.engine.project(s.workspaceId);
   s = run(f.engine, s, { type: 'saveLayout', placements: [], viewport: { x: -123.25, y: 55.75, zoom: 0.65, displayId: 'synthetic-display' } });
   const order = [...s.blocks.map(block => block.blockId).toReversed(), 'system:vela'];
   s = run(f.engine, s, { type: 'setOrganization', organization: { structured: { order, spans: { [s.blocks[0].blockId]: { columns: 2, rows: 4 } } } } });

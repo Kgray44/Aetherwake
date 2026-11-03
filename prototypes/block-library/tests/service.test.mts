@@ -464,7 +464,7 @@ test("same resource keeps canonical ID, ownership and history across distinct pl
     key: "place" + i,
     resourceKey: "shared",
     subjectBinding: undefined,
-    presentation: { ...p.presentation, x: 100, y: 100 },
+    presentation: { ...p.presentation, x: 100, y: 400 },
   }));
   const template = service.saveTemplate(draft(body));
   const input = apply(template.id, {
@@ -494,8 +494,8 @@ test("same resource keeps canonical ID, ownership and history across distinct pl
     assert.equal(new Set(state.blocks.map((block) => block.blockId)).size, 2);
     assert.equal(state.blocks[0].x, 100);
     assert.equal(state.blocks[1].x, 100);
-    assert.equal(state.blocks[0].y, 100);
-    assert.equal(state.blocks[1].y, 100);
+    assert.equal(state.blocks[0].y, 400);
+    assert.equal(state.blocks[1].y, 400);
   }
   assert.notEqual(a.placementIds.place0, b.placementIds.place0);
   assert.deepEqual(service.applyTemplate(input), a);

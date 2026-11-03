@@ -439,13 +439,15 @@ export class WorkspaceEngine {
         case 'saveLayout': {
           ensure(Array.isArray(command.placements)); this.apply(workspaceId, command.placements, state.revision, this.viewport(command.viewport ?? state.viewport));
           for (const p of command.placements) { targets.push(p.blockId); const b = find(p.blockId); if ((p.presentation.width !== undefined && p.presentation.width !== b.width) || (p.presentation.height !== undefined && p.presentation.height !== b.height) || (p.presentation.shape === 'circle' && b.width !== b.height)) resizeIds.push(p.blockId); }
-          if (!command.placements.length && (command.viewport || state.organization.mode === 'structured')) policy.intent = 'view';
+          if (!command.placements.length && (command.viewport || state.organization.mode !== 'fluid')) policy.intent = 'view';
           break;
         }
         case 'applyPreset': {
           const ps = presetGeometry(command.preset, state.blocks, command.width, command.height);
+          if (state.organization.mode === 'freeform') policy.intent = 'move';
           this.apply(workspaceId, state.blocks.filter(b => !b.locked).map(b => {
             const p = ps[state.blocks.indexOf(b)];
+            if (state.organization.mode === 'freeform') targets.push(b.blockId);
             return { blockId: b.blockId, expectedVersion: b.version, presentation: { x: p.x, y: p.y, width: p.width, height: p.height } };
           }), state.revision, state.viewport); break;
         }
@@ -464,7 +466,7 @@ export class WorkspaceEngine {
         case 'restoreCheckpoint': {
           const row = this.db.prepare('SELECT snapshot_json FROM workspace_engine_checkpoints WHERE id=? AND workspace_id=?').get(command.checkpointId, workspaceId);
           ensure(row, 'NOT_FOUND'); this.restore(workspaceId, this.normalizeSnapshot(workspaceId, JSON.parse(String(row.snapshot_json))), state.revision);
-          if (this.readOrganization(workspaceId).mode === 'structured') policy.intent = 'view';
+          if (this.readOrganization(workspaceId).mode !== 'fluid') policy.intent = 'view';
           break;
         }
         default: throw new WorkspaceError('UNKNOWN_COMMAND');
