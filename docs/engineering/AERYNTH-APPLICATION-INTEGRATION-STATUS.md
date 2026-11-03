@@ -2,6 +2,37 @@
 
 Snapshot 2026-11-03 UTC. Integration remains active and full product acceptance is incomplete.
 
+## November 3 renderer build verification and Portable BT
+
+Commit `b5d67f6` makes the portable packager require a completed Vite
+receipt for the exact clean HEAD and tree. It verifies the complete
+renderer file inventory and SHA-256 values when planning, then checks
+the expected hashes again while copying. The local development build
+still runs with pending source edits. Review packaging requires a
+fresh build after the candidate commit changes.
+
+The real packager rejected the previous unreceipted renderer before
+creating an output directory. The 16 packaging tests passed, including
+changed source, changed assets, incomplete inventory and a dirty build.
+The strict clean build produced a nine-file renderer receipt
+`36d64e6cedfe2eb8e40a714805efae912c49f375e51c3dbf2255a506115c1add`.
+The actual plan and build accepted it. Portable BT packages
+`b5d67f643ac7022cd69e4a272da24c941e3bac5f`. All 427 payload files
+matched manifest SHA-256
+`65fb292f74ad7c622c646627151ada32da63a7021338033148900bd42ee7f1ad`.
+All nine renderer files are byte-identical to BS. The local receipt
+provides build provenance for this workflow. Publisher identity and
+independent reproducible-build verification are separate.
+
+Three hidden Electron processes loaded BT's application modules,
+renderer and bundled backend. The complete local workspace and
+cross-project journey passed through exact restart restoration.
+Launch-to-exit times were 6.35, 14.65 and 2.64 seconds. SQLite
+integrity passed with zero provider executions. Five native captures
+and three receipts are in `review-package-motion-1793708611344`.
+All owned test processes exited. Current physical display and live
+authorized Codex checks remain open.
+
 ## November 3 Stream disclosures and Portable BS
 
 Universal Block System's `9caf7f0` landed on integration as
