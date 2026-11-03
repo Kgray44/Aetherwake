@@ -796,7 +796,7 @@ export class BackendCore {
     if(id==='createTimeline')return true;
     if(id==='setAttentionMode')return this.velaNative?.supportedActions.includes('setAttentionMode')===true&&this.vela?.attentionPreferenceVersion()!=null;
     if(id==='bringAllIntoView')return this.velaContext().currentWorkspaceId!==null&&this.velaNative?.supportedActions.includes('bringAllIntoView')===true;
-    return ['search','navigate','content','taskStatus','setTaskGroupMembers','relate','createResource'].includes(id)||this.velaNative?.supportedActions.includes(id as any)===true||(id==='delegateTask'&&this.capabilityCache.snapshot()?.authentication==='available');
+    return ['search','openResource','navigate','content','taskStatus','setTaskGroupMembers','relate','createResource'].includes(id)||this.velaNative?.supportedActions.includes(id as any)===true||(id==='delegateTask'&&this.capabilityCache.snapshot()?.authentication==='available');
   }
   private velaCapabilities(capabilities:CapabilityDescriptor[]):CapabilityDescriptor[] {
     const providers=this.port.id==='codex-app-server'&&!this.port.mock?['local','codex-app-server']:['local'];
@@ -929,9 +929,10 @@ export class BackendCore {
     return this.once(input.commandId,{type:'velaNative',...input},()=>{
       const a=input.action;
       ensure(a.type!=='readWeather','weather_reviewed_preparation_required');
-      if(a.type==='search'){
-        const foundSubjects=this.vela.search(a.query.trim()).slice(0,12).map(({id,kind})=>({id,kind}));
-        this.record('vela.native.search','observed');
+      if(a.type==='search'||a.type==='openResource'){
+        const match=a.type==='openResource'?'exact-resource':undefined;
+        const foundSubjects=this.vela.search(a.query.trim(),match).slice(0,12).map(({id,kind})=>({id,kind}));
+        this.record('vela.native.'+a.type,'observed');
         return {status:'applied',receiptId:input.commandId,foundSubjects};
       }
       if(a.type==='readLocalFact'){

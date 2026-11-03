@@ -256,9 +256,15 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
       if(projectId!==(ref.projectId??null)||projectId!==null&&!current.scope.projectIds.includes(projectId))return false;
       return options.permissions.inspectCollectionArchiveReceipt?.(ref,current.context,current.metadata)===true;
     }),
-    search: (query, scope, limit) => readWithin(() => {
+    search: (query, scope, limit, match) => readWithin(() => {
       check(typeof query === 'string' && query.length <= 200 && Number.isInteger(limit) && limit > 0 && limit <= 1000, 'invalid_canonical_search');
       const current = view(); selectedScope(scope, current); const search = query.normalize('NFKC').toLocaleLowerCase();
+      if (match === 'exact-resource') {
+        const resources = [...current.refs.values()].filter(ref => ref.kind === 'resource' && permitted(scope, ref));
+        const exactId = resources.find(ref => ref.id === query);
+        return exactId ? [structuredClone(exactId)] : resources.filter(ref => ref.title.normalize('NFKC').toLocaleLowerCase() === search)
+          .slice(0, limit).map(ref => structuredClone(ref));
+      }
       const priority = (ref: ResourceRef) => ref.kind === 'resource' && current.context.selectedResourceIds.includes(ref.id) ? 0 : ref.kind === 'workspace' && ref.id === current.context.currentWorkspaceId ? 1 : ref.kind === 'project' && ref.id === current.context.currentProjectId ? 2 : 3;
       return [...current.refs.values()].filter(ref => permitted(scope, ref) && (ref.title.normalize('NFKC').toLocaleLowerCase().includes(search) || ref.id.toLocaleLowerCase().includes(search) || ref.resourceKind?.includes(search)))
         .sort((a, b) => priority(a) - priority(b) || a.title.localeCompare(b.title) || a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id)).slice(0, limit).map(ref => structuredClone(ref));

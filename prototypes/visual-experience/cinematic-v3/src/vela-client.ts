@@ -7,11 +7,16 @@ import type { WorkspacePresentationContext } from "../../../application-contract
 /** Browser transport only. Native main owns provider consent; backend owns identity and state. */
 export function createVelaClient(options: {
   command(name: string, input: unknown): Promise<unknown>;
-  changed(name: string, result: unknown): Promise<void>;
+  changed(name: string, result: unknown, mayPresent?: () => boolean): Promise<void>;
+  presentationFence?(): () => boolean;
   observed(state: VelaState): void;
   presentation?(): WorkspacePresentationContext | null;
 }): VelaClient {
   const invoke = async <T>(name: string, input: unknown): Promise<T> => {
+    const mayPresent =
+      name === "request" || name === "apply"
+        ? options.presentationFence?.()
+        : undefined;
     const presentation = name === "apply" ? options.presentation?.() : null;
     const result = await options.command("vela", {
       name,
@@ -34,7 +39,7 @@ export function createVelaClient(options: {
         "resetPreferences",
       ].includes(name)
     )
-      await options.changed(name, result);
+      await options.changed(name, result, mayPresent);
     return result as T;
   };
   return {

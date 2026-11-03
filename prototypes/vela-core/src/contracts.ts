@@ -34,6 +34,7 @@ export interface ContextManifest {
 }
 export type VelaNativeAction =
   | { type: 'search'; query: string }
+  | { type: 'openResource'; query: string }
   | { type: 'setAttentionMode'; mode: AttentionMode; expectedVersion: number }
   | { type: 'navigate'; target: { kind: 'workspace'; workspaceId: string } | { kind: 'constellation'; projectId: string | null } }
   | { type: 'createProject'; title: string }
@@ -174,6 +175,8 @@ export interface ActionReceipt {
   state: 'started' | 'applied' | 'failed' | 'cancelled' | 'unknown';
   startedAt: string; endedAt?: string; hostReceiptId?: string; errorCode?: string;
   createdResourceId?: string; createdWorkspaceId?: string; createdProjectId?: string; createdCollectionId?: string;
+  /** Present only while the uniquely resolved resource remains in scope. */
+  openResourceId?: string;
   /** A delegated provider completing a turn is not verified task completion. */
   taskVerified: false;
 }
@@ -210,7 +213,7 @@ export interface VelaHostPort {
   /** Cheap authoritative graph revision; never implemented by cloning the transcript. */
   conversationRevision?(resourceId: string): number | null;
   appendMessage(resourceId: string, message: Omit<VelaMessage, 'id'>): VelaMessage;
-  search(query: string, scope: VelaScope, limit: number): ResourceRef[];
+  search(query: string, scope: VelaScope, limit: number, match?: 'exact-resource'): ResourceRef[];
   resolve(ref: VelaSubjectRef, scope: VelaScope, purpose?: { restoreCollection?: boolean }): ResourceRef | null;
   resolveMany?(refs: readonly VelaSubjectRef[], scope: VelaScope): ResourceRef[];
   /** Only for a persisted applied archive action/receipt; does not rediscover archived metadata. */
@@ -268,7 +271,7 @@ export interface VelaState {
   lastPresenceAt: string | null; coverage: 'authorized-app-events-only';
   adaptation?: AdaptationState;
   presentation?: VelaPresentationState;
-  /** Current authorized metadata, keyed by search receipt ID. Saved receipts hold only references. */
+  /** Current authorized metadata, keyed by lookup receipt ID. Saved receipts hold only references. */
   searchResults?: Record<string, ResourceRef[]>;
   applicationContext?: { currentProjectId:string|null;currentWorkspaceId:string|null;references:ResourceRef[] };
 }

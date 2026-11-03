@@ -234,7 +234,9 @@ export class VelaService {
       contract: VELA_CONTRACT, identity: { id: 'system:vela', name: 'Vela', role: 'application-assistant' },
       conversation: this.data.conversationId ? this.opts.host.readConversation(this.data.conversationId) : null,
       planner: { providerId: this.opts.planner?.providerId ?? null, ...available },
-      capabilities: CAPABILITIES, requests, plans, receipts: receipts.map(({ foundSubjects: _refs, ...receipt }) => receipt),
+      capabilities: CAPABILITIES, requests, plans, receipts: receipts.map(({ foundSubjects: _refs, openResourceId, ...receipt }) =>
+        openResourceId && searchResults[receipt.id]?.some(ref => ref.id === openResourceId && ref.kind === 'resource')
+          ? { ...receipt, openResourceId } : receipt),
       searchResults,
       preferences: this.data.preferences, attention: this.data.attention.filter(visible),
       lastPresenceAt: this.data.lastPresenceAt, coverage: 'authorized-app-events-only',
@@ -269,10 +271,10 @@ export class VelaService {
       this.data.presentation = value; return structuredClone(value);
     });
   }
-  search(query: string): ResourceRef[] {
+  search(query: string, match?: 'exact-resource'): ResourceRef[] {
     check(typeof query === 'string' && query.length <= 200, 'invalid_search');
     const scope = this.scope();
-    return this.resolveSubjects(this.opts.host.search(query, scope, 30).slice(0, 30), scope);
+    return this.resolveSubjects(this.opts.host.search(query, scope, 30, match).slice(0, 30), scope);
   }
   private resolveSubjects(refs: readonly VelaSubjectRef[], scope: VelaScope): ResourceRef[] {
     const allowed = new Map(refs.filter(ref => this.permitted(ref.id, ref.kind, scope)).map(ref => [subjectKey(ref), ref]));
@@ -432,6 +434,7 @@ export class VelaService {
       actions: plan.steps.map(s => s.action), ...(priorAuthorizationRef ? { priorAuthorizationRef } : {}) };
   }
   private prepare(request: VelaRequest, summary: string, steps: PlanStep[], contribution: VelaPlan['contribution']): VelaPlan {
+    check(steps.slice(0, -1).every(step => step.action.type !== 'openResource'), 'resource_open_must_be_final');
     const scope = this.scope(steps), targets = this.targets(steps, scope);
     const body = { requestId: request.id, version: 1 as const, summary, steps, targets, scope, contribution };
     const plan: VelaPlan = { ...body, id: randomUUID(), fingerprint: digest(body), state: 'prepared', createdAt: this.now(), expiresAt: new Date(Date.parse(this.now()) + 15 * 60000).toISOString() };
@@ -692,8 +695,10 @@ export class VelaService {
         if (result.createdWorkspaceId) receipt.createdWorkspaceId = result.createdWorkspaceId;
         if (result.createdProjectId) receipt.createdProjectId = result.createdProjectId;
         if (result.createdCollectionId) receipt.createdCollectionId = result.createdCollectionId;
-        if (step.action.type === 'search' && result.status === 'applied' && result.foundSubjects) {
+        if ((step.action.type === 'search' || step.action.type === 'openResource') && result.status === 'applied' && result.foundSubjects) {
           receipt.foundSubjects = result.foundSubjects.slice(0, 12).map(({ id, kind }) => ({ id, kind }));
+          if (step.action.type === 'openResource' && receipt.foundSubjects.length === 1 && receipt.foundSubjects[0].kind === 'resource')
+            receipt.openResourceId = receipt.foundSubjects[0].id;
         }
         if ((step.action.type === 'readWeather' || step.action.type === 'readLocalFact') && text(result.responseText, 1000)) {
           this.append(result.responseText, request.id, 'vela-native', plan);
@@ -709,6 +714,7 @@ export class VelaService {
         const action = plan.steps.length === 1 ? plan.steps[0].action : undefined;
         let applied = 'The reviewed native plan was applied. Host receipts are available for inspection; delegated task outcomes remain owned by the execution service.';
         if (action?.type === 'navigate') applied = 'Opened the requested view.';
+        else if (action?.type === 'openResource') applied = 'The resource lookup is complete.';
         else if (action && isHostPolicyRead(action.type)) applied = 'The local lookup is complete.';
         this.append(plan.state === 'applied' ? applied : 'Plan execution stopped with state: ' + plan.state + '. Inspect receipts before retrying.', request.id, 'vela-native', plan);
       }

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createResourceOpener } from "../src/resource-opening.ts";
+import { createVelaClient } from "../src/vela-client.ts";
 
 const ready = (id) => ({
   contract: "aerynth.resource-opening@1",
@@ -108,4 +109,28 @@ test("unavailable resources stay unavailable and a failed lookup does not poison
   assert.deepEqual(presented, ["available"]);
   assert.equal(unavailable.length, 1);
   assert.equal(unavailable[0].resourceId, "revoked");
+});
+
+test("newer navigation suppresses a resource presentation while the Vela model is still running", async () => {
+  let complete;
+  const result = new Promise(resolve => { complete = resolve; });
+  const opened = [];
+  const opener = createResourceOpener({
+    resolve: async ({ resourceId }) => ready(resourceId),
+    present: async (resource) => { opened.push(resource.resourceId); },
+    unavailable: () => assert.fail("unexpected unavailable"),
+  });
+  const client = createVelaClient({
+    command: () => result,
+    presentationFence: opener.capture,
+    observed() {},
+    changed: async (_name, value, mayPresent) => {
+      if (mayPresent?.()) await opener.open({ resourceId: value.id });
+    },
+  });
+  const pending = client.request({ intent: "Bring up my note", resourceIds: [], authorizeProvider: true });
+  await opener.open({ resourceId: "later-user-choice" });
+  complete({ id: "model-choice" });
+  await pending;
+  assert.deepEqual(opened, ["later-user-choice"]);
 });

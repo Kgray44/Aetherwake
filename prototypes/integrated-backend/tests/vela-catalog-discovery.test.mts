@@ -129,6 +129,55 @@ test('a model-selected navigation uses the canonical view and back stack without
   } finally { await f.close(); }
 });
 
+test('a model-selected resource opening resolves only a unique scoped target without changing placement', async () => {
+  const f = fixture('open');
+  try {
+    const project = (await f.core.command('desktop', { type: 'createProject', title: 'Synthetic project' })).projects[0];
+    const workspaceId = (await f.core.command('desktop', {
+      type: 'createWorkspace', title: 'Synthetic workspace', projectId: project.id,
+    })).activeWorkspaceId!;
+    const title = 'Synthetic note 1';
+    const addNote = (name: string) => f.core.command('desktop', { type: 'createResource', kind: 'note', title: name, workspaceId });
+    const seeded = await addNote(title);
+    const resource = seeded.resources.find(item => item.title === title)!;
+    const baseline = await addNote('Synthetic note 10');
+    const lookup = async () => {
+      const { input } = await f.granted([], 'Bring up the first note for me.');
+      const request = await f.vela('request', input) as { id: string; planId: string; state: string };
+      assert.equal(request.state, 'completed');
+      const state = await f.state();
+      assert.equal(state.plans.find(plan => plan.id === request.planId)?.steps[0].action.type, 'openResource');
+      const receipt = state.receipts.find(item => item.requestId === request.id)!;
+      assert.equal(receipt.state, 'applied');
+      assert.equal(receipt.providerId, null);
+      return { receipt, matches: state.searchResults?.[receipt.id].map(ref => ref.id) };
+    };
+    const unique = await lookup();
+    assert.equal(unique.receipt.openResourceId, resource.id);
+    assert.deepEqual(unique.matches, [resource.id]);
+    const opened = await f.core.command('openResource', { resourceId: resource.id, origin: { source: 'vela' } });
+    assert.equal(opened.status, 'ready');
+    if (opened.status === 'ready') assert.equal(opened.presentation.mode, 'direct');
+    assert.deepEqual((await f.core.command('desktop', { type: 'snapshot' })).blocks, baseline.blocks);
+
+    await addNote(title);
+    const ambiguous = await lookup();
+    assert.equal(ambiguous.receipt.openResourceId, undefined);
+    assert.equal(ambiguous.matches?.length, 2);
+    assert(ambiguous.matches?.includes(resource.id));
+
+    await f.reopen();
+    const other = (await f.core.command('desktop', { type: 'createProject', title: 'Synthetic other project' })).projects.find(item => item.id !== project.id)!;
+    await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic other workspace', projectId: other.id });
+    const state = await f.state();
+    assert.equal(state.receipts.find(item => item.id === unique.receipt.id)?.openResourceId, undefined);
+    assert.deepEqual(state.searchResults?.[unique.receipt.id], []);
+    const absent = await lookup();
+    assert.equal(absent.receipt.openResourceId, undefined);
+    assert.deepEqual(absent.matches, []);
+  } finally { await f.close(); }
+});
+
 for (const discovery of [false, true])
 test(`reviewed Vela text reaches the model adapter and arranges the exact active workspace with canonical undo (schema discovery: ${discovery})`, async () => {
   const f = fixture('layout', discovery);

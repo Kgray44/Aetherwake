@@ -18,6 +18,10 @@ export function createResourceOpener(options: {
 }) {
   let intent = 0;
   return {
+    capture() {
+      const revision = intent;
+      return () => revision === intent;
+    },
     cancel() {
       intent++;
     },

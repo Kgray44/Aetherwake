@@ -22,6 +22,7 @@ const session = (id) => ({
   instructionSources: ['C:\\synthetic\\AGENTS.md'],
 });
 const readAction = mode === 'search' ? { type: 'search', query: 'calibration' }
+  : mode === 'open' ? { type: 'openResource', query: 'Synthetic note 1' }
   : mode === 'clock' ? { type: 'readLocalFact', capabilityId: 'local.time' } : null;
 const selectedAction = () => {
   if (mode === 'navigate') return { type: 'navigate', target: { kind: 'constellation', projectId: null } };

@@ -57,6 +57,7 @@ import { mountBlockChat } from "../../../block-library/chat-view.ts";
 import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
+import type { VelaPlan, VelaRequest, VelaState } from "../../../vela-core/src/contracts.ts";
 import { createVelaExperience } from "./vela-experience";
 import { createVelaManifestation } from "./vela-manifestation.ts";
 import { createConversationExecutionPort } from "./conversation-execution";
@@ -268,6 +269,7 @@ export function installApplication(hooks: Hooks) {
   addEventListener("resize", surfaces.viewportChanged);
   let velaPanel: ReturnType<typeof mountVelaPanel> | null = null;
   let velaOpen = false;
+  let velaOpening = 0;
   let velaRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   const velaContent = document.createElement("div");
   velaContent.className = "application-vela-content";
@@ -299,8 +301,13 @@ export function installApplication(hooks: Hooks) {
       state?.navigation.kind === "workspace" && state.activeWorkspaceId
         ? { workspaceId: state.activeWorkspaceId, bounds: viewBounds() }
         : null,
-    changed: (name, result) =>
-      enqueue(async () => {
+    presentationFence: () => {
+      const current = resourceOpener.capture();
+      const opening = velaOpening;
+      return () => velaOpen && velaOpening === opening && current();
+    },
+    changed: async (name, result, mayPresent) => {
+      await enqueue(async () => {
         const previousWorkspaceId = state?.activeWorkspaceId;
         const next = (await host.command!("desktop", {
           type: "snapshot",
@@ -335,7 +342,35 @@ export function installApplication(hooks: Hooks) {
               workspaceId: next.activeWorkspaceId,
             });
         }
-      }),
+      });
+      const request = name === "request" ? (result as VelaRequest) : undefined;
+      const applied = name === "apply" ? (result as VelaPlan) : undefined;
+      const planId =
+        request?.state === "completed"
+          ? request.planId
+          : applied?.state === "applied" &&
+              applied.steps.at(-1)?.action.type === "openResource"
+            ? applied.id
+            : undefined;
+      if (!planId || !mayPresent?.()) return;
+      try {
+        const observed = (await host.command!("vela", {
+          name: "state",
+          input: {},
+        })) as VelaState;
+        const receipt = observed.receipts.find(
+          (item) => item.planId === planId && item.state === "applied" && item.openResourceId,
+        );
+        if (!receipt?.openResourceId || !mayPresent()) return;
+        const opened = await resourceOpener.open({
+          resourceId: receipt.openResourceId,
+          origin: { source: "vela" },
+        });
+        if (opened.status === "ready") surfaces.close("vela");
+      } catch (error) {
+        report(error);
+      }
+    },
     observed: (value) => {
       if (
         value.requests.some((r) => r.state === "planning") ||
@@ -2270,6 +2305,7 @@ export function installApplication(hooks: Hooks) {
         },
       });
     velaOpen = true;
+    velaOpening++;
     const surface = surfaces.open({
       id: "vela",
       anchor: el("#vela"),
