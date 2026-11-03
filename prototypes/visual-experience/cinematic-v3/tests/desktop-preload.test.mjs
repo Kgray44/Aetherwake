@@ -117,6 +117,7 @@ test("renderer cannot invoke private grant creation, raw provider execution or h
     "authorizeConversationSend",
     "conversationSend",
     "execute",
+    "send",
     "registerVelaNativeCapabilities",
     "constructor",
     "__proto__",

@@ -18,7 +18,7 @@ const {
   readdirSync,
   writeFileSync,
 } = require("node:fs");
-const { randomUUID, createHash } = require("node:crypto");
+const { createHash } = require("node:crypto");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 const { sendToWindow } = require("./host-lifecycle.cjs");
@@ -101,7 +101,6 @@ const verify =
   process.argv.includes("--integration-product-ui") ||
   process.argv.includes("--integration-visual-smoke") ||
   process.argv.includes("--integration-verify") ||
-  process.argv.includes("--integration-live") ||
   process.argv.includes("--integration-benchmark") ||
   process.argv.includes("--integration-constellation") ||
   process.argv.includes("--integration-organization") ||
@@ -116,6 +115,8 @@ const offscreenScale = process.argv.includes("--integration-benchmark") &&
   process.argv.includes("--offscreen-renderer");
 const profileArg = process.argv.find((a) => a.startsWith("--profile="));
 const checkCatalog = process.argv.includes("--check-model-catalog");
+if (process.argv.includes("--integration-live"))
+  throw Error("use_standard_conversation_review");
 if (
   checkCatalog &&
   (verify || !profileArg || !path.isAbsolute(profileArg.slice(10)))
@@ -183,7 +184,6 @@ if (deadlineArgument) {
     !Number.isInteger(deadlineMs) ||
     deadlineMs < 1000 ||
     deadlineMs > 180000 ||
-    process.argv.includes("--integration-live") ||
     process.argv.includes("--integration-vela-live")
   )
     throw new Error("bounded_offline_verification_profile_required");
@@ -484,58 +484,7 @@ app.whenReady().then(async () => {
         result = Object.values((await call("snapshot", {})).executions);
       else if (command === "interrupt")
         result = await call("interrupt", { executionId: input.executionId });
-      else if (command === "send") {
-        if (
-          typeof input.content !== "string" ||
-          !input.content.trim() ||
-          Buffer.byteLength(input.content) > 16000
-        )
-          throw new Error("invalid_message");
-        const state = await call("desktop", { type: "snapshot" });
-        const resource = state.resources.find(
-          (r) =>
-            r.id === input.resourceId &&
-            r.kind === "conversation" &&
-            r.available !== false,
-        );
-        if (!resource) throw new Error("resource_not_found");
-        if (resource.provider === "local")
-          result = await call("addMessage", {
-            resourceId: resource.id,
-            role: "user",
-            content: input.content,
-            sensitivity: "internal",
-            expectedRevision: input.expectedVersion,
-          });
-        else {
-          // Dedicated owner-requested verification authorizes this exact synthetic prompt only.
-          // Ordinary application launches always require the native dialog.
-          const syntheticAuthorization =
-            process.argv.includes("--integration-live") &&
-            input.content ===
-              "Reply with exactly AERYNTH_LIVE_OK. Do not use tools or inspect files.";
-          const response = syntheticAuthorization
-            ? { response: 1 }
-            : await dialog.showMessageBox(win, {
-                type: "question",
-                title: "Authorize Codex turn",
-                message: `Send this message to Codex in “${resource.title}”?`,
-                detail: `Uses your configured local Codex account and native instructions. This review build requests a read-only sandbox and denies approval requests. It does not grant tool or write approvals.\n\n${input.content}`,
-                buttons: ["Cancel", "Send once"],
-                defaultId: 0,
-                cancelId: 0,
-                noLink: true,
-              });
-          if (response.response !== 1)
-            throw new Error("authorization_cancelled");
-          result = await call("execute", {
-            resourceId: resource.id,
-            prompt: input.content,
-            authorized: true,
-            commandId: randomUUID(),
-          });
-        }
-      } else if (command === "firstPartyChat") {
+      else if (command === "firstPartyChat") {
         result = await firstPartyChatCommand({
           input,
           win,
@@ -962,11 +911,9 @@ app.whenReady().then(async () => {
     }
     const checks = require("./desktop-verify.cjs");
     await (
-      process.argv.includes("--integration-live")
-        ? checks.live
-        : process.argv.includes("--integration-benchmark")
-          ? checks.benchmark
-          : checks.verify
+      process.argv.includes("--integration-benchmark")
+        ? checks.benchmark
+        : checks.verify
     )({ win, app, privateRoot, call, source, moduleStarted });
   }
 });

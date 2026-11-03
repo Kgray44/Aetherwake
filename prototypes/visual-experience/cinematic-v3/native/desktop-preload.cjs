@@ -52,7 +52,6 @@ contextBridge.exposeInMainWorld(
           "openResource",
           "providerConnection",
           "interrupt",
-          "send",
           "viewState",
           "graphAction",
           "conversation",
