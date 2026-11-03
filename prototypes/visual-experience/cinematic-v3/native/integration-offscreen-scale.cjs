@@ -54,7 +54,7 @@ exports.verify = async ({
   };
   const snapshot = () => js("window.__aerynth.application()");
   const execute = (action) => js("window.__aerynth.execute(" + JSON.stringify(action) + ")");
-  const metrics = async () => {
+  const chromiumMetrics = async () => {
     const { metrics } = await devtools.sendCommand("Performance.getMetrics");
     return Object.fromEntries(metrics.map(({ name, value }) => [name, value]));
   };
@@ -64,7 +64,7 @@ exports.verify = async ({
   ].filter((key) => Number.isFinite(before[key]) && Number.isFinite(after[key]))
     .map((key) => [key, after[key] - before[key]]));
   const sample = async (label) => {
-    const before = profile ? await metrics() : null;
+    const before = profile ? await chromiumMetrics() : null;
     await js("window.__aerynth.resetMetrics()");
     paintIntervals.length = 0;
     lastPaint = paintCount = 0;
@@ -89,7 +89,7 @@ exports.verify = async ({
       callbacks: metrics.callbacks, draws: metrics.draws, paints: paintCount,
       callbackIntervalsMs: percentiles(metrics.intervals),
       offscreenPaintIntervalsMs: percentiles(paintIntervals),
-      ...(before ? { chromiumPerformanceDelta: delta(before, await metrics()) } : {}),
+      ...(before ? { chromiumPerformanceDelta: delta(before, await chromiumMetrics()) } : {}),
     });
   };
   const navigate = (target) => execute({ type: "navigate", target });
