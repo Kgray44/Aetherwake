@@ -73,6 +73,8 @@ lines.on("line", async (line) => {
         "checklists",
         "timelines",
         "taskObjectives",
+        "missions",
+        "missionStartReviewed",
         "velaRequestPreview",
         "velaNextWorkflowStage",
         "velaWorkflowReview",

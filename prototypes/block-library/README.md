@@ -24,7 +24,9 @@ Supply `restore(): Promise<void>` to the same identity mount for its explicit Re
 
 Bridge these methods to their matching `WorkspaceTemplatePort` / `BlockLibraryHostPort` promise methods: `capabilities`, `createBlock`, `listTemplates`, `getTemplate`, `saveTemplate`, `renameTemplate`, `archiveTemplate`, `previewTemplate`, `applyTemplate`, `requestVelaTemplate`. Native `readProject`, `readWorkspace` and `readResource` must return effective authorization and current state/version; fail closed rather than inferring access from existence.
 
-`requestVelaTemplate` only invokes the optional real `VelaTemplatePlanner.plan` port. No planner or unavailable Vela capability yields `vela_planning_unavailable`. A returned plan retains request/provider/model attribution and is reviewed, saved and checked before apply. No fallback AI generation, transcript cloning or Codex delegation is hidden in this module.
+`requestVelaTemplate` invokes the optional `VelaTemplatePlanner.plan` port. `createWorkspaceArchitect(host)` supplies the local planner. It interprets purpose and requested block types, matches authorized canonical resource titles in the selected destination scope, and calculates editable Freeform placements. Its provenance identifies local planning and omits a model. The template library shows the layout and resource bindings before save, and native apply checks access and versions again inside the transaction. A missing planner or capability yields `vela_planning_unavailable`.
+
+An explicitly fresh Checklist role uses `emptyChecklist: true` and creates a blank canonical Checklist on apply. Capturing an existing Checklist still requires a reference to its original identity. The planner accesses title, kind, scope and version metadata and makes zero provider calls.
 
 ## Behavior
 

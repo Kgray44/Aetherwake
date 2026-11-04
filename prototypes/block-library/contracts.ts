@@ -247,6 +247,8 @@ export type TemplateResourceRole = {
         kind: BlockKind;
         title: string;
         provider?: "local" | "codex";
+        /** An explicit fresh Checklist, never an implicit clone of an existing document. */
+        emptyChecklist?: true;
       }
     | {
         mode: "reference";
@@ -340,6 +342,7 @@ export type VelaTemplateRequest = {
   prompt: string;
   projectId: string | null;
 };
+export const WORKSPACE_ARCHITECT_PROVIDER = "local-workspace-architect";
 export type VelaTemplatePlan = TemplateDraft & {
   provenance: { requestId: string; providerId: string; model?: string };
 };
@@ -435,6 +438,11 @@ export interface CanonicalTemplateHost<Database = unknown> {
     authorized: boolean;
   } | null;
   findResources?(input: ResourceDiscoveryInput): ResourceDiscoveryPage;
+  /** Metadata-only candidates from the exact authorized destination scope. */
+  workspacePlanningResources?(projectId: string | null): {
+    resources: ResourceCandidate[];
+    complete: boolean;
+  };
   readPlacement?(id: string): {
     id: string;
     resourceId?: string;

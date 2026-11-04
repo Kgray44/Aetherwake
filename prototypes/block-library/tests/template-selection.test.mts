@@ -5,6 +5,7 @@ import { runInNewContext } from 'node:vm';
 import { mountWorkspaceTemplates } from '../view.ts';
 import { predefinedTemplates } from '../model.ts';
 import type { TemplateSummary, WorkspaceTemplate, WorkspaceTemplatePort } from '../contracts.ts';
+import { WORKSPACE_ARCHITECT_PROVIDER } from '../contracts.ts';
 import { blockDocument } from './component-dom.mts';
 import { until } from '../../conversation-product/test/component-dom.mts';
 const { expressions, compileExpression } = createRequire(import.meta.url)('./library-native-expressions.cjs');
@@ -49,4 +50,41 @@ test('actual template list and generated native selector retain template identit
   assert.equal(ui.root.querySelector(selector), null, 'A removed template cannot silently retarget a replacement row with the same label');
   assert.deepEqual(selected, [template.id]);
 
+});
+
+test('Vela workspace review shows provenance and updates the proposed layout before saving selected bindings', async t => {
+  const ui = blockDocument(); t.after(ui.install());
+  const draft = predefinedTemplates()[1];
+  const noWrite = async () => { throw Error('Unexpected template mutation'); };
+  const saved: string[][] = [];
+  const port: WorkspaceTemplatePort = {
+    async capabilities() { return { revision: 1, kinds: {}, providers: {}, velaPlanning: { state: 'available' } }; },
+    async listTemplates() { return []; },
+    async requestVelaTemplate(input) {
+      assert.equal(input.prompt, 'Plan a development workspace');
+      return { ...draft, provenance: { requestId: input.requestId, providerId: WORKSPACE_ARCHITECT_PROVIDER } };
+    },
+    async saveTemplate(input) {
+      saved.push(input.body.resources.map(role => role.key));
+      return { ...input, id: 'template:reviewed', source: 'vela', version: 1, state: 'active', createdAt: '', updatedAt: '' };
+    },
+    getTemplate: noWrite, renameTemplate: noWrite, archiveTemplate: noWrite, previewTemplate: noWrite, applyTemplate: noWrite,
+  };
+  const controller = mountWorkspaceTemplates(ui.root, port, { projectId: null, onClose() {}, onApplied: noWrite });
+  t.after(() => controller.dispose());
+  await controller.refresh();
+  ui.root.querySelectorAll('button').find(button => button.textContent === 'Ask Vela').onclick();
+  ui.root.querySelector('textarea').value = 'Plan a development workspace';
+  ui.root.querySelector('form').onsubmit({ preventDefault() {} });
+  await until(() => ui.root.querySelectorAll('.aw-library__layout-block').length === draft.body.placements.length);
+  assert.ok(ui.root.querySelectorAll('.aw-library__hint').some(node => node.textContent.includes('Local workspace planner')));
+  const exclude = ui.root.querySelectorAll('.aw-library__bindings input')[0];
+  const omitted = draft.body.resources[0].key;
+  exclude.checked = false;
+  exclude.onchange();
+  assert.equal(ui.root.querySelectorAll('.aw-library__layout-block').length, draft.body.placements.filter(role => role.resourceKey !== omitted).length);
+  assert.deepEqual(saved, []);
+  ui.root.querySelectorAll('button').find(button => button.textContent === 'Save proposal as template').onclick();
+  await until(() => saved.length === 1);
+  assert.deepEqual(saved, [draft.body.resources.slice(1).map(role => role.key)]);
 });

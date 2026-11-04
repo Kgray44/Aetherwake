@@ -21,6 +21,7 @@ import type {
   LibraryRecommendationContext,
   ResourceDiscoveryInput,
 } from "./contracts.ts";
+import { WORKSPACE_ARCHITECT_PROVIDER } from "./contracts.ts";
 import {
   searchBlocks,
   blockDefinition,
@@ -69,8 +70,13 @@ const errorText = (error: unknown) =>
     ? error.message.replaceAll("_", " ")
     : "The host could not complete this operation.";
 const commandId = () => "library:" + crypto.randomUUID();
+type TemplateLayout = Pick<WorkspaceTemplate, "body">;
+const planningSource = (provenance: VelaTemplatePlan["provenance"]) =>
+  provenance.providerId === WORKSPACE_ARCHITECT_PROVIDER
+    ? "Local workspace planner"
+    : provenance.providerId + (provenance.model ? " · " + provenance.model : "");
 const placementLabel = (
-  template: WorkspaceTemplate,
+  template: TemplateLayout,
   placement: TemplatePlacementRole,
 ) =>
   placement.resourceKey !== undefined
@@ -87,7 +93,7 @@ const placementLabel = (
           ? "Resource Explorer — Collection"
           : "Resource Explorer — Resources";
 const kindTitle = (kind: BlockInstanceKind) => REGISTERED_BLOCKS.find(definition => definition.kind === kind)?.title ?? 'Unavailable block';
-const placementKind = (template: WorkspaceTemplate, placement: TemplatePlacementRole): BlockInstanceKind | undefined =>
+const placementKind = (template: TemplateLayout, placement: TemplatePlacementRole): BlockInstanceKind | undefined =>
   placement.resourceKey !== undefined
     ? template.body.resources.find(role => role.key === placement.resourceKey)?.source.kind
     : placement.subjectBinding.mode === 'project-context'
@@ -1202,7 +1208,7 @@ export function mountWorkspaceTemplates(
       if (!ui.disposed) ui.status.textContent = errorText(error);
     }
   }
-  function previewLayout(template: WorkspaceTemplate) {
+  function previewLayout(template: TemplateLayout) {
     const diagram = node("div", "aw-library__layout");
     diagram.setAttribute("aria-label", "Template layout preview");
     const placements = template.body.placements;
@@ -1294,7 +1300,7 @@ export function mountWorkspaceTemplates(
       const result = await run("Checking current access and versions…", () =>
         port.previewTemplate(candidate),
       );
-      if (result) {
+      if (result && candidate.title === name.value) {
         checked = candidate;
         summary.textContent =
           result.newResourceCount +
@@ -1315,7 +1321,7 @@ export function mountWorkspaceTemplates(
       event.preventDefault();
       void (async () => {
         if (!checked) await inspect();
-        if (!checked || ui.disposed) return;
+        if (!checked || checked.title !== name.value || ui.disposed) return;
         const result = await run("Creating workspace atomically…", () =>
           port.applyTemplate(checked!),
         );
@@ -1388,11 +1394,7 @@ export function mountWorkspaceTemplates(
         node(
           "p",
           "aw-library__hint",
-          "Vela plan from " +
-            template.provenance.providerId +
-            (template.provenance.model
-              ? " · " + template.provenance.model
-              : ""),
+          "Proposal source · " + planningSource(template.provenance),
         ),
       );
   }
@@ -1656,7 +1658,7 @@ export function mountWorkspaceTemplates(
       node(
         "p",
         "",
-        "Describe the work you want to do. Vela returns a proposal for review; resources are created only when you apply it.",
+          "Describe the work you want to do. Review the proposed layout and resource bindings before creating a workspace.",
       ),
     );
     const form = node("form"),
@@ -1691,26 +1693,29 @@ export function mountWorkspaceTemplates(
     detail.append(form);
   }
   function showVelaPlan(plan: VelaTemplatePlan) {
+    const enabled = new Set(plan.body.resources.map(role => role.key));
+    const diagram = node("div");
+    diagram.append(previewLayout(plan));
     detail.replaceChildren(
       node("h3", "", plan.name),
       node("p", "", plan.description),
+      diagram,
       node(
         "p",
         "aw-library__hint",
-        "Proposal from " +
-          plan.provenance.providerId +
-          ". Review and save before applying.",
+        "Proposal source · " + planningSource(plan.provenance) +
+          ". Choose which resources to include, then save the template to review and apply it.",
       ),
     );
-    const roles = node("ul");
-    for (const role of plan.body.resources)
-      roles.append(
-        node(
-          "li",
-          "",
-          role.label + " · " + role.source.kind + " · " + role.source.mode,
-        ),
-      );
+    const selectedBody = () => ({
+      ...plan.body,
+      resources: plan.body.resources.filter(role => enabled.has(role.key)),
+      placements: plan.body.placements.filter(role => role.resourceKey === undefined || enabled.has(role.resourceKey)),
+      groups: plan.body.groups.filter(group => enabled.has(group.groupKey)).map(group => ({
+        ...group, taskKeys: group.taskKeys.filter(key => enabled.has(key)),
+      })),
+    });
+    const roles = node("ul", "aw-library__bindings");
     detail.append(roles);
     const name = node("input");
     name.value = plan.name;
@@ -1718,7 +1723,7 @@ export function mountWorkspaceTemplates(
     name.required = true;
     const save = button("Save proposal as template", () => {
       void run("Saving Vela proposal…", () =>
-        port.saveTemplate({ ...plan, name: name.value, source: "vela" }),
+        port.saveTemplate({ ...plan, body: selectedBody(), name: name.value, source: "vela" }),
       ).then((value) => {
         if (value) {
           showTemplate(value);
@@ -1726,6 +1731,25 @@ export function mountWorkspaceTemplates(
         }
       });
     });
+    for (const role of plan.body.resources) {
+      const include = node("input");
+      include.type = "checkbox";
+      include.checked = true;
+      include.onchange = () => {
+        if (include.checked) enabled.add(role.key);
+        else enabled.delete(role.key);
+        const body = selectedBody();
+        diagram.replaceChildren(previewLayout({ body }));
+        save.disabled = body.placements.length === 0;
+      };
+      const item = node("li");
+      item.append(field(
+        role.label + " · " + kindTitle(role.source.kind) + " · " +
+          (role.source.mode === "new" ? "Start empty" : "Reuse existing"),
+        include,
+      ));
+      roles.append(item);
+    }
     detail.append(field("Template name", name), save);
   }
   search.oninput = () => {

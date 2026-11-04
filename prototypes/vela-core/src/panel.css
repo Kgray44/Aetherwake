@@ -322,6 +322,9 @@
   gap: 6px;
   flex-wrap: nowrap;
 }
+.vela-core-compose-actions:has([data-icon="missions"]) {
+  flex-wrap: wrap;
+}
 .vela-core-icon {
   position: relative;
   display: inline-grid;
@@ -468,6 +471,40 @@
 }
 .vela-core-more details + details {
   border-top: 1px solid #d8d0f014;
+}
+.vela-missions-body,
+.vela-missions-list {
+  display: grid;
+  gap: 8px;
+}
+.vela-missions-list > button {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.vela-missions-list > [aria-current="true"] {
+  border-color: var(--vela-light);
+}
+.vela-missions-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 8px;
+}
+.vela-missions-steps,
+.vela-missions-timeline {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-inline-start: 24px;
+}
+.vela-missions-steps > li {
+  padding-block: 6px;
+  border-bottom: 1px solid var(--vela-edge);
+}
+.vela-missions-timeline time {
+  display: block;
+  color: var(--vela-muted);
+  font-size: 12px;
 }
 .vela-core-search {
   display: flex;
@@ -831,6 +868,9 @@
 }
 .vela-core-icon-mark[data-icon="history"] {
   --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M4%2012a8%208%200%201%201%202%205M4%205v7h6M12%208v5l3%202%22%2F%3E%3C%2Fsvg%3E");
+}
+.vela-core-icon-mark[data-icon="missions"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M9%203h6v5H9zM4%2016h6v5H4zM14%2016h6v5h-6zM12%208v4M7%2016v-4h10v4%22%2F%3E%3C%2Fsvg%3E");
 }
 
 .vela-core-status[data-request-state="submitting"],

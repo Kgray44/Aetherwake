@@ -19,6 +19,7 @@ import type { TimelineRequest,TimelineResponse,TimelineDomainEvent } from './tim
 import type { TaskObjectiveRequest,TaskObjectiveResponse,TaskObjectiveEvent } from './task-objectives.mts';
 import type { TaskTargetQuery,TaskTargetPage } from '../../application-contract/task-targets.ts';
 import type { GitHubTimelineCommand } from '../../application-contract/github-timeline.ts';
+import type { MissionRequest, MissionResponse } from './mission-contracts.mts';
 export type NoteMethod = 'readNote'|'saveNoteDraft'|'commitNote'|'discardNoteDraft'|'renameNote';
 export type NoteRequest = { [K in NoteMethod]: {name:K;input:Parameters<NoteExperienceService[K]>[0]} }[NoteMethod];
 export type LibraryMethod = 'capabilities'|'preferences'|'setFavorite'|'getBlockSettings'|'configureBlock'|'findResources'|'attachBlock'|'createBlock'|'listTemplates'|'getTemplate'|'saveTemplate'|'renameTemplate'|'archiveTemplate'|'previewTemplate'|'applyTemplate'|'previewWorkspaceFromResources'|'workspaceFromResources'|'requestVelaTemplate'|'subjectTargets'|'createSubjectBlock'|'projectOverview'|'browseResources';
@@ -184,6 +185,8 @@ export interface Options {
   velaPlanningPort?: VelaPlanningPort;
 }
 export interface CommandMap {
+  missions: { input: MissionRequest; output: MissionResponse };
+  missionStartReviewed: { input: Extract<MissionRequest, { name: 'start' }>['input']; output: MissionResponse };
   /** Private desktop-host command. Local paths never cross renderer IPC. */
   mediaImportTrusted: {
     input: Omit<MediaImportRequest, 'url'> & { commandId: string; selection: MediaSelection };

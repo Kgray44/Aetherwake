@@ -14,7 +14,7 @@ import type {
   LibraryCapabilities,
 } from "./contracts.ts";
 import { check, identifier, text } from "./model.ts";
-import { assertBlockAvailable, blockDefinition } from "./registry.ts";
+import { assertBlockAvailable, blockDefinition, BUILTIN_BLOCKS } from "./registry.ts";
 
 export type TaskGroupMembershipCommand = Extract<
   DesktopCommand,
@@ -169,6 +169,22 @@ export function createCanonicalTemplateHost(
     readProject,
     readResource,
     readWorkspace,
+    workspacePlanningResources(projectId) {
+      requireProject(projectId);
+      const scanLimit = 400;
+      const rows = db.prepare(
+        "SELECT id,title FROM resources WHERE project_id IS ? AND state='active' ORDER BY id LIMIT ?",
+      ).all(projectId, scanLimit + 1);
+      const resources = rows.slice(0, scanLimit).flatMap(row => {
+        const id = String(row.id);
+        if (!authorized("resource", id) ||
+            !BUILTIN_BLOCKS.some(definition => definition.kind === options.resourceKind(id))) return [];
+        const resource = readResource(id);
+        if (!resource?.authorized || resource.projectId !== projectId) return [];
+        return [{ id, title: String(row.title), kind: resource.kind, version: resource.version, projectId }];
+      });
+      return { resources, complete: rows.length <= scanLimit };
+    },
     subjectTargets(workspaceId) {
       const workspace = readWorkspace(identifier(workspaceId));
       check(workspace?.authorized, "workspace_unavailable");

@@ -166,10 +166,9 @@ export function validateBody(input: TemplateBody): TemplateBody {
     object(
       role.source,
       role.source?.mode === "new"
-        ? ["mode", "kind", "title", "provider"]
+        ? ["mode", "kind", "title", "provider", "emptyChecklist"]
         : ["mode", "kind", "resourceId", "expectedVersion"],
     );
-    check(role.source.kind !== 'checklist' || role.source.mode !== 'new', 'checklist_template_reference_required');
     check(role.source.kind !== 'agent' || role.source.mode !== 'new', 'agent_template_reference_required');
     check(role.source.kind !== 'timeline' || role.source.mode !== 'new', 'timeline_template_reference_required');
     check(role.source.kind !== 'task_objective' || role.source.mode !== 'new', 'task_objective_template_reference_required');
@@ -180,6 +179,10 @@ export function validateBody(input: TemplateBody): TemplateBody {
     );
     if (role.source.mode === "new") {
       check(role.source.kind !== 'file' && role.source.kind !== 'link', 'media_import_required');
+      check(
+        role.source.kind === "checklist" ? role.source.emptyChecklist === true : role.source.emptyChecklist === undefined,
+        "checklist_template_reference_required",
+      );
       check(
         role.source.provider === undefined ||
           (role.source.kind === "conversation" &&
@@ -196,6 +199,7 @@ export function validateBody(input: TemplateBody): TemplateBody {
           ...(role.source.provider === undefined
             ? {}
             : { provider: role.source.provider }),
+          ...(role.source.emptyChecklist === true ? { emptyChecklist: true as const } : {}),
         },
       };
     }

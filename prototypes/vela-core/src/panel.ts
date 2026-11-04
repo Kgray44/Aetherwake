@@ -5,6 +5,7 @@ import { velaPanelStatus } from './panel-status.ts';
 import { projectVelaManifestation, type VelaManifestationState } from './manifestation-state.ts';
 import { summarizeSystemMemory } from './system-information.ts';
 import { githubRepository } from '../../application-contract/github-timeline.ts';
+import type { MissionPreview } from '../../integrated-backend/src/mission-contracts.mts';
 
 export interface VelaPanelPresentation {
   phase: 'idle' | 'receiving' | 'thinking' | 'planning' | 'review' | 'applying' | 'attention' | 'error';
@@ -22,6 +23,12 @@ export interface VelaPanelOptions {
   /** Real stable nodes for the host's existing MotionCoordinator/geometry; observational only, null retires them. */
   onManifestation?: (value: VelaPanelManifestation | null) => void;
   listTimelineRepositories?: () => Promise<string[]>;
+  missions?: {
+    element: HTMLElement;
+    preview(intent: string, agentProfileId?: string): Promise<MissionPreview | null>;
+    review(preview: MissionPreview, onStarted: () => void, agentProfileId?: string): void;
+    setVisible(visible: boolean): void;
+  };
 }
 export interface VelaPanelManifestation {
   projection: Readonly<VelaManifestationState>; view: 'current' | 'history'; baseline: boolean;
@@ -175,10 +182,13 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   settings.body.append(label('Attention mode', mode), label('Keep an app activity digest', monitor), label('Allow separately approved delegated work', delegation), el('p', 'vela-core-secondary', 'Quiet keeps updates silent. Opening Vela does not mark them reviewed. Only selected app events are used; external monitoring is unavailable.'), attentionRules.node,
     button('Save preferences', async () => { if (!current) return; await client.preferences({ expectedVersion: current.preferences.version, patch: { mode: mode.value as VelaState['preferences']['mode'], monitoringEnabled: monitor.checked, delegationEnabled: delegation.checked, allowedEventTypes: eventTypes.value.split(',').map(s => s.trim()).filter(Boolean), minimumSeverity: severity.value as VelaState['preferences']['minimumSeverity'], maxInterruptionsPerHour: Number(budget.value) } }); await refresh(); }));
   const attentionPanel = disclosure('Attention', 'vela-core-attention'), attention = attentionPanel.body;
+  const missionsPanel = disclosure('Missions', 'vela-core-missions');
+  if (options.missions) missionsPanel.body.append(options.missions.element);
   const adaptationPanel = disclosure('Personalization', 'vela-core-adaptation'), adaptationBody = adaptationPanel.body;
   const contextPanel = disclosure('Request details and sources', 'vela-core-context'), contextBody = contextPanel.body;
   const preferencesPanel = disclosure('Preferences', 'vela-core-preferences'); preferencesPanel.body.append(settings.node, adaptationPanel.node, contextPanel.node);
   more.append(contextualClose, sourcePanel.node, native.node, preferencesPanel.node, connection.node, attentionPanel.node);
+  if (options.missions) more.append(missionsPanel.node);
   flow.append(manifestation, history, more);
   const status = el('p', 'vela-core-status'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite'); status.hidden = true;
   const errorBox = el('div', 'vela-core-error'); errorBox.setAttribute('role', 'alert'); errorBox.hidden = true;
@@ -349,11 +359,15 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const stop = icon('Stop', '■', 'stop', async () => { const state = await client.state(), pending = state.requests.findLast(request => request.state === 'planning' || state.plans.some(plan => plan.requestId === request.id && plan.state === 'applying')); if (pending) { await client.cancel(pending.id); await refresh(); } else { status.textContent = 'No request is running.'; } }); stop.hidden = true;
   const sourcesControl = icon('Add sources', '+', 'sources', () => reveal('sources', search)), toolsControl = icon('Local tools', '⋯', 'tools', () => reveal('tools', nativeTitle)), preferencesControl = icon('Vela preferences', '⚙', 'preferences', () => reveal('preferences')), providerControl = icon('Provider', '◇', 'provider', () => reveal('provider', providerRoutes.hidden ? allowProvider : providerRoutes.querySelector('button') ?? undefined)), attentionControl = icon('Attention', '·', 'attention', () => reveal('attention'));
   const historyControl = icon('History', '↶', 'history', () => setView(view() === 'history' ? 'current' : 'history')); historyControl.setAttribute('aria-expanded', 'false'); historyControl.setAttribute('aria-controls', history.id);
+  const missionsControl = icon('Missions', '▤', 'missions', () => reveal('missions'));
   const contextPanels = new Map([
     ['sources', { panel: sourcePanel, trigger: sourcesControl }], ['tools', { panel: native, trigger: toolsControl }], ['preferences', { panel: preferencesPanel, trigger: preferencesControl }], ['provider', { panel: connection, trigger: providerControl }], ['attention', { panel: attentionPanel, trigger: attentionControl }],
   ]);
+  if (options.missions) contextPanels.set('missions', { panel: missionsPanel, trigger: missionsControl });
   for (const [key, entry] of contextPanels) { entry.panel.node.hidden = true; entry.panel.node.id = instanceId + '-' + key; entry.trigger.setAttribute('aria-controls', entry.panel.node.id); entry.trigger.setAttribute('aria-expanded', 'false'); entry.panel.node.addEventListener('toggle', () => { if (activeContext === key && !entry.panel.node.open) closeContext(); }); }
-  const composeActions = el('div', 'vela-core-compose-actions'); composeActions.append(sourcesControl, toolsControl, preferencesControl, providerControl, attentionControl, historyControl, stop, send);
+  const composeActions = el('div', 'vela-core-compose-actions'); composeActions.append(sourcesControl, toolsControl, preferencesControl, providerControl, attentionControl, historyControl);
+  if (options.missions) composeActions.append(missionsControl);
+  composeActions.append(stop, send);
   form.append(intent, selection, providerChoice, composeActions);
   intent.addEventListener('input', () => { draftRevision++; send.disabled = busy || !intent.value.trim(); present(); }); intent.addEventListener('compositionstart', () => { composing = true; }); intent.addEventListener('compositionend', () => { composing = false; });
   intent.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing && !composing && event.keyCode !== 229 && (!event.shiftKey || event.ctrlKey || event.metaKey)) { event.preventDefault(); if (!busy && intent.value.trim()) form.requestSubmit(); } });
@@ -366,9 +380,33 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     ...(connected && handoffSelection ? { handoffSourceRequestId: handoffSelection.requestId } : {}),
     ...(connected && routingAgentSelection ? { routingAgentId: routingAgentSelection.id } : {}),
     ...(connected && (useAutomaticOnce || handoffSelection && !routingAgentSelection) ? { overrideDefaults: true as const } : {}),
-  }, revision = draftRevision, submittedView = ++viewRevision; transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
+  }, revision = draftRevision, submittedView = ++viewRevision;
+    const defaults = useAutomaticOnce ? undefined : current?.routingSettings?.effective;
+    const agentProfileId = routingAgentSelection?.id;
+    const checkMission = options.missions && !selected.size && !chosenProviderId && !allowProvider.checked &&
+      (!routeMode.value || routeMode.value === 'auto') && !routeModel.value && !routeEffort.value && !routeHistory.checked && !routeEscalation.checked &&
+      !handoffSelection && !defaults?.providerId && !defaults?.model && !defaults?.reasoningEffort &&
+      (!defaults?.mode || defaults.mode === 'auto');
+    transientView = 'current'; allowProvider.checked = false; useAutomaticOnce = false; routeHistory.checked = routeEscalation.checked = false; if (!connected) chosenProviderId = null; renderProviderChoice(); closeContext(false); renderReading();
     void run(async () => { busy = true; send.disabled = true; stop.hidden = false; form.setAttribute('aria-busy', 'true'); errorBox.hidden = true; status.dataset.requestState = 'submitting'; delete status.dataset.planState; delete status.dataset.actionState; status.hidden = false; status.textContent = 'Checking how to handle this…'; present();
       try {
+        if (checkMission && options.missions) {
+          stop.hidden = true;
+          const preview = await options.missions.preview(submitted.intent, agentProfileId);
+          if (preview) {
+            renderStatus(current ?? { requests: [], plans: [], receipts: [] });
+            if (!disposed && observing && draftRevision === revision && intent.value === submitted.intent) {
+              options.missions.review(preview, () => {
+                if (draftRevision !== revision || intent.value !== submitted.intent) return;
+                intent.value = ''; send.disabled = true;
+                if (agentProfileId && routingAgentSelection?.id === agentProfileId) { routingAgentSelection = null; renderSelection(); }
+              }, agentProfileId);
+              reveal('missions');
+            }
+            return;
+          }
+          stop.hidden = false;
+        }
         const recorded = await client.request(submitted);
         if (disposed) return;
         if (recorded.handoff?.sourceRequestId === handoffSelection?.requestId && recorded.handoff &&
@@ -391,8 +429,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     });
   });
   shell.append(flow, errorBox, status, form); root.append(shell);
-  function reveal(key: string, focus?: HTMLElement) { const entry = contextPanels.get(key); if (!entry) return; for (const [name, item] of contextPanels) { item.panel.node.hidden = name !== key; item.trigger.setAttribute('aria-expanded', String(name === key)); } activeContext = key; contextTrigger = entry.trigger; more.hidden = false; more.setAttribute('aria-label', entry.trigger.getAttribute('aria-label')!); entry.panel.node.open = true; lastDisclosure = entry.panel.node; updatePresence(); entry.panel.node.scrollIntoView({ block: 'nearest' }); (focus && !(focus as HTMLInputElement).disabled ? focus : entry.panel.summary).focus(); present(); }
-  function closeContext(restoreFocus = true) { if (more.hidden) return; const previous = contextTrigger; for (const entry of contextPanels.values()) { entry.panel.node.hidden = true; entry.trigger.setAttribute('aria-expanded', 'false'); } activeContext = null; more.hidden = true; lastDisclosure = null; updatePresence(); if (restoreFocus) previous?.focus(); present(); }
+  function reveal(key: string, focus?: HTMLElement) { const entry = contextPanels.get(key); if (!entry) return; for (const [name, item] of contextPanels) { item.panel.node.hidden = name !== key; item.trigger.setAttribute('aria-expanded', String(name === key)); } activeContext = key; contextTrigger = entry.trigger; more.hidden = false; more.setAttribute('aria-label', entry.trigger.getAttribute('aria-label')!); entry.panel.node.open = true; lastDisclosure = entry.panel.node; options.missions?.setVisible(observing && key === 'missions'); updatePresence(); entry.panel.node.scrollIntoView({ block: 'nearest' }); (focus && !(focus as HTMLInputElement).disabled ? focus : entry.panel.summary).focus(); present(); }
+  function closeContext(restoreFocus = true) { if (more.hidden) return; const previous = contextTrigger; for (const entry of contextPanels.values()) { entry.panel.node.hidden = true; entry.trigger.setAttribute('aria-expanded', 'false'); } activeContext = null; more.hidden = true; lastDisclosure = null; options.missions?.setVisible(false); updatePresence(); if (restoreFocus) previous?.focus(); present(); }
   shell.addEventListener('keydown', event => { if (event.key !== 'Escape') return; const target = event.target as HTMLElement, opened = target.closest<HTMLDetailsElement>('details[open]') ?? (lastDisclosure?.open && shell.contains(lastDisclosure) && !lastDisclosure.closest('[hidden]') ? lastDisclosure : null); if (!more.hidden && (!opened || opened === contextPanels.get(activeContext!)?.panel.node)) { event.preventDefault(); event.stopPropagation(); closeContext(); } else if (opened) { event.preventDefault(); event.stopPropagation(); opened.open = false; opened.querySelector('summary')?.focus(); } });
   function renderSelection() {
     selection.replaceChildren(); selection.hidden = !selected.size && !handoffSelection && !routingAgentSelection;
@@ -702,6 +740,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       const code = error instanceof Error ? error.message : String(error);
       const messages: Record<string, string> = {
         vela_planner_unavailable: 'Vela couldn’t reach the AI. Your draft is still here.',
+        mission_scope_denied: 'The mission workspace changed. Review the current workspace and try again.',
         vela_planner_sign_in_required: 'Connect Codex or choose ChatGPT plan. Your draft is still here.',
         vela_chatgpt_sign_in_required: 'Connect your ChatGPT plan in Connections. Your draft is still here.',
         vela_deep_model_unavailable: 'The connected catalog has no verified deep reasoning controls. Choose an available model or reconnect. Your draft is still here.',
@@ -990,11 +1029,11 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   }
   void run(refresh);
   return {
-    async open() { observing = true; const sequence = ++readSequence, state = await client.open(); if (sequence === readSequence) render(state); return state; },
+    async open() { observing = true; options.missions?.setVisible(activeContext === 'missions'); const sequence = ++readSequence, state = await client.open(); if (sequence === readSequence) render(state); return state; },
     refresh,
     observeLiveAnswer,
     /** Host visibility notification only; no canonical mutation or inference. */
-    close() { observing = false; observeLiveAnswer(undefined); manifestationSignature = ''; manifestationBaseline = true; try { options.onManifestation?.(null); } catch {} },
-    dispose() { disposed = true; observing = false; readSequence++; shell.remove(); try { options.onManifestation?.(null); } catch {} },
+    close() { observing = false; options.missions?.setVisible(false); observeLiveAnswer(undefined); manifestationSignature = ''; manifestationBaseline = true; try { options.onManifestation?.(null); } catch {} },
+    dispose() { disposed = true; observing = false; options.missions?.setVisible(false); readSequence++; shell.remove(); try { options.onManifestation?.(null); } catch {} },
   };
 }

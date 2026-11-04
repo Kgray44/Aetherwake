@@ -13,6 +13,8 @@ import {
   type TaskGroupMembershipCommand,
 } from "../canonical-host.mts";
 import { TemplateService } from "../service.mts";
+import { createWorkspaceArchitect } from "../workspace-architect.mts";
+import { WORKSPACE_ARCHITECT_PROVIDER } from "../contracts.ts";
 import { predefinedTemplates, captureWorkspaceTemplate } from "../model.ts";
 import { BUILTIN_BLOCKS } from "../registry.ts";
 import {
@@ -278,6 +280,111 @@ const count = (db: CanonicalTemplateHostOptions["db"], table: string) => {
   );
   return Number(db.prepare("SELECT count(*) AS n FROM " + table).get()!.n);
 };
+
+test("Workspace Architect proposes and applies an ESP32 audio workspace with canonical reuse and editable geometry", async t => {
+  const f = fixture(t);
+  const capabilities = f.options.capabilities();
+  capabilities.velaPlanning = { state: "available" };
+  const architect = new TemplateService(f.db, f.host, createWorkspaceArchitect(f.host));
+  const project = f.kernel.createProject("Synthetic embedded audio");
+  const other = f.kernel.createProject("Synthetic unrelated audio project");
+  const bench = f.kernel.createNote("ESP32 audio bench notes", "private synthetic note body", project.id);
+  const measurement = f.host.createResource({ kind: "reference", title: "I2S measurement captures", projectId: project.id });
+  const denied = f.kernel.createNote("ESP32 audio processing denied note", "denied synthetic body", project.id);
+  const crossScope = f.kernel.createNote("ESP32 audio processing outside scope", "", other.id);
+  const unrelated = f.kernel.createNote("Grocery list", "", project.id);
+  f.revoked.add(denied.id);
+  const input = {
+    requestId: "architect-audio",
+    projectId: project.id,
+    prompt: 'Build a workspace for ESP32 audio processing with notes, checklist and developer chat. Use "I2S measurement captures".',
+  };
+  const inventory = () => ["workspaces", "resources", "blocks", "workspace_templates"].map(table => count(f.db, table));
+  const before = inventory();
+  const plan = await architect.requestVelaTemplate(input);
+  assert.deepEqual(plan, await architect.requestVelaTemplate(input));
+  assert.deepEqual(inventory(), before);
+  assert.deepEqual(plan.provenance, { requestId: input.requestId, providerId: WORKSPACE_ARCHITECT_PROVIDER });
+  assert.deepEqual(plan.body.resources.map(role => role.source.kind), ["note", "checklist", "conversation", "reference"]);
+  assert.deepEqual(plan.body.resources.filter(role => role.source.mode === "reference").map(role => role.source.resourceId),
+    [bench.id, measurement.id]);
+  for (const value of [denied.id, crossScope.id, unrelated.id, "private synthetic note body", "denied synthetic body"])
+    assert.ok(!JSON.stringify(plan).includes(value));
+  for (const [i, block] of plan.body.placements.entries()) {
+    assert.equal(block.presentation.locked, false);
+    for (const otherBlock of plan.body.placements.slice(i + 1))
+      assert.equal(intersects(footprint(block.presentation), footprint(otherBlock.presentation), 23), false);
+  }
+  const template = architect.saveTemplate({ ...plan, source: "vela" });
+  const apply = request({ templateId: template.id, projectId: project.id, expectedProjectVersion: project.version });
+  const saved = inventory();
+  const preview = architect.previewTemplate(apply);
+  assert.deepEqual([preview.newResourceCount, preview.referenceCount], [2, 2]);
+  assert.deepEqual(inventory(), saved);
+  f.revoked.add(bench.id);
+  assert.throws(() => architect.applyTemplate(apply), /reference_unavailable/);
+  assert.deepEqual(inventory(), saved);
+  f.revoked.delete(bench.id);
+  const canonicalFactory = f.options.createResource;
+  f.options.createResource = (...args) => {
+    if (args[0] === "conversation") throw new Error("synthetic_failed_factory");
+    return canonicalFactory(...args);
+  };
+  assert.throws(() => architect.applyTemplate(apply), /synthetic_failed_factory/);
+  assert.deepEqual(inventory(), saved);
+  assert.equal(f.checklist.count("checklist_documents"), 0);
+  f.options.createResource = canonicalFactory;
+  const result = architect.applyTemplate(apply);
+  assert.deepEqual(architect.applyTemplate(apply), result);
+  assert.equal(result.resourceIds.bench, bench.id);
+  assert.equal(result.resourceIds.measurements, measurement.id);
+  assert.equal(f.checklist.count("checklist_documents"), 1);
+  assert.equal(f.checklist.service.read(result.resourceIds.validation).entries.length, 0);
+  f.checklist.mutate(result.resourceIds.validation, [{ type: "addEntry", key: "sample", entry: { text: "Check actual I2S output" } }]);
+  assert.equal(f.checklist.service.read(result.resourceIds.validation).entries[0].checked, false);
+  const initial = f.engine.project(result.workspaceId);
+  const coordinates = ({ x, y, width, height }: { x: number; y: number; width: number; height: number }) => [x, y, width, height];
+  for (const placement of preview.body.placements)
+    assert.deepEqual(coordinates(initial.blocks.find(block => block.blockId === result.placementIds[placement.key])!), coordinates(placement.presentation));
+  assert.deepEqual(initial.viewport, preview.body.viewport);
+  const blockId = result.placementIds["placement-bench"];
+  const moved = f.engine.execute({
+    type: "moveBlock", commandId: randomUUID(), workspaceId: result.workspaceId,
+    expectedRevision: initial.revision, blockId, x: 16, y: 30,
+  });
+  assert.equal(moved.blocks.find(block => block.blockId === blockId)?.x, 16);
+  const restored = f.engine.execute({
+    type: "undoLayout", commandId: randomUUID(), workspaceId: result.workspaceId, expectedRevision: moved.revision,
+  });
+  assert.deepEqual(coordinates(restored.blocks.find(block => block.blockId === blockId)!),
+    coordinates(initial.blocks.find(block => block.blockId === blockId)!));
+  const redone = f.engine.execute({
+    type: "redoLayout", commandId: randomUUID(), workspaceId: result.workspaceId, expectedRevision: restored.revision,
+  });
+  assert.equal(redone.blocks.find(block => block.blockId === blockId)?.x, 16);
+  assert.equal(redone.blocks.find(block => block.blockId === blockId)?.resourceId, bench.id);
+});
+
+test("Workspace Architect distinguishes purposes, honors new-only and exclusions, and reports unavailable blocks", async t => {
+  const f = fixture(t);
+  const capabilities = f.options.capabilities();
+  capabilities.velaPlanning = { state: "available" };
+  capabilities.kinds.timeline = { state: "unsupported" };
+  const architect = new TemplateService(f.db, f.host, createWorkspaceArchitect(f.host));
+  f.kernel.createNote("Research findings on thermal behavior", "", null);
+  const plan = (prompt: string) => architect.requestVelaTemplate({ requestId: "architect-scenarios", prompt, projectId: null });
+  const research = await plan("Make a research workspace for thermal behavior from scratch, without notes.");
+  const review = await plan('Create a review workspace named "Thermal Review". Include a timeline.');
+  const operations = await plan("Make a server operations workspace");
+  assert.deepEqual(research.tags, ["workspace-architect", "research"]);
+  assert.ok(research.body.resources.every(role => role.source.mode === "new" && role.source.kind !== "note"));
+  assert.equal(review.name, "Thermal Review");
+  assert.match(review.description, /Unavailable requested blocks: Timeline/);
+  assert.ok(review.body.resources.some(role => role.key === "criteria"));
+  assert.ok(operations.body.resources.some(role => role.source.kind === "stream"));
+  assert.notDeepEqual(operations.body.resources, review.body.resources);
+  assert.equal(count(f.db, "workspaces"), 0);
+});
 
 test('direct ordinary Add forwards no provider while historical templates retain explicit manual-local semantics', t => {
   const f = fixture(t), calls: unknown[] = [], factory = f.options.createResource;

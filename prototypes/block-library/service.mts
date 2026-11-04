@@ -1121,32 +1121,7 @@ export class TemplateService {
         input.expectedProjectVersion === undefined,
         "unexpected_project_version",
       );
-    const capabilities = this.host.capabilities();
-    for (const role of template.body.resources) {
-      if (role.source.mode === "new")
-        assertBlockAvailable(
-          role.source.kind,
-          capabilities,
-          role.source.provider,
-        );
-      else {
-        const resource = this.host.readResource(role.source.resourceId);
-        check(
-          resource && resource.authorized && resource.state === "active",
-          "reference_unavailable",
-        );
-        check(resource.kind === role.source.kind, "reference_kind_changed");
-        check(
-          resource.projectId === null || resource.projectId === input.projectId,
-          "cross_project_reference",
-        );
-        check(
-          resource.version === role.source.expectedVersion,
-          "reference_version_conflict",
-        );
-        assertBlockAvailable(resource.kind, capabilities);
-      }
-    }
+    this.validateResourceRoles(template.body, input.projectId);
     this.validateSubjectBindings(template.body, input.projectId);
     return {
       templateId: template.id,
@@ -1171,6 +1146,34 @@ export class TemplateService {
       })),
       body: template.body,
     };
+  }
+  private validateResourceRoles(body: TemplateBody, projectId: string | null) {
+    const capabilities = this.host.capabilities();
+    for (const role of body.resources) {
+      if (role.source.mode === "new")
+        assertBlockAvailable(
+          role.source.kind,
+          capabilities,
+          role.source.provider,
+        );
+      else {
+        const resource = this.host.readResource(role.source.resourceId);
+        check(
+          resource && resource.authorized && resource.state === "active",
+          "reference_unavailable",
+        );
+        check(resource.kind === role.source.kind, "reference_kind_changed");
+        check(
+          resource.projectId === null || resource.projectId === projectId,
+          "cross_project_reference",
+        );
+        check(
+          resource.version === role.source.expectedVersion,
+          "reference_version_conflict",
+        );
+        assertBlockAvailable(resource.kind, capabilities);
+      }
+    }
   }
   /** No writes and no provider call. Apply repeats all checks inside the canonical transaction. */
   previewTemplate(input: TemplateApplyInput): TemplatePreview {
@@ -1559,6 +1562,13 @@ export class TemplateService {
       "vela_request_mismatch",
     );
     const draft = validateDraft(result);
+    // Planner output may arrive after a grant or version changed.
+    if (input.projectId !== null) {
+      const p = this.host.readProject(input.projectId);
+      check(p?.authorized && p.state === "active", "project_unavailable");
+    }
+    this.validateResourceRoles(draft.body, input.projectId);
+    this.validateSubjectBindings(draft.body, input.projectId);
     const provenance = {
       requestId: input.requestId,
       providerId: text(result.provenance.providerId, 200),

@@ -61,6 +61,8 @@ import { createVelaClient } from "./vela-client";
 import type { VelaPlan, VelaRequest, VelaState } from "../../../vela-core/src/contracts.ts";
 import { createVelaExperience } from "./vela-experience";
 import { createVelaManifestation } from "./vela-manifestation.ts";
+import { createVelaMissionView } from "./vela-missions.ts";
+import type { MissionResponse } from "../../../integrated-backend/src/mission-contracts.mts";
 import { createConversationExecutionPort } from "./conversation-execution";
 import { workspaceWheelFactor } from "./workspace-wheel";
 import { returnFocusAfterDialogClose } from "./focus-return";
@@ -270,6 +272,10 @@ export function installApplication(hooks: Hooks) {
   });
   addEventListener("resize", surfaces.viewportChanged);
   let velaPanel: ReturnType<typeof mountVelaPanel> | null = null;
+  const velaMissions = createVelaMissionView(document, async (request) =>
+    (await host.command!("missions", request)) as MissionResponse,
+  );
+  document.addEventListener("visibilitychange", velaMissions.observe);
   let velaOpen = false;
   let velaOpening = 0;
   let velaRefreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1070,6 +1076,9 @@ export function installApplication(hooks: Hooks) {
     )
       cancelPreview();
     state = next;
+    const missionWorkspace = next.navigation.kind === "workspace"
+      ? next.workspaces.find((item) => item.id === next.activeWorkspaceId) : undefined;
+    velaMissions.setScope(missionWorkspace ? { workspaceId: missionWorkspace.id, projectId: missionWorkspace.project_id } : null);
     const streamResources = new Set(
       next.resources.filter((resource) =>
         resource.kind === "stream" && resource.available !== false && resource.visible !== false,
@@ -2323,6 +2332,7 @@ export function installApplication(hooks: Hooks) {
     }
     if (!velaPanel)
       velaPanel = mountVelaPanel(velaContent, velaClient, {
+        missions: velaMissions,
         onPresentation: (value) => velaExperience.observe(value),
         onManifestation: (value) => velaManifestation.observe(value),
         onConnectProvider: () => host.command!("capabilities", {}),
@@ -4601,6 +4611,7 @@ export function installApplication(hooks: Hooks) {
       resourceId?: string;
       payload?: { delta?: string };
     };
+    if (e.type.startsWith("vela.mission/") || /^policy[./]/.test(e.type)) velaMissions.observe();
     if (e.type === "storage/reserve-admission-denied") {
       hooks.status("Storage check paused saving and new runs. Your data is retained.");
       return;

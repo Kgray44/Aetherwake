@@ -65,6 +65,7 @@ contextBridge.exposeInMainWorld(
           "timelines",
           "githubTimeline",
           "taskObjectives",
+          "missions",
           "firstPartyChat",
         ].includes(name)
       )
@@ -75,6 +76,9 @@ contextBridge.exposeInMainWorld(
       if (name === "reconcileConversationTurn" &&
           navigator.userActivation?.isActive !== true)
         throw new Error("turn_recovery_user_gesture_required");
+      if (name === "missions" && ["start", "control"].includes(input?.name) &&
+          navigator.userActivation?.isActive !== true)
+        throw new Error("mission_user_gesture_required");
       if (name === "media" &&
           ["chooseMediaForAdd", "openExternal", "acquirePlayback"].includes(input?.name) &&
           navigator.userActivation?.isActive !== true)

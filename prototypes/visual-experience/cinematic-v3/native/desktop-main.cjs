@@ -94,7 +94,9 @@ const source = {
   ),
 };
 const verifyAirPlan = process.argv.includes("--integration-vela-air-plan");
+const verifyMissions = process.argv.includes("--integration-vela-missions");
 const verify = verifyAirPlan ||
+  verifyMissions ||
   process.argv.includes("--integration-chat-motion") ||
   process.argv.includes("--integration-task-objectives") ||
   process.argv.includes("--integration-timeline") ||
@@ -139,6 +141,8 @@ const privateRoot = profileArg
   : path.join(app.getPath("appData"), "Aerynth", "review");
 if (verifyAirLocal && (!/^review-vela-air-offline-\d+$/u.test(path.basename(privateRoot)) || existsSync(privateRoot)))
   throw Error("fresh_offline_air_profile_required");
+if (verifyMissions && (!/^review-vela-missions-\d+$/u.test(path.basename(privateRoot)) || existsSync(privateRoot)))
+  throw Error("fresh_offline_mission_profile_required");
 if (verifyAirPlan && (!/^review-vela-air-plan-\d+$/u.test(path.basename(privateRoot)) || !existsSync(privateRoot)))
   throw Error("signed_in_air_test_profile_required");
 if (offscreenScale) {
@@ -471,6 +475,7 @@ app.whenReady().then(async () => {
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && isVelaRead(input)) &&
+        !(command === "missions" && ["preview", "list", "read"].includes(input?.name)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&
         !(command === "notes" && input?.name === "readNote") &&
@@ -562,6 +567,29 @@ app.whenReady().then(async () => {
         result = await call("library", input);
       } else if (command === "notes") {
         result = await call("notes", input);
+      } else if (command === "missions") {
+        if (input?.name === "start") {
+          const preview = await call("missions", { name: "preview", input: {
+            objective: input.input?.objective, ...(input.input?.agentProfileId ? { agentProfileId: input.input.agentProfileId } : {}),
+          } });
+          if (!preview || preview.fingerprint !== input.input?.fingerprint) throw Error("mission_preview_changed");
+          if (preview.externalReview) {
+            if (preview.executors.some(executor => !executor.available)) throw Error("mission_specialist_unavailable");
+            const { provider, calls } = preview.externalReview;
+            const assignments = preview.plan.tasks.filter(task => task.specialist).map(({ specialist }) =>
+              `${specialist.role} — ${specialist.model}${specialist.effort ? " · " + specialist.effort : ""}\n${specialist.instructions}`);
+            const choice = await dialog.showMessageBox(win, {
+              type: "question", buttons: ["Cancel", "Start mission"], defaultId: 0, cancelId: 0,
+              title: "Review specialist mission", message: `Send ${calls} separate requests to ${provider}?`,
+              detail: `Objective sent to each specialist:\n${preview.plan.objective}\n\nInstructions:\n${assignments.join("\n\n")}\n\nThe provider may count these requests against your plan. No files, chat history or local measurements are sent.`,
+            });
+            if (choice.response !== 1) throw Error("mission_review_declined");
+            if (win.isDestroyed() || event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
+              throw Error("unauthorized_sender");
+            if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
+            result = await call("missionStartReviewed", input.input);
+          } else result = await call("missions", input);
+        } else result = await call("missions", input);
       } else if (
         command === "agents" ||
         command === "checklists" ||
@@ -709,6 +737,12 @@ app.whenReady().then(async () => {
         startupErrors,
         moduleStartedMonotonicMs,
         observeProviderActivity: () => call("providerActivity", {}),
+      });
+      return;
+    }
+    if (verifyMissions) {
+      await require("./integration-vela-missions.cjs").verify({
+        win, app, privateRoot, call, source, startupErrors, moduleStartedMonotonicMs,
       });
       return;
     }

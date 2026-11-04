@@ -39,7 +39,10 @@ test('typed library creates true local conversation blocks, captures content-fre
   const body=captureWorkspaceTemplate(created.desktop,{[created.result.resourceId]:'reference'}),saved=await library(f.core,'saveTemplate',{name:'Saved actual workspace',description:'Explicit references only',tags:['synthetic'],body});
   assert.ok(!JSON.stringify(saved.result.body).includes('messages'));await f.reopen();assert.ok((await library(f.core,'preferences')).result.favorites.includes('conversation'));assert.equal((await library(f.core,'getBlockSettings',created.result.placementId)).result.configuration.textScale,1.2);assert.equal((await library(f.core,'getTemplate',saved.result.id)).result.name,'Saved actual workspace');
   await assert.rejects(library(f.core,'saveTemplate',{name:'Spoofed AI source',description:'',tags:[],body,source:'vela',provenance:{requestId:'fake',providerId:'fake'}}),/native_template_provenance_required/);
-  await assert.rejects(library(f.core,'requestVelaTemplate',{requestId:randomUUID(),prompt:'Do not fabricate a template plan',projectId:null}),/vela_planning_unavailable/);
+  const planned=await library(f.core,'requestVelaTemplate',{requestId:randomUUID(),prompt:'Set up a workspace to develop an ESP32 audio processing system',projectId:null});
+  assert.equal(planned.result.provenance.providerId,'local-workspace-architect');
+  assert.ok(planned.result.body.resources.some((role:any)=>role.source.kind==='checklist'));
+  assert.equal((await f.core.command('desktop',{type:'snapshot'})).workspaces.length,1,'planning must not apply the template');
  }finally{await f.close();}
 });
 

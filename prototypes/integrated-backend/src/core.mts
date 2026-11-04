@@ -1,8 +1,14 @@
 import { randomUUID, createHash } from 'node:crypto';
+import { freemem } from 'node:os';
 import { realpathSync } from 'node:fs';
 import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
+import { MissionService } from './mission-service.mts';
+import { nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
+import { createSpecialistExecutor, specialistMissionPlan } from './mission-specialists.mts';
+import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
+import type { MissionExecutionContext, MissionExecutor, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
@@ -62,6 +68,7 @@ import type { AcceptedHistoryAppend, HistoryFence, HistoryOrigin, HistoryOmissio
 import type { VelaMessage, VelaLocalHost, ContextManifest, AuthorizationRequest, AuthorizationDecision, VelaNativeAction, VelaPlanningPort, ResourceRef, VelaPlan, HostActionResult, CapabilityDescriptor, VelaScopePurpose } from '../../vela-core/src/contracts.ts';
 import type { VelaRequestPreview, VelaNativeReview, VelaNativeCapabilities, VelaBackendState, VelaRouteTiming } from './contracts.mts';
 import { TemplateService } from '../../block-library/service.mts';
+import { createWorkspaceArchitect } from '../../block-library/workspace-architect.mts';
 import { createCanonicalTemplateHost } from '../../block-library/canonical-host.mts';
 import { NoteExperienceService } from '../../block-library/note-service.mts';
 import { createCanonicalNoteHost } from '../../block-library/note-host.mts';
@@ -185,7 +192,10 @@ export class BackendCore {
   private velaPreviews=new Map<string,PrivateVelaPreview>();
   private velaEditReviews = new Map<string, { requestId: string; expiresAt: string; digest: string }>();
   private velaWorkflows = new Map<string, PendingVelaWorkflow>();
-  private velaWorkflowRunning = false;
+  private velaWorkflowClaims = new Set<string>();
+  private missions: MissionService;
+  private missionExecutors: Readonly<Record<string, MissionExecutor>>;
+  private missionSpecialistsInFlight = 0;
   private velaProjectCheckReviews = new Map<string, PendingVelaProjectCheck>();
   private velaProjectCheckTask?: { id: string; task: Promise<VelaFileEditView | VelaRequest> };
   private velaGrants=new Map<string,{previewId:string;expiresAt:string;requestId?:string;consumed:boolean;planning?:CodexPlanningGrant;reviewDigest?:string}>();
@@ -275,8 +285,168 @@ export class BackendCore {
       ensure(!options.velaPlanningPort||!this.privateMode,'synthetic_vela_planner_forbidden');
       this.initializeVela(options.velaPlanningPort);
       this.ordinaryConnections=ordinaryTest?.connection??new OpenAIConnections({db:this.db,transaction:work=>this.kernel.withTransaction(()=>work(this.db)),nativeHost:this.nativeHostServices,localEligibility:{kind:'local-personal-project',scope:'current-owner-local-installation',decisionRef:'aerynth.owner-local-personal-inference'}});
+      this.db.exec(`CREATE TABLE IF NOT EXISTS vela_mission_provider_admissions(
+        attempt_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, project_id TEXT, utc_day TEXT NOT NULL) STRICT;
+        CREATE INDEX IF NOT EXISTS vela_mission_provider_admission_day ON vela_mission_provider_admissions(utc_day);`);
+      this.missionExecutors = { ...nativeMissionExecutors, 'chatgpt.specialist': createSpecialistExecutor({
+        available: (scope, task) => this.missionSpecialistAvailable(scope, task),
+        turn: input => this.runMissionSpecialist(input),
+      }) };
+      this.missions = new MissionService({
+        db: this.db, atomic: work => this.kernel.withTransaction(work),
+        authorized: scope => this.missionScopeAllowed(scope),
+        executors: this.missionExecutors, laneLimit: lane => lane === CHATGPT_PLAN_PROVIDER && this.active?.providerId === lane ? 1 : 2,
+        underPressure: () => freemem() < 512 * 1024 * 1024,
+        replan: replanNativeMission,
+        contextSource: (_mission, task) => task.executor === 'inspect.workspace-notes' ?
+          canonicalMissionContextSource(this.velaHost, (binding, id) =>
+            this.missionScopeAllowed(binding.scope) && !!this.db.prepare('SELECT 1 FROM blocks WHERE workspace_id=? AND resource_id=?')
+              .get(binding.scope.workspaceId, id)) : undefined,
+        observe: (mission, event) => this.record('vela.mission/' + event.kind, 'observed', undefined,
+          'mission:' + mission.id + ':' + event.seq, {
+            providerId: 'aerynth-native', detached: true, correlationId: mission.id, nativeEventId: event.attemptId,
+            payload: { redacted: true, taskId: event.taskId },
+          }),
+      });
       this.record('stream/reopened', 'inferred');
     } catch (error) { this.kernel.close(); throw error; }
+  }
+  private missionScopeAllowed(scope: MissionScope): boolean {
+    if (this.closed || !this.libraryAuthorized({ kind: 'workspace', id: scope.workspaceId })) return false;
+    return this.db.prepare("SELECT project_id FROM workspaces WHERE id=? AND state='active'").get(scope.workspaceId)?.project_id === scope.projectId;
+  }
+  private missionSpecialistSelection(scope: MissionScope, agentProfileId?: string): Omit<NonNullable<MissionTaskPlan['specialist']>, 'role' | 'instructions'> | undefined {
+    if (!this.ordinaryAvailable()) return;
+    const profiles = this.velaRoutingProfiles(scope);
+    let agent: ReturnType<BackendCore['velaAgentRouting']> | undefined;
+    if (agentProfileId !== undefined) {
+      try {
+        if (this.velaContext().currentWorkspaceId !== scope.workspaceId) return;
+        agent = this.velaAgentRouting(agentProfileId);
+        if (Buffer.byteLength(agent.instructions) > 2048) return;
+      } catch { return; }
+    }
+    const { effective: values } = resolveRoutingSettings(profiles, undefined, agent?.defaults);
+    if (values.providerId && values.providerId !== CHATGPT_PLAN_PROVIDER || values.mode === 'codex') return;
+    const catalog = this.ordinaryCatalog!;
+    const options = catalog.models.map(ordinaryModelOption);
+    const model = values.model
+      ? options.find(m => m.id === values.model)
+      : options.find(m => m.reasoningEfforts?.includes(values.reasoningEffort ?? 'none')) ??
+        options.find(m => m.reasoningEfforts?.includes('low'));
+    if (!model || values.reasoningEffort && !model.reasoningEfforts?.includes(values.reasoningEffort)) return;
+    const effort = values.reasoningEffort ?? (values.mode === 'deep' && model.reasoningEfforts?.includes('high') ? 'high' :
+      model.reasoningEfforts?.includes('none') ? 'none' : model.reasoningEfforts?.includes('low') ? 'low' : undefined);
+    return { provider: CHATGPT_PLAN_PROVIDER, model: model.id, effort, connectionVersion: catalog.version,
+      settingsStamp: this.velaRoutingSettingsStamp(profiles),
+      ...(agent ? { profile: { id: agent.agent.resourceId, profileVersion: agent.agent.profileVersion,
+        resourceVersion: agent.agent.resourceVersion, title: agent.agent.title, instructions: agent.instructions } } : {}) };
+  }
+  private missionSpecialistAvailable(scope: MissionScope, task: MissionTaskPlan) {
+    const assigned = task.specialist, current = this.missionSpecialistSelection(scope, assigned?.profile?.id);
+    return !!(current && assigned && current.connectionVersion === assigned.connectionVersion &&
+      current.settingsStamp === assigned.settingsStamp && current.model === assigned.model && current.effort === assigned.effort &&
+      planningDigest(current.profile ?? null) === planningDigest(assigned.profile ?? null) &&
+      !this.velaQuotaExhausted(CHATGPT_PLAN_PROVIDER, now().slice(0, 10), this.velaRoutingProfiles(scope)));
+  }
+  private async runMissionSpecialist(context: MissionExecutionContext): Promise<TurnResult> {
+    const assigned = context.task.specialist;
+    ensure(assigned && this.missionSpecialistAvailable(context.scope, context.task), 'mission_specialist_unavailable');
+    const catalog = this.ordinaryCatalog!;
+    const turn: TurnInput = {
+      executionId: context.attemptId, requestId: context.attemptId, configurationId: CHATGPT_PLAN_REGISTRATION,
+      providerId: CHATGPT_PLAN_PROVIDER, assistant: 'ordinary', model: assigned.model, instructions: assigned.instructions,
+      messages: [{ role: 'user', content: context.context.payload.missionObjective }], contextDigest: context.context.manifest.payloadDigest,
+      ...(assigned.effort ? { reasoningEffort: assigned.effort } : {}),
+    };
+    const prepared = prepareResponsesTurn(turn, 8192).review;
+    const fence = () => {
+      ensure(!context.signal.aborted && this.missionScopeAllowed(context.scope) && this.ordinaryAvailable() &&
+        this.ordinaryCatalog?.boundaryDigest === catalog.boundaryDigest && this.ordinaryCatalog?.version === catalog.version &&
+        this.velaRoutingSettingsStamp(this.velaRoutingProfiles(context.scope)) === assigned.settingsStamp &&
+        (!assigned.profile || planningDigest(this.missionSpecialistSelection(context.scope, assigned.profile.id)?.profile ?? null) ===
+          planningDigest(assigned.profile)), 'mission_specialist_scope_changed');
+    };
+    let admitted = false;
+    this.missionSpecialistsInFlight++;
+    try {
+      const transport = new ResponsesTransport({ ...(this.ordinaryTest ? { fetch: this.ordinaryTest.fetch } : {}),
+        limits: { requestBytes: 8192, outputBytes: 2048, timeoutMs: 40_000, streamBytes: 262144 },
+        onEvent: event => {
+          fence();
+          if (event.type === 'provider/usage') this.record(event.type, this.ordinaryTest ? 'simulated' : 'reported',
+            undefined, context.attemptId + ':usage', { providerId: CHATGPT_PLAN_PROVIDER, detached: true,
+              correlationId: context.missionId, payload: { redacted: true, taskId: context.task.id, usage: event.usage } });
+        },
+        native: {
+          authorize: async review => {
+            fence();
+            ensure(!admitted && review.bodyDigest === prepared.bodyDigest && review.executionId === context.attemptId, 'approval_scope_mismatch');
+            const day = now().slice(0, 10);
+            this.kernel.withTransaction(() => {
+              ensure(!this.velaQuotaExhausted(CHATGPT_PLAN_PROVIDER, day, this.velaRoutingProfiles(context.scope)), 'vela_daily_attempt_limit_reached');
+              this.db.prepare('INSERT INTO vela_mission_provider_admissions VALUES(?,?,?,?)')
+                .run(context.attemptId, CHATGPT_PLAN_PROVIDER, context.scope.projectId, day);
+            });
+            admitted = true;
+          },
+          resolveCredential: async (id, provider) => {
+            ensure(id === CHATGPT_PLAN_REGISTRATION && provider === CHATGPT_PLAN_PROVIDER, 'credential_boundary_mismatch');
+            return this.ordinaryConnections.resolveCredential(assigned.connectionVersion);
+          },
+          resolveCatalog: async () => ({ boundaryDigest: catalog.boundaryDigest, expiresAt: catalog.expiresAt, models: catalog.models.map(m => m.id) }),
+          revalidate: async (review, boundary) => {
+            fence(); ensure(admitted && review.bodyDigest === prepared.bodyDigest && boundary === catalog.boundaryDigest, 'approval_scope_mismatch');
+            await this.ordinaryConnections.revalidateCredential(assigned.connectionVersion, boundary);
+            fence();
+          },
+        },
+      });
+      const result = await transport.turn(turn, context.signal);
+      if (result.dispatched) this.providerActivity.providerRequests++;
+      return result;
+    } finally { this.missionSpecialistsInFlight--; }
+  }
+  private missionCommand(request: MissionRequest, reviewed = false): MissionResponse {
+    ensure(request && Object.keys(request).length === 2 && request.input &&
+      typeof request.input === 'object' && !Array.isArray(request.input), 'invalid_mission_command');
+    const { currentWorkspaceId: workspaceId, currentProjectId: projectId } = this.velaContext();
+    if (!workspaceId && request.name === 'preview') return null;
+    ensure(workspaceId, 'mission_workspace_required');
+    const scope = { workspaceId, projectId };
+    switch (request.name) {
+      case 'preview': case 'start': {
+        const { objective, agentProfileId } = request.input;
+        const keys = request.name === 'preview' ? ['objective', 'agentProfileId'] : ['objective', 'agentProfileId', 'fingerprint', 'requestId'];
+        ensure(Object.keys(request.input).every(key => keys.includes(key)) &&
+          (agentProfileId === undefined || identifier(agentProfileId)), 'invalid_mission_command');
+        const plan = (agentProfileId === undefined ? nativeMissionPlan(objective, scope) : null) ??
+          specialistMissionPlan(objective, scope, this.missionSpecialistSelection(scope),
+            agentProfileId === undefined ? undefined : { selection: this.missionSpecialistSelection(scope, agentProfileId) });
+        if (!plan && request.name === 'preview') return null;
+        ensure(plan && this.missionScopeAllowed(scope), 'mission_scope_or_plan_unavailable');
+        const fingerprint = planningDigest(plan);
+        const remote = plan.tasks.filter(task => task.executor === 'chatgpt.specialist');
+        const selected = remote[0]?.specialist;
+        if (request.name === 'preview') return { fingerprint, plan,
+          executors: plan.tasks.map(task => ({ id: task.id, available: this.missionExecutors[task.executor].available(scope, task) })),
+          ...(remote.length ? { externalReview: { provider: 'ChatGPT plan', model: selected?.model ?? 'Unavailable',
+            effort: selected?.effort, calls: remote.length } } : {}) };
+        ensure(request.input.fingerprint === fingerprint, 'mission_preview_changed');
+        ensure(!remote.length || reviewed && remote.every(task => this.missionSpecialistAvailable(scope, task)), 'mission_native_review_or_connection_required');
+        return this.missions.create(request.input.requestId, plan);
+      }
+      case 'list':
+        ensure(!Object.keys(request.input).length, 'invalid_mission_command');
+        return this.missions.list(scope);
+      case 'read':
+        ensure(Object.keys(request.input).length === 1, 'invalid_mission_command');
+        return this.missions.read(request.input.id, scope);
+      case 'control':
+        ensure(Object.keys(request.input).length === 3, 'invalid_mission_command');
+        return this.missions.control(request.input.id, scope, request.input.revision, request.input.control);
+      default: throw new ServiceError('invalid_mission_command');
+    }
   }
   private productResourceAccess(id:string,messageId?:string):boolean {
     if(this.libraryAuthorized({kind:'resource',id}))return this.conversationReadAccess(id,messageId);
@@ -538,7 +708,7 @@ export class BackendCore {
   private libraryCapabilities():LibraryCapabilities {
     const cap=this.capabilityCache.snapshot(),codex=!!cap&&!cap.mock&&cap.authentication==='available'&&cap.providerId===this.port.id;
     const media=this.nativeMedia?{state:'available' as const}:{state:'unsupported' as const,reason:'File and link access is not available in this build.'};
-    return {revision:1,kinds:{...Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),file:media,link:media},subjects:Object.fromEntries(SUBJECT_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{automatic:this.ordinaryAuthorized()?{state:'available'}:{state:'setup_required',reason:'Connect ChatGPT to start an AI conversation.'},local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'unsupported',reason:'A typed template planning port is not registered; reviewed Vela native workspace proposals remain separate'}};
+    return {revision:1,kinds:{...Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),file:media,link:media},subjects:Object.fromEntries(SUBJECT_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{automatic:this.ordinaryAuthorized()?{state:'available'}:{state:'setup_required',reason:'Connect ChatGPT to start an AI conversation.'},local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'available'}};
   }
   private createLibraryResource(kind:BlockKind,title:string,provider:'local'|'codex'|undefined,projectId:string|null):string {
     ensure(!['file','link'].includes(kind),'media_import_required');
@@ -557,7 +727,7 @@ export class BackendCore {
       navigateWorkspace:id=>bridge.navigateWorkspace(id),setTaskGroupMembers:command=>this.desktop.apply(command,()=>{throw new ServiceError('unexpected_library_conversation_creation');}),
       isAuthorized:subject=>this.libraryAuthorized(subject),authorizeSubject:(subject,workspaceId)=>this.librarySubjectAllowed(subject,workspaceId),
     });
-    this.library=new TemplateService(this.db,host);
+    this.library=new TemplateService(this.db,host,createWorkspaceArchitect(host));
     this.notes=new NoteExperienceService(this.db,createCanonicalNoteHost({db:this.db,kernel:this.kernel,templateHost:host,atomic:work=>this.atomic(work),
       applyDesktopCommand:command=>this.desktop.apply(command,()=>{throw new ServiceError('unexpected_note_conversation_creation');}),
       renameResource:input=>{this.kernel.renameResource(input.resourceId,input.title,input.expectedVersion);},
@@ -1400,8 +1570,8 @@ export class BackendCore {
       return this.velaFileEditView(record);
     });
   }
-  private velaRoutingProfiles() {
-    const context = this.velaContext();
+  private velaRoutingProfiles(scope?: MissionScope) {
+    const context = scope ? { currentProjectId: scope.projectId, currentWorkspaceId: scope.workspaceId } : this.velaContext();
     const profiles = [this.vela.routingProfile('global', null)];
     if (context.currentProjectId && this.libraryAuthorized({ kind: 'project', id: context.currentProjectId }))
       profiles.push(this.vela.routingProfile('project', context.currentProjectId));
@@ -1441,6 +1611,7 @@ export class BackendCore {
     const limited = profiles.filter(profile => !!profile.defaults.attemptLimits);
     if (!limited.length) return { utcDay, limits: [] };
     const admissions = Object.values(this.state.executions).filter(execution => execution.velaAdmission?.utcDay === utcDay);
+    const missionAdmissions = this.db.prepare('SELECT provider_id,project_id,count(*) AS n FROM vela_mission_provider_admissions WHERE utc_day=? GROUP BY provider_id,project_id').all(utcDay);
     const limits: NonNullable<VelaRoutingSettingsView['attempts']>['limits'] = [];
     for (const profile of limited) {
       if (profile.scope !== 'global' && profile.scope !== 'project') continue;
@@ -1448,13 +1619,15 @@ export class BackendCore {
       for (const provider of ['total', CHATGPT_PLAN_PROVIDER, 'codex-app-server'] as const) {
         const limit = profile.defaults.attemptLimits?.[provider];
         if (limit !== undefined) limits.push({ scope: profile.scope, provider, limit,
-          used: provider === 'total' ? scoped.length : scoped.filter(execution => execution.providerId === provider).length });
+          used: (provider === 'total' ? scoped.length : scoped.filter(execution => execution.providerId === provider).length) +
+            missionAdmissions.filter(row => (profile.scope === 'global' || row.project_id === profile.id) &&
+              (provider === 'total' || row.provider_id === provider)).reduce((count, row) => count + Number(row.n), 0) });
       }
     }
     return { utcDay, limits };
   }
-  private velaQuotaExhausted(providerId: string, utcDay: string) {
-    return this.velaAttemptLimits(utcDay).limits.some(limit =>
+  private velaQuotaExhausted(providerId: string, utcDay: string, profiles?: ReturnType<BackendCore['velaRoutingProfiles']>) {
+    return this.velaAttemptLimits(utcDay, profiles).limits.some(limit =>
       (limit.provider === 'total' || limit.provider === providerId) && limit.used >= limit.limit);
   }
   private admitVelaAttempt(execution: Execution) {
@@ -1938,9 +2111,11 @@ export class BackendCore {
   private async runVelaWorkflow(id: string): Promise<VelaRequest> {
     const pending = this.velaWorkflows.get(id);
     ensure(pending, 'vela_workflow_review_required');
-    ensure(!this.velaWorkflowRunning, 'vela_workflow_busy');
+    const claims = ['conversation:' + this.state.vela!.conversationId, ...new Set(pending.codex.fileEdit!.map(file =>
+      'checkout:' + (process.platform === 'win32' ? file.target.root.toLowerCase() : file.target.root)))];
+    ensure(this.velaWorkflowClaims.size < 8 && claims.every(claim => !this.velaWorkflowClaims.has(claim)), 'vela_workflow_busy');
     this.velaWorkflows.delete(id);
-    this.velaWorkflowRunning = true;
+    for (const claim of claims) this.velaWorkflowClaims.add(claim);
     const { analysis, codex, targets, checkPaths, checkDigest } = pending;
     const check = analysis.workflowScope!.check;
     const editTargets = codex.fileEdit!.map(item => item.target);
@@ -1992,7 +2167,7 @@ export class BackendCore {
       }
       return second;
     } finally {
-      this.velaWorkflowRunning = false;
+      for (const claim of claims) this.velaWorkflowClaims.delete(claim);
     }
   }
   private nextVelaWorkflowStage(requestId: string): { intent: string } | null {
@@ -2915,7 +3090,7 @@ export class BackendCore {
   }
   private async runOrdinary(input:ConversationSendInput,preview:Omit<ConversationSendPreview,'id'|'expiresAt'>, authority?:{signal:AbortSignal;validate:()=>void;countVelaAttempt?:boolean;measure?:boolean;liveVelaAnswer?:BackendCore['liveVelaAnswer']}):Promise<Execution> {
     const measuredStart = authority?.measure ? performance.now() : undefined;
-    const p=preview.responses;ensure(p&&preview.providerId===CHATGPT_PLAN_PROVIDER&&!this.active,'ordinary_execution_unavailable');
+    const p=preview.responses;ensure(p&&preview.providerId===CHATGPT_PLAN_PROVIDER&&!this.active&&this.missionSpecialistsInFlight<2,'ordinary_execution_unavailable');
     ensure(this.conv(input.resourceId).providerId===CHATGPT_PLAN_PROVIDER&&!this.state.bindings[input.resourceId]?.length,'invalid_cross_provider_reference');
     ensure(this.state.revisions[input.resourceId]===input.expectedRevision,'stale_resource_version');
     const fingerprint=hash({type:'ordinary-responses',...input}),prior=this.state.receipts[input.commandId];
@@ -3116,6 +3291,8 @@ export class BackendCore {
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
     ensure(!this.closed, 'backend_closed');
     const a: any = input;
+    if (name === 'missions') return this.missionCommand(a) as CommandMap[K]['output'];
+    if (name === 'missionStartReviewed') return this.missionCommand({ name: 'start', input: a }, true) as CommandMap[K]['output'];
     // Targeted observed facts can respond during unrelated agent execution.
     // Their own strict schema cannot dispatch an action or a provider.
     if(name==='vela'&&a?.name==='presentation')return this.vela.presentation(a.input) as any;
@@ -3315,7 +3492,7 @@ export class BackendCore {
         const latest = Number(this.db.prepare('SELECT latest FROM integration_meta WHERE id=1').get()!.latest);
         return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;
       }
-      case 'close': this.githubImport?.abort();this.ordinaryController?.abort();if(this.ordinaryTask)await this.ordinaryTask.catch(()=>{});if(this.velaProjectCheckTask)await this.velaProjectCheckTask.task.catch(()=>{});await this.ordinaryConnections.close();await Promise.allSettled([...this.ordinaryAuth.values()]);for(const id of this.velaCatalogLeases.keys())this.finishVelaCatalog(id);this.stopEvents(); this.port.close(); this.kernel.close(); this.closed = true; return null as any;
+      case 'close': this.githubImport?.abort();this.ordinaryController?.abort();await this.missions.close();if(this.ordinaryTask)await this.ordinaryTask.catch(()=>{});if(this.velaProjectCheckTask)await this.velaProjectCheckTask.task.catch(()=>{});await this.ordinaryConnections.close();await Promise.allSettled([...this.ordinaryAuth.values()]);for(const id of this.velaCatalogLeases.keys())this.finishVelaCatalog(id);this.stopEvents(); this.port.close(); this.kernel.close(); this.closed = true; return null as any;
       default: throw new ServiceError('unsupported_command');
     }
   }

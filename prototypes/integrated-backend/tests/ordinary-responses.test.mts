@@ -6,6 +6,7 @@ import { admitVelaFileEdit } from '../src/vela-file-edit.mts';
 import { tmpdir } from 'node:os';
 import { join,resolve,relative,isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { BackendCore } from '../src/core.mts';
 import { createRequire } from 'node:module';
@@ -20,6 +21,7 @@ import type { VelaRoutingSample } from '../../vela-core/src/routing-calibration.
 import { agentTemplates } from '../../agent-product/service.mts';
 import type { AgentMutationReceipt, AgentProviderCatalog } from '../../agent-product/contracts.ts';
 import { RESPONSES_ENDPOINT } from '../../openai-provider/responses.mts';
+import type { MissionPreview, MissionProjection } from '../src/mission-contracts.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
 const documentedModel = { id: 'gpt-6.1-sol', label: 'Synthetic catalog Sol' };
 function sse(events:unknown[]){return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});}
@@ -42,6 +44,53 @@ function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection'){
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}
+
+test('reviewed mission runs two isolated stateless specialists concurrently and retains attributable usage', async () => {
+  const f = fixture();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    f.setListedModels([documentedModel]);
+    await f.core.command('ordinaryProviderCheck', {});
+    const d = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic performance mission', projectId: null });
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: d.workspaces[0].id } });
+    const objective = 'Investigate Aerynth backend performance with two independent specialists';
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    assert.equal(preview.externalReview?.calls, 2);
+    assert.equal(preview.externalReview?.model, documentedModel.id);
+    const input = { objective, fingerprint: preview.fingerprint, requestId: randomUUID() };
+    await assert.rejects(f.core.command('missions', { name: 'start', input }), /mission_native_review_or_connection_required/);
+    assert.equal(f.requests.length, 0);
+    const report = (id: string, items: string[]) => async () => {
+      await gate;
+      return sse([{ type: 'response.created', response: { id } },
+        { type: 'response.output_text.delta', delta: JSON.stringify({ observations: items }) },
+        { type: 'response.completed', response: { id, status: 'completed', model: documentedModel.id,
+          usage: { input_tokens: 50, output_tokens: 12, total_tokens: 62 }, output: [] } }]);
+    };
+    f.responses.push(report('resp_synthetic_methods', ['Run multiple warmup iterations', 'Measure a fixed baseline workload']),
+      report('resp_synthetic_review', ['Check competing processes during the run', 'Record CPU and renderer sampling windows']));
+    const { id } = await f.core.command('missionStartReviewed', input) as MissionProjection;
+    const until = performance.now() + 5000;
+    while (f.requests.length < 2 && performance.now() < until) await wait(25);
+    assert.equal(f.requests.length, 2, 'Both requests must reach the transport before either can finish');
+    assert.notEqual(f.requests[0].instructions, f.requests[1].instructions);
+    assert.deepEqual(f.requests.map(req => req.input), Array(2).fill([{ role: 'user', content: objective }]));
+    assert.ok(f.requests.every(req => !req.tools && req.store === false && req.reasoning?.effort === 'low'));
+    release();
+    const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
+    let completed = await read();
+    while (['queued', 'running'].includes(completed.outcome) && performance.now() < until) {
+      await wait(25); completed = await read();
+    }
+    assert.equal(completed.outcome, 'verified', JSON.stringify(completed.tasks.map(t => [t.id, t.state, t.detail])));
+    const specialists = completed.tasks.filter(t => t.specialist).map(t => t.attempts[0]);
+    assert.equal(new Set(specialists.map(a => a.id)).size, 2);
+    assert.equal(new Set(specialists.map(a => a.telemetry?.responseId)).size, 2);
+    assert.ok(specialists.every(a => a.telemetry?.usage?.totalTokens === 62 && a.evidence?.source.endsWith(':reported')));
+    assert.equal(f.events.filter(e => e.type === 'provider/usage' && e.correlationId === id && e.classification === 'simulated').length, 2);
+  } finally { release(); await f.close(); }
+});
 
 test('Compare faster answers only when I turn it on, and keep my model choice', async () => {
   const f = fixture();
