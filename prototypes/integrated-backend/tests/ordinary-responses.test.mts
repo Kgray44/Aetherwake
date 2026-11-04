@@ -21,7 +21,7 @@ import type { VelaRoutingSample } from '../../vela-core/src/routing-calibration.
 import { agentTemplates } from '../../agent-product/service.mts';
 import type { AgentMutationReceipt, AgentProviderCatalog } from '../../agent-product/contracts.ts';
 import { RESPONSES_ENDPOINT } from '../../openai-provider/responses.mts';
-import type { MissionPreview, MissionProjection } from '../src/mission-contracts.mts';
+import type { MissionPlanningOffer, MissionPreview, MissionProjection } from '../src/mission-contracts.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
 const documentedModel = { id: 'gpt-6.1-sol', label: 'Synthetic catalog Sol' };
 function sse(events:unknown[]){return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});}
@@ -44,6 +44,90 @@ function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection'){
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
 async function grant(f:ReturnType<typeof fixture>,preview:Awaited<ReturnType<typeof prepare>>['preview']){const g=await f.core.command('authorizeConversationSend',{previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId});return {previewId:preview.id,fingerprint:preview.fingerprint,commandId:preview.commandId,grantId:g.grantId};}
+
+test('a reviewed planning request compiles one graph and runs native dependencies and a specialist after review', async () => {
+  const f = fixture();
+  try {
+    const desktop = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic planning workspace', projectId: null });
+    const workspaceId = desktop.workspaces[0].id;
+    const enter = () => f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
+    await enter();
+    const objective = 'Plan a mission to read physical memory after recording processor load and get an independent review of measurement pitfalls';
+    const preview = (objective: string) => f.core.command('missions', { name: 'preview', input: { objective } });
+    const unavailable = await preview(objective) as MissionPlanningOffer;
+    assert.equal(unavailable.kind, 'planning-offer');
+    assert.equal(unavailable.planner, undefined);
+    f.setListedModels([documentedModel]);
+    await f.core.command('ordinaryProviderCheck', {});
+    assert.equal(await preview('Explain how processor and memory counters differ'), null);
+    const local = await preview('Run a mission to measure CPU and RAM') as MissionPreview;
+    assert.ok(local.plan);
+    const offer = await preview(objective) as MissionPlanningOffer;
+    assert.equal(offer.planner?.model, documentedModel.id);
+    const input = { objective, fingerprint: offer.fingerprint, requestId: randomUUID() };
+    await assert.rejects(f.core.command('missions', { name: 'plan', input }), /invalid_mission_command/);
+    await assert.rejects(f.core.command('missionPlanReviewed', { ...input, objective: objective + ' today' }), /mission_preview_changed/);
+    assert.equal(f.requests.length, 0);
+    const output = JSON.stringify({ tasks: [
+      { capability: 'cpu', after: [] }, { capability: 'ram', after: ['cpu'] }, { capability: 'independent-review', after: [] },
+    ], unsupported: [] });
+    f.responses.push(() => sse([
+      { type: 'response.created', response: { id: 'resp_synthetic_plan' } },
+      { type: 'response.output_text.delta', delta: output },
+      { type: 'response.completed', response: { id: 'resp_synthetic_plan', status: 'completed', model: documentedModel.id,
+        usage: { input_tokens: 70, output_tokens: 18, total_tokens: 88 }, output: [] } },
+    ]));
+    const proposed = await f.core.command('missionPlanReviewed', input) as MissionPreview;
+    assert.equal(proposed.proposalId, input.requestId);
+    assert.deepEqual(proposed.plan.tasks.map(task => [task.id, task.dependencies]), [
+      ['cpu', []], ['independent-review', []], ['ram', ['cpu']], ['report', ['cpu', 'independent-review', 'ram']],
+    ]);
+    assert.equal(f.requests.length, 1);
+    const body = f.requests[0];
+    assert.equal(body.input.length, 1);
+    assert.equal(body.input[0].role, 'user');
+    const sent = JSON.parse(body.input[0].content);
+    assert.deepEqual(Object.keys(sent).sort(), ['capabilities', 'objective']);
+    assert.equal(sent.objective, objective);
+    assert.ok(sent.capabilities.every((task: object) => Object.keys(task).sort().join(',') === 'description,id'));
+    assert.deepEqual(await f.core.command('missions', { name: 'list', input: {} }), []);
+    await assert.rejects(f.core.command('missionPlanReviewed', input), /mission_planning_already_attempted/);
+    const start = { ...input, fingerprint: proposed.fingerprint, proposalId: proposed.proposalId };
+    await assert.rejects(f.core.command('missions', { name: 'start', input: { ...start, proposalId: randomUUID() } }), /mission_preview_changed/);
+    await assert.rejects(f.core.command('missions', { name: 'start', input: start }), /mission_native_review_or_connection_required/);
+    assert.equal(f.requests.length, 1);
+    f.responses.push(() => sse([
+      { type: 'response.created', response: { id: 'resp_synthetic_review' } },
+      { type: 'response.output_text.delta', delta: JSON.stringify({ observations: [
+        'Measure CPU and RAM over comparable intervals', 'Separate process memory from system memory',
+      ] }) },
+      { type: 'response.completed', response: { id: 'resp_synthetic_review', status: 'completed', model: documentedModel.id,
+        usage: { input_tokens: 42, output_tokens: 12, total_tokens: 54 }, output: [] } },
+    ]));
+    const { id } = await f.core.command('missionStartReviewed', start) as MissionProjection;
+    const read = () => f.core.command('missions', { name: 'read', input: { id } }) as Promise<MissionProjection>;
+    let mission = await read();
+    const deadline = performance.now() + 5000;
+    while (['queued', 'running'].includes(mission.outcome) && performance.now() < deadline) {
+      await wait(25);
+      mission = await read();
+    }
+    assert.equal(mission.outcome, 'verified');
+    assert.ok(mission.events.find(event => event.kind === 'settled' && event.taskId === 'cpu')!.seq <
+      mission.events.find(event => event.kind === 'started' && event.taskId === 'ram')!.seq);
+    assert.equal(mission.profile.providerCalls, 2);
+    assert.equal(mission.profile.reportedTotalTokens, 142);
+    assert.equal(f.requests.length, 2);
+    assert.deepEqual(f.requests[1].input, [{ role: 'user', content: objective }]);
+    await f.reopen();
+    await enter();
+    assert.equal((await read()).planning?.responseId, 'resp_synthetic_plan');
+    await f.core.command('ordinaryProviderCheck', {});
+    const fresh = await preview(objective) as MissionPlanningOffer;
+    await assert.rejects(f.core.command('missionPlanReviewed', { ...input, fingerprint: fresh.fingerprint }), /mission_planning_already_attempted/);
+    assert.equal(f.requests.length, 2);
+  } finally { await f.close(); }
+});
 
 test('reviewed mission runs two isolated stateless specialists concurrently and retains attributable usage', async () => {
   const f = fixture();

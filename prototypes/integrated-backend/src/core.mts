@@ -4,13 +4,14 @@ import { realpathSync } from 'node:fs';
 import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
-import { MissionService } from './mission-service.mts';
+import { MissionService, validateMissionPlan } from './mission-service.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
-import { nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
-import { createSpecialistExecutor, specialistMissionPlan } from './mission-specialists.mts';
+import { missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
+import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS } from './mission-proposal.mts';
+import { createSpecialistExecutor, missionPlanningSpecialists, specialistMissionPlan } from './mission-specialists.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
-import type { MissionExecutionContext, MissionExecutor, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
+import type { MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningOffer, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
@@ -199,6 +200,8 @@ export class BackendCore {
   private missionWorkrooms: MissionWorkrooms;
   private missionExecutors: Readonly<Record<string, MissionExecutor>>;
   private missionSpecialistsInFlight = 0;
+  private missionPlanningRun?: { abort: AbortController; settled: Promise<MissionResponse> };
+  private missionProposals = new Map<string, { plan: MissionPlan; expires: number }>();
   private missionProjectCheckRunning = false;
   private velaProjectCheckReviews = new Map<string, PendingVelaProjectCheck>();
   private velaProjectCheckTask?: { id: string; task: Promise<VelaFileEditView | VelaRequest> };
@@ -306,8 +309,8 @@ export class BackendCore {
       this.missions = new MissionService({
         db: this.db, atomic: work => this.kernel.withTransaction(work),
         authorized: scope => this.missionScopeAllowed(scope),
-        executors: this.missionExecutors, laneLimit: lane => lane === 'codex-local-check' ||
-          lane === CHATGPT_PLAN_PROVIDER && this.active?.providerId === lane ? 1 : 2,
+        executors: this.missionExecutors, laneLimit: lane => lane === 'codex-local-check' ? 1 :
+          lane === CHATGPT_PLAN_PROVIDER ? 2 - Number(this.active?.providerId === lane) - Number(!!this.missionPlanningRun) : 2,
         underPressure: () => freemem() < 512 * 1024 * 1024,
         replan: replanNativeMission,
         contextSource: (_mission, task) => task.executor === 'inspect.workspace-notes' ?
@@ -366,7 +369,7 @@ export class BackendCore {
       ...(agent ? { profile: { id: agent.agent.resourceId, profileVersion: agent.agent.profileVersion,
         resourceVersion: agent.agent.resourceVersion, title: agent.agent.title, instructions: agent.instructions } } : {}) };
   }
-  private missionSpecialistAvailable(scope: MissionScope, task: MissionTaskPlan) {
+  private missionSpecialistAvailable(scope: MissionScope, task: Pick<MissionTaskPlan, 'specialist'>) {
     const assigned = task.specialist, current = this.missionSpecialistSelection(scope, assigned?.profile?.id);
     return !!(current && assigned && current.connectionVersion === assigned.connectionVersion &&
       current.settingsStamp === assigned.settingsStamp && current.model === assigned.model && current.effort === assigned.effort &&
@@ -375,8 +378,7 @@ export class BackendCore {
   }
   private async runMissionSpecialist(context: MissionExecutionContext): Promise<TurnResult> {
     const assigned = context.task.specialist;
-    ensure(assigned && this.missionSpecialistAvailable(context.scope, context.task), 'mission_specialist_unavailable');
-    const catalog = this.ordinaryCatalog!;
+    ensure(assigned, 'mission_specialist_unavailable');
     const turn: TurnInput = {
       executionId: context.attemptId, requestId: context.attemptId, configurationId: CHATGPT_PLAN_REGISTRATION,
       providerId: CHATGPT_PLAN_PROVIDER, assistant: 'ordinary', model: assigned.model, instructions: assigned.instructions,
@@ -384,12 +386,22 @@ export class BackendCore {
       ...(assigned.effort ? { reasoningEffort: assigned.effort } : {}),
       ...(assigned.webSearch ? { webSearch: true } : {}),
     };
+    return this.runMissionProvider(context.scope, context.task, turn, context.signal, context.missionId);
+  }
+  private async runMissionProvider(scope: MissionScope, task: Pick<MissionTaskPlan, 'id' | 'specialist'>, turn: TurnInput,
+    signal: AbortSignal, correlationId: string, requireActiveWorkspace = false): Promise<TurnResult> {
+    const assigned = task.specialist;
+    ensure(assigned && this.missionSpecialistAvailable(scope, task), 'mission_specialist_unavailable');
+    ensure(this.missionSpecialistsInFlight + Number(this.active?.providerId === CHATGPT_PLAN_PROVIDER) < 2, 'mission_planner_busy');
+    const catalog = this.ordinaryCatalog!;
     const prepared = prepareResponsesTurn(turn, 8192).review;
     const fence = () => {
-      ensure(!context.signal.aborted && this.missionScopeAllowed(context.scope) && this.ordinaryAvailable() &&
+      const activeScope = this.velaContext();
+      ensure(!signal.aborted && this.missionScopeAllowed(scope) && this.ordinaryAvailable() &&
+        (!requireActiveWorkspace || activeScope.currentWorkspaceId === scope.workspaceId && activeScope.currentProjectId === scope.projectId) &&
         this.ordinaryCatalog?.boundaryDigest === catalog.boundaryDigest && this.ordinaryCatalog?.version === catalog.version &&
-        this.velaRoutingSettingsStamp(this.velaRoutingProfiles(context.scope)) === assigned.settingsStamp &&
-        (!assigned.profile || planningDigest(this.missionSpecialistSelection(context.scope, assigned.profile.id)?.profile ?? null) ===
+        this.velaRoutingSettingsStamp(this.velaRoutingProfiles(scope)) === assigned.settingsStamp &&
+        (!assigned.profile || planningDigest(this.missionSpecialistSelection(scope, assigned.profile.id)?.profile ?? null) ===
           planningDigest(assigned.profile)), 'mission_specialist_scope_changed');
     };
     let admitted = false;
@@ -400,18 +412,19 @@ export class BackendCore {
         onEvent: event => {
           fence();
           if (event.type === 'provider/usage') this.record(event.type, this.ordinaryTest ? 'simulated' : 'reported',
-            undefined, context.attemptId + ':usage', { providerId: CHATGPT_PLAN_PROVIDER, detached: true,
-              correlationId: context.missionId, payload: { redacted: true, taskId: context.task.id, usage: event.usage } });
+            undefined, turn.executionId + ':usage', { providerId: CHATGPT_PLAN_PROVIDER, detached: true,
+              correlationId, payload: { redacted: true, taskId: task.id, usage: event.usage } });
         },
         native: {
           authorize: async review => {
             fence();
-            ensure(!admitted && review.bodyDigest === prepared.bodyDigest && review.executionId === context.attemptId, 'approval_scope_mismatch');
+            ensure(!admitted && review.bodyDigest === prepared.bodyDigest && review.executionId === turn.executionId, 'approval_scope_mismatch');
             const day = now().slice(0, 10);
             this.kernel.withTransaction(() => {
-              ensure(!this.velaQuotaExhausted(CHATGPT_PLAN_PROVIDER, day, this.velaRoutingProfiles(context.scope)), 'vela_daily_attempt_limit_reached');
+              ensure(!this.velaQuotaExhausted(CHATGPT_PLAN_PROVIDER, day, this.velaRoutingProfiles(scope)), 'vela_daily_attempt_limit_reached');
+              ensure(!this.db.prepare('SELECT 1 FROM vela_mission_provider_admissions WHERE attempt_id=?').get(turn.executionId), 'mission_planning_already_attempted');
               this.db.prepare('INSERT INTO vela_mission_provider_admissions VALUES(?,?,?,?)')
-                .run(context.attemptId, CHATGPT_PLAN_PROVIDER, context.scope.projectId, day);
+                .run(turn.executionId, CHATGPT_PLAN_PROVIDER, scope.projectId, day);
             });
             admitted = true;
           },
@@ -427,10 +440,66 @@ export class BackendCore {
           },
         },
       });
-      const result = await transport.turn(turn, context.signal);
+      const result = await transport.turn(turn, signal);
       if (result.dispatched) this.providerActivity.providerRequests++;
+      if (requireActiveWorkspace) fence();
       return result;
     } finally { this.missionSpecialistsInFlight--; }
+  }
+  private missionPlanningInputs(objective: string, scope: MissionScope) {
+    const selection = this.missionSpecialistSelection(scope);
+    const tasks = [...Object.values(missionPlanningCatalog()), ...missionPlanningSpecialists(selection)];
+    const catalog = Object.fromEntries(tasks.filter(task => this.missionExecutors[task.executor].available(scope, task))
+      .map(task => [task.id, task]));
+    const capabilities = Object.values(catalog).map(task => ({ id: task.id, description: task.objective +
+      (task.specialist ? ' This specialist receives only the objective and must run independently.' : '') }));
+    const available = selection && !this.velaQuotaExhausted(CHATGPT_PLAN_PROVIDER, now().slice(0, 10), this.velaRoutingProfiles(scope));
+    const offer: MissionPlanningOffer = { kind: 'planning-offer', scope, objective,
+      fingerprint: planningDigest({ objective, scope, capabilities, selection, boundary: this.ordinaryCatalog?.boundaryDigest,
+        instructions: MISSION_PROPOSAL_INSTRUCTIONS }),
+      ...(available ? { planner: { model: selection.model, effort: selection.effort,
+        capabilities: capabilities.map(entry => entry.id + ' · ' + entry.description) } } : {}) };
+    return { catalog, capabilities, selection, offer };
+  }
+  private startMissionPlanning(request: Extract<MissionRequest, { name: 'plan' }>['input']): Promise<MissionResponse> {
+    ensure(request && Object.keys(request).length === 3 && identifier(request.requestId), 'invalid_mission_command');
+    const { objective, fingerprint, requestId } = request;
+    const offer = this.missionCommand({ name: 'preview', input: { objective } });
+    ensure(offer && 'kind' in offer && offer.kind === 'planning-offer' && offer.fingerprint === fingerprint, 'mission_preview_changed');
+    const { scope } = offer;
+    const { catalog, capabilities, selection } = this.missionPlanningInputs(objective, scope);
+    ensure(offer.planner && selection, 'mission_planner_unavailable');
+    ensure(!this.missionPlanningRun, 'mission_planner_busy');
+    for (const [id, value] of this.missionProposals) if (value.expires <= Date.now()) this.missionProposals.delete(id);
+    ensure(this.missionProposals.size < 8, 'mission_planning_capacity');
+    const executionId = 'plan:' + requestId;
+    ensure(!this.db.prepare('SELECT 1 FROM vela_mission_provider_admissions WHERE attempt_id=?').get(executionId), 'mission_planning_already_attempted');
+    const task = { id: 'planning', specialist: { ...selection, role: 'Mission planner', instructions: MISSION_PROPOSAL_INSTRUCTIONS } };
+    const turn: TurnInput = {
+      executionId, requestId, configurationId: CHATGPT_PLAN_REGISTRATION, providerId: CHATGPT_PLAN_PROVIDER,
+      assistant: 'ordinary', model: selection.model, instructions: MISSION_PROPOSAL_INSTRUCTIONS,
+      messages: [{ role: 'user', content: JSON.stringify({ objective, capabilities }) }],
+      contextDigest: fingerprint, ...(selection.effort ? { reasoningEffort: selection.effort } : {}),
+    };
+    const abort = new AbortController();
+    const started = performance.now(), startedAt = now();
+    const settled = Promise.resolve().then(async () => {
+      const result = await this.runMissionProvider(scope, task, turn, abort.signal, requestId, true);
+      ensure(result.outcome === 'completed' && result.dispatched && result.responseId && result.reportedModel === selection.model,
+        'mission_planning_response_unavailable');
+      const plan = compileMissionProposal(result.partialText, objective, scope, catalog);
+      ensure(!plan.tasks.some(step => step.specialist && step.dependencies.length), 'mission_proposal_unsupported_objective');
+      validateMissionPlan(plan, this.missionExecutors);
+      plan.planning = { provider: CHATGPT_PLAN_PROVIDER, model: selection.model, effort: selection.effort,
+        responseId: result.responseId, startedAt, durationMs: performance.now() - started, ...(result.usage ? { usage: result.usage } : {}) };
+      this.missionProposals.set(requestId, { plan, expires: Date.now() + 5 * 60_000 });
+      return this.missionCommand({ name: 'preview', input: { objective, proposalId: requestId } });
+    }).finally(() => {
+      this.missionPlanningRun = undefined;
+      this.missions.capacityChanged();
+    });
+    this.missionPlanningRun = { abort, settled };
+    return settled;
   }
   private async missionCheckReview(paths: string[]): Promise<CommandMap['missionCheckReview']['output']> {
     const runner = this.port.projectChecks;
@@ -450,20 +519,35 @@ export class BackendCore {
     const scope = { workspaceId, projectId };
     switch (request.name) {
       case 'preview': case 'start': {
-        const { objective, agentProfileId } = request.input;
-        const keys = request.name === 'preview' ? ['objective', 'agentProfileId'] : ['objective', 'agentProfileId', 'fingerprint', 'requestId'];
+        const { objective, agentProfileId, proposalId } = request.input;
+        const keys = request.name === 'preview' ? ['objective', 'agentProfileId', 'proposalId'] :
+          ['objective', 'agentProfileId', 'proposalId', 'fingerprint', 'requestId'];
         ensure(Object.keys(request.input).every(key => keys.includes(key)) &&
           (agentProfileId === undefined || identifier(agentProfileId)), 'invalid_mission_command');
-        const plan = (agentProfileId === undefined ? nativeMissionPlan(objective, scope) : null) ??
+        const stored = proposalId === undefined ? undefined : this.missionProposals.get(proposalId);
+        if (proposalId !== undefined) ensure(identifier(proposalId) && agentProfileId === undefined && stored &&
+          (request.name === 'preview' || request.input.requestId === proposalId) &&
+          stored.expires > Date.now() && objective === stored.plan.objective &&
+          scope.workspaceId === stored.plan.scope.workspaceId && scope.projectId === stored.plan.scope.projectId, 'mission_preview_changed');
+        const plan = (stored ? structuredClone(stored.plan) : undefined) ??
+          (agentProfileId === undefined ? nativeMissionPlan(objective, scope) : null) ??
           specialistMissionPlan(objective, scope, this.missionSpecialistSelection(scope),
             agentProfileId === undefined ? undefined : { selection: this.missionSpecialistSelection(scope, agentProfileId) });
-        if (!plan && request.name === 'preview') return null;
+        if (!plan && request.name === 'preview') {
+          if (agentProfileId === undefined && typeof objective === 'string' && Buffer.byteLength(objective) <= 1536 &&
+            /^\s*(?:vela[,:]?\s+)?(?:please\s+)?(?:plan|create|start|run)\s+a\s+mission\s+(?:to|for)\s+\S/iu.test(objective)) {
+            ensure(this.missionScopeAllowed(scope), 'mission_scope_denied');
+            return this.missionPlanningInputs(objective, scope).offer;
+          }
+          return null;
+        }
         ensure(plan && this.missionScopeAllowed(scope), 'mission_scope_or_plan_unavailable');
         const fingerprint = planningDigest(plan);
         const remote = plan.tasks.filter(task => task.executor === 'chatgpt.specialist');
         const projectCheck = plan.tasks.find(task => task.executor === 'codex.project-check');
         const selected = remote[0]?.specialist;
         if (request.name === 'preview') return { fingerprint, plan,
+          ...(proposalId ? { proposalId } : {}),
           executors: plan.tasks.map(task => ({ id: task.id, available: this.missionExecutors[task.executor].available(scope, task) })),
           ...(projectCheck ? { localReview: { kind: 'node-test', maxFiles: 4 } as const } : {}),
           ...(remote.length ? { externalReview: { provider: 'ChatGPT plan', model: selected?.model ?? 'Unavailable',
@@ -3195,7 +3279,7 @@ export class BackendCore {
         this.state.revisions[e.resourceId]++;if(handoff)handoff.state=e.state==='provider_completed'?'applied':e.state==='unknown'?'unknown':e.state==='interrupted'?'interrupted':'failed';
       });
     }catch(error){this.atomic(()=>{e.state=result?.dispatched?'unknown':'failed';e.errorCode=error instanceof ServiceError?error.code:'ordinary_provider_unavailable';e.endedAt=now();if(handoff)handoff.state=e.state==='unknown'?'unknown':'failed';});}
-    finally{authority?.signal.removeEventListener('abort',cancel);this.record('execution/'+e.state,e.state==='provider_completed'?classification:'inferred',undefined,randomUUID(),{providerId:CHATGPT_PLAN_PROVIDER});this.active=null;this.ordinaryController=null;this.liveVelaAnswer=undefined;}
+    finally{authority?.signal.removeEventListener('abort',cancel);this.record('execution/'+e.state,e.state==='provider_completed'?classification:'inferred',undefined,randomUUID(),{providerId:CHATGPT_PLAN_PROVIDER});this.active=null;this.ordinaryController=null;this.liveVelaAnswer=undefined;this.missions.capacityChanged();}
     return structuredClone(e);
   }
   private async runExecution(input: CommandMap['execute']['input'],managed?:{input:ConversationSendInput;preview:Omit<ConversationSendPreview,'id'|'expiresAt'>},discovery?:{requestId:string;previewId:string;expiresAt:string;sourceConversationId:string},inspection?:{signal?:AbortSignal;validate:()=>void;effort?:string;cwd?:string}, countVelaAttempt = false): Promise<Execution> {
@@ -3345,6 +3429,7 @@ export class BackendCore {
       return await this.missionCommand({ name: 'start', input: request }, true, approvedProjectCheck) as CommandMap[K]['output'];
     }
     if (name === 'missionCheckReview') return await this.missionCheckReview(a?.paths) as CommandMap[K]['output'];
+    if (name === 'missionPlanReviewed') return await this.startMissionPlanning(a) as CommandMap[K]['output'];
     // Targeted observed facts can respond during unrelated agent execution.
     // Their own strict schema cannot dispatch an action or a provider.
     if(name==='vela'&&a?.name==='presentation')return this.vela.presentation(a.input) as any;
@@ -3544,7 +3629,24 @@ export class BackendCore {
         const latest = Number(this.db.prepare('SELECT latest FROM integration_meta WHERE id=1').get()!.latest);
         return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;
       }
-      case 'close': this.githubImport?.abort();this.ordinaryController?.abort();await this.missions.close();if(this.ordinaryTask)await this.ordinaryTask.catch(()=>{});if(this.velaProjectCheckTask)await this.velaProjectCheckTask.task.catch(()=>{});await this.ordinaryConnections.close();await Promise.allSettled([...this.ordinaryAuth.values()]);for(const id of this.velaCatalogLeases.keys())this.finishVelaCatalog(id);this.stopEvents(); this.port.close(); this.kernel.close(); this.closed = true; return null as any;
+      case 'close': {
+        this.githubImport?.abort();
+        this.ordinaryController?.abort();
+        const planning = this.missionPlanningRun;
+        planning?.abort.abort();
+        await this.missions.close();
+        await planning?.settled.catch(() => {});
+        if(this.ordinaryTask)await this.ordinaryTask.catch(()=>{});
+        if(this.velaProjectCheckTask)await this.velaProjectCheckTask.task.catch(()=>{});
+        await this.ordinaryConnections.close();
+        await Promise.allSettled([...this.ordinaryAuth.values()]);
+        for(const id of this.velaCatalogLeases.keys())this.finishVelaCatalog(id);
+        this.stopEvents();
+        this.port.close();
+        this.kernel.close();
+        this.closed = true;
+        return null as any;
+      }
       default: throw new ServiceError('unsupported_command');
     }
   }

@@ -189,6 +189,7 @@ export interface CommandMap {
   missionStartReviewed: { input: Extract<MissionRequest, { name: 'start' }>['input'] & {
     approvedProjectCheck?: { paths: string[]; digest: string } }; output: MissionResponse };
   missionCheckReview: { input: { paths: string[] }; output: { cwd: string; argv: string[]; head: string; digest: string } };
+  missionPlanReviewed: { input: Extract<MissionRequest, { name: 'plan' }>['input']; output: MissionResponse };
   /** Private desktop-host command. Local paths never cross renderer IPC. */
   mediaImportTrusted: {
     input: Omit<MediaImportRequest, 'url'> & { commandId: string; selection: MediaSelection };

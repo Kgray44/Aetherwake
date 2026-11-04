@@ -57,7 +57,7 @@ this branch; **verified** is limited to the proof in the same row.
 | Acceptance | Checkpoint evidence | Remaining work |
 | --- | --- | --- |
 | A · Native intelligence | **Verified for the measured route.** Electron ran real backend, CPU and memory observations plus a digest-bound static code scan; zero provider calls. Baseline native AIR covers individual facts. | Expand exact-source native checks for GPU availability across hardware. |
-| B · Adaptive answers | **Partial.** Existing AIR baseline and 352 offline matches; specialist route binds observed catalog controls and fails closed. | Repeat live deep/pinned and unavailable-provider desktop cases on the candidate; general bounded model-assisted intent interpretation. |
+| B · Adaptive answers | **Partial.** Existing AIR baseline and 352 offline matches. Explicit unmatched missions can request a bounded graph proposal through native approval. Catalog controls and ordinary fallback are preserved. | Repeat live deep and pinned desktop cases. Test broader natural-language objective interpretation. |
 | C · Parallel performance mission | **Verified for the native route.** Actual Electron Start, 106 ms measured overlap, ordered report join, actual static source digest. The Responses protocol with synthetic transport observed two outstanding requests before releasing either. | Live specialist and hosted search evidence. |
 | D · Dependencies | **Verified in scheduler and native app.** No join before verified predecessors; graph validator rejects missing edges and cycles. | Extend proof to implementation and verification mutations once mission-owned write adapters exist. |
 | E · Concurrent missions | **Verified in controlled scheduler execution.** Two mission identities run together, exclusive claims serialize, outputs do not mix. | Sustained native load and UI responsiveness under simultaneous missions. |
@@ -105,3 +105,15 @@ actual ChatGPT plan grant before creating an exclusive dispatch marker. The
 preflight on this host returned `chatgpt_plan_grant_required`, so it
 dispatched no specialist calls. The protocol tests remain the proof of
 specialist isolation and citation handling until the live grant is available.
+
+The bounded graph planner was exercised through the production provider
+transport with synthetic responses. One approved planning request produced a
+CPU sample, a dependent RAM measurement and an independent specialist. Start
+required separate specialist approval. The mission recorded the two reported
+usage entries, preserved its planning receipt across restart and refused
+duplicate planning dispatch. Compiler regressions cover unknown capabilities,
+cyclic and missing dependencies, unsupported outcomes and ambiguous JSON.
+The Electron journey displayed the unavailable planner in a fresh profile
+with zero provider requests, then completed the native mission and created its
+linked four-block workroom. Native attempts overlapped by 106 ms on that run.
+Live semantic interpretation and provider qualification remain open.

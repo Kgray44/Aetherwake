@@ -40,6 +40,16 @@ export interface MissionPlan {
   scope: MissionScope;
   criteria: string[];
   tasks: MissionTaskPlan[];
+  planning?: MissionPlanningReceipt;
+}
+export interface MissionPlanningReceipt {
+  provider: 'chatgpt-plan-responses';
+  model: string;
+  effort?: ReasoningEffort;
+  responseId: string;
+  startedAt: string;
+  durationMs: number;
+  usage?: ReportedUsage;
 }
 export interface MissionEvidence {
   id: string;
@@ -93,6 +103,7 @@ export interface Mission {
   planRevision: number;
   concurrency: number;
   disposition: 'active' | 'paused' | 'cancelled';
+  planning?: MissionPlanningReceipt;
   workroom?: MissionWorkroom;
   tasks: MissionTask[];
   events: MissionEvent[];
@@ -119,8 +130,9 @@ export type MissionControl =
 
 export type MissionSummary = Pick<MissionProjection, 'id' | 'objective' | 'outcome' | 'createdAt' | 'revision'>;
 export type MissionRequest =
-  | { name: 'preview'; input: { objective: string; agentProfileId?: string } }
-  | { name: 'start'; input: { objective: string; fingerprint: string; requestId: string; agentProfileId?: string } }
+  | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string } }
+  | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string } }
+  | { name: 'start'; input: { objective: string; fingerprint: string; requestId: string; agentProfileId?: string; proposalId?: string } }
   | { name: 'list'; input: Record<string, never> }
   | { name: 'read'; input: { id: string } }
   | { name: 'workroom-preview'; input: { id: string } }
@@ -132,6 +144,14 @@ export interface MissionPreview {
   executors: { id: string; available: boolean }[];
   externalReview?: { provider: string; model: string; effort?: ReasoningEffort; calls: number };
   localReview?: { kind: 'node-test'; maxFiles: number };
+  proposalId?: string;
+}
+export interface MissionPlanningOffer {
+  kind: 'planning-offer';
+  scope: MissionScope;
+  objective: string;
+  fingerprint: string;
+  planner?: { model: string; effort?: ReasoningEffort; capabilities: string[] };
 }
 export interface MissionWorkroom {
   kind: 'workroom';
@@ -147,7 +167,7 @@ export interface MissionWorkroomPreview {
   expiresAt: string;
   cards: { title: string; kind: string; mode: 'new' | 'reference' }[];
 }
-export type MissionResponse = MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomPreview | null;
+export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomPreview | null;
 
 export interface MissionExecutionContext {
   missionId: string;

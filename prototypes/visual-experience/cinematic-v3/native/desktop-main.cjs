@@ -568,27 +568,42 @@ app.whenReady().then(async () => {
       } else if (command === "notes") {
         result = await call("notes", input);
       } else if (command === "missions") {
-        if (input?.name === "start") {
+        if (input?.name === "plan") {
+          const offer = await call("missions", { name: "preview", input: { objective: input.input?.objective } });
+          if (offer?.kind !== "planning-offer" || offer.fingerprint !== input.input?.fingerprint)
+            throw Error("mission_preview_changed");
+          if (!offer.planner) throw Error("mission_planner_unavailable");
+          const { model, effort, capabilities } = offer.planner;
+          const choice = await dialog.showMessageBox(win, {
+            type: "question", buttons: ["Cancel", "Request plan"], defaultId: 0, cancelId: 0,
+            title: "Review mission planning request", message: "Send one planning request to ChatGPT plan?",
+            detail: `Model: ${model}${effort ? " · " + effort : ""}\n\nObjective:\n${offer.objective}\n\nCapability descriptions:\n${capabilities.join("\n")}\n\nReview the resulting tasks before starting the mission.`,
+          });
+          if (choice.response !== 1) throw Error("mission_review_declined");
+          if (win.isDestroyed() || event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
+            throw Error("unauthorized_sender");
+          if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
+          result = await call("missionPlanReviewed", input.input);
+        } else if (input?.name === "start") {
           const preview = await call("missions", { name: "preview", input: {
             objective: input.input?.objective, ...(input.input?.agentProfileId ? { agentProfileId: input.input.agentProfileId } : {}),
+            ...(input.input?.proposalId ? { proposalId: input.input.proposalId } : {}),
           } });
-          if (!preview || preview.fingerprint !== input.input?.fingerprint) throw Error("mission_preview_changed");
+          if (!preview?.plan || preview.fingerprint !== input.input?.fingerprint) throw Error("mission_preview_changed");
+          let approvedProjectCheck;
           if (preview.externalReview) {
             if (preview.executors.some(executor => !executor.available)) throw Error("mission_specialist_unavailable");
             const { provider, calls } = preview.externalReview;
             const assignments = preview.plan.tasks.filter(task => task.specialist).map(({ specialist }) =>
               `${specialist.role} — ${specialist.model}${specialist.effort ? " · " + specialist.effort : ""}${specialist.webSearch ? " · public web search" : ""}\n${specialist.instructions}`);
             const choice = await dialog.showMessageBox(win, {
-              type: "question", buttons: ["Cancel", "Start mission"], defaultId: 0, cancelId: 0,
+              type: "question", buttons: ["Cancel", preview.localReview ? "Approve specialists" : "Start mission"], defaultId: 0, cancelId: 0,
               title: "Review specialist mission", message: `Send ${calls} separate requests to ${provider}?`,
               detail: `Objective sent to each specialist:\n${preview.plan.objective}\n\nInstructions:\n${assignments.join("\n\n")}\n\nThe provider may count these requests against your plan. No files, chat history or local measurements are sent.`,
             });
             if (choice.response !== 1) throw Error("mission_review_declined");
-            if (win.isDestroyed() || event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
-              throw Error("unauthorized_sender");
-            if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
-            result = await call("missionStartReviewed", input.input);
-          } else if (preview.localReview) {
+          }
+          if (preview.localReview) {
             if (preview.executors.some(executor => !executor.available)) throw Error("mission_project_check_unavailable");
             const selected = await dialog.showOpenDialog(win, {
               title: "Choose tracked Node test files in one Git checkout",
@@ -605,10 +620,13 @@ app.whenReady().then(async () => {
               detail: `Checkout: ${review.cwd}\nCommit: ${review.head}\nArguments: ${JSON.stringify(review.argv)}\n\nCodex runs the selected command in its read-only sandbox with networking disabled and no model inference.`,
             });
             if (choice.response !== 1) throw Error("mission_review_declined");
+            approvedProjectCheck = { paths, digest: review.digest };
+          }
+          if (preview.externalReview || approvedProjectCheck) {
             if (win.isDestroyed() || event.senderFrame !== win.webContents.mainFrame || event.senderFrame?.url !== localURL)
               throw Error("unauthorized_sender");
             if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
-            result = await call("missionStartReviewed", { ...input.input, approvedProjectCheck: { paths, digest: review.digest } });
+            result = await call("missionStartReviewed", { ...input.input, ...(approvedProjectCheck ? { approvedProjectCheck } : {}) });
           } else result = await call("missions", input);
         } else result = await call("missions", input);
       } else if (

@@ -179,7 +179,7 @@ export class MissionService {
       check(Number(this.host.db.prepare('SELECT count(*) AS n FROM vela_missions').get()!.n) < L.missions, 'mission_store_full');
       const value: Mission = { contract: MISSION_CONTRACT, id: randomUUID(), requestId, objective: plan.objective, scope: plan.scope,
         criteria: [...plan.criteria], createdAt: stamp(), disposition: 'active', revision: 0, planRevision: 1, concurrency: 2,
-        tasks: plan.tasks.map(makeTask), events: [] };
+        tasks: plan.tasks.map(makeTask), events: [], ...(plan.planning ? { planning: plan.planning } : {}) };
       this.event(value, { kind: 'created' });
       this.host.db.prepare('INSERT INTO vela_missions VALUES(?,?,?,?,1,1,?)')
         .run(value.id, requestId, fingerprint, digest(value.scope), JSON.stringify(value));
@@ -317,9 +317,10 @@ export class MissionService {
     const attempts = m.tasks.flatMap(task => task.attempts);
     const expectedRemote = attempts.filter(attempt => this.host.executors[attempt.executor]?.lane !== 'native');
     const usage = expectedRemote.flatMap(attempt => attempt.telemetry?.usage ? [attempt.telemetry.usage] : []);
+    if (m.planning?.usage) usage.push(m.planning.usage);
     const reportedTotalTokens = usage.length ? usage.reduce((total, reading) => total + reading.totalTokens, 0) : null;
     const providerCalls = expectedRemote.every(attempt => attempt.telemetry) ?
-      expectedRemote.reduce((total, attempt) => total + attempt.telemetry!.providerCalls, 0) : null;
+      expectedRemote.reduce((total, attempt) => total + attempt.telemetry!.providerCalls, m.planning ? 1 : 0) : null;
     let peakWorkers = 0, admitted = 0;
     for (const event of m.events) {
       if (event.kind === 'started') peakWorkers = Math.max(peakWorkers, ++admitted);
@@ -327,13 +328,15 @@ export class MissionService {
     }
     const ended = ['queued', 'running', 'cancelling'].includes(outcome) ? Date.now() : Date.parse(m.events.at(-1)!.time);
     return { ...m, outcome, waits, profile: {
-      elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)), peakWorkers, attempts: attempts.length,
+      elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0), peakWorkers, attempts: attempts.length,
       retries: m.tasks.reduce((total, task) => total + Math.max(0, task.attempts.length - 1), 0),
       providerCalls, usageReports: usage.length, reportedTotalTokens,
       verifiedObjectivesPerReportedToken: outcome === 'verified' && providerCalls === usage.length &&
         reportedTotalTokens && reportedTotalTokens > 0 ? 1 / reportedTotalTokens : null,
     } };
   }
+
+  capacityChanged() { this.wake(); }
 
   private wake() {
     if (this.closed || !this.healthy || this.scheduled) return;

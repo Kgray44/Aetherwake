@@ -1,6 +1,7 @@
 import { MISSION_LIMITS } from "../../../integrated-backend/src/mission-contracts.mts";
 import type {
   MissionControl,
+  MissionPlanningOffer,
   MissionPreview,
   MissionProjection,
   MissionRequest,
@@ -96,7 +97,7 @@ export function createVelaMissionView(
     mission: MissionProjection | null = null,
     selectedId: string | null = null;
   let review: {
-    preview: MissionPreview;
+    preview: MissionPreview | MissionPlanningOffer;
     requestId: string;
     agentProfileId?: string;
     onStarted: () => void;
@@ -124,6 +125,12 @@ export function createVelaMissionView(
         "The review was cancelled. Your draft is still here.",
       mission_project_check_unavailable:
         "The installed Codex read-only sandbox is unavailable.",
+      mission_planner_unavailable:
+        "A planning model is unavailable. Check the ChatGPT plan connection and request limits.",
+      mission_proposal_unsupported_objective:
+        "The planner reported that available capabilities cannot cover the whole objective. No mission was started.",
+      mission_planning_already_attempted:
+        "This planning request was already admitted. Submit the objective again for a fresh review.",
     };
     error.textContent =
       descriptions[code] ??
@@ -318,8 +325,9 @@ export function createVelaMissionView(
   }
   function renderPreview() {
     if (!review) return null;
-    const { preview, requestId, agentProfileId } = review,
-      { plan, executors, externalReview, localReview } = preview;
+    const { preview, requestId, agentProfileId } = review;
+    if ("kind" in preview) return renderPlanningOffer(preview);
+    const { plan, executors, externalReview, localReview } = preview;
     const section = el("section", "vela-core-plan vela-mission-preview");
     section.append(
       el("h3", undefined, "Review mission"),
@@ -327,6 +335,8 @@ export function createVelaMissionView(
     );
     if (localReview) section.append(el("p", "vela-core-meta",
       "Start opens a native picker for up to four tracked Node tests. You will review the exact checkout and command before it runs."));
+    if (plan.planning) section.append(el("p", "vela-core-meta",
+      `Proposed by ${plan.planning.model}. Review the tasks and dependencies before starting.`));
     section.append(
       externalReview
         ? el(
@@ -404,6 +414,7 @@ export function createVelaMissionView(
           fingerprint: preview.fingerprint,
           requestId,
           ...(agentProfileId ? { agentProfileId } : {}),
+          ...(preview.proposalId ? { proposalId: preview.proposalId } : {}),
         },
       });
     });
@@ -437,6 +448,44 @@ export function createVelaMissionView(
     section.append(tasks, controls);
     return section;
   }
+  function renderPlanningOffer(offer: MissionPlanningOffer) {
+    const section = el("section", "vela-core-plan vela-mission-preview");
+    section.append(el("h3", undefined, "Plan a mission"), el("p", undefined, offer.objective),
+      el("p", "vela-core-meta", offer.planner
+        ? `One planning request to ${offer.planner.model}. You’ll review the resulting tasks separately.`
+        : "A planning model is unavailable for this workspace. Check Connections and request limits."));
+    const controls = actions();
+    const plan = button("Review planning request", "plan-mission", () => { void preparePlan(offer); });
+    plan.classList.add("vela-core-primary");
+    plan.disabled = commandPending || !offer.planner;
+    controls.append(plan, button("Dismiss preview", "dismiss-preview", () => {
+      if (!commandPending) { review = null; render(); }
+    }));
+    section.append(controls);
+    return section;
+  }
+  async function preparePlan(offer: MissionPlanningOffer) {
+    const pending = review;
+    if (commandPending || !visible || pending?.preview !== offer || !offer.planner) return;
+    const generation = epoch;
+    commandPending = true;
+    error.hidden = true;
+    body.setAttribute("aria-busy", "true");
+    try {
+      const result = await command({ name: "plan",
+        input: { objective: offer.objective, fingerprint: offer.fingerprint, requestId: pending.requestId } });
+      if (generation !== epoch || review !== pending) return;
+      if (!result || !("plan" in result) || !sameScope(result.plan.scope, scope) || result.proposalId !== pending.requestId)
+        throw new Error("mission_preview_changed");
+      review = { ...pending, preview: result };
+    } catch (cause) {
+      if (generation === epoch) showError(cause);
+    } finally {
+      commandPending = false;
+      body.removeAttribute("aria-busy");
+      if (generation === epoch) render();
+    }
+  }
   function renderMission(current: MissionProjection) {
     const section = el("section", "vela-core-plan vela-mission-record");
     section.dataset.missionId = current.id;
@@ -449,6 +498,8 @@ export function createVelaMissionView(
         `${stateLabel[current.outcome]} · plan v${current.planRevision} · journal revision ${current.revision}`,
       ),
     );
+    if (current.planning) section.append(el("p", "vela-core-meta",
+      `Planning · ${current.planning.model} · ${Math.round(current.planning.durationMs)} ms · ${current.planning.usage?.totalTokens ?? "Unknown"} reported tokens`));
     if (current.workroom && scope?.workspaceId !== current.workroom.workspaceId && openWorkspace) {
       section.append(button("Open mission workroom", "open-workroom",
         () => { void openWorkspace(current.workroom!.workspaceId).catch(showError); }));
@@ -744,16 +795,17 @@ export function createVelaMissionView(
       }
       if (activeEpoch !== epoch) throw new Error("mission_scope_denied");
       if (response === null) return null;
+      if ("kind" in response && response.kind === "planning-offer" && sameScope(response.scope, expected)) return response;
       if (!("plan" in response) || !sameScope(response.plan.scope, expected))
         throw new Error("mission_scope_denied");
       return response;
     },
     review(
-      preview: MissionPreview,
+      preview: MissionPreview | MissionPlanningOffer,
       onStarted: () => void,
       agentProfileId?: string,
     ) {
-      if (!sameScope(preview.plan.scope, scope)) return;
+      if (!sameScope("plan" in preview ? preview.plan.scope : preview.scope, scope)) return;
       review = {
         preview,
         requestId: crypto.randomUUID(),

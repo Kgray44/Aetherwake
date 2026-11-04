@@ -126,11 +126,23 @@ const probes: Record<string, { executor: string; objective: string; resource: st
   notes: { executor: 'inspect.workspace-notes', objective: 'Find relevant notes already placed in this workspace', resource: 'aerynth.notes' },
 };
 
+export function missionPlanningCatalog() {
+  const tasks: MissionTaskPlan[] = Object.entries(probes).map(([id, probe]) => ({
+    id, objective: probe.objective, executor: probe.executor, criterion: id,
+    claims: [{ resource: probe.resource, mode: id === 'gpu' ? 'exclusive' : 'read' }],
+    dependencies: [], maxAttempts: 2, timeoutMs: 6000,
+  }));
+  tasks.push({ id: 'project-tests', objective: 'Run the reviewed tracked Node tests in the Codex read-only sandbox',
+    executor: 'codex.project-check', criterion: 'project-tests-pass', dependencies: [],
+    claims: [{ resource: 'codex.project-check', mode: 'exclusive' }], maxAttempts: 1, timeoutMs: 35_000 });
+  return Object.fromEntries(tasks.map(task => [task.id, task]));
+}
+
 /** AIR remains the default. Only fully matched, supported read-only objectives enter this planner. */
 export function nativeMissionPlan(intent: string, scope: MissionScope): MissionPlan | null {
   if (typeof intent !== 'string' || Buffer.byteLength(intent) > 4096) return null;
   const text = intent.normalize('NFKC').toLowerCase().trim().replace(/^vela[,:]?\s+/u, '')
-    .replace(/^(?:please\s+)?(?:run|start) (?:a )?mission to\s+/u, '').replace(/[.!?]+$/u, '');
+    .replace(/^(?:please\s+)?(?:run|start|plan|create) (?:a )?mission (?:to|for)\s+/u, '').replace(/[.!?]+$/u, '');
   let ids: string[];
   const check = /^run (?:the )?selected node(?:\.js)? tests and (?:measure|sample|check) cpu and ram(?: in parallel)?$/u.test(text);
   if (/^(?:investigate|profile|measure) (?:the )?aerynth backend(?:'s)? performance(?: using workspace notes)?$/u.test(text))
@@ -142,14 +154,9 @@ export function nativeMissionPlan(intent: string, scope: MissionScope): MissionP
     ids = [...new Set(match[1].match(/cpu|gpu|ram|memory/gu)!.map(id => id === 'memory' ? 'ram' : id))];
     if (ids.length < 2) return null;
   }
-  const tasks: MissionTaskPlan[] = ids.map(id => ({
-    id, objective: probes[id].objective, executor: probes[id].executor, criterion: id,
-    claims: [{ resource: probes[id].resource, mode: id === 'gpu' ? 'exclusive' : 'read' }],
-    dependencies: [], maxAttempts: 2, timeoutMs: 6000,
-  }));
-  if (check) tasks.push({ id: 'project-tests', objective: 'Run the reviewed tracked Node tests in the Codex read-only sandbox',
-    executor: 'codex.project-check', criterion: 'project-tests-pass', dependencies: [],
-    claims: [{ resource: 'codex.project-check', mode: 'exclusive' }], maxAttempts: 1, timeoutMs: 35_000 });
+  const catalog = missionPlanningCatalog();
+  const tasks = ids.map(id => catalog[id]);
+  if (check) tasks.push(catalog['project-tests']);
   tasks.push({ id: 'report', objective: check ? 'Join the reviewed test result and measured samples' : 'Join the measured samples with provenance',
     executor: 'join.samples', criterion: 'joined-samples', claims: [], dependencies: tasks.map(task => task.id), maxAttempts: 2, timeoutMs: 1000 });
   return { objective: intent.trim(), scope, criteria: tasks.map(task => task.criterion), tasks };

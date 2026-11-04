@@ -9,6 +9,9 @@ flowchart LR
   Send["Vela Send"] --> Check{"Supported mission objective<br/>and no turn-level provider pin?"}
   Check -- No --> AIR["Existing AIR and ordinary/Codex paths"]
   Check -- Yes --> Preview["Canonical graph preview"]
+  Check -- "Explicit mission beyond a native route" --> PlanningReview["Native review of one planning request"]
+  PlanningReview --> Compiler["Validate proposal against host capability catalog"]
+  Compiler --> Preview
   Preview --> Consent["Explicit Start<br/>native review for provider calls"]
   Consent --> Journal["Mission journal in canonical SQLite"]
   Journal --> Scheduler["Fair bounded admission"]
@@ -29,12 +32,27 @@ flowchart LR
 ```
 
 The deterministic planner recognizes explicit host sampling and Aerynth backend
-performance objectives. It does not claim to interpret an arbitrary objective
-or grant arbitrary shell, network or write capabilities. Performance work
+performance objectives. Performance work
 uses a real worker timer, host counters and a bounded scan of the shipped Core
 module. An observed timer outlier adds one follow-up measurement before the
 report without changing the original acceptance criteria. Counts of source
 call sites do not establish a measured bottleneck.
+
+An explicit mission request outside the deterministic routes can request a graph
+proposal from the connected ChatGPT plan model. The native approval displays the
+objective, selected model and available capability descriptions. The single
+request sends the objective and public capability descriptions. Its response can
+select catalog tasks and dependency edges. The host supplies executable task
+definitions, resource claims, limits, verification criteria and the evidence join.
+The compiler rejects malformed graphs and proposals that report unsupported
+outcomes. The graph preview lets the user check whether the interpretation
+covers the original objective. Start requires the reviewed fingerprint and
+current workspace, plus any specialist or checkout approvals. Hosted specialists
+can run as independent branches. Their approvals cover objective text and role
+instructions, so the host rejects proposals with prerequisites on hosted
+specialist tasks. A confirmed planning receipt contributes to mission
+duration and reported usage. Admitted planning requests are fenced against
+replay after interruption or restart.
 
 The selected-tests route asks for a native file selection and displays the
 exact checkout, commit and argument vector. It uses the existing Codex App

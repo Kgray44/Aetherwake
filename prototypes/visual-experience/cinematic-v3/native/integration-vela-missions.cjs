@@ -203,6 +203,15 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     assert.deepEqual(await list(), []);
     await click("#vela");
     const composer = SURFACE + ' textarea[aria-label="Message Vela"]';
+    const unmatchedObjective = "Plan a mission to read physical memory after recording processor load";
+    await fillNative({ click, key, js, wait, insertText: text => operation(() => win.webContents.insertText(text), "mission_text_input_deadline") }, composer, unmatchedObjective);
+    await click(SURFACE + ' button[aria-label="Send to Vela"]');
+    const planningButton = PREVIEW + ' [data-mission-focus="plan-mission"]';
+    await wait("Disconnected planner is shown as unavailable", () => js(`document.querySelector(${quote(planningButton)})?.disabled === true`));
+    assert.deepEqual(await list(), [], "disconnected_planner_created_mission");
+    assert.equal((await rpc("providerActivity", {})).providerRequests, 0, "disconnected_planner_called_provider");
+    await click(PREVIEW + ' [data-mission-focus="dismiss-preview"]');
+    receipt.disconnectedPlanner = { shown: true, requestAvailable: false, providerRequests: 0 };
     await fillNative({ click, key, js, wait, insertText: text => operation(() => win.webContents.insertText(text), "mission_text_input_deadline") }, composer, OBJECTIVE);
     receipt.actions.push({ method: "software-native-window-insertText", selector: composer, characters: OBJECTIVE.length });
     await click(SURFACE + ' button[aria-label="Send to Vela"]');

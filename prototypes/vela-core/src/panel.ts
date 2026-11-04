@@ -5,7 +5,7 @@ import { velaPanelStatus } from './panel-status.ts';
 import { projectVelaManifestation, type VelaManifestationState } from './manifestation-state.ts';
 import { summarizeSystemMemory } from './system-information.ts';
 import { githubRepository } from '../../application-contract/github-timeline.ts';
-import type { MissionPreview } from '../../integrated-backend/src/mission-contracts.mts';
+import type { MissionPlanningOffer, MissionPreview } from '../../integrated-backend/src/mission-contracts.mts';
 
 export interface VelaPanelPresentation {
   phase: 'idle' | 'receiving' | 'thinking' | 'planning' | 'review' | 'applying' | 'attention' | 'error';
@@ -25,8 +25,8 @@ export interface VelaPanelOptions {
   listTimelineRepositories?: () => Promise<string[]>;
   missions?: {
     element: HTMLElement;
-    preview(intent: string, agentProfileId?: string): Promise<MissionPreview | null>;
-    review(preview: MissionPreview, onStarted: () => void, agentProfileId?: string): void;
+    preview(intent: string, agentProfileId?: string): Promise<MissionPreview | MissionPlanningOffer | null>;
+    review(preview: MissionPreview | MissionPlanningOffer, onStarted: () => void, agentProfileId?: string): void;
     setVisible(visible: boolean): void;
   };
 }
@@ -383,7 +383,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   }, revision = draftRevision, submittedView = ++viewRevision;
     const defaults = useAutomaticOnce ? undefined : current?.routingSettings?.effective;
     const agentProfileId = routingAgentSelection?.id;
-    const couldBeMission = /^\s*(?:vela[,:]?\s+)?(?:please\s+)?(?:run\s|start\s|investigate\s|profile\s|measure\s|sample\s|check\s|research\s)/iu.test(submitted.intent);
+    const couldBeMission = /^\s*(?:vela[,:]?\s+)?(?:please\s+)?(?:run|start|plan|create|investigate|profile|measure|sample|check|research)\s/iu.test(submitted.intent);
     const checkMission = couldBeMission && options.missions && !selected.size && !chosenProviderId && !allowProvider.checked &&
       (!routeMode.value || routeMode.value === 'auto') && !routeModel.value && !routeEffort.value && !routeHistory.checked && !routeEscalation.checked &&
       !handoffSelection && !defaults?.providerId && !defaults?.model && !defaults?.reasoningEffort &&
