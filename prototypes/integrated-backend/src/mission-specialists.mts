@@ -2,6 +2,7 @@ import type { TurnResult } from '../../openai-provider/contracts.mts';
 import { supportsOrdinaryWebSearch } from '../../openai-provider/model-controls.ts';
 import type { MissionExecutionContext, MissionExecutor, MissionPlan, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import { nativeMissionPlan } from './mission-native.mts';
+import type { MissionTeam } from './mission-teams.mts';
 
 type Selection = Omit<NonNullable<MissionTaskPlan['specialist']>, 'role' | 'instructions'>;
 const assignments = [
@@ -38,6 +39,59 @@ export function missionPlanningSpecialists(selection: Selection | undefined): Mi
     specialistTask({ ...sourceAssignments[1], id: 'independent-review' }, selection),
   ];
 }
+
+export function teamMissionPlan(objective: string, scope: MissionScope, team: MissionTeam,
+  profile: (id: string) => { title: string; selection?: Selection } | undefined): MissionPlan | null {
+  if (typeof objective !== 'string' || !objective.trim() || Buffer.byteLength(objective) > 2048) return null;
+  const tasks = team.members.map((member, index) => {
+    const resolved = profile(member.profileId);
+    const title = resolved?.title ?? 'Unavailable agent';
+    const task = specialistTask({
+      id: 'member-' + (index + 1), role: title, objective: member.responsibility,
+      focus: 'Your reviewed responsibility for the objective is: ' + member.responsibility,
+    }, resolved?.selection);
+    return { ...task, teamMember: { profileId: member.profileId, title, responsibility: member.responsibility } };
+  });
+  const join: MissionTaskPlan = {
+    id: 'report', objective: 'Reconcile member reports with evidence attribution', executor: 'join.team',
+    dependencies: tasks.map(task => task.id), claims: [], criterion: 'team-findings-linked', maxAttempts: 2, timeoutMs: 1000,
+  };
+  const { id, title, version } = team;
+  return { objective: objective.trim(), scope, team: { id, title, version }, tasks: [...tasks, join],
+    criteria: [...tasks.map(task => task.criterion), join.criterion] };
+}
+
+function teamFindings({ dependencies, task }: MissionExecutionContext) {
+  const findings = new Map<string, { taskId: string; index: number }[]>();
+  const reports = dependencies.map((evidence, index) => {
+    const taskId = task.dependencies[index];
+    const value = evidence.value;
+    if (!recommendations(value) || evidence.source !== 'chatgpt-plan-responses:reported') throw Error('invalid_team_report');
+    value.observations.forEach((observation, index) => {
+      const key = observation.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLowerCase();
+      const matches = findings.get(key) ?? [];
+      matches.push({ taskId, index });
+      findings.set(key, matches);
+    });
+    return { taskId, evidenceId: evidence.id, attemptId: evidence.attemptId };
+  });
+  const repeatedFindings = [...findings.values()].filter(matches => new Set(matches.map(match => match.taskId)).size > 1);
+  return { reports, repeatedFindings, distinctFindingCount: findings.size,
+    assessment: 'Exact-text agreement only. Assess distinct claims and possible contradictions against their sources.' };
+}
+
+export const missionTeamJoin: MissionExecutor = {
+  lane: 'native', replaySafe: true, available: () => true,
+  async run(context) {
+    return { source: 'aerynth.team-evidence-index', value: teamFindings(context) };
+  },
+  verify(evidence, context) {
+    const passed = context.dependencies.length >= 2 && context.dependencies.length === context.task.dependencies.length &&
+      evidence.source === 'aerynth.team-evidence-index' &&
+      JSON.stringify(evidence.value) === JSON.stringify(teamFindings(context));
+    return { passed, detail: passed ? 'Verified member report attribution and indexed repeated observations' : 'Team report attribution failed' };
+  },
+};
 
 export function specialistMissionPlan(intent: string, scope: MissionScope, defaultSelection: Selection | undefined,
   requestedProfile?: { selection: Selection | undefined }): MissionPlan | null {

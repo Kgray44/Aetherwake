@@ -1,6 +1,6 @@
 /* Owned Electron mission journey. Run through desktop-main.cjs with
  * --integration-vela-missions --profile=<absolute C: profile ending review-vela-missions-DIGITS>
- * 45 seconds including cleanup, up to two PNGs/16 MiB, no video. */
+ * 45 seconds including cleanup, up to three PNGs/24 MiB, no video. */
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
 const fs = require("node:fs/promises");
@@ -16,6 +16,7 @@ const WORKSPACE = "Synthetic Vela mission acceptance";
 const SURFACE = '#vela-assistant-surface[data-surface-id="vela"]';
 const PREVIEW = SURFACE + " .vela-mission-preview";
 const RECORD = SURFACE + " .vela-mission-record";
+const missionControl = name => SURFACE + ' [data-mission-focus=' + JSON.stringify(name) + ']';
 const LIMIT_MS = 45000;
 const MiB = 1024 * 1024;
 const quote = JSON.stringify;
@@ -179,6 +180,9 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         win.webContents.sendInputEvent({ type, keyCode, modifiers });
       }
     };
+    const fill = (selector, text) => fillNative({
+      click, key, js, wait, insertText: value => operation(() => win.webContents.insertText(value), "mission_text_input_deadline"),
+    }, selector, text);
     const capture = async name => {
       const image = await operation(() => win.webContents.capturePage(), "mission_capture_deadline");
       const png = image.toPNG();
@@ -204,7 +208,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     await click("#vela");
     const composer = SURFACE + ' textarea[aria-label="Message Vela"]';
     const unmatchedObjective = "Plan a mission to read physical memory after recording processor load";
-    await fillNative({ click, key, js, wait, insertText: text => operation(() => win.webContents.insertText(text), "mission_text_input_deadline") }, composer, unmatchedObjective);
+    await fill(composer, unmatchedObjective);
     await click(SURFACE + ' button[aria-label="Send to Vela"]');
     const planningButton = PREVIEW + ' [data-mission-focus="plan-mission"]';
     await wait("Disconnected planner is shown as unavailable", () => js(`document.querySelector(${quote(planningButton)})?.disabled === true`));
@@ -212,7 +216,60 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     assert.equal((await rpc("providerActivity", {})).providerRequests, 0, "disconnected_planner_called_provider");
     await click(PREVIEW + ' [data-mission-focus="dismiss-preview"]');
     receipt.disconnectedPlanner = { shown: true, requestAvailable: false, providerRequests: 0 };
-    await fillNative({ click, key, js, wait, insertText: text => operation(() => win.webContents.insertText(text), "mission_text_input_deadline") }, composer, OBJECTIVE);
+
+    await rpc("agents", { name: "ensureStarters", input: {} });
+    receipt.actions.push({ method: "canonical-fixture", type: "ensureStarterAgentProfiles" });
+    const library = () => rpc("missions", { name: "team-library", input: {} });
+    const starters = await library();
+    assert.equal(starters.kind, "team-library");
+    assert.deepEqual(starters.teams, []);
+    assert(starters.profiles.length >= 2, "starter_team_profiles_unavailable");
+    const teamName = "Synthetic evidence review team";
+    const responsibilities = ["Propose reproducible comparison checks.", "Identify alternative interpretations and evidence gaps."];
+    const objective = "Compare two synthetic measurement reports";
+    await click(missionControl("team-library"));
+    await click(missionControl("new-team"));
+    await fill(missionControl("team-title"), teamName);
+    for (const [index, responsibility] of responsibilities.entries()) {
+      const profile = missionControl(`team-profile-${index + 1}`);
+      key("Tab");
+      await wait("Actual team profile focus", () => js(`document.activeElement === document.querySelector(${quote(profile)})`));
+      for (let choice = 0; choice <= index; choice++) {
+        key("Down");
+        await wait("Canonical team profile chosen", () => js(`document.querySelector(${quote(profile)})?.value === ${quote(starters.profiles[choice].id)}`));
+      }
+      await fill(missionControl(`team-responsibility-${index + 1}`), responsibility);
+    }
+    await click(missionControl("save-team"));
+    const savedTeam = await wait("Team saved without a mission", async () => (await library()).teams[0]);
+    assert.equal(savedTeam.title, teamName);
+    assert.equal(savedTeam.version, 1);
+    assert.deepEqual(savedTeam.members, responsibilities.map((responsibility, index) => ({ profileId: starters.profiles[index].id, responsibility })));
+    assert.deepEqual(await list(), [], "saving_team_created_mission");
+    assert.equal(await js(`!!document.querySelector(${quote(RECORD)})`), false, "saved_team_displayed_mission_activity");
+    await fill(missionControl("team-objective"), objective);
+    await click(missionControl("preview-team-mission"));
+    const teamPreview = await wait("Team preview shows the reviewed version and disconnected specialists", () => js(`(()=>{
+      const preview = document.querySelector(${quote(PREVIEW)});
+      const team = preview?.querySelector('[data-mission-team]');
+      return preview?.getClientRects().length && team && {
+        id: team.dataset.missionTeam, version: Number(team.dataset.teamVersion), text: preview.textContent,
+        canStart: !preview.querySelector('[data-mission-focus="start-mission"]')?.disabled,
+      };
+    })()`));
+    assert.equal(teamPreview.id, savedTeam.id);
+    assert.equal(teamPreview.version, savedTeam.version);
+    assert.equal(teamPreview.canStart, false);
+    for (const item of [teamName, objective, ...responsibilities, ...starters.profiles.slice(0, 2).map(profile => profile.title)])
+      assert(teamPreview.text.includes(item), "team_preview_missing_reviewed_detail");
+    assert.deepEqual(await list(), [], "team_preview_created_mission");
+    const providerAtTeamReview = await rpc("providerActivity", {});
+    assert.equal(providerAtTeamReview.providerRequests, providerBefore.providerRequests, "team_preview_called_provider");
+    receipt.teamPreview = { savedTeam, ...teamPreview, persistedMissions: 0, providerRequests: 0 };
+    await click(PREVIEW + ' [data-mission-focus="dismiss-preview"]');
+    await click(missionControl("team-library"));
+
+    await fill(composer, OBJECTIVE);
     receipt.actions.push({ method: "software-native-window-insertText", selector: composer, characters: OBJECTIVE.length });
     await click(SURFACE + ' button[aria-label="Send to Vela"]');
     const preview = await wait("Mission review in Vela", () => js(`(()=>{const p=document.querySelector(${quote(PREVIEW)});return p?.getClientRects().length&&p.querySelector('ol li')&&{text:p.textContent,taskTitles:[...p.querySelectorAll('ol > li > strong')].map(n=>n.textContent)}})()`));

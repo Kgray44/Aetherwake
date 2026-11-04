@@ -223,6 +223,9 @@ export class VelaService {
     }
     return this.data.conversationId;
   }
+  ensureMissionConversation(): string {
+    return this.atomic(() => this.conversationId());
+  }
   private append(content: string, requestId: string, source: 'user' | 'vela-native' | 'provider', plan?: VelaPlan, response?: { kind: ProviderReplyKind; contribution?: ProviderContribution }) {
     const contribution = source === 'provider' ? response?.contribution ?? plan?.contribution : undefined;
     return this.opts.host.appendMessage(this.conversationId(), {

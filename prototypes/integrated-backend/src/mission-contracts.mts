@@ -1,6 +1,7 @@
 import type { MissionContextPackage } from '../../vela-core/src/mission-context.mts';
 import type { ReasoningEffort } from '../../openai-provider/model-controls.ts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
+import type { MissionTeam, MissionTeamSave } from './mission-teams.mts';
 
 export const MISSION_CONTRACT = 'aerynth.vela-mission@1' as const;
 export const MISSION_LIMITS = { missions: 128, active: 8, tasks: 16, attempts: 3, workers: 3, revisions: 4, events: 256 } as const;
@@ -23,6 +24,7 @@ export interface MissionTaskPlan {
   timeoutMs: number;
   maxAttempts: number;
   projectCheck?: { paths: string[]; digest: string };
+  teamMember?: { profileId: string; title: string; responsibility: string };
   specialist?: {
     role: string;
     instructions: string;
@@ -41,6 +43,14 @@ export interface MissionPlan {
   criteria: string[];
   tasks: MissionTaskPlan[];
   planning?: MissionPlanningReceipt;
+  team?: MissionTeamBinding;
+  originConversationId?: string;
+}
+export type MissionTeamBinding = Pick<MissionTeam, 'id' | 'title' | 'version'>;
+export interface MissionTeamLibrary {
+  kind: 'team-library';
+  teams: MissionTeam[];
+  profiles: { id: string; title: string }[];
 }
 export interface MissionPlanningReceipt {
   provider: 'chatgpt-plan-responses';
@@ -104,6 +114,8 @@ export interface Mission {
   concurrency: number;
   disposition: 'active' | 'paused' | 'cancelled';
   planning?: MissionPlanningReceipt;
+  team?: MissionTeamBinding;
+  originConversationId?: string;
   workroom?: MissionWorkroom;
   tasks: MissionTask[];
   events: MissionEvent[];
@@ -130,9 +142,13 @@ export type MissionControl =
 
 export type MissionSummary = Pick<MissionProjection, 'id' | 'objective' | 'outcome' | 'createdAt' | 'revision'>;
 export type MissionRequest =
-  | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string } }
+  | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string; teamId?: string } }
   | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string } }
-  | { name: 'start'; input: { objective: string; fingerprint: string; requestId: string; agentProfileId?: string; proposalId?: string } }
+  | { name: 'start'; input: { objective: string; fingerprint: string; requestId: string; agentProfileId?: string; proposalId?: string; teamId?: string } }
+  | { name: 'team-library'; input: Record<string, never> }
+  | { name: 'team-save'; input: MissionTeamSave }
+  | { name: 'team-archive'; input: { id: string; expectedVersion: number } }
+  | { name: 'team-report'; input: { id: string } }
   | { name: 'list'; input: Record<string, never> }
   | { name: 'read'; input: { id: string } }
   | { name: 'workroom-preview'; input: { id: string } }
@@ -167,7 +183,9 @@ export interface MissionWorkroomPreview {
   expiresAt: string;
   cards: { title: string; kind: string; mode: 'new' | 'reference' }[];
 }
-export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomPreview | null;
+export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom |
+  MissionWorkroomPreview | MissionTeam | MissionTeamLibrary |
+  { kind: 'team-report'; missionId: string; messageId: string } | null;
 
 export interface MissionExecutionContext {
   missionId: string;

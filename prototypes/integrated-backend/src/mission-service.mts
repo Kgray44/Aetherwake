@@ -179,7 +179,9 @@ export class MissionService {
       check(Number(this.host.db.prepare('SELECT count(*) AS n FROM vela_missions').get()!.n) < L.missions, 'mission_store_full');
       const value: Mission = { contract: MISSION_CONTRACT, id: randomUUID(), requestId, objective: plan.objective, scope: plan.scope,
         criteria: [...plan.criteria], createdAt: stamp(), disposition: 'active', revision: 0, planRevision: 1, concurrency: 2,
-        tasks: plan.tasks.map(makeTask), events: [], ...(plan.planning ? { planning: plan.planning } : {}) };
+        tasks: plan.tasks.map(makeTask), events: [], ...(plan.planning ? { planning: plan.planning } : {}),
+        ...(plan.team ? { team: plan.team } : {}),
+        ...(plan.originConversationId ? { originConversationId: plan.originConversationId } : {}) };
       this.event(value, { kind: 'created' });
       this.host.db.prepare('INSERT INTO vela_missions VALUES(?,?,?,?,1,1,?)')
         .run(value.id, requestId, fingerprint, digest(value.scope), JSON.stringify(value));

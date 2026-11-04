@@ -8,8 +8,11 @@ import type {
   MissionResponse,
   MissionScope,
   MissionSummary,
+  MissionTeamBinding,
+  MissionTeamLibrary,
   MissionWorkroomPreview,
 } from "../../../integrated-backend/src/mission-contracts.mts";
+import type { MissionTeam, MissionTeamSave } from "../../../integrated-backend/src/mission-teams.mts";
 
 const stateLabel: Record<MissionProjection["outcome"], string> = {
   queued: "Queued",
@@ -105,6 +108,14 @@ export function createVelaMissionView(
   let workroomReview: MissionWorkroomPreview | null = null;
   let commandPending = false;
   const staged = new Map<string, string>();
+  let teamLibrary: MissionTeamLibrary | null = null;
+  let teamLibraryPending: number | null = null;
+  let teamLibraryOpen = false;
+  let teamDraft: MissionTeamSave | null = null;
+  let teamObjective = "";
+  let postedTeamReport: string | null = null;
+  const bytes = new TextEncoder();
+  const fits = (value: string, max: number) => !!value.trim() && bytes.encode(value).length <= max;
 
   function showError(cause: unknown) {
     const code = cause instanceof Error ? cause.message : "";
@@ -131,6 +142,16 @@ export function createVelaMissionView(
         "The planner reported that available capabilities cannot cover the whole objective. No mission was started.",
       mission_planning_already_attempted:
         "This planning request was already admitted. Submit the objective again for a fresh review.",
+      mission_team_not_found: "This team is no longer available. Refresh the team library.",
+      mission_team_scope_denied: "Team templates are unavailable in this workspace.",
+      mission_team_version_conflict: "This team changed. Reload its saved version before continuing.",
+      mission_team_profile_unavailable: "A team profile is no longer available in this workspace. Refresh the library and choose an available profile.",
+      mission_team_title_conflict: "A saved team already uses that name. Choose another name.",
+      invalid_mission_team: "Enter a team name and two to four distinct profiles with responsibilities within the limits shown.",
+      mission_team_capacity: "The team library has reached its capacity.",
+      mission_team_library_unavailable: "The team library could not be loaded. Refresh to try again.",
+      invalid_mission_team_objective: "Enter a mission objective within the limit shown.",
+      mission_team_report_unavailable: "The mission report link could not be posted. Check the Vela chat before trying again.",
     };
     error.textContent =
       descriptions[code] ??
@@ -155,26 +176,288 @@ export function createVelaMissionView(
   function actions() {
     return el("div", "vela-missions-actions");
   }
+  function field(label: string, key: string, control: HTMLElement) {
+    const node = el("label", "vela-core-field");
+    control.dataset.missionFocus = key;
+    node.append(el("span", undefined, label), control);
+    return node;
+  }
+  function option(value: string, title: string) {
+    const node = el("option", undefined, title);
+    node.value = value;
+    return node;
+  }
   function select(
     label: string,
     key: string,
     items: readonly (readonly [number, string])[],
     value: number,
   ) {
-    const field = el("label", "vela-core-field"),
-      control = el("select", "vela-core-input");
-    for (const [id, title] of items) {
-      const option = el("option", undefined, title);
-      option.value = String(id);
-      control.append(option);
-    }
+    const control = el("select", "vela-core-input");
+    for (const [id, title] of items) control.append(option(String(id), title));
     control.value = staged.get(key) ?? String(value);
-    control.dataset.missionFocus = key;
     control.addEventListener("change", () => {
       staged.set(key, control.value);
     });
-    field.append(el("span", undefined, label), control);
-    return { field, control };
+    return { field: field(label, key, control), control };
+  }
+
+  async function loadTeams() {
+    if (!visible || !scope || !teamLibraryOpen || doc.hidden || commandPending || teamLibraryPending === epoch) return;
+    const generation = epoch;
+    teamLibraryPending = generation;
+    render();
+    try {
+      const result = await command({ name: "team-library", input: {} });
+      if (generation !== epoch) return;
+      if (!result || !("kind" in result) || result.kind !== "team-library")
+        throw new Error("mission_team_library_unavailable");
+      teamLibrary = result;
+      if (review && "plan" in review.preview && review.preview.plan.team) {
+        const { id, version } = review.preview.plan.team;
+        if (!result.teams.some((team) => team.id === id && team.version === version)) review = null;
+      }
+    } catch (cause) {
+      if (generation === epoch) showError(cause);
+    } finally {
+      if (teamLibraryPending === generation) teamLibraryPending = null;
+      if (generation === epoch) render();
+    }
+  }
+  function clearTeamReview() {
+    if (!review || !("plan" in review.preview) || !review.preview.plan.team) return false;
+    review = null;
+    return true;
+  }
+  function emptyRole() {
+    return { profileId: "", responsibility: "" };
+  }
+  function editTeam(saved?: MissionTeam) {
+    if (commandPending) return;
+    clearTeamReview();
+    teamObjective = "";
+    teamDraft = saved ? {
+      id: saved.id,
+      expectedVersion: saved.version,
+      title: saved.title,
+      members: saved.members.map((member) => ({ ...member })),
+    } : { title: "", members: [emptyRole(), emptyRole()] };
+    error.hidden = true;
+    render();
+  }
+  async function teamCommand<T>(request: MissionRequest, apply: (value: MissionResponse) => T) {
+    if (commandPending || !visible || !scope) return;
+    const generation = epoch;
+    const focused = (doc.activeElement as HTMLElement | null)?.dataset.missionFocus;
+    let refreshLibrary = false;
+    commandPending = true;
+    error.hidden = true;
+    body.setAttribute("aria-busy", "true");
+    clearTeamReview();
+    render();
+    try {
+      const value = await command(request);
+      if (generation !== epoch) return;
+      return apply(value);
+    } catch (cause) {
+      if (generation === epoch) {
+        showError(cause);
+        refreshLibrary = cause instanceof Error && ["mission_team_version_conflict", "mission_team_not_found", "mission_team_profile_unavailable", "mission_preview_changed"].includes(cause.message);
+      }
+    } finally {
+      commandPending = false;
+      body.removeAttribute("aria-busy");
+      if (visible) render(generation === epoch ? focused : undefined);
+      if (refreshLibrary || !teamLibrary) void loadTeams();
+    }
+  }
+  async function saveTeam(draft: MissionTeamSave) {
+    await teamCommand({ name: "team-save", input: draft }, (value) => {
+      if (!value || !("members" in value) || !teamLibrary) throw new Error("invalid_mission_team");
+      teamLibrary.teams = [...teamLibrary.teams.filter((team) => team.id !== value.id), value];
+      teamDraft = {
+        id: value.id, expectedVersion: value.version, title: value.title,
+        members: value.members.map((member) => ({ ...member })),
+      };
+    });
+  }
+  async function archiveTeam(saved: MissionTeam) {
+    await teamCommand({ name: "team-archive", input: { id: saved.id, expectedVersion: saved.version } }, (value) => {
+      if (!value || !("members" in value) || !teamLibrary || value.id !== saved.id)
+        throw new Error("mission_team_not_found");
+      teamLibrary.teams = teamLibrary.teams.filter((team) => team.id !== value.id);
+      teamDraft = null;
+      teamObjective = "";
+    });
+  }
+  async function previewTeam(saved: MissionTeam) {
+    const result = await teamCommand({ name: "preview", input: { objective: teamObjective.trim(), teamId: saved.id } }, (value) => {
+      if (!value || !("plan" in value) || !sameScope(value.plan.scope, scope) ||
+        value.plan.team?.id !== saved.id || value.plan.team.version !== saved.version)
+        throw new Error("mission_preview_changed");
+      review = { preview: value, requestId: crypto.randomUUID(), onStarted: () => { teamObjective = ""; } };
+      return review;
+    });
+    if (result && result === review)
+      body.querySelector<HTMLElement>('[data-mission-focus="team-review-heading"]')?.focus();
+  }
+
+  function renderTeams() {
+    const disclosure = details("Team library", "team-library");
+    disclosure.open = teamLibraryOpen;
+    disclosure.addEventListener("toggle", () => {
+      if (!disclosure.isConnected || teamLibraryOpen === disclosure.open) return;
+      teamLibraryOpen = disclosure.open;
+      if (teamLibraryOpen) void loadTeams();
+    });
+    const section = el("section", "vela-core-plan");
+    disclosure.append(section);
+    if (!teamLibrary) {
+      const loading = teamLibraryPending === epoch;
+      section.append(loading
+        ? el("p", "vela-core-meta", "Loading team library…")
+        : button("Refresh team library", "refresh-teams", () => { void loadTeams(); }));
+      return disclosure;
+    }
+
+    const draft = teamDraft;
+    const { teams, profiles } = teamLibrary;
+    const saved = teams.find((team) => team.id === draft?.id);
+    const stale = !!draft?.id && saved?.version !== draft.expectedVersion;
+    const busy = commandPending || teamLibraryPending === epoch;
+    const controls = actions();
+    const picker = el("select", "vela-core-input");
+    picker.append(option("", "Choose a team"));
+    for (const team of teams) picker.append(option(team.id, `${team.title} · v${team.version}`));
+    picker.value = saved?.id ?? "";
+    picker.disabled = busy || !teams.length;
+    picker.addEventListener("change", () => {
+      const team = teams.find((item) => item.id === picker.value);
+      if (team) editTeam(team);
+      else { clearTeamReview(); teamDraft = null; teamObjective = ""; render(); }
+    });
+    const create = button("New team", "new-team", () => {
+      editTeam();
+      body.querySelector<HTMLInputElement>('[data-mission-focus="team-title"]')?.focus();
+    });
+    create.disabled = busy || profiles.length < 2;
+    const refreshTeams = button("Refresh team library", "refresh-teams", () => { error.hidden = true; void loadTeams(); });
+    refreshTeams.disabled = busy;
+    controls.append(create, refreshTeams);
+    section.append(
+      el("p", "vela-core-meta", "Reuse two to four agent profiles with defined responsibilities. A team runs only when you review and start a mission."),
+      field("Saved team", "team-select", picker),
+      controls,
+    );
+    if (profiles.length < 2)
+      section.append(el("p", "vela-core-meta", "Add at least two available agent profiles before creating a team."));
+    if (!draft) return disclosure;
+    if (stale) {
+      section.append(el("p", "vela-core-meta", "The saved team changed. Reload its current version to edit or reuse it."));
+      const reload = button(saved ? "Reload saved version" : "Close team draft", "reload-team-draft", () => {
+        if (saved) editTeam(saved);
+        else { clearTeamReview(); teamDraft = null; teamObjective = ""; render(); }
+      });
+      reload.disabled = busy;
+      section.append(reload);
+      return disclosure;
+    }
+
+    const title = el("input", "vela-core-input");
+    title.type = "text";
+    title.value = draft.title;
+    title.maxLength = 120;
+    title.disabled = busy;
+    section.append(field("Team name (up to 120 bytes)", "team-title", title));
+    const roles = el("ol", "vela-missions-steps");
+    for (const [index, member] of draft.members.entries()) {
+      const number = index + 1;
+      const row = el("li");
+      const profile = el("select", "vela-core-input");
+      const responsibility = el("input", "vela-core-input");
+      profile.append(option("", "Choose a profile"));
+      for (const entry of profiles) profile.append(option(entry.id, entry.title));
+      if (member.profileId && !profiles.some((entry) => entry.id === member.profileId))
+        profile.append(option(member.profileId, "Unavailable profile"));
+      profile.value = member.profileId;
+      profile.disabled = busy;
+      responsibility.type = "text";
+      responsibility.value = member.responsibility;
+      responsibility.maxLength = 512;
+      responsibility.disabled = busy;
+      profile.addEventListener("change", () => { member.profileId = profile.value; update(); });
+      responsibility.addEventListener("input", () => { member.responsibility = responsibility.value; update(); });
+      row.append(field(`Role ${number} profile`, `team-profile-${number}`, profile),
+        field(`Role ${number} responsibility (up to 512 bytes)`, `team-responsibility-${number}`, responsibility));
+      if (draft.members.length > 2) {
+        const remove = button(`Remove role ${number}`, `remove-team-role-${number}`, () => {
+          draft.members.splice(index, 1);
+          clearTeamReview();
+          render("add-team-role");
+        });
+        remove.disabled = busy;
+        row.append(remove);
+      }
+      roles.append(row);
+    }
+    section.append(roles);
+
+    const editorControls = actions();
+    const add = button("Add role", "add-team-role", () => {
+      draft.members.push(emptyRole());
+      clearTeamReview();
+      render();
+      body.querySelector<HTMLSelectElement>(`[data-mission-focus="team-profile-${draft.members.length}"]`)?.focus();
+    });
+    add.disabled = busy || draft.members.length >= Math.min(4, profiles.length);
+    const save = button("Save team", "save-team", () => { void saveTeam(draft); });
+    save.classList.add("vela-core-primary");
+    editorControls.append(add, save);
+    if (saved) {
+      const archive = button("Archive team", "archive-team", () => { void archiveTeam(saved); });
+      archive.disabled = busy;
+      editorControls.append(archive);
+    }
+    section.append(editorControls);
+
+    const objective = el("textarea", "vela-core-input");
+    objective.value = teamObjective;
+    objective.maxLength = 2048;
+    objective.rows = 2;
+    objective.disabled = busy;
+    const preview = button("Preview team mission", "preview-team-mission", () => {
+      if (saved) void previewTeam(saved);
+    });
+    preview.classList.add("vela-core-primary");
+    const guidance = el("p", "vela-core-meta");
+    if (saved) section.append(field("Mission objective (up to 2048 bytes)", "team-objective", objective), preview);
+    section.append(guidance);
+    const syncControls = () => {
+      const members = draft.members;
+      const validTitle = fits(draft.title, 120);
+      const validRoles = members.every((member) => profiles.some((profile) => profile.id === member.profileId)) &&
+        new Set(members.map((member) => member.profileId)).size === members.length;
+      const validResponsibilities = members.every((member) => fits(member.responsibility, 512));
+      const dirty = !saved || saved.title !== draft.title.trim() || saved.members.length !== members.length ||
+        saved.members.some((member, index) => member.profileId !== members[index].profileId ||
+          member.responsibility !== members[index].responsibility.trim());
+      save.disabled = busy || !validTitle || !validRoles || !validResponsibilities || !dirty;
+      preview.disabled = busy || dirty || !fits(teamObjective.trim(), 2048);
+      guidance.textContent = !validTitle ? "Enter a team name within the limit shown." :
+        !validRoles ? "Choose a different available profile for each role." :
+        !validResponsibilities ? "Enter a responsibility within the limit shown for every role." :
+        dirty ? "Save the team to preview a mission with these roles." :
+        teamObjective && !fits(teamObjective.trim(), 2048) ? "Enter a mission objective within the limit shown." : "";
+      guidance.hidden = !guidance.textContent;
+    };
+    function update() {
+      if (clearTeamReview()) render();
+      else syncControls();
+    }
+    title.addEventListener("input", () => { draft.title = title.value; update(); });
+    objective.addEventListener("input", () => { teamObjective = objective.value; update(); });
+    syncControls();
+    return disclosure;
   }
   function accepted(
     value: MissionResponse,
@@ -251,7 +534,7 @@ export function createVelaMissionView(
       workroomReview = value;
       error.hidden = true;
     } catch (cause) { if (epoch === generation) showError(cause); }
-    finally { commandPending = false; if (epoch === generation) render(); }
+    finally { commandPending = false; if (visible) render(); }
   }
   async function applyWorkroom(review: MissionWorkroomPreview) {
     if (commandPending || !visible || review.missionId !== selectedId) return;
@@ -265,7 +548,7 @@ export function createVelaMissionView(
       error.hidden = true;
       await openWorkspace?.(value.workspaceId);
     } catch (cause) { if (epoch === generation) showError(cause); }
-    finally { commandPending = false; if (epoch === generation) { render(); refresh(); } }
+    finally { commandPending = false; if (visible) { render(); refresh(); } }
   }
   async function mutate(
     request: Extract<MissionRequest, { name: "start" | "control" }>,
@@ -275,6 +558,7 @@ export function createVelaMissionView(
       expected = scope,
       selection = selectedId,
       pendingReview = review;
+    let refreshLibrary = false;
     commandPending = true;
     body.setAttribute("aria-busy", "true");
     error.hidden = true;
@@ -300,13 +584,21 @@ export function createVelaMissionView(
           mission = response;
       }
     } catch (cause) {
-      if (activeEpoch === epoch && visible) showError(cause);
+      if (activeEpoch === epoch && visible) {
+        showError(cause);
+        if (request.name === "start" && request.input.teamId && review === pendingReview &&
+          cause instanceof Error && ["mission_preview_changed", "mission_team_not_found", "mission_team_profile_unavailable"].includes(cause.message)) {
+          clearTeamReview();
+          refreshLibrary = true;
+        }
+      }
     } finally {
       commandPending = false;
       body.removeAttribute("aria-busy");
       if (visible) {
         render();
         refresh();
+        if (refreshLibrary || !teamLibrary) void loadTeams();
       }
     }
   }
@@ -329,10 +621,13 @@ export function createVelaMissionView(
     if ("kind" in preview) return renderPlanningOffer(preview);
     const { plan, executors, externalReview, localReview } = preview;
     const section = el("section", "vela-core-plan vela-mission-preview");
-    section.append(
-      el("h3", undefined, "Review mission"),
-      el("p", undefined, plan.objective),
-    );
+    const heading = el("h3", undefined, "Review mission");
+    if (plan.team) {
+      heading.tabIndex = -1;
+      heading.dataset.missionFocus = "team-review-heading";
+    }
+    section.append(heading, el("p", undefined, plan.objective));
+    if (plan.team) section.append(teamLabel(plan.team));
     if (localReview) section.append(el("p", "vela-core-meta",
       "Start opens a native picker for up to four tracked Node tests. You will review the exact checkout and command before it runs."));
     if (plan.planning) section.append(el("p", "vela-core-meta",
@@ -342,9 +637,9 @@ export function createVelaMissionView(
         ? el(
             "p",
             "vela-core-meta",
-            `${plan.tasks.length} steps · ${externalReview.calls} separate requests to ${externalReview.provider} · ${externalReview.model}${externalReview.effort ? " · " + externalReview.effort : ""} · native review required`,
+            `${plan.tasks.length} steps · ${externalReview.calls} separate requests to ${externalReview.provider}${plan.team ? "" : ` · ${externalReview.model}${externalReview.effort ? " · " + externalReview.effort : ""}`} · native review required`,
           )
-        : el(
+        : plan.team ? el("p", "vela-core-meta", "Specialist availability is checked before starting.") : el(
             "p",
             "vela-core-meta",
             "Local read-only tasks · " + plan.tasks.length + " steps",
@@ -368,12 +663,13 @@ export function createVelaMissionView(
           `Criterion ${task.criterion} · ${task.timeoutMs / 1000}s per attempt · up to ${task.maxAttempts} attempts`,
         ),
       );
+      if (task.teamMember) entry.append(el("p", "vela-core-meta", task.teamMember.title));
       if (task.specialist)
         entry.append(
           el(
             "p",
             "vela-core-meta",
-            task.specialist.role +
+            (task.teamMember ? [task.specialist.model, task.specialist.effort].filter(Boolean).join(" · ") : task.specialist.role) +
               (task.specialist.profile
                 ? ` · profile v${task.specialist.profile.profileVersion}`
                 : ""),
@@ -415,16 +711,18 @@ export function createVelaMissionView(
           requestId,
           ...(agentProfileId ? { agentProfileId } : {}),
           ...(preview.proposalId ? { proposalId: preview.proposalId } : {}),
+          ...(plan.team ? { teamId: plan.team.id } : {}),
         },
       });
     });
     start.classList.add("vela-core-primary");
+    start.disabled = commandPending || (!!plan.team && teamLibraryPending === epoch);
     controls.append(
       start,
       button("Dismiss preview", "dismiss-preview", () => {
         if (!commandPending) {
           review = null;
-          render();
+          render(plan.team ? "preview-team-mission" : undefined);
         }
       }),
     );
@@ -434,12 +732,12 @@ export function createVelaMissionView(
           executors.find((item) => item.id === task.id)?.available !== true,
       )
     ) {
-      start.disabled = !!externalReview;
+      start.disabled ||= !!externalReview || !!plan.team;
       section.append(
         el(
           "p",
           "vela-core-meta",
-          externalReview
+          externalReview || plan.team
             ? "All specialist mission executors must be available before starting."
             : "Unavailable executors can block their tasks and dependent steps.",
         ),
@@ -483,8 +781,46 @@ export function createVelaMissionView(
     } finally {
       commandPending = false;
       body.removeAttribute("aria-busy");
-      if (generation === epoch) render();
+      if (visible) render();
     }
+  }
+  function teamLabel(team: MissionTeamBinding) {
+    const label = el("p", "vela-core-meta", `Team ${team.title} · v${team.version}`);
+    label.dataset.missionTeam = team.id;
+    label.dataset.teamVersion = String(team.version);
+    return label;
+  }
+  function renderTeamEvidence(task: MissionProjection["tasks"][number], evidence: NonNullable<MissionProjection["tasks"][number]["attempts"][number]["evidence"]>) {
+    const value = evidence.value;
+    if (!value || typeof value !== "object") return null;
+    if (task.teamMember && evidence.source === "chatgpt-plan-responses:reported" &&
+      "observations" in value && Array.isArray(value.observations)) {
+      const findings = value.observations.filter((item): item is string => typeof item === "string");
+      if (!findings.length) return null;
+      const list = el("ul", "vela-missions-steps");
+      list.dataset.teamFindings = task.teamMember.profileId;
+      list.setAttribute("aria-label", `Reported findings from ${task.teamMember.title}`);
+      for (const finding of findings) list.append(el("li", undefined, finding));
+      const block = el("div");
+      block.append(el("strong", undefined, "Reported findings"), list);
+      return block;
+    }
+    if (task.executor === "join.team" && "reports" in value && Array.isArray(value.reports) &&
+      "distinctFindingCount" in value && typeof value.distinctFindingCount === "number" &&
+      "repeatedFindings" in value && Array.isArray(value.repeatedFindings)) {
+      const block = el("div");
+      block.append(el("p", "vela-core-meta", `${value.reports.length} attributed role reports · ${value.distinctFindingCount} distinct findings · ${value.repeatedFindings.length} groups of repeated findings`));
+      if ("assessment" in value && typeof value.assessment === "string") block.append(el("p", "vela-core-meta", value.assessment));
+      return block;
+    }
+    return null;
+  }
+  function postTeamReport(id: string) {
+    void teamCommand({ name: "team-report", input: { id } }, (value) => {
+      if (!value || !("kind" in value) || value.kind !== "team-report" || value.missionId !== id)
+        throw new Error("mission_team_report_unavailable");
+      postedTeamReport = id;
+    });
   }
   function renderMission(current: MissionProjection) {
     const section = el("section", "vela-core-plan vela-mission-record");
@@ -498,6 +834,16 @@ export function createVelaMissionView(
         `${stateLabel[current.outcome]} · plan v${current.planRevision} · journal revision ${current.revision}`,
       ),
     );
+    if (current.team) {
+      section.append(teamLabel(current.team));
+      if (sameScope(current.scope, scope) && current.outcome === "verified" &&
+        current.tasks.some((task) => task.executor === "join.team" && task.state === "verified")) {
+        const post = button("Post report link to Vela chat", "post-team-report", () => { postTeamReport(current.id); });
+        post.disabled = commandPending || postedTeamReport === current.id;
+        section.append(post);
+        if (postedTeamReport === current.id) section.append(el("p", "vela-core-meta", "Report link posted to Vela chat."));
+      }
+    }
     if (current.planning) section.append(el("p", "vela-core-meta",
       `Planning · ${current.planning.model} · ${Math.round(current.planning.durationMs)} ms · ${current.planning.usage?.totalTokens ?? "Unknown"} reported tokens`));
     if (current.workroom && scope?.workspaceId !== current.workroom.workspaceId && openWorkspace) {
@@ -568,12 +914,16 @@ export function createVelaMissionView(
           `${stateLabel[task.state]} · ${task.executor}`,
         ),
       );
+      if (task.teamMember) {
+        item.dataset.teamProfile = task.teamMember.profileId;
+        item.append(el("p", "vela-core-meta", task.teamMember.title));
+      }
       if (task.specialist)
         item.append(
           el(
             "p",
             "vela-core-meta",
-            `${task.specialist.role} · ${task.specialist.model} · agent-reported recommendations`,
+            `${task.teamMember ? "" : `${task.specialist.role} · `}${task.specialist.model} · agent-reported recommendations`,
           ),
         );
       if (task.dependencies.length)
@@ -644,7 +994,11 @@ export function createVelaMissionView(
               `${attempt.verification.passed ? "Passed" : "Failed"} · ${attempt.verification.criterion} · ${attempt.verification.detail}`,
             ),
           );
-        if (attempt.evidence)
+        if (attempt.evidence) {
+          if (current.team) {
+            const finding = renderTeamEvidence(task, attempt.evidence);
+            if (finding) item.append(finding);
+          }
           receipt.append(
             el(
               "p",
@@ -657,6 +1011,7 @@ export function createVelaMissionView(
               JSON.stringify(attempt.evidence.value, null, 2),
             ),
           );
+        }
         if (attempt.context) {
           const { accounting, dependencies, sources } = attempt.context;
           receipt.append(
@@ -722,10 +1077,11 @@ export function createVelaMissionView(
     section.append(tasks, timeline);
     return section;
   }
-  function render() {
-    const focus = body.contains(doc.activeElement)
-      ? (doc.activeElement as HTMLElement).dataset.missionFocus
-      : undefined;
+  function render(focusFallback?: string) {
+    const active = doc.activeElement as HTMLElement | null;
+    const focus = body.contains(active) ? active?.dataset.missionFocus : undefined;
+    const textField = focus && active?.matches("input[type=text],textarea")
+      ? active as HTMLInputElement | HTMLTextAreaElement : null;
     const open = new Set(
       Array.from(
         body.querySelectorAll<HTMLDetailsElement>("details[open]"),
@@ -741,6 +1097,7 @@ export function createVelaMissionView(
       const preview = renderPreview();
       if (preview) next.push(preview);
       if (mission && !review) next.push(renderMission(mission));
+      next.push(renderTeams());
       const list = el("nav", "vela-missions-list");
       list.setAttribute("aria-label", "Saved workspace missions");
       list.append(el("h3", undefined, "Workspace missions"));
@@ -761,19 +1118,22 @@ export function createVelaMissionView(
     }
     const announcement =
       mission && !review
-        ? `Mission ${stateLabel[mission.outcome].toLowerCase()}`
+        ? `Mission ${stateLabel[mission.outcome].toLowerCase()}${postedTeamReport === mission.id ? " · Report link posted to Vela chat" : ""}`
         : "";
     if (status.textContent !== announcement) status.textContent = announcement;
     status.hidden = !announcement;
     body.replaceChildren(...next);
     for (const detail of body.querySelectorAll<HTMLDetailsElement>("details"))
-      detail.open = open.has(detail.dataset.missionDisclosure);
-    if (focus)
-      (
-        Array.from(
-          body.querySelectorAll<HTMLElement>("[data-mission-focus]"),
-        ).find((node) => node.dataset.missionFocus === focus) ?? body
-      ).focus({ preventScroll: true });
+      if (detail.dataset.missionDisclosure !== "team-library")
+        detail.open = open.has(detail.dataset.missionDisclosure);
+    if (focus || (focusFallback && (!active || active === doc.body || active === body))) {
+      const nodes = Array.from(body.querySelectorAll<HTMLElement>("[data-mission-focus]:not(:disabled)"));
+      const target = nodes.find((node) => node.dataset.missionFocus === focus)
+        ?? nodes.find((node) => node.dataset.missionFocus === focusFallback) ?? body;
+      target.focus({ preventScroll: true });
+      if (textField && target.matches("input[type=text],textarea"))
+        (target as HTMLInputElement | HTMLTextAreaElement).setSelectionRange(textField.selectionStart, textField.selectionEnd, textField.selectionDirection ?? undefined);
+    }
   }
 
   return {
@@ -815,17 +1175,25 @@ export function createVelaMissionView(
       error.hidden = true;
       render();
     },
+    openReport(id: string) {
+      if (!scope) return;
+      if (selectedId !== id) choose(id);
+      else { review = null; render(); refresh(); }
+    },
     setVisible(next: boolean) {
       if (visible === next) return;
       visible = next;
       if (next) {
         render();
         refresh();
+        if (teamLibraryOpen) void loadTeams();
       } else {
         epoch++;
         refreshQueued = false;
         summaries = [];
         mission = null;
+        teamLibrary = null;
+        clearTeamReview();
       }
     },
     setScope(next: MissionScope | null) {
@@ -837,11 +1205,19 @@ export function createVelaMissionView(
       selectedId = null;
       mission = null;
       summaries = [];
+      teamLibrary = null;
+      teamDraft = null;
+      teamObjective = "";
+      postedTeamReport = null;
       staged.clear();
       error.hidden = true;
       render();
       refresh();
+      if (teamLibraryOpen) void loadTeams();
     },
-    observe: refresh,
+    observe() {
+      refresh();
+      if (teamLibraryOpen && !teamLibrary) void loadTeams();
+    },
   };
 }

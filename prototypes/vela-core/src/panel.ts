@@ -27,6 +27,7 @@ export interface VelaPanelOptions {
     element: HTMLElement;
     preview(intent: string, agentProfileId?: string): Promise<MissionPreview | MissionPlanningOffer | null>;
     review(preview: MissionPreview | MissionPlanningOffer, onStarted: () => void, agentProfileId?: string): void;
+    openReport?(id: string): void;
     setVisible(visible: boolean): void;
   };
 }
@@ -827,7 +828,13 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const items = state.conversation?.messages.slice(-80) ?? [], target: HTMLElement[] = [];
     for (const message of items) { const signature = JSON.stringify(message), cached = messages.get(message.id); if (cached?.signature === signature) { target.push(cached.node); continue; }
       const entry = el('article', 'vela-core-message'); entry.dataset.messageId = message.id; entry.dataset.source = message.source;
-      entry.append(el('strong', 'vela-core-message-author', message.source === 'provider' ? providerName(message.providerId) + ' · contribution' : message.role === 'user' ? 'You' : 'Vela'), el('p', undefined, message.content)); messages.set(message.id, { node: entry, signature }); target.push(entry);
+      entry.append(el('strong', 'vela-core-message-author', message.source === 'provider' ? providerName(message.providerId) + ' · contribution' : message.role === 'user' ? 'You' : 'Vela'), el('p', undefined, message.content));
+      const link = message.missionReport;
+      if (link && options.missions?.openReport) entry.append(button('Open team findings', () => {
+        reveal('missions');
+        options.missions?.openReport?.(link.missionId);
+      }));
+      messages.set(message.id, { node: entry, signature }); target.push(entry);
     }
     for (const child of Array.from(conversation.children)) if (!target.includes(child as HTMLElement)) child.remove(); target.forEach((node, index) => { if (conversation.children[index] !== node) conversation.insertBefore(node, conversation.children[index] ?? null); });
     for (const [id, cached] of messages) if (!target.includes(cached.node)) messages.delete(id);

@@ -475,7 +475,7 @@ app.whenReady().then(async () => {
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && isVelaRead(input)) &&
-        !(command === "missions" && ["preview", "list", "read", "workroom-preview"].includes(input?.name)) &&
+        !(command === "missions" && ["preview", "list", "read", "workroom-preview", "team-library"].includes(input?.name)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&
         !(command === "notes" && input?.name === "readNote") &&
@@ -588,6 +588,7 @@ app.whenReady().then(async () => {
           const preview = await call("missions", { name: "preview", input: {
             objective: input.input?.objective, ...(input.input?.agentProfileId ? { agentProfileId: input.input.agentProfileId } : {}),
             ...(input.input?.proposalId ? { proposalId: input.input.proposalId } : {}),
+            ...(input.input?.teamId ? { teamId: input.input.teamId } : {}),
           } });
           if (!preview?.plan || preview.fingerprint !== input.input?.fingerprint) throw Error("mission_preview_changed");
           let approvedProjectCheck;

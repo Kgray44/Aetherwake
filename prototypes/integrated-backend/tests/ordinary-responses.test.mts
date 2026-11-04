@@ -22,6 +22,7 @@ import { agentTemplates } from '../../agent-product/service.mts';
 import type { AgentMutationReceipt, AgentProviderCatalog } from '../../agent-product/contracts.ts';
 import { RESPONSES_ENDPOINT } from '../../openai-provider/responses.mts';
 import type { MissionPlanningOffer, MissionPreview, MissionProjection } from '../src/mission-contracts.mts';
+import type { MissionTeam } from '../src/mission-teams.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
 const documentedModel = { id: 'gpt-6.1-sol', label: 'Synthetic catalog Sol' };
 function sse(events:unknown[]){return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});}
@@ -173,6 +174,94 @@ test('reviewed mission runs two isolated stateless specialists concurrently and 
     assert.equal(new Set(specialists.map(a => a.telemetry?.responseId)).size, 2);
     assert.ok(specialists.every(a => a.telemetry?.usage?.totalTokens === 62 && a.evidence?.source.endsWith(':reported')));
     assert.equal(f.events.filter(e => e.type === 'provider/usage' && e.correlationId === id && e.classification === 'simulated').length, 2);
+  } finally { release(); await f.close(); }
+});
+
+test('reviewed saved teams bind roles, reconcile concurrent reports and link the originating Vela chat', async () => {
+  const f = fixture();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  try {
+    f.setListedModels([documentedModel]);
+    await f.core.command('ordinaryProviderCheck', {});
+    const desktop = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic team workspace', projectId: null });
+    const workspaceId = desktop.activeWorkspaceId!;
+    const navigate = (id: string) => f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: id } });
+    await navigate(workspaceId);
+    const members: MissionTeam['members'] = [];
+    for (const [title, responsibility] of [
+      ['Measurement specialist', 'Describe how to measure warmup.'],
+      ['Evidence reviewer', 'Check the validity of warmup comparisons.'],
+    ]) {
+      const profile = structuredClone(agentTemplates()[0].profile);
+      const { result } = await f.core.command('agents', { name: 'create', input: {
+        commandId: randomUUID(), title, projectId: null, profile,
+      } });
+      members.push({ profileId: (result as AgentMutationReceipt).agent.resourceId, responsibility });
+    }
+    const save = async (title: string, previous?: MissionTeam) =>
+      await f.core.command('missions', { name: 'team-save', input: {
+        title, members, ...(previous ? { id: previous.id, expectedVersion: previous.version } : {}),
+      } }) as MissionTeam;
+    const team = await save('Synthetic measurement team');
+    const objective = 'Assess a synthetic benchmark plan';
+    const preview = () => f.core.command('missions', { name: 'preview', input: { objective, teamId: team.id } }) as Promise<MissionPreview>;
+    const startInput = (review: MissionPreview) => ({ objective, teamId: team.id, fingerprint: review.fingerprint, requestId: randomUUID() });
+    const stale = await preview();
+    const saved = await save('Revised synthetic measurement team', team);
+    await assert.rejects(f.core.command('missionStartReviewed', startInput(stale)), /mission_preview_changed/);
+    const review = await preview();
+    assert.equal(review.plan?.team?.version, saved.version);
+    assert.deepEqual(review.plan?.tasks.slice(0, 2).map(task => task.specialist?.profile?.id), members.map(member => member.profileId));
+    assert.equal(review.externalReview?.calls, 2);
+    const input = startInput(review);
+    await assert.rejects(f.core.command('missions', { name: 'start', input }), /mission_native_review_or_connection_required/);
+    assert.equal(f.requests.length, 0);
+    for (const [index, observation] of ['Use a fixed workload.', 'Record background activity.'].entries()) {
+      f.responses.push(async () => {
+        await gate;
+        const id = 'resp_team_member_' + index;
+        return sse([{ type: 'response.created', response: { id } },
+          { type: 'response.output_text.delta', delta: JSON.stringify({ observations: ['Repeat the warmup.', observation] }) },
+          { type: 'response.completed', response: { id, status: 'completed', model: documentedModel.id,
+            usage: { input_tokens: 50, output_tokens: 12, total_tokens: 62 }, output: [] } }]);
+      });
+    }
+    const mission = await f.core.command('missionStartReviewed', input) as MissionProjection;
+    const post = () => f.core.command('missions', { name: 'team-report', input: { id: mission.id } });
+    await assert.rejects(post(), /mission_team_report_unavailable/);
+    const until = performance.now() + 5000;
+    while (f.requests.length < 2 && performance.now() < until) await wait(10);
+    assert.equal(f.requests.length, 2, 'Both roles must dispatch before either can return');
+    for (const member of members) assert.equal(f.requests.filter(request => request.instructions.includes(member.responsibility)).length, 1);
+    release();
+    const read = () => f.core.command('missions', { name: 'read', input: { id: mission.id } }) as Promise<MissionProjection>;
+    let completed = await read();
+    while (['queued', 'running'].includes(completed.outcome) && performance.now() < until) { await wait(10); completed = await read(); }
+    assert.equal(completed.outcome, 'verified', JSON.stringify(completed.tasks.map(t => [t.id, t.state, t.detail])));
+    const report = completed.tasks.find(task => task.executor === 'join.team')?.attempts[0].evidence;
+    assert.deepEqual((report?.value as Record<string, unknown>).reports, completed.tasks.slice(0, 2).map(task => ({
+      taskId: task.id, evidenceId: task.attempts[0].evidence?.id, attemptId: task.attempts[0].id,
+    })));
+    assert.deepEqual((report?.value as Record<string, unknown>).repeatedFindings, [[
+      { taskId: 'member-1', index: 0 }, { taskId: 'member-2', index: 0 },
+    ]]);
+    const posted = await post();
+    assert.deepEqual(await post(), posted);
+    const conversation = async () => (await f.core.command('vela', { name: 'state', input: {} }) as VelaState).conversation;
+    const matchingLinks = async () => (await conversation())?.messages.filter(item => item.missionReport?.missionId === mission.id);
+    assert.equal((await conversation())?.resourceId, mission.originConversationId);
+    assert.deepEqual((await matchingLinks())?.map(item => item.missionReport), [{ missionId: mission.id, workspaceId, projectId: null }]);
+    const other = await f.core.command('desktop', { type: 'createWorkspace', title: 'Other synthetic workspace', projectId: null });
+    await navigate(other.activeWorkspaceId!);
+    assert.equal((await matchingLinks())?.length, 0);
+    await assert.rejects(post(), /mission_not_found/);
+    await f.reopen();
+    await navigate(workspaceId);
+    assert.equal((await read()).team?.version, saved.version);
+    assert.equal((await matchingLinks())?.length, 1);
+    assert.deepEqual(await post(), posted);
+    assert.equal(f.requests.length, 2);
   } finally { release(); await f.close(); }
 });
 

@@ -9,7 +9,8 @@ import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
 import { missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
 import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS } from './mission-proposal.mts';
-import { createSpecialistExecutor, missionPlanningSpecialists, specialistMissionPlan } from './mission-specialists.mts';
+import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, specialistMissionPlan, teamMissionPlan } from './mission-specialists.mts';
+import { MissionTeams } from './mission-teams.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
 import type { MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningOffer, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import type { DatabaseSync } from 'node:sqlite';
@@ -200,6 +201,7 @@ export class BackendCore {
   private missionWorkrooms: MissionWorkrooms;
   private missionExecutors: Readonly<Record<string, MissionExecutor>>;
   private missionSpecialistsInFlight = 0;
+  private missionTeams: MissionTeams;
   private missionPlanningRun?: { abort: AbortController; settled: Promise<MissionResponse> };
   private missionProposals = new Map<string, { plan: MissionPlan; expires: number }>();
   private missionProjectCheckRunning = false;
@@ -294,8 +296,14 @@ export class BackendCore {
       this.ordinaryConnections=ordinaryTest?.connection??new OpenAIConnections({db:this.db,transaction:work=>this.kernel.withTransaction(()=>work(this.db)),nativeHost:this.nativeHostServices,localEligibility:{kind:'local-personal-project',scope:'current-owner-local-installation',decisionRef:'aerynth.owner-local-personal-inference'}});
       this.db.exec(`CREATE TABLE IF NOT EXISTS vela_mission_provider_admissions(
         attempt_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, project_id TEXT, utc_day TEXT NOT NULL) STRICT;
-        CREATE INDEX IF NOT EXISTS vela_mission_provider_admission_day ON vela_mission_provider_admissions(utc_day);`);
-      this.missionExecutors = { ...nativeMissionExecutors, 'codex.project-check': createMissionProjectCheck({
+        CREATE INDEX IF NOT EXISTS vela_mission_provider_admission_day ON vela_mission_provider_admissions(utc_day);
+        CREATE TABLE IF NOT EXISTS vela_mission_report_links(mission_id TEXT PRIMARY KEY, message_id TEXT NOT NULL) STRICT;`);
+      this.missionTeams = new MissionTeams({
+        db: this.db, atomic: work => this.kernel.withTransaction(work),
+        authorized: scope => this.missionScopeAllowed(scope),
+        profileAvailable: (scope, id) => this.missionAgentProfile(scope, id) !== undefined,
+      });
+      this.missionExecutors = { ...nativeMissionExecutors, 'join.team': missionTeamJoin, 'codex.project-check': createMissionProjectCheck({
         runner: this.port.projectChecks, privateRoot: this.privateRoot, digest: planningDigest,
         lease: () => {
           if (this.closed || this.active || this.velaProjectCheckTask || this.velaMemoryFallback || this.missionProjectCheckRunning) return null;
@@ -342,14 +350,61 @@ export class BackendCore {
     if (this.closed || !this.libraryAuthorized({ kind: 'workspace', id: scope.workspaceId })) return false;
     return this.db.prepare("SELECT project_id FROM workspaces WHERE id=? AND state='active'").get(scope.workspaceId)?.project_id === scope.projectId;
   }
+  private missionAgentInScope(scope: MissionScope, resource: AgentProfile['resource']): boolean {
+    if (resource.state !== 'active' || !this.conversationAccess.resource(resource.id, 'read')) return false;
+    if (scope.projectId !== null && resource.projectId === scope.projectId) return true;
+    if (resource.projectId !== null) return false;
+    const placement = this.db.prepare(`SELECT COUNT(*) AS total,
+      COUNT(CASE WHEN w.id=? OR w.project_id=? THEN 1 END) AS in_scope
+      FROM blocks b JOIN workspaces w ON w.id=b.workspace_id
+      WHERE b.resource_id=? AND w.state='active'`).get(scope.workspaceId, scope.projectId, resource.id)!;
+    return placement.total === 0 || Number(placement.in_scope) > 0;
+  }
+  private missionAgentProfile(scope: MissionScope, id: string): AgentProfile | undefined {
+    if (!identifier(id) || !this.missionScopeAllowed(scope)) return;
+    try {
+      const profile = this.productDomains().agent({ name: 'inspect', input: { resourceId: id } });
+      if (this.missionAgentInScope(scope, profile.resource)) return profile;
+    } catch { /* Unavailable or revoked profiles cannot participate. */ }
+  }
+  private missionTeamLibrary(scope: MissionScope) {
+    const teams = this.missionTeams.list(scope);
+    const agents = this.productDomains().agent({ name: 'list', input: { limit: 128 } });
+    const profiles = agents.items.map(item => item.resource).filter(resource => this.missionAgentInScope(scope, resource))
+      .map(({ id, title }) => ({ id, title }));
+    return { kind: 'team-library' as const, teams, profiles };
+  }
+  private postMissionTeamReport(scope: MissionScope, id: string): MissionResponse {
+    const mission = this.missions.read(id, scope);
+    const report = mission.tasks.find(task => task.executor === 'join.team');
+    const origin = mission.originConversationId;
+    ensure(mission.team && origin && mission.scope.workspaceId === scope.workspaceId && mission.scope.projectId === scope.projectId &&
+      mission.outcome === 'verified' && report?.state === 'verified' && report.attempts.at(-1)?.verification?.passed,
+    'mission_team_report_unavailable');
+    this.requireVelaConversation(origin);
+    return this.atomic(() => {
+      const existing = this.db.prepare('SELECT message_id FROM vela_mission_report_links WHERE mission_id=?').get(id);
+      if (existing) return { kind: 'team-report', missionId: id, messageId: String(existing.message_id) };
+      const message = this.appendVelaMessage(origin, {
+        role: 'assistant', source: 'vela-native', classification: 'observed', content: 'Team findings are ready in this workspace.',
+        missionReport: { missionId: id, workspaceId: scope.workspaceId, projectId: scope.projectId },
+      });
+      this.db.prepare('INSERT INTO vela_mission_report_links VALUES(?,?)').run(id, message.id);
+      this.record('vela.mission/team-report-posted', 'observed', undefined, 'mission:team-report:' + id, {
+        providerId: 'aerynth-native', detached: true, correlationId: id, payload: { redacted: true },
+      });
+      return { kind: 'team-report', missionId: id, messageId: message.id };
+    });
+  }
   private missionSpecialistSelection(scope: MissionScope, agentProfileId?: string): Omit<NonNullable<MissionTaskPlan['specialist']>, 'role' | 'instructions'> | undefined {
     if (!this.ordinaryAvailable()) return;
     const profiles = this.velaRoutingProfiles(scope);
-    let agent: ReturnType<BackendCore['velaAgentRouting']> | undefined;
+    let agent: ReturnType<BackendCore['agentRoutingDetails']> | undefined;
     if (agentProfileId !== undefined) {
       try {
-        if (this.velaContext().currentWorkspaceId !== scope.workspaceId) return;
-        agent = this.velaAgentRouting(agentProfileId);
+        const profile = this.missionAgentProfile(scope, agentProfileId);
+        if (!profile) return;
+        agent = this.agentRoutingDetails(profile);
         if (Buffer.byteLength(agent.instructions) > 2048) return;
       } catch { return; }
     }
@@ -519,21 +574,26 @@ export class BackendCore {
     const scope = { workspaceId, projectId };
     switch (request.name) {
       case 'preview': case 'start': {
-        const { objective, agentProfileId, proposalId } = request.input;
-        const keys = request.name === 'preview' ? ['objective', 'agentProfileId', 'proposalId'] :
-          ['objective', 'agentProfileId', 'proposalId', 'fingerprint', 'requestId'];
+        const { objective, agentProfileId, proposalId, teamId } = request.input;
+        const keys = request.name === 'preview' ? ['objective', 'agentProfileId', 'proposalId', 'teamId'] :
+          ['objective', 'agentProfileId', 'proposalId', 'teamId', 'fingerprint', 'requestId'];
         ensure(Object.keys(request.input).every(key => keys.includes(key)) &&
-          (agentProfileId === undefined || identifier(agentProfileId)), 'invalid_mission_command');
+          (agentProfileId === undefined || identifier(agentProfileId)) &&
+          (teamId === undefined || identifier(teamId) && agentProfileId === undefined && proposalId === undefined), 'invalid_mission_command');
         const stored = proposalId === undefined ? undefined : this.missionProposals.get(proposalId);
         if (proposalId !== undefined) ensure(identifier(proposalId) && agentProfileId === undefined && stored &&
           (request.name === 'preview' || request.input.requestId === proposalId) &&
           stored.expires > Date.now() && objective === stored.plan.objective &&
           scope.workspaceId === stored.plan.scope.workspaceId && scope.projectId === stored.plan.scope.projectId, 'mission_preview_changed');
-        const plan = (stored ? structuredClone(stored.plan) : undefined) ??
+        const plan = teamId !== undefined ? teamMissionPlan(objective, scope, this.missionTeams.read(teamId, scope), id => {
+          const profile = this.missionAgentProfile(scope, id);
+          return profile ? { title: profile.resource.title, selection: this.missionSpecialistSelection(scope, id) } : undefined;
+        }) : (stored ? structuredClone(stored.plan) : undefined) ??
           (agentProfileId === undefined ? nativeMissionPlan(objective, scope) : null) ??
           specialistMissionPlan(objective, scope, this.missionSpecialistSelection(scope),
             agentProfileId === undefined ? undefined : { selection: this.missionSpecialistSelection(scope, agentProfileId) });
         if (!plan && request.name === 'preview') {
+          ensure(teamId === undefined, 'invalid_mission_team_objective');
           if (agentProfileId === undefined && typeof objective === 'string' && Buffer.byteLength(objective) <= 1536 &&
             /^\s*(?:vela[,:]?\s+)?(?:please\s+)?(?:plan|create|start|run)\s+a\s+mission\s+(?:to|for)\s+\S/iu.test(objective)) {
             ensure(this.missionScopeAllowed(scope), 'mission_scope_denied');
@@ -560,8 +620,21 @@ export class BackendCore {
           ensure(planningDigest(checked) === approvedProjectCheck.digest, 'mission_project_check_scope_changed');
           projectCheck.projectCheck = { paths: [...approvedProjectCheck.paths], digest: approvedProjectCheck.digest };
         }
-        return this.missions.create(request.input.requestId, plan);
+        const requestId = request.input.requestId;
+        if (plan.team) return this.missions.create(requestId, { ...plan, originConversationId: this.vela.ensureMissionConversation() });
+        return this.missions.create(requestId, plan);
       }
+      case 'team-library':
+        ensure(!Object.keys(request.input).length, 'invalid_mission_command');
+        return this.missionTeamLibrary(scope);
+      case 'team-save':
+        return this.missionTeams.save(request.input, scope);
+      case 'team-archive':
+        ensure(Object.keys(request.input).length === 2 && identifier(request.input.id), 'invalid_mission_command');
+        return this.missionTeams.archive(request.input.id, request.input.expectedVersion, scope);
+      case 'team-report':
+        ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
+        return this.postMissionTeamReport(scope, request.input.id);
       case 'list':
         ensure(!Object.keys(request.input).length, 'invalid_mission_command');
         return this.missions.list(scope);
@@ -1081,18 +1154,23 @@ export class BackendCore {
     return {principalId:context.principalId,policyVersion:context.policyVersion,resourceIds:resources,workspaceIds:workspaces,projectIds:projects,collectionIds:collections};
   }
   private readVelaConversation(resourceId:string) {
-    const scope=this.velaScope(this.velaContext(),this.velaMetadata());
-    const messages=this.graph.visibleMessages(this.gid(resourceId)).filter(m=>scope.resourceIds.includes(this.publicId(m.conversationId))&&this.conversationAccess.access(resourceId,m.id)).map(m=>{
+    const context=this.velaContext(),scope=this.velaScope(context,this.velaMetadata());
+    const messages=this.graph.visibleMessages(this.gid(resourceId)).filter(m=>{
+      const link=this.state.vela!.messages[m.id]?.missionReport;
+      return (!link || link.workspaceId===context.currentWorkspaceId && link.projectId===context.currentProjectId) &&
+        scope.resourceIds.includes(this.publicId(m.conversationId))&&this.conversationAccess.access(resourceId,m.id);
+    }).map(m=>{
       const meta=this.state.vela!.messages[m.id],evidence=this.state.messageEvidence[m.id];
       return {id:m.id,role:m.role,content:m.content,...(meta??{source:m.role==='user'?'user':evidence?'provider':'user',classification:evidence?.classification==='reported'?'reported':evidence?'unknown':'observed',...(evidence?{providerId:evidence.providerId}:{})})} as VelaMessage;
     });
     return {resourceId,revision:this.state.revisions[resourceId],messages};
   }
   private velaHistorySourceAllowed(meta:Pick<MessageMetadata,'id'|'conversationId'|'unavailable'>,scopeIds:ReadonlySet<string>):boolean {
-    if(meta.unavailable)return false;try{const sourceId=this.publicId(meta.conversationId);return scopeIds.has(sourceId)&&this.conversationAccess.resource(sourceId,'read')===true;}catch{return false;}
+    if(meta.unavailable||this.state.vela!.messages[meta.id]?.missionReport)return false;try{const sourceId=this.publicId(meta.conversationId);return scopeIds.has(sourceId)&&this.conversationAccess.resource(sourceId,'read')===true;}catch{return false;}
   }
   private velaHistoryMessageMetadata(conversationId:string,messageId:string):HistoryMessageMetadata|null {
-    if(conversationId!==this.state.vela!.conversationId||!this.conversationAccess.resource(conversationId,'read'))return null;
+    if(conversationId!==this.state.vela!.conversationId||!this.conversationAccess.resource(conversationId,'read')||
+      this.state.vela!.messages[messageId]?.missionReport)return null;
     const gid=this.state.resources[conversationId],conversation=this.state.graph.conversations.find(value=>value.id===gid);
     // The system Vela conversation is a canonical root. Refuse a corrupted/reparented identity rather than recreate lineage rules.
     if(!conversation||this.state.graph.edges.some(edge=>edge.childId===gid)||this.state.graph.unavailableMessageIds.includes(messageId))return null;
@@ -1728,6 +1806,9 @@ export class BackendCore {
     catch { throw new VelaError('vela_routing_agent_unavailable'); }
     ensure(agent.resource.state === 'active' && agent.ref.resourceVersion === ref.version &&
       (agent.resource.projectId === null || agent.resource.projectId === this.velaContext().currentProjectId), 'vela_routing_agent_unavailable');
+    return { ref, ...this.agentRoutingDetails(agent) };
+  }
+  private agentRoutingDetails(agent: AgentProfile) {
     const settings = agent.profile.settings;
     ensure(settings.requiredCapabilities.source !== 'override' || settings.requiredCapabilities.value.length === 0,
       'vela_agent_capability_unavailable');
@@ -1736,7 +1817,7 @@ export class BackendCore {
       ...(settings.modelId.source === 'override' ? { model: settings.modelId.value } : {}),
       ...(settings.reasoningEffort.source === 'override' ? { reasoningEffort: settings.reasoningEffort.value } : {}),
     };
-    return { ref, agent: { ...agent.ref, title: agent.resource.title }, defaults,
+    return { agent: { ...agent.ref, title: agent.resource.title }, defaults,
       instructions: settings.additionalInstructions.source === 'override' ? settings.additionalInstructions.value : '' };
   }
   private velaAttemptLimits(utcDay: string, profiles = this.velaRoutingProfiles()): NonNullable<VelaRoutingSettingsView['attempts']> {

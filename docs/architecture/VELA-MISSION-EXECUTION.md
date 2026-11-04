@@ -99,6 +99,18 @@ existing hosted web search. That role must return provider-attributed HTTPS
 citations; its partner receives no tools. Citation presence is distinct from
 independent factual confirmation.
 
+Saved teams combine two to four existing Agent Library profiles with reviewed
+responsibilities. The roster is reusable across authorized workspaces in a
+project, or inside its originating standalone workspace. Versioned saves and
+archives fence stale writes. Starting a team mission binds the roster version
+and each profile version to separate hosted tasks. A local join waits for all
+verified report contracts, retains the member task, attempt and evidence IDs,
+and indexes repeated observations by normalized text. Claims and contradictions
+remain attributable to the individual reports. The user can post one durable
+link to the originating Vela chat. The link is visible only from the originating
+workspace and stays outside model history. The findings remain in the mission
+journal.
+
 The journal distinguishes native measurements, provider-reported usage and
 unknown usage. Mission metrics use recorded transitions and do not convert
 tokens into money. The native benchmark measures the same workload with one
