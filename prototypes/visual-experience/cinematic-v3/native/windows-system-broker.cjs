@@ -2,6 +2,7 @@ const fs=require('node:fs');const path=require('node:path');const {createHash}=r
 const record=v=>v&&typeof v==='object'&&!Array.isArray(v);
 const exact=(v,keys)=>Object.keys(v).sort().join('|')===keys.sort().join('|');
 const settingsUri='ms-settings:privacy-location';
+const LOCATION_ERRORS=new Set(['location_native_unavailable','location_native_source_changed','location_foreground_ui_required','location_native_capacity','location_native_busy','location_native_arguments','location_permission_timeout','location_os_denied','location_permission_unspecified','location_cancelled','location_fresh_fix_unavailable','location_source_unavailable','location_stale_fix','location_native_consent_unavailable','location_native_timeout','location_native_protocol']);
 function loadWindowsSystem(root){
  if(process.platform!=='win32'||process.type!=='browser')throw Error('location_native_unavailable');
  const asset='aerynth-windows-system.node',metadata=JSON.parse(fs.readFileSync(path.join(root,'dist/aerynth-windows-system.sources.json'),'utf8'));
@@ -32,7 +33,7 @@ function createWindowsSystemBroker({root,getOwner,dialog,send,addon,now=Date.now
     if(!Buffer.isBuffer(bytes)||![4,8].includes(bytes.length))throw Error('location_native_unavailable');
     const hwnd=bytes.length===8?bytes.readBigUInt64LE().toString(16):bytes.readUInt32LE().toString(16);locationPending=true;
     try{return await getNative().locate(hwnd,h.input.requestedAtMs);}finally{locationPending=false;}
-   }).then(result=>reply({result})).catch(error=>{const code=typeof error==='string'?error:error?.message;reply({error:typeof code==='string'&&/^location_[a-z_]{1,60}$/u.test(code)?code:'location_native_unavailable'});}).finally(()=>inFlight--);return true;
+   }).then(result=>reply({result})).catch(error=>{const code=typeof error==='string'?error:error?.message;reply({error:LOCATION_ERRORS.has(code)?code:'location_native_unavailable'});}).finally(()=>inFlight--);return true;
   },
   async permission(request,call,openExternal){
    if(closed||!record(request))throw Error('invalid_weather_permission');

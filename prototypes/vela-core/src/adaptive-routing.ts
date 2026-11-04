@@ -65,7 +65,7 @@ export function nativeConversationalWorkflow(intent: string) {
 export function nativeVelaFact(intent: string): VelaLocalCapabilityId | undefined {
   const text = intent.normalize('NFKC').toLowerCase().trim()
     .replace(/^vela[,:]?\s+/u, '').replaceAll('’', "'").replace(/\s+/gu, ' ')
-    .replace(/^(?:(?:please|(?:can|could|would) you)\s+)+/u, '').replace(/[?.!]+$/u, '').replace(/,?\s+please$/u, '');
+    .replace(/^(?:(?:please|(?:can|could|would) you)\s+)+/u, '').replace(/[?.!]+$/u, '').replace(/,?\s+please$/u, '').replace(/^(what|how)s\b/u,"$1's");
   if (/^(?:how much (?:ram|memory|physical memory) (?:am i using|is (?:my (?:computer|pc|system)|this (?:computer|pc|system)) using|is (?:currently )?(?:in use|being used))|(?:what(?:'s| is) )?(?:(?:my|the|this (?:pc|computer)'s) )?(?:current )?(?:system )?(?:ram|physical memory) (?:usage|utilization))(?: (?:right now|now|currently|on (?:my|this) (?:pc|computer|system)))?$/u.test(text))
     return 'system.memory';
   if (/^(?:(?:what(?:'s| is)|show(?: me)?|check) )?(?:(?:my|the|current) )?(?:battery(?: (?:charge|level|status|percentage))?|power status)(?: (?:right now|now|currently))?$/u.test(text)||/^how much battery (?:is left|do i have)(?: (?:right now|now))?$/u.test(text)||/^(?:is (?:my |the )?(?:laptop |computer )?(?:charging|plugged in)|am i (?:on battery(?: power)?|plugged in))$/u.test(text))return 'system.battery';
@@ -81,6 +81,9 @@ export function nativeVelaFact(intent: string): VelaLocalCapabilityId | undefine
 
 export function nativeVelaWeather(intent: string): 'now' | 'today' | 'tonight' | 'tomorrow' | 'tomorrow-morning' | undefined {
   let text = fileEditIntent(intent).replaceAll('’', "'").replace(/[?.!]+$/u, '').replace(/,?\s+please$/u, '');
+  text=text.replace(/^(?:tell me |let me know )/u,'').replace(/^(what|how)s\b/u,"$1's")
+    .replace(/^(?:check|look up|get)(?: me)? (?:the |my )?((?:local )?(?:weather|forecast))/u,'show the $1')
+    .replace(/\boutside\b/u,'here').replace(/\bfor (?:later )?(today|tonight|tomorrow(?: morning)?)$/u,'$1');
   text=text.replace(/\b(?:near me|in my area|(?:at|in) my (?:current )?location|where i am|where i'm at)\b/u,'here').replace(/\s+/gu,' ')
     .replace(/^how(?:'s| is) (?:the )?weather/u,"what's the weather").replace(/^what(?:'s| is) (?:the )?current weather/u,"what's the weather")
     .replace(/^what(?:'s| is) (?:the )?weather going to be(?: like)?/u,"what's the weather")

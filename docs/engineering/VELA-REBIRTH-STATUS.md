@@ -24,6 +24,12 @@ Allow UI and physical location/NWS qualification remain outstanding. A separate
 native-response marker fixes a display defect that hid direct host replies;
 the panel regression checks a failed legacy weather plan followed by the actual
 native answer. Native facts require no reviewed plan or inference request.
+The retained apostrophe-free question exposed a separate routing defect: it
+reached inference instead of this native handler. Common weather phrasing now
+uses native consent, including when a source chip is selected. Core regressions
+cover the exact phrase, one consent across restart and fresh A/B fixes with zero
+provider calls. Native diagnostics also distinguish denial, unspecified access,
+cancellation and timeout; an unspecified error no longer claims OS denial.
 
 Addendum B now has local capture, a private bounded PCM bridge, canonical
 preferences, lifecycle controls and observed phase events. Master microphone

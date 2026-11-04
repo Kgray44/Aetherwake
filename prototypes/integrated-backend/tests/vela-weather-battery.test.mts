@@ -11,7 +11,7 @@ function fixture(decision:'allow'|'deny'='allow'){
  const options={path:join(folder,'canonical.sqlite'),provider:'fixture' as const,contentPolicy:'synthetic-only' as const};
  const create=()=>new BackendCore(options,event=>events.push(event),host,undefined,{fetch:request});let core=create();
  return {get core(){return core;},urls,events,get prompts(){return prompts;},setLocate:(fn:typeof locate)=>{locate=fn;},
-  ask:async()=>{const result=await core.command('velaRouteNative',{intent:"What's the weather right now?"});assert(result.matched);return result;},state:()=>core.command('vela',{name:'state',input:{}}) as Promise<VelaBackendState>,
+  ask:async(intent="What's the weather right now?",resourceIds:string[]=[])=>{const result=await core.command('velaRouteNative',{intent,resourceIds});assert(result.matched);return result;},state:()=>core.command('vela',{name:'state',input:{}}) as Promise<VelaBackendState>,
   async reopen(){await core.command('close',{});core=create();},async close(){await core.command('close',{});server.close();client.close();assert.equal(dirname(folder),tmpdir());assert(basename(folder).startsWith('aerynth-weather-battery-'));rmSync(folder,{recursive:true,force:true});}};
 }
 test('actual Core/private native protocol remembers weather consent across restart and requests fresh A→B positions per question',async()=>{
@@ -19,6 +19,15 @@ test('actual Core/private native protocol remembers weather consent across resta
  assert.equal(f.prompts,1);await f.reopen();const b=await f.ask();assert.equal(b.request?.response?.kind,'answer');assert.equal(f.prompts,1);
  assert.deepEqual(f.urls.filter(url=>url.includes('/points/')),['https://api.weather.gov/points/43.46,-72.39','https://api.weather.gov/points/44.55,-72.39']);
  const state=await f.state();assert.equal(state.plans.length,0);assert.equal(state.conversation!.messages.length,4);assert(!JSON.stringify(state).includes('72.39'));assert(!JSON.stringify(f.events).includes('72.39'));assert.equal((await f.core.command('providerActivity',{})).providerRequests,0);
+ }finally{await f.close();}
+});
+
+test('the exact apostrophe-free weather question reaches native consent and a selected source cannot divert it to inference',async()=>{
+ const f=fixture();try{
+  const first=await f.ask('whats the weather');assert.equal(first.request?.providerId,null);assert.equal(first.request?.response?.kind,'answer');assert.equal(f.prompts,1);
+  const source=(await f.state()).conversation!.resourceId;await f.reopen();
+  const second=await f.ask('whats the weather outside',[source]);assert.equal(second.request?.providerId,null);assert.equal(second.request?.planId,undefined);
+  assert.equal(f.prompts,1);assert.equal(f.urls.filter(url=>url.includes('/points/')).length,2);assert.equal((await f.core.command('providerActivity',{})).providerRequests,0);
  }finally{await f.close();}
 });
 test('actual Core/private protocol rejects a stale cached timestamp without sending coordinates or asking permission again',async()=>{

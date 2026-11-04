@@ -27,17 +27,34 @@ API(napi_throw_error,(E,const char*,const char*));
 static void str(E e,V o,const char* k,const std::string& x){V v;napi_create_string_utf8(e,x.c_str(),x.size(),&v);napi_set_named_property(e,o,k,v);}
 static void num(E e,V o,const char* k,double x){V v;napi_create_double(e,x,&v);napi_set_named_property(e,o,k,v);}
 struct Request { V deferred{},work{}; IAsyncOperation<GeolocationAccessStatus> access{nullptr}; double requestedAt{},lat{},lon{},observedAt{};std::string source,error; };
+struct LocationFailure { const char* code; };
+static const char* consentDecision(GeolocationAccessStatus status){
+ switch(status){case GeolocationAccessStatus::Allowed:return nullptr;case GeolocationAccessStatus::Denied:return "location_os_denied";default:return "location_permission_unspecified";}
+}
+static const char* locationError(winrt::hresult code,const char* fallback){
+ if(code==E_ACCESSDENIED)return "location_os_denied";
+ if(code==HRESULT_FROM_WIN32(ERROR_CANCELLED)||code==E_ABORT)return "location_cancelled";
+ return fallback;
+}
+template<typename Operation> static auto completedLocationOperation(const Operation& operation,std::chrono::seconds timeout,const char* timeoutCode){
+ auto status=operation.wait_for(timeout);
+ if(status==AsyncStatus::Started){try{operation.Cancel();}catch(...){}throw LocationFailure{timeoutCode};}
+ if(status==AsyncStatus::Canceled)throw LocationFailure{"location_cancelled"};
+ // Error is terminal too: GetResults rethrows its real HRESULT instead of claiming a timeout.
+ return operation.GetResults();
+}
 static void execute(E,V data){
  auto& r=*static_cast<Request*>(data);
+ const char* unavailable="location_native_consent_unavailable";
  try{
   winrt::init_apartment(winrt::apartment_type::multi_threaded);
   struct ApartmentExit { ~ApartmentExit(){winrt::uninit_apartment();} } apartmentExit;
-  if(r.access.wait_for(std::chrono::seconds(25))!=AsyncStatus::Completed){r.access.Cancel();r.error="location_permission_timeout";return;}
-  if(r.access.GetResults()!=GeolocationAccessStatus::Allowed){r.error="location_os_denied";return;}
+   auto access=completedLocationOperation(r.access,std::chrono::seconds(25),"location_permission_timeout");
+   if(auto error=consentDecision(access)){r.error=error;return;}
+   unavailable="location_fresh_fix_unavailable";
   Geolocator locator;locator.DesiredAccuracy(PositionAccuracy::Default);
   auto operation=locator.GetGeopositionAsync(std::chrono::seconds(0),std::chrono::seconds(12));
-  if(operation.wait_for(std::chrono::seconds(14))!=AsyncStatus::Completed){operation.Cancel();r.error="location_fresh_fix_unavailable";return;}
-  auto coordinate=operation.GetResults().Coordinate();auto position=coordinate.Point().Position();
+   auto coordinate=completedLocationOperation(operation,std::chrono::seconds(14),"location_fresh_fix_unavailable").Coordinate();auto position=coordinate.Point().Position();
   r.lat=position.Latitude;r.lon=position.Longitude;
   r.observedAt=std::chrono::duration<double,std::milli>(coordinate.Timestamp().time_since_epoch()).count()-11644473600000.0;
   switch(coordinate.PositionSource()){
@@ -47,8 +64,9 @@ static void execute(E,V data){
    default:r.error="location_source_unavailable";return;
   }
   if(!std::isfinite(r.lat)||!std::isfinite(r.lon)||std::abs(r.lat)>90||std::abs(r.lon)>180||r.observedAt<r.requestedAt)r.error="location_stale_fix";
- }catch(const winrt::hresult_error& ex){r.error=ex.code()==E_ACCESSDENIED?"location_os_denied":"location_fresh_fix_unavailable";}
- catch(...){r.error="location_fresh_fix_unavailable";}
+  }catch(const LocationFailure& ex){r.error=ex.code;}
+  catch(const winrt::hresult_error& ex){r.error=locationError(ex.code(),unavailable);}
+  catch(...){r.error=unavailable;}
 }
 static void complete(E e,int status,V data){
  auto r=static_cast<Request*>(data);V result;
@@ -68,7 +86,7 @@ static V locate(E e,V info){
   napi_throw_error(e,nullptr,"location_foreground_ui_required");return nullptr;
  }
  auto r=new Request;r->requestedAt=requestedAt;
- try{r->access=Geolocator::RequestAccessAsync();}catch(...){delete r;napi_throw_error(e,nullptr,"location_native_consent_unavailable");return nullptr;}
+ try{r->access=Geolocator::RequestAccessAsync();}catch(const winrt::hresult_error& ex){auto code=locationError(ex.code(),"location_native_consent_unavailable");delete r;napi_throw_error(e,nullptr,code);return nullptr;}catch(...){delete r;napi_throw_error(e,nullptr,"location_native_consent_unavailable");return nullptr;}
  V promise,name;napi_create_promise(e,&r->deferred,&promise);napi_create_string_utf8(e,"aerynth-current-windows-location",32,&name);
  if(napi_create_async_work(e,nullptr,name,execute,complete,r,&r->work)||napi_queue_async_work(e,r->work)){delete r;napi_throw_error(e,nullptr,"location_native_unavailable");return nullptr;}
  return promise;

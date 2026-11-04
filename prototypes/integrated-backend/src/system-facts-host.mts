@@ -22,7 +22,8 @@ export function validSystemFactsResult(operation:string,result:unknown):boolean{
  if(operation==='locate')return exact(result,['latitude','longitude','observedAtMs','source'])&&Number.isFinite(result.latitude)&&Math.abs(result.latitude)<=90&&Number.isFinite(result.longitude)&&Math.abs(result.longitude)<=180&&Number.isFinite(result.observedAtMs)&&['satellite','cellular','wifi'].includes(result.source);
  return operation==='battery'&&exact(result,['acLineStatus','batteryFlag','batteryLifePercent','batteryLifeSeconds'])&&[0,1,255].includes(result.acLineStatus)&&Number.isInteger(result.batteryFlag)&&result.batteryFlag>=0&&result.batteryFlag<=255&&Number.isInteger(result.batteryLifePercent)&&(result.batteryLifePercent<=100||result.batteryLifePercent===255)&&result.batteryLifePercent>=0&&Number.isInteger(result.batteryLifeSeconds)&&result.batteryLifeSeconds>=0&&result.batteryLifeSeconds<=0xffffffff;
 }
-const safeError=(v:unknown)=>typeof v==='string'&&/^location_[a-z_]{1,60}$/u.test(v)?v:'location_native_unavailable';
+const locationErrors=new Set(['location_native_unavailable','location_native_source_changed','location_foreground_ui_required','location_native_capacity','location_native_busy','location_native_arguments','location_permission_timeout','location_os_denied','location_permission_unspecified','location_cancelled','location_fresh_fix_unavailable','location_source_unavailable','location_stale_fix','location_native_consent_unavailable','location_native_timeout','location_native_protocol']);
+const safeError=(v:unknown)=>typeof v==='string'&&locationErrors.has(v)?v:'location_native_unavailable';
 /** Private transport only. Coordinates never enter generic RPC events or renderer state. */
 export function createSystemFactsClient(send:(message:any)=>void){
  const pending=new Map<string,{operation:string;resolve:(v:any)=>void;reject:(e:Error)=>void;timer:ReturnType<typeof setTimeout>}>();let closed=false;

@@ -3055,6 +3055,15 @@ export class BackendCore {
       try{return {matched:true,request:await this.velaFileProposals.prepare({intent,...(folderResourceId?{folderResourceId}:{})})};}
       catch(error){if((error as {code?:string}).code==='file_proposal_root_required')return {matched:false,fileDiscovery:documents};throw error;}
     }
+    const weatherPeriod=nativeVelaWeather(intent);
+    if(weatherPeriod){
+      resolveRoutingSettings(this.velaRoutingProfiles(),settings);
+      const forecast=await this.forecastWeather(weatherPeriod,Date.now(),new AbortController().signal);ensure(!this.closed,'backend_closed');
+      const observed='locationObservedAt' in forecast&&typeof forecast.locationObservedAt==='string'?forecast.locationObservedAt:undefined;
+      const request=this.vela.nativeResponse(intent,forecast.content,forecast.ok?'answer':'inability',observed?{kind:'local-weather',locationObservedAt:observed,source:'National Weather Service',sharedPrecision:'0.01-degree'}:undefined);
+      this.recordVelaRoute('stage_completed',request.id,'aerynth-native',{route:'native',capabilityId:'readWeather',outcome:forecast.ok?'observed':'unavailable'});
+      return {matched:true,request};
+    }
     if(resourceIds.length)return {matched:false};
     const projectCheck = standaloneVelaProjectCheck(intent);
     if (projectCheck) {
@@ -3064,14 +3073,6 @@ export class BackendCore {
     const profiles = this.velaRoutingProfiles();
     // Pins govern inference when needed. Clear native tools retain the same configured pins without a model call.
     resolveRoutingSettings(profiles, settings);
-    const weatherPeriod=nativeVelaWeather(intent);
-    if(weatherPeriod){
-      const forecast=await this.forecastWeather(weatherPeriod,Date.now(),new AbortController().signal);ensure(!this.closed,'backend_closed');
-      const observed='locationObservedAt' in forecast&&typeof forecast.locationObservedAt==='string'?forecast.locationObservedAt:undefined;
-      const request=this.vela.nativeResponse(intent,forecast.content,forecast.ok?'answer':'inability',observed?{kind:'local-weather',locationObservedAt:observed,source:'National Weather Service',sharedPrecision:'0.01-degree'}:undefined);
-      this.recordVelaRoute('stage_completed',request.id,'aerynth-native',{route:'native',capabilityId:'readWeather',outcome:forecast.ok?'observed':'unavailable'});
-      return {matched:true,request};
-    }
     const workspaceMutation=await this.routeVelaWorkspaceMutation(intent);if(workspaceMutation)return workspaceMutation;
     const timer=await this.routeVelaClockTimer(intent,activeCard);if(timer)return timer;
     const fact = nativeVelaFact(intent) ?? matchOrdinaryClockQuestion(intent);
