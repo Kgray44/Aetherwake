@@ -1273,7 +1273,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     await Promise.race([run(), aborted]);
   } catch (error) {
     receipt.error = { message: String(error.message).slice(0, 1000), ...(error.diagnostics ? { diagnostics: error.diagnostics } : {}) };
-    if(argv.includes('--missions-weather-product-only')&&owned&&admitted&&!win.isDestroyed()&&receipt.captures.length<3){
+    if((argv.includes('--missions-weather-product-only')||argv.includes('--missions-folders-only'))&&owned&&admitted&&!win.isDestroyed()&&receipt.captures.length<3){
       try{const image=await bounded(win.webContents.capturePage(),1000,'weather_owned_failure_capture_deadline'),png=image.toPNG();assert(png.length>0&&png.length<=8*MiB,'weather_failure_capture_bound');await fs.writeFile(path.join(out,'failure-owned-application.png'),png,{flag:'wx'});receipt.captures.push({file:'failure-owned-application.png',bytes:png.length});}catch{receipt.failureCapture='unavailable within owned window/deadline';}
     }
   } finally {

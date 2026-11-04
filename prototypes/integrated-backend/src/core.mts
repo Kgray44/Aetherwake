@@ -48,7 +48,7 @@ import { OpenAIConnections,CHATGPT_PLAN_REGISTRATION } from './openai-connection
 import { VelaApiConnection } from './vela-api-connection.mts';
 import { VelaApiRuntime, VELA_API_RUNTIME_LIMITS, velaApiReasoningEfforts, type VelaApiRuntimeTestServices } from './vela-api-runtime.mts';
 import { VelaWakeRuntime } from './vela-wake-runtime.mts';
-import { VelaFileProposals, localDocumentIntent } from './vela-file-proposals.mts';
+import { VelaFileProposals, localDocumentIntent,localSourceAttachmentIntent,localFolderListIntent,folderListingAnswer } from './vela-file-proposals.mts';
 import { FolderSources,inspectFolderSelection,readFolderSource,findFolderResource,storeFolderSource,assertCurrentFolderSourceSync } from './folder-sources.mts';
 import type { VelaFileProposal } from '../../vela-core/src/contracts.ts';
 import type { MediaSource } from './media-sources.mts';
@@ -1783,6 +1783,7 @@ export class BackendCore {
     const ids=new Set(projects.map(p=>p.id));
     const workspaces=this.db.prepare("SELECT * FROM workspaces WHERE state='active'").all().filter(w=>w.project_id===null||ids.has(w.project_id)) as any[];
     const resources=this.db.prepare('SELECT r.*,d.kind AS desktop_kind FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id').all().map(r=>({id:String(r.id),title:String(r.title),kind:r.desktop_kind??(r.kind==='generic'?'reference':r.kind),version:Number(r.version),project_id:r.project_id,state:r.state,visible:r.state==='active'&&(r.project_id===null||ids.has(r.project_id)),available:r.state==='active'&&(r.project_id===null||ids.has(r.project_id)),...(r.kind==='conversation'?{conversationRevision:this.state.revisions[String(r.id)]}:{})})) as any[];
+    for(const resource of resources)if(resource.kind==='folder'){const source=readFolderSource(this.db,resource.id);if(!source||source.grantState!=='active'||source.projectId!==resource.project_id){resource.visible=false;resource.available=false;}}
     const blocks=this.db.prepare('SELECT * FROM blocks').all() as any[],session=this.velaSession();
     const restoreIds=purpose?.restoreCollectionIds??[];
     const collections=this.db.prepare("SELECT id,title,project_id,version,state FROM collections WHERE state='active'"+(restoreIds.length?' OR id IN('+restoreIds.map(()=>'?').join(',')+')':'')).all(...restoreIds) as any[];
@@ -2039,6 +2040,7 @@ export class BackendCore {
         ensure(this.velaNative?.applyPreference,'vela_preference_capability_unavailable');this.requireVelaPolicyGrant(input.authorizationRef,undefined,'adaptation');return this.velaNative.applyPreference(input);
       }}};
     this.velaHost=createCanonicalVelaHost(hostOptions);
+    this.velaHost.validateNativeSourceObservation=(observation,scope)=>{try{return observation.kind==='folder-metadata'&&scope.resourceIds.includes(observation.resourceId)&&this.velaHost.resolve({id:observation.resourceId,kind:'resource'},scope)?.version===observation.version&&this.folderBinding(observation.resourceId)===observation.bindingDigest;}catch{return false;}};
     const readCanonicalContent=this.velaHost.readContent.bind(this.velaHost);
     this.velaHost.readContent=(id,scope)=>{const existing=readCanonicalContent(id,scope);if(existing)return existing;
       const ref=this.velaHost.resolve({id,kind:'resource'},scope);if(!ref||!this.conversationAccess.resource(id,'read'))return null;
@@ -3019,9 +3021,23 @@ export class BackendCore {
     const plan=this.vela.native({intent,action});this.recordVelaRoute('route_selected',plan.requestId,'aerynth-native',{route:'native',capabilityId:action.type});
     await this.vela.apply(plan.id);return {matched:true,request:this.vela.state().requests.find(request=>request.id===plan.requestId)!};
   }
-  private async routeVelaNative(intent: string, settings?: VelaTurnRouting,activeCard?:import('../../vela-core/src/contracts.ts').VelaActiveCard,resourceIds:string[]=[]): Promise<CommandMap['velaRouteNative']['output']> {
+  private async routeVelaNative(intent: string, settings?: VelaTurnRouting,activeCard?:import('../../vela-core/src/contracts.ts').VelaActiveCard,resourceIds:string[]=[],resourceRefs?:ResourceRef[]): Promise<CommandMap['velaRouteNative']['output']> {
     ensure(Array.isArray(resourceIds)&&resourceIds.length<=128&&resourceIds.every(identifier)&&new Set(resourceIds).size===resourceIds.length,'invalid_vela_context');
+    if(localFolderListIntent(intent)){
+      if(resourceIds.length!==1)return {matched:true,request:this.vela.nativeResponse(intent,'Select one connected folder to list its contents.','clarification')};
+      const refs=this.attachmentReferences(resourceIds,resourceRefs);if(refs[0].resourceKind!=='folder')return {matched:true,request:this.vela.nativeResponse(intent,'Select a connected folder, rather than a file, to list its contents.','clarification')};
+      const ref=refs[0],source=this.scopedFolder(ref.id),binding=this.folderBinding(ref.id),stamp=this.velaScopeStamp(),listing=await this.folderSources.list({resourceId:ref.id},source.projectId);
+      ensure(stamp===this.velaScopeStamp()&&binding===this.folderBinding(ref.id),'source_selection_changed');const content=folderListingAnswer(source.metadata.name,listing);
+      return {matched:true,request:this.atomic(()=>{ensure(stamp===this.velaScopeStamp()&&binding===this.folderBinding(ref.id),'source_selection_changed');return this.vela.nativeSourceResponse(intent,content,ref,{kind:'folder-metadata',resourceId:ref.id,version:ref.version,bindingDigest:binding,sourceRevision:listing.observedRevision,observedAt:now()});})};
+    }
     const documents=localDocumentIntent(intent);
+    if(localSourceAttachmentIntent(intent)){
+      const continuation=!resourceIds.length&&/\b(?:these|those|them|results|found)\b/iu.test(intent)?this.vela.nativeSearchSelection():null;
+      const ids=resourceIds.length?resourceIds:continuation?.resources.map(ref=>ref.id)??[];
+      if(ids.length){const refs=this.attachmentReferences(ids,resourceRefs??continuation?.resources),hasFolder=refs.some(ref=>ref.resourceKind==='folder'),children=hasFolder&&(/\b(?:contents?|children|docs?|documents?)\b/iu.test(intent)||/\bfiles?\s+(?:in|from|inside|within)\b/iu.test(intent));
+        if(!children)return {matched:true,request:this.attachCanonicalSources(intent,refs,continuation?.receiptId)};
+      }else if(!documents||/\b(?:these|those|them|results|found)\b/iu.test(intent))return {matched:true,request:this.vela.nativeResponse(intent,'Select the files or folder to add. I don’t have a current, verified selection to attach. No sources were added.','clarification')};
+    }
     if(documents){
       if(!this.nativeMedia)return {matched:true,request:this.vela.nativeResponse(intent,'Local document import is unavailable in this host. No files were added.','inability')};
       let folderResourceId:string|undefined;
@@ -4006,6 +4022,32 @@ export class BackendCore {
     const row=this.db.prepare("SELECT w.id,w.project_id,w.title,w.version,l.version AS layout_version FROM workspaces w JOIN workspace_layouts l ON l.workspace_id=w.id WHERE w.id=? AND w.state='active'").get(id);
     return row&&row.project_id===scope.currentProjectId?{workspaceId:id,projectId:scope.currentProjectId,workspaceVersion:Number(row.version),layoutVersion:Number(row.layout_version),workspaceTitle:String(row.title)}:null;
   }
+  private attachmentReferences(ids:string[],selected?:ResourceRef[]):ResourceRef[]{
+    ensure(selected===undefined||Array.isArray(selected)&&selected.length===ids.length&&selected.every(ref=>ref&&ref.kind==='resource'&&identifier(ref.id)&&ids.includes(ref.id)&&Number.isSafeInteger(ref.version)&&ref.version>=1)&&new Set(selected.map(ref=>ref.id)).size===ids.length,'invalid_source_selection');
+    const scope=this.velaHost.scope();return ids.map(id=>{const current=this.velaHost.resolve({id,kind:'resource'},scope),expected=selected?.find(ref=>ref.id===id);
+      ensure(current&&this.productResourceAccess(id)&&['file','folder'].includes(current.resourceKind??''),'source_selection_unavailable');
+      ensure(!expected||current.version===expected.version&&(expected.resourceKind===undefined||current.resourceKind===expected.resourceKind)&&(expected.projectId===undefined||current.projectId===expected.projectId),'source_selection_changed');return current;});
+  }
+  private attachCanonicalSources(intent:string,refs:ResourceRef[],searchReceiptId?:string):import('../../vela-core/src/contracts.ts').VelaRequest{
+    ensure(this.nativeMedia&&!this.active&&this.missionStorageAdmitted&&refs.length>0,'source_attachment_unavailable');const target=this.fileProposalTarget();ensure(target,'file_proposal_workspace_required');
+    const stamp=this.velaScopeStamp(),id=randomUUID(),engine=this.desktop.nativeBlockServices().engine;
+    return this.atomic(()=>this.once('source-attachment:'+id,{intent,target,refs,searchReceiptId},()=>{
+      ensure(stamp===this.velaScopeStamp()&&planningDigest(target)===planningDigest(this.fileProposalTarget()),'file_proposal_target_changed');
+      const current=this.attachmentReferences(refs.map(ref=>ref.id),refs);ensure(current.every(ref=>ref.projectId===target.projectId||ref.projectId===null),'source_attachment_project_mismatch');
+      if(searchReceiptId){const source=this.vela.nativeSearchSelection();ensure(source?.receiptId===searchReceiptId&&planningDigest(source.resources)===planningDigest(current),'source_selection_changed');}
+      const descriptors:{fd:number;source:MediaSource}[]=[],folders=current.filter(ref=>ref.resourceKind==='folder').map(ref=>this.scopedFolder(ref.id));
+      const verify=()=>{for(const folder of folders){assertCurrentFolderSourceSync(folder);ensure(this.folderBinding(folder.resourceId)===planningDigest({resourceId:folder.resourceId,version:current.find(ref=>ref.id===folder.resourceId)!.version,projectId:folder.projectId,identity:folder.identity,grantId:folder.sourceGrantId}),'source_selection_changed');}
+        for(const {fd,source} of descriptors){const stat=lstatSync(source.path!,{bigint:true});ensure(stat.isFile()&&!stat.isSymbolicLink()&&realpathSync(source.path!)===source.path&&mediaSourceRevision(stat)===source.metadata.sourceRevision&&mediaSourceRevision(fstatSync(fd,{bigint:true}))===source.metadata.sourceRevision,'source_changed');}};
+      try{for(const ref of current.filter(ref=>ref.resourceKind==='file')){const source=this.scopedMedia(ref.id,ref.version);ensure(source.path,'source_selection_unavailable');descriptors.push({fd:openSync(source.path,'r'),source});}verify();let addedCount=0;
+        for(const [index,ref] of current.entries()){const layout=engine.project(target.workspaceId);if(layout.blocks.some(block=>block.resourceId===ref.id))continue;
+          const geometry=ref.resourceKind==='folder'?blockDefinition('folder').defaultPresentation:mediaDefaultGeometry(this.scopedMedia(ref.id).metadata),presentation={width:geometry.width,height:geometry.height,shape:geometry.shape};
+          engine.execute({type:'attachResource',commandId:id+':attach:'+index,workspaceId:target.workspaceId,resourceId:ref.id,expectedRevision:layout.revision,presentation,placement:'nearest-free'});addedCount++;}
+        verify();const final=engine.project(target.workspaceId);this.attachmentReferences(refs.map(ref=>ref.id),refs);ensure(current.every(ref=>final.blocks.filter(block=>block.resourceId===ref.id).length>=1),'source_attachment_verification_failed');
+        const request=this.vela.nativeAttachmentResult(intent,{id,workspaceId:target.workspaceId,layoutBefore:target.layoutVersion,layoutAfter:final.revision,resources:current,addedCount,existingCount:current.length-addedCount,verified:true,...(searchReceiptId?{searchReceiptId}:{})});
+        this.record('vela.sources/attached','observed',undefined,randomUUID(),{providerId:'aerynth-native',detached:true,correlationId:request.id,payload:{redacted:true,itemType:'native-source-attachment',files:{count:current.length,state:'verified'}}});return request;
+      }finally{for(const {fd} of descriptors)closeSync(fd);}
+    }));
+  }
   private scopedFolder(resourceId:string,allowRevoked=false){
     ensure(!this.closed&&this.nativeMedia&&identifier(resourceId)&&this.productResourceAccess(resourceId),'folder_source_unavailable');
     const row=this.db.prepare("SELECT r.project_id,d.kind FROM resources r JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=? AND r.state='active'").get(resourceId);
@@ -4948,7 +4990,7 @@ export class BackendCore {
     if(name==='vela'&&a?.name==='local')return this.vela.local(a.input) as any;
     if(name==='velaRouteNative') {
       ensure(typeof a?.intent === 'string' && a.intent.length <= 16000, 'invalid_vela_intent');
-      return await this.routeVelaNative(a.intent, a.settings,a.activeCard,a.resourceIds) as any;
+      return await this.routeVelaNative(a.intent, a.settings,a.activeCard,a.resourceIds,a.resourceRefs) as any;
     }
     if (!(name==='close'&&(this.active?.providerId===CHATGPT_PLAN_PROVIDER||this.active?.providerId===VELA_API_PROVIDER))&&!(name==='conversation'&&['saveDraft','saveViewState','selectView'].includes(a?.name))&&!['providerActivity','providerConnection','providerAuth','ordinaryProviderStatus','ordinaryProviderCheck','openResource','mediaDescribe','mediaReadChunk','snapshot','replay','interrupt','execute','desktop','viewState','conversationCitation','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['inspectWorkspace','capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {

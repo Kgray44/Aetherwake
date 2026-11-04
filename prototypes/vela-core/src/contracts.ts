@@ -190,6 +190,8 @@ export type VelaProviderRecovery = { state: 'provider_completed' | 'failed' | 'i
 export interface VelaRequest {
   id: string; conversationId: string; intent: string; state: RequestState;
   createdAt: string; updatedAt: string; providerId: string | null;
+  nativeAttachment?:{id:string;workspaceId:string;layoutBefore:number;layoutAfter:number;resources:ResourceRef[];addedCount:number;existingCount:number;verified:true;searchReceiptId?:string};
+  nativeSourceObservation?:{kind:'folder-metadata';resourceId:string;version:number;bindingDigest:string;sourceRevision:string;observedAt:string};
   context: ContextManifest; planId?: string; errorCode?: string;
   /** Reference only: content lives in the SAME canonical conversation, never a second transcript. */
   response?: { kind: ProviderReplyKind; messageId: string; contentDigest?: string };
@@ -295,6 +297,7 @@ export interface VelaHostPort {
   readContent(id: string, scope: VelaScope): { ref: ResourceRef; content: string; source: string } | null;
   /** Current content-policy decision without reading content; absence disables implicit history. */
   canReadContent?(ref: ResourceRef, scope: VelaScope): boolean;
+  validateNativeSourceObservation?(observation:NonNullable<VelaRequest['nativeSourceObservation']>,scope:VelaScope):boolean;
   /** Must evaluate actual host policy, issue opaque references, and revalidate grants at the action boundary. */
   authorize(request: AuthorizationRequest): AuthorizationDecision;
   /** Must be idempotent by commandId. workspaceFromResources is one atomic canonical create/attach operation. */
@@ -453,7 +456,7 @@ export interface VelaClient {
   open(): Promise<VelaState>;
   fileProposal?(input: VelaFileProposalCommand): Promise<unknown>;
   search(query: string): Promise<ResourceRef[]>;
-  request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean } & import('./adaptive-routing.ts').VelaTurnRouting): Promise<VelaRequest>;
+  request(input: { intent: string; resourceIds: string[]; resourceRefs?:ResourceRef[];authorizeProvider: boolean } & import('./adaptive-routing.ts').VelaTurnRouting): Promise<VelaRequest>;
   routingOptions?(input: { providerId: string }): Promise<import('../../openai-provider/model-controls.ts').OrdinaryModelOption[]>;
   saveRoutingSettings?(input: import('./routing-settings.ts').VelaRoutingSettingsChange): Promise<import('./routing-settings.ts').VelaRoutingProfile>;
   rateRoutingResponse?(input: { requestId: string; feedback: import('./routing-calibration.ts').VelaRoutingFeedback }): Promise<void>;

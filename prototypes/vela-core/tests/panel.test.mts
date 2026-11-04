@@ -123,15 +123,15 @@ test('ordinary reviewed app changes use the same natural Yes or No surface and r
 });
 
 test('dedicated file icon selects a whole folder once for the next message without sending it automatically',async()=>{
-  const doc=new Document(),root=doc.createElement('main'),canonical=state(),picks:unknown[]=[],turns:{resourceIds:string[]}[]=[];
+  const doc=new Document(),root=doc.createElement('main'),canonical=state(),picks:unknown[]=[],turns:{resourceIds:string[];resourceRefs?:unknown[]}[]=[];
   const panel=mountVelaPanel(root as unknown as HTMLElement,clientFor(async()=>canonical,{
-    pickSources:async input=>{picks.push(input);return {resources:[{id:'folder:one',kind:'folder',title:'Project docs',version:2}]};},
+    pickSources:async input=>{picks.push(input);return {resources:[{id:'folder:one',kind:'folder',title:'Project docs',version:2,projectId:null}]};},
     request:async input=>{turns.push(input);return request();},
   }));
   await settles(()=>!!named(root,'Add files or folders'));named(root,'Add files or folders').fire('click');named(root,'Choose a folder…').fire('click');
   await settles(()=>!!named(root,'Project docs ×'));assert.deepEqual(picks,[{kind:'folder',destination:'context'}]);assert.equal(turns.length,0);
   const composer=root.find(node=>node.tagName==='textarea')!;composer.value='Look at these sources';composer.fire('input');composer.fire('keydown',{key:'Enter'});
-  await settles(()=>turns.length===1);assert.deepEqual(turns[0].resourceIds,['folder:one']);panel.dispose();
+  await settles(()=>turns.length===1);assert.deepEqual(turns[0].resourceIds,['folder:one']);assert.deepEqual(turns[0].resourceRefs,[{id:'folder:one',kind:'resource',resourceKind:'folder',title:'Project docs',version:2,projectId:null}]);panel.dispose();
 });
 
 test('a polite investigation uses mission admission while a simple greeting stays an ordinary turn', async () => {

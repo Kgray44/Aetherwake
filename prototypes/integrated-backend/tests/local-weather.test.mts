@@ -41,7 +41,8 @@ test("denied location makes no network request and untrusted forecast destinatio
   const denied = await readLocalWeather("now", signal, {
     locate: async () => { throw Error("denied"); }, request, now,
   });
-  assert.match(denied.content, /Windows did not provide/);
+  assert.equal(denied.ok, false);
+  assert.equal(denied.content, 'Windows couldn’t get a fresh location. Check Windows Location settings and try again.');
   assert.equal(requests, 0);
   assert.equal((await readLocalWeather("now", signal, { locate, request, now })).ok, false);
   assert.equal(requests, 1);

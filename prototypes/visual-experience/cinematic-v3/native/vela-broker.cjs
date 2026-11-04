@@ -231,20 +231,23 @@ exports.velaCommand = async ({
     const request = {
       intent: value.intent,
       resourceIds: value.resourceIds,
+      ...(value.resourceRefs===undefined?{}:{resourceRefs:value.resourceRefs}),
       authorizeProvider: value.authorizeProvider,
       ...(value.handoffSourceRequestId === undefined ? {} : { handoffSourceRequestId: value.handoffSourceRequestId }),
       ...(value.routingAgentId === undefined ? {} : { routingAgentId: value.routingAgentId }),
     };
     const { providerId, model, reasoningEffort, mode, budgetLimit, allowEscalation, includeRecentHistory, overrideDefaults } = value;
     // The Core independently validates this intent and the selected Folder's grant.
-    const localDocuments=/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you|I want(?: you)? to|I(?: would|'d) like(?: you)? to)\s+)*(?:add|attach|import|bring|put|load)\b[\s\S]*\b(?:docs?|documents?|files?)\b[\s\S]*\b(?:(?:this|current|the)\s+)?workspace\b/iu.test(request.intent);
-    if (routeNative && !request.handoffSourceRequestId && !request.routingAgentId && (!request.resourceIds.length||localDocuments) && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
+    const localDocuments=/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you|I want(?: you)? to|I(?: would|'d) like(?: you)? to)\s+)*(?:add|attach|import|bring|put|load)\b[\s\S]*\b(?:docs?|documents?|files?|folders?|sources?|resources?|results?|these|those|them)\b[\s\S]*\b(?:(?:this|current|the)\s+)?workspace\b/iu.test(request.intent);
+    const localFolderList=/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you)\s+)*(?:(?:what(?:'s| is)\s+in\s+(?:this|the selected)\s+folder)|(?:what\s+(?:files|folders|items)\s+(?:are\s+)?(?:in|inside)\s+(?:this|the selected)\s+folder)|(?:(?:list|show)\s+(?:(?:the\s+)?(?:files|folders|items|contents)\s+(?:in|of|inside)\s+)?(?:this|the selected)\s+folder(?:['’]s\s+contents)?))[.!?]*\s*$/iu.test(request.intent);
+    if (routeNative && !request.handoffSourceRequestId && !request.routingAgentId && (!request.resourceIds.length||localDocuments||localFolderList) && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
       const settings = directMessageSend
         ? Object.fromEntries(Object.entries({ providerId, mode, model, reasoningEffort, overrideDefaults, budgetLimit }).filter(([, option]) => option !== undefined))
         : {};
       const local = await stage("native-route", () => call("velaRouteNative", {
         intent: request.intent,
         ...(request.resourceIds.length ? {resourceIds:request.resourceIds} : {}),
+        ...(request.resourceRefs===undefined?{}:{resourceRefs:request.resourceRefs}),
         ...(value.activeCard === undefined ? {} : { activeCard: value.activeCard }),
         ...(Object.keys(settings).length ? { settings } : {}),
       }));

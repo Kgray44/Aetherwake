@@ -24,7 +24,7 @@ import type {
   VelaPresentationState, VelaPresentationPatch, VelaProjectCheckReceipt, VelaProviderRecovery,
 } from './contracts.ts';
 
-type StoredActionReceipt = ActionReceipt & { foundSubjects?: VelaSubjectRef[] };
+type StoredActionReceipt = ActionReceipt & { foundSubjects?: (VelaSubjectRef&{version?:number})[] };
 const subjectKey = ({ id, kind }: VelaSubjectRef) => kind + ':' + id;
 
 interface StoredState {
@@ -263,6 +263,8 @@ export class VelaService {
       const { activeSurface, activeResourceId, activeWorkspaceLayout, ...context } = r.context;
       const projectId = activeSurface?.projectId ?? null, workspaceId = activeSurface?.workspaceId ?? null;
       const visibleWorkspaceId = workspaceId && scope.workspaceIds.includes(workspaceId) ? workspaceId : null;
+      if(r.nativeAttachment&&(!this.permitted(r.nativeAttachment.workspaceId,'workspace',scope)||!r.nativeAttachment.resources.every(ref=>this.permitted(ref.id,ref.kind,scope))))delete r.nativeAttachment;
+      if(r.nativeSourceObservation&&this.opts.host.validateNativeSourceObservation?.(r.nativeSourceObservation,scope)!==true)delete r.nativeSourceObservation;
       return { ...r, context: { ...context,
         discovered: context.discovered.filter(ref => this.permitted(ref.id, ref.kind, scope)),
         included: context.included.filter(ref => this.permitted(ref.id, ref.kind, scope)),
@@ -384,11 +386,12 @@ export class VelaService {
       const r = this.data.requests.find(value => value.id === id); if (!r) return null;
       const scope = this.scope(), ref = this.opts.host.resolve({ id: r.conversationId, kind: 'resource' }, scope);
       if (!ref || this.opts.host.canReadContent?.(ref, scope) !== true) return null;
+      if(r.nativeSourceObservation&&this.opts.host.validateNativeSourceObservation?.(r.nativeSourceObservation,scope)!==true)return null;
       let sourceDependencies; try { sourceDependencies = historyDependenciesFromContext(r.context, r.conversationId); } catch { return null; }
       return structuredClone({ id: r.id, conversationId: r.conversationId, state: r.state, providerId: r.providerId,
         ...(r.handoff?.taskId ? { taskId: r.handoff.taskId } : {}),
         ...(r.origin ? { origin: r.origin } : {}), ...(r.inputMessageId ? { inputMessageId: r.inputMessageId } : {}), ...(r.inputContentDigest ? { inputContentDigest: r.inputContentDigest } : {}),
-        ...(r.response ? { response: r.response } : {}), ...(r.provenance ? { provenance: r.provenance } : {}), sourcePolicyVersion: r.context.policyVersion, sourceDependencies });
+        ...(r.response ? { response: r.response } : {}), ...(r.provenance ? { provenance: r.provenance } : {}),...(r.nativeSourceObservation?{nativeSourceObservation:r.nativeSourceObservation}:{}), sourcePolicyVersion: r.context.policyVersion, sourceDependencies });
     });
   }
   private historyReaders(): { full: HistoryProofReader; metadata: HistoryMetadataReader } {
@@ -397,10 +400,11 @@ export class VelaService {
     const canReadContent = (ref: ResourceRef) => this.opts.host.canReadContent!(ref, scope) === true;
     const canReadMessage = (id: string) => { const ref = resolve({ id, kind: 'resource' }); return !!ref && canReadContent(ref); };
     const request = (id: string) => this.historyRequestMetadata(id);
+    const verifyNativeSourceObservation=(r:HistoryRequestRecord)=>!!r.nativeSourceObservation&&this.opts.host.validateNativeSourceObservation?.(r.nativeSourceObservation,scope)===true;
     const metadata: HistoryMetadataReader = { request, resolve, canReadContent,
       message: (id, messageId) => canReadMessage(id) ? callbacks.messageMetadata(id, messageId) : null,
-      verifyProviderContribution: callbacks.verifyProviderContribution };
-    const full: HistoryProofReader = { request, resolve,
+      verifyProviderContribution: callbacks.verifyProviderContribution,verifyNativeSourceObservation };
+    const full: HistoryProofReader = { request, resolve,verifyNativeSourceObservation,
       message: (id, messageId, maxBytes) => canReadMessage(id) ? callbacks.message(id, messageId, maxBytes) : null,
       content: (ref, maxBytes) => canReadContent(ref) ? callbacks.content(ref, maxBytes) : null,
       verifyProviderContribution: (contribution, message, r) => {
@@ -811,6 +815,26 @@ export class VelaService {
       const response=this.append(content,request.id,'vela-native',undefined,{kind});request.response={kind,messageId:response.id,contentDigest:digest(content)};
       request.state='responded';request.updatedAt=this.now();return structuredClone(request);});
   }
+  /** Only an applied, current-scope search can supply a subsequent native attachment's IDs. */
+  nativeSearchSelection():{receiptId:string;resources:ResourceRef[]}|null{
+    return this.read(()=>{const scope=this.scope(),request=this.data.requests.at(-1);if(!request||request.state!=='completed'||JSON.stringify(request.origin)!==JSON.stringify(this.historyOrigin(scope)))return null;
+      const plan=this.data.plans.find(plan=>plan.id===request.planId);if(!plan||plan.state!=='applied')return null;
+      const receipts=this.data.receipts.filter(receipt=>receipt.planId===plan.id&&receipt.state==='applied'&&plan.steps.some(step=>step.id===receipt.stepId&&step.action.type==='search'));
+      if(receipts.length!==1||!receipts[0].foundSubjects?.length)return null;
+      const resources:ResourceRef[]=[];for(const saved of receipts[0].foundSubjects){if(saved.kind!=='resource'||!Number.isSafeInteger(saved.version))return null;
+        const current=this.opts.host.resolve(saved,scope);if(!current||current.version!==saved.version||!this.permitted(current.id,current.kind,scope))return null;resources.push(structuredClone(current));}
+      return {receiptId:receipts[0].id,resources};});
+  }
+  nativeAttachmentResult(intent:string,receipt:NonNullable<VelaRequest['nativeAttachment']>):VelaRequest{
+    return this.atomic(()=>{check(receipt.verified&&receipt.resources.length>0&&receipt.addedCount+receipt.existingCount===receipt.resources.length,'invalid_native_attachment_receipt');
+      const content=receipt.resources.length+' selected source'+(receipt.resources.length===1?' is':'s are')+' now in this workspace.';
+      const request=this.nativeResponse(intent,content,'answer'),stored=this.getRequest(request.id);stored.nativeAttachment=structuredClone(receipt);stored.context.discovered.push(...structuredClone(receipt.resources));return structuredClone(stored);});
+  }
+  nativeSourceResponse(intent:string,content:string,ref:ResourceRef,observation:NonNullable<VelaRequest['nativeSourceObservation']>):VelaRequest{
+    return this.atomic(()=>{check(observation.kind==='folder-metadata'&&ref.kind==='resource'&&ref.resourceKind==='folder'&&observation.resourceId===ref.id&&observation.version===ref.version&&this.opts.host.validateNativeSourceObservation?.(observation,this.scope())===true,'native_source_observation_unavailable');
+      const request=this.nativeResponse(intent,content,'answer'),stored=this.getRequest(request.id);stored.context.discovered.push(structuredClone(ref));stored.nativeSourceObservation=structuredClone(observation);
+      stored.provenance=createHistoryProvenance({requestId:stored.id,conversationId:stored.conversationId,origin:stored.origin!,inputMessageId:stored.inputMessageId!,inputContentDigest:stored.inputContentDigest!,dependencies:historyDependenciesFromContext(stored.context,stored.conversationId)});return structuredClone(stored);});
+  }
   creationRecoveryReference(receiptId?:string):{receiptId:string;workspaceId:string;projectId:string|null}|null {
     let receipt=receiptId?this.data.receipts.find(receipt=>receipt.id===receiptId):this.data.receipts.at(-1);
     if(!receipt||receipt.state!=='applied')return null;
@@ -959,7 +983,7 @@ export class VelaService {
         if (result.createdProjectId) receipt.createdProjectId = result.createdProjectId;
         if (result.createdCollectionId) receipt.createdCollectionId = result.createdCollectionId;
         if ((step.action.type === 'search' || step.action.type === 'openResource') && result.status === 'applied' && result.foundSubjects) {
-          receipt.foundSubjects = result.foundSubjects.slice(0, 12).map(({ id, kind }) => ({ id, kind }));
+          receipt.foundSubjects = result.foundSubjects.slice(0, 12).map(({ id, kind }) => {const current=this.opts.host.resolve({id,kind},this.scope());return {id,kind,...(current?{version:current.version}:{})};});
           if (step.action.type === 'openResource' && receipt.foundSubjects.length === 1 && receipt.foundSubjects[0].kind === 'resource')
             receipt.openResourceId = receipt.foundSubjects[0].id;
         }

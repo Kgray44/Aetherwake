@@ -22,7 +22,7 @@ test('actual Core/private native protocol remembers weather consent across resta
  }finally{await f.close();}
 });
 test('actual Core/private protocol rejects a stale cached timestamp without sending coordinates or asking permission again',async()=>{
- const f=fixture();try{await f.ask();f.urls.length=0;f.setLocate(async input=>({latitude:43,longitude:-72,observedAtMs:input.requestedAtMs-1,source:'wifi'}));const stale=await f.ask();assert.equal(stale.request?.response?.kind,'inability');assert.equal(stale.request?.nativeObservation,undefined);assert.equal(f.urls.length,0);assert.equal(f.prompts,1);assert.match((await f.state()).conversation!.messages.at(-1)!.content,/fresh current location/);
+ const f=fixture();try{await f.ask();f.urls.length=0;f.setLocate(async input=>({latitude:43,longitude:-72,observedAtMs:input.requestedAtMs-1,source:'wifi'}));const stale=await f.ask();assert.equal(stale.request?.response?.kind,'inability');assert.equal(stale.request?.nativeObservation,undefined);assert.equal(f.urls.length,0);assert.equal(f.prompts,1);assert.equal((await f.state()).conversation!.messages.at(-1)!.content,'Windows couldn’t get a fresh location. Check Windows Location settings and try again.');
  }finally{await f.close();}
 });
 test('denial persists across actual Core reopen and explicit revocation cancels pending observation before egress',async()=>{

@@ -4,12 +4,24 @@ import { openSync,closeSync,fstatSync,lstatSync,realpathSync } from 'node:fs';
 import { basename, extname, isAbsolute, join, relative, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import type { VelaFileProposal, VelaFileProposalCommand, VelaRequest } from '../../vela-core/src/contracts.ts';
+import type {FolderBrowseResponse} from '../../application-contract/folder.ts';
 import { inspectMediaSelection,mediaSourceRevision,type MediaSource } from './media-sources.mts';
 import { ensure,ServiceError } from './contracts.mts';
 
 export const LOCAL_FILE_PROPOSAL_LIMITS=Object.freeze({files:128,entries:4096,depth:8,metadataBytes:196608,lifetimeMs:15*60*1000,proposals:256});
+export const localSourceAttachmentIntent=(intent:string)=>typeof intent==='string'&&intent.length<=16000&&/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you|I want(?: you)? to|I(?: would|'d) like(?: you)? to)\s+)*(?:add|attach|import|bring|put|load)\b[\s\S]*\b(?:docs?|documents?|files?|folders?|sources?|resources?|results?|these|those|them)\b[\s\S]*\b(?:(?:this|current|the)\s+)?workspace\b/iu.test(intent);
+export const localFolderListIntent=(intent:string)=>typeof intent==='string'&&/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you)\s+)*(?:(?:what(?:'s| is)\s+in\s+(?:this|the selected)\s+folder)|(?:what\s+(?:files|folders|items)\s+(?:are\s+)?(?:in|inside)\s+(?:this|the selected)\s+folder)|(?:(?:list|show)\s+(?:(?:the\s+)?(?:files|folders|items|contents)\s+(?:in|of|inside)\s+)?(?:this|the selected)\s+folder(?:['’]s\s+contents)?))[.!?]*\s*$/iu.test(intent);
+/** Whole untrusted labels only; never clip a filename or imply this page is the whole folder. */
+export function folderListingAnswer(name:string,listing:FolderBrowseResponse):string{
+  const header='In “'+name+'”:\n',footer='\nThis is a bounded preview; open the folder to browse more entries.',lines:string[]=[];
+  for(const entry of listing.entries.slice(0,12)){const line='• '+JSON.stringify(entry.name)+(entry.kind==='folder'?' (folder)':entry.kind==='unsupported'?' (unsupported)':'');
+    if(Buffer.byteLength(header+[...lines,line].join('\n')+footer)>1800)break;lines.push(line);}
+  const more=lines.length<listing.entries.length||listing.cursor!==null||listing.truncated;
+  const answer=lines.length?header+lines.join('\n')+(more?footer:''):'I found no visible entries in “'+name+'” in this metadata listing.'+(more?footer:'');
+  ensure(Buffer.byteLength(answer)<=1800,'folder_listing_capacity');return answer;
+}
 export function localDocumentIntent(intent:string):{projectName?:string}|null{
-  if(typeof intent!=='string'||intent.length>16000||! /^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you|I want(?: you)? to|I(?: would|'d) like(?: you)? to)\s+)*(?:add|attach|import|bring|put|load)\b[\s\S]*\b(?:docs?|documents?|files?)\b[\s\S]*\b(?:(?:this|current|the)\s+)?workspace\b/iu.test(intent))return null;
+  if(typeof intent!=='string'||intent.length>16000||! /^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you|I want(?: you)? to|I(?: would|'d) like(?: you)? to)\s+)*(?:add|attach|import|bring|put|load)\b[\s\S]*\b(?:docs?|documents?|files?|(?:folder\s+)?contents?)\b[\s\S]*\b(?:(?:this|current|the)\s+)?workspace\b/iu.test(intent))return null;
   const quoted=/["“]([^"”\r\n]{1,120})["”]\s+(?:project\s+)?(?:docs?|documents?|files?)/iu.exec(intent);
   const unquoted=/\b(?:add|attach|import|bring|put|load)\s+(?:the\s+)?([^\r\n]{1,120}?)\s+project\s+(?:docs?|documents?|files?)\b/iu.exec(intent);
   return quoted?{projectName:quoted[1].trim()}:unquoted&&!/^(?:my|this|current|the)$/iu.test(unquoted[1])?{projectName:unquoted[1].trim()}:{};

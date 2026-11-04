@@ -127,11 +127,12 @@ test('native Vela grant binds exact intent, metadata/content versions, expiry an
 
 test('unsupported block actions are honestly unavailable and only released parent capabilities receive workspace composites',async()=>{
  const f=fixture();try{
+  const source=await note(f.core,'Synthetic released workspace source');
   f.core.registerVelaNativeCapabilities({supportedActions:[],dispatch:()=>{throw new Error('Explicitly disabled host capability');}});
   const state=await vela(f.core,'state') as VelaBackendState;assert.equal(state.nativeCapabilities.workspaceFromResources.available,false);assert.ok(!state.capabilities.some(c=>c.id==='workspaceFromResources'));
-  await assert.rejects(vela(f.core,'native',{intent:'Requires released block capability',action:{type:'workspaceFromResources',title:'Unsupported workspace',projectId:null,resourceIds:[]}}),/host_policy_denied/);
-  let calls=0;f.core.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources'],dispatch:input=>{calls++;assert.equal(input.action.type,'workspaceFromResources');return {status:'applied',receiptId:'synthetic-released-capability-receipt'};}});
-  const plan=await vela(f.core,'native',{intent:'Forward the exact typed workspace command',action:{type:'workspaceFromResources',title:'Parent released workspace command',projectId:null,resourceIds:[]}});await vela(f.core,'apply',plan.id);assert.equal(calls,1);
+  await assert.rejects(vela(f.core,'native',{intent:'Requires released block capability',action:{type:'workspaceFromResources',title:'Unsupported workspace',projectId:null,resourceIds:[source.id]}}),/host_policy_denied/);
+  let calls=0;f.core.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources'],dispatch:input=>{calls++;assert.equal(input.action.type,'workspaceFromResources');if(input.action.type==='workspaceFromResources')assert.deepEqual(input.action.resourceIds,[source.id]);return {status:'applied',receiptId:'synthetic-released-capability-receipt'};}});
+  const plan=await vela(f.core,'native',{intent:'Forward the exact typed workspace command',action:{type:'workspaceFromResources',title:'Parent released workspace command',projectId:null,resourceIds:[source.id]}});await vela(f.core,'apply',plan.id);assert.equal(calls,1);
   assert.equal((await f.core.command('desktop',{type:'snapshot'})).workspaces.length,0,'the integration does not create fallback blocks or workspaces');
  }finally{await f.close();}
 });
@@ -158,8 +159,9 @@ test('canonical application events feed explicit attention with no external watc
 
 test('failed released capabilities retain uncertain receipt and provider-independent request/proposal provenance',async()=>{
  const p=planner(),f=fixture(p.port);try{
+  const source=await note(f.core,'Synthetic uncertain workspace source');
   f.core.registerVelaNativeCapabilities({supportedActions:['workspaceFromResources'],dispatch:()=>{throw new Error('Synthetic lost host response');}});
-  const plan=await vela(f.core,'native',{intent:'Preserve the user objective on uncertain effects',action:{type:'workspaceFromResources',title:'Uncertain operation',projectId:null,resourceIds:[]}}),applied=await vela(f.core,'apply',plan.id);assert.equal(applied.state,'unknown');
+  const plan=await vela(f.core,'native',{intent:'Preserve the user objective on uncertain effects',action:{type:'workspaceFromResources',title:'Uncertain operation',projectId:null,resourceIds:[source.id]}}),applied=await vela(f.core,'apply',plan.id);assert.equal(applied.state,'unknown');
   assert.equal((await vela(f.core,'state')).receipts.find((r:any)=>r.planId===plan.id).state,'unknown');await assert.rejects(vela(f.core,'apply',plan.id),/review_authorization_required/);
   const approved=await granted(f.core,'Preserve this exact original planning intent',[]),request=await vela(f.core,'request',approved.input),state=await vela(f.core,'state');assert.equal(request.state,'awaiting-review');assert.equal(state.requests.find((r:any)=>r.id===request.id).intent,approved.input.intent);assert.equal(state.plans.find((p:any)=>p.id===request.planId).contribution.providerId,'synthetic-planning-test-double');assert.ok(state.conversation.messages.some((m:any)=>m.source==='provider'&&m.providerId==='synthetic-planning-test-double'));
  }finally{await f.close();}

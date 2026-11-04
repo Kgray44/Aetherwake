@@ -171,6 +171,13 @@ test('explicit document requests pass selected canonical folder IDs to Core with
   assert.equal(result,prepared);assert.equal(calls.length,1);assert.equal(f.reviews.length,0);
 });
 
+test('selected source Add and selected-folder listing forward exact ref versions directly to native Core without provider or picker review',async()=>{
+  for(const intent of ['Add this folder to this workspace','What files are in this folder?']){const f=fixture(),input=request(true),ref={id:'canonical-folder',kind:'resource',resourceKind:'folder',title:'Selected folder',version:7,projectId:null},calls=[];input.input.intent=intent;input.input.resourceIds=[ref.id];input.input.resourceRefs=[ref];
+    await velaCommand({...f,input,directMessageSend:true,routeNative:true,dialog:{showOpenDialog:async()=>assert.fail('Already selected source must not be rediscovered')},call:async(name,value)=>{calls.push({name,value});assert.equal(name,'velaRouteNative');assert.deepEqual(value.resourceRefs,[ref]);return {matched:true,request:{id:'native-observed'}};}});
+    assert.equal(calls.length,1);assert.equal(f.reviews.length,0);
+  }
+});
+
 test('file proposal Yes/No forwards only its typed receipt and an owner lost during selection cannot import',async()=>{
   const f=fixture(),command={name:'accept',input:{id:'proposal',digest:'bound-digest',expectedVersion:1}},calls=[];
   await velaCommand({...f,input:{name:'fileProposal',input:command},call:async(name,input)=>{calls.push({name,input});return {proposal:{state:'applied'}};}});

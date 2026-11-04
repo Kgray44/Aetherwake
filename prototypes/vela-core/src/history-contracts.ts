@@ -13,7 +13,7 @@ export interface HistoryMessageDependency {
 export type HistoryDependency = HistoryResourceDependency | HistoryMessageDependency;
 export interface HistoryProvenance { schemaVersion: 1; dependencies: readonly HistoryDependency[]; digest: string }
 export interface ProviderHistoryMessage {
-  id: string; requestId: string; role: 'user' | 'assistant'; source: 'user' | 'provider';
+  id: string; requestId: string; role: 'user' | 'assistant'; source: 'user' | 'provider' | 'vela-native';
   providerId?: string; classification: 'observed' | 'reported'; content: string; contentDigest: string;
 }
 export interface ProviderHistory { schemaVersion: 1; messages: readonly ProviderHistoryMessage[]; coverage: 'bounded-authorized-whole-messages';

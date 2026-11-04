@@ -13,6 +13,7 @@ export interface HistoryRequestRecord extends Pick<VelaRequest, 'id' | 'conversa
   origin?: HistoryOrigin; inputMessageId?: string; inputContentDigest?: string;
   response?: { kind: ProviderReplyKind; messageId: string; contentDigest?: string };
   provenance?: HistoryProvenance;
+  nativeSourceObservation?:NonNullable<VelaRequest['nativeSourceObservation']>;
   sourcePolicyVersion: string; sourceDependencies: readonly HistoryResourceDependency[];
 }
 export interface HistoryHeader { id: string; requestId?: string; role: VelaMessage['role']; source: VelaMessage['source']; ordinal: number; contentBytes: number }
@@ -29,6 +30,7 @@ export interface HistoryMetadataReader {
   resolve(ref: Pick<ResourceRef, 'id' | 'kind'>): ResourceRef | null;
   canReadContent(ref: ResourceRef): boolean;
   verifyProviderContribution(contribution: ProviderContribution, message: HistoryMessageMetadata, request: HistoryRequestRecord): boolean;
+  verifyNativeSourceObservation?(request:HistoryRequestRecord):boolean;
 }
 export interface HistoryReadLimit { overBudget: true }
 export interface HistoryProofReader {
@@ -39,6 +41,7 @@ export interface HistoryProofReader {
   content(ref: ResourceRef, maxBytes: number): { ref: ResourceRef; source: string; content: string } | HistoryReadLimit | null;
   /** Actual canonical provider/execution evidence only; no provider invocation or model-written attribution. */
   verifyProviderContribution(contribution: ProviderContribution, message: VelaMessage, request: HistoryRequestRecord): boolean;
+  verifyNativeSourceObservation?(request:HistoryRequestRecord):boolean;
 }
 export type HistoryOmissionReason = 'disabled' | 'no-conversation' | 'no-history' | 'unknown-origin' | 'scope-mismatch' | 'unproven-request'
   | 'non-conversational' | 'missing-pair' | 'message-unavailable' | 'message-changed' | 'provider-evidence' | 'upstream-unavailable'
@@ -130,9 +133,11 @@ export function createHistoryProvenance(input: { requestId: string; conversation
 function containsDependency(actual: HistoryDependency, expected: HistoryDependency): boolean {
   return historyDigest(actual) === historyDigest(expected) || actual.kind === 'resource' && expected.kind === 'resource' && !expected.content && historyDigest(actual.ref) === historyDigest(expected.ref);
 }
+const nativeObservation=(request:HistoryRequestRecord)=>request.providerId===null&&request.nativeSourceObservation?.kind==='folder-metadata';
 function proveRequest(request: HistoryRequestRecord | null, id: string, origin: HistoryOrigin, conversationId: string, state: 'responded' | 'planning' = 'responded'): HistoryRequestRecord {
   requireValue(request && request.id === id, 'unproven-request'); requireOrigin(request.origin, origin);
-  requireValue(request.conversationId === conversationId && request.state === state && identifier(request.providerId) && identifier(request.inputMessageId) && hash(request.inputContentDigest) && request.provenance?.schemaVersion === 1 && request.sourcePolicyVersion === request.origin!.policyVersion, 'unproven-request');
+  requireValue(request.conversationId === conversationId && request.state === state && (identifier(request.providerId)||state==='responded'&&nativeObservation(request)) && identifier(request.inputMessageId) && hash(request.inputContentDigest) && request.provenance?.schemaVersion === 1 && request.sourcePolicyVersion === request.origin!.policyVersion, 'unproven-request');
+  if(nativeObservation(request)){const observed=request.nativeSourceObservation!;requireValue(identifier(observed.resourceId)&&integer(observed.version)&&hash(observed.bindingDigest)&&hash(observed.sourceRevision)&&Number.isFinite(Date.parse(observed.observedAt))&&request.sourceDependencies.some(dep=>dep.kind==='resource'&&dep.ref.id===observed.resourceId&&dep.ref.version===observed.version&&dep.ref.resourceKind==='folder'),'unproven-request');}
   if (state === 'responded') requireValue(request.response && identifier(request.response.messageId) && hash(request.response.contentDigest) && ['answer', 'clarification', 'inability'].includes(request.response.kind), 'unproven-request');
   const proof = createHistoryProvenance({ requestId: id, conversationId, origin: request.origin!, inputMessageId: request.inputMessageId, inputContentDigest: request.inputContentDigest, dependencies: request.provenance.dependencies });
   requireValue(proof.digest === request.provenance.digest, 'unproven-request');
@@ -151,6 +156,7 @@ class Verifier {
   request(id: string): HistoryRequestRecord {
     if (this.requests.has(id)) return this.requests.get(id)!;
     const request = proveRequest(this.reader.request(id), id, this.origin, this.conversationId);
+    if(nativeObservation(request))requireValue(this.reader.verifyNativeSourceObservation?.(request)===true,'upstream-unavailable');
     this.requests.set(id, request); return request;
   }
   private contains(actual: HistoryDependency, expected: HistoryDependency): boolean {
@@ -171,7 +177,8 @@ class Verifier {
     requireValue(message.requestId === request.id, 'message-changed');
     if (messageId === request.inputMessageId) requireValue(message.role === 'user' && message.source === 'user' && canonicalUserEvidence(message) && historyDigest(message.content) === request.inputContentDigest, 'message-changed');
     else {
-      requireValue(messageId === request.response?.messageId && message.role === 'assistant' && message.source === 'provider' && message.classification === 'reported' && message.responseKind === request.response.kind && message.content.trim().length > 0 && message.content.length <= 16000 && historyDigest(message.content) === request.response.contentDigest, 'message-changed');
+      requireValue(messageId === request.response?.messageId && message.role === 'assistant' && (nativeObservation(request)?message.source==='vela-native'&&message.classification==='observed'&&!message.providerId&&!message.providerContribution:message.source === 'provider' && message.classification === 'reported') && message.responseKind === request.response.kind && message.content.trim().length > 0 && message.content.length <= 16000 && historyDigest(message.content) === request.response.contentDigest, 'message-changed');
+      if(nativeObservation(request))return value;
       const c = message.providerContribution;
       requireValue(c && c.classification === 'reported' && message.providerId === request.providerId && c.providerId === request.providerId && this.reader.verifyProviderContribution(c, message, request) === true, 'provider-evidence');
     }
@@ -206,7 +213,7 @@ function messageProof(conversationId: string, value: CanonicalHistoryMessage, re
 }
 const historyPayload = (messages: readonly ProviderHistoryMessage[]): ProviderHistory => ({ schemaVersion: 1, messages, coverage: 'bounded-authorized-whole-messages' });
 function providerMessage(message: VelaMessage, requestId: string): ProviderHistoryMessage {
-  return { id: message.id, requestId, role: message.role as 'user' | 'assistant', source: message.source as 'user' | 'provider', ...(message.providerId ? { providerId: message.providerId } : {}), classification: message.classification as 'observed' | 'reported', content: message.content, contentDigest: historyDigest(message.content) };
+  return { id: message.id, requestId, role: message.role as 'user' | 'assistant', source: message.source as ProviderHistoryMessage['source'], ...(message.providerId ? { providerId: message.providerId } : {}), classification: message.classification as 'observed' | 'reported', content: message.content, contentDigest: historyDigest(message.content) };
 }
 function fenceBody(fence: Omit<HistoryFence, 'digest'>) { return { ...fence }; }
 function validateFenceEnvelope(input: { fence: HistoryFence; origin: HistoryOrigin; current: { conversationId: string; revision: number }; acceptedAppend?: AcceptedHistoryAppend }) {
@@ -230,7 +237,7 @@ export function validateFrozenHistoryMetadata(input: {
   validateFenceEnvelope(input);
   const { fence, reader } = input, dependencies = unionHistoryDependencies(fence.dependencies), all = new Map(dependencies.map(dep => [dependencyKey(dep), dep]));
   const requests = new Map<string, HistoryRequestRecord>();
-  const request = (id: string) => { let value = requests.get(id); if (!value) { value = proveRequest(reader.request(id), id, input.origin, fence.conversationId); requests.set(id, value); } return value; };
+  const request = (id: string) => { let value = requests.get(id); if (!value) { value = proveRequest(reader.request(id), id, input.origin, fence.conversationId);if(nativeObservation(value))requireValue(reader.verifyNativeSourceObservation?.(value)===true,'upstream-unavailable'); requests.set(id, value); } return value; };
   // Permission and revision gates for the COMPLETE flattened source set precede inspecting derived message metadata.
   for (const dep of dependencies) if (dep.kind === 'resource') {
     requireValue(!(dep.ref.kind === 'resource' && dep.ref.id === fence.conversationId), 'incomplete-proof');
@@ -244,8 +251,8 @@ export function validateFrozenHistoryMetadata(input: {
     requireValue(m && m.id === dep.messageId && m.conversationId === dep.conversationId && m.ordinal === dep.ordinal && m.requestId === r.id && r.provenance!.digest === dep.provenanceDigest, 'message-unavailable');
     if (m.id === r.inputMessageId) requireValue(m.role === 'user' && m.source === 'user' && canonicalUserEvidence(m) && r.inputContentDigest === dep.contentDigest, 'message-changed');
     else {
-      requireValue(m.id === r.response!.messageId && m.role === 'assistant' && m.source === 'provider' && m.classification === 'reported' && m.responseKind === r.response!.kind && r.response!.contentDigest === dep.contentDigest, 'message-changed');
-      const c = m.providerContribution; requireValue(c && c.classification === 'reported' && m.providerId === r.providerId && c.providerId === r.providerId && reader.verifyProviderContribution(c, m, r) === true, 'provider-evidence');
+      requireValue(m.id === r.response!.messageId && m.role === 'assistant' && (nativeObservation(r)?m.source==='vela-native'&&m.classification==='observed'&&!m.providerId&&!m.providerContribution:m.source === 'provider' && m.classification === 'reported') && m.responseKind === r.response!.kind && r.response!.contentDigest === dep.contentDigest, 'message-changed');
+      if(!nativeObservation(r)){const c = m.providerContribution; requireValue(c && c.classification === 'reported' && m.providerId === r.providerId && c.providerId === r.providerId && reader.verifyProviderContribution(c, m, r) === true, 'provider-evidence');}
     }
     for (const ancestor of r.provenance!.dependencies) requireValue(all.has(dependencyKey(ancestor)) && containsDependency(all.get(dependencyKey(ancestor))!, ancestor), 'incomplete-proof');
   }
@@ -280,7 +287,7 @@ export function selectBoundedHistory(input: {
     const last = headers[index], first = headers[index - 1], ids = first ? [first.id, last.id] : [last.id];
     if (chosen.length + 2 > maxMessages) { omissions.push({ reason: 'message-limit', count: index + 1 }); break; }
     try {
-      requireValue(last.requestId && last.source === 'provider' && last.role === 'assistant', 'non-conversational');
+      requireValue(last.requestId && (last.source === 'provider'||last.source==='vela-native'&&input.reader.request(last.requestId)?.nativeSourceObservation?.kind==='folder-metadata') && last.role === 'assistant', 'non-conversational');
       const request = verifier.request(last.requestId);
       requireValue(first && request.inputMessageId === first.id && request.response!.messageId === last.id && first.requestId === last.requestId && first.role === 'user' && first.source === 'user', 'missing-pair');
       verifier.dependencies(request.provenance!.dependencies);
@@ -365,6 +372,7 @@ export function selectVelaHandoff(input: {
     identifier(tail.conversationId) && integer(tail.revision) && integer(tail.ordinal), 'invalid-history-input');
   const verifier = new Verifier(reader, origin, tail.conversationId);
   const request = verifier.request(requestId);
+  requireValue(identifier(request.providerId),'non-conversational');
   requireValue(request.providerId !== destinationProviderId, 'handoff-same-provider');
   requireValue(request.response?.kind === 'answer', 'non-conversational');
   verifier.dependencies(request.provenance!.dependencies);

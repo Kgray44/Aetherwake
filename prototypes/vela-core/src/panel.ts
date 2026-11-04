@@ -435,7 +435,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       void run(async () => { await starting; if (draftRevision === revision && intent.value === text) { intent.value = ''; draftRevision++; send.disabled = true; } await refresh(); });
       return;
     }
-    const connected = !!current?.planningProviders, submitted = { intent: intent.value, resourceIds: [...selected.keys()], authorizeProvider: connected || allowProvider.checked && chosenProviderId === current?.planner.providerId, ...(connected && chosenProviderId ? { providerId: chosenProviderId } : {}),
+    const connected = !!current?.planningProviders, submitted = { intent: intent.value, resourceIds: [...selected.keys()],...(selected.size?{resourceRefs:[...selected.values()].map(ref=>({...ref}))}:{}), authorizeProvider: connected || allowProvider.checked && chosenProviderId === current?.planner.providerId, ...(connected && chosenProviderId ? { providerId: chosenProviderId } : {}),
     ...(connected && routeMode.value && routeMode.value !== 'auto' ? { mode: routeMode.value as typeof modes[number][0] } : {}),
     ...(connected && routeModel.value ? { model: routeModel.value } : {}),
     ...(connected && routeEffort.value ? { reasoningEffort: routeEffort.value as import('../../openai-provider/model-controls.ts').ReasoningEffort } : {}),
