@@ -72,12 +72,17 @@ async function selectOwnedSource(input){
   assert.equal(stdout.trim(),'EXACT_OWNED_SOURCE_SELECTED');return {foregroundPid:input.pid,ownerChainVerified:true,title:input.kind==='folder'?'Choose a folder':'Choose files',kind:input.kind,selection:'exact-owned-neutral-fixture'};
  }catch{throw Error('exact_owned_source_dialog_failed');}
 }
-async function run({argv,profile,documents,receipt,rpc,js,click,wait,capture,withNativeSourceDialog,ownerHwnd}){
+async function run({argv,profile,documents,receipt,rpc,js,click,fill,wait,capture,withNativeSourceDialog,ownerHwnd}){
  assertFoldersJourney({argv,profile});const fixture=await prepareFixture(documents);
- receipt.profileContent='One fixture workspace; actual native file/folder pickers select only owned neutral Documents fixtures. Metadata browsing, no implicit child import, zero provider calls.';
+ receipt.profileContent='Workspace created through actual native Environment Navigator input; actual native file/folder pickers select only owned neutral Documents fixtures. Metadata browsing, no implicit child import, zero provider calls.';
  receipt.folders={fixtureDirectory:path.basename(fixture.root),fixtureAllocationBoundBytes:fixture.allocationBoundBytes,nativeDialogs:[],externalExplorerOpen:'not invoked'};
  const resources='[data-surface-id="resources"]',q=JSON.stringify;
- const workspace=await rpc('desktop',{type:'createWorkspace',title:'Synthetic folder source acceptance',projectId:null});
+ // Private RPC mutation does not drive the renderer's navigation/panel scope.
+ // Use the ordinary workspace creation UI so Resources captures its real scope.
+ await click('#workspace-manager');await click('.en-navigator [data-action="toggle-create"]');await click('.en-navigator [data-action="create-workspace"]');
+ await fill('.en-navigator input[aria-label="Environment name"]','Synthetic folder source acceptance');await click('.en-navigator [data-action="submit-workspace-create"]');
+ const workspace=await wait('Native-created workspace reaches renderer and canonical navigation',async()=>{const value=await rpc('desktop',{type:'snapshot'});return value.workspaces.length===1&&value.navigation.kind==='workspace'&&
+  await js(`document.querySelector('#workspace-manager')?.textContent.includes('Synthetic folder source acceptance')`)?value:false;});
  await click('#application-resources');await wait('Resources scope controls',()=>js(`document.querySelector(${q(resources+' [aria-label="Source scope"]')})?.getClientRects().length>0`));
  const pick=async kind=>{
   await click(resources+' [data-resources-add="true"] summary');

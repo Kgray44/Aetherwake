@@ -217,7 +217,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     if(argv.includes('--missions-folders-only')){
       const nativeHandle=win.getNativeWindowHandle(),ownerHwnd=(nativeHandle.length===8?nativeHandle.readBigUInt64LE():BigInt(nativeHandle.readUInt32LE())).toString();
       const withNativeSourceDialog=async action=>{assert(!expectedSourceModal,'one_exact_owned_source_dialog');expectedSourceModal={until:performance.now()+5500,blurred:false};try{const result=await bounded(action(),5000,'exact_owned_source_dialog_deadline');for(let frame=0;!win.isFocused()&&frame<6&&performance.now()<expectedSourceModal.until;frame++)await new Promise(resolve=>setTimeout(resolve,16));assert(win.isFocused(),'owned_source_dialog_focus_not_restored');slot.check();return result;}finally{expectedSourceModal=null;}};
-      await require('./mission-folders.cjs').run({argv,profile:root,documents:app.getPath('documents'),receipt,rpc,js,click,wait,capture,withNativeSourceDialog,ownerHwnd});
+      await require('./mission-folders.cjs').run({argv,profile:root,documents:app.getPath('documents'),receipt,rpc,js,click,fill,wait,capture,withNativeSourceDialog,ownerHwnd});
       receipt.passed=true;return;
     }
     if(argv.includes('--missions-weather-product-only')){
