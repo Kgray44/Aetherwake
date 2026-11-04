@@ -21,7 +21,7 @@ import type { VelaRoutingSample } from '../../vela-core/src/routing-calibration.
 import { agentTemplates } from '../../agent-product/service.mts';
 import type { AgentMutationReceipt, AgentProviderCatalog } from '../../agent-product/contracts.ts';
 import { RESPONSES_ENDPOINT } from '../../openai-provider/responses.mts';
-import type { MissionPlanningOffer, MissionPreview, MissionProjection } from '../src/mission-contracts.mts';
+import type { MissionPlanningOffer, MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomPreview } from '../src/mission-contracts.mts';
 import type { MissionTeam } from '../src/mission-teams.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
 const documentedModel = { id: 'gpt-6.1-sol', label: 'Synthetic catalog Sol' };
@@ -243,11 +243,44 @@ test('reviewed saved teams bind roles, reconcile concurrent reports and link the
     while (f.requests.length < 2 && performance.now() < until) await wait(10);
     assert.equal(f.requests.length, 2, 'Both roles must dispatch before either can return');
     for (const member of members) assert.equal(f.requests.filter(request => request.instructions.includes(member.responsibility)).length, 1);
+    const roomReview = await f.core.command('missions', { name: 'workroom-preview', input: { id: mission.id } }) as MissionWorkroomPreview;
+    assert.ok(roomReview.cards.some(card => card.title === 'Mission agent team' && card.kind === 'note'));
+    const room = await f.core.command('missions', { name: 'workroom-apply', input: { id: mission.id, reviewId: roomReview.reviewId } }) as MissionWorkroom;
+    const { team: teamCardId, evidence: evidenceCardId, stream: streamCardId } = room.missionCards ?? {};
+    assert.ok(teamCardId && evidenceCardId && streamCardId);
+    await navigate(room.workspaceId);
+    const dashboard = async (resourceId: string) => {
+      const card = await f.core.command('missions', { name: 'workroom-resource', input: { resourceId } });
+      assert.ok(card && 'kind' in card && card.kind === 'workroom-resource' && card.dashboard);
+      return card.dashboard;
+    };
+    const activeTeam = await dashboard(teamCardId);
+    assert.deepEqual(activeTeam, { kind: 'team', title: saved.title, members: [
+      { taskId: 'member-1', role: 'Measurement specialist', responsibility: members[0].responsibility,
+        state: 'running', provider: providerId, model: documentedModel.id, attempts: 1 },
+      { taskId: 'member-2', role: 'Evidence reviewer', responsibility: members[1].responsibility,
+        state: 'running', provider: providerId, model: documentedModel.id, attempts: 1 },
+    ] });
+    const liveBefore = f.events.length;
     release();
     const read = () => f.core.command('missions', { name: 'read', input: { id: mission.id } }) as Promise<MissionProjection>;
+    const settlesUntil = performance.now() + 5000;
     let completed = await read();
-    while (['queued', 'running'].includes(completed.outcome) && performance.now() < until) { await wait(10); completed = await read(); }
+    while (['queued', 'running'].includes(completed.outcome) && performance.now() < settlesUntil) { await wait(10); completed = await read(); }
     assert.equal(completed.outcome, 'verified', JSON.stringify(completed.tasks.map(t => [t.id, t.state, t.detail])));
+    const completedTeam = await dashboard(teamCardId);
+    assert.ok(completedTeam.kind === 'team' && completedTeam.members.every(member => member.state === 'verified'));
+    const delivered = f.events.slice(liveBefore).filter(event => event.mission?.id === mission.id);
+    assert.equal(delivered.filter(event => event.mission?.kind === 'settled').length, 3);
+    const workroomStream = await dashboard(streamCardId);
+    assert.ok(workroomStream.kind === 'stream' && delivered.every(event => workroomStream.events.some(row => row.eventId === event.eventId)));
+    const replayInWorkroom = await f.core.command('replay', { after: 0, limit: 1000 });
+    assert.ok(replayInWorkroom.events.every(event => event.mission?.id !== mission.id));
+    const evidence = await dashboard(evidenceCardId);
+    assert.ok(evidence.kind === 'evidence');
+    const findings = evidence.rows.find(row => row.taskId === 'member-1');
+    assert.equal(findings?.source, 'chatgpt-plan-responses:reported');
+    assert.deepEqual(findings?.findings, ['Repeat the warmup.', 'Use a fixed workload.']);
     const report = completed.tasks.find(task => task.executor === 'join.team')?.attempts[0].evidence;
     assert.deepEqual((report?.value as Record<string, unknown>).reports, completed.tasks.slice(0, 2).map(task => ({
       taskId: task.id, evidenceId: task.attempts[0].evidence?.id, attemptId: task.attempts[0].id,
@@ -258,6 +291,7 @@ test('reviewed saved teams bind roles, reconcile concurrent reports and link the
     assert.deepEqual((report?.value as Record<string, unknown>).conflictingAssessments, [[
       { taskId: 'member-1', index: 0, position: 'supports' }, { taskId: 'member-2', index: 0, position: 'challenges' },
     ]]);
+    await navigate(workspaceId);
     const conversation = async () => (await f.core.command('vela', { name: 'state', input: {} }) as VelaState).conversation;
     const matchingLinks = async () => (await conversation())?.messages.filter(item => item.missionReport?.missionId === mission.id);
     assert.equal((await conversation())?.resourceId, mission.originConversationId);
@@ -313,6 +347,15 @@ test('a research mission authorizes web search only for the source specialist an
     assert.deepEqual((researcher.attempts[0].evidence!.value as { citations: string[] }).citations, ['https://example.org/measurement']);
     assert.equal(f.requests.filter(req => req.tool_choice === 'required').length, 1);
     assert.equal(mission.profile.reportedTotalTokens, null);
+    const review = await f.core.command('missions', { name: 'workroom-preview', input: { id: mission.id } }) as MissionWorkroomPreview;
+    const room = await f.core.command('missions', { name: 'workroom-apply', input: { id: mission.id, reviewId: review.reviewId } }) as MissionWorkroom;
+    const resourceId = room.missionCards?.evidence;
+    assert.ok(resourceId);
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });
+    const card = await f.core.command('missions', { name: 'workroom-resource', input: { resourceId } });
+    assert.ok(card && 'kind' in card && card.kind === 'workroom-resource' && card.dashboard?.kind === 'evidence');
+    assert.deepEqual(card.dashboard.rows.find(row => row.taskId === researcher.id)?.citations, ['https://example.org/measurement']);
+    assert.equal(f.requests.length, 2, 'Opening the workroom must use the recorded citations');
   } finally { await f.close(); }
 });
 

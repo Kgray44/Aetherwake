@@ -9,7 +9,8 @@ import { buildMissionRevision } from './mission-revision.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
   type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionProjection,
   type MissionAttempt, type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
-  type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomResource } from './mission-contracts.mts';
+  type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomCard, type MissionWorkroomDashboard,
+  type MissionWorkroomResource } from './mission-contracts.mts';
 
 export interface MissionServiceHost {
   db: DatabaseSync;
@@ -233,21 +234,67 @@ export class MissionService {
     });
   }
 
-  workroomResource(resourceId: string, scope: MissionScope): MissionWorkroomResource | null {
-    if (!this.host.authorized(scope)) return null;
+  private boundWorkroom(scope: MissionScope) {
+    if (!this.host.authorized(scope)) return;
     const row = this.host.db.prepare(`SELECT json FROM vela_missions
       WHERE json_extract(json,'$.workroom.workspaceId')=?
         AND json_extract(json,'$.scope.projectId') IS ? LIMIT 1`).get(scope.workspaceId, scope.projectId);
-    if (!row) return null;
+    if (!row) return;
     const mission = this.decode(row.json);
-    const workroom = mission.workroom!;
-    const checklist = workroom.missionChecklistResourceId === resourceId;
-    if (!this.host.authorized(mission.scope) || (!checklist && workroom.missionTimelineResourceId !== resourceId)) return null;
-    const { id, outcome, revision, tasks, events } = this.project(mission);
+    if (mission.workroom && this.host.authorized(mission.scope)) return { mission, workroom: mission.workroom };
+  }
+
+  workroomCardIds(scope: MissionScope): string[] {
+    return Object.values(this.boundWorkroom(scope)?.workroom.missionCards ?? {});
+  }
+
+  workroomResource(resourceId: string, scope: MissionScope): MissionWorkroomResource | null {
+    const linked = this.boundWorkroom(scope);
+    if (!linked) return null;
+    const { mission, workroom } = linked;
+    const card = workroom.missionChecklistResourceId === resourceId ? 'checklist' :
+      workroom.missionTimelineResourceId === resourceId ? 'timeline' :
+        (Object.keys(workroom.missionCards ?? {}) as MissionWorkroomCard[]).find(kind => workroom.missionCards?.[kind] === resourceId);
+    if (!card) return null;
+    const projection = this.project(mission);
+    const { id, outcome, revision, tasks, events } = projection;
     const binding = { kind: 'workroom-resource' as const, missionId: id, outcome, revision };
-    return checklist
-      ? { ...binding, checklist: tasks.map(task => ({ taskId: task.id, title: task.objective, state: task.state })) }
-      : { ...binding, timeline: events };
+    if (card === 'checklist') return { ...binding, checklist: tasks.map(task => ({ taskId: task.id, title: task.objective, state: task.state })) };
+    if (card === 'timeline') return { ...binding, timeline: events };
+    return { ...binding, dashboard: this.workroomDashboard(projection, card) };
+  }
+
+  private workroomDashboard(mission: MissionProjection, kind: MissionWorkroomCard): MissionWorkroomDashboard {
+    switch (kind) {
+      case 'graph': return { kind, objective: mission.objective, planRevision: mission.planRevision,
+        tasks: mission.tasks.map(task => ({ id: task.id, title: task.objective, state: task.state,
+          dependencies: task.dependencies, executor: task.executor,
+          ...(task.specialist ? { role: task.specialist.role } : {}),
+          ...(own(mission.waits, task.id) ? { wait: mission.waits[task.id] } : {}) })) };
+      case 'team': return { kind, ...(mission.team ? { title: mission.team.title } : {}),
+        members: mission.tasks.flatMap(task => task.specialist ? [{
+          taskId: task.id, role: task.specialist.role, responsibility: task.teamMember?.responsibility ?? task.objective,
+          state: task.state, provider: task.specialist.provider, model: task.specialist.model, attempts: task.attempts.length,
+        }] : []) };
+      case 'evidence': return { kind, criteria: mission.criteria, rows: mission.tasks.map(task => {
+        const attempt = task.attempts.at(-1), evidence = attempt?.evidence, verification = attempt?.verification;
+        const report = task.executor === 'chatgpt.specialist' && evidence?.source === 'chatgpt-plan-responses:reported' &&
+          verification?.passed && verification.evidenceIds.includes(evidence.id) && evidence.attemptId === attempt?.id
+          ? evidence.value as { observations?: unknown; citations?: unknown } : undefined;
+        const findings = Array.isArray(report?.observations)
+          ? report.observations.filter((item): item is string => bounded(item, 240)).slice(0, 3) : missionMeasurementAnswer([task]);
+        const citations = Array.isArray(report?.citations) ? report.citations.flatMap(item => {
+          const url = bounded(item, 256) ? URL.parse(item) : null;
+          return url?.protocol === 'https:' && !url.username && !url.password ? [url.href] : [];
+        }).slice(0, 3) : [];
+        return { taskId: task.id, title: task.objective, state: task.state, criterion: task.criterion,
+          ...(evidence ? { evidenceId: evidence.id, source: evidence.source, observedAt: evidence.observedAt } : {}),
+          ...(verification ? { verification: verification.detail, passed: verification.passed } : {}),
+          ...(findings.length ? { findings } : {}), ...(citations.length ? { citations } : {}) };
+      }) };
+      case 'performance': return { kind, profile: mission.profile };
+      case 'stream': return { kind, events: [] };
+    }
   }
 
   control(id: string, scope: MissionScope, revision: number, control: MissionControl): MissionProjection {
@@ -491,7 +538,8 @@ export class MissionService {
       if (event.kind === 'started') peakWorkers = Math.max(peakWorkers, ++admitted);
       if (event.attemptId && (event.kind === 'settled' || event.kind === 'recovered')) admitted--;
     }
-    const ended = ['queued', 'running', 'cancelling'].includes(outcome) ? Date.now() : Date.parse(m.events.at(-1)!.time);
+    const ended = ['queued', 'running', 'cancelling'].includes(outcome) ? Date.now() :
+      Date.parse(m.events.findLast(event => event.kind !== 'workroom')!.time);
     const answer = missionMeasurementAnswer(m.tasks);
     return { ...m, outcome, ...(answer.length ? { answer } : {}), waits, profile: {
       elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0), peakWorkers, attempts: attempts.length,

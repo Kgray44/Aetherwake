@@ -10,7 +10,9 @@ import type { ChecklistDocument, ChecklistMutationResult } from '../../applicati
 import type { TimelineDocument } from '../../timeline-product/contracts.ts';
 import type { NoteDocument } from '../../block-library/note-contracts.ts';
 import type { VelaState } from '../../vela-core/src/contracts.ts';
-import type { MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomPreview, MissionWorkroomResource } from '../src/mission-contracts.mts';
+import type { MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomDashboard, MissionWorkroomPreview, MissionWorkroomResource } from '../src/mission-contracts.mts';
+
+type EvidenceRow = Extract<MissionWorkroomDashboard, { kind: 'evidence' }>['rows'][number];
 
 async function linkedCard(backend: Backend, resourceId: string): Promise<MissionWorkroomResource | null> {
   const result = await backend.call('missions', { name: 'workroom-resource', input: { resourceId } });
@@ -22,14 +24,14 @@ test('native mission scopes Notes to its originating project and rechecks eviden
   const directory = mkdtempSync(join(tmpdir(), 'aerynth-mission-context-test-'));
   const backend = new Backend({ path: join(directory, 'state.sqlite'), contentPolicy: 'synthetic-only' });
   try {
-    async function room(title: string) {
+    async function createRoom(title: string) {
       const created = await backend.call('desktop', { type: 'createProject', title });
       const projectId = created.projects.find(project => project.title === title)!.id;
       const desktop = await backend.call('desktop', { type: 'createWorkspace', title: title + ' workspace', projectId });
       return desktop.workspaces.find(workspace => workspace.project_id === projectId)!.id;
     }
-    const workspaceId = await room('Synthetic mission source project');
-    const other = await room('Other synthetic source project');
+    const workspaceId = await createRoom('Synthetic mission source project');
+    const other = await createRoom('Other synthetic source project');
     const navigate = (id: string) => backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: id } });
     async function createNote(id: string) {
       await navigate(id);
@@ -61,6 +63,20 @@ test('native mission scopes Notes to its originating project and rechecks eviden
     assert.equal(mission.outcome, 'verified', JSON.stringify(mission.tasks.map(task => [task.id, task.state, task.detail])));
     assert.deepEqual(mission.tasks.find(task => task.id === 'notes')?.attempts[0].context?.sources.map(source => source.ref.id), [note]);
     assert.equal(JSON.stringify(mission).includes('timing baseline'), false, 'The journal should contain references rather than note bodies');
+    const review = await backend.call('missions', { name: 'workroom-preview', input: { id } }) as MissionWorkroomPreview;
+    assert.ok(review.cards.some(card => card.title === 'Backend performance notes' && card.mode === 'reference'));
+    const room = await backend.call('missions', { name: 'workroom-apply', input: { id, reviewId: review.reviewId } }) as MissionWorkroom;
+    const evidenceId = room.missionCards?.evidence;
+    assert.ok(evidenceId);
+    const opened = await navigate(room.workspaceId);
+    assert.ok(opened.blocks.some(block => block.workspace_id === room.workspaceId && block.resource_id === note));
+    assert.ok(!opened.blocks.some(block => block.workspace_id === room.workspaceId && block.resource_id === unrelated));
+    const originalEvidence = (await linkedCard(backend, evidenceId))?.dashboard;
+    assert.ok(originalEvidence?.kind === 'evidence');
+    assert.equal(originalEvidence.rows.find(row => row.taskId === 'notes')?.evidenceId,
+      mission.tasks.find(task => task.id === 'notes')?.attempts[0].evidence?.id);
+    assert.equal(JSON.stringify(originalEvidence).includes('timing baseline'), false);
+    await navigate(workspaceId);
     await edit(note, 'Edited synthetic backend performance timing and sampling notes.');
     const stale = await read();
     assert.equal(stale.outcome, 'blocked');
@@ -69,6 +85,20 @@ test('native mission scopes Notes to its originating project and rechecks eviden
       assert.equal(task.state, 'blocked');
       assert.equal(task.attempts[0].evidence, undefined);
     }
+    const linkedWorkspace = await navigate(room.workspaceId);
+    const staleEvidence = (await linkedCard(backend, evidenceId))?.dashboard;
+    assert.ok(staleEvidence?.kind === 'evidence');
+    for (const taskId of ['notes', 'report']) {
+      const row: EvidenceRow | undefined = staleEvidence.rows.find(item => item.taskId === taskId);
+      assert.equal(row?.state, 'blocked');
+      assert.equal(row?.evidenceId, undefined);
+      assert.equal(row?.passed, undefined);
+    }
+    const originVersion = linkedWorkspace.workspaces.find(workspace => workspace.id === workspaceId)!.version;
+    const archived = await backend.call('desktop', { type: 'archiveWorkspace', workspaceId, expectedVersion: originVersion, archived: true });
+    assert.equal(archived.activeWorkspaceId, room.workspaceId);
+    assert.deepEqual(archived.missionWorkroomCardIds ?? [], []);
+    assert.equal(await linkedCard(backend, evidenceId), null);
   } finally {
     await backend.close();
     const target = resolve(directory);
@@ -121,6 +151,9 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.deepEqual(await read(), mission);
     const prior = await backend.call('desktop', { type: 'snapshot' });
     const draft = await backend.call('missions', { name: 'workroom-preview', input: { id } }) as MissionWorkroomPreview;
+    assert.deepEqual(draft.cards[0], { title: 'Mission graph', kind: 'note', mode: 'new' });
+    assert.equal(draft.cards[1].kind, 'conversation');
+    assert.equal(draft.cards[1].mode, 'new');
     assert.deepEqual(draft.cards.filter(card => card.kind === 'checklist' || card.kind === 'timeline'), [
       { title: 'Mission checklist', kind: 'checklist', mode: 'new' },
       { title: 'Mission timeline', kind: 'timeline', mode: 'new' },
@@ -134,19 +167,41 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.equal(projected.scope.workspaceId, workspaceId);
     assert.deepEqual(projected.workroom, room);
     assert.deepEqual(projected.tasks, mission.tasks);
+    assert.deepEqual(projected.profile, mission.profile, 'Creating a workspace must not add to completed mission elapsed time');
     assert.deepEqual(await backend.call('missions', { name: 'workroom-apply', input: { id, reviewId: draft.reviewId } }), room);
     const built = await backend.call('desktop', { type: 'snapshot' });
     assert.equal(built.workspaces.length, prior.workspaces.length + 1);
     const { missionChecklistResourceId: checklistId, missionTimelineResourceId: timelineId } = room;
+    const cardIds = room.missionCards;
+    assert.ok(cardIds?.graph && cardIds.evidence && cardIds.performance && cardIds.stream && !cardIds.team);
+    assert.deepEqual(new Set(built.missionWorkroomCardIds), new Set(Object.values(cardIds)));
     assert.ok(checklistId && timelineId && checklistId !== timelineId);
-    assert.ok([checklistId, timelineId].every(resourceId => built.blocks.some(block =>
+    assert.ok([checklistId, timelineId, ...Object.values(cardIds)].every(resourceId => built.blocks.some(block =>
       block.workspace_id === room.workspaceId && block.resource_id === resourceId)));
+    const chat = built.resources.find(resource => resource.kind === 'conversation' && resource.title === draft.cards[1].title &&
+      built.blocks.some(block => block.workspace_id === room.workspaceId && block.resource_id === resource.id));
+    assert.equal(chat?.providerId, 'local');
     const checklistLink = await linkedCard(backend, checklistId);
     const timelineLink = await linkedCard(backend, timelineId);
     assert.deepEqual(checklistLink, { kind: 'workroom-resource', missionId: id, revision: projected.revision, outcome: 'verified',
       checklist: projected.tasks.map(task => ({ taskId: task.id, title: task.objective, state: task.state })) });
     assert.deepEqual(timelineLink, { kind: 'workroom-resource', missionId: id, revision: projected.revision,
       outcome: 'verified', timeline: projected.events });
+    const graphLink = await linkedCard(backend, cardIds.graph);
+    assert.deepEqual(graphLink?.dashboard, { kind: 'graph', objective, planRevision: projected.planRevision,
+      tasks: projected.tasks.map(task => ({ id: task.id, title: task.objective, state: task.state,
+        dependencies: task.dependencies, executor: task.executor })) });
+    assert.deepEqual((await linkedCard(backend, cardIds.performance))?.dashboard, { kind: 'performance', profile: projected.profile });
+    const evidenceLink = await linkedCard(backend, cardIds.evidence);
+    assert.ok(evidenceLink?.dashboard?.kind === 'evidence');
+    assert.deepEqual(evidenceLink.dashboard.criteria, projected.criteria);
+    for (const task of projected.tasks) {
+      const attempt = task.attempts.at(-1)!;
+      const row: EvidenceRow | undefined = evidenceLink.dashboard.rows.find(item => item.taskId === task.id);
+      assert.equal(row?.evidenceId, attempt.evidence?.id);
+      assert.equal(row?.source, attempt.evidence?.source);
+      assert.equal(row?.passed, attempt.verification?.passed);
+    }
     const readChecklist = async () => (await backend.call('checklists', { name: 'read', input: { resourceId: checklistId } })).result as ChecklistDocument;
     const readTimeline = async () => (await backend.call('timelines', { name: 'read', input: { resourceId: timelineId } })).result as TimelineDocument;
     const checklist = await readChecklist();
@@ -161,12 +216,18 @@ test('canonical backend runs a native mission without inference, restores eviden
     await backend.call('timelines', { name: 'save', input: { commandId: randomUUID(), resourceId: timelineId,
       expectedVersion: timeline.resource.version, view } });
     const updatedTimeline = await readTimeline();
+    const graph = built.resources.find(resource => resource.id === cardIds.graph)!;
     const origin = await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
     await backend.call('library', { name: 'attachBlock', input: { commandId: randomUUID(), workspaceId,
       expectedLayoutVersion: origin.layoutVersion, kind: 'timeline', resourceId: timelineId,
       expectedResourceVersion: updatedTimeline.resource.version } });
+    const originWithTimeline = await backend.call('desktop', { type: 'snapshot' });
+    await backend.call('library', { name: 'attachBlock', input: { commandId: randomUUID(), workspaceId,
+      expectedLayoutVersion: originWithTimeline.layoutVersion, kind: 'note', resourceId: graph.id,
+      expectedResourceVersion: graph.version } });
     assert.equal(await linkedCard(backend, checklistId), null);
     assert.equal(await linkedCard(backend, timelineId), null);
+    assert.equal(await linkedCard(backend, graph.id), null);
     assert.deepEqual((await readTimeline()).view, view);
     await backend.close();
     backend = new Backend(options);
@@ -176,6 +237,8 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.deepEqual((await readTimeline()).view, view);
     assert.deepEqual(await linkedCard(backend, checklistId), checklistLink);
     assert.deepEqual(await linkedCard(backend, timelineId), timelineLink);
+    assert.deepEqual(await linkedCard(backend, cardIds.graph), graphLink);
+    assert.deepEqual(await linkedCard(backend, cardIds.evidence), evidenceLink);
     const measurement = 'Measure CPU and RAM';
     const measure = async (objective = measurement) => {
       const preview = await backend.call('missions', { name: 'preview', input: { objective } }) as MissionPreview;

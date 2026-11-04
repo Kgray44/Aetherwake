@@ -78,6 +78,27 @@
 .aw-mission-workroom li[data-task-state="verified"] {
   border-inline-start: 2px solid #a9d8c6;
 }
+.aw-mission-workroom li > details > :is(small, time) {
+  display: block;
+  margin-block-start: 4px;
+  color: #beb8cd;
+  font-size: 0.78rem;
+}
+.aw-mission-workroom li > details > summary {
+  cursor: pointer;
+  color: #ded0f2;
+}
+.aw-mission-workroom li[data-mission-metric] {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 3px 12px;
+  font-size: 0.82rem;
+}
+.aw-mission-workroom li[data-mission-metric] > strong {
+  font-variant-numeric: tabular-nums;
+}
 .aw-mission-workroom-controls > summary {
   cursor: pointer;
   color: #ded0f2;

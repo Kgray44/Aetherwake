@@ -278,7 +278,10 @@ export function installApplication(hooks: Hooks) {
   let velaPanel: ReturnType<typeof mountVelaPanel> | null = null;
   const velaMissions = createVelaMissionView(document, async (request) =>
     (await host.command!("missions", request)) as MissionResponse,
-    async workspaceId => { await run({ type: "navigate", target: { kind: "workspace", workspaceId } }); },
+    async workspaceId => {
+      await run({ type: "navigate", target: { kind: "workspace", workspaceId } });
+      if (state?.activeWorkspaceId === workspaceId) surfaces.close("vela");
+    },
   );
   document.addEventListener("visibilitychange", velaMissions.observe);
   let velaOpen = false;
@@ -464,7 +467,9 @@ export function installApplication(hooks: Hooks) {
     resourceId?: string;
   } | null = null;
   let missionWorkroomScope: string | null = null;
+  let missionWorkroomCardIds = new Set<string>();
   const missionWorkroomViews = new Set<MissionWorkroomView>();
+  const missionDashboardViews = new Map<string, MissionWorkroomView>();
   const checklistViews = new Map<
     string,
     {
@@ -499,8 +504,8 @@ export function installApplication(hooks: Hooks) {
   function mountWorkroomCard(
     root: HTMLElement,
     resourceId: string,
-    kind: "checklist" | "timeline",
-    mountDefault: (container: HTMLElement) => ReturnType<typeof mountTimelineExperience>,
+    kind: "checklist" | "timeline" | "dashboard" | "stream",
+    mountDefault?: (container: HTMLElement) => ReturnType<typeof mountTimelineExperience>,
   ): MissionWorkroomView {
     const view = mountMissionWorkroomView(root, kind, missionWorkroomScope, async () => {
       try {
@@ -1121,13 +1126,15 @@ export function installApplication(hooks: Hooks) {
     )
       cancelPreview();
     state = next;
+    missionWorkroomCardIds = new Set(next.missionWorkroomCardIds);
     const missionWorkspace = next.navigation.kind === "workspace"
       ? next.workspaces.find((item) => item.id === next.activeWorkspaceId) : undefined;
     velaMissions.setScope(missionWorkspace ? { workspaceId: missionWorkspace.id, projectId: missionWorkspace.project_id } : null);
     const workroomScope = missionWorkspace ? JSON.stringify([missionWorkspace.id, missionWorkspace.project_id]) : null;
     const streamResources = new Set(
       next.resources.filter((resource) =>
-        resource.kind === "stream" && resource.available !== false && resource.visible !== false,
+        resource.kind === "stream" && !missionWorkroomCardIds.has(resource.id) &&
+        resource.available !== false && resource.visible !== false,
       ).map((resource) => resource.id),
     );
     streamBlockIds = next.blocks
@@ -1203,6 +1210,12 @@ export function installApplication(hooks: Hooks) {
         view.dispose();
         noteViews.delete(id);
       }
+    for (const [id, view] of missionDashboardViews) {
+      const resourceId = next.blocks.find((block) => block.id === id)?.resource_id;
+      if (resourceId && missionWorkroomCardIds.has(resourceId)) continue;
+      view.dispose();
+      missionDashboardViews.delete(id);
+    }
     for (const [id, entry] of checklistViews)
       if (!next.blocks.some((block) => block.id === id)) {
         entry.view.dispose();
@@ -3556,6 +3569,7 @@ export function installApplication(hooks: Hooks) {
       !article ||
       !resource ||
       resource.available === false ||
+      missionWorkroomCardIds.has(resource.id) ||
       !["note", "research", "reference", "task", "task_group"].includes(
         resource.kind,
       )
@@ -3907,8 +3921,11 @@ export function installApplication(hooks: Hooks) {
           resource.content)
         : "";
     const projection = subjectProjections.get(id);
+    const missionLabel = resource && missionWorkroomCardIds.has(resource.id)
+      ? resource.kind === "stream" ? "Intelligence Stream" : "Mission" : null;
     const key = JSON.stringify([
       knownKind,
+      missionLabel,
       resource?.id,
       resource?.version,
       resource?.title,
@@ -3927,7 +3944,7 @@ export function installApplication(hooks: Hooks) {
     ]);
     const cached = identityModels.get(id);
     const timeline = timelineProjections.get(id);
-    const model =
+    let model =
       cached &&
       cached.key === key &&
       cached.content === content &&
@@ -3946,6 +3963,7 @@ export function installApplication(hooks: Hooks) {
             taskObjective: taskProjections.get(id),
             timeline,
           });
+    if (missionLabel && model.label !== missionLabel) model = { ...model, label: missionLabel };
     identityModels.set(id, {
       key,
       content,
@@ -4181,7 +4199,14 @@ export function installApplication(hooks: Hooks) {
         : r.kind === "task_objective"
           ? "TASK TRACKER"
           : r.kind.toUpperCase();
-    if (r.kind === "conversation") {
+    if (missionWorkroomCardIds.has(r.id)) {
+      if (activeBlocks.get(id) && !missionDashboardViews.has(id)) {
+        const content = el(".working-content", article);
+        const view = mountWorkroomCard(content, r.id, r.kind === "stream" ? "stream" : "dashboard");
+        view.setPresentation(blockPresentation(id));
+        missionDashboardViews.set(id, view);
+      }
+    } else if (r.kind === "conversation") {
       const surface = el(".working-content", article);
       let view = chatViews.get(b.id);
       if (!view && activeBlocks.get(b.id)) {
@@ -4467,6 +4492,7 @@ export function installApplication(hooks: Hooks) {
         );
       }
     } else {
+      if (activeBlocks.get(id)) ensureNoteView(id);
       el(".synthetic", article).textContent =
         r.kind === "task"
           ? "LOCAL TASK · AUTOMATED EXECUTION UNAVAILABLE"
@@ -4988,7 +5014,7 @@ export function installApplication(hooks: Hooks) {
         state?.resources.find(
           (resource) => resource.id === block.resource_id,
         ) &&
-        [
+        (missionWorkroomCardIds.has(block.resource_id) || [
           "conversation",
           "task_group",
           "stream",
@@ -4998,7 +5024,7 @@ export function installApplication(hooks: Hooks) {
           "task_objective",
           "file",
           "link",
-        ].includes(resource?.kind ?? "")
+        ].includes(resource?.kind ?? ""))
       ) {
         const article = document.querySelector<HTMLElement>(
           `[data-block="${id}"]`,
@@ -5009,6 +5035,7 @@ export function installApplication(hooks: Hooks) {
     const presentation = blockPresentation(id);
     chatViews.get(id)?.setPresentation(presentation);
     noteViews.get(id)?.setPresentation(presentation);
+    missionDashboardViews.get(id)?.setPresentation(presentation);
     subjectViews.get(id)?.setPresentation(presentation);
     eventViews.get(id)?.setPresentation(presentation);
     groupViews.get(id)?.setPresentation(presentation);
@@ -5018,6 +5045,7 @@ export function installApplication(hooks: Hooks) {
     taskTrackerViews.get(id)?.view.setPresentation(presentation);
     chatViews.get(id)?.setActive(active);
     noteViews.get(id)?.setActive(active);
+    missionDashboardViews.get(id)?.setActive(active);
     const media = mediaViews.get(id);
     media?.setActive(active);
     if (media && previous && !active) {

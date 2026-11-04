@@ -154,10 +154,24 @@ the template planner does not create a second workspace store.
 From an active or settled mission, the user can review a workroom's proposed
 cards and create the workspace and its reusable template. Timeline creation,
 template apply and the mission-to-workroom link share one transaction. The
-linked Checklist and Timeline read task states and event rows from the
-journal. They are authorized through the exact workroom and its originating
-mission. Manual checklist entries and ordinary timeline settings retain their
-own canonical storage and controls.
+graph, checklist, timeline, verification and performance cards project the
+mission journal. A mission with specialists also receives a team card with
+the assigned roles and recorded task states. The Intelligence Stream card
+reads up to 128 recent retained events by mission identity from the existing
+Intelligence Stream store. Its cursor and event IDs are the same as those in
+the originating workspace's stream. An authorized linked workroom receives
+the redacted lifecycle notification so its cards refresh while the mission
+runs. General stream replay uses its own workspace scope. The workroom also
+has a canonical local conversation and supporting resources selected by the
+architect. The initial camera leaves the graph and conversation below the
+workspace toolbar.
+
+The backend verifies access to both workspaces and to the exact card
+placement before returning a projection. Card bindings are optional in older
+workrooms. Manual checklist entries and ordinary timeline settings retain
+their own canonical storage and controls. Specialist evidence identifies
+provider-reported findings and separates evidence checks from the claims in
+those findings. Usage stays unavailable when the provider supplied no report.
 
 The New Workspace dialog opens this same architect through Ask Vela. It
 retains the selected project and allows editing the purpose before requesting

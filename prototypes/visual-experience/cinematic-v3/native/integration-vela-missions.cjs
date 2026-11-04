@@ -154,7 +154,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const wait = (label, check) => {
       receipt.phase = label;
       return waitForCondition({ slot, label, check, diagnose: () => js(
-        "({app:document.querySelector('#status')?.textContent?.slice(0,240),vela:document.querySelector('.vela-core-status')?.textContent?.slice(0,240),mission:document.querySelector('.vela-missions [role=alert]:not([hidden])')?.textContent?.slice(0,240),architect:document.querySelector('[data-surface-id=workspace-templates]')?.textContent?.slice(-600),stream:document.querySelector('[data-surface-id=intelligence-stream]')?.textContent?.slice(0,360)})",
+        "({viewport:[innerWidth,innerHeight],app:document.querySelector('#status')?.textContent?.slice(0,240),vela:document.querySelector('.vela-core-status')?.textContent?.slice(0,240),mission:document.querySelector('.vela-missions [role=alert]:not([hidden])')?.textContent?.slice(0,240),architect:document.querySelector('[data-surface-id=workspace-templates]')?.textContent?.slice(-600),stream:document.querySelector('[data-surface-id=intelligence-stream]')?.textContent?.slice(0,360)})",
       ) });
     };
     const click = async selector => {
@@ -321,10 +321,16 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     ));
     receipt.reportLink = { missionId: rendered.id, messageId: reportMessage.id };
     await click(RECORD + ' [data-mission-focus="preview-workroom"]');
-    await wait("Workroom preview in Vela", () => js(
-      `document.querySelector(${quote(RECORD + ' [data-mission-focus="apply-workroom"]')})?.textContent === 'Create linked workroom'`,
-    ));
+    const reviewedCards = await wait("Workroom preview in Vela", () => js(`(() => {
+      const apply = document.querySelector(${quote(RECORD + ' [data-mission-focus="apply-workroom"]')});
+      return apply?.getClientRects().length && [...apply.closest('.vela-core-plan').querySelectorAll('ul > li')].map(row => row.textContent);
+    })()`));
+    for (const label of ["Mission graph", "Mission checklist", "Mission timeline", "Verification evidence", "Mission performance", "Mission Intelligence Stream"]) {
+      assert(reviewedCards.some(row => row.startsWith(label + " · ")), `missing_workroom_review_${label}`);
+    }
     assert.equal((await desktop()).workspaces.length, 1, "workroom_preview_changed_canonical_state");
+    const originEvents = (await rpc("replay", { after: 0, limit: 1000 })).events.filter(event => event.mission?.id === rendered.id);
+    assert(originEvents.some(event => event.type === "vela.mission/report-posted"), "origin_report_stream_event_missing");
     await click(RECORD + ' [data-mission-focus="apply-workroom"]');
     const workroom = await wait("Canonical mission workroom is active", async () => {
       const state = await desktop(), room = state.workspaces.find(item => item.title === "Backend performance workroom");
@@ -332,37 +338,136 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       const projection = await read(rendered.id);
       return projection.workroom?.workspaceId === room.id && {
         id: room.id, sourceMissionId: projection.id, outcome: projection.outcome,
-        blocks: state.blocks.filter(block => block.workspace_id === room.id).map(block => block.resource_id).filter(Boolean),
+        placements: state.blocks.filter(block => block.workspace_id === room.id && block.resource_id).map(block => ({
+          blockId: block.id, resourceId: block.resource_id, x: block.x, y: block.y, width: block.width, height: block.height,
+          kind: state.resources.find(resource => resource.id === block.resource_id)?.kind,
+        })),
+        viewport: state.viewport,
         checklistId: projection.workroom.missionChecklistResourceId,
         timelineId: projection.workroom.missionTimelineResourceId,
+        missionCards: projection.workroom.missionCards,
       };
     });
     assert.equal(workroom.outcome, "verified");
-    assert(workroom.blocks.length >= 2, "expected_functional_workroom_blocks");
     assert.equal((await list())[0].id, rendered.id);
     const roomVela = await rpc("vela", { name: "state", input: {} });
     assert(!roomVela.conversation.messages.some(message => message.id === reportMessage.id), "mission_report_link_escaped_origin");
-    assert(workroom.checklistId && workroom.blocks.includes(workroom.checklistId), "canonical_mission_checklist_missing");
-    assert(workroom.timelineId && workroom.blocks.includes(workroom.timelineId), "canonical_mission_timeline_missing");
+    const expectedKinds = { checklist: "checklist", timeline: "timeline", graph: "note", evidence: "note", performance: "note", stream: "stream" };
+    const bindings = { checklist: workroom.checklistId, timeline: workroom.timelineId, ...workroom.missionCards };
+    assert.deepEqual(Object.keys(bindings).sort(), Object.keys(expectedKinds).sort(), "native_workroom_card_bindings");
+    assert.equal(new Set(Object.values(bindings)).size, Object.keys(bindings).length, "duplicate_workroom_resource_binding");
+    assert(workroom.placements.some(placement => placement.kind === "conversation"), "workroom_chat_placement_missing");
+    for (const [kind, resourceKind] of Object.entries(expectedKinds)) {
+      assert(bindings[kind], `missing_${kind}_binding`);
+      const placements = workroom.placements.filter(placement => placement.resourceId === bindings[kind]);
+      assert.equal(placements.length, 1, `missing_or_duplicate_${kind}_placement`);
+      assert.equal(placements[0].kind, resourceKind);
+    }
+    const linked = await read(rendered.id);
     const readCard = resourceId => rpc("missions", { name: "workroom-resource", input: { resourceId } });
-    const checklist = await readCard(workroom.checklistId), eventCard = await readCard(workroom.timelineId);
-    assert.equal(checklist.missionId, rendered.id);
-    assert.equal(eventCard.missionId, rendered.id);
-    const renderedCards = await wait("Linked checklist and timeline render canonical mission evidence", () => js(`(()=>{
-      const card=kind=>[...document.querySelectorAll('[data-mission-workroom-card="'+kind+'"]')].find(el=>el.dataset.missionId===${quote(rendered.id)}&&el.getClientRects().length);
-      const checklist=card('checklist'),timeline=card('timeline');
-      return checklist&&timeline&&{
-        tasks:[...checklist.querySelectorAll('[data-mission-task]')].map(el=>[el.dataset.missionTask,el.dataset.taskState]),
-        timeline:[...timeline.querySelectorAll('[data-mission-sequence]')].map(el=>Number(el.dataset.missionSequence))
-      };
+    const cards = Object.fromEntries(await Promise.all(Object.entries(bindings).map(async ([kind, id]) => [kind, await readCard(id)])));
+    for (const [kind, card] of Object.entries(cards)) {
+      assert.equal(card?.missionId, rendered.id, `wrong_${kind}_mission`);
+      assert.equal(card.revision, linked.revision);
+      assert.equal(card.outcome, linked.outcome);
+      if (kind !== "checklist" && kind !== "timeline") assert.equal(card.dashboard.kind, kind);
+    }
+    const checklist = linked.tasks.map(task => [task.id, task.state]);
+    const timelineSequences = linked.events.map(event => event.seq);
+    assert.deepEqual(cards.checklist.checklist.map(task => [task.taskId, task.state]), checklist);
+    assert.deepEqual(cards.timeline.timeline, linked.events);
+    assert.equal(cards.graph.dashboard.objective, linked.objective);
+    assert.equal(cards.graph.dashboard.planRevision, linked.planRevision);
+    assert.deepEqual(cards.graph.dashboard.tasks.map(({ id, title, state, dependencies, executor }) =>
+      [id, title, state, dependencies, executor]), linked.tasks.map(({ id, objective, state, dependencies, executor }) =>
+      [id, objective, state, dependencies, executor]));
+    assert.deepEqual(cards.evidence.dashboard.criteria, linked.criteria);
+    const evidenceFields = row => [row.taskId, row.criterion, row.evidenceId, row.source, row.passed];
+    assert.deepEqual(cards.evidence.dashboard.rows.map(evidenceFields), linked.tasks.map(task => {
+      const attempt = task.attempts.at(-1);
+      return [task.id, task.criterion, attempt.evidence.id, attempt.evidence.source, attempt.verification.passed];
+    }));
+    assert.deepEqual(cards.performance.dashboard.profile, linked.profile);
+    const streamEvents = cards.stream.dashboard.events;
+    const replayFields = event => [event.eventId, event.cursor, event.receivedAt, event.type, event.status, event.classification];
+    assert.deepEqual(streamEvents.filter(event => event.type !== "vela.mission/workroom").map(replayFields), originEvents.map(replayFields));
+    assert.equal(streamEvents.filter(event => event.type === "vela.mission/workroom" && event.classification === "observed").length, 1);
+
+    const appCommand = input => js(`window.__aerynth.execute(${quote(input)})`);
+    const showCard = async (kind, inspect) => {
+      const placement = workroom.placements.find(item => item.resourceId === bindings[kind]);
+      const selector = `[data-block=${quote(placement.blockId)}] [data-mission-workroom-card=${quote(kind)}][data-mission-id=${quote(rendered.id)}]`;
+      const probe = () => js(`(() => {
+        const card = document.querySelector(${quote(selector)});
+        if (!card || card.dataset.missionRevision !== ${quote(String(linked.revision))} || card.closest('[inert],[hidden]')) return null;
+        const rect = card.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0 || rect.top < 0 || rect.top >= innerHeight || rect.left >= innerWidth || rect.right <= 0) return null;
+        return (${inspect})(card);
+      })()`);
+      const visible = await probe();
+      if (visible) return visible;
+      await appCommand({ type: "setViewport", workspaceId: workroom.id, viewport: { x: placement.x - 60, y: placement.y - 180, zoom: 1 } });
+      return wait(`Canonical ${kind} card renders in its workspace placement`, probe);
+    };
+    const renderedCards = {};
+    renderedCards.tasks = await showCard("checklist", `card => [...card.querySelectorAll('[data-mission-task]')].map(row => [row.dataset.missionTask, row.dataset.taskState])`);
+    renderedCards.timeline = await showCard("timeline", `card => [...card.querySelectorAll('[data-mission-sequence]')].map(row => Number(row.dataset.missionSequence))`);
+    renderedCards.graph = await showCard("graph", `card => [...card.querySelectorAll('[data-mission-task]')].map(row => ({
+      taskId: row.dataset.missionTask, state: row.dataset.taskState, dependencies: JSON.parse(row.dataset.taskDependencies), text: row.textContent
+    }))`);
+    renderedCards.evidence = await showCard("evidence", `card => [...card.querySelectorAll('[data-mission-evidence-id]')].map(row => ({
+      taskId: row.dataset.missionTask, evidenceId: row.dataset.missionEvidenceId, text: row.textContent
+    }))`);
+    renderedCards.performance = await showCard("performance", `card => Object.fromEntries([...card.querySelectorAll('[data-mission-metric]')].map(row => [row.dataset.missionMetric, row.querySelector('strong')?.textContent]))`);
+    renderedCards.stream = await showCard("stream", `card => [...card.querySelectorAll('[data-stream-event-id]')].map(row => ({
+      eventId: row.dataset.streamEventId, cursor: Number(row.dataset.streamCursor), time: row.querySelector('time')?.dateTime,
+      evidenceLabel: row.querySelector('small')?.textContent
+    }))`);
+    assert.deepEqual(renderedCards.tasks, checklist);
+    assert.deepEqual(renderedCards.timeline, timelineSequences);
+    assert.deepEqual(renderedCards.graph.map(row => [row.taskId, row.state, row.dependencies]), linked.tasks.map(task => [task.id, task.state, task.dependencies]));
+    for (const [index, task] of linked.tasks.entries()) assert(renderedCards.graph[index].text.includes(task.objective));
+    assert.deepEqual(renderedCards.evidence.map(row => [row.taskId, row.evidenceId]), linked.tasks.map(task => [task.id, task.attempts.at(-1).evidence.id]));
+    for (const [index, task] of linked.tasks.entries()) {
+      assert(renderedCards.evidence[index].text.includes("Evidence check passed"));
+      assert(renderedCards.evidence[index].text.includes(task.attempts.at(-1).evidence.source));
+    }
+    for (const metric of ["attempts", "peakWorkers", "providerCalls"]) {
+      assert.equal(renderedCards.performance[metric], String(linked.profile[metric]));
+    }
+    assert.equal(renderedCards.performance.reportedTotalTokens, "Unavailable");
+    assert.deepEqual(renderedCards.stream.sort((a, b) => a.cursor - b.cursor).map(({ eventId, cursor, time }) => [eventId, cursor, time]),
+      streamEvents.map(event => [event.eventId, event.cursor, event.receivedAt]));
+    assert(renderedCards.stream.every(row => row.evidenceLabel?.split(" · ")[0] === "Observed"), "workroom_stream_evidence_class_missing");
+    if (workroom.viewport) await appCommand({ type: "setViewport", workspaceId: workroom.id, viewport: workroom.viewport });
+    receipt.workroom = { ...workroom, blocks: workroom.placements.map(placement => placement.resourceId), reviewedCards, renderedCards };
+    await wait("Mission workroom opens without the Vela overlay", () => js(`!document.querySelector(${quote(SURFACE)})`));
+    const graphBlock = workroom.placements.find(item => item.resourceId === bindings.graph).blockId;
+    await wait("The leading graph is below the workspace controls", () => js(`(() => {
+      const graph = document.querySelector(${quote('[data-block=' + quote(graphBlock) + ']')})?.getBoundingClientRect();
+      const toolbar = document.querySelector('#workspace-manager')?.getBoundingClientRect();
+      return graph && toolbar && graph.top >= toolbar.bottom && graph.bottom < innerHeight;
     })()`));
-    assert.deepEqual(renderedCards.tasks, checklist.checklist.map(task => [task.taskId, task.state]));
-    assert.deepEqual(renderedCards.timeline, eventCard.timeline.map(event => event.seq));
-    receipt.workroom = { ...workroom, renderedCards };
     await capture("03-linked-mission-workroom");
+    const initialWindow = win.getBounds(), fullViewport = await js("[innerWidth, innerHeight]");
+    win.setSize(1150, 760);
+    const compactViewport = await wait("Aerynth reflows at a compact window size", () => js(
+      `[innerWidth, innerHeight].every((extent, i) => extent < ${quote(fullViewport)}[i] - 100) && [innerWidth, innerHeight]`,
+    ));
+    assert.equal(await showCard("graph", "card => card.querySelectorAll('[data-mission-task]').length"), linked.tasks.length);
+    win.setBounds(initialWindow);
+    const restoredViewport = await wait("Aerynth restores the original window size", () => js(
+      `[innerWidth, innerHeight].every((extent, i) => Math.abs(extent - ${quote(fullViewport)}[i]) <= 12) && [innerWidth, innerHeight]`,
+    ));
+    if (workroom.viewport) await appCommand({ type: "setViewport", workspaceId: workroom.id, viewport: workroom.viewport });
+    const placedAfterResize = (await desktop()).blocks.filter(block => block.workspace_id === workroom.id && block.resource_id);
+    for (const before of workroom.placements) {
+      const after = placedAfterResize.find(block => block.id === before.blockId);
+      assert.deepEqual([after?.x, after?.y, after?.width, after?.height], [before.x, before.y, before.width, before.height]);
+    }
+    receipt.workroom.windowSizes = { full: fullViewport, compact: compactViewport, restored: restoredViewport, savedPlacementsPreserved: true };
 
     const optimizeTitle = "Synthetic layout optimization room";
-    const appCommand = input => js(`window.__aerynth.execute(${quote(input)})`);
     await appCommand({ type: "createWorkspace", title: optimizeTitle, projectId: null });
     const optimizeWorkspace = await wait("Layout optimization workspace is active", async () => {
       const state = await desktop();
@@ -506,7 +611,8 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       return mission.outcome === "paused" && mission.tasks.find(task => task.id === "report")?.state === "queued";
     });
     await click("#application-stream");
-    if (!await js(`document.querySelector(${quote(composer)})?.getClientRects().length > 0`)) await click("#vela");
+    await wait("Intelligence Stream closes before returning to Vela", () => js(`!document.querySelector(${quote(stream)})`));
+    if (await js(`document.querySelector('#vela')?.getAttribute('aria-expanded') !== 'true'`)) await click("#vela");
     await click(SURFACE + ' button[aria-label="Missions"]');
     await click(missionControl(revisionMission.id));
     await click(missionControl("report-revision"));

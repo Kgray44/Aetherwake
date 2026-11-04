@@ -185,6 +185,8 @@ export type DesktopSnapshot = {
   canRedo: boolean;
   hasCheckpoint: boolean;
   savedLayouts?: SavedWorkspaceLayout[];
+  /** Mission projections authorized for the current workspace placements. */
+  missionWorkroomCardIds?: string[];
   navigationBlocks?: Block[];
   viewport?: { x: number; y: number; zoom: number; displayId?: string };
   organization?: WorkspaceOrganization;

@@ -1,6 +1,7 @@
 import type { MissionContextPackage } from '../../vela-core/src/mission-context.mts';
 import type { ReasoningEffort } from '../../openai-provider/model-controls.ts';
 import type { ReportedUsage } from '../../openai-provider/contracts.mts';
+import type { StreamEvent } from './contracts.mts';
 import type { MissionTeam, MissionTeamSave } from './mission-teams.mts';
 
 export const MISSION_CONTRACT = 'aerynth.vela-mission@1' as const;
@@ -209,6 +210,7 @@ export interface MissionWorkroom {
   templateId: string;
   missionChecklistResourceId?: string;
   missionTimelineResourceId?: string;
+  missionCards?: Partial<Record<MissionWorkroomCard, string>>;
 }
 export interface MissionWorkroomPreview {
   kind: 'workroom-preview';
@@ -218,14 +220,42 @@ export interface MissionWorkroomPreview {
   expiresAt: string;
   cards: { title: string; kind: string; mode: 'new' | 'reference' }[];
 }
+export interface MissionWorkroomStreamEvent {
+  eventId: string;
+  cursor: number;
+  receivedAt: string;
+  type: string;
+  status: string | null;
+  taskId?: string;
+  executor?: string;
+  classification: StreamEvent['classification'];
+}
+export type MissionWorkroomDashboard =
+  | { kind: 'graph'; objective: string; planRevision: number; tasks: {
+      id: string; title: string; state: MissionTaskState; dependencies: string[]; executor: string;
+      role?: string; wait?: MissionProjection['waits'][string];
+    }[] }
+  | { kind: 'team'; title?: string; members: {
+      taskId: string; role: string; responsibility: string; state: MissionTaskState;
+      provider?: string; model?: string; attempts: number;
+    }[] }
+  | { kind: 'evidence'; criteria: string[]; rows: {
+      taskId: string; title: string; state: MissionTaskState; criterion: string;
+      evidenceId?: string; source?: string; observedAt?: string; verification?: string; passed?: boolean;
+      findings?: string[]; citations?: string[];
+    }[] }
+  | { kind: 'performance'; profile: MissionProjection['profile'] }
+  | { kind: 'stream'; events: MissionWorkroomStreamEvent[] };
+export type MissionWorkroomCard = MissionWorkroomDashboard['kind'];
 export type MissionWorkroomResource = {
   kind: 'workroom-resource';
   missionId: string;
   outcome: MissionProjection['outcome'];
   revision: number;
 } & (
-  { checklist: { taskId: string; title: string; state: MissionTaskState }[]; timeline?: never } |
-  { timeline: MissionEvent[]; checklist?: never }
+  { checklist: { taskId: string; title: string; state: MissionTaskState }[]; timeline?: never; dashboard?: never } |
+  { timeline: MissionEvent[]; checklist?: never; dashboard?: never } |
+  { dashboard: MissionWorkroomDashboard; checklist?: never; timeline?: never }
 );
 
 export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomResource |

@@ -262,6 +262,8 @@ export class BackendCore {
           CREATE TABLE IF NOT EXISTS integration_state(id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL);
           CREATE TABLE IF NOT EXISTS intelligence_events(
             cursor INTEGER PRIMARY KEY AUTOINCREMENT, dedupe TEXT NOT NULL UNIQUE, json TEXT NOT NULL);
+          CREATE INDEX IF NOT EXISTS intelligence_mission_cursor ON intelligence_events(json_extract(json,'$.correlationId'), cursor)
+            WHERE json_extract(json,'$.type') GLOB 'vela.mission/*';
           CREATE TABLE IF NOT EXISTS media_sources(
             resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
             metadata_json TEXT NOT NULL, selected_path TEXT);
@@ -670,7 +672,11 @@ export class BackendCore {
         ensure(Object.keys(request.input).length === 1 && identifier(resourceId), 'invalid_mission_command');
         if (!this.productResourceAccess(resourceId) || !this.db.prepare('SELECT 1 FROM blocks WHERE workspace_id=? AND resource_id=?')
           .get(scope.workspaceId, resourceId)) return null;
-        return this.missions.workroomResource(resourceId, scope);
+        const card = this.missions.workroomResource(resourceId, scope);
+        if (card?.dashboard?.kind !== 'stream') return card;
+        const mission = this.missions.read(card.missionId, scope);
+        const { kind, missionId, outcome, revision } = card;
+        return { kind, missionId, outcome, revision, dashboard: { kind: 'stream', events: this.readWorkroomStream(mission) } };
       }
       case 'list':
         ensure(!Object.keys(request.input).length, 'invalid_mission_command');
@@ -3365,8 +3371,31 @@ export class BackendCore {
       ...this.missionStreamFields(mission, event),
     });
   }
+  private readWorkroomStream(mission: Mission) {
+    const legacy = new Map([[mission.id, mission]]);
+    return this.db.prepare(`SELECT dedupe,json FROM intelligence_events
+      WHERE json_extract(json,'$.correlationId')=? AND json_extract(json,'$.type') GLOB 'vela.mission/*'
+      ORDER BY cursor DESC LIMIT 128`).all(mission.id).reverse().flatMap(row => {
+      const stored = JSON.parse(String(row.json)) as StreamEvent;
+      const event = this.projectReplayedMissionEvent(stored, String(row.dedupe), mission.scope, legacy);
+      if (event?.mission?.id !== mission.id) return [];
+      const { eventId, cursor, receivedAt, type, status, classification } = event;
+      const { taskId, executor } = event.mission;
+      return [{ eventId, cursor, receivedAt, type, status, classification,
+        ...(taskId ? { taskId } : {}), ...(executor ? { executor } : {}) }];
+    });
+  }
   private streamScopeMatches(scope: MissionScope | null, origin: MissionScope | undefined) {
     return !!scope && scope.workspaceId === origin?.workspaceId && scope.projectId === origin.projectId;
+  }
+  private missionLiveScopeAllowed(event: StreamEvent) {
+    const scope = this.missionStreamScope(), mission = event.mission;
+    if (this.streamScopeMatches(scope, mission?.scope)) return true;
+    // Linked workroom views need a refresh when the originating mission changes.
+    // General stream replay remains scoped to the originating workspace.
+    return !!scope && !!mission && scope.projectId === mission.scope.projectId && this.missionScopeAllowed(mission.scope) &&
+      !!this.db.prepare(`SELECT 1 FROM vela_missions WHERE id=? AND json_extract(json,'$.workroom.workspaceId')=?`)
+        .get(mission.id, scope.workspaceId);
   }
   private projectReplayedMissionEvent(event: StreamEvent, dedupe: string, scope: MissionScope | null,
     legacyMissions: Map<string, Mission | null>): StreamEvent | undefined {
@@ -3413,7 +3442,7 @@ export class BackendCore {
   }
   private publishRecordedEvent(e:StreamEvent) {
     try {
-      if (!e.type.startsWith('vela.mission/') || this.streamScopeMatches(this.missionStreamScope(), e.mission?.scope)) this.emit(e);
+      if (!e.type.startsWith('vela.mission/') || this.missionLiveScopeAllowed(e)) this.emit(e);
     } catch { /* Replay remains authoritative after a delivery failure. */ }
     const {type,classification}=e;
     if(this.vela&&classification!=='simulated'&&!type.startsWith('vela.'))try{this.vela.ingestAttention({id:e.eventId,type:type.replaceAll('/','.'),source:'aerynth.canonical-events',occurredAt:e.receivedAt,subject:e.resourceId?{id:e.resourceId,kind:'resource'}:null,severity:type.includes('failed')||type.includes('unknown')||type.includes('gap')?'warning':'info',classification,summary:'Recorded application event: '+type,correlationId:e.correlationId??e.eventId,...(type==='stream/reopened'?{coverageGap:'Collection resumed at this recorded event; offline activity is unavailable'}:{})});}catch{/* Delivery cannot falsify a committed canonical operation. */}
@@ -3781,12 +3810,20 @@ export class BackendCore {
         const messagesMap=new Map<string,typeof graph.messages>();for(const m of graph.messages){const list=messagesMap.get(m.conversationId)??[];list.push(m);messagesMap.set(m.conversationId,list);}
         const publicMap=new Map(Object.entries(this.state.resources).map(([id,gid])=>[gid,id]));
         const branches=graph.edges.filter(edge=>publicMap.has(edge.parentId)&&publicMap.has(edge.childId)).map(edge=>({id:edge.id,parentResourceId:publicMap.get(edge.parentId)!,childResourceId:publicMap.get(edge.childId)!,sourceMessageId:edge.sourceMessageId,mode:edge.mode,createdAt:edge.createdAt,provenance:'recorded conversation lineage'}));
-        return this.desktop.snapshot(id => {
+        const snapshot = this.desktop.snapshot(id => {
           const graphId=this.state.resources[id],c=conversationMap.get(graphId);if(!c)return {provider:'local',messages:[]};
           const messages=messagesMap.get(graphId)??[];
           const execution=Object.values(this.state.executions).filter(e=>e.resourceId===id).at(-1);
           return {provider:c.kind==='codex'?'codex':'local',providerId:c.providerId,conversationRevision:this.state.revisions[id],messageCount:messages.length,...(execution?{execution:{id:execution.id,state:execution.state,errorCode:execution.errorCode,taskVerified:false as const}}:{}),messages:messages.slice(-200).map(m=>({id:m.id,role:m.role,content:m.content}))};
-        },{revision:graph.counter,branches}) as any;
+        },{revision:graph.counter,branches});
+        const active = snapshot.navigation.kind === 'workspace' && snapshot.workspaces.find(workspace => workspace.id === snapshot.activeWorkspaceId);
+        if (active) {
+          const cards = this.missions.workroomCardIds({ workspaceId: active.id, projectId: active.project_id });
+          const placed = new Set(snapshot.blocks.map(block => block.resource_id));
+          const authorized = cards.filter(id => placed.has(id) && this.productResourceAccess(id));
+          if (authorized.length) snapshot.missionWorkroomCardIds = authorized;
+        }
+        return snapshot as any;
       }
       case 'createConversation': {const title=a.title===undefined||typeof a.title==='string'&&!a.title.trim()?'New conversation':a.title;ensure(typeof title==='string'&&title.trim()&&title.length<=200,'invalid_title');if(a.providerId===undefined||a.providerId===CHATGPT_PLAN_PROVIDER)await this.refreshOrdinaryStatus();return this.atomic(() => this.once(a.commandId, { name, ...a }, () => this.create(title.trim(), a.providerId ?? this.defaultOrdinaryProvider()))) as any;}
       case 'addMessage': {
