@@ -214,6 +214,67 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       return workspace && state.activeWorkspaceId === workspace.id && { workspaceId: workspace.id, projectId: null };
     });
     assert.deepEqual(await list(), []);
+    if (argv.includes("--missions-header-only")) {
+      const chrome = () => js(`(() => {
+        const overlay=navigator.windowControlsOverlay,area=overlay?.getTitlebarAreaRect();
+        const rect=node=>{const r=node.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
+        const header=document.querySelector('.topbar'),pill=document.querySelector('.window-caption-pill'),drag=document.querySelector('.window-drag');
+        return {overlayVisible:overlay?.visible===true,area:area&&{x:area.x,y:area.y,width:area.width,height:area.height,right:area.right},
+          viewport:{width:innerWidth,height:innerHeight},header:rect(header),pill:{hidden:pill.hidden,...rect(pill)},
+          drag:{background:getComputedStyle(drag).backgroundColor,border:getComputedStyle(drag).borderBottomWidth,text:drag.textContent},
+          mark:rect(header.querySelector('.brand img')),nameFont:parseFloat(getComputedStyle(header.querySelector('.brand > span')).fontSize),
+          controls:[...header.querySelectorAll('button')].filter(node=>node.getClientRects().length).map(node=>({
+            label:node.getAttribute('aria-label')||node.textContent.trim(),...rect(node)}))};
+      })()`);
+      const inspectChrome = async label => {
+        const state=await wait(label, async()=>{
+          const current=await chrome();
+          return current.overlayVisible && !current.pill.hidden && current.controls.every(control=>control.width>0&&control.height>0) && current;
+        });
+        assert.equal(state.drag.background,"rgba(0, 0, 0, 0)");
+        assert.equal(state.drag.border,"0px");
+        assert.equal(state.drag.text,"");
+        assert(state.header.y<30 && state.mark.width>=76 && state.nameFont>=18,"header_not_raised_and_enlarged");
+        assert(state.pill.width>100 && state.pill.width<180 && state.pill.height>=36,"caption_pill_not_localized");
+        const visible=state.controls;
+        for(const control of visible){
+          assert(control.x>=0&&control.right<=state.viewport.width+1&&control.y>=0&&control.bottom<=state.viewport.height,"header_control_offscreen: "+control.label);
+          assert(control.y>=state.area.height||control.right<=state.area.right+1,"header_control_under_native_caption: "+control.label);
+        }
+        for(let i=0;i<visible.length;i++)for(let j=i+1;j<visible.length;j++){
+          const a=visible[i],b=visible[j];
+          assert(!(Math.min(a.right,b.right)-Math.max(a.x,b.x)>1 && Math.min(a.bottom,b.bottom)-Math.max(a.y,b.y)>1),
+            "header_controls_overlap: "+a.label+" / "+b.label);
+        }
+        return state;
+      };
+      const captureWindow = async name => {
+        const {desktopCapturer,screen}=require("electron"),bounds=win.getBounds();
+        const scale=screen.getDisplayMatching(bounds).scaleFactor;
+        const sources=await operation(()=>desktopCapturer.getSources({types:["window"],fetchWindowIcons:false,
+          thumbnailSize:{width:Math.ceil(bounds.width*scale),height:Math.ceil(bounds.height*scale)}}),"header_window_capture_deadline");
+        const source=sources.find(item=>item.id===win.getMediaSourceId());
+        assert(source&&!source.thumbnail.isEmpty(),"owned_header_window_capture_unavailable");
+        const png=source.thumbnail.toPNG();
+        assert(png.length>0&&png.length<=8*MiB,"header_capture_budget");
+        await fs.writeFile(path.join(out,name+".png"),png,{flag:"wx"});
+        receipt.captures.push({file:name+".png",bytes:png.length});
+      };
+      const full=await inspectChrome("Floating header clears native window controls");
+      await captureWindow("00-floating-header");
+      win.setSize(800,650);
+      await wait("Compact header viewport",()=>js("innerWidth<850"));
+      const compact=await inspectChrome("Compact header retains every visible action without overlap");
+      await click("#settings-button");
+      await wait("Scene controls open from the compact header",()=>js("document.querySelector('#settings').hidden===false"));
+      await click("#settings-close");
+      await captureWindow("01-compact-floating-header");
+      receipt.header={full,compact,nativeCaptionControlsRetained:true};
+      receipt.providerActivity={before:providerBefore,after:await rpc("providerActivity",{})};
+      assert.equal(receipt.providerActivity.after.providerRequests,0);
+      receipt.passed=true;
+      return;
+    }
     await click("#vela");
     const composer = SURFACE + ' textarea[aria-label="Message Vela"]';
     const unmatchedObjective = "Plan a mission to read physical memory after recording processor load";

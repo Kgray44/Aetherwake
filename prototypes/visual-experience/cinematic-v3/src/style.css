@@ -104,8 +104,8 @@ body[data-study="architecture"] .scene-vignette {
   gap: 8px;
 }
 .brand img {
-  width: 64px;
-  height: 64px;
+  width: 80px;
+  height: 80px;
   object-fit: contain;
   mix-blend-mode: normal;
   filter: url(#logo-clear-background);
@@ -119,7 +119,7 @@ body.application-ready #vela.vela-card {
   min-height: 0;
 }
 .brand > span {
-  font-size: 17px;
+  font-size: 19px;
   letter-spacing: 0.32em;
 }
 .brand small {
@@ -133,7 +133,7 @@ body.application-ready #vela.vela-card {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  font-size: 14px;
+  font-size: 15px;
   color: #d9d6e6;
   border-left: 1px solid #393445;
   padding-left: 30px;
@@ -145,7 +145,7 @@ body.application-ready #vela.vela-card {
 }
 .topbar > button {
   margin-left: 0;
-  font-size: 12px;
+  font-size: 14px;
   color: #c7c3d7;
   border: 1px solid #343044;
   border-radius: 30px;
@@ -184,7 +184,7 @@ body.application-ready .study-caption {
 }
 .scene-navigation button {
   padding: 6px 0;
-  font-size: 11px;
+  font-size: 13px;
   color: #a19ab3;
   border-bottom: 1px solid transparent;
 }
@@ -1025,30 +1025,49 @@ body:not(.focused) #vela[data-demo-stream-visible] .vela-label {
   }
 }
 
-/* Supported Windows caption controls remain native; only the drag surface is ours. */
+/* The transparent drag region leaves the scene visible. Caption buttons remain native. */
 .window-drag {
   position: absolute;
   inset: 0 0 auto;
-  height: 42px;
-  background: #080910;
-  border-bottom: 1px solid #bca4dc0d;
+  height: 44px;
+  background: transparent;
+  border: 0;
   -webkit-app-region: drag;
   app-region: drag;
   z-index: 100;
-  padding: 13px 20px;
-  color: #a89db9;
-  font-size: 10px;
-  letter-spacing: 0.16em;
+  padding: 0;
   user-select: none;
 }
-.window-drag i {
-  margin: 0 9px;
-  color: #605669;
-  font-style: normal;
+.window-drag > * {
+  display: none;
+}
+.window-caption-pill {
+  position: fixed;
+  top: 2px;
+  right: 2px;
+  width: max(0px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) - 4px));
+  height: calc(env(titlebar-area-height, 44px) - 4px);
+  border: 1px solid #d9e1ec36;
+  border-radius: 999px;
+  background:
+    linear-gradient(150deg, #dbe5f21b, #252a3b69 48%, #10162282);
+  box-shadow: inset 0 1px 0 #f0f5ff24, 0 4px 16px #01030824;
+  backdrop-filter: blur(18px) saturate(1.1);
+  pointer-events: none;
+  z-index: 300001;
+}
+body.native-caption-controls {
+  --window-control-reserve: max(152px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 12px));
 }
 .topbar {
-  top: 42px;
+  top: 12px;
   height: 96px;
+  padding-right: var(--window-control-reserve, 40px);
+}
+.topbar .brand {
+  -webkit-app-region: drag;
+  app-region: drag;
+  user-select: none;
 }
 .topbar button {
   -webkit-app-region: no-drag;
@@ -1057,6 +1076,14 @@ body:not(.focused) #vela[data-demo-stream-visible] .vela-label {
 .study-caption {
   top: 164px;
   opacity: calc(1 - var(--scene-focus, 0));
+}
+@media (forced-colors: active) {
+  .window-caption-pill {
+    background: Canvas;
+    border-color: CanvasText;
+    box-shadow: none;
+    backdrop-filter: none;
+  }
 }
 .focused .place {
   opacity: 0.65;

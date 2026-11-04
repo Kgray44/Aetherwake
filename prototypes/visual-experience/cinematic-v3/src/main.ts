@@ -68,7 +68,8 @@ let dragGlideFrame: Record<string, unknown> | null = null;
 app.innerHTML = `
   <canvas id="world" aria-hidden="true"></canvas>
   <div class="scene-vignette" aria-hidden="true"></div>
-  <div class="window-drag" aria-hidden="true"><span>AERYNTH <i>·</i> THE QUIET ATELIER</span></div>
+  <div class="window-drag" aria-hidden="true"></div>
+  <div class="window-caption-pill" aria-hidden="true" hidden></div>
   <header class="topbar">
     <svg width="0" height="0" aria-hidden="true" class="logo-filter"><defs><filter id="logo-clear-background" color-interpolation-filters="sRGB"><feColorMatrix type="matrix" values="1 0 0 0 0 0 1 0 0 0 0 0 1 0 0 4 4 4 0 -0.32"/></filter></defs></svg>
     <div class="brand"><img src="./aerynth-mark-master.png" alt="Approved Aerynth mark"><span>AERYNTH<small>LIQUID INTELLIGENCE / V3.5</small></span></div>
@@ -112,6 +113,18 @@ app.innerHTML = `
 `;
 
 const desktopMode = !!window.aerynthHost?.command;
+// Native caption buttons keep Windows snapping, system menus and accessibility.
+// Only their glass backdrop is drawn here; browser fixtures have no caption pill.
+const captionOverlay = (navigator as Navigator & {
+  windowControlsOverlay?: EventTarget & { visible: boolean };
+}).windowControlsOverlay;
+const syncCaptionOverlay = () => {
+  const visible = captionOverlay?.visible === true;
+  $(".window-caption-pill").hidden = !visible;
+  document.body.classList.toggle("native-caption-controls", visible);
+};
+syncCaptionOverlay();
+captionOverlay?.addEventListener("geometrychange", syncCaptionOverlay);
 let application: Application | null = null;
 const storageKey = "aerynth-cinematic-v3-v1";
 let saved: ReturnType<typeof validateSaved> = null;

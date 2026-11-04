@@ -374,7 +374,7 @@ app.whenReady().then(async () => {
       ? "Aerynth · Automated check"
       : "Aerynth · Working environment",
     titleBarStyle: "hidden",
-    titleBarOverlay: { color: "#080910", symbolColor: "#d8cee9", height: 42 },
+    titleBarOverlay: { color: "#00000000", symbolColor: "#e5e3f2", height: 44 },
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "desktop-preload.cjs"),

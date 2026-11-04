@@ -564,9 +564,6 @@
   .application-ready .dock button span {
     font-size: 9px;
   }
-  .application-ready .scene-navigation {
-    display: none;
-  }
   .application-ready .dock {
     gap: 2px;
   }
@@ -588,45 +585,123 @@
   pointer-events: none;
 }
 .application-ready .topbar {
-  height: 48px;
-  padding: 4px 20px 4px 16px;
-  gap: 16px;
+  top: 12px;
+  height: auto;
+  min-height: 80px;
+  padding: 0 var(--window-control-reserve, 20px) 0 16px;
+  gap: 18px;
 }
 .application-ready .brand {
   flex: none;
 }
 .application-ready .brand img {
-  width: 72px;
-  height: 72px;
+  width: 80px;
+  height: 80px;
+}
+.application-ready .brand > span {
+  font-size: 19px;
+  letter-spacing: 0.28em;
 }
 .application-ready .brand small {
   display: none;
 }
 .application-ready .place {
+  flex: 1 1 auto;
   flex-direction: row;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 8px 10px;
   min-width: 0;
   border: 0;
   padding-left: 0;
+  font-size: 15px;
+}
+.application-ready .place > button {
+  min-height: 34px;
+  flex: none;
+  padding: 5px 2px;
+  line-height: 1.2;
+}
+.application-ready .aw-workspace-layout {
+  flex: none;
+  max-width: 100%;
+}
+.application-ready .aw-workspace-layout button {
+  font-size: 13px;
+  padding: 8px 10px;
+}
+.application-ready .aw-workspace-layout .aw-workspace-add {
+  font-size: 18px;
+  padding: 6px 10px;
+}
+.application-ready #application-stream svg {
+  width: 20px;
+  height: 20px;
+}
+.application-ready #application-connections {
+  font-size: 22px;
 }
 .application-ready #workspace-manager {
+  flex: 0 1 auto;
+  min-width: 88px;
   max-width: min(24vw, 260px);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 .application-ready .topbar > button {
+  flex: none;
   padding: 8px 12px;
+  font-size: 15px;
+}
+.application-ready .scene-navigation {
+  display: flex;
+  flex: none;
+  gap: 16px;
+}
+.application-ready .scene-navigation button {
+  font-size: 14px;
+}
+@media (max-width: 1280px) {
+  .application-ready .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 2px 12px;
+    align-items: center;
+  }
+  .application-ready .brand {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .application-ready .place {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    padding-block: 0 6px;
+  }
+  .application-ready .scene-navigation {
+    grid-column: 2;
+    grid-row: 1;
+    margin-left: 0;
+  }
+  .application-ready #settings-button {
+    grid-column: 3;
+    grid-row: 1;
+  }
 }
 @media (max-width: 850px) {
   .application-ready .topbar {
-    gap: 8px;
+    gap: 2px 8px;
     padding-left: 12px;
   }
+  .application-ready .brand img {
+    width: 76px;
+    height: 76px;
+  }
+  .application-ready .brand > span {
+    font-size: 18px;
+  }
   .application-ready #workspace-manager {
-    max-width: 120px;
+    max-width: min(40vw, 220px);
   }
   .application-ready #settings-button {
     font-size: 0;
