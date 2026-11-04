@@ -84,7 +84,24 @@ nor performance under representative renderer or provider load.
 
 The broad acceptance runner passed 16 groups (1,910 tests) at the first
 integrated checkpoint. Later workroom and specialist changes were checked
-through focused integration and native journeys. The installed Codex test
+through focused integration and native journeys. The complete rerun on
+`c706b413ed55242f2a46299249430c1f27ecd941` passed 16 groups (1,911 tests);
+the hosted synthetic integration job also passed. The Electron journey on
+that candidate passed at 125% device scale, observed 108 ms of native task
+overlap, and created a linked workroom with four functional placements. It
+did not test monitor removal on a physical multi-display setup.
+
+The installed Codex test
 mission used a new synthetic Git checkout; one test passed, four attempts
 settled, peak workers were two, and the mission settled in 2,313 ms. The test
 file and the measured fixture were unchanged, and no model turn was made.
+The separate one-turn installed Codex edit probe used an actual thread and
+turn, published only the reviewed synthetic replacement and passed its
+selected Node test. Exact billed credits were unavailable.
+
+The optional `--integration-vela-air-plan --air-plan-specialist-mission=1`
+helper requires the dedicated synthetic signed-in profile. It checks the
+actual ChatGPT plan grant before creating an exclusive dispatch marker. The
+preflight on this host returned `chatgpt_plan_grant_required`, so it
+dispatched no specialist calls. The protocol tests remain the proof of
+specialist isolation and citation handling until the live grant is available.

@@ -2,6 +2,8 @@ const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { mkdirSync, mkdtempSync, writeFileSync, appendFileSync, readFileSync } = require('node:fs');
 const { join, resolve } = require('node:path');
+const { randomUUID } = require('node:crypto');
+const { setTimeout: wait } = require('node:timers/promises');
 const { velaCommand } = require('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
 
 const providerId = 'chatgpt-plan-responses';
@@ -221,7 +223,71 @@ async function runHeldOut({ win, app, privateRoot, call }, batch) {
   }
 }
 
+async function runOneSpecialistMission({ app, privateRoot, call }) {
+  const { cases: heldOut } = require('./air-held-out-live.cjs');
+  const directory = join(privateRoot, 'air-plan-evaluation');
+  const output = join(directory, 'specialist-mission-once.jsonl');
+  const objective = 'Investigate Aerynth backend performance with two independent specialists';
+  const append = entry => appendFileSync(output, JSON.stringify(entry) + '\n');
+  let passed = false, admitted = false;
+  try {
+    const state = await call('vela', { name: 'state', input: {} });
+    const synthetic = new Set([...allowed, mixedIntent, mixedNext, ...heldOut.map(([, intent]) => intent)]);
+    assert(state.requests.some(request => request.intent === initialQuestion && request.state === 'responded'));
+    assert(state.requests.every(request => synthetic.has(request.intent)), 'Synthetic test profile only');
+    const status = await call('ordinaryProviderCheck', {});
+    assert(status.state === 'ready' && status.planUsageEnabled, 'ChatGPT-plan authorization is unavailable');
+    mkdirSync(directory, { recursive: true });
+    // Exclusive marker before creating any workspace or dispatching. No replay after interruption.
+    writeFileSync(output, JSON.stringify({ contract: 'aerynth.air-plan-specialist-mission@1', type: 'begin', maxModelTurns: 2 }) + '\n', { flag: 'wx' });
+    admitted = true;
+    const desktop = await call('desktop', { type: 'createWorkspace', title: 'Synthetic live specialist evaluation', projectId: null });
+    const workspace = desktop.workspaces.find(item => item.title === 'Synthetic live specialist evaluation');
+    assert(workspace);
+    await call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: workspace.id } });
+    const preview = await call('missions', { name: 'preview', input: { objective } });
+    assert.equal(preview.plan.objective, objective);
+    assert.equal(preview.externalReview?.calls, 2);
+    assert(preview.executors.every(item => item.available));
+    assert.equal(preview.plan.tasks.filter(task => task.specialist && !task.specialist.webSearch && !task.specialist.profile).length, 2);
+    const prior = await call('providerActivity', {});
+    // This explicit bounded evaluation flag supplies the known synthetic egress review.
+    const start = await call('missionStartReviewed', { objective, fingerprint: preview.fingerprint, requestId: randomUUID() });
+    const deadline = performance.now() + 55_000;
+    let mission;
+    do {
+      mission = await call('missions', { name: 'read', input: { id: start.id } });
+      if (!['queued', 'running'].includes(mission.outcome)) break;
+      await wait(75);
+    } while (performance.now() < deadline);
+    const attempts = mission.tasks.filter(task => task.specialist).map(task => task.attempts[0]);
+    const observed = await call('providerActivity', {});
+    const reportedCalls = observed.providerRequests - prior.providerRequests;
+    const overlapMs = Math.max(0, Math.min(...attempts.map(a => Date.parse(a?.finishedAt))) -
+      Math.max(...attempts.map(a => Date.parse(a?.admittedAt))));
+    append({ type: 'result', outcome: mission.outcome, model: preview.externalReview.model, effort: preview.externalReview.effort,
+      observedCalls: reportedCalls, overlapMs, profile: mission.profile,
+      reports: attempts.map(a => ({ outcome: a?.outcome ?? 'unavailable', source: a?.evidence?.source ?? null,
+        responseIdObserved: !!a?.telemetry?.responseId, usage: a?.telemetry?.usage ?? null })) });
+    assert.equal(mission.outcome, 'verified');
+    assert.equal(reportedCalls, 2);
+    assert(overlapMs > 0);
+    assert.equal(new Set(attempts.map(a => a?.telemetry?.responseId)).size, 2);
+    assert(attempts.every(a => a.telemetry?.responseId && a.evidence?.source === 'chatgpt-plan-responses:reported'));
+    append({ type: 'complete', passed: true });
+    passed = true;
+  } catch (error) {
+    if (admitted) append({ type: 'failure', error: error instanceof Error ? error.message : 'unknown_failure' });
+    console.log(JSON.stringify({ type: 'failure', reason: error instanceof Error ? error.message : 'unknown_failure' }));
+  } finally {
+    console.log(JSON.stringify({ passed, output }));
+    process.exitCode = passed ? 0 : 1;
+    app.quit();
+  }
+}
+
 exports.run = async ({ win, app, privateRoot, call }) => {
+  if (process.argv.includes('--air-plan-specialist-mission=1')) return runOneSpecialistMission({ app, privateRoot, call });
   if (process.argv.includes('--air-plan-mixed')) return runMixed({ win, app, privateRoot, call });
   const heldOut = process.argv.find(value => value.startsWith('--air-plan-held-out='));
   if (heldOut) return runHeldOut({ win, app, privateRoot, call }, Number(heldOut.slice('--air-plan-held-out='.length)));
