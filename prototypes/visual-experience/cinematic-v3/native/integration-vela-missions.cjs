@@ -157,7 +157,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const wait = (label, check) => {
       receipt.phase = label;
       return waitForCondition({ slot, label, check, diagnose: () => js(
-        "({viewport:[innerWidth,innerHeight],app:document.querySelector('#status')?.textContent?.slice(0,240),vela:document.querySelector('.vela-core-status')?.textContent?.slice(0,240),mission:document.querySelector('.vela-missions [role=alert]:not([hidden])')?.textContent?.slice(0,240),architect:document.querySelector('[data-surface-id=workspace-templates]')?.textContent?.slice(-600),stream:document.querySelector('[data-surface-id=intelligence-stream]')?.textContent?.slice(0,360)})",
+        "({viewport:[innerWidth,innerHeight],app:document.querySelector('#status')?.textContent?.slice(0,240),vela:document.querySelector('.vela-core-status')?.textContent?.slice(0,240),mission:document.querySelector('.vela-missions [role=alert]:not([hidden])')?.textContent?.slice(0,240),architect:document.querySelector('[data-surface-id=workspace-templates]')?.textContent?.slice(-600),stream:document.querySelector('[data-surface-id=intelligence-stream]')?.textContent?.slice(0,360),navigator:document.querySelector('.en-navigator')?.textContent?.slice(-700),active:document.activeElement?.outerHTML?.slice(0,500),dialog:document.querySelector('dialog[open]')?.textContent?.slice(0,360)})",
       ) });
     };
     const click = async (selector, revealByHover = false) => {
@@ -547,6 +547,46 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     await click('#conversation-surface button[data-cp-control="close"]');
     await wait("Mission conversation history closes", () => js("!document.querySelector('#conversation-surface')"));
     receipt.workroom.conversation = { resourceId: workroom.conversationId, messageId: handoffMessage.id, branch };
+
+    const recoveryLayout = await rpc("library", { name: "inspectWorkspace", input: { workspaceId: workroom.id } });
+    const recoveryGraph = (await rpc("snapshot", {})).graph;
+    await click('.aw-workspace-layout button[aria-label="Workspace actions"]');
+    const recoveryControl = name => '.aw-workspace-actions [data-action=' + quote(name) + ']';
+    await click(recoveryControl("creation-toggle"));
+    await click(recoveryControl("undo-creation"));
+    const recoveryRoot = "#workspace-creation-recovery";
+    await wait("Workspace creation undo is reviewed without mutating the workspace", () => js(`(() => {
+      const root=document.querySelector(${quote(recoveryRoot)}),button=root?.querySelector('[data-recovery-action="apply"]');
+      return root?.dataset.workspaceRecovery===${quote(workroom.id)} && button?.textContent==='Undo creation' && !button.disabled;
+    })()`));
+    assert((await desktop()).workspaces.some(item => item.id === workroom.id));
+    await click(recoveryRoot + ' [data-recovery-action="apply"]');
+    const archivedWorkroom = await wait("Creation undo archives the workroom and preserves its canonical data", async () => {
+      const state=await desktop();
+      return state.archivedWorkspaces?.find(item=>item.id===workroom.id) &&
+        await js(`document.querySelector(${quote(recoveryRoot)})?.dataset.state==='applied'`) && state;
+    });
+    assert(!archivedWorkroom.workspaces.some(item=>item.id===workroom.id));
+    assert.deepEqual((await rpc("snapshot", {})).graph, recoveryGraph, "creation_undo_changed_conversation_history");
+    await click(recoveryRoot + ' [data-recovery-action="review"]');
+    await wait("A fresh review restores the same saved workroom", () => js(
+      `document.querySelector(${quote(recoveryRoot + ' [data-recovery-action="apply"]')})?.textContent==='Restore workspace'`,
+    ));
+    await click(recoveryRoot + ' [data-recovery-action="apply"]');
+    await wait("The original workroom identity is restored", async () => {
+      const state=await desktop();
+      return state.workspaces.some(item=>item.id===workroom.id) &&
+        await js(`document.querySelector(${quote(recoveryRoot)})?.dataset.state==='applied'`);
+    });
+    await click(recoveryRoot + ' [data-recovery-action="close"]');
+    const restoredWorkroom = await rpc("library", { name: "inspectWorkspace", input: { workspaceId: workroom.id } });
+    assert.deepEqual(restoredWorkroom.result.blocks, recoveryLayout.result.blocks, "creation_restore_changed_saved_placements");
+    assert.deepEqual((await rpc("snapshot", {})).graph, recoveryGraph, "creation_restore_changed_conversation_history");
+    const recoveryEvents=(await rpc("replay", {after:0,limit:1000})).events.filter(event=>event.payload.workspaceRecovery?.workspaceId===workroom.id);
+    assert.deepEqual(recoveryEvents.map(event=>event.type), ["workspace.creation-undone","workspace.creation-restored"]);
+    assert(recoveryEvents.every(event=>event.classification==="observed"));
+    receipt.workroom.creationRecovery={workspaceId:workroom.id,placementIds:restoredWorkroom.result.blocks.map(block=>block.blockId),
+      eventIds:recoveryEvents.map(event=>event.eventId),historyPreserved:true};
 
     const optimizeTitle = "Synthetic layout optimization room";
     await appCommand({ type: "createWorkspace", title: optimizeTitle, projectId: null });

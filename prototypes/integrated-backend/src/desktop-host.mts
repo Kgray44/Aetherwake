@@ -79,6 +79,7 @@ lines.on("line", async (line) => {
         "timelines",
         "taskObjectives",
         "missions",
+        "workspaceRecovery",
         "missionStartReviewed",
         "missionRevisionReviewed",
         "missionCheckReview",

@@ -20,6 +20,7 @@ import type { TaskObjectiveRequest,TaskObjectiveResponse,TaskObjectiveEvent } fr
 import type { TaskTargetQuery,TaskTargetPage } from '../../application-contract/task-targets.ts';
 import type { GitHubTimelineCommand } from '../../application-contract/github-timeline.ts';
 import type { MissionEvent, MissionRequest, MissionResponse, MissionScope } from './mission-contracts.mts';
+import type { WorkspaceRecoveryRequest, WorkspaceRecoveryResponse } from '../../application-contract/workspace-recovery.ts';
 export type NoteMethod = 'readNote'|'saveNoteDraft'|'commitNote'|'discardNoteDraft'|'renameNote';
 export type NoteRequest = { [K in NoteMethod]: {name:K;input:Parameters<NoteExperienceService[K]>[0]} }[NoteMethod];
 export type LibraryMethod = 'capabilities'|'preferences'|'setFavorite'|'getBlockSettings'|'configureBlock'|'findResources'|'attachBlock'|'createBlock'|'listTemplates'|'getTemplate'|'saveTemplate'|'renameTemplate'|'archiveTemplate'|'previewTemplate'|'applyTemplate'|'previewWorkspaceFromResources'|'workspaceFromResources'|'requestVelaTemplate'|'subjectTargets'|'createSubjectBlock'|'projectOverview'|'browseResources';
@@ -168,7 +169,8 @@ export interface StreamEvent {
   correlationId: string | null; causationId: string | null;
   receivedAt: string; providerTime: number | null; providerTimeSource: string | null;
   type: string; classification: Classification;
-  status: string | null; payload: { redacted: true; taskId?: string; timing?: VelaRouteTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'> };
+  status: string | null; payload: { redacted: true; taskId?: string; timing?: VelaRouteTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'>;
+    workspaceRecovery?: {workspaceId:string;action:'undo-creation'|'restore';creationEventId:string;workspaceVersion:number} };
   mission?: MissionStreamEvent;
 }
 export interface HandoffReview {
@@ -199,6 +201,7 @@ export interface Options {
 }
 export interface CommandMap {
   missions: { input: MissionRequest; output: MissionResponse };
+  workspaceRecovery: { input: WorkspaceRecoveryRequest; output: WorkspaceRecoveryResponse };
   missionStartReviewed: { input: Extract<MissionRequest, { name: 'start' }>['input'] & {
     approvedProjectCheck?: { paths: string[]; digest: string } }; output: MissionResponse };
   missionCheckReview: { input: { paths: string[] }; output: { cwd: string; argv: string[]; head: string; digest: string } };

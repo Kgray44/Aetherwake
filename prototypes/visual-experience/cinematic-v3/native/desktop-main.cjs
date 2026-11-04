@@ -490,6 +490,11 @@ app.whenReady().then(async () => {
             !trustedActiveFrame(event))
           throw Error("mission_user_gesture_required");
       }
+      if (command === "workspaceRecovery" && input?.name === "apply") {
+        if (!trustedActiveFrame(event) ||
+            await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
+            !trustedActiveFrame(event)) throw Error("workspace_recovery_user_gesture_required");
+      }
       if (
         ![
           "replay",
@@ -503,6 +508,7 @@ app.whenReady().then(async () => {
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && isVelaRead(input)) &&
         !(command === "missions" && ["preview", "list", "read", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
+        !(command === "workspaceRecovery" && ["state", "preview"].includes(input?.name)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&
         !(command === "notes" && input?.name === "readNote") &&
@@ -590,6 +596,8 @@ app.whenReady().then(async () => {
           result = { opened: true };
         } else if (input?.name === "sources") result = await call("githubTimeline", input);
         else throw new Error("unsupported_command");
+      } else if (command === "workspaceRecovery") {
+        result = await call("workspaceRecovery", input);
       } else if (command === "library") {
         result = await call("library", input);
       } else if (command === "notes") {

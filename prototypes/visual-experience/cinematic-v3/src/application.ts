@@ -102,6 +102,8 @@ import { mountEnvironmentNavigator } from "./environment-navigator.ts";
 import "./environment-navigator.css";
 import { mountWorkspaceActions, type WorkspaceOptimizationReview } from "./workspace-actions.ts";
 import "./workspace-actions.css";
+import { mountWorkspaceRecovery } from "./workspace-recovery-view.ts";
+import type { WorkspaceRecoveryRequest, WorkspaceRecoveryResponse } from "../../../application-contract/workspace-recovery.ts";
 import { createClipboardClient } from "../../../application-contract/clipboard.ts";
 import { createControlMotion } from "./control-motion.ts";
 import "./control-motion.css";
@@ -606,6 +608,7 @@ export function installApplication(hooks: Hooks) {
   let environmentSurface: (ContextualSurfaceRequest & { id: "environments" }) | null = null;
   let environmentPresentation = 0;
   let workspaceActions: ReturnType<typeof mountWorkspaceActions> | null = null;
+  let workspaceRecoveryView: ReturnType<typeof mountWorkspaceRecovery> | null = null;
   let workspaceActionsSurface: (ContextualSurfaceRequest & { id: "workspace-actions" }) | null = null;
   let offset = { x: 0, y: 0 };
   let zoom = 1;
@@ -851,6 +854,7 @@ export function installApplication(hooks: Hooks) {
     () => {
       environmentNavigator?.dispose();
       workspaceActions?.dispose();
+      workspaceRecoveryView?.dispose();
       agentLibrary?.dispose();
       checklistCreator?.dispose();
       taskCreator?.dispose();
@@ -1720,6 +1724,8 @@ export function installApplication(hooks: Hooks) {
     });
   }
   dialog.addEventListener("close", () => {
+    workspaceRecoveryView?.dispose();
+    workspaceRecoveryView = null;
     if (!previewCommitting) cancelPreview();
     cardConfiguration?.dispose();
     cardConfiguration = null;
@@ -1857,6 +1863,8 @@ export function installApplication(hooks: Hooks) {
     });
   });
   function open(title: string, body: string) {
+    workspaceRecoveryView?.dispose();
+    workspaceRecoveryView = null;
     cardConfiguration?.dispose();
     cardConfiguration = null;
     surfaces.close("conversations");
@@ -3225,6 +3233,27 @@ export function installApplication(hooks: Hooks) {
       snapshot: state,
       motion: hooks.motion,
       wake: hooks.wake,
+      recoverCreation: async () => {
+        const workspaceId = state?.activeWorkspaceId;
+        if (!workspaceId) throw Error("workspace_unavailable");
+        await flush();
+        surfaces.close("workspace-actions");
+        open("Workspace creation", '<section id="workspace-creation-recovery"></section>');
+        const root = el<HTMLElement>("#workspace-creation-recovery", dialog);
+        const view = mountWorkspaceRecovery(root, workspaceId, async (request: WorkspaceRecoveryRequest) => {
+          const result = await host.command!("workspaceRecovery", request) as WorkspaceRecoveryResponse;
+          if (result.kind === "receipt" && workspaceRecoveryView === view) {
+            try { apply(await host.command!("desktop", { type: "snapshot" }) as DesktopSnapshot); }
+            catch (cause) { report(cause); }
+          }
+          return result;
+        }, () => {
+          if (workspaceRecoveryView === view) workspaceRecoveryView = null;
+          dialog.close();
+        });
+        workspaceRecoveryView = view;
+        await view.ready;
+      },
       optimization: {
         limit: LAYOUT_OPTIMIZATION_LIMITS.movable,
         preview: previewOptimization,

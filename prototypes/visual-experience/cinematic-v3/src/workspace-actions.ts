@@ -38,6 +38,7 @@ export interface WorkspaceActionsOptions {
   constellation(): Promise<void>;
   stream(): Promise<void>;
   connections(): Promise<void>;
+  recoverCreation?(): Promise<void>;
   configureOrganization?(input: {
     organization: OrganizationUpdate;
     expectedRevision: number;
@@ -406,6 +407,11 @@ export function mountWorkspaceActions(
   }
   const history = disclosure("Layout history", "history");
   history.content.classList.add("aw-wa-history");
+  const creation = options.recoverCreation ? disclosure("Workspace creation", "creation") : null;
+  const creationAction = creation ? button("Undo workspace creation…", "undo-creation", () => {
+    if (creation.open && active()) void run("undo-creation", () => options.recoverCreation!());
+  }) : null;
+  if (creation && creationAction) creation.content.append(creationAction);
   const historyButtons = (
     [
       ["undo", "Undo"],
@@ -925,6 +931,7 @@ export function mountWorkspaceActions(
     destinations.append(button(title, key, () => void run(key, options[key])));
   }
   shell.append(name, modeGroup, essentials, history.wrap, find.wrap);
+  if (creation) shell.append(creation.wrap);
   if (grid) shell.append(grid.wrap);
   if (optimize) shell.append(optimize.wrap);
   shell.append(destinations, status);
@@ -1074,6 +1081,7 @@ export function mountWorkspaceActions(
         pending.has(entry.action),
       );
     paintNamedLayouts?.();
+    if (creationAction) state(creationAction, unavailable || pending.has("undo-creation"), false, pending.has("undo-creation"));
     const p = snapshot.presence,
       validPresence = !!workspace && p?.workspaceId === workspace.id;
     state(
@@ -1142,13 +1150,14 @@ export function mountWorkspaceActions(
         write(n, "--wa-" + name, String(Math.max(0, Math.min(1, value))));
     }
     history.paint();
+    creation?.paint();
     find.paint();
     grid?.paint();
     optimize?.paint();
   }
   listen(shell, "keydown", (event) => {
     if ((event as KeyboardEvent).key !== "Escape") return;
-    const open = [optimize, grid, find, history].find((d) => d?.open);
+    const open = [optimize, grid, creation, find, history].find((d) => d?.open);
     if (!open) return;
     event.preventDefault();
     event.stopPropagation();

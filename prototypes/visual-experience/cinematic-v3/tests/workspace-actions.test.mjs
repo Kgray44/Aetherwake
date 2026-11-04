@@ -755,3 +755,65 @@ test("content module has no scheduler, CSS transition/animation, full-scene blur
     "material cues are driven by shared coordinator values",
   );
 });
+
+test("creation recovery uses the shared disclosure coordinator, Escape focus semantics and one explicit pending action", async () => {
+  let requests = 0, complete;
+  const pending = new Promise(resolve => { complete = resolve; });
+  const f = setup({ recoverCreation: async () => { requests++; await pending; } });
+  try {
+    assert.equal(requests, 0);
+    const toggle = f.get("creation-toggle"), apply = f.get("undo-creation");
+    const body = f.dom.root.querySelectorAll(".aw-workspace-actions-disclosure")
+      .find(node => node.id === toggle.getAttribute("aria-controls"));
+    assert.equal(toggle.getAttribute("aria-expanded"), "false");
+    apply.fire("click");
+    assert.equal(requests, 0, "A closed disclosure cannot invoke recovery");
+    toggle.fire("click");
+    assert.equal(body.hidden, false);
+    assert.equal(body.inert, false);
+    assert.equal(body.style.opacity, "0");
+    assert.ok([...f.motion.bodies.keys()].some(key => key.endsWith("creation-disclosure")));
+    f.tick(1);
+    assert.ok(Number(body.style.opacity) > 0 && Number(body.style.opacity) < 1);
+    apply.focus();
+    const escape = f.shell.fire("keydown", { key: "Escape" });
+    assert.ok(escape.defaultPrevented && escape.stopped);
+    assert.equal(body.inert, true);
+    assert.equal(body.getAttribute("aria-hidden"), "true");
+    assert.equal(f.dom.doc.activeElement, toggle);
+    apply.fire("click");
+    assert.equal(requests, 0);
+    f.tick();
+    assert.equal(body.hidden, true);
+    toggle.fire("click");
+    apply.fire("click");
+    apply.fire("click");
+    assert.equal(requests, 1);
+    assert.equal(apply.disabled, true);
+    assert.equal(f.shell.dataset.state, "pending");
+    f.view.dispose();
+    complete();
+    await Promise.resolve(); await Promise.resolve();
+    apply.fire("click");
+    assert.equal(requests, 1);
+    assert.equal(f.motion.bodies.size, 1, "Only the independently owned coordinator body remains");
+  } finally { complete(); f.cleanup(); }
+});
+
+test("creation recovery is optional and cannot act without a current workspace", () => {
+  const ordinary = setup();
+  try { assert.equal(ordinary.get("creation-toggle"), null); }
+  finally { ordinary.cleanup(); }
+  const snapshot = initial();
+  snapshot.activeWorkspaceId = null;
+  snapshot.workspaces = [];
+  snapshot.blocks = [];
+  let requests = 0;
+  const absent = setup({ recoverCreation: async () => { requests++; } }, snapshot);
+  try {
+    absent.get("creation-toggle").fire("click");
+    assert.equal(absent.get("undo-creation").disabled, true);
+    absent.get("undo-creation").fire("click");
+    assert.equal(requests, 0);
+  } finally { absent.cleanup(); }
+});

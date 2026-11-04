@@ -237,3 +237,33 @@ rotations and all unselected geometry. It reports cards that cannot fit and
 keeps their current positions. The review is invalidated by navigation, layout
 changes, panning, zoom or resize. Apply uses the reviewed revision and bounds
 and records one undoable layout operation.
+
+Workspace creation has a separate reviewed recovery path. It binds to the
+exact canonical `workspace.created` change event recorded by the shared kernel
+factory, covering ordinary, Vela, template, existing-resource and mission
+workspaces. Missing or ambiguous creation records make recovery unavailable.
+State reads expose authorized metadata without granting an action. A bounded,
+short-lived preview binds the complete creation record and current workspace,
+layout, project and management-policy versions. Native apply requires current
+user activation and a trusted focused frame. Archived workspace management
+checks the exact workspace and its active authorized project without expanding
+ordinary Library access.
+
+Undo creation archives the workspace; restore makes the same workspace active.
+Both preserve its current resources, placements, geometry, layout history,
+conversation identities and mission bindings. They do not restore an earlier
+content snapshot, cancel a mission or delete resources. Archive, the durable
+idempotent action receipt and the observed Stream event commit together. A
+retry after a lost response uses the same command identity and rechecks current
+management authority before returning the historical receipt. Restoring a
+workroom also retries pending handoff delivery. Its originating mission and
+Vela reply can complete while the workroom is archived.
+
+Focused recovery proof comprises 15 canonical-service tests and three actual
+Core integration tests. Nine new renderer/preload cases cover the reviewed
+interaction and native activation boundary; the full renderer suite passed
+436 tests. A bounded Windows journey at 125% scale completed creation
+undo/restore and subsequent Workspace Architect construction alongside the
+mission, Stream, branch, layout and revision checks with zero provider
+requests. Live provider turns and physical multi-display qualification remain
+separate acceptance work.

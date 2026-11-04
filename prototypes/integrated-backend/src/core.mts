@@ -16,6 +16,8 @@ import { MISSION_LIMITS } from './mission-contracts.mts';
 import { createMissionAdmission } from './mission-admission.mts';
 import { MissionPublication } from './mission-publication.mts';
 import { MissionConversationReceipts } from './mission-conversation.mts';
+import { WorkspaceRecoveryService } from './workspace-recovery.mts';
+import type { WorkspaceRecoverySnapshot } from '../../application-contract/workspace-recovery.ts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
@@ -152,6 +154,7 @@ export class BackendCore {
   private mutationDepth = 0;
   private pendingEventDelivery: StreamEvent[] = [];
   private missionConversations?: MissionConversationReceipts;
+  private workspaceRecovery!: WorkspaceRecoveryService;
   private port: ProviderPort;
   private providerActivity = {codexConnections:0,providerRequests:0,systemMemoryReads:0,scope:'process-session-native-attempts' as const};
   private velaSamples = new Map<'system.cpu' | 'system.gpu', Promise<SystemUtilization | undefined>>();
@@ -402,6 +405,18 @@ export class BackendCore {
           return row ? Number(row.version) : undefined;
         },
       });
+      this.workspaceRecovery = new WorkspaceRecoveryService({
+        db: this.db, atomic: work => this.atomic(work),
+        snapshot: id => this.workspaceRecoverySnapshot(id),
+        archive: (workspaceId, archived, expectedVersion) => this.desktop.apply({
+          type: 'archiveWorkspace', workspaceId, archived, expectedVersion,
+        }, () => { throw new ServiceError('unexpected_workspace_recovery_creation'); }),
+        record: ({ workspaceId, action, commandId, creationEventId, workspaceVersion }) =>
+          this.record('workspace.creation-' + (action === 'restore' ? 'restored' : 'undone'), 'observed', undefined,
+            'workspace-recovery:' + commandId, { providerId: 'aerynth-native', detached: true,
+              correlationId: commandId, status: action === 'restore' ? 'restored' : 'archived',
+              payload: { redacted: true, workspaceRecovery: { workspaceId, action, creationEventId, workspaceVersion } } }),
+      });
       this.record('stream/reopened', 'inferred');
       this.flushMissionPublication();
     } catch (error) { this.kernel.close(); throw error; }
@@ -409,6 +424,21 @@ export class BackendCore {
   private missionScopeAllowed(scope: MissionScope): boolean {
     if (this.closed || !this.libraryAuthorized({ kind: 'workspace', id: scope.workspaceId })) return false;
     return this.db.prepare("SELECT project_id FROM workspaces WHERE id=? AND state='active'").get(scope.workspaceId)?.project_id === scope.projectId;
+  }
+  private workspaceRecoverySnapshot(id: string): WorkspaceRecoverySnapshot | null {
+    const row = this.db.prepare(`SELECT w.*,l.version AS layout_version,p.state AS project_state,p.version AS project_version
+      FROM workspaces w JOIN workspace_layouts l ON l.workspace_id=w.id LEFT JOIN projects p ON p.id=w.project_id
+      WHERE w.id=?`).get(id);
+    if (!row || !['active', 'archived'].includes(String(row.state)) ||
+      row.project_id !== null && (row.project_state !== 'active' || !this.conversationAccess.project(String(row.project_id), 'organize'))) return null;
+    // Exact local-owner management authority also covers archived workspace metadata.
+    // Ordinary library access remains active-only.
+    if (row.state === 'active' && !this.libraryAuthorized({ kind: 'workspace', id })) return null;
+    const counts = this.db.prepare('SELECT count(*) AS placements,count(DISTINCT resource_id) AS resources FROM blocks WHERE workspace_id=?').get(id)!;
+    return { workspaceId: id, title: String(row.title), projectId: row.project_id === null ? null : String(row.project_id),
+      projectVersion: row.project_id === null ? null : Number(row.project_version), policyVersion: 'aerynth.local-owner@1',
+      state: row.state as 'active' | 'archived', version: Number(row.version), layoutVersion: Number(row.layout_version),
+      placementCount: Number(counts.placements), resourceCount: Number(counts.resources) };
   }
   private missionConversationAllowed(mission: Mission): boolean {
     const room = mission.workroom, id = room?.missionConversationResourceId;
@@ -3810,6 +3840,12 @@ export class BackendCore {
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
     ensure(!this.closed, 'backend_closed');
     const a: any = input;
+    if (name === 'workspaceRecovery') {
+      if (a?.name === 'apply') ensure(!this.active, 'execution_busy');
+      const result = this.workspaceRecovery.dispatch(a);
+      if (result.kind === 'receipt') this.flushMissionPublication();
+      return result as CommandMap[K]['output'];
+    }
     if (name === 'missions') return await this.missionCommand(a) as CommandMap[K]['output'];
     if (name === 'missionStartReviewed') {
       const { approvedProjectCheck, ...request } = a as CommandMap['missionStartReviewed']['input'];

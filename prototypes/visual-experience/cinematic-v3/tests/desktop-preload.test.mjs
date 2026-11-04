@@ -161,3 +161,20 @@ test("scoped conversation activity remains a public read without exposing execut
   );
   assert.equal(calls.length, 1);
 });
+
+test("creation recovery reads require no gesture while applying needs current isolated-world activation", async () => {
+  const denied = bridge();
+  const state = { name: "state", input: { workspaceId: "canonical-workspace" } };
+  const preview = { name: "preview", input: { workspaceId: "canonical-workspace", action: "undo-creation",
+    creationEventId: "canonical-event", expectedVersion: 1, expectedLayoutVersion: 4 } };
+  const apply = { name: "apply", input: { previewId: "canonical-review", fingerprint: "a".repeat(64), commandId: "canonical-command" } };
+  assert.equal(await denied.host.command("workspaceRecovery", state), "canonical-result");
+  assert.equal(await denied.host.command("workspaceRecovery", preview), "canonical-result");
+  await assert.rejects(denied.host.command("workspaceRecovery", apply), /workspace_recovery_user_gesture_required/);
+  assert.deepEqual(denied.calls.map(call => call[2].name), ["state", "preview"]);
+  const allowed = bridge(true);
+  assert.equal(await allowed.host.command("workspaceRecovery", apply), "canonical-result");
+  assert.deepEqual(JSON.parse(JSON.stringify(allowed.calls)), [["application-command", "workspaceRecovery", apply]]);
+  await assert.rejects(allowed.host.command("authorizeWorkspaceRecovery", apply.input), /unsupported_command/);
+  assert.equal(allowed.calls.length, 1);
+});
