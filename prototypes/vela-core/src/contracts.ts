@@ -395,6 +395,7 @@ export interface VelaState {
   planningProviders?: { providerId: string; available: boolean }[];
   routingSettings?: import('./routing-settings.ts').VelaRoutingSettingsView;
   fileEdits?: VelaFileEditView[];
+  missionFileEdits?: import('../../application-contract/mission-file-edits.ts').MissionFileEditView[];
   fileProposals?: VelaFileProposal[];
   recoverableProviderRequestIds?: string[];
   /** Bounded transient excerpt of the active conversational response. */
@@ -452,6 +453,7 @@ export interface AdaptationState {
   applicationAvailable: boolean;
 }
 export interface VelaClient {
+  missionFileEdit?(input:{type:'apply'|'verify';operationId:string}):Promise<import('../../application-contract/mission-file-edits.ts').MissionFileEditView>;
   pickSources?(input:VelaPickSourcesInput):Promise<VelaPickedSources>;
   state(): Promise<VelaState>;
   open(): Promise<VelaState>;

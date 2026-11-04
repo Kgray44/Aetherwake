@@ -674,15 +674,20 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       : route?.kind === 'file-edit' ? 'Codex proposes file changes. Aerynth applies only the exact contents you approve.'
       : route?.kind === 'project-check' ? 'The approved command runs locally in the Codex read-only sandbox without inference.'
       : selectedRequest?.local ? 'An authorized native capability can answer directly.' : undefined;
+    const apiEdit=current?.missionFileEdits?.find(record=>record.owner.kind==='api-selected-file-intent'&&record.owner.requestId===selectedRequest?.id);
     const edit = current?.fileEdits?.find(record => record.requestId === selectedRequest?.id);
     const standaloneCheck = selectedRequest?.projectCheck;
     const providerRecovery = selectedRequest?.providerRecovery;
     const canRecoverProvider = !!selectedRequest && !!current?.recoverableProviderRequestIds?.includes(selectedRequest.id) && !!client.reconcileProviderTurn;
-    fileEditActions.hidden = !edit && !standaloneCheck && !providerRecovery && !canRecoverProvider;
-    const editSignature = JSON.stringify({ edit, standaloneCheck, providerRecovery, canRecoverProvider });
+    fileEditActions.hidden = !apiEdit && !edit && !standaloneCheck && !providerRecovery && !canRecoverProvider;
+    const editSignature = JSON.stringify({ apiEdit,edit, standaloneCheck, providerRecovery, canRecoverProvider });
     if (fileEditActions.dataset.edit !== editSignature) {
       fileEditActions.dataset.edit = editSignature;
       fileEditActions.replaceChildren();
+      if(apiEdit&&client.missionFileEdit){
+        const type=apiEdit.phase==='awaiting-native-review'?'apply':apiEdit.phase==='applied'&&apiEdit.verification.state!=='passed'&&!(apiEdit.verification.state==='unknown'&&apiEdit.verification.reason==='check-outcome-unconfirmed')?'verify':null;
+        if(type){const control=button(type==='apply'?'Review change':'Review required test',()=>void run(async()=>{if(fileEditBusy)return;fileEditBusy=control.disabled=true;try{await client.missionFileEdit!({type,operationId:apiEdit.id});}finally{fileEditBusy=control.disabled=false;await refresh();}}));fileEditActions.append(control);}
+      }
       if (providerRecovery) {
         const outcome = { provider_completed: 'finished', failed: 'failed', interrupted: 'was interrupted' }[providerRecovery.state];
         fileEditActions.append(el('p', 'vela-core-meta', `The Codex turn ${outcome}. The original task still needs verification.`));
@@ -774,7 +779,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const details = JSON.stringify({ requestId: selectedRequest?.id, taskId: selectedRequest?.handoff?.taskId ?? selectedRequest?.id, issue: selectedRequest?.errorCode, why,
       route, routingSettings: selectedRequest?.routingSettings, routingAgent: selectedRequest?.routingAgent,
       budget: route?.kind === 'project-check' ? 'No model usage' : route ? 'Cost and remaining allowance unknown' : undefined,
-      ...(route?.kind === 'agentic' || route?.kind === 'composite' ? { verification: 'unverified' } : {}), edit,
+      ...(route?.kind === 'agentic' || route?.kind === 'composite' ? { verification: 'unverified' } : {}), edit,apiEdit,
       projectCheck: standaloneCheck, providerRecovery, handoff: selectedRequest?.handoff, local: selectedRequest?.local, response: selectedRequest?.response,
       provider: message?.providerContribution ?? selectedRequest?.providerId }, null, 2);
     if (manifestationDetails.body.firstElementChild?.textContent !== details) manifestationDetails.body.replaceChildren(el('pre', undefined, details)); manifestationDetails.node.hidden = !!missionReport || projection.kind === 'none' || projection.kind === 'action';

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { NativeCredential } from './contracts.mts';
 import { abortable, boundedJSON, digest, exact, record, text } from './common.mts';
-import { GPT_LIVE_MODEL, type CanonicalVelaRuntimePort, type LiveCanonicalContext, type LiveChannel, type LiveClientCommand, type LiveDelegationBinding, type LiveMediaAdapter, type LiveNativePort, type LiveNativeReview, type LiveSessionView, type LiveStartInput, type LiveVoice, type PromptVoiceInput, type PromptVoiceResult, type SavedPromptVoice } from './live-contracts.mts';
+import { GPT_LIVE_MODEL, type CanonicalVelaRuntimePort, type LiveCanonicalContext, type LiveChannel, type LiveClientCommand, type LiveDelegationBinding, type LiveMediaAdapter, type LiveNativePort, type LiveNativeReview, type LiveSessionView, type LiveStartInput, type LiveVoice, type PromptVoiceInput, type PromptVoiceResult, type SavedCustomVoice } from './live-contracts.mts';
 export const LIVE_ENDPOINT = 'https://api.openai.com/v1/live/sessions';
 export const PROMPT_VOICE_ENDPOINT = 'https://api.openai.com/v1/audio/voices';
 // Supported Live startup: developer input and the same commentary instruction
@@ -249,8 +249,12 @@ export class GptLiveController {
       await this.bounded(this.options.runtime.recordVoiceCandidate(result.candidate)); result.savedLocally = true; result.state = 'created'; return result;
     } catch (error) { result.state = result.dispatched ? 'unknown' : 'failed'; result.errorCode = error instanceof LiveError ? error.code : 'live_voice_creation_unavailable'; return result; }
   }
-  async saveVoiceSelection(input: { voice: SavedPromptVoice; expectedSettingsVersion: number; speechPersonality: string; authorizationRef: string }): Promise<{ settingsVersion: number }> {
-    check(fields(input, ['voice', 'expectedSettingsVersion', 'speechPersonality', 'authorizationRef']) && fields(input.voice, ['configurationId', 'configurationVersion', 'id', 'name', 'prompt', 'createdAt', 'type']) && input.voice.type === 'prompt' && text(input.voice.id, 256) && text(input.voice.configurationId) && Number.isSafeInteger(input.voice.configurationVersion) && input.voice.configurationVersion > 0 && text(input.voice.name, 100) && typeof input.voice.prompt === 'string' && Buffer.byteLength(input.voice.prompt) <= 4000 && Number.isSafeInteger(input.voice.createdAt) && input.voice.createdAt >= 0 && Number.isSafeInteger(input.expectedSettingsVersion) && input.expectedSettingsVersion >= 0 && typeof input.speechPersonality === 'string' && Buffer.byteLength(input.speechPersonality) <= 2000 && text(input.authorizationRef), 'live_invalid_voice_selection');
+  async saveVoiceSelection(input: { voice: SavedCustomVoice; expectedSettingsVersion: number; speechPersonality: string; authorizationRef: string }): Promise<{ settingsVersion: number }> {
+    check(fields(input,['voice','expectedSettingsVersion','speechPersonality','authorizationRef']),'live_invalid_voice_selection');
+    const voice=input.voice;
+    const validVoice=voice?.type==='prompt'?fields(voice,['configurationId','configurationVersion','id','name','prompt','createdAt','type'])&&typeof voice.prompt==='string'&&Buffer.byteLength(voice.prompt)<=4000&&Number.isSafeInteger(voice.createdAt)&&voice.createdAt>=0:
+      voice?.type==='existing'&&fields(voice,['configurationId','configurationVersion','id','name','createdAt','type','sourceType'])&&['prompt','audio_sample','unknown'].includes(voice.sourceType)&&(voice.createdAt===null||Number.isSafeInteger(voice.createdAt)&&voice.createdAt>=0);
+    check(fields(input, ['voice', 'expectedSettingsVersion', 'speechPersonality', 'authorizationRef']) && validVoice && text(voice.id,256)&&text(voice.configurationId)&&Number.isSafeInteger(voice.configurationVersion)&&voice.configurationVersion>0&&text(voice.name,100)&&Number.isSafeInteger(input.expectedSettingsVersion) && input.expectedSettingsVersion >= 0 && typeof input.speechPersonality === 'string' && Buffer.byteLength(input.speechPersonality) <= 2000 && text(input.authorizationRef), 'live_invalid_voice_selection');
     const frozen = structuredClone(input), body = JSON.stringify(frozen), review: LiveNativeReview = { operation: 'voice-save', attemptId: randomUUID(), configurationId: frozen.voice.configurationId, configurationVersion: frozen.voice.configurationVersion, authorizationRef: frozen.authorizationRef, bodyDigest: digest(body), bodyBytes: Buffer.byteLength(body), paidSession: false };
     try {
       await this.bounded(this.options.native.authorize(review)); const credential = await this.bounded(this.options.native.resolveCredential(review.configurationId, review.configurationVersion)); this.headers(credential); await this.fence(review, credential.boundaryDigest);

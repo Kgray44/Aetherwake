@@ -35,6 +35,8 @@ const {
   isConversationRead,
 } = require("./conversation-broker.cjs");
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
+const {createMissionFileEditBroker,PRIVATE_MISSION_FILE_EDIT_COMMANDS}=require('./mission-file-edit-broker.cjs');
+const {showVelaReview}=require('./vela-review.cjs');
 const {createDocumentExtractionBroker}=require('./document-extraction-broker.cjs');
 const { productCommand, isProductRead } = require("./product-commands.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
@@ -523,6 +525,11 @@ app.whenReady().then(async () => {
     win.isVisible() &&
     !win.isMinimized() &&
     win.isFocused();
+  let nativeReviewBusy=false;
+  const nativeReviewGate=async work=>{if(nativeReviewBusy)throw Error('native_review_busy');nativeReviewBusy=true;try{return await work();}finally{nativeReviewBusy=false;}};
+  const reviewProvider=args=>nativeReviewGate(()=>showVelaReview(args));
+  const reviewDialogs={showMessageBox:(...args)=>nativeReviewGate(()=>dialog.showMessageBox(...args)),showOpenDialog:(...args)=>nativeReviewGate(()=>dialog.showOpenDialog(...args)),showSaveDialog:(...args)=>nativeReviewGate(()=>dialog.showSaveDialog(...args))};
+  const missionFileEditBroker=createMissionFileEditBroker({win,trustedDocumentUrl:localURL,call,nodeExecutable:backendExecutable(process.env.AERYNTH_NODE_BIN),runtime:{BrowserWindow,ipcMain,session,dialog},reviewGate:nativeReviewGate});
   velaVoiceBroker = createVelaVoiceBroker({call,mediaBroker:liveMediaBroker,
     maximumVoiceSeconds: process.argv.includes('--missions-voice-live-only') && process.argv.includes('--voice-synthetic-input') ? 30 : 300,
     storageAllowed: () => storage.allowWrite(),
@@ -555,6 +562,7 @@ app.whenReady().then(async () => {
   win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
+      if(PRIVATE_MISSION_FILE_EDIT_COMMANDS.includes(command))throw Error('unauthorized_private_command');
       if (
         event.sender !== win.webContents ||
         event.senderFrame !== win.webContents.mainFrame ||
@@ -619,7 +627,7 @@ app.whenReady().then(async () => {
             await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
             !trustedActiveFrame(event)) throw Error("workspace_recovery_user_gesture_required");
       }
-      if (command === "vela" && ["request", "native", "apply", "pickSources", "fileProposal"].includes(input?.name)) {
+      if (command === "vela" && ["request", "native", "apply", "pickSources", "fileProposal", "missionFileEdit"].includes(input?.name)) {
         if (!trustedActiveFrame(event) ||
             await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
             !trustedActiveFrame(event)) throw Error("vela_user_gesture_required");
@@ -646,7 +654,7 @@ app.whenReady().then(async () => {
         !(command === 'velaApiConnection' && ['status', 'usageStatus', 'catalog'].includes(input?.type)) &&
         !(command === 'weatherPermission' && ['status', 'windows-settings'].includes(input?.type)) &&
         !(command === 'velaWake' && ['state','disableWake','masterOff','reconcile'].includes(input?.name)) &&
-        !(command === 'velaVoice' && ['state','devices','stop','mute','setInputDevice','setOutputDevice','resumePlayback','interruptPlayback'].includes(input?.name)) &&
+        !(command === 'velaVoice' && ['state','devices','refreshVoices','stop','mute','setInputDevice','setOutputDevice','resumePlayback','interruptPlayback'].includes(input?.name)) &&
         !(
           command === "library" &&
           [
@@ -726,13 +734,15 @@ app.whenReady().then(async () => {
           openExternal: (url) => shell.openExternal(url),
         });
       } else if (command === "conversation") {
-        result = await conversationCommand({ win, call, input, openExternal: (url) => shell.openExternal(url) });
+        result = await conversationCommand({ win, call, input,reviewSources:reviewProvider, openExternal: (url) => shell.openExternal(url) });
       } else if (command === "vela") {
-        result = await velaCommand({
+        result = input?.name==='missionFileEdit'?await missionFileEditBroker.command(event,input.input):await velaCommand({
           win,
-          dialog,
+          dialog:reviewDialogs,
           call,
           input,
+          reviewProvider,
+          missionFileEditRequest:request=>missionFileEditBroker.prepare(event,request),
           observeNativeRequest: observeVelaRequest,
           offerPlanningByDefault: !verify || verifyAirLocal,
           directMessageSend: !verify || verifyAirLocal || verifyMissions && (process.argv.includes('--missions-api-live-only')||process.argv.includes('--missions-persistence-live-only')),
@@ -763,7 +773,7 @@ app.whenReady().then(async () => {
             throw Error("mission_preview_changed");
           if (!offer.planner) throw Error("mission_planner_unavailable");
           const { model, effort, capabilities, provider } = offer.planner;
-          const choice = await dialog.showMessageBox(win, {
+          const choice = await reviewDialogs.showMessageBox(win, {
             type: "question", buttons: ["Cancel", "Request plan"], defaultId: 0, cancelId: 0,
             title: "Review mission planning request", message: `Send one planning request to ${provider==='openai-api-vela'?'Vela’s dedicated API':'ChatGPT plan'}?`,
             detail: `Model: ${model}${effort ? " · " + effort : ""}\n\nObjective:\n${offer.objective}\n\nCapability descriptions:\n${capabilities.join("\n")}\n\nReview the resulting tasks before starting the mission.`,
@@ -782,7 +792,7 @@ app.whenReady().then(async () => {
           if (!trustedActiveFrame(event)) throw Error("unauthorized_sender");
           if (preview.externalReview) {
             const { provider, model, effort, objective, instructions, webSearch } = preview.externalReview;
-            const choice = await dialog.showMessageBox(win, {
+            const choice = await reviewDialogs.showMessageBox(win, {
               type: "question", buttons: ["Cancel", "Approve reassignment"], defaultId: 0, cancelId: 0,
               title: "Review mission specialist reassignment",
               message: "Apply this reassignment to the paused mission?",
@@ -814,7 +824,7 @@ app.whenReady().then(async () => {
             const assignments = preview.plan.tasks.filter(task => task.specialist).map(({ id, objective, criterion, dependencies, specialist }) =>
               `${id}: ${specialist.role} — ${specialist.provider} · ${specialist.model}${specialist.effort ? " · " + specialist.effort : ""}${specialist.webSearch ? " · public web search" : ""}\nTask: ${objective}\nCriterion: ${criterion}\nVerified prerequisite receipts: ${dependencies.join(', ') || 'none'}\n${specialist.instructions}`);
             const apiWorkers = preview.plan.tasks.some(task => task.specialist?.provider === 'openai-api-vela');
-            const choice = await dialog.showMessageBox(win, {
+            const choice = await reviewDialogs.showMessageBox(win, {
               type: "question", buttons: ["Cancel", preview.localReview ? "Approve specialists" : "Start mission"], defaultId: 0, cancelId: 0,
               title: "Review specialist mission", message: `Send ${calls} separate requests to ${provider}?`,
               detail: `Objective sent to each specialist:\n${preview.plan.objective}\n\nInstructions and reviewed inputs:\n${assignments.join("\n\n")}\n\n${apiWorkers ? `API workers receive this objective, task objectives, mission criteria (${preview.plan.criteria.join(', ')}), project/workspace scope identifiers and whole verified receipts from only their named prerequisites. Those future receipt bodies are compiled when prerequisites finish. Each exact request body and context digest is bound to one use and revalidated before dispatch. API workers have no web search, file, notes or chat-history tools. API calls use the dedicated key and authorized usage limits.` : 'The provider may count these requests against your plan. No files, chat history or local measurements are sent.'}`,
@@ -823,7 +833,7 @@ app.whenReady().then(async () => {
           }
           if (preview.localReview) {
             if (preview.executors.some(executor => !executor.available)) throw Error("mission_project_check_unavailable");
-            const selected = await dialog.showOpenDialog(win, {
+            const selected = await reviewDialogs.showOpenDialog(win, {
               title: "Choose tracked Node test files in one Git checkout",
               properties: ["openFile", "multiSelections"],
               filters: [{ name: "Node test sources", extensions: ["js", "cjs", "mjs", "ts", "mts"] }],
@@ -832,7 +842,7 @@ app.whenReady().then(async () => {
             const paths = selected.filePaths;
             if (paths.length > preview.localReview.maxFiles) throw Error("mission_project_check_selection_limit");
             const review = await call("missionCheckReview", { paths });
-            const choice = await dialog.showMessageBox(win, {
+            const choice = await reviewDialogs.showMessageBox(win, {
               type: "question", buttons: ["Cancel", "Run reviewed mission"], defaultId: 0, cancelId: 0,
               title: "Review read-only project tests", message: "Run the selected Node tests alongside native measurements?",
               detail: `Checkout: ${review.cwd}\nCommit: ${review.head}\nArguments: ${JSON.stringify(review.argv)}\n\nCodex runs the selected command in a read-only sandbox with zero model requests. The sandbox requests restricted networking. Effective isolation depends on the installed Windows sandbox mode.`,

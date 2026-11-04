@@ -49,7 +49,8 @@ lines.on("line", async (line) => {
       return;
     }
     id = request.id;
-    if (['velaApiConfigure', 'velaApiUsageAuthorize', 'velaApiUsageStatus','velaVoiceNative','velaWeatherPermissionNative','velaWakeNative','velaWakeFrame','velaWakeCaptureState','velaFileProposalPrepareNative','velaSourcesPickNative','folderOpenNative'].includes(request.command)) {
+    if (['velaApiConfigure', 'velaApiUsageAuthorize', 'velaApiUsageStatus','velaVoiceNative','velaWeatherPermissionNative','velaWakeNative','velaWakeFrame','velaWakeCaptureState','velaFileProposalPrepareNative','velaSourcesPickNative','folderOpenNative',
+      'missionFileEditPrepareNative','missionFileEditRunNative','missionFileEditReviewNative','missionFileEditChoiceNative','missionFileEditApplyNative','missionFileEditCheckReviewNative','missionFileEditCheckRunNative','missionFileEditRead'].includes(request.command)) {
       if (!nativeClient || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))
         throw new Error('native_api_configuration_required');
       write({ id, result: await backend.call(request.command, request.input) });

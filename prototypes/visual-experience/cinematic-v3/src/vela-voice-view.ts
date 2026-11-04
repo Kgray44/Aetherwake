@@ -54,6 +54,9 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
     dirty = false; if (isState(result)) { settingsVersion = -1; accept(result); } return result;
   });
   const reload = act('Reload saved settings', async () => { dirty = false; settingsVersion = -1; await refresh(); });
+  const catalogStatus=make('p','Vela 3 is the default. Voice changes apply to the next session.');catalogStatus.className='vela-core-meta';
+  const refreshVoices=act('Refresh saved voices',()=>command({name:'refreshVoices',input:{}}));
+  advanced.addEventListener('toggle',()=>{if(advanced.open&&visible&&!pending)void run(()=>command({name:'refreshVoices',input:{}})).catch(()=>{});});
   const audition = act('Preview voice', () => command({ name: 'audition', input: { ...(voice.value ? { voiceId: voice.value } : {}), sample: 'Hello. I’m Vela. What shall we work on together?' } }));
   const name = make('input'); name.maxLength = 80; name.className = 'vela-core-input';
   const prompt = make('textarea'); prompt.maxLength = 1200; prompt.rows = 3; prompt.className = 'vela-core-input';
@@ -76,7 +79,7 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
   });
   const billing = make('p', 'Starting or previewing voice uses the Vela API: up to 5 minutes per session, including 15 seconds of initial exposure. Creating a prompt voice is free.'); billing.className = 'vela-core-meta';
   const usage = make('p'); usage.className = 'vela-core-meta';
-  settings.append(field('Voice', voice), field('Speaking style', personality), save, reload, audition,
+  settings.append(field('Voice', voice),catalogStatus,refreshVoices, field('Speaking style', personality), save, reload, audition,
     field('New voice name', name), field('Describe the voice', prompt), create,
     field('Microphone', input), field('Speaker', output), deviceButton, billing, usage);
   advanced.append(summary, settings); element.append(status, caption, error, controls, advanced);
@@ -102,16 +105,19 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
     muteButton.setAttribute('aria-pressed', String(state?.media?.localTrackEnabled === false));
     resumeButton.hidden = state?.media?.playback !== 'blocked'; resumeButton.disabled = pending;
     interruptButton.hidden = !active; interruptButton.disabled = pending || session?.state !== 'running';
-    for (const button of [save, reload, audition, create, deviceButton]) button.disabled = pending || !state?.available || active;
+    for (const button of [reload, audition, create, deviceButton]) button.disabled = pending || !state?.available || active;
+    save.disabled=pending||!state?.available||!voice.value||[...voice.options].find(option=>option.value===voice.value)?.disabled===true;
+    refreshVoices.disabled=pending||!state?.usage.enabled;voice.disabled=pending;personality.disabled=pending||active;
     input.disabled = output.disabled = pending;
     if (state && !dirty && settingsVersion !== state.settings.version) {
       settingsVersion = state.settings.version; personality.value = state.settings.speechPersonality;
-      voice.replaceChildren(); const defaultVoice = make('option', 'Default'); defaultVoice.value = ''; voice.append(defaultVoice);
-      for (const candidate of state.settings.candidates) { const option = make('option', candidate.name); option.value = candidate.id; voice.append(option); }
+      voice.replaceChildren();
+      for(const name of ['Vela 3','Vela 2']){const candidate=state.settings.candidates.find(candidate=>candidate.name===name),selected=state.settings.selectedVoice?.name===name?state.settings.selectedVoice:null,option=make('option',candidate?name:name+' — unavailable');option.value=candidate?.id??selected?.id??'';option.disabled=!candidate;voice.append(option);}
       voice.value = state.settings.selectedVoice?.id || '';
     } else if (state) {
-      for (const candidate of state.settings.candidates) if (![...voice.options].some(option => option.value === candidate.id)) { const option = make('option', candidate.name); option.value = candidate.id; voice.append(option); }
+      for(const name of ['Vela 3','Vela 2']){const candidate=state.settings.candidates.find(candidate=>candidate.name===name),option=[...voice.options].find(option=>option.textContent?.startsWith(name));if(option){option.value=candidate?.id??(state.settings.selectedVoice?.name===name?state.settings.selectedVoice.id:'');option.disabled=!candidate;option.textContent=candidate?name:name+' — unavailable';}}
     }
+    if(state){const catalog=state.settings.catalog;catalogStatus.textContent=catalog?.state==='unavailable'?'Saved voices could not be checked. Refresh them or check the Vela API connection.':catalog?.state==='unresolved'?'Vela 3 is the default. Load the saved voices or start voice to check access.':!state.settings.selectedVoice&&!state.settings.candidates.some(voice=>voice.name==='Vela 3')?'Vela 3 is unavailable. Choose Vela 2 or check the Vela API connection.':active?'Saved voice changes apply to your next session.':'Vela 3 is the default. Voice changes apply to the next session.';save.disabled=pending||!state.available||!voice.value||[...voice.options].find(option=>option.value===voice.value)?.disabled===true;}
   }
   async function refresh() {
     if (reading || disposed) return; reading = true;

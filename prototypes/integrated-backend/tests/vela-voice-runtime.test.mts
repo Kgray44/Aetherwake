@@ -19,6 +19,7 @@ const answer = 'v=0\r\no=SYNTHETIC_PRIVATE_VOICE_ANSWER\r\n';
 const idleMedia = (): GptLiveMediaState => ({ contract:'aerynth.gpt-live-media@1',connection:'idle',microphoneAccess:'not-requested',localTrackEnabled:false,
   localSourceMuted:null,providerInputMute:'unknown',playback:'idle',playbackObserved:false,humanAudibility:'unverified',inputDevice:'default',outputDevice:'default',
   localSpeech:'unavailable',remoteSignal:'unavailable',interruption:'none' });
+const savedCatalog=(names=['Vela 3','Vela 2'],prompt=true)=>Response.json({object:'list',has_more:false,data:names.map(name=>({object:'audio.voice',id:name==='Vela 3'?'voice-vela-3':'voice-vela-2',name,type:'prompt',created_at:1000,...(prompt?{prompt:'Synthetic adult '+name}:{})}))});
 function response(content:string, id='voice-response') {
   const output=[{type:'message',id:'message-'+id,role:'assistant',status:'completed',content:[{type:'output_text',text:content,annotations:[]}]}];
   return new Response([
@@ -31,6 +32,8 @@ function fixture() {
   const base=resolve(tmpdir()),directory=mkdtempSync(join(base,'aerynth-voice-core-')),path=join(directory,'canonical.sqlite'),key=randomBytes(32);
   const requests:{url:string;body:any}[]=[],commands:LiveClientCommand[]=[],events:StreamEvent[]=[],replies:((body:any)=>Response|Promise<Response>)[]=[];
   let peer:Parameters<LiveMediaAdapter['connect']>[0]|undefined,sequence=0,prepared=0,disposed=0;
+  let catalogCalls=0,catalogReply:()=>Response|Promise<Response>=()=>Response.json({object:'list',has_more:false,data:[{object:'audio.voice',id:'voice-vela-3',type:'prompt',name:'Vela 3',prompt:'Synthetic adult voice three.',created_at:1000},{object:'audio.voice',id:'voice-vela-2',type:'prompt',name:'Vela 2',prompt:'Synthetic adult voice two.',created_at:1000}]});
+  let expectedCredential=credential;
   const mediaState=idleMedia();
   const media:NativeLiveMediaServices={
     prepare:async()=>{prepared++;return {offerId:'synthetic-offer',sdpOffer:offer};},
@@ -51,7 +54,8 @@ function fixture() {
   }};
   const fetchFixture=(async(url,init)=>{
     if(String(url)==='https://api.openai.com/v1/models')return Response.json({data:[{id:'gpt-6-luna'}]});
-    assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+credential);
+    assert.equal(new Headers(init?.headers).get('authorization'),'Bearer '+expectedCredential);
+    if(String(url)===PROMPT_VOICE_ENDPOINT&&init?.method==='GET'){catalogCalls++;return catalogReply();}
     const body=JSON.parse(String(init?.body));requests.push({url:String(url),body});
     if(String(url)===LIVE_ENDPOINT)return Response.json({session:{id:'synthetic-live-'+ ++sequence},transport:{type:'webrtc',sdp:answer}},{status:201});
     if(String(url)===PROMPT_VOICE_ENDPOINT)return Response.json({object:'audio.voice',id:'voice-synthetic',type:'prompt',name:body.name,prompt:body.prompt,created_at:1000});
@@ -63,7 +67,7 @@ function fixture() {
   const vela=async()=>await core.command('vela',{name:'state',input:{}}) as VelaBackendState;
   const grant=async(operation:Extract<VelaVoiceNativeRequest,{name:'authorize'}>['input']['operation'],attemptId:string=randomUUID(),extra={})=>await core.command('velaVoiceNative',{name:'authorize',input:{attemptId,operation,...extra}}) as VoiceAuthorization;
   const emit=async(event:unknown)=>{assert.ok(peer);await peer.onEvent(event);};
-  return {get core(){return core;},get peer(){return peer!;},get prepared(){return prepared;},get disposed(){return disposed;},requests,commands,events,replies,voice,vela,grant,emit,
+  return {get core(){return core;},get peer(){return peer!;},get prepared(){return prepared;},get disposed(){return disposed;},get catalogCalls(){return catalogCalls;},setCatalogReply(next:typeof catalogReply){catalogReply=next;},setExpectedCredential(next:string){expectedCredential=next;},requests,commands,events,replies,voice,vela,grant,emit,
     db:()=> (core as any).db as DatabaseSync,
     runtime:()=> (core as any).velaVoiceRuntime,
     async configure(){await core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:credential},expectedVersion:null});},
@@ -78,6 +82,41 @@ function fixture() {
     async close(){await core.command('close',{}).catch(()=>{});const part=relative(base,resolve(directory));assert.ok(part.startsWith('aerynth-voice-core-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(directory,{recursive:true,force:true});},
   };
 }
+
+function expireCatalog(f:ReturnType<typeof fixture>){const row=f.db().prepare('SELECT json FROM vela_voice_catalog WHERE id=1').get()!;const value=JSON.parse(String(row.json));value.expiresAt=0;f.db().prepare('UPDATE vela_voice_catalog SET json=? WHERE id=1').run(JSON.stringify(value));}
+async function selectVoice(f:ReturnType<typeof fixture>,voiceId:string){const current=await f.voice(),grant=await f.grant('voice-save');return await f.core.command('velaVoiceNative',{name:'voice-save',input:{attemptId:grant.attemptId,authorizationRef:grant.authorizationRef,voiceId,expectedSettingsVersion:current.settings.version,speechPersonality:current.settings.speechPersonality}}) as VelaVoiceState;}
+
+test('existing requested voices default to Vela 3 once, persist explicit Vela 2 across restart, and never fetch during state polling',async()=>{
+ const f=fixture();try{await f.ready();await Promise.all(Array.from({length:8},()=>f.voice()));assert.equal(f.catalogCalls,0);const refreshed=await f.core.command('velaVoice',{name:'refreshVoices',input:{}}) as VelaVoiceState;assert.equal(refreshed.settings.selectedVoice?.name,'Vela 3');assert.equal(refreshed.settings.selectedVoice?.id,'voice-vela-3');assert.equal(f.catalogCalls,1);assert.equal(f.prepared,0);assert.equal(f.requests.length,0);await selectVoice(f,'voice-vela-2');await f.reopen();assert.equal((await f.voice()).settings.selectedVoice?.id,'voice-vela-2');await f.core.command('velaVoice',{name:'refreshVoices',input:{}});assert.equal((await f.voice()).settings.selectedVoice?.name,'Vela 2');assert.equal(f.catalogCalls,1);assert.equal(f.requests.length,0);assert(!JSON.stringify(f.events).includes('Synthetic adult voice'));}finally{await f.close();}
+});
+
+test('an in-flight default catalog refresh cannot overwrite a later explicit Vela 2 CAS selection',async()=>{
+ const f=fixture();try{await f.ready();f.db().prepare('INSERT INTO vela_voice_candidates VALUES(?,?)').run('voice-vela-2',JSON.stringify({configurationId:'vela-primary',configurationVersion:1,id:'voice-vela-2',name:'Vela 2',prompt:'Synthetic adult voice two.',createdAt:1000,type:'prompt'}));let release!:(value:Response)=>void,entered!:()=>void;const ready=new Promise<void>(resolve=>{entered=resolve;});f.setCatalogReply(()=>{entered();return new Promise(resolve=>{release=resolve;});});const pending=f.core.command('velaVoice',{name:'refreshVoices',input:{}});await ready;await selectVoice(f,'voice-vela-2');release(savedCatalog());await pending;assert.equal((await f.voice()).settings.selectedVoice?.name,'Vela 2');await f.reopen();assert.equal((await f.voice()).settings.selectedVoice?.id,'voice-vela-2');assert.equal(f.requests.length,0);}finally{await f.close();}
+});
+
+test('changing a saved voice during an active session is durable for the next session with no reconnect or extra voice request',async()=>{
+ const f=fixture();try{await f.ready();const active=await f.start(),first=f.requests.find(request=>request.url===LIVE_ENDPOINT)!;assert.deepEqual(first.body.session.audio.output.voice,{id:'voice-vela-3'});const posts=f.requests.length,commands=f.commands.length;await selectVoice(f,'voice-vela-2');const current=await f.voice();assert.equal(current.session.sessionId,active.session.sessionId);assert.equal(current.session.state,'running');assert.equal(current.settings.selectedVoice?.name,'Vela 2');assert.equal(f.requests.length,posts);assert.equal(f.commands.length,commands);assert.deepEqual(first.body.session.audio.output.voice,{id:'voice-vela-3'});await f.core.command('velaVoice',{name:'stop',input:{}});await f.start();assert.deepEqual(f.requests.filter(request=>request.url===LIVE_ENDPOINT).at(-1)!.body.session.audio.output.voice,{id:'voice-vela-2'});}finally{await f.close();}
+});
+
+test('revoked or unavailable Vela 3 retains its preference and fails before microphone preparation without a built-in fallback',async()=>{
+ for(const failure of ['revoked','catalog'] as const){const f=fixture();try{await f.ready();await f.core.command('velaVoice',{name:'refreshVoices',input:{}});expireCatalog(f);f.setCatalogReply(()=>failure==='revoked'?savedCatalog(['Vela 2']):Response.json({error:{message:'SYNTHETIC_PRIVATE_REMOTE_ERROR'}},{status:503}));await f.core.command('velaVoice',{name:'refreshVoices',input:{}});assert.equal((await f.voice()).settings.selectedVoice?.name,'Vela 3');await assert.rejects(f.start(),/live_voice_unavailable/);assert.equal(f.prepared,0);assert.equal(f.requests.length,0);assert(!JSON.stringify(f.events).includes('SYNTHETIC_PRIVATE_REMOTE_ERROR'));}finally{await f.close();}}
+});
+
+test('storage loss during catalog refresh preserves the existing choice and cannot claim a new default or cache',async()=>{
+ const f=fixture();try{await f.ready();let release!:(value:Response)=>void,entered!:()=>void;const ready=new Promise<void>(resolve=>{entered=resolve;});f.setCatalogReply(()=>{entered();return new Promise(resolve=>{release=resolve;});});const pending=f.core.command('velaVoice',{name:'refreshVoices',input:{}});await ready;(f.core as any).missionStorageAdmitted=false;release(savedCatalog());await assert.rejects(pending,/storage_reserve_admission_denied/);const state=await f.voice();assert.equal(state.settings.selectedVoice,null);assert.equal(state.settings.version,0);assert.equal(f.db().prepare('SELECT count(*) AS n FROM vela_voice_catalog').get()!.n,0);assert.equal(f.prepared,0);assert.equal(f.requests.length,0);}finally{(f.core as any).missionStorageAdmitted=true;await f.close();}
+});
+
+test('catalog entries without prompts remain imported voices and start with their provider ID without invented description',async()=>{
+ const f=fixture();try{await f.ready();f.setCatalogReply(()=>savedCatalog(undefined,false));await f.core.command('velaVoice',{name:'refreshVoices',input:{}});const selected=(await f.voice()).settings.selectedVoice;assert.equal(selected?.type,'existing');assert(selected&&!Object.hasOwn(selected,'prompt'));await f.start();const body=f.requests.find(request=>request.url===LIVE_ENDPOINT)!.body;assert.deepEqual(body.session.audio.output.voice,{id:'voice-vela-3'});assert(!body.session.instructions.includes('undefined'));}finally{await f.close();}
+});
+
+test('rotated API key and configuration rebind the catalog while retaining an explicit Vela 2 selection',async()=>{
+ const f=fixture();try{await f.ready();await f.core.command('velaVoice',{name:'refreshVoices',input:{}});await selectVoice(f,'voice-vela-2');const previous=JSON.parse(String(f.db().prepare('SELECT json FROM vela_voice_catalog').get()!.json));await f.core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:credential+'-ROTATED'},expectedVersion:1});f.setExpectedCredential(credential+'-ROTATED');await f.core.command('velaApiUsageAuthorize',{expectedVersion:2,enabled:true});await f.core.command('velaVoice',{name:'refreshVoices',input:{}});const state=await f.voice(),next=JSON.parse(String(f.db().prepare('SELECT json FROM vela_voice_catalog').get()!.json));assert.equal(state.settings.selectedVoice?.name,'Vela 2');assert.equal(state.settings.selectedVoice?.configurationVersion,2);assert.notEqual(next.data.boundaryDigest,previous.data.boundaryDigest);assert.equal(f.catalogCalls,2);assert.equal(f.requests.length,0);}finally{await f.close();}
+});
+
+test('storage rejection during refresh preserves both an active Vela 3 session and the saved next-session Vela 2 choice',async()=>{
+ const f=fixture();try{await f.ready();const active=await f.start();await selectVoice(f,'voice-vela-2');const version=(await f.voice()).settings.version;expireCatalog(f);const reads=f.catalogCalls,posts=f.requests.length;(f.core as any).missionStorageAdmitted=false;await assert.rejects(f.core.command('velaVoice',{name:'refreshVoices',input:{}}),/storage_reserve_admission_denied/);const state=await f.voice();assert.equal(state.settings.selectedVoice?.name,'Vela 2');assert.equal(state.settings.version,version);assert.equal(state.session.sessionId,active.session.sessionId);assert.equal(state.session.state,'running');assert.equal(f.catalogCalls,reads);assert.equal(f.requests.length,posts);}finally{(f.core as any).missionStorageAdmitted=true;await f.close();}
+});
 
 test('actual Core voice starts with canonical text history, identity and observed operation context; public commands cannot authorize paid starts',async()=>{
   const f=fixture();try{

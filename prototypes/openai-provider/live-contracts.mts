@@ -24,6 +24,12 @@ export interface SavedPromptVoice {
   configurationId: string; configurationVersion: number;
   id: string; name: string; prompt: string; createdAt: number; type: 'prompt';
 }
+/** Existing provider voice metadata may omit its original design prompt. */
+export interface ImportedCustomVoice {
+  configurationId:string;configurationVersion:number;
+  id:string;name:string;createdAt:number|null;type:'existing';sourceType:'prompt'|'audio_sample'|'unknown';
+}
+export type SavedCustomVoice=SavedPromptVoice|ImportedCustomVoice;
 export interface CanonicalVelaRuntimePort {
   context(input: { conversationId: string; purpose: 'conversation' | 'audition' | 'delegation'; sessionId?: string; signal: AbortSignal }): Promise<LiveCanonicalContext>;
   validateContext(contextRef: string, contextDigest: string): Promise<void>;
@@ -37,7 +43,7 @@ export interface CanonicalVelaRuntimePort {
   delegate(input: LiveDelegationBinding & { signal: AbortSignal }): Promise<{ state: 'verified' | 'failed' | 'unknown'; content?: string; receiptRef?: string }>;
   reconcile(input: { conversationId: string; previousAttemptId: string; previousSessionId?: string; signal: AbortSignal }): Promise<{ state: 'reconciled' | 'unknown'; reconciliationRef?: string }>;
   recordVoiceCandidate(voice: SavedPromptVoice): Promise<void>;
-  saveVoiceSelection(input: { voice: SavedPromptVoice; expectedSettingsVersion: number; speechPersonality: string; authorizationRef: string }): Promise<{ settingsVersion: number }>;
+  saveVoiceSelection(input: { voice: SavedCustomVoice; expectedSettingsVersion: number; speechPersonality: string; authorizationRef: string }): Promise<{ settingsVersion: number }>;
 }
 export interface LiveStartInput {
   attemptId: string; configurationId: string; configurationVersion: number; conversationId: string;

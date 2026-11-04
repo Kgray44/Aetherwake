@@ -176,7 +176,7 @@ export interface StreamEvent {
     workspaceRecovery?: {workspaceId:string;action:'undo-creation'|'restore';creationEventId:string;workspaceVersion:number};
     clockTimer?: Pick<TimerDomainEvent, 'resourceVersion' | 'commandId' | 'timerIds' | 'expiryIds' | 'operations'>;
     api?: { maxOutputTokens?: number; callId?: string; elapsedMs?: number; enabled?: boolean; executionId?: string; bodyDigest?: string; contextDigest?: string };
-    voice?: {sessionId?:string;attemptId?:string;state?:string;usageSeconds?:number;messageId?:string;delegationId?:string};
+    voice?: {sessionId?:string;attemptId?:string;state?:string;usageSeconds?:number;messageId?:string;delegationId?:string;catalogCount?:number;errorCode?:string};
     wake?: {phase:string;enabled:boolean;microphone:string;voice:string;detector:string;owner:string|null;sessionId:string|null;settingsVersion:number;errorCode:string|null};files?:{count:number;state:string} };
   mission?: MissionStreamEvent;
 }
@@ -281,12 +281,20 @@ export interface CommandMap {
   velaWorkflowRun: { input: { id: string }; output: import('../../vela-core/src/contracts.ts').VelaRequest };
   velaNextWorkflowStage: { input: { requestId: string }; output: { intent: string } | null };
   velaFileEditReview: { input: {requestId:string}; output: import('./vela-file-edit.mts').VelaFileEditReview };
+  missionFileEditPrepareNative:{input:{intent:string;resourceIds:string[];resourceRefs?:import('../../vela-core/src/contracts.ts').ResourceRef[];settings?:import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting};output:{requestId:string;reviewId:string;expiresAt:string;preview:{id:string;signature:string;providerId:string};review:VelaNativeReview}};
+  missionFileEditRunNative:{input:{requestId:string;reviewId:string;reviewDigest:string};output:import('../../vela-core/src/contracts.ts').VelaRequest};
+  missionFileEditReviewNative:{input:{operationId:string};output:import('./mission-file-edits.mts').NativeMissionPatchReview};
+  missionFileEditChoiceNative:{input:{operationId:string;reviewId:string;reviewDigest:string;purpose:'patch'|'check';decision:'yes'|'no';nativeChoiceId:string};output:import('./mission-file-edits.mts').PrivateMissionEditAuthority|null};
+  missionFileEditApplyNative:{input:{operationId:string;authority:string};output:import('../../application-contract/mission-file-edits.ts').MissionFileEditView};
+  missionFileEditCheckReviewNative:{input:{operationId:string;selectedTestPath:string};output:ReturnType<import('./mission-file-edits.mts').MissionFileEdits['reviewRequiredCheck']>};
+  missionFileEditCheckRunNative:{input:{operationId:string;authority:string};output:import('../../application-contract/mission-file-edits.ts').MissionFileEditView};
+  missionFileEditRead:{input:{operationId:string};output:import('../../application-contract/mission-file-edits.ts').MissionFileEditView};
   velaFileEditApply: { input: {requestId:string;reviewId:string}; output: import('./vela-file-edit.mts').VelaFileEditView };
   velaProjectCheckReview: { input: {requestId:string;kind:import('../../vela-core/src/contracts.ts').VelaProjectCheckKind;paths:string[]}; output: import('./vela-project-check.mts').VelaProjectCheckReview };
   velaProjectCheckRun: { input: {requestId:string;reviewId:string}; output: import('./vela-file-edit.mts').VelaFileEditView };
   velaStandaloneCheckReview: { input: {intent:string;settings?:import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting;paths:string[];artifactPath?:string}; output: import('./vela-project-check.mts').VelaProjectCheckReview<null> };
   velaStandaloneCheckRun: { input: {reviewId:string}; output: import('../../vela-core/src/contracts.ts').VelaRequest };
-  velaRouteNative: { input: { intent: string; resourceIds?:string[];resourceRefs?:import('../../vela-core/src/contracts.ts').ResourceRef[];activeCard?:VelaActiveCard; settings?: import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting }; output: { matched: false; projectCheck?: import('../../vela-core/src/contracts.ts').VelaProjectCheckKind;fileDiscovery?:{projectName?:string} } | { matched: true; request: import('../../vela-core/src/contracts.ts').VelaRequest } };
+  velaRouteNative: { input: { intent: string; resourceIds?:string[];resourceRefs?:import('../../vela-core/src/contracts.ts').ResourceRef[];activeCard?:VelaActiveCard; settings?: import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting }; output: { matched: false; apiFileEdit?:true;selectedEditSource?:import('../../vela-core/src/contracts.ts').ResourceRef;projectCheck?: import('../../vela-core/src/contracts.ts').VelaProjectCheckKind;fileDiscovery?:{projectName?:string} } | { matched: true; request: import('../../vela-core/src/contracts.ts').VelaRequest } };
   /** Native selected directory only. Provider/renderer fields never grant filesystem discovery authority. */
   velaFileProposalPrepareNative:{input:{intent:string;selectedDirectory?:string;folderResourceId?:string};output:import('../../vela-core/src/contracts.ts').VelaRequest};
   /** Native picker selections only; never accept a renderer path, root grant or recursive file list. */

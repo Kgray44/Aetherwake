@@ -159,6 +159,7 @@ exports.velaCommand = async ({
   routeNative = directMessageSend,
   requireInspectionDirectory = false,
   observeNativeRequest,
+  missionFileEditRequest,
 }) => {
   const observe = (event) => {
     try {
@@ -240,7 +241,8 @@ exports.velaCommand = async ({
     // The Core independently validates this intent and the selected Folder's grant.
     const localDocuments=/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you|I want(?: you)? to|I(?: would|'d) like(?: you)? to)\s+)*(?:add|attach|import|bring|put|load)\b[\s\S]*\b(?:docs?|documents?|files?|folders?|sources?|resources?|results?|these|those|them)\b[\s\S]*\b(?:(?:this|current|the)\s+)?workspace\b/iu.test(request.intent);
     const localFolderList=/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you)\s+)*(?:(?:what(?:'s| is)\s+in\s+(?:this|the selected)\s+folder)|(?:what\s+(?:files|folders|items)\s+(?:are\s+)?(?:in|inside)\s+(?:this|the selected)\s+folder)|(?:(?:list|show)\s+(?:(?:the\s+)?(?:files|folders|items|contents)\s+(?:in|of|inside)\s+)?(?:this|the selected)\s+folder(?:['’]s\s+contents)?))[.!?]*\s*$/iu.test(request.intent);
-    if (routeNative && !request.handoffSourceRequestId && !request.routingAgentId && (!request.resourceIds.length||localDocuments||localFolderList) && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
+    const selectedFileEdit=/\b(?:fix|edit|change|update|correct|modify|repair|refactor|replace)\b/iu.test(request.intent)&&/\b(?:file|code|function|selected|attached)\b/iu.test(request.intent);
+    if (routeNative && !request.handoffSourceRequestId && !request.routingAgentId && (!request.resourceIds.length||localDocuments||localFolderList||selectedFileEdit) && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
       const settings = directMessageSend
         ? Object.fromEntries(Object.entries({ providerId, mode, model, reasoningEffort, overrideDefaults, budgetLimit }).filter(([, option]) => option !== undefined))
         : {};
@@ -252,6 +254,11 @@ exports.velaCommand = async ({
         ...(Object.keys(settings).length ? { settings } : {}),
       }));
       if (local?.matched === true) return local.request;
+      if(local?.apiFileEdit===true){
+        if(typeof missionFileEditRequest!=='function')throw Error('mission_edit_native_required');
+        const refs=local.selectedEditSource?[local.selectedEditSource]:request.resourceRefs,ids=local.selectedEditSource?[local.selectedEditSource.id]:request.resourceIds;
+        return missionFileEditRequest({intent:request.intent,resourceIds:ids,...(refs?{resourceRefs:refs}:{}),...(Object.keys(settings).length?{settings}:{})});
+      }
       if(local?.fileDiscovery){
         if(!isReviewOwnerAlive(win))throw Error('native_review_owner_unavailable');
         const selected=await dialog.showOpenDialog(win,{title:local.fileDiscovery.projectName?`Choose the “${local.fileDiscovery.projectName}” project folder`:'Choose the project folder containing the documents',properties:['openDirectory','dontAddToRecent']});

@@ -5,10 +5,11 @@ const text=(value,max)=>typeof value==='string'&&value.length<=max&&!/[\x00-\x08
 const version=value=>Number.isSafeInteger(value)&&value>=1;
 const settingsVersion=value=>Number.isSafeInteger(value)&&value>=0;
 const codes=new Set(['voice_invalid_request','voice_user_gesture_required','voice_busy','voice_closed','voice_unavailable','voice_state_invalid','storage_reserve_admission_denied']);
+const catalogCodes=new Set(['live_voice_catalog_unavailable','live_voice_catalog_access_unavailable','live_voice_catalog_invalid','live_voice_catalog_incomplete','live_voice_catalog_ambiguous','live_voice_catalog_credential']);
 const attempts=new Set(['start','reconnect','audition','createVoice','saveVoice']);
 function validVoiceRequest(dto){
   if(!exact(dto,['name','input']))return false;const {name,input:p}=dto;
-  if(['state','devices','stop','resumePlayback','interruptPlayback'].includes(name))return exact(p,[]);
+  if(['state','refreshVoices','devices','stop','resumePlayback','interruptPlayback'].includes(name))return exact(p,[]);
   if(name==='mute')return exact(p,['muted'])&&typeof p.muted==='boolean';
   if(['setInputDevice','setOutputDevice'].includes(name))return exact(p,['deviceId'])&&id(p.deviceId);
   if(name==='start'||name==='reconnect')return exact(p,[...(Object.hasOwn(p??{},'inputDeviceId')?['inputDeviceId']:[]),...(Object.hasOwn(p??{},'outputDeviceId')?['outputDeviceId']:[]),...(Object.hasOwn(p??{},'intent')?['intent']:[])])&&(p.inputDeviceId===undefined||id(p.inputDeviceId))&&(p.outputDeviceId===undefined||id(p.outputDeviceId))&&(p.intent===undefined||text(p.intent,8000)&&p.intent.length>0);
@@ -30,6 +31,10 @@ function safeMedia(value){
 }
 function safeVoice(value){
   if(value===null)return null;
+  if(value?.type==='existing'){
+    if(!exact(value,['configurationId','configurationVersion','id','name','createdAt','type','sourceType'])||!id(value.configurationId)||!version(value.configurationVersion)||!id(value.id)||!text(value.name,100)||!['prompt','audio_sample','unknown'].includes(value.sourceType)||!(value.createdAt===null||Number.isSafeInteger(value.createdAt)&&value.createdAt>=0))throw Error('voice_state_invalid');
+    return structuredClone(value);
+  }
   if(!exact(value,['configurationId','configurationVersion','id','name','prompt','createdAt','type'])||!id(value.configurationId)||!version(value.configurationVersion)||!id(value.id)||!text(value.name,100)||!text(value.prompt,4000)||!Number.isSafeInteger(value.createdAt)||value.createdAt<0||value.type!=='prompt')throw Error('voice_state_invalid');
   return structuredClone(value);
 }
@@ -45,8 +50,9 @@ function safeVoiceState(value){
     !Number.isSafeInteger(s.transcriptFragments)||s.transcriptFragments<0||!['idle','running','unknown'].includes(s.backend)||!exact(s.usage,['seconds','source','final'])||!(s.usage.seconds===null||Number.isFinite(s.usage.seconds)&&s.usage.seconds>=0)||!['provider-reported','unavailable'].includes(s.usage.source)||typeof s.usage.final!=='boolean'||
     s.errorCode!==undefined&&(typeof s.errorCode!=='string'||!/^live_[a-z_]{1,80}$/u.test(s.errorCode)))throw Error('voice_state_invalid');
   const settings=value.settings;
-  if(!exact(settings,['version','speechPersonality','selectedVoice','candidates'])||!settingsVersion(settings.version)||!text(settings.speechPersonality,2000)||!Array.isArray(settings.candidates)||settings.candidates.length>64||settings.candidates.some(candidate=>candidate===null))throw Error('voice_state_invalid');
-  return {available:value.available,...(value.reason===undefined?{}:{reason:value.reason}),session:structuredClone(s),media:safeMedia(value.media),settings:{version:settings.version,speechPersonality:settings.speechPersonality,selectedVoice:safeVoice(settings.selectedVoice),candidates:settings.candidates.map(safeVoice)},captions:structuredClone(value.captions),usage:structuredClone(value.usage)};
+  if(!exact(settings,['version','speechPersonality','selectedVoice','candidates',...(Object.hasOwn(settings??{},'catalog')?['catalog']:[])])||!settingsVersion(settings.version)||!text(settings.speechPersonality,2000)||!Array.isArray(settings.candidates)||settings.candidates.length>64||settings.candidates.some(candidate=>candidate===null))throw Error('voice_state_invalid');
+  const c=settings.catalog;if(c!==undefined&&(!exact(c,['state','configurationVersion','observedAt','expiresAt',...(Object.hasOwn(c??{},'errorCode')?['errorCode']:[])])||!['unresolved','ready','unavailable','stale'].includes(c.state)||!(c.configurationVersion===null||version(c.configurationVersion))||!['observedAt','expiresAt'].every(key=>c[key]===null||Number.isSafeInteger(c[key])&&c[key]>=0)||c.errorCode!==undefined&&!catalogCodes.has(c.errorCode)))throw Error('voice_state_invalid');
+  return {available:value.available,...(value.reason===undefined?{}:{reason:value.reason}),session:structuredClone(s),media:safeMedia(value.media),settings:{version:settings.version,speechPersonality:settings.speechPersonality,selectedVoice:safeVoice(settings.selectedVoice),candidates:settings.candidates.map(safeVoice),...(c===undefined?{}:{catalog:structuredClone(c)})},captions:structuredClone(value.captions),usage:structuredClone(value.usage)};
 }
 function safeDevices(value){
   if(!Array.isArray(value)||value.length>64||!value.every(d=>exact(d,['kind','id','label','labelAvailable'])&&['audioinput','audiooutput'].includes(d.kind)&&id(d.id)&&text(d.label,200)&&typeof d.labelAvailable==='boolean'))throw Error('voice_state_invalid');
