@@ -90,7 +90,8 @@ test('a model-selected search opens canonical results, persists references only,
     assert.deepEqual(state.searchResults?.[receipt.id].map(ref => [ref.id, ref.title]), [[resource.id, title]]);
     assert(!state.conversation?.messages.some(message => message.content.includes(title)));
     const saved = f.db().prepare('SELECT json FROM vela_state').get()!;
-    assert.deepEqual(JSON.parse(String(saved.json)).receipts[0].foundSubjects, [{ id: resource.id, kind: 'resource' }]);
+    assert(Number.isSafeInteger(resource.version) && resource.version > 0);
+    assert.deepEqual(JSON.parse(String(saved.json)).receipts[0].foundSubjects, [{ id: resource.id, kind: 'resource', version: resource.version }]);
     assert(!String(saved.json).includes(title));
     assert.equal(f.events.filter(event => event.method === 'fixture/catalogResult' && event.payload.success === true).length, 1);
     assert.equal(Object.keys((await f.core.command('snapshot', {})).executions).length, 1);
