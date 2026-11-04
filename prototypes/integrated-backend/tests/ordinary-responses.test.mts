@@ -797,7 +797,7 @@ test('a Vela response sends shared identity once and scoped current application 
     const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Unselected local notes', workspaceId });
     const note = created.resources.find(resource => resource.title === 'Unselected local notes')!;
     await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: 'PRIVATE_UNSELECTED_NOTE_BODY' });
-    const input = { intent: 'What workspace do I have open?', resourceIds: [], providerId, model: documentedModel.id, adaptive: true };
+    const input = { intent: 'What workspace do I have open?', resourceIds: [], providerId, model: documentedModel.id, adaptive: true as const };
     const preview = await f.core.command('velaRequestPreview', input);
     assert.equal(preview.route?.kind, 'conversational');
     const approval = { previewId: preview.id, signature: preview.signature };
