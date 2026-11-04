@@ -56,6 +56,7 @@ export const LOCAL_FACT_LABELS = {
   'local.project-count': 'active project count',
   'local.execution-status': 'Aerynth execution status',
   'system.memory': 'physical memory usage',
+  'system.battery': 'battery charge and power status',
 } satisfies Record<VelaInstantCapabilityId, string>;
 export const isLocalFact = (id: unknown): id is VelaLocalCapabilityId =>
   typeof id === 'string' && (Object.hasOwn(LOCAL_FACT_LABELS, id) || ['system.cpu', 'system.gpu', 'system.performance', 'local.calculator'].includes(id));
@@ -81,10 +82,10 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('repairWorkspace', 'Restore missing workspace bindings', 'mutate', { type: { const: 'repairWorkspace' }, workspaceId: idSchema, receiptId: idSchema, resourceIds: arraySchema }, 'Restore only missing declared resource bindings in the same authorized workspace; preserve current content and existing geometry'),
   capability('readLocalFact', 'Read a live device or Aerynth fact', 'read', {
     type: { const: 'readLocalFact' }, capabilityId: { enum: Object.keys(LOCAL_FACT_LABELS) },
-  }, 'Read current local time/date, active workspace and save state, project count, execution status, or physical RAM. Aerynth measures it locally and shows the answer directly.'),
+  }, 'Read current time/date, workspace save state, project count, execution status, RAM or battery/power. Measured locally; direct answer.'),
   capability('readWeather', 'Read a live local forecast', 'read', {
     type: { const: 'readWeather' }, period: { enum: ['now', 'today', 'tonight', 'tomorrow', 'tomorrow-morning'] },
-  }, 'Uses the current Windows device location once. Shares rounded coordinates with the US National Weather Service after review. Use only for local weather requests.', 'reviewed-action'),
+  }, 'Fresh Windows location per request; rounded point to National Weather Service under remembered revocable weather consent.', 'reviewed-action'),
   capability('createTimeline', 'Create and show a saved Timeline', 'create', {
     type: { const: 'createTimeline' }, title: stringSchema, projectId: nullableIdSchema, workspaceId: nullableIdSchema,
     source: { oneOf: [objectSchema({ kind: { const: 'application-activity' } }),

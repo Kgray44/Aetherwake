@@ -71,20 +71,20 @@ export class GptLiveController {
     if (typeof voice === 'string') { check(text(voice, 100), 'live_invalid_voice'); return voice; }
     check(fields(voice, ['id'], ['description']) && text(voice.id, 256) && (voice.description === undefined || typeof voice.description === 'string' && Buffer.byteLength(voice.description) <= 4000), 'live_invalid_voice'); return { id: voice.id };
   }
-  async start(input: LiveStartInput): Promise<LiveSessionView> { return this.startSession(input, 'start'); }
-  async audition(input: LiveStartInput, sample: string): Promise<LiveSessionView> { check(typeof sample === 'string' && sample.trim().length > 0 && Buffer.byteLength(sample) <= 500, 'live_append_capacity'); return this.startSession(input, 'audition', undefined, sample); }
-  async reconnect(input: LiveStartInput): Promise<LiveSessionView> {
+  async start(input: LiveStartInput, signal?: AbortSignal): Promise<LiveSessionView> { return this.startSession(input, 'start', undefined, undefined, signal); }
+  async audition(input: LiveStartInput, sample: string, signal?:AbortSignal): Promise<LiveSessionView> { check(typeof sample === 'string' && sample.trim().length > 0 && Buffer.byteLength(sample) <= 500, 'live_append_capacity'); return this.startSession(input, 'audition', undefined, sample, signal); }
+  async reconnect(input: LiveStartInput, signal?:AbortSignal): Promise<LiveSessionView> {
     this.validateStart(input); check(['unknown', 'closed', 'failed'].includes(this.view.state) && this.view.attemptId && input.attemptId !== this.view.attemptId && input.conversationId === this.view.conversationId, 'live_reconnect_required');
     const previousAttemptId = this.view.attemptId;
     const result = await this.bounded(Promise.resolve().then(() => this.options.runtime.reconcile({ conversationId: input.conversationId, previousAttemptId, ...(this.view.sessionId ? { previousSessionId: this.view.sessionId } : {}), signal: this.signal() })));
     check(result.state === 'reconciled' && text(result.reconciliationRef), 'live_reconciliation_required');
-    return this.startSession(input, 'reconnect', result.reconciliationRef);
+    return this.startSession(input, 'reconnect', result.reconciliationRef, undefined, signal);
   }
-  private async startSession(input: LiveStartInput, operation: 'start' | 'audition' | 'reconnect', reconciliationRef?: string, sample?: string): Promise<LiveSessionView> {
+  private async startSession(input: LiveStartInput, operation: 'start' | 'audition' | 'reconnect', reconciliationRef?: string, sample?: string, externalSignal?: AbortSignal): Promise<LiveSessionView> {
     check(!input.wake || operation !== 'audition', 'live_invalid_wake');
     this.validateStart(input); check(!this.lifetime.signal.aborted && !['starting', 'awaiting-start', 'running', 'closing'].includes(this.view.state), 'live_session_busy');
     check(operation === 'reconnect' || this.view.state !== 'unknown', 'live_reconnect_required');
-    const frozen = structuredClone(input), generation = ++this.generation, signal = this.signal(), purpose = operation === 'audition' ? 'audition' as const : 'conversation' as const;
+    const frozen = structuredClone(input), generation = ++this.generation, signal = externalSignal ? AbortSignal.any([this.signal(), externalSignal]) : this.signal(), purpose = operation === 'audition' ? 'audition' as const : 'conversation' as const;
     const previousChannel = this.current?.channel;
     clearTimeout(this.budgetTimer); clearTimeout(this.startTimer); this.rejectPending('live_session_replaced'); this.current = undefined; this.seen.clear(); this.delegations.clear();
     this.view = { ...this.view, attemptId: frozen.attemptId, sessionId: null, conversationId: frozen.conversationId, configurationVersion: frozen.configurationVersion, state: 'starting', dispatched: false, initializationExposureSeconds: 0, inputMute: 'unknown', finalization: 'not-requested', lastAppend: 'none', transcriptFragments: 0, backend: 'idle', usage: { seconds: null, source: 'unavailable', final: false } }; delete this.view.errorCode;

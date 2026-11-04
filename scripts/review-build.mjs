@@ -19,7 +19,10 @@ export const JOSE_RUNTIME = Object.freeze({name:'jose',version:'6.2.15',integrit
 // BrowserWindow preload paths are loaded by Electron, not Node imports. Keep
 // both trusted preload entry points explicit in the runtime dependency closure.
 // Validate the lazy auth entry even while its default/native-disabled path does not load it.
-export const NATIVE_RUNTIME_ENTRIES = Object.freeze([APP+'/native/desktop-main.cjs', APP+'/native/desktop-preload.cjs', APP+'/native/vela-review-preload.cjs', APP+'/native/voice-media.html', 'prototypes/integrated-backend/src/desktop-host.mts', 'prototypes/integrated-backend/src/worker.mts',JOSE_RUNTIME.importer]);
+export const NATIVE_RUNTIME_ENTRIES = Object.freeze([APP+'/native/desktop-main.cjs', APP+'/native/desktop-preload.cjs', APP+'/native/vela-review-preload.cjs', APP+'/native/voice-media.html',
+  APP+'/native/wake-media-broker.cjs',APP+'/native/wake-media.html',APP+'/native/wake-pcm-worklet.js',
+  APP+'/native/windows-system-broker.cjs',APP+'/native/windows-system.cpp',
+  'prototypes/integrated-backend/src/desktop-host.mts', 'prototypes/integrated-backend/src/worker.mts',JOSE_RUNTIME.importer]);
 const REQUIRED_FOLDERS = ['prototypes/integrated-backend/src','prototypes/connected-conversations/src','prototypes/codex-bridge/src','prototypes/workspace-kernel','prototypes/workspace-engine','prototypes/constellation','prototypes/application-contract','prototypes/vela-core/src','prototypes/conversation-product/src','prototypes/block-library','prototypes/agent-product','prototypes/checklist-product','prototypes/timer-product','prototypes/timeline-product','prototypes/task-product',OPENAI,APP+'/src',APP+'/native'];
 const OMITTED = /(?:^|\/)(?:node_modules|\.runtime|\.local-data|profiles?|test|tests|fixtures?|demo|evidence[^/]*|protocol-generated)(?:\/|$)/i;
 const NON_RUNTIME_FILE = /(?:^|\/)(?:benchmark[^/]*|prepare-[^/]*native[^/]*|demo|journey|reopen|cli)\.[cm]?[jt]s$/i;
@@ -120,6 +123,37 @@ export async function validateLiveMediaPreload(root,dist,tracked,assets){
   for(const relative of required){const file=APP+'/'+relative;check(tracked.has(file)&&value.inputs[relative]===await hashFile(path.join(root,file)),'live_media_preload_source_changed',relative);}
   return new Set([preload,metadata]);
 }
+export async function validateWakeCapturePreload(root,dist,tracked,assets){
+  const preload='vela-wake-capture-preload.cjs',metadata='vela-wake-capture-preload.sources.json',worklet='vela-wake-pcm-worklet.js';
+  check([preload,metadata,worklet].every(name=>Object.hasOwn(assets,name)),'wake_capture_preload_receipt_missing');
+  const source=await fs.readFile(path.join(dist,metadata));check(source.length<=16384,'wake_capture_preload_metadata_bound');
+  const value=JSON.parse(source),required=['src/wake-audio-capture.ts','src/wake-native-capture.ts'];
+  check(value?.contract==='aerynth.private-wake-capture-build@1'&&value.asset===preload&&value.sha256===assets[preload]&&
+    Object.keys(value).sort().join('|')==='asset|contract|inputs|sha256|worklet'&&value.inputs&&Object.keys(value.inputs).sort().join('|')===required.join('|')&&
+    value.worklet&&Object.keys(value.worklet).sort().join('|')==='asset|sha256|source'&&value.worklet.asset===worklet&&
+    value.worklet.source==='native/wake-pcm-worklet.js'&&value.worklet.sha256===assets[worklet],'wake_capture_preload_source_binding_invalid');
+  for(const relative of [...required,value.worklet.source]){
+    const file=APP+'/'+relative,expected=relative===value.worklet.source?value.worklet.sha256:value.inputs[relative];
+    check(tracked.has(file)&&expected===await hashFile(path.join(root,file)),'wake_capture_preload_source_changed',relative);
+  }
+  return new Set([preload,metadata,worklet]);
+}
+export async function validateWindowsSystemNative(root,dist,tracked,assets){
+  const asset='aerynth-windows-system.node',metadata='aerynth-windows-system.sources.json',source='native/windows-system.cpp';
+  check([asset,metadata].every(name=>Object.hasOwn(assets,name)),'windows_system_receipt_missing');
+  const raw=await fs.readFile(path.join(dist,metadata));check(raw.length<=16384,'windows_system_metadata_bound');const value=JSON.parse(raw);
+  check(value?.contract==='aerynth.private-windows-system-build@1'&&value.asset===asset&&value.sha256===assets[asset]&&Object.keys(value).sort().join('|')==='asset|contract|inputs|sha256'&&value.inputs&&Object.keys(value.inputs).join('|')===source,'windows_system_source_binding_invalid');
+  check(tracked.has(APP+'/'+source)&&value.inputs[source]===await hashFile(path.join(root,APP,source)),'windows_system_source_changed');
+  check((await fs.stat(path.join(dist,asset))).size<=4*1024*1024,'windows_system_binary_capacity');
+  return new Set([asset,metadata]);
+}
+export async function validateWakeHostCore(root,dist,tracked,assets){
+  const asset='vela-wake-host.cjs',metadata='vela-wake-host.sources.json',required=['prototypes/integrated-backend/src/native-wake-controller.mts','prototypes/integrated-backend/src/wake-audio-buffer.mts','prototypes/integrated-backend/src/wake-capture-host.mts'];
+  check([asset,metadata].every(name=>Object.hasOwn(assets,name)),'wake_host_receipt_missing');const raw=await fs.readFile(path.join(dist,metadata));check(raw.length<=16384,'wake_host_metadata_bound');const value=JSON.parse(raw);
+  check(value?.contract==='aerynth.private-wake-host-build@1'&&value.asset===asset&&value.sha256===assets[asset]&&Object.keys(value).sort().join('|')==='asset|contract|inputs|sha256'&&value.inputs&&Object.keys(value.inputs).sort().join('|')===required.join('|'),'wake_host_source_binding_invalid');
+  for(const file of required)check(tracked.has(file)&&value.inputs[file]===await hashFile(path.join(root,file)),'wake_host_source_changed',file);
+  check((await fs.stat(path.join(dist,asset))).size<=262144,'wake_host_asset_capacity');return new Set([asset,metadata]);
+}
 export function bootstrap(candidate) {
   return `/* Generated review entry. The real desktop host retains all permissions and provider identity. */
 const fs=require('node:fs'),path=require('node:path');
@@ -168,6 +202,9 @@ export async function plan(options={}) {
   const rendererFiles=(await walk(dist)).filter(file=>file!==path.join(dist,rendererReceiptName));
   const rendererReceipt=await readRendererReceipt(dist,{head,tree},rendererFiles.map(file=>slash(path.relative(dist,file))));
   const privatePreload=await validateLiveMediaPreload(sourceRoot,dist,tracked,rendererReceipt.assets);
+  for(const file of await validateWakeCapturePreload(sourceRoot,dist,tracked,rendererReceipt.assets))privatePreload.add(file);
+  for(const file of await validateWindowsSystemNative(sourceRoot,dist,tracked,rendererReceipt.assets))privatePreload.add(file);
+  for(const file of await validateWakeHostCore(sourceRoot,dist,tracked,rendererReceipt.assets))privatePreload.add(file);
   const pdfWorker=path.join(sourceRoot,BLOCKS,'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs');
   for(const file of rendererFiles){
     const relative=slash(path.relative(dist,file)),worker=/^assets\/pdf\.worker-[A-Za-z0-9_-]+\.mjs$/.test(relative);

@@ -20,7 +20,7 @@ function fixture({syntheticInput=false,answer=true}={}){
     async loadURL(url){this.webContents.mainFrame.url=url;queueMicrotask(()=>ipcMain.emit(CHANNEL+'-ready',this.event(),{token:this.token()}));}
   }
   const broker=createLiveMediaBroker({BrowserWindow:Window,ipcMain,send:wire=>backend.push(wire),preloadPath:'C:\\app\\dist\\vela-live-media-preload.cjs',htmlPath:'C:\\app\\native\\voice-media.html',syntheticInput});
-  return{broker,ipcMain,windows,sent,backend};
+  return{broker,ipcMain,windows,sent,backend,setAnswer(value){answer=value;}};
 }
 test('native media requires an owned one-use attempt and creates an isolated memory-partition window',async()=>{
   const f=fixture();try{
@@ -30,6 +30,26 @@ test('native media requires an owned one-use attempt and creates an isolated mem
     assert.equal(f.backend.at(-1).nativeLiveHost.result.offerId,'offer-fixture');assert.equal(isSyntheticLiveMediaWindow(w),false);
     f.broker.handle(request('prepare',{attemptId}));await tick();assert.equal(f.backend.at(-1).nativeLiveHost.error,'live_media_protocol');
   }finally{f.broker.close();}assert.equal(f.ipcMain.listenerCount(CHANNEL+'-reply'),0);
+});
+
+test('native master quiesce creates no window and bypasses8 normal requests while preserving provider finalization',async()=>{
+  const f=fixture();try{
+    await f.broker.quiesceAll();assert.equal(f.windows.length,0);
+    const attemptId=randomUUID();f.broker.authorizeAttempt(attemptId);f.broker.handle(request('prepare',{attemptId}));await tick();f.broker.handle(request('connect',{sessionId:'session-kept',sdpAnswer:'v=0'}));await tick();
+    const w=f.windows[0];f.setAnswer(false);for(let i=0;i<8;i++)f.broker.handle(request('devices'));await tick();
+    const quiesce=f.broker.quiesceAll(),same=f.broker.quiesceAll();assert.equal(quiesce,same);await tick();
+    const h=f.sent.at(-1).message.nativeLiveHost;assert.equal(h.operation,'quiesceAll');assert.equal(w.webContents.isAudioMuted(),true);
+    f.ipcMain.emit(CHANNEL+'-reply',w.event(),{token:w.token(),message:{nativeLiveHost:{version:1,kind:'response',id:h.id,operation:h.operation,result:null}}});await quiesce;
+    assert.equal(w.isDestroyed(),false);
+    const close=request('send',{sessionId:'session-kept',command:{type:'session.close',event_id:'finish'}});f.broker.handle(close);await tick();assert.equal(f.sent.at(-1).message.nativeLiveHost.id,close.nativeLiveHost.id);
+    const before=f.backend.length;f.broker.handle(request('quiesceCapture',{attemptId:'old',sessionId:'session-kept'}));await tick();assert.equal(f.backend.at(-1).nativeLiveHost.error,'live_media_protocol');assert.equal(f.backend.length,before+1);
+  }finally{f.broker.close();await tick();}
+});
+
+test('unanswered native master quiesce physically tears down only its owned media window within the bounded fallback',async()=>{
+  const f=fixture();try{const attemptId=randomUUID();f.broker.authorizeAttempt(attemptId);f.broker.handle(request('prepare',{attemptId}));await tick();const w=f.windows[0];f.setAnswer(false);
+    await assert.rejects(f.broker.quiesceAll(),/live_media_timeout/);assert.equal(w.isDestroyed(),true);
+  }finally{f.broker.close();}
 });
 test('private IPC rejects foreign frames and wrong tokens; only audio gets an active attempt permission',async()=>{
   const f=fixture({answer:false});try{

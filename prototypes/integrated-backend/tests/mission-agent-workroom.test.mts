@@ -255,6 +255,7 @@ test('real Responses protocol applies long Unicode assignment labels through can
   let core = new BackendCore(options, undefined, undefined, { connection, fetch: fakeFetch });
   try {
     await core.command('ordinaryProviderCheck', {});
+    await core.command('vela', { name: 'saveRoutingSettings', input: { scope: 'global', id: null, expectedVersion: 0, defaults: { providerId } } });
     const desktop = await core.command('desktop', { type: 'createWorkspace', title: 'Synthetic agent workspace', projectId: null });
     const workspaceId = desktop.activeWorkspaceId!;
     await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });

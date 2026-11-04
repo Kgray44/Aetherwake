@@ -411,6 +411,28 @@ function retainLocal(canonical: VelaState, value: Extract<VelaLocalDispatch, { m
   canonical.requests.push(value.request); canonical.conversation = { resourceId: value.request.conversationId, revision: (canonical.conversation?.revision ?? 1) + 2, messages: [...(canonical.conversation?.messages ?? []), { id: 'message:input:' + value.request.id, role: 'user', content: value.request.intent, source: 'user', classification: 'observed', requestId: value.request.id }, { id: value.result.messageId, role: 'assistant', content: value.result.content, source: 'vela-native', classification: 'observed', requestId: value.request.id, responseKind: 'answer' }] };
 }
 
+test('a failed weather plan stays behind details and a new native answer replaces its primary failure', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  const plan: VelaPlan = { id: 'plan:old-weather', requestId: 'request:synthetic', version: 1, fingerprint: 'synthetic',
+    summary: 'Check the local forecast for later today.', steps: [{ id: 'weather', explanation: 'Old weather flow', action: { type: 'readWeather', period: 'today' } }],
+    targets: [], scope: { principalId: 'synthetic', policyVersion: 'synthetic', resourceIds: [], projectIds: [], workspaceIds: [] },
+    state: 'failed', createdAt: manifest.createdAt, expiresAt: manifest.createdAt, contribution: null };
+  canonical.requests = [request({ state: 'failed', providerId: null, planId: plan.id })]; canonical.plans = [plan];
+  canonical.conversation!.messages = [{ id: 'old:failure', requestId: plan.requestId, planId: plan.id, role: 'assistant', source: 'vela-native', classification: 'observed',
+    content: 'Windows did not provide a current location. Check Location services and desktop app access in Windows Settings.' }];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical));
+  await settles(() => !!root.find(node => node.dataset.planId === plan.id));
+  assert.equal(displayed(root.find(node => node.dataset.planId === plan.id)!), false);
+  assert.equal(root.find(node => node.className === 'vela-manifestation-content')!.textContent.includes('Windows did not provide'), false);
+  const local = localOutcome('What’s the weather?', 'synthetic:weather'); local.result.content = 'Location is off for weather. Change it in Vela preferences.';
+  delete local.request.local; local.request.nativeResponse = {schemaVersion:1,classification:'observed'};
+  retainLocal(canonical, local); await panel.refresh();
+  const body = root.find(node => node.className === 'vela-manifestation-content')!;
+  assert.ok(body.textContent.startsWith(local.result.content)); assert.equal(body.textContent.includes('Check the local forecast'), false);
+  assert.equal(displayed(root.find(node => node.dataset.planId === plan.id)!), false);
+  panel.dispose();
+});
+
 
 test('pin/dismiss/reopen/history use durable CAS only; same-state refresh preserves response/editor/focus and reopening uses canonical identity', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(), calls: unknown[] = []; const local = localOutcome('Synthetic saved clock question', 'synthetic:command'); retainLocal(canonical, local);

@@ -98,7 +98,7 @@ function verifyJournal(mission, scope, shippedCoreHash) {
   return { tasks: [...attempt].map(([id, entry]) => ({ id, ...entry })), overlapMs, events: mission.events };
 }
 
-exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs }) {
+exports.verify = async function verify({ win, app, privateRoot, call, source, startupErrors = [], moduleStartedMonotonicMs,systemFactsAudit }) {
   const argv = process.argv;
   const receipt = {
     contract: "aerynth.vela-missions-integration@1", objective: OBJECTIVE, passed: false,
@@ -111,7 +111,9 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
   const aborted = new Promise((_, reject) => { rejectAbort = reject; });
   aborted.catch(() => {});
   const abort = code => rejectAbort(slot?.abort(code) ?? Error(code));
+  let expectedWeatherModal=null;
   const blur = () => {
+    if(expectedWeatherModal&&performance.now()<expectedWeatherModal.until){expectedWeatherModal.blurred=true;return;}
     receipt.focusLoss = require('electron').BrowserWindow.getAllWindows().map(window => ({ id: window.id,
       title: window.getTitle(), visible: window.isVisible(), focused: window.isFocused(), parentId: window.getParentWindow()?.id ?? null }));
     abort("mission_native_focus_lost");
@@ -211,6 +213,12 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     assert.equal(providerBefore.scope, "process-session-native-attempts");
     assert.equal(providerBefore.codexConnections, 0);
     assert.equal(providerBefore.providerRequests, 0);
+    if(argv.includes('--missions-weather-product-only')){
+      const nativeHandle=win.getNativeWindowHandle(),ownerHwnd=(nativeHandle.length===8?nativeHandle.readBigUInt64LE():BigInt(nativeHandle.readUInt32LE())).toString();
+      const withNativeWeatherModal=async action=>{assert(!expectedWeatherModal,'one_owned_weather_modal');expectedWeatherModal={until:performance.now()+5000,blurred:false};let failure=false;try{const result=await bounded(action(),5000,'weather_exact_owned_modal_deadline');for(let frame=0;!win.isFocused()&&frame<6&&performance.now()<expectedWeatherModal.until;frame++)await new Promise(resolve=>setTimeout(resolve,16));assert(win.isFocused(),'weather_owned_owner_focus_not_restored');slot.check();return result;}catch(error){failure=true;receipt.nativeModalFailure={code:typeof error?.code==='string'?error.code:'weather_owned_dialog_proof_failed',stderr:typeof error?.stderr==='string'?error.stderr.slice(0,1600):'',message:typeof error?.stderr==='string'?'native_modal_proof_process_failed':String(error?.message??'').slice(0,300)};throw Error('weather_owned_dialog_proof_failed');}finally{expectedWeatherModal=null;if(!failure&&!win.isFocused())abort('mission_native_focus_lost');}};
+      await require('./mission-weather.cjs').run({argv,profile:root,receipt,rpc,js,click,fill,wait,capture,operation,slot,systemFactsAudit,withNativeWeatherModal,ownerHwnd});
+      receipt.passed=true;return;
+    }
     if(argv.includes('--missions-persistence-live-only')){
       await require('./mission-persistence.cjs').run({argv,root,source,receipt,rpc,js,click,fill,wait,capture,operation,slot});
       receipt.passed=true;return;
@@ -1258,6 +1266,9 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     await Promise.race([run(), aborted]);
   } catch (error) {
     receipt.error = { message: String(error.message).slice(0, 1000), ...(error.diagnostics ? { diagnostics: error.diagnostics } : {}) };
+    if(argv.includes('--missions-weather-product-only')&&owned&&admitted&&!win.isDestroyed()&&receipt.captures.length<3){
+      try{const image=await bounded(win.webContents.capturePage(),1000,'weather_owned_failure_capture_deadline'),png=image.toPNG();assert(png.length>0&&png.length<=8*MiB,'weather_failure_capture_bound');await fs.writeFile(path.join(out,'failure-owned-application.png'),png,{flag:'wx'});receipt.captures.push({file:'failure-owned-application.png',bytes:png.length});}catch{receipt.failureCapture='unavailable within owned window/deadline';}
+    }
   } finally {
     clearTimeout(workTimer);
     if (listening) {

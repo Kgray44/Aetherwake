@@ -61,6 +61,7 @@ test('a reviewed planning request compiles one graph and runs native dependencie
     assert.equal(unavailable.planner, undefined);
     f.setListedModels([documentedModel]);
     await f.core.command('ordinaryProviderCheck', {});
+    await f.core.command('vela', { name: 'saveRoutingSettings', input: { scope: 'global', id: null, expectedVersion: 0, defaults: { providerId } } });
     assert.equal(await preview('Explain how processor and memory counters differ'), null);
     const local = await preview('Run a mission to measure CPU and RAM') as MissionPreview;
     assert.ok(local.plan);
@@ -146,6 +147,7 @@ test('reviewed mission runs two isolated stateless specialists concurrently and 
   try {
     f.setListedModels([documentedModel]);
     await f.core.command('ordinaryProviderCheck', {});
+    await f.core.command('vela', { name: 'saveRoutingSettings', input: { scope: 'global', id: null, expectedVersion: 0, defaults: { providerId } } });
     const d = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic performance mission', projectId: null });
     await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: d.workspaces[0].id } });
     const objective = 'Investigate Aerynth backend performance with two independent specialists';
@@ -193,6 +195,7 @@ test('reviewed saved teams bind roles, reconcile concurrent reports and link the
   try {
     f.setListedModels([documentedModel]);
     await f.core.command('ordinaryProviderCheck', {});
+    await f.core.command('vela', { name: 'saveRoutingSettings', input: { scope: 'global', id: null, expectedVersion: 0, defaults: { providerId } } });
     const desktop = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic team workspace', projectId: null });
     const workspaceId = desktop.activeWorkspaceId!;
     const navigate = (id: string) => f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: id } });
@@ -320,6 +323,7 @@ test('a research mission authorizes web search only for the source specialist an
   try {
     f.setListedModels([documentedModel]);
     await f.core.command('ordinaryProviderCheck', {});
+    await f.core.command('vela', { name: 'saveRoutingSettings', input: { scope: 'global', id: null, expectedVersion: 0, defaults: { providerId } } });
     const d = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic research room', projectId: null });
     await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: d.workspaces[0].id } });
     const objective = 'Research event loop instrumentation with two independent specialists';
@@ -990,17 +994,15 @@ test('Will it rain here tomorrow? Ask before sharing my location', { skip: proce
   const f = fixture();
   try {
     const ask = () => f.core.command('velaRouteNative', { intent: 'Will it rain here tomorrow?' });
-    await assert.rejects(ask(), /vela_native_weather_unavailable/);
-    f.owner.nativeHostServices = {};
+    const unavailable=await ask();assert(unavailable.matched);assert.equal(unavailable.request.response?.kind,'inability');
+    let asked=0;f.owner.nativeHostServices = {systemFacts:{authorizeWeatherPurpose:async()=>{asked++;return 'deny';},locate:async()=>{throw Error('denied_location_must_not_be_read');}}};
     const result = await ask();
     assert(result.matched);
-    assert.equal(result.request.state, 'awaiting-review');
+    assert.equal(result.request.state, 'responded');
     assert.equal(result.request.providerId, null);
     const state = await f.core.command('vela', { name: 'state', input: {} }) as import('../../vela-core/src/contracts.ts').VelaState;
-    const plan = state.plans.find(item => item.id === result.request.planId);
-    assert.deepEqual(plan?.steps.map(step => step.action), [{ type: 'readWeather', period: 'tomorrow' }]);
-    assert.equal(plan?.state, 'prepared');
-    await assert.rejects(f.core.command('vela', { name: 'apply', input: plan!.id }), /review_authorization_required/);
+    assert.equal(result.request.planId,undefined);assert.equal(result.request.response?.kind,'inability');assert.equal(state.plans.length,0);
+    await ask();assert.equal(asked,1,'purpose denial is remembered without repeated app approvals');
     assert.equal((await f.core.command('providerActivity', {})).providerRequests, 0);
     assert.equal(f.requests.length + f.codexCalls, 0);
   } finally { await f.close(); }

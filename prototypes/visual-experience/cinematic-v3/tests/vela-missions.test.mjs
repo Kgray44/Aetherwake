@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { componentDocument, until } from "../../../conversation-product/test/component-dom.mts";
-import { createVelaMissionView } from "../src/vela-missions.ts";
+import { createVelaMissionView, missionTaskControls } from "../src/vela-missions.ts";
 
 const scope = { workspaceId: "workspace-a", projectId: "project-a" };
 const task = (id, executor, objective, dependencies = []) => ({
@@ -13,6 +13,14 @@ const initial = () => ({
   objective: "Measure CPU and RAM", planRevision: 1, revision: 4, concurrency: 1, waits: {}, events: [],
   tasks: [task("cpu", "sample.cpu", "Sample CPU"), task("ram", "sample.ram", "Sample RAM"),
     task("report", "join.samples", "Join measured results", ["cpu", "ram"])],
+});
+
+test('API specialist controls preserve nonreplayable attempts', () => {
+  const mission = initial();
+  const worker = { ...task('api-worker', 'api.specialist', 'Assess supplied evidence'), state: 'failed' };
+  assert.equal(missionTaskControls(mission, worker).retry, false);
+  assert.equal(missionTaskControls(mission, { ...worker, state: 'queued' }).cancel, true);
+  assert.equal(missionTaskControls(mission, { ...worker, executor: 'sample.cpu' }).retry, true);
 });
 
 async function fixture(handle) {

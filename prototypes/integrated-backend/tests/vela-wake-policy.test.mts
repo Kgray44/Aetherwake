@@ -65,7 +65,7 @@ test('native opt-in is required before local arm and repeated enabled configurat
 });
 test('one native wake starts one session; model-estimated boundaries remain private and bare wake requests in-session dynamic greeting',async()=>{
   const f=fixture();await f.active();const start=f.calls.find(call=>call.kind==='start')!.input;
-  assert.equal(start.greeting,'dynamic-in-session');assert.equal(start.pronunciation,'VAY-luh');assert.equal(start.initializationExposureSeconds,15);assert.equal(start.commandAudio,undefined);
+  assert.equal(start.greeting,'dynamic-in-session');assert.equal(start.pronunciation,'VAY-luh');assert.equal(start.initializationExposureSeconds,15);assert.equal(start.commandAudio,f.lease);
   assert.equal(f.leaseReleases,1);assert.equal(f.coordinator.state().voice,'active');assert.equal(f.coordinator.state().detector,'suspended');
   const visible=JSON.stringify(f.views);assert.doesNotMatch(visible,/private-native-consent|Float32Array|keywordEndSample|samples|commandAudio|PRIVATE_NATIVE/);
   assert.equal(f.coordinator.state().budget.dispatchedAttempts,1);assert.equal(f.coordinator.state().budget.possibleInitializationExposureSeconds,15);
@@ -74,7 +74,7 @@ test('wake followed by actual command VAD transfers only an opaque lease and sup
   const f=fixture();f.speech('present');await f.active();const start=f.calls.find(call=>call.kind==='start')!.input;
   assert.equal(start.greeting,'none');assert.equal(start.commandAudio,f.lease);assert.equal(f.leaseReleases,1);
   const unknown=fixture();unknown.speech('unknown');await unknown.active();assert.equal(unknown.calls.find(call=>call.kind==='start')!.input.greeting,'none');
-  assert.equal(unknown.calls.find(call=>call.kind==='start')!.input.commandAudio,undefined);
+  assert.equal(unknown.calls.find(call=>call.kind==='start')!.input.commandAudio,unknown.lease);
 });
 test('duplicate engine events and Vela playback cannot create a second paid start, while full-duplex live input remains enabled',async()=>{
   const f=fixture();f.controls.start=deferred();await f.coordinator.enable();const first=f.fire();await flush();const old=f.handler!;

@@ -583,7 +583,7 @@ export class VelaService {
     return plan;
   }
   /** Only the host can supply a sampled measurement or select a typed observation. */
-  local(input: { capabilityId: VelaLocalCapabilityId; intent: string; commandId: string }, signal?: AbortSignal, utilization?: import('./system-utilization.mts').SystemUtilization[], memory?: import('./system-information.ts').SystemMemoryMeasurement | null): VelaLocalDispatch {
+  local(input: { capabilityId: VelaLocalCapabilityId; intent: string; commandId: string }, signal?: AbortSignal, utilization?: import('./system-utilization.mts').SystemUtilization[], memory?: import('./system-information.ts').SystemMemoryMeasurement | null,battery?:import('./system-battery.ts').SystemBatteryMeasurement|null): VelaLocalDispatch {
     const started = performance.now();
     check(isRecord(input) && Object.keys(input).every(key => ['capabilityId', 'intent', 'commandId'].includes(key)) && text(input.intent, 16000) && identifier(input.commandId), 'invalid_local_request');
     const { capabilityId } = input, classified = performance.now();
@@ -598,7 +598,7 @@ export class VelaService {
       check(message && message.id === previous.response!.messageId && message.requestId === previous.id && message.role === 'assistant' && message.source === 'vela-native' && canonicalUserEvidence(message) && message.providerId === undefined && message.providerContribution === undefined && message.planId === undefined && message.responseKind === previous.response!.kind && digest(message.content) === previous.response!.contentDigest, 'local_response_unavailable');
       const ended = performance.now(); return { matched: true, request: structuredClone(previous), result: { ...structuredClone(previous.local!), messageId: message.id, content: message.content, replayed: true, timing: { classificationMs: classified - started, capabilityMs: ended - classified, persistenceMs: 0, totalMs: ended - started } } };
     }
-    const answer = evaluateLocalCapability(capabilityId, host, input.intent, utilization, memory), recordedAt = this.now(), observedAt = answer.facts.kind === 'time' || answer.facts.kind === 'date' ? answer.facts.utc : answer.facts.kind === 'system-memory' || answer.facts.kind === 'system-utilization' ? answer.facts.measurement.measuredAt : recordedAt; check(!signal?.aborted, 'local_request_cancelled');
+    const answer = evaluateLocalCapability(capabilityId, host, input.intent, utilization, memory,battery), recordedAt = this.now(), observedAt = answer.facts.kind === 'time' || answer.facts.kind === 'date' ? answer.facts.utc : answer.facts.kind === 'system-memory' || answer.facts.kind === 'system-battery' || answer.facts.kind === 'system-utilization' ? answer.facts.measurement.measuredAt : recordedAt; check(!signal?.aborted, 'local_request_cancelled');
     const record: VelaLocalRecord = { schemaVersion: 1, commandId: input.commandId, capabilityId, classification: 'observed', providerId: null, observedAt, facts: answer.facts }; validateLocalRecord(record);
     const committing = performance.now();
     const value = this.atomic(() => {
@@ -787,13 +787,19 @@ export class VelaService {
     return {lastResourceId:last?.resourceId??null,lastTimer:timer?.resourceId&&timer.timerId?{resourceId:timer.resourceId,timerId:timer.timerId}:null};
   }
   nativeClarification(intent: string, content: string): VelaRequest {
+    return this.nativeResponse(intent,content,'clarification');
+  }
+  /** Canonical, observed native answer; receives no provider authority or raw location. */
+  nativeResponse(intent:string,content:string,kind:import('./contracts.ts').ProviderReplyKind,observation?:VelaRequest['nativeObservation']):VelaRequest {
     check(text(intent,16000)&&text(content,2000),'invalid_timer_clarification');const scope=this.scope();
+    check(['answer','clarification','inability'].includes(kind),'invalid_native_response');
+    if(observation)check(observation.kind==='local-weather'&&observation.source==='National Weather Service'&&observation.sharedPrecision==='0.01-degree'&&Number.isFinite(Date.parse(observation.locationObservedAt)),'invalid_weather_observation');
     return this.atomic(()=>{
       const time=this.now(),request:VelaRequest={id:randomUUID(),conversationId:this.conversationId(),intent,state:'responded',createdAt:time,updatedAt:time,
-        providerId:null,origin:this.historyOrigin(scope),inputContentDigest:digest(intent),context:this.context([],scope)};
+        providerId:null,nativeResponse:{schemaVersion:1,classification:'observed'},origin:this.historyOrigin(scope),inputContentDigest:digest(intent),context:this.context([],scope),...(observation?{nativeObservation:structuredClone(observation)}:{})};
       const user=this.append(intent,request.id,'user');request.inputMessageId=user.id;
-      const response=this.append(content,request.id,'vela-native',undefined,{kind:'clarification'});
-      request.response={kind:'clarification',messageId:response.id,contentDigest:digest(content)};this.data.requests.push(request);return structuredClone(request);
+      const response=this.append(content,request.id,'vela-native',undefined,{kind});
+      request.response={kind,messageId:response.id,contentDigest:digest(content)};this.data.requests.push(request);return structuredClone(request);
     });
   }
   creationRecoveryReference(receiptId?:string):{receiptId:string;workspaceId:string;projectId:string|null}|null {

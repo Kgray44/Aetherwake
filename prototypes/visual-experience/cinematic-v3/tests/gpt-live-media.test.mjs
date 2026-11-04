@@ -324,6 +324,26 @@ function fixture(options = {}) {
   };
 }
 
+test('physical quiesce stops every microphone/playback track while preserving the bound data channel for final usage',async()=>{
+  const f=fixture();try{const channel=await f.started('quiesce-session'),peer=f.peers[0],remote=new Track('remote-speaker');peer.remote(remote);await flush();
+    await assert.rejects(f.adapter.quiesceCapture('foreign-session'),/session_mismatch/);assert.equal(f.streams[0].getTracks()[0].readyState,'live');
+    await f.adapter.quiesceCapture('quiesce-session');assert.equal(f.streams[0].getTracks()[0].readyState,'ended');assert.equal(remote.readyState,'ended');
+    assert.equal(f.audios[0].paused,true);assert.equal(f.audios[0].srcObject,null);assert.equal(f.adapter.state().microphoneAccess,'released');
+    assert.equal(peer.closed,false);assert.equal(peer.channel.closes,0);assert.equal(f.lost,0);
+    await assert.rejects(f.adapter.setInputDevice('mic-B'),/invalid_device/);await assert.rejects(f.adapter.resumePlayback(),/no_remote_audio/);
+    const late=new Track('late-remote');peer.remote(late);await flush();assert.equal(late.readyState,'ended');
+    await channel.send({type:'session.close',event_id:'close-native'});peer.channel.receive({type:'session.closed',event_id:'closed-native',session:{id:'quiesce-session'},usage:{seconds:2}});await flush();
+    assert.ok(f.events.some(event=>event.type==='session.closed'));assert.equal(f.lost,0);
+  }finally{await f.adapter.dispose();}
+});
+
+test('quiesce aborts pending microphone acquisition and releases a late stream without opening a peer session',async()=>{
+  const f=fixture(),pending=deferred(),track=new Track('late-microphone');f.setMicrophoneProvider(()=>pending.promise);
+  try{const prepare=f.adapter.prepare();await flush();await f.adapter.quiesceCapture();await assert.rejects(prepare);pending.resolve(new Stream([track]));await flush();
+    assert.equal(track.readyState,'ended');assert.equal(f.adapter.state().microphoneAccess,'released');assert.equal(f.authorizations.length,0);
+  }finally{await f.adapter.dispose();}
+});
+
 test("offline browser adapter: explicit microphone permission, selected devices, exact native negotiation and private SDP", async () => {
   const f = fixture();
   try {

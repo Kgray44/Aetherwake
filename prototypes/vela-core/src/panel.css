@@ -959,3 +959,20 @@
 .vela-voice-settings { display: grid; gap: 10px; padding-top: 12px; }
 .vela-voice-caption { white-space: pre-wrap; overflow-wrap: anywhere; }
 .vela-core-icon[data-voice-active="true"] { color: #d8ccff; outline: 1px solid #b6a0ee; }
+.vela-proposal { width: 100%; min-width: 0; font-size: 16px; }
+.vela-proposal-question { margin: 0; font-size: 19px; line-height: 1.5; font-weight: 400; text-wrap: pretty; }
+.vela-manifestation-content .vela-proposal-list { list-style: none; padding: 0; margin: 16px 0 8px; display: grid; gap: 5px; }
+.vela-manifestation-content .vela-proposal-item { display: flex; gap: 12px; align-items: center; min-width: 0; margin: 0; padding: 10px 12px; border-radius: 14px; background: linear-gradient(110deg, #d7d2ff0b, #d7d2ff03); }
+.vela-proposal-file-mark { flex: 0 0 24px; color: #c9c1e9; font-size: 21px; }
+.vela-proposal-item-copy { min-width: 0; display: grid; gap: 2px; }
+.vela-proposal-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; color: #efebfa; }
+.vela-proposal-item-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; color: #aaa2bc; }
+.vela-proposal-more { display: block; border: 0; background: none; color: #c7bce8; padding: 7px 10px; margin: 0 auto; font: inherit; font-size: 12px; cursor: pointer; }
+.vela-proposal-choices { display: flex; align-items: center; gap: 10px; margin-top: 18px; }
+.vela-proposal-choices button { font: inherit; font-size: 14px; min-height: 40px; min-width: 86px; padding: 8px 18px; border-radius: 999px; cursor: pointer; transition: background-color 150ms ease, border-color 150ms ease; }
+.vela-proposal-yes { background: #ded6f4; color: #211c31; border: 1px solid #e7e0fa; font-weight: 600 !important; }
+.vela-proposal-no { background: #ded6f409; color: #ddd6eb; border: 1px solid #c3b5df38; }
+.vela-proposal-choices button:disabled { opacity: .5; cursor: default; }
+.vela-proposal button:focus-visible { outline: 2px solid #d7c5ff; outline-offset: 3px; }
+.vela-proposal-error { font-size: 13px; color: #e5c9cb; }
+@media (prefers-reduced-motion: reduce) { .vela-proposal-choices button { transition: none; } }

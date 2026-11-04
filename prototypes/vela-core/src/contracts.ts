@@ -132,7 +132,7 @@ export interface ProviderProposal {
   contribution: ProviderContribution;
 }
 export type ProviderReplyKind = 'answer' | 'clarification' | 'inability';
-export type VelaInstantCapabilityId = 'local.time' | 'local.date' | 'local.workspace-status' | 'local.project-count' | 'local.execution-status' | 'system.memory';
+export type VelaInstantCapabilityId = 'local.time' | 'local.date' | 'local.workspace-status' | 'local.project-count' | 'local.execution-status' | 'system.memory' | 'system.battery';
 export type VelaLocalCapabilityId = VelaInstantCapabilityId | 'system.cpu' | 'system.gpu' | 'system.performance' | 'local.calculator';
 export type VelaLocalFacts =
   | { kind: 'time' | 'date'; epochMs: number; utc: string; timeZone: string; locale: string; utcOffsetMinutes: number; calendarDate: string; formatted: string }
@@ -140,6 +140,7 @@ export type VelaLocalFacts =
   | { kind: 'project-count'; count: number; coverage: 'authorized-active-projects' }
   | { kind: 'execution-status'; running: number; unknown: number; coverage: 'aerynth-owned-executions' }
   | { kind: 'system-memory'; measurement: SystemMemoryMeasurement }
+  | { kind: 'system-battery'; measurement: import('./system-battery.ts').SystemBatteryMeasurement }
   | { kind: 'system-utilization'; measurement: import('./system-utilization.mts').SystemUtilization }
   | { kind: 'system-performance'; measurements: import('./system-utilization.mts').SystemUtilization[] }
   | { kind: 'calculator'; expression: string; value: number }
@@ -193,6 +194,9 @@ export interface VelaRequest {
   /** Reference only: content lives in the SAME canonical conversation, never a second transcript. */
   response?: { kind: ProviderReplyKind; messageId: string; contentDigest?: string };
   local?: VelaLocalRecord;
+  /** The canonical host composed this reply without inference or a plan. */
+  nativeResponse?: { schemaVersion: 1; classification: 'observed' };
+  nativeObservation?: {kind:'local-weather';locationObservedAt:string;source:'National Weather Service';sharedPrecision:'0.01-degree'};
   projectCheck?: VelaProjectCheckReceipt;
   providerRecovery?: VelaProviderRecovery;
   route?: import('./adaptive-routing.ts').VelaRouteDecision;
@@ -368,6 +372,15 @@ export interface VelaFileEditView {
   projectChecks?: VelaProjectCheckReceipt[];
   projectChecksAvailable?: true;
 }
+export interface VelaFileProposal {
+  kind: 'local-file-proposal'; id: string; requestId: string; version: number; digest: string;
+  target: { workspaceId: string; projectId: string | null; workspaceVersion: number; layoutVersion: number; workspaceTitle?: string };
+  source: { displayRoot: string };
+  files: { id: string; displayName: string; relativePath: string; kind: string; bytes: number; versionDigest: string }[];
+  count: number; summary: string; state: 'proposed' | 'applied' | 'cancelled' | 'stale'; expiresAt: string;
+  result?: { importedCount: number; reusedCount: number; verified: boolean; workspaceId: string };
+}
+export type VelaFileProposalCommand = { name: 'accept' | 'cancel'; input: { id: string; digest: string; expectedVersion: number } };
 export interface VelaState {
   contract: typeof VELA_CONTRACT; identity: { id: 'system:vela'; name: 'Vela'; role: 'application-assistant' };
   conversation: CanonicalConversation | null;
@@ -375,6 +388,7 @@ export interface VelaState {
   planningProviders?: { providerId: string; available: boolean }[];
   routingSettings?: import('./routing-settings.ts').VelaRoutingSettingsView;
   fileEdits?: VelaFileEditView[];
+  fileProposals?: VelaFileProposal[];
   recoverableProviderRequestIds?: string[];
   /** Bounded transient excerpt of the active conversational response. */
   activeAnswer?: { requestId: string; text: string; truncated: boolean };
@@ -433,6 +447,7 @@ export interface AdaptationState {
 export interface VelaClient {
   state(): Promise<VelaState>;
   open(): Promise<VelaState>;
+  fileProposal?(input: VelaFileProposalCommand): Promise<unknown>;
   search(query: string): Promise<ResourceRef[]>;
   request(input: { intent: string; resourceIds: string[]; authorizeProvider: boolean } & import('./adaptive-routing.ts').VelaTurnRouting): Promise<VelaRequest>;
   routingOptions?(input: { providerId: string }): Promise<import('../../openai-provider/model-controls.ts').OrdinaryModelOption[]>;

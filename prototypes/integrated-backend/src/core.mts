@@ -46,12 +46,15 @@ import type { TurnInput,TurnEvent,TurnResult } from '../../openai-provider/contr
 import type { OrdinaryConnectionPort,OrdinaryResponsesTestServices,OrdinaryResponsesPreview } from './contracts.mts';
 import { OpenAIConnections,CHATGPT_PLAN_REGISTRATION } from './openai-connections.mts';
 import { VelaApiConnection } from './vela-api-connection.mts';
-import { VelaApiRuntime, velaApiReasoningEfforts, type VelaApiRuntimeTestServices } from './vela-api-runtime.mts';
+import { VelaApiRuntime, VELA_API_RUNTIME_LIMITS, velaApiReasoningEfforts, type VelaApiRuntimeTestServices } from './vela-api-runtime.mts';
+import { VelaWakeRuntime } from './vela-wake-runtime.mts';
 import { VelaVoiceRuntime } from './vela-voice-runtime.mts';
 import type { LiveCanonicalContext, LiveDelegationBinding, LiveTranscriptFragment } from '../../openai-provider/live-contracts.mts';
 import { canonicalUserEvidence } from '../../vela-core/src/voice-evidence.ts';
 import { VELA_API_PROVIDER } from '../../openai-provider/api-connection-contracts.mts';
 import { readLocalWeather } from './local-weather.mts';
+import {WeatherPermissionStore} from './weather-permission.mts';
+import {systemBattery,type SystemBatteryMeasurement} from '../../vela-core/src/system-battery.ts';
 import { mediaDefaultGeometry } from '../../block-library/media-policy.ts';
 import { inspectMediaSelection, mediaCapabilities, mediaExternalTarget, readMediaChunk, readMediaSource } from './media-sources.mts';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
@@ -200,10 +203,13 @@ export class BackendCore {
   private readonly privateRoot?: string;
   private conversations!: ConversationProduct;
   private nativeHostServices?:NativeHostServices;
+  private weatherPermissions?:WeatherPermissionStore;
+  private weatherRequest:AbortController|null=null;
   private ordinaryConnections!:OrdinaryConnectionPort;
   private velaApiConnection!:VelaApiConnection;
   private velaApiRuntime!:VelaApiRuntime;
   private velaVoiceRuntime!:VelaVoiceRuntime;
+  private velaWakeRuntime!:VelaWakeRuntime;
   private voiceContexts = new Map<string,{value:LiveCanonicalContext;scopeStamp:string;expires:number;sources:{id:string;digest:string}[];operations?:VelaOperationsPacket}>();
   private pendingVoiceInput?: {messageId:string;intent:string;sessionId:string};
   private velaApiPlanner!:VelaPlanningPort;
@@ -351,7 +357,7 @@ export class BackendCore {
       ensure(!options.velaPlanningPort||!this.privateMode,'synthetic_vela_planner_forbidden');
       this.initializeVela(options.velaPlanningPort);
       this.ordinaryConnections=ordinaryTest?.connection??new OpenAIConnections({db:this.db,transaction:work=>this.kernel.withTransaction(()=>work(this.db)),nativeHost:this.nativeHostServices,localEligibility:{kind:'local-personal-project',scope:'current-owner-local-installation',decisionRef:'aerynth.owner-local-personal-inference'}});
-      this.kernel.withTransaction(() => { VelaApiConnection.migrate(this.db); VelaApiRuntime.migrate(this.db); VelaVoiceRuntime.migrate(this.db); });
+      this.kernel.withTransaction(() => { VelaApiConnection.migrate(this.db); VelaApiRuntime.migrate(this.db); VelaVoiceRuntime.migrate(this.db); VelaWakeRuntime.migrate(this.db); });
       this.velaApiConnection = new VelaApiConnection({ db: this.db, transaction: work => this.kernel.withTransaction(() => work(this.db)), nativeHost: this.nativeHostServices, ...(velaApiTest ? { fetch: velaApiTest.fetch } : {}) });
       this.velaApiRuntime = new VelaApiRuntime({ db: this.db, transaction: work => this.kernel.withTransaction(work), connection: this.velaApiConnection, test: velaApiTest,
         observe: {
@@ -397,6 +403,10 @@ export class BackendCore {
               providerId:'gpt-live-1',detached:true,...(details.sessionId?{correlationId:details.sessionId}:{}),payload:{redacted:true,voice:details}});
           },
         }});
+      this.velaWakeRuntime = new VelaWakeRuntime({db:this.db,atomic:work=>this.atomic(work),api:this.velaApiRuntime,voice:this.velaVoiceRuntime,
+        capture:this.nativeHostServices?.wakeCapture,privateRoot:this.privateRoot,...(velaApiTest?.wake??{}),storageAllowed:()=>this.missionStorageAdmitted,
+        observe:view=>this.atomic(()=>this.record('vela.wake/state','observed',undefined,randomUUID(),{providerId:'aerynth-native',detached:true,
+          ...(view.sessionId?{correlationId:view.sessionId}:{}),payload:{redacted:true,wake:view}}))});
       this.db.exec(`CREATE TABLE IF NOT EXISTS vela_mission_provider_admissions(
         attempt_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, project_id TEXT, utc_day TEXT NOT NULL) STRICT;
         CREATE INDEX IF NOT EXISTS vela_mission_provider_admission_day ON vela_mission_provider_admissions(utc_day);
@@ -416,7 +426,11 @@ export class BackendCore {
       }), 'chatgpt.specialist': createSpecialistExecutor({
         available: (scope, task) => this.missionSpecialistAvailable(scope, task),
         turn: input => this.runMissionSpecialist(input),
-      }) };
+      }), 'api.specialist': createSpecialistExecutor({
+        available: (scope, task) => this.missionSpecialistAvailable(scope, task),
+        turn: input => this.runMissionSpecialist(input),
+      }, VELA_API_PROVIDER),
+      };
       this.missionAdmission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers,
         onChange: () => this.missions?.capacityChanged() });
       this.missionPublication = new MissionPublication(this.db);
@@ -424,7 +438,8 @@ export class BackendCore {
         db: this.db, atomic: work => this.kernel.withTransaction(work),
         authorized: scope => this.missionScopeAllowed(scope),
         executors: this.missionExecutors, laneLimit: lane => lane === 'codex-local-check' ? 1 :
-          lane === CHATGPT_PLAN_PROVIDER ? 2 - Number(this.active?.providerId === lane) - Number(!!this.missionPlanningRun) : 2,
+          lane === CHATGPT_PLAN_PROVIDER ? 2 - Number(this.active?.providerId === lane) - Number(!!this.missionPlanningRun) :
+          lane === VELA_API_PROVIDER ? VELA_API_RUNTIME_LIMITS.concurrent - this.velaApiRuntime.nonMissionInFlight() : 2,
         admission: demand => {
           if (!demand || !this.missionStorageAdmitted) this.missionAdmission.stopDemand();
           const snapshot = this.missionAdmission.read(demand && this.missionStorageAdmitted);
@@ -652,7 +667,6 @@ export class BackendCore {
     });
   }
   private missionSpecialistSelection(scope: MissionScope, agentProfileId?: string): Omit<NonNullable<MissionTaskPlan['specialist']>, 'role' | 'instructions'> | undefined {
-    if (!this.ordinaryAvailable()) return;
     const profiles = this.velaRoutingProfiles(scope);
     let agent: ReturnType<BackendCore['agentRoutingDetails']> | undefined;
     if (agentProfileId !== undefined) {
@@ -664,7 +678,17 @@ export class BackendCore {
       } catch { return; }
     }
     const { effective: values } = resolveRoutingSettings(profiles, undefined, agent?.defaults);
-    if (values.providerId && values.providerId !== CHATGPT_PLAN_PROVIDER || values.mode === 'codex') return;
+    if (values.mode === 'codex') return;
+    const profile = agent ? { profile: { id: agent.agent.resourceId, profileVersion: agent.agent.profileVersion,
+      resourceVersion: agent.agent.resourceVersion, title: agent.agent.title, instructions: agent.instructions } } : {};
+    if (!values.providerId || values.providerId === VELA_API_PROVIDER) {
+      if (!this.velaApiRuntime.authorized()) return;
+      const model = values.model ?? 'gpt-6-luna', effort = values.reasoningEffort ?? (values.mode === 'deep' ? 'high' : 'low');
+      if (!velaApiReasoningEfforts(model).includes(effort)) return;
+      return { provider: VELA_API_PROVIDER, model, effort, connectionVersion: this.velaApiRuntime.configurationVersion()!,
+        settingsStamp: this.velaRoutingSettingsStamp(profiles), ...profile };
+    }
+    if (values.providerId !== CHATGPT_PLAN_PROVIDER || !this.ordinaryAvailable()) return;
     const catalog = this.ordinaryCatalog!;
     const options = catalog.models.map(ordinaryModelOption);
     const model = values.model
@@ -676,19 +700,54 @@ export class BackendCore {
       model.reasoningEfforts?.includes('none') ? 'none' : model.reasoningEfforts?.includes('low') ? 'low' : undefined);
     return { provider: CHATGPT_PLAN_PROVIDER, model: model.id, effort, connectionVersion: catalog.version,
       settingsStamp: this.velaRoutingSettingsStamp(profiles),
-      ...(agent ? { profile: { id: agent.agent.resourceId, profileVersion: agent.agent.profileVersion,
-        resourceVersion: agent.agent.resourceVersion, title: agent.agent.title, instructions: agent.instructions } } : {}) };
+      ...profile };
   }
-  private missionSpecialistAvailable(scope: MissionScope, task: Pick<MissionTaskPlan, 'specialist'>) {
+  private missionSpecialistAvailable(scope: MissionScope, task: Pick<MissionTaskPlan, 'specialist'>, checkAdmission = true) {
     const assigned = task.specialist, current = this.missionSpecialistSelection(scope, assigned?.profile?.id);
-    return !!(current && assigned && current.connectionVersion === assigned.connectionVersion &&
+    return !!(current && assigned && current.provider === assigned.provider && current.connectionVersion === assigned.connectionVersion &&
       current.settingsStamp === assigned.settingsStamp && current.model === assigned.model && current.effort === assigned.effort &&
       planningDigest(current.profile ?? null) === planningDigest(assigned.profile ?? null) &&
-      !this.velaQuotaExhausted(CHATGPT_PLAN_PROVIDER, now().slice(0, 10), this.velaRoutingProfiles(scope)));
+      (!assigned.webSearch || assigned.provider === CHATGPT_PLAN_PROVIDER) &&
+      (!checkAdmission || !this.velaQuotaExhausted(assigned.provider, now().slice(0, 10), this.velaRoutingProfiles(scope)) &&
+      (assigned.provider !== VELA_API_PROVIDER || this.velaApiRuntime.usageStatus().usedToday < VELA_API_RUNTIME_LIMITS.requestsPerDay)));
   }
   private async runMissionSpecialist(context: MissionExecutionContext): Promise<TurnResult> {
     const assigned = context.task.specialist;
     ensure(assigned, 'mission_specialist_unavailable');
+    if (assigned.provider === VELA_API_PROVIDER) {
+      const fence = () => ensure(!this.closed && !context.signal.aborted && this.missionStorageAdmitted &&
+        this.missionScopeAllowed(context.scope) && this.missionSpecialistAvailable(context.scope, context.task, false), 'mission_specialist_scope_changed');
+      fence();
+      ensure(this.missionSpecialistAvailable(context.scope, context.task), 'mission_specialist_unavailable');
+      const models = await this.velaApiRuntime.models(assigned.connectionVersion); fence();
+      ensure(models.includes(assigned.model) && !assigned.webSearch, 'mission_specialist_unavailable');
+      // The scheduler supplies one frozen, permission-checked package. No transcript, files,
+      // web tools, catalog discovery or another worker's undeclared evidence is added here.
+      const { result } = await this.velaApiRuntime.run({ requestId: context.attemptId, version: assigned.connectionVersion,
+        model: assigned.model, reasoningEffort: assigned.effort, instruction: assigned.instructions,
+        prompt: JSON.stringify(context.context.payload), contextDigest: context.context.manifest.payloadDigest,
+        lane: 'mission-specialist', oneUse: true, validate: fence,
+        stage: (executionId, review) => {
+          fence();
+          ensure(!this.velaQuotaExhausted(VELA_API_PROVIDER, now().slice(0,10), this.velaRoutingProfiles(context.scope)), 'vela_daily_attempt_limit_reached');
+          ensure(review.contextDigest === context.context.manifest.payloadDigest && review.model === assigned.model &&
+            !review.api?.tools?.length, 'approval_scope_mismatch');
+          ensure(!this.db.prepare('SELECT 1 FROM vela_mission_provider_admissions WHERE attempt_id=?').get(context.attemptId), 'mission_planning_already_attempted');
+          this.db.prepare('INSERT INTO vela_mission_provider_admissions VALUES(?,?,?,?)')
+            .run(context.attemptId, VELA_API_PROVIDER, context.scope.projectId, now().slice(0,10));
+          this.providerActivity.providerRequests++;
+          this.record('vela.mission/api-dispatch', 'observed', undefined, executionId, { providerId: VELA_API_PROVIDER,
+            detached: true, correlationId: context.missionId, payload: { redacted: true, taskId: context.task.id,
+              api: { executionId, bodyDigest: review.bodyDigest, contextDigest: review.contextDigest } } });
+        },
+        event: event => { fence(); if (event.type === 'provider/usage') this.record(event.type, this.velaApiTest ? 'simulated' : 'reported',
+          undefined, context.attemptId + ':usage', { providerId: VELA_API_PROVIDER, detached: true, correlationId: context.missionId,
+            payload: { redacted: true, taskId: context.task.id, usage: event.usage } }); },
+        // MissionService owns task results; do not publish worker output as a Vela conversation turn.
+        completed: () => {},
+      }, context.signal);
+      return result;
+    }
     const turn: TurnInput = {
       executionId: context.attemptId, requestId: context.attemptId, configurationId: CHATGPT_PLAN_REGISTRATION,
       providerId: CHATGPT_PLAN_PROVIDER, assistant: 'ordinary', model: assigned.model, instructions: assigned.instructions,
@@ -763,13 +822,11 @@ export class BackendCore {
     const apiPlanner=this.velaApiRuntime?.authorized()&&values.mode!=='codex'&&(!values.providerId||values.providerId===VELA_API_PROVIDER)&&
       velaApiReasoningEfforts(apiModel).includes(apiEffort)?{provider:VELA_API_PROVIDER,model:apiModel,effort:apiEffort,
         version:this.velaApiRuntime.configurationVersion()!,settingsStamp:this.velaRoutingSettingsStamp(profiles)}:undefined;
-    // Dedicated API planning may select only locally supported executors. It does not authorize
-    // ChatGPT specialists, a checkout, server access, external tools or additional provider calls.
-    const tasks = [...Object.values(missionPlanningCatalog()), ...(apiPlanner?[]:missionPlanningSpecialists(selection))];
+    const tasks = [...Object.values(missionPlanningCatalog()), ...missionPlanningSpecialists(selection)];
     const catalog = Object.fromEntries(tasks.filter(task => this.missionExecutors[task.executor].available(scope, task))
       .map(task => [task.id, task]));
     const capabilities = Object.values(catalog).map(task => ({ id: task.id, description: task.objective +
-      (task.specialist ? ' This specialist receives only the objective and must run independently.' : '') }));
+      (task.specialist ? task.specialist.provider === VELA_API_PROVIDER ? ' Receives scoped compiled task context and declared verified prerequisites; may depend on selected capabilities. Reports are not independently verified facts. No tools.' : ' Receives only the reviewed objective and must run independently. Provider web search is available only when explicitly listed.' : '') }));
     const available = selection && !this.velaQuotaExhausted(CHATGPT_PLAN_PROVIDER, now().slice(0, 10), this.velaRoutingProfiles(scope));
     const offer: MissionPlanningOffer = { kind: 'planning-offer', scope, objective,
       fingerprint: planningDigest({ objective, scope, capabilities, selection:apiPlanner??selection, boundary:apiPlanner?undefined:this.ordinaryCatalog?.boundaryDigest,
@@ -820,7 +877,7 @@ export class BackendCore {
         'Only selected local host measurements and authorized workspace notes are available. Target application logs, traces and external runtime access need separate authorized capabilities.']}:
         apiPlanner?{partialLimitations:['This semantic plan verifies only the listed native capability criteria. An independent whole-objective verifier is not available; local observations do not establish an external diagnosis or completion.']}:undefined;
       const plan = compileMissionProposal(proposal, objective, scope, catalog,partial);
-      ensure(!plan.tasks.some(step => step.specialist && step.dependencies.length), 'mission_proposal_unsupported_objective');
+      ensure(!plan.tasks.some(step => step.specialist?.provider === CHATGPT_PLAN_PROVIDER && step.dependencies.length), 'mission_proposal_unsupported_objective');
       validateMissionPlan(plan, this.missionExecutors);
       plan.planning = { provider: apiPlanner?VELA_API_PROVIDER:CHATGPT_PLAN_PROVIDER, model: planner.model, effort: planner.effort,
         responseId: result.responseId, startedAt, durationMs: performance.now() - started, ...(result.usage ? { usage: result.usage } : {}) };
@@ -880,14 +937,14 @@ export class BackendCore {
         }
         ensure(plan && this.missionScopeAllowed(scope), 'mission_scope_or_plan_unavailable');
         const fingerprint = planningDigest(plan);
-        const remote = plan.tasks.filter(task => task.executor === 'chatgpt.specialist');
+        const remote = plan.tasks.filter(task => task.executor === 'chatgpt.specialist' || task.executor === 'api.specialist');
         const projectCheck = plan.tasks.find(task => task.executor === 'codex.project-check');
         const selected = remote[0]?.specialist;
         if (request.name === 'preview') return { fingerprint, plan,
           ...(proposalId ? { proposalId } : {}),
           executors: plan.tasks.map(task => ({ id: task.id, available: this.missionExecutors[task.executor].available(scope, task) })),
           ...(projectCheck ? { localReview: { kind: 'node-test', maxFiles: 4 } as const } : {}),
-          ...(remote.length ? { externalReview: { provider: 'ChatGPT plan', model: selected?.model ?? 'Unavailable',
+          ...(remote.length ? { externalReview: { provider: [...new Set(remote.map(task => task.specialist?.provider === VELA_API_PROVIDER ? 'Vela dedicated API' : 'ChatGPT plan'))].join(' + '), model: selected?.model ?? 'Unavailable',
             effort: selected?.effort, calls: remote.length } } : {}) };
         ensure(request.input.fingerprint === fingerprint, 'mission_preview_changed');
         ensure(!remote.length || reviewed && remote.every(task => this.missionSpecialistAvailable(scope, task)), 'mission_native_review_or_connection_required');
@@ -1325,6 +1382,12 @@ export class BackendCore {
       }));
     }
     if(action.type==='clockTimer')return this.prepareVelaClockTimer({...input,action},cancel);
+    if(action.type==='readLocalFact'&&action.capabilityId==='system.battery'){
+      this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
+      return this.sampleVelaBattery().then(battery=>()=>{cancel.throwIfAborted();this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
+        const fact=evaluateLocalCapability('system.battery',this.localVelaHost(),undefined,[],undefined,battery);
+        return this.once<HostActionResult>(input.commandId,{type:'velaNative',...input},()=>({status:fact.kind==='answer'?'applied':'failed',receiptId:input.commandId,responseText:fact.content}));});
+    }
     if(action.type==='repairWorkspace') {
       this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
       const repair=new VelaWorkspaceRepair({
@@ -1365,7 +1428,7 @@ export class BackendCore {
     if(action.type==='readWeather'){
       ensure(this.velaCapability(action.type),'vela_native_capability_unavailable');
       this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
-      return readLocalWeather(action.period,cancel).then(forecast=>()=>{
+      return this.forecastWeather(action.period,Date.now(),cancel).then(forecast=>()=>{
         this.requireVelaPolicyGrant(input.authorizationRef,input.planId,'apply');
         return this.once<HostActionResult>(input.commandId,{type:'velaNative',...input},()=>({
           status:forecast.ok?'applied':'failed',receiptId:input.commandId,responseText:forecast.content,
@@ -1957,7 +2020,7 @@ export class BackendCore {
     const hostOptions: Parameters<typeof createCanonicalVelaHost>[0] = {db:this.db,transaction:work=>this.atomic(()=>work(this.db)),readTransaction:work=>this.kernel.withTransaction(work),metadata:purpose=>this.velaMetadata(purpose),currentContext:()=>this.velaContext(),
       permissions:{attentionPreferences:(_intent,c)=>c.principalId==='local-owner'&&c.policyVersion==='aerynth.local-owner@1',scope:(c,m)=>this.velaScope(c,m),metadata:(ref,_c,m)=>ref.kind==='resource'?!!m.resources.find(r=>r.id===ref.id&&r.visible!==false):ref.kind==='workspace'?m.workspaces.some(w=>w.id===ref.id):ref.kind==='collection'?!!m.collections?.some(c=>c.id===ref.id)&&this.conversationAccess.collection(ref.id,'read',ref.state==='archived'):m.projects.some(p=>p.id===ref.id),content:ref=>ref.kind==='resource'&&!!this.conversationAccess.resource(ref.id),authorize:request=>this.authorizeVelaPolicy(request),restoreCollection:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'organize',true),inspectCollectionArchiveReceipt:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'read',true)},
       revisions:{attentionPreferences:()=>this.vela.attentionPreferenceVersion(),conversation:id=>this.state.revisions[id]??null,workspace:id=>this.velaNative?.workspaceRevision?.(id)??Number(this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(id)?.version??0),collection:id=>Number(this.db.prepare('SELECT version FROM cp_collection_rules WHERE collection_id=?').get(id)?.version??0)},
-      conversations:{ensure:()=>this.ensureVelaConversation(),read:id=>this.readVelaConversation(id),append:(id,message)=>this.appendVelaMessage(id,message)},dispatch:{native:input=>this.applyVelaNative(input),prepareNative:{supports:action=>action.type==='adjustWorkspace'||action.type==='recoverCreation'||action.type==='clockTimer'||action.type==='repairWorkspace'||action.type==='constructWorkspace'||action.type==='readWeather'||action.type==='createTimeline'&&action.source.kind==='github-commits',prepare:(input,signal)=>this.prepareVelaNative(input,signal)},delegateTask:input=>this.executeVelaDelegation(input),preference:input=>{
+      conversations:{ensure:()=>this.ensureVelaConversation(),read:id=>this.readVelaConversation(id),append:(id,message)=>this.appendVelaMessage(id,message)},dispatch:{native:input=>this.applyVelaNative(input),prepareNative:{supports:action=>action.type==='readLocalFact'&&action.capabilityId==='system.battery'||action.type==='adjustWorkspace'||action.type==='recoverCreation'||action.type==='clockTimer'||action.type==='repairWorkspace'||action.type==='constructWorkspace'||action.type==='readWeather'||action.type==='createTimeline'&&action.source.kind==='github-commits',prepare:(input,signal)=>this.prepareVelaNative(input,signal)},delegateTask:input=>this.executeVelaDelegation(input),preference:input=>{
         ensure(this.velaNative?.applyPreference,'vela_preference_capability_unavailable');this.requireVelaPolicyGrant(input.authorizationRef,undefined,'adaptation');return this.velaNative.applyPreference(input);
       }}};
     this.velaHost=createCanonicalVelaHost(hostOptions);
@@ -2047,7 +2110,7 @@ export class BackendCore {
     if(id==='adjustWorkspace'||id==='recoverCreation')return this.missionStorageAdmitted;
     if(id==='clockTimer')return this.missionStorageAdmitted&&(process.platform==='win32'||!!this.syntheticTimerClock);
     if(id==='readLocalFact')return true;
-    if(id==='readWeather')return process.platform==='win32'&&!!this.nativeHostServices;
+    if(id==='readWeather')return process.platform==='win32'&&!!this.nativeHostServices?.systemFacts;
     if(id==='createTimeline')return true;
     if(id==='setAttentionMode')return this.velaNative?.supportedActions.includes('setAttentionMode')===true&&this.vela?.attentionPreferenceVersion()!=null;
     if(id==='bringAllIntoView')return this.velaContext().currentWorkspaceId!==null&&this.velaNative?.supportedActions.includes('bringAllIntoView')===true;
@@ -2884,6 +2947,28 @@ export class BackendCore {
       return reading;
     } catch { return null; }
   }
+  private weatherPermissionStore(){return this.weatherPermissions??=new WeatherPermissionStore(this.db);}
+  private async forecastWeather(period:import('./local-weather.mts').WeatherPeriod,requestedAtMs:number,cancel:AbortSignal){
+    const host=this.nativeHostServices?.systemFacts;
+    if(!host)return {ok:false,content:'Native Windows location is unavailable in this host. You can explicitly ask for weather in a city.'};
+    if(this.weatherRequest)return {ok:false,content:'A current-location weather request is already in progress.'};
+    const controller=new AbortController();this.weatherRequest=controller;
+    try{
+      const store=this.weatherPermissionStore(),initial=store.state();
+      if(initial.decision==='unknown'){
+        const choice=await host.authorizeWeatherPurpose();cancel.throwIfAborted();controller.signal.throwIfAborted();
+        if(choice==='cancel')return {ok:false,content:'Location sharing for weather was not enabled. You can change this in Vela’s permissions.'};
+        // A concurrent user change wins; a stale native dialog can never restore permission.
+        store.set(initial.version,choice);
+      }
+      if(store.state().decision!=='allow')return {ok:false,content:'Location sharing for weather is off. You can change this in Vela’s permissions.'};
+      const grant=store.grant(),signal=AbortSignal.any([cancel,controller.signal,grant.signal]);
+      return await readLocalWeather(period,signal,{requestedAtMs,authorize:grant.assert,locate:input=>host.locate(input),...(this.velaApiTest?{request:this.velaApiTest.fetch}:{})});
+    }catch{
+      return {ok:false,content:this.closed?'The weather request was cancelled.':'The weather request could not use a fresh authorized location. Check Vela’s permissions and Windows Location settings.'};
+    }finally{if(this.weatherRequest===controller)this.weatherRequest=null;}
+  }
+  private async sampleVelaBattery():Promise<SystemBatteryMeasurement|null>{try{const host=this.nativeHostServices?.systemFacts;if(!host)return null;return systemBattery(await host.battery());}catch{return null;}}
   private async sampleVelaFact(fact: string) {
     const samples = fact === 'system.performance' ? await Promise.all([this.sampleVelaUtilization('system.cpu'), this.sampleVelaUtilization('system.gpu')])
       : fact === 'system.cpu' || fact === 'system.gpu' ? [await this.sampleVelaUtilization(fact)] : [];
@@ -2923,6 +3008,14 @@ export class BackendCore {
     const profiles = this.velaRoutingProfiles();
     // Pins govern inference when needed. Clear native tools retain the same configured pins without a model call.
     resolveRoutingSettings(profiles, settings);
+    const weatherPeriod=nativeVelaWeather(intent);
+    if(weatherPeriod){
+      const forecast=await this.forecastWeather(weatherPeriod,Date.now(),new AbortController().signal);ensure(!this.closed,'backend_closed');
+      const observed='locationObservedAt' in forecast&&typeof forecast.locationObservedAt==='string'?forecast.locationObservedAt:undefined;
+      const request=this.vela.nativeResponse(intent,forecast.content,forecast.ok?'answer':'inability',observed?{kind:'local-weather',locationObservedAt:observed,source:'National Weather Service',sharedPrecision:'0.01-degree'}:undefined);
+      this.recordVelaRoute('stage_completed',request.id,'aerynth-native',{route:'native',capabilityId:'readWeather',outcome:forecast.ok?'observed':'unavailable'});
+      return {matched:true,request};
+    }
     const workspaceMutation=await this.routeVelaWorkspaceMutation(intent);if(workspaceMutation)return workspaceMutation;
     const timer=await this.routeVelaClockTimer(intent,activeCard);if(timer)return timer;
     const fact = nativeVelaFact(intent) ?? matchOrdinaryClockQuestion(intent);
@@ -2930,9 +3023,10 @@ export class BackendCore {
       const start = performance.now();
       const samples = await this.sampleVelaFact(fact);
       const memory = fact === 'system.memory' ? await this.sampleVelaMemory() : undefined;
+      const battery=fact==='system.battery'?await this.sampleVelaBattery():undefined;
       ensure(!this.closed, 'backend_closed');
       ensure(this.velaRoutingSettingsStamp(profiles) === this.velaRoutingSettingsStamp(), 'stale_vela_routing_defaults');
-      const local = this.vela.local({ capabilityId: fact, intent, commandId: randomUUID() }, undefined, samples, memory);
+      const local = this.vela.local({ capabilityId: fact, intent, commandId: randomUUID() }, undefined, samples, memory,battery);
       if (!local.matched) return local;
       this.recordVelaRoute('stage_completed', local.request.id, 'aerynth-native', {
         route: 'native', capabilityId: fact, outcome: local.result.facts.kind === 'unavailable' ? 'unavailable' : 'observed',
@@ -4619,6 +4713,19 @@ export class BackendCore {
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
+    if(name==='velaWake'){ensure(!this.closed,'backend_closed');return await this.velaWakeRuntime.request(input as CommandMap['velaWake']['input']) as CommandMap[K]['output'];}
+    if(name==='velaWakeNative'||name==='velaWakeFrame'){
+      ensure(!this.closed&&this.nativeHostServices?.wakeCapture&&(this.privateMode||this.velaApiTest?.wake),'native_wake_authorization_required');
+      if(name==='velaWakeFrame')return await this.velaWakeRuntime.frame(input as CommandMap['velaWakeFrame']['input']) as CommandMap[K]['output'];
+      ensure(this.missionStorageAdmitted,'storage_reserve_admission_denied');return await this.velaWakeRuntime.native(input as CommandMap['velaWakeNative']['input']) as CommandMap[K]['output'];
+    }
+    if(name==='velaWeatherPermissionNative'){
+      const request=input as CommandMap['velaWeatherPermissionNative']['input'];
+      ensure(!this.closed&&this.nativeHostServices?.systemFacts&&(this.privateMode||this.velaApiTest)&&request&&typeof request==='object'&&!Array.isArray(request),'native_weather_permission_required');
+      if(request.type==='status'){ensure(Object.keys(request).length===1,'invalid_weather_permission');return this.weatherPermissionStore().state() as CommandMap[K]['output'];}
+      ensure(request.type==='set'&&Object.keys(request).length===3&&Number.isSafeInteger(request.expectedVersion)&&['allow','deny'].includes(request.decision),'invalid_weather_permission');
+      ensure(this.missionStorageAdmitted,'storage_reserve_admission_denied');return this.weatherPermissionStore().set(request.expectedVersion,request.decision) as CommandMap[K]['output'];
+    }
     if(name==='velaVoice'){
       ensure(!this.closed,'backend_closed');return await this.velaVoiceRuntime.request(input as CommandMap['velaVoice']['input']) as CommandMap[K]['output'];
     }
@@ -4928,6 +5035,7 @@ export class BackendCore {
         return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;
       }
       case 'close': {
+        await this.velaWakeRuntime.dispose();
         await this.velaVoiceRuntime.dispose();
         await this.timerDomain?.dispose();
         this.githubImport?.abort();
@@ -4935,6 +5043,7 @@ export class BackendCore {
         const planning = this.missionPlanningRun;
         planning?.abort.abort();
         this.missionAdmission.dispose();
+        this.weatherRequest?.abort();this.weatherPermissions?.close();
         await this.missions.close();
         this.flushMissionPublication();
         await planning?.settled.catch(() => {});

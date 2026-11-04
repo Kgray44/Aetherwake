@@ -65,7 +65,7 @@ export function missionCompletion(mission: Mission) {
       lines.push(`Found ${value.references.length} relevant ${value.references.length === 1 ? 'note' : 'notes'}.`);
     } else if (evidence?.source === 'codex-app-server:read-only-command') {
       lines.push(`${value.testCount} ${value.testCount === 1 ? 'test passed' : 'tests passed'}.`);
-    } else if (evidence?.source === 'chatgpt-plan-responses:reported' && Array.isArray(value.observations) &&
+    } else if ((evidence?.source === 'chatgpt-plan-responses:reported' || evidence?.source === 'openai-api-vela:reported') && Array.isArray(value.observations) &&
       typeof value.observations[0] === 'string' && !specialistResults.has(value.observations[0])) {
       specialistResults.add(value.observations[0]);
       lines.push(`${task.specialist?.role ?? 'Specialist'} reported: ${value.observations[0].trim()}`);

@@ -55,6 +55,8 @@ contextBridge.exposeInMainWorld(
           "providerConnection",
           "velaApiConnection",
           "velaVoice",
+          "velaWake",
+          "weatherPermission",
           "interrupt",
           "viewState",
           "graphAction",
@@ -85,6 +87,12 @@ contextBridge.exposeInMainWorld(
       if (name === 'velaVoice' && ['start','reconnect','audition','createVoice','saveVoice'].includes(input?.name) &&
           navigator.userActivation?.isActive !== true)
         throw new Error('voice_user_gesture_required');
+      if (name === 'weatherPermission' && input?.type !== 'status' &&
+          navigator.userActivation?.isActive !== true)
+        throw new Error('weather_user_gesture_required');
+      if (name === 'velaWake' && ['enable','save'].includes(input?.name) &&
+          navigator.userActivation?.isActive !== true)
+        throw new Error('wake_user_gesture_required');
       if (name === "githubTimeline" && input?.name === "openCommit" &&
           navigator.userActivation?.isActive !== true)
         throw new Error("github_user_gesture_required");

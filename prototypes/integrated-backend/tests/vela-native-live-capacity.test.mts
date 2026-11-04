@@ -8,6 +8,15 @@ import { BackendCore } from "../src/core.mts";
 import type { ProviderPort } from "../src/contracts.mts";
 import { CAPABILITIES } from "../../vela-core/src/capabilities.ts";
 
+function decodedContext(data:any):any{
+  if(!data.contextEncoding)return data.context;
+  assert.equal(data.contextEncoding,'aerynth.json-dictionary@1');
+  const decode=(value:any):any=>!Array.isArray(value)?value:value[0]===0?Object.fromEntries(Array.from({length:(value.length-1)/2},(_,index)=>{
+    const key=value[index*2+1];return [typeof key==='number'?data.contextKeys[key]:key,decode(value[index*2+2])];
+  })):value[0]===1?value.slice(1).map(decode):value[0]===2?data.contextStrings[value[1]]:assert.fail('unknown context tag');
+  return decode(data.context);
+}
+
 /** Independent application of the documented data codec, including literal schema-key escaping. */
 function decodedCatalog(data: any) {
   assert.equal(data.capabilityEncoding, "aerynth.inline-catalog@3");
@@ -146,7 +155,8 @@ for (const authenticated of [false, true])
         contentPolicy: "local-private",
         velaCatalogDiscovery: false,
         velaHistoryContext: false,
-      });
+      },()=>{},{secrets:{available:async()=>false,seal:async()=>{throw Error('capacity_fixture_no_secret_access');},open:async()=>{throw Error('capacity_fixture_no_secret_access');}},
+        systemFacts:{authorizeWeatherPurpose:async()=>{throw Error('capacity_fixture_no_location');},locate:async()=>{throw Error('capacity_fixture_no_location');},battery:async()=>{throw Error('capacity_fixture_no_battery_read');}}});
       const internal = core as any,
         db = internal.db as DatabaseSync,
         port = internal.port as ProviderPort;
@@ -253,21 +263,21 @@ for (const authenticated of [false, true])
           signature: preview.signature,
         }),
         data = JSON.parse(review.prompt.split("\n").at(-1)!),
-        capabilities = decodedCatalog(data);
+        capabilities = decodedCatalog(data),context=decodedContext(data);
       assert.equal(Buffer.byteLength(exact.intent), 669);
       assert.equal(Buffer.byteLength(exact.sourceChat), 40);
       assert.equal(Buffer.byteLength(exact.sourceNote), 60);
       const expectedIds = CAPABILITIES.filter(capability =>
-        capability.id !== "readWeather" && (authenticated || capability.id !== "delegateTask"),
+        (process.platform==='win32'||capability.id!=='readWeather')&&(authenticated || capability.id !== "delegateTask"),
       ).map(capability => capability.id).sort();
       assert.deepEqual(capabilities.map((capability: { id: string }) => capability.id).sort(), expectedIds);
       assert(capabilities.some((capability: { id: string }) => capability.id === "createTimeline"));
       assert.deepEqual(capabilities, [...internal.velaCapabilities(CAPABILITIES)].sort((a, b) => a.id.localeCompare(b.id)), "Every effective schema, scope and policy survives the transport encoding");
       assert.equal(data.schemaAvailability, "complete-approved-catalog");
       assert(!data.capabilityDiscovery);
-      assert(!data.context.history);
+      assert(!context.history);
       assert(!review.history);
-      assert.deepEqual(data.context, review.context);
+      assert.equal(JSON.stringify(context),JSON.stringify(review.context),'The lossless context must retain every source byte, ID, revision, digest and scope in original order');
       assert.deepEqual(review.context, preview.context);
       assert.equal(
         review.context.included.find((ref) => ref.id === noteId)!.content,

@@ -29,7 +29,7 @@ export interface MissionTaskPlan {
   specialist?: {
     role: string;
     instructions: string;
-    provider: 'chatgpt-plan-responses';
+    provider: 'chatgpt-plan-responses' | 'openai-api-vela';
     model: string;
     effort?: ReasoningEffort;
     connectionVersion: number;

@@ -41,11 +41,11 @@ export function buildMissionRevision(mission: Mission, change: MissionRevisionCh
     }
     case 'reassign': {
       ensure(keys(change, ['type', 'taskId', 'agentProfileId']) && id(change.agentProfileId), 'invalid_mission_revision');
-      ensure(task.executor === 'chatgpt.specialist' && !task.attempts.length && !task.dependencies.length &&
+      ensure((task.executor === 'chatgpt.specialist' || task.executor === 'api.specialist') && !task.attempts.length && !task.dependencies.length &&
         ['queued', 'blocked'].includes(task.state), 'mission_revision_task_denied');
       const specialist = authority.reassign?.(mission, task, change.agentProfileId);
       ensure(specialist?.profile?.id === change.agentProfileId &&
-        specialist.provider === 'chatgpt-plan-responses' && specialist.webSearch === task.specialist?.webSearch &&
+        specialist.provider === task.specialist?.provider && specialist.webSearch === task.specialist?.webSearch &&
         (!task.teamMember || tasks.every(item => item === task || item.teamMember?.profileId !== change.agentProfileId)) &&
         JSON.stringify(specialist) !== JSON.stringify(task.specialist), 'mission_revision_reassignment_unavailable');
       const { detail: _detail, ...prior } = task;
@@ -53,7 +53,7 @@ export function buildMissionRevision(mission: Mission, change: MissionRevisionCh
         ...(task.teamMember ? { teamMember: { ...task.teamMember, profileId: specialist.profile.id, title: specialist.role } } : {}) };
       tasks = tasks.map(item => item === task ? updated : item);
       summary = `Assign “${task.objective}” to ${specialist.role}. The task can send one request when the mission resumes.`;
-      externalReview = { provider: 'ChatGPT plan', model: specialist.model, effort: specialist.effort,
+      externalReview = { provider: specialist.provider === 'openai-api-vela' ? 'Vela dedicated API' : 'ChatGPT plan', model: specialist.model, effort: specialist.effort,
         objective: mission.objective, instructions: specialist.instructions, ...(specialist.webSearch ? { webSearch: true } : {}) };
       break;
     }

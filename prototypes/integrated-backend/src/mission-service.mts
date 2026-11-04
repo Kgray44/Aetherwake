@@ -39,7 +39,8 @@ const own = (table: object, key: string) => Object.hasOwn(table, key);
 function workroomEvidence(task: MissionTask, attempt?: MissionAttempt): Pick<MissionAgentAttempt,
   'evidenceId' | 'source' | 'observedAt' | 'verification' | 'passed' | 'findings' | 'citations'> {
   const evidence = attempt?.evidence, verification = attempt?.verification;
-  const report = task.executor === 'chatgpt.specialist' && evidence?.source === 'chatgpt-plan-responses:reported' &&
+  const report = (task.executor === 'chatgpt.specialist' && evidence?.source === 'chatgpt-plan-responses:reported' ||
+    task.executor === 'api.specialist' && evidence?.source === 'openai-api-vela:reported') &&
     verification?.passed && verification.evidenceIds.includes(evidence.id) && evidence.attemptId === attempt?.id
     ? evidence.value as { observations?: unknown; citations?: unknown } : undefined;
   const findings = Array.isArray(report?.observations)

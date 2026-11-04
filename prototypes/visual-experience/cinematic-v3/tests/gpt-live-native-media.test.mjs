@@ -8,7 +8,7 @@ function fixture(){
   const runtime=createNativeMediaRuntime(wire=>sent.push(wire),{randomId:randomUUID,mediaFactory:options=>{settings=options;return{
     prepare:async input=>{calls.push(input);return{offerId:'offer-a',sdpOffer:'v=0 PRIVATE_OFFER'};},
     connect:async input=>{binding=input;await settings.acceptNegotiation({offerId:'offer-a',sessionId:input.sessionId,sdpAnswer:input.sdpAnswer});return{send:async command=>calls.push(command),close:async()=>calls.push('close')};},
-    devices:async()=>[],state:()=>({fixture:true}),setInputDevice:async()=>{},setOutputDevice:async()=>{},setLocalMute:()=>{},resumePlayback:async()=>{},interruptPlayback:()=>{},dispose:async()=>{disposed++;},
+    devices:async()=>[],state:()=>({fixture:true}),setInputDevice:async()=>{},setOutputDevice:async()=>{},setLocalMute:()=>{},resumePlayback:async()=>{},interruptPlayback:()=>{},quiesceCapture:async session=>calls.push({quiesce:session??'all'}),dispose:async()=>{disposed++;},
   };}});
   return{runtime,sent,calls,get settings(){return settings;},get binding(){return binding;},get disposed(){return disposed;}};
 }
@@ -23,6 +23,16 @@ test('isolated media authenticates the cached offer/session/answer and forwards 
     await f.runtime.handle(request('close',{sessionId:'session-a'}));const count=f.sent.length;await f.binding.onEvent({type:'old'});assert.equal(f.sent.length,count);
     assert.ok(!JSON.stringify(f.sent.filter(w=>w.nativeLiveHost.kind==='event')).includes('PRIVATE_'));
   }finally{await f.runtime.dispose();}assert.equal(f.disposed,1);
+});
+test('private quiesce binds the current attempt/session and master quiesce keeps the finalization channel usable',async()=>{
+  const f=fixture(),attemptId=randomUUID();try{
+    await f.runtime.handle(request('prepare',{attemptId}));await f.runtime.handle(request('connect',{sessionId:'current',sdpAnswer:'v=0'}));
+    await f.runtime.handle(request('quiesceCapture',{attemptId:'old-attempt',sessionId:'current'}));assert.ok(!f.calls.some(call=>call.quiesce));
+    await f.runtime.handle(request('quiesceCapture',{attemptId,sessionId:'foreign'}));assert.ok(!f.calls.some(call=>call.quiesce));
+    await f.runtime.handle(request('quiesceCapture',{attemptId,sessionId:'current'}));assert.deepEqual(f.calls.at(-1),{quiesce:'current'});
+    await f.runtime.handle(request('quiesceAll'));assert.deepEqual(f.calls.at(-1),{quiesce:'all'});
+    await f.runtime.handle(request('send',{sessionId:'current',command:{type:'session.close',event_id:'close'}}));assert.equal(f.calls.at(-1).type,'session.close');assert.equal(f.disposed,0);
+  }finally{await f.runtime.dispose();}
 });
 test('isolated protocol rejects unsolicited credentials and session mismatch and returns fixed safe errors',async()=>{
   const f=fixture();try{

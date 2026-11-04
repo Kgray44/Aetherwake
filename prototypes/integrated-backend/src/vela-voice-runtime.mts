@@ -5,6 +5,7 @@ import type { CanonicalVelaRuntimePort, LiveCanonicalContext, LiveDelegationBind
 import type { GptLiveAudioDevice, GptLiveMediaState, NativeLiveMediaServices } from './live-media-host.mts';
 import { VELA_API_CONFIGURATION_ID, type VelaApiConnection } from './vela-api-connection.mts';
 import type { VelaApiRuntime } from './vela-api-runtime.mts';
+import type { WakeOwnedVoice, WakeNativeVoiceObservation } from './vela-wake-policy.mts';
 export type VoiceOperation = 'start'|'reconnect'|'audition'|'voice-create'|'voice-save';
 export interface VoiceAuthorization { authorizationRef:string;attemptId:string;configurationVersion:number;expiresAt:string }
 export interface VoiceCaption { messageId:string;role:'user'|'assistant';content:string;startMs:number;endMs:number;completedTurn:false }
@@ -51,6 +52,9 @@ export class VelaVoiceRuntime {
   private readonly controller:GptLiveController;
   private closed=false;
   private controlBusy=false;
+  private wakePreparing:string|null=null;
+  private pendingStart:{attemptId:string;controller:AbortController}|null=null;
+  private readonly wakeOwners=new Map<string,{attemptId:string;signal:AbortSignal;validate():void}>();
   static migrate(db:DatabaseSync){
     check(db.isTransaction,'live_storage_unavailable');
     db.exec(`CREATE TABLE IF NOT EXISTS vela_voice_grants(ref TEXT PRIMARY KEY,attempt_id TEXT NOT NULL,operation TEXT NOT NULL,configuration_version INTEGER NOT NULL,expires_at INTEGER NOT NULL,used INTEGER NOT NULL,maximum_seconds INTEGER NOT NULL,intent_digest TEXT);
@@ -82,7 +86,7 @@ export class VelaVoiceRuntime {
     this.controller=new GptLiveController({runtime,media,limits:{maximumVoiceSeconds:300,...(options.test?.acknowledgementMs?{acknowledgementMs:options.test.acknowledgementMs}:{})},
       ...(options.test?{fetch:options.test.fetch}:{}),native:{authorize:review=>this.authorizeReview(review),
         resolveCredential:async(configurationId,version)=>{this.allowed(version);check(configurationId===VELA_API_CONFIGURATION_ID,'live_credential_boundary');return options.connection.resolveNativeCredential(version);},
-        revalidate:async(review,boundary)=>{this.allowed(review.configurationVersion);await options.connection.revalidate(review.configurationVersion,boundary);this.allowed(review.configurationVersion);},},
+        revalidate:async(review,boundary)=>{this.validateWakeAttempt(review.attemptId);this.allowed(review.configurationVersion);await options.connection.revalidate(review.configurationVersion,boundary);this.validateWakeAttempt(review.attemptId);this.allowed(review.configurationVersion);},},
       onState:view=>{
         if(this.closed)return;
         options.atomic(()=>{if(view.attemptId)options.db.prepare('INSERT INTO vela_voice_sessions VALUES(?,?) ON CONFLICT(attempt_id) DO UPDATE SET json=excluded.json').run(view.attemptId,JSON.stringify(view));});
@@ -91,6 +95,7 @@ export class VelaVoiceRuntime {
       },});
   }
   private allowed(version:number){check(!this.closed&&this.options.api.authorized(version),'live_api_usage_authorization_required');}
+  private validateWakeAttempt(attemptId:string){for(const owner of this.wakeOwners.values())if(owner.attemptId===attemptId){check(!owner.signal.aborted,'live_operation_aborted');owner.validate();}}
   private settings(){const row=this.options.db.prepare('SELECT * FROM vela_voice_settings WHERE id=1').get()!;return {version:Number(row.version),speechPersonality:String(row.personality),selectedVoice:row.selected_voice?JSON.parse(String(row.selected_voice)) as SavedPromptVoice:null,
     candidates:this.options.db.prepare('SELECT json FROM vela_voice_candidates ORDER BY rowid DESC LIMIT 16').all().map(row=>JSON.parse(String(row.json)) as SavedPromptVoice)};}
   async state():Promise<VelaVoiceState>{
@@ -110,7 +115,7 @@ export class VelaVoiceRuntime {
     if(name==='devices'){check(exact(input,[]),'live_invalid_control');return this.options.media.devices();}
     if(name==='mute'){check(exact(input,['muted'])&&typeof input.muted==='boolean','live_invalid_control');await this.options.media.setLocalMute(input.muted);await this.controller.mute(input.muted);}
     else if(name==='setInputDevice'||name==='setOutputDevice'){check(exact(input,['deviceId'])&&id(input.deviceId),'live_invalid_control');await this.options.media[name](input.deviceId);}
-    else {check(exact(input,[]),'live_invalid_control');if(name==='stop'){try{await this.controller.stop();}finally{await this.options.media.dispose();}}
+    else {check(exact(input,[]),'live_invalid_control');if(name==='stop'){this.pendingStart?.controller.abort();try{await this.controller.stop();}finally{await this.options.media.dispose();}}
       else if(name==='resumePlayback')await this.options.media.resumePlayback();else if(name==='interruptPlayback')await this.options.media.interruptPlayback();else throw new LiveError('live_invalid_control');}
     return this.state();
   }
@@ -128,6 +133,7 @@ export class VelaVoiceRuntime {
   }
   private grant(ref:string){check(id(ref),'live_paid_start_review_required');const row=this.options.db.prepare('SELECT * FROM vela_voice_grants WHERE ref=?').get(ref);check(row,'live_paid_start_review_required');return row;}
   private async authorizeReview(review:LiveNativeReview){
+    this.validateWakeAttempt(review.attemptId);
     this.allowed(review.configurationVersion);
     this.options.atomic(()=>{
       const grant=this.grant(review.authorizationRef),first=['start','reconnect','audition','voice-create','voice-save'].includes(review.operation);
@@ -141,7 +147,7 @@ export class VelaVoiceRuntime {
   }
   async native(request:VelaVoiceNativeRequest):Promise<VelaVoiceState|VoiceAuthorization|PromptVoiceResult>{
     check(request&&exact(request,['name','input']),'live_invalid_control');if(request.name==='authorize')return this.authorize(request.input);
-    check(!this.controlBusy&&this.options.media,'live_session_busy');this.controlBusy=true;
+    check(!this.controlBusy&&this.options.media,'live_session_busy');this.controlBusy=true;let startup:AbortController|undefined;
     try{
       const input=request.input,grant=this.grant(input.authorizationRef);this.allowed(Number(grant.configuration_version));
       check(grant.used===0&&Number(grant.expires_at)>Date.now()&&grant.operation===request.name&&grant.attempt_id===input.attemptId,'live_paid_start_review_required');
@@ -157,20 +163,22 @@ export class VelaVoiceRuntime {
       check(exact(start,['attemptId','authorizationRef',...['inputDeviceId','outputDeviceId','sample','voiceId','intent'].filter(key=>Object.hasOwn(start,key))])&&
         (start.intent===undefined?grant.intent_digest===null:hash(start.intent)===grant.intent_digest),'live_paid_start_review_required');
       if(start.intent)this.options.host.acceptIntent(start.intent,start.attemptId);
+      startup=new AbortController();this.pendingStart={attemptId:start.attemptId,controller:startup};
       let prepared;
       try{prepared=await this.options.media.prepare({attemptId:start.attemptId,...(start.inputDeviceId?{inputDeviceId:start.inputDeviceId}:{}),...(start.outputDeviceId?{outputDeviceId:start.outputDeviceId}:{})});}
       catch(error){await this.options.media.dispose().catch(()=>{});throw error;}
       try{
+      check(!startup.signal.aborted,'live_operation_aborted');
       const voice=start.voiceId?this.settings().candidates.find(voice=>voice.id===start.voiceId):this.settings().selectedVoice;
       check(!start.voiceId||voice,'live_invalid_voice_selection');
       const live={attemptId:start.attemptId,authorizationRef:start.authorizationRef,configurationId:VELA_API_CONFIGURATION_ID,configurationVersion:Number(grant.configuration_version),conversationId:this.options.host.conversationId(),sdpOffer:prepared.sdpOffer,
         ...(voice?{voice:{id:voice.id,description:voice.prompt}}:{}),budget:{ref:'voice-budget:'+start.attemptId,maximumVoiceSeconds:Number(grant.maximum_seconds),initializationExposureSeconds:15 as const}};
-      if(request.name==='audition'){check(typeof start.sample==='string'&&Buffer.byteLength(start.sample)>0&&Buffer.byteLength(start.sample)<=500,'live_append_capacity');await this.controller.audition(live,start.sample);}
-      else if(request.name==='reconnect')await this.controller.reconnect(live);else await this.controller.start(live);
+      if(request.name==='audition'){check(typeof start.sample==='string'&&Buffer.byteLength(start.sample)>0&&Buffer.byteLength(start.sample)<=500,'live_append_capacity');await this.controller.audition(live,start.sample,startup.signal);}
+      else if(request.name==='reconnect')await this.controller.reconnect(live,startup.signal);else await this.controller.start(live,startup.signal);
       if(['failed','unknown'].includes(this.controller.state().state))await this.options.media.dispose().catch(()=>{});
       return this.state();
       }catch(error){await this.options.media.dispose().catch(()=>{});throw error;}
-    }finally{this.controlBusy=false;}
+    }finally{if(startup&&this.pendingStart?.controller===startup)this.pendingStart=null;this.controlBusy=false;}
   }
   private async receiveFragment(fragment:LiveTranscriptFragment){
     this.allowed(this.controller.state().configurationVersion!);
@@ -223,6 +231,59 @@ export class VelaVoiceRuntime {
     const row=this.options.db.prepare('SELECT version FROM vela_voice_settings WHERE id=1').get();check(row?.version===expected,'live_voice_settings_changed');
     this.options.db.prepare('UPDATE vela_voice_settings SET version=version+1,personality=?,selected_voice=? WHERE id=1 AND version=?').run(personality,voice?JSON.stringify(voice):null,expected);return {settingsVersion:expected+1};});}
   speechPersonality(){return this.settings().speechPersonality;}
+  /** Private coordinator port. Standing native opt-in is checked before minting an ordinary one-use grant. */
+  async wakeStart(input:{activationId:string;signal:AbortSignal;inputDeviceId?:string;bufferLeaseRef?:string;greeting:'dynamic-in-session'|'none';validate():void}):Promise<{sessionId:string;microphone:'live'|'muted'}>{
+    check(!this.controlBusy&&this.options.media&&id(input.activationId),'live_session_busy');input.validate();check(!input.signal.aborted,'live_operation_aborted');
+    const attemptId=input.activationId,startup=new AbortController(),signal=AbortSignal.any([input.signal,startup.signal]);this.controlBusy=true;this.wakePreparing=input.activationId;
+    this.pendingStart={attemptId,controller:startup};
+    this.wakeOwners.set(input.activationId,{attemptId,signal,validate:input.validate});
+    while(this.wakeOwners.size>32)this.wakeOwners.delete(this.wakeOwners.keys().next().value!);
+    try{
+      const grant=this.authorize({attemptId,operation:'start'});
+      const prepared=await this.options.media.prepare({attemptId,...(input.inputDeviceId?{inputDeviceId:input.inputDeviceId}:{}),...(input.bufferLeaseRef?{bufferLeaseRef:input.bufferLeaseRef}:{})});
+      this.validateWakeAttempt(attemptId);
+      const voice=this.settings().selectedVoice;
+      await this.controller.start({attemptId,authorizationRef:grant.authorizationRef,configurationId:VELA_API_CONFIGURATION_ID,configurationVersion:grant.configurationVersion,
+        conversationId:this.options.host.conversationId(),sdpOffer:prepared.sdpOffer,...(voice?{voice:{id:voice.id,description:voice.prompt}}:{}),
+        wake:{greeting:input.greeting==='dynamic-in-session'?'dynamic':'none',pronunciation:'VAY-luh'},
+        budget:{ref:'voice-budget:'+attemptId,maximumVoiceSeconds:300,initializationExposureSeconds:15}},signal);
+      const until=Date.now()+14000;
+      while(this.controller.state().attemptId===attemptId&&['starting','awaiting-start'].includes(this.controller.state().state)&&Date.now()<until){this.validateWakeAttempt(attemptId);await new Promise(resolve=>setTimeout(resolve,10));}
+      this.validateWakeAttempt(attemptId);const view=this.controller.state(),media=await this.options.media.state();
+      check(view.attemptId===attemptId&&view.sessionId&&view.state==='running'&&media.microphoneAccess==='active','live_start_unconfirmed');
+      return {sessionId:view.sessionId,microphone:media.localTrackEnabled?'live':'muted'};
+    }catch(error){await this.releaseOwned({activationId:input.activationId}).catch(()=>{});throw error;}
+    finally{if(this.wakePreparing===input.activationId)this.wakePreparing=null;if(this.pendingStart?.controller===startup)this.pendingStart=null;this.controlBusy=false;}
+  }
+  private owned(scope:WakeOwnedVoice){const view=this.controller.state();
+    if(scope.all)return true;
+    if(scope.sessionId&&scope.sessionId!==view.sessionId)return false;
+    if(scope.activationId){const owner=this.wakeOwners.get(scope.activationId);return !!owner&&(view.attemptId===owner.attemptId||this.wakePreparing===scope.activationId);}
+    return !!scope.sessionId&&scope.sessionId===view.sessionId;
+  }
+  async quiesceOwned(scope:WakeOwnedVoice){if(!this.owned(scope))return;this.pendingStart?.controller.abort();const view=this.controller.state();
+    if(this.options.media?.quiesceCapture&&view.attemptId)await this.options.media.quiesceCapture({attemptId:view.attemptId,...(view.sessionId?{sessionId:view.sessionId}:{})});
+    else await this.options.media?.dispose();
+  }
+  async stopOwned(scope:WakeOwnedVoice):Promise<{closure:'confirmed'|'unknown'}>{
+    if(!this.owned(scope))return this.reconcileOwned(scope);
+    const view=await this.controller.stop();return {closure:view.state==='idle'||view.state==='closed'&&view.finalization==='confirmed'?'confirmed':'unknown'};
+  }
+  async releaseOwned(scope:WakeOwnedVoice){if(this.owned(scope))await this.options.media?.dispose();}
+  async reconcileOwned(scope:WakeOwnedVoice):Promise<{closure:'confirmed'|'unknown'}>{
+    const current=this.controller.state();if((scope.all||this.owned(scope))&&(current.state==='idle'||current.state==='closed'&&current.finalization==='confirmed'))return {closure:'confirmed'};
+    const attemptId=scope.activationId?this.wakeOwners.get(scope.activationId)?.attemptId??scope.activationId:undefined;
+    const row=attemptId?this.options.db.prepare('SELECT json FROM vela_voice_sessions WHERE attempt_id=?').get(attemptId):null;
+    const prior=row?JSON.parse(String(row.json)) as LiveSessionView:null;
+    return {closure:prior?.state==='closed'&&prior.finalization==='confirmed'?'confirmed':'unknown'};
+  }
+  async wakeObservation():Promise<WakeNativeVoiceObservation|null>{const view=this.controller.state();if(!view.sessionId)return null;
+    const media=await this.options.media?.state();const owner=[...this.wakeOwners.values()].some(owner=>owner.attemptId===view.attemptId)?'wake':'manual';
+    return {owner,sessionId:view.sessionId,connection:view.state==='running'?'active':view.state==='closed'&&view.finalization==='confirmed'?'closed':'unknown',
+      microphone:media?.microphoneAccess==='released'||media?.microphoneAccess==='not-requested'?'off':media?.microphoneAccess==='active'?media.localTrackEnabled?'live':'muted':'unknown',
+      localSpeechActive:media?.localSpeech==='detected',actualPlaybackActive:media?.playback==='playing'&&media.playbackObserved,
+      importantResponseQueued:view.lastAppend==='pending',backendWorking:view.backend==='running'};
+  }
   async settled(){await this.controller.settled();}
   async dispose(){if(this.closed)return;try{await this.controller.dispose();}finally{try{await this.options.media?.dispose().catch(()=>{});}finally{this.closed=true;}}}
 }

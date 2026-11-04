@@ -132,6 +132,7 @@ export function missionTaskControls(
     retry:
       active &&
       task.executor !== "chatgpt.specialist" &&
+      task.executor !== "api.specialist" &&
       (task.state === "failed" || task.state === "blocked") &&
       task.attempts.length < task.maxAttempts,
     priority: active && task.state === "queued",
@@ -1027,7 +1028,7 @@ export function createVelaMissionView(
     if (nativeRevisionTask(task) && unattempted(task) && candidates.some((candidate) =>
       task.executor.startsWith("sample.") || !task.dependencies.includes(candidate.id))) kinds.push("dependencies");
     if (successors.length) kinds.push("retire");
-    if (task.executor === "chatgpt.specialist" && !task.attempts.length && !task.dependencies.length &&
+    if ((task.executor === "chatgpt.specialist" || task.executor === "api.specialist") && !task.attempts.length && !task.dependencies.length &&
       (task.state === "queued" || task.state === "blocked")) kinds.push("reassign");
     if (!kinds.length) return null;
     const emptyChange = (type: MissionRevisionChange["type"]): MissionRevisionChange => {

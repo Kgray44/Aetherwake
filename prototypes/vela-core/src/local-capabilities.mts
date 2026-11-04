@@ -3,6 +3,7 @@ import type { VelaLocalCapabilityId, VelaLocalFacts, VelaLocalHost, VelaLocalRec
 import { validateSystemMemoryMeasurement, type SystemMemoryMeasurement } from './system-information.ts';
 import { calculate, calculatorExpression } from './calculator.ts';
 import type { SystemUtilization } from './system-utilization.mts';
+import {validateSystemBattery,summarizeSystemBattery,type SystemBatteryMeasurement} from './system-battery.ts';
 
 /** Node/native host system facts. No provider, credentials, files or network are consulted. */
 export function readSystemClock(): ReturnType<VelaLocalHost['clock']> {
@@ -15,6 +16,7 @@ export function validateLocalRecord(value: unknown): asserts value is VelaLocalR
   check(isRecord(value) && value.schemaVersion === 1, 'unsupported_vela_local_schema');
   check(identifier(value.commandId) && isLocalFact(value.capabilityId) && value.classification === 'observed' && value.providerId === null && typeof value.observedAt === 'string' && Number.isFinite(Date.parse(value.observedAt)), 'corrupt_vela_local_record');
   const f = value.facts; check(isRecord(f), 'corrupt_vela_local_facts');
+  if(f.kind==='system-battery'){validateSystemBattery(f.measurement);check(value.capabilityId==='system.battery'&&value.observedAt===f.measurement.measuredAt,'corrupt_vela_local_facts');return;}
   if (f.kind === 'unavailable') { check(typeof f.code === 'string' && /^local_[a-z_]+_unavailable$/u.test(f.code), 'corrupt_vela_local_facts'); return; }
   if (f.kind === 'system-utilization') {
     validateUtilization(f.measurement);
@@ -50,8 +52,9 @@ function validateUtilization(value: unknown): asserts value is SystemUtilization
     value.observedAdapters > 0 && count(value.observedEngines) && value.observedEngines >= value.observedAdapters, 'invalid_gpu_counters');
 }
 
-export function evaluateLocalCapability(id: VelaLocalCapabilityId, host: VelaLocalHost, intent?: string, utilization: SystemUtilization[] = [], memory?: SystemMemoryMeasurement | null): { facts: VelaLocalFacts; content: string; kind: 'answer' | 'inability' } {
+export function evaluateLocalCapability(id: VelaLocalCapabilityId, host: VelaLocalHost, intent?: string, utilization: SystemUtilization[] = [], memory?: SystemMemoryMeasurement | null,battery?:SystemBatteryMeasurement|null): { facts: VelaLocalFacts; content: string; kind: 'answer' | 'inability' } {
   check(isLocalFact(id), 'unsupported_local_capability');
+  if(id==='system.battery'){try{validateSystemBattery(battery);return {facts:{kind:'system-battery',measurement:structuredClone(battery)},content:summarizeSystemBattery(battery),kind:'answer'};}catch{return {facts:{kind:'unavailable',code:'local_system_battery_unavailable'},content:'Current battery and power status is unavailable from Windows.',kind:'inability'};}}
   if (id === 'local.calculator') {
     const expression = intent && calculatorExpression(intent);
     try {

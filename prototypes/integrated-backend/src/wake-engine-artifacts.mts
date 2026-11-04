@@ -3,6 +3,7 @@ import path from 'node:path';
 import {createHash} from 'node:crypto';
 import {WAKE_ARTIFACT_REGISTRY} from './wake-engine-artifact-registry.mts';
 export const WAKE_ENGINE_ASSET_LIMIT=64*1024*1024;
+const WAKE_ENGINE_ENTRY='node_modules/sherpa-onnx-node/sherpa-onnx.js';
 const fail=()=>{throw Error('wake_artifact_invalid');};
 const same=(a:string,b:string)=>process.platform==='win32'?a.toLowerCase()===b.toLowerCase():a===b;
 export async function verifyWakeArtifacts(artifactRoot:string,manifestPath:string){
@@ -20,5 +21,8 @@ export async function verifyWakeArtifacts(artifactRoot:string,manifestPath:strin
     total+=info.size;if(total>WAKE_ENGINE_ASSET_LIMIT)fail();
     if(createHash('sha256').update(await readFile(target)).digest('hex')!==file.sha256)fail();
   }
-  return {root,registry:WAKE_ARTIFACT_REGISTRY,totalBytes:total};
+  // The executable entry must be one of the exact files whose size and hash passed above.
+  const entry=WAKE_ARTIFACT_REGISTRY.files.find(file=>file.path===WAKE_ENGINE_ENTRY);
+  if(!entry)fail();
+  return {root,registry:WAKE_ARTIFACT_REGISTRY,totalBytes:total,entryPath:path.resolve(root,...entry!.path.split('/'))};
 }

@@ -1,32 +1,13 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import type {DeviceLocation} from './system-facts-host.mts';
 
 export type WeatherPeriod = "now" | "today" | "tonight" | "tomorrow" | "tomorrow-morning";
-type Location = { latitude: number; longitude: number };
-const execute = promisify(execFile);
+type Location = DeviceLocation;
 const origin = "https://api.weather.gov";
 
-async function deviceLocation(signal: AbortSignal): Promise<Location> {
-  // Ask the Windows location provider once. TryStart's first argument keeps
-  // the helper from opening a permission prompt behind the reviewing window.
-  const script = `
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Device
-$watcher = [System.Device.Location.GeoCoordinateWatcher]::new()
-try {
-  if (!$watcher.TryStart($true, [TimeSpan]::FromSeconds(5))) { exit 2 }
-  $fix = $watcher.Position
-  $point = $fix.Location
-  if ($watcher.Permission -ne 'Granted' -or $point.IsUnknown -or
-      ([DateTimeOffset]::UtcNow - $fix.Timestamp).TotalMinutes -gt 15) { exit 2 }
-  @{ latitude = $point.Latitude; longitude = $point.Longitude } | ConvertTo-Json -Compress
-} finally { $watcher.Dispose() }
-`;
-  const { stdout } = await execute("powershell.exe", [
-    "-NoProfile", "-NonInteractive", "-Command", script,
-  ], { windowsHide: true, timeout: 7500, maxBuffer: 2048, signal });
-  return JSON.parse(stdout) as Location;
-}
+export const weatherLocationFailure=(code:string)=>code==='location_os_denied'
+ ? 'Windows Location access is blocked. You can change it in Windows Settings → Privacy & security → Location.'
+ :code==='location_foreground_ui_required'?'Bring Aerynth to the foreground and ask again so Windows can request location access.'
+ :'Windows did not provide a fresh current location. Check Windows Location settings, or explicitly ask for weather in a city.';
 
 async function json(url: string, signal: AbortSignal, request: typeof fetch) {
   const response = await request(url, {
@@ -59,32 +40,39 @@ function boundedText(value: unknown, max = 120) {
 }
 
 /** Device coordinates stay in the native process. Only a rounded point is
- * shared with the fixed forecast origin after the caller's one-time review. */
+ * shared with the fixed forecast origin under current standing purpose consent.
+ * This function never saves a location or falls back to a cached/default/IP service. */
 export async function readLocalWeather(period: WeatherPeriod, cancel: AbortSignal, options: {
-  locate?: typeof deviceLocation; request?: typeof fetch; now?: () => Date;
-} = {}): Promise<{ content: string; ok: boolean }> {
-  const signal = AbortSignal.any([cancel, AbortSignal.timeout(16000)]);
+  locate?: (input:{requestedAtMs:number},signal:AbortSignal)=>Promise<Location>; request?: typeof fetch; now?: () => Date;
+  requestedAtMs?:number;authorize?:()=>void;
+} = {}): Promise<{ content: string; ok: boolean;locationObservedAt?:string }> {
+  const signal = AbortSignal.any([cancel, AbortSignal.timeout(45000)]);
+  const requestedAtMs=options.requestedAtMs??(options.now??(()=>new Date()))().getTime();
   let point: Location;
   try {
-    point = await (options.locate ?? deviceLocation)(signal);
+    options.authorize?.();
+    if(!options.locate)throw Error('location_native_unavailable');
+    point = await options.locate({requestedAtMs},signal);signal.throwIfAborted();options.authorize?.();
     if (!Number.isFinite(point.latitude) || Math.abs(point.latitude) > 90 ||
-        !Number.isFinite(point.longitude) || Math.abs(point.longitude) > 180)
+        !Number.isFinite(point.longitude) || Math.abs(point.longitude) > 180||!Number.isFinite(point.observedAtMs)||point.observedAtMs<requestedAtMs||point.observedAtMs>(options.now??(()=>new Date()))().getTime()+2000||!['satellite','cellular','wifi'].includes(point.source))
       throw Error("invalid_device_location");
-  } catch {
+  } catch(error) {
     cancel.throwIfAborted();
-    return { ok: false, content: "Windows did not provide a current location. Check Location services and desktop app access in Windows Settings." };
+    return { ok: false, content:weatherLocationFailure(error instanceof Error?error.message:'location_native_unavailable') };
   }
   try {
     const request = options.request ?? fetch;
+    options.authorize?.();signal.throwIfAborted();
     const properties = (await json(origin + "/points/" +
       point.latitude.toFixed(2) + "," + point.longitude.toFixed(2), signal, request)).properties;
+    options.authorize?.();signal.throwIfAborted();
     const hourly = period === "now" || period === "tomorrow-morning";
     const forecast = new URL(hourly ? properties.forecastHourly : properties.forecast);
     if (forecast.origin !== origin || forecast.username || forecast.password ||
         forecast.search || forecast.hash ||
         !/^\/gridpoints\/[A-Z]{3}\/\d+,\d+\/forecast(?:\/hourly)?$/.test(forecast.pathname))
       throw Error("invalid_weather_source");
-    const payload = await json(forecast.href, signal, request);
+    const payload = await json(forecast.href, signal, request);options.authorize?.();signal.throwIfAborted();
     const now = (options.now ?? (() => new Date()))();
     const zone = properties.timeZone;
     if (typeof zone !== "string" || !zone) throw Error("invalid_weather_time_zone");
@@ -122,7 +110,7 @@ export async function readLocalWeather(period: WeatherPeriod, cancel: AbortSigna
     const label = { now: "Current hour forecast", today: "Today", tonight: "Tonight", tomorrow: "Tomorrow", "tomorrow-morning": "Tomorrow morning" }[period];
     const conditions = [...new Set(selected.map(slot => boundedText(slot.shortForecast)))].slice(0, 2).join(" / ");
     const temperature = (min === max ? String(min) : min + "–" + max) + "°" + first.temperatureUnit;
-    return { ok: true, content: label + (place ? " near " + place : "") + " — " + conditions +
+    return { ok: true,locationObservedAt:new Date(point.observedAtMs).toISOString(), content: label + (place ? " near " + place : "") + " — " + conditions +
       ", " + temperature + (precipitation.length ? ", " + Math.max(...precipitation) + "% chance of precipitation" : "") +
       ".\nSource: National Weather Service." };
   } catch {

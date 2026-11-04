@@ -4,19 +4,20 @@ import type { LiveChannel } from '../../../openai-provider/live-contracts.mts';
 
 type Header = {version:1;kind:'request'|'response'|'event';id:string;operation:string;payload?:any;result?:unknown;error?:string};
 type Wire = {nativeLiveHost:Header};
-type Media = Pick<BrowserGptLiveMedia,'prepare'|'connect'|'devices'|'state'|'setInputDevice'|'setOutputDevice'|'setLocalMute'|'resumePlayback'|'interruptPlayback'|'dispose'>;
+type Media = Pick<BrowserGptLiveMedia,'prepare'|'connect'|'devices'|'state'|'setInputDevice'|'setOutputDevice'|'setLocalMute'|'resumePlayback'|'interruptPlayback'|'quiesceCapture'|'dispose'>;
 const channel = 'aerynth-private-live-media';
 const uuid = (value:unknown):value is string => typeof value==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(value);
 const bounded=(value:unknown)=>{try{return new TextEncoder().encode(JSON.stringify(value)).length<=196608;}catch{return false;}};
 const exact=(value:any,keys:string[])=>!!value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
 const identifier=(value:unknown)=>typeof value==='string'&&value.length>0&&value.length<=512&&!/[\x00-\x20\x7f]/u.test(value);
 const sdp=(value:unknown)=>typeof value==='string'&&value.length>0&&new TextEncoder().encode(value).length<=65536;
-const operations=new Set(['prepare','connect','send','close','devices','setInputDevice','setOutputDevice','setLocalMute','resumePlayback','interruptPlayback','state','dispose']);
+const operations=new Set(['prepare','connect','send','close','devices','setInputDevice','setOutputDevice','setLocalMute','resumePlayback','interruptPlayback','state','dispose','quiesceCapture','quiesceAll']);
 export function validNativeMediaRequest(value:any):value is Wire {
   if(!exact(value,['nativeLiveHost'])||!bounded(value))return false;
   const h=value.nativeLiveHost,p=h?.payload;
   if(!exact(h,['version','kind','id','operation','payload'])||h.version!==1||h.kind!=='request'||!uuid(h.id)||!operations.has(h.operation))return false;
-  if(h.operation==='prepare')return exact(p,['attemptId',...(Object.hasOwn(p??{},'inputDeviceId')?['inputDeviceId']:[]),...(Object.hasOwn(p??{},'outputDeviceId')?['outputDeviceId']:[])])&&identifier(p.attemptId)&&(p.inputDeviceId===undefined||identifier(p.inputDeviceId))&&(p.outputDeviceId===undefined||identifier(p.outputDeviceId));
+  if(h.operation==='prepare')return exact(p,['attemptId',...['inputDeviceId','outputDeviceId','bufferLeaseRef'].filter(key=>Object.hasOwn(p??{},key))])&&identifier(p.attemptId)&&['inputDeviceId','outputDeviceId','bufferLeaseRef'].every(key=>p[key]===undefined||identifier(p[key]));
+  if(h.operation==='quiesceCapture')return exact(p,['attemptId',...(Object.hasOwn(p??{},'sessionId')?['sessionId']:[])])&&identifier(p.attemptId)&&(p.sessionId===undefined||identifier(p.sessionId));
   if(h.operation==='connect')return exact(p,['sessionId','sdpAnswer'])&&identifier(p.sessionId)&&sdp(p.sdpAnswer);
   if(h.operation==='send')return exact(p,['sessionId','command'])&&identifier(p.sessionId)&&
     (exact(p.command,['type','event_id'])&&['session.close','session.input_audio.mute','session.input_audio.unmute'].includes(p.command.type)&&identifier(p.command.event_id)||
@@ -35,7 +36,7 @@ export function createSyntheticVoiceEnvironment(): {environment:Partial<GptLiveB
   },async dispose(){for(const context of contexts)await context.close().catch(()=>{});contexts.clear();}};
 }
 export function createNativeMediaRuntime(send:(message:Wire)=>void, options:{mediaFactory?:(options:GptLiveMediaOptions)=>Media;syntheticInput?:boolean;randomId?:()=>string}={}) {
-  let sessionId:string|null=null, offer:{offerId:string;sdpOffer:string}|null=null, negotiation:{offerId:string;sessionId:string;sdpAnswer:string}|null=null;
+  let sessionId:string|null=null, attemptId:string|null=null, preparing=false, offer:{offerId:string;sdpOffer:string}|null=null, negotiation:{offerId:string;sessionId:string;sdpAnswer:string}|null=null;
   let live:LiveChannel|null=null, closed=false, inFlight=0, eventCount=0, eventAt=Date.now();
   const seen=new Set<string>();
   const synthetic=options.syntheticInput?createSyntheticVoiceEnvironment():null;
@@ -53,19 +54,21 @@ export function createNativeMediaRuntime(send:(message:Wire)=>void, options:{med
     },
     onState:state=>event('state',{sessionId,state}),
   });
-  async function dispose(){if(closed)return;closed=true;live=null;offer=null;negotiation=null;sessionId=null;seen.clear();await media.dispose();await synthetic?.dispose();}
+  async function dispose(){if(closed)return;closed=true;live=null;offer=null;negotiation=null;sessionId=null;attemptId=null;seen.clear();await media.dispose();await synthetic?.dispose();}
   return {
     async handle(value:unknown){
       if(!validNativeMediaRequest(value))return;
       const h=value.nativeLiveHost,p=h.payload;
       const reply=(result:unknown,error?:string)=>send({nativeLiveHost:{version:1,kind:'response',id:h.id,operation:h.operation,...(error?{error}:{result})}});
       if(closed){reply(null,h.operation==='dispose'?undefined:'live_media_closed');return;}
-      if(inFlight>=8||seen.has(h.id)){reply(null,'live_media_backpressure');return;}
+      const capacity=h.operation==='quiesceAll'||h.operation==='dispose'?12:['quiesceCapture','close'].includes(h.operation)||h.operation==='send'&&p.command?.type==='session.close'?11:8;
+      if(inFlight>=capacity||seen.has(h.id)){reply(null,'live_media_backpressure');return;}
       seen.add(h.id);if(seen.size>512)seen.delete(seen.values().next().value!);inFlight++;
       try{
         let result:unknown=null;
         switch(h.operation){
-          case 'prepare':if(offer||live)throw Error();offer=await media.prepare({...('inputDeviceId'in p?{inputDeviceId:p.inputDeviceId}:{}),...('outputDeviceId'in p?{outputDeviceId:p.outputDeviceId}:{})});result=offer;break;
+          case 'prepare':if(offer||live||preparing||p.bufferLeaseRef)throw Error();attemptId=p.attemptId;preparing=true;
+            try{offer=await media.prepare({...('inputDeviceId'in p?{inputDeviceId:p.inputDeviceId}:{}),...('outputDeviceId'in p?{outputDeviceId:p.outputDeviceId}:{})});result=offer;}finally{preparing=false;}break;
           case 'connect':{
             if(!offer||sessionId||live)throw Error();sessionId=p.sessionId;const boundSession=sessionId;
             negotiation={offerId:offer.offerId,sessionId:boundSession!,sdpAnswer:p.sdpAnswer};
@@ -75,7 +78,7 @@ export function createNativeMediaRuntime(send:(message:Wire)=>void, options:{med
             });negotiation=null;break;
           }
           case 'send':if(!live||p.sessionId!==sessionId)throw Error();await live.send(p.command);break;
-          case 'close':if(p.sessionId!==sessionId)throw Error();await live?.close();live=null;offer=null;negotiation=null;sessionId=null;break;
+          case 'close':if(p.sessionId!==sessionId)throw Error();await live?.close();live=null;offer=null;negotiation=null;sessionId=null;attemptId=null;break;
           case 'devices':result=await media.devices();break;
           case 'state':result=media.state();break;
           case 'setInputDevice':await media.setInputDevice(p.deviceId);break;
@@ -83,6 +86,8 @@ export function createNativeMediaRuntime(send:(message:Wire)=>void, options:{med
           case 'setLocalMute':media.setLocalMute(p.muted);break;
           case 'resumePlayback':await media.resumePlayback();break;
           case 'interruptPlayback':media.interruptPlayback();break;
+          case 'quiesceCapture':if(p.attemptId!==attemptId||p.sessionId!==undefined&&p.sessionId!==sessionId)throw Error();await media.quiesceCapture(p.sessionId);break;
+          case 'quiesceAll':await media.quiesceCapture();break;
           case 'dispose':await dispose();break;
         }
         if(!bounded(result))throw Error();reply(result);

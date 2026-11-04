@@ -56,7 +56,7 @@ export interface VelaWakeHostPorts {
 export interface VelaWakeLimits { cooldownMs?:number;errorBackoffMs?:number;startTimeoutMs?:number;cleanupTimeoutMs?:number;maximumStartsPerWindow?:number;attemptWindowMs?:number }
 export class WakePolicyError extends Error {readonly code:string;constructor(code:string){super(code);this.code=code;}}
 const requireValue:(value:unknown,code:string)=>asserts value=(value,code)=>{if(!value)throw new WakePolicyError(code);};
-function preferences(value:Partial<VelaWakePreferences>={}):VelaWakePreferences {
+export function validateWakePreferences(value:Partial<VelaWakePreferences>={}):VelaWakePreferences {
   requireValue(value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).every(key=>['phraseId','sensitivity','idleTimeoutMs','inputDeviceId','dynamicGreeting'].includes(key)),'wake_preferences_invalid');
   const result={...VELA_WAKE_DEFAULTS,...value};
   requireValue(typeof result.phraseId==='string'&&/^[a-zA-Z0-9:_-]{1,80}$/u.test(result.phraseId)&&Number.isFinite(result.sensitivity)&&result.sensitivity>=0&&result.sensitivity<=1&&
@@ -83,7 +83,7 @@ export class VelaWakeCoordinator {
   private activity={localSpeechActive:false,actualPlaybackActive:false,importantResponseQueued:false,backendWorking:false};
   private idleCancel:(()=>void)|null=null;private cooldownCancel:(()=>void)|null=null;
   constructor(ports:VelaWakeHostPorts,value:Partial<VelaWakePreferences>={},limits:VelaWakeLimits={}){
-    this.ports=ports;this.prefs=preferences(value);
+    this.ports=ports;this.prefs=validateWakePreferences(value);
     this.limits={cooldownMs:2000,errorBackoffMs:5000,startTimeoutMs:15000,cleanupTimeoutMs:5000,maximumStartsPerWindow:3,attemptWindowMs:60000,...limits};
     requireValue(Object.values(this.limits).every(value=>Number.isSafeInteger(value)&&value>0)&&this.limits.cooldownMs<=10000&&this.limits.errorBackoffMs<=60000&&
       this.limits.startTimeoutMs<=30000&&this.limits.cleanupTimeoutMs<=10000&&this.limits.maximumStartsPerWindow<=10&&this.limits.attemptWindowMs<=300000,'wake_limits_invalid');
@@ -116,7 +116,7 @@ export class VelaWakeCoordinator {
     requireValue(!this.closed,'wake_shutdown');requireValue(!this.unknownScope&&this.voice!=='unknown'&&this.voice!=='closing'&&!this.pendingStarts.size,'wake_reconciliation_required');
     requireValue(this.pendingArms===0,'wake_local_cleanup_pending');
     if(this.backoffUntil!==null)requireValue(this.now()>=this.backoffUntil,'wake_error_backoff');
-    const next=preferences(value);
+    const next=validateWakePreferences(value);
     if(this.enabled&&this.phase==='ARMED'&&JSON.stringify(next)===JSON.stringify(this.prefs))return;
     const generation=this.invalidate(),controller=new AbortController();this.controller=controller;
     try{
@@ -158,11 +158,10 @@ export class VelaWakeCoordinator {
       if(command?.lease)activation.lease=command.lease;
       if(!this.isCurrent(generation)||activation.controller.signal.aborted){this.releaseLease(activation);return;}
       const hasCommand=command?.postWakeSpeech==='present';
-      if(!hasCommand)this.releaseLease(activation);
       this.starts.push(this.now());this.dispatched++;this.pendingStarts.add(activation.id);this.emit();
       let raw:ReturnType<VelaWakeHostPorts['voice']['start']>;
       try{raw=this.ports.voice.start({activationId:activation.id,signal:activation.controller.signal,...(this.prefs.inputDeviceId?{inputDeviceId:this.prefs.inputDeviceId}:{}),
-        ...(hasCommand&&activation.lease?{commandAudio:activation.lease}:{}),greeting:!hasCommand&&command?.postWakeSpeech==='absent'&&this.prefs.dynamicGreeting?'dynamic-in-session':'none',
+        ...(activation.lease?{commandAudio:activation.lease}:{}),greeting:!hasCommand&&command?.postWakeSpeech==='absent'&&this.prefs.dynamicGreeting?'dynamic-in-session':'none',
         pronunciation:'VAY-luh',initializationExposureSeconds:15});}catch(error){this.pendingStarts.delete(activation.id);throw error;}
       // The raw continuation cleans a late successful start even after timeout, cancellation, device change or shutdown.
       const guarded=raw.then(async result=>{

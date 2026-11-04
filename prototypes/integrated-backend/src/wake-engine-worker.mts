@@ -7,11 +7,11 @@ let spotter:any,stream:any,total=0,base=0,sequence=0,busy=false,ready=false,work
 let phrases:WakePhrase[]=[];
 const safeError=(code:string)=>({error:code});
 async function initialize(){
-  const {root,registry}=await verifyWakeArtifacts(workerData.artifactRoot,workerData.manifestPath);
-  const at=(role:keyof typeof registry.roles)=>path.join(root,registry.roles[role]);
+  const {root,registry,entryPath}=await verifyWakeArtifacts(workerData.artifactRoot,workerData.manifestPath);
+  const at=(role:keyof typeof registry.roles|'entry')=>role==='entry'?entryPath:path.join(root,registry.roles[role]);
   const keywords=compileWakeKeywords(phrases,await readFile(at('bpe')),workerData.sensitivity);
   await writeFile(workerData.keywordPath,keywords,{flag:'wx'});
-  const require=createRequire(at('package')),sherpa=require('./sherpa-onnx.js');
+  const require=createRequire(at('package')),sherpa=require(at('entry'));
   if(sherpa.version!==registry.version||sherpa.onnxruntimeVersion!==registry.onnxruntimeVersion)throw Error('wake_engine_version');
   spotter=new sherpa.KeywordSpotter({featConfig:{sampleRate:16000,featureDim:80},modelConfig:{transducer:{encoder:at('encoder'),decoder:at('decoder'),joiner:at('joiner')},tokens:at('tokens'),numThreads:1,provider:'cpu',debug:false},maxActivePaths:4,numTrailingBlanks:1,keywordsScore:1,keywordsThreshold:Math.max(0.01,0.5-0.5*workerData.sensitivity),keywordsFile:workerData.keywordPath});
   stream=spotter.createStream();ready=true;

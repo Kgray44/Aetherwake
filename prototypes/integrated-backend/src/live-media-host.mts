@@ -3,7 +3,8 @@ import type { LiveChannel, LiveClientCommand, LiveMediaAdapter } from '../../ope
 import type { GptLiveAudioDevice, GptLiveMediaState } from '../../visual-experience/cinematic-v3/src/gpt-live-media.ts';
 export type { GptLiveAudioDevice, GptLiveMediaState };
 export interface NativeLiveMediaServices extends LiveMediaAdapter {
-  prepare(input: { attemptId: string; inputDeviceId?: string; outputDeviceId?: string }): Promise<{ offerId: string; sdpOffer: string }>;
+  prepare(input: { attemptId: string; inputDeviceId?: string; outputDeviceId?: string; bufferLeaseRef?:string }): Promise<{ offerId: string; sdpOffer: string }>;
+  quiesceCapture?(input:{attemptId:string;sessionId?:string}):Promise<void>;
   devices(): Promise<GptLiveAudioDevice[]>;
   setInputDevice(deviceId: string): Promise<void>;
   setOutputDevice(deviceId: string): Promise<void>;
@@ -14,8 +15,9 @@ export interface NativeLiveMediaServices extends LiveMediaAdapter {
   dispose(): Promise<void>;
 }
 export const NATIVE_LIVE_LIMITS = Object.freeze({ wireBytes: 196608, eventBytes: 65536, inFlight: 8, timeoutMs: 15000 });
-const operations = ['prepare','connect','send','close','devices','setInputDevice','setOutputDevice','setLocalMute','resumePlayback','interruptPlayback','state','dispose'] as const;
+const operations = ['prepare','connect','send','close','devices','setInputDevice','setOutputDevice','setLocalMute','resumePlayback','interruptPlayback','state','dispose','quiesceCapture'] as const;
 type Operation = typeof operations[number];
+const cleanup=(operation:Operation,payload:any)=>['dispose','close','quiesceCapture'].includes(operation)||operation==='send'&&payload?.command?.type==='session.close';
 const errors = new Set(['live_media_unavailable','live_media_protocol','live_media_capacity','live_media_backpressure','live_media_timeout','live_media_closed','live_media_operation_failed']);
 export class LiveMediaHostError extends Error { readonly code: string; constructor(code: string) { super(errors.has(code) ? code : 'live_media_operation_failed'); this.code = this.message; this.name = 'LiveMediaHostError'; } }
 const exact = (value: unknown, keys: readonly string[]): value is Record<string,any> => !!value && typeof value === 'object' && !Array.isArray(value) &&
@@ -30,7 +32,8 @@ const command = (value: unknown) => exact(value,['type','event_id']) && ['sessio
 export const isNativeLiveHostEnvelope = (value: unknown): value is {nativeLiveHost: Record<string,any>} => !!value && (typeof value==='object'||typeof value==='function') && Object.hasOwn(value,'nativeLiveHost');
 export type NativeLiveHostMessage = { nativeLiveHost: { version: 1; kind: 'request'|'response'|'event'; id: string; operation: string; payload?: any; result?: any; error?: string } };
 function payloadValid(operation: Operation,p: unknown): boolean {
-  if (operation==='prepare') return exact(p,['attemptId',...(Object.hasOwn(p??{},'inputDeviceId')?['inputDeviceId']:[]),...(Object.hasOwn(p??{},'outputDeviceId')?['outputDeviceId']:[])]) && id(p.attemptId) && (p.inputDeviceId===undefined||id(p.inputDeviceId)) && (p.outputDeviceId===undefined||id(p.outputDeviceId));
+  if (operation==='prepare') return exact(p,['attemptId',...['inputDeviceId','outputDeviceId','bufferLeaseRef'].filter(key=>Object.hasOwn(p??{},key))]) && id(p.attemptId) && ['inputDeviceId','outputDeviceId','bufferLeaseRef'].every(key=>p[key]===undefined||id(p[key]));
+  if (operation==='quiesceCapture') return exact(p,['attemptId',...(Object.hasOwn(p??{},'sessionId')?['sessionId']:[])])&&id(p.attemptId)&&(p.sessionId===undefined||id(p.sessionId));
   if (operation==='connect') return exact(p,['sessionId','sdpAnswer']) && id(p.sessionId) && sdp(p.sdpAnswer);
   if (operation==='send') return exact(p,['sessionId','command']) && id(p.sessionId) && command(p.command);
   if (operation==='close') return exact(p,['sessionId']) && id(p.sessionId);
@@ -72,7 +75,7 @@ export function createNativeLiveHostClient(send: (message: NativeLiveHostMessage
   const pending=new Map<string,{operation:Operation;resolve(value:any):void;reject(error:Error):void;timer:ReturnType<typeof setTimeout>}>();
   const sessions=new Map<string,Parameters<LiveMediaAdapter['connect']>[0]>(); let closed=false,queued=0;
   const request=(operation:Operation,payload:unknown)=>new Promise<any>((resolve,reject)=>{
-    if(closed)return reject(new LiveMediaHostError('live_media_closed')); if(pending.size>=capacity)return reject(new LiveMediaHostError('live_media_backpressure'));
+    if(closed)return reject(new LiveMediaHostError('live_media_closed')); if(pending.size>=(operation==='dispose'?12:cleanup(operation,payload)?11:capacity))return reject(new LiveMediaHostError('live_media_backpressure'));
     const key=randomUUID(),message:NativeLiveHostMessage={nativeLiveHost:{version:1,kind:'request',id:key,operation,payload}};
     if(!validateNativeLiveHostMessage(message))return reject(new LiveMediaHostError('live_media_protocol'));
     const timer=setTimeout(()=>{pending.delete(key);reject(new LiveMediaHostError('live_media_timeout'));},timeout);pending.set(key,{operation,resolve,reject,timer});
@@ -80,6 +83,7 @@ export function createNativeLiveHostClient(send: (message: NativeLiveHostMessage
   });
   const services:NativeLiveMediaServices={
     prepare:input=>request('prepare',input),
+    quiesceCapture:input=>request('quiesceCapture',input),
     async connect(input){if(sessions.size)throw new LiveMediaHostError('live_media_backpressure');sessions.set(input.sessionId,input);
       try{await request('connect',{sessionId:input.sessionId,sdpAnswer:input.sdpAnswer});}catch(error){sessions.delete(input.sessionId);throw error;}
       return {send:command=>request('send',{sessionId:input.sessionId,command}),close:async()=>{sessions.delete(input.sessionId);await request('close',{sessionId:input.sessionId});}};},
@@ -112,7 +116,7 @@ export function createNativeLiveHostServer(services:NativeLiveMediaServices|unde
   return {handle(value:unknown){
     if(!isNativeLiveHostEnvelope(value))return false;if(!validateNativeLiveHostMessage(value)||value.nativeLiveHost.kind!=='request')return true;
     const h=structuredClone(value.nativeLiveHost),reply=(result:any,error?:string)=>publish({nativeLiveHost:{version:1,kind:'response',id:h.id,operation:h.operation,...(error?{error}:{result})}});
-    if(closed)return true;if(!services){reply(null,'live_media_unavailable');return true;}if(pending.has(h.id)||pending.size>=capacity){reply(null,'live_media_backpressure');return true;}
+    if(closed)return true;if(!services){reply(null,'live_media_unavailable');return true;}if(pending.has(h.id)||pending.size>=(h.operation==='dispose'?12:cleanup(h.operation as Operation,h.payload)?11:capacity)){reply(null,'live_media_backpressure');return true;}
     pending.add(h.id);let done=false;const timer=setTimeout(()=>{done=true;pending.delete(h.id);reply(null,'live_media_timeout');},timeout);
     void Promise.resolve().then(async()=>{
       let result:any=null;const p=h.payload;
@@ -133,6 +137,7 @@ export function createNativeLiveHostServer(services:NativeLiveMediaServices|unde
         case 'setLocalMute':await services.setLocalMute(p.muted);break;
         case 'resumePlayback':await services.resumePlayback();break;
         case 'interruptPlayback':await services.interruptPlayback();break;
+        case 'quiesceCapture':if(!services.quiesceCapture)throw new LiveMediaHostError('live_media_unavailable');await services.quiesceCapture(p);break;
         case 'dispose':channels.clear();await services.dispose();break;
       }
       if(!done){done=true;clearTimeout(timer);pending.delete(h.id);reply(resultValid(h.operation as Operation,result)?result:null,resultValid(h.operation as Operation,result)?undefined:'live_media_protocol');}

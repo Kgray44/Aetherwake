@@ -57,6 +57,8 @@ import { mountContextualResources, mountContextualStream } from "./workspace-con
 import "./workspace-context-views.css";
 import { mountBlockChat } from "../../../block-library/chat-view.ts";
 import { createVelaVoiceView } from "./vela-voice-view.ts";
+import { createVelaPermissionsView } from "./vela-permissions-view.ts";
+import { createVelaWakeView } from "./vela-wake-view.ts";
 import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
@@ -282,6 +284,9 @@ export function installApplication(hooks: Hooks) {
   });
   addEventListener("resize", surfaces.viewportChanged);
   const velaVoice = createVelaVoiceView(document, request => host.command!("velaVoice", request));
+  const velaPermissions = createVelaPermissionsView(document, request => host.command!("weatherPermission", request));
+  const velaWake = createVelaWakeView(document, request => host.command!("velaWake", request), () => host.command!("velaVoice",{name:'devices',input:{}}));
+  velaVoice.element.append(velaWake.element);
   let velaPanel: ReturnType<typeof mountVelaPanel> | null = null;
   const velaMissions = createVelaMissionView(document, async (request) =>
     (await host.command!("missions", request)) as MissionResponse,
@@ -314,6 +319,8 @@ export function installApplication(hooks: Hooks) {
     "pagehide",
     () => {
       velaVoice.dispose();
+      velaPermissions.dispose();
+      velaWake.dispose();
       velaManifestation.dispose();
       velaExperience.dispose();
     },
@@ -2479,7 +2486,8 @@ export function installApplication(hooks: Hooks) {
     if (!velaPanel)
       velaPanel = mountVelaPanel(velaContent, velaClient, {
         missions: velaMissions,
-        voice: velaVoice,
+        voice: {...velaVoice,setVisible(visible){velaVoice.setVisible(visible);velaWake.setVisible(visible);}},
+        permissions: velaPermissions,
         onPresentation: (value) => velaExperience.observe(value),
         onManifestation: (value) => velaManifestation.observe(value),
         onConnectProvider: () => host.command!("capabilities", {}),

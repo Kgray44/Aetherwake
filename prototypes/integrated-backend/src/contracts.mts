@@ -176,7 +176,8 @@ export interface StreamEvent {
     workspaceRecovery?: {workspaceId:string;action:'undo-creation'|'restore';creationEventId:string;workspaceVersion:number};
     clockTimer?: Pick<TimerDomainEvent, 'resourceVersion' | 'commandId' | 'timerIds' | 'expiryIds' | 'operations'>;
     api?: { maxOutputTokens?: number; callId?: string; elapsedMs?: number; enabled?: boolean; executionId?: string; bodyDigest?: string; contextDigest?: string };
-    voice?: {sessionId?:string;attemptId?:string;state?:string;usageSeconds?:number;messageId?:string;delegationId?:string} };
+    voice?: {sessionId?:string;attemptId?:string;state?:string;usageSeconds?:number;messageId?:string;delegationId?:string};
+    wake?: {phase:string;enabled:boolean;microphone:string;voice:string;detector:string;owner:string|null;sessionId:string|null;settingsVersion:number;errorCode:string|null} };
   mission?: MissionStreamEvent;
 }
 export interface HandoffReview {
@@ -193,6 +194,8 @@ import type { TimerClockReading, TimerDomainEvent } from '../../timer-product/co
 import type { VelaApiConnectionRequest, VelaApiConnectionResult } from './vela-api-connection.mts';
 import type { VelaApiUsageStatus } from './vela-api-runtime.mts';
 import type { VelaVoiceControlRequest,VelaVoiceNativeRequest,VelaVoiceState,VoiceAuthorization } from './vela-voice-runtime.mts';
+import type { VelaWakeRequest,VelaWakeNativeRequest,VelaWakeState } from './vela-wake-runtime.mts';
+import type { NativeWakePcmFrame } from './wake-capture-host.mts';
 import type { GptLiveAudioDevice } from './live-media-host.mts';
 import type { PromptVoiceResult } from '../../openai-provider/live-contracts.mts';
 import type { NativeApiCredentialInput, RedactedApiConnectionView } from '../../openai-provider/api-connection-contracts.mts';
@@ -216,7 +219,14 @@ export interface Options {
   syntheticTimerClock?: TimerClockReading;
 }
 export interface CommandMap {
+  /** Native-owned purpose permission; never a renderer/model command. */
+  velaWeatherPermissionNative:{input:{type:'status'}|{type:'set';expectedVersion:number;decision:'allow'|'deny'};output:import('./weather-permission.mts').WeatherPermission};
   velaVoice: {input:VelaVoiceControlRequest;output:VelaVoiceState|GptLiveAudioDevice[]};
+  velaWake: {input:VelaWakeRequest;output:VelaWakeState};
+  /** Private native gesture / readiness boundary, excluded from renderer and model capabilities. */
+  velaWakeNative: {input:VelaWakeNativeRequest;output:VelaWakeState};
+  /** Private acknowledged PCM ingress; never an activity or conversation event. */
+  velaWakeFrame: {input:NativeWakePcmFrame;output:{accepted:true}};
   velaVoiceNative: {input:VelaVoiceNativeRequest;output:VelaVoiceState|VoiceAuthorization|PromptVoiceResult};
   velaApiConnection: { input: VelaApiConnectionRequest; output: VelaApiConnectionResult };
   velaApiUsageStatus: { input: Record<string,never>; output: VelaApiUsageStatus };

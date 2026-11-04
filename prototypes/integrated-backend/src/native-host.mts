@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { NativeLiveMediaServices } from './live-media-host.mts';
+import type { NativeWakeCaptureServices } from './wake-capture-host.mts';
 
 /** Private native-process injection. Never renderer RPC or serialized workerData. */
 export interface NativeHostServices {
+  wakeCapture?: NativeWakeCaptureServices;
+  systemFacts?: import('./system-facts-host.mts').NativeSystemFactsServices;
   liveMedia?: NativeLiveMediaServices;
   secrets: {
     available(): Promise<boolean>;

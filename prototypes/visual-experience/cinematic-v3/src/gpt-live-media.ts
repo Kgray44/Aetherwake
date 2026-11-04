@@ -110,6 +110,7 @@ type Resources = {
   channel: RTCDataChannel;
   audio: HTMLAudioElement;
   local?: MediaStream;
+  localAllocations: Set<MediaStream>;
   remote: MediaStream;
   sender?: RTCRtpSender;
   binding?: Session;
@@ -130,6 +131,8 @@ type Resources = {
   started: boolean;
   latestMuteId?: string;
   abort: AbortController;
+  captureAbort: AbortController;
+  captureQuiesced: boolean;
   inputListeners: (() => void)[];
 };
 
@@ -273,7 +276,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
         }),
       )
       .then((stream) => {
-        if (!accept || this.resources !== resources || this.disposed) {
+        if (!accept || this.resources !== resources || this.disposed || resources.captureQuiesced) {
           for (const track of stream.getTracks()) track.stop();
           throw new GptLiveMediaError("live_media_replaced");
         }
@@ -283,7 +286,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
       const stream = await this.bounded(
         () => pending,
         "live_media_microphone_unavailable",
-        resources.abort.signal,
+        AbortSignal.any([resources.abort.signal,resources.captureAbort.signal]),
       );
       const tracks = stream.getAudioTracks();
       if (
@@ -294,6 +297,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
         for (const track of stream.getTracks()) track.stop();
         throw new GptLiveMediaError("live_media_input_device_mismatch");
       }
+      resources.localAllocations.add(stream);
       return stream;
     } catch (error) {
       accept = false;
@@ -363,6 +367,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
         channel,
         audio,
         remote: this.environment.createStream(),
+        localAllocations: new Set(),
         inputId:
           input.inputDeviceId === "default" ? undefined : input.inputDeviceId,
         outputId:
@@ -377,6 +382,8 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
         queue: Promise.resolve(),
         started: false,
         abort: new AbortController(),
+        captureAbort: new AbortController(),
+        captureQuiesced: false,
         inputListeners: [],
       };
     } catch {
@@ -421,6 +428,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
       );
       this.publish({ microphoneAccess: "active" });
       await this.analysis(resources);
+      check(!resources.captureQuiesced,'live_media_replaced');
       const offer = await this.bounded(
         () => resources.peer.createOffer(),
         "live_media_offer_unavailable",
@@ -627,7 +635,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
   }
   private applyMute(resources: Resources) {
     const enabled =
-      !resources.localMuted && this.stateValue.providerInputMute === "unmuted";
+      !resources.captureQuiesced && !resources.localMuted && this.stateValue.providerInputMute === "unmuted";
     for (const track of resources.local?.getAudioTracks() ?? [])
       track.enabled = enabled;
     this.publish({
@@ -964,7 +972,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
   async setInputDevice(deviceId: string): Promise<void> {
     const resources = this.resources;
     check(
-      resources?.sender && identifier(deviceId),
+      resources?.sender && !resources.captureQuiesced && identifier(deviceId),
       "live_media_invalid_device",
     );
     check(!this.inputChanging, "live_media_device_change_busy");
@@ -983,13 +991,15 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
       await this.bounded(
         () => resources.sender!.replaceTrack(track),
         "live_media_input_device_unavailable",
-        resources.abort.signal,
+        AbortSignal.any([resources.abort.signal,resources.captureAbort.signal]),
       );
       this.active(resources);
+      check(!resources.captureQuiesced,'live_media_replaced');
       const previous = resources.local;
       resources.local = stream;
       resources.inputId = deviceId === "default" ? undefined : deviceId;
       for (const old of previous?.getTracks() ?? []) old.stop();
+      if(previous)resources.localAllocations.delete(previous);
       this.inputTrack(resources);
       resources.localAnalysis?.source.disconnect();
       resources.localAnalysis?.analyser.disconnect();
@@ -1003,6 +1013,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
       this.applyMute(resources);
     } catch (error) {
       for (const track of stream?.getTracks() ?? []) track.stop();
+      if(stream)resources.localAllocations.delete(stream);
       if (this.resources === resources) {
         resources.localMuted = true;
         this.applyMute(resources);
@@ -1023,6 +1034,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
   private async remoteTrack(resources: Resources, event: RTCTrackEvent) {
     if (
       this.resources !== resources ||
+      resources.captureQuiesced ||
       !resources.binding ||
       event.track.kind !== "audio"
     ) {
@@ -1061,6 +1073,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
     const resources = this.resources;
     check(
       resources &&
+        !resources.captureQuiesced &&
         resources.remote
           .getAudioTracks()
           .some((track) => track.readyState === "live"),
@@ -1188,6 +1201,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
     this.cleaning = true;
     resources.expectedClose = true;
     resources.abort.abort();
+    resources.captureAbort.abort();
     resources.stopAnalysis?.();
     for (const remove of [
       ...resources.listeners.splice(0),
@@ -1195,7 +1209,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
     ])
       remove();
     resources.pending.clear();
-    for (const stream of [resources.local, resources.remote])
+    for (const stream of [...resources.localAllocations, resources.remote])
       for (const track of stream?.getTracks() ?? []) {
         try {
           track.stop();
@@ -1203,6 +1217,7 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
           /* Continue owned resource cleanup. */
         }
       }
+    resources.localAllocations.clear();
     try {
       resources.channel.close();
     } catch {}
@@ -1249,6 +1264,21 @@ export class BrowserGptLiveMedia implements LiveMediaAdapter {
     if (this.disposed) this.publish({ connection: "disposed" });
   }
   /** Expected channel closure and disposal never fabricate session.closed or final usage. */
+  async quiesceCapture(expectedSessionId?:string):Promise<void>{
+    const resources=this.resources;if(!resources)return;
+    check(expectedSessionId===undefined||resources.binding?.sessionId===expectedSessionId,'live_media_session_mismatch');
+    resources.captureQuiesced=true;resources.captureAbort.abort();resources.localMuted=true;resources.stopAnalysis?.();resources.stopAnalysis=undefined;
+    for(const remove of resources.inputListeners.splice(0))remove();
+    for(const stream of [...resources.localAllocations,resources.remote])for(const track of stream.getTracks()){try{track.enabled=false;track.stop();}catch{/* Stop every owned track. */}}
+    resources.localAllocations.clear();
+    try{resources.audio.pause();resources.audio.srcObject=null;resources.audio.removeAttribute('src');resources.audio.load();}catch{/* Continue physical release. */}
+    for(const analysis of [resources.localAnalysis,resources.remoteAnalysis]){try{analysis?.source.disconnect();analysis?.analyser.disconnect();}catch{/* No audio analysis is retained. */}}
+    resources.localAnalysis=resources.remoteAnalysis=undefined;
+    this.publish({microphoneAccess:'released',localTrackEnabled:false,localSourceMuted:null,playback:'interrupted',localSpeech:'unavailable',remoteSignal:'unavailable',interruption:'explicit-user'});
+    const context=resources.context;resources.context=undefined;
+    if(context)try{await this.bounded(()=>context.close(),'live_media_analysis_unavailable');}catch{/* Physical tracks and playback are already released. */}
+    // Preserve peer, channel and provider event listeners to drain session.closed/usage.
+  }
   async dispose(): Promise<void> {
     this.disposed = true;
     if (this.resources) await this.release(this.resources, "disposed");

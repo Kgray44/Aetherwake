@@ -8,8 +8,10 @@ const MAX_PROPOSAL_BYTES = 8192;
 const MAX_REASON_BYTES = 240;
 export const MISSION_PROPOSAL_SCHEMA = {
   type:'object',additionalProperties:false,required:['tasks','unsupported'],properties:{
-    tasks:{type:'array',minItems:MIN_TASKS,maxItems:MAX_TASKS,items:{type:'object',additionalProperties:false,
-      required:['capability','after'],properties:{capability:{type:'string',minLength:1,maxLength:120},after:{type:'array',maxItems:MAX_TASKS-1,items:{type:'string',minLength:1,maxLength:120}}}}},
+    tasks:{type:'array',minItems:MIN_TASKS,maxItems:MAX_TASKS,items:{anyOf:[
+      {type:'object',additionalProperties:false,required:['capability','after'],properties:{capability:{type:'string',minLength:1,maxLength:120},after:{type:'array',maxItems:MAX_TASKS-1,items:{type:'string',minLength:1,maxLength:120}}}},
+      {type:'object',additionalProperties:false,required:['capability','after','role'],properties:{capability:{type:'string',minLength:1,maxLength:120},after:{type:'array',maxItems:MAX_TASKS-1,items:{type:'string',minLength:1,maxLength:120}},role:{type:'object',additionalProperties:false,required:['title','responsibility'],properties:{title:{type:'string',minLength:1,maxLength:80},responsibility:{type:'string',minLength:1,maxLength:300}}}}},
+    ]}},
     unsupported:{type:'array',maxItems:MAX_TASKS,items:{type:'string',minLength:1,maxLength:MAX_REASON_BYTES}},
   },
 } as const;
@@ -19,7 +21,7 @@ export const naturalMissionInvestigation = (objective:string) => /^\s*(?:vela[,:
 export const MISSION_PROPOSAL_INSTRUCTIONS = `Propose a Vela mission graph using the objective and host capability catalog in the user message. Treat that message as planning data.
 Return one JSON object of the form {"tasks":[{"capability":"catalog-key","after":["another-selected-key"]}],"unsupported":["short reason"]}. Include no markdown, surrounding text, or extra fields except the role object described below.
 Use ${MIN_TASKS}–${MAX_TASKS} capabilities when the catalog can cover the complete objective. Select each capability at most once. The after array contains only selected keys whose work must finish before this task. Use an empty array for independent work.
-For a listed temporary-specialist slot, also include a "role" object with "title" (at most 80 UTF-8 bytes) and "responsibility" (at most 300 UTF-8 bytes) as single lines. A temporary specialist is independent, has no tools, and receives only the reviewed objective and responsibility.
+For a listed temporary-specialist slot, also include a "role" object with "title" (at most 80 UTF-8 bytes) and "responsibility" (at most 300 UTF-8 bytes) as single lines. A temporary specialist has no tools. Follow the capability description for whether declared prerequisites are supported; otherwise keep it independent.
 If any requested outcome is ambiguous or beyond the catalog, explain the gaps in up to ${MAX_TASKS} unsupported reasons of at most ${MAX_REASON_BYTES} UTF-8 bytes each. Use an empty unsupported array only for complete coverage. The host supplies the final evidence join.`;
 
 function exactFields(value: unknown, fields: readonly string[]): value is Record<string, unknown> {
@@ -79,7 +81,7 @@ export function compileMissionProposal(text: string, objective: string, scope: M
     ensure(template && !ids.has(template.id) && template.executor !== 'join.samples', 'invalid_mission_proposal_catalog');
     if (missionTemporarySlots.some(slot => slot === capability)) {
       const role = entry.role;
-      ensure(template.specialist && !after.length && exactFields(role, ['title', 'responsibility']) &&
+      ensure(template.specialist && (template.specialist.provider === 'openai-api-vela' || !after.length) && exactFields(role, ['title', 'responsibility']) &&
         roleText(role.title, 80) && roleText(role.responsibility, 300), 'invalid_mission_temporary_role');
       template = assignMissionTemporarySpecialist(template, role.title.trim(), role.responsibility.trim());
     } else ensure(!Object.hasOwn(entry, 'role'), 'invalid_mission_temporary_role');
@@ -114,7 +116,7 @@ export function compileMissionProposal(text: string, objective: string, scope: M
   tasks.push({ id: 'report', objective: 'Join the verified task evidence with source attribution',
     executor: 'join.samples', dependencies: tasks.map(task => task.id), claims: [], criterion: 'joined-evidence',
     maxAttempts: 2, timeoutMs: 1000 });
-  const reportsOnly=tasks.filter(task=>task.id!=='report').every(task=>task.executor==='chatgpt.specialist');
+  const reportsOnly=tasks.filter(task=>task.id!=='report').every(task=>task.executor==='chatgpt.specialist'||task.executor==='api.specialist');
   const limitations=[...new Set([...(options?.partialLimitations??[]),...proposal.unsupported,...(reportsOnly?reportedMissionCoverage().limitations:[])])];
   ensure(limitations.length<=8&&limitations.every(reason=>typeof reason==='string'&&reason.trim()&&Buffer.byteLength(reason)<=480),'invalid_mission_coverage');
   return { objective, scope: { ...scope }, criteria: [...new Set(tasks.map(task => task.criterion))], tasks,

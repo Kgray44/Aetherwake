@@ -45,7 +45,11 @@ const {
 const { createVelaApiSetup } = require('./vela-api-setup.cjs');
 const { createVelaApiConnectionBroker, safeApiStatus } = require('./vela-api-connections.cjs');
 const { createLiveMediaBroker } = require('./live-media-broker.cjs');
+const {createWindowsSystemBroker}=require('./windows-system-broker.cjs');
 const { createVelaVoiceBroker } = require('./vela-voice-broker.cjs');
+const { createWakeMediaBroker } = require('./wake-media-broker.cjs');
+const { loadWakeController } = require('./wake-controller-loader.cjs');
+const { createVelaWakeBroker } = require('./vela-wake-broker.cjs');
 const root = path.resolve(__dirname, "..");
 const moduleStarted = Date.now();
 const moduleStartedMonotonicMs = performance.now();
@@ -61,7 +65,7 @@ function hashFolder(folder) {
       continue;
     const full = path.join(folder, entry.name);
     if (entry.isDirectory()) hashFolder(full);
-    else if (/\.(?:ts|mts|css|cjs|sql|html)$/.test(entry.name))
+    else if (/\.(?:ts|mts|css|cjs|cpp|sql|html)$/.test(entry.name))
       sourceHashes[path.relative(repository, full).replaceAll("\\", "/")] =
         createHash("sha256").update(readFileSync(full)).digest("hex");
   }
@@ -151,6 +155,7 @@ if (verifyMissions) {
   if(process.argv.includes('--missions-persistence-reopen-only'))require('./mission-persistence.cjs').assertMissionPersistenceReopen({profile:privateRoot,argv:process.argv,source});
   else if(!/^review-vela-missions-\d+$/u.test(path.basename(privateRoot))||existsSync(privateRoot))throw Error('fresh_offline_mission_profile_required');
 }
+if(process.argv.includes('--weather-deny-fixture')&&(!verifyMissions||!process.argv.includes('--missions-weather-product-only')||!process.env.LOCALAPPDATA||path.resolve(path.dirname(privateRoot)).toLowerCase()!==path.resolve(process.env.LOCALAPPDATA,'Aerynth').toLowerCase()||process.argv.filter(value=>value.startsWith('--profile=')).length!==1))throw Error('owned_weather_fixture_journey_required');
 if (verifyAirPlan && (!/^review-vela-air-plan-\d+$/u.test(path.basename(privateRoot)) || !existsSync(privateRoot)))
   throw Error("signed_in_air_test_profile_required");
 if (offscreenScale) {
@@ -240,11 +245,14 @@ if (deadlineArgument) {
 const pending = new Map();
 let backendFailed = false;
 let nativeSecretBroker;
+let windowsSystemBroker;
 let providerConnections;
 let velaApiSetup;
 let velaApiConnections;
 let liveMediaBroker;
 let velaVoiceBroker;
+let wakeController;
+let velaWakeBroker;
 let nativeClipboard;
 const storage = createStorageAdmission({
   probe: runtimeReserve,
@@ -267,11 +275,13 @@ const storage = createStorageAdmission({
 function failBackend() {
   if (backendFailed) return;
   backendFailed = true;
+  windowsSystemBroker?.close();
   nativeSecretBroker?.close();
   providerConnections?.close();
   velaApiSetup?.close();
   velaApiConnections?.close();
   velaVoiceBroker?.close();
+  velaWakeBroker?.close(); wakeController?.dispose();
   liveMediaBroker?.close();
   for (const request of pending.values()) {
     clearTimeout(request.timer);
@@ -339,6 +349,7 @@ app.whenReady().then(async () => {
       root,
       "--native-secrets",
       "--native-media",
+      "--native-system-facts",
     ],
     { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
   );
@@ -356,6 +367,13 @@ app.whenReady().then(async () => {
     platform: process.platform,
     send: (wire) => writeBackend(JSON.stringify(wire) + "\n"),
   });
+  windowsSystemBroker=createWindowsSystemBroker({root,getOwner:()=>win,dialog,send:wire=>writeBackend(JSON.stringify(wire)+'\n')});
+  try {
+    wakeController = loadWakeController(root)({call,send:wire=>writeBackend(JSON.stringify(wire)+'\n'),
+      capture:onFrame=>createWakeMediaBroker({BrowserWindow,ipcMain,onFrame,
+        preloadPath:path.join(root,'dist/vela-wake-capture-preload.cjs'),
+        htmlPath:path.join(__dirname,'wake-media.html'),workletPath:path.join(root,'dist/vela-wake-pcm-worklet.js')})});
+  } catch { wakeController = null; }
   liveMediaBroker = createLiveMediaBroker({ BrowserWindow, ipcMain,
     send: wire => writeBackend(JSON.stringify(wire) + '\n'),
     preloadPath: path.join(root, 'dist/vela-live-media-preload.cjs'),
@@ -377,6 +395,9 @@ app.whenReady().then(async () => {
     if (backendFailed) return;
     try {
       const m = JSON.parse(line);
+      if (wakeController?.handle(m)) return;
+      if (m.nativeWakeHost) { const h=m.nativeWakeHost; writeBackend(JSON.stringify({nativeWakeHost:{version:1,kind:'response',id:h.id,operation:h.operation,error:'wake_host_unavailable'}})+'\n'); return; }
+      if(windowsSystemBroker.handle(m))return;
       if (nativeSecretBroker.handle(m)) return;
       if (liveMediaBroker.handle(m)) return;
       if (m.event) {
@@ -447,7 +468,8 @@ app.whenReady().then(async () => {
   owner.on("render-process-gone", playback.clear);
   owner.on('render-process-gone', () => {
     // Stop local capture immediately even when the application renderer cannot send End.
-    velaVoiceBroker?.close(); liveMediaBroker?.close();
+    velaWakeBroker?.close(); wakeController?.dispose(); velaVoiceBroker?.close(); liveMediaBroker?.close();
+    void call('velaWake', {name:'masterOff',input:{}}).catch(() => {});
     void call('velaVoice', {name:'stop',input:{}}).catch(() => {});
   });
   owner.on("destroyed", playback.clear);
@@ -497,6 +519,9 @@ app.whenReady().then(async () => {
     setup: () => velaApiSetup.open(win),
     authorize: async context => context?.observedGesture === true && trustedActiveFrame(context.event),
   });
+  velaWakeBroker = createVelaWakeBroker({call,storageAllowed:()=>storage.allowWrite(),
+    authorize:async context=>context?.observedGesture===true&&trustedActiveFrame(context.event),
+    masterOffLocal:async()=>{try{wakeController?.masterOffLocal();}finally{await liveMediaBroker.quiesceAll();}}});
   nativeClipboard = createClipboardCapability({
     writeText: (text) => clipboard.writeText(text),
     isTrustedApplicationFrame: trustedActiveFrame,
@@ -514,7 +539,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("application-copy-text", (event, input) =>
     nativeClipboard.copy(event, input),
   );
-  win.on("closed", () => { nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
+  win.on("closed", () => { velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
       if (
@@ -534,6 +559,18 @@ app.whenReady().then(async () => {
         throw new Error("command_too_large");
       let apiGesture = false;
       let voiceGesture = false;
+      let wakeGesture = false;
+      if (command === 'velaWake' && ['enable','save'].includes(input?.name)) {
+        if (!trustedActiveFrame(event) ||
+            await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()', false).catch(() => false) !== true ||
+            !trustedActiveFrame(event)) throw Error('wake_user_gesture_required');
+        wakeGesture = true;
+      }
+      if (command === 'weatherPermission' && input?.type !== 'status') {
+        if (!trustedActiveFrame(event) ||
+            await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()', false).catch(() => false) !== true ||
+            !trustedActiveFrame(event)) throw Error('weather_user_gesture_required');
+      }
       if (command === 'velaVoice' && ['start','reconnect','audition','createVoice','saveVoice'].includes(input?.name)) {
         if (!trustedActiveFrame(event) ||
             await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()', false).catch(() => false) !== true ||
@@ -590,6 +627,8 @@ app.whenReady().then(async () => {
         !(command === "notes" && input?.name === "readNote") &&
         !(command === "providerConnection" && input?.type === "status") &&
         !(command === 'velaApiConnection' && ['status', 'usageStatus', 'catalog'].includes(input?.type)) &&
+        !(command === 'weatherPermission' && ['status', 'windows-settings'].includes(input?.type)) &&
+        !(command === 'velaWake' && ['state','disableWake','masterOff','reconcile'].includes(input?.name)) &&
         !(command === 'velaVoice' && ['state','devices','stop','mute','setInputDevice','setOutputDevice','resumePlayback','interruptPlayback'].includes(input?.name)) &&
         !(
           command === "library" &&
@@ -626,6 +665,12 @@ app.whenReady().then(async () => {
       }
       else if (command === 'velaVoice') {
         result = await velaVoiceBroker.command(input, {event, observedGesture: voiceGesture});
+      }
+      else if (command === 'weatherPermission') {
+        result = await windowsSystemBroker.permission(input, call, url => shell.openExternal(url));
+      }
+      else if (command === 'velaWake') {
+        result = await velaWakeBroker.command(input,{event,observedGesture:wakeGesture});
       }
       else if (command === "graphAction")
         result = await require("./graph-actions.cjs").graphAction(input, call);
@@ -721,7 +766,7 @@ app.whenReady().then(async () => {
                 `Provider · ${provider}\nModel · ${model}\nReasoning effort · ${effort ?? "Model default"}\nPublic web search · ${webSearch ? "Enabled" : "Disabled"}`,
                 `Mission objective\n${objective}`,
                 `Specialist instructions\n${instructions}`,
-                "One request may be sent when you resume this mission. The provider may count it against your plan.",
+                provider === 'Vela dedicated API' ? "One request may be sent when you resume this mission using the dedicated API key and authorized usage limits." : "One request may be sent when you resume this mission. The provider may count it against your plan.",
               ].join("\n\n"),
             });
             if (choice.response !== 1) throw Error("mission_review_declined");
@@ -741,12 +786,13 @@ app.whenReady().then(async () => {
           if (preview.externalReview) {
             if (preview.executors.some(executor => !executor.available)) throw Error("mission_specialist_unavailable");
             const { provider, calls } = preview.externalReview;
-            const assignments = preview.plan.tasks.filter(task => task.specialist).map(({ specialist }) =>
-              `${specialist.role} — ${specialist.model}${specialist.effort ? " · " + specialist.effort : ""}${specialist.webSearch ? " · public web search" : ""}\n${specialist.instructions}`);
+            const assignments = preview.plan.tasks.filter(task => task.specialist).map(({ id, objective, criterion, dependencies, specialist }) =>
+              `${id}: ${specialist.role} — ${specialist.provider} · ${specialist.model}${specialist.effort ? " · " + specialist.effort : ""}${specialist.webSearch ? " · public web search" : ""}\nTask: ${objective}\nCriterion: ${criterion}\nVerified prerequisite receipts: ${dependencies.join(', ') || 'none'}\n${specialist.instructions}`);
+            const apiWorkers = preview.plan.tasks.some(task => task.specialist?.provider === 'openai-api-vela');
             const choice = await dialog.showMessageBox(win, {
               type: "question", buttons: ["Cancel", preview.localReview ? "Approve specialists" : "Start mission"], defaultId: 0, cancelId: 0,
               title: "Review specialist mission", message: `Send ${calls} separate requests to ${provider}?`,
-              detail: `Objective sent to each specialist:\n${preview.plan.objective}\n\nInstructions:\n${assignments.join("\n\n")}\n\nThe provider may count these requests against your plan. No files, chat history or local measurements are sent.`,
+              detail: `Objective sent to each specialist:\n${preview.plan.objective}\n\nInstructions and reviewed inputs:\n${assignments.join("\n\n")}\n\n${apiWorkers ? `API workers receive this objective, task objectives, mission criteria (${preview.plan.criteria.join(', ')}), project/workspace scope identifiers and whole verified receipts from only their named prerequisites. Those future receipt bodies are compiled when prerequisites finish. Each exact request body and context digest is bound to one use and revalidated before dispatch. API workers have no web search, file, notes or chat-history tools. API calls use the dedicated key and authorized usage limits.` : 'The provider may count these requests against your plan. No files, chat history or local measurements are sent.'}`,
             });
             if (choice.response !== 1) throw Error("mission_review_declined");
           }
@@ -811,7 +857,16 @@ app.whenReady().then(async () => {
   });
   for (const event of ["focus", "blur", "show", "hide", "minimize", "restore"])
     win.on(event, active);
+  if(process.argv.includes('--weather-deny-fixture')){
+    if(!verifyMissions||!process.argv.includes('--missions-weather-product-only'))throw Error('owned_weather_fixture_journey_required');
+    const permission=await call('velaWeatherPermissionNative',{type:'status'});
+    if(permission.decision!=='unknown')throw Error('fresh_weather_fixture_permission_required');
+    const denied=await call('velaWeatherPermissionNative',{type:'set',expectedVersion:permission.version,decision:'deny'});
+    if(denied.decision!=='deny')throw Error('weather_fixture_deny_required');
+  }
   await win.loadURL(localURL);
+  // Restores explicit local detection consent only; this command never starts paid voice.
+  void call('velaWakeNative',{name:'ready',input:{}}).catch(()=>{});
   if (process.argv.includes('--bootstrap-vela-api')) {
     if (!profileArg || !path.isAbsolute(profileArg.slice(10))) throw Error('explicit_api_profile_required');
     const imported = await require('./vela-api-bootstrap.cjs').importVelaApiBootstrap({ call, profileDirectory: privateRoot, storageAllowed: () => storage.allowWrite() });
@@ -934,7 +989,7 @@ app.whenReady().then(async () => {
     }
     if (verifyMissions) {
       await require("./integration-vela-missions.cjs").verify({
-        win, app, privateRoot, call, source, startupErrors, moduleStartedMonotonicMs,
+        win, app, privateRoot, call, source, startupErrors, moduleStartedMonotonicMs,systemFactsAudit:()=>windowsSystemBroker.audit(),
       });
       return;
     }
@@ -1239,6 +1294,7 @@ app.on("before-quit", (event) => {
             await call("interrupt", { executionId: e.id }).catch(() => {});
       }
       await call("close", {}).catch(() => {});
+      velaWakeBroker?.close(); wakeController?.dispose();
       velaVoiceBroker?.close();
       liveMediaBroker?.close();
       providerConnections?.close();
@@ -1259,6 +1315,7 @@ app.on("before-quit", (event) => {
         cancelId: 0,
       });
       if (choice.response === 1) {
+        velaWakeBroker?.close(); wakeController?.dispose();
         velaVoiceBroker?.close();
         liveMediaBroker?.close();
         providerConnections?.close();

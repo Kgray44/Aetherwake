@@ -16,11 +16,11 @@ export function velaApiReasoningEfforts(model: string): readonly ReasoningEffort
   return model === 'gpt-6-luna' ? ['none','low','medium','high','xhigh','max'] : model === 'gpt-6.1-sol' ? ['low','medium','high','xhigh','max'] : [];
 }
 
-export const VELA_API_RUNTIME_LIMITS = Object.freeze({ maxOutputTokens: 2048, requestsPerDay: 64, stages: 4, discoveryCalls: 3, toolBytes: 16384 });
+export const VELA_API_RUNTIME_LIMITS = Object.freeze({ concurrent: 2, maxOutputTokens: 2048, requestsPerDay: 64, stages: 4, discoveryCalls: 3, toolBytes: 16384 });
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const check: (value: unknown, code: string) => asserts value = (value, code) => { if (!value) throw new VelaError(code); };
 export interface VelaApiUsageStatus { enabled: boolean; configurationVersion: number | null; maxOutputTokens: number; requestsPerDay: number; usedToday: number }
-export interface VelaApiRuntimeTestServices { fetch: typeof fetch; voice?: {fetch:typeof fetch;acknowledgementMs?:number} }
+export interface VelaApiRuntimeTestServices { fetch: typeof fetch; voice?: {fetch:typeof fetch;acknowledgementMs?:number};wake?:import('./vela-wake-runtime.mts').VelaWakeTestServices }
 export interface VelaApiRuntimeOptions {
   db: DatabaseSync; transaction<T>(work: () => T): T; connection: VelaApiConnection;
   /** Native synthetic-only constructor injection, never a serialized option. */
@@ -35,6 +35,9 @@ export interface VelaApiRun {
   requestId: string; version: number; model: string; prompt: string; instruction?: string; contextDigest: string;
   reasoningEffort?: ReasoningEffort;
   catalog?: CapabilityCatalogSnapshot; outputSchema?: ApiJsonSchema;
+  /** Shares the canonical admission pool; never creates a second runtime or conversation. */
+  lane?: 'mission-specialist';
+  oneUse?: true;
   validate(): void;
   stage?(executionId: string, review: DispatchReview): void;
   event?(event: TurnEvent): void;
@@ -44,8 +47,9 @@ export interface VelaApiRun {
 export class VelaApiRuntime {
   private readonly options: VelaApiRuntimeOptions;
   private readonly lifetime = new AbortController();
-  private running = false;
+  private readonly running = new Map<string, VelaApiRun['lane']>();
   private knownCatalog?: { version: number; expiresAt: number; models: string[] };
+  private catalogFlight?: { version: number; promise: Promise<string[]> };
   constructor(options: VelaApiRuntimeOptions) { this.options = options; }
   static migrate(db: DatabaseSync) {
     check(db.isTransaction, 'api_storage_unavailable');
@@ -79,11 +83,19 @@ export class VelaApiRuntime {
   authorized(version = this.configurationVersion()): boolean {
     return !this.lifetime.signal.aborted && version !== null && this.usageStatus().enabled && this.configurationVersion() === version;
   }
-  availability() { const available = this.authorized(); return { available, busy: this.running,
+  nonMissionInFlight() { return [...this.running.values()].filter(lane => lane !== 'mission-specialist').length; }
+  availability() { const available = this.authorized(); return { available, busy: this.running.size >= VELA_API_RUNTIME_LIMITS.concurrent,
     ...(!available ? { reason: 'Dedicated Vela API usage has not been authorized for this configuration.' } : {}) }; }
   private validate(version: number) { check(this.authorized(version), 'vela_api_usage_authorization_required'); }
   async models(version: number): Promise<string[]> {
     this.validate(version);
+    if (this.catalogFlight?.version === version) return [...await this.catalogFlight.promise];
+    const promise = this.loadModels(version);
+    const flight = { version, promise }; this.catalogFlight = flight;
+    try { return [...await promise]; }
+    finally { if (this.catalogFlight === flight) this.catalogFlight = undefined; }
+  }
+  private async loadModels(version: number): Promise<string[]> {
     try { const catalog = await this.options.connection.resolveCatalog(version); this.knownCatalog = { version, expiresAt: catalog.expiresAt, models: [...catalog.models] }; return [...catalog.models]; }
     catch (error) { if ((error as { code?: string }).code !== 'api_catalog_stale') throw error; }
     await this.options.connection.catalog(version);
@@ -105,11 +117,11 @@ export class VelaApiRuntime {
     return this.options.db.prepare('SELECT execution_id AS executionId,body_digest AS bodyDigest,context_digest AS contextDigest,state,response_id AS responseId,elapsed_ms AS elapsedMs FROM vela_api_runs WHERE request_id=? ORDER BY rowid LIMIT 4').all(requestId);
   }
   async run(input: VelaApiRun, signal: AbortSignal) {
-    check(!this.running && !this.lifetime.signal.aborted, 'vela_api_busy');
+    check(this.running.size < VELA_API_RUNTIME_LIMITS.concurrent && !this.running.has(input.requestId) && !this.lifetime.signal.aborted, 'vela_api_busy');
     this.validate(input.version); input.validate();
     const reasoningEfforts = velaApiReasoningEfforts(input.model);
     check(input.reasoningEffort === undefined || reasoningEfforts.includes(input.reasoningEffort), 'unsupported_reasoning_effort');
-    this.running = true;
+    check(!input.oneUse || !this.options.db.prepare('SELECT 1 FROM vela_api_runs WHERE request_id=?').get(input.requestId), 'api_execution_already_dispatched');
     const combined = AbortSignal.any([signal, this.lifetime.signal, AbortSignal.timeout(90000)]);
     const receipts = new Map<string, ApiToolOutput>(), items: ApiResponseItem[] = [], fetched = new Set<string>();
     let continuation: ApiContinuation | undefined, calls = 0, final: { executionId: string; result: TurnResult; fetchedIds: string[] } | undefined;
@@ -123,6 +135,7 @@ export class VelaApiRuntime {
       definitions.push({ definition, schemaDigest: digest(JSON.stringify(definition)), authorizationRef: 'vela-api-schema:' + input.catalog.projection.digest });
     }
     const fence = () => { check(!combined.aborted, 'vela_execution_cancelled'); this.validate(input.version); input.validate(); };
+    this.running.set(input.requestId, input.lane);
     try {
       for (let stage = 0; stage < VELA_API_RUNTIME_LIMITS.stages; stage++) {
         fence();
@@ -201,7 +214,7 @@ export class VelaApiRuntime {
           contextDigest: input.contextDigest, sourceOutcome: 'completed', itemsDigest: digest(JSON.stringify(items)), items: structuredClone(items), toolOutputs: [...receipts.values()] };
       }
       throw new VelaError('api_tool_call_limit');
-    } finally { this.running = false; }
+    } finally { this.running.delete(input.requestId); }
   }
   async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;onResult?(result:TurnResult):void;validate(): void }, signal: AbortSignal): Promise<unknown> {
     const version = this.configurationVersion(); check(version !== null, 'api_configuration_disconnected');

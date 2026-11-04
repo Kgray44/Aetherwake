@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readLocalWeather } from "../src/local-weather.mts";
 
 const signal = new AbortController().signal;
-const locate = async () => ({ latitude: 43.45827, longitude: -72.38753 });
+const locate = async (input:{requestedAtMs:number}) => ({ latitude: 43.45827, longitude: -72.38753,observedAtMs:input.requestedAtMs,source:'wifi' as const });
 const now = () => new Date("2026-11-03T06:00:00Z");
 const origin = "https://api.weather.gov";
 const forecast = origin + "/gridpoints/BTV/100,30/forecast/hourly";

@@ -110,7 +110,7 @@ test('actual Core durably groups fragments, preserves spaces/timestamps and spea
     assert.equal(messages[1].providerId,'gpt-live-1');assert.ok(messages.every(message=>message.classification==='reported'&&message.voice?.transcription==='provider-reported'));
     assert.equal((await f.voice()).captions.length,3);assert.equal((await f.voice()).session.audioPlayback,'unverified');
     const first=messages[0].id,fragment:LiveTranscriptFragment={sessionId,eventId:'first',conversationId,role:'user',delta:'Pause ',startMs:0,endMs:100,completedTurn:false,playback:'unverified'};
-    await f.reopen();assert.equal((await f.voice()).session.state,'unknown');await f.start();await f.runtime().receiveFragment(fragment);
+    await f.reopen();assert.equal((await f.voice()).session.state,'closed');assert.equal((await f.voice()).session.finalization,'confirmed');await f.start();await f.runtime().receiveFragment(fragment);
     assert.equal((await f.vela()).conversation!.messages.length,3);assert.equal((await f.vela()).conversation!.messages[0].id,first);
     await assert.rejects(f.runtime().receiveFragment({...fragment,delta:'Different'}),/live_transcript_duplicate_mismatch/);
     assert.equal(Number(f.db().prepare('SELECT count(*) AS n FROM vela_voice_fragments').get()!.n),4);

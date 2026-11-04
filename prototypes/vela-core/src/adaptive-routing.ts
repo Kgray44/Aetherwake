@@ -68,6 +68,7 @@ export function nativeVelaFact(intent: string): VelaLocalCapabilityId | undefine
     .replace(/^(?:(?:please|(?:can|could|would) you)\s+)+/u, '').replace(/[?.!]+$/u, '').replace(/,?\s+please$/u, '');
   if (/^(?:how much (?:ram|memory|physical memory) (?:am i using|is (?:my (?:computer|pc|system)|this (?:computer|pc|system)) using|is (?:currently )?(?:in use|being used))|(?:what(?:'s| is) )?(?:(?:my|the|this (?:pc|computer)'s) )?(?:current )?(?:system )?(?:ram|physical memory) (?:usage|utilization))(?: (?:right now|now|currently|on (?:my|this) (?:pc|computer|system)))?$/u.test(text))
     return 'system.memory';
+  if (/^(?:(?:what(?:'s| is)|show(?: me)?|check) )?(?:(?:my|the|current) )?(?:battery(?: (?:charge|level|status|percentage))?|power status)(?: (?:right now|now|currently))?$/u.test(text)||/^how much battery (?:is left|do i have)(?: (?:right now|now))?$/u.test(text)||/^(?:is (?:my |the )?(?:laptop |computer )?(?:charging|plugged in)|am i (?:on battery(?: power)?|plugged in))$/u.test(text))return 'system.battery';
   const usage = /^(?:(?:what(?:'s| is)|show(?: me)?|check) )?(?:(?:my|the) )?(?:current )?(cpu|gpu|cpu and gpu|gpu and cpu) (?:usage|utilization|load)(?: (?:right now|now|currently))?$/u.exec(text);
   if (usage) return usage[1] === 'cpu' ? 'system.cpu' : usage[1] === 'gpu' ? 'system.gpu' : 'system.performance';
   const busy = /^how busy (?:is|are) (?:my|the) (cpu|gpu|cpu and gpu|gpu and cpu)(?: (?:right now|now|currently))?$/u.exec(text);
@@ -79,7 +80,14 @@ export function nativeVelaFact(intent: string): VelaLocalCapabilityId | undefine
 }
 
 export function nativeVelaWeather(intent: string): 'now' | 'today' | 'tonight' | 'tomorrow' | 'tomorrow-morning' | undefined {
-  const text = fileEditIntent(intent).replaceAll('’', "'").replace(/[?.!]+$/u, '').replace(/,?\s+please$/u, '');
+  let text = fileEditIntent(intent).replaceAll('’', "'").replace(/[?.!]+$/u, '').replace(/,?\s+please$/u, '');
+  text=text.replace(/\b(?:near me|in my area|(?:at|in) my (?:current )?location|where i am|where i'm at)\b/u,'here').replace(/\s+/gu,' ')
+    .replace(/^how(?:'s| is) (?:the )?weather/u,"what's the weather").replace(/^what(?:'s| is) (?:the )?current weather/u,"what's the weather")
+    .replace(/^what(?:'s| is) (?:the )?weather going to be(?: like)?/u,"what's the weather")
+    .replace(/^what (?:will|is) (?:the )?weather (?:be|going to be)(?: like)?/u,"what's the weather")
+    .replace(/^(?:is it (?:going to|expected to)) (rain|snow)/u,'will it $1')
+    .replace(/\b(weather|forecast) for (today|tonight|tomorrow(?: morning)?)$/u,'$1 $2')
+    .replace(/^(?:weather|forecast)(?= (?:here|right now|now|today|tonight|tomorrow)|$)/u,"what's the weather");
   const request = /^(?:will it (?:rain|snow)|(?:what(?:'s| is)|show(?: me)?) (?:the |my )?(?:local )?(?:weather|forecast)(?: like)?)(?: here)?(?: (right now|now|today|tonight|tomorrow morning|tomorrow))?$/u.exec(text);
   const period = request?.[1];
   if (!request) return;

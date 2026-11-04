@@ -6,12 +6,31 @@ integration is `35b823804645d7e7921fa4db8e1225291c91f2db` on draft PR #19,
 stacked on #18, #17 and #16. These remain review candidates, not merged releases.
 The Constitution is binding; the specialist registry remains advisory.
 
-The current review checkpoint includes the dedicated API, native voice,
-canonical timer and workspace flows, and fixes for the broader regression
-failures. Local wake-word activation is being added under Addendum B. Its
-on-device engine and lifecycle foundations are tested, but the wake controls
-and capture-to-session integration are not yet part of the review experience.
-This checkpoint is not a declaration that the full program is complete.
+Development includes the dedicated API, native voice, canonical timer and
+workspace flows, API specialist scheduling, and fresh native weather/battery
+answers. The open review remains the earlier checkpoint until its replacement
+passes qualification. This is not a declaration that the full program is complete.
+
+Weather now persists the purpose permission rather than coordinates. Every
+question requests a fresh Windows fix; stale/default/IP positions are rejected.
+The fixed native addon invokes the Windows consent API in the owned foreground
+UI process. Core/private-protocol tests cover location A changing to B, denial
+across restart, stale-fix rejection and revocation before egress. Real Windows
+Allow UI and physical location/NWS qualification remain outstanding. A separate
+native-response marker fixes a display defect that hid direct host replies;
+the panel regression checks a failed legacy weather plan followed by the actual
+native answer. Native facts require no reviewed plan or inference request.
+
+Addendum B now has local capture, a private bounded PCM bridge, canonical
+preferences, lifecycle controls and observed phase events. Master microphone
+shutdown releases tracks before waiting for provider finalization. Production
+wake activation remains blocked: no evaluated acoustic model has passed the
+quality gate, and the continuous audio handoff still requires integration.
+Synthetic research results are not human microphone or production acceptance.
+
+The shared proposal view presents four items, an expandable full list and clear
+Yes/No actions. The local document discovery/import bridge is still in progress.
+The reported empty-document plan is a confirmed failure, not a completed import.
 
 | Directive | Current evidence | Remaining acceptance |
 | --- | --- | --- |
