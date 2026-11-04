@@ -153,7 +153,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const wait = (label, check) => {
       receipt.phase = label;
       return waitForCondition({ slot, label, check, diagnose: () => js(
-        "({app:document.querySelector('#status')?.textContent?.slice(0,240),vela:document.querySelector('.vela-core-status')?.textContent?.slice(0,240),mission:document.querySelector('.vela-missions [role=alert]:not([hidden])')?.textContent?.slice(0,240)})",
+        "({app:document.querySelector('#status')?.textContent?.slice(0,240),vela:document.querySelector('.vela-core-status')?.textContent?.slice(0,240),mission:document.querySelector('.vela-missions [role=alert]:not([hidden])')?.textContent?.slice(0,240),layout:document.querySelector('.aw-wa-optimization')?.textContent?.slice(-360)})",
       ) });
     };
     const click = async selector => {
@@ -306,6 +306,18 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     }
     receipt.rendered = { ...rendered, timeline: rows };
     await capture("02-verified-mission-timeline");
+    await click(RECORD + ' [data-mission-focus="post-report"]');
+    const reportMessage = await wait("Mission evidence linked from Vela chat", async () => {
+      const state = await rpc("vela", { name: "state", input: {} });
+      return state.conversation?.messages.find(message => message.missionReport?.missionId === rendered.id);
+    });
+    assert.deepEqual(reportMessage.missionReport, { missionId: rendered.id, ...scope });
+    await click(SURFACE + ' button[aria-label="History"]');
+    await click(SURFACE + ' [data-mission-report-link=' + quote(rendered.id) + ']');
+    await wait("Vela chat opens the canonical mission", () => js(
+      `document.querySelector(${quote(RECORD + '[data-mission-id=' + quote(rendered.id) + ']')})?.getClientRects().length > 0`,
+    ));
+    receipt.reportLink = { missionId: rendered.id, messageId: reportMessage.id };
     await click(RECORD + ' [data-mission-focus="preview-workroom"]');
     await wait("Workroom preview in Vela", () => js(
       `document.querySelector(${quote(RECORD + ' [data-mission-focus="apply-workroom"]')})?.textContent === 'Create linked workroom'`,
@@ -326,6 +338,8 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     assert.equal(workroom.outcome, "verified");
     assert(workroom.blocks.length >= 2, "expected_functional_workroom_blocks");
     assert.equal((await list())[0].id, rendered.id);
+    const roomVela = await rpc("vela", { name: "state", input: {} });
+    assert(!roomVela.conversation.messages.some(message => message.id === reportMessage.id), "mission_report_link_escaped_origin");
     assert(workroom.checklistId && workroom.blocks.includes(workroom.checklistId), "canonical_mission_checklist_missing");
     assert(workroom.timelineId && workroom.blocks.includes(workroom.timelineId), "canonical_mission_timeline_missing");
     const readCard = resourceId => rpc("missions", { name: "workroom-resource", input: { resourceId } });
@@ -344,6 +358,54 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     assert.deepEqual(renderedCards.timeline, eventCard.timeline.map(event => event.seq));
     receipt.workroom = { ...workroom, renderedCards };
     await capture("03-linked-mission-workroom");
+
+    const optimizeTitle = "Synthetic layout optimization room";
+    const appCommand = input => js(`window.__aerynth.execute(${quote(input)})`);
+    await appCommand({ type: "createWorkspace", title: optimizeTitle, projectId: null });
+    const optimizeWorkspace = await wait("Layout optimization workspace is active", async () => {
+      const state = await desktop();
+      return state.workspaces.find(item => item.title === optimizeTitle && item.id === state.activeWorkspaceId);
+    });
+    for (const title of ["Synthetic movable note", "Synthetic fixed note"])
+      await appCommand({ type: "createResource", kind: "note", title, workspaceId: optimizeWorkspace.id });
+    const layout = () => rpc("library", { name: "inspectWorkspace", input: { workspaceId: optimizeWorkspace.id } }).then(result => result.result);
+    const roomState = await desktop(), note = roomState.resources.find(resource => resource.title === "Synthetic movable note");
+    const selected = roomState.blocks.find(block => block.resource_id === note.id && block.workspace_id === optimizeWorkspace.id);
+    await appCommand({ type: "geometry", blockId: selected.id, expectedVersion: selected.version,
+      placement: { x: -3200, y: selected.y, width: selected.width, height: selected.height, z: selected.z },
+      shape: selected.shape, rotation: selected.rotation ?? 0 });
+    await appCommand({ type: "setViewport", workspaceId: optimizeWorkspace.id, viewport: { x: 0, y: 0, zoom: 0.9 } });
+    const geometry = plan => [plan.presence, ...plan.blocks].map(({ blockId, x, y, width, height, rotation }) => [blockId, x, y, width, height, rotation]);
+    const before = await layout();
+    const priorPosition = before.blocks.find(card => card.blockId === selected.id);
+    assert(priorPosition.x < selected.x, "optimization_fixture_was_not_moved_left");
+    const matchesPrior = card => card.x === priorPosition.x && card.y === priorPosition.y;
+    await click('.aw-workspace-layout button[aria-label="Workspace actions"]');
+    const control = name => '.aw-workspace-actions [data-action=' + quote(name) + ']';
+    await click(control("optimize-toggle"));
+    await click('.aw-workspace-actions [data-optimize-block=' + quote(selected.id) + ']');
+    await click(control("optimize-preview"));
+    await wait("Review displays the selected card and enables Apply", () => js(`(() => {
+      const control = document.querySelector(${quote(control("optimize-apply"))});
+      return control && !control.disabled && !!document.querySelector(${quote('[data-optimize-review-block=' + quote(selected.id) + ']')});
+    })()`));
+    assert.deepEqual(geometry(await layout()), geometry(before), "optimization_preview_changed_geometry");
+    await click(control("optimize-apply"));
+    const applied = await wait("Reviewed optimization moved the selected card", async () => {
+      const state = await layout();
+      return state.revision > before.revision && !matchesPrior(state.blocks.find(card => card.blockId === selected.id)) && state;
+    });
+    assert.deepEqual(geometry(applied).filter(card => card[0] !== selected.id), geometry(before).filter(card => card[0] !== selected.id));
+    assert.deepEqual(applied.viewport, before.viewport);
+    await click(control("history-toggle"));
+    await click(control("undo"));
+    const undone = await wait("Undo restored the manually positioned card", async () => {
+      const state = await layout();
+      return state.revision > applied.revision && matchesPrior(state.blocks.find(card => card.blockId === selected.id)) && state;
+    });
+    assert.deepEqual(geometry(undone), geometry(before));
+    receipt.optimization = { selectedId: selected.id, revisions: [before.revision, applied.revision, undone.revision], undoRestored: true };
+
     const providerAfter = await rpc("providerActivity", {});
     assert.equal(providerAfter.codexConnections, providerBefore.codexConnections);
     assert.equal(providerAfter.providerRequests, providerBefore.providerRequests);

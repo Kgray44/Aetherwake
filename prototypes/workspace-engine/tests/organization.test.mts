@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { WorkspaceEngine } from '../engine.mts';
 import { previewLayout, defaultOrganization } from '../organization.mts';
-import { footprint, intersects } from '../collisions.mts';
+import { fitsBounds, footprint, intersects } from '../collisions.mts';
 import type { Command, WorkspaceProjection, Geometry, OrganizationMode, LayoutPreview, Viewport } from '../contracts.mts';
 const bounds = { x: 20, y: 170, width: 1240, height: 650 };
 let serial = 0;
@@ -273,6 +273,87 @@ test('recovery fits the rotated footprint of an oversized locked card within the
   assertCenteredFit(fit, safe); assert.ok(fit.viewport.zoom < .1);
   assert.deepEqual(fit.blocks, s.blocks); assert.deepEqual(fit.presence, s.presence);
   assert.deepEqual(fit.affectedPlacementIds, []);
+});
+
+test('reviewed optimization matches the active viewport, leaves manual anchors exact and survives undo and reopen', t => {
+  const { engine: e, path, state } = fixture(t, true);
+  let s = run(e, state, { type: 'setOrganization', organization: { mode: 'freeform' } });
+  s = add(e, s, { x: 50, y: 210, width: 240, height: 160, locked: true });
+  s = add(e, s, { x: 56, y: 220, width: 180, height: 140 });
+  s = add(e, s, { x: 270, y: 410, width: 180, height: 128 });
+  s = add(e, s, { x: 920, y: 200, width: 160, height: 128, rotation: 21 });
+  s = add(e, s, { x: 1300, y: 230, width: 900, height: 360 });
+  s = run(e, s, { type: 'saveLayout', placements: [], viewport: { x: -42, y: 61, zoom: .8, displayId: 'synthetic' } });
+  const get = (x: number) => s.blocks.find(block => block.x === x)!;
+  const [locked, manual, stable, offscreen, oversized] = [50, 56, 270, 920, 1300].map(get);
+  const wide = { x: 20, y: 170, width: 2400, height: 740 };
+  const small = { x: 20, y: 170, width: 760, height: 400 };
+  const movableBlockIds = [stable.blockId, offscreen.blockId, oversized.blockId];
+  const request = { intent: 'optimize' as const, movableBlockIds, expectedRevision: s.revision };
+  const full = previewLayout(s, { ...request, bounds: wide });
+  assert.deepEqual(full.affectedPlacementIds, []);
+  assert.deepEqual(full.unresolvedPlacementIds, []);
+  const noop = run(e, s, { type: 'optimizeLayout', movableBlockIds, bounds: wide });
+  assert.equal(noop.revision, s.revision);
+
+  const preview = previewLayout(s, { ...request, bounds: small });
+  assert.deepEqual(preview.affectedPlacementIds, [offscreen.blockId]);
+  assert.deepEqual(preview.unresolvedPlacementIds, [oversized.blockId]);
+  assert.deepEqual(e.project(s.workspaceId), s);
+  assert.throws(() => previewLayout(s, request), code('BOUNDS_REQUIRED'));
+  assert.throws(() => previewLayout(s, { ...request, bounds: small, expectedRevision: undefined }), code('CONFLICT'));
+  for (const invalid of [[locked.blockId], [offscreen.blockId, offscreen.blockId], ['missing'], ['system:vela'], []]) {
+    assert.throws(() => previewLayout(s, { ...request, bounds: small, movableBlockIds: invalid }), code('INVALID_OPTIMIZATION_SELECTION'));
+    assert.throws(() => run(e, s, { type: 'optimizeLayout', bounds: small, movableBlockIds: invalid }), code('INVALID_OPTIMIZATION_SELECTION'));
+  }
+
+  const command = { type: 'optimizeLayout', commandId: 'reviewed-optimize', workspaceId: s.workspaceId,
+    expectedRevision: s.revision, bounds: small, movableBlockIds } as const;
+  const applied = e.execute(command);
+  assert.deepEqual(layouts(applied), layouts(preview));
+  assert.deepEqual(applied.unresolvedPlacementIds, preview.unresolvedPlacementIds);
+  assert.deepEqual(applied.viewport, s.viewport);
+  assert.deepEqual(applied.organization, s.organization);
+  assert.deepEqual(applied.presence, s.presence);
+  assert.deepEqual(applied.blocks.filter(block => block.blockId !== offscreen.blockId), s.blocks.filter(block => block.blockId !== offscreen.blockId));
+  const moved = applied.blocks.find(block => block.blockId === offscreen.blockId)!;
+  assert.deepEqual([moved.width, moved.height, moved.rotation, moved.resourceId], [offscreen.width, offscreen.height, offscreen.rotation, offscreen.resourceId]);
+  assert.ok(fitsBounds(footprint({ ...moved, id: moved.blockId }), small));
+  for (const anchor of [locked, manual, stable, oversized, s.presence]) {
+    assert.equal(intersects(footprint({ ...moved, id: moved.blockId }), footprint({ ...anchor, id: 'anchor' }), s.organization.gap), false);
+  }
+  assert.deepEqual(e.execute(command), applied);
+  assert.throws(() => e.execute({ ...command, commandId: 'stale-optimize' }), code('CONFLICT'));
+
+  const reopened = WorkspaceKernel.open(path);
+  try {
+    const engine = new WorkspaceEngine(reopened);
+    assert.deepEqual(layouts(engine.project(s.workspaceId)), layouts(applied));
+    const undo = run(engine, applied, { type: 'undoLayout' });
+    assert.deepEqual(layouts(undo), layouts(s));
+    assert.deepEqual(undo.viewport, s.viewport);
+    const redo = run(engine, undo, { type: 'redoLayout' });
+    assert.deepEqual(layouts(redo), layouts(applied));
+    for (const block of redo.blocks) assert.equal(reopened.getResource(block.resourceId!).note.content, 'Canonical synthetic draft');
+  } finally { reopened.close(); }
+});
+
+test('structured optimization snaps moved cards without reflowing existing unselected geometry', t => {
+  const { engine: e, state } = fixture(t);
+  let s = run(e, state, { type: 'setOrganization', organization: { mode: 'freeform' } });
+  s = add(e, s, { x: 137, y: 227, width: 220, height: 160 });
+  s = add(e, s, { x: 1001, y: 237, width: 160, height: 128 });
+  s = run(e, s, { type: 'setOrganization', organization: { mode: 'structured' } });
+  const target = s.blocks.find(block => block.x === 1001)!;
+  const movableBlockIds = [target.blockId];
+  const visible = { x: 20, y: 170, width: 750, height: 390 };
+  const preview = previewLayout(s, { intent: 'optimize', expectedRevision: s.revision, bounds: visible, movableBlockIds });
+  const applied = run(e, s, { type: 'optimizeLayout', bounds: visible, movableBlockIds });
+  const moved = applied.blocks.find(block => block.blockId === target.blockId)!;
+  assert.deepEqual(layouts(applied), layouts(preview));
+  assert.deepEqual([moved.x % 16, moved.y % 16, moved.width, moved.height], [0, 0, target.width, target.height]);
+  assert.deepEqual(applied.blocks.find(block => block.blockId !== target.blockId), s.blocks.find(block => block.blockId !== target.blockId));
+  assert.deepEqual(applied.organization, s.organization);
 });
 
 test('locked geometry, invalid policies and stale organization revisions fail without partial changes', t => {

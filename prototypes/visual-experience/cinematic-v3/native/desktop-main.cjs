@@ -618,7 +618,7 @@ app.whenReady().then(async () => {
             const choice = await dialog.showMessageBox(win, {
               type: "question", buttons: ["Cancel", "Run reviewed mission"], defaultId: 0, cancelId: 0,
               title: "Review read-only project tests", message: "Run the selected Node tests alongside native measurements?",
-              detail: `Checkout: ${review.cwd}\nCommit: ${review.head}\nArguments: ${JSON.stringify(review.argv)}\n\nCodex runs the selected command in its read-only sandbox with networking disabled and no model inference.`,
+              detail: `Checkout: ${review.cwd}\nCommit: ${review.head}\nArguments: ${JSON.stringify(review.argv)}\n\nCodex runs the selected command in a read-only sandbox with zero model requests. The sandbox requests restricted networking. Effective isolation depends on the installed Windows sandbox mode.`,
             });
             if (choice.response !== 1) throw Error("mission_review_declined");
             approvedProjectCheck = { paths, digest: review.digest };

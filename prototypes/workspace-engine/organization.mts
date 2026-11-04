@@ -1,7 +1,7 @@
-import type { WorkspaceOrganization, OrganizationUpdate, LayoutState, LayoutPreview, LayoutPreviewRequest, Geometry, BlockProjection, GridSpan, StructuredPreset, LayoutIntent, StructuredOrganization } from './contracts.mts';
-import { ensure, defaults, presentation } from './geometry.mts';
-import { findVacantPlacement, footprint, intersects, resolveCollisions, validateBounds, type CollisionPlacement } from './collisions.mts';
-import { findVacantGridPlacement, snapStructuredTargets, structuredGridGuides } from './structured-grid.mts';
+import { LAYOUT_OPTIMIZATION_LIMITS, type WorkspaceOrganization, type OrganizationUpdate, type LayoutState, type LayoutPreview, type LayoutPreviewRequest, type Geometry, type BlockProjection, type GridSpan, type StructuredPreset, type LayoutIntent, type StructuredOrganization } from './contracts.mts';
+import { ensure, defaults, presentation, snapValue, WorkspaceError } from './geometry.mts';
+import { findVacantPlacement, fitsBounds, footprint, intersects, resolveCollisions, validateBounds, type CollisionPlacement } from './collisions.mts';
+import { findVacantGridPlacement, snapStructuredTargets, structuredGridGuides, STRUCTURED_GRID_SIZE } from './structured-grid.mts';
 
 const idOrder = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
 const presets = ['balanced', 'focus', 'development', 'research'];
@@ -29,12 +29,51 @@ export function updateOrganization(base: WorkspaceOrganization, patch: Organizat
   ensure(['fluid', 'freeform', 'structured'].includes(o.mode) && Number.isFinite(o.gap) && o.gap >= 0 && o.gap <= 256);
   return o;
 }
-export type PolicyOptions = { targets?: string[]; resizeIds?: string[]; bounds?: Geometry; intent?: LayoutIntent; order?: string[]; preset?: StructuredPreset; spanOverrides?: string[]; before?: LayoutState };
+export type PolicyOptions = { targets?: string[]; resizeIds?: string[]; bounds?: Geometry; intent?: LayoutIntent; order?: string[]; preset?: StructuredPreset; spanOverrides?: string[]; before?: LayoutState; movableBlockIds?: string[] };
 const entries = (state: LayoutState): CollisionPlacement[] => [
   ...state.blocks.map(b => ({ id: b.blockId, x: b.x, y: b.y, width: b.width, height: b.height, rotation: b.rotation, locked: b.locked })),
   { ...state.presence, keepVisible: true },
 ];
 const changedGeometry = (a: Geometry, b: Geometry) => a.x !== b.x || a.y !== b.y || a.width !== b.width || a.height !== b.height;
+
+/** Each selected card may move around all other current footprints. Existing
+ * overlaps between anchors and offscreen anchors are user-owned geometry. */
+function optimize(state: LayoutState, input: CollisionPlacement[], options: PolicyOptions) {
+  const { bounds, movableBlockIds } = options;
+  ensure(bounds, 'BOUNDS_REQUIRED');
+  ensure(Array.isArray(movableBlockIds) && movableBlockIds.length > 0 &&
+    movableBlockIds.length <= LAYOUT_OPTIMIZATION_LIMITS.movable && new Set(movableBlockIds).size === movableBlockIds.length,
+  'INVALID_OPTIMIZATION_SELECTION');
+  const selected = new Set(movableBlockIds);
+  const eligible = state.blocks.filter(block => selected.has(block.blockId))
+    .sort((a, b) => a.y - b.y || a.x - b.x || idOrder(a.blockId, b.blockId));
+  ensure(eligible.length === selected.size && eligible.every(block => !block.locked && !block.minimized &&
+    (block.subjectState ?? block.resourceState) === 'active'), 'INVALID_OPTIMIZATION_SELECTION');
+  const { gap, mode } = state.organization;
+  const planned = new Map(input.map(item => [item.id, item]));
+  for (const block of eligible) {
+    const item = planned.get(block.blockId)!;
+    const box = footprint(item);
+    const obstacles = [...planned.values()].filter(other => other.id !== item.id && intersects(bounds, footprint(other), gap));
+    if (fitsBounds(box, bounds) && obstacles.every(other => !intersects(box, footprint(other), gap))) continue;
+    if (box.width > bounds.width || box.height > bounds.height || obstacles.length > LAYOUT_OPTIMIZATION_LIMITS.visibleObstacles) continue;
+    try {
+      const candidate = mode === 'structured'
+        ? findVacantGridPlacement({ ...item, keepVisible: true, x: snapValue(item.x, STRUCTURED_GRID_SIZE),
+            y: snapValue(item.y, STRUCTURED_GRID_SIZE) }, obstacles, bounds, gap)
+        : findVacantPlacement(item, obstacles, bounds, gap);
+      if (fitsBounds(footprint(candidate), bounds)) planned.set(item.id, candidate);
+    } catch (error) {
+      if (!(error instanceof WorkspaceError) || error.code !== 'LAYOUT_SPACE_EXHAUSTED') throw error;
+    }
+  }
+  const items = [...planned.values()];
+  const unresolvedPlacementIds = eligible.map(block => planned.get(block.blockId)!).filter(item => {
+    const box = footprint(item);
+    return !fitsBounds(box, bounds) || items.some(other => other.id !== item.id && intersects(box, footprint(other), gap));
+  }).map(item => item.id);
+  return { items, unresolvedPlacementIds };
+}
 
 /** Freeform allows card/card overlap. A gesture may move its own footprint
  * around Vela, and a Vela gesture treats all stationary cards as obstacles. */
@@ -146,7 +185,10 @@ export function applyOrganizationPolicy(state: LayoutState, options: PolicyOptio
   if (options.bounds) validateBounds(options.bounds);
   const input = entries(state); let items = input, organization = updateOrganization(state.organization), guides: LayoutPreview['guides'] = [];
   let viewport = { ...state.viewport };
-  if (options.intent === 'recover') {
+  let unresolvedPlacementIds: string[] | undefined;
+  if (options.intent === 'optimize') {
+    ({ items, unresolvedPlacementIds } = optimize(state, input, options));
+  } else if (options.intent === 'recover') {
     ensure(options.bounds, 'BOUNDS_REQUIRED');
     const boxes = input.map(footprint), left = Math.min(...boxes.map(b => b.x)), top = Math.min(...boxes.map(b => b.y));
     const right = Math.max(...boxes.map(b => b.x + b.width)), bottom = Math.max(...boxes.map(b => b.y + b.height));
@@ -202,12 +244,20 @@ export function applyOrganizationPolicy(state: LayoutState, options: PolicyOptio
   const p = byId.get('system:vela')!, presence = { ...state.presence, x: p.x, y: p.y, width: p.width, height: p.height };
   const affectedPlacementIds = items.filter(p => changedGeometry(p, input.find(b => b.id === p.id)!)).map(p => p.id);
   const areas = (options.targets ?? []).map(id => byId.get(id)).filter((p): p is CollisionPlacement => !!p).map(footprint);
-  return { canonical: false, baseRevision: state.revision, blocks, presence, organization, viewport, affectedPlacementIds, guides, placementAreas: areas };
+  return { canonical: false, baseRevision: state.revision, blocks, presence, organization, viewport, affectedPlacementIds, guides,
+    placementAreas: areas, ...(unresolvedPlacementIds === undefined ? {} : { unresolvedPlacementIds }) };
 }
 
 /** Never reads/writes SQLite, revisions, provider state, editor nodes or MotionCoordinator. */
 export function previewLayout(state: LayoutState, request: LayoutPreviewRequest = {}): LayoutPreview {
   ensure(request.expectedRevision === undefined || request.expectedRevision === state.revision, 'CONFLICT');
+  if (request.intent === 'optimize') {
+    ensure(request.expectedRevision === state.revision, 'CONFLICT');
+    ensure(!request.placements && !request.presence && !request.organization && !request.viewport && !request.order && !request.structuredPreset,
+      'INVALID_OPTIMIZATION_SELECTION');
+    return applyOrganizationPolicy(state, { intent: 'optimize', bounds: request.bounds, movableBlockIds: request.movableBlockIds });
+  }
+  ensure(request.movableBlockIds === undefined, 'INVALID_OPTIMIZATION_SELECTION');
   const next = { ...state, blocks: state.blocks.map(b => ({ ...b })), presence: { ...state.presence }, organization: updateOrganization(state.organization, request.organization) };
   if (request.viewport) {
     const v = request.viewport;

@@ -218,7 +218,7 @@ function reviewPage(review, intent = "", experience = "vela", workflow) {
   const workflowScope = workflow ? `<details open><summary>Files and test command</summary><section>
     <p>Codex will propose the changes using ${escape(workflow.codex.model)}${workflow.codex.effort ? " · " + escape(workflow.codex.effort) : ""}. Aerynth will apply changes to these files and keep backups of replacements.</p>
     <ul>${workflow.files.map(file => `<li>${file.operation === "create" ? "Create" : "Edit"} <small>${escape(file.path)}</small></li>`).join("")}</ul>
-    <p>Then Aerynth will run this check in a read-only sandbox with networking disabled.</p>
+    <p>Then Aerynth will run this check in a read-only sandbox. It requests restricted networking. Effective isolation depends on the installed Windows sandbox mode.</p>
     <small>${escape(workflow.check.cwd)}</small><pre>${escape(workflow.check.argv.map(part => JSON.stringify(part)).join(" "))}</pre>
     </section></details>` : "";
   const historyLabel = review.handoff ? "Selected prior exchange" : view.historyLabel;

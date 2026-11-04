@@ -228,8 +228,8 @@ test('reviewed saved teams bind roles, reconcile concurrent reports and link the
       });
     }
     const mission = await f.core.command('missionStartReviewed', input) as MissionProjection;
-    const post = () => f.core.command('missions', { name: 'team-report', input: { id: mission.id } });
-    await assert.rejects(post(), /mission_team_report_unavailable/);
+    const post = () => f.core.command('missions', { name: 'post-report', input: { id: mission.id } });
+    await assert.rejects(post(), /mission_report_unavailable/);
     const until = performance.now() + 5000;
     while (f.requests.length < 2 && performance.now() < until) await wait(10);
     assert.equal(f.requests.length, 2, 'Both roles must dispatch before either can return');

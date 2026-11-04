@@ -588,6 +588,13 @@ export class DesktopState {
         this.workspace(a.workspaceId);
         this.engineCommand(a.workspaceId, { type: "resolveLayout" });
         break;
+      case "optimizeLayout":
+        check(s.navigation.kind === "workspace" && s.navigation.workspaceId === a.workspaceId, "workspace_changed");
+        check(a.bounds && typeof a.expectedLayoutVersion === "number" && Number.isSafeInteger(a.expectedLayoutVersion) &&
+          a.expectedLayoutVersion > 0, "optimization_review_required");
+        this.workspace(a.workspaceId);
+        this.engineCommand(a.workspaceId, { type: "optimizeLayout", movableBlockIds: a.movableBlockIds });
+        break;
       case "setOrganization":
         this.workspace(a.workspaceId);
         this.engineCommand(a.workspaceId, {

@@ -1,5 +1,6 @@
 import type {
   DesktopSnapshot,
+  Geometry,
   OrganizationMode,
   OrganizationUpdate,
   StructuredPreset,
@@ -13,6 +14,13 @@ export type WorkspaceAction =
   | "redo"
   | "resolve"
   | "bring-all";
+export interface WorkspaceOptimizationReview {
+  workspaceId: string;
+  layoutRevision: number;
+  bounds: Omit<Geometry, "z">;
+  cards: { blockId: string; from: Pick<Geometry, "x" | "y">; to: Pick<Geometry, "x" | "y"> }[];
+  unresolvedPlacementIds: string[];
+}
 export interface WorkspaceActionsOptions {
   snapshot: DesktopSnapshot;
   motion: MotionCoordinator;
@@ -39,6 +47,12 @@ export interface WorkspaceActionsOptions {
     preset: StructuredPreset,
   ): Promise<DesktopSnapshot | void>;
   previewStructuredPreset?(preset: StructuredPreset): void;
+  optimization?: {
+    limit: number;
+    preview(ids: string[]): WorkspaceOptimizationReview;
+    apply(review: WorkspaceOptimizationReview): Promise<DesktopSnapshot | void>;
+    cancel(): void;
+  };
 }
 const neutral: Pose = { x: 0, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity: 1 };
 let sequence = 0;
@@ -677,6 +691,122 @@ export function mountWorkspaceActions(
     state(gridCancel, organizationBusy());
     gridCancel.hidden = !previewOwned;
   }
+  const optimization = options.optimization;
+  const optimize = optimization ? disclosure("Optimize selected cards", "optimize", () => paintOptimization(), () => clearOptimization()) : null;
+  const selectedCards = new Set<string>();
+  const optimizationRows = new Map<string, { label: HTMLLabelElement; checkbox: HTMLInputElement; title: HTMLElement }>();
+  let optimizationReview: WorkspaceOptimizationReview | null = null;
+  let optimizationNotice = "";
+  const optimizationChoices = node("div", "aw-wa-optimize-choices");
+  optimizationChoices.setAttribute("role", "group");
+  optimizationChoices.setAttribute("aria-label", "Cards to optimize");
+  const optimizationStatus = node("p", "aw-wa-grid-notice");
+  optimizationStatus.setAttribute("role", "status");
+  const optimizationResult = node("section", "aw-wa-optimize-review");
+  const optimizationBounds = node("p", "aw-wa-grid-notice");
+  const optimizationMoves = node("ul", "aw-wa-optimize-moves");
+  optimizationResult.append(optimizationBounds, optimizationMoves);
+  const reviewOptimization = button("Preview optimization", "optimize-preview", () => {
+    if (!optimization || !selectedCards.size) return;
+    clearOptimization();
+    try {
+      optimizationReview = optimization.preview([...selectedCards]);
+      optimizationNotice = optimizationReview.cards.some(({ from, to }) => from.x !== to.x || from.y !== to.y)
+        ? "Review the proposed positions before applying."
+        : optimizationReview.unresolvedPlacementIds.length
+          ? "No selected card can move within the reviewed view."
+          : "The selected cards already fit in the reviewed view.";
+    } catch {
+      optimizationNotice = "The selected arrangement could not be previewed. Check the current layout and try again.";
+    }
+    paintOptimization();
+  });
+  const applyOptimization = button("Apply optimization", "optimize-apply", () => {
+    if (!optimization || !optimizationReview) return;
+    const review = optimizationReview;
+    const unresolved = review.unresolvedPlacementIds.length;
+    void run("optimize-apply", async () => {
+      try { return await optimization.apply(review); }
+      finally { clearOptimization(); }
+    }, unresolved
+      ? `Optimization applied. ${unresolved} selected cards still need room. Undo is available in Layout history.`
+      : "Optimization applied. Undo is available in Layout history.");
+  });
+  const cancelOptimization = button("Cancel optimization preview", "optimize-cancel", () => {
+    clearOptimization();
+    paintOptimization();
+    reviewOptimization.focus();
+  });
+  if (optimize) {
+    const actions = node("div", "aw-wa-grid-actions");
+    actions.append(reviewOptimization, applyOptimization, cancelOptimization);
+    optimize.content.append(optimizationChoices, optimizationStatus, optimizationResult, actions);
+  }
+  function clearOptimization(notice = "", releasePreview = true) {
+    const reviewed = optimizationReview;
+    optimizationReview = null;
+    optimizationNotice = notice;
+    if (reviewed && releasePreview) optimization?.cancel();
+  }
+  function paintOptimization() {
+    if (!optimize || !optimization || !optimize.open) return;
+    const busy = pending.has("optimize-apply");
+    const movable = [...workspaceBlockRows()].filter(({ block }) => !block.locked && !block.minimized);
+    const titles = new Map(movable.map(({ block, title }) => [block.id, title]));
+    if ([...selectedCards].some((id) => !titles.has(id))) {
+      for (const id of selectedCards) if (!titles.has(id)) selectedCards.delete(id);
+      clearOptimization("Card availability changed. Preview the current selection.");
+    }
+    for (const [id, row] of optimizationRows) {
+      if (titles.has(id)) continue;
+      if (doc.activeElement === row.checkbox) optimize.toggle.focus();
+      row.label.remove();
+      optimizationRows.delete(id);
+    }
+    for (const [id, title] of titles) {
+      let row = optimizationRows.get(id);
+      if (!row) {
+        const label = node("label", "aw-wa-optimize-card"), checkbox = node("input"), name = node("span");
+        checkbox.type = "checkbox";
+        checkbox.dataset.optimizeBlock = id;
+        checkbox.addEventListener("change", () => {
+          if (!optimize.open || checkbox.disabled) return;
+          if (checkbox.checked) selectedCards.add(id);
+          else selectedCards.delete(id);
+          clearOptimization();
+          paintOptimization();
+        });
+        label.append(checkbox, name);
+        optimizationChoices.append(label);
+        row = { label, checkbox, title: name };
+        optimizationRows.set(id, row);
+      }
+      if (row.title.textContent !== title) row.title.textContent = title;
+      row.checkbox.checked = selectedCards.has(id);
+      row.checkbox.disabled = busy || (!row.checkbox.checked && selectedCards.size >= optimization.limit);
+    }
+    optimizationStatus.textContent = optimizationNotice || (movable.length
+      ? `${selectedCards.size} selected · Choose up to ${optimization.limit} movable cards.`
+      : "There are no movable cards in this workspace.");
+    const review = optimizationReview;
+    optimizationResult.hidden = !review;
+    applyOptimization.hidden = cancelOptimization.hidden = !review;
+    state(reviewOptimization, !active() || !selectedCards.size || pending.size > 0);
+    state(applyOptimization, !review || pending.size > 0 || !review.cards.some(({ from, to }) => from.x !== to.x || from.y !== to.y), false, busy);
+    state(cancelOptimization, busy);
+    if (!review) return;
+    const { x, y, width, height } = review.bounds;
+    const coordinate = (value: number) => Number(value.toFixed(2));
+    optimizationBounds.textContent = `Reviewed view · Origin (${coordinate(x)}, ${coordinate(y)}) · ${coordinate(width)} × ${coordinate(height)} workspace units`;
+    optimizationMoves.replaceChildren(...review.cards.map(({ blockId, from, to }) => {
+      const changed = from.x !== to.x || from.y !== to.y;
+      const positions = changed ? `(${coordinate(from.x)}, ${coordinate(from.y)}) → (${coordinate(to.x)}, ${coordinate(to.y)})` : "Current position";
+      const unresolved = review.unresolvedPlacementIds.includes(blockId) ? " · Needs room" : "";
+      const row = node("li", "", `${titles.get(blockId) ?? blockId} · ${positions}${unresolved}`);
+      row.dataset.optimizeReviewBlock = blockId;
+      return row;
+    }));
+  }
   const destinations = node("nav", "aw-wa-destinations");
   destinations.setAttribute("aria-label", "Workspace destinations");
   for (const key of [
@@ -695,13 +825,11 @@ export function mountWorkspaceActions(
   }
   shell.append(name, modeGroup, essentials, history.wrap, find.wrap);
   if (grid) shell.append(grid.wrap);
+  if (optimize) shell.append(optimize.wrap);
   shell.append(destinations, status);
   container.append(shell);
 
-  function renderRows() {
-    if (!find.open && !rows.size) return;
-    const wanted = new Set<string>(),
-      query = search.value.trim().toLocaleLowerCase();
+  function* workspaceBlockRows() {
     for (const block of snapshot.blocks) {
       if (
         block.workspace_id !== snapshot.activeWorkspaceId ||
@@ -738,6 +866,14 @@ export function mountWorkspaceActions(
         (subject?.kind === "resource-query"
           ? "Resource view"
           : (subject?.kind ?? "View"));
+      yield { block, resource, title, kind };
+    }
+  }
+  function renderRows() {
+    if (!find.open && !rows.size) return;
+    const wanted = new Set<string>(),
+      query = search.value.trim().toLocaleLowerCase();
+    for (const { block, resource, title, kind } of workspaceBlockRows()) {
       wanted.add(block.id);
       let row = rows.get(block.id);
       if (!row) {
@@ -861,6 +997,7 @@ export function mountWorkspaceActions(
         pending.has(n.dataset.action!),
       );
     checkGrid();
+    paintOptimization();
     renderRows();
     showStatus();
   }
@@ -876,6 +1013,14 @@ export function mountWorkspaceActions(
       return;
     if (grid?.open && next.activeWorkspaceId !== snapshot.activeWorkspaceId)
       cancelPreview();
+    if (next.activeWorkspaceId !== snapshot.activeWorkspaceId) {
+      selectedCards.clear();
+      clearOptimization();
+    } else if (optimizationReview && (next.layoutVersion !== optimizationReview.layoutRevision ||
+      next.viewport?.x !== snapshot.viewport?.x || next.viewport?.y !== snapshot.viewport?.y ||
+      next.viewport?.zoom !== snapshot.viewport?.zoom)) {
+      clearOptimization("The layout or view changed. Preview the selection again.");
+    }
     snapshot = next;
     paint();
     frame();
@@ -897,10 +1042,11 @@ export function mountWorkspaceActions(
     history.paint();
     find.paint();
     grid?.paint();
+    optimize?.paint();
   }
   listen(shell, "keydown", (event) => {
     if ((event as KeyboardEvent).key !== "Escape") return;
-    const open = [grid, find, history].find((d) => d?.open);
+    const open = [optimize, grid, find, history].find((d) => d?.open);
     if (!open) return;
     event.preventDefault();
     event.stopPropagation();
@@ -911,10 +1057,20 @@ export function mountWorkspaceActions(
   return {
     update,
     frame,
+    invalidateOptimization() {
+      if (!optimizationReview) return;
+      clearOptimization("The layout or view changed. Preview the selection again.", false);
+      paintOptimization();
+    },
+    closeOptimization() {
+      clearOptimization();
+      paintOptimization();
+    },
     dispose() {
       if (disposed) return;
       disposed = true;
       if (grid?.open) cancelPreview();
+      clearOptimization();
       for (const group of listeners.values())
         for (const remove of group) remove();
       listeners.clear();

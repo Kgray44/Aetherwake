@@ -176,7 +176,9 @@ export class MissionService {
       if (existing) {
         const value = this.decode(existing.json);
         this.requireAccess(value, plan.scope);
-        check(existing.request_digest === fingerprint, 'mission_request_conflict');
+        const { originConversationId: _origin, ...legacyPlan } = plan;
+        check(existing.request_digest === fingerprint ||
+          value.originConversationId === undefined && existing.request_digest === digest(legacyPlan), 'mission_request_conflict');
         return value;
       }
       this.capacity();
@@ -452,6 +454,7 @@ export class MissionService {
 
   private start(m: Mission, task: MissionTask, executor: MissionExecutor) {
     const id = randomUUID();
+    const compilingAt = performance.now();
     const abort = new AbortController();
     const dependencies = task.dependencies.map(dep => taskOf(m, dep)!.attempts.at(-1)!.evidence!);
     const { attempts: _attempts, queuedAt: _queued, state: _state, priority: _priority, detail: _detail, ...plan } = task;
@@ -481,10 +484,14 @@ export class MissionService {
       this.wake();
       return;
     }
+    const timing: NonNullable<MissionAttempt['timing']> = {
+      queueMs: Math.max(0, Date.now() - Date.parse(task.queuedAt)),
+      contextPreparationMs: performance.now() - compilingAt,
+    };
     this.update(m.id, current => {
       const value = taskOf(current, task.id)!;
       check(value.state === 'queued' && value.attempts.length < value.maxAttempts, 'mission_dispatch_denied');
-      value.state = 'running'; value.attempts.push({ id, executor: task.executor, admittedAt: stamp(), context: context.context.manifest });
+      value.state = 'running'; value.attempts.push({ id, executor: task.executor, admittedAt: stamp(), context: context.context.manifest, timing });
       this.event(current, { kind: 'started', taskId: task.id, attemptId: id });
     });
     const timer = setTimeout(() => this.abort(id, 'timeout'), task.timeoutMs).unref();
@@ -507,10 +514,14 @@ export class MissionService {
               this.contextIsCurrent(current, parent, attempt, checked), 'mission_dependency_context_changed');
           }
         };
+        const recheckingAt = performance.now();
         try { validateInputs(); }
         catch (error) { reportedOutcome = 'blocked'; detail = 'mission_context_unavailable'; throw error; }
-        const result = await executor.run(context);
+        finally { timing.contextPreparationMs += performance.now() - recheckingAt; }
+        const executingAt = performance.now();
+        const result = await executor.run(context).finally(() => { timing.executionMs = performance.now() - executingAt; });
         telemetry = result.telemetry;
+        const verifyingAt = performance.now();
         try { validateInputs(); }
         catch (error) { reportedOutcome = executor.replaySafe ? 'blocked' : 'uncertain'; detail = 'mission_context_changed_during_execution'; throw error; }
         check(bounded(result.source, 128) && JSON.stringify(result.value) !== undefined &&
@@ -520,6 +531,7 @@ export class MissionService {
         const verdict = executor.verify(structuredClone(evidence), context);
         check(typeof verdict.passed === 'boolean' && bounded(verdict.detail, 160), 'invalid_mission_verification');
         verification = { ...verdict, criterion: task.criterion, evidenceIds: [evidence.id] };
+        timing.verificationMs = performance.now() - verifyingAt;
         detail = verdict.detail;
       } catch { detail ??= 'executor_failed_or_evidence_invalid'; }
       const cancellation = this.running.get(id)?.cancellation;
@@ -533,6 +545,7 @@ export class MissionService {
         check(attempt.id === id, 'mission_attempt_changed');
         value.state = outcome; value.detail = cancellation ?? (!authorized ? 'mission_scope_revoked' : detail);
         attempt.outcome = outcome; attempt.finishedAt = stamp();
+        attempt.timing = timing;
         if (authorized) attempt.telemetry = telemetry ??
           (executor.lane === 'native' ? { durationMs: performance.now() - started, providerCalls: 0 } : undefined);
         if (authorized && !cancellation && evidence) attempt.evidence = evidence;

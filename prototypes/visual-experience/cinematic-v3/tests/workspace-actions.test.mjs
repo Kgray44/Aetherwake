@@ -516,6 +516,50 @@ test("Grid drafts bind a revision, retain fields on canonical conflict and requi
   }
 });
 
+test("Selected optimization reviews only movable cards and requires a fresh preview after camera changes", async () => {
+  const snapshot = initial();
+  const block = snapshot.blocks[0];
+  snapshot.blocks.push({ ...block, id: "synthetic:locked", locked: true });
+  const previews = [], applies = [];
+  let cancellations = 0;
+  const f = setup({ optimization: {
+    limit: 16,
+    preview(ids) {
+      const review = {
+        workspaceId: snapshot.activeWorkspaceId, layoutRevision: 1,
+        bounds: { x: 0, y: 0, width: 800, height: 400 },
+        cards: ids.map(blockId => ({ blockId, from: { x: 20, y: 30 }, to: { x: 40, y: 50 } })),
+        unresolvedPlacementIds: [],
+      };
+      previews.push(review);
+      return review;
+    },
+    apply: async review => { applies.push(review); },
+    cancel: () => { cancellations++; },
+  } }, snapshot);
+  try {
+    f.get("optimize-toggle").fire("click");
+    assert.equal(f.get("optimize-preview").disabled, true);
+    assert.equal(f.dom.root.querySelector('[data-optimize-block="synthetic:locked"]'), null);
+    const selected = f.dom.root.querySelector('[data-optimize-block="synthetic:block"]');
+    selected.checked = true;
+    selected.fire("change");
+    f.get("optimize-preview").fire("click");
+    assert.equal(previews.length, 1);
+    assert.match(f.dom.root.querySelector('[data-optimize-review-block="synthetic:block"]').textContent, /20, 30.*40, 50/);
+    assert.equal(f.get("optimize-apply").disabled, false);
+    f.view.update({ ...snapshot, revision: 2, viewport: { ...snapshot.viewport, zoom: 0.9 } });
+    assert.equal(cancellations, 1);
+    assert.equal(f.get("optimize-apply").disabled, true);
+    f.get("optimize-apply").fire("click");
+    assert.equal(applies.length, 0);
+    f.get("optimize-preview").fire("click");
+    f.get("optimize-apply").fire("click");
+    await until(() => applies.length === 1 && f.get("optimize-apply").hidden);
+    assert.equal(applies[0], previews[1]);
+  } finally { f.cleanup(); }
+});
+
 test("Grid completion preserves edits typed while awaiting the canonical commit and advances only its verified own revision", async () => {
   let complete;
   const commits = [],

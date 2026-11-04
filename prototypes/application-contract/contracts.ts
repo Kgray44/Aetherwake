@@ -244,6 +244,7 @@ type DesktopAction =
       };
     }
   | { type: "resolveLayout"; workspaceId: string }
+  | { type: "optimizeLayout"; workspaceId: string; movableBlockIds: string[] }
   | {
       type: "setOrganization";
       workspaceId: string;

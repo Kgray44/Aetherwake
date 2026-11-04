@@ -320,7 +320,9 @@ export class WorkspaceEngine {
     this.writeOrganization(workspaceId, { ...target.organization, revision: oldOrganization.revision + 1 });
     this.kernel.saveLayout(workspaceId, target.organization.mode === 'structured' ? 'structured' : 'freeform', this.viewport(target.viewport), [], revision);
   }
-  private resolve(workspaceId: string, options: PolicyOptions, initialOrganizationRevision: number): { changed: string[]; viewport: Viewport } {
+  private resolve(workspaceId: string, options: PolicyOptions, initialOrganizationRevision: number): {
+    changed: string[]; viewport: Viewport; unresolvedPlacementIds?: string[];
+  } {
     const state = this.project(workspaceId), presence = state.presence, blocks = state.blocks;
     const result = applyOrganizationPolicy(state, options);
     const resolved = [...result.blocks.map(b => ({ ...b, id: b.blockId })), result.presence];
@@ -338,7 +340,7 @@ export class WorkspaceEngine {
     }
     if (this.organizationChanged(state.organization, result.organization))
       this.writeOrganization(workspaceId, { ...result.organization, revision: Math.max(state.organization.revision, initialOrganizationRevision + 1) });
-    return { changed, viewport: result.viewport };
+    return { changed, viewport: result.viewport, unresolvedPlacementIds: result.unresolvedPlacementIds };
   }
   execute(command: Command): CommandResult {
     ensure(command && text(command.commandId) && text(command.workspaceId));
@@ -424,6 +426,7 @@ export class WorkspaceEngine {
           if (next.width !== state.presence.width || next.height !== state.presence.height) resizeIds.push(next.id); break;
         }
         case 'resolveLayout': break;
+        case 'optimizeLayout': policy.intent = 'optimize'; policy.movableBlockIds = command.movableBlockIds; break;
         case 'setOrganization': {
           ensure(command.expectedOrganizationRevision === undefined || command.expectedOrganizationRevision === state.organization.revision, 'CONFLICT');
           const next = updateOrganization(state.organization, command.organization);
@@ -472,21 +475,23 @@ export class WorkspaceEngine {
         default: throw new WorkspaceError('UNKNOWN_COMMAND');
       }
       policy.targets = targets; policy.resizeIds = resizeIds; policy.intent ??= resizeIds.length ? 'resize' : targets.length ? 'move' : 'resolve';
-      const resolve = ['createBlock', 'attachResource', 'attachSubject', 'duplicateBlock', 'moveBlock', 'resizeBlock', 'setBlockShape', 'setBlockPresentation', 'setPresence', 'saveLayout', 'applyPreset', 'resolveLayout', 'restoreCheckpoint', 'setOrganization', 'applyStructuredPreset', 'reorderPlacements', 'bringAllIntoView'].includes(command.type);
+      const resolve = ['createBlock', 'attachResource', 'attachSubject', 'duplicateBlock', 'moveBlock', 'resizeBlock', 'setBlockShape', 'setBlockPresentation', 'setPresence', 'saveLayout', 'applyPreset', 'resolveLayout', 'optimizeLayout', 'restoreCheckpoint', 'setOrganization', 'applyStructuredPreset', 'reorderPlacements', 'bringAllIntoView'].includes(command.type);
       // Fluid's nearest-free search already reserved every existing footprint.
       // A second pass would treat a valid overflow placement like a drag and
       // pull it into bounds by moving cards the user didn't touch.
       const fluidVacancy = state.organization.mode === 'fluid' && 'placement' in command && command.placement === 'nearest-free';
-      const resolved = resolve && !fluidVacancy ? this.resolve(workspaceId, { ...policy, before: state }, state.organization.revision) : { changed: [], viewport: state.viewport };
+      const resolved = resolve && !fluidVacancy ? this.resolve(workspaceId, { ...policy, before: state }, state.organization.revision) :
+        { changed: [], viewport: state.viewport, unresolvedPlacementIds: undefined };
       const rearrangedPlacementIds = resolved.changed;
-      const noOp = ['resolveLayout', 'setOrganization', 'bringAllIntoView', 'reorderPlacements', 'setBlockMinimized'].includes(command.type) && hash(before) === hash(this.snapshot(workspaceId)) && hash(state.viewport) === hash(resolved.viewport);
+      const noOp = ['resolveLayout', 'optimizeLayout', 'setOrganization', 'bringAllIntoView', 'reorderPlacements', 'setBlockMinimized'].includes(command.type) && hash(before) === hash(this.snapshot(workspaceId)) && hash(state.viewport) === hash(resolved.viewport);
       if (!noOp && this.kernel.openWorkspace(workspaceId).layout.version === state.revision)
         this.kernel.saveLayout(workspaceId, this.readOrganization(workspaceId).mode === 'structured' ? 'structured' : 'freeform', resolved.viewport, [], state.revision);
       if (!noOp && !['undoLayout', 'redoLayout', 'checkpoint'].includes(command.type)) {
         const after = this.snapshot(workspaceId);
         h.undo.push({ before, after }); h.redo = []; this.writeHistory(workspaceId, h);
       }
-      const result: CommandResult = { ...this.project(workspaceId), ...(checkpointId ? { checkpointId } : {}) };
+      const result: CommandResult = { ...this.project(workspaceId), ...(checkpointId ? { checkpointId } : {}),
+        ...(resolved.unresolvedPlacementIds === undefined ? {} : { unresolvedPlacementIds: resolved.unresolvedPlacementIds }) };
       this.db.prepare('INSERT INTO workspace_engine_receipts VALUES(?,?,?)').run(command.commandId, fingerprint, JSON.stringify(result));
       // Retried commands outside this bounded receipt window fail revision checks.
       this.db.exec('DELETE FROM workspace_engine_receipts WHERE rowid NOT IN (SELECT rowid FROM workspace_engine_receipts ORDER BY rowid DESC LIMIT 256)');

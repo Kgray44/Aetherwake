@@ -39,6 +39,7 @@ export type Preset = 'freeform' | 'focus' | 'columns' | 'research' | 'developmen
 export type NewResource = { kind: 'note'; title: string; content: string } | { kind: 'conversation'; title: string };
 export type BlockTemplate = { id: string; title: string; presentation: Partial<Presentation> };
 export type PlacementUpdate = { blockId: string; expectedVersion: number; presentation: Partial<Presentation> };
+export const LAYOUT_OPTIMIZATION_LIMITS = { movable: 16, visibleObstacles: 64 } as const;
 type Action =
   | { type: 'attachResource'; resourceId: string; presentation?: Partial<Presentation>; templateId?: string; placement?: 'nearest-free' }
   | { type: 'attachSubject'; subject: NonResourceSubjectRef; presentation?: Partial<Presentation>; templateId?: string; placement?: 'nearest-free' }
@@ -54,6 +55,7 @@ type Action =
   | { type: 'setBlockPresentation'; blockId: string; patch: Partial<Presentation> }
   | { type: 'setPresence'; expectedVersion: number; presentation: Partial<Geometry & { locked: boolean }> }
   | { type: 'resolveLayout' }
+  | { type: 'optimizeLayout'; movableBlockIds: string[] }
   | { type: 'setOrganization'; organization: OrganizationUpdate; expectedOrganizationRevision?: number }
   | { type: 'applyStructuredPreset'; preset: StructuredPreset }
   | { type: 'reorderPlacements'; order: string[] }
@@ -65,18 +67,19 @@ type Action =
   | { type: 'checkpoint'; name: string }
   | { type: 'restoreCheckpoint'; checkpointId: string };
 export type Command = Action & { commandId: string; workspaceId: string; expectedRevision: number; bounds?: Geometry };
-export type CommandResult = WorkspaceProjection & { checkpointId?: string };
-export type LayoutIntent = 'move' | 'resize' | 'reorder' | 'mode' | 'resolve' | 'recover' | 'view';
+export type CommandResult = WorkspaceProjection & { checkpointId?: string; unresolvedPlacementIds?: string[] };
+export type LayoutIntent = 'move' | 'resize' | 'reorder' | 'mode' | 'resolve' | 'recover' | 'view' | 'optimize';
 export type LayoutState = Pick<WorkspaceProjection, 'revision' | 'blocks' | 'presence' | 'organization' | 'viewport'>;
 export type LayoutPreviewRequest = {
   expectedRevision?: number; placements?: PlacementUpdate[];
   presence?: { expectedVersion: number; presentation: Partial<Geometry & { locked: boolean }> };
   organization?: OrganizationUpdate; bounds?: Geometry; viewport?: Viewport; intent?: LayoutIntent;
-  order?: string[]; structuredPreset?: StructuredPreset;
+  order?: string[]; structuredPreset?: StructuredPreset; movableBlockIds?: string[];
 };
 export type LayoutPreview = {
   canonical: false; baseRevision: number; blocks: BlockProjection[]; presence: PresencePlacement;
   organization: WorkspaceOrganization; viewport: Viewport; affectedPlacementIds: string[];
+  unresolvedPlacementIds?: string[];
   guides: { axis: 'x' | 'y'; position: number; from: number; to: number }[]; placementAreas: Geometry[];
 };
 export interface WorkspacePort {

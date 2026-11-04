@@ -16,6 +16,7 @@ import type {
   LayoutPreview,
   LayoutPreviewRequest,
 } from "../../../workspace-engine/contracts.mts";
+import { LAYOUT_OPTIMIZATION_LIMITS } from "../../../workspace-engine/contracts.mts";
 import {
   layoutState,
   previewBlock as desktopPreviewBlock,
@@ -99,7 +100,7 @@ import { createResourceSurface } from "./resource-surface.ts";
 import { mountProviderConnections } from "./provider-connections.ts";
 import { mountEnvironmentNavigator } from "./environment-navigator.ts";
 import "./environment-navigator.css";
-import { mountWorkspaceActions } from "./workspace-actions.ts";
+import { mountWorkspaceActions, type WorkspaceOptimizationReview } from "./workspace-actions.ts";
 import "./workspace-actions.css";
 import { createClipboardClient } from "../../../application-contract/clipboard.ts";
 import { createControlMotion } from "./control-motion.ts";
@@ -605,6 +606,7 @@ export function installApplication(hooks: Hooks) {
   let preview: LayoutPreview | undefined;
   let previewRequest: LayoutPreviewRequest | undefined;
   let previewCommitting = false;
+  let optimizationReview: { review: WorkspaceOptimizationReview; viewStamp: string } | null = null;
   let cancelResize: (() => void) | undefined;
   const activeBlocks = new Map<string, boolean>();
   const directBindings = new Map<
@@ -887,7 +889,7 @@ export function installApplication(hooks: Hooks) {
   let suppressPresenceClick = false;
   let overviewBarBottom = 201;
   function camera() {
-    const viewport = preview?.viewport;
+    const viewport = optimizationReview ? undefined : preview?.viewport;
     return viewport
       ? {
           zoom: viewport.zoom,
@@ -960,6 +962,12 @@ export function installApplication(hooks: Hooks) {
       width: Math.max(240, innerWidth - 40) / zoom,
       height: Math.max(260, innerHeight - 320) / zoom,
     };
+  }
+  function optimizationViewStamp() {
+    return JSON.stringify([state?.activeWorkspaceId, state?.layoutVersion, zoom, offset.x, offset.y, innerWidth, innerHeight]);
+  }
+  function checkOptimizationView() {
+    if (optimizationReview && optimizationReview.viewStamp !== optimizationViewStamp()) cancelPreview();
   }
   function workspaceDropPoint(clientX: number, clientY: number) {
     if (state?.navigation.kind !== "workspace" || !state.activeWorkspaceId)
@@ -1268,6 +1276,7 @@ export function installApplication(hooks: Hooks) {
       x: -(next.viewport?.x ?? 0) * zoom,
       y: -(next.viewport?.y ?? 0) * zoom,
     };
+    checkOptimizationView();
     if (changed) {
       hooks.home();
     }
@@ -1566,6 +1575,7 @@ export function installApplication(hooks: Hooks) {
   }
   function queuePreview(request: LayoutPreviewRequest) {
     if (!state || previewCommitting) return;
+    if (optimizationReview) cancelPreview();
     previewBase ??= layoutState(state);
     if (!previewBase) return;
     previewRequest = {
@@ -1580,34 +1590,37 @@ export function installApplication(hooks: Hooks) {
     const request = previewRequest;
     previewRequest = undefined;
     try {
-      preview = previewLayout(previewBase, request);
-      const { zoom, offset } = camera();
-      const gridOnly =
-        preview.organization.mode === "structured" &&
-        ["mode", "move", "resize"].includes(request.intent ?? "");
-      const guides = (gridOnly ? [] : preview.guides).map(
-        (g) =>
-          `<i class="alignment-guide" style="left:${(g.axis === "x" ? g.position : g.from) * zoom + offset.x}px;top:${(g.axis === "y" ? g.position : g.from) * zoom + offset.y}px;width:${g.axis === "x" ? 1 : (g.to - g.from) * zoom}px;height:${g.axis === "y" ? 1 : (g.to - g.from) * zoom}px"></i>`,
-      );
-      const areas = preview.placementAreas.map(
-        (a) =>
-          `<i class="placement-area" style="left:${a.x * zoom + offset.x}px;top:${a.y * zoom + offset.y}px;width:${a.width * zoom}px;height:${a.height * zoom}px"></i>`,
-      );
-      previewGuides.innerHTML = [...guides, ...areas].join("");
-      hooks.motion.target(
-        previewGuideId,
-        { ...previewGuidePose, opacity: guides.length || areas.length ? 1 : 0 },
-        "placement guide reveal",
-      );
-      document.body.dataset.layoutPreview = preview.organization.mode;
-      hooks.layout();
+      presentPreview(previewLayout(previewBase, request), request.intent);
     } catch (error) {
       hooks.status(
         `Placement preview unavailable: ${(error as Error).message}. Saved layout retained.`,
       );
     }
   }
-  function cancelPreview() {
+  function presentPreview(result: LayoutPreview, intent?: LayoutPreviewRequest["intent"]) {
+    preview = result;
+    const { zoom, offset } = camera();
+    const gridOnly = result.organization.mode === "structured" && ["mode", "move", "resize"].includes(intent ?? "");
+    const guides = (gridOnly ? [] : result.guides).map(
+      (g) =>
+        `<i class="alignment-guide" style="left:${(g.axis === "x" ? g.position : g.from) * zoom + offset.x}px;top:${(g.axis === "y" ? g.position : g.from) * zoom + offset.y}px;width:${g.axis === "x" ? 1 : (g.to - g.from) * zoom}px;height:${g.axis === "y" ? 1 : (g.to - g.from) * zoom}px"></i>`,
+    );
+    const areas = result.placementAreas.map(
+      (a) =>
+        `<i class="placement-area" style="left:${a.x * zoom + offset.x}px;top:${a.y * zoom + offset.y}px;width:${a.width * zoom}px;height:${a.height * zoom}px"></i>`,
+    );
+    previewGuides.innerHTML = [...guides, ...areas].join("");
+    hooks.motion.target(
+      previewGuideId,
+      { ...previewGuidePose, opacity: guides.length || areas.length ? 1 : 0 },
+      "placement guide reveal",
+    );
+    document.body.dataset.layoutPreview = result.organization.mode;
+    hooks.layout();
+  }
+  function cancelPreview(invalidateOptimization = true) {
+    const hadOptimization = !!optimizationReview;
+    optimizationReview = null;
     previewRequest = undefined;
     preview = undefined;
     previewBase = undefined;
@@ -1617,6 +1630,7 @@ export function installApplication(hooks: Hooks) {
       "placement guide dismissal",
     );
     delete document.body.dataset.layoutPreview;
+    if (hadOptimization && invalidateOptimization) workspaceActions?.invalidateOptimization();
     hooks.layout();
     hooks.wake();
   }
@@ -1634,6 +1648,52 @@ export function installApplication(hooks: Hooks) {
     return saving.finally(() => {
       previewCommitting = false;
       cancelPreview();
+    });
+  }
+  function previewOptimization(movableBlockIds: string[]): WorkspaceOptimizationReview {
+    if (!state?.activeWorkspaceId || state.navigation.kind !== "workspace" || previewCommitting || presenceDrag || directGestures.size)
+      throw Error("workspace_layout_unavailable");
+    const base = layoutState(state);
+    if (!base) throw Error("workspace_layout_unavailable");
+    const bounds = viewBounds();
+    const result = previewLayout(base, { intent: "optimize", movableBlockIds, expectedRevision: base.revision, bounds });
+    const review: WorkspaceOptimizationReview = {
+      workspaceId: state.activeWorkspaceId,
+      layoutRevision: base.revision,
+      bounds,
+      cards: movableBlockIds.map((blockId) => {
+        const from = base.blocks.find((block) => block.blockId === blockId);
+        const to = result.blocks.find((block) => block.blockId === blockId);
+        if (!from || !to) throw Error("workspace_card_unavailable");
+        return { blockId, from: { x: from.x, y: from.y }, to: { x: to.x, y: to.y } };
+      }),
+      unresolvedPlacementIds: result.unresolvedPlacementIds ?? [],
+    };
+    if (previewBase) cancelPreview(false);
+    optimizationReview = { review, viewStamp: optimizationViewStamp() };
+    previewBase = base;
+    presentPreview(result, "optimize");
+    return review;
+  }
+  function applyOptimization(review: WorkspaceOptimizationReview) {
+    return enqueueResult(async () => {
+      await flush();
+      if (previewCommitting || state?.navigation.kind !== "workspace" || optimizationReview?.review !== review ||
+        optimizationReview.viewStamp !== optimizationViewStamp())
+        throw Error("The layout or view changed. Preview the selection again.");
+      previewCommitting = true;
+      try {
+        return await command({
+          type: "optimizeLayout",
+          workspaceId: review.workspaceId,
+          expectedLayoutVersion: review.layoutRevision,
+          movableBlockIds: review.cards.map(({ blockId }) => blockId),
+          bounds: review.bounds,
+        });
+      } finally {
+        previewCommitting = false;
+        if (optimizationReview?.review === review) cancelPreview(false);
+      }
     });
   }
   dialog.addEventListener("close", () => {
@@ -3148,6 +3208,12 @@ export function installApplication(hooks: Hooks) {
       snapshot: state,
       motion: hooks.motion,
       wake: hooks.wake,
+      optimization: {
+        limit: LAYOUT_OPTIMIZATION_LIMITS.movable,
+        preview: previewOptimization,
+        apply: applyOptimization,
+        cancel: () => { if (optimizationReview) cancelPreview(false); },
+      },
       act: async (action) => {
         if (!state?.activeWorkspaceId) throw Error("workspace_unavailable");
         const workspaceId = state.activeWorkspaceId;
@@ -3238,6 +3304,7 @@ export function installApplication(hooks: Hooks) {
         ) ?? el("#layout-manager"),
       content,
       label: "Workspace",
+      onClose: () => workspaceActions?.closeOptimization(),
       minSize: { width: 340, height: 240 },
       maxSize: { width: 520, height: 700 },
       placement: "bottom",
@@ -4994,6 +5061,7 @@ export function installApplication(hooks: Hooks) {
       for (const picker of streamPickers) picker.frame();
       blockLibrary?.view.frame();
       environmentNavigator?.frame();
+      checkOptimizationView();
       workspaceActions?.frame();
       agentLibrary?.frame();
       conversationManager?.frame();

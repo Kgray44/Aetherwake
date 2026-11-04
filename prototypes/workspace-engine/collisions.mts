@@ -15,7 +15,7 @@ export function intersects(a: Geometry, b: Geometry, gap = collisionGap): boolea
   return a.x < b.x + b.width + gap - epsilon && a.x + a.width + gap > b.x + epsilon
     && a.y < b.y + b.height + gap - epsilon && a.y + a.height + gap > b.y + epsilon;
 }
-const fits = (p: Geometry, bounds: Geometry) => p.x >= bounds.x - epsilon && p.y >= bounds.y - epsilon
+export const fitsBounds = (p: Geometry, bounds: Geometry) => p.x >= bounds.x - epsilon && p.y >= bounds.y - epsilon
   && p.x + p.width <= bounds.x + bounds.width + epsilon && p.y + p.height <= bounds.y + bounds.height + epsilon;
 export function validateBounds(bounds: Geometry) {
   ensure(bounds && Object.values(bounds).every(Number.isFinite));
@@ -27,7 +27,7 @@ export function validateBounds(bounds: Geometry) {
 function nearest(p: CollisionPlacement, occupied: Geometry[], bounds: Geometry | undefined, gap: number, protectedFootprints: Geometry[] = []): CollisionPlacement {
   const box = footprint(p), dx = box.x - p.x, dy = box.y - p.y;
   const free = (b: Geometry) => !occupied.some(other => intersects(b, other, gap));
-  if (free(box) && (!bounds || fits(box, bounds))) return { ...p };
+  if (free(box) && (!bounds || fitsBounds(box, bounds))) return { ...p };
   const xs = new Set([box.x]), ys = new Set([box.y]);
   for (const b of occupied) {
     xs.add(b.x - box.width - gap); xs.add(b.x + b.width + gap);
@@ -45,7 +45,7 @@ function nearest(p: CollisionPlacement, occupied: Geometry[], bounds: Geometry |
   for (const x of xs) for (const y of ys) {
     if (Math.abs(x - dx) > limits.coordinate || Math.abs(y - dy) > limits.coordinate) continue;
     const b = { ...box, x, y };
-    candidates.push({ x, y, distance: (x - box.x) ** 2 + (y - box.y) ** 2, inside: !bounds || fits(b, bounds), disruption: protectedFootprints.filter(other => intersects(b, other, gap)).length });
+    candidates.push({ x, y, distance: (x - box.x) ** 2 + (y - box.y) ** 2, inside: !bounds || fitsBounds(b, bounds), disruption: protectedFootprints.filter(other => intersects(b, other, gap)).length });
   }
   // Keep a displaced card visible whenever a valid in-bounds candidate exists.
   candidates.sort((a, b) => Number(b.inside) - Number(a.inside) || a.disruption - b.disruption || a.distance - b.distance || a.y - b.y || a.x - b.x);
@@ -87,7 +87,7 @@ export function resolveCollisions(placements: CollisionPlacement[], targetIds: s
     const next = !priorities.has(p.id) && !(bounds && p.keepVisible) && !occupied.some(other => intersects(original, other, gap)) ? { ...p } : nearest(p, occupied, bounds, gap, protectedFootprints);
     result.set(p.id, next); occupied.push(footprint(next));
   }
-  if (bounds && options.yieldVisible && placements.some(p => p.keepVisible && !p.locked && p.width <= bounds.width && p.height <= bounds.height && !fits(footprint(result.get(p.id)!), bounds)))
+  if (bounds && options.yieldVisible && placements.some(p => p.keepVisible && !p.locked && p.width <= bounds.width && p.height <= bounds.height && !fitsBounds(footprint(result.get(p.id)!), bounds)))
     return resolveCollisions(placements, targetIds, bounds, { ...options, yieldVisible: false });
   return placements.map(p => result.get(p.id)!);
 }

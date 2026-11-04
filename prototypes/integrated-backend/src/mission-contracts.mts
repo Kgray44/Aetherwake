@@ -83,6 +83,7 @@ export interface MissionAttempt {
   evidence?: MissionEvidence;
   verification?: MissionVerification;
   context?: MissionContextPackage['manifest'];
+  timing?: { queueMs: number; contextPreparationMs: number; executionMs?: number; verificationMs?: number };
   telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string };
 }
 export type MissionTaskState = 'queued' | 'running' | 'cancelling' | 'verified' | 'failed' | 'blocked' | 'cancelled' | 'uncertain';
@@ -148,7 +149,7 @@ export type MissionRequest =
   | { name: 'team-library'; input: Record<string, never> }
   | { name: 'team-save'; input: MissionTeamSave }
   | { name: 'team-archive'; input: { id: string; expectedVersion: number } }
-  | { name: 'team-report'; input: { id: string } }
+  | { name: 'post-report'; input: { id: string } }
   | { name: 'workroom-resource'; input: { resourceId: string } }
   | { name: 'list'; input: Record<string, never> }
   | { name: 'read'; input: { id: string } }
@@ -198,7 +199,7 @@ export type MissionWorkroomResource = {
 
 export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomResource |
   MissionWorkroomPreview | MissionTeam | MissionTeamLibrary |
-  { kind: 'team-report'; missionId: string; messageId: string } | null;
+  { kind: 'mission-report'; missionId: string; messageId: string } | null;
 
 export interface MissionExecutionContext {
   missionId: string;

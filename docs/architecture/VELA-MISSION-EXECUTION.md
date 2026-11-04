@@ -57,8 +57,9 @@ replay after interruption or restart.
 
 The selected-tests route asks for a native file selection and displays the
 exact checkout, commit and argument vector. It uses the existing Codex App
-Server local command runner, with networking disabled and no inference. The
-worker rechecks the selected tracked files, checkout identity and sandbox
+Server local command runner with zero model inference. It requests restricted
+network access. Effective isolation depends on the installed sandbox mode.
+The worker rechecks the selected tracked files, checkout identity and sandbox
 availability at dispatch and validates the TAP result after execution. The
 profile records zero model calls for this lane.
 
@@ -119,13 +120,15 @@ and each profile version to separate hosted tasks. A local join waits for all
 verified report contracts, retains the member task, attempt and evidence IDs,
 and indexes repeated observations by normalized text. Claims and contradictions
 remain attributable to the individual reports. The user can post one durable
-link to the originating Vela chat. The link is visible only from the originating
-workspace and stays outside model history. The findings remain in the mission
-journal.
+evidence link for a verified mission to the originating Vela chat. The link
+is visible only from the originating workspace and stays outside model history.
+Evidence remains in the mission journal.
 
 The journal distinguishes native measurements, provider-reported usage and
 unknown usage. Mission metrics use recorded transitions and do not convert
-tokens into money. The native benchmark measures the same workload with one
+tokens into money. Attempt details separate queue time, context preparation,
+executor duration and verification time. Interrupted attempts can lack final
+spans. The native benchmark measures the same workload with one
 and two workers. An opt-in concurrent run samples backend process CPU, RSS
 and event-loop delay, and compares admission with and without injected
 pressure. Neither run measures cloud model or renderer performance.
@@ -143,3 +146,10 @@ linked Checklist and Timeline read task states and event rows from the
 journal. They are authorized through the exact workroom and its originating
 mission. Manual checklist entries and ordinary timeline settings retain their
 own canonical storage and controls.
+
+Workspace Actions can preview an optimization for explicitly selected movable
+cards against the current viewport. The solver preserves camera, dimensions,
+rotations and all unselected geometry. It reports cards that cannot fit and
+keeps their current positions. The review is invalidated by navigation, layout
+changes, panning, zoom or resize. Apply uses the reviewed revision and bounds
+and records one undoable layout operation.

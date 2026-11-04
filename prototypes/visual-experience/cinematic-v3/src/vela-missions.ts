@@ -119,7 +119,7 @@ export function createVelaMissionView(
   let teamLibraryOpen = false;
   let teamDraft: MissionTeamSave | null = null;
   let teamObjective = "";
-  let postedTeamReport: string | null = null;
+  let postedReport: string | null = null;
   const bytes = new TextEncoder();
   const fits = (value: string, max: number) => !!value.trim() && bytes.encode(value).length <= max;
 
@@ -157,7 +157,7 @@ export function createVelaMissionView(
       mission_team_capacity: "The team library has reached its capacity.",
       mission_team_library_unavailable: "The team library could not be loaded. Refresh to try again.",
       invalid_mission_team_objective: "Enter a mission objective within the limit shown.",
-      mission_team_report_unavailable: "The mission report link could not be posted. Check the Vela chat before trying again.",
+      mission_report_unavailable: "The mission report link could not be posted. Check the Vela chat before trying again.",
     };
     error.textContent =
       descriptions[code] ??
@@ -251,7 +251,7 @@ export function createVelaMissionView(
     error.hidden = true;
     render();
   }
-  async function teamCommand<T>(request: MissionRequest, apply: (value: MissionResponse) => T) {
+  async function scopedCommand<T>(request: MissionRequest, apply: (value: MissionResponse) => T) {
     if (commandPending || !visible || !scope) return;
     const generation = epoch;
     const focused = (doc.activeElement as HTMLElement | null)?.dataset.missionFocus;
@@ -278,7 +278,7 @@ export function createVelaMissionView(
     }
   }
   async function saveTeam(draft: MissionTeamSave) {
-    await teamCommand({ name: "team-save", input: draft }, (value) => {
+    await scopedCommand({ name: "team-save", input: draft }, (value) => {
       if (!value || !("members" in value) || !teamLibrary) throw new Error("invalid_mission_team");
       teamLibrary.teams = [...teamLibrary.teams.filter((team) => team.id !== value.id), value];
       teamDraft = {
@@ -288,7 +288,7 @@ export function createVelaMissionView(
     });
   }
   async function archiveTeam(saved: MissionTeam) {
-    await teamCommand({ name: "team-archive", input: { id: saved.id, expectedVersion: saved.version } }, (value) => {
+    await scopedCommand({ name: "team-archive", input: { id: saved.id, expectedVersion: saved.version } }, (value) => {
       if (!value || !("members" in value) || !teamLibrary || value.id !== saved.id)
         throw new Error("mission_team_not_found");
       teamLibrary.teams = teamLibrary.teams.filter((team) => team.id !== value.id);
@@ -297,7 +297,7 @@ export function createVelaMissionView(
     });
   }
   async function previewTeam(saved: MissionTeam) {
-    const result = await teamCommand({ name: "preview", input: { objective: teamObjective.trim(), teamId: saved.id } }, (value) => {
+    const result = await scopedCommand({ name: "preview", input: { objective: teamObjective.trim(), teamId: saved.id } }, (value) => {
       if (!value || !("plan" in value) || !sameScope(value.plan.scope, scope) ||
         value.plan.team?.id !== saved.id || value.plan.team.version !== saved.version)
         throw new Error("mission_preview_changed");
@@ -823,11 +823,11 @@ export function createVelaMissionView(
     }
     return null;
   }
-  function postTeamReport(id: string) {
-    void teamCommand({ name: "team-report", input: { id } }, (value) => {
-      if (!value || !("kind" in value) || value.kind !== "team-report" || value.missionId !== id)
-        throw new Error("mission_team_report_unavailable");
-      postedTeamReport = id;
+  function postReport(id: string) {
+    void scopedCommand({ name: "post-report", input: { id } }, (value) => {
+      if (!value || !("kind" in value) || value.kind !== "mission-report" || value.missionId !== id)
+        throw new Error("mission_report_unavailable");
+      postedReport = id;
     });
   }
   function renderMission(current: MissionProjection) {
@@ -842,15 +842,12 @@ export function createVelaMissionView(
         `${stateLabel[current.outcome]} · plan v${current.planRevision} · journal revision ${current.revision}`,
       ),
     );
-    if (current.team) {
-      section.append(teamLabel(current.team));
-      if (sameScope(current.scope, scope) && current.outcome === "verified" &&
-        current.tasks.some((task) => task.executor === "join.team" && task.state === "verified")) {
-        const post = button("Post report link to Vela chat", "post-team-report", () => { postTeamReport(current.id); });
-        post.disabled = commandPending || postedTeamReport === current.id;
-        section.append(post);
-        if (postedTeamReport === current.id) section.append(el("p", "vela-core-meta", "Report link posted to Vela chat."));
-      }
+    if (current.team) section.append(teamLabel(current.team));
+    if (sameScope(current.scope, scope) && current.outcome === "verified") {
+      const post = button("Post evidence link to Vela chat", "post-report", () => { postReport(current.id); });
+      post.disabled = commandPending || postedReport === current.id;
+      section.append(post);
+      if (postedReport === current.id) section.append(el("p", "vela-core-meta", "Evidence link posted to Vela chat."));
     }
     if (current.planning) section.append(el("p", "vela-core-meta",
       `Planning · ${current.planning.model} · ${Math.round(current.planning.durationMs)} ms · ${current.planning.usage?.totalTokens ?? "Unknown"} reported tokens`));
@@ -1043,6 +1040,15 @@ export function createVelaMissionView(
             receipt.append(references);
           }
         }
+        if (attempt.timing) {
+          const { queueMs, contextPreparationMs, executionMs, verificationMs } = attempt.timing;
+          receipt.append(el("p", "vela-core-meta", [
+            `Queue ${Math.round(queueMs)} ms`,
+            `Context preparation ${Math.round(contextPreparationMs)} ms`,
+            ...(executionMs === undefined ? [] : [`Executor ${Math.round(executionMs)} ms`]),
+            ...(verificationMs === undefined ? [] : [`Verification ${Math.round(verificationMs)} ms`]),
+          ].join(" · ")));
+        }
         if (attempt.telemetry) {
           const {
             durationMs,
@@ -1057,7 +1063,7 @@ export function createVelaMissionView(
               "vela-core-meta",
               `${Math.round(durationMs)} ms · ${providerCalls} provider ${providerCalls === 1 ? "call" : "calls"} · ${
                 usage
-                  ? `${usage.inputTokens} input / ${usage.outputTokens} output / ${usage.totalTokens} total tokens reported by provider`
+                  ? `${usage.inputTokens} input / ${usage.outputTokens} output / ${usage.totalTokens} total tokens reported by provider${usage.cachedInputTokens === undefined ? "" : ` · ${usage.cachedInputTokens} cached input tokens`}`
                   : "provider usage unavailable"
               }`,
             ),
@@ -1139,7 +1145,7 @@ export function createVelaMissionView(
     }
     const announcement =
       mission && !review
-        ? `Mission ${stateLabel[mission.outcome].toLowerCase()}${postedTeamReport === mission.id ? " · Report link posted to Vela chat" : ""}`
+        ? `Mission ${stateLabel[mission.outcome].toLowerCase()}${postedReport === mission.id ? " · Evidence link posted to Vela chat" : ""}`
         : "";
     if (status.textContent !== announcement) status.textContent = announcement;
     status.hidden = !announcement;
@@ -1229,7 +1235,7 @@ export function createVelaMissionView(
       teamLibrary = null;
       teamDraft = null;
       teamObjective = "";
-      postedTeamReport = null;
+      postedReport = null;
       staged.clear();
       error.hidden = true;
       render();

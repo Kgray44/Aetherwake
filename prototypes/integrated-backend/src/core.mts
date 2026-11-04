@@ -387,26 +387,24 @@ export class BackendCore {
       .map(({ id, title }) => ({ id, title }));
     return { kind: 'team-library' as const, teams, profiles };
   }
-  private postMissionTeamReport(scope: MissionScope, id: string): MissionResponse {
+  private postMissionReport(scope: MissionScope, id: string): MissionResponse {
     const mission = this.missions.read(id, scope);
-    const report = mission.tasks.find(task => task.executor === 'join.team');
-    const origin = mission.originConversationId;
-    ensure(mission.team && origin && mission.scope.workspaceId === scope.workspaceId && mission.scope.projectId === scope.projectId &&
-      mission.outcome === 'verified' && report?.state === 'verified' && report.attempts.at(-1)?.verification?.passed,
-    'mission_team_report_unavailable');
+    ensure(mission.scope.workspaceId === scope.workspaceId && mission.scope.projectId === scope.projectId &&
+      mission.outcome === 'verified', 'mission_report_unavailable');
+    const origin = mission.originConversationId ?? this.vela.ensureMissionConversation();
     this.requireVelaConversation(origin);
     return this.atomic(() => {
       const existing = this.db.prepare('SELECT message_id FROM vela_mission_report_links WHERE mission_id=?').get(id);
-      if (existing) return { kind: 'team-report', missionId: id, messageId: String(existing.message_id) };
+      if (existing) return { kind: 'mission-report', missionId: id, messageId: String(existing.message_id) };
       const message = this.appendVelaMessage(origin, {
-        role: 'assistant', source: 'vela-native', classification: 'observed', content: 'Team findings are ready in this workspace.',
+        role: 'assistant', source: 'vela-native', classification: 'observed', content: 'Mission evidence is ready in this workspace.',
         missionReport: { missionId: id, workspaceId: scope.workspaceId, projectId: scope.projectId },
       });
       this.db.prepare('INSERT INTO vela_mission_report_links VALUES(?,?)').run(id, message.id);
-      this.record('vela.mission/team-report-posted', 'observed', undefined, 'mission:team-report:' + id, {
+      this.record('vela.mission/report-posted', 'observed', undefined, 'mission:report:' + id, {
         providerId: 'aerynth-native', detached: true, correlationId: id, payload: { redacted: true },
       });
-      return { kind: 'team-report', missionId: id, messageId: message.id };
+      return { kind: 'mission-report', missionId: id, messageId: message.id };
     });
   }
   private missionSpecialistSelection(scope: MissionScope, agentProfileId?: string): Omit<NonNullable<MissionTaskPlan['specialist']>, 'role' | 'instructions'> | undefined {
@@ -634,8 +632,7 @@ export class BackendCore {
           projectCheck.projectCheck = { paths: [...approvedProjectCheck.paths], digest: approvedProjectCheck.digest };
         }
         const requestId = request.input.requestId;
-        if (plan.team) return this.missions.create(requestId, { ...plan, originConversationId: this.vela.ensureMissionConversation() });
-        return this.missions.create(requestId, plan);
+        return this.missions.create(requestId, { ...plan, originConversationId: this.vela.ensureMissionConversation() });
       }
       case 'team-library':
         ensure(!Object.keys(request.input).length, 'invalid_mission_command');
@@ -645,9 +642,9 @@ export class BackendCore {
       case 'team-archive':
         ensure(Object.keys(request.input).length === 2 && identifier(request.input.id), 'invalid_mission_command');
         return this.missionTeams.archive(request.input.id, request.input.expectedVersion, scope);
-      case 'team-report':
+      case 'post-report':
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
-        return this.postMissionTeamReport(scope, request.input.id);
+        return this.postMissionReport(scope, request.input.id);
       case 'workroom-resource': {
         const { resourceId } = request.input;
         ensure(Object.keys(request.input).length === 1 && identifier(resourceId), 'invalid_mission_command');

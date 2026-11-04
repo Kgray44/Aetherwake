@@ -129,4 +129,15 @@ test('the existing Desktop adapter preserves the workspace on Structured selecti
   assert.deepEqual(s.blocks, before.blocks); assert.deepEqual(s.viewport, before.viewport); assert.deepEqual(s.presence, before.presence); assert.deepEqual(s.resources, before.resources); assert.deepEqual(s.relationships, before.relationships);
   const card = s.blocks[0]; s = apply({ type: 'geometry', blockId: card.id, expectedVersion: card.version, placement: { x: 185, y: 451, width: card.width, height: card.height, z: card.z }, shape: card.shape });
   assert.equal(s.blocks[0].x, 192); assert.equal(s.blocks[0].y, 448); assert.deepEqual(s.resources, before.resources); assert.deepEqual(s.viewport, before.viewport); assert.deepEqual(s.presence, before.presence);
+  const review = { type: 'optimizeLayout' as const, workspaceId, movableBlockIds: [card.id],
+    expectedLayoutVersion: s.layoutVersion, bounds: { x: 700, y: 350, width: 600, height: 500 } };
+  assert.throws(() => apply({ ...review, bounds: undefined }), /optimization_review_required/);
+  assert.throws(() => apply({ ...review, expectedLayoutVersion: undefined }), /optimization_review_required/);
+  const optimized = apply(review);
+  assert.ok(optimized.blocks[0].x >= review.bounds.x);
+  assert.deepEqual(optimized.resources, s.resources);
+  assert.deepEqual(optimized.viewport, s.viewport);
+  assert.deepEqual(optimized.presence, s.presence);
+  assert.throws(() => apply(review), /CONFLICT/);
+  assert.equal(apply({ type: 'undo' }).blocks[0].x, s.blocks[0].x);
 });
