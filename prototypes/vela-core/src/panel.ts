@@ -591,7 +591,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const completedFiles = current?.fileProposals?.find(item => item.requestId === selectedRequest?.id && item.state === 'applied' && item.result?.verified && item.result.workspaceId === item.target.workspaceId && item.result.importedCount + item.result.reusedCount === item.count);
     const actionMessage = projection.kind === 'action' && actionPlan ? ({ prepared: 'Ready for your review.', approved: 'Ready to apply.', applying: 'Working…', applied: 'The result needs checking.', failed: 'That couldn’t be completed. Open details to review.', cancelled: 'Cancelled.', rejected: 'No changes made.', unknown: 'The outcome needs checking. Open details before trying again.' }[actionPlan.state]) : '';
     const signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind, content, actionMessage, missionReport, completedPlan: completedPlan?.id, fileProposal, completedFiles });
-    manifestationBody.dataset.density = content.length > 140 ? 'reading' : 'signal';
+    manifestationBody.dataset.density = facts && ['time','date','calculator'].includes(facts.kind) && content.length <= 80 ? 'signal' : 'reading';
     shell.dataset.manifestationKind = projection.kind; shell.dataset.presentationView = view(); manifestation.dataset.requestId = projection.currentRequestId ?? ''; manifestation.dataset.currentMessageId = projection.currentMessageId ?? '';
     manifestation.hidden = projection.kind === 'none' || view() === 'history' && !projection.requiredPlanIds.length;
     const route = selectedRequest?.route;
