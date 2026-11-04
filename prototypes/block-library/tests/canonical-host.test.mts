@@ -1542,9 +1542,11 @@ test("registered project/browser views have live capability states and create on
     );
   assert.deepEqual(REGISTERED_BLOCKS.map(block=>block.kind).sort(),[
     'conversation','note','research','task','task_group','checklist','agent','timeline','task_objective','clock_timer',
-    'reference','stream','file','link','project_overview','resource_browser','collection_browser',
+    'reference','stream','file','folder','link','project_overview','resource_browser','collection_browser',
   ].sort());
-  assert.equal(REGISTERED_BLOCKS.length, 17);
+  assert.equal(REGISTERED_BLOCKS.length, 18);
+  const folder=REGISTERED_BLOCKS.find(block=>block.kind==='folder')!;
+  assert.equal(folder.creation,'reference-only');assert(folder.requiredServices.includes('native-folder-access'));
   const clock=REGISTERED_BLOCKS.find(block=>block.kind==='clock_timer')!;
   assert(clock.requiredServices.includes('clock-timer-service'));
   assert.deepEqual(clock.defaultConfiguration.clockTimer,{mode:'timer'});

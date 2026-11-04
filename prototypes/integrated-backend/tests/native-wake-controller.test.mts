@@ -60,3 +60,15 @@ test('stale leases and old generation teardown cannot consume or stop a new capt
     await h.request('stop', {}); assert.equal(h.controller.state().allocatedBytes, 0);
   } finally { h.controller.dispose(); }
 });
+test('continuous handoff uses the same capture without gaps and scoped detector cleanup cannot stop voice',async()=>{
+  const h=fixture(),frames:{startSample:number;samples:Float32Array}[]=[];
+  try{
+    await h.request('arm',{generation:1});await h.pcm(0,.1);await h.pcm(1,.2);await h.request('pause',{generation:1});
+    const lease=await h.request('lease',{generation:1,keywordEndSample:640,detectedAtSample:1280}),attempt=randomUUID();
+    const prefix=h.controller.claimLive(lease.leaseRef,attempt,async frame=>{frames.push({...frame,samples:new Float32Array(frame.samples)});});
+    assert.equal(prefix.toSample,1280);await h.pcm(2,.3,'handoff');assert.equal(frames[0].startSample,prefix.samples.length);assert.ok(frames[0].samples.every(value=>value>.29));
+    await h.request('stop',{generation:1});assert.equal(h.controller.state().liveAttemptId,attempt);
+    assert.equal(h.controller.releaseLive(randomUUID()),false);assert.equal(h.controller.state().liveAttemptId,attempt);
+    assert.equal(h.controller.releaseLive(attempt),true);assert.equal(h.controller.state().liveAttemptId,null);prefix.release();
+  }finally{frames.forEach(frame=>frame.samples.fill(0));h.controller.dispose();}
+});

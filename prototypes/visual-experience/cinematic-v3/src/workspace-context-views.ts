@@ -14,6 +14,7 @@ export type ContextualResource = Readonly<{
 export type ContextualResourceSnapshot = Readonly<{
   resources: readonly ContextualResource[];
   workspaceId: string | null;
+  workspaceResourceIds?: readonly string[];
 }>;
 export interface ContextualResourcesPort {
   snapshot(): ContextualResourceSnapshot;
@@ -29,7 +30,9 @@ export interface ContextualResourcesPort {
 const PAGE_SIZE = 24;
 const categories = [
   { label: "Conversations", kinds: ["conversation"] },
-  { label: "Knowledge", kinds: ["note", "research", "reference", "document", "file", "video", "link"] },
+  { label: "Knowledge", kinds: ["note", "research", "reference", "link"] },
+  { label: "Files", kinds: ["document", "file", "video", "audio", "image"] },
+  { label: "Folders", kinds: ["folder", "directory"] },
   { label: "Planning", kinds: ["checklist", "task_objective", "task", "task_group", "timeline", "workflow"] },
   { label: "Intelligence", kinds: ["agent", "stream"] },
   { label: "Other resources", kinds: [] },
@@ -129,6 +132,11 @@ export function mountContextualResources(
     empty = node("p", "aw-context-empty", "No matching resources."),
     navigation = node("nav", "aw-context-pages"),
     position = node("span");
+  const sourceScope=node('nav','aw-context-source-scope');sourceScope.setAttribute('aria-label','Source scope');
+  let showingWorkspace=!!port.snapshot().workspaceId&&port.snapshot().workspaceResourceIds!==undefined;
+  const thisWorkspace=button('Workspace sources',()=>{showingWorkspace=true;page=0;update();});
+  const allSources=button('All sources',()=>{showingWorkspace=false;page=0;update();});
+  sourceScope.append(thisWorkspace,allSources);
   surface(section);
   section.setAttribute("aria-label", "Resource browser");
   query.type = "search";
@@ -155,10 +163,12 @@ export function mountContextualResources(
     return { disclosure, summary, count, items };
   });
   navigation.setAttribute("aria-label", "Resource results pages");
-  const createSummary = node("summary", "aw-context-control", "Create");
+  const createSummary = node("summary", "aw-context-control", "+");
+  createSummary.setAttribute('aria-label','Add sources');createSummary.title='Add sources';
+  create.dataset.resourcesAdd='true';surface(create);
   motionControl(createSummary);
   createMenu.setAttribute("role", "group");
-  createMenu.setAttribute("aria-label", "Create a standalone resource");
+  createMenu.setAttribute("aria-label", "Add sources");
   create.append(createSummary, createMenu);
   create.addEventListener("keydown", (event) => {
     if (event.key !== "Escape" || !create.open) return;
@@ -173,6 +183,7 @@ export function mountContextualResources(
   });
   const actions = (port.actions ?? []).map((action) => {
     const item = button(action.label, () => {
+      create.open=false;
       void run("Could not create the resource.", () => action.run());
     });
     item.dataset.resourceAction = action.id;
@@ -180,7 +191,6 @@ export function mountContextualResources(
     return item;
   });
   toolbar.append(query);
-  if (actions.length) toolbar.append(create);
   const previous = button("Previous", () => {
     if (!active || disposed || page === 0) return;
     page--;
@@ -193,7 +203,7 @@ export function mountContextualResources(
     update();
   });
   navigation.append(previous, position, next);
-  section.append(toolbar, status, failure, list, empty, navigation);
+  section.append(sourceScope,toolbar, status, failure, list, empty, navigation);
   root.append(section);
 
   type Row = {
@@ -262,7 +272,12 @@ export function mountContextualResources(
   function update() {
     if (!active || disposed) return;
     const snapshot = port.snapshot();
-    const result = contextualResourcePage(snapshot, committedQuery, page);
+    const supportsWorkspace=!!snapshot.workspaceId&&snapshot.workspaceResourceIds!==undefined;
+    sourceScope.hidden=!supportsWorkspace;if(!supportsWorkspace)showingWorkspace=false;
+    thisWorkspace.setAttribute('aria-pressed',String(showingWorkspace));allSources.setAttribute('aria-pressed',String(!showingWorkspace));
+    const included=new Set(snapshot.workspaceResourceIds??[]);
+    const scoped=showingWorkspace?{...snapshot,resources:snapshot.resources.filter(resource=>included.has(resource.id))}:snapshot;
+    const result = contextualResourcePage(scoped, committedQuery, page);
     page = result.page;
     const ids = new Set(result.items.map((item) => item.id));
     const focus = root.ownerDocument.activeElement;
@@ -290,7 +305,8 @@ export function mountContextualResources(
       const attachable = canAttach(snapshot, resource);
       if (!attachable && focus === row.attach) focusFallback = row.open;
       row.attach.hidden = !snapshot.workspaceId;
-      row.attach.disabled = !attachable;
+      const alreadyAdded=included.has(resource.id);row.attach.disabled = !attachable||alreadyAdded;
+      row.attach.textContent=alreadyAdded?'Added':'Add';
       row.attach.setAttribute(
         "aria-label",
         "Add " + title + " to this workspace",
@@ -299,7 +315,7 @@ export function mountContextualResources(
         ? "Add to this workspace"
         : "Workspace placement unavailable";
       row.open.setAttribute("aria-disabled", String(pending));
-      row.attach.setAttribute("aria-disabled", String(pending || !attachable));
+      row.attach.setAttribute("aria-disabled", String(pending || !attachable||alreadyAdded));
       const category = categoryIndex(resource.kind);
       const items = groups[category].items;
       const reference = items.children[counts[category]++] ?? null;
@@ -308,14 +324,14 @@ export function mountContextualResources(
     groups.forEach((group, index) => {
       const count = counts[index];
       if (!count && group.disclosure.contains(focus)) focusRetired = true;
-      group.disclosure.hidden = count === 0;
+      const sourceCategory=categories[index].label==='Files'||categories[index].label==='Folders';
+      group.disclosure.hidden = count === 0 && (!sourceCategory || !!committedQuery.trim());
       if (group.count.textContent !== String(count)) group.count.textContent = String(count);
     });
     for (const item of actions)
       item.setAttribute("aria-disabled", String(pending));
     section.setAttribute("aria-busy", String(pending));
-    const count =
-      result.total === 1 ? "1 resource" : result.total + " resources";
+    const count = showingWorkspace ? result.total+' '+(result.total===1?'source':'sources')+' in this workspace' : result.total === 1 ? "1 resource" : result.total + " resources";
     if (status.textContent !== count) status.textContent = count;
     empty.hidden = result.total !== 0;
     navigation.hidden = result.pages === 1;
@@ -349,6 +365,7 @@ export function mountContextualResources(
   query.addEventListener("input", commitQuery);
   update();
   return {
+    addMenu: actions.length?create:undefined,
     update,
     setActive(value: boolean) {
       if (disposed || value === active) return;
@@ -363,13 +380,15 @@ export function mountContextualResources(
         }
       }
     },
-    focusSearch() {
+    focusSearch(all=false) {
+      if(all){showingWorkspace=false;page=0;update();}
       if (active && !disposed) query.focus({ preventScroll: true });
     },
     dispose() {
       if (disposed) return;
       disposed = true;
       rows.clear();
+      create.remove();
       section.remove();
     },
   };

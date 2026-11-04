@@ -1452,6 +1452,7 @@ export class TemplateService {
       );
     check(
       Array.isArray(input.resources) &&
+        input.resources.length > 0 &&
         input.resources.length <= TEMPLATE_LIMITS.resources,
       "workspace_resource_limit",
     );

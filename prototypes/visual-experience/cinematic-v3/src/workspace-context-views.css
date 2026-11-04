@@ -78,6 +78,8 @@
   position: relative;
   z-index: 1;
 }
+.aw-context-source-scope { display: flex; gap: 6px; }
+.aw-context-source-scope [aria-pressed="true"] { background: #d1c6e91a; border-color: #cfbee055; }
 .aw-context-create > summary {
   display: flex;
   align-items: center;
@@ -92,6 +94,9 @@
   content: "⌄";
   color: var(--aw-control-muted, #b9c4ce);
 }
+.aw-context-create[data-resources-add] > summary { width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 22px; }
+.aw-context-create[data-resources-add] > summary::after { content: none; }
+.aw-context-create[data-resources-add] .aw-context-create-menu > .aw-context-control { text-align: start; border-radius: var(--aw-option-radius, 11px); }
 .aw-context-create-menu {
   position: absolute;
   inset-block-start: calc(100% + 6px);

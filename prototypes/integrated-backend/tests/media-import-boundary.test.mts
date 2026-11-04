@@ -12,9 +12,10 @@ test('media kinds require an actual import capability and never become empty not
     const capabilities = (await core.command('library', { name: 'capabilities', input: {} })).result as any;
     assert.equal(capabilities.kinds.file.state, 'unsupported');
     assert.equal(capabilities.kinds.link.state, 'unsupported');
+    assert.equal(capabilities.kinds.folder.state, 'unsupported');
     assert.equal(capabilities.providers.automatic.state, 'setup_required');
     const before = await core.command('snapshot', {});
-    for (const kind of ['file', 'link'] as const) {
+    for (const kind of ['file', 'link','folder'] as const) {
       await assert.rejects(core.command('desktop', { type: 'createResource', kind, title: 'Synthetic unimported media', workspaceId: null }), /media_import_required/);
     }
     assert.deepEqual(await core.command('snapshot', {}), before);

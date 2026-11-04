@@ -7,7 +7,7 @@ const origin = "https://api.weather.gov";
 export const weatherLocationFailure=(code:string)=>code==='location_os_denied'
  ? 'Windows Location access is blocked. You can change it in Windows Settings → Privacy & security → Location.'
  :code==='location_foreground_ui_required'?'Bring Aerynth to the foreground and ask again so Windows can request location access.'
- :'Windows did not provide a fresh current location. Check Windows Location settings, or explicitly ask for weather in a city.';
+ :'Windows couldn’t get a fresh location. Check Windows Location settings and try again.';
 
 async function json(url: string, signal: AbortSignal, request: typeof fetch) {
   const response = await request(url, {

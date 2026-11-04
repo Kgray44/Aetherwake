@@ -290,7 +290,7 @@ export function mountSubjectExperience(
       }
       item.resource = resource;
       item.row.dataset.resourceKind = resource.kind;
-      item.kind.textContent = ({ timeline: 'TIMELINE', task_objective: 'OBJECTIVE', clock_timer: 'CLOCK & TIMER', agent: 'AGENT', conversation: "CHAT", note: "NOTE", task: "MANUAL", task_group: "MANUAL GROUP", checklist: 'CHECKLIST', stream: "FEED", research: "NOTEBOOK", reference: "REF", file: 'FILE', link: 'LINK' } as const)[resource.kind];
+      item.kind.textContent = ({ timeline: 'TIMELINE', task_objective: 'OBJECTIVE', clock_timer: 'CLOCK & TIMER', agent: 'AGENT', conversation: "CHAT", note: "NOTE", task: "MANUAL", task_group: "MANUAL GROUP", checklist: 'CHECKLIST', stream: "FEED", research: "NOTEBOOK", reference: "REF", file: 'FILE', folder:'FOLDER', link: 'LINK' } as const)[resource.kind];
       item.kind.setAttribute('aria-label', BUILTIN_BLOCKS.find(definition => definition.kind === resource.kind)?.title ?? resource.kind);
       item.title.textContent = resource.title;
       if (options.openResource)

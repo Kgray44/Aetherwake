@@ -33,6 +33,7 @@ export const readableBody = Object.freeze({
   research: Object.freeze({ width: 192, height: 80 }),
   reference: Object.freeze({ width: 176, height: 72 }),
   file: Object.freeze({ width: 280, height: 200 }),
+  folder: Object.freeze({ width: 240, height: 120 }),
   link: Object.freeze({ width: 240, height: 96 }),
 } satisfies Record<BlockInstanceKind, { width: number; height: number }>);
 const widthMargin = 16, heightMargin = 12;

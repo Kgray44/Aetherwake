@@ -8,8 +8,11 @@ The Constitution is binding; the specialist registry remains advisory.
 
 Development includes the dedicated API, native voice, canonical timer and
 workspace flows, API specialist scheduling, and fresh native weather/battery
-answers. The open review remains the earlier checkpoint until its replacement
-passes qualification. This is not a declaration that the full program is complete.
+answers. The open review is `ca16a1fd06fee526fe74507b9fd5a716900fdbca`,
+with its existing workspace preserved. The complete 17-group regression applies
+to `43f184f431cbf4c5645c982f177ae0cdd4472c5a`; the single density-line change
+in ca16 has 50 targeted checks, a fresh build and native visual qualification.
+This is not a declaration that the full program is complete.
 
 Weather now persists the purpose permission rather than coordinates. Every
 question requests a fresh Windows fix; stale/default/IP positions are rejected.
@@ -28,9 +31,21 @@ wake activation remains blocked: no evaluated acoustic model has passed the
 quality gate, and the continuous audio handoff still requires integration.
 Synthetic research results are not human microphone or production acceptance.
 
-The shared proposal view presents four items, an expandable full list and clear
-Yes/No actions. The local document discovery/import bridge is still in progress.
-The reported empty-document plan is a confirmed failure, not a completed import.
+The development proposal view presents four items, an expandable full list and
+clear Yes/No actions, including ordinary app change reviews. Native project-doc
+discovery now prepares verified file metadata, then imports/reuses the approved
+files into the current workspace atomically. Empty workspace-from-resource
+proposals are rejected. Explicit pickers create canonical file references or one
+Folder reference; browsing a folder creates no child resources or placements.
+Resources separates Files/Folders and workspace/all-source scopes, with its add
+menu inside the panel. These changes have Core, boundary, component and 271
+block-library checks; the native picker journey and joined-source regression
+remain pending. They are not yet in the open ca16 review.
+
+Direct attachment of already-selected sources and version-bound continuation
+from prior search results remain follow-up work. Selected PDF/DOCX/image text
+context is omitted until a real extraction path exists. The reported historical
+empty-document plan is a confirmed failure, not a completed import.
 
 | Directive | Current evidence | Remaining acceptance |
 | --- | --- | --- |

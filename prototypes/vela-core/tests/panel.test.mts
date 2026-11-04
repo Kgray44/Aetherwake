@@ -104,6 +104,36 @@ test('voice remains behind its icon and typed talk starts once through the nativ
   panel.close(); assert.equal(visibility.at(-1), false); panel.dispose();
 });
 
+test('ordinary reviewed app changes use the same natural Yes or No surface and retain exact native approval', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state(), reviews: unknown[] = [], applies: string[] = [];
+  const plan: VelaPlan = {id:'plan:natural',requestId:'request:synthetic',version:1,fingerprint:'exact:native:fingerprint',summary:'Create the requested workspace',
+    steps:[{id:'create',explanation:'Create the workspace',action:{type:'createWorkspace',title:'Garden',projectId:null}}],targets:[],
+    scope:{principalId:'synthetic',policyVersion:'synthetic',resourceIds:[],projectIds:[],workspaceIds:[]},state:'prepared',createdAt:manifest.createdAt,expiresAt:manifest.createdAt,contribution:null};
+  canonical.requests=[request({state:'awaiting-review',planId:plan.id})];canonical.plans=[plan];
+  const panel=mountVelaPanel(root as unknown as HTMLElement,clientFor(async()=>canonical,{
+    review:async input=>{reviews.push(input);plan.state=input.decision==='approve'?'approved':'rejected';return plan;},
+    apply:async id=>{applies.push(id);plan.state='applied';return plan;},
+  }));
+  await settles(()=>!!named(root,'Yes, do that'));
+  assert.ok(displayed(named(root,'Yes, do that'))); assert.ok(displayed(named(root,'No')));
+  assert.equal(displayed(root.find(node=>node.dataset.planId===plan.id)!),false);
+  named(root,'Yes, do that').fire('click');await settles(()=>applies.length===1);
+  assert.deepEqual(reviews,[{planId:plan.id,fingerprint:plan.fingerprint,decision:'approve'}]);assert.deepEqual(applies,[plan.id]);
+  assert.equal(root.find(node=>node.className==='vela-mission-jobs-done'),undefined,'Missing effect receipts cannot produce a success pill');panel.dispose();
+});
+
+test('dedicated file icon selects a whole folder once for the next message without sending it automatically',async()=>{
+  const doc=new Document(),root=doc.createElement('main'),canonical=state(),picks:unknown[]=[],turns:{resourceIds:string[]}[]=[];
+  const panel=mountVelaPanel(root as unknown as HTMLElement,clientFor(async()=>canonical,{
+    pickSources:async input=>{picks.push(input);return {resources:[{id:'folder:one',kind:'folder',title:'Project docs',version:2}]};},
+    request:async input=>{turns.push(input);return request();},
+  }));
+  await settles(()=>!!named(root,'Add files or folders'));named(root,'Add files or folders').fire('click');named(root,'Choose a folder…').fire('click');
+  await settles(()=>!!named(root,'Project docs ×'));assert.deepEqual(picks,[{kind:'folder',destination:'context'}]);assert.equal(turns.length,0);
+  const composer=root.find(node=>node.tagName==='textarea')!;composer.value='Look at these sources';composer.fire('input');composer.fire('keydown',{key:'Enter'});
+  await settles(()=>turns.length===1);assert.deepEqual(turns[0].resourceIds,['folder:one']);panel.dispose();
+});
+
 test('a polite investigation uses mission admission while a simple greeting stays an ordinary turn', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(), previews: string[] = [], turns: string[] = [];
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, { request: async input => { turns.push(input.intent); return request(); } }), {

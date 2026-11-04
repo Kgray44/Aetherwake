@@ -10,6 +10,8 @@ const publicNames = new Set([
   "search",
   "native",
   "request",
+  "fileProposal",
+  "pickSources",
   "routingOptions",
   "saveRoutingSettings",
   "rateRoutingResponse",
@@ -190,6 +192,20 @@ exports.velaCommand = async ({
       : undefined;
   if (input.name !== "apply" && input.presentation !== undefined)
     throw Error("invalid_vela_presentation");
+  if(input.name==='pickSources'){
+    const value=input.input;
+    if(!value||Object.keys(value).length!==2||!['files','folder'].includes(value.kind)||!['context','workspace'].includes(value.destination))throw Error('invalid_source_picker');
+    if(!isReviewOwnerAlive(win))throw Error('native_review_owner_unavailable');
+    const desktop=await call('desktop',{type:'snapshot'}),workspace=value.destination==='workspace'?desktop.workspaces.find(item=>item.id===desktop.activeWorkspaceId):null;
+    if(value.destination==='workspace'&&!workspace)throw Error('file_proposal_workspace_required');
+    const selected=await dialog.showOpenDialog(win,{title:value.kind==='folder'?'Choose a folder':'Choose files',properties:value.kind==='folder'?['openDirectory','dontAddToRecent']:['openFile','multiSelections','dontAddToRecent']});
+    if(selected.canceled||!selected.filePaths?.length)return {resources:[]};
+    if(!isReviewOwnerAlive(win))throw Error('native_review_owner_unavailable');
+    const selection=value.kind==='folder'?{kind:'folder',path:selected.filePaths[0]}:{kind:'files',paths:selected.filePaths};
+    const result=await call('velaSourcesPickNative',{commandId:require('node:crypto').randomUUID(),selection,destination:value.destination,
+      ...(workspace?{workspaceId:workspace.id,expectedLayoutVersion:desktop.layoutVersion}:{})});
+    return result;
+  }
   if (input.name === "request") {
     const value = input.input;
     if (
@@ -220,16 +236,26 @@ exports.velaCommand = async ({
       ...(value.routingAgentId === undefined ? {} : { routingAgentId: value.routingAgentId }),
     };
     const { providerId, model, reasoningEffort, mode, budgetLimit, allowEscalation, includeRecentHistory, overrideDefaults } = value;
-    if (routeNative && !request.handoffSourceRequestId && !request.routingAgentId && !request.resourceIds.length && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
+    // The Core independently validates this intent and the selected Folder's grant.
+    const localDocuments=/^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you|I want(?: you)? to|I(?: would|'d) like(?: you)? to)\s+)*(?:add|attach|import|bring|put|load)\b[\s\S]*\b(?:docs?|documents?|files?)\b[\s\S]*\b(?:(?:this|current|the)\s+)?workspace\b/iu.test(request.intent);
+    if (routeNative && !request.handoffSourceRequestId && !request.routingAgentId && (!request.resourceIds.length||localDocuments) && (directMessageSend || mode !== "codex" && !providerId && !model && !reasoningEffort)) {
       const settings = directMessageSend
         ? Object.fromEntries(Object.entries({ providerId, mode, model, reasoningEffort, overrideDefaults, budgetLimit }).filter(([, option]) => option !== undefined))
         : {};
       const local = await stage("native-route", () => call("velaRouteNative", {
         intent: request.intent,
+        ...(request.resourceIds.length ? {resourceIds:request.resourceIds} : {}),
         ...(value.activeCard === undefined ? {} : { activeCard: value.activeCard }),
         ...(Object.keys(settings).length ? { settings } : {}),
       }));
       if (local?.matched === true) return local.request;
+      if(local?.fileDiscovery){
+        if(!isReviewOwnerAlive(win))throw Error('native_review_owner_unavailable');
+        const selected=await dialog.showOpenDialog(win,{title:local.fileDiscovery.projectName?`Choose the “${local.fileDiscovery.projectName}” project folder`:'Choose the project folder containing the documents',properties:['openDirectory','dontAddToRecent']});
+        if(selected.canceled||selected.filePaths?.length!==1)throw Error('authorization_cancelled');
+        if(!isReviewOwnerAlive(win))throw Error('native_review_owner_unavailable');
+        return stage('file-discovery',()=>call('velaFileProposalPrepareNative',{intent:request.intent,selectedDirectory:selected.filePaths[0]}));
+      }
       if (directMessageSend && local?.projectCheck) {
         return stage("project-check", () => reviewProjectCheck({ win, dialog, call, requestId: null,
           kind: local.projectCheck, intent: request.intent, settings: Object.keys(settings).length ? settings : undefined }));

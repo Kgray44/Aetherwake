@@ -177,7 +177,7 @@ export interface StreamEvent {
     clockTimer?: Pick<TimerDomainEvent, 'resourceVersion' | 'commandId' | 'timerIds' | 'expiryIds' | 'operations'>;
     api?: { maxOutputTokens?: number; callId?: string; elapsedMs?: number; enabled?: boolean; executionId?: string; bodyDigest?: string; contextDigest?: string };
     voice?: {sessionId?:string;attemptId?:string;state?:string;usageSeconds?:number;messageId?:string;delegationId?:string};
-    wake?: {phase:string;enabled:boolean;microphone:string;voice:string;detector:string;owner:string|null;sessionId:string|null;settingsVersion:number;errorCode:string|null} };
+    wake?: {phase:string;enabled:boolean;microphone:string;voice:string;detector:string;owner:string|null;sessionId:string|null;settingsVersion:number;errorCode:string|null};files?:{count:number;state:string} };
   mission?: MissionStreamEvent;
 }
 export interface HandoffReview {
@@ -284,7 +284,14 @@ export interface CommandMap {
   velaProjectCheckRun: { input: {requestId:string;reviewId:string}; output: import('./vela-file-edit.mts').VelaFileEditView };
   velaStandaloneCheckReview: { input: {intent:string;settings?:import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting;paths:string[];artifactPath?:string}; output: import('./vela-project-check.mts').VelaProjectCheckReview<null> };
   velaStandaloneCheckRun: { input: {reviewId:string}; output: import('../../vela-core/src/contracts.ts').VelaRequest };
-  velaRouteNative: { input: { intent: string; activeCard?:VelaActiveCard; settings?: import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting }; output: { matched: false; projectCheck?: import('../../vela-core/src/contracts.ts').VelaProjectCheckKind } | { matched: true; request: import('../../vela-core/src/contracts.ts').VelaRequest } };
+  velaRouteNative: { input: { intent: string; resourceIds?:string[];activeCard?:VelaActiveCard; settings?: import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting }; output: { matched: false; projectCheck?: import('../../vela-core/src/contracts.ts').VelaProjectCheckKind;fileDiscovery?:{projectName?:string} } | { matched: true; request: import('../../vela-core/src/contracts.ts').VelaRequest } };
+  /** Native selected directory only. Provider/renderer fields never grant filesystem discovery authority. */
+  velaFileProposalPrepareNative:{input:{intent:string;selectedDirectory?:string;folderResourceId?:string};output:import('../../vela-core/src/contracts.ts').VelaRequest};
+  /** Native picker selections only; never accept a renderer path, root grant or recursive file list. */
+  velaSourcesPickNative:{input:{commandId:string;selection:{kind:'files';paths:string[]}|{kind:'folder';path:string};destination:'context'|'workspace';workspaceId?:string;expectedLayoutVersion?:number};output:import('../../vela-core/src/contracts.ts').VelaPickedSources};
+  folders:{input:import('../../application-contract/folder.ts').FolderRequest;output:import('../../application-contract/folder.ts').FolderResponse};
+  /** Native gesture only. Never forward the private directory target to a renderer or a model. */
+  folderOpenNative:{input:{resourceId:string;entryId?:string};output:{path:string}};
   velaNativeReview: {input:{previewId:string;signature:string};output:VelaNativeReview};
   /** TRUSTED NATIVE HOST ONLY. Renderer/tool allow-lists MUST exclude this authorization command. */
   authorizeVelaRequest: { input: {previewId:string;signature:string;reviewDigest?:string;directSend?:true}; output: {grantId:string;expiresAt:string} };

@@ -31,9 +31,10 @@ import type { NoteDocument } from './note-contracts.ts';
 
 const sourceRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const require = createRequire(import.meta.url);
-// Retained ten-kind review profile. New canonical domains require their own
-// native preparation and real Core factories before joining this matrix.
-export const WORKSPACE_SOURCE_REVIEW_BLOCKS = REGISTERED_BLOCKS.filter(definition => definition.kind !== 'checklist' && definition.kind !== 'agent' && definition.kind !== 'timeline' && definition.kind !== 'task_objective' && definition.kind !== 'file' && definition.kind !== 'link');
+// Retained eleven-kind card/recovery/grid profile. Native selected sources
+// (file/link/folder) have their own real-source Core and picker journeys; they
+// cannot be prepared through generic createBlock in this capability-limited matrix.
+export const WORKSPACE_SOURCE_REVIEW_BLOCKS = REGISTERED_BLOCKS.filter(definition => definition.kind !== 'checklist' && definition.kind !== 'agent' && definition.kind !== 'timeline' && definition.kind !== 'task_objective' && definition.kind !== 'file' && definition.kind !== 'link' && definition.kind !== 'folder');
 export type WorkspaceNativeCase = {
   kind: BlockInstanceKind;
   workspaceId: string;

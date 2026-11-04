@@ -9,6 +9,7 @@ import type {
   SubjectState,
 } from "../workspace-kernel/subjects.ts";
 import type { MediaMetadata } from "./media.ts";
+import type { FolderMetadata } from "./folder.ts";
 export type {
   BlockSubjectRef,
   NonResourceSubjectRef,
@@ -34,6 +35,7 @@ export type BlockKind =
   | "reference"
   | "stream"
   | "file"
+  | "folder"
   | "link";
 /** Canonical domains can exist before a workspace presenter is registered. */
 export type CanonicalResourceKind = BlockKind | "timeline" | "task_objective";
@@ -128,6 +130,7 @@ export type Resource = {
   content: string;
   /** Safe metadata only. Native file references and playback authority stay in the host. */
   media?: MediaMetadata;
+  folder?: FolderMetadata;
   taskStatus?: "open" | "done";
   taskPriority?: TaskPriority;
   taskMembers?: { id: string; title: string; status: "open" | "done" }[];

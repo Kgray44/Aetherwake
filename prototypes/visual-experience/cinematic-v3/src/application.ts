@@ -96,6 +96,9 @@ import { NoteSession } from "../../../block-library/note-session.ts";
 import { mountNoteExperience } from "../../../block-library/note-view.ts";
 import "../../../block-library/note-view.css";
 import { mountResourceLinks } from "../../../block-library/resource-links-view.ts";
+import {mountFolderExperience,type FolderViewPort} from '../../../block-library/folder-view.ts';
+import '../../../block-library/folder-view.css';
+import type {FolderBrowseResponse} from '../../../application-contract/folder.ts';
 import "../../../block-library/resource-links-view.css";
 import { createRelatedResourcesPort } from "./related-resources";
 import { createResourceOpener } from "./resource-opening.ts";
@@ -544,6 +547,9 @@ export function installApplication(hooks: Hooks) {
   const noteSessions = new Map<string, NoteSession>();
   const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
   const mediaViews = new Map<string, MediaExperience>();
+  const folderViews=new Map<string,ReturnType<typeof mountFolderExperience>>();
+  const folderPort:FolderViewPort={list:async input=>await host.command!('folders',{type:'list',...input}) as FolderBrowseResponse,
+    openExternal:input=>host.command!('folders',{type:'openExternal',...input})};
   const groupViews = new Map<
     string,
     ReturnType<typeof mountTaskGroupExperience>
@@ -732,6 +738,7 @@ export function installApplication(hooks: Hooks) {
         notes: notesClient,
         mountCard: mountWorkroomCard,
         media: mediaClient,
+        folders:folderPort,
         clockTimers: { port: productClients.clockTimers },
         checklists: {
           port: productClients.checklists,
@@ -876,6 +883,7 @@ export function installApplication(hooks: Hooks) {
       taskCreator?.dispose();
       resourcesMotion?.dispose();
       resourcesView?.dispose();
+      for(const view of folderViews.values())view.dispose();folderViews.clear();
       streamMotion?.dispose();
       for (const picker of streamPickers) picker.dispose();
       streamView?.dispose();
@@ -1296,6 +1304,10 @@ export function installApplication(hooks: Hooks) {
         view.dispose();
         mediaViews.delete(id);
       }
+    }
+    for(const [id,view] of folderViews){
+      const block=next.blocks.find(item=>item.id===id),resource=block&&next.resources.find(item=>item.id===block.resource_id);
+      if(!resource||resource.available===false||resource.visible===false){view.dispose();folderViews.delete(id);}
     }
     for (const id of blockSettings.keys())
       if (!next.blocks.some((block) => block.id === id))
@@ -2846,6 +2858,7 @@ export function installApplication(hooks: Hooks) {
     const view = mountContextualResources(content, {
       snapshot: () => ({
         workspaceId,
+        workspaceResourceIds:state?.activeWorkspaceId===workspaceId?state.blocks.filter(block=>block.workspace_id===workspaceId&&!!block.resource_id).map(block=>block.resource_id!):undefined,
         resources: (state?.resources ?? []).map((resource) => ({
           id: resource.id,
           kind: resource.kind,
@@ -2888,6 +2901,13 @@ export function installApplication(hooks: Hooks) {
         });
       },
       actions: [
+        {id:'search-aerynth-sources',label:'Search Aerynth sources',run:()=>view.focusSearch(true)},
+        ...(['files','folder'] as const).map(kind=>({id:kind==='files'?'standalone-file':'choose-source-folder',label:kind==='files'?'Choose files…':'Choose a folder…',run:async()=>{
+          if(!velaClient.pickSources)throw Error('source_picker_unavailable');
+          if(workspaceId&&state?.activeWorkspaceId!==workspaceId)throw Error('workspace_changed');
+          await velaClient.pickSources({kind,destination:workspaceId?'workspace':'context'});
+          view.update();
+        }})),
         {
           id: "standalone-note",
           label: "Note",
@@ -2904,21 +2924,10 @@ export function installApplication(hooks: Hooks) {
         { id: "standalone-task-objective", label: "Task objective", run: async () => { await newTaskObjective(); closeUnpinned("resources"); } },
         { id: "new-activity-timeline", label: "Activity timeline", run: async () => { await newActivityTimeline(); closeUnpinned("resources"); } },
         {
-          id: "standalone-file",
-          label: "Import file",
-          run: async () => {
-            const imported = await mediaClient.chooseMediaForAdd({
-              kind: "file",
-              variant: "any",
-            });
-            if (imported) await showImportedResource(imported.resource.id);
-          },
-        },
-        {
           id: "standalone-link",
           label: "Save web link",
           run: () => {
-            content.querySelector<HTMLDetailsElement>(".aw-context-create")!.open = false;
+            if(view.addMenu)view.addMenu.open=false;
             importResourceLink(anchor);
           },
         },
@@ -2934,6 +2943,7 @@ export function installApplication(hooks: Hooks) {
       anchor,
       content,
       label: "Resources",
+      headerActions:view.addMenu,
       placement: "bottom",
       minSize: { width: 360, height: 310 },
       maxSize: { width: 790, height: 730 },
@@ -4529,6 +4539,10 @@ export function installApplication(hooks: Hooks) {
           r.content;
         if (editor.value !== content) editor.value = content;
       }
+    } else if(r.kind==='folder'){
+      const view=folderViews.get(id);
+      if(view)view.update(r);
+      else if(activeBlocks.get(id)){const content=el('.working-content',article);content.inert=false;folderViews.set(id,mountFolderExperience(content,r,folderPort));}
     } else if (r.kind === "file" || r.kind === "link") {
       const view = mediaViews.get(id);
       const media = { ...r, kind: r.kind };
@@ -5111,6 +5125,7 @@ export function installApplication(hooks: Hooks) {
           "timeline",
           "task_objective",
           "file",
+          "folder",
           "link",
         ].includes(resource?.kind ?? ""))
       ) {
@@ -5137,6 +5152,7 @@ export function installApplication(hooks: Hooks) {
     missionDashboardViews.get(id)?.setActive(active);
     const media = mediaViews.get(id);
     media?.setActive(active);
+    folderViews.get(id)?.setActive(active);
     if (media && previous && !active) {
       // Keep recently used reading positions. Older offscreen readers release
       // their decoders and canvases while their canonical placements stay put.

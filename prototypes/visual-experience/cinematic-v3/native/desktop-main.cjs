@@ -560,6 +560,9 @@ app.whenReady().then(async () => {
       let apiGesture = false;
       let voiceGesture = false;
       let wakeGesture = false;
+      if(command==='folders'&&input?.type==='openExternal'){
+        if(!trustedActiveFrame(event)||await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()',false).catch(()=>false)!==true||!trustedActiveFrame(event))throw Error('folder_user_gesture_required');
+      }
       if (command === 'velaWake' && ['enable','save'].includes(input?.name)) {
         if (!trustedActiveFrame(event) ||
             await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()', false).catch(() => false) !== true ||
@@ -603,7 +606,7 @@ app.whenReady().then(async () => {
             await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
             !trustedActiveFrame(event)) throw Error("workspace_recovery_user_gesture_required");
       }
-      if (command === "vela" && ["request", "native", "apply"].includes(input?.name)) {
+      if (command === "vela" && ["request", "native", "apply", "pickSources", "fileProposal"].includes(input?.name)) {
         if (!trustedActiveFrame(event) ||
             await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
             !trustedActiveFrame(event)) throw Error("vela_user_gesture_required");
@@ -616,6 +619,7 @@ app.whenReady().then(async () => {
           "openResource",
           "interrupt",
           "firstPartyChat",
+          "folders",
         ].includes(command) &&
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
@@ -671,6 +675,14 @@ app.whenReady().then(async () => {
       }
       else if (command === 'velaWake') {
         result = await velaWakeBroker.command(input,{event,observedGesture:wakeGesture});
+      }
+      else if(command==='folders'){
+        if(input?.type==='openExternal'){
+          if(!input||Object.keys(input).some(key=>!['type','resourceId','entryId'].includes(key))||typeof input.resourceId!=='string'||input.entryId!==undefined&&typeof input.entryId!=='string')throw Error('invalid_folder_request');
+          const target=await call('folderOpenNative',{resourceId:input.resourceId,...(input.entryId?{entryId:input.entryId}:{})});
+          if(typeof target?.path!=='string'||!path.isAbsolute(target.path))throw Error('folder_target_unavailable');
+          const failure=await shell.openPath(target.path);if(failure)throw Error('folder_open_failed');result={opened:true};
+        }else result=await call('folders',input);
       }
       else if (command === "graphAction")
         result = await require("./graph-actions.cjs").graphAction(input, call);

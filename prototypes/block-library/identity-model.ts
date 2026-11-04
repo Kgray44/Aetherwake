@@ -103,6 +103,7 @@ const typeLabel = {
   research: "Research Notebook",
   reference: "Reference",
   file: 'File',
+  folder: 'Folder',
   link: 'Link',
 } satisfies Record<BlockInstanceKind, string>;
 
@@ -139,6 +140,7 @@ export function blockIdentity(input: {
     research: "research",
     reference: "reference",
     file: 'file',
+    folder: 'collection',
     link: 'link',
   } as const;
   const model: BlockIdentityModel = {
@@ -163,6 +165,12 @@ export function blockIdentity(input: {
     };
   }
   const content = input.content ?? resource?.content ?? "";
+  if(kind==='folder'){
+    model.label='Folder';model.heading=resource?.folder?.name||resource?.title||'Folder';model.subtitle='Folder source';
+    model.paragraphs=['Open this folder to browse its contents.'];
+    if(!resource?.folder||resource.folder.source!=='folder'){model.phase='unavailable';model.subtitle='Folder access unavailable';model.empty='Reconnect this local folder.';}
+    return model;
+  }
   if (kind === 'file' || kind === 'link') {
     try {
       if (!resource?.media) throw new Error('Media source information is unavailable.');

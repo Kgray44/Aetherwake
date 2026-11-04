@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { prepareWorkspaceNative, WORKSPACE_SOURCE_REVIEW_BLOCKS } from "../prepare-workspace-native.mts";
 import { BackendCore } from "../../integrated-backend/src/core.mts";
+import { blockDefinition } from '../registry.ts';
 const require = createRequire(import.meta.url);
 const { options, workspaceState, verify } = require("./workspace-native.cjs");
 
@@ -152,6 +153,8 @@ test("offline normal-card preparation and fresh Core restore use canonical kinds
     });
   t.after(() => core.command("close", {}));
   assert.equal(seed.cases.length, WORKSPACE_SOURCE_REVIEW_BLOCKS.length);
+  assert.equal(blockDefinition('folder').creation, 'reference-only', 'The registered Folder requires a real native-selected source; folder-core-boundary and vela-file-proposals cover that path');
+  assert.ok(seed.cases.every(entry => !['file', 'link', 'folder'].includes(entry.kind)), 'Generic card preparation does not fabricate native selected-source records');
   assert.equal(seed.relatedCase, undefined); assert.equal(seed.relatedValidation, undefined, 'Ordinary fixture does not silently acquire recovery specialization');
   const approach = require('./workspace-approach.cjs'), expressions = require('./workspace-approach-expressions.cjs');
   assert.equal(seed.approachValidation.preflightSha256, expressions.preflight().sha256);

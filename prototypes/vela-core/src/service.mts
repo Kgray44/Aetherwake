@@ -802,6 +802,15 @@ export class VelaService {
       request.response={kind,messageId:response.id,contentDigest:digest(content)};this.data.requests.push(request);return structuredClone(request);
     });
   }
+  /** Host-only result for an already observed native proposal. Never creates another user utterance. */
+  nativeProposalResult(requestId:string,content:string,kind:import('./contracts.ts').ProviderReplyKind):VelaRequest {
+    check(identifier(requestId)&&text(content,2000)&&['answer','clarification','inability'].includes(kind),'invalid_native_response');
+    return this.atomic(()=>{const request=this.data.requests.find(value=>value.id===requestId),origin=this.historyOrigin();
+      check(request?.nativeResponse?.classification==='observed'&&request.providerId===null&&!request.planId&&
+        request.conversationId===this.data.conversationId&&JSON.stringify(request.origin)===JSON.stringify(origin),'native_proposal_request_unavailable');
+      const response=this.append(content,request.id,'vela-native',undefined,{kind});request.response={kind,messageId:response.id,contentDigest:digest(content)};
+      request.state='responded';request.updatedAt=this.now();return structuredClone(request);});
+  }
   creationRecoveryReference(receiptId?:string):{receiptId:string;workspaceId:string;projectId:string|null}|null {
     let receipt=receiptId?this.data.receipts.find(receipt=>receipt.id===receiptId):this.data.receipts.at(-1);
     if(!receipt||receipt.state!=='applied')return null;

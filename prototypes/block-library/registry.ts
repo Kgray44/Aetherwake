@@ -108,6 +108,7 @@ export const BLOCK_DEFAULT_SIZES: Readonly<
   research: { width: 420, height: 420 },
   reference: { width: 340, height: 300 },
   file: { width: 420, height: 240 },
+  folder: { width: 420, height: 300 },
   link: { width: 420, height: 220 },
 });
 
@@ -249,6 +250,9 @@ export const BUILTIN_BLOCKS: readonly BlockDefinition[] = deepFreeze([
   { ...define('file', 'File', 'knowledge', 'A canonical original file with a format-specific reader: PDF, DOCX, video, image or text.',
     ['Read original file', 'Open original externally'], 'Source import is required. Unsupported formats retain accurate file facts and external opening.'),
     minimumSize: { width: 280, height: 180 }, requiredServices: ['canonical-resources', 'workspace-engine', 'native-media-access'] },
+  { ...define('folder', 'Folder', 'knowledge', 'A selected local folder kept as one source. Its contents are browsed explicitly.',
+    ['Browse folder', 'Open folder externally'], 'Choose a folder to connect it. Adding a folder does not add every child file to the workspace.'),
+    creation:'reference-only', minimumSize: { width: 280, height: 180 }, requiredServices: ['canonical-resources', 'workspace-engine', 'native-folder-access'] },
   { ...define('link', 'Link', 'knowledge', 'A canonical web or YouTube source with an explicit native Open action.',
     ['Inspect canonical link', 'Open original externally'], 'No remote content is loaded on mount. YouTube embedding requires native identity and capability.'),
     minimumSize: { width: 280, height: 160 }, requiredServices: ['canonical-resources', 'workspace-engine', 'native-media-access'] },

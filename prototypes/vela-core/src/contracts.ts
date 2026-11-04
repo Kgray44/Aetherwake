@@ -381,6 +381,9 @@ export interface VelaFileProposal {
   result?: { importedCount: number; reusedCount: number; verified: boolean; workspaceId: string };
 }
 export type VelaFileProposalCommand = { name: 'accept' | 'cancel'; input: { id: string; digest: string; expectedVersion: number } };
+export interface VelaPickedSource {id:string;kind:'file'|'folder';title:string;version:number;projectId?:string|null}
+export interface VelaPickedSources {resources:VelaPickedSource[];desktop?:unknown}
+export interface VelaPickSourcesInput {kind:'files'|'folder';destination:'context'|'workspace'}
 export interface VelaState {
   contract: typeof VELA_CONTRACT; identity: { id: 'system:vela'; name: 'Vela'; role: 'application-assistant' };
   conversation: CanonicalConversation | null;
@@ -445,6 +448,7 @@ export interface AdaptationState {
   applicationAvailable: boolean;
 }
 export interface VelaClient {
+  pickSources?(input:VelaPickSourcesInput):Promise<VelaPickedSources>;
   state(): Promise<VelaState>;
   open(): Promise<VelaState>;
   fileProposal?(input: VelaFileProposalCommand): Promise<unknown>;

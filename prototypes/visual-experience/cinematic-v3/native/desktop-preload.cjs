@@ -57,6 +57,7 @@ contextBridge.exposeInMainWorld(
           "velaVoice",
           "velaWake",
           "weatherPermission",
+          "folders",
           "interrupt",
           "viewState",
           "graphAction",
@@ -90,6 +91,7 @@ contextBridge.exposeInMainWorld(
       if (name === 'weatherPermission' && input?.type !== 'status' &&
           navigator.userActivation?.isActive !== true)
         throw new Error('weather_user_gesture_required');
+      if(name==='folders'&&input?.type==='openExternal'&&navigator.userActivation?.isActive!==true)throw Error('folder_user_gesture_required');
       if (name === 'velaWake' && ['enable','save'].includes(input?.name) &&
           navigator.userActivation?.isActive !== true)
         throw new Error('wake_user_gesture_required');
@@ -98,7 +100,7 @@ contextBridge.exposeInMainWorld(
         throw new Error("github_user_gesture_required");
       if (name === "workspaceRecovery" && input?.name === "apply" && navigator.userActivation?.isActive !== true)
         throw new Error("workspace_recovery_user_gesture_required");
-      if (name === "vela" && ["request", "native", "apply"].includes(input?.name) && navigator.userActivation?.isActive !== true)
+      if (name === "vela" && ["request", "native", "apply", "pickSources", "fileProposal"].includes(input?.name) && navigator.userActivation?.isActive !== true)
         throw new Error("vela_user_gesture_required");
       if (name === "reconcileConversationTurn" &&
           navigator.userActivation?.isActive !== true)

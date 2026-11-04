@@ -111,9 +111,10 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
   const aborted = new Promise((_, reject) => { rejectAbort = reject; });
   aborted.catch(() => {});
   const abort = code => rejectAbort(slot?.abort(code) ?? Error(code));
-  let expectedWeatherModal=null;
+  let expectedWeatherModal=null,expectedSourceModal=null;
   const blur = () => {
     if(expectedWeatherModal&&performance.now()<expectedWeatherModal.until){expectedWeatherModal.blurred=true;return;}
+    if(expectedSourceModal&&performance.now()<expectedSourceModal.until){expectedSourceModal.blurred=true;return;}
     receipt.focusLoss = require('electron').BrowserWindow.getAllWindows().map(window => ({ id: window.id,
       title: window.getTitle(), visible: window.isVisible(), focused: window.isFocused(), parentId: window.getParentWindow()?.id ?? null }));
     abort("mission_native_focus_lost");
@@ -142,7 +143,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     listening = true;
     const guardFile = path.join(app.getPath("home"), "AppData", "Local", "AeroStorageWatch", "ReserveGuard.ps1");
     receipt.reserve = JSON.parse(execFileSync("powershell.exe", [
-      "-NoProfile", "-NonInteractive", "-File", guardFile, "-EstimatedCBytes", String(32 * MiB), "-EstimatedDBytes", "0",
+      "-NoProfile", "-NonInteractive", "-File", guardFile, "-EstimatedCBytes", String((argv.includes('--missions-folders-only')?64:32) * MiB), "-EstimatedDBytes", "0",
     ], { windowsHide: true, timeout: 4000, maxBuffer: 8192, encoding: "utf8" }));
     assert.equal(receipt.reserve.allowed, true, "storage_reserve_denied");
     await fs.mkdir(out);
@@ -213,6 +214,12 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     assert.equal(providerBefore.scope, "process-session-native-attempts");
     assert.equal(providerBefore.codexConnections, 0);
     assert.equal(providerBefore.providerRequests, 0);
+    if(argv.includes('--missions-folders-only')){
+      const nativeHandle=win.getNativeWindowHandle(),ownerHwnd=(nativeHandle.length===8?nativeHandle.readBigUInt64LE():BigInt(nativeHandle.readUInt32LE())).toString();
+      const withNativeSourceDialog=async action=>{assert(!expectedSourceModal,'one_exact_owned_source_dialog');expectedSourceModal={until:performance.now()+5500,blurred:false};try{const result=await bounded(action(),5000,'exact_owned_source_dialog_deadline');for(let frame=0;!win.isFocused()&&frame<6&&performance.now()<expectedSourceModal.until;frame++)await new Promise(resolve=>setTimeout(resolve,16));assert(win.isFocused(),'owned_source_dialog_focus_not_restored');slot.check();return result;}finally{expectedSourceModal=null;}};
+      await require('./mission-folders.cjs').run({argv,profile:root,documents:app.getPath('documents'),receipt,rpc,js,click,wait,capture,withNativeSourceDialog,ownerHwnd});
+      receipt.passed=true;return;
+    }
     if(argv.includes('--missions-weather-product-only')){
       const nativeHandle=win.getNativeWindowHandle(),ownerHwnd=(nativeHandle.length===8?nativeHandle.readBigUInt64LE():BigInt(nativeHandle.readUInt32LE())).toString();
       const withNativeWeatherModal=async action=>{assert(!expectedWeatherModal,'one_owned_weather_modal');expectedWeatherModal={until:performance.now()+5000,blurred:false};let failure=false;try{const result=await bounded(action(),5000,'weather_exact_owned_modal_deadline');for(let frame=0;!win.isFocused()&&frame<6&&performance.now()<expectedWeatherModal.until;frame++)await new Promise(resolve=>setTimeout(resolve,16));assert(win.isFocused(),'weather_owned_owner_focus_not_restored');slot.check();return result;}catch(error){failure=true;receipt.nativeModalFailure={code:typeof error?.code==='string'?error.code:'weather_owned_dialog_proof_failed',stderr:typeof error?.stderr==='string'?error.stderr.slice(0,1600):'',message:typeof error?.stderr==='string'?'native_modal_proof_process_failed':String(error?.message??'').slice(0,300)};throw Error('weather_owned_dialog_proof_failed');}finally{expectedWeatherModal=null;if(!failure&&!win.isFocused())abort('mission_native_focus_lost');}};

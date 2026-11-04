@@ -14,11 +14,13 @@ import { mountEventExperience, type EventWindow } from './event-view.ts';
 import type { MediaReadPort } from '../application-contract/media.ts';
 import { mountMediaExperience, type MediaExperience, type MediaResource } from './media-view.ts';
 import type { ClockTimerPort } from '../timer-product/contracts.ts';
+import {mountFolderExperience,type FolderViewPort} from './folder-view.ts';
 import { mountClockTimerExperience, type ClockTimerExperience } from '../visual-experience/cinematic-v3/src/clock-timer-view.ts';
 
 export interface DirectResourcePorts {
   clockTimers?: { port: ClockTimerPort };
   media?: MediaReadPort;
+  folders?: FolderViewPort;
   notes: NoteExperiencePort;
   noteSession(resourceId: string): NoteSession;
   timelines?: {
@@ -90,6 +92,7 @@ export function mountDirectResourceExperience(
   let group: ReturnType<typeof mountTaskGroupExperience> | undefined;
   let events: ReturnType<typeof mountEventExperience> | undefined;
   let media: MediaExperience | undefined;
+  let folder:ReturnType<typeof mountFolderExperience>|undefined;
   let clockTimer: ClockTimerExperience | undefined, clockTimerWasActive = false;
   let session: NoteSession | undefined;
   let checklist: TimelineExperience | undefined;
@@ -254,6 +257,8 @@ export function mountDirectResourceExperience(
       mounted = true;
     } else if ((kind === 'file' || kind === 'link') && ports.media) {
       media = mountMediaExperience(body, { ...resource, kind }, ports.media); mounted = true;
+    } else if(kind==='folder'&&ports.folders){
+      folder=mountFolderExperience(body,resource,ports.folders);mounted=true;
     } else if (kind === 'stream' && ports.events) {
       events = mountEventExperience(body, {
         snapshot: () => ({ ...ports.events!.snapshot(), workspaceResourceIds: [], projectId: resource.project_id ?? null }),
@@ -281,8 +286,8 @@ export function mountDirectResourceExperience(
         taskObjective?.dispose(); taskObjective = undefined; taskObjectiveWasActive = false;
         timeline?.dispose(); timeline = undefined; timelineWasActive = false;
         checklist?.dispose(); checklist = undefined;
-        note?.dispose(); group?.dispose(); events?.dispose(); media?.dispose();
-        note = undefined; group = undefined; events = undefined; media = undefined;
+        note?.dispose(); group?.dispose(); events?.dispose(); media?.dispose(); folder?.dispose();
+        note = undefined; group = undefined; events = undefined; media = undefined; folder=undefined;
         session = undefined; editor = undefined; taskStatus = undefined; taskPriority = undefined;
         body.replaceChildren(); body.inert = true;
         fail(error);
@@ -318,6 +323,7 @@ export function mountDirectResourceExperience(
     group?.update(resource.taskMembers ?? []);
     events?.setActive(active && available(resource));
     media?.update(resource as MediaResource); media?.setActive(active && available(resource));
+    folder?.update(resource);folder?.setActive(active&&available(resource));
     if (available(resource) && active) events?.update();
     if (editor) editor.disabled = !active || !available(resource);
     paintTask();
@@ -367,7 +373,7 @@ export function mountDirectResourceExperience(
       if (editor) editor.oninput = null;
       if (taskStatus) taskStatus.onchange = null;
       if (taskPriority) taskPriority.onchange = null;
-      note?.dispose(); group?.dispose(); events?.dispose(); media?.dispose();
+      note?.dispose(); group?.dispose(); events?.dispose(); media?.dispose(); folder?.dispose();
       body.remove(); status.remove();
       root.classList.remove('aw-direct-resource');
       delete root.dataset.resourceId; delete root.dataset.resourceKind;

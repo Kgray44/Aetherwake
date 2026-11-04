@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { open, realpath } from 'node:fs/promises';
+import { openSync,closeSync,fstatSync,readFileSync,realpathSync } from 'node:fs';
 import { basename, extname, isAbsolute } from 'node:path';
 import type { BigIntStats } from 'node:fs';
 import type { DatabaseSync } from 'node:sqlite';
@@ -14,6 +15,8 @@ const hash = (text: string) => createHash('sha256').update(text).digest('hex');
 const sourceRevision = (stat: BigIntStats) => hash(
   [stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String).join(':'),
 );
+/** Shared native stat identity for atomic reviewed import; never contains file contents or paths. */
+export const mediaSourceRevision=sourceRevision;
 const localPath = (path: string) => isAbsolute(path) &&
   (process.platform !== 'win32' || /^[a-z]:[\\/][^:]*$/i.test(path)) &&
   !path.includes('\0') && path.length <= 32767;
@@ -94,6 +97,16 @@ export function mediaCapabilities(source: MediaSource) {
     embed: false,
     openExternal: m.source === 'link' || !!(source.path && playableExtensions[m.format]?.includes(extname(source.path).toLowerCase())),
   };
+}
+
+/** Only an explicitly selected canonical text resource may call this synchronous host content port. */
+export function readSelectedMediaText(source:MediaSource,maxBytes=12000):string|null{
+  if(!source.path||source.metadata.source!=='file'||source.metadata.format!=='text'||source.metadata.byteLength>maxBytes)return null;
+  ensure(realpathSync(source.path)===source.path,'source_changed');const fd=openSync(source.path,'r');
+  try{const current=()=>{const stat=fstatSync(fd,{bigint:true});ensure(stat.isFile()&&sourceRevision(stat)===source.metadata.sourceRevision,'source_changed');};current();
+    const bytes=readFileSync(fd);ensure(bytes.byteLength===source.metadata.byteLength&&bytes.byteLength<=maxBytes,'source_changed');
+    let text:string;try{text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes);}finally{bytes.fill(0);}current();return text;
+  }finally{closeSync(fd);}
 }
 
 async function withCurrentFile<T>(source: MediaSource, inspect: (file: Awaited<ReturnType<typeof open>>) => Promise<T>): Promise<T> {

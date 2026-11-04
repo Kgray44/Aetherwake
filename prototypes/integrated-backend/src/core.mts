@@ -1,6 +1,6 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { realpathSync } from 'node:fs';
-import { dirname, relative, resolve, isAbsolute } from 'node:path';
+import { realpathSync,openSync,closeSync,lstatSync,fstatSync } from 'node:fs';
+import { dirname, relative, resolve, isAbsolute,sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
@@ -48,6 +48,10 @@ import { OpenAIConnections,CHATGPT_PLAN_REGISTRATION } from './openai-connection
 import { VelaApiConnection } from './vela-api-connection.mts';
 import { VelaApiRuntime, VELA_API_RUNTIME_LIMITS, velaApiReasoningEfforts, type VelaApiRuntimeTestServices } from './vela-api-runtime.mts';
 import { VelaWakeRuntime } from './vela-wake-runtime.mts';
+import { VelaFileProposals, localDocumentIntent } from './vela-file-proposals.mts';
+import { FolderSources,inspectFolderSelection,readFolderSource,findFolderResource,storeFolderSource,assertCurrentFolderSourceSync } from './folder-sources.mts';
+import type { VelaFileProposal } from '../../vela-core/src/contracts.ts';
+import type { MediaSource } from './media-sources.mts';
 import { VelaVoiceRuntime } from './vela-voice-runtime.mts';
 import type { LiveCanonicalContext, LiveDelegationBinding, LiveTranscriptFragment } from '../../openai-provider/live-contracts.mts';
 import { canonicalUserEvidence } from '../../vela-core/src/voice-evidence.ts';
@@ -56,7 +60,7 @@ import { readLocalWeather } from './local-weather.mts';
 import {WeatherPermissionStore} from './weather-permission.mts';
 import {systemBattery,type SystemBatteryMeasurement} from '../../vela-core/src/system-battery.ts';
 import { mediaDefaultGeometry } from '../../block-library/media-policy.ts';
-import { inspectMediaSelection, mediaCapabilities, mediaExternalTarget, readMediaChunk, readMediaSource } from './media-sources.mts';
+import { inspectMediaSelection, mediaCapabilities, mediaExternalTarget, readMediaChunk, readMediaSource,readSelectedMediaText,mediaSourceRevision } from './media-sources.mts';
 import { WorkspaceKernel } from '../../workspace-kernel/kernel.mts';
 import { WorkspaceError } from '../../workspace-engine/geometry.mts';
 import { previewLayout } from '../../workspace-engine/organization.mts';
@@ -105,7 +109,7 @@ import { createSemanticWorkspaceArchitect } from '../../block-library/semantic-w
 import { createCanonicalTemplateHost } from '../../block-library/canonical-host.mts';
 import { NoteExperienceService } from '../../block-library/note-service.mts';
 import { createCanonicalNoteHost } from '../../block-library/note-host.mts';
-import { BUILTIN_BLOCKS, SUBJECT_BLOCKS } from '../../block-library/registry.ts';
+import { BUILTIN_BLOCKS, SUBJECT_BLOCKS,blockDefinition } from '../../block-library/registry.ts';
 import type { LibraryCapabilities, BlockKind, VelaTemplatePlan, VelaTemplateRequest } from '../../block-library/contracts.ts';
 import { validateSubjectRef, type NonResourceSubjectRef } from '../../workspace-kernel/subjects.ts';
 import type { LibraryRequest, LibraryResponse, NoteRequest } from './contracts.mts';
@@ -210,6 +214,8 @@ export class BackendCore {
   private velaApiRuntime!:VelaApiRuntime;
   private velaVoiceRuntime!:VelaVoiceRuntime;
   private velaWakeRuntime!:VelaWakeRuntime;
+  private velaFileProposals!:VelaFileProposals;
+  private folderSources!:FolderSources;
   private voiceContexts = new Map<string,{value:LiveCanonicalContext;scopeStamp:string;expires:number;sources:{id:string;digest:string}[];operations?:VelaOperationsPacket}>();
   private pendingVoiceInput?: {messageId:string;intent:string;sessionId:string};
   private velaApiPlanner!:VelaPlanningPort;
@@ -357,7 +363,8 @@ export class BackendCore {
       ensure(!options.velaPlanningPort||!this.privateMode,'synthetic_vela_planner_forbidden');
       this.initializeVela(options.velaPlanningPort);
       this.ordinaryConnections=ordinaryTest?.connection??new OpenAIConnections({db:this.db,transaction:work=>this.kernel.withTransaction(()=>work(this.db)),nativeHost:this.nativeHostServices,localEligibility:{kind:'local-personal-project',scope:'current-owner-local-installation',decisionRef:'aerynth.owner-local-personal-inference'}});
-      this.kernel.withTransaction(() => { VelaApiConnection.migrate(this.db); VelaApiRuntime.migrate(this.db); VelaVoiceRuntime.migrate(this.db); VelaWakeRuntime.migrate(this.db); });
+      this.kernel.withTransaction(() => { VelaApiConnection.migrate(this.db); VelaApiRuntime.migrate(this.db); VelaVoiceRuntime.migrate(this.db); VelaWakeRuntime.migrate(this.db); VelaFileProposals.migrate(this.db); FolderSources.migrate(this.db); });
+      this.folderSources=new FolderSources(this.db,{privateRoot:this.privateRoot});
       this.velaApiConnection = new VelaApiConnection({ db: this.db, transaction: work => this.kernel.withTransaction(() => work(this.db)), nativeHost: this.nativeHostServices, ...(velaApiTest ? { fetch: velaApiTest.fetch } : {}) });
       this.velaApiRuntime = new VelaApiRuntime({ db: this.db, transaction: work => this.kernel.withTransaction(work), connection: this.velaApiConnection, test: velaApiTest,
         observe: {
@@ -407,6 +414,14 @@ export class BackendCore {
         capture:this.nativeHostServices?.wakeCapture,privateRoot:this.privateRoot,...(velaApiTest?.wake??{}),storageAllowed:()=>this.missionStorageAdmitted,
         observe:view=>this.atomic(()=>this.record('vela.wake/state','observed',undefined,randomUUID(),{providerId:'aerynth-native',detached:true,
           ...(view.sessionId?{correlationId:view.sessionId}:{}),payload:{redacted:true,wake:view}}))});
+      this.velaFileProposals=new VelaFileProposals({db:this.db,atomic:work=>this.atomic(work),privateRoot:this.privateRoot,scopeStamp:()=>this.velaScopeStamp(),
+        rootScopeStamp:()=>{const c=this.velaContext();return planningDigest({principalId:c.principalId,policyVersion:c.policyVersion,workspaceId:c.currentWorkspaceId,projectId:c.currentProjectId});},
+        target:()=>this.fileProposalTarget(),allowed:target=>{const current=this.fileProposalTarget();return !!current&&current.workspaceId===target.workspaceId&&current.projectId===target.projectId;},
+        response:(intent,content,kind)=>this.vela.nativeResponse(intent,content,kind),result:(id,content,kind)=>this.vela.nativeProposalResult(id,content,kind),
+        folderRoot:async id=>{const source=this.scopedFolder(id),binding=this.folderBinding(id);const path=await this.folderSources.externalTarget(id,source.projectId);ensure(binding===this.folderBinding(id),'file_proposal_scope_changed');return {path,binding};},
+        folderCurrent:(id,binding)=>{try{const source=this.scopedFolder(id);assertCurrentFolderSourceSync(source);return binding===this.folderBinding(id);}catch{return false;}},
+        importAndAttach:(id,target,sources)=>this.importFileProposal(id,target,sources),
+        observe:(state,id,count)=>this.record('vela.files/'+state,'observed',undefined,randomUUID(),{providerId:'aerynth-native',detached:true,correlationId:id,payload:{redacted:true,itemType:'local-file-proposal',files:{count,state}}})});
       this.db.exec(`CREATE TABLE IF NOT EXISTS vela_mission_provider_admissions(
         attempt_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, project_id TEXT, utc_day TEXT NOT NULL) STRICT;
         CREATE INDEX IF NOT EXISTS vela_mission_provider_admission_day ON vela_mission_provider_admissions(utc_day);
@@ -1537,10 +1552,10 @@ export class BackendCore {
     const clockTimer = timer?.state === 'ready' && !this.timerResumeRequired && this.missionStorageAdmitted ? { state: 'available' as const } :
       { state: (process.platform !== 'win32' && !this.syntheticTimerClock ? 'unsupported' : 'setup_required') as 'unsupported' | 'setup_required',
         reason: timer?.errorCode ?? 'Native clock timing is not ready.' };
-    return {revision:1,kinds:{...Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),clock_timer:clockTimer,file:media,link:media},subjects:Object.fromEntries(SUBJECT_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{automatic:this.ordinaryAuthorized()?{state:'available'}:{state:'setup_required',reason:'Connect ChatGPT to start an AI conversation.'},local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'available'}};
+    return {revision:1,kinds:{...Object.fromEntries(BUILTIN_BLOCKS.map(b=>[b.kind,{state:'available'}])),clock_timer:clockTimer,file:media,link:media,folder:media},subjects:Object.fromEntries(SUBJECT_BLOCKS.map(b=>[b.kind,{state:'available'}])),providers:{automatic:this.ordinaryAuthorized()?{state:'available'}:{state:'setup_required',reason:'Connect ChatGPT to start an AI conversation.'},local:{state:'available'},codex:codex?{state:'available'}:{state:'setup_required',reason:'No fresh authenticated real Codex capability observation'}},velaPlanning:{state:'available'}};
   }
   private createLibraryResource(kind:BlockKind,title:string,provider:'local'|'codex'|undefined,projectId:string|null):string {
-    ensure(!['file','link'].includes(kind),'media_import_required');
+    ensure(!['file','link','folder'].includes(kind),'media_import_required');
     ensure(kind!=='agent','agent_library_creation_required');
     ensure(kind!=='timeline','timeline_creation_required');
     ensure(kind!=='task_objective','task_objective_creation_required');
@@ -2024,6 +2039,11 @@ export class BackendCore {
         ensure(this.velaNative?.applyPreference,'vela_preference_capability_unavailable');this.requireVelaPolicyGrant(input.authorizationRef,undefined,'adaptation');return this.velaNative.applyPreference(input);
       }}};
     this.velaHost=createCanonicalVelaHost(hostOptions);
+    const readCanonicalContent=this.velaHost.readContent.bind(this.velaHost);
+    this.velaHost.readContent=(id,scope)=>{const existing=readCanonicalContent(id,scope);if(existing)return existing;
+      const ref=this.velaHost.resolve({id,kind:'resource'},scope);if(!ref||!this.conversationAccess.resource(id,'read'))return null;
+      const source=readMediaSource(this.db,id);if(!source)return null;
+      try{const content=readSelectedMediaText(source);return content===null?null:{ref,content,source:'aerynth://resource/'+encodeURIComponent(id)+'?sourceRevision='+source.metadata.sourceRevision};}catch{return null;}};
     this.velaHost.canInspectWorkspaceArchiveReceipt=(ref,scope)=>{
       const current=this.velaHost.scope();
       if(ref.kind!=='workspace'||scope.principalId!==current.principalId||scope.policyVersion!==current.policyVersion||!scope.workspaceIds.includes(ref.id))return false;
@@ -2390,7 +2410,7 @@ export class BackendCore {
     const context=this.velaHost.context(),scope=this.velaHost.scope();
     const references=scope.projectIds.map(id=>this.velaHost.resolve({id,kind:'project'},scope)).filter((r):r is ResourceRef=>r!==null);
     if(context.currentWorkspaceId){const workspace=this.velaHost.resolve({id:context.currentWorkspaceId,kind:'workspace'},scope);if(workspace)references.push(workspace);}
-    return {...state,nativeCapabilities,planningReferences:structuredClone(this.state.vela!.planning),applicationContext:{currentProjectId:context.currentProjectId,currentWorkspaceId:context.currentWorkspaceId,references}};
+    return {...state,fileProposals:this.velaFileProposals.list(),nativeCapabilities,planningReferences:structuredClone(this.state.vela!.planning),applicationContext:{currentProjectId:context.currentProjectId,currentWorkspaceId:context.currentWorkspaceId,references}};
   }
   private velaFileEditView(record: VelaFileEditRecord): VelaFileEditView {
     return { requestId: record.requestId, state: record.state, files: record.files.map((file, index) => ({
@@ -2999,7 +3019,23 @@ export class BackendCore {
     const plan=this.vela.native({intent,action});this.recordVelaRoute('route_selected',plan.requestId,'aerynth-native',{route:'native',capabilityId:action.type});
     await this.vela.apply(plan.id);return {matched:true,request:this.vela.state().requests.find(request=>request.id===plan.requestId)!};
   }
-  private async routeVelaNative(intent: string, settings?: VelaTurnRouting,activeCard?:import('../../vela-core/src/contracts.ts').VelaActiveCard): Promise<CommandMap['velaRouteNative']['output']> {
+  private async routeVelaNative(intent: string, settings?: VelaTurnRouting,activeCard?:import('../../vela-core/src/contracts.ts').VelaActiveCard,resourceIds:string[]=[]): Promise<CommandMap['velaRouteNative']['output']> {
+    ensure(Array.isArray(resourceIds)&&resourceIds.length<=128&&resourceIds.every(identifier)&&new Set(resourceIds).size===resourceIds.length,'invalid_vela_context');
+    const documents=localDocumentIntent(intent);
+    if(documents){
+      if(!this.nativeMedia)return {matched:true,request:this.vela.nativeResponse(intent,'Local document import is unavailable in this host. No files were added.','inability')};
+      let folderResourceId:string|undefined;
+      if(resourceIds.length){
+        if(resourceIds.length===1)try{this.scopedFolder(resourceIds[0]);folderResourceId=resourceIds[0];}catch{}
+        if(!folderResourceId)return {matched:true,request:this.vela.nativeResponse(intent,'Choose one connected folder to find its project documents, or choose files with Add to workspace. No files were added.','clarification')};
+      }else{const normalize=(s:string)=>s.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu,' ').trim();
+        const candidates=this.db.prepare("SELECT f.resource_id,r.title FROM folder_sources f JOIN resources r ON r.id=f.resource_id WHERE f.grant_state='active' AND r.state='active' AND r.project_id IS ?").all(this.velaContext().currentProjectId).filter(row=>{try{this.scopedFolder(String(row.resource_id));return !documents.projectName||normalize(String(row.title))===normalize(documents.projectName);}catch{return false;}});
+        if(candidates.length===1)folderResourceId=String(candidates[0].resource_id);
+      }
+      try{return {matched:true,request:await this.velaFileProposals.prepare({intent,...(folderResourceId?{folderResourceId}:{})})};}
+      catch(error){if((error as {code?:string}).code==='file_proposal_root_required')return {matched:false,fileDiscovery:documents};throw error;}
+    }
+    if(resourceIds.length)return {matched:false};
     const projectCheck = standaloneVelaProjectCheck(intent);
     if (projectCheck) {
       this.standaloneCheckRouting(settings);
@@ -3659,6 +3695,7 @@ export class BackendCore {
         await this.refreshOrdinaryStatus().catch(() => {});
         return this.velaState();
       case 'search':return this.vela.search(input);
+      case 'fileProposal':{ensure(this.nativeMedia&&this.missionStorageAdmitted,'file_proposal_unavailable');const result=await this.velaFileProposals.command(input);return {...result,desktop:await this.command('desktop',{type:'snapshot'})};}
       case 'reconcileFileEdit':return this.reconcileVelaFileEdit(input?.requestId);
       case 'reconcileProviderTurn':return this.recoverVelaProviderOutcome(input?.requestId);
       case 'saveRoutingSettings':return this.saveVelaRoutingSettings(input);
@@ -3908,7 +3945,7 @@ export class BackendCore {
     return this.kernel.withTransaction(()=>{
       const row=this.db.prepare('SELECT r.*,d.kind AS desktop_kind,d.metadata_json FROM resources r LEFT JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=?').get(resourceId);
       if(!row||row.state!=='active'||!this.libraryAuthorized({kind:'resource',id:resourceId})||!this.conversationReadAccess(resourceId))return unavailable();
-      const actualKind=row.kind==='conversation'?'conversation':row.desktop_kind??(row.kind==='generic'?'reference':row.kind),kinds:CanonicalResourceKind[]=['conversation','note','research','task','task_group','reference','stream','agent','checklist','timeline','task_objective','clock_timer','file','link'];
+      const actualKind=row.kind==='conversation'?'conversation':row.desktop_kind??(row.kind==='generic'?'reference':row.kind),kinds:CanonicalResourceKind[]=['conversation','note','research','task','task_group','reference','stream','agent','checklist','timeline','task_objective','clock_timer','file','link','folder'];
       if(!kinds.includes(actualKind as BlockKind)||actualKind==='conversation'&&row.kind!=='conversation')return {...base,status:'unsupported',reason:'resource-kind-unsupported',kind:String(actualKind).slice(0,64)};
       const kind=actualKind as CanonicalResourceKind;
       if(kind==='agent'||kind==='checklist')try{const domains=this.productDomains();if(kind==='agent')domains.agent({name:'inspect',input:{resourceId}});else domains.checklist({name:'read',input:{resourceId}});}catch{return unavailable();}
@@ -3929,6 +3966,7 @@ export class BackendCore {
         if(!media)return unavailable();
         resource.media=media;
       }
+      if(kind==='folder'){const source=readFolderSource(this.db,resourceId);if(!source||source.grantState!=='active'||source.projectId!==resource.project_id)return unavailable();resource.folder=source.metadata;}
       if(kind==='task'||kind==='task_group'){
         let metadata:Record<string,unknown>;try{metadata=JSON.parse(String(row.metadata_json??'{}'));if(!metadata||typeof metadata!=='object'||Array.isArray(metadata))return unavailable();}catch{return unavailable();}
         if(kind==='task'){
@@ -3963,6 +4001,77 @@ export class BackendCore {
     return source;
   }
 
+  private fileProposalTarget():VelaFileProposal['target']|null{
+    const scope=this.velaContext(),id=scope.currentWorkspaceId;if(!id||!this.libraryAuthorized({kind:'workspace',id}))return null;
+    const row=this.db.prepare("SELECT w.id,w.project_id,w.title,w.version,l.version AS layout_version FROM workspaces w JOIN workspace_layouts l ON l.workspace_id=w.id WHERE w.id=? AND w.state='active'").get(id);
+    return row&&row.project_id===scope.currentProjectId?{workspaceId:id,projectId:scope.currentProjectId,workspaceVersion:Number(row.version),layoutVersion:Number(row.layout_version),workspaceTitle:String(row.title)}:null;
+  }
+  private scopedFolder(resourceId:string,allowRevoked=false){
+    ensure(!this.closed&&this.nativeMedia&&identifier(resourceId)&&this.productResourceAccess(resourceId),'folder_source_unavailable');
+    const row=this.db.prepare("SELECT r.project_id,d.kind FROM resources r JOIN desktop_resources d ON d.resource_id=r.id WHERE r.id=? AND r.state='active'").get(resourceId);
+    const source=readFolderSource(this.db,resourceId);ensure(row&&row.kind==='folder'&&source&&source.projectId===row.project_id&&(allowRevoked||source.grantState==='active'),'folder_source_unavailable');return source;
+  }
+  private folderBinding(resourceId:string){const source=this.scopedFolder(resourceId),resource=this.kernel.getResource(resourceId).resource;return planningDigest({resourceId,version:resource.version,projectId:source.projectId,identity:source.identity,grantId:source.sourceGrantId});}
+  private importFileProposal(proposalId:string,target:VelaFileProposal['target'],sources:readonly MediaSource[]){
+    ensure(this.nativeMedia&&!this.active&&this.missionStorageAdmitted&&sources.length>0,'file_proposal_unavailable');
+    const engine=this.desktop.nativeBlockServices().engine,current=this.fileProposalTarget();ensure(current&&planningDigest(current)===planningDigest(target),'file_proposal_target_changed');
+    let importedCount=0,reusedCount=0;const resourceIds:string[]=[];
+    for(const [index,source] of sources.entries()){
+      ensure(source.path&&source.metadata.source==='file','file_proposal_source_changed');
+      const candidates=this.db.prepare(`SELECT r.id,m.metadata_json FROM media_sources m JOIN resources r ON r.id=m.resource_id WHERE ${process.platform==='win32'?'lower(m.selected_path)=lower(?)':'m.selected_path=?'} AND r.state='active' AND r.project_id IS ?`).all(source.path,target.projectId);
+      const existing=candidates.find(row=>this.libraryAuthorized({kind:'resource',id:String(row.id)}));let resourceId:string;
+      if(existing){ensure(planningDigest(JSON.parse(String(existing.metadata_json)))===planningDigest(source.metadata),'file_proposal_existing_source_changed');resourceId=String(existing.id);reusedCount++;}
+      else{const resource=this.kernel.createGenericResource(source.metadata.name,target.projectId,{origin:'import',correlationId:proposalId});resourceId=resource.id;
+        this.db.prepare('INSERT INTO desktop_resources(resource_id,kind) VALUES(?,?)').run(resourceId,'file');this.db.prepare('INSERT INTO media_sources VALUES(?,?,?)').run(resourceId,JSON.stringify(source.metadata),source.path);importedCount++;}
+      resourceIds.push(resourceId);const layout=engine.project(target.workspaceId);
+      if(!layout.blocks.some(block=>block.resourceId===resourceId)){const {width,height,shape}=mediaDefaultGeometry(source.metadata);engine.execute({type:'attachResource',commandId:proposalId+':attach:'+index,resourceId,workspaceId:target.workspaceId,expectedRevision:layout.revision,presentation:{width,height,shape},placement:'nearest-free'});}
+    }
+    const final=engine.project(target.workspaceId);ensure(resourceIds.every(id=>final.blocks.some(block=>block.resourceId===id)&&this.libraryAuthorized({kind:'resource',id})),'file_proposal_verification_failed');
+    return {importedCount,reusedCount,verified:true,workspaceId:target.workspaceId};
+  }
+  private async pickNativeSources(input:CommandMap['velaSourcesPickNative']['input']):Promise<CommandMap['velaSourcesPickNative']['output']>{
+    ensure(input&&Object.keys(input).every(key=>['commandId','selection','destination','workspaceId','expectedLayoutVersion'].includes(key))&&identifier(input.commandId)&&['context','workspace'].includes(input.destination),'invalid_source_picker');
+    const selection=input.selection;ensure(selection&&typeof selection==='object'&&Object.keys(selection).length===2&&(['files','folder'].includes(selection.kind)),'invalid_source_picker');
+    if(selection.kind==='files')ensure(Array.isArray(selection.paths)&&selection.paths.length>0&&selection.paths.length<=128&&new Set(selection.paths).size===selection.paths.length,'invalid_source_picker');
+    else ensure(typeof selection.path==='string','invalid_source_picker');
+    const scopeStamp=this.velaScopeStamp(),target=this.fileProposalTarget();
+    if(input.destination==='workspace')ensure(target&&target.workspaceId===input.workspaceId&&target.layoutVersion===input.expectedLayoutVersion,'file_proposal_target_changed');
+    else ensure(input.workspaceId===undefined&&input.expectedLayoutVersion===undefined,'invalid_source_picker');
+    if(selection.kind==='folder'){
+      const source=await inspectFolderSelection(selection.path,this.privateRoot);
+      const result=this.atomic(()=>this.once(input.commandId,{operation:'vela-source-picker',scopeStamp,...input},()=>{
+        ensure(scopeStamp===this.velaScopeStamp()&&!this.active&&this.missionStorageAdmitted,'file_proposal_scope_changed');assertCurrentFolderSourceSync(source,true);
+        const projectId=this.velaContext().currentProjectId,existing=findFolderResource(this.db,projectId,source);let resourceId:string;
+        if(existing){this.scopedFolder(existing);resourceId=existing;}
+        else{const canonical=this.kernel.createGenericResource(source.metadata.name,projectId,{origin:'import',correlationId:input.commandId});resourceId=canonical.id;
+          this.db.prepare('INSERT INTO desktop_resources(resource_id,kind) VALUES(?,?)').run(resourceId,'folder');storeFolderSource(this.db,{resourceId,projectId,source});}
+        if(input.destination==='workspace'){const engine=this.desktop.nativeBlockServices().engine,layout=engine.project(target!.workspaceId);if(!layout.blocks.some(block=>block.resourceId===resourceId))engine.execute({type:'attachResource',commandId:input.commandId+':source:0',workspaceId:target!.workspaceId,resourceId,expectedRevision:layout.revision,presentation:blockDefinition('folder').defaultPresentation,placement:'nearest-free'});}
+        const canonical=this.kernel.getResource(resourceId).resource;this.record('vela.sources/picked','observed',undefined,randomUUID(),{providerId:'aerynth-native',detached:true,resourceId,payload:{redacted:true,itemType:'native-folder-source',files:{count:1,state:'imported'}}});
+        return {resources:[{id:resourceId,kind:'folder' as const,title:canonical.title,version:canonical.version,projectId:canonical.project_id}]};
+      }));return {...result,desktop:await this.command('desktop',{type:'snapshot'})};
+    }
+    const sources:MediaSource[]=[];
+    for(const path of selection.paths){ensure(typeof path==='string'&&isAbsolute(path),'invalid_media_source');const actual=realpathSync(path);
+      if(this.privateRoot){const part=relative(this.privateRoot,actual);ensure(part.startsWith('..'+sep)||part==='..'||isAbsolute(part),'media_source_unavailable');}
+      sources.push(await inspectMediaSelection({kind:'file',path:actual}));}
+    const result=this.atomic(()=>this.once(input.commandId,{operation:'vela-source-picker',scopeStamp,...input},()=>{
+      ensure(scopeStamp===this.velaScopeStamp()&&!this.active&&this.missionStorageAdmitted,'file_proposal_scope_changed');
+      const descriptors:{source:MediaSource;fd:number}[]=[];
+      const verify=()=>{for(const {source,fd} of descriptors){const stat=lstatSync(source.path!,{bigint:true});ensure(stat.isFile()&&!stat.isSymbolicLink()&&realpathSync(source.path!)===source.path&&mediaSourceRevision(stat)===source.metadata.sourceRevision&&mediaSourceRevision(fstatSync(fd,{bigint:true}))===source.metadata.sourceRevision,'source_changed');}};
+      try{for(const source of sources)descriptors.push({source,fd:openSync(source.path!,'r')});verify();
+      const projectId=this.velaContext().currentProjectId,engine=this.desktop.nativeBlockServices().engine,resources:import('../../vela-core/src/contracts.ts').VelaPickedSource[]=[];
+      for(const [index,source] of sources.entries()){
+        const match=this.db.prepare(`SELECT r.id,m.metadata_json FROM media_sources m JOIN resources r ON r.id=m.resource_id WHERE ${process.platform==='win32'?'lower(m.selected_path)=lower(?)':'m.selected_path=?'} AND r.state='active' AND r.project_id IS ?`).all(source.path!,projectId).find(row=>this.libraryAuthorized({kind:'resource',id:String(row.id)}));
+        let resourceId:string;if(match){ensure(planningDigest(JSON.parse(String(match.metadata_json)))===planningDigest(source.metadata),'source_changed');resourceId=String(match.id);}
+        else{const row=this.kernel.createGenericResource(source.metadata.name,projectId,{origin:'import',correlationId:input.commandId});resourceId=row.id;this.db.prepare('INSERT INTO desktop_resources(resource_id,kind) VALUES(?,?)').run(resourceId,'file');this.db.prepare('INSERT INTO media_sources(resource_id,metadata_json,selected_path) VALUES(?,?,?)').run(resourceId,JSON.stringify(source.metadata),source.path);}
+        if(input.destination==='workspace'){const layout=engine.project(target!.workspaceId);if(!layout.blocks.some(block=>block.resourceId===resourceId)){const {width,height,shape}=mediaDefaultGeometry(source.metadata);engine.execute({type:'attachResource',commandId:input.commandId+':source:'+index,workspaceId:target!.workspaceId,resourceId,expectedRevision:layout.revision,presentation:{width,height,shape},placement:'nearest-free'});}}
+        const canonical=this.kernel.getResource(resourceId).resource;resources.push({id:resourceId,kind:'file',title:canonical.title,version:canonical.version,projectId:canonical.project_id});
+      }
+      verify();this.record('vela.sources/picked','observed',undefined,randomUUID(),{providerId:'aerynth-native',detached:true,payload:{redacted:true,itemType:'native-sources',files:{count:resources.length,state:'imported'}}});return {resources};
+      }finally{for(const {fd} of descriptors)closeSync(fd);}
+    }));
+    return {...result,desktop:await this.command('desktop',{type:'snapshot'})};
+  }
   private async importSelectedMedia(input: CommandMap['mediaImportTrusted']['input']) {
     ensure(this.nativeMedia, 'media_capability_unavailable');
     ensure(input && ['file','link'].includes(input.kind) && input.kind === input.selection?.kind &&
@@ -4713,6 +4822,26 @@ export class BackendCore {
     return structuredClone(e);
   }
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
+    if(name==='folders'){
+      const request=input as CommandMap['folders']['input'];ensure(request&&typeof request==='object'&&!Array.isArray(request)&&['describe','list'].includes(request.type)&&Object.keys(request).every(key=>(request.type==='describe'?['type','resourceId']:['type','resourceId','entryId','cursor']).includes(key)),'invalid_folder_request');
+      const source=this.scopedFolder(request.resourceId,request.type==='describe'),scope=this.velaScopeStamp();
+      const result=request.type==='describe'?await this.folderSources.describe(request.resourceId,source.projectId):await this.folderSources.list({resourceId:request.resourceId,...(request.entryId===undefined?{}:{entryId:request.entryId}),...(request.cursor===undefined?{}:{cursor:request.cursor})},source.projectId);
+      const current=this.scopedFolder(request.resourceId,request.type==='describe');ensure(scope===this.velaScopeStamp()&&source.sourceGrantId===current.sourceGrantId&&source.grantState===current.grantState,'folder_source_unavailable');return result as CommandMap[K]['output'];
+    }
+    if(name==='folderOpenNative'){
+      ensure(!this.closed&&this.nativeMedia&&this.nativeHostServices&&(this.privateMode||this.velaApiTest),'native_folder_open_required');
+      const request=input as CommandMap['folderOpenNative']['input'];ensure(request&&typeof request==='object'&&!Array.isArray(request)&&Object.keys(request).every(key=>['resourceId','entryId'].includes(key))&&(request.entryId===undefined||typeof request.entryId==='string'),'invalid_folder_request');
+      const source=this.scopedFolder(request.resourceId),binding=this.folderBinding(request.resourceId),scope=this.velaScopeStamp();
+      const path=await this.folderSources.externalTarget(request.resourceId,source.projectId,request.entryId);ensure(scope===this.velaScopeStamp()&&binding===this.folderBinding(request.resourceId),'folder_source_unavailable');return {path} as CommandMap[K]['output'];
+    }
+    if(name==='velaSourcesPickNative'){
+      ensure(!this.closed&&this.nativeMedia&&this.nativeHostServices&&(this.privateMode||this.velaApiTest),'native_source_picker_required');
+      ensure(!this.active&&this.missionStorageAdmitted,'file_proposal_unavailable');return await this.pickNativeSources(input as CommandMap['velaSourcesPickNative']['input']) as CommandMap[K]['output'];
+    }
+    if(name==='velaFileProposalPrepareNative'){
+      ensure(!this.closed&&this.nativeMedia&&this.nativeHostServices&&(this.privateMode||this.velaApiTest),'native_file_proposal_required');
+      ensure(!this.active&&this.missionStorageAdmitted,'file_proposal_unavailable');return await this.velaFileProposals.prepare(input as CommandMap['velaFileProposalPrepareNative']['input']) as CommandMap[K]['output'];
+    }
     if(name==='velaWake'){ensure(!this.closed,'backend_closed');return await this.velaWakeRuntime.request(input as CommandMap['velaWake']['input']) as CommandMap[K]['output'];}
     if(name==='velaWakeNative'||name==='velaWakeFrame'){
       ensure(!this.closed&&this.nativeHostServices?.wakeCapture&&(this.privateMode||this.velaApiTest?.wake),'native_wake_authorization_required');
@@ -4819,7 +4948,7 @@ export class BackendCore {
     if(name==='vela'&&a?.name==='local')return this.vela.local(a.input) as any;
     if(name==='velaRouteNative') {
       ensure(typeof a?.intent === 'string' && a.intent.length <= 16000, 'invalid_vela_intent');
-      return await this.routeVelaNative(a.intent, a.settings,a.activeCard) as any;
+      return await this.routeVelaNative(a.intent, a.settings,a.activeCard,a.resourceIds) as any;
     }
     if (!(name==='close'&&(this.active?.providerId===CHATGPT_PLAN_PROVIDER||this.active?.providerId===VELA_API_PROVIDER))&&!(name==='conversation'&&['saveDraft','saveViewState','selectView'].includes(a?.name))&&!['providerActivity','providerConnection','providerAuth','ordinaryProviderStatus','ordinaryProviderCheck','openResource','mediaDescribe','mediaReadChunk','snapshot','replay','interrupt','execute','desktop','viewState','conversationCitation','conversationSendPreview','conversationActivity','velaRequestPreview'].includes(name)&&!(name==='conversation'&&productReads.includes(a?.name))&&!(name==='vela'&&['state','search','cancel','reviewAttention'].includes(a?.name))&&!(name==='library'&&['inspectWorkspace','capabilities','preferences','getBlockSettings','findResources','listTemplates','getTemplate','previewTemplate','previewWorkspaceFromResources','subjectTargets','projectOverview','browseResources'].includes(a?.name))&&!(name==='notes'&&['readNote','saveNoteDraft','discardNoteDraft'].includes(a?.name))) ensure(!this.active, 'execution_busy');
     switch (name) {
@@ -4907,7 +5036,7 @@ export class BackendCore {
           });
           this.record('application/createResource', 'observed'); return await this.command('desktop', { type: 'snapshot' }) as CommandMap[K]['output'];
         }
-        if(a.type==='createResource')ensure(!['file','link'].includes(a.kind),'media_import_required');
+        if(a.type==='createResource')ensure(!['file','link','folder'].includes(a.kind),'media_import_required');
         if(a.type==='createResource'&&a.kind==='conversation'&&a.provider===undefined)await this.refreshOrdinaryStatus();
         if (a.type !== 'snapshot') {
           if(['createResource','content','archiveSubject','relate','unrelate','setTaskGroupMembers'].includes(a.type))ensure(!this.active,'execution_busy');
@@ -5035,6 +5164,7 @@ export class BackendCore {
         return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;
       }
       case 'close': {
+        this.folderSources.dispose();
         await this.velaWakeRuntime.dispose();
         await this.velaVoiceRuntime.dispose();
         await this.timerDomain?.dispose();

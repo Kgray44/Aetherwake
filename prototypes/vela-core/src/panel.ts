@@ -55,6 +55,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const messages = new Map<string, { node: HTMLElement; signature: string }>(), workingPlans = new Set<string>(), applyingPlans = new Set<string>();
   let applyingLocally = false;
   const planCards = new Map<string, { node: HTMLElement; controls: HTMLElement; signature: string }>();
+  const planReviewActions = new Map<string, {accept():Promise<void>;decline():Promise<void>}>();
   const historyRows = new Map<string, { node: HTMLElement; signature: string }>();
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, className?: string, text?: string) => {
     const node = doc.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node;
@@ -118,7 +119,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const more = el('section', 'vela-core-contextual vela-core-more'); more.hidden = true; more.id = instanceId; more.setAttribute('aria-label', 'Vela controls');
   const resultPanel = disclosure('Plan and response details', 'vela-core-result-panel');
   const resultPlans = el('div', 'vela-core-result-plans');
-  resultPanel.body.append(resultPlans, manifestationSources, manifestationDetails.node, fileEditActions, responseActions);
+  const fileProposalDetails=el('section','vela-file-proposal-receipt');
+  resultPanel.body.append(resultPlans, fileProposalDetails, manifestationSources, manifestationDetails.node, fileEditActions, responseActions);
   const resultControl = icon('Open response details', '▤', 'result', () => reveal('result'));
   const chooseFiles = async (choice: Readonly<VelaProposalChoice>, accept: boolean) => {
     const proposal = current?.fileProposals?.find(item => item.id + ':' + item.digest === choice.id && item.version === choice.version && item.state === 'proposed');
@@ -127,8 +129,26 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     await refresh();
   };
   const fileProposalView = createVelaProposalView(doc,{accept:choice=>chooseFiles(choice,true),decline:choice=>chooseFiles(choice,false),changed:()=>present()});
+  const choosePlan = async (choice: Readonly<VelaProposalChoice>, accept: boolean) => {
+    const plan=current?.plans.find(item=>item.id+':'+item.fingerprint===choice.id&&item.version===choice.version&&item.state==='prepared');
+    const action=plan&&planReviewActions.get(plan.id); if(!action)throw Error('plan_proposal_unavailable');
+    await (accept?action.accept():action.decline());
+  };
+  const planProposalView = createVelaProposalView(doc,{accept:choice=>choosePlan(choice,true),decline:choice=>choosePlan(choice,false),changed:()=>present()});
   const contextualClose = icon('Close Vela controls', '×', 'close', () => closeContext()); contextualClose.className += ' vela-core-contextual-close';
   const sourcePanel = disclosure('Find and add sources', 'vela-core-source-panel');
+  const localFilesPanel=disclosure('Add files or folders','vela-core-local-files');
+  const pickLocalSources=async(kind:'files'|'folder')=>{
+    if(!client.pickSources)throw Error('source_picker_unavailable');
+    const picked=await client.pickSources({kind,destination:'context'});
+    for(const source of picked.resources){
+      const version=source.version;
+      if(!Number.isSafeInteger(version)||!version||version<1)throw Error('source_version_unavailable');
+      selected.set(source.id,{id:source.id,kind:'resource',resourceKind:source.kind,title:source.title,version,projectId:source.projectId});
+    }
+    renderSelection();
+  };
+  localFilesPanel.body.append(button('Choose files…',()=>pickLocalSources('files')),button('Choose a folder…',()=>pickLocalSources('folder')));
   const searchForm = el('form', 'vela-core-search'), search = el('input'), searchButton = el('button', 'vela-core-button', 'Search');
   search.type = 'search'; search.placeholder = 'Find a note, chat, task, or workspace'; search.maxLength = 200; search.setAttribute('aria-label', 'Search your work'); searchButton.type = 'submit';
   const searchResults = el('div', 'vela-core-results'); searchResults.setAttribute('aria-live', 'polite'); searchForm.append(search, searchButton);
@@ -208,6 +228,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const preferencesPanel = disclosure('Preferences', 'vela-core-preferences'); preferencesPanel.body.append(settings.node, adaptationPanel.node, contextPanel.node);
   if (options.permissions) preferencesPanel.body.append(options.permissions.element);
   more.append(contextualClose, resultPanel.node, sourcePanel.node, native.node, preferencesPanel.node, connection.node, attentionPanel.node);
+  if(client.pickSources)more.append(localFilesPanel.node);
   if (options.missions) more.append(missionsPanel.node);
   if (options.voice) more.append(voicePanel.node);
   flow.append(manifestation, history, more);
@@ -382,6 +403,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   const historyControl = icon('History', '↶', 'history', () => setView(view() === 'history' ? 'current' : 'history')); historyControl.setAttribute('aria-expanded', 'false'); historyControl.setAttribute('aria-controls', history.id);
   const missionsControl = icon('Missions', '▤', 'missions', () => reveal('missions'));
   const voiceControl = icon('Voice', '♩', 'voice', () => reveal('voice'));
+  const localFilesControl=icon('Add files or folders','▤','files',()=>reveal('files'));
   const releaseVoice = options.voice?.subscribe?.(value => {
     voiceControl.dataset.voiceActive = String(value.active); voiceControl.setAttribute('aria-pressed', String(value.active));
     const description = value.microphoneOn ? 'Microphone on' : value.active ? 'Voice connected; microphone off' : 'Voice off';
@@ -393,8 +415,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   ]);
   if (options.missions) contextPanels.set('missions', { panel: missionsPanel, trigger: missionsControl });
   if (options.voice) contextPanels.set('voice', { panel: voicePanel, trigger: voiceControl });
+  if(client.pickSources)contextPanels.set('files',{panel:localFilesPanel,trigger:localFilesControl});
   for (const [key, entry] of contextPanels) { entry.panel.node.hidden = true; entry.panel.node.id = instanceId + '-' + key; entry.trigger.setAttribute('aria-controls', entry.panel.node.id); entry.trigger.setAttribute('aria-expanded', 'false'); entry.panel.node.addEventListener('toggle', () => { if (activeContext === key && !entry.panel.node.open) closeContext(); }); }
   const composeActions = el('div', 'vela-core-compose-actions'); composeActions.append(sourcesControl, toolsControl, preferencesControl, providerControl, attentionControl, historyControl);
+  if(client.pickSources)composeActions.prepend(localFilesControl);
   if (options.missions) composeActions.append(missionsControl);
   if (options.voice) composeActions.append(voiceControl);
   composeActions.append(stop, send);
@@ -587,8 +611,10 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const missionReport = message?.missionReport;
     const completedPlan = selectedRequest && current?.plans.find(plan => plan.id === projection.currentPlanId && confirmedVelaPlan(current!, selectedRequest, plan));
     const actionPlan = current?.plans.find(plan => plan.id === projection.currentPlanId);
+    const reviewPlan = actionPlan?.state === 'prepared' && !actionPlan.steps.some(step=>step.action.type==='delegateTask') ? actionPlan : null;
     const fileProposal = current?.fileProposals?.find(item => item.requestId === selectedRequest?.id && item.state === 'proposed' && item.count === item.files.length && item.count > 0);
     const completedFiles = current?.fileProposals?.find(item => item.requestId === selectedRequest?.id && item.state === 'applied' && item.result?.verified && item.result.workspaceId === item.target.workspaceId && item.result.importedCount + item.result.reusedCount === item.count);
+    const fileDetails=fileProposal||completedFiles;
     const actionMessage = projection.kind === 'action' && actionPlan ? ({ prepared: 'Ready for your review.', approved: 'Ready to apply.', applying: 'Working…', applied: 'The result needs checking.', failed: 'That couldn’t be completed. Open details to review.', cancelled: 'Cancelled.', rejected: 'No changes made.', unknown: 'The outcome needs checking. Open details before trying again.' }[actionPlan.state]) : '';
     const signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind, content, actionMessage, missionReport, completedPlan: completedPlan?.id, fileProposal, completedFiles });
     manifestationBody.dataset.density = facts && ['time','date','calculator'].includes(facts.kind) && content.length <= 80 ? 'signal' : 'reading';
@@ -606,10 +632,20 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       : projection.kind === 'insight' && message?.source === 'provider' ? providerName(message.providerId) + ' · contribution' : 'Vela';
     if (signature !== responseSignature) {
       responseSignature = signature; manifestationBody.replaceChildren();
+      fileProposalDetails.replaceChildren();fileProposalDetails.hidden=!fileDetails;
+      if(fileDetails){
+        const list=el('ul');for(const file of fileDetails.files)list.append(el('li',undefined,file.displayName));
+        fileProposalDetails.append(el('p','vela-core-meta',fileDetails.source.displayRoot),list);
+        if(completedFiles&&options.onOpenSubject)fileProposalDetails.append(button('Open workspace',()=>options.onOpenSubject!({kind:'workspace',id:completedFiles.target.workspaceId})));
+      }
+      planProposalView.update(reviewPlan?{id:reviewPlan.id+':'+reviewPlan.fingerprint,version:reviewPlan.version,
+        question:reviewPlan.steps.length===1?'Would you like me to do this?':'Would you like me to make these changes?',acceptLabel:'Yes, do that',declineLabel:'No',
+        items:reviewPlan.steps.map(step=>({id:step.id,label:effect(step.action,reviewPlan)}))}:null);
       fileProposalView.update(fileProposal && client.fileProposal ? {id:fileProposal.id+':'+fileProposal.digest,version:fileProposal.version,
         question:content || 'I found these files that seem to match. Would you like me to add them?',acceptLabel:'Yes, add them',declineLabel:'No',
         items:fileProposal.files.map(file=>({id:file.id,label:file.displayName,kind:file.kind,detail:file.relativePath.split(/[\\/]/u).slice(0,-1).slice(-2).join(' / ')}))} : null);
       if (fileProposal && client.fileProposal) manifestationBody.append(fileProposalView.element);
+      else if (reviewPlan) manifestationBody.append(planProposalView.element,responseFooter());
       else if (actionMessage) manifestationBody.append(el('p', undefined, actionMessage), responseFooter());
       else if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content));
       if (missionReport) manifestationBody.append(missionReplyFooter(missionReport));
@@ -1043,6 +1079,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
           workingPlans.delete(plan.id); applyingPlans.delete(plan.id); setPlanBusy(plan.id, false); present();
         }
       };
+      if(plan.state==='prepared')planReviewActions.set(plan.id,{accept:()=>perform(true),decline:async()=>{await client.review({planId:plan.id,fingerprint:plan.fingerprint,decision:'reject'});await refresh();}});
+      else planReviewActions.delete(plan.id);
       if (plan.state === 'prepared') controls.append(button('Approve and apply', () => perform(true)), button('Reject plan', async () => { await client.review({ planId: plan.id, fingerprint: plan.fingerprint, decision: 'reject' }); await refresh(); }));
       if (plan.state === 'approved') controls.append(button('Apply approved plan', () => perform(false))); card.append(controls);
       if (timelineResult()) controls.append(button('Open saved Timeline', () => { const id = timelineResult(); if (id) options.onOpenSubject?.({ kind: 'resource', id }); }));
@@ -1051,7 +1089,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       planCards.set(plan.id, { node: card, controls, signature }); setPlanBusy(plan.id, workingPlans.has(plan.id)); target.push(card);
     }
     reconcile(planHistory.body, earlierCards); planHistory.node.hidden = !earlierCards.length; reconcile(plans, activeCards); reconcile(resultPlans, resultCards);
-    for (const id of planCards.keys()) if (!visible.has(id)) planCards.delete(id);
+    for (const id of planCards.keys()) if (!visible.has(id)) {planCards.delete(id);planReviewActions.delete(id);}
   }
   function setPlanBusy(id: string, pending: boolean) { const controls = planCards.get(id)?.controls; if (controls) for (const child of Array.from(controls.children)) (child as HTMLButtonElement).disabled = pending; }
   function reconcile(parent: HTMLElement, children: HTMLElement[]) { for (const child of Array.from(parent.children)) if (!children.includes(child as HTMLElement)) child.remove(); children.forEach((node, index) => { if (parent.children[index] !== node) parent.insertBefore(node, parent.children[index] ?? null); }); }
@@ -1154,6 +1192,6 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     observeLiveAnswer,
     /** Host visibility notification only; no canonical mutation or inference. */
     close() { observing = false; options.missions?.setVisible(false); options.voice?.setVisible(false); options.permissions?.setVisible(false); observeLiveAnswer(undefined); manifestationSignature = ''; manifestationBaseline = true; try { options.onManifestation?.(null); } catch {} },
-    dispose() { disposed = true; observing = false; fileProposalView.dispose(); releaseVoice?.(); options.missions?.setVisible(false); options.voice?.setVisible(false); options.permissions?.setVisible(false); readSequence++; shell.remove(); try { options.onManifestation?.(null); } catch {} },
+    dispose() { disposed = true; observing = false; fileProposalView.dispose(); planProposalView.dispose(); planReviewActions.clear(); releaseVoice?.(); options.missions?.setVisible(false); options.voice?.setVisible(false); options.permissions?.setVisible(false); readSequence++; shell.remove(); try { options.onManifestation?.(null); } catch {} },
   };
 }

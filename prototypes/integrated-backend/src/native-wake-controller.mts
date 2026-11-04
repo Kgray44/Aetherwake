@@ -22,18 +22,24 @@ interface Options {
 export function createNativeWakeController(options: Options) {
   const now = options.now ?? Date.now, ring = new WakeAudioBuffer(4);
   let generation: number | null = null, handoff = false, closed = false;
+  let live: {attemptId:string;generation:number;fromSample:number;nextSample:number;feed(frame:{startSample:number;samples:Float32Array}):Promise<void>} | null = null;
   const leases = new Map<string, { generation: number; end: number; expires: number }>();
   const claimedAttempts = new Set<string>();
   const purge = () => { leases.clear(); ring.dispose(); handoff = false; };
   const capture = options.capture(async (frame, signal) => {
     if (closed || signal.aborted || frame.generation !== generation) throw Error('wake_host_closed');
+    if(live){
+      if(frame.generation!==live.generation||frame.startSample!==live.nextSample)throw Error('wake_host_failed');
+      const owner=live;owner.nextSample+=frame.samples.length;
+      await owner.feed({startSample:frame.startSample-owner.fromSample,samples:frame.samples});return;
+    }
     ring.append(frame.startSample, frame.samples);
     const result = await options.call('velaWakeFrame', encodeNativeWakeFrame(frame)) as { accepted?: boolean };
     if (result?.accepted !== true) throw Error('wake_host_failed');
   });
   const services: NativeWakeCaptureServices = {
     async arm(input) {
-      if (closed) throw Error('wake_host_closed');
+      if (closed || live) throw Error('wake_host_closed');
       const grant = capture.authorizeArm(input.generation);
       purge(); generation = input.generation; ring.arm();
       try { const result = await capture.arm(input, grant); if (closed || generation !== input.generation) throw Error('wake_host_closed'); return result; }
@@ -46,6 +52,9 @@ export function createNativeWakeController(options: Options) {
       handoff = true; return result;
     },
     async stop(input) {
+      // A paid session owns the same physical capture after handoff. Disabling
+      // only the detector must not sever separately authorized voice input.
+      if(live&&input.generation===live.generation)return capture.state();
       if (input.generation === undefined || generation === input.generation) { generation = null; purge(); }
       return capture.stop(input);
     },
@@ -69,23 +78,31 @@ export function createNativeWakeController(options: Options) {
     async releaseLease({ leaseRef }) { return { released: leases.delete(leaseRef) }; },
   };
   const server = createNativeWakeCaptureServer(services, options.send);
+  function claim(leaseRef:string,attemptId:string){
+    const lease=leases.get(leaseRef);leases.delete(leaseRef);
+    if(closed||live||!handoff||!lease||lease.expires<=now()||lease.generation!==generation||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(attemptId)||claimedAttempts.has(attemptId))throw Error('wake_host_failed');
+    const audio=ring.commandAfter(lease.end);if(audio.clipped){audio.release();throw Error('wake_host_failed');}
+    claimedAttempts.add(attemptId);if(claimedAttempts.size>128)claimedAttempts.delete(claimedAttempts.values().next().value!);return audio;
+  }
   return {
     handle: server.handle,
     /** Call only from the private Live broker after its replacement input is
      * ready. The caller must release this copy after the owned media handoff. */
     consume(leaseRef: string, attemptId: string) {
-      const lease = leases.get(leaseRef); leases.delete(leaseRef);
-      if (closed || !handoff || !lease || lease.expires <= now() || lease.generation !== generation ||
-          !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(attemptId) || claimedAttempts.has(attemptId)) throw Error('wake_host_failed');
-      const audio = ring.commandAfter(lease.end);
-      if (audio.clipped) { audio.release(); throw Error('wake_host_failed'); }
-      claimedAttempts.add(attemptId); if (claimedAttempts.size > 128) claimedAttempts.delete(claimedAttempts.values().next().value!);
+      const audio=claim(leaseRef,attemptId);
       const prior = generation; generation = null; purge();
       try { capture.stop({ generation: prior! }); } catch { audio.release(); throw Error('wake_host_failed'); }
       return audio;
     },
-    state: () => ({ generation, handoff, leases: leases.size, ...ring.state() }),
-    masterOffLocal() { generation = null; purge(); capture.stop({}); },
-    dispose() { if (closed) return; closed = true; generation = null; server.dispose(); purge(); claimedAttempts.clear(); capture.dispose(); },
+    claimLive(leaseRef:string,attemptId:string,feed:(frame:{startSample:number;samples:Float32Array})=>Promise<void>){
+      const audio=claim(leaseRef,attemptId);live={attemptId,generation:generation!,fromSample:audio.fromSample,nextSample:audio.toSample,feed};ring.dispose();return audio;
+    },
+    releaseLive(attemptId:string){
+      if(live?.attemptId!==attemptId)return false;const prior=live.generation;live=null;generation=null;purge();capture.stop({generation:prior});return true;
+    },
+    state: () => ({ generation, handoff, leases: leases.size, liveAttemptId:live?.attemptId??null, ...ring.state() }),
+    masterOffLocal() { live=null; generation = null; purge(); capture.stop({}); },
+    dispose() { if (closed) return; closed = true; live=null; generation = null; server.dispose(); purge(); claimedAttempts.clear(); capture.dispose(); },
   };
 }

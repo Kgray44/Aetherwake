@@ -154,6 +154,41 @@ test("ordinary Vela Send uses the connected ChatGPT plan without opening a secon
   assert.equal(f.calls.at(-1).input.input.grantId, "private-native-grant");
 });
 
+test('project document discovery uses only the owned native folder choice and never opens a provider request',async()=>{
+  const f=fixture(),input=request(true),calls=[];input.input.intent='Can you add the "Synthetic Library" project docs to this workspace?';input.input.resourceIds=[];input.input.selectedDirectory='C:\\FORGED_RENDERER_PATH';
+  const prepared={id:'canonical-question',nativeResponse:{schemaVersion:1,classification:'observed'}};
+  const result=await velaCommand({...f,input,directMessageSend:true,routeNative:true,
+    dialog:{showOpenDialog:async()=>({canceled:false,filePaths:['C:\\OWNED_NATIVE_SELECTION']})},
+    call:async(name,value)=>{calls.push({name,value});if(name==='velaRouteNative')return {matched:false,fileDiscovery:{projectName:'Synthetic Library'}};
+      assert.equal(name,'velaFileProposalPrepareNative');assert.deepEqual(value,{intent:input.input.intent,selectedDirectory:'C:\\OWNED_NATIVE_SELECTION'});return prepared;}});
+  assert.equal(result,prepared);assert.deepEqual(calls.map(call=>call.name),['velaRouteNative','velaFileProposalPrepareNative']);assert.equal(f.reviews.length,0);
+});
+
+test('explicit document requests pass selected canonical folder IDs to Core without selecting another root or probing a provider',async()=>{
+  const f=fixture(),input=request(true),calls=[];input.input.intent='Add project docs to this workspace';input.input.resourceIds=['canonical-folder'];const prepared={id:'bound-folder-question'};
+  const result=await velaCommand({...f,input,directMessageSend:true,routeNative:true,dialog:{showOpenDialog:async()=>assert.fail('The connected folder already grants root metadata access')},
+    call:async(name,value)=>{calls.push({name,value});assert.equal(name,'velaRouteNative');assert.deepEqual(value.resourceIds,['canonical-folder']);return {matched:true,request:prepared};}});
+  assert.equal(result,prepared);assert.equal(calls.length,1);assert.equal(f.reviews.length,0);
+});
+
+test('file proposal Yes/No forwards only its typed receipt and an owner lost during selection cannot import',async()=>{
+  const f=fixture(),command={name:'accept',input:{id:'proposal',digest:'bound-digest',expectedVersion:1}},calls=[];
+  await velaCommand({...f,input:{name:'fileProposal',input:command},call:async(name,input)=>{calls.push({name,input});return {proposal:{state:'applied'}};}});
+  assert.deepEqual(calls,[{name:'vela',input:{name:'fileProposal',input:command}}]);
+  const input=request(true);input.input.intent='Add project docs to this workspace';input.input.resourceIds=[];
+  await assert.rejects(velaCommand({...f,input,directMessageSend:true,routeNative:true,
+    dialog:{showOpenDialog:async()=>{f.close();return {canceled:false,filePaths:['C:\\NATIVE']};}},
+    call:async(name)=>{assert.equal(name,'velaRouteNative');return {matched:false,fileDiscovery:{}};}}),/native_review_owner_unavailable/);
+});
+
+test('manual files and folders come from the native picker and folder selection stays one item',async()=>{
+  for(const kind of ['files','folder']){const f=fixture(),calls=[],paths=kind==='folder'?['C:\\NATIVE_FOLDER']:['C:\\NATIVE_FILE_1','C:\\NATIVE_FILE_2'];
+    const result=await velaCommand({...f,input:{name:'pickSources',input:{kind,destination:'context'}},dialog:{showOpenDialog:async(_win,input)=>{assert.ok(input.properties.includes(kind==='folder'?'openDirectory':'openFile'));return {canceled:false,filePaths:paths};}},
+      call:async(name,input)=>{calls.push({name,input});if(name==='desktop')return {workspaces:[],activeWorkspaceId:null};assert.equal(name,'velaSourcesPickNative');assert.equal(input.destination,'context');assert.deepEqual(input.selection,kind==='folder'?{kind:'folder',path:paths[0]}:{kind:'files',paths});return {resources:[{id:'canonical',kind:kind==='folder'?'folder':'file',title:'Selected',version:1}]};}});
+    assert.equal(result.resources.length,1);assert.deepEqual(calls.map(call=>call.name),['desktop','velaSourcesPickNative']);
+  }
+});
+
 test("a renderer-supplied disposition cannot bypass the backend review decision", async () => {
   const f=fixture();const input=request(true);input.input.resourceIds=[];input.input.sendDisposition="routine";
   await velaCommand({...f,input,directMessageSend:true,offerPlanningByDefault:true});

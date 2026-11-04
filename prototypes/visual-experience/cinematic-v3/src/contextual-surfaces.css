@@ -45,6 +45,7 @@
   letter-spacing: 0.025em;
 }
 .aw-contextual-heading > span {
+  flex: 1;
   overflow-wrap: anywhere;
 }
 .aw-contextual-dismiss {

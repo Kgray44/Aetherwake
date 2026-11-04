@@ -29,6 +29,8 @@ export type ContextualSurfaceRequest = {
   anchor: SurfaceAnchor;
   content: HTMLElement;
   label?: string;
+  /** Controls scoped to this panel, beside its pin/close controls. */
+  headerActions?: HTMLElement;
   role?: "dialog" | "region" | "menu";
   minSize?: SurfaceSize;
   maxSize?: SurfaceSize;
@@ -659,6 +661,10 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
       !!existing.request.modal === !!request.modal
     ) {
       existing.pendingClose = null;
+      if(existing.request.headerActions!==request.headerActions){
+        existing.request.headerActions?.remove();
+        if(request.headerActions){const heading=existing.title.parentElement!;heading.insertBefore(request.headerActions,heading.children[1]??null);}
+      }
       existing.request = request;
       existing.closing = null;
       existing.node.inert = false;
@@ -714,7 +720,9 @@ export function createContextualSurfaces(options: ContextualSurfaceOptions) {
     dismiss.className = "aw-contextual-dismiss";
     dismiss.textContent = "×";
     dismiss.setAttribute("aria-label", "Close panel");
-    header.append(title, dismiss);
+    header.append(title);
+    if(request.headerActions)header.append(request.headerActions);
+    header.append(dismiss);
     body.className = "aw-contextual-content";
     node.append(header, body);
     const previousFocus =

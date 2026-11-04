@@ -29,6 +29,7 @@ export function createVelaProposalView(doc: Document, actions: {
       const copy = row.children[1] as HTMLElement;
       const label = el('span', 'vela-proposal-item-name', item.label); label.title = item.label; copy.replaceChildren(label);
       if (item.detail) copy.append(el('span', 'vela-proposal-item-detail', item.detail));
+      row.children[0].textContent = item.kind === undefined ? '·' : '▤';
       row.children[0].setAttribute('aria-hidden', 'true'); row.hidden = !expanded && index >= 4; list.append(row);
     });
     more.hidden = value.items.length <= 4; more.textContent = expanded ? 'Show less' : 'See all ' + value.items.length;
