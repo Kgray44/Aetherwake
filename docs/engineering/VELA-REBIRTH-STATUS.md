@@ -8,8 +8,10 @@ The Constitution is binding; the specialist registry remains advisory.
 
 Development includes the dedicated API, native voice, canonical timer and
 workspace flows, API specialist scheduling, weather data tools and native battery
-answers. The open review is `c72e2d19f57c064af0418d9ab5a143d1ea03386d`,
-with its existing workspace preserved. The preceding 3d21aef passed 16 of 17
+answers. The prior packaged API-weather review is
+`c72e2d19f57c064af0418d9ab5a143d1ea03386d`, with its existing workspace
+preserved. Source-bound packaging receipts are separate from this implementation
+status. The preceding 3d21aef passed 16 of 17
 regression groups; the remaining backend group found one stale expectation that
 weather questions stayed native. The corrected complete backend group passed
 647 tests with two skips at c72, alongside three helper guards, 21 review checks
@@ -63,11 +65,33 @@ promotes an unknown result. Real API, actual GUI and restricted-runner acceptanc
 are still pending. This is not unattended specialist mutation, multi-file editing
 or a public compensation/Undo flow.
 
+The 8518979 joined run found a cleanup regression: unconditional authority
+revocation during close could fail graph CAS or storage admission and prevent
+worker/database cleanup. The correction scopes token consumption and close-time
+revocation to the current runtime, avoids writes when it owns no authority, and
+drains cleanup before rethrowing a journal error. Startup projects uncertain
+foreign operations safely rather than rewriting their rows. Running and unknown
+checks retain durable quarantine. Twenty-nine domain/Core checks plus the original
+stale-host and storage-admission regressions pass. Broader simultaneous live
+backend recovery remains unqualified; the graph CAS is unchanged.
+
+Pure acknowledgments and greetings now use one canonical local reply and an
+observed Intelligence Stream event. Explicit routing pins, agents, handoffs,
+selected sources and compound requests retain their existing paths. Four checks
+cover zero provider work and preservation of a previous unknown request/execution
+through restart. API reply timeouts use concise text while preserving unknown
+state and all diagnostics. Routing badges remain behind details even on failures;
+33 panel checks and the typecheck pass. The latest joined checkpoint still needs
+its source-bound regression and packaging.
+
 The context-efficiency benchmark is offline preparation only. It seals synthetic
 source fixtures and independent behavioral cases, compares the actual compiler
 against a declared full-corpus control, and forbids savings claims when usage or
 equal verified success is missing. It has made zero model requests and establishes
 no measured production token, cost or performance improvement.
+Nine offline checks and strict TypeScript pass, including a durable SQLite
+authorization claim across reopen, exact transport identity, post-response source
+validation and consistent input/output/total token accounting.
 
 The requested existing custom voices are now discovered through a bounded,
 read-only account catalog request. Vela 3 is the default and the settings selector

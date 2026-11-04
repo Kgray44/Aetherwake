@@ -45,6 +45,53 @@ function fixture(){
   };
 }
 
+test('actual stale second Core closes without a mutation and cannot overwrite the first host', async () => {
+  const f=fixture(); let second:BackendCore|undefined,reopened:BackendCore|undefined;
+  try {
+    const path=join(f.profile,'canonical.sqlite');
+    second=new BackendCore({path,privateRoot:f.profile,provider:'fixture',contentPolicy:'synthetic-only'},()=>{});
+    await second.command('snapshot',{});
+    await f.core.command('createConversation',{title:'Synthetic first writer',commandId:randomUUID()});
+    await assert.rejects(second.command('createConversation',{title:'Synthetic stale writer',commandId:randomUUID()}),/concurrent_backend_writer/);
+    const owner=second as any,close=owner.port.close.bind(owner.port);let closed=0;
+    owner.port.close=()=>{closed++;return close();};
+    await f.core.command('close',{});await second.command('close',{});
+    assert.equal(closed,1);assert.equal(owner.closed,true);second=undefined;
+    reopened=new BackendCore({path,privateRoot:f.profile,provider:'fixture',contentPolicy:'synthetic-only'},()=>{});
+    const state=await reopened.command('snapshot',{});
+    assert.deepEqual(state.conversations.map(c=>c.title),['Synthetic first writer']);
+  } finally { await second?.command('close',{}).catch(()=>{});await reopened?.command('close',{});await f.close(); }
+});
+
+test('owned-authority journal failure during actual Core close still releases wake, voice, worker and SQLite',async()=>{
+  const f=fixture();try{
+    await f.ready();await f.run();await f.approve(await f.operation());
+    const owner=f.core as any,observed:string[]=[];
+    for(const [name,target,method] of [['wake',owner.velaWakeRuntime,'dispose'],['voice',owner.velaVoiceRuntime,'dispose'],['worker',owner.port,'close'],['sqlite',owner.kernel,'close']] as const){
+      const original=target[method].bind(target);target[method]=(...args:unknown[])=>{observed.push(name);return original(...args);};
+    }
+    owner.atomic=()=>{throw Error('synthetic close journal failure');};
+    await assert.rejects(f.core.command('close',{}),/synthetic close journal failure/);
+    assert.deepEqual(observed,['wake','voice','worker','sqlite']);assert.equal(owner.closed,true);
+    assert.throws(()=>owner.missionFileEdits.view('unused'),/mission_edit_closed/);
+  }finally{await f.close();}
+});
+
+test('startup quarantines a persisted running check without rewriting its uncertain source record',async()=>{
+  const f=fixture();try{
+    await f.ready();await f.run();const op=await f.operation(),grant=await f.approve(op);
+    await f.core.command('missionFileEditApplyNative',{operationId:op.id,authority:grant.authority});
+    await f.approve(await f.operation(),'check');
+    const raw=JSON.parse(String(f.db.prepare('SELECT json FROM mission_file_operations WHERE id=?').get(op.id).json));raw.check.state='running';
+    (f.core as any).atomic(()=>{f.db.prepare('UPDATE mission_file_operations SET json=? WHERE id=?').run(JSON.stringify(raw),op.id);f.db.prepare('DELETE FROM mission_file_check_custody').run();});
+    await f.reopen();
+    assert.equal(f.db.prepare('SELECT state FROM mission_file_check_custody').get().state,'unknown');
+    assert.equal((await f.operation()).verification.state,'unknown');
+    assert.equal(JSON.parse(String(f.db.prepare('SELECT json FROM mission_file_operations WHERE id=?').get(op.id).json)).check.state,'running');
+    await assert.rejects(f.prepare(),/mission_edit_unavailable/);assert.equal(f.checkCalls,0);
+  }finally{await f.close();}
+});
+
 test('actual Core API selected-file edit binds one real user request and typed API receipt, then native Yes applies with same-resource CAS and separately reviewed check',async()=>{
   const f=fixture();try{await f.ready();const route=await f.core.command('velaRouteNative',{intent,resourceIds:[f.resourceId],resourceRefs:[f.ref()]});assert.equal(route.matched,false);assert.equal((route as any).apiFileEdit,true);assert.equal((route as any).selectedEditSource.id,f.resourceId);
     const desktop=await f.core.command('desktop',{type:'snapshot'}),block=desktop.blocks.find(b=>b.resource_id===f.resourceId)!;

@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { productCommand, isProductRead } = require('../native/product-commands.cjs');
+const { PRIVATE_MISSION_FILE_EDIT_COMMANDS } = require('../native/mission-file-edit-broker.cjs');
 
 function preload(active) {
   let host; const calls = [], activation = { isActive: active };
@@ -31,7 +32,7 @@ function main(resumeBarrier = Promise.resolve()) {
   vm.runInNewContext(source.slice(start, end), {
     ipcMain: { handle(_name, callback) { handler = callback; } }, Buffer, win, localURL,
     trustedActiveFrame: received => received === event && focused,
-    productCommand, isProductRead, timerResumeBarrier: resumeBarrier,
+    productCommand, isProductRead, PRIVATE_MISSION_FILE_EDIT_COMMANDS, timerResumeBarrier: resumeBarrier,
     storage: { allowWrite: async () => { storageChecks++; return true; } },
     call: async (...input) => { calls.push(input); return { result: 'canonical-clock-result' }; },
   });
@@ -82,6 +83,16 @@ test('Main rejects detached/untrusted frames and lost focus after the activation
   assert.equal((await native.invoke('clockTimers', { name: 'list', input: {} }, { ...native.event, sender: {} })).error, 'unauthorized_sender');
   native.loseFocus(); assert.equal((await native.invoke('clockTimers', { name: 'create', input: {} })).error, 'timer_user_gesture_required');
   assert.equal(native.calls.length, 0);
+});
+
+test('Main refuses every real private mission-edit command through generic renderer RPC', async () => {
+  const native = main();
+  assert(Object.isFrozen(PRIVATE_MISSION_FILE_EDIT_COMMANDS) && PRIVATE_MISSION_FILE_EDIT_COMMANDS.length > 0);
+  for (const command of PRIVATE_MISSION_FILE_EDIT_COMMANDS) {
+    assert.equal((await native.invoke(command, { userGesture: true })).error, 'unauthorized_private_command');
+  }
+  assert.equal(native.calls.length, 0);
+  assert.deepEqual(native.metrics(), { activationReads: 0, storageChecks: 0 });
 });
 
 test('Main serializes new clock commands behind its private resume barrier and never dispatches renderer-forged resume', async () => {

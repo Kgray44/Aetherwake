@@ -226,19 +226,51 @@ test('a fabricated canonical version cannot convert a confirmed filesystem write
   } finally { await f.close(); }
 });
 
-test('restart invalidates pending write authority, preserves truthful applying/check uncertainty and does not fill terminal journals', async () => {
+test('restart invalidates local write authority without rewriting another host and projects applying/check uncertainty', async () => {
   const f = fixture(); try {
     const op = f.proposal().view, authority = f.approve(op.id); f.reopen();
     assert.equal(f.domain.view(op.id).phase, 'awaiting-native-review');
-    assert.equal(f.db.prepare('SELECT state FROM mission_file_authorities').get()!.state, 'revoked');
+    assert.equal(f.db.prepare('SELECT state FROM mission_file_authorities').get()!.state, 'active', 'opening a reader cannot revoke another host’s row');
     assert.throws(() => f.domain.apply(op.id, authority.authority), /write_authority_required/);
     const reviewed = f.approve(op.id); f.domain.apply(op.id, reviewed.authority);
     const raw = f.raw(op.id); raw.phase = 'applying'; raw.check = { state: 'running' };
     f.db.prepare('UPDATE mission_file_operations SET json=? WHERE id=?').run(JSON.stringify(raw), op.id);
-    f.reopen(); assert.equal(f.raw(op.id).phase, 'unknown'); assert.equal(f.raw(op.id).check.state, 'unknown');
+    f.reopen(); assert.equal(f.domain.view(op.id).phase, 'unknown'); assert.equal(f.domain.view(op.id).verification.state, 'unknown');
+    assert.equal(f.raw(op.id).phase, 'applying'); assert.equal(f.raw(op.id).check.state, 'running', 'recovery leaves the original unconfirmed evidence intact');
     const count = f.raw(op.id).events.length; for (let i = 0; i < 40; i++) f.reopen();
     assert.equal(f.raw(op.id).events.length, count); assert.equal(readFileSync(f.path, 'utf8'), after); assert.equal(f.calls, 0);
   } finally { await f.close(); }
+});
+
+test('another live domain cannot consume or revoke the first host’s authority when opening and closing', async () => {
+  const f = fixture(); let other: MissionFileEdits | undefined;
+  try {
+    const op = f.proposal().view, token = f.approve(op.id), stored = f.db.prepare('SELECT * FROM mission_file_authorities').all();
+    const atomic = f.host.atomic; let transactions = 0;
+    f.host.atomic = work => { transactions++; return atomic(work); };
+    other = new MissionFileEdits(f.host);
+    assert.equal(other.view(op.id).phase, 'awaiting-native-review');
+    assert.throws(() => other!.apply(op.id, token.authority), /write_authority_required/);
+    await other.close(); other = undefined;
+    assert.equal(transactions, 0, 'a reader with no owned authority has no shutdown transaction');
+    assert.deepEqual(f.db.prepare('SELECT * FROM mission_file_authorities').all(), stored);
+    assert.equal(f.domain.apply(op.id, token.authority).phase, 'applied');
+  } finally { await other?.close(); await f.close(); }
+});
+
+test('close revokes only locally minted hashes and leaves a different host’s live token usable', async () => {
+  const f = fixture(); let other: MissionFileEdits | undefined;
+  try {
+    const owned = f.proposal().view; f.approve(owned.id);
+    const foreign = f.proposal().view; other = new MissionFileEdits(f.host);
+    const review = other.review(foreign.id), token = other.acceptNativePatchChoice(foreign.id, review.reviewId, f.decision(review, 'patch'))!;
+    await f.domain.close();
+    const rows = f.db.prepare('SELECT operation_id,state FROM mission_file_authorities ORDER BY operation_id').all();
+    assert.equal(rows.find(row => row.operation_id === owned.id)!.state, 'revoked');
+    assert.equal(rows.find(row => row.operation_id === foreign.id)!.state, 'active');
+    assert.equal(other.apply(foreign.id, token.authority).phase, 'applied');
+    assert.throws(() => f.domain.view(owned.id), /closed/);
+  } finally { await other?.close(); await f.close(); }
 });
 
 test('compensation is a separate exact patch with another native Yes and a new canonical version', async () => {

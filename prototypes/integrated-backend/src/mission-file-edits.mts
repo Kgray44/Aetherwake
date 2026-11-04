@@ -96,6 +96,7 @@ function whileActive<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
 export class MissionFileEdits {
   private readonly host: MissionFileEditsHost; private readonly now: () => number;
   private closed = false; private readonly checks = new Set<Promise<unknown>>(); private readonly stopping = new AbortController();
+  private readonly ownedAuthorities = new Set<string>(); private readonly ownedOperations = new Set<string>();
   static migrate(db: DatabaseSync) {
     ensure(db.isTransaction, 'mission_edit_transaction_required');
     db.exec(`CREATE TABLE IF NOT EXISTS mission_file_inspections(id TEXT PRIMARY KEY,json TEXT NOT NULL);
@@ -105,18 +106,8 @@ export class MissionFileEdits {
   }
   constructor(host: MissionFileEditsHost) {
     this.host = host; this.now = host.now ?? Date.now;
-    host.atomic(() => {
-      host.db.prepare("UPDATE mission_file_authorities SET state='revoked' WHERE state='active'").run();
-      for (const row of host.db.prepare('SELECT id,json FROM mission_file_operations').all()) {
-        const op = this.decode(String(row.json), String(row.id));
-        let changed = false;
-        if (op.phase === 'applying') { op.phase = 'unknown'; changed = true; }
-        if (op.phase === 'approved') { op.phase = 'awaiting-native-review'; delete op.review; changed = true; }
-        if (op.check?.state === 'approved') { op.check.state = 'awaiting-native-review'; changed = true; }
-        if (op.check?.state === 'running') { op.check.state = 'unknown'; op.check.reason = 'restart-after-check-dispatch'; changed = true; }
-        if (changed) this.save(op, 'recovered');
-      }
-    });
+    // A new reader cannot infer that another host exited. Recovery is a safe
+    // projection; persisted runner uncertainty is quarantined by the Core.
   }
   private active() { ensure(!this.closed, 'mission_edit_closed'); }
   private read<T>(table: 'mission_file_inspections' | 'mission_file_operations', key: string): T {
@@ -144,7 +135,16 @@ export class MissionFileEdits {
       inspection.source.path === inspection.target.path && hex(inspection.target.beforeDigest) && sha(inspection.before) === inspection.target.beforeDigest,
     'mission_edit_unavailable');
   }
-  private op(key: string) { this.active(); return this.decode(JSON.stringify(this.read<Operation>('mission_file_operations', key)), key); }
+  private op(key: string) {
+    this.active(); const op = this.decode(JSON.stringify(this.read<Operation>('mission_file_operations', key)), key);
+    if (!this.ownedOperations.has(op.id)) {
+      if (op.phase === 'applying') op.phase = 'unknown';
+      if (op.phase === 'approved') { op.phase = 'awaiting-native-review'; delete op.review; }
+      if (op.check?.state === 'approved') op.check.state = 'awaiting-native-review';
+      if (op.check?.state === 'running') { op.check.state = 'unknown'; op.check.reason = 'runner-outcome-unconfirmed'; }
+    }
+    return op;
+  }
   private save(op: Operation, kind: string) {
     ensure(this.host.db.isTransaction && op.events.length < MISSION_FILE_EDIT_LIMITS.events, 'mission_edit_storage_unavailable');
     op.updatedAt = new Date(this.now()).toISOString(); op.events.push({ kind, at: op.updatedAt });
@@ -202,6 +202,7 @@ export class MissionFileEdits {
     this.host.atomic(() => {
       ensure(!this.host.db.prepare("SELECT id FROM mission_file_operations WHERE json_extract(json,'$.inspection.id')=?").get(inspection.id), 'mission_edit_inspection_consumed');
       ensure(Number(this.host.db.prepare('SELECT count(*) AS n FROM mission_file_operations').get()!.n) < MISSION_FILE_EDIT_LIMITS.operations, 'mission_edit_capacity'); this.save(op, 'proposal-ready'); });
+    this.ownedOperations.add(op.id);
     return this.view(op.id);
   }
   /** Only canonical completed API execution evidence may register a proposal. */
@@ -243,6 +244,8 @@ export class MissionFileEdits {
     this.host.atomic(() => { this.host.db.prepare("UPDATE mission_file_authorities SET state='revoked' WHERE operation_id=? AND purpose=? AND state='active'").run(op.id, review.purpose);
       this.host.db.prepare('INSERT INTO mission_file_authorities VALUES(?,?,?,?,?,?)').run(sha(authority), op.id, review.purpose, review.digest, expiresAt, 'active');
       if (review.purpose === 'patch') op.phase = 'approved'; else if (op.check) op.check.state = 'approved'; this.save(op, 'native-choice-yes'); });
+    this.ownedAuthorities.add(sha(authority));
+    this.ownedOperations.add(op.id);
     return { authority, expiresAt };
   }
   acceptNativePatchChoice(operationId: string, reviewId: string, nativeChoiceId: string): PrivateMissionEditAuthority | null {
@@ -251,7 +254,7 @@ export class MissionFileEdits {
     return this.choose(op, op.review, nativeChoiceId);
   }
   private consume(op: Operation, authority: string, review: Review) {
-    ensure(id(authority), 'mission_edit_write_authority_required');
+    ensure(id(authority) && this.ownedAuthorities.has(sha(authority)), 'mission_edit_write_authority_required');
     const row = this.host.db.prepare('SELECT * FROM mission_file_authorities WHERE token_hash=?').get(sha(authority));
     ensure(row?.operation_id === op.id && row.purpose === review.purpose && row.review_digest === review.digest && row.state === 'active' && Number(row.expires_at) > this.now(), 'mission_edit_write_authority_required');
     ensure(this.host.db.isTransaction, 'mission_edit_transaction_required');
@@ -352,8 +355,13 @@ export class MissionFileEdits {
     this.host.atomic(() => { this.host.db.prepare("UPDATE mission_file_authorities SET state='revoked' WHERE operation_id=?").run(op.id); op.phase = 'cancelled'; this.save(op, 'cancelled'); }); return this.view(op.id);
   }
   async close(): Promise<void> {
+    if (this.closed) return;
     this.closed = true; this.stopping.abort();
-    try { this.host.atomic(() => this.host.db.prepare("UPDATE mission_file_authorities SET state='revoked' WHERE state='active'").run()); }
-    finally { await Promise.allSettled([...this.checks]); }
+    try {
+      if (this.ownedAuthorities.size) this.host.atomic(() => {
+        const revoke = this.host.db.prepare("UPDATE mission_file_authorities SET state='revoked' WHERE token_hash=? AND state='active'");
+        for (const token of this.ownedAuthorities) revoke.run(token);
+      });
+    } finally { this.ownedAuthorities.clear(); await Promise.allSettled([...this.checks]); }
   }
 }

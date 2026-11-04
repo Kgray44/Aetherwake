@@ -14,7 +14,7 @@ export const LIMITS = Object.freeze({ totalBytes:1024*1024*1024, fileBytes:512*1
 const APP = 'prototypes/visual-experience/cinematic-v3';
 const BLOCKS = 'prototypes/block-library';
 const OPENAI = 'prototypes/openai-provider';
-const OPENAI_SOURCE = new Set(['auth.mts','common.mts','contracts.mts','responses.mts','model-controls.ts','native-storage.mts','loopback.mts','api-connection-contracts.mts','api-connections.mts','live-contracts.mts','live.mts','live-usage.mts'].map(name=>OPENAI+'/'+name));
+const OPENAI_SOURCE = new Set(['auth.mts','common.mts','contracts.mts','responses.mts','model-controls.ts','native-storage.mts','loopback.mts','api-connection-contracts.mts','api-connections.mts','live-contracts.mts','live.mts','live-usage.mts','voice-catalog.mts'].map(name=>OPENAI+'/'+name));
 export const JOSE_RUNTIME = Object.freeze({name:'jose',version:'6.2.15',integrity:'sha512-qdF6ewcZARtef63fJ9AKKZPgxw+t7USH6HLXYcD4CrdmSvDp79rpJSPFEKc90QBeGS63u1KQtN2MZQHC0yDIzA==',resolved:'https://registry.npmjs.org/jose/-/jose-6.2.15.tgz',importer:OPENAI+'/auth.mts',entry:'dist/webapi/index.js',files:128,bytes:1024*1024,tarBytes:2*1024*1024});
 // BrowserWindow preload paths are loaded by Electron, not Node imports. Keep
 // both trusted preload entry points explicit in the runtime dependency closure.

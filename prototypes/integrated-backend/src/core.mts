@@ -97,6 +97,7 @@ import { resolveRoutingSettings, resolveVelaCalibration, validateRoutingDefaults
 import { compareVelaCalibration, type VelaRoutingSample } from '../../vela-core/src/routing-calibration.ts';
 import type { AgentProfile, AgentProviderCatalog } from '../../agent-product/contracts.ts';
 import { matchOrdinaryClockQuestion } from './ordinary-clock-questions.mts';
+import { pureCourtesyReply } from './vela-courtesy.mts';
 import { evaluateLocalCapability, readSystemClock } from '../../vela-core/src/local-capabilities.mts';
 import { createCanonicalVelaHost, type CanonicalVelaHost, type CanonicalVelaMetadata } from '../../vela-core/src/canonical-host.mts';
 import { CodexPlanningAdapter, planningDigest, buildCodexPlanningPrompt, parseCodexPlanningOutput, type CodexPlanningGrant, type PlanningObservation } from '../../vela-core/src/codex-planning-adapter.mts';
@@ -3118,7 +3119,17 @@ export class BackendCore {
     }
     const profiles = this.velaRoutingProfiles();
     // Pins govern inference when needed. Clear native tools retain the same configured pins without a model call.
-    resolveRoutingSettings(profiles, settings);
+    const { effective } = resolveRoutingSettings(profiles, settings);
+    const courtesy = pureCourtesyReply(intent);
+    if (courtesy) {
+      if (settings?.routingAgentId || settings?.handoffSourceRequestId || effective.mode !== 'auto' ||
+        effective.providerId || effective.model || effective.reasoningEffort) return { matched: false };
+      const request = this.vela.nativeResponse(intent, courtesy, 'answer');
+      this.recordVelaRoute('stage_completed', request.id, 'aerynth-native', {
+        route: 'native', capabilityId: 'conversation.courtesy', outcome: 'observed',
+      });
+      return { matched: true, request };
+    }
     const workspaceMutation=await this.routeVelaWorkspaceMutation(intent);if(workspaceMutation)return workspaceMutation;
     const timer=await this.routeVelaClockTimer(intent,activeCard);if(timer)return timer;
     const fact = nativeVelaFact(intent) ?? matchOrdinaryClockQuestion(intent);
@@ -4122,7 +4133,7 @@ export class BackendCore {
         if(Number.isSafeInteger(result.exitCode)&&result.exitCode>=0&&!this.closed)this.atomic(()=>this.db.prepare("UPDATE mission_file_check_custody SET state='exit-observed' WHERE operation_id=?").run(id));
         return result;
       }}});
-    this.atomic(()=>{for(const row of this.db.prepare("SELECT id,json FROM mission_file_operations WHERE json_extract(json,'$.check.state')='unknown'").all()){
+    this.atomic(()=>{for(const row of this.db.prepare("SELECT id,json FROM mission_file_operations WHERE json_extract(json,'$.check.state') IN ('unknown','running')").all()){
       const op=JSON.parse(String(row.json));this.db.prepare("INSERT OR IGNORE INTO mission_file_check_custody VALUES(?,?,'unknown')").run(String(row.id),op.inspection.target.root);}});
     if(this.missionEditQuarantined())this.missionProjectCheckRunning=true;
   }
@@ -5389,37 +5400,43 @@ export class BackendCore {
         return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;
       }
       case 'close': {
+        let cleanupError: unknown, cleanupFailed = false;
+        const cleanup = async (work: () => unknown | Promise<unknown>) => {
+          try { await work(); } catch (error) { if (!cleanupFailed) { cleanupFailed = true; cleanupError = error; } }
+        };
         for(const abort of this.missionFileApiRuns.values())abort.abort();
         const fileEditsClosing=this.missionFileEdits.close();void fileEditsClosing.catch(()=>{});
-        this.selectedDocumentContext.close();
-        this.folderSources.dispose();
-        await this.velaWakeRuntime.dispose();
-        await this.velaVoiceRuntime.dispose();
+        await cleanup(() => this.selectedDocumentContext.close());
+        await cleanup(() => this.folderSources.dispose());
+        await cleanup(() => this.velaWakeRuntime.dispose());
+        await cleanup(() => this.velaVoiceRuntime.dispose());
         await Promise.allSettled([...this.missionFileApiTasks]);
-        await fileEditsClosing;
-        await this.timerDomain?.dispose();
-        this.githubImport?.abort();
-        this.ordinaryController?.abort();
+        await cleanup(() => fileEditsClosing);
+        await cleanup(() => this.timerDomain?.dispose());
+        await cleanup(() => this.githubImport?.abort());
+        await cleanup(() => this.ordinaryController?.abort());
         const planning = this.missionPlanningRun;
-        planning?.abort.abort();
-        this.missionAdmission.dispose();
-        this.weatherRequest?.abort();this.weatherPermissions?.close();
-        await this.missions.close();
-        this.flushMissionPublication();
+        await cleanup(() => planning?.abort.abort());
+        await cleanup(() => this.missionAdmission.dispose());
+        await cleanup(() => this.weatherRequest?.abort());
+        await cleanup(() => this.weatherPermissions?.close());
+        await cleanup(() => this.missions.close());
+        await cleanup(() => this.flushMissionPublication());
         await planning?.settled.catch(() => {});
         if(this.ordinaryTask)await this.ordinaryTask.catch(()=>{});
         if(this.velaProjectCheckTask)await this.velaProjectCheckTask.task.catch(()=>{});
-        await this.ordinaryConnections.close();
-        this.velaApiRuntime.close();
+        await cleanup(() => this.ordinaryConnections.close());
+        await cleanup(() => this.velaApiRuntime.close());
         await this.velaApiTask?.catch(() => {});
-        this.velaApiConnection.close();
+        await cleanup(() => this.velaApiConnection.close());
         await Promise.allSettled([...this.ordinaryAuth.values()]);
-        for(const id of this.velaCatalogLeases.keys())this.finishVelaCatalog(id);
-        this.stopEvents();
-        this.port.close();
+        for(const id of this.velaCatalogLeases.keys())await cleanup(() => this.finishVelaCatalog(id));
+        await cleanup(() => this.stopEvents());
+        await cleanup(() => this.port.close());
         clearTimeout(this.missionPublicationTimer);
-        this.kernel.close();
+        await cleanup(() => this.kernel.close());
         this.closed = true;
+        if (cleanupFailed) throw cleanupError;
         return null as any;
       }
       default: throw new ServiceError('unsupported_command');
