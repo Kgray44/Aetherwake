@@ -3184,6 +3184,7 @@ export function installApplication(hooks: Hooks) {
           state.navigation.kind !== "workspace"
         )
           throw Error("workspace_changed");
+        if (action.type === "saveNamedLayout" || action.type === "restoreNamedLayout") return command(action);
         return command({ ...action, expectedLayoutVersion });
       });
     };
@@ -3216,6 +3217,10 @@ export function installApplication(hooks: Hooks) {
         preview: previewOptimization,
         apply: applyOptimization,
         cancel: () => { if (optimizationReview) cancelPreview(false); },
+      },
+      namedLayouts: {
+        save: input => mutate({ type: "saveNamedLayout", ...input }),
+        restore: input => mutate({ type: "restoreNamedLayout", ...input }),
       },
       act: async (action) => {
         if (!state?.activeWorkspaceId) throw Error("workspace_unavailable");

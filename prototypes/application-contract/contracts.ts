@@ -161,6 +161,7 @@ export type WorkspacePresence = {
   scale: 0.65;
   locked: boolean;
 };
+export type SavedWorkspaceLayout = { id: string; name: string; createdAt: string };
 export type DesktopSnapshot = {
   contract: "aerynth.desktop@1";
   revision: number;
@@ -183,6 +184,7 @@ export type DesktopSnapshot = {
   canUndo: boolean;
   canRedo: boolean;
   hasCheckpoint: boolean;
+  savedLayouts?: SavedWorkspaceLayout[];
   navigationBlocks?: Block[];
   viewport?: { x: number; y: number; zoom: number; displayId?: string };
   organization?: WorkspaceOrganization;
@@ -319,7 +321,9 @@ type DesktopAction =
   | { type: "undo" }
   | { type: "redo" }
   | { type: "checkpoint" }
-  | { type: "restore" };
+  | { type: "restore" }
+  | { type: "saveNamedLayout"; workspaceId: string; name: string; expectedLayoutVersion: number }
+  | { type: "restoreNamedLayout"; workspaceId: string; checkpointId: string; expectedLayoutVersion: number };
 export type DesktopCommand = DesktopAction & {
   expectedLayoutVersion?: number;
   bounds?: { x: number; y: number; width: number; height: number };

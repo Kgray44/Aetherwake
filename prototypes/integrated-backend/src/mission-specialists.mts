@@ -18,6 +18,7 @@ const sourceAssignments = [
   { id: 'research-review', role: 'Independent Research Reviewer', objective: 'Identify potential gaps, conflicts and validation checks.',
     focus: 'Independently identify gaps, alternative interpretations, and ways to verify answers. You have no web tools.' },
 ] as const;
+const teamReportInstructions = 'If evaluating a concrete claim, include up to two "assessments". Each has a "claim" of up to 80 bytes, a "position" of "supports" or "challenges", and the zero-based "observation" index of your supporting reason. Use the objective’s wording for shared claims.';
 
 function specialistTask(
   assignment: { id: string; role: string; objective: string; focus: string; report?: string },
@@ -52,6 +53,14 @@ export function assignMissionTemporarySpecialist(template: MissionTaskPlan, titl
   }, template.specialist);
 }
 
+export function reassignMissionSpecialist(task: MissionTaskPlan, selection: Selection | undefined): MissionTaskPlan['specialist'] {
+  return specialistTask({
+    id: task.id, role: task.specialist?.role ?? 'Specialist', objective: task.objective,
+    focus: 'Your reviewed responsibility for the objective is: ' + task.objective,
+    ...(task.teamMember ? { report: teamReportInstructions } : {}),
+  }, selection, task.specialist?.webSearch).specialist;
+}
+
 export function teamMissionPlan(objective: string, scope: MissionScope, team: MissionTeam,
   profile: (id: string) => { title: string; selection?: Selection } | undefined): MissionPlan | null {
   if (typeof objective !== 'string' || !objective.trim() || Buffer.byteLength(objective) > 2048) return null;
@@ -61,7 +70,7 @@ export function teamMissionPlan(objective: string, scope: MissionScope, team: Mi
     const task = specialistTask({
       id: 'member-' + (index + 1), role: title, objective: member.responsibility,
       focus: 'Your reviewed responsibility for the objective is: ' + member.responsibility,
-      report: 'If evaluating a concrete claim, include up to two "assessments". Each has a "claim" of up to 80 bytes, a "position" of "supports" or "challenges", and the zero-based "observation" index of your supporting reason. Use the objective’s wording for shared claims.',
+      report: teamReportInstructions,
     }, resolved?.selection);
     return { ...task, teamMember: { profileId: member.profileId, title, responsibility: member.responsibility } };
   });

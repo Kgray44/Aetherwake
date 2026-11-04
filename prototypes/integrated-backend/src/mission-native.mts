@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { readCpuUtilization, readGpuUtilization } from '../../vela-core/src/system-utilization.mts';
 import { readSystemMemory } from '../../vela-core/src/system-memory.mts';
-import { summarizeSystemMemory, validateSystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
+import { validateSystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
 import type { Mission, MissionExecutor, MissionPlan, MissionScope, MissionTask, MissionTaskPlan } from './mission-contracts.mts';
 
 const numberIn = (n: unknown, min: number, max: number) =>
@@ -21,18 +21,54 @@ export function missionMeasurementAnswer(tasks: readonly MissionTask[]): string[
     const value = object(evidence.value);
     if (task.executor === 'sample.cpu' && evidence.source === 'node:os.cpus' && value.metric === 'cpu' &&
       numberIn(value.percent, 0, 100) && numberIn(value.sampleMs, 200, 5000)) {
-      answer.push(`CPU usage was ${value.percent}% over a ${value.sampleMs} ms sample.`);
+      answer.push(`CPU ${value.percent}% (${value.sampleMs} ms sample).`);
     } else if (task.executor === 'sample.ram' && evidence.source === 'node:os.totalmem+freemem') {
       try {
         validateSystemMemoryMeasurement(evidence.value);
-        answer.push(summarizeSystemMemory(evidence.value));
+        const { usedBytes, totalBytes, availableBytes, utilizationPercent, source } = evidence.value;
+        const gib = (bytes: number) => (bytes / 2 ** 30).toFixed(2);
+        answer.push(`RAM ${utilizationPercent}% (${gib(usedBytes)}/${gib(totalBytes)} GiB used, ${gib(availableBytes)} GiB ${source.platform === 'win32' ? 'available' : 'free'}).`);
       } catch { /* Ignore evidence that no longer meets the native contract. */ }
     } else if (task.executor === 'sample.gpu' && evidence.source === 'windows:gpu-engine' && value.metric === 'gpu' &&
       numberIn(value.percent, 0, 100)) {
-      answer.push(`The busiest observed GPU engine was at ${value.percent}% utilization.`);
+      answer.push(`GPU ${value.percent}% (busiest observed engine).`);
     }
   }
   return answer;
+}
+
+const completedMissionWork = (mission: Mission) => mission.tasks.filter(task =>
+  task.state === 'verified' && task.executor !== 'join.samples' && task.executor !== 'join.team');
+
+export function missionJobsDone(mission: Mission) {
+  return new Set(completedMissionWork(mission).map(task => task.criterion)).size;
+}
+
+/** Concise results for the scoped chat receipt. The plan retains the full evidence. */
+export function missionCompletion(mission: Mission) {
+  const jobs = completedMissionWork(mission);
+  const lines = missionMeasurementAnswer(jobs);
+  const specialistResults = new Set<string>();
+  for (const task of jobs) {
+    const evidence = task.attempts.at(-1)?.evidence;
+    const value = object(evidence?.value);
+    if (evidence?.source === 'aerynth.backend.node' && typeof value.rssBytes === 'number' &&
+      typeof value.heapUsedBytes === 'number' && typeof value.timerOvershootMs === 'number') {
+      const mib = (bytes: number) => (bytes / 2 ** 20).toFixed(1);
+      lines.push(`Backend ${mib(value.rssBytes)} MiB RSS, ${mib(value.heapUsedBytes)} MiB heap, ${value.timerOvershootMs.toFixed(1)} ms timer delay.`);
+    } else if (evidence?.source === 'aerynth.shipped-backend-source') {
+      lines.push(`Found ${value.sqlitePrepareSites} SQLite prepare sites and ${value.transactionSites} transaction sites in the shipped source.`);
+    } else if (evidence?.source === 'aerynth.authorized-workspace-notes' && Array.isArray(value.references)) {
+      lines.push(`Found ${value.references.length} relevant ${value.references.length === 1 ? 'note' : 'notes'}.`);
+    } else if (evidence?.source === 'codex-app-server:read-only-command') {
+      lines.push(`${value.testCount} ${value.testCount === 1 ? 'test passed' : 'tests passed'}.`);
+    } else if (evidence?.source === 'chatgpt-plan-responses:reported' && Array.isArray(value.observations) &&
+      typeof value.observations[0] === 'string' && !specialistResults.has(value.observations[0])) {
+      specialistResults.add(value.observations[0]);
+      lines.push(`${task.specialist?.role ?? 'Specialist'} reported: ${value.observations[0].trim()}`);
+    }
+  }
+  return { content: lines.join('\n') || 'Completed the requested work.', jobsDone: missionJobsDone(mission) };
 }
 
 const utilization = (metric: 'cpu' | 'gpu', read: typeof readCpuUtilization): MissionExecutor => ({
@@ -166,31 +202,34 @@ export function missionPlanningCatalog() {
 /** AIR remains the default. Only fully matched, supported read-only objectives enter this planner. */
 export function nativeMissionPlan(intent: string, scope: MissionScope): MissionPlan | null {
   if (typeof intent !== 'string' || Buffer.byteLength(intent) > 4096) return null;
-  const text = intent.normalize('NFKC').toLowerCase().trim().replace(/^vela[,:]?\s+/u, '')
-    .replace(/^(?:please\s+)?(?:run|start|plan|create) (?:a )?mission (?:to|for)\s+/u, '').replace(/[.!?]+$/u, '');
+  const normalized = intent.normalize('NFKC').toLowerCase().trim().replace(/^vela[,:]?\s+/u, '');
+  const prefix = /^(?:please\s+)?(?:run|start|plan|create) (?:a )?mission (?:to|for)\s+/u;
+  const explicit = prefix.test(normalized);
+  const text = normalized.replace(prefix, '').replace(/[.!?]+$/u, '');
   let ids: string[];
   const check = /^run (?:the )?selected node(?:\.js)? tests and (?:measure|sample|check) cpu and ram(?: in parallel)?$/u.test(text);
   if (/^(?:investigate|profile|measure) (?:the )?aerynth backend(?:'s)? performance(?: using workspace notes)?$/u.test(text))
     ids = ['backend', 'cpu', 'ram', 'code', ...(text.endsWith('using workspace notes') ? ['notes'] : [])];
   else if (check) ids = ['cpu', 'ram'];
   else {
-    const match = /^(?:measure|sample|check) (?:the )?(?:host |system )?((?:cpu|gpu|ram|memory)(?:(?:,\s*(?:and\s+)?|\s+and\s+)(?:cpu|gpu|ram|memory)){1,2})(?: (?:utilization|usage))?(?: in parallel)?$/u.exec(text);
+    const match = /^(?:measure|sample|check) (?:the )?(?:host |system )?((?:cpu|gpu|ram|memory)(?:(?:,\s*(?:and\s+)?|\s+and\s+)(?:cpu|gpu|ram|memory)){0,2})(?: (?:utilization|usage))?(?: in parallel)?$/u.exec(text);
     if (!match) return null;
-    ids = [...new Set(match[1].match(/cpu|gpu|ram|memory/gu)!.map(id => id === 'memory' ? 'ram' : id))];
-    if (ids.length < 2) return null;
+    const requested = match[1].match(/cpu|gpu|ram|memory/gu)!;
+    ids = [...new Set(requested.map(id => id === 'memory' ? 'ram' : id))];
+    if (ids.length < 2 && (!explicit || requested.length !== 1)) return null;
   }
   const catalog = missionPlanningCatalog();
   const tasks = ids.map(id => catalog[id]);
   if (check) tasks.push(catalog['project-tests']);
-  tasks.push({ id: 'report', objective: check ? 'Join the reviewed test result and measured samples' : 'Join the measured samples with provenance',
+  if (tasks.length > 1) tasks.push({ id: 'report', objective: check ? 'Join the reviewed test result and measured samples' : 'Join the measured samples with provenance',
     executor: 'join.samples', criterion: 'joined-samples', claims: [], dependencies: tasks.map(task => task.id), maxAttempts: 2, timeoutMs: 1000 });
   return { objective: intent.trim(), scope, criteria: tasks.map(task => task.criterion), tasks };
 }
 
 /** A single timer outlier calls for a repeat sample before the report, not a bottleneck claim. */
 export function replanNativeMission(mission: Mission, task: MissionTask) {
-  const report = mission.tasks.find(t => t.id === 'report');
-  if (task.id !== 'backend' || task.executor !== 'sample.backend' || report?.state !== 'queued' || report.attempts.length ||
+  const report = mission.tasks.find(t => t.executor === 'join.samples' && t.dependencies.includes(task.id));
+  if (task.criterion !== 'backend' || task.executor !== 'sample.backend' || report?.state !== 'queued' || report.attempts.length ||
     mission.disposition === 'cancelled' || mission.tasks.some(t => t.id === 'backend-repeat')) return;
   const attempt = task.attempts.at(-1);
   const sample = object(attempt?.evidence?.value);
@@ -198,5 +237,5 @@ export function replanNativeMission(mission: Mission, task: MissionTask) {
   return { reason: 'The first backend timer sample exceeded its interval by at least 20 ms; repeat before reporting.',
     additions: [{ id: 'backend-repeat', objective: 'Repeat the backend timer sample after the initial outlier',
       executor: task.executor, criterion: task.criterion, claims: task.claims, dependencies: [task.id],
-      timeoutMs: task.timeoutMs, maxAttempts: task.maxAttempts }], dependents: { report: ['backend-repeat'] } };
+      timeoutMs: task.timeoutMs, maxAttempts: task.maxAttempts }], dependents: { [report.id]: ['backend-repeat'] } };
 }

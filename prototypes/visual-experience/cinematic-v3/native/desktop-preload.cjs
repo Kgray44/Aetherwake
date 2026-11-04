@@ -76,7 +76,7 @@ contextBridge.exposeInMainWorld(
       if (name === "reconcileConversationTurn" &&
           navigator.userActivation?.isActive !== true)
         throw new Error("turn_recovery_user_gesture_required");
-      if (name === "missions" && ["plan", "start", "control", "workroom-apply", "team-save", "team-archive", "post-report"].includes(input?.name) &&
+      if (name === "missions" && ["plan", "start", "control", "revision-apply", "workroom-apply", "team-save", "team-archive", "post-report"].includes(input?.name) &&
           navigator.userActivation?.isActive !== true)
         throw new Error("mission_user_gesture_required");
       if (name === "media" &&

@@ -7,9 +7,9 @@ import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
-import { missionMeasurementAnswer, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
+import { missionCompletion, missionJobsDone, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
 import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS } from './mission-proposal.mts';
-import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, specialistMissionPlan, teamMissionPlan } from './mission-specialists.mts';
+import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, reassignMissionSpecialist, specialistMissionPlan, teamMissionPlan } from './mission-specialists.mts';
 import { MissionTeams } from './mission-teams.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
 import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningOffer, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
@@ -326,6 +326,10 @@ export class BackendCore {
           lane === CHATGPT_PLAN_PROVIDER ? 2 - Number(this.active?.providerId === lane) - Number(!!this.missionPlanningRun) : 2,
         underPressure: () => freemem() < 512 * 1024 * 1024,
         replan: replanNativeMission,
+        reassign: (mission, task, profileId) => {
+          const specialist = reassignMissionSpecialist(task, this.missionSpecialistSelection(mission.scope, profileId));
+          return this.missionSpecialistAvailable(mission.scope, { specialist }) ? specialist : undefined;
+        },
         contextSource: (mission, task) => task.executor === 'inspect.workspace-notes' ?
           canonicalMissionContextSource(this.missionContextHost(mission.scope), (binding, id) =>
             this.missionScopeAllowed(binding.scope) && !!this.db.prepare('SELECT 1 FROM blocks WHERE workspace_id=? AND resource_id=?')
@@ -395,25 +399,25 @@ export class BackendCore {
     ensure(mission.scope.workspaceId === scope.workspaceId && mission.scope.projectId === scope.projectId &&
       mission.outcome === 'verified', 'mission_report_unavailable');
     const origin = mission.originConversationId ?? this.vela.ensureMissionConversation();
-    return this.publishMissionReport(mission, origin, mission.answer?.join(' ') ?? 'Mission evidence is ready in this workspace.');
+    return this.publishMissionReport(mission, origin);
   }
   private publishVerifiedMissionAnswer(mission: Mission, event: MissionEvent) {
     const origin = mission.originConversationId;
     if (!origin || event.kind !== 'settled' || event.detail !== 'verified' || !this.missionScopeAllowed(mission.scope) ||
-      !mission.tasks.every(task => task.state === 'verified' &&
-        ['sample.cpu', 'sample.ram', 'sample.gpu', 'join.samples'].includes(task.executor))) return;
-    const answer = missionMeasurementAnswer(mission.tasks);
-    if (answer.length) this.publishMissionReport(mission, origin, answer.join(' '));
+      !mission.tasks.every(task => task.state === 'verified')) return;
+    const verified = this.missions.read(mission.id, mission.scope);
+    if (verified.outcome === 'verified') this.publishMissionReport(verified, origin);
   }
-  private publishMissionReport(mission: Mission, origin: string, content: string): MissionResponse {
+  private publishMissionReport(mission: Mission, origin: string): MissionResponse {
     const { id, scope } = mission;
     this.requireVelaConversation(origin);
     return this.atomic(() => {
       const existing = this.db.prepare('SELECT message_id FROM vela_mission_report_links WHERE mission_id=?').get(id);
       if (existing) return { kind: 'mission-report', missionId: id, messageId: String(existing.message_id) };
+      const { content, jobsDone } = missionCompletion(mission);
       const message = this.appendVelaMessage(origin, {
         role: 'assistant', source: 'vela-native', classification: 'observed', content, responseKind: 'answer',
-        missionReport: { missionId: id, workspaceId: scope.workspaceId, projectId: scope.projectId },
+        missionReport: { missionId: id, workspaceId: scope.workspaceId, projectId: scope.projectId, jobsDone },
       });
       this.db.prepare('INSERT INTO vela_mission_report_links VALUES(?,?)').run(id, message.id);
       this.record('vela.mission/report-posted', 'observed', undefined, 'mission:report:' + id, {
@@ -674,6 +678,18 @@ export class BackendCore {
       case 'read':
         ensure(Object.keys(request.input).length === 1, 'invalid_mission_command');
         return this.missions.read(request.input.id, scope);
+      case 'revision-preview': {
+        const { id, revision, change } = request.input;
+        ensure(Object.keys(request.input).length === 3 && identifier(id) && Number.isSafeInteger(revision), 'invalid_mission_command');
+        return this.missions.previewRevision(id, scope, revision, change);
+      }
+      case 'revision-apply': {
+        const { id, revision, change, fingerprint } = request.input;
+        ensure(reviewed, 'mission_native_revision_review_required');
+        ensure(Object.keys(request.input).length === 4 && identifier(id) && Number.isSafeInteger(revision) &&
+          typeof fingerprint === 'string' && /^[a-f0-9]{64}$/u.test(fingerprint), 'invalid_mission_command');
+        return this.missions.applyRevision(id, scope, revision, change, fingerprint);
+      }
       case 'workroom-preview':
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
         return this.missionWorkrooms.preview(request.input.id);
@@ -1241,6 +1257,14 @@ export class BackendCore {
         scope.resourceIds.includes(this.publicId(m.conversationId))&&this.conversationAccess.access(resourceId,m.id);
     }).map(m=>{
       const meta=this.state.vela!.messages[m.id],evidence=this.state.messageEvidence[m.id];
+      const link=meta?.missionReport;
+      if(link&&link.jobsDone===undefined){
+        try {
+          const mission=this.missions.read(link.missionId,{workspaceId:link.workspaceId,projectId:link.projectId});
+          if(mission.outcome==='verified')return {id:m.id,role:m.role,content:m.content,...meta,
+            missionReport:{...link,jobsDone:missionJobsDone(mission)}} as VelaMessage;
+        }catch { /* Keep the older chat receipt when its backing journal is unavailable. */ }
+      }
       return {id:m.id,role:m.role,content:m.content,...(meta??{source:m.role==='user'?'user':evidence?'provider':'user',classification:evidence?.classification==='reported'?'reported':evidence?'unknown':'observed',...(evidence?{providerId:evidence.providerId}:{})})} as VelaMessage;
     });
     return {resourceId,revision:this.state.revisions[resourceId],messages};
@@ -3323,7 +3347,8 @@ export class BackendCore {
     return scope && this.missionScopeAllowed(scope) ? scope : null;
   }
   private missionStreamFields(mission: Mission, event: MissionEvent): Pick<StreamEvent, 'mission' | 'status' | 'payload'> {
-    const executor = mission.tasks.find(task => task.id === event.taskId)?.executor;
+    const executor = (mission.tasks.find(task => task.id === event.taskId) ??
+      mission.retiredTasks?.find(task => task.id === event.taskId))?.executor;
     let status: string | null = event.kind === 'created' ? 'queued' : event.kind === 'started' ? 'running' : null;
     if (event.kind === 'settled' || event.kind === 'recovered') {
       if (event.detail && ['verified', 'failed', 'blocked', 'cancelled', 'uncertain'].includes(event.detail)) status = event.detail;
@@ -3643,6 +3668,8 @@ export class BackendCore {
     }
     if (name === 'missionCheckReview') return await this.missionCheckReview(a?.paths) as CommandMap[K]['output'];
     if (name === 'missionPlanReviewed') return await this.startMissionPlanning(a) as CommandMap[K]['output'];
+    if (name === 'missionRevisionReviewed')
+      return await this.missionCommand({ name: 'revision-apply', input: a }, true) as CommandMap[K]['output'];
     // Targeted observed facts can respond during unrelated agent execution.
     // Their own strict schema cannot dispatch an action or a provider.
     if(name==='vela'&&a?.name==='presentation')return this.vela.presentation(a.input) as any;

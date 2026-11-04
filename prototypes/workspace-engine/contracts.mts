@@ -64,8 +64,8 @@ type Action =
   | { type: 'saveLayout'; placements: PlacementUpdate[]; viewport?: Viewport }
   | { type: 'applyPreset'; preset: Preset; width: number; height: number }
   | { type: 'undoLayout' | 'redoLayout' }
-  | { type: 'checkpoint'; name: string }
-  | { type: 'restoreCheckpoint'; checkpointId: string };
+  | { type: 'checkpoint'; name: string; uniqueName?: true }
+  | { type: 'restoreCheckpoint'; checkpointId: string; exact?: true };
 export type Command = Action & { commandId: string; workspaceId: string; expectedRevision: number; bounds?: Geometry };
 export type CommandResult = WorkspaceProjection & { checkpointId?: string; unresolvedPlacementIds?: string[] };
 export type LayoutIntent = 'move' | 'resize' | 'reorder' | 'mode' | 'resolve' | 'recover' | 'view' | 'optimize';

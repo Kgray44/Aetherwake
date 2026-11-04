@@ -409,6 +409,45 @@ test("pending commands deduplicate locally, leave unrelated controls usable and 
   }
 });
 
+test("named layouts save with the current revision and restore only a selected, reviewed layout", async () => {
+  const initialState = initial();
+  const workspaceId = initialState.activeWorkspaceId;
+  const older = { id: "saved:older", name: "Older arrangement", createdAt: "2026-11-03T20:00:00Z" };
+  const newer = { id: "saved:newer", name: "Current arrangement", createdAt: "2026-11-03T21:00:00Z" };
+  initialState.savedLayouts = [older, newer];
+  const calls = [];
+  const f = setup({ namedLayouts: {
+    save: async input => { calls.push(["save", input]); },
+    restore: async input => { calls.push(["restore", input]); },
+  } }, initialState);
+  try {
+    f.get("history-toggle").fire("click");
+    const name = f.get("layout-name"), save = f.get("save-named-layout");
+    const select = f.get("saved-layout-select"), review = f.get("review-named-layout"), restore = f.get("restore-named-layout");
+    assert.equal(save.disabled, true);
+    assert.equal(restore.hidden, true);
+    name.value = "  Layout for review  ";
+    name.fire("input");
+    save.fire("click");
+    await until(() => name.value === "");
+    assert.deepEqual(calls[0], ["save", { workspaceId, expectedLayoutVersion: initialState.layoutVersion, name: "Layout for review" }]);
+    select.value = older.id;
+    select.fire("change");
+    review.fire("click");
+    assert.equal(restore.hidden, false);
+    assert.match(f.shell.querySelector(".aw-wa-named-layouts").querySelector(".aw-wa-grid-notice").textContent, /Older arrangement/);
+    const updated = { ...initialState, revision: initialState.revision + 1, layoutVersion: initialState.layoutVersion + 1 };
+    f.view.update(updated);
+    assert.equal(restore.hidden, true);
+    restore.fire("click");
+    assert.equal(calls.length, 1);
+    review.fire("click");
+    restore.fire("click");
+    await until(() => restore.hidden);
+    assert.deepEqual(calls[1], ["restore", { workspaceId, expectedLayoutVersion: updated.layoutVersion, checkpointId: older.id }]);
+  } finally { f.cleanup(); }
+});
+
 test("mode and lock dispatch explicit current intent and the canonical expected presence version; failures persist across refresh", async () => {
   const f = setup({
     changeMode: async () => {

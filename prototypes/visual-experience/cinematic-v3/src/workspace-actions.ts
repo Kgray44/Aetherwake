@@ -21,6 +21,7 @@ export interface WorkspaceOptimizationReview {
   cards: { blockId: string; from: Pick<Geometry, "x" | "y">; to: Pick<Geometry, "x" | "y"> }[];
   unresolvedPlacementIds: string[];
 }
+type LayoutReview = { workspaceId: string; expectedLayoutVersion: number; checkpointId: string };
 export interface WorkspaceActionsOptions {
   snapshot: DesktopSnapshot;
   motion: MotionCoordinator;
@@ -52,6 +53,10 @@ export interface WorkspaceActionsOptions {
     preview(ids: string[]): WorkspaceOptimizationReview;
     apply(review: WorkspaceOptimizationReview): Promise<DesktopSnapshot | void>;
     cancel(): void;
+  };
+  namedLayouts?: {
+    save(input: Omit<LayoutReview, "checkpointId"> & { name: string }): Promise<DesktopSnapshot | void>;
+    restore(input: LayoutReview): Promise<DesktopSnapshot | void>;
   };
 }
 const neutral: Pose = { x: 0, y: 0, w: 0, h: 0, lift: 0, yaw: 0, opacity: 1 };
@@ -408,7 +413,7 @@ export function mountWorkspaceActions(
       ["checkpoint", "Save checkpoint"],
       ["restore", "Restore checkpoint"],
     ] as const
-  ).map(([action, title]) => {
+  ).filter(([action]) => !options.namedLayouts || action === "undo" || action === "redo").map(([action, title]) => {
     const b = button(title, action, () => {
       if (history.open)
         void run(
@@ -420,6 +425,102 @@ export function mountWorkspaceActions(
     history.content.append(b);
     return { action, button: b };
   });
+  function mountNamedLayouts(operations: NonNullable<WorkspaceActionsOptions["namedLayouts"]>) {
+    const section = node("section", "aw-wa-named-layouts");
+    section.setAttribute("aria-label", "Saved layouts");
+    const nameField = node("label", "aw-wa-grid-field", "Layout name");
+    const nameInput = node("input");
+    nameInput.maxLength = 120;
+    nameInput.setAttribute("aria-label", "Layout name");
+    nameInput.dataset.action = "layout-name";
+    nameField.append(nameInput);
+    const choiceField = node("label", "aw-wa-grid-field", "Saved layout");
+    const choice = node("select", "aw-wa-search");
+    choice.setAttribute("aria-label", "Saved layout");
+    choice.dataset.action = "saved-layout-select";
+    choiceField.append(choice);
+    const summary = node("p", "aw-wa-grid-notice");
+    summary.setAttribute("role", "status");
+    let review: LayoutReview | undefined;
+    let reviewNotice = "";
+    let workspaceId = snapshot.activeWorkspaceId;
+    let listed = "";
+    const selectedLayout = () => snapshot.savedLayouts?.find(layout => layout.id === choice.value);
+    const save = button("Save named layout", "save-named-layout", () => {
+      const current = active();
+      const name = nameInput.value.trim();
+      if (!history.open || !current || !name) return;
+      const input = { workspaceId: current.id, expectedLayoutVersion: snapshot.layoutVersion, name };
+      void run("save-named-layout", async () => {
+        const next = await operations.save(input);
+        if (snapshot.activeWorkspaceId === input.workspaceId) nameInput.value = "";
+        return next;
+      }, "Named layout saved.");
+    });
+    const preview = button("Review restore", "review-named-layout", () => {
+      const current = active(), layout = selectedLayout();
+      if (!history.open || !current || !layout) return;
+      review = { workspaceId: current.id, expectedLayoutVersion: snapshot.layoutVersion, checkpointId: layout.id };
+      reviewNotice = "";
+      paintNamed();
+    });
+    const restore = button("Restore saved layout", "restore-named-layout", () => {
+      if (!history.open || !review) return;
+      const approved = review;
+      void run("restore-named-layout", async () => {
+        const next = await operations.restore(approved);
+        review = undefined;
+        return next;
+      }, "Layout restored. Use Undo to return to the previous arrangement.");
+    });
+    section.append(nameField, save, choiceField, preview, summary, restore);
+    history.content.append(section);
+    listen(nameInput, "input", () => paintNamed());
+    listen(choice, "change", () => { review = undefined; reviewNotice = ""; paintNamed(); });
+    function paintNamed() {
+      if (workspaceId !== snapshot.activeWorkspaceId) {
+        workspaceId = snapshot.activeWorkspaceId;
+        review = undefined;
+        reviewNotice = "";
+        nameInput.value = "";
+        choice.value = "";
+      }
+      const layouts = snapshot.savedLayouts ?? [];
+      const signature = JSON.stringify(layouts);
+      if (listed !== signature) {
+        listed = signature;
+        const previous = choice.value;
+        const placeholder = node("option", "", layouts.length ? "Choose a saved layout" : "No saved layouts");
+        placeholder.value = "";
+        choice.replaceChildren(placeholder, ...layouts.toReversed().map(layout => {
+          const date = new Date(layout.createdAt).toLocaleString();
+          const option = node("option", "", `${layout.name} · ${date}`);
+          option.value = layout.id;
+          return option;
+        }));
+        choice.value = layouts.some(layout => layout.id === previous) ? previous : "";
+      }
+      const layout = selectedLayout();
+      if (review && (review.expectedLayoutVersion !== snapshot.layoutVersion || review.checkpointId !== layout?.id)) {
+        review = undefined;
+        reviewNotice = "The layout changed. Review the restore again.";
+      }
+      summary.textContent = review && layout
+        ? `Restore ${layout.name} to its saved placement, organization and view. Changes to card contents are kept. You can undo the restore.`
+        : reviewNotice;
+      summary.hidden = !summary.textContent;
+      restore.hidden = !review;
+      const busy = pending.has("save-named-layout") || pending.has("restore-named-layout");
+      const available = !!active() && snapshot.navigation.kind === "workspace" && snapshot.layoutVersion > 0;
+      nameInput.disabled = !available || busy;
+      choice.disabled = !available || busy || !layouts.length;
+      state(save, nameInput.disabled || !nameInput.value.trim(), false, pending.has("save-named-layout"));
+      state(preview, choice.disabled || !layout, false, false);
+      state(restore, !available || !review || busy, false, pending.has("restore-named-layout"));
+    }
+    return paintNamed;
+  }
+  const paintNamedLayouts = options.namedLayouts && mountNamedLayouts(options.namedLayouts);
   const find = disclosure("Find in workspace", "find", () => renderRows());
   const search = register(
     node("input", "aw-wa-search"),
@@ -972,6 +1073,7 @@ export function mountWorkspaceActions(
         false,
         pending.has(entry.action),
       );
+    paintNamedLayouts?.();
     const p = snapshot.presence,
       validPresence = !!workspace && p?.workspaceId === workspace.id;
     state(

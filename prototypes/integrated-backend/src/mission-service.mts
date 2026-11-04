@@ -5,9 +5,11 @@ import { compileMissionContext, createMissionContextCache, validateMissionContex
 import { historyDigest } from '../../vela-core/src/bounded-history.mts';
 import { ServiceError } from './contracts.mts';
 import { missionMeasurementAnswer } from './mission-native.mts';
+import { buildMissionRevision } from './mission-revision.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
   type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionProjection,
-  type MissionAttempt, type MissionScope, type MissionTask, type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomResource } from './mission-contracts.mts';
+  type MissionAttempt, type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
+  type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomResource } from './mission-contracts.mts';
 
 export interface MissionServiceHost {
   db: DatabaseSync;
@@ -17,6 +19,7 @@ export interface MissionServiceHost {
   laneLimit(lane: string): number;
   underPressure(): boolean;
   contextSource?(mission: Mission, task: MissionTaskPlan): MissionContextSource | undefined;
+  reassign?(mission: Mission, task: MissionTask, agentProfileId: string): MissionTaskPlan['specialist'];
   replan?(mission: Mission, task: MissionTask): { additions: MissionTaskPlan[]; dependents: Record<string, string[]>; reason: string } | undefined;
   observe?(mission: Mission, event: MissionEvent): void;
 }
@@ -34,6 +37,7 @@ const taskOf = (m: Mission, id: string) => m.tasks.find(task => task.id === id);
 const sameScope = (a: MissionScope, b: MissionScope) => a.workspaceId === b.workspaceId && a.projectId === b.projectId;
 const busy = (m: Mission) => m.tasks.some(task => task.state === 'running' || task.state === 'cancelling');
 const active = (m: Mission) => busy(m) || m.disposition !== 'cancelled' && m.tasks.some(task => task.state === 'queued');
+const recordLimitBytes = 160 * 1024;
 
 export function validateMissionPlan(plan: MissionPlan, executors: MissionServiceHost['executors']): void {
   check(plan && bounded(plan.objective, 4096) && plan.scope && identifier(plan.scope.workspaceId) &&
@@ -119,18 +123,20 @@ export class MissionService {
   }
 
   private decode(json: unknown): Mission {
-    check(typeof json === 'string' && Buffer.byteLength(json) <= 160 * 1024, 'invalid_mission_record');
+    check(typeof json === 'string' && Buffer.byteLength(json) <= recordLimitBytes, 'invalid_mission_record');
     const m = JSON.parse(json) as Mission;
     check(m.contract === MISSION_CONTRACT, 'unsupported_mission_contract');
     return m;
   }
   private event(m: Mission, event: Omit<MissionEvent, 'seq' | 'time'>) {
     check(m.events.length < L.events, 'mission_journal_full');
-    m.events.push({ ...event, seq: ++m.revision, time: stamp() });
+    const recorded = { ...event, seq: ++m.revision, time: stamp() };
+    m.events.push(recorded);
+    return recorded;
   }
   private store(m: Mission) {
     const json = JSON.stringify(m);
-    check(Buffer.byteLength(json) <= 160 * 1024, 'mission_record_full');
+    check(Buffer.byteLength(json) <= recordLimitBytes, 'mission_record_full');
     this.host.db.prepare('UPDATE vela_missions SET pending=?,active=?,json=? WHERE id=?')
       .run(Number(scheduled(m)), Number(active(m)), json, m.id);
   }
@@ -263,7 +269,12 @@ export class MissionService {
       check(value.disposition !== 'cancelled' && (stale || !value.tasks.every(t => t.state === 'verified')), 'mission_terminal');
       switch (control.type) {
         case 'pause': check(value.disposition === 'active', 'mission_not_active'); value.disposition = 'paused'; break;
-        case 'resume': check(value.disposition === 'paused', 'mission_not_paused'); value.disposition = 'active'; break;
+        case 'resume': {
+          check(value.disposition === 'paused', 'mission_not_paused');
+          this.recoverPendingReplans(value);
+          value.disposition = 'active';
+          break;
+        }
         case 'cancel': value.disposition = 'cancelled'; value.tasks.forEach(stopTask); break;
         case 'cancel-branch': {
           check(task, 'mission_task_not_found');
@@ -294,6 +305,47 @@ export class MissionService {
     return this.project(m);
   }
 
+  private prepareRevision(mission: Mission, scope: MissionScope, revision: number, change: MissionRevisionChange) {
+    this.requireAccess(mission, scope);
+    check(mission.revision === revision, 'mission_revision_changed');
+    check(sameScope(mission.scope, scope) && mission.disposition === 'paused' && !busy(mission) &&
+      mission.events.filter(event => event.kind === 'revised').length < L.revisions, 'mission_revision_denied');
+    const candidate = buildMissionRevision(mission, change, {
+      executors: this.host.executors,
+      reassign: this.host.reassign,
+      evidenceCurrent: task => {
+        const attempt = task.attempts.at(-1);
+        return !!attempt?.verification?.passed && this.contextIsCurrent(mission, task, attempt, new Map());
+      },
+    });
+    validateMissionPlan({ ...mission, tasks: candidate.tasks }, this.host.executors);
+    const { summary, externalReview } = candidate;
+    const preview: MissionRevisionPreview = { kind: 'revision-preview', missionId: mission.id, revision, summary,
+      fingerprint: digest({ missionId: mission.id, scope, revision, change, tasks: candidate.tasks }),
+      ...(externalReview ? { externalReview } : {}) };
+    return { candidate, preview };
+  }
+
+  previewRevision(id: string, scope: MissionScope, revision: number, change: MissionRevisionChange): MissionRevisionPreview {
+    this.requireOpen();
+    return this.prepareRevision(this.lookup(id), scope, revision, change).preview;
+  }
+
+  applyRevision(id: string, scope: MissionScope, revision: number, change: MissionRevisionChange, fingerprint: string): MissionProjection {
+    this.requireOpen();
+    const mission = this.update(id, current => {
+      const { candidate, preview } = this.prepareRevision(current, scope, revision, change);
+      check(preview.fingerprint === fingerprint, 'mission_revision_preview_changed');
+      if (!active(current) && candidate.tasks.some(task => task.state === 'queued')) this.capacity();
+      current.tasks = candidate.tasks;
+      if (candidate.retired) (current.retiredTasks ??= []).push(candidate.retired);
+      current.planRevision++;
+      this.event(current, { kind: 'revised', detail: candidate.summary, taskId: change.taskId, change,
+        ...(candidate.replacementTaskId ? { replacementTaskId: candidate.replacementTaskId } : {}) });
+    });
+    return this.project(mission);
+  }
+
   /** Host-only amendment. Replays require a reviewed capability and cannot expand acceptance or authority. */
   revise(id: string, scope: MissionScope, revision: number, additions: MissionTaskPlan[], reason: string,
     dependents: Record<string, string[]> = {}, trigger?: { taskId: string; attemptId: string }) {
@@ -301,31 +353,70 @@ export class MissionService {
     const m = this.update(id, value => {
       this.requireAccess(value, scope);
       check(value.revision === revision, 'mission_revision_changed');
-      check(value.disposition !== 'cancelled' && Array.isArray(additions) && additions.length > 0 && bounded(reason, 160) &&
-        value.events.filter(e => e.kind === 'revised').length < L.revisions, 'mission_revision_denied');
-      check(additions.every(task => this.host.executors[task?.executor]?.replaySafe &&
-        value.tasks.some(existing => existing.executor === task.executor &&
-        task.claims?.every(claim => existing.claims.some(current => current.resource === claim.resource &&
-          (current.mode === 'exclusive' || claim.mode === 'read'))))), 'mission_revision_expands_authority');
-      if (trigger) {
-        const task = taskOf(value, trigger.taskId), attempt = task?.attempts.at(-1);
-        check(task?.state === 'verified' && attempt?.id === trigger.attemptId &&
-          this.contextIsCurrent(value, task, attempt, new Map()), 'mission_revision_evidence_changed');
-      }
-      for (const [id, added] of Object.entries(dependents)) {
-        const task = taskOf(value, id);
-        check(task?.state === 'queued' && !task.attempts.length && Array.isArray(added) &&
-          added.every(dep => additions.some(t => t.id === dep)), 'mission_revision_dependency_denied');
-        task.dependencies.push(...added);
-      }
-      validateMissionPlan({ ...value, tasks: [...value.tasks, ...additions] }, this.host.executors);
-      if (!active(value)) this.capacity();
-      value.tasks.push(...additions.map(makeTask));
-      value.planRevision++;
-      this.event(value, { kind: 'revised', detail: reason, ...trigger });
+      this.amend(value, additions, reason, dependents, trigger);
     });
     this.wake();
     return this.project(m);
+  }
+
+  /** Validate a separate candidate before replacing any part of the current journal. */
+  private amend(value: Mission, additions: MissionTaskPlan[], reason: string, dependents: Record<string, string[]>,
+    trigger?: { taskId: string; attemptId: string }) {
+    check(value.disposition !== 'cancelled' && Array.isArray(additions) && additions.length > 0 && bounded(reason, 160) &&
+      value.events.filter(e => e.kind === 'revised').length < L.revisions, 'mission_revision_denied');
+    check(additions.every(task => own(this.host.executors, task?.executor) && this.host.executors[task.executor].replaySafe &&
+      value.tasks.some(existing => existing.executor === task.executor &&
+        task.claims?.every(claim => existing.claims.some(current => current.resource === claim.resource &&
+        (current.mode === 'exclusive' || claim.mode === 'read'))))), 'mission_revision_expands_authority');
+    if (trigger) {
+      const task = taskOf(value, trigger.taskId), attempt = task?.attempts.at(-1);
+      check(task?.state === 'verified' && attempt?.id === trigger.attemptId &&
+        this.contextIsCurrent(value, task, attempt, new Map()), 'mission_revision_evidence_changed');
+    }
+    const rewired = new Map<string, MissionTask>();
+    for (const [id, added] of Object.entries(dependents)) {
+      const task = taskOf(value, id);
+      check(task?.state === 'queued' && !task.attempts.length && Array.isArray(added) &&
+        added.every(dep => additions.some(t => t.id === dep)), 'mission_revision_dependency_denied');
+      rewired.set(id, { ...task, dependencies: [...task.dependencies, ...added] });
+    }
+    const tasks = [...value.tasks.map(task => rewired.get(task.id) ?? task), ...additions.map(makeTask)];
+    validateMissionPlan({ ...value, tasks }, this.host.executors);
+    if (!active(value)) this.capacity();
+    const amended = { ...value, tasks, planRevision: value.planRevision + 1, events: [...value.events] };
+    this.event(amended, { kind: 'revised', detail: reason, ...trigger });
+    check(Buffer.byteLength(JSON.stringify(amended)) <= recordLimitBytes, 'mission_record_full');
+    Object.assign(value, amended);
+  }
+
+  private applyAutomaticReplan(mission: Mission, task: MissionTask, attemptId: string): boolean {
+    if (!this.host.replan) return true;
+    try {
+      const draft = structuredClone(mission);
+      const amendment = this.host.replan(draft, taskOf(draft, task.id)!);
+      if (amendment) {
+        this.requireAccess(mission, mission.scope);
+        this.amend(mission, amendment.additions, amendment.reason, amendment.dependents, { taskId: task.id, attemptId });
+      }
+      return true;
+    } catch {
+      task.state = 'blocked';
+      task.detail = 'mission_required_replan_blocked';
+      return false;
+    }
+  }
+
+  private recoverPendingReplans(mission: Mission) {
+    if (!this.host.replan || busy(mission) || !mission.tasks.some(task => task.state === 'queued')) return;
+    // Older journals could commit the sample just before losing the separate amendment write.
+    const amended = new Set(mission.events.filter(event => event.kind === 'revised').map(event => event.attemptId));
+    for (const task of mission.tasks) {
+      const attempt = task.attempts.at(-1);
+      if (task.state === 'verified' && attempt?.outcome === 'verified' && attempt.verification?.passed &&
+        !amended.has(attempt.id) && !this.applyAutomaticReplan(mission, task, attempt.id)) {
+        this.event(mission, { kind: 'recovered', taskId: task.id, detail: 'blocked' });
+      }
+    }
   }
 
   private conflict(task: MissionTaskPlan) {
@@ -359,7 +450,7 @@ export class MissionService {
   }
   private project(m: Mission): MissionProjection {
     const checked = new Map<string, boolean>();
-    const tasks = m.tasks.map(task => {
+    const visibleTask = (task: MissionTask): MissionTask => {
       let staleLatest = false;
       const attempts = task.attempts.map((attempt, index) => {
         if (!attempt.context || this.contextIsCurrent(m, task, attempt, checked)) return attempt;
@@ -370,8 +461,9 @@ export class MissionService {
       return task.state === 'verified' && staleLatest
         ? { ...task, attempts, state: 'blocked' as const, detail: 'mission_source_changed_since_verification' }
         : { ...task, attempts };
-    });
-    m = { ...m, tasks };
+    };
+    m = { ...m, tasks: m.tasks.map(visibleTask),
+      ...(m.retiredTasks ? { retiredTasks: m.retiredTasks.map(visibleTask) } : {}) };
     const outcome = m.tasks.some(t => t.state === 'cancelling') ? 'cancelling' :
       busy(m) ? 'running' : m.tasks.some(t => t.state === 'uncertain') ? 'uncertain' :
       m.disposition === 'cancelled' ? 'cancelled' : m.tasks.every(t => t.state === 'verified') ? 'verified' :
@@ -386,7 +478,8 @@ export class MissionService {
       else if (executor && !this.capacityFor(m, executor.lane)) waits[task.id] = 'capacity';
       else if (this.host.underPressure()) waits[task.id] = 'resource-pressure';
     }
-    const attempts = m.tasks.flatMap(task => task.attempts);
+    const allTasks = [...m.tasks, ...(m.retiredTasks ?? [])];
+    const attempts = allTasks.flatMap(task => task.attempts);
     const expectedRemote = attempts.filter(attempt => this.host.executors[attempt.executor]?.lane !== 'native');
     const usage = expectedRemote.flatMap(attempt => attempt.telemetry?.usage ? [attempt.telemetry.usage] : []);
     if (m.planning?.usage) usage.push(m.planning.usage);
@@ -402,7 +495,7 @@ export class MissionService {
     const answer = missionMeasurementAnswer(m.tasks);
     return { ...m, outcome, ...(answer.length ? { answer } : {}), waits, profile: {
       elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0), peakWorkers, attempts: attempts.length,
-      retries: m.tasks.reduce((total, task) => total + Math.max(0, task.attempts.length - 1), 0),
+      retries: allTasks.reduce((total, task) => total + Math.max(0, task.attempts.length - 1), 0),
       providerCalls, usageReports: usage.length, reportedTotalTokens,
       verifiedObjectivesPerReportedToken: outcome === 'verified' && providerCalls === usage.length &&
         reportedTotalTokens && reportedTotalTokens > 0 ? 1 / reportedTotalTokens : null,
@@ -541,7 +634,7 @@ export class MissionService {
       const outcome = cancellation || !authorized ? (!executor.replaySafe ? 'uncertain' :
         !authorized ? 'blocked' : cancellation === 'user' ? 'cancelled' : 'failed') :
         reportedOutcome ?? (verification?.passed ? 'verified' : executor.replaySafe || evidence ? 'failed' : 'uncertain');
-      const next = this.update(m.id, current => {
+      this.update(m.id, current => {
         const value = taskOf(current, task.id)!;
         const attempt = value.attempts.at(-1)!;
         check(attempt.id === id, 'mission_attempt_changed');
@@ -552,13 +645,12 @@ export class MissionService {
           (executor.lane === 'native' ? { durationMs: performance.now() - started, providerCalls: 0 } : undefined);
         if (authorized && !cancellation && evidence) attempt.evidence = evidence;
         if (authorized && !cancellation && verification) attempt.verification = verification;
-        this.event(current, { kind: 'settled', taskId: task.id, attemptId: id, detail: outcome });
+        const settlement = this.event(current, { kind: 'settled', taskId: task.id, attemptId: id, detail: outcome });
+        if (outcome === 'verified' && !this.closed && !this.applyAutomaticReplan(current, value, id)) {
+          attempt.outcome = 'blocked';
+          settlement.detail = 'blocked';
+        }
       });
-      if (outcome === 'verified' && !this.closed) {
-        const amendment = this.host.replan?.(next, taskOf(next, task.id)!);
-        if (amendment) this.revise(next.id, next.scope, next.revision, amendment.additions, amendment.reason, amendment.dependents,
-          { taskId: task.id, attemptId: id });
-      }
     }).catch(() => { this.healthy = false; }).finally(() => {
       clearTimeout(timer); this.running.delete(id); this.wake();
     });

@@ -101,6 +101,8 @@ export interface MissionEvent {
   taskId?: string;
   attemptId?: string;
   detail?: string;
+  change?: MissionRevisionChange;
+  replacementTaskId?: string;
 }
 export interface Mission {
   contract: typeof MISSION_CONTRACT;
@@ -119,6 +121,7 @@ export interface Mission {
   originConversationId?: string;
   workroom?: MissionWorkroom;
   tasks: MissionTask[];
+  retiredTasks?: MissionTask[];
   events: MissionEvent[];
 }
 export interface MissionProjection extends Mission {
@@ -143,6 +146,31 @@ export type MissionControl =
   | { type: 'concurrency'; concurrency: number };
 
 export type MissionSummary = Pick<MissionProjection, 'id' | 'objective' | 'outcome' | 'createdAt' | 'revision'>;
+export type MissionRevisionChange =
+  | { type: 'replace'; taskId: string }
+  | { type: 'dependencies'; taskId: string; dependencies: string[] }
+  | { type: 'retire'; taskId: string; successorId: string }
+  | { type: 'reassign'; taskId: string; agentProfileId: string };
+export interface MissionRevisionInput {
+  id: string;
+  revision: number;
+  change: MissionRevisionChange;
+}
+export interface MissionRevisionPreview {
+  kind: 'revision-preview';
+  missionId: string;
+  revision: number;
+  fingerprint: string;
+  summary: string;
+  externalReview?: {
+    provider: string;
+    model: string;
+    effort?: ReasoningEffort;
+    objective: string;
+    instructions: string;
+    webSearch?: true;
+  };
+}
 export type MissionRequest =
   | { name: 'preview'; input: { objective: string; agentProfileId?: string; proposalId?: string; teamId?: string } }
   | { name: 'plan'; input: { objective: string; fingerprint: string; requestId: string } }
@@ -154,6 +182,8 @@ export type MissionRequest =
   | { name: 'workroom-resource'; input: { resourceId: string } }
   | { name: 'list'; input: Record<string, never> }
   | { name: 'read'; input: { id: string } }
+  | { name: 'revision-preview'; input: MissionRevisionInput }
+  | { name: 'revision-apply'; input: MissionRevisionInput & { fingerprint: string } }
   | { name: 'workroom-preview'; input: { id: string } }
   | { name: 'workroom-apply'; input: { id: string; reviewId: string } }
   | { name: 'control'; input: { id: string; revision: number; control: MissionControl } };
@@ -199,7 +229,7 @@ export type MissionWorkroomResource = {
 );
 
 export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomResource |
-  MissionWorkroomPreview | MissionTeam | MissionTeamLibrary |
+  MissionWorkroomPreview | MissionRevisionPreview | MissionTeam | MissionTeamLibrary |
   { kind: 'mission-report'; missionId: string; messageId: string } | null;
 
 export interface MissionExecutionContext {

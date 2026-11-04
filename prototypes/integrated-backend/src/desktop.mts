@@ -781,6 +781,18 @@ export class DesktopState {
         });
         break;
       }
+      case "saveNamedLayout":
+      case "restoreNamedLayout": {
+        check(s.navigation.kind === "workspace" && s.navigation.workspaceId === a.workspaceId, "workspace_changed");
+        check(Number.isSafeInteger(a.expectedLayoutVersion) && a.expectedLayoutVersion > 0, "layout_review_required");
+        if (a.type === "restoreNamedLayout")
+          check(typeof a.checkpointId === "string" && a.checkpointId.length > 0 && a.checkpointId.length <= 512, "invalid_checkpoint_id");
+        this.workspace(a.workspaceId);
+        this.engineCommand(a.workspaceId, a.type === "saveNamedLayout"
+          ? { type: "checkpoint", name: a.name, uniqueName: true }
+          : { type: "restoreCheckpoint", checkpointId: a.checkpointId, exact: true });
+        break;
+      }
       case "undo":
         check(s.activeWorkspaceId, "workspace_required");
         this.engineCommand(s.activeWorkspaceId!, { type: "undoLayout" });
@@ -916,6 +928,7 @@ export class DesktopState {
     // One synchronous publication uses one canonical projection. Rebuilding it for
     // each field repeatedly normalizes the same complete undo/redo history.
     const projection = s.activeWorkspaceId ? this.engine.project(s.activeWorkspaceId) : null;
+    const checkpoints = s.activeWorkspaceId ? this.engine.listCheckpoints(s.activeWorkspaceId) : [];
     return {
       contract: "aerynth.desktop@1",
       projects,
@@ -957,9 +970,10 @@ export class DesktopState {
       ),
       canUndo: projection?.canUndo ?? false,
       canRedo: projection?.canRedo ?? false,
-      hasCheckpoint: s.activeWorkspaceId
-        ? this.engine.listCheckpoints(s.activeWorkspaceId).length > 0
-        : false,
+      hasCheckpoint: checkpoints.length > 0,
+      savedLayouts: s.navigation.kind === "workspace" ? checkpoints.map(row => ({
+        id: row.id, name: row.name, createdAt: row.created_at,
+      })) : [],
     };
   }
 }

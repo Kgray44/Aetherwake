@@ -497,6 +497,21 @@
   border-block-start: 1px solid currentColor;
 }
 .vela-mission-answer p { margin: 0; }
+.vela-mission-reply-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.vela-mission-jobs-done {
+  padding: 2px 9px;
+  border: 1px solid #d9b9f43b;
+  border-radius: 999px;
+  color: #c6b9d9;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.vela-mission-reply-footer > button { margin-left: auto; }
 .vela-missions-steps,
 .vela-missions-timeline {
   display: grid;

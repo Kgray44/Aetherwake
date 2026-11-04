@@ -26,7 +26,7 @@ export interface VelaPanelOptions {
   missions?: {
     element: HTMLElement;
     preview(intent: string, agentProfileId?: string): Promise<MissionPreview | MissionPlanningOffer | null>;
-    review(preview: MissionPreview | MissionPlanningOffer, onStarted: () => void, agentProfileId?: string): void;
+    review(preview: MissionPreview | MissionPlanningOffer, onStarted: (missionId: string) => void, agentProfileId?: string): void;
     openReport?(id: string): void;
     setVisible(visible: boolean): void;
   };
@@ -44,6 +44,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   let activeContext: string | null = null, contextTrigger: HTMLButtonElement | null = null, chosenProviderId: string | null = null, presentationSignature = '';
   let handoffSelection: { requestId: string; sourceProviderId: string } | null = null;
   let routingAgentSelection: ResourceRef | null = null;
+  let pendingMissionReplyId: string | null = null;
   let manifestationSignature = '', manifestationBaseline = true, observing = true, presentationBusy = false, readSequence = 0, viewRevision = 0, transientView: 'current' | 'history' | null = null;
   const instanceId = 'vela-context-' + ++panelSequence;
   const selected = new Map<string, ResourceRef>(), sourceControls = new Map<string, HTMLInputElement>();
@@ -398,10 +399,12 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
           if (preview) {
             renderStatus(current ?? { requests: [], plans: [], receipts: [] });
             if (!disposed && observing && draftRevision === revision && intent.value === submitted.intent) {
-              options.missions.review(preview, () => {
+              options.missions.review(preview, missionId => {
                 if (draftRevision !== revision || intent.value !== submitted.intent) return;
+                pendingMissionReplyId = missionId;
                 intent.value = ''; send.disabled = true;
                 if (agentProfileId && routingAgentSelection?.id === agentProfileId) { routingAgentSelection = null; renderSelection(); }
+                void run(() => settleSubmittedView(submittedView));
               }, agentProfileId);
               reveal('missions');
             }
@@ -545,11 +548,13 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const projection = project(), selectedRequest = current?.requests.find(request => request.id === projection.currentRequestId), message = current?.conversation?.messages.find(message => message.id === projection.currentMessageId);
     const facts = selectedRequest?.local?.facts;
     const content = facts?.kind === 'system-memory' && message ? summarizeSystemMemory(facts.measurement) : message?.content ?? '';
-    const signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind, content });
+    const missionReport = message?.missionReport;
+    const signature = JSON.stringify({ id: projection.currentMessageId, kind: projection.kind, content, missionReport });
     manifestationBody.dataset.density = content.length > 140 ? 'reading' : 'signal';
     shell.dataset.manifestationKind = projection.kind; shell.dataset.presentationView = view(); manifestation.dataset.requestId = projection.currentRequestId ?? ''; manifestation.dataset.currentMessageId = projection.currentMessageId ?? '';
     manifestation.hidden = projection.kind === 'none' || view() === 'history' && !projection.requiredPlanIds.length;
     const route = selectedRequest?.route;
+    manifestationKicker.hidden = !!missionReport;
     manifestationKicker.textContent = route?.kind === 'conversational'
       ? route.nativeMetric || route.nativeLog ? 'Vela · Native + ChatGPT plan' : 'Vela · ' + (route.depth === 'deep' ? 'Deep' : 'Quick')
       : route?.kind === 'agentic' ? 'Vela · Codex · Read-only'
@@ -557,13 +562,11 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       : route?.kind === 'project-check' ? 'Vela · Local project check'
       : route?.kind === 'composite' ? 'Vela · Native + Codex'
       : selectedRequest?.local ? 'Vela · Native'
-      : message?.missionReport ? 'Vela · Native mission'
       : projection.kind === 'insight' && message?.source === 'provider' ? providerName(message.providerId) + ' · contribution' : 'Vela';
     if (signature !== responseSignature) {
       responseSignature = signature; manifestationBody.replaceChildren();
       if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content));
-      const evidence = message && missionEvidenceLink(message);
-      if (evidence) manifestationBody.append(evidence);
+      if (missionReport) manifestationBody.append(missionReplyFooter(missionReport));
     }
     manifestationBody.hidden = projection.kind === 'action' || !content;
     const why = route?.kind === 'conversational' && (route.nativeMetric || route.nativeLog) ? 'Vela shared the reviewed local evidence for analysis and can offer a separate Codex review.'
@@ -679,7 +682,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       ...(route?.kind === 'agentic' || route?.kind === 'composite' ? { verification: 'unverified' } : {}), edit,
       projectCheck: standaloneCheck, providerRecovery, handoff: selectedRequest?.handoff, local: selectedRequest?.local, response: selectedRequest?.response,
       provider: message?.providerContribution ?? selectedRequest?.providerId }, null, 2);
-    if (manifestationDetails.body.firstElementChild?.textContent !== details) manifestationDetails.body.replaceChildren(el('pre', undefined, details)); manifestationDetails.node.hidden = projection.kind === 'none' || projection.kind === 'action';
+    if (manifestationDetails.body.firstElementChild?.textContent !== details) manifestationDetails.body.replaceChildren(el('pre', undefined, details)); manifestationDetails.node.hidden = !!missionReport || projection.kind === 'none' || projection.kind === 'action';
     const sources = selectedRequest?.context.included ?? [], sourceSignature = JSON.stringify(sources.map(ref => [ref.id, ref.kind, ref.version, ref.title]));
     if (manifestationSources.dataset.signature !== sourceSignature) { manifestationSources.dataset.signature = sourceSignature; manifestationSources.replaceChildren(); for (const ref of sources) manifestationSources.append(options.onOpenSubject ? button(ref.title, () => options.onOpenSubject?.({ id: ref.id, kind: ref.kind })) : el('span', undefined, ref.title)); } manifestationSources.hidden = !manifestationSources.children.length;
     const recent = current?.requests.at(-1), recentMessage = recent?.response && current?.conversation?.messages.find(message => message.id === recent.response!.messageId && message.requestId === recent.id && message.source === 'vela-native' && message.classification === 'observed' && message.providerId === undefined && message.providerContribution === undefined);
@@ -718,6 +721,17 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     reconcile(historyRequests, rows); for (const id of historyRows.keys()) if (!retained.has(id)) historyRows.delete(id);
     if (current) renderPlans(current);
     if (!busy && (selectedRequest || current)) { renderStatus({ requests: selectedRequest ? [selectedRequest] : current!.requests, plans: current?.plans ?? [], receipts: current?.receipts ?? [] }); if (selectedRequest?.state === 'responded' && projection.kind === 'insight' && !projection.currentMessageId) { status.textContent = 'This response is unavailable or its attribution could not be verified. Review history before using it.'; status.hidden = false; } if (projection.kind === 'none' && current?.requests.at(-1) && presentation().dismissedRequestIds.includes(current.requests.at(-1)!.id)) status.hidden = true; }
+    if (missionReport) {
+      status.hidden = true;
+      if (missionReport.missionId === pendingMissionReplyId) {
+        pendingMissionReplyId = null;
+        if (activeContext === 'missions' && !manifestation.hidden) {
+          const focusWasInPlan = more.contains(doc.activeElement);
+          closeContext(false);
+          if (focusWasInPlan) manifestation.focus();
+        }
+      }
+    }
     updatePresence(); emitManifestation();
   }
   function present() {
@@ -830,23 +844,30 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     developmentTimeline.disabled = activityTimeline.disabled || !githubRepository(repositoryInput.value);
   }
   function renderStatus(state: Pick<VelaState, 'requests' | 'plans' | 'receipts'>) { const recorded = velaPanelStatus(state); status.dataset.requestState = recorded.requestState; if (recorded.requestId) status.dataset.requestId = recorded.requestId; else delete status.dataset.requestId; if (recorded.planState) status.dataset.planState = recorded.planState; else delete status.dataset.planState; delete status.dataset.actionState; delete status.dataset.refreshState; status.textContent = recorded.message; status.hidden = recorded.requestState === 'idle'; }
-  function missionEvidenceLink(message: VelaMessage) {
-    const link = message.missionReport;
-    if (!link || !options.missions?.openReport) return;
-    const openEvidence = button('Open mission evidence', () => {
-      reveal('missions');
-      options.missions?.openReport?.(link.missionId);
-    });
-    openEvidence.dataset.missionReportLink = link.missionId;
-    return openEvidence;
+  function missionReplyFooter(link: NonNullable<VelaMessage['missionReport']>) {
+    const footer = el('div', 'vela-mission-reply-footer');
+    if (link.jobsDone !== undefined) footer.append(el('span', 'vela-mission-jobs-done', `${link.jobsDone} ${link.jobsDone === 1 ? 'job' : 'jobs'} done`));
+    if (options.missions?.openReport) {
+      const openPlan = icon('Open mission plan', '▤', 'missions', () => {
+        pendingMissionReplyId = null;
+        reveal('missions');
+        contextTrigger = openPlan;
+        options.missions?.openReport?.(link.missionId);
+      });
+      openPlan.setAttribute('aria-controls', more.id);
+      openPlan.dataset.missionReportLink = link.missionId;
+      footer.append(openPlan);
+    }
+    return footer;
   }
   function renderConversation(state: VelaState) {
     const items = state.conversation?.messages.slice(-80) ?? [], target: HTMLElement[] = [];
     for (const message of items) { const signature = JSON.stringify(message), cached = messages.get(message.id); if (cached?.signature === signature) { target.push(cached.node); continue; }
       const entry = el('article', 'vela-core-message'); entry.dataset.messageId = message.id; entry.dataset.source = message.source;
-      entry.append(el('strong', 'vela-core-message-author', message.source === 'provider' ? providerName(message.providerId) + ' · contribution' : message.role === 'user' ? 'You' : 'Vela'), el('p', undefined, message.content));
-      const evidence = missionEvidenceLink(message);
-      if (evidence) entry.append(evidence);
+      if (message.missionReport) {
+        entry.setAttribute('aria-label', 'Vela');
+        entry.append(el('p', undefined, message.content), missionReplyFooter(message.missionReport));
+      } else entry.append(el('strong', 'vela-core-message-author', message.source === 'provider' ? providerName(message.providerId) + ' · contribution' : message.role === 'user' ? 'You' : 'Vela'), el('p', undefined, message.content));
       messages.set(message.id, { node: entry, signature }); target.push(entry);
     }
     for (const child of Array.from(conversation.children)) if (!target.includes(child as HTMLElement)) child.remove(); target.forEach((node, index) => { if (conversation.children[index] !== node) conversation.insertBefore(node, conversation.children[index] ?? null); });

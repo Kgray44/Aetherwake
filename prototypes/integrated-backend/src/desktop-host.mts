@@ -75,6 +75,7 @@ lines.on("line", async (line) => {
         "taskObjectives",
         "missions",
         "missionStartReviewed",
+        "missionRevisionReviewed",
         "missionCheckReview",
         "missionPlanReviewed",
         "velaRequestPreview",

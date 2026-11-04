@@ -129,6 +129,12 @@
 .aw-wa-history > * {
   flex: 1 1 calc(50% - 8px);
 }
+.aw-wa-history > .aw-wa-named-layouts {
+  flex-basis: 100%;
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
 .aw-wa-search,
 .aw-wa-grid-field input {
   --wa-focus: 0;

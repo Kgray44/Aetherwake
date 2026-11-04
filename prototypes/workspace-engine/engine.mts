@@ -461,15 +461,26 @@ export class WorkspaceEngine {
           this.restore(workspaceId, undo ? entry.before : entry.after, state.revision);
           dst.push(src.pop()!); this.writeHistory(workspaceId, h); break;
         }
-        case 'checkpoint':
+        case 'checkpoint': {
           ensure(text(command.name));
-          ensure(Number(this.db.prepare('SELECT count(*) AS n FROM workspace_engine_checkpoints WHERE workspace_id=?').get(workspaceId)!.n) < 64, 'CHECKPOINT_LIMIT');
+          ensure(command.uniqueName === undefined || command.uniqueName === true);
+          const name = command.name.trim();
+          const checkpoints = this.listCheckpoints(workspaceId);
+          ensure(checkpoints.length < 64, 'CHECKPOINT_LIMIT');
+          if (command.uniqueName) {
+            ensure(name.length <= 120 && !/[\u0000-\u001f\u007f]/u.test(name), 'INVALID_CHECKPOINT_NAME');
+            const key = name.normalize('NFC').toLowerCase();
+            ensure(!checkpoints.some(item => item.name.normalize('NFC').toLowerCase() === key), 'CHECKPOINT_NAME_CONFLICT');
+          }
           checkpointId = randomUUID();
-          this.db.prepare('INSERT INTO workspace_engine_checkpoints VALUES(?,?,?,?,?)').run(checkpointId, workspaceId, command.name.trim(), JSON.stringify(before), now()); break;
+          this.db.prepare('INSERT INTO workspace_engine_checkpoints VALUES(?,?,?,?,?)').run(checkpointId, workspaceId, name, JSON.stringify(before), now());
+          break;
+        }
         case 'restoreCheckpoint': {
+          ensure(command.exact === undefined || command.exact === true);
           const row = this.db.prepare('SELECT snapshot_json FROM workspace_engine_checkpoints WHERE id=? AND workspace_id=?').get(command.checkpointId, workspaceId);
           ensure(row, 'NOT_FOUND'); this.restore(workspaceId, this.normalizeSnapshot(workspaceId, JSON.parse(String(row.snapshot_json))), state.revision);
-          if (this.readOrganization(workspaceId).mode !== 'fluid') policy.intent = 'view';
+          if (command.exact || this.readOrganization(workspaceId).mode !== 'fluid') policy.intent = 'view';
           break;
         }
         default: throw new WorkspaceError('UNKNOWN_COMMAND');

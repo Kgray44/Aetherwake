@@ -258,12 +258,13 @@ test('reviewed saved teams bind roles, reconcile concurrent reports and link the
     assert.deepEqual((report?.value as Record<string, unknown>).conflictingAssessments, [[
       { taskId: 'member-1', index: 0, position: 'supports' }, { taskId: 'member-2', index: 0, position: 'challenges' },
     ]]);
-    const posted = await post();
-    assert.deepEqual(await post(), posted);
     const conversation = async () => (await f.core.command('vela', { name: 'state', input: {} }) as VelaState).conversation;
     const matchingLinks = async () => (await conversation())?.messages.filter(item => item.missionReport?.missionId === mission.id);
     assert.equal((await conversation())?.resourceId, mission.originConversationId);
-    assert.deepEqual((await matchingLinks())?.map(item => item.missionReport), [{ missionId: mission.id, workspaceId, projectId: null }]);
+    assert.deepEqual((await matchingLinks())?.map(item => item.missionReport), [{ missionId: mission.id, workspaceId, projectId: null, jobsDone: 2 }]);
+    assert.match((await matchingLinks())?.[0].content ?? '', /reported:/u);
+    const posted = await post();
+    assert.deepEqual(await post(), posted);
     const other = await f.core.command('desktop', { type: 'createWorkspace', title: 'Other synthetic workspace', projectId: null });
     await navigate(other.activeWorkspaceId!);
     assert.equal((await matchingLinks())?.length, 0);

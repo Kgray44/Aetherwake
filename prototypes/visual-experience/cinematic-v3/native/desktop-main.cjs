@@ -419,20 +419,22 @@ app.whenReady().then(async () => {
   win.webContents.on("will-navigate", (event, url) => {
     if (url !== localURL) event.preventDefault();
   });
-  const trustedCopyFrame = (event) =>
+  const trustedApplicationFrame = (event) =>
     !win.isDestroyed() &&
     !win.webContents.isDestroyed() &&
-    win.isVisible() &&
-    !win.isMinimized() &&
-    win.isFocused() &&
     event.sender === win.webContents &&
     event.senderFrame === win.webContents.mainFrame &&
-    event.senderFrame.url === localURL;
+    event.senderFrame?.url === localURL;
+  const trustedActiveFrame = (event) =>
+    trustedApplicationFrame(event) &&
+    win.isVisible() &&
+    !win.isMinimized() &&
+    win.isFocused();
   nativeClipboard = createClipboardCapability({
     writeText: (text) => clipboard.writeText(text),
-    isTrustedApplicationFrame: trustedCopyFrame,
+    isTrustedApplicationFrame: trustedActiveFrame,
     authorizeUserCopy: async (event) => {
-      if (!trustedCopyFrame(event)) return false;
+      if (!trustedActiveFrame(event)) return false;
       // Observe Blink's existing activation; never synthesize a user gesture.
       return (
         (await event.senderFrame.executeJavaScript(
@@ -463,6 +465,12 @@ app.whenReady().then(async () => {
             : 200000)
       )
         throw new Error("command_too_large");
+      if (command === "missions" && input?.name === "revision-apply") {
+        if (!trustedActiveFrame(event) ||
+            await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
+            !trustedActiveFrame(event))
+          throw Error("mission_user_gesture_required");
+      }
       if (
         ![
           "replay",
@@ -475,7 +483,7 @@ app.whenReady().then(async () => {
         !(command === "conversation" && isConversationRead(input)) &&
         !(command === "media" && ["describe", "readBytes", "acquirePlayback", "releasePlayback"].includes(input?.name)) &&
         !(command === "vela" && isVelaRead(input)) &&
-        !(command === "missions" && ["preview", "list", "read", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
+        !(command === "missions" && ["preview", "list", "read", "revision-preview", "workroom-preview", "workroom-resource", "team-library"].includes(input?.name)) &&
         !(command === "githubTimeline" && ["sources", "openCommit"].includes(input?.name)) &&
         !isProductRead(command, input) &&
         !(command === "notes" && input?.name === "readNote") &&
@@ -584,6 +592,33 @@ app.whenReady().then(async () => {
             throw Error("unauthorized_sender");
           if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
           result = await call("missionPlanReviewed", input.input);
+        } else if (input?.name === "revision-apply") {
+          const { fingerprint, ...revisionInput } = input.input ?? {};
+          const preview = await call("missions", { name: "revision-preview", input: revisionInput });
+          if (preview?.kind !== "revision-preview" || preview.missionId !== revisionInput.id ||
+              preview.revision !== revisionInput.revision || preview.fingerprint !== fingerprint)
+            throw Error("mission_revision_preview_changed");
+          if (!trustedActiveFrame(event)) throw Error("unauthorized_sender");
+          if (preview.externalReview) {
+            const { provider, model, effort, objective, instructions, webSearch } = preview.externalReview;
+            const choice = await dialog.showMessageBox(win, {
+              type: "question", buttons: ["Cancel", "Approve reassignment"], defaultId: 0, cancelId: 0,
+              title: "Review mission specialist reassignment",
+              message: "Apply this reassignment to the paused mission?",
+              detail: [
+                preview.summary,
+                `Provider · ${provider}\nModel · ${model}\nReasoning effort · ${effort ?? "Model default"}\nPublic web search · ${webSearch ? "Enabled" : "Disabled"}`,
+                `Mission objective\n${objective}`,
+                `Specialist instructions\n${instructions}`,
+                "One request may be sent when you resume this mission. The provider may count it against your plan.",
+              ].join("\n\n"),
+            });
+            if (choice.response !== 1) throw Error("mission_review_declined");
+          }
+          if (!trustedApplicationFrame(event)) throw Error("unauthorized_sender");
+          if (!(await storage.allowWrite())) throw Error("storage_reserve_admission_denied");
+          if (!trustedApplicationFrame(event)) throw Error("unauthorized_sender");
+          result = await call("missionRevisionReviewed", { ...revisionInput, fingerprint });
         } else if (input?.name === "start") {
           const preview = await call("missions", { name: "preview", input: {
             objective: input.input?.objective, ...(input.input?.agentProfileId ? { agentProfileId: input.input.agentProfileId } : {}),

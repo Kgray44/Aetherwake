@@ -177,26 +177,32 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.deepEqual(await linkedCard(backend, checklistId), checklistLink);
     assert.deepEqual(await linkedCard(backend, timelineId), timelineLink);
     const measurement = 'Measure CPU and RAM';
-    const measurementPreview = await backend.call('missions', { name: 'preview', input: { objective: measurement } }) as MissionPreview;
-    const started = await backend.call('missions', { name: 'start', input: {
-      objective: measurement, fingerprint: measurementPreview.fingerprint, requestId: randomUUID(),
-    } }) as MissionProjection;
-    const readMeasurement = () => backend.call('missions', { name: 'read', input: { id: started.id } }) as Promise<MissionProjection>;
-    let measured = await readMeasurement();
-    const until = performance.now() + 4000;
-    while (['queued', 'running'].includes(measured.outcome) && performance.now() < until) {
-      await delay(25); measured = await readMeasurement();
-    }
-    assert.equal(measured.outcome, 'verified');
-    assert.match(measured.answer?.[0] ?? '', /^CPU usage was [\d.]+% over a \d+ ms sample\.$/u);
-    assert.match(measured.answer?.[1] ?? '', /GiB RAM in use \([\d.]+%\)/u);
+    const measure = async (objective = measurement) => {
+      const preview = await backend.call('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+      let result = await backend.call('missions', { name: 'start', input: {
+        objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
+      } }) as MissionProjection;
+      const until = performance.now() + 4000;
+      while (['queued', 'running'].includes(result.outcome) && performance.now() < until) {
+        await delay(25);
+        result = await backend.call('missions', { name: 'read', input: { id: result.id } }) as MissionProjection;
+      }
+      assert.equal(result.outcome, 'verified');
+      return result;
+    };
+    const measured = await measure(), measuredAgain = await measure(), single = await measure('Run a mission to measure CPU');
+    assert.deepEqual(single.tasks.map(task => task.id), ['cpu']);
+    assert.match(measured.answer?.[0] ?? '', /^CPU [\d.]+% \(\d+ ms sample\)\.$/u);
+    assert.match(measured.answer?.[1] ?? '', /^RAM [\d.]+% \([\d.]+\/[\d.]+ GiB used, [\d.]+ GiB (available|free)\)\.$/u);
     const vela = await backend.call('vela', { name: 'state', input: {} }) as VelaState;
-    const messages = vela.conversation!.messages.filter(message => message.missionReport?.missionId === started.id);
-    assert.equal(messages.length, 1);
-    assert.equal(messages[0].content, measured.answer!.join(' '));
-    assert.equal(messages[0].missionReport?.workspaceId, room.workspaceId);
-    assert.deepEqual(await backend.call('missions', { name: 'post-report', input: { id: started.id } }),
-      { kind: 'mission-report', missionId: started.id, messageId: messages[0].id });
+    for (const [result, jobsDone] of [[measured, 2], [measuredAgain, 2], [single, 1]] as const) {
+      const messages = vela.conversation!.messages.filter(message => message.missionReport?.missionId === result.id);
+      assert.equal(messages.length, 1);
+      assert.equal(messages[0].content, result.answer!.join('\n'));
+      assert.deepEqual(messages[0].missionReport, { missionId: result.id, workspaceId: room.workspaceId, projectId: null, jobsDone });
+      assert.deepEqual(await backend.call('missions', { name: 'post-report', input: { id: result.id } }),
+        { kind: 'mission-report', missionId: result.id, messageId: messages[0].id });
+    }
     assert.deepEqual(await backend.call('providerActivity', {}), providerActivity);
   } finally {
     await backend.close();

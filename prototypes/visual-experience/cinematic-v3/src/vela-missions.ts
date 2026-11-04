@@ -6,6 +6,8 @@ import type {
   MissionProjection,
   MissionRequest,
   MissionResponse,
+  MissionRevisionChange,
+  MissionRevisionPreview,
   MissionScope,
   MissionSummary,
   MissionTeamBinding,
@@ -49,6 +51,20 @@ const priorities = ["Lowest", "Lower", "Normal", "Higher", "Highest"];
 const sameScope = (left: MissionScope | null, right: MissionScope | null) =>
   left?.workspaceId === right?.workspaceId &&
   left?.projectId === right?.projectId;
+type RevisionTask = MissionProjection["tasks"][number];
+const revisionLabels: Record<MissionRevisionChange["type"], string> = {
+  replace: "Replace task",
+  dependencies: "Change prerequisites",
+  retire: "Retire duplicate task",
+  reassign: "Reassign specialist",
+};
+const nativeRevisionTask = (task: RevisionTask) => !task.projectCheck && !task.specialist && !task.teamMember &&
+  (task.executor.startsWith("sample.") ||
+    ["inspect.backend-source", "inspect.workspace-notes", "join.samples", "join.team"].includes(task.executor));
+const unattempted = (task: RevisionTask) => task.state === "queued" && !task.attempts.length;
+const canRevise = (mission: MissionProjection, scope: MissionScope | null) => sameScope(mission.scope, scope) &&
+  mission.disposition === "paused" && !mission.tasks.some((task) => task.state === "running" || task.state === "cancelling") &&
+  mission.events.filter((event) => event.kind === "revised").length < MISSION_LIMITS.revisions;
 
 export function missionTaskControls(
   mission: MissionProjection,
@@ -109,9 +125,12 @@ export function createVelaMissionView(
     preview: MissionPreview | MissionPlanningOffer;
     requestId: string;
     agentProfileId?: string;
-    onStarted: () => void;
+    onStarted: (missionId: string) => void;
   } | null = null;
   let workroomReview: MissionWorkroomPreview | null = null;
+  let revisionReview: { preview: MissionRevisionPreview; change: MissionRevisionChange } | null = null;
+  const revisionDrafts = new Map<string, MissionRevisionChange>();
+  let revisionProfilesRequested = false;
   let commandPending = false;
   const staged = new Map<string, string>();
   let teamLibrary: MissionTeamLibrary | null = null;
@@ -129,6 +148,18 @@ export function createVelaMissionView(
     const descriptions: Record<string, string> = {
       mission_revision_changed:
         "The mission changed. Review the current state and try again.",
+      mission_revision_denied:
+        "This revision is no longer available. Check the paused plan and choose another change.",
+      mission_revision_preview_changed:
+        "The plan revision changed. Request a new preview before applying.",
+      mission_revision_task_denied:
+        "This task no longer qualifies for the selected change. Review the paused mission.",
+      mission_revision_dependency_denied:
+        "This prerequisite change would affect a task that has already started or a required dependency.",
+      mission_revision_reassignment_unavailable:
+        "This specialist profile is unavailable or incompatible with the task’s reviewed capability.",
+      mission_native_revision_review_required:
+        "Review the plan revision in the native approval window before applying.",
       mission_scope_denied: "Missions are unavailable in this workspace.",
       mission_preview_changed:
         "The reviewed plan changed. Submit the objective again to review it.",
@@ -211,8 +242,8 @@ export function createVelaMissionView(
     return { field: field(label, key, control), control };
   }
 
-  async function loadTeams() {
-    if (!visible || !scope || !teamLibraryOpen || doc.hidden || commandPending || teamLibraryPending === epoch) return;
+  async function loadTeams(forRevision = false) {
+    if (!visible || !scope || (!teamLibraryOpen && !forRevision) || doc.hidden || commandPending || teamLibraryPending === epoch) return;
     const generation = epoch;
     teamLibraryPending = generation;
     render();
@@ -475,6 +506,21 @@ export function createVelaMissionView(
     return !!value && "contract" in value && (sameScope(value.scope, expected) ||
       value.workroom?.workspaceId === expected?.workspaceId && value.scope.projectId === expected?.projectId);
   }
+  function clearRevision() {
+    revisionDrafts.clear();
+    revisionReview = null;
+    revisionProfilesRequested = false;
+  }
+  function requestRevisionProfiles() {
+    if (revisionProfilesRequested || teamLibrary || commandPending) return;
+    revisionProfilesRequested = true;
+    void loadTeams(true);
+  }
+  function setMission(next: MissionProjection | null) {
+    if (!next || mission?.id !== next.id || mission.revision !== next.revision || !canRevise(next, scope) ||
+      (revisionReview && JSON.stringify(mission.tasks) !== JSON.stringify(next.tasks))) clearRevision();
+    mission = next;
+  }
   function refresh() {
     if (!visible || !scope || doc.hidden) return;
     refreshQueued = true;
@@ -498,21 +544,21 @@ export function createVelaMissionView(
           summaries = list;
           if (id && !list.some((item) => item.id === id)) {
             selectedId = null;
-            mission = null;
+            setMission(null);
             changed = true;
           } else if (
             accepted(record, expected) &&
             (!mission || record.revision > mission.revision ||
               (record.revision === mission.revision && JSON.stringify(record) !== JSON.stringify(mission)))
           ) {
-            mission = record;
+            setMission(record);
             changed = true;
           }
           if (changed) render();
         } catch (cause) {
           if (activeEpoch === epoch && activeReadEpoch === readEpoch && visible && id === selectedId) {
             summaries = [];
-            mission = null;
+            setMission(null);
             selectedId = null;
             render();
             showError(cause);
@@ -528,7 +574,7 @@ export function createVelaMissionView(
     review = null;
     workroomReview = null;
     selectedId = id;
-    mission = null;
+    setMission(null);
     staged.clear();
     error.hidden = true;
     render();
@@ -580,11 +626,11 @@ export function createVelaMissionView(
       if (!accepted(response, expected))
         throw new Error("mission_scope_denied");
       if (request.name === "start") {
-        pendingReview?.onStarted();
+        pendingReview?.onStarted(response.id);
         if (review !== pendingReview) return;
         review = null;
         selectedId = response.id;
-        mission = response;
+        setMission(response);
         staged.clear();
       } else if (selectedId === selection) {
         const control = request.input.control;
@@ -592,7 +638,7 @@ export function createVelaMissionView(
         if (control.type === "priority")
           staged.delete(`${control.taskId}-priority-value`);
         if (!mission || response.revision >= mission.revision)
-          mission = response;
+          setMission(response);
       }
     } catch (cause) {
       if (activeEpoch === epoch && visible) {
@@ -828,6 +874,172 @@ export function createVelaMissionView(
     }
     return null;
   }
+  function currentRevision(current: MissionProjection) {
+    return selectedId === current.id && mission?.id === current.id && mission.revision === current.revision &&
+      canRevise(mission, scope);
+  }
+  async function previewRevision(current: MissionProjection, change: MissionRevisionChange) {
+    if (!currentRevision(current) || commandPending) return;
+    const readGeneration = readEpoch;
+    revisionReview = null;
+    const result = await scopedCommand({ name: "revision-preview", input: { id: current.id, revision: current.revision, change } }, (value) => {
+      if (readGeneration !== readEpoch || !currentRevision(current)) return;
+      if (!value || !("kind" in value) || value.kind !== "revision-preview" ||
+        value.missionId !== current.id || value.revision !== current.revision)
+        throw Error("mission_revision_preview_changed");
+      revisionReview = { preview: value, change };
+      return revisionReview;
+    });
+    if (result && result === revisionReview)
+      body.querySelector<HTMLElement>('[data-mission-focus="revision-review-heading"]')?.focus();
+    refresh();
+  }
+  async function applyRevision(current: MissionProjection, reviewed: NonNullable<typeof revisionReview>) {
+    if (!currentRevision(current) || revisionReview !== reviewed || commandPending) return;
+    const readGeneration = readEpoch;
+    const { preview, change } = reviewed;
+    await scopedCommand({ name: "revision-apply", input: {
+      id: current.id, revision: current.revision, change, fingerprint: preview.fingerprint,
+    } }, (value) => {
+      if (readGeneration !== readEpoch || selectedId !== current.id) return;
+      if (!accepted(value, scope) || value.id !== current.id || value.revision <= current.revision)
+        throw Error("mission_revision_changed");
+      if (!mission || value.revision >= mission.revision) setMission(value);
+    });
+    refresh();
+  }
+  function renderRevisionReview(current: MissionProjection) {
+    const reviewed = revisionReview;
+    if (!reviewed || !currentRevision(current) || reviewed.preview.missionId !== current.id ||
+      reviewed.preview.revision !== current.revision) return null;
+    const section = el("section", "vela-core-plan");
+    const heading = el("h4", undefined, "Review plan revision");
+    heading.tabIndex = -1;
+    heading.dataset.missionFocus = "revision-review-heading";
+    section.append(heading, el("p", undefined, reviewed.preview.summary));
+    const external = reviewed.preview.externalReview;
+    if (external) section.append(el("p", "vela-core-meta",
+      `${external.provider} · ${external.model}${external.effort ? ` · ${external.effort}` : ""} · Native review required before reassignment`));
+    const controls = actions();
+    const apply = button("Apply plan revision", "revision-apply", () => { void applyRevision(current, reviewed); });
+    apply.classList.add("vela-core-primary");
+    apply.disabled = commandPending;
+    const dismiss = button("Dismiss revision preview", "revision-dismiss", () => {
+      revisionReview = null;
+      render(`${reviewed.change.taskId}-revision-preview`);
+    });
+    dismiss.disabled = commandPending;
+    controls.append(apply, dismiss);
+    section.append(controls);
+    return section;
+  }
+  function renderRevisionEditor(current: MissionProjection, task: RevisionTask) {
+    if (!canRevise(current, scope)) return null;
+    const dependents = new Set([task.id]);
+    for (const id of dependents) {
+      for (const candidate of current.tasks)
+        if (candidate.dependencies.includes(id)) dependents.add(candidate.id);
+    }
+    const candidates = current.tasks.filter((candidate) => !dependents.has(candidate.id));
+    const canRetire = nativeRevisionTask(task) && task.detail !== "mission_source_changed_since_verification" &&
+      ["queued", "failed", "blocked", "cancelled"].includes(task.state) &&
+      task.attempts.every((attempt) => attempt.finishedAt && attempt.outcome && attempt.outcome !== "uncertain") &&
+      current.tasks.every((candidate) => !candidate.dependencies.includes(task.id) || unattempted(candidate));
+    const successors = canRetire ? candidates.filter((other) => nativeRevisionTask(other) &&
+      other.executor === task.executor && other.criterion === task.criterion && other.objective === task.objective &&
+      JSON.stringify(other.claims) === JSON.stringify(task.claims) && task.dependencies.every((id) => other.dependencies.includes(id)) &&
+      (unattempted(other) || other.state === "verified" && other.attempts.at(-1)?.verification?.passed)) : [];
+    const kinds: MissionRevisionChange["type"][] = [];
+    if (canRetire && task.attempts.length < task.maxAttempts) kinds.push("replace");
+    if (nativeRevisionTask(task) && unattempted(task) && candidates.some((candidate) =>
+      task.executor.startsWith("sample.") || !task.dependencies.includes(candidate.id))) kinds.push("dependencies");
+    if (successors.length) kinds.push("retire");
+    if (task.executor === "chatgpt.specialist" && !task.attempts.length && !task.dependencies.length &&
+      (task.state === "queued" || task.state === "blocked")) kinds.push("reassign");
+    if (!kinds.length) return null;
+    const emptyChange = (type: MissionRevisionChange["type"]): MissionRevisionChange => {
+      if (type === "dependencies") return { type, taskId: task.id, dependencies: [...task.dependencies] };
+      if (type === "retire") return { type, taskId: task.id, successorId: successors[0]?.id ?? "" };
+      if (type === "reassign") return { type, taskId: task.id, agentProfileId: "" };
+      return { type, taskId: task.id };
+    };
+    const stagedChange = revisionDrafts.get(task.id);
+    const change = stagedChange && kinds.includes(stagedChange.type) ? stagedChange : emptyChange(kinds[0]);
+    const key = `${task.id}-revision`;
+    const section = details("Revise task", key);
+    const editor = el("div", "vela-core-plan");
+    const action = el("select", "vela-core-input");
+    for (const type of kinds) action.append(option(type, revisionLabels[type]));
+    action.value = change.type;
+    action.disabled = commandPending;
+    const stage = (next: MissionRevisionChange) => {
+      revisionDrafts.set(task.id, next);
+      revisionReview = null;
+      error.hidden = true;
+      render();
+    };
+    action.addEventListener("change", () => {
+      const type = kinds.find((item) => item === action.value);
+      if (type) stage(emptyChange(type));
+      if (type === "reassign") requestRevisionProfiles();
+    });
+    editor.append(field("Plan change", `${key}-action`, action));
+    let ready = true;
+    if (change.type === "replace") {
+      editor.append(el("p", "vela-core-meta", "Review a fresh task for this objective. The previous task and its receipts stay in history."));
+    } else if (change.type === "dependencies") {
+      const selected = new Set(change.dependencies);
+      const list = el("div", "vela-core-plan");
+      list.setAttribute("role", "group");
+      list.setAttribute("aria-label", "Verified prerequisites");
+      for (const candidate of candidates) {
+        const checkbox = el("input");
+        checkbox.type = "checkbox";
+        checkbox.checked = selected.has(candidate.id);
+        checkbox.disabled = commandPending || (task.dependencies.includes(candidate.id) && !task.executor.startsWith("sample."));
+        checkbox.addEventListener("change", () => {
+          if (checkbox.checked) selected.add(candidate.id);
+          else selected.delete(candidate.id);
+          stage({ ...change, dependencies: [...selected] });
+        });
+        list.append(field(candidate.objective, `${key}-dependency-${candidate.id}`, checkbox));
+      }
+      ready = candidates.length > 0 && (selected.size !== task.dependencies.length || task.dependencies.some((id) => !selected.has(id)));
+      editor.append(el("p", "vela-core-meta", candidates.length ? "Choose the tasks that must verify before this task starts." : "No eligible prerequisites are available."), list);
+    } else if (change.type === "retire") {
+      const successor = el("select", "vela-core-input");
+      for (const candidate of successors) successor.append(option(candidate.id, `${candidate.objective} · ${candidate.id}`));
+      successor.value = change.successorId;
+      successor.disabled = commandPending;
+      successor.addEventListener("change", () => { stage({ ...change, successorId: successor.value }); });
+      ready = successors.some((candidate) => candidate.id === change.successorId);
+      editor.append(field("Keep equivalent task", `${key}-successor`, successor));
+    } else {
+      const profile = el("select", "vela-core-input");
+      profile.append(option("", "Choose a profile"));
+      const taken = new Set(current.tasks.filter((item) => item.id !== task.id).map((item) => item.teamMember?.profileId));
+      const profiles = (teamLibrary?.profiles ?? []).filter((item) => item.id !== task.specialist?.profile?.id &&
+        (!task.teamMember || !taken.has(item.id)));
+      for (const item of profiles) profile.append(option(item.id, item.title));
+      profile.value = change.agentProfileId;
+      profile.disabled = commandPending || !profiles.length;
+      profile.addEventListener("change", () => { stage({ ...change, agentProfileId: profile.value }); });
+      ready = profiles.some((item) => item.id === change.agentProfileId);
+      const load = button("Refresh agent profiles", `${key}-profiles`, () => { void loadTeams(true); });
+      load.disabled = commandPending || teamLibraryPending === epoch;
+      editor.append(field("Available agent profile", `${key}-profile`, profile), load);
+      if (!profiles.length) editor.append(el("p", "vela-core-meta", teamLibraryPending === epoch
+        ? "Loading available profiles…" : "No alternate profile is currently listed."));
+      section.addEventListener("toggle", () => {
+        if (section.open && section.isConnected) requestRevisionProfiles();
+      });
+    }
+    const preview = button("Preview revision", `${key}-preview`, () => { void previewRevision(current, change); });
+    preview.disabled = commandPending || !ready;
+    editor.append(preview);
+    section.append(editor);
+    return section;
+  }
   function postReport(id: string) {
     void scopedCommand({ name: "post-report", input: { id } }, (value) => {
       if (!value || !("kind" in value) || value.kind !== "mission-report" || value.missionId !== id)
@@ -855,6 +1067,8 @@ export function createVelaMissionView(
       section.append(answer);
     }
     if (current.team) section.append(teamLabel(current.team));
+    const revision = renderRevisionReview(current);
+    if (revision) section.append(revision);
     if (sameScope(current.scope, scope) && current.outcome === "verified") {
       const post = button("Post evidence link to Vela chat", "post-report", () => { postReport(current.id); });
       post.disabled = commandPending || postedReport === current.id;
@@ -915,20 +1129,20 @@ export function createVelaMissionView(
       );
       section.append(controls);
     }
-    const titles = new Map(
-      current.tasks.map((task) => [task.id, task.objective]),
-    );
+    const retiredTasks = current.retiredTasks ?? [];
+    const titles = new Map([...current.tasks, ...retiredTasks].map((task) => [task.id, task.objective]));
     const tasks = el("ol", "vela-missions-steps");
-    for (const task of current.tasks) {
+    const renderTask = (task: RevisionTask, retired = false) => {
       const item = el("li");
-      item.dataset.missionTask = task.id;
+      if (retired) item.dataset.retiredMissionTask = task.id;
+      else item.dataset.missionTask = task.id;
       item.dataset.taskState = task.state;
       item.append(
         el("strong", undefined, task.objective),
         el(
           "p",
           "vela-core-meta",
-          `${stateLabel[task.state]} · ${task.executor}`,
+          `${retired ? "Retired · " : ""}${stateLabel[task.state]} · ${task.executor}`,
         ),
       );
       if (task.teamMember) {
@@ -958,7 +1172,7 @@ export function createVelaMissionView(
         );
       if (task.detail)
         item.append(el("p", "vela-core-meta", contextDetail[task.detail] ?? task.detail.replace(/_/g, " ")));
-      const available = missionTaskControls(current, task),
+      const available = retired ? { priority: false, retry: false, cancel: false } : missionTaskControls(current, task),
         controls = actions();
       if (available.priority) {
         const priority = select(
@@ -991,6 +1205,8 @@ export function createVelaMissionView(
           })),
         );
       if (controls.childElementCount) item.append(controls);
+      const edit = retired ? null : renderRevisionEditor(current, task);
+      if (edit) item.append(edit);
       for (const [index, attempt] of task.attempts.entries()) {
         const receipt = details(
           `Attempt ${index + 1} · ${attempt.outcome ? stateLabel[attempt.outcome] : stateLabel[task.state]}`,
@@ -1091,7 +1307,16 @@ export function createVelaMissionView(
         }
         item.append(receipt);
       }
-      tasks.append(item);
+      return item;
+    };
+    tasks.append(...current.tasks.map((task) => renderTask(task)));
+    section.append(tasks);
+    if (retiredTasks.length) {
+      const retired = details(`Retired tasks · ${retiredTasks.length}`, `${current.id}-retired-tasks`);
+      const history = el("ol", "vela-missions-steps");
+      history.append(...retiredTasks.map((task) => renderTask(task, true)));
+      retired.append(history);
+      section.append(retired);
     }
     const timeline = details(
         "Observed mission timeline",
@@ -1113,7 +1338,7 @@ export function createVelaMissionView(
       events.append(entry);
     }
     timeline.append(events);
-    section.append(tasks, timeline);
+    section.append(timeline);
     return section;
   }
   function render(focusFallback?: string) {
@@ -1208,7 +1433,7 @@ export function createVelaMissionView(
     },
     review(
       preview: MissionPreview | MissionPlanningOffer,
-      onStarted: () => void,
+      onStarted: (missionId: string) => void,
       agentProfileId?: string,
     ) {
       if (!sameScope("plan" in preview ? preview.plan.scope : preview.scope, scope)) return;
@@ -1237,7 +1462,7 @@ export function createVelaMissionView(
         epoch++;
         refreshQueued = false;
         summaries = [];
-        mission = null;
+        setMission(null);
         teamLibrary = null;
         clearTeamReview();
       }
@@ -1249,7 +1474,7 @@ export function createVelaMissionView(
       review = null;
       workroomReview = null;
       selectedId = null;
-      mission = null;
+      setMission(null);
       summaries = [];
       teamLibrary = null;
       teamDraft = null;
@@ -1268,7 +1493,7 @@ export function createVelaMissionView(
     },
     invalidateEvidence() {
       readEpoch++;
-      if (mission) { mission = null; render(); }
+      if (mission) { setMission(null); render(); }
       refresh();
     },
   };

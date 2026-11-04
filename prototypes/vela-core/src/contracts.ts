@@ -100,7 +100,7 @@ export interface VelaMessage {
   id: string; role: 'user' | 'assistant' | 'system'; content: string;
   source: 'user' | 'vela-native' | 'provider'; providerId?: string;
   requestId?: string; planId?: string; classification: EvidenceClass;
-  missionReport?: { missionId: string; workspaceId: string; projectId: string | null };
+  missionReport?: { missionId: string; workspaceId: string; projectId: string | null; jobsDone?: number };
   /** Parsed conversational content remains attributed to the actual observed provider output. */
   responseKind?: ProviderReplyKind; providerContribution?: ProviderContribution;
 }

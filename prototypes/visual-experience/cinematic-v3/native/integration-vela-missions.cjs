@@ -1,8 +1,9 @@
 /* Owned Electron mission journey. Run through desktop-main.cjs with
  * --integration-vela-missions --profile=<absolute C: profile ending review-vela-missions-DIGITS>
- * 45 seconds including cleanup, up to three PNGs/24 MiB, no video. */
+ * 45 seconds including cleanup, bounded PNG evidence, no video. */
 const assert = require("node:assert/strict");
 const { execFileSync } = require("node:child_process");
+const { randomUUID } = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { performance } = require("node:perf_hooks");
@@ -285,6 +286,12 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     await capture("01-mission-review");
 
     await click(PREVIEW + ' [data-mission-focus="start-mission"]');
+    const reportMessage = await wait("Vela posts the completed mission result automatically", async () => {
+      const state = await rpc("vela", { name: "state", input: {} });
+      return state.conversation?.messages.find(message => message.missionReport?.jobsDone === 4);
+    });
+    const reportIcon = id => '[data-mission-report-link=' + quote(id) + ']';
+    await click(SURFACE + ' .vela-manifestation ' + reportIcon(reportMessage.missionReport.missionId));
     const rendered = await wait("Verified mission and tasks in Vela", () => js(`(()=>{const p=document.querySelector(${quote(RECORD + '[data-mission-outcome="verified"]')});return p?.getClientRects().length&&{id:p.dataset.missionId,title:p.querySelector('h3').textContent,tasks:[...p.querySelectorAll('[data-mission-task][data-task-state]')].map(n=>[n.dataset.missionTask,n.dataset.taskState])}})()`));
     assert.equal(rendered.title, OBJECTIVE);
     const missions = await list();
@@ -306,14 +313,9 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     }
     receipt.rendered = { ...rendered, timeline: rows };
     await capture("02-verified-mission-timeline");
-    await click(RECORD + ' [data-mission-focus="post-report"]');
-    const reportMessage = await wait("Mission evidence linked from Vela chat", async () => {
-      const state = await rpc("vela", { name: "state", input: {} });
-      return state.conversation?.messages.find(message => message.missionReport?.missionId === rendered.id);
-    });
-    assert.deepEqual(reportMessage.missionReport, { missionId: rendered.id, ...scope });
+    assert.deepEqual(reportMessage.missionReport, { missionId: rendered.id, ...scope, jobsDone: 4 });
     await click(SURFACE + ' button[aria-label="History"]');
-    await click(SURFACE + ' .vela-core-history [data-mission-report-link=' + quote(rendered.id) + ']');
+    await click(SURFACE + ' .vela-core-history ' + reportIcon(rendered.id));
     await wait("Vela chat opens the canonical mission", () => js(
       `document.querySelector(${quote(RECORD + '[data-mission-id=' + quote(rendered.id) + ']')})?.getClientRects().length > 0`,
     ));
@@ -398,12 +400,37 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     assert.deepEqual(geometry(applied).filter(card => card[0] !== selected.id), geometry(before).filter(card => card[0] !== selected.id));
     assert.deepEqual(applied.viewport, before.viewport);
     await click(control("history-toggle"));
+    await fill(control("layout-name"), "Reviewed card arrangement");
+    await click(control("save-named-layout"));
+    const savedLayout = await wait("Named layout is available after saving", async () =>
+      (await desktop()).savedLayouts?.find(item => item.name === "Reviewed card arrangement"));
     await click(control("undo"));
     const undone = await wait("Undo restored the manually positioned card", async () => {
       const state = await layout();
       return state.revision > applied.revision && matchesPrior(state.blocks.find(card => card.blockId === selected.id)) && state;
     });
     assert.deepEqual(geometry(undone), geometry(before));
+    await click(control("saved-layout-select"));
+    key("Down");
+    key("Return");
+    await wait("The saved arrangement is selected", () => js(
+      `document.querySelector(${quote(control("saved-layout-select"))})?.value === ${quote(savedLayout.id)}`,
+    ));
+    await click(control("review-named-layout"));
+    assert.deepEqual(geometry(await layout()), geometry(before), "named_layout_review_changed_geometry");
+    await click(control("restore-named-layout"));
+    const restored = await wait("Named layout restores the saved card arrangement", async () => {
+      const state = await layout();
+      return state.revision > undone.revision && !matchesPrior(state.blocks.find(card => card.blockId === selected.id)) && state;
+    });
+    assert.deepEqual(geometry(restored), geometry(applied));
+    assert.deepEqual(restored.viewport, applied.viewport);
+    await click(control("undo"));
+    await wait("Undo restores the layout from before the named restore", async () => {
+      const state = await layout();
+      return state.revision > restored.revision && matchesPrior(state.blocks.find(card => card.blockId === selected.id));
+    });
+    receipt.namedLayout = { name: savedLayout.name, id: savedLayout.id, revision: restored.revision, undoRestored: true };
     receipt.optimization = { selectedId: selected.id, revisions: [before.revision, applied.revision, undone.revision], undoRestored: true };
 
     if (!await js(`document.querySelector(${quote(composer)})?.getClientRects().length > 0`)) await click("#vela");
@@ -412,21 +439,35 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     await fillNative({ click, key, js, wait, insertText: text => operation(() => win.webContents.insertText(text), "mission_text_input_deadline") }, composer, "Measure CPU and RAM");
     await click(SURFACE + ' button[aria-label="Send to Vela"]');
     await click(PREVIEW + ' [data-mission-focus="start-mission"]');
+    const answerMessage = await wait("CPU and RAM report appears automatically in Vela chat", async () => {
+      const state = await rpc("vela", { name: "state", input: {} });
+      return state.conversation?.messages.find(message => message.missionReport?.jobsDone === 2);
+    });
+    const reply = SURFACE + ' [data-current-message-id=' + quote(answerMessage.id) + ']';
+    const pill = await wait("Vela shows the reply and a scoped job count with its plan closed", () => js(`(() => {
+      const node = document.querySelector(${quote(reply)});
+      const surface = document.querySelector(${quote(SURFACE)});
+      return node?.getClientRects().length && node.closest('.vela-core')?.dataset.context === 'none' &&
+        surface?.getBoundingClientRect().height < 350 && node.querySelector('.vela-mission-jobs-done')?.textContent;
+    })()`));
+    assert.equal(pill, "2 jobs done");
+    await capture("05-compact-measurement-reply");
+    await click(reply + ' ' + reportIcon(answerMessage.missionReport.missionId));
+    await wait("Plan icon opens the mission with the workspace option", () => js(
+      `document.querySelector(${quote(RECORD + ' [data-mission-focus="preview-workroom"]')})?.getClientRects().length > 0`,
+    ));
     const measured = await wait("Vela displays the actual CPU and RAM answer", () => js(`(() => {
       const answer = document.querySelector(${quote(RECORD + '[data-mission-outcome="verified"] [data-mission-answer]')});
       return answer?.getClientRects().length && {
         id: answer.dataset.missionAnswer, text: Array.from(answer.querySelectorAll('p'), node => node.textContent)
       };
     })()`));
-    assert.match(measured.text[0], /^CPU usage was [\d.]+% over a \d+ ms sample\.$/u);
-    assert.match(measured.text[1], /GiB RAM in use \([\d.]+%\)/u);
+    assert.match(measured.text[0], /^CPU [\d.]+% \(\d+ ms sample\)\.$/u);
+    assert.match(measured.text[1], /^RAM [\d.]+% \([\d.]+\/[\d.]+ GiB used, [\d.]+ GiB available\)\.$/u);
     const measurementMission = await read(measured.id);
     assert.deepEqual(measured.text, measurementMission.answer);
-    const measuredChat = await rpc("vela", { name: "state", input: {} });
-    const answerMessage = measuredChat.conversation.messages.find(message => message.missionReport?.missionId === measured.id);
-    assert.equal(answerMessage?.content, measured.text.join(" "));
+    assert.equal(answerMessage.content, measured.text.join("\n"));
     await click(SURFACE + ' button[aria-label="Close Vela controls"]');
-    const reply = SURFACE + ' [data-current-message-id=' + quote(answerMessage.id) + ']';
     await wait("The normal Vela reply shows the measured values", () => js(`(() => {
       const node = document.querySelector(${quote(reply)});
       return node?.getClientRects().length && ${quote(measured.text)}.every(line => node.textContent.includes(line));
@@ -442,7 +483,48 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     })()`));
     assert(shown.some(row => row.task === "cpu" && row.label.includes("CPU utilization")));
     assert(shown.some(row => row.task === "ram" && row.label.includes("RAM utilization")));
-    receipt.measurementAnswer = { missionId: measured.id, lines: measured.text, messageId: answerMessage.id, streamEvents: shown };
+    receipt.measurementAnswer = { missionId: measured.id, lines: measured.text, messageId: answerMessage.id, pill, streamEvents: shown };
+
+    const revisionObjective = "Measure RAM and CPU";
+    const revisionPreview = await rpc("missions", { name: "preview", input: { objective: revisionObjective } });
+    const revisionMission = await rpc("missions", { name: "start", input: {
+      objective: revisionObjective, fingerprint: revisionPreview.fingerprint, requestId: randomUUID(),
+    } });
+    const controlMission = (mission, type) => rpc("missions", { name: "control", input: {
+      id: mission.id, revision: mission.revision, control: { type },
+    } });
+    let pausing = revisionMission;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      try { pausing = await controlMission(pausing, "pause"); break; }
+      catch (error) {
+        if (!String(error.message).includes("mission_revision_changed")) throw error;
+        pausing = await read(revisionMission.id);
+      }
+    }
+    await wait("Paused mission is idle and its report remains queued", async () => {
+      const mission = await read(revisionMission.id);
+      return mission.outcome === "paused" && mission.tasks.find(task => task.id === "report")?.state === "queued";
+    });
+    await click("#application-stream");
+    if (!await js(`document.querySelector(${quote(composer)})?.getClientRects().length > 0`)) await click("#vela");
+    await click(SURFACE + ' button[aria-label="Missions"]');
+    await click(missionControl(revisionMission.id));
+    await click(missionControl("report-revision"));
+    await click(missionControl("report-revision-preview"));
+    await click(missionControl("revision-apply"));
+    const amended = await wait("Reviewed replacement commits and keeps the original report record", async () => {
+      const mission = await read(revisionMission.id);
+      return mission.planRevision === 2 && mission.retiredTasks?.some(task => task.id === "report") && mission;
+    });
+    assert.equal(amended.outcome, "paused");
+    await click(missionControl("pause-resume"));
+    const revisedResult = await wait("The replacement report verifies after Resume", async () => {
+      const mission = await read(revisionMission.id);
+      return mission.outcome === "verified" && mission;
+    });
+    const replacement = revisedResult.tasks.find(task => task.executor === "join.samples");
+    assert(replacement.id.startsWith("replacement-") && replacement.state === "verified");
+    receipt.reviewedRevision = { missionId: revisedResult.id, retiredTaskId: "report", replacementTaskId: replacement.id, planRevision: revisedResult.planRevision };
 
     await click("#workspace-manager");
     const environmentAction = name => '.en-navigator [data-action=' + quote(name) + ']';
