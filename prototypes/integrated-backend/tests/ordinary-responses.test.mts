@@ -19,6 +19,7 @@ import type { VelaRequest, VelaState } from '../../vela-core/src/contracts.ts';
 import type { VelaRoutingSettingsChange } from '../../vela-core/src/routing-settings.ts';
 import type { VelaRoutingSample } from '../../vela-core/src/routing-calibration.ts';
 import { agentTemplates } from '../../agent-product/service.mts';
+import { VELA_IDENTITY_PROMPT, VELA_IDENTITY_VERSION } from '../../vela-core/src/vela-identity.mts';
 import type { AgentMutationReceipt, AgentProviderCatalog } from '../../agent-product/contracts.ts';
 import { RESPONSES_ENDPOINT } from '../../openai-provider/responses.mts';
 import type { MissionPlanningOffer, MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomPreview } from '../src/mission-contracts.mts';
@@ -776,13 +777,45 @@ test('Vela routes a single frozen prompt through the connected ChatGPT plan with
     const request = await f.core.command('vela', { name: 'request', input: { intent, resourceIds: [], authorizeProvider: true, previewId: preview.id, grantId } }) as VelaRequest;
     assert.equal(f.requests.length, 1);
     assert(JSON.stringify(f.requests[0].input).includes(intent));
-    assert.match(f.requests[0].instructions, /contribute to Vela/);
+    assert(f.requests[0].instructions.startsWith(VELA_IDENTITY_PROMPT));
     assert.equal(f.codexCalls, 0);
     assert.equal(request.providerId, providerId);
     assert.equal(request.state, 'failed', 'simulated output must not be attributed to a real provider');
     const execution = Object.values(f.owner.state.executions as Record<string, {state: string; responseId?: string}>)
       .find(item => item.responseId === 'resp_synthetic_vela');
     assert.equal(execution?.state, 'provider_completed');
+  } finally { await f.close(); }
+});
+
+test('a Vela response sends shared identity once and scoped current application facts without unselected note content', async () => {
+  const f = fixture();
+  try {
+    f.setListedModels([documentedModel]);
+    await f.core.command('ordinaryProviderCheck', {});
+    const desktop = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic current observatory', projectId: null });
+    const workspaceId = desktop.activeWorkspaceId!;
+    const created = await f.core.command('desktop', { type: 'createResource', kind: 'note', title: 'Unselected local notes', workspaceId });
+    const note = created.resources.find(resource => resource.title === 'Unselected local notes')!;
+    await f.core.command('desktop', { type: 'content', resourceId: note.id, expectedVersion: note.version, content: 'PRIVATE_UNSELECTED_NOTE_BODY' });
+    const input = { intent: 'What workspace do I have open?', resourceIds: [], providerId, model: documentedModel.id, adaptive: true };
+    const preview = await f.core.command('velaRequestPreview', input);
+    assert.equal(preview.route?.kind, 'conversational');
+    const approval = { previewId: preview.id, signature: preview.signature };
+    const review = await f.core.command('velaNativeReview', approval);
+    const data = JSON.parse(review.prompt.slice(review.prompt.indexOf('\n{') + 1));
+    assert.equal(data.application.surface.workspaceId, workspaceId);
+    assert.equal(data.application.layout.placementCount, 1);
+    assert(data.application.objects.some((object: { id: string; title: string }) => object.id === workspaceId && object.title === 'Synthetic current observatory'));
+    assert.doesNotMatch(review.prompt, /PRIVATE_UNSELECTED_NOTE_BODY/);
+    const { grantId } = await f.core.command('authorizeVelaRequest', { ...approval, reviewDigest: review.reviewDigest, directSend: true });
+    f.responses.push(() => complete('resp_scoped_application', 'Synthetic response from the protocol fixture.'));
+    await f.core.command('vela', { name: 'request', input: { ...input, authorizeProvider: true, previewId: preview.id, grantId } });
+    assert.equal(f.requests.length, 1);
+    const body = f.requests[0];
+    assert.equal(body.instructions.split(VELA_IDENTITY_VERSION).length - 1, 1);
+    assert(body.instructions.startsWith(VELA_IDENTITY_PROMPT));
+    assert.doesNotMatch(JSON.stringify(body.input), /aerynth\.vela-identity@1|PRIVATE_UNSELECTED_NOTE_BODY/);
+    assert.equal(f.codexCalls, 0);
   } finally { await f.close(); }
 });
 

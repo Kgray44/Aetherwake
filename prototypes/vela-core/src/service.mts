@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { VELA_IDENTITY_PROMPT } from './vela-identity.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import { CAPABILITIES, VelaError, check, identifier, isHostPolicyRead, isImmediateNativeAction, isLocalFact, isRecord, text, validateAction, validateProviderResult } from './capabilities.ts';
 import { defaultAdaptation, effectivePreference, observePreference, preferenceCategory, samePreferenceScope, setExplicitPreference, validatePreference } from './adaptation.ts';
@@ -67,7 +68,8 @@ function validatePresentation(value: unknown): asserts value is VelaPresentation
   check(isRecord(value) && value.schemaVersion === 1, 'unsupported_vela_presentation_schema');
   check(Object.keys(value).sort().join(',') === 'dismissedRequestIds,pinnedRequestIds,schemaVersion,selectedRequestId,version,view' && Number.isSafeInteger(value.version) && Number(value.version) >= 1 && (value.view === 'current' || value.view === 'history') && (value.selectedRequestId === null || identifier(value.selectedRequestId)) && presentationIds(value.dismissedRequestIds) && presentationIds(value.pinnedRequestIds), 'invalid_vela_presentation_state');
 }
-export const VELA_PLANNING_INSTRUCTION = `Be brief. Resolve “here” or “this” using activeSurface and activeResourceId. Choose typed tools by effect and activeWorkspaceLayout. Avoid no-ops when rearranging. Clarify unresolved targets or consequential ambiguity. Report plans as proposals. Delegation requires separate approval.`;
+export const VELA_PLANNING_TASK_INSTRUCTION = `Be brief. Resolve “here” or “this” using activeSurface and activeResourceId. Choose typed tools by effect and activeWorkspaceLayout. Avoid no-ops when rearranging. Clarify unresolved targets or consequential ambiguity. Report plans as proposals. Delegation requires separate approval.`;
+export const VELA_PLANNING_INSTRUCTION = VELA_IDENTITY_PROMPT + '\n' + VELA_PLANNING_TASK_INSTRUCTION;
 
 export class VelaService {
   private data!: StoredState;
