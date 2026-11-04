@@ -8,7 +8,7 @@ export type SystemUtilization =
   | { metric: 'cpu'; source: 'node:os.cpus'; measuredAt: string; percent: number; sampleMs: number; logicalCpus: number }
   | { metric: 'gpu'; source: 'windows:gpu-engine'; measuredAt: string; percent: number; observedAdapters: number; observedEngines: number };
 
-function cpuTimes() {
+export function readCpuCounters() {
   const processors = cpus();
   return {
     logicalCpus: processors.length,
@@ -18,9 +18,9 @@ function cpuTimes() {
 }
 
 export async function readCpuUtilization(): Promise<SystemUtilization> {
-  const start = performance.now(), before = cpuTimes();
+  const start = performance.now(), before = readCpuCounters();
   await delay(250);
-  const after = cpuTimes(), elapsed = Math.round(performance.now() - start);
+  const after = readCpuCounters(), elapsed = Math.round(performance.now() - start);
   const total = after.total - before.total, idle = after.idle - before.idle;
   if (before.logicalCpus === 0 || before.logicalCpus !== after.logicalCpus || total <= 0 || idle < 0 || idle > total)
     throw Error('invalid_cpu_counters');

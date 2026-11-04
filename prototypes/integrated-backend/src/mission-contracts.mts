@@ -75,6 +75,18 @@ export interface MissionVerification {
   detail: string;
   evidenceIds: string[];
 }
+export type MissionAdmissionReason = 'physical-memory' | 'storage-reserve' | 'cpu-load' | 'gpu-load' | 'disk-io' | 'active-input';
+export interface MissionAdmissionReading { value: number; observedAt: string }
+export interface MissionAdmission {
+  workerLimit: number;
+  reasons: MissionAdmissionReason[];
+  readings: {
+    cpuPercent?: MissionAdmissionReading;
+    availableMemoryBytes?: MissionAdmissionReading;
+    gpuEnginePercent?: MissionAdmissionReading;
+    diskQueueLength?: MissionAdmissionReading;
+  };
+}
 export interface MissionAttempt {
   id: string;
   executor: string;
@@ -84,6 +96,7 @@ export interface MissionAttempt {
   evidence?: MissionEvidence;
   verification?: MissionVerification;
   context?: MissionContextPackage['manifest'];
+  admission?: MissionAdmission;
   timing?: { queueMs: number; contextPreparationMs: number; executionMs?: number; verificationMs?: number };
   telemetry?: { durationMs: number; providerCalls: number; usage?: ReportedUsage; responseId?: string; reportedModel?: string };
 }
@@ -128,6 +141,7 @@ export interface Mission {
 export interface MissionProjection extends Mission {
   outcome: 'queued' | 'running' | 'paused' | 'cancelling' | 'cancelled' | 'blocked' | 'failed' | 'uncertain' | 'verified';
   answer?: string[];
+  admission?: MissionAdmission;
   waits: Record<string, 'dependencies' | 'capacity' | 'resource-conflict' | 'resource-pressure'>;
   profile: {
     elapsedMs: number;
@@ -244,7 +258,7 @@ export type MissionWorkroomDashboard =
       evidenceId?: string; source?: string; observedAt?: string; verification?: string; passed?: boolean;
       findings?: string[]; citations?: string[];
     }[] }
-  | { kind: 'performance'; profile: MissionProjection['profile'] }
+  | { kind: 'performance'; profile: MissionProjection['profile']; admission?: MissionAdmission }
   | { kind: 'stream'; events: MissionWorkroomStreamEvent[] };
 export type MissionWorkroomCard = MissionWorkroomDashboard['kind'];
 export type MissionWorkroomResource = {

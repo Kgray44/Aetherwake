@@ -69,3 +69,37 @@ test("evidence disclosures keep their place on refresh and clear immediately whe
     assert.equal(root.querySelector('[data-mission-id="mission-a"]'), null);
   } finally { view.dispose(); }
 });
+
+test("a visible performance card reports host pressure and refreshes until its mission settles", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { doc, root } = componentDocument();
+  const observedAt = "2026-11-04T01:00:00.000Z";
+  let reads = 0, running = true;
+  const view = mountMissionWorkroomView(root, "dashboard", "room", async () => {
+    reads++;
+    return { ...binding({ kind: "performance", profile: { elapsedMs: 30, peakWorkers: 1, attempts: 1, retries: 0,
+      providerCalls: 0, usageReports: 0, reportedTotalTokens: null, verifiedObjectivesPerReportedToken: null },
+      admission: { workerLimit: running ? 1 : 3, reasons: running ? ["cpu-load"] : [], readings: {
+        cpuPercent: { value: 96, observedAt }, diskQueueLength: { value: 0, observedAt },
+      } } }), outcome: running ? "running" : "verified" };
+  }, undefined, () => {});
+  try {
+    await view.refresh();
+    const detail = () => root.querySelector('[data-mission-admission="current"]');
+    assert.equal(detail().querySelector("summary").textContent, "Scheduler limit · 1 worker · High CPU load");
+    assert.equal(detail().querySelector('[data-admission-metric="gpuEnginePercent"]').textContent, "Busiest GPU engine · Unavailable");
+    assert.equal(detail().querySelector('[data-admission-metric="diskQueueLength"]').textContent, `Disk queue length · 0 · Observed ${observedAt}`);
+    detail().open = true;
+    detail().querySelector("summary").focus();
+    running = false;
+    const before = reads;
+    t.mock.timers.tick(2000);
+    await Promise.resolve();
+    assert.equal(reads, before + 1);
+    assert.equal(detail().querySelector("summary").textContent, "Scheduler limit · 3 workers");
+    assert.equal(detail().open, true);
+    assert.equal(doc.activeElement, detail().querySelector("summary"));
+    t.mock.timers.tick(4000);
+    assert.equal(reads, before + 1);
+  } finally { view.dispose(); }
+});

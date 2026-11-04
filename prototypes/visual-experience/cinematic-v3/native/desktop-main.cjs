@@ -239,6 +239,7 @@ const storage = createStorageAdmission({
   initiallyAdmitted: true,
   changed(admitted) {
     if (closing) return;
+    sendMissionHostSignal({ storageAdmitted: admitted });
     sendToWindow(win, "application-event", {
       type: admitted ? "storage/reserve-admission-restored" : "storage/reserve-admission-denied",
       classification: "observed",
@@ -303,6 +304,11 @@ function call(command, input) {
     pending.set(id, { resolve, reject, timer });
     writeBackend(line);
   });
+}
+function sendMissionHostSignal(missionHostSignal) {
+  if (!closing && backendWritable()) {
+    try { writeBackend(JSON.stringify({ missionHostSignal }) + "\n"); } catch { /* The backend transport reports disconnect. */ }
+  }
 }
 app.whenReady().then(async () => {
   nativeTheme.themeSource = "dark";
@@ -382,6 +388,19 @@ app.whenReady().then(async () => {
     },
   });
   const owner = win.webContents;
+  let lastMissionActivity = -Infinity;
+  const observeMissionActivity = () => {
+    const at = performance.now();
+    if (!win.isFocused() || owner.getURL() !== localURL || at - lastMissionActivity < 1000) return;
+    lastMissionActivity = at;
+    sendMissionHostSignal({ foregroundInput: true });
+  };
+  owner.on("before-input-event", (_event, input) => {
+    if (input.type === "keyDown") observeMissionActivity();
+  });
+  owner.on("before-mouse-event", (_event, input) => {
+    if (input.type === "mouseDown") observeMissionActivity();
+  });
   const mediaOwnerAlive = () => !owner.isDestroyed() && owner.getURL() === localURL;
   const playback = createMediaPlayback({ call, ownerAlive: mediaOwnerAlive });
   session.defaultSession.protocol.handle(mediaScheme, playback.handle);

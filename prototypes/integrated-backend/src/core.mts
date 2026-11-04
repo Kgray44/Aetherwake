@@ -1,5 +1,4 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { freemem } from 'node:os';
 import { realpathSync } from 'node:fs';
 import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +12,8 @@ import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, 
 import { MissionTeams } from './mission-teams.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
 import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningOffer, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
+import { MISSION_LIMITS } from './mission-contracts.mts';
+import { createMissionAdmission } from './mission-admission.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
@@ -202,6 +203,8 @@ export class BackendCore {
   private velaWorkflows = new Map<string, PendingVelaWorkflow>();
   private velaWorkflowClaims = new Set<string>();
   private missions: MissionService;
+  private missionAdmission: ReturnType<typeof createMissionAdmission>;
+  private missionStorageAdmitted = true;
   private missionWorkrooms: MissionWorkrooms;
   private missionExecutors: Readonly<Record<string, MissionExecutor>>;
   private missionSpecialistsInFlight = 0;
@@ -321,12 +324,19 @@ export class BackendCore {
         available: (scope, task) => this.missionSpecialistAvailable(scope, task),
         turn: input => this.runMissionSpecialist(input),
       }) };
+      this.missionAdmission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers,
+        onChange: () => this.missions?.capacityChanged() });
       this.missions = new MissionService({
         db: this.db, atomic: work => this.kernel.withTransaction(work),
         authorized: scope => this.missionScopeAllowed(scope),
         executors: this.missionExecutors, laneLimit: lane => lane === 'codex-local-check' ? 1 :
           lane === CHATGPT_PLAN_PROVIDER ? 2 - Number(this.active?.providerId === lane) - Number(!!this.missionPlanningRun) : 2,
-        underPressure: () => freemem() < 512 * 1024 * 1024,
+        admission: demand => {
+          if (!demand || !this.missionStorageAdmitted) this.missionAdmission.stopDemand();
+          const snapshot = this.missionAdmission.read(demand && this.missionStorageAdmitted);
+          return this.missionStorageAdmitted ? snapshot : { ...snapshot, workerLimit: 0,
+            reasons: ['storage-reserve', ...snapshot.reasons] };
+        },
         replan: replanNativeMission,
         reassign: (mission, task, profileId) => {
           const specialist = reassignMissionSpecialist(task, this.missionSpecialistSelection(mission.scope, profileId));
@@ -3699,6 +3709,17 @@ export class BackendCore {
     if (name === 'missionPlanReviewed') return await this.startMissionPlanning(a) as CommandMap[K]['output'];
     if (name === 'missionRevisionReviewed')
       return await this.missionCommand({ name: 'revision-apply', input: a }, true) as CommandMap[K]['output'];
+    if (name === 'missionHostSignal') {
+      ensure(this.privateMode && this.nativeHostServices && a && Object.keys(a).length === 1, 'invalid_mission_host_signal');
+      if (typeof a.storageAdmitted === 'boolean') {
+        this.missionStorageAdmitted = a.storageAdmitted;
+        this.missions.capacityChanged();
+      } else {
+        ensure(a.foregroundInput === true, 'invalid_mission_host_signal');
+        this.missionAdmission.noteActivity();
+      }
+      return null as CommandMap[K]['output'];
+    }
     // Targeted observed facts can respond during unrelated agent execution.
     // Their own strict schema cannot dispatch an action or a provider.
     if(name==='vela'&&a?.name==='presentation')return this.vela.presentation(a.input) as any;
@@ -3922,6 +3943,7 @@ export class BackendCore {
         this.ordinaryController?.abort();
         const planning = this.missionPlanningRun;
         planning?.abort.abort();
+        this.missionAdmission.dispose();
         await this.missions.close();
         await planning?.settled.catch(() => {});
         if(this.ordinaryTask)await this.ordinaryTask.catch(()=>{});

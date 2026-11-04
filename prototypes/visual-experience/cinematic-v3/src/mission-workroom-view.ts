@@ -1,6 +1,6 @@
 import type { TimelineExperience } from "../../../block-library/timeline-view.ts";
 import type { MissionProjection, MissionTaskState, MissionWorkroomDashboard, MissionWorkroomResource } from "../../../integrated-backend/src/mission-contracts.mts";
-import { missionEventLabel, missionStateLabel } from "./vela-missions.ts";
+import { missionAdmissionDetails, missionAdmissionRefreshMs, missionEventLabel, missionStateLabel } from "./vela-missions.ts";
 
 export interface MissionWorkroomView extends TimelineExperience {
   setScope(scope: string | null): void;
@@ -73,10 +73,26 @@ export function mountMissionWorkroomView(
   let projection: MissionWorkroomResource | null = null;
   let projectionStamp: string | null = null;
   let pending: Promise<void> | null = null, queued = false;
+  let admissionRefresh: ReturnType<typeof setTimeout> | undefined;
+
+  function syncAdmissionRefresh() {
+    const shouldRefresh = active && !disposed && !doc.hidden && projection?.dashboard?.kind === "performance" &&
+      (projection.outcome === "queued" || projection.outcome === "running");
+    if (!shouldRefresh) {
+      clearTimeout(admissionRefresh);
+      admissionRefresh = undefined;
+    } else if (!pending && admissionRefresh === undefined) {
+      admissionRefresh = setTimeout(() => {
+        admissionRefresh = undefined;
+        void refreshProjection();
+      }, missionAdmissionRefreshMs);
+    }
+  }
 
   const statusOnly = (message: string) => {
     projection = null;
     projectionStamp = null;
+    syncAdmissionRefresh();
     delete section.dataset.missionWorkroomCard;
     delete section.dataset.missionId;
     delete section.dataset.missionRevision;
@@ -147,8 +163,6 @@ export function mountMissionWorkroomView(
         return { rows, coverage: `${rows.length} specialist assignments`, intro: value.title };
       }
       case "evidence": {
-        const previous = Array.from(list.querySelectorAll<HTMLDetailsElement>("details[data-evidence-task]"));
-        const opened = new Set(previous.filter(node => node.open).map(node => node.dataset.evidenceTask));
         const rows = value.rows.map(item => {
           const row = taskRow(item.taskId, item.title, item.state);
           if (item.evidenceId) row.dataset.missionEvidenceId = item.evidenceId;
@@ -158,7 +172,7 @@ export function mountMissionWorkroomView(
           if (item.evidenceId || item.verification || item.findings?.length || item.citations?.length) {
             const details = doc.createElement("details");
             details.dataset.evidenceTask = item.taskId;
-            details.open = opened.has(item.taskId);
+            details.dataset.workroomDisclosure = `evidence:${item.taskId}`;
             const summary = doc.createElement("summary");
             summary.textContent = "Inspect evidence";
             details.append(summary);
@@ -200,6 +214,12 @@ export function mountMissionWorkroomView(
           row.append(doc.createTextNode(label), field);
           return row;
         });
+        if (value.admission) {
+          const row = doc.createElement("li"), details = missionAdmissionDetails(doc, value.admission, "current");
+          details.dataset.workroomDisclosure = "admission";
+          row.append(details);
+          rows.unshift(row);
+        }
         return { rows, coverage: "Recorded mission telemetry" };
       }
       case "stream": {
@@ -224,6 +244,7 @@ export function mountMissionWorkroomView(
     if (projectionStamp === stamp) return;
     projection = value;
     projectionStamp = stamp;
+    syncAdmissionRefresh();
     section.dataset.missionWorkroomCard = value.dashboard?.kind ?? kind;
     section.dataset.missionId = value.missionId;
     section.dataset.missionRevision = String(value.revision);
@@ -245,15 +266,20 @@ export function mountMissionWorkroomView(
         return row;
       }),
     };
-    status.textContent = `${missionStateLabel[value.outcome]} · ${displayed.coverage} · Journal revision ${value.revision}`;
+    const nextStatus = `${missionStateLabel[value.outcome]} · ${displayed.coverage} · Journal revision ${value.revision}`;
+    if (status.textContent !== nextStatus) status.textContent = nextStatus;
     intro.textContent = "intro" in displayed ? displayed.intro ?? "" : "";
     intro.hidden = !intro.textContent;
+    const selector = "details[data-workroom-disclosure]";
+    const opened = new Set(Array.from(list.querySelectorAll<HTMLDetailsElement>(selector))
+      .filter(node => node.open).map(node => node.dataset.workroomDisclosure));
     const activeDisclosure = list.contains(doc.activeElement)
-      ? doc.activeElement?.closest<HTMLDetailsElement>("details[data-evidence-task]")?.dataset.evidenceTask : undefined;
+      ? doc.activeElement?.closest<HTMLDetailsElement>(selector)?.dataset.workroomDisclosure : undefined;
     list.replaceChildren(...displayed.rows);
+    const disclosures = Array.from(list.querySelectorAll<HTMLDetailsElement>(selector));
+    for (const detail of disclosures) detail.open = opened.has(detail.dataset.workroomDisclosure);
     if (activeDisclosure) {
-      const replacement = Array.from(list.querySelectorAll<HTMLDetailsElement>("details[data-evidence-task]"))
-        .find(node => node.dataset.evidenceTask === activeDisclosure)?.querySelector("summary");
+      const replacement = disclosures.find(node => node.dataset.workroomDisclosure === activeDisclosure)?.querySelector("summary");
       (replacement ?? open).focus({ preventScroll: true });
     }
     if (mountManual && manualDetails.parentElement !== root) {
@@ -267,7 +293,7 @@ export function mountMissionWorkroomView(
   };
 
   function refreshProjection() {
-    if (!active || disposed || doc.hidden) return Promise.resolve();
+    if (!active || disposed || doc.hidden) { syncAdmissionRefresh(); return Promise.resolve(); }
     queued = true;
     if (pending) return pending;
     pending = (async () => {
@@ -284,6 +310,7 @@ export function mountMissionWorkroomView(
             }
             projection = null;
             projectionStamp = null;
+            syncAdmissionRefresh();
             resolvedManual = true;
             if (manualHost.parentElement !== root) root.replaceChildren(manualHost);
             syncManual();
@@ -299,7 +326,7 @@ export function mountMissionWorkroomView(
             statusOnly("The mission card could not be refreshed.");
         }
       }
-    })().finally(() => { pending = null; });
+    })().finally(() => { pending = null; syncAdmissionRefresh(); });
     return pending;
   }
   statusOnly("Checking the mission card…");
@@ -328,6 +355,7 @@ export function mountMissionWorkroomView(
     setActive(next) {
       if (active === next) return;
       active = next;
+      syncAdmissionRefresh();
       section.inert = !next;
       manualDetails.inert = !next;
       syncManual();
@@ -346,6 +374,7 @@ export function mountMissionWorkroomView(
     reflow() { manual?.reflow(); },
     dispose() {
       disposed = true;
+      syncAdmissionRefresh();
       manual?.dispose();
       section.remove();
       manualDetails.remove();

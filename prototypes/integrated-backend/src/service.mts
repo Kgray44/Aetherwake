@@ -41,6 +41,12 @@ export class Backend {
     const id = ++this.next;
     return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.worker.postMessage({ id, contract: CONTRACT, command, input }); });
   }
+  /** Reserved for the native process. Coarse host observations consume no RPC slots. */
+  observeMissionHostSignal(signal: CommandMap['missionHostSignal']['input']): void {
+    void this.ready.then(() => {
+      if (!this.dead && !this.closed) this.worker.postMessage({ missionHostSignal: signal });
+    }).catch(() => {});
+  }
   subscribe(listener: (event: StreamEvent) => void): () => void { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; }
   async close() {
     if(this.dead||this.closed)return;

@@ -31,6 +31,11 @@ lines.on("line", async (line) => {
       throw new Error("command_too_large");
     const request = JSON.parse(line);
     if(isNativeHostEnvelope(request)){nativeClient?.handle(request);return;}
+    if (request && Object.hasOwn(request, 'missionHostSignal')) {
+      if (nativeClient && Object.keys(request).length === 1)
+        backend.observeMissionHostSignal(request.missionHostSignal);
+      return;
+    }
     id = request.id;
     if (request.command === "metrics") {
       write({ id, result: process.memoryUsage() });

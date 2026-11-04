@@ -98,10 +98,24 @@ An explicit retry may re-run an affected replay-safe task within its attempt
 budget. Existing conversation and Codex sessions continue to own their
 respective histories.
 
-Admission rotates between missions; within a mission it favors older work and
-uses priority to order tasks within an age band. It enforces worker and provider
-limits, the mission's parallelism setting, exclusive resource claims and a
-physical-memory floor. A dependency join waits for verified prerequisites
+Admission rotates between missions. Ready tasks waiting 30 seconds receive
+oldest-first service. For newer work, user priority precedes the length of the
+remaining feasible dependency path. Admission also enforces provider and worker
+limits, per-mission parallelism and exclusive resource claims.
+
+The existing native storage guard and a 512 MiB available-memory floor can
+hold new admissions. Running attempts retain their claims and can settle.
+Two consecutive high CPU, busiest GPU engine or busiest physical disk queue
+samples can reduce the shared limit to one worker. Lower release thresholds
+reduce oscillation. Recent foreground Aerynth input can reinforce a measured
+CPU or GPU load signal. The desktop sends only a coarse input observation.
+Windows GPU and disk sampling starts after sustained queue demand, uses a
+fixed local CIM query, and has a 20-second cooldown. The policy exposes the
+latest available readings while work is pending. The journal records the
+actual decision and available samples when each attempt starts. Missing or
+expired readings appear as unavailable in the mission and Performance card.
+
+A dependency join waits for verified prerequisites
 and retains each contributing identity. Pause stops new admissions. A timeout
 or cancellation does not release a claim until the worker settles. On restart,
 in-flight external attempts become uncertain and are not replayed; interrupted

@@ -99,6 +99,10 @@
 .aw-mission-workroom li[data-mission-metric] > strong {
   font-variant-numeric: tabular-nums;
 }
+.vela-mission-record [data-mission-admission] > small {
+  display: block;
+  margin-block-start: 4px;
+}
 .aw-mission-workroom-controls > summary {
   cursor: pointer;
   color: #ded0f2;

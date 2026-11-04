@@ -8,7 +8,7 @@ import { missionMeasurementAnswer } from './mission-native.mts';
 import { buildMissionRevision } from './mission-revision.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
   type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionProjection,
-  type MissionAttempt, type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
+  type MissionAdmission, type MissionAttempt, type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
   type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomCard, type MissionWorkroomDashboard,
   type MissionWorkroomResource } from './mission-contracts.mts';
 
@@ -18,7 +18,8 @@ export interface MissionServiceHost {
   authorized(scope: MissionScope): boolean;
   executors: Readonly<Record<string, MissionExecutor>>;
   laneLimit(lane: string): number;
-  underPressure(): boolean;
+  underPressure?(): boolean;
+  admission?(demand: boolean): MissionAdmission;
   contextSource?(mission: Mission, task: MissionTaskPlan): MissionContextSource | undefined;
   reassign?(mission: Mission, task: MissionTask, agentProfileId: string): MissionTaskPlan['specialist'];
   replan?(mission: Mission, task: MissionTask): { additions: MissionTaskPlan[]; dependents: Record<string, string[]>; reason: string } | undefined;
@@ -39,6 +40,43 @@ const sameScope = (a: MissionScope, b: MissionScope) => a.workspaceId === b.work
 const busy = (m: Mission) => m.tasks.some(task => task.state === 'running' || task.state === 'cancelling');
 const active = (m: Mission) => busy(m) || m.disposition !== 'cancelled' && m.tasks.some(task => task.state === 'queued');
 const recordLimitBytes = 160 * 1024;
+const admissionLimitBytes = 1024;
+const priorityAgingMs = 30_000;
+
+function readyTasks(mission: Mission): MissionTask[] {
+  const tasks = new Map(mission.tasks.map(task => [task.id, task]));
+  return mission.tasks.filter(task => task.state === 'queued' &&
+    task.dependencies.every(id => tasks.get(id)?.state === 'verified'));
+}
+
+function orderReadyTasks(mission: Mission, ready: MissionTask[], now: number): MissionTask[] {
+  const tasks = new Map(mission.tasks.map(task => [task.id, task]));
+  const feasible = new Map<string, boolean>();
+  const canComplete = (task: MissionTask): boolean => {
+    if (!feasible.has(task.id)) feasible.set(task.id, !blockedState(task) &&
+      task.dependencies.every(id => canComplete(tasks.get(id)!)));
+    return feasible.get(task.id)!;
+  };
+  const dependents = new Map<string, MissionTask[]>();
+  for (const task of mission.tasks) if (task.state === 'queued' && canComplete(task)) {
+    for (const id of task.dependencies) {
+      const children = dependents.get(id) ?? [];
+      children.push(task);
+      dependents.set(id, children);
+    }
+  }
+  const paths = new Map<string, number>();
+  const pathLength = (task: MissionTask): number => {
+    if (!paths.has(task.id)) paths.set(task.id, 1 + Math.max(0, ...(dependents.get(task.id) ?? []).map(pathLength)));
+    return paths.get(task.id)!;
+  };
+  const aged = (task: MissionTask) => now - Date.parse(task.queuedAt) >= priorityAgingMs;
+  return ready.sort((a, b) => {
+    const aAged = aged(a), bAged = aged(b), queuedOrder = a.queuedAt.localeCompare(b.queuedAt);
+    return Number(bAged) - Number(aAged) || (aAged && bAged ? queuedOrder : 0) ||
+      b.priority - a.priority || pathLength(b) - pathLength(a) || queuedOrder;
+  });
+}
 
 export function validateMissionPlan(plan: MissionPlan, executors: MissionServiceHost['executors']): void {
   check(plan && bounded(plan.objective, 4096) && plan.scope && identifier(plan.scope.workspaceId) &&
@@ -89,6 +127,7 @@ export class MissionService {
   private healthy = true;
   private scheduled = false;
   private wakeTimer?: NodeJS.Timeout;
+  private admissionSnapshot?: MissionAdmission;
   private lastAdmitted = new Map<string, number>();
   private turn = 0;
   private readonly host: MissionServiceHost;
@@ -292,7 +331,7 @@ export class MissionService {
           ...(verification ? { verification: verification.detail, passed: verification.passed } : {}),
           ...(findings.length ? { findings } : {}), ...(citations.length ? { citations } : {}) };
       }) };
-      case 'performance': return { kind, profile: mission.profile };
+      case 'performance': return { kind, profile: mission.profile, ...(mission.admission ? { admission: mission.admission } : {}) };
       case 'stream': return { kind, events: [] };
     }
   }
@@ -475,6 +514,19 @@ export class MissionService {
     return running.length < L.workers && running.filter(r => r.missionId === m.id).length < m.concurrency &&
       running.filter(r => r.lane === lane).length < this.host.laneLimit(lane);
   }
+  private sampleAdmission(demand: boolean): MissionAdmission | undefined {
+    try {
+      const value = this.host.admission?.(demand);
+      if (value && Number.isInteger(value.workerLimit) && value.workerLimit >= 0 && value.workerLimit <= L.workers &&
+        Buffer.byteLength(JSON.stringify(value)) <= admissionLimitBytes) return structuredClone(value);
+    } catch { /* An unavailable reading does not fabricate a measurement. */ }
+  }
+  private clearAdmissionDemand() {
+    if (this.admissionSnapshot || this.wakeTimer) this.sampleAdmission(false);
+    this.admissionSnapshot = undefined;
+    clearTimeout(this.wakeTimer);
+    this.wakeTimer = undefined;
+  }
   private contextIsCurrent(m: Mission, task: MissionTask, attempt: MissionAttempt, checked: Map<string, boolean>): boolean {
     const cached = checked.get(attempt.id);
     if (cached !== undefined) return cached;
@@ -518,12 +570,14 @@ export class MissionService {
       m.tasks.some(t => t.state === 'failed') ? 'failed' :
       m.tasks.some(t => t.state === 'blocked' || t.state === 'cancelled') ? 'blocked' : 'queued';
     const waits: MissionProjection['waits'] = {};
+    const admission = m.disposition === 'active' && readyTasks(m).length ? this.admissionSnapshot : undefined;
+    const pressure = this.host.underPressure?.() || (admission && this.running.size >= admission.workerLimit && admission.workerLimit < L.workers);
     for (const task of m.tasks) if (task.state === 'queued') {
       const executor = own(this.host.executors, task.executor) ? this.host.executors[task.executor] : undefined;
       if (!task.dependencies.every(id => taskOf(m, id)?.state === 'verified')) waits[task.id] = 'dependencies';
       else if (this.conflict(task)) waits[task.id] = 'resource-conflict';
       else if (executor && !this.capacityFor(m, executor.lane)) waits[task.id] = 'capacity';
-      else if (this.host.underPressure()) waits[task.id] = 'resource-pressure';
+      else if (pressure) waits[task.id] = 'resource-pressure';
     }
     const allTasks = [...m.tasks, ...(m.retiredTasks ?? [])];
     const attempts = allTasks.flatMap(task => task.attempts);
@@ -541,7 +595,8 @@ export class MissionService {
     const ended = ['queued', 'running', 'cancelling'].includes(outcome) ? Date.now() :
       Date.parse(m.events.findLast(event => event.kind !== 'workroom')!.time);
     const answer = missionMeasurementAnswer(m.tasks);
-    return { ...m, outcome, ...(answer.length ? { answer } : {}), waits, profile: {
+    return { ...m, outcome, ...(answer.length ? { answer } : {}), waits,
+      ...(admission ? { admission: structuredClone(admission) } : {}), profile: {
       elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0), peakWorkers, attempts: attempts.length,
       retries: allTasks.reduce((total, task) => total + Math.max(0, task.attempts.length - 1), 0),
       providerCalls, usageReports: usage.length, reportedTotalTokens,
@@ -563,20 +618,21 @@ export class MissionService {
   }
   private drain() {
     const rows = this.host.db.prepare('SELECT json FROM vela_missions WHERE pending=1 ORDER BY rowid LIMIT ?').all(L.active);
-    const missions = rows.map(row => this.decode(row.json));
-    if (!missions.length) return;
-    if (this.host.underPressure()) {
+    const ready = rows.map(row => this.decode(row.json)).map(mission => ({ mission, tasks: readyTasks(mission) }))
+      .filter(entry => entry.tasks.length);
+    if (!ready.length) { this.clearAdmissionDemand(); return; }
+    const demand = ready.some(({ mission }) => this.host.authorized(mission.scope));
+    const admission = this.sampleAdmission(demand);
+    this.admissionSnapshot = demand ? admission : undefined;
+    const workerLimit = this.host.underPressure?.() ? 0 : admission?.workerLimit ?? L.workers;
+    if (workerLimit === 0 || demand && this.host.admission)
       this.wakeTimer ??= setTimeout(() => { this.wakeTimer = undefined; this.wake(); }, 1500).unref();
-      return;
-    }
-    missions.sort((a, b) => (this.lastAdmitted.get(a.id) ?? 0) - (this.lastAdmitted.get(b.id) ?? 0));
-    for (const m of missions) {
-      if (this.running.size >= L.workers) return;
-      const queued = m.tasks.filter(t => t.state === 'queued').sort((a, b) =>
-        a.queuedAt.slice(0, 16).localeCompare(b.queuedAt.slice(0, 16)) || b.priority - a.priority);
-      for (const task of queued) {
-        if (task.dependencies.some(id => blockedState(taskOf(m, id)!))) continue; // Preserve downstream work for a verified retry.
-        if (!task.dependencies.every(id => taskOf(m, id)?.state === 'verified')) continue;
+    if (workerLimit === 0) return;
+    ready.sort((a, b) => (this.lastAdmitted.get(a.mission.id) ?? 0) - (this.lastAdmitted.get(b.mission.id) ?? 0));
+    const now = Date.now();
+    for (const { mission: m, tasks } of ready) {
+      if (this.running.size >= workerLimit) return;
+      for (const task of orderReadyTasks(m, tasks, now)) {
         const executor = own(this.host.executors, task.executor) ? this.host.executors[task.executor] : undefined;
         if (!this.host.authorized(m.scope) || !executor?.available(m.scope, task)) {
           this.update(m.id, current => {
@@ -587,7 +643,7 @@ export class MissionService {
           continue;
         }
         if (!this.capacityFor(m, executor.lane) || this.conflict(task)) continue;
-        this.start(m, task, executor);
+        this.start(m, task, executor, admission);
         this.lastAdmitted.set(m.id, ++this.turn);
         this.wake();
         break;
@@ -595,7 +651,7 @@ export class MissionService {
     }
   }
 
-  private start(m: Mission, task: MissionTask, executor: MissionExecutor) {
+  private start(m: Mission, task: MissionTask, executor: MissionExecutor, admission?: MissionAdmission) {
     const id = randomUUID();
     const compilingAt = performance.now();
     const abort = new AbortController();
@@ -634,8 +690,13 @@ export class MissionService {
     this.update(m.id, current => {
       const value = taskOf(current, task.id)!;
       check(value.state === 'queued' && value.attempts.length < value.maxAttempts, 'mission_dispatch_denied');
-      value.state = 'running'; value.attempts.push({ id, executor: task.executor, admittedAt: stamp(), context: context.context.manifest, timing });
+      const attempt: MissionAttempt = { id, executor: task.executor, admittedAt: stamp(), context: context.context.manifest, timing };
+      value.state = 'running'; value.attempts.push(attempt);
       this.event(current, { kind: 'started', taskId: task.id, attemptId: id });
+      if (admission) {
+        attempt.admission = admission;
+        if (Buffer.byteLength(JSON.stringify(current)) > recordLimitBytes) delete attempt.admission;
+      }
     });
     const timer = setTimeout(() => this.abort(id, 'timeout'), task.timeoutMs).unref();
     const started = performance.now();
@@ -711,7 +772,7 @@ export class MissionService {
   }
   async close() {
     this.closed = true;
-    clearTimeout(this.wakeTimer);
+    this.clearAdmissionDemand();
     for (const id of this.running.keys()) this.abort(id, 'close');
     await Promise.all([...this.running.values()].map(r => r.settled));
   }

@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { BackendCore } from '../src/core.mts';
+import { Backend } from '../src/service.mts';
 import type { StreamEvent } from '../src/contracts.mts';
 import type { MissionExecutor, MissionPreview, MissionProjection } from '../src/mission-contracts.mts';
 
@@ -18,6 +19,7 @@ test('native mission lifecycle events replay in the originating workspace and hi
   let releaseCpu!: () => void;
   const gate = new Promise<void>(resolve => { releaseCpu = resolve; });
   try {
+    await assert.rejects(core.command('missionHostSignal', { storageAdmitted: false }), /invalid_mission_host_signal/);
     const executors = (core as unknown as { missionExecutors: Record<string, MissionExecutor> }).missionExecutors;
     const cpu = executors['sample.cpu'];
     executors['sample.cpu'] = { ...cpu, async run(context) { await gate; return cpu.run(context); } };
@@ -86,6 +88,52 @@ test('native mission lifecycle events replay in the originating workspace and hi
     if (!closed) await core.command('close', {});
     const target = resolve(directory);
     assert.ok(relative(resolve(tmpdir()), target).startsWith('aerynth-mission-stream-'));
+    rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test('trusted native reserve observations defer mission dispatch and persist the actual admission sample after release', async () => {
+  const directory = mkdtempSync(join(tmpdir(), 'aerynth-mission-host-signal-'));
+  const backend = new Backend({ path: join(directory, 'state.sqlite'), privateRoot: directory,
+    contentPolicy: 'local-private', provider: 'codex' }, { secrets: {
+    available: async () => false,
+    seal: async () => { throw Error('not_used'); },
+    open: async () => { throw Error('not_used'); },
+  } });
+  try {
+    const desktop = await backend.call('desktop', { type: 'createWorkspace', title: 'Synthetic reserve signal room', projectId: null });
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: desktop.activeWorkspaceId! } });
+    backend.observeMissionHostSignal({ storageAdmitted: false });
+    const objective = 'Measure CPU and RAM';
+    const preview = await backend.call('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    const mission = await backend.call('missions', { name: 'start', input: {
+      objective, fingerprint: preview.fingerprint, requestId: randomUUID(),
+    } }) as MissionProjection;
+    const read = () => backend.call('missions', { name: 'read', input: { id: mission.id } }) as Promise<MissionProjection>;
+    const held = await read();
+    assert.equal(held.profile.attempts, 0);
+    assert.equal(held.waits.cpu, 'resource-pressure');
+    assert.equal(held.admission?.workerLimit, 0);
+    assert.ok(held.admission?.reasons.includes('storage-reserve'));
+
+    backend.observeMissionHostSignal({ storageAdmitted: true });
+    let result = await read();
+    const deadline = performance.now() + 4000;
+    while (['queued', 'running'].includes(result.outcome) && performance.now() < deadline) {
+      await delay(20);
+      result = await read();
+    }
+    assert.equal(result.outcome, 'verified');
+    assert.ok(result.tasks.every(task => {
+      const snapshot = task.attempts.at(-1)?.admission;
+      return snapshot && snapshot.workerLimit > 0 && snapshot.readings.availableMemoryBytes &&
+        Number.isFinite(snapshot.readings.availableMemoryBytes.value) && !snapshot.reasons.includes('storage-reserve');
+    }));
+    assert.equal((await backend.call('providerActivity', {})).providerRequests, 0);
+  } finally {
+    await backend.close();
+    const target = resolve(directory);
+    assert.ok(relative(resolve(tmpdir()), target).startsWith('aerynth-mission-host-signal-'));
     rmSync(target, { recursive: true, force: true });
   }
 });

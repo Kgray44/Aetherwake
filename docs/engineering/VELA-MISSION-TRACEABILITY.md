@@ -67,11 +67,11 @@ this branch; **verified** is limited to the proof in the same row.
 | I · Workspace construction | **Partial.** Block Library tests cover scoped identity reuse, geometry, rollback and preview. The Windows journey built an engineering workspace with a reused note and verified the linked mission workroom's graph, checklist, timeline, evidence, performance and stream cards beside a local conversation. The workroom retains canonical bindings across restart and withdraws them when access to the origin is revoked. | Richer workspace intents, individual agent views, and layout quality across physical displays. |
 | J · Workspace adaptation | **Partial.** Workspace Actions previews optimization of selected movable cards and saves named arrangements. The Windows journey saved, restored and undid a named arrangement. SQLite tests cover restart, isolation by workspace, stale review and transaction rollback. A restore preserves the current content of referenced resources. | Explicit workspace creation undo and physical multi-display checks. |
 | K · Token efficiency | **Partial.** Context receipts distinguish estimates and reported usage. Whole-source compaction retains bounded source pointers, with a scope-keyed cache for authorized ranking work. No-provider workload completed with two workers using no model calls. | Matched, held-out live token, latency, quality and reliability comparison for missions. |
-| L · Resource pressure | **Partial.** Worker limits, claims and injected memory pressure/backpressure are tested. The native backend benchmark records process CPU, RSS and event-loop delay across four concurrent objectives. Core uses a physical-memory floor. | GPU, disk, network and renderer measurements under sustained representative workloads. |
+| L · Resource pressure | **Partial.** The scheduler enforces the native storage reserve and physical-memory floor and can reduce concurrency using observed CPU, GPU and disk queue readings. Focused tests exercise hard and soft limits, recovery, aging and preservation of running workers. The Windows admission benchmark captured real host readings and measured completion time, Node CPU, RSS and event-loop delay across four concurrent objectives. | Induced host saturation, renderer responsiveness under representative load, and live network/provider behavior. |
 | M · Permissions and isolation | **Partial.** Scoped mission reads, same-workspace Notes boundary, provider review, version fences, exclusive claims and no automatic external replay. Tests show source edits invalidate in-flight and transitive evidence, with a deliberate native retry. | Mission file-write isolation, connector approval/revocation, and broader adversarial cases. |
 | N · Conversation continuity | **Partial.** Ordinary fallback and pin bypass tested. A verified mission automatically posts a concise, durable result in its originating Vela chat. The job count belongs to that request and excludes aggregation and repeated verification of the same criterion. Tests exercised two measurement replies and a one-job mission in one workspace. The Windows journey used the plan icon to reopen the canonical mission with its workspace action. | Qualify native Connected Branches handoffs between ordinary, mission and Codex conversations. |
 | O · Truthful completion | **Verified for scheduler behavior.** Failed independent verification blocks downstream work; provider output is labeled reported. | More domain-specific external verifiers. |
-| P · Visual integration | **Partial.** Windows Electron exercised reviewed Start, the compact measurement reply, scoped Intelligence Stream rows, live workroom projections and undoable layout optimization at 125% scale. The workroom stream matched 13 retained event IDs with their origin. The mission graph remained usable at full and compact window sizes, and resize and restore preserved saved placements. | Broader keyboard and reduced-motion journeys, and physical multi-display configurations. |
+| P · Visual integration | **Partial.** Windows Electron exercised reviewed Start, the compact measurement reply, scoped Intelligence Stream rows, live workroom projections and undoable layout optimization at 125% scale. The workroom stream matched 13 retained event IDs with their origin. The graph remained usable at full and compact window sizes, with saved placements preserved. The attempt disclosure displayed the recorded worker limit and the exact physical-memory observation time. | Broader keyboard and reduced-motion journeys, and physical multi-display configurations. |
 
 The paired native benchmark (`node prototypes/integrated-backend/src/mission-benchmark.mts`)
 used two warm-ups and six measured runs per setting with alternating order.
@@ -132,6 +132,19 @@ objectives verified 653.81 ms after release. The pressure arm measured
 pressure signal was injected and SQLite was in memory. This single run
 measured backend scheduling and process counters. Both arms made zero
 provider calls, so reported token usage is unavailable.
+
+The admission comparison runs with
+`node prototypes/integrated-backend/src/mission-admission-benchmark.mts`.
+Each arm verified four concurrent objectives and 40 native attempts per run.
+On Windows with Node 24.18.0 and two native workers, one warm-up per arm and
+three interleaved measured runs gave a median of 4,242 ms for the memory-only
+gate (range 4,212–4,262 ms) and 4,240 ms for the measured policy (range
+4,220–4,249 ms). The ranges overlap. The measured arm recorded memory, GPU
+engine and disk queue readings on all 120 attempts and CPU on 105. Its Node
+event-loop p95 ranged from 17.92 to 18.89 ms. Ambient pressure did not trigger
+a reduced limit in this comparison. Controlled tests separately exercised
+holding and releasing work. The benchmark used in-memory journals, zero
+provider calls and no renderer, and the process counters cover Node only.
 
 Model-driven Codex checkout inspection remains gated. The installed Codex
 0.153.3 App Server rejected the direct restricted read field. Its ready

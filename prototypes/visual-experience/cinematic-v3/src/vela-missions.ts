@@ -1,5 +1,7 @@
 import { MISSION_LIMITS } from "../../../integrated-backend/src/mission-contracts.mts";
 import type {
+  MissionAdmission,
+  MissionAdmissionReason,
   MissionControl,
   MissionPlanningOffer,
   MissionPreview,
@@ -43,6 +45,60 @@ const eventLabel = {
   workroom: "Workroom created",
 } as const;
 export { eventLabel as missionEventLabel, stateLabel as missionStateLabel };
+
+const admissionReasonLabel: Record<MissionAdmissionReason, string> = {
+  "physical-memory": "Low available memory",
+  "storage-reserve": "Storage reserve",
+  "cpu-load": "High CPU load",
+  "gpu-load": "High GPU load",
+  "disk-io": "High disk I/O load",
+  "active-input": "Recent Aerynth activity",
+};
+const admissionNumber = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
+export const missionAdmissionRefreshMs = 2000;
+
+export function missionAdmissionDetails(
+  doc: Document,
+  admission: MissionAdmission,
+  phase: "current" | "attempt",
+  focusKey?: string,
+) {
+  const disclosure = doc.createElement("details"), summary = doc.createElement("summary");
+  disclosure.dataset.missionAdmission = phase;
+  if (focusKey) {
+    disclosure.dataset.missionDisclosure = focusKey;
+    summary.dataset.missionFocus = focusKey;
+  }
+  summary.textContent = [
+    phase === "current" ? "Scheduler limit" : "Scheduler limit at admission",
+    `${admission.workerLimit} ${admission.workerLimit === 1 ? "worker" : "workers"}`,
+    ...admission.reasons.map(reason => admissionReasonLabel[reason]),
+  ].join(" · ");
+  const description = doc.createElement("small");
+  description.textContent = "The limit applies to new starts across missions.";
+  disclosure.append(summary, description);
+  const readings = [
+    ["cpuPercent", "CPU usage", "%"],
+    ["availableMemoryBytes", "Available physical memory", " MiB"],
+    ["gpuEnginePercent", "Busiest GPU engine", "%"],
+    ["diskQueueLength", "Disk queue length", ""],
+  ] as const;
+  for (const [key, label, unit] of readings) {
+    const row = doc.createElement("small"), reading = admission.readings[key];
+    row.dataset.admissionMetric = key;
+    if (reading) {
+      const value = key === "availableMemoryBytes" ? reading.value / (1024 * 1024) : reading.value;
+      const time = doc.createElement("time");
+      time.dateTime = reading.observedAt;
+      time.textContent = reading.observedAt;
+      row.textContent = `${label} · ${admissionNumber.format(value)}${unit} · Observed `;
+      row.append(time);
+    } else row.textContent = `${label} · Unavailable`;
+    disclosure.append(row);
+  }
+  return disclosure;
+}
+
 const contextDetail: Record<string, string> = {
   mission_source_changed_since_verification: "A source changed after verification. The previous result needs a new review.",
   mission_context_changed_during_execution: "The sources changed during execution. Review the current sources before trying again.",
@@ -121,6 +177,7 @@ export function createVelaMissionView(
   let summaries: MissionSummary[] = [],
     mission: MissionProjection | null = null,
     selectedId: string | null = null;
+  let admissionRefresh: ReturnType<typeof setTimeout> | undefined;
   let review: {
     preview: MissionPreview | MissionPlanningOffer;
     requestId: string;
@@ -520,9 +577,23 @@ export function createVelaMissionView(
     if (!next || mission?.id !== next.id || mission.revision !== next.revision || !canRevise(next, scope) ||
       (revisionReview && JSON.stringify(mission.tasks) !== JSON.stringify(next.tasks))) clearRevision();
     mission = next;
+    syncAdmissionRefresh();
+  }
+  function syncAdmissionRefresh() {
+    const shouldRefresh = visible && !doc.hidden && !review && mission &&
+      (mission.outcome === "queued" || mission.outcome === "running");
+    if (!shouldRefresh) {
+      clearTimeout(admissionRefresh);
+      admissionRefresh = undefined;
+    } else if (!refreshing && admissionRefresh === undefined) {
+      admissionRefresh = setTimeout(() => {
+        admissionRefresh = undefined;
+        refresh();
+      }, missionAdmissionRefreshMs);
+    }
   }
   function refresh() {
-    if (!visible || !scope || doc.hidden) return;
+    if (!visible || !scope || doc.hidden) { syncAdmissionRefresh(); return; }
     refreshQueued = true;
     if (refreshing) return;
     refreshing = true;
@@ -567,6 +638,7 @@ export function createVelaMissionView(
       }
     })().finally(() => {
       refreshing = false;
+      syncAdmissionRefresh();
     });
   }
   function choose(id: string) {
@@ -1077,6 +1149,7 @@ export function createVelaMissionView(
     }
     if (current.planning) section.append(el("p", "vela-core-meta",
       `Planning · ${current.planning.model} · ${Math.round(current.planning.durationMs)} ms · ${current.planning.usage?.totalTokens ?? "Unknown"} reported tokens`));
+    if (current.admission) section.append(missionAdmissionDetails(doc, current.admission, "current", `${current.id}-admission`));
     if (current.workroom && scope?.workspaceId !== current.workroom.workspaceId && openWorkspace) {
       section.append(button("Open mission workroom", "open-workroom",
         () => { void openWorkspace(current.workroom!.workspaceId).catch(showError); }));
@@ -1277,6 +1350,7 @@ export function createVelaMissionView(
             ...(verificationMs === undefined ? [] : [`Verification ${Math.round(verificationMs)} ms`]),
           ].join(" · ")));
         }
+        if (attempt.admission) receipt.append(missionAdmissionDetails(doc, attempt.admission, "attempt", `${attempt.id}-admission`));
         if (attempt.telemetry) {
           const {
             durationMs,
@@ -1342,6 +1416,7 @@ export function createVelaMissionView(
     return section;
   }
   function render(focusFallback?: string) {
+    syncAdmissionRefresh();
     const active = doc.activeElement as HTMLElement | null;
     const focus = body.contains(active) ? active?.dataset.missionFocus : undefined;
     const textField = focus && active?.matches("input[type=text],textarea")

@@ -1,0 +1,125 @@
+import { strict as assert } from 'node:assert';
+import { test } from 'node:test';
+import { setImmediate as yieldToProbe } from 'node:timers/promises';
+import { createMissionAdmission } from '../src/mission-admission.mts';
+
+const mib = 1024 * 1024;
+const epoch = Date.parse('2026-01-01T00:00:00Z');
+
+test('memory holds immediately while sustained CPU load limits concurrency and then clears', () => {
+  let time = 0, total = 0, idle = 0, free = 1024 * mib;
+  const admission = createMissionAdmission({ maxWorkers: 3, now: () => time, wallNow: () => epoch + time,
+    availableMemory: () => free, cpuCounters: () => ({ total, idle, logicalCpus: 4 }), readWindowsPressure: null });
+  const sample = (idleTicks: number) => { time += 500; total += 2_000; idle += idleTicks; return admission.read(true); };
+  try {
+    assert.deepEqual(admission.read(false), { workerLimit: 3, reasons: [], readings: {} });
+    admission.noteActivity();
+    assert.equal(admission.read(true).workerLimit, 3, 'Input alone is not a host constraint');
+    const corroborated = sample(350);
+    assert.equal(corroborated.readings.cpuPercent?.value, 82.5);
+    assert.deepEqual(corroborated.reasons, ['active-input']);
+    time += 3_001;
+    assert.equal(sample(100).workerLimit, 3, 'One high sample does not imply sustained load');
+    const sustained = sample(100);
+    assert.equal(sustained.workerLimit, 1);
+    assert.deepEqual(sustained.reasons, ['cpu-load']);
+    assert.equal(sustained.readings.cpuPercent?.observedAt, new Date(epoch + time).toISOString());
+    assert.equal(sample(250).workerLimit, 1, 'Load inside the hysteresis band preserves the prior limit');
+    assert.equal(sample(1_000).workerLimit, 3);
+    free = 0;
+    const held = admission.read(true);
+    assert.equal(held.workerLimit, 0);
+    assert.deepEqual(held.reasons, ['physical-memory']);
+    assert.equal(held.readings.availableMemoryBytes?.value, 0);
+    free = 512 * mib;
+    assert.equal(admission.read(true).workerLimit, 3);
+    time += 5_001;
+    assert.deepEqual(admission.read(false).readings, {});
+  } finally { admission.dispose(); }
+});
+
+test('Windows probes wait for sustained demand, enforce a cooldown and expire individual readings', async () => {
+  let time = 0, notifications = 0, probes = 0;
+  const responses = [
+    { gpuEnginePercent: 97, diskQueueLength: 8 },
+    { gpuEnginePercent: 99, diskQueueLength: 9 },
+    { gpuEnginePercent: 0 },
+  ];
+  const admission = createMissionAdmission({ maxWorkers: 3, now: () => time, wallNow: () => epoch + time,
+    availableMemory: () => 1024 * mib, cpuCounters: () => ({ idle: 0, total: 0, logicalCpus: 0 }),
+    readWindowsPressure: async () => responses[probes++] ?? {}, onChange: () => { notifications++; } });
+  const readAt = (at: number, demand = true) => { time = at; return admission.read(demand); };
+  try {
+    readAt(0);
+    readAt(1_999);
+    readAt(2_000, false);
+    await yieldToProbe();
+    assert.equal(probes, 0);
+    readAt(2_000);
+    readAt(2_000);
+    assert.equal(notifications, 0, 'An observer does not run inside a scheduler read');
+    await yieldToProbe();
+    assert.equal(probes, 1);
+    assert.equal(notifications, 1);
+    const first = readAt(2_000, false);
+    assert.equal(first.workerLimit, 3);
+    assert.equal(first.readings.gpuEnginePercent?.value, 97);
+    for (const at of [6_000, 10_000, 14_000, 18_000, 21_999]) readAt(at);
+    await yieldToProbe();
+    assert.equal(probes, 1);
+    readAt(22_000);
+    await yieldToProbe();
+    assert.equal(probes, 2);
+    const second = readAt(22_000, false);
+    assert.equal(second.workerLimit, 1);
+    assert.deepEqual(second.reasons, ['gpu-load', 'disk-io']);
+    for (const at of [26_000, 30_000, 34_000, 38_000, 42_000]) readAt(at);
+    await yieldToProbe();
+    const third = readAt(42_000, false);
+    assert.equal(third.workerLimit, 3);
+    assert.equal(third.readings.gpuEnginePercent?.value, 0);
+    assert.equal(third.readings.diskQueueLength, undefined);
+    assert.deepEqual(readAt(72_001, false).readings, {});
+  } finally { admission.dispose(); }
+});
+
+test('a closing admission policy aborts a pending Windows probe and ignores late results', async () => {
+  let time = 0, signal: AbortSignal | undefined, notify = 0;
+  let resolveProbe!: (result: { gpuEnginePercent: number }) => void;
+  const pending = new Promise<{ gpuEnginePercent: number }>(resolve => { resolveProbe = resolve; });
+  const admission = createMissionAdmission({ maxWorkers: 3, now: () => time,
+    availableMemory: () => 1024 * mib, cpuCounters: () => ({ idle: 0, total: 0, logicalCpus: 0 }),
+    readWindowsPressure: async probeSignal => { signal = probeSignal; return pending; }, onChange: () => { notify++; } });
+  admission.read(true);
+  time = 2_000;
+  admission.read(true);
+  await yieldToProbe();
+  assert.equal(signal?.aborted, false);
+  admission.dispose();
+  assert.equal(signal?.aborted, true);
+  resolveProbe({ gpuEnginePercent: 100 });
+  await yieldToProbe();
+  assert.equal(notify, 0);
+  assert.deepEqual(admission.read(false).readings, {});
+});
+
+test('separate short missions do not combine their Windows sampler warmup', async () => {
+  let time = 0, probes = 0;
+  const admission = createMissionAdmission({ maxWorkers: 3, now: () => time,
+    availableMemory: () => 1024 * mib, cpuCounters: () => ({ idle: 0, total: 0, logicalCpus: 0 }),
+    readWindowsPressure: async () => { probes++; return {}; } });
+  try {
+    admission.read(true);
+    time = 1_999;
+    admission.stopDemand();
+    admission.read(true);
+    time = 3_998;
+    admission.read(true);
+    await yieldToProbe();
+    assert.equal(probes, 0);
+    time = 3_999;
+    admission.read(true);
+    await yieldToProbe();
+    assert.equal(probes, 1);
+  } finally { admission.dispose(); }
+});

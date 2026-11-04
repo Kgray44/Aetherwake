@@ -4790,10 +4790,14 @@ export function installApplication(hooks: Hooks) {
       refreshMissionWorkroomCards(accessChanged);
     }
     if (e.type === "storage/reserve-admission-denied") {
+      velaMissions.observe();
+      refreshMissionWorkroomCards();
       hooks.status("Storage check paused saving and new runs. Your data is retained.");
       return;
     }
     if (e.type === "storage/reserve-admission-restored") {
+      velaMissions.observe();
+      refreshMissionWorkroomCards();
       hooks.status("Storage check passed. Saving is available again.");
       void enqueue(async () => {
         for (const session of composerSessions.values()) {

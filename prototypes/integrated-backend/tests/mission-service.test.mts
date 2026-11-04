@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { setImmediate as flush } from 'node:timers/promises';
 import { MissionService, validateMissionPlan, type MissionServiceHost } from '../src/mission-service.mts';
 import { nativeMissionPlan, replanNativeMission } from '../src/mission-native.mts';
-import { MISSION_LIMITS, type Mission, type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionScope,
+import { MISSION_LIMITS, type Mission, type MissionAdmission, type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionScope,
   type MissionTaskPlan } from '../src/mission-contracts.mts';
 import type { MissionContextSource } from '../../vela-core/src/mission-context.mts';
 
@@ -332,6 +332,106 @@ test('pressure defers admission and cancelling a branch preserves an independent
     assert.equal(outcome.tasks.find(t => t.id === 'dependent')?.state, 'cancelled');
     assert.equal(outcome.tasks.find(t => t.id === 'independent')?.state, 'verified');
     assert.equal(outcome.outcome, 'blocked');
+  } finally { await service.close(); f.db.close(); }
+});
+
+test('host admission holds queued work, preserves running workers and records only dispatched attempts', async () => {
+  const f = fixture(), demand: boolean[] = [];
+  const observedAt = new Date().toISOString();
+  const memory: MissionAdmission = { workerLimit: 0, reasons: ['physical-memory'],
+    readings: { availableMemoryBytes: { value: 256 * 1024 * 1024, observedAt } } };
+  const cpu: MissionAdmission = { workerLimit: 1, reasons: ['cpu-load'], readings: { cpuPercent: { value: 95, observedAt } } };
+  const normal: MissionAdmission = { workerLimit: 3, reasons: [], readings: { cpuPercent: { value: 40, observedAt } } };
+  let policy = memory;
+  const service = new MissionService({ ...f.host, admission: needed => { demand.push(needed); return policy; } });
+  try {
+    const { id } = service.create('sampled-admission', plan(task('first'), task('second'), task('third')));
+    const read = () => service.read(id, scope);
+    await flush();
+    const samples = demand.length;
+    const held = read();
+    assert.equal(held.waits.first, 'resource-pressure');
+    assert.deepEqual(held.admission, memory);
+    assert.ok(held.tasks.every(task => !task.attempts.length));
+    assert.equal(demand.length, samples, 'projection must not trigger admission sampling');
+
+    policy = normal;
+    service.capacityChanged();
+    await flush();
+    assert.deepEqual([...f.active.keys()], ['first', 'second']);
+    assert.deepEqual(read().tasks[0].attempts[0].admission, normal);
+    policy = cpu;
+    service.capacityChanged();
+    await flush();
+    assert.deepEqual([...f.active.keys()], ['first', 'second']);
+    assert.ok([...f.active.values()].every(worker => !worker.context.signal.aborted));
+    f.active.get('first')!.release();
+    await flush();
+    assert.equal(read().waits.third, 'resource-pressure');
+    assert.deepEqual(read().admission, cpu);
+    assert.deepEqual([...f.active.keys()], ['second']);
+    f.active.get('second')!.release();
+    await flush();
+    assert.deepEqual([...f.active.keys()], ['third']);
+    const started = read().tasks[2].attempts[0];
+    assert.deepEqual(started.admission, cpu);
+    assert.equal(demand.at(-1), false);
+    f.active.get('third')!.release();
+    await flush();
+    assert.equal(read().outcome, 'verified');
+    assert.equal(read().admission, undefined);
+    assert.deepEqual(read().tasks[2].attempts[0].admission, cpu);
+  } finally { await service.close(); f.db.close(); }
+});
+
+test('queued admission resamples and recovers without an external wake signal', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture();
+  let workerLimit = 0;
+  const service = new MissionService({ ...f.host, admission: () => ({ workerLimit, reasons: [], readings: {} }) });
+  try {
+    const { id } = service.create('admission-recheck', plan(task('waiting')));
+    await flush();
+    assert.equal(service.read(id, scope).waits.waiting, 'resource-pressure');
+    workerLimit = 1;
+    t.mock.timers.tick(1500);
+    await flush();
+    assert.deepEqual([...f.active.keys()], ['waiting']);
+    f.active.get('waiting')!.release();
+    await flush();
+    assert.equal(service.read(id, scope).outcome, 'verified');
+  } finally { await service.close(); f.db.close(); }
+});
+
+test('ready tasks honor aging, explicit priority and the longest feasible dependency path', async () => {
+  const f = fixture();
+  let limit = 0;
+  const service = new MissionService({ ...f.host, admission: () => ({ workerLimit: limit, reasons: [], readings: {} }) });
+  try {
+    const { id } = service.create('admission-order', plan(task('ordinary'), task('urgent'), task('critical'),
+      task('tail', ['critical']), task('aged')));
+    const read = () => service.read(id, scope);
+    const priority = service.control(id, scope, read().revision, { type: 'priority', taskId: 'urgent', priority: 2 });
+    service.control(id, scope, priority.revision, { type: 'priority', taskId: 'aged', priority: -2 });
+    const row = f.db.prepare('SELECT json FROM vela_missions WHERE id=?').get(id)!;
+    const stored = JSON.parse(String(row.json)) as Mission;
+    stored.tasks.find(task => task.id === 'aged')!.queuedAt = new Date(Date.now() - 31_000).toISOString();
+    f.db.prepare('UPDATE vela_missions SET json=? WHERE id=?').run(JSON.stringify(stored), id);
+    limit = 1;
+    service.capacityChanged();
+    await flush();
+    for (const id of ['aged', 'urgent', 'critical']) {
+      assert.deepEqual([...f.active.keys()], [id]);
+      f.active.get(id)!.release();
+      await flush();
+    }
+    assert.deepEqual([...f.active.keys()], ['ordinary']);
+    f.active.get('ordinary')!.release();
+    await flush();
+    assert.deepEqual([...f.active.keys()], ['tail']);
+    f.active.get('tail')!.release();
+    await flush();
+    assert.equal(read().outcome, 'verified');
   } finally { await service.close(); f.db.close(); }
 });
 

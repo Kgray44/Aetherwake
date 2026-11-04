@@ -11,6 +11,11 @@ try {
   const core = new BackendCore(options, event => port.postMessage({ event }),nativeClient?.services);
   port.on('message', async request => {
     if(isNativeHostEnvelope(request)){nativeClient?.handle(request);return;}
+    if (request && Object.hasOwn(request, 'missionHostSignal')) {
+      if (hosted && Object.keys(request).length === 1)
+        await core.command('missionHostSignal', request.missionHostSignal).catch(() => {});
+      return;
+    }
     const { id, contract, command, input } = request;
     try {
       if (contract !== CONTRACT) throw Object.assign(new Error(), { code: 'unsupported_contract' });

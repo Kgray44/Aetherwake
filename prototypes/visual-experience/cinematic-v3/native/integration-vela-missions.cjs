@@ -61,6 +61,9 @@ function verifyJournal(mission, scope, shippedCoreHash) {
     assert.equal(entry.evidence.attemptId, entry.id);
     assert(Number.isFinite(Date.parse(entry.evidence.observedAt)), "observed_evidence_timestamp_required");
     assert.equal(entry.telemetry?.providerCalls, 0);
+    assert(Number.isInteger(entry.admission?.workerLimit) && entry.admission.workerLimit >= 1 && entry.admission.workerLimit <= 3);
+    const availableMemory = entry.admission.readings.availableMemoryBytes;
+    assert(availableMemory?.value >= 512 * 1024 * 1024 && Number.isFinite(Date.parse(availableMemory.observedAt)), "observed_memory_admission_required");
     const started = mission.events.find(event => event.kind === "started" && event.taskId === task.id && event.attemptId === entry.id);
     const settled = mission.events.find(event => event.kind === "settled" && event.taskId === task.id && event.attemptId === entry.id);
     assert(started && settled && started.seq < settled.seq, "canonical_start_and_settle_required");
@@ -300,6 +303,21 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const mission = await read(rendered.id);
     assert.deepEqual(rendered.tasks, mission.tasks.map(task => [task.id, task.state]));
     receipt.journal = verifyJournal(mission, scope, source.hashes["prototypes/integrated-backend/src/core.mts"]);
+    const firstAttempt = mission.tasks[0].attempts[0];
+    const attemptDisclosure = RECORD + ' details[data-mission-disclosure=' + quote(firstAttempt.id) + ']';
+    await click(attemptDisclosure + ' > summary');
+    const admissionDisclosure = attemptDisclosure + ' details[data-mission-admission="attempt"]';
+    await click(admissionDisclosure + ' > summary');
+    receipt.admission = await wait("Vela displays the recorded admission limit and physical memory reading", () => js(`(() => {
+      const disclosure = document.querySelector(${quote(admissionDisclosure)});
+      const memory = disclosure?.querySelector('[data-admission-metric="availableMemoryBytes"]');
+      return disclosure?.open && memory?.getClientRects().length && {
+        limit: disclosure.querySelector('summary').textContent, measuredAt: memory.querySelector('time')?.dateTime,
+      };
+    })()`));
+    assert(receipt.admission.limit.includes(String(firstAttempt.admission.workerLimit)));
+    assert.equal(receipt.admission.measuredAt, firstAttempt.admission.readings.availableMemoryBytes.observedAt);
+    await click(attemptDisclosure + ' > summary');
     const timeline = RECORD + " details[data-mission-disclosure=" + quote(rendered.id + "-timeline") + "]";
     const summary = timeline + " > summary";
     assert.equal(await js(`document.querySelector(${quote(summary)})?.textContent`), "Observed mission timeline");
