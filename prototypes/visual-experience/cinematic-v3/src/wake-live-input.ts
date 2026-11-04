@@ -18,17 +18,20 @@ export class WakeLiveInput {
     this.destination = this.context.createMediaStreamDestination(); this.stream = this.destination.stream;
   }
   append(startSample: number, samples: Float32Array) {
-    if (this.closed || !(samples instanceof Float32Array) || samples.buffer instanceof SharedArrayBuffer || samples.length < 1 || samples.length > 640 ||
+    if (this.closed || !(samples instanceof Float32Array) || typeof SharedArrayBuffer!=='undefined'&&samples.buffer instanceof SharedArrayBuffer || samples.length < 1 || samples.length > 640 ||
         startSample !== this.nextSample || !samples.every(value=>Number.isFinite(value)&&Math.abs(value)<=1) || this.retained + samples.length > 128000)
       throw Error('wake_live_frame_invalid');
     const copy = new Float32Array(samples); this.nextSample += copy.length; this.retained += copy.length;
     if (this.active) this.schedule(copy); else this.queued.push(copy);
   }
+  async ready(){
+    if(this.closed)throw Error('wake_live_closed');
+    await this.context.resume(); if(this.closed)throw Error('wake_live_closed');
+    if(this.context.state!=='running')throw Error('wake_live_audio_unavailable');
+  }
   async activate() {
     if (this.closed) throw Error('wake_live_closed'); if(this.active)return;
-    await this.context.resume(); if(this.closed)throw Error('wake_live_closed');
-    if(this.active)return;
-    if(this.context.state!=='running')throw Error('wake_live_audio_unavailable');
+    await this.ready();if(this.active)return;
     this.active=true;this.nextTime=this.context.currentTime+.02;
     while(this.queued.length)this.schedule(this.queued.shift()!);
   }

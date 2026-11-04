@@ -80,6 +80,20 @@ test('post-wake command uses an opaque Main lease and suppresses the greeting wi
     assert.equal(f.requests.length,1);assert.ok(f.releasedLeases.length===1);assert.ok(!JSON.stringify(f.events).includes('pcmBase64'));assert.ok(!JSON.stringify(await f.state()).includes('samples'));
   }finally{await f.close();}
 });
+
+test('native capture loss is generation-fenced, clears ARMED and emits metadata without audio',async()=>{
+  const f=fixture();try{await f.enable();const generation=f.capture.generation!;
+    const lost={...f.capture,phase:'failed' as const,microphone:'released' as const,sampleRate:null,pendingFrames:0,errorCode:'wake_capture_device_ended'};
+    const stale=await f.core.command('velaWakeCaptureState',{...lost,generation:generation+1});assert.equal(stale.phase,'ARMED');
+    await assert.rejects(f.core.command('velaWakeCaptureState',{...lost,privateAudio:new Float32Array(1)} as any),/wake_host_protocol/);
+    const result=await f.core.command('velaWakeCaptureState',lost);assert.equal(result.phase,'ERROR');assert.equal(result.microphone,'off');
+    assert.equal(result.detector,'stopped');assert.equal(f.engineDisposals,1);assert.equal(f.requests.length,0);
+    await f.core.command('velaWakeCaptureState',lost);assert.equal(f.engineDisposals,1,'duplicate loss is inert after cleanup');
+    const wakeEvents=(await f.core.command('replay',{after:0,limit:200})).events.filter(event=>event.type==='vela.wake/state');
+    assert(wakeEvents.some(event=>(event.payload as any).wake.errorCode==='wake_capture_lost'));
+    assert.doesNotMatch(JSON.stringify(wakeEvents),/pcmBase64|samples|rms|leaseRef|inputDeviceId|frames/);
+  }finally{await f.close();}
+});
 test('usage revocation and key rotation invalidate standing wake spend authority before any paid request',async()=>{
   for(const change of ['usage','rotation'] as const){const f=fixture();try{await f.ready();await f.enable();
     if(change==='usage')await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:false});else{await f.core.command('velaApiConfigure',{credential:{configurationId:'vela-primary',apiKey:marker},expectedVersion:1});await f.core.command('velaApiUsageAuthorize',{expectedVersion:2,enabled:true});}

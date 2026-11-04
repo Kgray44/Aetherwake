@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { createLocalWakeEngine, type WakePcmResult } from './wake-engine.mts';
 import { DEFAULT_WAKE_PHRASES } from './wake-engine-phrases.mts';
 import { verifyWakeArtifacts } from './wake-engine-artifacts.mts';
-import { decodeNativeWakeFrame, type NativeWakeCaptureServices, type NativeWakePcmFrame } from './wake-capture-host.mts';
+import { decodeNativeWakeFrame, validWakeCaptureState, type WakeCaptureState, type NativeWakeCaptureServices, type NativeWakePcmFrame } from './wake-capture-host.mts';
 import { VelaWakeCoordinator, VELA_WAKE_DEFAULTS, validateWakePreferences, WakePolicyError, type VelaWakePreferences, type VelaWakeHostPorts, type VelaWakeLimits, type WakeCommandAudioLease } from './vela-wake-policy.mts';
 import type { VelaVoiceRuntime } from './vela-voice-runtime.mts';
 import type { VelaApiRuntime } from './vela-api-runtime.mts';
@@ -94,6 +94,14 @@ export class VelaWakeRuntime {
       if(frame.generation===this.captureGeneration)for(const event of result.detections)void this.onDetection?.(event).catch(()=>{});
       return {accepted:true as const};
     }finally{frame.samples.fill(0);this.processing=false;}
+  }
+  async captureState(value:WakeCaptureState){
+    check(validWakeCaptureState(value),'wake_host_protocol');
+    // Expected stop clears captureGeneration before its native await. Stale
+    // generations cannot interrupt another capture or a manual voice session.
+    if(!this.closed&&this.captureGeneration!==null&&value.generation===this.captureGeneration&&['failed','stopped','disposed'].includes(value.phase))
+      await this.coordinator.captureLost();
+    return this.state();
   }
   private ensurePoll(){if(this.closed)return;const view=this.coordinator.state();if(view.enabled||view.owner){if(!this.poll){this.poll=setInterval(()=>{void this.observeVoice();},250);this.poll.unref();}}else if(this.poll){clearInterval(this.poll);this.poll=null;}}
   async observeVoice(){if(this.polling||this.closed)return;this.polling=true;try{const view=await this.options.voice.wakeObservation();if(view)await this.coordinator.observeNativeVoice(view);}catch{/* A failed state read cannot grant another paid session. */}finally{this.polling=false;}}

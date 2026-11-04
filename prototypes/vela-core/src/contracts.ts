@@ -295,6 +295,7 @@ export interface VelaHostPort {
   /** Exact applied creation-undo receipt only; current recovery permission remains host-owned. */
   canInspectWorkspaceArchiveReceipt?(ref:ResourceRef,scope:VelaScope):boolean;
   readContent(id: string, scope: VelaScope): { ref: ResourceRef; content: string; source: string } | null;
+  contentOmissionReason?(id:string,scope:VelaScope):string|undefined;
   /** Current content-policy decision without reading content; absence disables implicit history. */
   canReadContent?(ref: ResourceRef, scope: VelaScope): boolean;
   validateNativeSourceObservation?(observation:NonNullable<VelaRequest['nativeSourceObservation']>,scope:VelaScope):boolean;

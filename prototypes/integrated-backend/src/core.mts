@@ -50,6 +50,7 @@ import { VelaApiRuntime, VELA_API_RUNTIME_LIMITS, velaApiReasoningEfforts, type 
 import { VelaWakeRuntime } from './vela-wake-runtime.mts';
 import { VelaFileProposals, localDocumentIntent,localSourceAttachmentIntent,localFolderListIntent,folderListingAnswer } from './vela-file-proposals.mts';
 import { FolderSources,inspectFolderSelection,readFolderSource,findFolderResource,storeFolderSource,assertCurrentFolderSourceSync } from './folder-sources.mts';
+import {SelectedDocumentContext} from './selected-document-context.mts';
 import type { VelaFileProposal } from '../../vela-core/src/contracts.ts';
 import type { MediaSource } from './media-sources.mts';
 import { VelaVoiceRuntime } from './vela-voice-runtime.mts';
@@ -216,6 +217,7 @@ export class BackendCore {
   private velaWakeRuntime!:VelaWakeRuntime;
   private velaFileProposals!:VelaFileProposals;
   private folderSources!:FolderSources;
+  private selectedDocumentContext!:SelectedDocumentContext;
   private voiceContexts = new Map<string,{value:LiveCanonicalContext;scopeStamp:string;expires:number;sources:{id:string;digest:string}[];operations?:VelaOperationsPacket}>();
   private pendingVoiceInput?: {messageId:string;intent:string;sessionId:string};
   private velaApiPlanner!:VelaPlanningPort;
@@ -365,6 +367,7 @@ export class BackendCore {
       this.ordinaryConnections=ordinaryTest?.connection??new OpenAIConnections({db:this.db,transaction:work=>this.kernel.withTransaction(()=>work(this.db)),nativeHost:this.nativeHostServices,localEligibility:{kind:'local-personal-project',scope:'current-owner-local-installation',decisionRef:'aerynth.owner-local-personal-inference'}});
       this.kernel.withTransaction(() => { VelaApiConnection.migrate(this.db); VelaApiRuntime.migrate(this.db); VelaVoiceRuntime.migrate(this.db); VelaWakeRuntime.migrate(this.db); VelaFileProposals.migrate(this.db); FolderSources.migrate(this.db); });
       this.folderSources=new FolderSources(this.db,{privateRoot:this.privateRoot});
+      this.selectedDocumentContext=new SelectedDocumentContext({scopeStamp:()=>this.velaScopeStamp(),documents:this.nativeHostServices?.documents,source:id=>{const scope=this.velaHost.scope(),ref=this.velaHost.resolve({id,kind:'resource'},scope);if(!ref||ref.resourceKind!=='file'||!this.productResourceAccess(id)||!this.conversationAccess.resource(id,'read'))return null;const source=readMediaSource(this.db,id);return source?{ref,source}:null;}});
       this.velaApiConnection = new VelaApiConnection({ db: this.db, transaction: work => this.kernel.withTransaction(() => work(this.db)), nativeHost: this.nativeHostServices, ...(velaApiTest ? { fetch: velaApiTest.fetch } : {}) });
       this.velaApiRuntime = new VelaApiRuntime({ db: this.db, transaction: work => this.kernel.withTransaction(work), connection: this.velaApiConnection, test: velaApiTest,
         observe: {
@@ -2041,11 +2044,12 @@ export class BackendCore {
       }}};
     this.velaHost=createCanonicalVelaHost(hostOptions);
     this.velaHost.validateNativeSourceObservation=(observation,scope)=>{try{return observation.kind==='folder-metadata'&&scope.resourceIds.includes(observation.resourceId)&&this.velaHost.resolve({id:observation.resourceId,kind:'resource'},scope)?.version===observation.version&&this.folderBinding(observation.resourceId)===observation.bindingDigest;}catch{return false;}};
+    this.velaHost.contentOmissionReason=id=>this.selectedDocumentContext?.reason(id);
     const readCanonicalContent=this.velaHost.readContent.bind(this.velaHost);
     this.velaHost.readContent=(id,scope)=>{const existing=readCanonicalContent(id,scope);if(existing)return existing;
       const ref=this.velaHost.resolve({id,kind:'resource'},scope);if(!ref||!this.conversationAccess.resource(id,'read'))return null;
       const source=readMediaSource(this.db,id);if(!source)return null;
-      try{const content=readSelectedMediaText(source);return content===null?null:{ref,content,source:'aerynth://resource/'+encodeURIComponent(id)+'?sourceRevision='+source.metadata.sourceRevision};}catch{return null;}};
+      try{const document=this.selectedDocumentContext?.read(id);if(document)return document;const content=readSelectedMediaText(source);return content===null?null:{ref,content,source:'aerynth://resource/'+encodeURIComponent(id)+'?sourceRevision='+source.metadata.sourceRevision};}catch{return null;}};
     this.velaHost.canInspectWorkspaceArchiveReceipt=(ref,scope)=>{
       const current=this.velaHost.scope();
       if(ref.kind!=='workspace'||scope.principalId!==current.principalId||scope.policyVersion!==current.policyVersion||!scope.workspaceIds.includes(ref.id))return false;
@@ -3260,6 +3264,7 @@ export class BackendCore {
   private async previewVelaRequest(input:CommandMap['velaRequestPreview']['input']):Promise<VelaRequestPreview> {
     const previewStarted = performance.now();
     this.pruneVelaGrants();ensure(typeof input.intent==='string'&&input.intent.trim()&&input.intent.length<=16000,'invalid_vela_intent');ensure(this.velaPreviews.size<64,'approval_backpressure');
+    ensure(Array.isArray(input.resourceIds)&&input.resourceIds.length<=100&&input.resourceIds.every(identifier),'invalid_vela_context');await this.selectedDocumentContext.prepare(input.resourceIds);
     ensure(input.includeRecentHistory===undefined||typeof input.includeRecentHistory==='boolean','invalid_vela_history_mode');
     const handoffRequestId = input.handoffSourceRequestId;
     if (handoffRequestId !== undefined) {
@@ -4885,8 +4890,9 @@ export class BackendCore {
       ensure(!this.active&&this.missionStorageAdmitted,'file_proposal_unavailable');return await this.velaFileProposals.prepare(input as CommandMap['velaFileProposalPrepareNative']['input']) as CommandMap[K]['output'];
     }
     if(name==='velaWake'){ensure(!this.closed,'backend_closed');return await this.velaWakeRuntime.request(input as CommandMap['velaWake']['input']) as CommandMap[K]['output'];}
-    if(name==='velaWakeNative'||name==='velaWakeFrame'){
+    if(name==='velaWakeNative'||name==='velaWakeFrame'||name==='velaWakeCaptureState'){
       ensure(!this.closed&&this.nativeHostServices?.wakeCapture&&(this.privateMode||this.velaApiTest?.wake),'native_wake_authorization_required');
+      if(name==='velaWakeCaptureState')return await this.velaWakeRuntime.captureState(input as CommandMap['velaWakeCaptureState']['input']) as CommandMap[K]['output'];
       if(name==='velaWakeFrame')return await this.velaWakeRuntime.frame(input as CommandMap['velaWakeFrame']['input']) as CommandMap[K]['output'];
       ensure(this.missionStorageAdmitted,'storage_reserve_admission_denied');return await this.velaWakeRuntime.native(input as CommandMap['velaWakeNative']['input']) as CommandMap[K]['output'];
     }
@@ -5206,6 +5212,7 @@ export class BackendCore {
         return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;
       }
       case 'close': {
+        this.selectedDocumentContext.close();
         this.folderSources.dispose();
         await this.velaWakeRuntime.dispose();
         await this.velaVoiceRuntime.dispose();

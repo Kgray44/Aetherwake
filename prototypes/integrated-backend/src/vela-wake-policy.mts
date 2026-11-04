@@ -246,6 +246,23 @@ export class VelaWakeCoordinator {
       if(!confirmed||this.pendingStarts.size||!stopped){this.fault('wake_disabled_close_unknown');return;}}
     this.phase=stopped?'OFF':'ERROR';if(stopped){this.microphone='off';this.lastError=null;}this.emit();
   }
+  /** A native capture owner reports loss, never provider/renderer text. Close only
+   * this wake activation; a newer manual session owns its own microphone. */
+  async captureLost():Promise<void>{
+    if(this.closed)return;
+    const manual=this.session?.owner==='manual'?this.session:null;
+    const wake=this.session?.owner==='wake'?this.session:this.activation;
+    const manualMicrophone=this.microphone,generation=this.invalidate();this.enabled=false;
+    if(wake){this.voice='closing';this.emit();}
+    const [stopped,confirmed]=await Promise.all([this.stopDetector(),wake?this.closeOwned(this.scope(wake),'wake-capture-lost'):Promise.resolve(true)]);
+    if(!this.isCurrent(generation))return;
+    this.lastError='wake_capture_lost';this.backoffUntil=this.now()+this.limits.errorBackoffMs;
+    if(manual&&this.session===manual){this.voice='active';this.microphone=manualMicrophone;this.livePhase();this.emit();return;}
+    this.session=null;this.activation=null;this.voice=confirmed&&!this.pendingStarts.size?'inactive':'unknown';
+    this.microphone=stopped?'off':'unknown';
+    this.activity={localSpeechActive:false,actualPlaybackActive:false,importantResponseQueued:false,backendWorking:this.activity.backendWorking};
+    this.fault(!stopped||!confirmed||this.pendingStarts.size?'wake_capture_close_unknown':'wake_capture_lost');
+  }
   async masterMicrophoneOff():Promise<void>{
     this.enabled=false;const generation=this.invalidate();this.voice=this.session||this.pendingStarts.size?'closing':this.voice;this.emit();
     // Both begin before the first await. A slow remote close cannot leave the detector capturing.

@@ -1,12 +1,20 @@
 import { LOCAL_FACT_LABELS } from './capabilities.ts';
 import { VELA_PROJECT_CHECK_LABELS } from './contracts.ts';
-import type { ResourceRef, VelaClient, VelaMessage, VelaNativeAction, VelaState, VelaPlan, PlanStep, VelaPresentationState, VelaPresentationPatch } from './contracts.ts';
+import type { ResourceRef, VelaClient, VelaMessage, VelaNativeAction, VelaState, VelaPlan, PlanStep, VelaPresentationState, VelaPresentationPatch, VelaLocalFacts } from './contracts.ts';
 import { velaPanelStatus } from './panel-status.ts';
 import { confirmedVelaPlan, projectVelaManifestation, type VelaManifestationState } from './manifestation-state.ts';
 import { summarizeSystemMemory } from './system-information.ts';
 import { createVelaProposalView, type VelaProposalChoice } from './proposal-view.ts';
 import { githubRepository } from '../../application-contract/github-timeline.ts';
 import type { MissionPlanningOffer, MissionPreview } from '../../integrated-backend/src/mission-contracts.mts';
+
+function conciseObservedAnswer(content:string|undefined,facts:VelaLocalFacts|undefined){
+  if(!content)return '';
+  if(facts?.kind==='system-memory')return summarizeSystemMemory(facts.measurement);
+  if(facts?.kind==='system-utilization')return `${facts.measurement.metric.toUpperCase()} usage: ${facts.measurement.percent}%.`;
+  if(facts?.kind==='system-performance')return facts.measurements.map(value=>`${value.metric.toUpperCase()}: ${value.percent}%`).join(' · ')+'.';
+  return content;
+}
 
 export interface VelaPanelPresentation {
   phase: 'idle' | 'receiving' | 'thinking' | 'planning' | 'review' | 'applying' | 'attention' | 'error';
@@ -607,7 +615,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   function renderReading() {
     const projection = project(), selectedRequest = current?.requests.find(request => request.id === projection.currentRequestId), message = current?.conversation?.messages.find(message => message.id === projection.currentMessageId);
     const facts = selectedRequest?.local?.facts;
-    const content = facts?.kind === 'system-memory' && message ? summarizeSystemMemory(facts.measurement) : message?.content ?? '';
+    const content = conciseObservedAnswer(message?.content,facts);
     const missionReport = message?.missionReport;
     const completedPlan = selectedRequest && current?.plans.find(plan => plan.id === projection.currentPlanId && confirmedVelaPlan(current!, selectedRequest, plan));
     const actionPlan = current?.plans.find(plan => plan.id === projection.currentPlanId);
@@ -775,7 +783,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     const recent = current?.requests.at(-1), recentMessage = recent?.response && current?.conversation?.messages.find(message => message.id === recent.response!.messageId && message.requestId === recent.id && message.source === 'vela-native' && message.classification === 'observed' && message.providerId === undefined && message.providerContribution === undefined);
     const adjacentFacts = recent?.local?.facts;
     const adjacentContent = (recent?.state === 'responded' && recent.local?.classification === 'observed' && recent.providerId === null ? recentMessage?.content : undefined);
-    const adjacent = adjacentContent && adjacentFacts?.kind === 'system-memory' ? summarizeSystemMemory(adjacentFacts.measurement) : adjacentContent;
+    const adjacent = conciseObservedAnswer(adjacentContent,adjacentFacts);
     localAlongsidePlan.hidden = !projection.requiredPlanIds.length || !adjacent || view() === 'history'; if (adjacent && localAlongsidePlan.textContent !== adjacent) localAlongsidePlan.textContent = adjacent;
     pin.hidden = dismiss.hidden = projection.currentRequestId === null; pin.disabled = presentationBusy || !persistent(); dismiss.disabled = presentationBusy || !persistent() || !projection.canDismiss;
     const sourceProvider = selectedRequest?.providerId;

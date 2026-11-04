@@ -20,6 +20,7 @@ export const JOSE_RUNTIME = Object.freeze({name:'jose',version:'6.2.15',integrit
 // both trusted preload entry points explicit in the runtime dependency closure.
 // Validate the lazy auth entry even while its default/native-disabled path does not load it.
 export const NATIVE_RUNTIME_ENTRIES = Object.freeze([APP+'/native/desktop-main.cjs', APP+'/native/desktop-preload.cjs', APP+'/native/vela-review-preload.cjs', APP+'/native/voice-media.html',
+  APP+'/native/document-text.html',APP+'/native/document-extraction-broker.cjs',
   APP+'/native/wake-media-broker.cjs',APP+'/native/wake-media.html',APP+'/native/wake-pcm-worklet.js',
   APP+'/native/windows-system-broker.cjs',APP+'/native/windows-system.cpp',
   'prototypes/integrated-backend/src/desktop-host.mts', 'prototypes/integrated-backend/src/worker.mts',JOSE_RUNTIME.importer]);
@@ -117,11 +118,29 @@ export async function validateLiveMediaPreload(root,dist,tracked,assets){
   const preload='vela-live-media-preload.cjs',metadata='vela-live-media-preload.sources.json';
   check(Object.hasOwn(assets,preload)&&Object.hasOwn(assets,metadata),'live_media_preload_receipt_missing');
   const source=await fs.readFile(path.join(dist,metadata));check(source.length<=16384,'live_media_preload_metadata_bound');
-  const value=JSON.parse(source),required=['src/gpt-live-media.ts','src/gpt-live-native-media.ts'];
+  const value=JSON.parse(source),required=['src/gpt-live-media.ts','src/gpt-live-native-media.ts','src/wake-live-input.ts'];
   check(value?.contract==='aerynth.private-live-media-build@1'&&value.asset===preload&&value.sha256===assets[preload]&&
     Object.keys(value).sort().join('|')==='asset|contract|inputs|sha256'&&value.inputs&&Object.keys(value.inputs).sort().join('|')===required.sort().join('|'),'live_media_preload_source_binding_invalid');
   for(const relative of required){const file=APP+'/'+relative;check(tracked.has(file)&&value.inputs[relative]===await hashFile(path.join(root,file)),'live_media_preload_source_changed',relative);}
   return new Set([preload,metadata]);
+}
+export async function validateDocumentTextAssets(root,dist,tracked,assets){
+  const names=['vela-document-text-preload.cjs','vela-document-text-worker.js','vela-document-pdf.worker.js'],receipt='vela-document-text.sources.json';
+  check([...names,receipt].every(name=>Object.hasOwn(assets,name)),'document_text_receipt_missing');const bytes=await fs.readFile(path.join(dist,receipt));check(bytes.length<=512*1024,'document_text_metadata_capacity');const value=JSON.parse(bytes);
+  const required=[APP+'/src/document-text-preload.ts',APP+'/src/document-text-worker.ts',BLOCKS+'/media-docx-parser.ts',BLOCKS+'/media-pdf.ts',BLOCKS+'/media-policy.ts','prototypes/application-contract/media.ts'].sort();
+  check(value?.contract==='aerynth.private-document-text-build@1'&&Object.keys(value).sort().join('|')==='assets|contract|dependencyLock|inputs|licenses|vendorInputs'&&value.assets&&Object.keys(value.assets).sort().join('|')===[...names].sort().join('|')&&names.every(name=>value.assets[name]===assets[name])&&value.inputs&&Object.keys(value.inputs).sort().join('|')===required.join('|'),'document_text_source_binding_invalid');
+  for(const file of required)check(tracked.has(file)&&value.inputs[file]===await hashFile(path.join(root,file)),'document_text_source_changed',file);
+  const lock=BLOCKS+'/package-lock.json';check(tracked.has(lock)&&value.dependencyLock?.source===lock&&value.dependencyLock.sha256===await hashFile(path.join(root,lock)),'document_text_dependency_lock_changed');const packages=JSON.parse(await fs.readFile(path.join(root,lock),'utf8')).packages;
+  const vendor=value.vendorInputs;check(vendor&&typeof vendor==='object'&&!Array.isArray(vendor)&&Object.keys(vendor).length>0&&Object.keys(vendor).length<=512,'document_text_vendor_capacity');
+  for(const [file,digest] of Object.entries(vendor)){check(file.startsWith(BLOCKS+'/node_modules/')&&!file.includes('\\')&&!file.split('/').some(part=>!part||part==='..'||part==='.')&&/\.(?:js|mjs|json)$/.test(file)&&/^[a-f0-9]{64}$/.test(digest),'document_text_vendor_path_invalid');
+    const absolute=path.join(root,file),actual=await fs.realpath(absolute),stat=await fs.lstat(absolute);check(stat.isFile()&&!stat.isSymbolicLink()&&same(path.resolve(absolute),actual)&&contained(root,actual)&&stat.size<=8*1024*1024&&digest===await hashFile(actual),'document_text_vendor_changed',file);
+    const relative=file.slice((BLOCKS+'/').length),parts=relative.split('/'),owner=parts[1].startsWith('@')?parts.slice(0,3).join('/'):parts.slice(0,2).join('/'),pin=packages?.[owner];check(pin?.version&&typeof pin.integrity==='string','document_text_vendor_unlocked',owner);
+  }
+  check(vendor[BLOCKS+'/node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs']===assets[names[2]],'document_text_pdf_worker_changed');
+  check(value.licenses&&Object.keys(value.licenses).sort().join('|')==='fflate|mammoth|pdfjs-dist','document_text_license_missing');
+  for(const name of ['fflate','mammoth','pdfjs-dist']){const base=path.join(root,BLOCKS,'node_modules',name),pkg=JSON.parse(await fs.readFile(path.join(base,'package.json'),'utf8')),entry=value.licenses[name];let license;for(const file of ['LICENSE','LICENSE.md','LICENSE.txt'])try{license=await fs.readFile(path.join(base,file),'utf8');break;}catch{}
+    check(entry?.version===packages['node_modules/'+name]?.version&&entry.version===pkg.version&&entry.license===pkg.license&&typeof license==='string'&&entry.text===license,'document_text_license_changed',name);}
+  return new Set([...names,receipt]);
 }
 export async function validateWakeCapturePreload(root,dist,tracked,assets){
   const preload='vela-wake-capture-preload.cjs',metadata='vela-wake-capture-preload.sources.json',worklet='vela-wake-pcm-worklet.js';
@@ -202,6 +221,7 @@ export async function plan(options={}) {
   const rendererFiles=(await walk(dist)).filter(file=>file!==path.join(dist,rendererReceiptName));
   const rendererReceipt=await readRendererReceipt(dist,{head,tree},rendererFiles.map(file=>slash(path.relative(dist,file))));
   const privatePreload=await validateLiveMediaPreload(sourceRoot,dist,tracked,rendererReceipt.assets);
+  for(const file of await validateDocumentTextAssets(sourceRoot,dist,tracked,rendererReceipt.assets))privatePreload.add(file);
   for(const file of await validateWakeCapturePreload(sourceRoot,dist,tracked,rendererReceipt.assets))privatePreload.add(file);
   for(const file of await validateWindowsSystemNative(sourceRoot,dist,tracked,rendererReceipt.assets))privatePreload.add(file);
   for(const file of await validateWakeHostCore(sourceRoot,dist,tracked,rendererReceipt.assets))privatePreload.add(file);

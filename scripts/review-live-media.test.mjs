@@ -12,7 +12,7 @@ test('packager permits only the exact private preload/metadata pair with candida
     const app='prototypes/visual-experience/cinematic-v3',dist=path.join(root,'dist'),inputs={},tracked=new Set();
     await fs.mkdir(path.join(root,app,'src'),{recursive:true});await fs.mkdir(dist);
     const hash=value=>createHash('sha256').update(value).digest('hex');
-    for(const name of ['src/gpt-live-media.ts','src/gpt-live-native-media.ts']){const file=app+'/'+name,source='// synthetic '+name;await fs.writeFile(path.join(root,file),source);tracked.add(file);inputs[name]=hash(source);}
+    for(const name of ['src/gpt-live-media.ts','src/gpt-live-native-media.ts','src/wake-live-input.ts']){const file=app+'/'+name,source='// synthetic '+name;await fs.writeFile(path.join(root,file),source);tracked.add(file);inputs[name]=hash(source);}
     const preload='vela-live-media-preload.cjs',meta='vela-live-media-preload.sources.json',assets={[preload]:hash('owned build'),[meta]:hash('receipt-bound metadata')};
     const value={contract:'aerynth.private-live-media-build@1',asset:preload,sha256:assets[preload],inputs};
     await fs.writeFile(path.join(dist,meta),JSON.stringify(value));

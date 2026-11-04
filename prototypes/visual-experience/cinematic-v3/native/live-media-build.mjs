@@ -16,7 +16,8 @@ export function liveMediaPreload(){
         if(relative.startsWith('../')||!relative.startsWith('src/')||!/\.ts$/u.test(relative))throw Error('live_media_preload_unexpected_source');
         inputs[relative]=createHash('sha256').update(await readFile(file)).digest('hex');
       }
-      if(!inputs['src/gpt-live-native-media.ts']||!inputs['src/gpt-live-media.ts']||result.outputFiles.length!==1)throw Error('live_media_preload_source_missing');
+      const required=['src/gpt-live-media.ts','src/gpt-live-native-media.ts','src/wake-live-input.ts'];
+      if(Object.keys(inputs).sort().join('|')!==required.join('|')||result.outputFiles.length!==1)throw Error('live_media_preload_source_missing');
       const source=result.outputFiles[0].text;
       if(source.includes('contextBridge')||source.length>262144)throw Error('live_media_preload_boundary_invalid');
       this.emitFile({type:'asset',fileName:liveMediaPreloadName,source});
@@ -26,7 +27,7 @@ export function liveMediaPreload(){
 }
 
 export const wakeCapturePreloadName='vela-wake-capture-preload.cjs';
-/** Separate fixed closure; the existing Live preload's two-source proof remains unchanged. */
+/** Separate fixed closure; each private preload retains its declared source inventory. */
 export function wakeCapturePreload(){
   let root;
   return {name:'aerynth-private-wake-capture-preload',apply:'build',configResolved(config){root=config.root;},

@@ -156,6 +156,26 @@ test('device changes stop capture and voice without automatic paid reconnection'
   const f=fixture(),id=await f.active();await f.coordinator.deviceChanged();assert.equal(f.sessions.get(id)!.capture,false);await f.clock.advance(120000);
   assert.equal(f.starts,1);assert.equal(f.coordinator.state().phase,'OFF');assert.equal(f.coordinator.state().enabled,false);
 });
+
+test('capture loss closes its wake session and never rearms or reconnects automatically',async()=>{
+  const f=fixture(),id=await f.active();await f.coordinator.captureLost();
+  assert.equal(f.sessions.get(id)!.capture,false);assert.equal(f.coordinator.state().phase,'ERROR');
+  assert.equal(f.coordinator.state().enabled,false);assert.equal(f.coordinator.state().voice,'inactive');
+  assert(f.calls.some(call=>call.kind==='stop'&&call.scope?.sessionId===id&&!call.scope.all));
+  await f.clock.advance(120000);assert.equal(f.starts,1);assert.equal(f.coordinator.state().detector,'stopped');
+});
+
+test('capture loss cancels a pending wake start; its late cleanup preserves a newer manual microphone',async()=>{
+  const f=fixture();f.controls.start=deferred();await f.coordinator.enable();const pending=f.fire();await flush();
+  const signal=f.calls.find(call=>call.kind==='start')!.input.signal;await f.coordinator.captureLost();
+  assert.equal(signal.aborted,true);assert.equal(f.coordinator.state().voice,'unknown');
+  const manual=await f.manual('manual:after-capture-loss');
+  f.controls.start.resolve({sessionId:'wake:late-loss',microphone:'live'});await pending;
+  assert.equal(f.sessions.get(manual)!.capture,true);assert.equal(f.sessions.get('wake:late-loss')!.capture,false);
+  assert.equal(f.coordinator.state().sessionId,manual);assert.equal(f.coordinator.state().microphone,'live');
+  const stops=f.calls.filter(call=>call.kind==='stop').length;await f.coordinator.captureLost();
+  assert.equal(f.calls.filter(call=>call.kind==='stop').length,stops);assert.equal(f.sessions.get(manual)!.capture,true);
+});
 test('wake disable preserves independent manual voice; master off releases it, and completed backend work has no cancellation port',async()=>{
   const f=fixture(),id=await f.manual();await f.coordinator.enable();assert.equal(f.coordinator.state().owner,'manual');assert(!f.calls.some(call=>call.kind==='arm'));
   await f.coordinator.disableWake();assert.equal(f.sessions.get(id)!.capture,true);assert(!f.calls.some(call=>call.kind==='stop'));

@@ -8,10 +8,11 @@ The Constitution is binding; the specialist registry remains advisory.
 
 Development includes the dedicated API, native voice, canonical timer and
 workspace flows, API specialist scheduling, and fresh native weather/battery
-answers. The open review is `ca16a1fd06fee526fe74507b9fd5a716900fdbca`,
-with its existing workspace preserved. The complete 17-group regression applies
-to `43f184f431cbf4c5645c982f177ae0cdd4472c5a`; the single density-line change
-in ca16 has 50 targeted checks, a fresh build and native visual qualification.
+answers. The latest packaged review is `91fbf64f124aaab9789844ec56b65cf6f6f8279d`,
+with its existing workspace preserved during replacement. It passed all 17 test
+groups, 20 review checks, a fresh renderer build and strict package closure. The
+archive and all 534 emitted files were independently hashed. The preceding
+ca16 review and its receipts remain preserved.
 This is not a declaration that the full program is complete.
 
 Weather now persists the purpose permission rather than coordinates. Every
@@ -28,7 +29,12 @@ Addendum B now has local capture, a private bounded PCM bridge, canonical
 preferences, lifecycle controls and observed phase events. Master microphone
 shutdown releases tracks before waiting for provider finalization. Production
 wake activation remains blocked: no evaluated acoustic model has passed the
-quality gate, and the continuous audio handoff still requires integration.
+quality gate. The shared-capture relay now transfers a bounded command prefix
+and continuous tail to one private outgoing track. A hidden native Electron
+probe verified queued silence, actual prefix/tail signal, zero retained samples
+and ended tracks after stop, with no microphone, network or provider requests.
+This qualifies the virtual input component; the complete physical capture,
+detector, provider session and command-boundary journey remains outstanding.
 Synthetic research results are not human microphone or production acceptance.
 
 The development proposal view presents four items, an expandable full list and
@@ -38,14 +44,31 @@ files into the current workspace atomically. Empty workspace-from-resource
 proposals are rejected. Explicit pickers create canonical file references or one
 Folder reference; browsing a folder creates no child resources or placements.
 Resources separates Files/Folders and workspace/all-source scopes, with its add
-menu inside the panel. These changes have Core, boundary, component and 271
-block-library checks; the native picker journey and joined-source regression
-remain pending. They are not yet in the open ca16 review.
+menu inside the panel. These changes have Core, boundary, component, 271
+block-library checks and the joined 17-group regression. Native screenshots
+confirm the Resources header and source sections; the owned Windows picker was
+shown, but its selection journey stopped at the foreground ownership guard.
+They are included in the packaged 91fb review.
 
-Direct attachment of already-selected sources and version-bound continuation
-from prior search results remain follow-up work. Selected PDF/DOCX/image text
-context is omitted until a real extraction path exists. The reported historical
-empty-document plan is a confirmed failure, not a completed import.
+Already-selected sources attach directly using canonical versioned references.
+Typed continuation from previous search results uses the exact retained search
+receipt and versions. Selected-folder questions return bounded native metadata
+without creating child sources or sending a provider request. Selected PDF/DOCX
+extraction now has Core, private-protocol, adversarial and actual hidden native
+worker proof. The worker ran sandboxed with no network or device permission
+requests and released both format-specific utility windows. Whole extracted text
+is included only within the source/context limits; coverage is DOCX body text or
+extractable PDF text from all pages. Image/OCR and unverified document parts
+remain omitted. Joined build/package and user interface qualification remain
+outstanding for this development addition. The historical empty-document plan
+is a confirmed failure, not a completed import.
+
+A separate 91fb no-focus check exercised the actual desktop host, worker and
+Core for ordinary CPU/RAM questions and a joined measurement mission. Real OS
+measurements reached the response controller and canonical Intelligence Stream
+attempt/provenance projections with no provider calls. It received the Core
+close acknowledgement. This is functional controller/host evidence, not browser
+pixel or physical display qualification.
 
 | Directive | Current evidence | Remaining acceptance |
 | --- | --- | --- |

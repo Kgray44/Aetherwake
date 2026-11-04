@@ -15,5 +15,5 @@ test('wake capture has a separate exact two-source sandbox preload and fixed byt
   assert.equal(hash(worklet.source),hash(await readFile(new URL('../native/wake-pcm-worklet.js',import.meta.url))));
   assert.match(preload.source,/require\("electron"\)/);assert.doesNotMatch(preload.source,/contextBridge|exposeInMainWorld|apiKey|api\.openai\.com/);
   const legacy=[],old=liveMediaPreload();old.configResolved({root});await old.generateBundle.call({emitFile:value=>legacy.push(value)});
-  assert.deepEqual(Object.keys(JSON.parse(legacy[1].source).inputs),['src/gpt-live-media.ts','src/gpt-live-native-media.ts'],'the established Live preload closure stays exactly two sources');
+  assert.deepEqual(Object.keys(JSON.parse(legacy[1].source).inputs),['src/gpt-live-media.ts','src/gpt-live-native-media.ts','src/wake-live-input.ts'],'the private Live preload has exactly its three declared media and input sources');
 });

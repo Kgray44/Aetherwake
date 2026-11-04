@@ -1,6 +1,7 @@
 const { randomUUID, randomBytes } = require('node:crypto');
 const { pathToFileURL } = require('node:url');
 const { safeMedia, safeDevices } = require('./vela-voice-broker.cjs');
+const {createWakeLiveRelay}=require('./wake-live-relay.cjs');
 const CHANNEL = 'aerynth-private-live-media';
 // Native-only QA readback; Electron does not return additionalArguments in every version.
 const syntheticWindows=new WeakSet();
@@ -39,7 +40,7 @@ function validRequest(value) {
   return exact(p,[]);
 }
 /** Private transport: neither this channel nor its token is exposed by a contextBridge. */
-function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, htmlPath, syntheticInput=false, now=Date.now }) {
+function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, htmlPath, syntheticInput=false, now=Date.now,wakeSource }) {
   let win=null, token=null, ready=null, readyResolve, readyReject, readyTimer, closed=false, currentSession=null, currentAttempt=null, permissionDepth=0,quiesceFlight=null;
   let lastState={contract:'aerynth.gpt-live-media@1',connection:'idle',microphoneAccess:'not-requested',localTrackEnabled:false,localSourceMuted:null,providerInputMute:'unknown',playback:'idle',playbackObserved:false,humanAudibility:'unverified',inputDevice:'default',outputDevice:'default',localSpeech:'unavailable',remoteSignal:'unavailable',interruption:'none'};
   let rateAt=now(), rate=0, activeRequests=0, generation=0;
@@ -49,7 +50,19 @@ function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, html
   const response=(h,result,error)=>publish({nativeLiveHost:{version:1,kind:'response',id:h.id,operation:h.operation,...(error?{error}:{result})}});
   const owns=event=>!!win&&!win.isDestroyed()&&!win.webContents.isDestroyed()&&event.sender===win.webContents&&event.senderFrame===win.webContents.mainFrame&&event.senderFrame?.url===url;
   const authenticated=(event,value)=>owns(event)&&exact(value,['token','message'])&&value.token===token&&bounded(value.message);
+  let pcmFlight=null;
+  const wakeRelay=wakeSource?createWakeLiveRelay({claim:(ref,attempt,feed)=>wakeSource.claimLive(ref,attempt,feed),release:attempt=>wakeSource.releaseLive(attempt),
+    deliver:(attemptId,frame)=>new Promise((resolve,reject)=>{
+      if(!win||closed||currentAttempt!==attemptId||pcmFlight)return reject(Error('live_media_protocol'));
+      const timer=setTimeout(()=>{pcmFlight=null;reject(Error('live_media_timeout'));},2000);
+      pcmFlight={attemptId,startSample:frame.startSample,endSample:frame.startSample+frame.samples.length,timer,resolve,reject};
+      try{win.webContents.send(CHANNEL+'-wake-pcm',{token,frame:{attemptId,startSample:frame.startSample,samples:frame.samples}});}catch{clearTimeout(timer);pcmFlight=null;reject(Error('live_media_closed'));}
+    }),failed:()=>failed()}):null;
+  const releaseWake=attempt=>{
+    try{wakeRelay?.stop(attempt);}finally{if(pcmFlight){clearTimeout(pcmFlight.timer);pcmFlight.reject(Error('live_media_closed'));pcmFlight=null;}}
+  };
   function reset(code='live_media_closed',disposed=false) {
+    releaseWake(currentAttempt??undefined);
     generation++;
     const prior=win;win=null;token=null;permissionDepth=0;currentSession=null;currentAttempt=null;
     lastState={...lastState,connection:disposed?'disposed':code==='live_media_closed'?'closed':'failed',microphoneAccess:lastState.microphoneAccess==='active'?'released':lastState.microphoneAccess,localTrackEnabled:false,localSourceMuted:null,providerInputMute:'unknown',playback:'idle',localSpeech:'unavailable',remoteSignal:'unavailable',interruption:'none'};
@@ -70,7 +83,7 @@ function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, html
     ready=new Promise((resolve,reject)=>{readyResolve=resolve;readyReject=reject;});
     const waiting=ready;
     // Non-persistent partition, no application scripts, no renderer navigation or Node access.
-    win=new BrowserWindow({show:false,focusable:false,width:1,height:1,skipTaskbar:true,webPreferences:{preload:preloadPath,contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true,backgroundThrottling:false,partition:'aerynth-live-media-'+randomUUID(),additionalArguments:['--aerynth-live-media-token='+token,...(syntheticInput?['--aerynth-live-media-synthetic']:[])]}});
+    win=new BrowserWindow({show:false,focusable:false,width:1,height:1,skipTaskbar:true,webPreferences:{preload:preloadPath,contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true,backgroundThrottling:false,autoplayPolicy:'no-user-gesture-required',partition:'aerynth-live-media-'+randomUUID(),additionalArguments:['--aerynth-live-media-token='+token,...(wakeSource?['--aerynth-live-wake-input']:[]),...(syntheticInput?['--aerynth-live-media-synthetic']:[])]}});
     if(syntheticInput)syntheticWindows.add(win);
     const wc=win.webContents, mediaSession=wc.session;
     // QA must remain inaudible even if a future media adapter changes its element mute.
@@ -91,6 +104,12 @@ function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, html
     return waiting;
   }
   const onReady=(event,value)=>{if(!owns(event)||!exact(value,['token'])||value.token!==token)return;clearTimeout(readyTimer);readyResolve?.();readyResolve=null;readyReject=null;};
+  const onWakeAck=(event,value)=>{
+    const flight=pcmFlight;if(!flight||!owns(event)||!value||value.token!==token||value.attemptId!==flight.attemptId||value.startSample!==flight.startSample||
+      !(exact(value,['token','attemptId','startSample','result'])||exact(value,['token','attemptId','startSample','error'])&&value.error==='live_media_protocol'))return;
+    clearTimeout(flight.timer);pcmFlight=null;
+    if(value.error||!exact(value.result,['accepted','nextSample'])||value.result.accepted!==true||value.result.nextSample!==flight.endSample)flight.reject(Error('live_media_protocol'));else flight.resolve(value.result);
+  };
   const onReply=(event,value)=>{
     if(!authenticated(event,value))return;
     const m=value.message,h=m?.nativeLiveHost,p=pending.get(h?.id);
@@ -108,11 +127,12 @@ function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, html
     if(now()-rateAt>=1000){rateAt=now();rate=0;}if(++rate>LIMITS.eventsPerSecond){failed();return;}
     if(h.operation==='state'){if(!exact(p,['sessionId','state'])||(p.sessionId!==null&&p.sessionId!==currentSession)||!resultValid('state',p.state))return;lastState=structuredClone(p.state);}
     else if(h.operation==='provider-event'){if(!exact(p,['sessionId','event'])||p.sessionId!==currentSession||!p.event||typeof p.event!=='object'||Array.isArray(p.event)||Buffer.byteLength(JSON.stringify(p.event))>65536)return;}
-    else if(h.operation==='connection-lost'){if(!exact(p,['sessionId'])||p.sessionId!==currentSession)return;currentSession=null;}
+    else if(h.operation==='connection-lost'){if(!exact(p,['sessionId'])||p.sessionId!==currentSession)return;reset();}
     else return;
     publish(m);
   };
   ipcMain.on(CHANNEL+'-ready',onReady);ipcMain.on(CHANNEL+'-reply',onReply);ipcMain.on(CHANNEL+'-event',onEvent);
+  ipcMain.on(CHANNEL+'-wake-ack',onWakeAck);
   async function request(h) {
     const startedGeneration=generation;
     // Teardown is native-owned: it cannot wait behind a stalled preload or media permission.
@@ -121,29 +141,34 @@ function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, html
     const quiesce=h.operation==='quiesceCapture'||h.operation==='quiesceAll';
     if(quiesce){
       if(h.operation==='quiesceCapture'&&(h.payload.attemptId!==currentAttempt||h.payload.sessionId!==undefined&&h.payload.sessionId!==currentSession))throw Error('live_media_protocol');
+      releaseWake(h.operation==='quiesceCapture'?h.payload.attemptId:undefined);
       permissionDepth=0;if(!win)return null;win.webContents.setAudioMuted(true);
       generation++;
     }
     if(h.operation==='state'&&!win)return structuredClone(lastState);
     if(h.operation==='prepare'){
+      if(currentAttempt)throw Error('live_media_protocol');
       const expiry=attempts.get(h.payload.attemptId);attempts.delete(h.payload.attemptId);
-      if(!expiry||expiry<now())throw Error('live_media_protocol');
+      if(h.payload.bufferLeaseRef){if(!wakeRelay||currentAttempt)throw Error('live_media_protocol');wakeRelay.bind(h.payload);}
+      else if(!expiry||expiry<now())throw Error('live_media_protocol');
       currentAttempt=h.payload.attemptId;
     }
-    if(h.operation==='connect'){if(currentSession)throw Error('live_media_backpressure');currentSession=h.payload.sessionId;}
+    if(h.operation==='connect'){if(!currentAttempt||currentSession)throw Error('live_media_backpressure');currentSession=h.payload.sessionId;}
     if(['send','close'].includes(h.operation)&&h.payload.sessionId!==currentSession)throw Error('live_media_protocol');
     await ensureWindow();
     if(['prepare','connect','setInputDevice'].includes(h.operation)&&startedGeneration!==generation)throw Error('live_media_closed');
     if(h.operation==='prepare'&&!syntheticInput)win.webContents.setAudioMuted(false);
     const microphoneOperation=['prepare','setInputDevice'].includes(h.operation);if(microphoneOperation)permissionDepth++;
-    try{return await new Promise((resolve,reject)=>{
+    try{const result=await new Promise((resolve,reject)=>{
       if(pending.size>=(h.operation==='quiesceAll'?12:cleanup(h)?11:LIMITS.inFlight))return reject(Error('live_media_backpressure'));
       const timer=setTimeout(()=>{pending.delete(h.id);reject(Error('live_media_timeout'));failed();},quiesce?500:LIMITS.timeoutMs);
       pending.set(h.id,{operation:h.operation,resolve,reject,timer});
       try{win.webContents.send(CHANNEL+'-command',{token,message:{nativeLiveHost:h}});}catch{clearTimeout(timer);pending.delete(h.id);reject(Error('live_media_closed'));}
-    });}finally{if(microphoneOperation)permissionDepth=Math.max(0,permissionDepth-1);if(h.operation==='close')currentSession=null;}
+    });if(h.operation==='prepare'&&h.payload.bufferLeaseRef)await wakeRelay.ready(h.payload.attemptId);return result;
+    }finally{if(microphoneOperation)permissionDepth=Math.max(0,permissionDepth-1);if(h.operation==='close'){releaseWake(currentAttempt??undefined);currentSession=null;currentAttempt=null;}}
   }
   return {
+    wakeSourceLost(attemptId){if(wakeRelay?.state()?.attemptId===attemptId)failed();},
     /** Native master switch only. It bypasses Core/worker capacity and never opens a media window. */
     quiesceAll(){if(quiesceFlight)return quiesceFlight;attempts.clear();const h={version:1,kind:'request',id:randomUUID(),operation:'quiesceAll',payload:{}};
       const work=request(h).then(()=>undefined);quiesceFlight=work;void work.finally(()=>{if(quiesceFlight===work)quiesceFlight=null;}).catch(()=>{});return work;},
@@ -156,10 +181,12 @@ function createLiveMediaBroker({ BrowserWindow, ipcMain, send, preloadPath, html
       if(seen.has(h.id)||activeRequests>=(cleanup(h)?11:LIMITS.inFlight)&&h.operation!=='dispose'){response(h,null,'live_media_backpressure');return true;}
       seen.add(h.id);if(seen.size>512)seen.delete(seen.values().next().value);
       activeRequests++;const requestGeneration=generation;
-      void request(h).then(result=>{response(h,result);}).catch(error=>{response(h,null,errors.has(error?.message)?error.message:'live_media_operation_failed');if(['prepare','connect'].includes(h.operation)&&win&&requestGeneration===generation)reset();}).finally(()=>activeRequests--);
+      void request(h).then(result=>{response(h,result);}).catch(error=>{response(h,null,errors.has(error?.message)?error.message:'live_media_operation_failed');
+        const owned=h.operation==='prepare'?h.payload.attemptId===currentAttempt:h.operation==='connect'&&h.payload.sessionId===currentSession;
+        if(owned&&requestGeneration===generation)reset();}).finally(()=>activeRequests--);
       return true;
     },
-    close(){if(closed)return;closed=true;attempts.clear();seen.clear();reset();ipcMain.removeListener(CHANNEL+'-ready',onReady);ipcMain.removeListener(CHANNEL+'-reply',onReply);ipcMain.removeListener(CHANNEL+'-event',onEvent);},
+    close(){if(closed)return;closed=true;attempts.clear();seen.clear();reset();wakeRelay?.dispose();ipcMain.removeListener(CHANNEL+'-ready',onReady);ipcMain.removeListener(CHANNEL+'-reply',onReply);ipcMain.removeListener(CHANNEL+'-event',onEvent);ipcMain.removeListener(CHANNEL+'-wake-ack',onWakeAck);},
   };
 }
 module.exports={createLiveMediaBroker,validRequest,LIMITS,CHANNEL,isSyntheticLiveMediaWindow};

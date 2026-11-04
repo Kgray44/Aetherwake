@@ -3,14 +3,16 @@ import { Backend } from "./service.mts";
 import {createNativeHostClient,isNativeHostEnvelope} from './native-host.mts';
 import {createNativeLiveHostClient,isNativeLiveHostEnvelope} from './live-media-host.mts';
 import {createSystemFactsClient,isSystemFactsEnvelope} from './system-facts-host.mts';
+import {createDocumentTextClient,isDocumentTextEnvelope} from './document-text-host.mts';
 import {createNativeWakeCaptureClient,isNativeWakeCaptureMessage} from './wake-capture-host.mts';
 const [path, privateRoot, cwd,...flags] = process.argv.slice(2);
 const write = (v: unknown) => process.stdout.write(JSON.stringify(v) + "\n");
-if (flags.some(flag => !["--native-secrets", "--native-media", "--native-system-facts", "--native-wake-capture"].includes(flag)) || new Set(flags).size !== flags.length)
+if (flags.some(flag => !["--native-secrets", "--native-media", "--native-system-facts", "--native-wake-capture","--native-documents"].includes(flag)) || new Set(flags).size !== flags.length)
   throw Error("invalid_native_host_flags");
 const nativeClient=flags.includes('--native-secrets')?createNativeHostClient(write):undefined;
 const liveClient=flags.includes('--native-media')?createNativeLiveHostClient(write):undefined;
 const systemClient=flags.includes('--native-system-facts')?createSystemFactsClient(write):undefined;
+const documentClient=flags.includes('--native-documents')?createDocumentTextClient(write):undefined;
 const wakeClient=flags.includes('--native-wake-capture')?createNativeWakeCaptureClient(write):undefined;
 const backend = new Backend({
   path,
@@ -20,11 +22,11 @@ const backend = new Backend({
   provider: "codex",
   nativeMedia: flags.includes("--native-media"),
   retention: { maxEvents: 10000 },
-},nativeClient?{...nativeClient.services,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{})}:undefined);
+},nativeClient?{...nativeClient.services,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{})}:undefined);
 let closeTask:Promise<void>|null=null;
 const closeBackend=()=>{
   if(closeTask)return closeTask;
-  const task=backend.close().then(()=>{wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();});closeTask=task;
+  const task=backend.close().then(()=>{documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();});closeTask=task;
   void task.catch(()=>{if(closeTask===task)closeTask=null;});
   return task;
 };
@@ -38,6 +40,7 @@ lines.on("line", async (line) => {
     const request = JSON.parse(line);
     if(isNativeWakeCaptureMessage(request)){wakeClient?.handle(request);return;}
     if(isSystemFactsEnvelope(request)){systemClient?.handle(request);return;}
+    if(isDocumentTextEnvelope(request)){documentClient?.handle(request);return;}
     if(isNativeLiveHostEnvelope(request)){liveClient?.handle(request);return;}
     if(isNativeHostEnvelope(request)){nativeClient?.handle(request);return;}
     if (request && Object.hasOwn(request, 'missionHostSignal')) {
@@ -46,7 +49,7 @@ lines.on("line", async (line) => {
       return;
     }
     id = request.id;
-    if (['velaApiConfigure', 'velaApiUsageAuthorize', 'velaApiUsageStatus','velaVoiceNative','velaWeatherPermissionNative','velaWakeNative','velaWakeFrame','velaFileProposalPrepareNative','velaSourcesPickNative','folderOpenNative'].includes(request.command)) {
+    if (['velaApiConfigure', 'velaApiUsageAuthorize', 'velaApiUsageStatus','velaVoiceNative','velaWeatherPermissionNative','velaWakeNative','velaWakeFrame','velaWakeCaptureState','velaFileProposalPrepareNative','velaSourcesPickNative','folderOpenNative'].includes(request.command)) {
       if (!nativeClient || Object.keys(request).some(key => !['id', 'command', 'input'].includes(key)))
         throw new Error('native_api_configuration_required');
       write({ id, result: await backend.call(request.command, request.input) });

@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import {randomUUID} from 'node:crypto';
 import {createNativeMediaRuntime,validNativeMediaRequest} from '../src/gpt-live-native-media.ts';
 const request=(operation,payload={})=>({nativeLiveHost:{version:1,kind:'request',id:randomUUID(),operation,payload}});
-function fixture(){
+function fixture(options={}){
   const sent=[],calls=[];let settings,binding,disposed=0;
-  const runtime=createNativeMediaRuntime(wire=>sent.push(wire),{randomId:randomUUID,mediaFactory:options=>{settings=options;return{
-    prepare:async input=>{calls.push(input);return{offerId:'offer-a',sdpOffer:'v=0 PRIVATE_OFFER'};},
+  const runtime=createNativeMediaRuntime(wire=>sent.push(wire),{...options,randomId:randomUUID,mediaFactory:mediaOptions=>{settings=mediaOptions;return{
+    prepare:async input=>{calls.push(input);if(options.readStream)calls.push(await settings.environment.getUserMedia({audio:true}));return{offerId:'offer-a',sdpOffer:'v=0 PRIVATE_OFFER'};},
     connect:async input=>{binding=input;await settings.acceptNegotiation({offerId:'offer-a',sessionId:input.sessionId,sdpAnswer:input.sdpAnswer});return{send:async command=>calls.push(command),close:async()=>calls.push('close')};},
     devices:async()=>[],state:()=>({fixture:true}),setInputDevice:async()=>{},setOutputDevice:async()=>{},setLocalMute:()=>{},resumePlayback:async()=>{},interruptPlayback:()=>{},quiesceCapture:async session=>calls.push({quiesce:session??'all'}),dispose:async()=>{disposed++;},
   };}});
@@ -23,6 +23,33 @@ test('isolated media authenticates the cached offer/session/answer and forwards 
     await f.runtime.handle(request('close',{sessionId:'session-a'}));const count=f.sent.length;await f.binding.onEvent({type:'old'});assert.equal(f.sent.length,count);
     assert.ok(!JSON.stringify(f.sent.filter(w=>w.nativeLiveHost.kind==='event')).includes('PRIVATE_'));
   }finally{await f.runtime.dispose();}assert.equal(f.disposed,1);
+});
+
+test('wake input uses one already-owned stream, preserves command audio until matching session start and erases rejected PCM',async()=>{
+  const stream={nativeOwned:true},queued=[],calls=[];let next=0;
+  const f=fixture({wakeInputEnabled:true,readStream:true,wakeFactory:()=>({stream,ready:async()=>calls.push('ready'),
+    append(start,samples){assert.equal(start,next);queued.push(new Float32Array(samples));next+=samples.length;},
+    activate:async()=>calls.push('activate'),quiesce:()=>calls.push('quiesce'),dispose:async()=>calls.push('dispose')})});
+  const attemptId=randomUUID();try{
+    await f.runtime.handle(request('prepare',{attemptId,bufferLeaseRef:'private-lease',inputDeviceId:'private-device',outputDeviceId:'speaker'}));
+    assert.deepEqual(f.calls,[{outputDeviceId:'speaker'},stream]);assert(!calls.includes('activate'));
+    const samples=new Float32Array([.25,.5]);assert.deepEqual(f.runtime.wakePcm({attemptId,startSample:0,samples}),{accepted:true,nextSample:2});
+    assert.deepEqual([...samples],[0,0]);assert.deepEqual([...queued[0]],[.25,.5]);
+    const foreign=new Float32Array([.3]);assert.throws(()=>f.runtime.wakePcm({attemptId:'foreign',startSample:2,samples:foreign}),/live_media_protocol/);assert.equal(foreign[0],0);
+    await f.runtime.handle(request('connect',{sessionId:'wake:one',sdpAnswer:'v=0'}));
+    await f.binding.onEvent({type:'session.started',session:{id:'foreign'}});assert(!calls.includes('activate'));
+    await f.binding.onEvent({type:'session.started',session:{id:'wake:one'}});assert.equal(calls.filter(x=>x==='activate').length,1);
+    await f.runtime.handle(request('quiesceCapture',{attemptId:'stale',sessionId:'wake:one'}));assert(!calls.includes('quiesce'));
+    await f.runtime.handle(request('quiesceCapture',{attemptId,sessionId:'wake:one'}));assert(calls.includes('quiesce'));
+    await f.runtime.handle(request('send',{sessionId:'wake:one',command:{type:'session.close',event_id:'closed'}}));assert.equal(f.calls.at(-1).type,'session.close');
+    assert.doesNotMatch(JSON.stringify(f.sent),/private-lease|private-device|nativeOwned|samples/);
+  }finally{await f.runtime.dispose();}
+});
+
+test('an opaque audio lease alone cannot enable the private wake input',async()=>{
+  const f=fixture();try{await f.runtime.handle(request('prepare',{attemptId:randomUUID(),bufferLeaseRef:'untrusted-lease'}));
+    assert.equal(f.calls.length,0);assert.equal(f.disposed,1);assert.equal(f.sent.at(-1).nativeLiveHost.error,'live_media_operation_failed');
+  }finally{await f.runtime.dispose();}
 });
 test('private quiesce binds the current attempt/session and master quiesce keeps the finalization channel usable',async()=>{
   const f=fixture(),attemptId=randomUUID();try{

@@ -28,4 +28,4 @@ export function docxParts(extra: Record<string, Uint8Array> = {}) {
     ...extra,
   };
 }
-export const docxFixture = () => zipSync(docxParts());
+export const docxFixture = (extra:Record<string,Uint8Array>={}) => zipSync(docxParts(extra));

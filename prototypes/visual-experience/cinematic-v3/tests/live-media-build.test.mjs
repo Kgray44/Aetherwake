@@ -10,7 +10,7 @@ test('private preload bundle is generated before the renderer receipt with a clo
   assert.deepEqual(assets.map(asset=>asset.fileName),[liveMediaPreloadName,'vela-live-media-preload.sources.json']);
   const [preload,meta]=assets,value=JSON.parse(meta.source);
   assert.equal(value.sha256,createHash('sha256').update(preload.source).digest('hex'));
-  assert.deepEqual(Object.keys(value.inputs),['src/gpt-live-media.ts','src/gpt-live-native-media.ts']);
+  assert.deepEqual(Object.keys(value.inputs),['src/gpt-live-media.ts','src/gpt-live-native-media.ts','src/wake-live-input.ts']);
   assert.match(preload.source,/require\("electron"\)/);assert.doesNotMatch(preload.source,/contextBridge|exposeInMainWorld|apiKey|api\.openai\.com/);
   const html=await readFile(new URL('../native/voice-media.html',import.meta.url),'utf8');assert.match(html,/default-src 'none'/);assert.match(html,/script-src 'none'/);assert.doesNotMatch(html,/<script\b|<iframe\b/);
 });

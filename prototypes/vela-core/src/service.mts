@@ -479,7 +479,7 @@ export class VelaService {
     for (const id of ids) {
       const ref = this.resolve(id, 'resource', scope); manifest.discovered.push(ref);
       const content = this.opts.host.readContent(id, scope);
-      if (!content) { manifest.omitted.push({ id, reason: 'Content unavailable or not authorized' }); continue; }
+      if (!content) {const reason=this.opts.host.contentOmissionReason?.(id,scope);check(reason===undefined||text(reason,400),'invalid_host_content');manifest.omitted.push({ id, reason:reason??'Content unavailable or not authorized' }); continue; }
       check(content.ref.id === id && content.ref.kind === ref.kind && content.ref.version === ref.version, 'stale_context_version');
       check(typeof content.content === 'string' && text(content.source, 1000), 'invalid_host_content');
       const bytes = byteLength(content.content);

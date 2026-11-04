@@ -7,6 +7,23 @@ const stable = value => Array.isArray(value) ? value.map(stable) : value && type
 const digest = value => createHash('sha256').update(JSON.stringify(stable(value))).digest('hex');
 const sourceDigest = source => digest({ hashes: source.hashes, buildAssets: source.buildAssets });
 const LIVE = '--missions-persistence-live-only', REOPEN = '--missions-persistence-reopen-only';
+const AGING_TURNS=20;
+/** Bind the actual request's reference-only fence to the independently reviewed, text-bearing package. */
+function assertReviewedHistory(history,checkpoint){
+  assert(history&&history.schemaVersion===1&&Array.isArray(history.messages)&&history.messages.length<=4&&Buffer.byteLength(JSON.stringify(history))<=4096,'bounded_persistence_egress_required');
+  assert.equal(history.retrieval?.method,'lexical-canonical-exchanges');assert.equal(history.retrieval?.resolution,'matched');
+  assert(history.messages.some(message=>message.id===checkpoint.userMessageId&&digest(message.content)===checkpoint.userContentDigest));
+  assert(history.messages.some(message=>message.id===checkpoint.answerMessageId&&digest(message.content)===checkpoint.answerContentDigest));
+  assert(!history.messages.some(message=>/^What is 2\d\d \+ 1\?$/u.test(message.content)),'unrelated_native_turns_sent');
+  return {sourceMessageIds:history.messages.map(message=>message.id),historyBytes:Buffer.byteLength(JSON.stringify(history)),historyDigest:digest(history),historyRetrieval:history.retrieval};
+}
+function assertRecallHistory({history,record,checkpoint}){
+  const proof=assertReviewedHistory(history,checkpoint);
+  assert(record&&record.schemaVersion===1&&record.historyDigest===digest(history)&&Array.isArray(record.messages),'actual_persistence_fence_mismatch');
+  assert.deepEqual(record.messages.map(message=>message.messageId),history.messages.map(message=>message.id),'actual_persistence_source_ids_mismatch');
+  for(const dependency of record.messages){const message=history.messages.find(item=>item.id===dependency.messageId);assert(dependency.kind==='message'&&dependency.contentDigest===digest(message.content)&&dependency.provenanceDigest===checkpoint.provenanceDigest,'actual_persistence_source_proof_mismatch');assert(!Object.hasOwn(dependency,'content'),'canonical_history_body_duplicated');}
+  return proof;
+}
 function readJSON(file, maxBytes) {
   const info = fs.lstatSync(file); assert(info.isFile() && !info.isSymbolicLink() && info.size > 0 && info.size <= maxBytes, 'persistence_evidence_size_or_identity');
   return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -68,14 +85,14 @@ async function run({ argv, root, source, receipt, rpc, js, click, fill, wait, ca
   if (!reopen) {
     const first = await ask('Remember this synthetic Aurora project decision: the server port is 25581. Reply only: Noted.', true);
     const user = first.state.conversation.messages.find(message => message.id === first.request.inputMessageId); assert(user?.content.includes('25581'));
-    for (let i = 0; i < 18; i++) { const turn = await ask('What is '+(200+i)+' + 1?', false);
+    for (let i = 0; i < AGING_TURNS; i++) { const turn = await ask('What is '+(200+i)+' + 1?', false);
       assert.equal(turn.request.local?.capabilityId, 'local.calculator'); receipt.persistence.nativeTurns.push(turn.request.id); }
     const state = await vela(), before = await rpc('providerActivity', {}), usage = await rpc('velaApiUsageStatus', {});
     assert.equal(before.providerRequests, 1); assert.equal(before.codexConnections, 0); assert.equal(usage.usedToday, 1);
     const marker = { contract: 'aerynth.vela-persistence-checkpoint@1', profile: path.basename(root), sourceDigest: sourceDigest(source),
       conversationId: state.conversation.resourceId, requestId: first.request.id, userMessageId: user.id, answerMessageId: first.answer.id,
       userContentDigest: digest(user.content),answerContentDigest:digest(first.answer.content),provenanceDigest:first.request.provenance.digest,
-      canonicalMessageCount: state.conversation.messages.length, agedNativeTurns: 18, apiCalls: 1 };
+      canonicalMessageCount: state.conversation.messages.length, agedNativeTurns: AGING_TURNS, apiCalls: 1 };
     assert(state.conversation.messages.findIndex(message => message.id === user.id) < state.conversation.messages.length - 12);
     await capture('00-persistence-aged-native-conversation');
     fs.writeFileSync(path.join(root, 'mission-evidence', 'persistence-checkpoint.json'), JSON.stringify(marker, null, 2), { flag: 'wx' });
@@ -85,21 +102,23 @@ async function run({ argv, root, source, receipt, rpc, js, click, fill, wait, ca
     const user = restored.conversation.messages.find(message => message.id === checkpoint.userMessageId);
     assert(user && digest(user.content) === checkpoint.userContentDigest);assert(restored.conversation.messages.some(message=>message.id===checkpoint.answerMessageId&&digest(message.content)===checkpoint.answerContentDigest));
     assert.equal(restored.requests.find(request=>request.id===checkpoint.requestId)?.provenance?.digest,checkpoint.provenanceDigest);
-    const recalled = await ask('What server port did we decide earlier for the Aurora project? Reply with only the port number.', true), history = recalled.request.history;
+    const recallIntent='What server port did we decide earlier for the Aurora project? Reply with only the port number.';
+    // Read-only preparation makes no model request. Equality with the actual saved fence below
+    // proves the same whole-message package reached dispatch; the journal itself retains only IDs/proofs.
+    const preview=await rpc('velaRequestPreview',{intent:recallIntent,resourceIds:[],providerId:'openai-api-vela',adaptive:true,includeRecentHistory:true});
+    const reviewed=await rpc('velaNativeReview',{previewId:preview.id,signature:preview.signature});
+    assertReviewedHistory(reviewed.history,checkpoint);
+    const recalled = await ask(recallIntent, true),history=reviewed.history;
     assert.equal(recalled.answer.content.trim(), '25581', 'exact_earlier_decision_not_recalled');
-    assert(history && history.messages.length <= 4 && Buffer.byteLength(JSON.stringify(history)) <= 4096, 'bounded_persistence_egress_required');
-    assert(history.messages.some(message => message.id === checkpoint.userMessageId && digest(message.content) === checkpoint.userContentDigest));
-    assert(history.messages.some(message => message.id === checkpoint.answerMessageId));
-    assert.equal(history.retrieval?.method, 'lexical-canonical-exchanges'); assert.equal(history.retrieval?.resolution, 'matched');
-    assert(!history.messages.some(message => /^What is 2\d\d \+ 1\?$/u.test(message.content)), 'unrelated_native_turns_sent');
+    const historyProof=assertRecallHistory({history,record:recalled.request.history,checkpoint});
     assert.equal(recalled.state.conversation.resourceId, checkpoint.conversationId);
     const activity = await rpc('providerActivity', {}), usage = await rpc('velaApiUsageStatus', {});
     assert.equal(activity.providerRequests, 1); assert.equal(activity.codexConnections, 0); assert.equal(usage.usedToday, 2);
     await capture('00-persistence-recalled-earlier-decision');
     receipt.persistence = { ...receipt.persistence, checkpoint, recallRequestId: recalled.request.id, answerMessageId: recalled.answer.id,
-      answer: recalled.answer.content, sourceMessageIds: history.messages.map(message => message.id), historyBytes: Buffer.byteLength(JSON.stringify(history)),
-      sourceProvenancePreserved: true, canonicalConversationPreserved: true, usageTotal: 2, historyRetrieval: history.retrieval };
+      answer: recalled.answer.content,...historyProof,
+      sourceProvenancePreserved: true, canonicalConversationPreserved: true, usageTotal: 2 };
     receipt.providerActivity = { after: activity };
   }
 }
-module.exports = { assertMissionPersistenceReopen, sourceDigest, digest, run, LIVE, REOPEN };
+module.exports = { assertMissionPersistenceReopen,assertReviewedHistory,assertRecallHistory,AGING_TURNS,sourceDigest, digest, run, LIVE, REOPEN };

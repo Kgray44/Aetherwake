@@ -5,22 +5,23 @@ const {randomUUID}=require('node:crypto');
 const {createLiveMediaBroker,CHANNEL,validRequest,isSyntheticLiveMediaWindow}=require('../native/live-media-broker.cjs');
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 const request=(operation,payload={})=>({nativeLiveHost:{version:1,kind:'request',id:randomUUID(),operation,payload}});
-function fixture({syntheticInput=false,answer=true}={}){
-  const ipcMain=new EventEmitter(),windows=[],sent=[],backend=[];
+function fixture({syntheticInput=false,answer=true,wakeSource,wakeAck=true,loadError=false}={}){
+  const ipcMain=new EventEmitter(),windows=[],sent=[],backend=[],pcm=[];
   class Window{
     constructor(options){this.options=options;this.dead=false;windows.push(this);const wc=new EventEmitter();this.webContents=wc;wc.mainFrame={url:''};wc.getURL=()=>wc.mainFrame.url;wc.isDestroyed=()=>this.dead;wc.setWindowOpenHandler=handler=>{wc.windowOpen=handler;};
       wc.session={setPermissionRequestHandler:fn=>{wc.permissionRequest=fn;},setPermissionCheckHandler:fn=>{wc.permissionCheck=fn;},setDevicePermissionHandler:fn=>{wc.devicePermission=fn;},webRequest:{onBeforeRequest:fn=>{wc.network=fn;}}};
       wc.setAudioMuted=value=>{wc.audioMuted=value;};wc.isAudioMuted=()=>wc.audioMuted===true;
-      wc.send=(_name,value)=>{sent.push(value);if(!answer)return;const h=value.message.nativeLiveHost,result=h.operation==='prepare'?{offerId:'offer-fixture',sdpOffer:'v=0\r\nPRIVATE_OFFER'}:null;queueMicrotask(()=>ipcMain.emit(CHANNEL+'-reply',this.event(),{token:this.token(),message:{nativeLiveHost:{version:1,kind:'response',id:h.id,operation:h.operation,result}}}));};
+      wc.send=(_name,value)=>{if(_name===CHANNEL+'-wake-pcm'){pcm.push(structuredClone(value));if(wakeAck)queueMicrotask(()=>ipcMain.emit(CHANNEL+'-wake-ack',this.event(),{token:this.token(),attemptId:value.frame.attemptId,startSample:value.frame.startSample,result:{accepted:true,nextSample:value.frame.startSample+value.frame.samples.length}}));return;}
+        sent.push(value);if(!answer)return;const h=value.message.nativeLiveHost,result=h.operation==='prepare'?{offerId:'offer-fixture',sdpOffer:'v=0\r\nPRIVATE_OFFER'}:null;queueMicrotask(()=>ipcMain.emit(CHANNEL+'-reply',this.event(),{token:this.token(),message:{nativeLiveHost:{version:1,kind:'response',id:h.id,operation:h.operation,result}}}));};
     }
     token(){return this.options.webPreferences.additionalArguments[0].split('=')[1];}
     event(){return{sender:this.webContents,senderFrame:this.webContents.mainFrame};}
     isDestroyed(){return this.dead;}
     destroy(){this.dead=true;this.webContents.emit('destroyed');}
-    async loadURL(url){this.webContents.mainFrame.url=url;queueMicrotask(()=>ipcMain.emit(CHANNEL+'-ready',this.event(),{token:this.token()}));}
+    async loadURL(url){if(loadError)throw Error('PRIVATE_LOAD_ERROR');this.webContents.mainFrame.url=url;queueMicrotask(()=>ipcMain.emit(CHANNEL+'-ready',this.event(),{token:this.token()}));}
   }
-  const broker=createLiveMediaBroker({BrowserWindow:Window,ipcMain,send:wire=>backend.push(wire),preloadPath:'C:\\app\\dist\\vela-live-media-preload.cjs',htmlPath:'C:\\app\\native\\voice-media.html',syntheticInput});
-  return{broker,ipcMain,windows,sent,backend,setAnswer(value){answer=value;}};
+  const broker=createLiveMediaBroker({BrowserWindow:Window,ipcMain,send:wire=>backend.push(wire),preloadPath:'C:\\app\\dist\\vela-live-media-preload.cjs',htmlPath:'C:\\app\\native\\voice-media.html',syntheticInput,wakeSource});
+  return{broker,ipcMain,windows,sent,backend,pcm,setAnswer(value){answer=value;}};
 }
 test('native media requires an owned one-use attempt and creates an isolated memory-partition window',async()=>{
   const f=fixture();try{
@@ -112,4 +113,33 @@ test('state polling never creates a window and native dispose cancels an unanswe
     assert.equal(f.backend.find(wire=>wire.nativeLiveHost.id===prepare.nativeLiveHost.id).nativeLiveHost.error,'live_media_closed');
     f.broker.handle(request('state'));await tick();assert.equal(f.windows.length,1);assert.equal(f.backend.at(-1).nativeLiveHost.result.connection,'disposed');assert.equal(f.backend.at(-1).nativeLiveHost.result.localTrackEnabled,false);
   }finally{f.broker.close();}
+});
+
+test('wake preparation waits for authenticated command-prefix acceptance before enabling paid transport',async()=>{
+  let feed;const released=[],prefix=new Float32Array([.2,.4]);
+  const f=fixture({wakeAck:false,wakeSource:{claimLive(ref,attempt,callback){assert.equal(ref,'opaque-main-lease');feed=callback;return{samples:prefix,release(){prefix.fill(0);}};},releaseLive:attempt=>released.push(attempt)}});
+  const attemptId=randomUUID();try{
+    const prepare=request('prepare',{attemptId,bufferLeaseRef:'opaque-main-lease'});f.broker.handle(prepare);await tick();
+    assert.equal(f.backend.length,0,'no prepare offer may reach Core until its prefix is accepted');assert.equal(f.pcm.length,1);assert.deepEqual([...prefix],[0,0]);
+    const w=f.windows[0],packet=f.pcm[0],ack={token:w.token(),attemptId,startSample:0,result:{accepted:true,nextSample:2}};
+    assert(w.options.webPreferences.additionalArguments.includes('--aerynth-live-wake-input'));
+    for(const [event,token]of [[{sender:{},senderFrame:w.webContents.mainFrame},w.token()],[w.event(),'foreign']])f.ipcMain.emit(CHANNEL+'-wake-ack',event,{...ack,token});
+    await tick();assert.equal(f.backend.length,0);
+    f.ipcMain.emit(CHANNEL+'-wake-ack',w.event(),ack);await tick();assert.equal(f.backend.at(-1).nativeLiveHost.result.offerId,'offer-fixture');
+    await feed({startSample:2,samples:new Float32Array([.6])});await tick();assert.equal(f.pcm[1].frame.startSample,2);
+    f.ipcMain.emit(CHANNEL+'-wake-ack',w.event(),{...ack,startSample:2,result:{accepted:true,nextSample:3}});await tick();
+    f.broker.handle(request('connect',{sessionId:'wake-owned',sdpAnswer:'v=0'}));await tick();
+    f.broker.wakeSourceLost('stale-attempt');assert.equal(w.isDestroyed(),false);
+    f.broker.wakeSourceLost(attemptId);assert.equal(w.isDestroyed(),true);assert.deepEqual(released,[attemptId]);assert.equal(f.backend.at(-1).nativeLiveHost.operation,'connection-lost');
+    assert(!JSON.stringify(f.backend).includes('samples'));assert(!JSON.stringify(f.backend).includes('opaque-main-lease'));
+  }finally{f.broker.close();await tick();}
+});
+
+test('a failed media load releases a claimed physical capture and a stale prepare cannot destroy the active attempt',async()=>{
+  const released=[];const f=fixture({loadError:true,wakeSource:{claimLive(){return{samples:new Float32Array(1),release(){}};},releaseLive:attempt=>released.push(attempt)}});
+  const attemptId=randomUUID();try{f.broker.handle(request('prepare',{attemptId,bufferLeaseRef:'owned'}));await tick();await tick();assert.deepEqual(released,[attemptId]);assert(f.windows[0].isDestroyed());assert.equal(f.backend.at(-1).nativeLiveHost.error,'live_media_unavailable');}finally{f.broker.close();}
+  const active=fixture();try{const attemptId=randomUUID();active.broker.authorizeAttempt(attemptId);active.broker.handle(request('prepare',{attemptId}));await tick();const w=active.windows[0];
+    active.broker.handle(request('prepare',{attemptId:randomUUID(),bufferLeaseRef:'stale'}));await tick();assert.equal(w.isDestroyed(),false);assert.equal(active.backend.at(-1).nativeLiveHost.error,'live_media_protocol');
+    active.broker.handle(request('connect',{sessionId:'still-owned',sdpAnswer:'v=0'}));await tick();assert.equal(active.backend.at(-1).nativeLiveHost.result,null);
+  }finally{active.broker.close();}
 });

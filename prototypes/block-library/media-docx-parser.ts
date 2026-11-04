@@ -91,3 +91,10 @@ export async function parseDocx(bytes: Uint8Array) {
   if (result.value.length > MEDIA_LIMITS.expandedDocxBytes) throw new MediaError('too_large', 'Document preview exceeds its text budget.');
   return { html: result.value, warnings: result.messages.map(message => message.message), omittedImages };
 }
+
+/** Body text for explicitly selected source context; no HTML, images or external reads. */
+export async function extractDocxBodyText(bytes:Uint8Array){
+  const archive=boundedDocxArchive(bytes);
+  try{const input=typeof process!=='undefined'&&typeof process.versions?.node==='string'?{buffer:Buffer.from(archive),externalFileAccess:false}:{arrayBuffer:archive.buffer as ArrayBuffer,externalFileAccess:false};return await mammoth.extractRawText(input);}
+  finally{archive.fill(0);}
+}

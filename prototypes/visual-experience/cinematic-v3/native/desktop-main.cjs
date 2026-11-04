@@ -35,6 +35,7 @@ const {
   isConversationRead,
 } = require("./conversation-broker.cjs");
 const { velaCommand, isVelaRead } = require("./vela-broker.cjs");
+const {createDocumentExtractionBroker}=require('./document-extraction-broker.cjs');
 const { productCommand, isProductRead } = require("./product-commands.cjs");
 const { firstPartyChatCommand } = require("./first-party-chat.cjs");
 const { createProtectedStorageBroker } = require("./protected-storage.cjs");
@@ -246,6 +247,7 @@ const pending = new Map();
 let backendFailed = false;
 let nativeSecretBroker;
 let windowsSystemBroker;
+let documentTextBroker;
 let providerConnections;
 let velaApiSetup;
 let velaApiConnections;
@@ -283,6 +285,7 @@ function failBackend() {
   velaVoiceBroker?.close();
   velaWakeBroker?.close(); wakeController?.dispose();
   liveMediaBroker?.close();
+  documentTextBroker?.close();
   for (const request of pending.values()) {
     clearTimeout(request.timer);
     request.reject(new Error("backend_disconnected"));
@@ -309,7 +312,8 @@ function writeBackend(line) {
 function call(command, input) {
   if (!backendWritable())
     return Promise.reject(new Error("backend_disconnected"));
-  if (pending.size >= 64) return Promise.reject(new Error("backpressure"));
+  const cleanup=command==='close'||command==='velaWakeCaptureState'||command==='velaWake'&&['masterOff','disableWake'].includes(input?.name)||command==='velaVoice'&&input?.name==='stop';
+  if (pending.size >= (cleanup?68:64)) return Promise.reject(new Error("backpressure"));
   const id = ++serial;
   return new Promise((resolve, reject) => {
     const line = JSON.stringify({ id, command, input }) + "\n";
@@ -350,6 +354,7 @@ app.whenReady().then(async () => {
       "--native-secrets",
       "--native-media",
       "--native-system-facts",
+      "--native-documents",
     ],
     { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
   );
@@ -361,6 +366,7 @@ app.whenReady().then(async () => {
     timerResumeBarrier = call('timerHostResume', {});
     void timerResumeBarrier.catch(() => {});
   });
+  documentTextBroker=createDocumentExtractionBroker({BrowserWindow,ipcMain,call,send:wire=>writeBackend(JSON.stringify(wire)+'\n'),preloadPath:path.join(root,'dist/vela-document-text-preload.cjs'),htmlPath:path.join(__dirname,'document-text.html')});
   nativeSecretBroker = createProtectedStorageBroker({
     safeStorage,
     isReady: () => app.isReady(),
@@ -370,11 +376,17 @@ app.whenReady().then(async () => {
   windowsSystemBroker=createWindowsSystemBroker({root,getOwner:()=>win,dialog,send:wire=>writeBackend(JSON.stringify(wire)+'\n')});
   try {
     wakeController = loadWakeController(root)({call,send:wire=>writeBackend(JSON.stringify(wire)+'\n'),
-      capture:onFrame=>createWakeMediaBroker({BrowserWindow,ipcMain,onFrame,
+      capture:onFrame=>createWakeMediaBroker({BrowserWindow,ipcMain,onFrame,onState:state=>{
+        if(!['failed','stopped','disposed'].includes(state.phase)||wakeController?.state().generation!==state.generation)return;
+        const attemptId=wakeController.state().liveAttemptId;
+        if(attemptId)liveMediaBroker?.wakeSourceLost(attemptId);
+        void call('velaWakeCaptureState',state).catch(()=>{});
+      },
         preloadPath:path.join(root,'dist/vela-wake-capture-preload.cjs'),
         htmlPath:path.join(__dirname,'wake-media.html'),workletPath:path.join(root,'dist/vela-wake-pcm-worklet.js')})});
   } catch { wakeController = null; }
   liveMediaBroker = createLiveMediaBroker({ BrowserWindow, ipcMain,
+    ...(wakeController?{wakeSource:{claimLive:(ref,attempt,feed)=>wakeController.claimLive(ref,attempt,feed),releaseLive:attempt=>wakeController.releaseLive(attempt)}}:{}),
     send: wire => writeBackend(JSON.stringify(wire) + '\n'),
     preloadPath: path.join(root, 'dist/vela-live-media-preload.cjs'),
     htmlPath: path.join(__dirname, 'voice-media.html'),
@@ -398,6 +410,7 @@ app.whenReady().then(async () => {
       if (wakeController?.handle(m)) return;
       if (m.nativeWakeHost) { const h=m.nativeWakeHost; writeBackend(JSON.stringify({nativeWakeHost:{version:1,kind:'response',id:h.id,operation:h.operation,error:'wake_host_unavailable'}})+'\n'); return; }
       if(windowsSystemBroker.handle(m))return;
+      if(documentTextBroker.handle(m))return;
       if (nativeSecretBroker.handle(m)) return;
       if (liveMediaBroker.handle(m)) return;
       if (m.event) {
@@ -468,7 +481,7 @@ app.whenReady().then(async () => {
   owner.on("render-process-gone", playback.clear);
   owner.on('render-process-gone', () => {
     // Stop local capture immediately even when the application renderer cannot send End.
-    velaWakeBroker?.close(); wakeController?.dispose(); velaVoiceBroker?.close(); liveMediaBroker?.close();
+    documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); velaVoiceBroker?.close(); liveMediaBroker?.close();
     void call('velaWake', {name:'masterOff',input:{}}).catch(() => {});
     void call('velaVoice', {name:'stop',input:{}}).catch(() => {});
   });
@@ -539,7 +552,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("application-copy-text", (event, input) =>
     nativeClipboard.copy(event, input),
   );
-  win.on("closed", () => { velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
+  win.on("closed", () => { documentTextBroker?.close();velaWakeBroker?.close(); wakeController?.dispose(); windowsSystemBroker?.close(); nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
       if (
@@ -1309,6 +1322,7 @@ app.on("before-quit", (event) => {
       velaWakeBroker?.close(); wakeController?.dispose();
       velaVoiceBroker?.close();
       liveMediaBroker?.close();
+      documentTextBroker?.close();
       providerConnections?.close();
       velaApiSetup?.close();
       velaApiConnections?.close();
@@ -1330,6 +1344,7 @@ app.on("before-quit", (event) => {
         velaWakeBroker?.close(); wakeController?.dispose();
         velaVoiceBroker?.close();
         liveMediaBroker?.close();
+        documentTextBroker?.close();
         providerConnections?.close();
         velaApiSetup?.close();
         velaApiConnections?.close();

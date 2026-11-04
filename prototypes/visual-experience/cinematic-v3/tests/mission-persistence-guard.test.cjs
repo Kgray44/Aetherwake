@@ -1,5 +1,5 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
-const {assertMissionPersistenceReopen,sourceDigest,digest}=require('../native/mission-persistence.cjs');
+const {assertMissionPersistenceReopen,assertRecallHistory,AGING_TURNS,sourceDigest,digest}=require('../native/mission-persistence.cjs');
 function fixture(t){
   const localAppData=fs.mkdtempSync(path.join(os.tmpdir(),'aerynth-persistence-guard-')),profile=path.join(localAppData,'Aerynth','review-vela-missions-123456');
   fs.mkdirSync(path.join(profile,'mission-evidence'),{recursive:true});t.after(()=>{assert.equal(path.dirname(localAppData),path.resolve(os.tmpdir()));assert(path.basename(localAppData).startsWith('aerynth-persistence-guard-'));fs.rmSync(localAppData,{recursive:true,force:true});});
@@ -20,3 +20,15 @@ test('changed source, copied profile marker, foreign parent and mixed journey fl
 test('a reopen is single attempt and cannot reuse or overwrite its evidence directory',t=>{const f=fixture(t);fs.mkdirSync(path.join(f.profile,'mission-reopen-evidence'));assert.throws(f.check,/persistence_reopen_already_attempted/);});
 test('forged marker content and insufficient aging are rejected even when source identity matches',t=>{const f=fixture(t);f.checkpoint.agedNativeTurns=1;f.write();assert.throws(f.check,/bound_persistence_checkpoint_required/);
   f.checkpoint.agedNativeTurns=18;f.receipt.persistence.checkpoint={...f.checkpoint,userMessageId:'different'};f.write();assert.throws(f.check,/bound_persistence_checkpoint_required/);});
+test('recall proves the actual reference-only request fence matches the complete reviewed bounded history package',()=>{
+ assert.equal(AGING_TURNS,20);
+ const checkpoint={userMessageId:'user:old',answerMessageId:'answer:old',userContentDigest:digest('Aurora server port is 25581'),answerContentDigest:digest('Noted.'),provenanceDigest:digest('provider-origin')};
+ const history={schemaVersion:1,coverage:'bounded-authorized-whole-messages',messages:[{id:checkpoint.userMessageId,role:'user',content:'Aurora server port is 25581'},{id:checkpoint.answerMessageId,role:'assistant',content:'Noted.'}],retrieval:{method:'lexical-canonical-exchanges',resolution:'matched'}},
+ record={schemaVersion:1,historyDigest:digest(history),messages:history.messages.map(message=>({kind:'message',messageId:message.id,contentDigest:digest(message.content),provenanceDigest:checkpoint.provenanceDigest}))};
+ const prove=(h=history,r=record)=>assertRecallHistory({history:h,record:r,checkpoint});assert.equal(prove().sourceMessageIds.length,2);assert(prove().historyBytes<=4096);
+ assert.throws(()=>prove(history,{...record,historyDigest:'0'.repeat(64)}),/fence_mismatch/);
+ assert.throws(()=>prove(history,{...record,messages:[{...record.messages[0],messageId:'unrelated'},record.messages[1]]}),/source_ids_mismatch/);
+ assert.throws(()=>prove(history,{...record,messages:[{...record.messages[0],content:'duplicate body'},record.messages[1]]}),/body_duplicated/);
+ assert.throws(()=>prove({...history,messages:[...history.messages,{id:'wrong',content:'What is 201 + 1?'}]}),/unrelated_native_turns_sent/);
+ assert.throws(()=>prove({...history,messages:[...history.messages,{id:'large',content:'x'.repeat(4096)}]}),/bounded_persistence_egress_required/);
+});

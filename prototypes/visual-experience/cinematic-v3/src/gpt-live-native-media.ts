@@ -1,6 +1,7 @@
 /** Sandboxed preload entry. This module never exposes a main-world bridge. */
 import { BrowserGptLiveMedia, type GptLiveMediaOptions, type GptLiveBrowserEnvironment } from './gpt-live-media.ts';
 import type { LiveChannel } from '../../../openai-provider/live-contracts.mts';
+import {WakeLiveInput} from './wake-live-input.ts';
 
 type Header = {version:1;kind:'request'|'response'|'event';id:string;operation:string;payload?:any;result?:unknown;error?:string};
 type Wire = {nativeLiveHost:Header};
@@ -35,11 +36,12 @@ export function createSyntheticVoiceEnvironment(): {environment:Partial<GptLiveB
     createAudio(){const audio=document.createElement('audio');audio.muted=true;return audio;},
   },async dispose(){for(const context of contexts)await context.close().catch(()=>{});contexts.clear();}};
 }
-export function createNativeMediaRuntime(send:(message:Wire)=>void, options:{mediaFactory?:(options:GptLiveMediaOptions)=>Media;syntheticInput?:boolean;randomId?:()=>string}={}) {
+export function createNativeMediaRuntime(send:(message:Wire)=>void, options:{mediaFactory?:(options:GptLiveMediaOptions)=>Media;syntheticInput?:boolean;randomId?:()=>string;wakeInputEnabled?:boolean;wakeFactory?:()=>Pick<WakeLiveInput,'stream'|'ready'|'append'|'activate'|'quiesce'|'dispose'>}={}) {
   let sessionId:string|null=null, attemptId:string|null=null, preparing=false, offer:{offerId:string;sdpOffer:string}|null=null, negotiation:{offerId:string;sessionId:string;sdpAnswer:string}|null=null;
   let live:LiveChannel|null=null, closed=false, inFlight=0, eventCount=0, eventAt=Date.now();
   const seen=new Set<string>();
   const synthetic=options.syntheticInput?createSyntheticVoiceEnvironment():null;
+  let wakeInput:ReturnType<NonNullable<typeof options.wakeFactory>>|null=null,wakeSelected=false;
   const event=(operation:string,payload:any)=>{
     if(closed||!bounded(payload))return;
     if(Date.now()-eventAt>=1000){eventAt=Date.now();eventCount=0;}
@@ -47,14 +49,17 @@ export function createNativeMediaRuntime(send:(message:Wire)=>void, options:{med
     send({nativeLiveHost:{version:1,kind:'event',id:(options.randomId??(()=>crypto.randomUUID()))(),operation,payload}});
   };
   const media=(options.mediaFactory??(settings=>new BrowserGptLiveMedia(settings)))({
-    ...(synthetic?{environment:synthetic.environment}:{}),
+    environment:{...synthetic?.environment,async getUserMedia(constraints){
+      if(wakeInput){await wakeInput.ready();return wakeInput.stream;}
+      return synthetic?.environment.getUserMedia?synthetic.environment.getUserMedia(constraints):navigator.mediaDevices.getUserMedia(constraints);
+    }},
     async acceptNegotiation(input){
       if(!negotiation||!offer||input.offerId!==offer.offerId||input.offerId!==negotiation.offerId||input.sessionId!==negotiation.sessionId||input.sdpAnswer!==negotiation.sdpAnswer)throw Error('live_media_negotiation_denied');
       negotiation=null;
     },
-    onState:state=>event('state',{sessionId,state}),
+    onState:state=>event('state',{sessionId,state:wakeInput?{...state,inputDevice:wakeSelected?'selected':'default'}:state}),
   });
-  async function dispose(){if(closed)return;closed=true;live=null;offer=null;negotiation=null;sessionId=null;attemptId=null;seen.clear();await media.dispose();await synthetic?.dispose();}
+  async function dispose(){if(closed)return;closed=true;live=null;offer=null;negotiation=null;sessionId=null;attemptId=null;seen.clear();try{await media.dispose();}finally{await wakeInput?.dispose();wakeInput=null;await synthetic?.dispose();}}
   return {
     async handle(value:unknown){
       if(!validNativeMediaRequest(value))return;
@@ -67,32 +72,41 @@ export function createNativeMediaRuntime(send:(message:Wire)=>void, options:{med
       try{
         let result:unknown=null;
         switch(h.operation){
-          case 'prepare':if(offer||live||preparing||p.bufferLeaseRef)throw Error();attemptId=p.attemptId;preparing=true;
-            try{offer=await media.prepare({...('inputDeviceId'in p?{inputDeviceId:p.inputDeviceId}:{}),...('outputDeviceId'in p?{outputDeviceId:p.outputDeviceId}:{})});result=offer;}finally{preparing=false;}break;
+          case 'prepare':if(offer||live||preparing||p.bufferLeaseRef&&!options.wakeInputEnabled)throw Error();attemptId=p.attemptId;preparing=true;
+            try{
+              if(p.bufferLeaseRef){wakeSelected=!!p.inputDeviceId;wakeInput=(options.wakeFactory??(()=>new WakeLiveInput()))();await wakeInput.ready();}
+              offer=await media.prepare({...(!wakeInput&&'inputDeviceId'in p?{inputDeviceId:p.inputDeviceId}:{}),...('outputDeviceId'in p?{outputDeviceId:p.outputDeviceId}:{})});result=offer;
+            }finally{preparing=false;}break;
           case 'connect':{
             if(!offer||sessionId||live)throw Error();sessionId=p.sessionId;const boundSession=sessionId;
             negotiation={offerId:offer.offerId,sessionId:boundSession!,sdpAnswer:p.sdpAnswer};
             live=await media.connect({sessionId:boundSession!,sdpAnswer:p.sdpAnswer,
-              onEvent:async observed=>{if(sessionId===boundSession)event('provider-event',{sessionId:boundSession,event:observed});},
-              onConnectionLost:()=>{if(sessionId!==boundSession)return;event('connection-lost',{sessionId:boundSession});live=null;offer=null;negotiation=null;sessionId=null;},
+              onEvent:async observed=>{if(sessionId===boundSession){const packet=observed as {type?:unknown;session?:{id?:unknown}};if(packet?.type==='session.started'&&packet.session?.id===boundSession)await wakeInput?.activate();event('provider-event',{sessionId:boundSession,event:observed});}},
+              onConnectionLost:()=>{if(sessionId!==boundSession)return;wakeInput?.quiesce();event('connection-lost',{sessionId:boundSession});live=null;offer=null;negotiation=null;sessionId=null;},
             });negotiation=null;break;
           }
           case 'send':if(!live||p.sessionId!==sessionId)throw Error();await live.send(p.command);break;
-          case 'close':if(p.sessionId!==sessionId)throw Error();await live?.close();live=null;offer=null;negotiation=null;sessionId=null;attemptId=null;break;
+          case 'close':if(p.sessionId!==sessionId)throw Error();wakeInput?.quiesce();await live?.close();await wakeInput?.dispose();wakeInput=null;live=null;offer=null;negotiation=null;sessionId=null;attemptId=null;break;
           case 'devices':result=await media.devices();break;
           case 'state':result=media.state();break;
-          case 'setInputDevice':await media.setInputDevice(p.deviceId);break;
+          case 'setInputDevice':if(wakeInput)throw Error();await media.setInputDevice(p.deviceId);break;
           case 'setOutputDevice':await media.setOutputDevice(p.deviceId);break;
           case 'setLocalMute':media.setLocalMute(p.muted);break;
           case 'resumePlayback':await media.resumePlayback();break;
           case 'interruptPlayback':media.interruptPlayback();break;
-          case 'quiesceCapture':if(p.attemptId!==attemptId||p.sessionId!==undefined&&p.sessionId!==sessionId)throw Error();await media.quiesceCapture(p.sessionId);break;
-          case 'quiesceAll':await media.quiesceCapture();break;
+          case 'quiesceCapture':if(p.attemptId!==attemptId||p.sessionId!==undefined&&p.sessionId!==sessionId)throw Error();wakeInput?.quiesce();await media.quiesceCapture(p.sessionId);break;
+          case 'quiesceAll':wakeInput?.quiesce();await media.quiesceCapture();break;
           case 'dispose':await dispose();break;
         }
         if(!bounded(result))throw Error();reply(result);
       }catch{negotiation=null;reply(null,'live_media_operation_failed');if(['prepare','connect'].includes(h.operation))await dispose();}
       finally{inFlight--;}
+    },
+    wakePcm(frame:any){
+      try{
+        if(closed||!wakeInput||!exact(frame,['attemptId','startSample','samples'])||frame.attemptId!==attemptId||!Number.isSafeInteger(frame.startSample)||!(frame.samples instanceof Float32Array))throw Error('live_media_protocol');
+        wakeInput.append(frame.startSample,frame.samples);return {accepted:true,nextSample:frame.startSample+frame.samples.length};
+      }finally{if(frame?.samples instanceof Float32Array)frame.samples.fill(0);}
     },dispose,
   };
 }
@@ -104,10 +118,16 @@ if(typeof require==='function'){
   const {ipcRenderer}=require('electron');
   const token=process.argv.find(arg=>arg.startsWith('--aerynth-live-media-token='))?.slice('--aerynth-live-media-token='.length);
   if(token&&/^[a-f0-9]{64}$/u.test(token)){
-    const runtime=createNativeMediaRuntime(message=>ipcRenderer.send(channel+(message.nativeLiveHost.kind==='event'?'-event':'-reply'),{token,message}),{syntheticInput:process.argv.includes('--aerynth-live-media-synthetic')});
+    const runtime=createNativeMediaRuntime(message=>ipcRenderer.send(channel+(message.nativeLiveHost.kind==='event'?'-event':'-reply'),{token,message}),{syntheticInput:process.argv.includes('--aerynth-live-media-synthetic'),wakeInputEnabled:process.argv.includes('--aerynth-live-wake-input')});
+    const onPcm=(_event:unknown,value:any)=>{
+      if(!exact(value,['token','frame'])||value.token!==token)return;
+      const frame=value.frame;try{const result=runtime.wakePcm(frame);ipcRenderer.send(channel+'-wake-ack',{token,attemptId:frame.attemptId,startSample:frame.startSample,result});}
+      catch{ipcRenderer.send(channel+'-wake-ack',{token,attemptId:frame?.attemptId,startSample:frame?.startSample,error:'live_media_protocol'});}
+    };
     const handler=(_event:unknown,value:any)=>{if(exact(value,['token','message'])&&value.token===token)void runtime.handle(value.message);};
     ipcRenderer.on(channel+'-command',handler);
-    addEventListener('unload',()=>{ipcRenderer.removeListener(channel+'-command',handler);void runtime.dispose();},{once:true});
+    ipcRenderer.on(channel+'-wake-pcm',onPcm);
+    addEventListener('unload',()=>{ipcRenderer.removeListener(channel+'-command',handler);ipcRenderer.removeListener(channel+'-wake-pcm',onPcm);void runtime.dispose();},{once:true});
     ipcRenderer.send(channel+'-ready',{token});
   }
 }

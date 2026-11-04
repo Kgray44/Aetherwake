@@ -196,6 +196,7 @@ import type { VelaApiUsageStatus } from './vela-api-runtime.mts';
 import type { VelaVoiceControlRequest,VelaVoiceNativeRequest,VelaVoiceState,VoiceAuthorization } from './vela-voice-runtime.mts';
 import type { VelaWakeRequest,VelaWakeNativeRequest,VelaWakeState } from './vela-wake-runtime.mts';
 import type { NativeWakePcmFrame } from './wake-capture-host.mts';
+import type {WakeCaptureState} from './wake-capture-host.mts';
 import type { GptLiveAudioDevice } from './live-media-host.mts';
 import type { PromptVoiceResult } from '../../openai-provider/live-contracts.mts';
 import type { NativeApiCredentialInput, RedactedApiConnectionView } from '../../openai-provider/api-connection-contracts.mts';
@@ -227,6 +228,7 @@ export interface CommandMap {
   velaWakeNative: {input:VelaWakeNativeRequest;output:VelaWakeState};
   /** Private acknowledged PCM ingress; never an activity or conversation event. */
   velaWakeFrame: {input:NativeWakePcmFrame;output:{accepted:true}};
+  velaWakeCaptureState:{input:WakeCaptureState;output:VelaWakeState};
   velaVoiceNative: {input:VelaVoiceNativeRequest;output:VelaVoiceState|VoiceAuthorization|PromptVoiceResult};
   velaApiConnection: { input: VelaApiConnectionRequest; output: VelaApiConnectionResult };
   velaApiUsageStatus: { input: Record<string,never>; output: VelaApiUsageStatus };

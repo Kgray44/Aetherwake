@@ -4,20 +4,23 @@ import { CONTRACT, type Options } from './contracts.mts';
 import {createNativeHostClient,isNativeHostEnvelope} from './native-host.mts';
 import {createNativeLiveHostClient,isNativeLiveHostEnvelope} from './live-media-host.mts';
 import {createSystemFactsClient,isSystemFactsEnvelope} from './system-facts-host.mts';
+import {createDocumentTextClient,isDocumentTextEnvelope} from './document-text-host.mts';
 import {createNativeWakeCaptureClient,isNativeWakeCaptureMessage} from './wake-capture-host.mts';
 const port = parentPort!;
 const hosted=workerData?.nativeHostProtocol===1;
 const nativeClient=hosted?createNativeHostClient(message=>port.postMessage(message)):undefined;
 const liveClient=hosted&&workerData.nativeLiveHostProtocol===1?createNativeLiveHostClient(message=>port.postMessage(message)):undefined;
 const systemClient=hosted&&workerData.nativeSystemFactsProtocol===1?createSystemFactsClient(message=>port.postMessage(message)):undefined;
+const documentClient=hosted&&workerData.nativeDocumentTextProtocol===1?createDocumentTextClient(message=>port.postMessage(message)):undefined;
 const wakeClient=hosted&&workerData.nativeWakeCaptureProtocol===1?createNativeWakeCaptureClient(message=>port.postMessage(message)):undefined;
-port.on('close',()=>{wakeClient?.dispose();systemClient?.close();nativeClient?.close();});
+port.on('close',()=>{documentClient?.close();wakeClient?.dispose();systemClient?.close();nativeClient?.close();});
 try {
   const options=(hosted?workerData.options:workerData) as Options;
-  const core = new BackendCore(options, event => port.postMessage({ event }),nativeClient?{...nativeClient.services,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{})}:undefined);
+  const core = new BackendCore(options, event => port.postMessage({ event }),nativeClient?{...nativeClient.services,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{})}:undefined);
   port.on('message', async request => {
     if(isNativeWakeCaptureMessage(request)){wakeClient?.handle(request);return;}
     if(isSystemFactsEnvelope(request)){systemClient?.handle(request);return;}
+    if(isDocumentTextEnvelope(request)){documentClient?.handle(request);return;}
     if(isNativeLiveHostEnvelope(request)){liveClient?.handle(request);return;}
     if(isNativeHostEnvelope(request)){nativeClient?.handle(request);return;}
     if (request && Object.hasOwn(request, 'missionHostSignal')) {
@@ -30,7 +33,7 @@ try {
       if (contract !== CONTRACT) throw Object.assign(new Error(), { code: 'unsupported_contract' });
       const result = await core.command(command, input);
       port.postMessage({ id, result });
-      if (command === 'close') { wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();port.close(); }
+      if (command === 'close') { documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();port.close(); }
     } catch (e) {
       // Raw native diagnostics may contain personal paths/content. Send codes only.
       const candidate = (e as any).code ?? (e as any).kind;
@@ -39,4 +42,4 @@ try {
     }
   });
   port.postMessage({ ready: true });
-} catch { wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close(); port.postMessage({ startupError: 'storage_or_schema_failure' }); port.close(); }
+} catch { documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close(); port.postMessage({ startupError: 'storage_or_schema_failure' }); port.close(); }
