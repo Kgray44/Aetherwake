@@ -5,6 +5,7 @@ import { nativeMissionPlan } from './mission-native.mts';
 import type { MissionTeam } from './mission-teams.mts';
 
 type Selection = Omit<NonNullable<MissionTaskPlan['specialist']>, 'role' | 'instructions'>;
+export const missionTemporarySlots = ['temporary-specialist-1', 'temporary-specialist-2'] as const;
 const assignments = [
   { id: 'research-methods', role: 'Performance Methods Specialist', objective: 'Propose reproducible experiments and comparison criteria.',
     focus: 'Focus on measurements, controls, comparison workloads, and reproducibility.' },
@@ -37,7 +38,18 @@ export function missionPlanningSpecialists(selection: Selection | undefined): Mi
   return [
     specialistTask({ ...sourceAssignments[0], id: 'public-source-research' }, selection, true),
     specialistTask({ ...sourceAssignments[1], id: 'independent-review' }, selection),
+    ...missionTemporarySlots.map(id => specialistTask({
+      id, role: 'Temporary specialist', objective: 'Assign a task-scoped specialist with a role title and responsibility.',
+      focus: 'Follow the responsibility reviewed for this task.',
+    }, selection)),
   ];
+}
+
+export function assignMissionTemporarySpecialist(template: MissionTaskPlan, title: string, responsibility: string): MissionTaskPlan {
+  return specialistTask({
+    id: template.id, role: title, objective: responsibility,
+    focus: 'Your reviewed responsibility for the objective is: ' + responsibility,
+  }, template.specialist);
 }
 
 export function teamMissionPlan(objective: string, scope: MissionScope, team: MissionTeam,

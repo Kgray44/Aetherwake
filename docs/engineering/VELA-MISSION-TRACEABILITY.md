@@ -16,7 +16,7 @@ is proposed. Its existing level and route evidence lives in
 [AIR status](VELA-AIR-STATUS.md). The table tracks implementation and proof and
 does not establish new governing requirements.
 
-| Directive / proof | Authority references | Baseline and current gap | Change and required evidence |
+| Directive / proof | Authority references | Baseline at branch start | Target and required evidence |
 | --- | --- | --- | --- |
 | §1–2 / M0 | AW-CON-007–010, 080, 088–089; charter 16 | **Partial.** Latest integrated stack identified. Core owns routing, review, workflow, app state, and observation. | Keep canonical SQLite and native consent; extract bounded services. Record exact-source baseline, migrations, source and runtime checks. |
 | §3 / A–B | AW-CON-011, 041, 062–065; charters 06, 10, 12; AIR §4–6 | **Partial.** Native zero-model actions, bounded routing, live discovery, pins, calibration and escalation exist. Complex objectives still resolve to single or fixed workflows. | Add mission strategy alongside AIR, inspect decisions, retain manual controls; prove native, deep, unavailable and direct Codex cases. |
@@ -109,7 +109,9 @@ specialist isolation and citation handling until the live grant is available.
 The bounded graph planner was exercised through the production provider
 transport with synthetic responses. One approved planning request produced a
 CPU sample, a dependent RAM measurement and an independent specialist. Start
-required separate specialist approval. The mission recorded the two reported
+required separate specialist approval. The planner supplied a task-scoped
+role title and responsibility while the host retained the model, capability
+and budget controls. The mission recorded the two reported
 usage entries, preserved its planning receipt across restart and refused
 duplicate planning dispatch. Compiler regressions cover unknown capabilities,
 cyclic and missing dependencies, unsupported outcomes and ambiguous JSON.

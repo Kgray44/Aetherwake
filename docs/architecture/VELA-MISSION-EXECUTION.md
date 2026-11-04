@@ -51,7 +51,10 @@ covers the original objective. Start requires the reviewed fingerprint and
 current workspace, plus any specialist or checkout approvals. Hosted specialists
 can run as independent branches. Their approvals cover objective text and role
 instructions, so the host rejects proposals with prerequisites on hosted
-specialist tasks. A confirmed planning receipt contributes to mission
+specialist tasks. The planner can configure up to two temporary specialists
+with a single-line title and responsibility. The host controls provider,
+model, tools and execution budget. The role exists only in its mission.
+A confirmed planning receipt contributes to mission
 duration and reported usage. Admitted planning requests are fenced against
 replay after interruption or restart.
 

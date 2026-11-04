@@ -146,6 +146,8 @@ export function createVelaMissionView(
         "A planning model is unavailable. Check the ChatGPT plan connection and request limits.",
       mission_proposal_unsupported_objective:
         "The planner reported that available capabilities cannot cover the whole objective. No mission was started.",
+      invalid_mission_temporary_role:
+        "The planner returned an invalid specialist assignment. Review the objective and request a new plan.",
       mission_planning_already_attempted:
         "This planning request was already admitted. Submit the objective again for a fresh review.",
       mission_team_not_found: "This team is no longer available. Refresh the team library.",

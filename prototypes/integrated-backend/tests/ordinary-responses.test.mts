@@ -69,8 +69,9 @@ test('a reviewed planning request compiles one graph and runs native dependencie
     await assert.rejects(f.core.command('missions', { name: 'plan', input }), /invalid_mission_command/);
     await assert.rejects(f.core.command('missionPlanReviewed', { ...input, objective: objective + ' today' }), /mission_preview_changed/);
     assert.equal(f.requests.length, 0);
+    const role = { title: 'Measurement design reviewer', responsibility: 'Identify control conditions for comparing CPU and RAM.' };
     const output = JSON.stringify({ tasks: [
-      { capability: 'cpu', after: [] }, { capability: 'ram', after: ['cpu'] }, { capability: 'independent-review', after: [] },
+      { capability: 'cpu', after: [] }, { capability: 'ram', after: ['cpu'] }, { capability: 'temporary-specialist-1', after: [], role },
     ], unsupported: [] });
     f.responses.push(() => sse([
       { type: 'response.created', response: { id: 'resp_synthetic_plan' } },
@@ -81,8 +82,13 @@ test('a reviewed planning request compiles one graph and runs native dependencie
     const proposed = await f.core.command('missionPlanReviewed', input) as MissionPreview;
     assert.equal(proposed.proposalId, input.requestId);
     assert.deepEqual(proposed.plan.tasks.map(task => [task.id, task.dependencies]), [
-      ['cpu', []], ['independent-review', []], ['ram', ['cpu']], ['report', ['cpu', 'independent-review', 'ram']],
+      ['cpu', []], ['ram', ['cpu']], ['temporary-specialist-1', []], ['report', ['cpu', 'ram', 'temporary-specialist-1']],
     ]);
+    const specialist = proposed.plan.tasks[2];
+    assert.equal(specialist.specialist?.role, role.title);
+    assert.equal(specialist.objective, role.responsibility);
+    assert.equal(specialist.specialist?.profile, undefined);
+    assert.equal(specialist.specialist?.webSearch, undefined);
     assert.equal(f.requests.length, 1);
     const body = f.requests[0];
     assert.equal(body.input.length, 1);
@@ -120,6 +126,8 @@ test('a reviewed planning request compiles one graph and runs native dependencie
     assert.equal(mission.profile.reportedTotalTokens, 142);
     assert.equal(f.requests.length, 2);
     assert.deepEqual(f.requests[1].input, [{ role: 'user', content: objective }]);
+    assert(f.requests[1].instructions.includes(role.responsibility));
+    assert.equal(f.requests[1].tools, undefined);
     await f.reopen();
     await enter();
     assert.equal((await read()).planning?.responseId, 'resp_synthetic_plan');

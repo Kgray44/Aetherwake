@@ -4,6 +4,7 @@ import { ServiceError } from '../src/contracts.mts';
 import type { MissionTaskPlan } from '../src/mission-contracts.mts';
 import { nativeMissionExecutors } from '../src/mission-native.mts';
 import { compileMissionProposal } from '../src/mission-proposal.mts';
+import { missionPlanningSpecialists } from '../src/mission-specialists.mts';
 import { validateMissionPlan } from '../src/mission-service.mts';
 
 const scope = { projectId: 'project-1', workspaceId: 'workspace-1' };
@@ -49,6 +50,29 @@ test('rejects unknown or duplicate capabilities, dangling edges, and cycles', ()
   rejects(proposal([entry('cpu', ['cpu']), entry('ram')]), 'mission_dependency_cycle');
   rejects(proposal([entry('cpu', ['ram']), entry('ram', ['cpu'])]), 'mission_dependency_cycle');
   rejects(proposal([entry('inspect'), entry('ram', ['inspect'])]), 'mission_dependency_cycle');
+});
+
+test('temporary roles cannot add tools, provider controls, or dependencies', () => {
+  const model = { provider: 'chatgpt-plan-responses' as const, model: 'synthetic-model', connectionVersion: 1, settingsStamp: 'synthetic' };
+  const [slot] = missionPlanningSpecialists(model).filter(task => task.id.startsWith('temporary-specialist'));
+  const supported = { ...catalog, [slot.id]: slot };
+  const role = { title: 'Measurement reviewer', responsibility: 'Identify one source of measurement error.' };
+  const compileRole = (candidate: object) => compileMissionProposal(JSON.stringify({
+    tasks: [entry('cpu'), candidate], unsupported: [],
+  }), objective, scope, supported);
+  const task = compileRole({ ...entry(slot.id), role }).tasks.find(task => task.id === slot.id)!;
+  assert.equal(task.specialist?.model, model.model);
+  assert.equal(task.specialist?.role, role.title);
+  assert.equal(task.specialist?.webSearch, undefined);
+  assert.equal(task.maxAttempts, 1);
+  for (const candidate of [
+    entry(slot.id),
+    { ...entry(slot.id, ['cpu']), role },
+    { ...entry(slot.id), role: { ...role, tool: 'web_search' } },
+    { ...entry(slot.id), role: { ...role, title: 'Invalid\nrole' } },
+    { ...entry(slot.id), role: { ...role, responsibility: '😀'.repeat(76) } },
+    { ...entry('ram'), role },
+  ]) assert.throws(() => compileRole(candidate), /invalid_mission_temporary_role/);
 });
 
 test('rejects an unsupported outcome even when some tasks could run', () => {
