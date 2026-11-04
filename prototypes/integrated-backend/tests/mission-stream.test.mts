@@ -180,6 +180,7 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
     const pending = (id: string) => {
       const db = new DatabaseSync(options.path, { readOnly: true });
       try {
+        db.exec('PRAGMA busy_timeout=1000');
         return {
           lifecycle: Number(db.prepare('SELECT count(*) AS count FROM vela_mission_lifecycle_outbox WHERE mission_id=?').get(id)?.count),
           report: Number(db.prepare('SELECT count(*) AS count FROM vela_mission_report_outbox WHERE mission_id=?').get(id)?.count),
@@ -266,6 +267,7 @@ for (const fault of ['lifecycle', 'acknowledgement', 'report'] as const) {
         const retryRequest = 'publication-retry-live';
         const connection = new DatabaseSync(options.path);
         try {
+          connection.exec('PRAGMA busy_timeout=1000');
           connection.exec(`CREATE TRIGGER test_mission_publication_retry BEFORE INSERT ON vela_mission_report_links
             WHEN NEW.mission_id=(SELECT id FROM vela_missions WHERE request_id='${retryRequest}')
             BEGIN SELECT RAISE(ABORT,'test temporary report publication failure'); END;`);
