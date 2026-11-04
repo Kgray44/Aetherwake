@@ -270,6 +270,29 @@ test('terminal status survives request completion and refresh; connection probe 
   panel.dispose(); assert.equal(root.children.length, 0);
 });
 
+test('a timed-out API reply stays unknown with concise visible text and no fabricated completion', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state();
+  canonical.requests = [request({state:'unknown',errorCode:'provider_timeout',providerId:'openai-api-vela',
+    route:{kind:'conversational',depth:'quick',reason:'routine-answer',model:'gpt-6-luna'}})];
+  const before=structuredClone(canonical);
+  const panel=mountVelaPanel(root as unknown as HTMLElement,clientFor(async()=>canonical));
+  await settles(()=>root.find(node=>node.className==='vela-core-status')!.dataset.requestState==='unknown');
+  assert.equal(root.find(node=>node.className==='vela-core-status')!.textContent,'That reply timed out.');
+  assert.equal(root.find(node=>node.className==='vela-manifestation-kicker')!.hidden,true,'routing metadata stays behind details even when a reply fails');
+  assert.equal(root.find(node=>node.className==='vela-mission-jobs-done'),undefined);
+  assert.deepEqual(canonical,before,'presentation cannot rewrite the durable unknown request');
+  panel.dispose();
+  for(const patch of [{planId:'unresolved-plan'},{route:{kind:'app-planning',reason:'reviewed-app-action'}},
+    {errorCode:'provider_transport_unavailable'},{providerId:'codex-app-server'}] as Partial<VelaRequest>[]){
+    canonical.requests=[{...before.requests[0],...patch}];
+    assert.match(velaPanelStatus(canonical).message,/outcome is unknown/);
+  }
+  canonical.requests=before.requests;
+  canonical.receipts=[{id:'receipt:prior',requestId:before.requests[0].id,planId:'plan:prior',stepId:'step:prior',
+    commandId:'command:prior',source:'vela',providerId:'synthetic',state:'applied',startedAt:manifest.createdAt,hostReceiptId:'host:prior',taskVerified:false}];
+  assert.match(velaPanelStatus(canonical).message,/outcome is unknown/,'effect-bearing requests retain the cautious outcome message');
+});
+
 test('status distinguishes review, applied receipts, partial failure and unknown outcomes without asserting delegated task completion', () => {
   const canonical = state(); canonical.requests = [request({ state: 'awaiting-review', planId: 'plan:synthetic' })];
   const plan: VelaPlan = { id: 'plan:synthetic', requestId: 'request:synthetic', version: 1, fingerprint: 'synthetic', summary: 'Synthetic command', steps: [{ id: 'one', explanation: 'Synthetic delegation', action: { type: 'delegateTask', title: 'Synthetic task', objective: 'Synthetic only', providerId: 'synthetic-planner', resourceIds: [], constraints: [] } }], targets: [], scope: { principalId: 'synthetic', policyVersion: 'synthetic', resourceIds: [], projectIds: [], workspaceIds: [] }, state: 'prepared', createdAt: manifest.createdAt, expiresAt: manifest.createdAt, contribution: null };

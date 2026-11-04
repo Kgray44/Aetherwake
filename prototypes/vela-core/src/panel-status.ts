@@ -17,7 +17,12 @@ export function velaPanelStatus(state: Pick<VelaState, 'requests' | 'plans' | 'r
   const appliedCount = receipts.filter(r => r.state === 'applied' && r.hostReceiptId).length;
   const priorEffects = appliedCount ? ' ' + appliedCount + (appliedCount === 1 ? ' earlier step was confirmed.' : ' earlier steps were confirmed.') + ' Review the details.' : '';
   const result = (message: string): VelaPanelStatus => ({ requestState: request.state, requestId: request.id, ...(plan ? { planState: plan.state } : {}), message });
-  if (request.state === 'unknown' || plan?.state === 'unknown') return result('The outcome is unknown. Review the activity details before trying again.' + priorEffects);
+  if (request.state === 'unknown' || plan?.state === 'unknown') {
+    if (request.errorCode === 'provider_timeout' && request.providerId === 'openai-api-vela' &&
+        request.route?.kind === 'conversational' && !request.planId && !plan &&
+        !state.receipts.some(receipt => receipt.requestId === request.id)) return result('That reply timed out.');
+    return result('The outcome is unknown. Review the activity details before trying again.' + priorEffects);
+  }
   if (request.state === 'failed' || plan?.state === 'failed') {
     if (request.errorCode === 'planning_execution_failed')
       return result((request.providerId === 'codex-app-server' ? 'Codex' : 'The provider') + ' stopped before returning a reply.' + priorEffects);

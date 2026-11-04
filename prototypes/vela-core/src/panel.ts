@@ -629,15 +629,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     shell.dataset.manifestationKind = projection.kind; shell.dataset.presentationView = view(); manifestation.dataset.requestId = projection.currentRequestId ?? ''; manifestation.dataset.currentMessageId = projection.currentMessageId ?? '';
     manifestation.hidden = projection.kind === 'none' || view() === 'history' && !projection.requiredPlanIds.length;
     const route = selectedRequest?.route;
-    manifestationKicker.hidden = !!content || !!actionMessage;
-    manifestationKicker.textContent = route?.kind === 'conversational'
-      ? route.nativeMetric || route.nativeLog ? 'Vela · Native + ChatGPT plan' : 'Vela · ' + (route.depth === 'deep' ? 'Deep' : 'Quick')
-      : route?.kind === 'agentic' ? 'Vela · Codex · Read-only'
-      : route?.kind === 'file-edit' ? 'Vela · Codex file proposal'
-      : route?.kind === 'project-check' ? 'Vela · Local project check'
-      : route?.kind === 'composite' ? 'Vela · Native + Codex'
-      : selectedRequest?.local ? 'Vela · Native'
-      : projection.kind === 'insight' && message?.source === 'provider' ? providerName(message.providerId) + ' · contribution' : 'Vela';
+    manifestationKicker.hidden = true;
+    manifestationKicker.textContent = 'Vela';
     if (signature !== responseSignature) {
       responseSignature = signature; manifestationBody.replaceChildren();
       fileProposalDetails.replaceChildren();fileProposalDetails.hidden=!fileDetails;
