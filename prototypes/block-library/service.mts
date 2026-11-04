@@ -1561,6 +1561,7 @@ export class TemplateService {
   }
   async requestVelaTemplate(
     input: VelaTemplateRequest,
+    options: { signal?: AbortSignal } = {},
   ): Promise<VelaTemplatePlan> {
     check(
       input &&
@@ -1587,7 +1588,7 @@ export class TemplateService {
       supportedKinds: BUILTIN_BLOCKS.filter(
         (b) => capabilities.kinds[b.kind]?.state === "available",
       ).map((b) => b.kind),
-    });
+    }, options.signal);
     check(
       result?.provenance?.requestId === input.requestId,
       "vela_request_mismatch",

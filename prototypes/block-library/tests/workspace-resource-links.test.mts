@@ -115,7 +115,8 @@ test('a consumed initial Related profile is rejected before JS or native input r
 
 test('explicit recovery-special preparation uses existing Core/SQLite, preserves separate Note/Task recovery through automatic flush and reopening, and never starts execution', async t => {
   const profile = join(tmpdir(), 'review-workspace-native-related-source-' + randomUUID()), seed = await prepareWorkspaceNative(profile, { relatedResources: true }), fixture = helper.fixture(seed);
-  assert.equal(seed.cases.length, 10); assert.equal(seed.shapeCases.length, 3); assert.equal(seed.expected.workspaces.length, 13); assert.equal(seed.cases.filter(entry => !entry.blockId).length, 1, 'Only Chat remains for native creation in this explicitly specialized fixture');
+  assert.equal(seed.cases.length, 11); assert(seed.cases.some(entry=>entry.kind==='clock_timer'&&entry.resourceId&&entry.blockId));
+  assert.equal(seed.shapeCases.length, 3); assert.equal(seed.expected.workspaces.length, 14); assert.equal(seed.cases.filter(entry => !entry.blockId).length, 1, 'Only Chat remains for native creation in this explicitly specialized fixture');
   assert.equal(seed.relatedValidation!.preflightSha256, preflight().sha256);
   const options = { path: join(profile, 'aerynth.sqlite'), privateRoot: profile, provider: 'codex' as const, contentPolicy: 'local-private' as const };
   let core = new BackendCore(options), open = true, commits = 0;

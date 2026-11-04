@@ -16,7 +16,7 @@ function fixture(planner?:VelaPlanningPort) {
 async function vela(core:BackendCore,name:VelaOperation['name'],input:any={}):Promise<any>{return core.command('vela',{name,input} as VelaOperation);}
 async function note(core:BackendCore,title='Synthetic Vela note') {const before=await core.command('desktop',{type:'snapshot'}),after=await core.command('desktop',{type:'createResource',kind:'note',title,workspaceId:null});return after.resources.find(r=>!before.resources.some(old=>old.id===r.id))!;}
 function planner(value?:unknown) {let calls=0;const port:VelaPlanningPort={providerId:'synthetic-planning-test-double',availability:()=>({available:true,busy:false}),propose:async()=>{calls++;return value??{schemaVersion:1,summary:'Propose an explicitly local synthetic note',steps:[{id:'capture',explanation:'Test-only proposal through an injected port, never real model qualification',action:{type:'createResource',kind:'note',title:'Synthetic proposed capture',workspaceId:null}}],contribution:{providerId:'synthetic-planning-test-double',classification:'reported'}};}};return {port,calls:()=>calls};}
-async function granted(core:BackendCore,intent:string,resourceIds:string[]) {const preview=await core.command('velaRequestPreview',{intent,resourceIds}),grant=await core.command('authorizeVelaRequest',{previewId:preview.id,signature:preview.signature});return {preview,grant,input:{intent,resourceIds,authorizeProvider:true,previewId:preview.id,grantId:grant.grantId} satisfies VelaRequestInput};}
+async function granted(core:BackendCore,intent:string,resourceIds:string[]) {const preview=await core.command('velaRequestPreview',{intent,resourceIds}),review=await core.command('velaNativeReview',{previewId:preview.id,signature:preview.signature}),grant=await core.command('authorizeVelaRequest',{previewId:preview.id,signature:preview.signature,reviewDigest:review.reviewDigest});return {preview,review,grant,input:{intent,resourceIds,authorizeProvider:true,previewId:preview.id,grantId:grant.grantId} satisfies VelaRequestInput};}
 
 test('the same model path selects a device tool and a reviewed layout tool against the canonical active workspace', async () => {
   const calls: Parameters<VelaPlanningPort['propose']>[0][] = [];
@@ -114,9 +114,9 @@ test('native Vela grant binds exact intent, metadata/content versions, expiry an
   const resource=await note(f.core),authorization=await granted(f.core,'Use this exact intent',[resource.id]);
   await assert.rejects(vela(f.core,'request',{...authorization.input,intent:'Changed intent'}),/native_vela_grant_mismatch/);
   await f.core.command('desktop',{type:'content',resourceId:resource.id,expectedVersion:resource.version,content:'Changed after native preview'});
-  const stale=await vela(f.core,'request',authorization.input);assert.equal(stale.state,'failed');assert.equal(p.calls(),0);
+  await assert.rejects(vela(f.core,'request',authorization.input),/stale_vela_preview/);assert.equal(p.calls(),0);
   const next=await granted(f.core,'Plan from current scope',[resource.id]);await f.core.command('desktop',{type:'createProject',title:'A new synthetic scope'});const desktop=await f.core.command('desktop',{type:'snapshot'});await f.core.command('desktop',{type:'navigate',target:{kind:'constellation',projectId:desktop.projects[0].id}});
-  const changed=await vela(f.core,'request',next.input);assert.equal(changed.state,'failed');assert.equal(p.calls(),0);
+  await assert.rejects(vela(f.core,'request',next.input),/stale_vela_preview/);assert.equal(p.calls(),0);
   const expiring=await granted(f.core,'Expiry check',[resource.id]),clock=Date.now;try{Date.now=()=>clock()+61000;await assert.rejects(vela(f.core,'request',expiring.input),/native_vela_grant_expired/);}finally{Date.now=clock;}
   const other=await f.core.command('desktop',{type:'createProject',title:'Other private synthetic scope'}),otherProject=other.projects.find(p=>p.id!==desktop.projects[0].id)!;
   const inOther=await f.core.command('desktop',{type:'createWorkspace',title:'Other scope workspace',projectId:otherProject.id}),otherWorkspace=inOther.workspaces.find(w=>w.project_id===otherProject.id)!;

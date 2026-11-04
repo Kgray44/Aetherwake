@@ -4,7 +4,7 @@ import type { ReasoningEffort } from '../../openai-provider/model-controls.ts';
 import { VELA_CALIBRATION_MODES, type VelaCalibrationMode } from './routing-calibration.ts';
 
 export const VELA_ROUTING_MODES = ['auto', 'fast', 'deep', 'codex', 'custom'] as const;
-const providers = ['chatgpt-plan-responses', 'codex-app-server'] as const;
+const providers = ['chatgpt-plan-responses', 'openai-api-vela', 'codex-app-server'] as const;
 const efforts = ['none', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 const keys = ['mode', 'providerId', 'model', 'reasoningEffort'] as const;
 export type VelaRoutingScope = 'global' | 'project' | 'workspace' | 'chat';

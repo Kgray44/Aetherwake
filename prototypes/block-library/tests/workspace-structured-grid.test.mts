@@ -53,7 +53,8 @@ test('mode and gesture assertions reject silent packing, changed shape/order/ver
 
 test('Structured specialization prepares three real off-grid shapes and equivalent canonical operations persist exactly across Core restart without provider activity', async t => {
   const profile = join(tmpdir(), 'review-workspace-native-grid-source-' + randomUUID()), seed = await prepareWorkspaceNative(profile, { structuredGrid: true }), fixture = helper.fixture(seed);
-  assert.equal(seed.cases.length, 10); assert.equal(seed.shapeCases.length, 3); assert.equal(seed.expected.workspaces.length, 13); assert.equal(seed.expected.blocks.length, 3); assert.equal(Object.keys(seed.hashes).length, 7); assert.equal(seed.structuredGridValidation!.preflightSha256, preflight().sha256);
+  assert.equal(seed.cases.length, 11); assert(seed.cases.some(entry=>entry.kind==='clock_timer'&&entry.resourceId&&entry.blockId));
+  assert.equal(seed.shapeCases.length, 3); assert.equal(seed.expected.workspaces.length, 14); assert.equal(seed.expected.blocks.length, 3); assert.equal(Object.keys(seed.hashes).length, 7); assert.equal(seed.structuredGridValidation!.preflightSha256, preflight().sha256);
   const options = { path: join(profile, 'aerynth.sqlite'), privateRoot: profile, provider: 'codex' as const, contentPolicy: 'local-private' as const }; let core = new BackendCore(options), open = true;
   t.after(async () => { if (open) await core.command('close', {}); });
   let state = await core.command('desktop', { type: 'snapshot' }); assert.deepEqual(helper.workspace(state), helper.workspace(seed.expected));

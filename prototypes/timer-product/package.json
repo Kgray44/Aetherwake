@@ -1,0 +1,10 @@
+{
+  "name": "aerynth-clock-timer-domain",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=24.18" },
+  "scripts": {
+    "test": "node --test tests/*.test.mts",
+    "typecheck": "node ../integrated-backend/node_modules/typescript/bin/tsc --noEmit -p tsconfig.json"
+  }
+}

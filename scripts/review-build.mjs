@@ -14,13 +14,13 @@ export const LIMITS = Object.freeze({ totalBytes:1024*1024*1024, fileBytes:512*1
 const APP = 'prototypes/visual-experience/cinematic-v3';
 const BLOCKS = 'prototypes/block-library';
 const OPENAI = 'prototypes/openai-provider';
-const OPENAI_SOURCE = new Set(['auth.mts','common.mts','contracts.mts','responses.mts','model-controls.ts','native-storage.mts','loopback.mts'].map(name=>OPENAI+'/'+name));
+const OPENAI_SOURCE = new Set(['auth.mts','common.mts','contracts.mts','responses.mts','model-controls.ts','native-storage.mts','loopback.mts','api-connection-contracts.mts','api-connections.mts','live-contracts.mts','live.mts','live-usage.mts'].map(name=>OPENAI+'/'+name));
 export const JOSE_RUNTIME = Object.freeze({name:'jose',version:'6.2.15',integrity:'sha512-qdF6ewcZARtef63fJ9AKKZPgxw+t7USH6HLXYcD4CrdmSvDp79rpJSPFEKc90QBeGS63u1KQtN2MZQHC0yDIzA==',resolved:'https://registry.npmjs.org/jose/-/jose-6.2.15.tgz',importer:OPENAI+'/auth.mts',entry:'dist/webapi/index.js',files:128,bytes:1024*1024,tarBytes:2*1024*1024});
 // BrowserWindow preload paths are loaded by Electron, not Node imports. Keep
 // both trusted preload entry points explicit in the runtime dependency closure.
 // Validate the lazy auth entry even while its default/native-disabled path does not load it.
-export const NATIVE_RUNTIME_ENTRIES = Object.freeze([APP+'/native/desktop-main.cjs', APP+'/native/desktop-preload.cjs', APP+'/native/vela-review-preload.cjs', 'prototypes/integrated-backend/src/desktop-host.mts', 'prototypes/integrated-backend/src/worker.mts',JOSE_RUNTIME.importer]);
-const REQUIRED_FOLDERS = ['prototypes/integrated-backend/src','prototypes/connected-conversations/src','prototypes/codex-bridge/src','prototypes/workspace-kernel','prototypes/workspace-engine','prototypes/constellation','prototypes/application-contract','prototypes/vela-core/src','prototypes/conversation-product/src','prototypes/block-library','prototypes/agent-product','prototypes/checklist-product','prototypes/timeline-product','prototypes/task-product',OPENAI,APP+'/src',APP+'/native'];
+export const NATIVE_RUNTIME_ENTRIES = Object.freeze([APP+'/native/desktop-main.cjs', APP+'/native/desktop-preload.cjs', APP+'/native/vela-review-preload.cjs', APP+'/native/voice-media.html', 'prototypes/integrated-backend/src/desktop-host.mts', 'prototypes/integrated-backend/src/worker.mts',JOSE_RUNTIME.importer]);
+const REQUIRED_FOLDERS = ['prototypes/integrated-backend/src','prototypes/connected-conversations/src','prototypes/codex-bridge/src','prototypes/workspace-kernel','prototypes/workspace-engine','prototypes/constellation','prototypes/application-contract','prototypes/vela-core/src','prototypes/conversation-product/src','prototypes/block-library','prototypes/agent-product','prototypes/checklist-product','prototypes/timer-product','prototypes/timeline-product','prototypes/task-product',OPENAI,APP+'/src',APP+'/native'];
 const OMITTED = /(?:^|\/)(?:node_modules|\.runtime|\.local-data|profiles?|test|tests|fixtures?|demo|evidence[^/]*|protocol-generated)(?:\/|$)/i;
 const NON_RUNTIME_FILE = /(?:^|\/)(?:benchmark[^/]*|prepare-[^/]*native[^/]*|demo|journey|reopen|cli)\.[cm]?[jt]s$/i;
 const OPTIONAL_NATIVE = /(?:^|\/)(?:integration-[^/]+|desktop-verify|application-recording|recording|presentation-metrics)\.cjs$|\/(?:test|tests)\//;
@@ -102,12 +102,23 @@ export async function nodeClosure(root, tracked, entries) {
   const selected=new Set(),pending=[...entries],optional=[];let jose=null;
   while(pending.length){const name=pending.pop();if(selected.has(name))continue;check(tracked.has(name),'untracked_or_missing_runtime_import',name);selected.add(name);
     let text=await fs.readFile(path.join(root,name),'utf8');if(/\.[cm]?ts$/.test(name))text=stripTypeScriptTypes(text,{mode:'strip'});
-    for(const spec of importsOf(text)){if(spec.startsWith('node:')||BUILTINS.has(spec)||spec==='electron'&&name.startsWith(APP+'/native/'))continue;if(spec==='jose'&&name===JOSE_RUNTIME.importer){jose??=await joseRuntime(root,tracked);continue;}check(spec.startsWith('.'),'unbundled_runtime_dependency',spec);
+    for(const spec of name.endsWith('.html')?[]:importsOf(text)){if(spec.startsWith('node:')||BUILTINS.has(spec)||spec==='electron'&&name.startsWith(APP+'/native/'))continue;if(spec==='jose'&&name===JOSE_RUNTIME.importer){jose??=await joseRuntime(root,tracked);continue;}check(spec.startsWith('.'),'unbundled_runtime_dependency',spec);
       const resolved=slash(path.posix.normalize(path.posix.join(path.posix.dirname(name),spec)));check(!resolved.startsWith('../')&&!path.posix.isAbsolute(resolved),'runtime_import_escapes_repository',spec);
       if(OPTIONAL_NATIVE.test(resolved)){optional.push(resolved);continue;}check(!OMITTED.test(resolved)&&!NON_RUNTIME_FILE.test(resolved),'fixture_or_private_runtime_import',resolved);check(!resolved.startsWith(OPENAI+'/')||OPENAI_SOURCE.has(resolved),'unreviewed_openai_runtime_source',resolved);pending.push(resolved);
     }
   }
   return {files:[...selected].sort(),excludedVerificationImports:[...new Set(optional)].sort(),vendorFiles:jose?.files??[],vendors:jose?[jose.metadata]:[],vendorRoots:jose?[jose.root]:[]};
+}
+/** The only additional executable dist file is the isolated, receipt-bound voice preload. */
+export async function validateLiveMediaPreload(root,dist,tracked,assets){
+  const preload='vela-live-media-preload.cjs',metadata='vela-live-media-preload.sources.json';
+  check(Object.hasOwn(assets,preload)&&Object.hasOwn(assets,metadata),'live_media_preload_receipt_missing');
+  const source=await fs.readFile(path.join(dist,metadata));check(source.length<=16384,'live_media_preload_metadata_bound');
+  const value=JSON.parse(source),required=['src/gpt-live-media.ts','src/gpt-live-native-media.ts'];
+  check(value?.contract==='aerynth.private-live-media-build@1'&&value.asset===preload&&value.sha256===assets[preload]&&
+    Object.keys(value).sort().join('|')==='asset|contract|inputs|sha256'&&value.inputs&&Object.keys(value.inputs).sort().join('|')===required.sort().join('|'),'live_media_preload_source_binding_invalid');
+  for(const relative of required){const file=APP+'/'+relative;check(tracked.has(file)&&value.inputs[relative]===await hashFile(path.join(root,file)),'live_media_preload_source_changed',relative);}
+  return new Set([preload,metadata]);
 }
 export function bootstrap(candidate) {
   return `/* Generated review entry. The real desktop host retains all permissions and provider identity. */
@@ -156,10 +167,11 @@ export async function plan(options={}) {
   const dist=await fs.realpath(path.join(sourceRoot,APP,'dist'));check(await exists(path.join(dist,'index.html'))&&await exists(path.join(dist,'assets')),'built_application_dist_missing');
   const rendererFiles=(await walk(dist)).filter(file=>file!==path.join(dist,rendererReceiptName));
   const rendererReceipt=await readRendererReceipt(dist,{head,tree},rendererFiles.map(file=>slash(path.relative(dist,file))));
+  const privatePreload=await validateLiveMediaPreload(sourceRoot,dist,tracked,rendererReceipt.assets);
   const pdfWorker=path.join(sourceRoot,BLOCKS,'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs');
   for(const file of rendererFiles){
     const relative=slash(path.relative(dist,file)),worker=/^assets\/pdf\.worker-[A-Za-z0-9_-]+\.mjs$/.test(relative);
-    check(!OMITTED.test(relative)&&(worker||/\.(?:html|js|css|png|svg|jpg|jpeg|woff2?|ico|txt)$/.test(relative)),'unexpected_dist_payload',relative);
+    check(!OMITTED.test(relative)&&(worker||privatePreload.has(relative)||/\.(?:html|js|css|png|svg|jpg|jpeg|woff2?|ico|txt)$/.test(relative)),'unexpected_dist_payload',relative);
     const canonicalAsset=APP+'/public/'+relative;
     check(!/\.(?:png|svg|jpe?g|woff2?|ico)$/.test(relative)||tracked.has(canonicalAsset),'unreviewed_static_asset_origin',relative);
     await addFile(files,targets,'built-dist:'+relative,file,'resources/app/'+APP+'/dist/'+relative,dist);

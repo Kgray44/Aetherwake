@@ -123,9 +123,14 @@ test('whole-pair history and full-prompt byte limits omit rather than truncate, 
   // Keep this a real prompt-capacity boundary as lossless catalog formatting improves.
   const budget = fixture(), bodyUnits=600; try { budget.turn({ question: 'q'.repeat(bodyUnits), answer: 'a'.repeat(bodyUnits), sourceIds: [] }); budget.turn({ question: 'r'.repeat(bodyUnits), answer: 'b'.repeat(bodyUnits), sourceIds: [] });
     const context: ContextManifest = { id: randomUUID(), createdAt: '2026-11-02T08:40:00Z', policyVersion: 'policy:1', discovered: [], included: [], omitted: [], contentBytes: 0, coverage: 'explicit-resources-only' };
-    const prompt = (history?: ProviderHistory) => buildCodexPlanningPrompt({ intent: 'Clarify the first option.', context: { ...context, ...(history ? { history } : {}) }, instruction: 'Keep provider identity, source provenance and permission boundaries intact. '.repeat(9), capabilities: CAPABILITIES });
+    let instructionRepeats=9;
+    const prompt = (history?: ProviderHistory) => buildCodexPlanningPrompt({ intent: 'Clarify the first option.', context: { ...context, ...(history ? { history } : {}) }, instruction: 'Keep provider identity, source provenance and permission boundaries intact. '.repeat(instructionRepeats), capabilities: CAPABILITIES });
+    const fits=(history?:ProviderHistory)=>{try{return Buffer.byteLength(prompt(history))<=16384;}catch(error){if((error as {code?:string}).code==='planning_prompt_capacity_exceeded')return false;throw error;}};
+    const single=budget.select({maxMessages:2}).history!,both=budget.select().history!;
+    for(;instructionRepeats<=128;instructionRepeats++)if(fits(single)&&!fits(both))break;
+    assert(instructionRepeats<=128,'bounded setup must reach an actual full-prompt capacity boundary');assert(fits(undefined));
     const selected = budget.select({ fits: history => { try { return Buffer.byteLength(prompt(history)) <= 16384; } catch (error) { if ((error as { code?: string }).code === 'planning_prompt_capacity_exceeded') return false; throw error; } } });
-    const promptBytes = Buffer.byteLength(prompt(selected.history)); assert.equal(selected.history!.messages.length, 2); assert(selected.omissions.some(o => o.reason === 'prompt-byte-limit')); assert(promptBytes <= 16384); assert.equal(selected.history!.messages[0].content.length, bodyUnits);
+    const promptBytes = Buffer.byteLength(prompt(selected.history)); assert.equal(selected.history!.messages.length, 2); assert(selected.omissions.some(o => o.reason === 'prompt-byte-limit')); assert(promptBytes <= 16384); assert.equal(selected.history!.messages[0].content.length, bodyUnits);assert.equal(fits(both),false,'the omitted whole exchange would exceed the real prompt ceiling');
     t.diagnostic(JSON.stringify({ evidence: 'synthetic-current-full-catalog-formatter-only', capabilities: CAPABILITIES.length, promptBytes, ceiling: 16384, wholeMessages: selected.history!.messages.length, historyEncodedBytes: Buffer.byteLength(JSON.stringify(selected.history)), providerCalls: 0 }));
   } finally { budget.close(); }
 });
@@ -200,4 +205,37 @@ test('metadata revision fence catches real message edits; full gates additionall
     f.editMessage(turn.output.id, { content: 'Canonical versioned edit' });
     assert.throws(() => validateFrozenHistoryMetadata({ fence: selected.fence!, origin: f.origin(), reader: f.metadataReader, current: { conversationId: f.vela.id, revision: f.revision() } }), /stale-history-revision/);
   } finally { f.close(); }
+});
+
+test('bounded canonical query retrieves an earlier exact decision beyond thirty exchanges and fences the true tail',()=>{
+  const f=fixture();try{
+    const old=f.turn({question:'Our Aurora release color decision is violet.',answer:'Recorded the Aurora release color decision.',sourceIds:[f.note.id]});
+    for(let i=0;i<34;i++)f.turn({question:'Unrelated coastal weather '+i,answer:'An independent synthetic response '+i,sourceIds:[]});
+    const snapshot=():HistorySnapshot=>{const rows=f.db.prepare('SELECT id,ordinal,request_id,role,source,content_bytes FROM test_history_messages ORDER BY ordinal').all();
+      return {conversationId:f.vela.id,revision:f.revision(),headers:rows.map(r=>({id:String(r.id),ordinal:Number(r.ordinal),requestId:String(r.request_id),role:r.role as 'user'|'assistant',source:r.source as 'user'|'provider',contentBytes:Number(r.content_bytes)})),hasEarlier:false,
+        retrieval:{query:'What did we decide earlier about Aurora release color?',tailOrdinal:rows.length,partial:false}};};
+    const select=()=>f.select({snapshot:snapshot()}),selected=select();
+    assert.equal(selected.history!.messages.length,4);assert.equal(selected.history!.messages[0].id,old.input.id);
+    assert.equal(selected.history!.messages[0].content,old.input.content);assert.equal(selected.history!.retrieval?.resolution,'matched');
+    assert.equal(selected.history!.retrieval?.scannedMessages,70);assert.equal(selected.fence!.baseTailOrdinal,70);
+    assert(Buffer.byteLength(JSON.stringify(selected.history))<=HISTORY_LIMITS.maxEncodedBytes);assert.equal(f.frozen(selected).valid,true);
+    assert(!JSON.stringify(selected.history).includes('coastal weather 20'),'unrelated middle exchanges are not sent');
+    const append=f.pending(selected);assert.equal(f.frozen(selected,append).valid,true,'an earlier selection still appends at the real canonical tail');
+    f.deniedContent.add(f.note.id);assert.throws(()=>f.frozen(selected,append),/upstream-unavailable/);
+    const withdrawn=select();assert(!withdrawn.history?.messages.some(message=>message.id===old.input.id));
+  }finally{f.close();}
+});
+
+test('query ranking rejects unproved candidates before their text is indexed and retains equal-score ambiguity',()=>{
+  const f=fixture();try{
+    const one=f.turn({question:'Aurora launch color is violet.',answer:'First independently sourced decision.',sourceIds:[]}),
+      two=f.turn({question:'Aurora launch color is amber.',answer:'Second independently sourced decision.',sourceIds:[]});
+    const base=f.snapshot(),snapshot:HistorySnapshot={...base,retrieval:{query:'Recall our earlier Aurora launch color decision',tailOrdinal:4,partial:false}};
+    const both=f.select({snapshot});assert.equal(both.history!.retrieval?.resolution,'ambiguous');assert.equal(both.history!.messages.length,4);
+    f.editMessage(one.output.id,{providerContribution:undefined},false);
+    const proven=f.select({snapshot});assert(!proven.history!.messages.some(message=>message.requestId===one.request.id));
+    assert(proven.history!.messages.some(message=>message.requestId===two.request.id));assert(proven.omissions.some(item=>item.reason==='provider-evidence'));
+    assert.throws(()=>f.frozen(both),/provider-evidence/,'a stale exact reviewed candidate cannot dispatch after losing its canonical evidence');
+    const underBudget=f.select({snapshot,maxEncodedBytes:1});assert.equal(underBudget.history,undefined);
+  }finally{f.close();}
 });

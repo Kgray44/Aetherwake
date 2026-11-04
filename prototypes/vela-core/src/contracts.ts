@@ -1,6 +1,7 @@
 import type { OrganizationUpdate, TaskPriority } from '../../application-contract/contracts.ts';
 import type { HistoryOrigin, HistoryProvenance, HistoryMessageDependency, ProviderHistory } from './history-contracts.ts';
 import type { SystemMemoryMeasurement, VelaReadOnlySystemHost } from './system-information.ts';
+import type { ClockTimerAction, VelaClockTimerReceipt } from '../../timer-product/contracts.ts';
 /** Browser-safe Vela contracts. Canonical data and provider execution remain host-owned. */
 export const VELA_CONTRACT = 'aerynth.vela@1' as const;
 export type EvidenceClass = 'observed' | 'reported' | 'inferred' | 'unknown';
@@ -35,6 +36,8 @@ export interface ContextManifest {
   contentBytes: number; coverage: 'explicit-resources-only';
   /** Exact reviewed egress only. Persisted request context never copies these canonical message bodies. */
   history?: ProviderHistory;
+  /** Ephemeral, scoped projection of existing action receipts; never a second operation journal. */
+  operations?: import('./operational-context.mts').VelaOperationsPacket;
   /** Exact additional instructions from an explicitly selected, reviewed agent profile. */
   agentInstructions?: string;
 }
@@ -55,6 +58,7 @@ export interface VelaWorkspaceLayoutContext {
   resolveWouldMovePlacements: boolean | null;
 }
 export type VelaNativeAction =
+  | ClockTimerAction
   | { type: 'search'; query: string }
   | { type: 'openResource'; query: string }
   | { type: 'setAttentionMode'; mode: AttentionMode; expectedVersion: number }
@@ -64,6 +68,11 @@ export type VelaNativeAction =
   | { type: 'renameResource'; resourceId: string; title: string }
   | { type: 'associateResourceProject'; resourceId: string; projectId: string | null }
   | { type: 'createWorkspace'; title: string; projectId: string | null }
+  | { type: 'constructWorkspace'; title: string; purpose: string; projectId: string | null; newProjectTitle: string | null }
+  | { type: 'adjustWorkspace'; workspaceId: string; adjustments: { resourceIds: string[]; position: 'left' | 'right' | 'keep'; size: 'larger' | 'smaller' | 'keep' }[] }
+  | { type: 'recoverCreation'; workspaceId: string; receiptId: string; action: 'undo-creation' | 'restore' }
+  | { type: 'inspectVelaOperation'; workspaceId: string; receiptId: string }
+  | { type: 'repairWorkspace'; workspaceId: string; receiptId: string; resourceIds: string[] }
   | { type: 'readLocalFact'; capabilityId: VelaInstantCapabilityId }
   | { type: 'readWeather'; period: 'now' | 'today' | 'tonight' | 'tomorrow' | 'tomorrow-morning' }
   | { type: 'createTimeline'; title: string; projectId: string | null; workspaceId: string | null;
@@ -100,6 +109,8 @@ export interface VelaMessage {
   id: string; role: 'user' | 'assistant' | 'system'; content: string;
   source: 'user' | 'vela-native' | 'provider'; providerId?: string;
   requestId?: string; planId?: string; classification: EvidenceClass;
+  /** Native captured transcript evidence; never a completed conversational turn. */
+  voice?: { sessionId:string;startMs:number;endMs:number;completedTurn:false;transcription:'provider-reported';sealed:boolean;acceptedRequestId?:string };
   missionReport?: { missionId: string; workspaceId: string; projectId: string | null; jobsDone?: number };
   /** Parsed conversational content remains attributed to the actual observed provider output. */
   responseKind?: ProviderReplyKind; providerContribution?: ProviderContribution;
@@ -190,6 +201,7 @@ export interface VelaRequest {
   origin?: HistoryOrigin; inputMessageId?: string; inputContentDigest?: string; provenance?: HistoryProvenance;
   /** References/proofs only; actual history text remains in the canonical conversation. */
   history?: { schemaVersion: 1; fenceDigest: string; historyDigest: string; messages: readonly HistoryMessageDependency[] };
+  operationContext?: { contract: 'aerynth.vela-operations@1'; digest: string; receiptIds: string[] };
   handoff?: import('./history-contracts.ts').VelaHandoff;
   routingAgent?: VelaRoutingAgent;
   /** Raw provider plans are preserved locally, including invalid plans; never interpreted as commands. */
@@ -209,6 +221,10 @@ export interface ActionReceipt {
   state: 'started' | 'applied' | 'failed' | 'cancelled' | 'unknown';
   startedAt: string; endedAt?: string; hostReceiptId?: string; errorCode?: string;
   createdResourceId?: string; createdWorkspaceId?: string; createdProjectId?: string; createdCollectionId?: string;
+  workspaceConstruction?: VelaWorkspaceConstructionReceipt;
+  clockTimer?: VelaClockTimerReceipt;
+  workspaceAdjustment?: VelaWorkspaceAdjustmentReceipt;
+  workspaceRecovery?: import('../../application-contract/workspace-recovery.ts').WorkspaceRecoveryReceipt;
   /** Present only while the uniquely resolved resource remains in scope. */
   openResourceId?: string;
   /** A delegated provider completing a turn is not verified task completion. */
@@ -231,7 +247,24 @@ export interface HostActionResult {
   status: 'applied' | 'failed' | 'cancelled' | 'unknown'; receiptId: string;
   errorCode?: string; createdResourceId?: string; createdWorkspaceId?: string; createdProjectId?: string; createdCollectionId?: string;
   responseText?: string;
+  workspaceConstruction?: VelaWorkspaceConstructionReceipt;
+  clockTimer?: VelaClockTimerReceipt;
+  workspaceAdjustment?: VelaWorkspaceAdjustmentReceipt;
+  workspaceRecovery?: import('../../application-contract/workspace-recovery.ts').WorkspaceRecoveryReceipt;
   foundSubjects?: VelaSubjectRef[];
+}
+export interface VelaWorkspaceAdjustmentReceipt {
+  contract:'aerynth.vela-workspace-adjustment@1';workspaceId:string;beforeLayoutVersion:number;layoutVersion:number;changedBlockIds:string[];
+  verification:{bindingsPreserved:true;unrelatedGeometryPreserved:true;geometryValid:true;oneUndoEntry:true};
+}
+/** Verified historical construction facts. Current access and targets must be rechecked on later reads. */
+export interface VelaWorkspaceConstructionReceipt {
+  contract: 'aerynth.vela-workspace-construction@1';
+  workspaceId: string; projectId: string | null; workspaceVersion: number; layoutVersion: number;
+  templateId: string; templateVersion: number; observedAt: string;
+  resources: { role: string; resourceId: string; version: number; reused: boolean }[];
+  placements: { role: string; blockId: string; resourceId: string }[];
+  verification: { workspaceExists: true; projectMatches: true; bindingsMatch: true; geometryValid: true };
 }
 export interface VelaHostPort {
   /** Trusted current policy metadata only; absent adapters cannot expose attention-version authority. */
@@ -253,6 +286,8 @@ export interface VelaHostPort {
   resolveMany?(refs: readonly VelaSubjectRef[], scope: VelaScope): ResourceRef[];
   /** Only for a persisted applied archive action/receipt; does not rediscover archived metadata. */
   canInspectCollectionArchiveReceipt?(ref:ResourceRef,scope:VelaScope):boolean;
+  /** Exact applied creation-undo receipt only; current recovery permission remains host-owned. */
+  canInspectWorkspaceArchiveReceipt?(ref:ResourceRef,scope:VelaScope):boolean;
   readContent(id: string, scope: VelaScope): { ref: ResourceRef; content: string; source: string } | null;
   /** Current content-policy decision without reading content; absence disables implicit history. */
   canReadContent?(ref: ResourceRef, scope: VelaScope): boolean;

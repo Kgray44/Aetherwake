@@ -138,7 +138,7 @@ test('call, argument and output bounds are enforced without partial descriptors 
 });
 
 test('aggregate metadata output is bounded across distinct calls, including recorded failures', () => {
-  const descriptors = structuredClone(CAPABILITIES.slice(0, 1));
+  const descriptors = structuredClone(CAPABILITIES.filter(capability=>capability.id==='createProject'));
   descriptors[0].scope = 'x'.repeat(6000);
   const catalog = createCapabilityCatalog(descriptors),
     lease = new CapabilityCatalogLease({ catalog, expiresAt: new Date(Date.now() + 60000).toISOString(), authorize() {} });

@@ -1,7 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { VELA_IDENTITY_PROMPT } from './vela-identity.mts';
+import { projectVelaOperations, validateVelaOperations, type VelaOperationsHost,
+  type VelaOperationsOptions, type VelaOperationsPacket } from './operational-context.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import { CAPABILITIES, VelaError, check, identifier, isHostPolicyRead, isImmediateNativeAction, isLocalFact, isRecord, text, validateAction, validateProviderResult } from './capabilities.ts';
+import { clockTimerRequiresReview } from '../../timer-product/vela-contract.ts';
+import { canonicalUserEvidence } from './voice-evidence.ts';
 import { defaultAdaptation, effectivePreference, observePreference, preferenceCategory, samePreferenceScope, setExplicitPreference, validatePreference } from './adaptation.ts';
 import { VELA_CONTRACT, VELA_PROJECT_CHECK_LABELS } from './contracts.ts';
 import { evaluateLocalCapability, validateLocalRecord } from './local-capabilities.mts';
@@ -43,7 +47,7 @@ export interface VelaServiceOptions {
   local?: VelaLocalHost;
   /** Explicit bounded canonical projections. Absent means no implicit conversational history. */
   history?: {
-    snapshot(conversationId: string, limit: number): HistorySnapshot | null;
+    snapshot(conversationId: string, limit: number, query?: string): HistorySnapshot | null;
     tail?(conversationId: string): HistoryTail | null;
     message: HistoryProofReader['message']; content: HistoryProofReader['content'];
     messageMetadata(conversationId: string, messageId: string): HistoryMessageMetadata | null;
@@ -140,6 +144,14 @@ export class VelaService {
     });
   }
   private now() { return this.opts.now?.() ?? new Date().toISOString(); }
+  operationContext(inspectWorkspace: VelaOperationsHost['inspectWorkspace'], options?: VelaOperationsOptions): VelaOperationsPacket {
+    return this.read(() => projectVelaOperations(this.data, { scope: () => this.scope(),
+      resolve: (ref, scope) => this.opts.host.resolve(ref, scope), inspectWorkspace }, options));
+  }
+  validateOperationContext(packet: VelaOperationsPacket, inspectWorkspace: VelaOperationsHost['inspectWorkspace']): void {
+    this.read(() => validateVelaOperations(packet, this.data, { scope: () => this.scope(),
+      resolve: (ref, scope) => this.opts.host.resolve(ref, scope), inspectWorkspace }));
+  }
   /** The canonical host supplies the applicable scope chain. */
   routingProfile(scope: VelaRoutingProfile['scope'], id: VelaRoutingProfile['id']): VelaRoutingProfile {
     return structuredClone(this.data.routingProfiles?.find(profile => profile.scope === scope && profile.id === id) ??
@@ -267,7 +279,9 @@ export class VelaService {
     const planVisible = (p: VelaPlan) => {
       if(p.scope.principalId!==scope.principalId)return false;
       const archived=p.state==='applied'?new Set(p.steps.flatMap(step=>step.action.type==='archiveCollection'&&step.action.archived&&this.data.receipts.some(receipt=>receipt.planId===p.id&&receipt.stepId===step.id&&receipt.state==='applied'&&identifier(receipt.hostReceiptId))?[step.action.collectionId]:[])):new Set<string>();
-      const visibleTarget=(ref:ResourceRef,allowed:VelaScope)=>this.permitted(ref.id,ref.kind,allowed)||(ref.kind==='collection'&&archived.has(ref.id)&&this.opts.host.canInspectCollectionArchiveReceipt?.(ref,p.scope)===true);
+      const archivedWorkspaces=p.state==='applied'?new Set(p.steps.flatMap(({id,action})=>action.type==='recoverCreation'&&action.action==='undo-creation'&&this.data.receipts.some(receipt=>receipt.planId===p.id&&receipt.stepId===id&&receipt.state==='applied'&&identifier(receipt.hostReceiptId)&&receipt.workspaceRecovery?.kind==='receipt'&&receipt.workspaceRecovery.action==='undo-creation'&&receipt.workspaceRecovery.workspaceId===action.workspaceId)?[action.workspaceId]:[])):new Set<string>();
+      const visibleTarget=(ref:ResourceRef,allowed:VelaScope)=>this.permitted(ref.id,ref.kind,allowed)||(ref.kind==='collection'&&archived.has(ref.id)&&this.opts.host.canInspectCollectionArchiveReceipt?.(ref,p.scope)===true)||
+        (ref.kind==='workspace'&&archivedWorkspaces.has(ref.id)&&this.opts.host.canInspectWorkspaceArchiveReceipt?.(ref,p.scope)===true);
       const ids=this.restores(p.steps);
       try{
         if(!ids.length)return p.targets.every(r=>visibleTarget(r,scope));
@@ -280,6 +294,14 @@ export class VelaService {
     const resultRefs = new Map<string, VelaSubjectRef>();
     for (const receipt of receipts) {
       if (receipt.state !== 'applied') continue;
+      const construction = receipt.workspaceConstruction;
+      if(receipt.clockTimer?.resourceId&&this.permitted(receipt.clockTimer.resourceId,'resource',scope))
+        resultRefs.set('resource:'+receipt.clockTimer.resourceId,{id:receipt.clockTimer.resourceId,kind:'resource'});
+      if (construction) for (const ref of [
+        { id: construction.workspaceId, kind: 'workspace' as const },
+        ...(construction.projectId ? [{ id: construction.projectId, kind: 'project' as const }] : []),
+        ...construction.resources.map(resource => ({ id: resource.resourceId, kind: 'resource' as const })),
+      ]) if (this.permitted(ref.id, ref.kind, scope)) resultRefs.set(subjectKey(ref), ref);
       for (const ref of receipt.foundSubjects ?? []) {
         if (this.permitted(ref.id, ref.kind, scope)) resultRefs.set(subjectKey(ref), ref);
       }
@@ -291,9 +313,16 @@ export class VelaService {
       contract: VELA_CONTRACT, identity: { id: 'system:vela', name: 'Vela', role: 'application-assistant' },
       conversation: this.data.conversationId ? this.opts.host.readConversation(this.data.conversationId) : null,
       planner: { providerId: this.opts.planner?.providerId ?? null, ...available },
-      capabilities: CAPABILITIES, requests, plans, receipts: receipts.map(({ foundSubjects: _refs, openResourceId, ...receipt }) =>
-        openResourceId && searchResults[receipt.id]?.some(ref => ref.id === openResourceId && ref.kind === 'resource')
-          ? { ...receipt, openResourceId } : receipt),
+      capabilities: CAPABILITIES, requests, plans, receipts: receipts.map(({ foundSubjects: _refs, openResourceId, workspaceConstruction, clockTimer, ...receipt }) => {
+        const constructionVisible = workspaceConstruction && [
+          { id: workspaceConstruction.workspaceId, kind: 'workspace' as const },
+          ...(workspaceConstruction.projectId ? [{ id: workspaceConstruction.projectId, kind: 'project' as const }] : []),
+          ...workspaceConstruction.resources.map(resource => ({ id: resource.resourceId, kind: 'resource' as const })),
+        ].every(ref => currentRefs.has(subjectKey(ref)));
+        const timerVisible=clockTimer&&(clockTimer.resourceId===null||currentRefs.has('resource:'+clockTimer.resourceId));
+        return { ...receipt, ...(constructionVisible ? { workspaceConstruction } : {}), ...(timerVisible?{clockTimer}:{}),
+          ...(openResourceId && searchResults[receipt.id]?.some(ref => ref.id === openResourceId && ref.kind === 'resource') ? { openResourceId } : {}) };
+      }),
       searchResults,
       preferences: this.data.preferences, attention: this.data.attention.filter(visible),
       lastPresenceAt: this.data.lastPresenceAt, coverage: 'authorized-app-events-only',
@@ -380,7 +409,7 @@ export class VelaService {
     return { full, metadata };
   }
   /** Core-only prospective egress. Opening/selection never appends, creates a conversation or invokes a provider. */
-  previewProviderContext(resourceIds: string[], options: { includeHistory: boolean; activeResourceId?: string;
+  previewProviderContext(resourceIds: string[], options: { includeHistory: boolean; activeResourceId?: string; historyQuery?: string;
     agent?: { ref: ResourceRef; instructions: string };
     handoff?: { requestId: string; destinationProviderId: string }; fits(context: ContextManifest): boolean
   }): { context: ContextManifest; origin: HistoryOrigin; historyFence?: HistoryFence; historyOmissions: readonly HistoryOmission[]; handoff?: VelaHandoff } {
@@ -415,7 +444,7 @@ export class VelaService {
       if (!this.data.conversationId) return { context, origin, historyOmissions: [{ reason: 'no-conversation' }] };
       const conversation = this.opts.host.resolve({ id: this.data.conversationId, kind: 'resource' }, scope);
       if (!conversation || this.opts.host.canReadContent?.(conversation, scope) !== true) return { context, origin, historyOmissions: [{ reason: 'message-unavailable' }] };
-      const readers = this.historyReaders(), snapshot = this.opts.history!.snapshot(this.data.conversationId, HISTORY_LIMITS.lookbackMessages);
+      const readers = this.historyReaders(), snapshot = this.opts.history!.snapshot(this.data.conversationId, HISTORY_LIMITS.lookbackMessages, options.historyQuery);
       if (snapshot === null) return { context, origin, historyOmissions: [{ reason: 'message-unavailable' }] };
       const selection = selectBoundedHistory({ enabled: true, origin, snapshot, reader: readers.full, fits: history => options.fits({ ...context, ...(history ? { history } : {}) }) });
       if (selection.fence) {
@@ -488,9 +517,24 @@ export class VelaService {
     for (const step of steps) {
       const a = step.action;
       switch (a.type) {
+        case 'clockTimer': {
+          const request=a.request;add(a.workspaceId,'workspace');
+          if(request.name==='create')add(request.input.projectId??null,'project');
+          if(request.name==='list')for(const id of request.input.resourceIds)add(id,'resource');
+          if(request.name==='mutate'||request.name==='read') {
+            add(request.input.resourceId,'resource');const ref=refs.get('resource:'+request.input.resourceId)!;
+            check(ref.resourceKind==='clock_timer','canonical_timer_resource_required');
+            if(request.input.expectedVersion!==undefined)check(ref.version===request.input.expectedVersion,'stale_resource_version');
+          }
+          break;
+        }
         case 'setAttentionMode': {const version=this.attentionPreferenceVersion();check(version!==null,'attention_preferences_unavailable');check(version===a.expectedVersion,'stale_preference_version');break;}
         case 'navigate': if (a.target.kind === 'workspace') add(a.target.workspaceId, 'workspace'); else add(a.target.projectId, 'project'); break;
-        case 'createWorkspace': add(a.projectId, 'project'); break;
+        case 'createWorkspace': case 'constructWorkspace': add(a.projectId, 'project'); break;
+        case 'adjustWorkspace':add(a.workspaceId,'workspace');for(const adjustment of a.adjustments)for(const id of adjustment.resourceIds)add(id,'resource');break;
+        case 'recoverCreation':if(a.action==='undo-creation')add(a.workspaceId,'workspace');else {const source=this.creationRecoveryReference(a.receiptId);if(source)add(source.projectId,'project');else for(const ref of this.opts.host.contextReferences?.([])??[])if(ref.kind==='project')add(ref.id,'project');}break;
+        case 'inspectVelaOperation': add(a.workspaceId,'workspace'); break;
+        case 'repairWorkspace': add(a.workspaceId,'workspace'); for(const id of a.resourceIds)add(id,'resource'); break;
         case 'createTimeline': add(a.projectId, 'project'); add(a.workspaceId, 'workspace'); break;
         case 'renameProject': add(a.projectId,'project'); break;
         case 'renameResource': case 'associateResourceProject': {
@@ -551,7 +595,7 @@ export class VelaService {
     if (previous) {
       check(previous.origin?.principalId === identity.principalId && previous.origin.policyVersion === identity.policyVersion, 'local_response_unavailable');
       const message = this.read(() => host.readMessage(previous.conversationId, previous.response!.messageId));
-      check(message && message.id === previous.response!.messageId && message.requestId === previous.id && message.role === 'assistant' && message.source === 'vela-native' && message.classification === 'observed' && message.providerId === undefined && message.providerContribution === undefined && message.planId === undefined && message.responseKind === previous.response!.kind && digest(message.content) === previous.response!.contentDigest, 'local_response_unavailable');
+      check(message && message.id === previous.response!.messageId && message.requestId === previous.id && message.role === 'assistant' && message.source === 'vela-native' && canonicalUserEvidence(message) && message.providerId === undefined && message.providerContribution === undefined && message.planId === undefined && message.responseKind === previous.response!.kind && digest(message.content) === previous.response!.contentDigest, 'local_response_unavailable');
       const ended = performance.now(); return { matched: true, request: structuredClone(previous), result: { ...structuredClone(previous.local!), messageId: message.id, content: message.content, replayed: true, timing: { classificationMs: classified - started, capabilityMs: ended - classified, persistenceMs: 0, totalMs: ended - started } } };
     }
     const answer = evaluateLocalCapability(capabilityId, host, input.intent, utilization, memory), recordedAt = this.now(), observedAt = answer.facts.kind === 'time' || answer.facts.kind === 'date' ? answer.facts.utc : answer.facts.kind === 'system-memory' || answer.facts.kind === 'system-utilization' ? answer.facts.measurement.measuredAt : recordedAt; check(!signal?.aborted, 'local_request_cancelled');
@@ -563,10 +607,10 @@ export class VelaService {
       const request: VelaRequest = { id: randomUUID(), conversationId, intent: input.intent, state: 'responded', createdAt: recordedAt, updatedAt: recordedAt, providerId: null,
         context: { id: randomUUID(), createdAt: recordedAt, policyVersion: identity.policyVersion, discovered: [], included: [], omitted: [], contentBytes: 0, coverage: 'explicit-resources-only' },
         origin: { ...identity, navigation: { kind: 'unknown' } }, inputContentDigest: digest(input.intent), local: record };
-      const user = host.appendMessage(conversationId, { role: 'user', content: input.intent, source: 'user', classification: 'observed', requestId: request.id }); check(identifier(user.id) && user.requestId === request.id && user.role === 'user' && user.classification === 'observed' && user.content === input.intent && user.source === 'user' && user.providerId === undefined, 'invalid_canonical_request'); request.inputMessageId = user.id;
+      const user = host.appendMessage(conversationId, { role: 'user', content: input.intent, source: 'user', classification: 'observed', requestId: request.id }); check(identifier(user.id) && user.requestId === request.id && user.role === 'user' && canonicalUserEvidence(user) && user.content === input.intent && user.source === 'user' && user.providerId === undefined, 'invalid_canonical_request'); request.inputMessageId = user.id;
       check(!signal?.aborted, 'local_request_cancelled');
       const message = host.appendMessage(conversationId, { role: 'assistant', content: answer.content, source: 'vela-native', classification: 'observed', requestId: request.id, responseKind: answer.kind });
-      check(identifier(message.id) && message.role === 'assistant' && message.requestId === request.id && message.content === answer.content && message.source === 'vela-native' && message.classification === 'observed' && message.providerId === undefined && message.providerContribution === undefined && message.planId === undefined && message.responseKind === answer.kind, 'invalid_canonical_local_response');
+      check(identifier(message.id) && message.role === 'assistant' && message.requestId === request.id && message.content === answer.content && message.source === 'vela-native' && canonicalUserEvidence(message) && message.providerId === undefined && message.providerContribution === undefined && message.planId === undefined && message.responseKind === answer.kind, 'invalid_canonical_local_response');
       check(!signal?.aborted, 'local_request_cancelled'); request.response = { kind: answer.kind, messageId: message.id, contentDigest: digest(message.content) }; this.data.requests.push(request);
       return { request: structuredClone(request), message };
     });
@@ -587,7 +631,7 @@ export class VelaService {
         routingSettings: structuredClone(routingSettings), projectCheck: structuredClone(receipt) };
       const user = this.append(intent, request.id, 'user');
       check(identifier(user.id) && user.requestId === request.id && user.role === 'user' && user.source === 'user' &&
-        user.classification === 'observed' && user.content === intent, 'invalid_canonical_request');
+        canonicalUserEvidence(user) && user.content === intent, 'invalid_canonical_request');
       request.inputMessageId = user.id;
       this.data.requests.push(request);
       return structuredClone(request);
@@ -608,7 +652,7 @@ export class VelaService {
       const kind = receipt.state === 'passed' || receipt.state === 'failed' ? 'answer' : 'inability';
       const message = this.append(content, requestId, 'vela-native', undefined, { kind });
       check(identifier(message.id) && message.requestId === requestId && message.source === 'vela-native' &&
-        message.classification === 'observed' && message.content === content && message.responseKind === kind &&
+        canonicalUserEvidence(message) && message.content === content && message.responseKind === kind &&
         message.providerId === undefined, 'invalid_canonical_local_response');
       request.projectCheck = structuredClone(receipt);
       request.response = { kind, messageId: message.id, contentDigest: historyDigest(content) };
@@ -641,16 +685,18 @@ export class VelaService {
       providerContext = reviewed ? structuredClone(reviewed.context) : this.context(input.resourceIds, scope);
       check(providerContext.policyVersion === scope.policyVersion, 'stale_policy_version');
       // The exact private reviewed egress is used in memory; canonical history bodies are never duplicated in request storage.
-      const { history: _history, agentInstructions: _agentInstructions, ...storedContext } = providerContext;
+      const { history: _history, agentInstructions: _agentInstructions, operations, ...storedContext } = providerContext;
       const conversationId=this.conversationId(),baseRevision=frozen?this.opts.host.conversationRevision?.(conversationId):undefined;
       if(frozen)check(Number.isSafeInteger(baseRevision)&&Number(baseRevision)>=1&&Number(baseRevision)<Number.MAX_SAFE_INTEGER,'canonical_history_revision_required');
       const r: VelaRequest = { id: randomUUID(), conversationId, intent: input.intent,
         state: 'planning', createdAt: this.now(), updatedAt: this.now(), providerId: planner?.providerId ?? null,
         context: storedContext, origin: this.historyOrigin(scope), inputContentDigest: historyDigest(input.intent),
+        ...(operations ? { operationContext: { contract: operations.contract, digest: operations.digest,
+          receiptIds: operations.operations.map(operation => operation.receiptId) } } : {}),
         ...(routed ? structuredClone(routed) : {}),
         ...(reviewed?.historyFence ? { history: { schemaVersion: 1, fenceDigest: reviewed.historyFence.digest, historyDigest: reviewed.historyFence.historyDigest, messages: reviewed.historyFence.messages } } : {}) };
       this.data.requests.push(r); const message = this.append(r.intent, r.id, 'user');
-      check(identifier(message.id) && message.requestId === r.id && message.role === 'user' && message.source === 'user' && message.classification === 'observed' && message.content === r.intent, 'invalid_canonical_request');
+      check(identifier(message.id) && message.requestId === r.id && message.role === 'user' && message.source === 'user' && canonicalUserEvidence(message) && message.content === r.intent, 'invalid_canonical_request');
       r.inputMessageId = message.id;
       // Explicit selection of Vela itself cannot establish a recursive proof. Such a request remains usable but is never implicit history.
       try { r.provenance = createHistoryProvenance({ requestId: r.id, conversationId: r.conversationId, origin: r.origin!, inputMessageId: message.id, inputContentDigest: r.inputContentDigest!, dependencies: unionHistoryDependencies(historyDependenciesFromContext(r.context, r.conversationId), reviewed?.historyFence?.dependencies ?? []) }); }
@@ -733,16 +779,45 @@ export class VelaService {
     return structuredClone(this.getRequest(request.id));
   }
   /** Explicit typed local action: host policy authorizes it, with no model call or redundant review. */
+  clockTimerJournalContext(): { lastResourceId: string | null; lastTimer: {resourceId:string;timerId:string} | null } {
+    // Trusted host-only reference projection of the existing canonical receipts.
+    // The caller must resolve these IDs against current access; stale refs must clarify.
+    const receipts=this.data.receipts.filter(receipt=>receipt.state==='applied'&&receipt.clockTimer?.resourceId).map(receipt=>receipt.clockTimer!);
+    const last=receipts.at(-1),timer=receipts.findLast(receipt=>receipt.timerId!==null);
+    return {lastResourceId:last?.resourceId??null,lastTimer:timer?.resourceId&&timer.timerId?{resourceId:timer.resourceId,timerId:timer.timerId}:null};
+  }
+  nativeClarification(intent: string, content: string): VelaRequest {
+    check(text(intent,16000)&&text(content,2000),'invalid_timer_clarification');const scope=this.scope();
+    return this.atomic(()=>{
+      const time=this.now(),request:VelaRequest={id:randomUUID(),conversationId:this.conversationId(),intent,state:'responded',createdAt:time,updatedAt:time,
+        providerId:null,origin:this.historyOrigin(scope),inputContentDigest:digest(intent),context:this.context([],scope)};
+      const user=this.append(intent,request.id,'user');request.inputMessageId=user.id;
+      const response=this.append(content,request.id,'vela-native',undefined,{kind:'clarification'});
+      request.response={kind:'clarification',messageId:response.id,contentDigest:digest(content)};this.data.requests.push(request);return structuredClone(request);
+    });
+  }
+  creationRecoveryReference(receiptId?:string):{receiptId:string;workspaceId:string;projectId:string|null}|null {
+    let receipt=receiptId?this.data.receipts.find(receipt=>receipt.id===receiptId):this.data.receipts.at(-1);
+    if(!receipt||receipt.state!=='applied')return null;
+    if(!receiptId&&receipt.workspaceRecovery) {
+      const action=this.data.plans.find(plan=>plan.id===receipt!.planId)?.steps.find(step=>step.id===receipt!.stepId)?.action;
+      if(action?.type!=='recoverCreation')return null;receipt=this.data.receipts.find(receipt=>receipt.id===action.receiptId);
+    }
+    const proof=receipt?.workspaceConstruction,plan=receipt&&this.data.plans.find(plan=>plan.id===receipt.planId);
+    if(!receipt||receipt.state!=='applied'||!proof||receipt.createdWorkspaceId!==proof.workspaceId||plan?.steps.length!==1||
+      !proof.verification.workspaceExists||!proof.verification.bindingsMatch||!proof.verification.geometryValid)return null;
+    return {receiptId:receipt.id,workspaceId:proof.workspaceId,projectId:proof.projectId};
+  }
   native(input: { intent: string; action: VelaNativeAction }): VelaPlan {
     check(text(input.intent, 16000), 'invalid_request'); const action = validateAction(input.action);
     check(action.type !== 'delegateTask', 'explicit_execution_authorization_required');
     const scope = this.scope();
     return this.atomic(() => {
       const r: VelaRequest = { id: randomUUID(), conversationId: this.conversationId(), intent: input.intent, state: 'native-ready',
-        createdAt: this.now(), updatedAt: this.now(), providerId: null, context: this.context([], scope) };
-      this.data.requests.push(r); this.append(r.intent, r.id, 'user');
+        createdAt: this.now(), updatedAt: this.now(), providerId: null, origin: this.historyOrigin(scope), inputContentDigest: historyDigest(input.intent), context: this.context([], scope) };
+      this.data.requests.push(r); r.inputMessageId=this.append(r.intent, r.id, 'user').id;
       const plan = this.prepare(r, input.intent, [{ id: 'native-1', explanation: 'Explicit native application command', action }], null);
-      if (CAPABILITIES.find(capability => capability.id === action.type)?.authorization === 'reviewed-action') return structuredClone(plan);
+      if (CAPABILITIES.find(capability => capability.id === action.type)?.authorization === 'reviewed-action'||action.type==='clockTimer'&&clockTimerRequiresReview(action)) return structuredClone(plan);
       plan.authorizationRef = this.authorize(this.authInput(plan, 'review')); plan.reviewedAt = this.now(); plan.state = 'approved';
       return structuredClone(plan);
     });
@@ -786,6 +861,7 @@ export class VelaService {
       this.atomic(() => { this.data.receipts.push(receipt); });
       let result: HostActionResult;
       let dispatched = false;
+      let timerReceiptCommitted = false;
       try {
         // Targets/permissions are checked again at every boundary, including between steps.
         const scope = this.scope([step]);
@@ -819,7 +895,23 @@ export class VelaService {
               check(Date.parse(plan.expiresAt) > Date.parse(this.now()), 'plan_expired');
               check(this.scope([step]).policyVersion === plan.scope.policyVersion, 'stale_policy_version');
               dispatched = true;
-              result = commit();
+              if(['clockTimer','adjustWorkspace','recoverCreation'].includes(step.action.type)) {
+                result=this.atomic(()=>{
+                  const value=commit();check(value&&['applied','failed','cancelled','unknown'].includes(value.status)&&identifier(value.receiptId),'invalid_host_receipt');
+                  if(step.action.type==='clockTimer')check(value.status!=='applied'||value.clockTimer?.contract==='aerynth.vela-clock-timer@1','canonical_timer_receipt_required');
+                  if(step.action.type==='adjustWorkspace')check(value.status!=='applied'||value.workspaceAdjustment?.verification.oneUndoEntry===true,'canonical_adjustment_receipt_required');
+                  if(step.action.type==='recoverCreation')check(value.status!=='applied'||value.workspaceRecovery?.kind==='receipt','canonical_recovery_receipt_required');
+                  receipt.state=value.status;receipt.endedAt=this.now();receipt.hostReceiptId=value.receiptId;
+                  if(value.clockTimer)receipt.clockTimer=structuredClone(value.clockTimer);
+                  if(value.workspaceAdjustment)receipt.workspaceAdjustment=structuredClone(value.workspaceAdjustment);
+                  if(value.workspaceRecovery)receipt.workspaceRecovery=structuredClone(value.workspaceRecovery);
+                  if(value.createdResourceId)receipt.createdResourceId=value.createdResourceId;
+                  if(value.errorCode)receipt.errorCode=value.errorCode;
+                  if(text(value.responseText,1000)){this.append(value.responseText,request.id,'vela-native',plan);explicitResponse=true;}
+                  if(value.status!=='applied'){plan.state=value.status;request.state=value.status;request.errorCode=value.errorCode;}
+                  return value;
+                });timerReceiptCommitted=true;
+              } else result = commit();
             } finally { this.controllers.delete(request.id); }
           } else {
             dispatched = true;
@@ -829,7 +921,7 @@ export class VelaService {
         }
         check(result && ['applied', 'failed', 'cancelled', 'unknown'].includes(result.status) && identifier(result.receiptId), 'invalid_host_receipt');
       } catch (e) {
-        if(step.action.type==='setAttentionMode') {
+        if(['setAttentionMode','clockTimer','adjustWorkspace','recoverCreation'].includes(step.action.type)) {
           // Mode mutation uses this SAME service inside the host transaction. Its
           // rollback restores a clone; reconnect local references to canonical IDs.
           plan=this.getPlan(planId);request=this.getRequest(plan.requestId);
@@ -839,11 +931,16 @@ export class VelaService {
         const cancelled = !dispatched && this.getPlan(planId).state !== 'applying';
         result = { status: dispatched ? 'unknown' : cancelled ? 'cancelled' : 'failed', receiptId: receipt.id, errorCode: errorCode(e, dispatched ? 'host_action_outcome_unknown' : 'action_validation_failed') };
       }
+      if(timerReceiptCommitted)continue;
       this.atomic(() => {
         receipt.state = result.status; receipt.endedAt = this.now(); receipt.hostReceiptId = result.receiptId;
         if (result.errorCode) receipt.errorCode = result.errorCode;
         if (result.createdResourceId) receipt.createdResourceId = result.createdResourceId;
         if (result.createdWorkspaceId) receipt.createdWorkspaceId = result.createdWorkspaceId;
+        if (result.workspaceConstruction) receipt.workspaceConstruction = structuredClone(result.workspaceConstruction);
+        if (result.clockTimer) receipt.clockTimer = structuredClone(result.clockTimer);
+        if (result.workspaceAdjustment) receipt.workspaceAdjustment = structuredClone(result.workspaceAdjustment);
+        if (result.workspaceRecovery) receipt.workspaceRecovery = structuredClone(result.workspaceRecovery);
         if (result.createdProjectId) receipt.createdProjectId = result.createdProjectId;
         if (result.createdCollectionId) receipt.createdCollectionId = result.createdCollectionId;
         if ((step.action.type === 'search' || step.action.type === 'openResource') && result.status === 'applied' && result.foundSubjects) {
@@ -863,10 +960,15 @@ export class VelaService {
       request.updatedAt = this.now();
       if (!explicitResponse || plan.steps.length !== 1) {
         const action = plan.steps.length === 1 ? plan.steps[0].action : undefined;
-        let applied = 'The reviewed native plan was applied. Host receipts are available for inspection; delegated task outcomes remain owned by the execution service.';
+        let applied = plan.steps.some(step => step.action.type === 'delegateTask')
+          ? 'Started the delegated work. Its result still needs verification.'
+          : `Completed ${plan.steps.length} action${plan.steps.length === 1 ? '' : 's'}.`;
         if (action?.type === 'navigate') applied = 'Opened the requested view.';
         else if (action?.type === 'openResource') applied = 'The resource lookup is complete.';
         else if (action && isHostPolicyRead(action.type)) applied = 'The local lookup is complete.';
+        else if (action && ['createProject', 'createResource', 'createWorkspace', 'createConversation', 'createCollection'].includes(action.type) && 'title' in action)
+          applied = `Created “${action.title}”.`;
+        else if (action?.type === 'workspaceFromResources') applied = `Created “${action.title}” with ${action.resourceIds.length} resource${action.resourceIds.length === 1 ? '' : 's'}.`;
         this.append(plan.state === 'applied' ? applied : 'Plan execution stopped with state: ' + plan.state + '. Inspect receipts before retrying.', request.id, 'vela-native', plan);
       }
     });

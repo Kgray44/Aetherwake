@@ -8,6 +8,56 @@ import { BackendCore } from "../src/core.mts";
 import type { ProviderPort } from "../src/contracts.mts";
 import { CAPABILITIES } from "../../vela-core/src/capabilities.ts";
 
+/** Independent application of the documented data codec, including literal schema-key escaping. */
+function decodedCatalog(data: any) {
+  assert.equal(data.capabilityEncoding, "aerynth.inline-catalog@3");
+  const dictionary = (value: any): string[] => {
+    if (Array.isArray(value)) return value; const entries = [''];
+    for (let index = 0; index < value.length; index++) if (value[index] === '\\') entries[entries.length - 1] += value[++index];
+    else if (value[index] === '|') entries.push(''); else entries[entries.length - 1] += value[index];
+    return entries;
+  };
+  const schemaKeys = dictionary(data.keys), capabilityTexts = dictionary(data.texts);
+  const expand = (value: any): any => {
+    if (Number.isSafeInteger(value) && value < 0) return expand(data.defs[-value - 1]);
+    if (Array.isArray(value)) {
+      if (value.length === 1 && Number.isSafeInteger(value[0]))
+        return value[0] < 0 ? schemaKeys[-value[0] - 1] : expand(data.defs[value[0]]);
+      if (value.length === 2 && value[0] === null && Array.isArray(value[1]))
+        return value[1].map(expand);
+      if (value.length === 2 && value[0] === null && Number.isSafeInteger(value[1]) && value[1] < 0) return value[1];
+      if (value.length === 3 && value[0] === null && Number.isInteger(value[1]) && value[1] >= 1 && value[1] <= 7) {
+        const flags = value[1], body = expand(value[2]);
+        return { ...(flags & 1 ? { type: 'object' } : {}), ...(flags & 2 ? { additionalProperties: false } : {}), ...body,
+          ...(flags & 4 ? { required: Object.keys(body.properties) } : {}) };
+      }
+      return value.map(expand);
+    }
+    if (value === null || typeof value !== "object") return value;
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key.startsWith("~") ? key.slice(1) : /^[A-Za-z]$/.test(key) ? schemaKeys['abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'.indexOf(key)] : key,
+      expand(item),
+    ]));
+  };
+  return data.capabilities.map(([values, encoded, flags, overrides = {}]: any[]) => {
+    const metadata = { ...data.defaults,
+      ...Object.fromEntries(data.fields.map((key: string, index: number) => [key, values[index]])), ...(typeof overrides === 'number' ? data.variants[overrides] : overrides) };
+    for (const key of ['label', 'scope']) if (typeof metadata[key] === 'string') {
+      const shortCodes = '!#$%&*+<=>?@^{}[]()|', value = metadata[key]; let decoded = '';
+      for (let index = 0; index < value.length; index++) {
+        const char = value[index];
+        if (char === '~') { const next = value[++index]; decoded += next === '~' || shortCodes.includes(next) ? next : capabilityTexts['ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'.indexOf(next)]; }
+        else decoded += shortCodes.includes(char) ? capabilityTexts[shortCodes.indexOf(char)] : char;
+      }
+      metadata[key] = decoded;
+    }
+    const expanded = expand(encoded), schema = { ...data.roots, ...(flags & 4 ? { properties: expanded } : expanded) };
+    if (flags & 1) schema.properties = { type: { const: metadata.id }, ...schema.properties };
+    if (flags & 2) schema.required = Object.keys(schema.properties);
+    return { ...metadata, schema };
+  });
+}
+
 /** Evaluate only the helper's known string-concatenation grammar, never require/execute the GUI helper. */
 function livePayload(projectId: string, chatId: string, noteId: string) {
   const helper = readFileSync(
@@ -202,15 +252,17 @@ for (const authenticated of [false, true])
           previewId: preview.id,
           signature: preview.signature,
         }),
-        data = JSON.parse(review.prompt.split("\n").at(-1)!);
+        data = JSON.parse(review.prompt.split("\n").at(-1)!),
+        capabilities = decodedCatalog(data);
       assert.equal(Buffer.byteLength(exact.intent), 669);
       assert.equal(Buffer.byteLength(exact.sourceChat), 40);
       assert.equal(Buffer.byteLength(exact.sourceNote), 60);
       const expectedIds = CAPABILITIES.filter(capability =>
         capability.id !== "readWeather" && (authenticated || capability.id !== "delegateTask"),
       ).map(capability => capability.id).sort();
-      assert.deepEqual(data.capabilities.map((capability: { id: string }) => capability.id).sort(), expectedIds);
-      assert(data.capabilities.some((capability: { id: string }) => capability.id === "createTimeline"));
+      assert.deepEqual(capabilities.map((capability: { id: string }) => capability.id).sort(), expectedIds);
+      assert(capabilities.some((capability: { id: string }) => capability.id === "createTimeline"));
+      assert.deepEqual(capabilities, [...internal.velaCapabilities(CAPABILITIES)].sort((a, b) => a.id.localeCompare(b.id)), "Every effective schema, scope and policy survives the transport encoding");
       assert.equal(data.schemaAvailability, "complete-approved-catalog");
       assert(!data.capabilityDiscovery);
       assert(!data.context.history);

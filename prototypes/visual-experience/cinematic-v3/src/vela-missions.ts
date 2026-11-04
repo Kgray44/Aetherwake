@@ -232,7 +232,7 @@ export function createVelaMissionView(
       mission_project_check_unavailable:
         "The installed Codex read-only sandbox is unavailable.",
       mission_planner_unavailable:
-        "A planning model is unavailable. Check the ChatGPT plan connection and request limits.",
+        "A planning model is unavailable. Check the selected provider connection, API usage authorization and request limits.",
       mission_proposal_unsupported_objective:
         "The planner reported that available capabilities cannot cover the whole objective. No mission was started.",
       invalid_mission_temporary_role:
@@ -756,6 +756,7 @@ export function createVelaMissionView(
       heading.dataset.missionFocus = "team-review-heading";
     }
     section.append(heading, el("p", undefined, plan.objective));
+    if(plan.coverage)section.append(el("p","vela-core-meta","Partial investigation: "+plan.coverage.limitations.join(' ')+' The original objective will remain blocked until the missing evidence is available.'));
     if (plan.team) section.append(teamLabel(plan.team));
     if (localReview) section.append(el("p", "vela-core-meta",
       "Start opens a native picker for up to four tracked Node tests. You will review the exact checkout and command before it runs."));
@@ -879,7 +880,7 @@ export function createVelaMissionView(
     const section = el("section", "vela-core-plan vela-mission-preview");
     section.append(el("h3", undefined, "Plan a mission"), el("p", undefined, offer.objective),
       el("p", "vela-core-meta", offer.planner
-        ? `One planning request to ${offer.planner.model}. You’ll review the resulting tasks separately.`
+        ? `One planning request to ${offer.planner.model}${offer.planner.provider==='openai-api-vela'?' through Vela’s dedicated API':''}. You’ll review the resulting tasks separately.`
         : "A planning model is unavailable for this workspace. Check Connections and request limits."));
     const controls = actions();
     const plan = button("Review planning request", "plan-mission", () => { void preparePlan(offer); });
@@ -1144,7 +1145,8 @@ export function createVelaMissionView(
     if (current.conversationPending) section.append(el("p", "vela-core-meta", "The verified handoff is waiting to reach the mission conversation."));
     const revision = renderRevisionReview(current);
     if (revision) section.append(revision);
-    if (sameScope(current.scope, scope) && current.outcome === "verified") {
+    if(current.coverage)section.append(el("p","vela-core-meta","Investigation incomplete: "+current.coverage.limitations.join(' ')));
+    if (sameScope(current.scope, scope) && (current.outcome === "verified" || current.outcome==='blocked'&&current.coverage&&current.tasks.every(task=>task.state==='verified'))) {
       const post = button("Post evidence link to Vela chat", "post-report", () => { postReport(current.id); });
       post.disabled = commandPending || postedReport === current.id;
       section.append(post);

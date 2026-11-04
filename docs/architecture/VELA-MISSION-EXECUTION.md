@@ -4,6 +4,59 @@ This records the integrated mission slice. The [traceability matrix](../engineer
 tracks work and acceptance beyond this slice. The [AIR specification](../specifications/VELA-ADAPTIVE-INTELLIGENCE-ROUTING.md)
 continues to govern the ordinary routing design; this change does not ratify it.
 
+## Canonical Vela continuity
+
+`VelaService` owns the canonical request/action journal and the existing Vela
+conversation graph. Core supplies current application metadata, scoped history,
+operational receipts and native permissions. The versioned behavior contract
+in `vela-identity.mts` is shared by conversational, planning and voice contexts;
+Codex receives the same identity with an explicit executor role. Direct provider
+chats retain their own sessions. They do not replace Vela's conversation.
+
+Ordinary text, API tool continuations and voice delegation use these same
+canonical services. Native requests bind their exact input message, digest and
+origin. Operational context resolves current canonical receipts and result
+bindings, and withdraws revoked dependencies. Recent history defaults on within
+its explicit scope/byte budget; Start fresh applies to a single send.
+
+`VelaApiConnection` stores versioned connection metadata in the canonical DB and
+uses the existing native protected-storage service for credentials. Explicit API
+usage authorization is separate from saving a key. `VelaApiRuntime` bounds paid
+stages and output, journals dispatch before HTTP, records reported usage and
+does not retry uncertain effects. Its metadata ledger references canonical
+messages; it is not a parallel transcript. Structured workspace planning chooses
+roles from authorized resource metadata; TemplateService retains validation,
+transactional mutation and deterministic geometry authority.
+
+`VelaVoiceRuntime` retains only fragment identities, group/message references,
+delegation claims, session observations and voice settings. Text fragments live
+in the same conversation graph. A native delegation claim seals the exact user
+input, then adopts that message into the ordinary turn pipeline without adding
+another user turn. Speaker transitions seal text groups without claiming a
+completed provider turn. Restart leaves uncertain external work unknown.
+
+GPT-Live uses `gpt-live-1` with client delegation. Only an isolated, hidden,
+sandboxed native media window sees SDP and WebRTC events. The ordinary renderer
+receives safe state and sends controls through a gesture-checked native broker;
+it never receives API credentials or negotiation material. Local capture,
+provider mute acknowledgement, playback observation and human audibility remain
+separate facts. Prompt-created voices and speech style are saved with version
+checks; audition is an explicit paid session. Closing the view does not stop a
+session, while End releases its owned media resources.
+
+Countdowns, stopwatches and world clocks are canonical `clock_timer` resources.
+Their lifecycle belongs to the persistent timer domain, independently of card
+visibility. A prepared native operation commits its mutation, receipt and reply
+in the shared transaction. Expiry uses a durable run-specific outbox and in-app
+acknowledgement. OS notification delivery and physical suspend/resume need their
+own platform evidence.
+
+The primary Vela surface shows the response, a request-scoped confirmed jobs
+count where applicable, and an icon for details. Plans, provider information,
+evidence, missions and workspace navigation remain available through those
+controls. Opening details grants no permission; consequential operations still
+require their exact native authorization and current policy checks.
+
 ```mermaid
 flowchart LR
   Send["Vela Send"] --> Check{"Supported mission objective<br/>and no turn-level provider pin?"}

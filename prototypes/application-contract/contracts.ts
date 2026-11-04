@@ -30,6 +30,7 @@ export type BlockKind =
   | "agent"
   | "timeline"
   | "task_objective"
+  | "clock_timer"
   | "reference"
   | "stream"
   | "file"

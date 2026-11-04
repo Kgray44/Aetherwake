@@ -9,6 +9,7 @@ const {
   shell,
   safeStorage,
   clipboard,
+  powerMonitor,
 } = require("electron");
 const { createMediaPlayback, scheme: mediaScheme } = require("./media-playback.cjs");
 protocol.registerSchemesAsPrivileged([
@@ -41,6 +42,10 @@ const { createClipboardCapability } = require("./clipboard-capability.cjs");
 const {
   createProviderConnectionBroker,
 } = require("./provider-connections.cjs");
+const { createVelaApiSetup } = require('./vela-api-setup.cjs');
+const { createVelaApiConnectionBroker, safeApiStatus } = require('./vela-api-connections.cjs');
+const { createLiveMediaBroker } = require('./live-media-broker.cjs');
+const { createVelaVoiceBroker } = require('./vela-voice-broker.cjs');
 const root = path.resolve(__dirname, "..");
 const moduleStarted = Date.now();
 const moduleStartedMonotonicMs = performance.now();
@@ -56,7 +61,7 @@ function hashFolder(folder) {
       continue;
     const full = path.join(folder, entry.name);
     if (entry.isDirectory()) hashFolder(full);
-    else if (/\.(?:ts|mts|css|cjs|sql)$/.test(entry.name))
+    else if (/\.(?:ts|mts|css|cjs|sql|html)$/.test(entry.name))
       sourceHashes[path.relative(repository, full).replaceAll("\\", "/")] =
         createHash("sha256").update(readFileSync(full)).digest("hex");
   }
@@ -75,6 +80,7 @@ for (const folder of [
   "prototypes/block-library",
   "prototypes/agent-product",
   "prototypes/checklist-product",
+  "prototypes/timer-product",
   "prototypes/timeline-product",
   "prototypes/task-product",
   "prototypes/visual-experience/cinematic-v3/src",
@@ -141,8 +147,10 @@ const privateRoot = profileArg
   : path.join(app.getPath("appData"), "Aerynth", "review");
 if (verifyAirLocal && (!/^review-vela-air-offline-\d+$/u.test(path.basename(privateRoot)) || existsSync(privateRoot)))
   throw Error("fresh_offline_air_profile_required");
-if (verifyMissions && (!/^review-vela-missions-\d+$/u.test(path.basename(privateRoot)) || existsSync(privateRoot)))
-  throw Error("fresh_offline_mission_profile_required");
+if (verifyMissions) {
+  if(process.argv.includes('--missions-persistence-reopen-only'))require('./mission-persistence.cjs').assertMissionPersistenceReopen({profile:privateRoot,argv:process.argv,source});
+  else if(!/^review-vela-missions-\d+$/u.test(path.basename(privateRoot))||existsSync(privateRoot))throw Error('fresh_offline_mission_profile_required');
+}
 if (verifyAirPlan && (!/^review-vela-air-plan-\d+$/u.test(path.basename(privateRoot)) || !existsSync(privateRoot)))
   throw Error("signed_in_air_test_profile_required");
 if (offscreenScale) {
@@ -233,6 +241,10 @@ const pending = new Map();
 let backendFailed = false;
 let nativeSecretBroker;
 let providerConnections;
+let velaApiSetup;
+let velaApiConnections;
+let liveMediaBroker;
+let velaVoiceBroker;
 let nativeClipboard;
 const storage = createStorageAdmission({
   probe: runtimeReserve,
@@ -257,6 +269,10 @@ function failBackend() {
   backendFailed = true;
   nativeSecretBroker?.close();
   providerConnections?.close();
+  velaApiSetup?.close();
+  velaApiConnections?.close();
+  velaVoiceBroker?.close();
+  liveMediaBroker?.close();
   for (const request of pending.values()) {
     clearTimeout(request.timer);
     request.reject(new Error("backend_disconnected"));
@@ -305,6 +321,7 @@ function call(command, input) {
     writeBackend(line);
   });
 }
+let timerResumeBarrier = Promise.resolve();
 function sendMissionHostSignal(missionHostSignal) {
   if (!closing && backendWritable()) {
     try { writeBackend(JSON.stringify({ missionHostSignal }) + "\n"); } catch { /* The backend transport reports disconnect. */ }
@@ -328,15 +345,31 @@ app.whenReady().then(async () => {
   child.stdin.on("error", failBackend);
   child.on("error", failBackend);
   child.on("exit", failBackend);
+  powerMonitor?.on?.('resume', () => {
+    if (closing || !backendWritable()) return;
+    timerResumeBarrier = call('timerHostResume', {});
+    void timerResumeBarrier.catch(() => {});
+  });
   nativeSecretBroker = createProtectedStorageBroker({
     safeStorage,
     isReady: () => app.isReady(),
     platform: process.platform,
     send: (wire) => writeBackend(JSON.stringify(wire) + "\n"),
   });
+  liveMediaBroker = createLiveMediaBroker({ BrowserWindow, ipcMain,
+    send: wire => writeBackend(JSON.stringify(wire) + '\n'),
+    preloadPath: path.join(root, 'dist/vela-live-media-preload.cjs'),
+    htmlPath: path.join(__dirname, 'voice-media.html'),
+    syntheticInput: process.argv.includes('--missions-voice-live-only') && process.argv.includes('--voice-synthetic-input'),
+  });
   providerConnections = createProviderConnectionBroker({
     call,
     openExternal: (url) => shell.openExternal(url),
+  });
+  velaApiSetup = createVelaApiSetup({ BrowserWindow, ipcMain,
+    storageAllowed: () => storage.allowWrite(),
+    status: async () => safeApiStatus(await call('velaApiConnection', { type: 'status' })),
+    configure: async (credential, expectedVersion) => safeApiStatus(await call('velaApiConfigure', { credential, expectedVersion })),
   });
   // Native diagnostics may contain private paths; never forward stderr to the renderer or public evidence.
   child.stderr.on("data", () => {});
@@ -345,6 +378,7 @@ app.whenReady().then(async () => {
     try {
       const m = JSON.parse(line);
       if (nativeSecretBroker.handle(m)) return;
+      if (liveMediaBroker.handle(m)) return;
       if (m.event) {
         sendToWindow(win, "application-event", m.event);
         return;
@@ -411,6 +445,11 @@ app.whenReady().then(async () => {
     callback({ cancel: external || foreignMedia });
   });
   owner.on("render-process-gone", playback.clear);
+  owner.on('render-process-gone', () => {
+    // Stop local capture immediately even when the application renderer cannot send End.
+    velaVoiceBroker?.close(); liveMediaBroker?.close();
+    void call('velaVoice', {name:'stop',input:{}}).catch(() => {});
+  });
   owner.on("destroyed", playback.clear);
   owner.on("did-start-loading", playback.clear);
   const mediaCommand = require("./media-broker.cjs").createMediaBroker({ win, dialog, shell, call, playback });
@@ -449,6 +488,15 @@ app.whenReady().then(async () => {
     win.isVisible() &&
     !win.isMinimized() &&
     win.isFocused();
+  velaVoiceBroker = createVelaVoiceBroker({call,mediaBroker:liveMediaBroker,
+    maximumVoiceSeconds: process.argv.includes('--missions-voice-live-only') && process.argv.includes('--voice-synthetic-input') ? 30 : 300,
+    storageAllowed: () => storage.allowWrite(),
+    authorize: async context => context?.observedGesture === true && trustedActiveFrame(context.event),
+  });
+  velaApiConnections = createVelaApiConnectionBroker({ call,
+    setup: () => velaApiSetup.open(win),
+    authorize: async context => context?.observedGesture === true && trustedActiveFrame(context.event),
+  });
   nativeClipboard = createClipboardCapability({
     writeText: (text) => clipboard.writeText(text),
     isTrustedApplicationFrame: trustedActiveFrame,
@@ -466,7 +514,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("application-copy-text", (event, input) =>
     nativeClipboard.copy(event, input),
   );
-  win.on("closed", () => nativeClipboard?.close());
+  win.on("closed", () => { nativeClipboard?.close(); velaApiSetup?.close(); velaApiConnections?.close(); velaVoiceBroker?.close(); liveMediaBroker?.close(); });
   ipcMain.handle("application-command", async (event, command, input) => {
     try {
       if (
@@ -484,6 +532,29 @@ app.whenReady().then(async () => {
             : 200000)
       )
         throw new Error("command_too_large");
+      let apiGesture = false;
+      let voiceGesture = false;
+      if (command === 'velaVoice' && ['start','reconnect','audition','createVoice','saveVoice'].includes(input?.name)) {
+        if (!trustedActiveFrame(event) ||
+            await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()', false).catch(() => false) !== true ||
+            !trustedActiveFrame(event)) throw Error('voice_user_gesture_required');
+        voiceGesture = true;
+      }
+      if (command === 'velaApiConnection' && !['status','usageStatus'].includes(input?.type)) {
+        if (!trustedActiveFrame(event) ||
+            await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()', false).catch(() => false) !== true ||
+            !trustedActiveFrame(event)) throw Error('api_user_gesture_required');
+        apiGesture = true;
+      }
+      const clockMutation = command === 'clockTimers' && ['create', 'mutate'].includes(input?.name) ||
+        command === 'library' && input?.name === 'createBlock' && input?.input?.kind === 'clock_timer' ||
+        command === 'desktop' && input?.type === 'createResource' && input?.kind === 'clock_timer';
+      if (clockMutation) {
+        if (!trustedActiveFrame(event) ||
+            await event.senderFrame.executeJavaScript('navigator.userActivation.isActive && document.hasFocus()', false).catch(() => false) !== true ||
+            !trustedActiveFrame(event)) throw Error('timer_user_gesture_required');
+      }
+      if (command === 'clockTimers' || command === 'library' || clockMutation) await timerResumeBarrier;
       if (command === "missions" && input?.name === "revision-apply") {
         if (!trustedActiveFrame(event) ||
             await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
@@ -494,6 +565,11 @@ app.whenReady().then(async () => {
         if (!trustedActiveFrame(event) ||
             await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
             !trustedActiveFrame(event)) throw Error("workspace_recovery_user_gesture_required");
+      }
+      if (command === "vela" && ["request", "native", "apply"].includes(input?.name)) {
+        if (!trustedActiveFrame(event) ||
+            await event.senderFrame.executeJavaScript("navigator.userActivation.isActive && document.hasFocus()", false).catch(() => false) !== true ||
+            !trustedActiveFrame(event)) throw Error("vela_user_gesture_required");
       }
       if (
         ![
@@ -513,6 +589,8 @@ app.whenReady().then(async () => {
         !isProductRead(command, input) &&
         !(command === "notes" && input?.name === "readNote") &&
         !(command === "providerConnection" && input?.type === "status") &&
+        !(command === 'velaApiConnection' && ['status', 'usageStatus', 'catalog'].includes(input?.type)) &&
+        !(command === 'velaVoice' && ['state','devices','stop','mute','setInputDevice','setOutputDevice','resumePlayback','interruptPlayback'].includes(input?.name)) &&
         !(
           command === "library" &&
           [
@@ -543,6 +621,12 @@ app.whenReady().then(async () => {
         result = await call("openResource", input);
       else if (command === "providerConnection")
         result = await providerConnections.command(input);
+      else if (command === 'velaApiConnection') {
+        result = await velaApiConnections.command(input, { event, observedGesture: apiGesture });
+      }
+      else if (command === 'velaVoice') {
+        result = await velaVoiceBroker.command(input, {event, observedGesture: voiceGesture});
+      }
       else if (command === "graphAction")
         result = await require("./graph-actions.cjs").graphAction(input, call);
       else if (command === "viewState") result = await call("viewState", input);
@@ -581,7 +665,7 @@ app.whenReady().then(async () => {
           input,
           observeNativeRequest: observeVelaRequest,
           offerPlanningByDefault: !verify || verifyAirLocal,
-          directMessageSend: !verify || verifyAirLocal,
+          directMessageSend: !verify || verifyAirLocal || verifyMissions && (process.argv.includes('--missions-api-live-only')||process.argv.includes('--missions-persistence-live-only')),
           routeNative: true,
           requireInspectionDirectory: !verify && process.platform === "win32",
         });
@@ -608,10 +692,10 @@ app.whenReady().then(async () => {
           if (offer?.kind !== "planning-offer" || offer.fingerprint !== input.input?.fingerprint)
             throw Error("mission_preview_changed");
           if (!offer.planner) throw Error("mission_planner_unavailable");
-          const { model, effort, capabilities } = offer.planner;
+          const { model, effort, capabilities, provider } = offer.planner;
           const choice = await dialog.showMessageBox(win, {
             type: "question", buttons: ["Cancel", "Request plan"], defaultId: 0, cancelId: 0,
-            title: "Review mission planning request", message: "Send one planning request to ChatGPT plan?",
+            title: "Review mission planning request", message: `Send one planning request to ${provider==='openai-api-vela'?'Vela’s dedicated API':'ChatGPT plan'}?`,
             detail: `Model: ${model}${effort ? " · " + effort : ""}\n\nObjective:\n${offer.objective}\n\nCapability descriptions:\n${capabilities.join("\n")}\n\nReview the resulting tasks before starting the mission.`,
           });
           if (choice.response !== 1) throw Error("mission_review_declined");
@@ -695,6 +779,7 @@ app.whenReady().then(async () => {
       } else if (
         command === "agents" ||
         command === "checklists" ||
+        command === "clockTimers" ||
         command === "timelines" ||
         command === "taskObjectives"
       ) {
@@ -727,6 +812,11 @@ app.whenReady().then(async () => {
   for (const event of ["focus", "blur", "show", "hide", "minimize", "restore"])
     win.on(event, active);
   await win.loadURL(localURL);
+  if (process.argv.includes('--bootstrap-vela-api')) {
+    if (!profileArg || !path.isAbsolute(profileArg.slice(10))) throw Error('explicit_api_profile_required');
+    const imported = await require('./vela-api-bootstrap.cjs').importVelaApiBootstrap({ call, profileDirectory: privateRoot, storageAllowed: () => storage.allowWrite() });
+    writeFileSync(path.join(privateRoot, 'vela-api-import-receipt.json'), JSON.stringify(imported));
+  }
   if (verifyAirPlan) {
     await require("../../../vela-core/test/native-plan-evaluation.cjs").run({ win, app, privateRoot, call });
     return;
@@ -1149,7 +1239,11 @@ app.on("before-quit", (event) => {
             await call("interrupt", { executionId: e.id }).catch(() => {});
       }
       await call("close", {}).catch(() => {});
+      velaVoiceBroker?.close();
+      liveMediaBroker?.close();
       providerConnections?.close();
+      velaApiSetup?.close();
+      velaApiConnections?.close();
       nativeSecretBroker?.close();
       child.kill();
       app.quit();
@@ -1165,7 +1259,11 @@ app.on("before-quit", (event) => {
         cancelId: 0,
       });
       if (choice.response === 1) {
+        velaVoiceBroker?.close();
+        liveMediaBroker?.close();
         providerConnections?.close();
+        velaApiSetup?.close();
+        velaApiConnections?.close();
         nativeSecretBroker?.close();
         child.kill();
         app.quit();

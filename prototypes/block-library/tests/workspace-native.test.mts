@@ -178,9 +178,15 @@ test("offline normal-card preparation and fresh Core restore use canonical kinds
         (entry) => entry.defaultSize.width + "x" + entry.defaultSize.height,
       ),
     ).size,
-    10,
+    11,
   );
   const initial = await core.command("desktop", { type: "snapshot" });
+  const clock=seed.cases.find(entry=>entry.kind==='clock_timer')!;
+  assert(clock.resourceId&&clock.blockId,'Clock & Timer preparation binds a real canonical resource and block');
+  assert.deepEqual(clock.defaultSize,{width:420,height:520});
+  assert.equal(initial.resources.find(resource=>resource.id===clock.resourceId)?.kind,'clock_timer');
+  const clockDocument=(await core.command('clockTimers',{name:'read',input:{resourceId:clock.resourceId}})).result as import('../../timer-product/contracts.ts').ClockTimerDocument;
+  assert.equal(clockDocument.contract,'aerynth.clock-timer@1');assert.equal(clockDocument.resource.id,clock.resourceId);
   assert.deepEqual(initial, seed.expected);
   for (const entry of seed.cases) {
     const state = await core.command("desktop", {

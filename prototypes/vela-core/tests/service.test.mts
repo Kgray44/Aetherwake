@@ -115,6 +115,7 @@ function fixture(options: { planner?: VelaPlanningPort; preferenceAdapter?: bool
 
 type CatalogAction = VelaNativeAction | DelegateTaskAction;
 const everydayToolRequests = [
+  ['Create a timer for fifteen minutes.', { type:'clockTimer',request:{name:'create',input:{title:'Synthetic clock',projectId:null,operations:[{type:'createTimer',key:'timer',name:'Timer',durationMs:900000,start:true}]}},workspaceId:null,focus:{mode:'timer',timerId:null,timerKey:'timer'},query:null }],
   ['Can you find my research note?', { type: 'search', query: 'research' }],
   ['Open my research note, please.', { type: 'openResource', query: 'Synthetic research' }],
   ['Take me back to my workspace.', { type: 'navigate', target: { kind: 'workspace', workspaceId: 'workspace:a' } }],
@@ -123,6 +124,11 @@ const everydayToolRequests = [
   ['Rename my research note to Kitchen Notes.', { type: 'renameResource', resourceId: 'note:a', title: 'Kitchen Notes' }],
   ['Put the research note in my Home project.', { type: 'associateResourceProject', resourceId: 'note:a', projectId: 'project:a' }],
   ['Make a new workspace called Weekend.', { type: 'createWorkspace', title: 'Weekend', projectId: null }],
+  ['Make a workspace for my garden project.', { type: 'constructWorkspace', title: 'Garden', purpose: 'Garden planning', projectId: 'project:a', newProjectTitle: null }],
+  ['Put the notes on the right side of the workspace.', {type:'adjustWorkspace',workspaceId:'workspace:a',adjustments:[{resourceIds:['note:a'],position:'right',size:'larger'}]}],
+  ['Restore the workspace I just created.', {type:'recoverCreation',workspaceId:'workspace:a',receiptId:'receipt:synthetic',action:'restore'}],
+  ['Show the workspace blocks from the last operation.', { type: 'inspectVelaOperation', workspaceId: 'workspace:a', receiptId: 'receipt:synthetic' }],
+  ['Restore the missing blocks in this workspace.', { type: 'repairWorkspace', workspaceId: 'workspace:a', receiptId: 'receipt:synthetic', resourceIds: ['note:a'] }],
   ['How much RAM am I using?', { type: 'readLocalFact', capabilityId: 'system.memory' }],
   ['Will it rain here tomorrow?', { type: 'readWeather', period: 'tomorrow' }],
   ['Make a timeline of what happened in my project.', { type: 'createTimeline', title: 'Project activity', projectId: 'project:a', workspaceId: 'workspace:a', source: { kind: 'application-activity' } }],

@@ -50,6 +50,14 @@ function planMessage(request: VelaRequest, plan: VelaPlan, messages: readonly Ve
   }
   return null;
 }
+/** A compact success requires the complete host result, never a provider's completion claim. */
+export function confirmedVelaPlan(state: VelaManifestationSource, request: VelaRequest, plan: VelaPlan): boolean {
+  return request.state === 'completed' && request.planId === plan.id && plan.requestId === request.id &&
+    plan.state === 'applied' && plan.steps.length > 0 && new Set(plan.steps.map(step => step.id)).size === plan.steps.length &&
+    plan.steps.every(step => step.action.type !== 'delegateTask' && state.receipts.some(receipt =>
+      receipt.requestId === request.id && receipt.planId === plan.id && receipt.stepId === step.id &&
+      receipt.state === 'applied' && id(receipt.hostReceiptId)));
+}
 /** Pure current-field projection. Canonical supplied state remains the authority; this grants no access or action approval. */
 export function projectVelaManifestation(state: VelaManifestationSource | null, selection: VelaManifestationSelection = { selectedRequestId: null, dismissedRequestIds: [], pinnedRequestIds: [] }): VelaManifestationState {
   const conversation = state?.conversation;
@@ -76,10 +84,14 @@ export function projectVelaManifestation(state: VelaManifestationSource | null, 
   if (!mustRemain && selection.dismissedRequestIds.includes(request.id)) return empty();
   const plan = plans.get(request.planId ?? ''), hasReceipts = state.receipts.some(receipt => receipt.requestId === request.id);
   const message = !plan && !hasReceipts ? responseMessage(request, messages) : null;
+  const completedMessage = plan && confirmedVelaPlan(state, request, plan)
+    ? conversation.messages.findLast(value => messages.get(value.id) === value && value.role === 'assistant' &&
+      value.requestId === request.id && value.planId === plan.id && value.source === 'vela-native' &&
+      value.classification === 'observed' && value.providerId === undefined && value.providerContribution === undefined) : undefined;
   return {
-    kind: plan ? 'action' : request.local && message ? 'whisper' : 'insight',
+    kind: plan && !completedMessage ? 'action' : request.local && message ? 'whisper' : 'insight',
     currentRequestId: request.id,
-    currentMessageId: plan ? planMessage(request, plan, conversation.messages.filter(value => messages.has(value.id))) : message?.id ?? null,
+    currentMessageId: completedMessage?.id ?? (plan ? planMessage(request, plan, conversation.messages.filter(value => messages.has(value.id))) : message?.id ?? null),
     currentPlanId: plan?.id ?? null,
     historyResource, pinned: selection.pinnedRequestIds.includes(request.id), canDismiss: !mustRemain, requiredPlanIds,
     selectionReason: mustRemain ? 'required-plan' : selected ? 'selected' : 'latest',

@@ -13,8 +13,11 @@ import { mountTaskGroupExperience } from './task-group-view.ts';
 import { mountEventExperience, type EventWindow } from './event-view.ts';
 import type { MediaReadPort } from '../application-contract/media.ts';
 import { mountMediaExperience, type MediaExperience, type MediaResource } from './media-view.ts';
+import type { ClockTimerPort } from '../timer-product/contracts.ts';
+import { mountClockTimerExperience, type ClockTimerExperience } from '../visual-experience/cinematic-v3/src/clock-timer-view.ts';
 
 export interface DirectResourcePorts {
+  clockTimers?: { port: ClockTimerPort };
   media?: MediaReadPort;
   notes: NoteExperiencePort;
   noteSession(resourceId: string): NoteSession;
@@ -87,6 +90,7 @@ export function mountDirectResourceExperience(
   let group: ReturnType<typeof mountTaskGroupExperience> | undefined;
   let events: ReturnType<typeof mountEventExperience> | undefined;
   let media: MediaExperience | undefined;
+  let clockTimer: ClockTimerExperience | undefined, clockTimerWasActive = false;
   let session: NoteSession | undefined;
   let checklist: TimelineExperience | undefined;
   let timeline: TimelineExperience | undefined;
@@ -191,6 +195,11 @@ export function mountDirectResourceExperience(
   const mount = () => {
     if (mounted || !available(resource)) return;
     body.replaceChildren();
+    if (kind === 'clock_timer') {
+      if (!ports.clockTimers) { status.textContent = 'Clock and timer access is unavailable in this surface.'; return; }
+      clockTimer = mountClockTimerExperience(body, resourceId, ports.clockTimers.port, { active, presentation: 'focused', showTitle: false });
+      clockTimerWasActive = active; refreshVersion = resource.version; mounted = true; return;
+    }
     if (kind === 'task_objective') {
       const source = ports.taskObjectives;
       if (!source) { status.textContent = 'Task Objective access is unavailable in this surface.'; return; }
@@ -268,6 +277,7 @@ export function mountDirectResourceExperience(
     else {
       if (mounted) status.textContent = '';
       try { mount(); } catch (error) {
+        clockTimer?.dispose(); clockTimer = undefined; clockTimerWasActive = false;
         taskObjective?.dispose(); taskObjective = undefined; taskObjectiveWasActive = false;
         timeline?.dispose(); timeline = undefined; timelineWasActive = false;
         checklist?.dispose(); checklist = undefined;
@@ -280,6 +290,10 @@ export function mountDirectResourceExperience(
       }
     }
     note?.setActive(active && available(resource));
+    const clockTimerActive = active && available(resource), clockTimerActivated = clockTimerActive && !clockTimerWasActive;
+    clockTimer?.setActive(clockTimerActive); clockTimerWasActive = clockTimerActive;
+    if (clockTimerActivated && clockTimer) refreshVersion = resource.version;
+    if (clockTimer && clockTimerActive && refreshVersion !== resource.version) { refreshVersion = resource.version; void clockTimer.refresh().catch(fail); }
     const objectiveActive = active && available(resource), objectiveActivated = objectiveActive && !taskObjectiveWasActive;
     taskObjective?.setActive(objectiveActive); taskObjectiveWasActive = objectiveActive;
     if (objectiveActivated && taskObjective) refreshVersion = resource.version;
@@ -321,6 +335,7 @@ export function mountDirectResourceExperience(
     setActive(value) { if (!disposed) { active = value; reconcile(); } },
     async flush() {
       if (disposed) return;
+      if (clockTimer) { await clockTimer.flush(); return; }
       if (taskObjective) {
         if (!available(resource)) throw new Error('Task Objective is unavailable. Pending decisions remain in its view.');
         await taskObjective.flush(); return;
@@ -338,13 +353,14 @@ export function mountDirectResourceExperience(
       if (!available(resource)) throw new Error('Resource is unavailable. Pending text remains in its canonical editor session.');
       await session.flushEdits();
     },
-    frame() { if (!disposed) { checklist?.frame(); timeline?.frame(); taskObjective?.frame(); } },
-    reflow() { if (!disposed) { checklist?.reflow(); timeline?.reflow(); taskObjective?.reflow(); } },
-    async refresh() { if (!disposed && active && available(resource)) { if (taskObjective) await taskObjective.refresh(); else if (timeline) await timeline.refresh(); else if (checklist) await checklist.refresh(); else if (session) await session.refresh(); else if (events) await ports.events?.refresh(); } },
+    frame() { if (!disposed) { clockTimer?.frame(); checklist?.frame(); timeline?.frame(); taskObjective?.frame(); } },
+    reflow() { if (!disposed) { clockTimer?.reflow(); checklist?.reflow(); timeline?.reflow(); taskObjective?.reflow(); } },
+    async refresh() { if (!disposed && active && available(resource)) { if (clockTimer) await clockTimer.refresh(); else if (taskObjective) await taskObjective.refresh(); else if (timeline) await timeline.refresh(); else if (checklist) await checklist.refresh(); else if (session) await session.refresh(); else if (events) await ports.events?.refresh(); } },
     ...(kind === 'task_objective' ? { hasUnsavedChanges: () => taskObjective?.hasUnsavedChanges() ?? false } : {}),
     dispose() {
       if (disposed) return;
       disposed = true;
+      clockTimer?.dispose();
       taskObjective?.dispose();
       timeline?.dispose();
       checklist?.dispose();

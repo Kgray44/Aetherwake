@@ -10,6 +10,7 @@ import type { AgentBlockProjection } from './agent-view.ts';
 import type { TimelineDocument } from '../timeline-product/contracts.ts';
 import { timelineItemTime, timelineItemTitle, type TimelinePresentationWindow } from './timeline-presentation.ts';
 import type { TaskObjectiveDocument } from '../task-product/contracts.ts';
+import type { ClockTimerDocument } from '../timer-product/contracts.ts';
 import { validateMediaMetadata, canonicalMediaUrl } from './media-policy.ts';
 
 export type SubjectIdentity =
@@ -49,6 +50,7 @@ export type BlockIdentityModel = {
     | 'agent'
     | 'chronology'
     | 'objective'
+    | 'clock'
     | "timeline"
     | "project"
     | "table"
@@ -87,6 +89,7 @@ const document = (content: string) => {
 const typeLabel = {
   timeline: 'Timeline',
   task_objective: 'Task Tracker',
+  clock_timer: 'Clock & Timer',
   agent: 'Agent',
   conversation: "Conversation",
   note: "Note",
@@ -115,12 +118,14 @@ export function blockIdentity(input: {
   agent?: AgentBlockProjection;
   timeline?: { document: TimelineDocument | null; window: TimelinePresentationWindow | null };
   taskObjective?: TaskObjectiveDocument | null;
+  clockTimer?: ClockTimerDocument | null;
   disconnected?: boolean;
 }): BlockIdentityModel {
   const { kind, resource } = input;
   const layouts = {
     timeline: 'chronology',
     task_objective: 'objective',
+    clock_timer: 'clock',
     agent: 'agent',
     conversation: resource?.provider === "codex" ? "execution" : "chat",
     note: "document",
@@ -235,6 +240,21 @@ export function blockIdentity(input: {
       : [];
     model.paragraphs = document(content).paragraphs.slice(0, 2);
     model.empty = "Add a description in task details.";
+  } else if (kind === 'clock_timer') {
+    const clock = input.clockTimer;
+    if (!clock || clock.resource.id !== resource?.id) {
+      model.phase = input.clockTimer === null ? 'unavailable' : 'loading';
+      model.subtitle = model.phase === 'loading' ? 'Loading clock & timers…' : 'Clock & timers unavailable';
+      model.empty = 'Open this resource to inspect its saved timers and clocks.';
+    } else {
+      model.heading = clock.resource.title;
+      model.subtitle = clock.timers.filter(timer => timer.state === 'running').length + ' running · ' + clock.timers.length + ' saved timers';
+      model.rows = clock.timers.slice(0, 3).map(timer => ({ id: timer.id, title: timer.name,
+        detail: (timer.due ? 'Awaiting host confirmation' : timer.state[0].toUpperCase() + timer.state.slice(1)) +
+          (timer.timing.wallRecovery ? ' · wall-time recovery' : '') }));
+      model.metrics = [{ label: 'Stopwatch', value: clock.stopwatch.state }, { label: 'World clocks', value: String(clock.worldClocks.length) }];
+      model.empty = 'Add a named timer, use the stopwatch, or show a world clock.';
+    }
   } else if (kind === 'task_objective') {
     const objective = input.taskObjective;
     if (!objective || objective.resource.id !== resource?.id) {

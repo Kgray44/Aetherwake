@@ -894,6 +894,9 @@
 .vela-core-icon-mark[data-icon="missions"] {
   --vela-icon: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22white%22%20stroke-width%3D%221.5%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M9%203h6v5H9zM4%2016h6v5H4zM14%2016h6v5h-6zM12%208v4M7%2016v-4h10v4%22%2F%3E%3C%2Fsvg%3E");
 }
+.vela-core-icon-mark[data-icon="result"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 3h12v18H6zM9 7h6M9 12h6M9 17h4'/%3E%3C/svg%3E");
+}
 
 .vela-core-status[data-request-state="submitting"],
 .vela-core-status[data-request-state="planning"] {
@@ -949,3 +952,10 @@
   line-height: 0;
   overflow: hidden;
 }
+.vela-core-icon-mark[data-icon="voice"] {
+  --vela-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.7' stroke-linecap='round'%3E%3Crect x='9' y='3' width='6' height='12' rx='3'/%3E%3Cpath d='M5 10v2a7 7 0 0 0 14 0v-2M12 19v3m-4 0h8'/%3E%3C/svg%3E");
+}
+.vela-voice-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.vela-voice-settings { display: grid; gap: 10px; padding-top: 12px; }
+.vela-voice-caption { white-space: pre-wrap; overflow-wrap: anywhere; }
+.vela-core-icon[data-voice-active="true"] { color: #d8ccff; outline: 1px solid #b6a0ee; }

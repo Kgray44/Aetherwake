@@ -29,12 +29,13 @@ function fixture(mode = 'normal', enabled = true) {
   port().onEvent((event) => events.push(event));
   const vela = (name: VelaOperation['name'], input: unknown = {}) => core.command('vela', { name, input } as VelaOperation);
   const state = () => vela('state') as Promise<VelaBackendState>;
-  const granted = async (resourceIds: string[] = [], intent = 'Synthetic protocol request to propose one folder.', reviewNatively = false) => {
+  const granted = async (resourceIds: string[] = [], intent = 'Synthetic protocol request to propose one folder.') => {
     await core.command('capabilities', {});
     const preview = await core.command('velaRequestPreview', { intent, resourceIds });
     const identity = { previewId: preview.id, signature: preview.signature };
-    const review = reviewNatively ? await core.command('velaNativeReview', identity) : undefined;
-    const grant = await core.command('authorizeVelaRequest', { ...identity, ...(review ? { reviewDigest: review.reviewDigest } : {}) });
+    // Match the native broker: every provider send reviews the exact frozen payload before consent.
+    const review = await core.command('velaNativeReview', identity);
+    const grant = await core.command('authorizeVelaRequest', { ...identity, reviewDigest: review.reviewDigest });
     return { preview, review, input: { intent: preview.intent, resourceIds, authorizeProvider: true, previewId: preview.id, grantId: grant.grantId } };
   };
   return {
@@ -145,8 +146,8 @@ test('a model-selected resource opening resolves only a unique scoped target wit
     const baseline = await addNote('Synthetic note 10');
     const lookup = async () => {
       const { input } = await f.granted([], 'Bring up the first note for me.');
-      const request = await f.vela('request', input) as { id: string; planId: string; state: string };
-      assert.equal(request.state, 'completed');
+      const request = await f.vela('request', input) as { id: string; planId: string; state: string; errorCode?: string };
+      assert.equal(request.state, 'completed', request.errorCode);
       const state = await f.state();
       assert.equal(state.plans.find(plan => plan.id === request.planId)?.steps[0].action.type, 'openResource');
       const receipt = state.receipts.find(item => item.requestId === request.id)!;
@@ -198,7 +199,7 @@ test(`a slow model can propose a reviewed arrangement of the active workspace wi
     await f.core.command('desktop', { type: 'createResource', kind: 'task', title: 'Synthetic build', workspaceId });
     const baseline = await f.core.command('desktop', { type: 'snapshot' });
 
-    const { preview, review, input } = await f.granted([], discovery ? 'Can you organize my workspace?' : 'These cards could use a tidier arrangement.', true);
+    const { preview, review, input } = await f.granted([], discovery ? 'Can you organize my workspace?' : 'These cards could use a tidier arrangement.');
     assert.deepEqual(preview.context.activeSurface, { projectId: project.id, workspaceId });
     assert.deepEqual(preview.context.activeWorkspaceLayout, {
       mode: 'fluid', placementCount: 2, lockedPlacementCount: 0, velaLocked: false, resolveWouldMovePlacements: false,

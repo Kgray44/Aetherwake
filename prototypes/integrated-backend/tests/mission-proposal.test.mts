@@ -104,3 +104,11 @@ test('accepts a full six-task graph with bounded depth and edge count', () => {
   assert.deepEqual(plan.tasks.map(task => task.id), [...keys, 'report']);
   assert.deepEqual(plan.tasks.at(-1)?.dependencies, keys);
 });
+
+test('a compiled specialist-only graph cannot promote validated reports into a verified objective',()=>{
+  const selection={provider:'chatgpt-plan-responses' as const,model:'synthetic-model',connectionVersion:1,settingsStamp:'synthetic'};
+  const templates=missionPlanningSpecialists(selection).filter(task=>task.id.startsWith('temporary-specialist'));
+  const plan=compileMissionProposal(JSON.stringify({tasks:templates.map(task=>({capability:task.id,after:[],role:{title:'Independent reviewer',responsibility:'Review a reported software claim.'}})),unsupported:[]}),objective,scope,Object.fromEntries(templates.map(task=>[task.id,task])));
+  assert.equal(plan.coverage?.status,'partial');assert.match(plan.coverage!.limitations.join(' '),/provider reports.*independent domain evidence/su);
+  assert.ok(plan.tasks.slice(0,-1).every(task=>task.executor==='chatgpt.specialist'));
+});

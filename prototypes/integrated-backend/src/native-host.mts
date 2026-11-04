@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { NativeLiveMediaServices } from './live-media-host.mts';
 
 /** Private native-process injection. Never renderer RPC or serialized workerData. */
 export interface NativeHostServices {
+  liveMedia?: NativeLiveMediaServices;
   secrets: {
     available(): Promise<boolean>;
     seal(plaintext: string): Promise<Uint8Array>;

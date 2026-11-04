@@ -106,12 +106,16 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     inputMethod: "App-window software native mouse, key and text input. Renderer inspections use userGesture=false.",
     actions: [], errors: [], captures: [],
   };
-  const root = path.win32.resolve(privateRoot), out = path.join(root, "mission-evidence");
+  const root = path.win32.resolve(privateRoot), out = path.join(root, argv.includes('--missions-persistence-reopen-only')?'mission-reopen-evidence':'mission-evidence');
   let slot, owned = false, admitted = false, listening = false, workTimer, hardTimer, rejectAbort;
   const aborted = new Promise((_, reject) => { rejectAbort = reject; });
   aborted.catch(() => {});
   const abort = code => rejectAbort(slot?.abort(code) ?? Error(code));
-  const blur = () => abort("mission_native_focus_lost");
+  const blur = () => {
+    receipt.focusLoss = require('electron').BrowserWindow.getAllWindows().map(window => ({ id: window.id,
+      title: window.getTitle(), visible: window.isVisible(), focused: window.isFocused(), parentId: window.getParentWindow()?.id ?? null }));
+    abort("mission_native_focus_lost");
+  };
   const escape = (_event, input) => { if (input?.type === "keyDown" && input.key === "Escape") abort("mission_native_operator_escape"); };
   const consoleError = (_event, details) => {
     if ((details?.level === "error" || details?.level === 3) && receipt.errors.length < 16)
@@ -127,7 +131,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     assert.match(win.getTitle(), /Automated check/i, "owned_automated_window_required");
     receipt.source = sourceIdentity(source);
     owned = true;
-    slot = createSlot({ win, startedAt: moduleStartedMonotonicMs, limitMs: LIMIT_MS, cleanupMs: 4000 });
+    slot = createSlot({ win, startedAt: moduleStartedMonotonicMs, limitMs: argv.includes('--missions-voice-live-only')?30000:LIMIT_MS, cleanupMs: 4000 });
     slot.check();
     hardTimer = setTimeout(() => app.exit(1), slot.remaining());
     workTimer = setTimeout(() => abort("mission_native_work_deadline"), slot.workRemaining());
@@ -207,6 +211,274 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     assert.equal(providerBefore.scope, "process-session-native-attempts");
     assert.equal(providerBefore.codexConnections, 0);
     assert.equal(providerBefore.providerRequests, 0);
+    if(argv.includes('--missions-persistence-live-only')){
+      await require('./mission-persistence.cjs').run({argv,root,source,receipt,rpc,js,click,fill,wait,capture,operation,slot});
+      receipt.passed=true;return;
+    }
+    if(argv.includes('--missions-semantic-live-only')){
+      assert(argv.includes('--bootstrap-vela-api'),'explicit_protected_semantic_api_required');
+      assert(!['--missions-voice-live-only','--missions-api-live-only','--missions-product-only'].some(flag=>argv.includes(flag)),'one_bounded_semantic_journey_required');
+      receipt.profileContent='Fresh synthetic vintage telescope project, optics note and a single real dedicated Vela API semantic workspace proposal. No personal project or note content.';
+      const appCommand=input=>js(`window.__aerynth.execute(${quote(input)})`),vela=()=>rpc('vela',{name:'state',input:{}}),
+        projectTitle='Vintage telescope restoration',noteTitle='Vintage telescope optics observations',
+        noteContent='Synthetic fixture: 1960s refractor. Record lens alignment observations and calibration measurements here.',
+        seedTitle='Synthetic telescope source workspace',composer=SURFACE+' textarea[aria-label="Message Vela"]';
+      const usageBefore=await rpc('velaApiUsageStatus',{});assert.equal(usageBefore.enabled,true);assert.equal(usageBefore.usedToday,0);
+      await appCommand({type:'createProject',title:projectTitle});
+      const project=(await desktop()).projects.find(item=>item.title===projectTitle);assert(project,'synthetic_project_fixture_missing');
+      await appCommand({type:'createWorkspace',title:seedTitle,projectId:project.id});
+      const seed=(await desktop()).workspaces.find(item=>item.title===seedTitle);assert(seed,'synthetic_source_workspace_missing');
+      await appCommand({type:'createResource',kind:'note',title:noteTitle,workspaceId:seed.id});
+      const note=(await desktop()).resources.find(item=>item.title===noteTitle&&item.kind==='note');assert(note?.project_id===project.id,'synthetic_optics_note_scope_mismatch');
+      await appCommand({type:'content',resourceId:note.id,expectedVersion:note.version,content:noteContent});
+      const before=await desktop(),sourceNote=before.resources.find(item=>item.id===note.id);assert.equal(sourceNote.content,noteContent);
+      assert.equal((await rpc('providerActivity',{})).providerRequests,0,'synthetic_fixtures_started_inference');
+      receipt.actions.push({method:'application-capability-fixture',type:'semantic-project-and-existing-note',projectId:project.id,workspaceId:seed.id,resourceId:note.id});
+      const intent='Create a workspace for Vintage telescope restoration for calibrating a 1960s refractor: calibration checklist, optics notes reusing "Vintage telescope optics observations", and a local project conversation.';
+      const priorRequests=new Set((await vela()).requests.map(request=>request.id));
+      if(!await js(`document.querySelector(${quote(composer)})?.getClientRects().length>0`))await click('#vela');
+      await fill(composer,intent);await capture('00-semantic-purpose-ready');await click(SURFACE+' button[aria-label="Send to Vela"]');
+      receipt.phase='Single real semantic proposal completes populated native construction';
+      const settled=await operation(async()=>{
+        const until=performance.now()+Math.min(28000,slot.workRemaining());
+        while(performance.now()<until){slot.check();const state=await vela(),request=state.requests.find(item=>!priorRequests.has(item.id)&&item.intent===intent);
+          if(request&&['completed','responded','failed','unknown','invalid-plan','provider-unavailable'].includes(request.state))return {state,request};
+          await new Promise(resolve=>setTimeout(resolve,35));}
+        throw Error('semantic_proposal_deadline');
+      },'semantic_proposal_deadline');
+      assert.equal(settled.request.state,'completed',settled.request.errorCode??settled.request.state);
+      const plan=settled.state.plans.find(item=>item.id===settled.request.planId),
+        construction=settled.state.receipts.find(item=>item.requestId===settled.request.id&&item.workspaceConstruction),proof=construction?.workspaceConstruction;
+      assert(plan?.state==='applied'&&plan.steps.length===1&&plan.steps[0].action.type==='constructWorkspace','native_semantic_construction_plan_required');
+      assert(proof?.resources.length>=3&&proof.placements.length===proof.resources.length,'semantic_workspace_not_populated');
+      assert.deepEqual(proof.verification,{workspaceExists:true,projectMatches:true,bindingsMatch:true,geometryValid:true});
+      assert.equal(proof.projectId,project.id);assert.equal(proof.resources.find(item=>item.resourceId===note.id)?.reused,true,'semantic_architect_did_not_reuse_exact_existing_note');
+      const template=(await rpc('library',{name:'getTemplate',input:proof.templateId})).result,
+        actual=(await rpc('library',{name:'inspectWorkspace',input:{workspaceId:proof.workspaceId}})).result,after=await desktop();
+      assert.equal(template.provenance?.providerId,'openai-api-vela','real_semantic_template_provenance_required');
+      assert(template.tags.includes('semantic'));assert.equal(template.version,proof.templateVersion);
+      assert.equal(actual.projectId,project.id);assert.equal(after.activeWorkspaceId,proof.workspaceId);assert.equal(after.workspaces.length,before.workspaces.length+1);assert.equal(after.projects.length,before.projects.length);
+      assert.equal(after.resources.find(item=>item.id===note.id)?.content,noteContent,'semantic_reference_changed_source_content');
+      assert.equal(after.resources.filter(item=>item.title===noteTitle).length,1,'semantic_reference_duplicated_source_note');
+      const bound=proof.resources.map(ref=>after.resources.find(item=>item.id===ref.resourceId));assert(bound.every(item=>item?.project_id===project.id&&item.state!=='archived'));
+      assert(bound.some(item=>item.kind==='checklist'),'semantic_calibration_checklist_missing');assert(bound.some(item=>item.kind==='conversation'&&item.providerId==='local'),'semantic_local_conversation_missing');
+      assert.equal(actual.blocks.length,proof.placements.length);
+      for(const binding of proof.placements){
+        const block=actual.blocks.find(item=>item.blockId===binding.blockId),role=template.body.placements.find(item=>item.key===binding.role);
+        assert(block?.resourceId===binding.resourceId&&block.resourceState==='active'&&role,'semantic_canonical_role_binding_mismatch');
+        for(const field of ['x','y','width','height'])assert(Number.isFinite(block[field])&&block[field]===role.presentation[field],'semantic_canonical_geometry_mismatch');
+        assert(block.width>0&&block.height>0,'semantic_zero_sized_block');
+      }
+      for(let i=0;i<actual.blocks.length;i++)for(let j=i+1;j<actual.blocks.length;j++){
+        const a=actual.blocks[i],b=actual.blocks[j];assert(!(Math.min(a.x+a.width,b.x+b.width)>Math.max(a.x,b.x)&&Math.min(a.y+a.height,b.y+b.height)>Math.max(a.y,b.y)),'semantic_workspace_blocks_overlap');
+      }
+      const providerAfter=await rpc('providerActivity',{}),usageAfter=await rpc('velaApiUsageStatus',{}),snapshot=await rpc('snapshot',{}),
+        executions=Object.values(snapshot.executions).filter(item=>item.providerId==='openai-api-vela'&&item.commandId==='vela-api-scoped:'+template.provenance.requestId);
+      assert.equal(providerAfter.codexConnections,0);assert.equal(providerAfter.providerRequests-providerBefore.providerRequests,1,'one_bounded_semantic_provider_request_required');
+      assert.equal(usageAfter.configurationVersion,usageBefore.configurationVersion);assert.equal(usageAfter.usedToday-usageBefore.usedToday,1,'semantic_scoped_usage_not_recorded');
+      assert.equal(executions.length,1,'semantic_execution_provenance_missing');const execution=executions[0];assert.equal(execution.state,'provider_completed');assert.equal(execution.responseOutcome,'completed');
+      if(execution.usage)assert.equal(execution.usage.source,'provider-reported');
+      receipt.semantic={requestId:settled.request.id,planId:plan.id,workspaceId:proof.workspaceId,projectId:project.id,reusedResourceId:note.id,
+        canonicalBindings:proof.resources,canonicalPlacements:proof.placements,templateProvenance:template.provenance,
+        geometry:actual.blocks.map(({blockId,resourceId,x,y,width,height})=>({blockId,resourceId,x,y,width,height})),
+        execution:{id:execution.id,state:execution.state,responseOutcome:execution.responseOutcome,usage:execution.usage??null,usageSource:execution.usage?'provider-reported':'unavailable'},
+        usage:{before:usageBefore,after:usageAfter},nativeConstructionVerified:true,conciseRequestBoundReply:false,completedPlanIcon:false};
+      receipt.providerActivity={before:providerBefore,after:providerAfter};
+      await wait('Semantic construction has a concise request-bound primary reply and plan control',()=>js(`(()=>{
+        const response=document.querySelector(${quote(SURFACE+' .vela-manifestation')}),body=response?.querySelector('.vela-manifestation-content'),
+          plan=response?.querySelector('button[aria-label="Open completed plan"]');
+        return response?.dataset.requestId===${quote(settled.request.id)}&&body&&!body.hidden&&body.getClientRects().length&&
+          body.textContent.length<500&&body.querySelector('.vela-mission-jobs-done')?.textContent==='1 job done'&&
+          plan?.dataset.completedPlanId===${quote(plan.id)}&&plan.getClientRects().length&&response.querySelector('.vela-manifestation-kicker')?.hidden&&
+          !response.querySelector('.vela-core-plans')?.children.length&&document.querySelector(${quote(SURFACE+' .vela-core-compose')})?.getAttribute('aria-busy')!=='true';
+      })()`));
+      receipt.semantic.conciseRequestBoundReply=true;
+      await capture('01-semantic-workspace-created');
+      assert.equal(require('electron').BrowserWindow.getAllWindows().length,1,'semantic_workspace_opened_redundant_review_window');
+      const openDialogs=await js(`[...document.querySelectorAll('dialog[open]')].map(node=>({id:node.id,surfaceId:node.dataset.surfaceId??null}))`);
+      receipt.semantic.openDialogs=openDialogs;
+      assert(openDialogs.every(dialog=>dialog.id==='vela-assistant-surface'&&dialog.surfaceId==='vela'),'semantic_workspace_left_redundant_dialog');
+      await click(SURFACE+' button[aria-label="Open completed plan"]');
+      await wait('Semantic completed plan opens behind its concise response icon',()=>js(`(()=>{const panel=document.querySelector(${quote(SURFACE+' .vela-core-result-panel')});return panel&&!panel.hidden&&panel.open&&panel.querySelector('[data-plan-id="'+${quote(plan.id)}+'"]');})()`));
+      await capture('02-semantic-completed-plan');
+      receipt.semantic={requestId:settled.request.id,planId:plan.id,workspaceId:proof.workspaceId,projectId:project.id,
+        reusedResourceId:note.id,canonicalBindings:proof.resources,canonicalPlacements:proof.placements,templateProvenance:template.provenance,
+        geometry:actual.blocks.map(({blockId,resourceId,x,y,width,height})=>({blockId,resourceId,x,y,width,height})),
+        execution:{id:execution.id,state:execution.state,responseOutcome:execution.responseOutcome,usage:execution.usage??null,usageSource:execution.usage?'provider-reported':'unavailable'},
+        usage:{before:usageBefore,after:usageAfter},openDialogs,noRedundantApproval:true,conciseRequestBoundReply:true,completedPlanIcon:true,
+        verificationBoundary:'Actual owned Electron composer and canonical native construction; one real dedicated Vela API semantic proposal using synthetic project metadata. No personal note content or human acceptance claim.'};
+      receipt.providerActivity={before:providerBefore,after:providerAfter};assert.deepEqual(receipt.errors,[],'semantic_renderer_console_errors');receipt.passed=true;return;
+    }
+    if(argv.includes('--missions-voice-live-only')){
+      assert(argv.includes('--bootstrap-vela-api')&&argv.includes('--voice-synthetic-input'),'explicit_protected_voice_and_synthetic_input_required');
+      assert(!argv.includes('--missions-api-live-only')&&!argv.includes('--missions-product-only'),'one_bounded_native_voice_journey_required');
+      receipt.profileContent='Fresh synthetic native voice profile, zero-source microphone stream and muted playback. Dedicated Vela API may incur the explicitly bounded voice session charge.';
+      receipt.voice={syntheticInput:true,ambientMicrophoneCapture:false,outputMuted:true,humanAudibility:'unverified',nativeAuthorizedMaximumSeconds:30,
+        verificationBoundary:'Actual owned Electron UI, private sandboxed WebRTC media and real provider lifecycle. Synthetic input is silence; no claim that a human heard or spoke audio.'};
+      const voice=()=>rpc('velaVoice',{name:'state',input:{}}),voiceSurface=SURFACE+' .vela-voice',
+        start=voiceSurface+' .vela-voice-actions button:first-child',end=voiceSurface+' .vela-voice-actions button:nth-child(2)';
+      const waitVoice=async(label,check,milliseconds)=>{
+        receipt.phase=label;const until=performance.now()+Math.min(milliseconds,slot.workRemaining());
+        while(performance.now()<until){slot.check();const value=await check();slot.check();if(value)return value;await new Promise(resolve=>setTimeout(resolve,35));}
+        throw Error('voice_lifecycle_deadline');
+      };
+      await click('#vela');await click(SURFACE+' button[aria-label="Voice"]');
+      const ready=await wait('Real Voice panel is available',async()=>{
+        const state=await voice();assert.equal(state.available,true,state.reason??'native_voice_unavailable');
+        return await js(`document.querySelector(${quote(start)})?.getClientRects().length>0&&!document.querySelector(${quote(start)}).disabled`)&&state;
+      });
+      assert.equal(ready.session.dispatched,false);assert.equal(ready.media?.microphoneAccess,'not-requested');
+      assert.equal(ready.usage.maximumVoiceSeconds,300);assert.equal(ready.usage.initializationExposureSeconds,15);
+      await capture('00-voice-ready');await click(start);
+      const running=await waitVoice('Real provider voice session reaches an authoritative lifecycle state',async()=>{
+        const state=await voice();return ['running','failed','unknown'].includes(state.session.state)&&state;
+      },18000);
+      receipt.voice.started={session:running.session,media:running.media,captionCount:running.captions.length};
+      assert.equal(running.session.state,'running',running.session.errorCode??'native_voice_did_not_start');
+      assert.equal(running.session.dispatched,true);assert.equal(running.session.initializationExposureSeconds,15);
+      assert.equal(running.media?.connection,'connected');assert.equal(running.media?.microphoneAccess,'active');assert.equal(running.media?.humanAudibility,'unverified');
+      const mediaWindows=require('electron').BrowserWindow.getAllWindows().filter(window=>window!==win&&/\/voice-media\.html$/u.test(window.webContents.getURL()));
+      assert.equal(mediaWindows.length,1,'one_owned_private_media_window_required');
+      const mediaWindow=mediaWindows[0],mediaPreferences=mediaWindow.webContents.getLastWebPreferences();
+      assert.equal(mediaWindow.isVisible(),false);assert.equal(mediaWindow.isFocusable(),false);assert.equal(mediaPreferences.sandbox,true);assert.equal(mediaPreferences.contextIsolation,true);assert.equal(mediaPreferences.nodeIntegration,false);
+      assert(require('./live-media-broker.cjs').isSyntheticLiveMediaWindow(mediaWindow),'synthetic_native_media_not_selected');
+      assert.equal(mediaWindow.webContents.isAudioMuted(),true,'synthetic_native_output_not_muted');
+      receipt.voice.privateMedia={sandbox:true,contextIsolation:true,nodeIntegration:false,hidden:true,focusable:false,nativeOutputMuted:true,
+        secureContext:await operation(()=>mediaWindow.webContents.executeJavaScript('isSecureContext',false),'private_media_secure_context_deadline')};
+      assert.equal(receipt.voice.privateMedia.secureContext,true);
+      await wait('The actual Voice panel observes the running provider state',()=>js(`document.querySelector(${quote(voiceSurface)})?.dataset.state==='running'`));
+      await capture('01-voice-running');await click(end);
+      const stopped=await waitVoice('Native End releases the private media and records finalization truth',async()=>{
+        const state=await voice();return ['closed','unknown'].includes(state.session.state)&&state.media?.microphoneAccess!=='active'&&state;
+      },7000);
+      receipt.voice.stopped={session:stopped.session,media:stopped.media,captionCount:stopped.captions.length};
+      assert.equal(stopped.session.state,'closed',stopped.session.errorCode??'native_voice_finalization_unconfirmed');assert.equal(stopped.session.finalization,'confirmed');
+      assert.equal(stopped.media?.localTrackEnabled,false);assert.notEqual(stopped.media?.microphoneAccess,'active');
+      assert.equal(mediaWindow.isDestroyed(),true,'private_voice_window_not_released');receipt.voice.privateMedia.destroyedAfterEnd=true;
+      await wait('Actual Voice panel observes confirmed closure',()=>js(`(()=>{const root=document.querySelector(${quote(voiceSurface)});return root?.dataset.state==='closed'&&root.textContent.includes('Voice is off.')&&[...root.querySelectorAll('button')].some(button=>button.textContent==='Start voice'&&!button.hidden&&!button.disabled);})()`));
+      await capture('02-voice-ended');const after=await rpc('providerActivity',{});
+      assert.equal(after.codexConnections,0);receipt.providerActivity={before:providerBefore,after};
+      assert.deepEqual(receipt.errors,[],'voice_renderer_console_errors');receipt.passed=true;return;
+    }
+    if(argv.includes('--missions-product-only')){
+      assert(!argv.includes('--bootstrap-vela-api')&&!argv.includes('--missions-api-live-only'),'offline_product_profile_required');
+      const subsets=['layout','timers','recovery'].filter(name=>argv.includes('--missions-product-'+name+'-only'));
+      assert(subsets.length<=1,'one_bounded_product_subset_required');
+      const subset=subsets[0]??'layout',composer=SURFACE+' textarea[aria-label="Message Vela"]';
+      receipt.product={subset,nativePrompts:[],verificationBoundary:'Owned Electron software native input and actual visible product/canonical state; no provider calls or physical-device claim.'};
+      const vela=()=>rpc('vela',{name:'state',input:{}}),layout=id=>rpc('library',{name:'inspectWorkspace',input:{workspaceId:id}}).then(value=>value.result);
+      const hideVela=async()=>{if(await js(`document.querySelector(${quote(composer)})?.getClientRects().length>0`))await click('#vela');
+        await wait('Vela composer closes for unobscured product inspection',()=>js(`!document.querySelector(${quote(composer)})?.getClientRects().length`));};
+      const ask=async intent=>{
+        const before=new Set((await vela()).requests.map(request=>request.id));
+        if(!await js(`document.querySelector(${quote(composer)})?.getClientRects().length>0`))await click('#vela');
+        await fill(composer,intent);await click(SURFACE+' button[aria-label="Send to Vela"]');
+        const settled=await wait('Native product turn: '+intent,async()=>{
+          const state=await vela(),request=state.requests.find(item=>!before.has(item.id)&&item.intent===intent);
+          return request&&['completed','responded','failed','unknown','invalid-plan','provider-unavailable'].includes(request.state)&&{state,request};
+        });
+        assert.equal(settled.request.state,'completed',settled.request.errorCode??settled.request.state);
+        assert.equal(settled.request.providerId,null,'native_product_started_inference');
+        await wait('Canonical native answer is visible',()=>js(`(()=>{const response=document.querySelector(${quote(SURFACE+' .vela-manifestation')}),body=response?.querySelector('.vela-manifestation-content');
+          return response?.dataset.requestId===${quote(settled.request.id)}&&body&&!body.hidden&&body.getClientRects().length&&document.querySelector(${quote(SURFACE+' .vela-core-compose')})?.getAttribute('aria-busy')!=='true';})()`));
+        assert.equal(require('electron').BrowserWindow.getAllWindows().length,1,'native_product_opened_extra_review_window');
+        receipt.product.nativePrompts.push({intent,requestId:settled.request.id,planId:settled.request.planId});return settled;
+      };
+      const cardGeometry=ids=>js(`(()=>{const top=Math.max(document.querySelector('.topbar')?.getBoundingClientRect().bottom??0,document.querySelector('.brand')?.getBoundingClientRect().bottom??0),bottom=innerHeight-32;
+        return ${quote(ids)}.map(id=>{const card=document.querySelector('[data-block="'+id+'"]'),r=card?.getBoundingClientRect();if(!r)return {id,missing:true};
+          const visibleWidth=Math.max(0,Math.min(r.right,innerWidth-16)-Math.max(r.left,16)),visibleHeight=Math.max(0,Math.min(r.bottom,bottom)-Math.max(r.top,top));
+          return {id,x:r.x,y:r.y,width:r.width,height:r.height,visibleWidth,visibleHeight,visibleFraction:visibleWidth*visibleHeight/(r.width*r.height),topClear:r.top>=top};});})()`);
+      const canonicalGeometry=state=>state.blocks.map(({blockId,resourceId,subject,x,y,width,height,zIndex,shape,rotation,minimized,locked,materialVariant})=>
+        ({blockId,resourceId,subject,x,y,width,height,zIndex,shape,rotation,minimized,locked,materialVariant})).sort((a,b)=>a.blockId.localeCompare(b.blockId));
+      if(subset==='layout'){
+        const created=await ask('Create a workspace for A World for Two for Minecraft.'),construction=created.state.receipts.find(receipt=>receipt.requestId===created.request.id&&receipt.workspaceConstruction);
+        assert(construction?.workspaceConstruction?.placements.length===3,'three_functional_native_cards_required');
+        const proof=construction.workspaceConstruction,before=await layout(proof.workspaceId),desktopBefore=await desktop(),
+          noteIds=desktopBefore.resources.filter(resource=>resource.kind==='note'&&proof.resources.some(ref=>ref.resourceId===resource.id)).map(resource=>resource.id),
+          taskIds=desktopBefore.resources.filter(resource=>['task','task_group','task_objective','checklist'].includes(resource.kind)&&proof.resources.some(ref=>ref.resourceId===resource.id)).map(resource=>resource.id);
+        assert(noteIds.length&&taskIds.length,'actual_native_task_and_note_family_required');
+        await hideVela();const ids=before.blocks.map(block=>block.blockId),beforeVisible=await wait('Constructed cards visibly settle',async()=>{const cards=await cardGeometry(ids);return cards.every(card=>card.visibleFraction>.65)&&cards;});
+        await capture('00-product-workspace-before');
+        const adjusted=await ask('Put the project tasks on the right, and make the notes bigger.'),after=await layout(proof.workspaceId),
+          actionReceipt=adjusted.state.receipts.find(receipt=>receipt.requestId===adjusted.request.id&&receipt.workspaceAdjustment);
+        assert.equal(actionReceipt?.workspaceAdjustment?.verification.oneUndoEntry,true);assert.equal(after.revision,before.revision+1);
+        assert.deepEqual(after.viewport,before.viewport);assert.deepEqual(after.presence,before.presence);
+        assert.deepEqual(after.blocks.map(block=>[block.blockId,block.resourceId]).sort(),before.blocks.map(block=>[block.blockId,block.resourceId]).sort());
+        for(const old of before.blocks){const current=after.blocks.find(block=>block.blockId===old.blockId);assert.equal(current.locked,old.locked);
+          if(noteIds.includes(old.resourceId))assert(current.width>old.width&&current.height>old.height,'native_notes_not_enlarged');
+          else if(!taskIds.includes(old.resourceId))assert.deepEqual(canonicalGeometry({blocks:[current]}),canonicalGeometry({blocks:[old]}),'unrelated_scene_card_changed');}
+        const notes=after.blocks.filter(block=>noteIds.includes(block.resourceId)),tasks=after.blocks.filter(block=>taskIds.includes(block.resourceId));
+        assert(tasks.every(task=>notes.every(note=>task.x>note.x)),'tasks_not_to_right_of_enlarged_notes');
+        await hideVela();const afterVisible=await wait('Adjusted cards stay useful in the actual viewport',async()=>{const cards=await cardGeometry(ids);return cards.every(card=>card.topClear&&card.visibleWidth>=180&&card.visibleHeight>=120&&card.visibleFraction>.60)&&cards;});
+        await capture('01-product-workspace-adjusted');receipt.product.layout={workspaceId:proof.workspaceId,beforeVisible,afterVisible,receipt:actionReceipt.workspaceAdjustment,
+          canonicalBindingsPreserved:true,unrelatedGeometryPreserved:true,locksPreserved:true,viewportPreserved:true};
+      } else if(subset==='timers'){
+        // Real empty-workspace product UI is setup; all timer/stopwatch/clock work below is natural language.
+        await click('#workspace-manager');const action=name=>'.en-navigator [data-action='+quote(name)+']';
+        await click(action('toggle-create'));await click(action('create-workspace'));
+        await fill('.en-navigator input[aria-label="Environment name"]','Native timer product review');await click(action('submit-workspace-create'));
+        const workspaceId=await wait('Blank timer workspace opens',async()=>{const state=await desktop();return state.activeWorkspaceId;});
+        if(await js(`document.querySelector('.en-navigator')?.getClientRects().length>0`))await click('#workspace-manager');
+        const created=await ask('Set a bread timer for fifteen minutes.'),proof=created.state.receipts.find(receipt=>receipt.requestId===created.request.id&&receipt.clockTimer)?.clockTimer;
+        assert(proof?.resourceId&&proof.timerId&&proof.blockId,'native_clock_block_receipt_required');assert.equal(proof.workspaceId,workspaceId);
+        const resourceId=proof.resourceId,timerId=proof.timerId,blockId=proof.blockId,view='[data-block="'+blockId+'"] .aw-clock-timer',
+          read=()=>rpc('clockTimers',{name:'read',input:{resourceId}}).then(value=>value.result);
+        const visibleTimer=async expected=>wait('Actual ClockTimer card: '+expected,async()=>{
+          const observed=await js(`(()=>{const node=document.querySelector(${quote(view)}),r=node?.getBoundingClientRect();return {present:!!node,timerId:node?.dataset.timerId,state:node?.dataset.timerState,name:node?.querySelector('[data-clock-timer-name]')?.textContent,status:node?.querySelector('[role=status]')?.textContent,rect:r?{x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom}:null,viewport:[innerWidth,innerHeight]};})()`);
+          receipt.product.timerVisibility=observed;const r=observed.rect;
+          return observed.timerId===timerId&&observed.state===expected&&r&&r.width>180&&r.height>160&&r.y>=0&&r.x>=0&&r.right<=observed.viewport[0]&&Math.min(r.bottom,observed.viewport[1])-r.y>160&&observed.name==='bread';
+        });
+        await hideVela();await capture('00-product-timer-initial');await visibleTimer('running');await capture('01-product-timer-running');
+        for(const [intent,expected] of [['Pause my bread timer.','paused'],['Add five minutes.','paused'],['Reset that timer.','ready'],['Start my bread timer.','running']]){
+          await ask(intent);const document=await read(),timer=document.timers.find(timer=>timer.id===timerId);assert.equal(timer.state,expected);assert.equal(timer.durationMs,intent.startsWith('Pause')?900000:1200000);await visibleTimer(expected);
+        }
+        const remaining=await ask('How much time is left?');assert(remaining.state.conversation.messages.some(message=>message.requestId===remaining.request.id&&message.role==='assistant'&&/remaining/u.test(message.content)));
+        await ask('Show all my timers.');await hideVela();
+        for(const [action,expected] of [['pauseTimer','paused'],['resumeTimer','running']]){
+          await click(view+' [data-clock-action='+quote(action)+']');
+          await wait('Native timer block control: '+action,async()=>(await read()).timers.find(timer=>timer.id===timerId)?.state===expected);
+        }
+        await ask('Start a stopwatch.');assert.equal((await read()).stopwatch.state,'running');
+        await hideVela();await click(view+' [data-clock-mode="stopwatch"]');await wait('Actual stopwatch output is visible',()=>js(`(()=>{const root=document.querySelector(${quote(view)}),output=root?.querySelector('[data-clock-stopwatch]');return root?.dataset.clockMode==='stopwatch'&&output?.getClientRects().length&&output.textContent!=='00:00.0';})()`));
+        await capture('01-product-stopwatch-running');
+        await ask("What's the time in Tokyo?");await ask('Add a clock for Tokyo.');await hideVela();await click(view+' [data-clock-mode="clock"]');
+        await wait('Actual saved Tokyo clock is visible',()=>js(`document.querySelector(${quote(view+' .aw-clock-timer-world-list')})?.textContent.includes('Tokyo')`));
+        await capture('02-product-tokyo-clock');
+        await click(view+' [data-clock-mode="timer"]');await click(view+' details:has([data-clock-action="createTimer"]) summary');
+        await fill(view+' input[aria-label="New timer name"]','Native completion check');
+        const durationInput=view+' input[aria-label="Duration in minutes"]';await click(durationInput);key('A',['control']);
+        await operation(()=>win.webContents.insertText('0.017'),'mission_numeric_input_deadline');
+        await wait('Native numeric duration is entered',()=>js(`document.querySelector(${quote(durationInput)})?.value==='0.017'`));
+        await click(view+' [data-clock-action="createTimer"]');
+        const quick=await wait('UI creates a second canonical timer',async()=>{const timer=(await read()).timers.find(timer=>timer.name==='Native completion check');
+          return timer?.state==='ready'&&await js(`document.querySelector(${quote(view)})?.dataset.timerId===${quote(timer.id)}`)&&timer;});
+        await click(view+' [data-clock-action="startTimer"]');
+        const expiry=await wait('Native timer completion reaches the actual block',async()=>{const document=await read(),timer=document.timers.find(timer=>timer.id===quick.id),saved=document.pendingExpiries.filter(item=>item.timerId===quick.id);
+          return timer?.state==='completed'&&saved.length===1&&await js(`document.querySelector(${quote(view)})?.dataset.timerState==='completed'&&document.querySelector(${quote(view+' [data-clock-expiry]')})?.textContent.includes('Native completion check completed')`)&&saved[0];});
+        await capture('03-product-native-timer-completed');await click(view+' [data-clock-action="acknowledgeExpiry"]');
+        await wait('Native completion acknowledgement is durable',async()=>{const document=await read();return document.pendingExpiries.length===0&&document.timers.filter(timer=>timer.id===quick.id&&timer.state==='completed').length===1;});
+        const final=await desktop();assert.equal(final.resources.filter(resource=>resource.kind==='clock_timer').length,1);
+        assert.equal(final.resources.filter(resource=>resource.kind==='note').length,0);assert.equal(final.blocks.filter(block=>block.workspace_id===workspaceId).length,1);
+        receipt.product.timers={workspaceId,resourceId,timerId,blockId,actualBlockUiVerified:true,directPauseResumeVerified:true,completedTimerId:quick.id,
+          completionExpiryId:expiry.id,completionAcknowledged:true,canonicalDocument:await read(),noGenericNote:true};
+      } else {
+        const created=await ask('Create a workspace for native recovery review.'),proof=created.state.receipts.find(receipt=>receipt.requestId===created.request.id&&receipt.workspaceConstruction)?.workspaceConstruction;
+        assert(proof,'verified_native_creation_required');const before=await layout(proof.workspaceId),beforeDesktop=await desktop(),
+          note=beforeDesktop.resources.find(resource=>resource.kind==='note'&&proof.resources.some(ref=>ref.resourceId===resource.id)),
+          noteBefore=note?await rpc('notes',{name:'readNote',input:note.id}):null;
+        const undone=await ask('Undo that.');const archived=await desktop();assert(archived.archivedWorkspaces.some(workspace=>workspace.id===proof.workspaceId));
+        const recoveryState=await rpc('workspaceRecovery',{name:'state',input:{workspaceId:proof.workspaceId}});
+        assert(recoveryState.available&&recoveryState.placementCount===before.blocks.length&&recoveryState.resourceCount===proof.resources.length,'archived_bindings_not_preserved');
+        const restored=await ask('Restore that workspace.'),after=await layout(proof.workspaceId);assert.equal((await desktop()).activeWorkspaceId,proof.workspaceId);
+        assert.deepEqual(canonicalGeometry(after),canonicalGeometry(before));assert.deepEqual(after.viewport,before.viewport);assert.deepEqual(after.presence,before.presence);
+        if(note)assert.deepEqual(await rpc('notes',{name:'readNote',input:note.id}),noteBefore);
+        await hideVela();await wait('Restored cards are actually visible',async()=>{const cards=await cardGeometry(after.blocks.map(block=>block.blockId));return cards.every(card=>card.visibleFraction>.65);});
+        await capture('00-product-restored-workspace');receipt.product.recovery={workspaceId:proof.workspaceId,originalCreationReceipt:proof,undoRequestId:undone.request.id,restoreRequestId:restored.request.id,
+          sameCanonicalBindings:true,contentPreserved:true,layoutPreserved:true,actualRestoredUiVisible:true};
+      }
+      const after=await rpc('providerActivity',{});assert.equal(after.providerRequests,0);assert.equal(after.codexConnections,0);
+      receipt.providerActivity={before:providerBefore,after};receipt.passed=true;return;
+    }
     await js(`window.__aerynth.execute(${quote({ type: "createWorkspace", title: WORKSPACE, projectId: null })})`);
     receipt.actions.push({ method: "application-capability-fixture", type: "createWorkspace" });
     const scope = await wait("Canonical workspace is active", async () => {
@@ -214,6 +486,122 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       return workspace && state.activeWorkspaceId === workspace.id && { workspaceId: workspace.id, projectId: null };
     });
     assert.deepEqual(await list(), []);
+    if(argv.includes('--missions-api-live-only')){
+      assert(argv.includes('--bootstrap-vela-api'),'explicit_protected_credential_import_required');
+      const diagnostic=await rpc('velaRequestPreview',{intent:'Remember the project codeword amber-pine. Reply only: Noted.',resourceIds:[],adaptive:true});
+      receipt.liveApiPreview={providerId:diagnostic.providerId,kind:diagnostic.route?.kind,sendDisposition:diagnostic.sendDisposition};
+      assert.equal(diagnostic.providerId,'openai-api-vela');assert.equal(diagnostic.sendDisposition,'routine');
+      const composer=SURFACE+' textarea[aria-label="Message Vela"]';
+      const ask=async intent=>{
+        const before=new Set((await rpc('vela',{name:'state',input:{}})).requests.map(request=>request.id));
+        if(!await js(`document.querySelector(${quote(composer)})?.getClientRects().length>0`))await click('#vela');
+        await fill(composer,intent);await click(SURFACE+' button[aria-label="Send to Vela"]');
+        const settled=await wait('Dedicated API answer settles',async()=>{
+          const state=await rpc('vela',{name:'state',input:{}}),request=state.requests.find(item=>!before.has(item.id)&&item.intent===intent);
+          if(!request||['planning','checking','awaiting-review','native-ready'].includes(request.state))return false;
+          return {state,request};
+        });
+        assert.equal(settled.request.state,'responded',settled.request.errorCode??settled.request.state);
+        assert.equal(settled.request.providerId,'openai-api-vela');
+        const answer=settled.state.conversation.messages.find(message=>message.id===settled.request.response?.messageId);
+        assert(answer?.role==='assistant'&&answer.providerId==='openai-api-vela'&&answer.providerContribution?.executionId);
+        await wait('Only the canonical concise answer is displayed',()=>js(`(()=>{
+          const response=document.querySelector(${quote(SURFACE+' .vela-manifestation')}),body=response?.querySelector('.vela-manifestation-content');
+          return response?.dataset.currentMessageId===${quote(answer.id)}&&body&&!body.hidden&&body.getClientRects().length&&
+            response.querySelector('.vela-manifestation-kicker')?.hidden&&
+            !response.querySelector('.vela-core-plans')?.children.length&&
+            document.querySelector(${quote(SURFACE+' .vela-core-compose')})?.getAttribute('aria-busy')!=='true';
+        })()`));
+        assert.equal(require('electron').BrowserWindow.getAllWindows().length,1,'ordinary_api_send_opened_extra_review');
+        return {request:settled.request,answer};
+      };
+      const first=await ask('Remember the project codeword amber-pine. Reply only: Noted.');
+      const second=await ask('What project codeword did I just give you? Reply with only the codeword.');
+      assert.match(second.answer.content,/amber-pine/iu);
+      assert(second.request.history?.messages.length>=2,'canonical_prior_exchange_was_not_included');
+      await capture('00-api-conversation-continuity');
+      const after=await rpc('providerActivity',{});
+      assert.equal(after.codexConnections,0);assert(after.providerRequests>=2&&after.providerRequests<=4);
+      receipt.liveApi={firstRequestId:first.request.id,secondRequestId:second.request.id,canonicalConversationPreserved:true,
+        priorExchangeIncluded:true,expectedCodewordReturned:true,extraReviewWindows:0};
+      receipt.providerActivity={before:providerBefore,after};receipt.passed=true;return;
+    }
+    if(argv.includes('--missions-rebirth-only')){
+      const composer=SURFACE+' textarea[aria-label="Message Vela"]';
+      const ask=async intent=>{
+        const before=new Set((await rpc('vela',{name:'state',input:{}})).requests.map(request=>request.id));
+        if(!await js(`document.querySelector(${quote(composer)})?.getClientRects().length>0`))await click('#vela');
+        await fill(composer,intent);await click(SURFACE+' button[aria-label="Send to Vela"]');
+        const request=await wait('Native Vela turn settles: '+intent,async()=>{
+          const state=await rpc('vela',{name:'state',input:{}});
+          return state.requests.find(request=>!before.has(request.id)&&request.intent===intent&&
+            ['completed','responded','failed','unknown','invalid-plan','provider-unavailable'].includes(request.state));
+        });
+        assert.equal(request.state,'completed',request.errorCode??request.state);
+        await wait('The canonical Vela reply is visible',()=>js(`(()=>{
+          const response=document.querySelector(${quote(SURFACE+' .vela-manifestation')}),body=response?.querySelector('.vela-manifestation-content');
+          return response?.dataset.requestId===${quote(request.id)}&&response.dataset.currentMessageId&&body&&!body.hidden&&
+            body.getClientRects().length>0&&body.querySelector('.vela-mission-jobs-done')?.textContent==='1 job done'&&
+            !response.querySelector('.vela-core-plans')?.children.length&&
+            document.querySelector(${quote(SURFACE+' .vela-core-compose')})?.getAttribute('aria-busy')!=='true'&&
+            document.querySelector(${quote(SURFACE+' .vela-core-status')})?.hidden;
+        })()`));
+        return request;
+      };
+      const exact='Create a workspace for A World for Two for Minecraft.';
+      const created=await ask(exact);
+      const initial=await rpc('vela',{name:'state',input:{}});
+      const construction=initial.receipts.find(receipt=>receipt.requestId===created.id&&receipt.workspaceConstruction);
+      assert(construction&&construction.workspaceConstruction.placements.length===3,'populated_construction_receipt_required');
+      const proof=construction.workspaceConstruction,workspaceId=proof.workspaceId;
+      const populated=await desktop(),expectedIds=proof.resources.map(resource=>resource.resourceId).sort();
+      assert.equal(populated.activeWorkspaceId,workspaceId);
+      assert.deepEqual(populated.blocks.filter(block=>block.workspace_id===workspaceId).map(block=>block.resource_id).sort(),expectedIds);
+      assert.equal(require('electron').BrowserWindow.getAllWindows().length,1,'routine_workspace_opened_a_second_approval_window');
+      await wait('The populated workspace has three visible resource cards',()=>js(`(()=>{
+        const ids=${quote(proof.placements.map(placement=>placement.blockId))};
+        return ids.every(id=>{const card=document.querySelector('[data-block="'+id+'"]'),r=card?.getBoundingClientRect();
+          const header=document.querySelector('.topbar')?.getBoundingClientRect();
+          return r&&r.width>80&&r.height>60&&r.top>=(header?.bottom??110)&&Math.min(r.right,innerWidth)-Math.max(r.left,0)>60&&Math.min(r.bottom,innerHeight)-Math.max(r.top,0)>40;});
+      })()`));
+      await capture('00-populated-minecraft-workspace');
+      const complaint="I literally just told you to make a workspace and you didn't!";
+      const inspected=await ask(complaint);
+      const inspectedState=await rpc('vela',{name:'state',input:{}});
+      assert(inspectedState.plans.find(plan=>plan.id===inspected.planId)?.steps.some(step=>step.action.type==='inspectVelaOperation'));
+      const checklist=populated.resources.find(resource=>expectedIds.includes(resource.id)&&resource.kind==='checklist');
+      const removed=populated.blocks.find(block=>block.workspace_id===workspaceId&&block.resource_id===checklist.id);
+      const command={type:'detach',blockId:removed.id,expectedVersion:removed.version,expectedLayoutVersion:populated.layoutVersion};
+      await js(`window.__aerynth.execute(${quote(command)})`);
+      receipt.actions.push({method:'controlled-canonical-placement-loss',workspaceId,resourceId:checklist.id,blockId:removed.id});
+      const missing=await desktop();
+      assert.equal(missing.blocks.filter(block=>block.workspace_id===workspaceId).length,2);
+      await capture('01-controlled-missing-block');
+      const repaired=await ask(complaint);
+      const final=await desktop(),finalVela=await rpc('vela',{name:'state',input:{}});
+      assert.equal(final.activeWorkspaceId,workspaceId);assert.equal(final.workspaces.length,populated.workspaces.length);
+      assert.deepEqual(final.blocks.filter(block=>block.workspace_id===workspaceId).map(block=>block.resource_id).sort(),expectedIds);
+      assert(finalVela.plans.find(plan=>plan.id===repaired.planId)?.steps.some(step=>step.action.type==='repairWorkspace'));
+      assert(finalVela.receipts.some(receipt=>receipt.requestId===repaired.id&&receipt.workspaceConstruction?.workspaceId===workspaceId));
+      assert.deepEqual(finalVela.receipts.find(receipt=>receipt.id===construction.id).workspaceConstruction,proof);
+      await capture('02-repaired-minecraft-workspace');
+      await click(SURFACE+' button[aria-label="Open completed plan"]');
+      await wait('The completed plan opens behind its response control',()=>js(`(()=>{
+        const panel=document.querySelector(${quote(SURFACE+' .vela-core-result-panel')}),r=panel?.getBoundingClientRect(),
+          open=[...panel?.querySelectorAll('button')??[]].find(button=>button.textContent==='Open workspace'),b=open?.getBoundingClientRect();
+        return panel&&!panel.hidden&&panel.open&&panel.querySelector('[data-plan-id="'+${quote(repaired.planId)}+'"]')&&
+          r&&r.height>100&&r.top>=0&&r.top<innerHeight-100&&b&&b.width>60&&b.top>=0&&b.bottom<innerHeight;
+      })()`));
+      await capture('03-completed-plan-disclosure');
+      await click(SURFACE+' .vela-core-result-panel button[data-open-workspace]');
+      await wait('The completed plan opens the same canonical workspace',async()=>
+        (await desktop()).activeWorkspaceId===workspaceId);
+      const after=await rpc('providerActivity',{});
+      assert.equal(after.providerRequests,providerBefore.providerRequests);assert.equal(after.codexConnections,providerBefore.codexConnections);
+      receipt.rebirth={workspaceId,constructionRequestId:created.id,inspectionRequestId:inspected.id,repairRequestId:repaired.id,
+        resourceIds:expectedIds,canonicalWorkspacePreserved:true,originalConstructionReceiptPreserved:true};
+      receipt.providerActivity={before:providerBefore,after};receipt.passed=true;return;
+    }
     if (argv.includes("--missions-header-only")) {
       const chrome = () => js(`(() => {
         const overlay=navigator.windowControlsOverlay,area=overlay?.getTitlebarAreaRect();

@@ -1540,7 +1540,14 @@ test("registered project/browser views have live capability states and create on
       "Synthetic view workspace",
       project.id,
     );
-  assert.equal(REGISTERED_BLOCKS.length, 16);
+  assert.deepEqual(REGISTERED_BLOCKS.map(block=>block.kind).sort(),[
+    'conversation','note','research','task','task_group','checklist','agent','timeline','task_objective','clock_timer',
+    'reference','stream','file','link','project_overview','resource_browser','collection_browser',
+  ].sort());
+  assert.equal(REGISTERED_BLOCKS.length, 17);
+  const clock=REGISTERED_BLOCKS.find(block=>block.kind==='clock_timer')!;
+  assert(clock.requiredServices.includes('clock-timer-service'));
+  assert.deepEqual(clock.defaultConfiguration.clockTimer,{mode:'timer'});
   assert.equal(
     f.service
       .discoverBlocks()

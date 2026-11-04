@@ -197,10 +197,10 @@ exports.velaCommand = async ({
       typeof value.intent !== "string" ||
       !Array.isArray(value.resourceIds) ||
       typeof value.authorizeProvider !== "boolean" ||
-      (value.providerId !== undefined && !["codex-app-server", "chatgpt-plan-responses"].includes(value.providerId)) ||
+      (value.providerId !== undefined && !["codex-app-server", "chatgpt-plan-responses", "openai-api-vela"].includes(value.providerId)) ||
       (value.mode !== undefined && !["auto", "fast", "deep", "codex", "custom"].includes(value.mode)) ||
       (value.allowEscalation !== undefined && value.allowEscalation !== true) ||
-      (value.includeRecentHistory !== undefined && value.includeRecentHistory !== true) ||
+      (value.includeRecentHistory !== undefined && typeof value.includeRecentHistory !== "boolean") ||
       (value.handoffSourceRequestId !== undefined && (!directMessageSend ||
         typeof value.handoffSourceRequestId !== "string" || !/^[a-f0-9-]{36}$/.test(value.handoffSourceRequestId))) ||
       (value.routingAgentId !== undefined && (!directMessageSend ||
@@ -226,6 +226,7 @@ exports.velaCommand = async ({
         : {};
       const local = await stage("native-route", () => call("velaRouteNative", {
         intent: request.intent,
+        ...(value.activeCard === undefined ? {} : { activeCard: value.activeCard }),
         ...(Object.keys(settings).length ? { settings } : {}),
       }));
       if (local?.matched === true) return local.request;
@@ -322,10 +323,12 @@ exports.velaCommand = async ({
     );
     if (!isReviewOwnerAlive(win))
       throw Error("native_review_owner_unavailable");
-    const direct = directMessageSend && (!preview.route || preview.route.kind === "conversational") &&
+    const direct = directMessageSend && preview.sendDisposition === "routine" &&
+      (preview.providerId === "chatgpt-plan-responses" && (!preview.route || preview.route.kind === "conversational") ||
+        preview.providerId === "openai-api-vela" && ['conversational', 'app-planning'].includes(preview.route?.kind)) &&
       !preview.route?.nativeMetric && !preview.route?.nativeLog &&
       preview.resourceIds?.length === 0 &&
-      !review.context.included.length && !review.history?.messages.length && !review.handoff && !review.routingAgent;
+      !review.context.included.length && !review.handoff && !review.routingAgent;
     const approved = direct || await reviewProvider({
       parent: win,
       review,

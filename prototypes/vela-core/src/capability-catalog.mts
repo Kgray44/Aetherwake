@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { check, identifier, isRecord } from './capabilities.ts';
 import type { CapabilityDescriptor } from './contracts.ts';
+import { planningCapabilityCatalog, INLINE_CATALOG_DECODING } from './capability-encoding.mts';
 
 export const CAPABILITY_CATALOG_CONTRACT = 'aerynth.vela.capability-catalog@1' as const;
 export const CAPABILITY_SCHEMA_TOOL = 'aerynth_capability_schemas' as const;
@@ -168,7 +169,7 @@ export class CapabilityCatalogLease {
       );
       const descriptors = query.ids.map((id) => this.snapshot.descriptors.find((item) => item.id === id));
       check(descriptors.every(Boolean), 'capability_schema_unavailable');
-      const reply: CapabilityToolReply = {
+      let reply: CapabilityToolReply = {
         success: true,
         contentItems: [
           {
@@ -177,6 +178,12 @@ export class CapabilityCatalogLease {
           },
         ],
       };
+      // Large exact schemas (including Clock & Timer) use the same lossless data codec
+      // as inline planning. The pinned digest always identifies the original descriptors.
+      if(bytes(reply)>CAPABILITY_DISCOVERY_LIMITS.maxResponseBytes)reply={success:true,contentItems:[{type:'inputText',text:JSON.stringify({
+        contract:CAPABILITY_CATALOG_CONTRACT,catalogDigest:this.snapshot.projection.digest,decoding:INLINE_CATALOG_DECODING,
+        ...planningCapabilityCatalog(descriptors as CapabilityDescriptor[]),
+      })}]};
       const size = bytes(reply),
         failureReserve = 256 * (CAPABILITY_DISCOVERY_LIMITS.maxCalls - this.replies.size);
       check(

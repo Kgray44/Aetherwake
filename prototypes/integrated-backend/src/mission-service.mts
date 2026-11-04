@@ -104,6 +104,7 @@ export function validateMissionPlan(plan: MissionPlan, executors: MissionService
   check(Array.isArray(plan.criteria) && plan.criteria.length > 0 && plan.criteria.length <= L.tasks &&
     plan.criteria.every(x => identifier(x)) && new Set(plan.criteria).size === plan.criteria.length, 'invalid_mission_criteria');
   check(Array.isArray(plan.tasks) && plan.tasks.length > 0 && plan.tasks.length <= L.tasks, 'invalid_mission_tasks');
+  check(!plan.coverage||plan.coverage.status==='partial'&&Array.isArray(plan.coverage.limitations)&&plan.coverage.limitations.length>0&&plan.coverage.limitations.length<=8&&plan.coverage.limitations.every(reason=>bounded(reason,480)),'invalid_mission_coverage');
   const tasks = new Map<string, MissionTaskPlan>();
   for (const t of plan.tasks) {
     check(t && identifier(t.id) && !tasks.has(t.id) && bounded(t.objective, 1024) &&
@@ -257,6 +258,7 @@ export class MissionService {
       const value: Mission = { contract: MISSION_CONTRACT, id: randomUUID(), requestId, objective: plan.objective, scope: plan.scope,
         criteria: [...plan.criteria], createdAt: stamp(), disposition: 'active', revision: 0, planRevision: 1, concurrency: 2,
         tasks: plan.tasks.map(makeTask), events: [], ...(plan.planning ? { planning: plan.planning } : {}),
+        ...(plan.coverage?{coverage:structuredClone(plan.coverage)}:{}),
         ...(plan.team ? { team: plan.team } : {}),
         ...(plan.originConversationId ? { originConversationId: plan.originConversationId } : {}) };
       this.event(value, { kind: 'created' });
@@ -618,7 +620,7 @@ export class MissionService {
       ...(m.retiredTasks ? { retiredTasks: m.retiredTasks.map(visibleTask) } : {}) };
     const outcome = m.tasks.some(t => t.state === 'cancelling') ? 'cancelling' :
       busy(m) ? 'running' : m.tasks.some(t => t.state === 'uncertain') ? 'uncertain' :
-      m.disposition === 'cancelled' ? 'cancelled' : m.tasks.every(t => t.state === 'verified') ? 'verified' :
+      m.disposition === 'cancelled' ? 'cancelled' : m.tasks.every(t => t.state === 'verified') ? m.coverage?'blocked':'verified' :
       m.disposition === 'paused' ? 'paused' :
       m.tasks.some(t => t.state === 'failed') ? 'failed' :
       m.tasks.some(t => t.state === 'blocked' || t.state === 'cancelled') ? 'blocked' : 'queued';

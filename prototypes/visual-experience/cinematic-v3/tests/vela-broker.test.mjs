@@ -138,11 +138,12 @@ test("ordinary Vela Send uses the connected ChatGPT plan without opening a secon
       if (name === "velaRequestPreview") {
         assert.equal(data.adaptive, true);
         assert.equal(data.providerId, undefined);
-        return { ...result, providerId: "chatgpt-plan-responses", resourceIds: [], route: { kind: "conversational" } };
+        return { ...result, providerId: "chatgpt-plan-responses", resourceIds: [], route: { kind: "conversational" }, sendDisposition: "routine" };
       }
       if (name === "velaNativeReview") {
         const prompt = "Exact intent and workspace labels";
-        return { ...result, providerId: "chatgpt-plan-responses", route: { kind: "conversational" }, context: { included: [] }, history: undefined,
+        return { ...result, providerId: "chatgpt-plan-responses", route: { kind: "conversational" }, context: { included: [] },
+          history: { messages: [{ role: "user", content: "Previous canonical question" }, { role: "assistant", content: "Previous canonical answer" }] },
           prompt, promptDigest: createHash("sha256").update(JSON.stringify(prompt)).digest("hex") };
       }
       if (name === "authorizeVelaRequest") assert.equal(data.directSend, true);
@@ -151,6 +152,14 @@ test("ordinary Vela Send uses the connected ChatGPT plan without opening a secon
   });
   assert.equal(f.reviews.length, 0);
   assert.equal(f.calls.at(-1).input.input.grantId, "private-native-grant");
+});
+
+test("a renderer-supplied disposition cannot bypass the backend review decision", async () => {
+  const f=fixture();const input=request(true);input.input.resourceIds=[];input.input.sendDisposition="routine";
+  await velaCommand({...f,input,directMessageSend:true,offerPlanningByDefault:true});
+  assert.equal(f.reviews.length,1);
+  assert.equal(f.calls.find(call=>call.name==="velaRequestPreview").input.sendDisposition,undefined);
+  assert.equal(f.calls.find(call=>call.name==="authorizeVelaRequest").input.directSend,undefined);
 });
 
 test("a native match returns a canonical response before any provider probe or review", async () => {

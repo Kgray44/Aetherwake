@@ -27,6 +27,7 @@ const glyphs: Record<BlockIdentityModel["layout"], string> = {
   agent: 'M12 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8M4 21v-3a8 8 0 0 1 16 0v3M8 17h8',
   chronology: 'M3 12h18M6 8v8M12 5v14M18 8v8M4 4h4M16 20h4',
   objective: 'M12 3a9 9 0 1 0 9 9M12 7a5 5 0 1 0 5 5M12 12l8-8M16 4h4v4',
+  clock: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18M12 7v6l4 2',
   timeline: "M6 3v18M3 6h6M3 12h6M3 18h6M12 6h9M12 12h6M12 18h8",
   project: "M12 3l8 5v9l-8 4-8-4V8zM4 8l8 5 8-5M12 13v8",
   table: "M3 5h18v15H3zM3 10h18M8 5v15M3 15h18",

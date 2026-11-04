@@ -9,6 +9,7 @@ const reads = Object.freeze({
     "assignment",
   ]),
   checklists: Object.freeze(["read"]),
+  clockTimers: Object.freeze(["read", "list"]),
   timelines: Object.freeze(["read", "query"]),
   taskObjectives: Object.freeze(["read", "history", "list", "targets"]),
 });
@@ -21,6 +22,7 @@ const writes = Object.freeze({
     "ensureStarters",
   ]),
   checklists: Object.freeze(["create", "mutate"]),
+  clockTimers: Object.freeze(["create", "mutate"]),
   timelines: Object.freeze(["create", "save"]),
   taskObjectives: Object.freeze(["create", "mutate"]),
 });

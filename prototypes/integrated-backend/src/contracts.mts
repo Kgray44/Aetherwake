@@ -41,7 +41,10 @@ export interface VelaWorkflowReview {
   files: { path: string; operation: 'create' | 'replace' }[];
   check: { cwd: string; argv: string[] };
 }
-export interface VelaRequestPreview { workflowScope?: VelaWorkflowScope; id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};handoff?:import('../../vela-core/src/history-contracts.ts').VelaHandoff;nativeReviewRequired?:boolean; workingDirectory?:string; route?:import('../../vela-core/src/adaptive-routing.ts').VelaRouteDecision; routingSettings?:import('../../vela-core/src/contracts.ts').VelaRequest['routingSettings'];routingAgent?:import('../../vela-core/src/contracts.ts').VelaRoutingAgent }
+export interface VelaRequestPreview { workflowScope?: VelaWorkflowScope; id:string; intent:string; resourceIds:string[]; context:ContextManifest; signature:string; scopeStamp:string; providerId:string; expiresAt:string; discovery?:CapabilityDiscoveryDeclaration;history?:{messageCount:number;encodedBytes:number;digest:string};handoff?:import('../../vela-core/src/history-contracts.ts').VelaHandoff;nativeReviewRequired?:boolean; workingDirectory?:string; route?:import('../../vela-core/src/adaptive-routing.ts').VelaRouteDecision; routingSettings?:import('../../vela-core/src/contracts.ts').VelaRequest['routingSettings'];routingAgent?:import('../../vela-core/src/contracts.ts').VelaRoutingAgent;
+  /** Core-derived foreground send policy, rechecked against the private frozen preview at grant time. */
+  sendDisposition?: 'routine' | 'review-required';
+}
 /** Trusted host inspection only; never registered in renderer command/subcommand allowlists. */
 export interface VelaNativeReview {previewId:string;signature:string;providerId:string;prompt:string;promptDigest:string;reviewDigest:string;context:ContextManifest;history?:ProviderHistory;handoff?:VelaRequestPreview['handoff'];historyOmissions:{reason:HistoryOmissionReason;count?:number}[];route?:VelaRequestPreview['route'];workingDirectory?:string;routingSettings?:VelaRequestPreview['routingSettings'];routingAgent?:VelaRequestPreview['routingAgent'];agentInstructions?:string;editPaths?:string[]}
 export interface VelaNativeCapabilities {
@@ -170,7 +173,10 @@ export interface StreamEvent {
   receivedAt: string; providerTime: number | null; providerTimeSource: string | null;
   type: string; classification: Classification;
   status: string | null; payload: { redacted: true; taskId?: string; timing?: VelaRouteTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'>;
-    workspaceRecovery?: {workspaceId:string;action:'undo-creation'|'restore';creationEventId:string;workspaceVersion:number} };
+    workspaceRecovery?: {workspaceId:string;action:'undo-creation'|'restore';creationEventId:string;workspaceVersion:number};
+    clockTimer?: Pick<TimerDomainEvent, 'resourceVersion' | 'commandId' | 'timerIds' | 'expiryIds' | 'operations'>;
+    api?: { maxOutputTokens?: number; callId?: string; elapsedMs?: number; enabled?: boolean; executionId?: string; bodyDigest?: string; contextDigest?: string };
+    voice?: {sessionId?:string;attemptId?:string;state?:string;usageSeconds?:number;messageId?:string;delegationId?:string} };
   mission?: MissionStreamEvent;
 }
 export interface HandoffReview {
@@ -182,6 +188,14 @@ export interface HandoffReview {
 }
 import type { MediaCapabilities, MediaImportRequest, MediaMetadata, MediaReadRequest } from '../../application-contract/media.ts';
 import type { MediaSelection } from './media-sources.mts';
+import type { ClockTimerRequest, ClockTimerResponse } from './timer-domain.mts';
+import type { TimerClockReading, TimerDomainEvent } from '../../timer-product/contracts.ts';
+import type { VelaApiConnectionRequest, VelaApiConnectionResult } from './vela-api-connection.mts';
+import type { VelaApiUsageStatus } from './vela-api-runtime.mts';
+import type { VelaVoiceControlRequest,VelaVoiceNativeRequest,VelaVoiceState,VoiceAuthorization } from './vela-voice-runtime.mts';
+import type { GptLiveAudioDevice } from './live-media-host.mts';
+import type { PromptVoiceResult } from '../../openai-provider/live-contracts.mts';
+import type { NativeApiCredentialInput, RedactedApiConnectionView } from '../../openai-provider/api-connection-contracts.mts';
 
 export interface Options {
   path: string; provider?: 'fixture' | 'codex' | 'bridge-fixture'; fixtureMode?: string;
@@ -198,8 +212,21 @@ export interface Options {
   privateRoot?: string;
   /** Explicit synthetic test seam; rejected for local-private production data. Never accepted through renderer RPC. */
   velaPlanningPort?: VelaPlanningPort;
+  /** Serializable synthetic-only clock fixture. Rejected for local-private data; never a renderer RPC field. */
+  syntheticTimerClock?: TimerClockReading;
 }
 export interface CommandMap {
+  velaVoice: {input:VelaVoiceControlRequest;output:VelaVoiceState|GptLiveAudioDevice[]};
+  velaVoiceNative: {input:VelaVoiceNativeRequest;output:VelaVoiceState|VoiceAuthorization|PromptVoiceResult};
+  velaApiConnection: { input: VelaApiConnectionRequest; output: VelaApiConnectionResult };
+  velaApiUsageStatus: { input: Record<string,never>; output: VelaApiUsageStatus };
+  /** Native explicit usage consent, separate from saving credentials. */
+  velaApiUsageAuthorize: { input: { expectedVersion: number; enabled: boolean }; output: VelaApiUsageStatus };
+  /** Private owned native-process command. Never registered as renderer or model capability. */
+  velaApiConfigure: { input: { credential: NativeApiCredentialInput; expectedVersion: number | null }; output: RedactedApiConnectionView };
+  clockTimers: { input: ClockTimerRequest; output: { result: ClockTimerResponse; desktop?: DesktopSnapshot } };
+  /** Private native-host power event; excluded from renderer/tool command allowlists. */
+  timerHostResume: { input: Record<string, never>; output: null };
   missions: { input: MissionRequest; output: MissionResponse };
   workspaceRecovery: { input: WorkspaceRecoveryRequest; output: WorkspaceRecoveryResponse };
   missionStartReviewed: { input: Extract<MissionRequest, { name: 'start' }>['input'] & {
@@ -247,7 +274,7 @@ export interface CommandMap {
   velaProjectCheckRun: { input: {requestId:string;reviewId:string}; output: import('./vela-file-edit.mts').VelaFileEditView };
   velaStandaloneCheckReview: { input: {intent:string;settings?:import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting;paths:string[];artifactPath?:string}; output: import('./vela-project-check.mts').VelaProjectCheckReview<null> };
   velaStandaloneCheckRun: { input: {reviewId:string}; output: import('../../vela-core/src/contracts.ts').VelaRequest };
-  velaRouteNative: { input: { intent: string; settings?: import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting }; output: { matched: false; projectCheck?: import('../../vela-core/src/contracts.ts').VelaProjectCheckKind } | { matched: true; request: import('../../vela-core/src/contracts.ts').VelaRequest } };
+  velaRouteNative: { input: { intent: string; activeCard?:VelaActiveCard; settings?: import('../../vela-core/src/adaptive-routing.ts').VelaTurnRouting }; output: { matched: false; projectCheck?: import('../../vela-core/src/contracts.ts').VelaProjectCheckKind } | { matched: true; request: import('../../vela-core/src/contracts.ts').VelaRequest } };
   velaNativeReview: {input:{previewId:string;signature:string};output:VelaNativeReview};
   /** TRUSTED NATIVE HOST ONLY. Renderer/tool allow-lists MUST exclude this authorization command. */
   authorizeVelaRequest: { input: {previewId:string;signature:string;reviewDigest?:string;directSend?:true}; output: {grantId:string;expiresAt:string} };

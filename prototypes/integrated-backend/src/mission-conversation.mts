@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { MissionProjection } from './mission-contracts.mts';
-import { missionCompletion } from './mission-native.mts';
+import { missionCompletion, missionResultAvailable } from './mission-native.mts';
 
 interface ReceiptHost {
   db: DatabaseSync;
@@ -15,7 +15,7 @@ interface ReceiptHost {
 // Excludes mutable delivery/layout events. A receipt identifies the exact verified evidence.
 function evidenceDigest(mission: MissionProjection): string {
   return createHash('sha256').update(JSON.stringify({ planRevision: mission.planRevision,
-    criteria: mission.criteria, tasks: mission.tasks.map(task => ({ id: task.id, state: task.state,
+    criteria: mission.criteria,...(mission.coverage?{coverage:mission.coverage}:{}), tasks: mission.tasks.map(task => ({ id: task.id, state: task.state,
       evidence: task.attempts.at(-1)?.evidence, verification: task.attempts.at(-1)?.verification })) })).digest('hex');
 }
 
@@ -36,7 +36,7 @@ export class MissionConversationReceipts {
   }
 
   publish(mission: MissionProjection, acknowledge: () => void): boolean {
-    if (mission.outcome !== 'verified' || !this.host.allowed(mission)) return false;
+    if (!missionResultAvailable(mission) || !this.host.allowed(mission)) return false;
     const resourceId = mission.workroom!.missionConversationResourceId!, digest = evidenceDigest(mission);
     this.host.atomic(() => {
       const previous = this.host.db.prepare(`SELECT message_id FROM vela_mission_conversation_receipts
@@ -45,10 +45,10 @@ export class MissionConversationReceipts {
         const evidence = mission.tasks.map(task => ({ taskId: task.id, evidence: task.attempts.at(-1)?.evidence }));
         const recordedAt = mission.events.findLast(event => event.kind === 'settled' && event.detail === 'verified')!.time;
         const content = [`Mission ${mission.id} · plan ${mission.planRevision}`, `Objective: ${mission.objective}`,
-          `Verified result recorded at ${recordedAt}`, missionCompletion(mission).content,
+          `${mission.coverage?'Partial evidence':'Verified result'} recorded at ${recordedAt}`, missionCompletion(mission).content,
           ...evidence.flatMap(({ taskId, evidence: item }) => item ?
             [`Evidence ${taskId}: ${item.id} · ${item.source} · observed ${item.observedAt}`] : []),
-          'This handoff records that verified result. Open the mission plan for current status and evidence.'].join('\n');
+          `This handoff records ${mission.coverage?'partial evidence, not a completed investigation':'that verified result'}. Open the mission plan for current status and evidence.`].join('\n');
         const messageId = this.host.append(resourceId, content, [mission.id,
           ...evidence.flatMap(row => row.evidence ? [row.evidence.id] : [])]);
         this.host.db.prepare('INSERT INTO vela_mission_conversation_receipts VALUES(?,?,?,?)')
@@ -69,7 +69,7 @@ export class MissionConversationReceipts {
     this.checking.add(id);
     try {
       const current = this.host.read(id);
-      return current.outcome === 'verified' && this.host.allowed(current) &&
+      return missionResultAvailable(current) && this.host.allowed(current) &&
         current.workroom?.missionConversationResourceId === row.resource_id && evidenceDigest(current) === row.evidence_digest;
     } catch { return false; }
     finally { this.checking.delete(id); }

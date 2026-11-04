@@ -11,7 +11,8 @@ export interface VelaTurnRouting {
   model?: string;
   reasoningEffort?: ReasoningEffort;
   allowEscalation?: true;
-  includeRecentHistory?: true;
+  /** Omitted uses the runtime default; false starts this send without the recent canonical tail. */
+  includeRecentHistory?: boolean;
   handoffSourceRequestId?: string;
   routingAgentId?: string;
   overrideDefaults?: true;
@@ -99,7 +100,7 @@ export function classifyVelaRoutingIntent(intent: string): VelaRoutingIntent {
     return 'local-write';
   if (!explanatory && /\b(?:inspect|read|review|search|check|scan|audit|look (?:at|through)|find)\b[\s\S]*(?:\b(?:files?|source|repo(?:sitory)?|checkout|working tree|logs?|codebase|git diff)\b|\b[\w-]+\.(?:md|json|toml|tsx?|mjs|mts|jsx?|py|rs|cpp|h|css|html|log|txt)\b)/u.test(text))
     return 'local-read';
-  const appObject = /\b(?:workspaces?|constellation|blocks?|cards?|checklists?|tasks?|attention mode|conversations?|chats?|collections?|folders?|timelines?|notes?|projects?|resources?)\b/u;
+  const appObject = /\b(?:timers?|stopwatch|world clocks?|workspaces?|constellation|blocks?|cards?|checklists?|tasks?|attention mode|conversations?|chats?|collections?|folders?|timelines?|notes?|projects?|resources?)\b/u;
   const appVerb = /^(?:open|navigate|go to|take me|find|create|make|add|start|move|put|rename|call|archive|restore|show|list|organize|set|bring|switch|favou?rite|unfavou?rite|change|edit|mark|link|tidy|apply)\b/u;
   if (appVerb.test(text) && appObject.test(text) ||
     /^(?:keep (?:things|vela) quiet|ask codex to|(?:will it (?:rain|snow)|(?:what(?:'s| is)|show(?: me)?) (?:the |my )?(?:local )?(?:weather|forecast))\b)/u.test(text))

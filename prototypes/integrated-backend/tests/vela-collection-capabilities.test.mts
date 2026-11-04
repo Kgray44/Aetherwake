@@ -221,8 +221,20 @@ test('archive audit requires an actual applied receipt, current owner and every 
     resourceId = chat.receipt.createdResourceId!;
     const folder = await f.apply({ type: 'createCollection', title: 'Synthetic audit folder', projectId });
     collectionId = folder.receipt.createdCollectionId!;
+    const beforeMissing=await f.state();
+    await assert.rejects(f.core.command('velaRequestPreview',{intent:'Recall the earlier Synthetic audit project operations',resourceIds:[]}),/vela_operation_context_unavailable/);
+    assert.equal((await f.state()).requests.length,beforeMissing.requests.length,'an essential receipt that cannot fit never dispatches or guesses');
     const preview = await f.core.command('velaRequestPreview', { intent: 'Synthetic explicit two-target regression', resourceIds: [] }),
-      grant = await f.core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature });
+      review = await f.core.command('velaNativeReview',{previewId:preview.id,signature:preview.signature}),
+      grant = await f.core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature,reviewDigest:review.reviewDigest });
+    const frozen=(f.core as any).velaPreviews.get(preview.id).frozenContext;
+    assert(frozen.operations.limits.maxEncodedBytes<6144);assert(frozen.operations.omissions.budget>0);
+    assert(Buffer.byteLength(review.prompt)<=16384);const wire=JSON.parse(review.prompt.split('\n').at(-1)!);
+    const decode=(value:any):any=>!Array.isArray(value)?value:value[0]===0?Object.fromEntries(Array.from({length:(value.length-1)/2},(_,index)=>{
+      const key=value[index*2+1];return [typeof key==='number'?wire.contextKeys[key]:key,decode(value[index*2+2])];
+    })):value[0]===1?value.slice(1).map(decode):value[0]===2?wire.contextStrings[value[1]]:assert.fail('unknown JSON data tag');
+    assert.deepEqual(wire.contextEncoding?decode(wire.context):wire.context,frozen,'the native-reviewed wire retains the complete chosen context and proof');
+    assert.equal(wire.capabilities.length,(f.core as any).velaPreviews.get(preview.id).catalog.descriptors.length,'all authorized capabilities remain in the original hard budget');
     const request = (await f.vela('request', {
       intent: preview.intent,
       resourceIds: [],

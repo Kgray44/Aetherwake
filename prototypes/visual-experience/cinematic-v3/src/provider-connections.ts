@@ -3,6 +3,7 @@ import {
   type ProviderConnectionRequest,
   type ProviderConnectionStatus,
 } from "../../../application-contract/provider-connections.ts";
+import { mountVelaApiConnection, type VelaApiControl } from './vela-api-connection-view.ts';
 
 const node = <K extends keyof HTMLElementTagNameMap>(tag: K, text = "") => {
   const value = document.createElement(tag);
@@ -35,6 +36,7 @@ export function mountProviderConnections(
     newConversation(): Promise<void>;
     codex(): Promise<{ authentication: string; models: string[] }>;
     changed?(): void | Promise<void>;
+    apiConnection?: VelaApiControl;
   },
 ) {
   let current: ProviderConnectionStatus | null = null;
@@ -93,6 +95,7 @@ export function mountProviderConnections(
   catalogDetails.append(catalogSummary, catalogFacts);
   codex.append(codexSummary, codexCheck, codexStatus);
   root.append(heading, status, actions, boundary, details, catalogDetails, codex);
+  const velaApi = options.apiConnection ? mountVelaApiConnection(root, options.apiConnection) : null;
 
   const modelsReady = () => current?.state === "ready" &&
     current.planUsageEnabled === true && current.modelCatalog?.state === "ready" && !catalogRecoveryUnconfirmed;
@@ -359,14 +362,17 @@ export function mountProviderConnections(
     providerId: CHATGPT_PLAN_PROVIDER,
   }).catch(failed);
   return {
-    ready,
-    refresh: () =>
-      update({ type: "status", providerId: CHATGPT_PLAN_PROVIDER }),
+    ready: Promise.all([ready, velaApi?.ready]),
+    refresh: async () => {
+      const [value] = await Promise.all([update({ type: "status", providerId: CHATGPT_PLAN_PROVIDER }), velaApi?.refresh()]);
+      return value;
+    },
     dispose() {
       disposed = true;
       requestRevision++;
       connectRequested = false;
       clearTimeout(timer);
+      velaApi?.dispose();
     },
   };
 }

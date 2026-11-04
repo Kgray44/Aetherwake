@@ -2,6 +2,7 @@ import type { VelaInstantCapabilityId, VelaLocalCapabilityId, CapabilityDescript
 import { defaultOrganization, updateOrganization } from '../../workspace-engine/organization.mts';
 import type { OrganizationUpdate } from '../../workspace-engine/contracts.mts';
 import { githubRepository } from '../../application-contract/github-timeline.ts';
+import { CLOCK_TIMER_ACTION_PROPERTIES, validClockTimerAction } from '../../timer-product/vela-contract.ts';
 
 export class VelaError extends Error {
   readonly code: string;
@@ -60,6 +61,8 @@ export const isLocalFact = (id: unknown): id is VelaLocalCapabilityId =>
   typeof id === 'string' && (Object.hasOwn(LOCAL_FACT_LABELS, id) || ['system.cpu', 'system.gpu', 'system.performance', 'local.calculator'].includes(id));
 
 export const CAPABILITIES: CapabilityDescriptor[] = [
+  capability('clockTimer', 'Control clocks, timers and stopwatch', 'mutate', CLOCK_TIMER_ACTION_PROPERTIES,
+    'Use exact canonical timer IDs and current versions. Timer lifecycle, stopwatch/laps, IANA clocks and reads. Deleting timers or removing clocks requires review. Never invent delivery or completion.'),
   capability('search', 'Find Aerynth resources by title or type', 'read', { type: { const: 'search' }, query: stringSchema }, 'Search current authorized metadata by title, ID or resource type. Use a short search term. Results stay local.'),
   capability('openResource', 'Open an existing Aerynth resource', 'navigate', { type: { const: 'openResource' }, query: { ...stringSchema, maxLength: 200 } }, 'Final step. Exact title or authorized ID; multiple matches become choices.'),
   capability('navigate', 'Open a workspace or project constellation', 'navigate', { type: { const: 'navigate' }, target: { oneOf: [objectSchema({ kind: { const: 'workspace' }, workspaceId: idSchema }), objectSchema({ kind: { const: 'constellation' }, projectId: nullableIdSchema })] } }, 'One authorized navigation target'),
@@ -68,6 +71,14 @@ export const CAPABILITIES: CapabilityDescriptor[] = [
   capability('renameResource', 'Rename a local resource', 'mutate', { type: { const: 'renameResource' }, resourceId: idSchema, title: stringSchema }, 'One authorized active note, task, task group or reference; preserves content, drafts and placements'),
   capability('associateResourceProject', 'Change a local resource project', 'mutate', { type: { const: 'associateResourceProject' }, resourceId: idSchema, projectId: nullableIdSchema }, 'One authorized active non-chat local resource and exact authorized destination project or null; grants no content or sharing access'),
   capability('createWorkspace', 'Create an empty workspace', 'create', { type: { const: 'createWorkspace' }, title: stringSchema, projectId: nullableIdSchema }, 'One canonical workspace in the exact authorized project or without a project; opens the new workspace'),
+  capability('constructWorkspace', 'Build a populated workspace', 'create', { type: { const: 'constructWorkspace' }, title: stringSchema, purpose: { ...stringSchema, maxLength: 4000 }, projectId: nullableIdSchema, newProjectTitle: nullableIdSchema }, 'Plan and atomically construct functional blocks for the stated purpose; reuse authorized resources, verify canonical bindings and geometry; optionally create its named project'),
+  capability('adjustWorkspace', 'Adjust workspace cards', 'mutate', {type:{const:'adjustWorkspace'},workspaceId:idSchema,adjustments:{type:'array',minItems:1,maxItems:8,
+    items:objectSchema({resourceIds:{...arraySchema,minItems:1,maxItems:64},position:{enum:['left','right','keep']},size:{enum:['larger','smaller','keep']}})}},
+    'Move or resize exact canonical resource cards in one undoable layout change. Preserve bindings, content, locks and unrelated geometry; verify collision and size constraints.'),
+  capability('recoverCreation', 'Undo or restore workspace creation', 'mutate', {type:{const:'recoverCreation'},workspaceId:idSchema,receiptId:idSchema,action:{enum:['undo-creation','restore']}},
+    'Use an exact verified creation receipt. Archive or restore workspace visibility through current recovery policy; preserve resources, content, history and layout.'),
+  capability('inspectVelaOperation', 'Check a previous workspace operation', 'read', { type: { const: 'inspectVelaOperation' }, workspaceId: idSchema, receiptId: idSchema }, 'Read the exact authorized operation receipt and current canonical workspace bindings; no changes'),
+  capability('repairWorkspace', 'Restore missing workspace bindings', 'mutate', { type: { const: 'repairWorkspace' }, workspaceId: idSchema, receiptId: idSchema, resourceIds: arraySchema }, 'Restore only missing declared resource bindings in the same authorized workspace; preserve current content and existing geometry'),
   capability('readLocalFact', 'Read a live device or Aerynth fact', 'read', {
     type: { const: 'readLocalFact' }, capabilityId: { enum: Object.keys(LOCAL_FACT_LABELS) },
   }, 'Read current local time/date, active workspace and save state, project count, execution status, or physical RAM. Aerynth measures it locally and shows the answer directly.'),
@@ -116,6 +127,7 @@ export function validateAction(value: unknown): VelaNativeAction | DelegateTaskA
   const v = value;
   let valid = false;
   switch (v.type) {
+    case 'clockTimer': valid = validClockTimerAction(v); break;
     case 'openResource': valid = fields(v, ['type', 'query']) && text(v.query, 200); break;
     case 'search': valid = fields(v, ['type', 'query']) && text(v.query); break;
     case 'setAttentionMode': valid = fields(v, ['type','mode','expectedVersion']) && typeof v.mode==='string' && ['normal','quiet','focused','collaborative','proactive'].includes(v.mode) && version(v.expectedVersion); break;
@@ -127,6 +139,11 @@ export function validateAction(value: unknown): VelaNativeAction | DelegateTaskA
     case 'renameResource': valid = fields(v, ['type', 'resourceId', 'title']) && identifier(v.resourceId) && text(v.title); break;
     case 'associateResourceProject': valid = fields(v, ['type', 'resourceId', 'projectId']) && identifier(v.resourceId) && nullableId(v.projectId); break;
     case 'createWorkspace': valid = fields(v, ['type', 'title', 'projectId']) && text(v.title) && nullableId(v.projectId); break;
+    case 'constructWorkspace': valid = fields(v, ['type', 'title', 'purpose', 'projectId', 'newProjectTitle']) && text(v.title) && text(v.purpose, 4000) && nullableId(v.projectId) && (v.newProjectTitle === null || v.projectId === null && text(v.newProjectTitle)); break;
+    case 'adjustWorkspace': valid=fields(v,['type','workspaceId','adjustments'])&&identifier(v.workspaceId)&&Array.isArray(v.adjustments)&&v.adjustments.length>0&&v.adjustments.length<=8&&v.adjustments.every(item=>isRecord(item)&&fields(item,['resourceIds','position','size'])&&ids(item.resourceIds)&&item.resourceIds.length>0&&item.resourceIds.length<=64&&['left','right','keep'].includes(String(item.position))&&['larger','smaller','keep'].includes(String(item.size))&&!(item.position==='keep'&&item.size==='keep'));break;
+    case 'recoverCreation': valid=fields(v,['type','workspaceId','receiptId','action'])&&identifier(v.workspaceId)&&identifier(v.receiptId)&&['undo-creation','restore'].includes(String(v.action));break;
+    case 'inspectVelaOperation': valid = fields(v, ['type','workspaceId','receiptId']) && identifier(v.workspaceId) && identifier(v.receiptId); break;
+    case 'repairWorkspace': valid = fields(v, ['type','workspaceId','receiptId','resourceIds']) && identifier(v.workspaceId) && identifier(v.receiptId) && ids(v.resourceIds); break;
     case 'readLocalFact': valid = fields(v, ['type', 'capabilityId']) && typeof v.capabilityId === 'string' && Object.hasOwn(LOCAL_FACT_LABELS, v.capabilityId); break;
     case 'readWeather': valid = fields(v, ['type', 'period']) && typeof v.period === 'string' && ['now', 'today', 'tonight', 'tomorrow', 'tomorrow-morning'].includes(v.period); break;
     case 'createTimeline': valid = fields(v, ['type', 'title', 'projectId', 'workspaceId', 'source']) && text(v.title) &&

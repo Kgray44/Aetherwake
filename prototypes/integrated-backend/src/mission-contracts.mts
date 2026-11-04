@@ -46,7 +46,9 @@ export interface MissionPlan {
   planning?: MissionPlanningReceipt;
   team?: MissionTeamBinding;
   originConversationId?: string;
+  coverage?: MissionCoverage;
 }
+export interface MissionCoverage { status: 'partial'; limitations: string[] }
 export type MissionTeamBinding = Pick<MissionTeam, 'id' | 'title' | 'version'>;
 export interface MissionTeamLibrary {
   kind: 'team-library';
@@ -54,7 +56,7 @@ export interface MissionTeamLibrary {
   profiles: { id: string; title: string }[];
 }
 export interface MissionPlanningReceipt {
-  provider: 'chatgpt-plan-responses';
+  provider: 'chatgpt-plan-responses' | 'openai-api-vela';
   model: string;
   effort?: ReasoningEffort;
   responseId: string;
@@ -133,6 +135,7 @@ export interface Mission {
   planning?: MissionPlanningReceipt;
   team?: MissionTeamBinding;
   originConversationId?: string;
+  coverage?: MissionCoverage;
   workroom?: MissionWorkroom;
   tasks: MissionTask[];
   retiredTasks?: MissionTask[];
@@ -218,7 +221,7 @@ export interface MissionPlanningOffer {
   scope: MissionScope;
   objective: string;
   fingerprint: string;
-  planner?: { model: string; effort?: ReasoningEffort; capabilities: string[] };
+  planner?: { provider?: 'chatgpt-plan-responses' | 'openai-api-vela'; model: string; effort?: ReasoningEffort; capabilities: string[] };
 }
 export interface MissionWorkroom {
   kind: 'workroom';

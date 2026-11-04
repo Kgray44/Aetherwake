@@ -22,7 +22,8 @@ function fixture(port: VelaPlanningPort) {
 const state = async (core: BackendCore) => await core.command('vela', { name: 'state', input: {} }) as VelaBackendState;
 const desktop = (core: BackendCore) => core.command('desktop', { type: 'snapshot' });
 async function approvedInput(core: BackendCore, intent: string, resourceIds: string[] = []): Promise<VelaRequestInput> {
-  const preview = await core.command('velaRequestPreview', { intent, resourceIds }), grant = await core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature });
+  const preview = await core.command('velaRequestPreview', { intent, resourceIds }), native = await core.command('velaNativeReview',{previewId:preview.id,signature:preview.signature}),
+    grant = await core.command('authorizeVelaRequest', { previewId: preview.id, signature: preview.signature,reviewDigest:native.reviewDigest });
   return { intent, resourceIds, authorizeProvider: true, previewId: preview.id, grantId: grant.grantId };
 }
 

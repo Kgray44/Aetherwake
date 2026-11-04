@@ -2,9 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { CodexPlanningAdapter, CodexPlanningError, buildCodexPlanningPrompt, parseCodexPlanningOutput, planningDigest } from '../src/codex-planning-adapter.mts';
 import { CAPABILITIES } from '../src/capabilities.ts';
-import { createCapabilityCatalog } from '../src/capability-catalog.mts';
+import { createCapabilityCatalog, CapabilityCatalogLease, CAPABILITY_SCHEMA_TOOL, CAPABILITY_DISCOVERY_LIMITS } from '../src/capability-catalog.mts';
 import type { CodexPlanningAdapterOptions, PlanningInput, PlanningObservation } from '../src/codex-planning-adapter.mts';
 import type { Execution, Snapshot } from '../../integrated-backend/src/contracts.mts';
+import { VELA_PLANNING_INSTRUCTION } from '../src/service.mts';
+import { VELA_IDENTITY_PROMPT_BYTES } from '../src/vela-identity.mts';
 
 /** Explicit synthetic command-port doubles; these are adapter regressions, never real model qualification. */
 function input(): PlanningInput {
@@ -18,20 +20,50 @@ function input(): PlanningInput {
 
 /** Independent consumer of the emitted rules; canonical schema objects are never modified. */
 function rehydrateCatalog(data:any) {
-  const expand=(value:any):any=>{
-    if(Array.isArray(value))return value.map(expand);if(value===null||typeof value!=='object')return value;
-    if(Object.hasOwn(value,'$ref')) {
-      assert.deepEqual(Object.keys(value),['$ref']);assert.match(value.$ref,/^#\/\$defs\/s\d+$/);
-      const definition=data.$defs[value.$ref.slice('#/$defs/'.length)];assert(definition);return expand(definition);
-    }
-    return Object.fromEntries(Object.entries(value).map(([key,entry])=>[key,expand(entry)]));
+  assert.equal(data.capabilityEncoding,'aerynth.inline-catalog@3');
+  const dictionary=(value:any):string[]=>{
+    if(Array.isArray(value))return value;const entries=[''];
+    for(let index=0;index<value.length;index++)if(value[index]==='\\')entries[entries.length-1]+=value[++index];
+    else if(value[index]==='|')entries.push('');else entries[entries.length-1]+=value[index];
+    return entries;
   };
-  return data.capabilities.map((capability:any)=>{
-    const { actionType, ...entry }=capability;
-    const schema=expand({...data.capabilitySchemaDefaults,...entry.schema});
-    if(actionType)schema.properties={type:{const:entry.id},...schema.properties};
-    if(data.capabilityRequiredDefault==='all-root-properties'&&!Object.hasOwn(schema,'required'))schema.required=Object.keys(schema.properties??{});
-    return {...data.capabilityDefaults,...entry,schema};
+  const schemaKeys=dictionary(data.keys),capabilityTexts=dictionary(data.texts);
+  const expand=(value:any):any=>{
+    if(Number.isSafeInteger(value)&&value<0)return expand(data.defs[-value-1]);
+    if(Array.isArray(value)) {
+      if(value.length===1&&Number.isSafeInteger(value[0])) {
+        if(value[0]<0)return schemaKeys[-value[0]-1];
+        assert(value[0]<data.defs.length);return expand(data.defs[value[0]]);
+      }
+      if(value.length===2&&value[0]===null&&Array.isArray(value[1]))return value[1].map(expand);
+      if(value.length===2&&value[0]===null&&Number.isSafeInteger(value[1])&&value[1]<0)return value[1];
+      if(value.length===3&&value[0]===null&&Number.isInteger(value[1])&&value[1]>=1&&value[1]<=7){
+        const flags=value[1],body=expand(value[2]);
+        return {...(flags&1?{type:'object'}:{}),...(flags&2?{additionalProperties:false}:{}),...body,
+          ...(flags&4?{required:Object.keys(body.properties)}:{})};
+      }
+      return value.map(expand);
+    }
+    if(value===null||typeof value!=='object')return value;
+    return Object.fromEntries(Object.entries(value).map(([key,entry])=>[
+      key.startsWith('~')?key.slice(1):/^[A-Za-z]$/.test(key)?schemaKeys['abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'.indexOf(key)]:key,expand(entry)]));
+  };
+  return data.capabilities.map(([values,encoded,flags,overrides={}]:any[])=>{
+    assert.equal(values.length,data.fields.length);assert(Number.isInteger(flags)&&flags>=0&&flags<=7);
+    const metadata={...data.defaults,...Object.fromEntries(data.fields.map((key:string,index:number)=>[key,values[index]])),...(typeof overrides==='number'?data.variants[overrides]:overrides)};
+    for(const key of ['label','scope'])if(typeof metadata[key]==='string'){
+      const shortCodes='!#$%&*+<=>?@^{}[]()|',value=metadata[key];let decoded='';
+      for(let index=0;index<value.length;index++){
+        const char=value[index];
+        if(char==='~'){const next=value[++index];decoded+=next==='~'||shortCodes.includes(next)?next:capabilityTexts['ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_'.indexOf(next)];}
+        else decoded+=shortCodes.includes(char)?capabilityTexts[shortCodes.indexOf(char)]:char;
+      }
+      metadata[key]=decoded;
+    }
+    const expanded=expand(encoded),schema={...data.roots,...(flags&4?{properties:expanded}:expanded)};
+    if(flags&1)schema.properties={type:{const:metadata.id},...schema.properties};
+    if(flags&2){assert(!Object.hasOwn(schema,'required'));schema.required=Object.keys(schema.properties??{});}
+    return {...metadata,schema};
   });
 }
 
@@ -43,10 +75,39 @@ test('current catalog prompt expands to every exact action schema, scope, effect
   const prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
   assert(Buffer.byteLength(prompt)<=16384);assert(prompt.includes('with explicit fields winning'));
   assert.deepEqual(data.context,request.context,'No source text, source metadata or omission record is truncated');
-  assert(data.$defs&&Object.keys(data.$defs).length>0);
-  assert.deepEqual(rehydrateCatalog(data),request.capabilities.map(({label:_label,...capability})=>capability));
-  assert.equal(data.capabilities.find((capability:any)=>capability.id==='delegateTask').authorization,'explicit-execution-authorization');
-  assert.equal(data.capabilities.find((capability:any)=>capability.id==='search').reversible,'no-state-change');
+  assert(data.defs.length>0);
+  const restored=rehydrateCatalog(data);assert.deepEqual(restored,request.capabilities);
+  const delegated=restored.find((capability:any)=>capability.id==='delegateTask'),search=restored.find((capability:any)=>capability.id==='search');
+  assert.ok(delegated);assert.ok(search);
+  assert.equal(delegated.authorization,'explicit-execution-authorization');assert.equal(search.reversible,'no-state-change');
+});
+
+test('same-turn discovery returns the complete Clock and Timer schema losslessly inside the unchanged 8 KiB response bound',()=>{
+  const original=structuredClone(CAPABILITIES.find(capability=>capability.id==='clockTimer')!);
+  assert(Buffer.byteLength(JSON.stringify(original.schema))>8192,'the released timer schema exercises the real oversized metadata case');
+  const catalog=createCapabilityCatalog(CAPABILITIES),lease=new CapabilityCatalogLease({catalog,expiresAt:new Date(Date.now()+60000).toISOString(),authorize(){}});
+  lease.bind('synthetic-thread','synthetic-turn');
+  const reply=lease.read({threadId:'synthetic-thread',turnId:'synthetic-turn',callId:'clock-schema',namespace:null,tool:CAPABILITY_SCHEMA_TOOL,
+    arguments:{catalogDigest:catalog.projection.digest,ids:['clockTimer']}});
+  assert.equal(reply.success,true);assert(Buffer.byteLength(JSON.stringify(reply))<=CAPABILITY_DISCOVERY_LIMITS.maxResponseBytes);
+  const data=JSON.parse(reply.contentItems[0].text);assert.equal(data.catalogDigest,catalog.projection.digest);assert.match(data.decoding,/Nested schemas inherit no defaults/);
+  assert.deepEqual(rehydrateCatalog(data),[original]);assert.deepEqual(lease.fetchedIds(),['clockTimer']);
+  assert.deepEqual(CAPABILITIES.find(capability=>capability.id==='clockTimer'),original,'encoding never mutates the canonical descriptor');
+});
+
+test('context dictionary fallback preserves every source byte, metadata identity and literal array while retaining the full catalog under 16 KiB',()=>{
+  const request=input();request.instruction=VELA_PLANNING_INSTRUCTION;
+  request.context.discovered.push(...Array.from({length:12},(_,index)=>({id:'note:discovered-source-'+index,kind:'resource' as const,version:1,
+    title:'Synthetic canonically discovered source. '.repeat(4),resourceKind:'note' as const,projectId:null})));
+  request.context.included[0].content+='\nLiteral source data: [0,"key",[2,1]], ~A, ! and \\ separators stay literal.';
+  request.context.contentBytes=Buffer.byteLength(request.context.included[0].content);
+  const original=structuredClone(request.context),prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
+  assert.equal(data.contextEncoding,'aerynth.json-dictionary@1');assert(Buffer.byteLength(prompt)<=16384);
+  const decode=(value:any):any=>!Array.isArray(value)?value:value[0]===0?Object.fromEntries(Array.from({length:(value.length-1)/2},(_,index)=>{
+    const key=value[index*2+1];return [typeof key==='number'?data.contextKeys[key]:key,decode(value[index*2+2])];
+  })):value[0]===1?value.slice(1).map(decode):value[0]===2?data.contextStrings[value[1]]:assert.fail('unknown JSON data tag');
+  assert.deepEqual(decode(data.context),original);assert.equal(planningDigest(decode(data.context)),planningDigest(original));
+  assert.deepEqual(request.context,original);assert.deepEqual(rehydrateCatalog(data),CAPABILITIES);
 });
 
 test('root schema defaults rehydrate every original field, explicit override and missing key without changing canonical descriptors',()=>{
@@ -70,9 +131,9 @@ test('root schema defaults rehydrate every original field, explicit override and
     const before=structuredClone(request.capabilities),catalogDigest=createCapabilityCatalog(request.capabilities).projection.digest,
       prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
     const restored=rehydrateCatalog(data);
-    assert.deepEqual(restored,before.map(({label:_label,...capability})=>capability));
+    assert.deepEqual(restored,before);
     assert.deepEqual(request.capabilities,before);assert.equal(createCapabilityCatalog(request.capabilities).projection.digest,catalogDigest);
-    for(const key of ['type','additionalProperties'])if(schemas.some(schema=>!Object.hasOwn(schema,key)))assert(!Object.hasOwn(data.capabilitySchemaDefaults,key));
+    for(const key of ['type','additionalProperties'])if(schemas.some(schema=>!Object.hasOwn(schema,key)))assert(!Object.hasOwn(data.roots,key));
     assert(prompt.includes('Nested schemas inherit no defaults'));
   }
 });
@@ -95,8 +156,7 @@ test('required/effect defaults retain order, absence, nested arrays and expanded
       {type:'object',additionalProperties:false,properties:{nested:{type:'object',properties,required:['a']}},required:['nested']},
       {type:'object',additionalProperties:false,properties:{nested:{type:'object',properties,required:['z','a']}},required:['nested']},
     ],
-    // Deliberately adversarial JSON-shaped input: the generic interner can reference this map.
-    // This tests round-trip serialization, not JSON Schema validation of these invented schemas.
+    // Deliberately adversarial JSON-shaped input: property maps are data in the codec, never schema $refs.
     [
       {type:'object',additionalProperties:false,properties:adversarialMap,required:Object.keys(adversarialMap)},
       {type:'object',additionalProperties:false,properties:adversarialMap,required:Object.keys(adversarialMap)},
@@ -105,13 +165,110 @@ test('required/effect defaults retain order, absence, nested arrays and expanded
   for(const [index,schemas]of variants.entries()){
     const request=input();request.capabilities=schemas.map((schema,i)=>({...CAPABILITIES[i],effect:(['read','provider-execution','mutate','navigate'] as const)[i%4],schema:structuredClone(schema)}));
     const before=structuredClone(request.capabilities),catalog=createCapabilityCatalog(request.capabilities),data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
-    assert.deepEqual(rehydrateCatalog(data),before.map(({label:_label,...entry})=>entry));
+    const restored=rehydrateCatalog(data);assert.deepEqual(restored,before);
     assert.deepEqual(request.capabilities,before);assert.deepEqual(createCapabilityCatalog(request.capabilities),catalog);
-    assert.equal(data.capabilityDefaults.effect,'mutate');assert.equal(data.capabilities[0].effect,'read');assert.equal(data.capabilities[1].effect,'provider-execution');
-    if(index===0){assert(!Object.hasOwn(data.capabilities[0].schema,'required'));assert.deepEqual(data.capabilities[1].schema.required,['a','z']);assert.deepEqual(data.capabilities[2].schema.required,['z']);assert.deepEqual(data.capabilities[3].schema.required,[]);}
-    if(index===1){assert(!Object.hasOwn(data,'capabilityRequiredDefault'));assert.deepEqual(data.capabilities[0].schema.required,['z','a']);assert(!Object.hasOwn(data.capabilities[1].schema,'required'));}
-    if(index===3){assert(Object.hasOwn(data.capabilities[0].schema.properties,'$ref'));assert(!Object.hasOwn(data.capabilities[0].schema,'required'));assert.deepEqual(rehydrateCatalog(data)[0].schema.required,Object.keys(adversarialMap));}
+    assert.equal(data.defaults.effect,'mutate');assert.equal(restored[0].effect,'read');assert.equal(restored[1].effect,'provider-execution');
+    if(index===0){assert.deepEqual(restored[0].schema.required,['z','a']);assert.deepEqual(restored[1].schema.required,['a','z']);assert.deepEqual(restored[2].schema.required,['z']);assert.deepEqual(restored[3].schema.required,[]);}
+    if(index===1){assert.deepEqual(restored[0].schema.required,['z','a']);assert(!Object.hasOwn(restored[1].schema,'required'));}
+    if(index===3)assert.deepEqual(restored[0].schema.required,Object.keys(adversarialMap));
   }
+});
+
+test('versioned schema data references round-trip native refs, literals, extension fields and both reserved array forms',()=>{
+  const repeated={type:'string',minLength:1,maxLength:200,'x-owner':'literal-extension-metadata'};
+  const literalPrototype=JSON.parse('{"__proto__":{"const":"literal prototype key"},"constructor":{"type":"string"},"0":{"const":"literal numeric key"},"01":{"const":"literal zero-prefixed key"},"~0":{"const":"literal escaped key"},"~~":{"const":"literal repeated escape"}}');
+  const schema={type:'object',additionalProperties:false,
+    $id:'https://synthetic.invalid/schema',
+    $defs:{native:repeated},$ref:'#/$defs/native',description:'Native ref siblings stay literal.',
+    properties:{type:{const:'search'},query:repeated,...literalPrototype},required:['type','query'],
+    const:{repeated,native:{$ref:'#/$defs/native',description:'Literal object, not a codec reference'}},
+    enum:[repeated,{nested:repeated}],examples:[[0],[null,[]],[null,[null,[0]]],[null,repeated],[[0]],[-1],[0.5],
+      ...Array.from({length:7},(_,index)=>[null,index+1,{properties:{letter:repeated}}])],
+    default:[null,repeated],minimum:-5,maximum:-1,'x-literal-integers':[-1,-2,[null,-3]],
+    'x-codec':{capabilityEncoding:'aerynth.inline-catalog@2',schemaDefinitions:[[0]],properties:{type:repeated}},
+    'x-opaque':{oneOf:[repeated],anyOf:[repeated],type:'array',items:repeated},
+  };
+  const request=input();request.capabilities=[{...CAPABILITIES[0],schema},{...CAPABILITIES[1],schema:structuredClone(schema)}];
+  const before=structuredClone(request.capabilities),prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
+  assert.deepEqual(rehydrateCatalog(data),before);
+  assert.deepEqual(request.capabilities,before);assert(prompt.includes('native $ref is unchanged'));
+  assert.equal(planningDigest(request.capabilities),planningDigest(before));
+});
+
+test('only useful definitions survive nested sharing and tiny repeated data remains inline',()=>{
+  const request=input(),tiny={};
+  request.capabilities=[{...CAPABILITIES[0],schema:{type:'object',properties:{first:tiny,second:tiny}}}];
+  let data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
+  assert.equal(data.defs.length,0);assert.deepEqual(rehydrateCatalog(data),request.capabilities);
+  const leaf={value:'Synthetic shared payload that is long enough to benefit from factoring.'},parent={nested:leaf,flag:true};
+  request.capabilities=[{...CAPABILITIES[0],schema:{type:'object',properties:{first:parent,second:parent,third:parent}}}];
+  data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
+  assert.deepEqual(rehydrateCatalog(data),request.capabilities);
+  const uses=new Array(data.defs.length).fill(0);
+  const visit=(value:any):void=>{
+    if(Number.isSafeInteger(value)&&value<0){uses[-value-1]++;return;}
+    if(Array.isArray(value)) {
+      if(value.length===1&&Number.isSafeInteger(value[0]))return;
+      if(value.length===2&&value[0]===null&&Array.isArray(value[1])){value[1].forEach(visit);return;}
+      if(value.length===2&&value[0]===null&&Number.isSafeInteger(value[1])&&value[1]<0)return;
+      value.forEach(visit);
+    }else if(value&&typeof value==='object')Object.values(value).forEach(visit);
+  };
+  data.defs.forEach(visit);data.capabilities.forEach((entry:any[])=>visit(entry[1]));
+  assert.equal(uses.length,1);assert(uses.every(count=>count>1),'No unused or single-use schema definition consumes prompt capacity');
+});
+
+test('metadata phrase references never reinterpret literal markers, adjacent codes or text inside a code',()=>{
+  const request=input();
+  request.capabilities=CAPABILITIES.map((capability,index)=>({...capability,...(index===0?{
+    label:capability.label+' literal ~A ~~ ~0 ~_ ~- ~ controls !#$%&*+<=>?@^{}[]()|',
+    scope:capability.scope+' Literal ~A ~~ ~0 ~_ ~- ~; duplicate or recreate the source without changing it.',
+  }:{})}));
+  const before=structuredClone(request.capabilities),data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
+  assert(data.texts.length>0);assert.deepEqual(rehydrateCatalog(data),before);
+  assert.deepEqual(request.capabilities,before);
+});
+
+test('nested schema defaults preserve literal property maps, object order and non-derived required arrays',()=>{
+  const request=input(),literalMap={type:'object',additionalProperties:false,properties:{a:{const:'literal'}},required:['properties','type','additionalProperties']};
+  const schema={type:'object',additionalProperties:false,properties:{
+    type:{const:'synthetic'},
+    reordered:{required:['b','a'],properties:{a:{type:'string'},b:{type:'number'}},type:'object',additionalProperties:false},
+    partial:{type:'object',additionalProperties:false,properties:{a:{type:'string'},b:{type:'number'}},required:['b']},
+    literal:{type:'object',additionalProperties:false,properties:literalMap,required:Object.keys(literalMap)},
+  },required:['type','reordered','partial','literal']};
+  request.capabilities=[{...CAPABILITIES[0],schema},{...CAPABILITIES[1],schema:structuredClone(schema)}];
+  const data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
+  assert.deepEqual(rehydrateCatalog(data),request.capabilities);
+});
+
+test('packed key dictionaries preserve literal separators and backslashes without changing property identities',()=>{
+  const request=input(),key='repeated|pipe\\key';
+  request.capabilities=CAPABILITIES.slice(0,6).map((capability,index)=>({...capability,schema:{
+    type:'object',additionalProperties:false,properties:{type:{const:capability.id},[key]:{const:index}},required:['type',key],
+  }}));
+  const data=JSON.parse(buildCodexPlanningPrompt(request).split('\n').at(-1)!);
+  assert.equal(typeof data.keys,'string');assert(data.keys.includes('\\|'));assert(data.keys.includes('\\\\'));
+  assert.deepEqual(rehydrateCatalog(data),request.capabilities);
+});
+
+test('production identity plus the complete catalog retains useful recent whole-message context within 16 KiB',t=>{
+  const request=input();request.instruction=VELA_PLANNING_INSTRUCTION;
+  const baseBytes=Buffer.byteLength(buildCodexPlanningPrompt(request));
+  const question='What did you create for Minecraft?';
+  const answer='The workspace has a note, checklist and local conversation. Their canonical bindings were verified; Minecraft itself was not changed.';
+  const messages=[
+    {id:'history:user',requestId:'history:request',role:'user' as const,source:'user' as const,classification:'observed' as const,content:question,contentDigest:planningDigest(question)},
+    {id:'history:assistant',requestId:'history:request',role:'assistant' as const,source:'provider' as const,providerId:'codex-app-server',classification:'reported' as const,content:answer,contentDigest:planningDigest(answer)},
+  ];
+  request.context.history={schemaVersion:1,messages,coverage:'bounded-authorized-whole-messages'};
+  const prompt=buildCodexPlanningPrompt(request),data=JSON.parse(prompt.split('\n').at(-1)!);
+  assert(Buffer.byteLength(prompt)<=16384);assert.deepEqual(data.context,request.context);
+  assert.deepEqual(data.context.history.messages,messages);assert.deepEqual(rehydrateCatalog(data),CAPABILITIES);
+  assert.equal(data.schemaAvailability,'complete-approved-catalog');assert.equal(data.capabilities.length,CAPABILITIES.length);
+  t.diagnostic(JSON.stringify({evidence:'synthetic-production-instruction-full-catalog-formatter-only',identityBytes:VELA_IDENTITY_PROMPT_BYTES,
+    instructionBytes:Buffer.byteLength(request.instruction),capabilities:CAPABILITIES.length,baseBytes,promptBytes:Buffer.byteLength(prompt),
+    historyEncodedBytes:Buffer.byteLength(JSON.stringify(request.context.history)),ceiling:16384,providerCalls:0}));
 });
 const output = () => ({ schemaVersion: 1, summary: 'Propose a research workspace.', steps: [{ id: 'create', explanation: 'Use a reference to the selected canonical note.', action: { type: 'workspaceFromResources', title: 'Research', projectId: null, resourceIds: ['note:synthetic'] } }], contribution: { providerId: 'spoofed-provider', executionId: 'spoofed-execution', nativeThreadId: 'spoofed-thread', classification: 'reported' } });
 function fixture(mode: 'normal' | 'invalid-json' | 'simulated' | 'unknown' | 'pending' | 'missing-output' = 'normal', providerOutput?: unknown) {
@@ -275,7 +432,7 @@ test('wire-v2 conversational kinds use only the observed canonical provider turn
     assert.deepEqual(response.contribution, { providerId: 'codex-app-server', classification: 'reported', executionId: 'execution:synthetic', planningConversationId: 'conversation:planning', sourceMessageId: 'message:synthetic', nativeThreadId: 'native-thread:synthetic', nativeTurnId: 'native-turn:synthetic' });
     assert.equal(f.observations.at(-1)!.stage, 'response-ready'); assert.equal(f.observations.at(-1)!.responseKind, kind); assert.equal(Object.keys(f.snapshot.executions).length, 1, 'The authorized response turn stays canonical, with no follow-on execution');
     assert.deepEqual(f.counts(), { turns: 1, opens: 1, authorizations: 1, interrupts: 0 }); assert.equal(f.snapshot.graph.messages[0].content, JSON.stringify(result), 'Exact raw provider output is retained separately from parsed conversation content');
-    assert(f.prompts[0].includes('schemaVersion:2')); assert(f.prompts[0].includes('NO steps or actions')); assert(f.prompts[0].includes('You remain Codex')); assert(!f.prompts[0].includes('return an empty steps array')); assert(Buffer.byteLength(f.prompts[0]) <= 16384);
+    assert(f.prompts[0].includes('schemaVersion:2')); assert(f.prompts[0].includes('no steps/actions')); assert(f.prompts[0].includes('You remain Codex')); assert(!f.prompts[0].includes('return an empty steps array')); assert(Buffer.byteLength(f.prompts[0]) <= 16384);
   }
 });
 

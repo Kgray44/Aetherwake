@@ -91,7 +91,8 @@ test('Vela discovers Timeline creation, composes with approved GitHub evidence, 
     assert.equal(calls.length,0);
     const intent='Give me a development history from the public source we discussed';
     const preview=await core.command('velaRequestPreview',{intent,resourceIds:[]});
-    const grant=await core.command('authorizeVelaRequest',{previewId:preview.id,signature:preview.signature});
+    const native=await core.command('velaNativeReview',{previewId:preview.id,signature:preview.signature});
+    const grant=await core.command('authorizeVelaRequest',{previewId:preview.id,signature:preview.signature,reviewDigest:native.reviewDigest});
     const request=await core.command('vela',{name:'request',input:{intent,resourceIds:[],authorizeProvider:true,previewId:preview.id,grantId:grant.grantId}}) as VelaRequest;
     const state=()=>core.command('vela',{name:'state',input:{}}) as Promise<VelaState>;
     const plan=(await state()).plans.find(plan=>plan.id===request.planId)!;

@@ -106,6 +106,7 @@ const general = {
   roles: [
     role("workingNotes", "Working notes", ["note"], /\b(working notes|workspace notes)\b/i),
     role("nextActions", "Next actions", ["checklist", "task_group", "task"], /\b(next actions|to[- ]do)\b/i),
+    role("discussion", "Project conversation", ["conversation"], /\b(chat|conversation|discussion)\b/i),
   ],
 } as const;
 
@@ -173,7 +174,9 @@ export function composeWorkspaceBlueprint(resources: TemplateResourceRole[], com
   const leftWidth = presence.x - gap - margin;
   const baseWidth = 1200;
   const firstRightWidth = baseWidth - firstRight - margin;
-  let rowTop = margin, rowHeight = 0, contentWidth = presence.x + presence.width;
+  // Reserve the floating application header in a newly composed canvas only.
+  // Existing workspaces and manually positioned cards never pass through this constructor.
+  let rowTop = 144, rowHeight = 0, contentWidth = presence.x + presence.width;
   const placements = resources.map((resource, index) => {
     const definition = blockDefinition(resource.source.kind);
     const right = index % 2 === 1;
@@ -214,9 +217,13 @@ export function composeWorkspaceBlueprint(resources: TemplateResourceRole[], com
 /** Interprets bounded purpose and metadata locally. It never accesses content, creates objects or invokes a provider. */
 export function createWorkspaceArchitect(
   host: Pick<CanonicalTemplateHost, "capabilities" | "workspacePlanningResources">,
+  options: { semantic?: () => VelaTemplatePlanner | undefined } = {},
 ): VelaTemplatePlanner {
   return {
-    async plan(input) {
+    async plan(input, signal) {
+      const semantic = options.semantic?.();
+      if (semantic) return semantic.plan(input, signal);
+      check(!signal?.aborted, 'workspace_architect_cancelled');
       const intent = interpret(input.prompt);
       const available = new Set(input.supportedKinds.filter(kind => !intent.excluded.has(kind)));
       const discovery = intent.allowReuse ? host.workspacePlanningResources?.(input.projectId) : undefined;

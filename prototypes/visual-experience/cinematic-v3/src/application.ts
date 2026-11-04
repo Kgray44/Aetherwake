@@ -56,6 +56,7 @@ import { conversationDisclosures, enhanceConversationSelect } from "../../../con
 import { mountContextualResources, mountContextualStream } from "./workspace-context-views.ts";
 import "./workspace-context-views.css";
 import { mountBlockChat } from "../../../block-library/chat-view.ts";
+import { createVelaVoiceView } from "./vela-voice-view.ts";
 import { mountVelaPanel } from "../../../vela-core/src/panel.ts";
 import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
@@ -113,6 +114,9 @@ import "../../../agent-product/view.css";
 import type { ExperienceMotionPort } from "../../../application-contract/motion.ts";
 import type { ChecklistReference } from "../../../application-contract/checklist.ts";
 import { mountChecklistExperience } from "../../../checklist-product/view.ts";
+import { mountClockTimerExperience } from "./clock-timer-view";
+import type { ClockTimerDocument } from "../../../timer-product/contracts.ts";
+import "./clock-timer-view.css";
 import { mountChecklistCreator } from "../../../checklist-product/creator.ts";
 import "../../../checklist-product/view.css";
 import "../../../checklist-product/creator.css";
@@ -277,6 +281,7 @@ export function installApplication(hooks: Hooks) {
     }),
   });
   addEventListener("resize", surfaces.viewportChanged);
+  const velaVoice = createVelaVoiceView(document, request => host.command!("velaVoice", request));
   let velaPanel: ReturnType<typeof mountVelaPanel> | null = null;
   const velaMissions = createVelaMissionView(document, async (request) =>
     (await host.command!("missions", request)) as MissionResponse,
@@ -308,6 +313,7 @@ export function installApplication(hooks: Hooks) {
   addEventListener(
     "pagehide",
     () => {
+      velaVoice.dispose();
       velaManifestation.dispose();
       velaExperience.dispose();
     },
@@ -480,6 +486,8 @@ export function installApplication(hooks: Hooks) {
       width?: number;
     }
   >();
+  const clockTimerViews = new Map<string, {view:ReturnType<typeof mountClockTimerExperience>;version:number;width?:number}>();
+  const clockTimerProjections = new Map<string, ClockTimerDocument | null>();
   const agentBlockViews = new Map<
     string,
     {
@@ -717,6 +725,7 @@ export function installApplication(hooks: Hooks) {
         notes: notesClient,
         mountCard: mountWorkroomCard,
         media: mediaClient,
+        clockTimers: { port: productClients.clockTimers },
         checklists: {
           port: productClients.checklists,
           motion: experienceMotion,
@@ -868,6 +877,9 @@ export function installApplication(hooks: Hooks) {
       taskProjections.clear();
       for (const entry of checklistViews.values()) entry.view.dispose();
       checklistViews.clear();
+      for (const entry of clockTimerViews.values()) entry.view.dispose();
+      clockTimerViews.clear();
+      clockTimerProjections.clear();
       for (const entry of agentBlockViews.values()) entry.view.dispose();
       agentBlockViews.clear();
       agentProjections.clear();
@@ -1225,6 +1237,9 @@ export function installApplication(hooks: Hooks) {
         entry.view.dispose();
         checklistViews.delete(id);
       }
+    for(const [id,entry] of clockTimerViews)if(!next.blocks.some(block=>block.id===id)){
+      entry.view.dispose();clockTimerViews.delete(id);clockTimerProjections.delete(id);
+    }
     for (const [id, entry] of agentBlockViews)
       if (!next.blocks.some((block) => block.id === id)) {
         entry.view.dispose();
@@ -1557,6 +1572,7 @@ export function installApplication(hooks: Hooks) {
     await taskCreator?.flush();
     for (const entry of taskTrackerViews.values()) await entry.view.flush();
     for (const entry of checklistViews.values()) await entry.view.flush();
+    for (const entry of clockTimerViews.values()) await entry.view.flush();
     for (const entry of timelineViews.values()) await entry.view.flush();
     await directResources.flush();
     for (;;) {
@@ -2463,6 +2479,7 @@ export function installApplication(hooks: Hooks) {
     if (!velaPanel)
       velaPanel = mountVelaPanel(velaContent, velaClient, {
         missions: velaMissions,
+        voice: velaVoice,
         onPresentation: (value) => velaExperience.observe(value),
         onManifestation: (value) => velaManifestation.observe(value),
         onConnectProvider: () => host.command!("capabilities", {}),
@@ -3970,6 +3987,7 @@ export function installApplication(hooks: Hooks) {
       events,
       eventDisconnected,
       agentProjections.get(id),
+      clockTimerProjections.get(id)?.sampledAt,
     ]);
     const cached = identityModels.get(id);
     const timeline = timelineProjections.get(id);
@@ -3991,6 +4009,7 @@ export function installApplication(hooks: Hooks) {
             agent: agentProjections.get(id),
             taskObjective: taskProjections.get(id),
             timeline,
+            clockTimer: clockTimerProjections.get(id),
           });
     if (missionLabel && model.label !== missionLabel) model = { ...model, label: missionLabel };
     identityModels.set(id, {
@@ -4054,6 +4073,7 @@ export function installApplication(hooks: Hooks) {
     if (!state?.blocks.some((block) => block.id === settings.placementId))
       return;
     blockSettings.set(settings.placementId, settings);
+    clockTimerViews.get(settings.placementId)?.view.setConfiguration(settings.configuration);
     settingsFailures.delete(settings.placementId);
     const article = document.querySelector<HTMLElement>(
       `[data-block="${settings.placementId}"]`,
@@ -4405,6 +4425,20 @@ export function installApplication(hooks: Hooks) {
       } else if (entry && entry.version !== r.version) {
         entry.version = r.version;
         void entry.view.refresh().catch(report);
+      }
+    } else if(r.kind === "clock_timer") {
+      const content=el('.working-content',article);
+      let entry=clockTimerViews.get(id);
+      if(!entry&&activeBlocks.get(id)){
+        content.replaceChildren();
+        entry={version:r.version,view:mountClockTimerExperience(content,r.id,productClients.clockTimers,{
+          active:true,presentation:blockPresentation(id),configuration:blockSettings.get(id)?.configuration,
+          placement:{placementId:id,host:libraryClient,onSaved:rememberBlockSettings},
+          onProjection:document=>{clockTimerProjections.set(id,document);refreshBlockIdentity(article,id);},
+        })};
+        clockTimerViews.set(id,entry);
+      }else if(entry&&entry.version!==r.version){
+        entry.version=r.version;void entry.view.refresh().catch(report);
       }
     } else if (r.kind === "checklist") {
       const content = el(".working-content", article);
@@ -4806,7 +4840,16 @@ export function installApplication(hooks: Hooks) {
       resourceId?: string;
       payload?: { delta?: string };
     };
+    if (/^vela[./]voice[./]/.test(e.type)) velaVoice.observe();
     const accessChanged = /^policy[./]/.test(e.type);
+    if (e.type.startsWith('clock_timer.') && e.resourceId) {
+      for (const [id, entry] of clockTimerViews) {
+        if (state?.blocks.find(block => block.id === id)?.resource_id === e.resourceId) void entry.view.refresh().catch(report);
+      }
+      void directResources.refresh(e.resourceId).catch(report);
+      if (e.type === 'clock_timer.expired') hooks.status('A timer completed. Open Clock & timers to inspect and dismiss its saved completion.');
+      hooks.wake();
+    }
     if (accessChanged) {
       eventRefreshGeneration++;
       discardStreamMissions(true);
@@ -4936,6 +4979,9 @@ export function installApplication(hooks: Hooks) {
     connectionsView?.dispose();
     const content = document.createElement("section");
     const controller = mountProviderConnections(content, {
+      apiConnection: async input => await host.command!('velaApiConnection', input) as
+        import('../../../openai-provider/api-connection-contracts.mts').RedactedApiConnectionView |
+        import('../../../openai-provider/api-connection-contracts.mts').ApiModelCatalog,
       command: async (input) =>
         (await host.command!(
           "providerConnection",
@@ -5052,6 +5098,7 @@ export function installApplication(hooks: Hooks) {
           "task_group",
           "stream",
           "checklist",
+          "clock_timer",
           "agent",
           "timeline",
           "task_objective",
@@ -5073,6 +5120,7 @@ export function installApplication(hooks: Hooks) {
     eventViews.get(id)?.setPresentation(presentation);
     groupViews.get(id)?.setPresentation(presentation);
     checklistViews.get(id)?.view.setPresentation(presentation);
+    clockTimerViews.get(id)?.view.setPresentation(presentation);
     agentBlockViews.get(id)?.view.setPresentation(presentation);
     timelineViews.get(id)?.view.setPresentation(presentation);
     taskTrackerViews.get(id)?.view.setPresentation(presentation);
@@ -5096,6 +5144,7 @@ export function installApplication(hooks: Hooks) {
     eventViews.get(id)?.setActive(active);
     groupViews.get(id)?.setActive(active);
     checklistViews.get(id)?.view.setActive(active);
+    clockTimerViews.get(id)?.view.setActive(active);
     agentBlockViews.get(id)?.view.setActive(active);
     timelineViews.get(id)?.view.setActive(active);
     taskTrackerViews.get(id)?.view.setActive(active);
@@ -5176,6 +5225,7 @@ export function installApplication(hooks: Hooks) {
       frameBlockViews(taskTrackerViews);
       directResources.frame();
       frameBlockViews(checklistViews);
+      frameBlockViews(clockTimerViews);
       controlMotion.frame();
       velaExperience.frame(policy);
       velaManifestation.frame(policy);

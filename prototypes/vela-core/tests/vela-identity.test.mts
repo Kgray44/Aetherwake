@@ -7,7 +7,7 @@ import {
 
 test('the versioned identity retains the canonical assistant and explicit evidence classes', () => {
   const contract = VELA_IDENTITY_CONTRACT;
-  assert.equal(VELA_IDENTITY_VERSION, 'aerynth.vela-identity@1');
+  assert.equal(VELA_IDENTITY_VERSION, 'aerynth.vela-identity@2');
   assert.equal(contract.version, VELA_IDENTITY_VERSION);
   assert.equal(contract.assistantId, 'system:vela');
   assert.equal(contract.name, 'Vela');

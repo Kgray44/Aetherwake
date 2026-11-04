@@ -53,6 +53,8 @@ contextBridge.exposeInMainWorld(
           "media",
           "openResource",
           "providerConnection",
+          "velaApiConnection",
+          "velaVoice",
           "interrupt",
           "viewState",
           "graphAction",
@@ -62,6 +64,7 @@ contextBridge.exposeInMainWorld(
           "notes",
           "agents",
           "checklists",
+          "clockTimers",
           "timelines",
           "githubTimeline",
           "taskObjectives",
@@ -71,11 +74,24 @@ contextBridge.exposeInMainWorld(
         ].includes(name)
       )
         throw new Error("unsupported_command");
+      if ((name === 'clockTimers' && ['create', 'mutate'].includes(input?.name) ||
+           name === 'library' && input?.name === 'createBlock' && input?.input?.kind === 'clock_timer' ||
+           name === 'desktop' && input?.type === 'createResource' && input?.kind === 'clock_timer') &&
+          navigator.userActivation?.isActive !== true)
+        throw new Error('timer_user_gesture_required');
+      if (name === 'velaApiConnection' && !['status','usageStatus'].includes(input?.type) &&
+          navigator.userActivation?.isActive !== true)
+        throw new Error('api_user_gesture_required');
+      if (name === 'velaVoice' && ['start','reconnect','audition','createVoice','saveVoice'].includes(input?.name) &&
+          navigator.userActivation?.isActive !== true)
+        throw new Error('voice_user_gesture_required');
       if (name === "githubTimeline" && input?.name === "openCommit" &&
           navigator.userActivation?.isActive !== true)
         throw new Error("github_user_gesture_required");
       if (name === "workspaceRecovery" && input?.name === "apply" && navigator.userActivation?.isActive !== true)
         throw new Error("workspace_recovery_user_gesture_required");
+      if (name === "vela" && ["request", "native", "apply"].includes(input?.name) && navigator.userActivation?.isActive !== true)
+        throw new Error("vela_user_gesture_required");
       if (name === "reconcileConversationTurn" &&
           navigator.userActivation?.isActive !== true)
         throw new Error("turn_recovery_user_gesture_required");

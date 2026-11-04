@@ -25,6 +25,7 @@ export const readableBody = Object.freeze({
   agent: Object.freeze({ width: 224, height: 144 }),
   timeline: Object.freeze({ width: 280, height: 160 }),
   task_objective: Object.freeze({ width: 280, height: 180 }),
+  clock_timer: Object.freeze({ width: 240, height: 180 }),
   stream: Object.freeze({ width: 240, height: 112 }),
   project_overview: Object.freeze({ width: 256, height: 112 }),
   resource_browser: Object.freeze({ width: 256, height: 120 }),

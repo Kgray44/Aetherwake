@@ -86,3 +86,27 @@ test("prerequisite picker avoids cycles and discards a pending review on workspa
   assert.equal(f.control("revision-apply"), null);
   assert.doesNotMatch(f.dom.root.textContent, /stale prior-workspace/);
 });
+
+test("partial investigation preview discloses missing server evidence before Start and names the dedicated API planning route", async () => {
+  const f=await fixture(async()=>{assert.fail('preview must not dispatch');});
+  try{
+    const offer={kind:'planning-offer',scope,objective:'Can you investigate why the Minecraft server is lagging?',fingerprint:'offer',
+      planner:{provider:'openai-api-vela',model:'gpt-6-luna',effort:'low',capabilities:['CPU and RAM']}};
+    f.view.review(offer,()=>{});assert.match(f.dom.root.textContent,/Vela’s dedicated API/);assert.equal(f.requests.some(request=>request.name==='plan'),false);
+    f.view.review({fingerprint:'plan',plan:{...initial(),coverage:{status:'partial',limitations:['Minecraft server logs and TPS are unavailable.']}},executors:[]},()=>{});
+    assert.match(f.dom.root.textContent,/Partial investigation.*Minecraft server logs and TPS.*original objective will remain blocked/su);
+    assert.equal(f.requests.some(request=>request.name==='start'),false);
+  }finally{f.view.setVisible(false);}
+});
+
+test("completed host evidence keeps the investigation blocked and offers an attributable partial report", async () => {
+  const f=await fixture(async request=>{assert.equal(request.name,'post-report');return {kind:'mission-report',missionId:'mission-a',messageId:'partial-report'};});
+  try{
+    f.state.projection={...initial(),disposition:'active',outcome:'blocked',coverage:{status:'partial',limitations:['Server logs and network traces are unavailable.']},
+      tasks:initial().tasks.map(task=>({...task,state:'verified'}))};
+    f.view.openReport('mission-a');await until(()=>/Investigation incomplete/.test(f.dom.root.textContent));
+    assert.match(f.dom.root.textContent,/Server logs and network traces are unavailable/);assert.ok(f.control('post-report'));
+    f.control('post-report').fire('click');await until(()=>f.requests.some(request=>request.name==='post-report'));
+    assert.equal(f.state.projection.outcome,'blocked');assert.equal(f.requests.some(request=>request.name==='start'),false);
+  }finally{f.view.setVisible(false);}
+});

@@ -100,6 +100,7 @@ export const BLOCK_DEFAULT_SIZES: Readonly<
   agent: { width: 400, height: 460 },
   timeline: { width: 640, height: 460 },
   task_objective: { width: 600, height: 540 },
+  clock_timer: { width: 420, height: 520 },
   stream: { width: 500, height: 380 },
   project_overview: { width: 520, height: 360 },
   resource_browser: { width: 560, height: 440 },
@@ -222,6 +223,12 @@ export const BUILTIN_BLOCKS: readonly BlockDefinition[] = deepFreeze([
     ['Edit objective and requirements', 'Link existing execution', 'Record manual review', 'Review acceptance', 'Inspect history'],
     'References one canonical Task Objective. Execution state, manual verification and acceptance stay separate; this block does not start or stop work.'),
     creation: 'reference-only', minimumSize: { width: 360, height: 300 }, requiredServices: ['canonical-resources', 'workspace-engine', 'task-objective-service'] },
+  { ...define('clock_timer', 'Clock & Timers', 'planning', 'Keep named countdowns, a stopwatch with laps, and local or world clocks in one persistent resource.',
+    ['Create named timers', 'Start, pause and adjust timers', 'Record stopwatch laps', 'Add world clocks'],
+    'A local clock, independent named timers, and a stopwatch. State persists when a block closes or moves.'),
+    minimumSize: { width: 280, height: 260 }, requiredServices: ['canonical-resources', 'workspace-engine', 'clock-timer-service'],
+    configurationSchema: { version: 1, fields: ['textScale', 'contentMode', 'clockTimer'] },
+    defaultConfiguration: { schemaVersion: 1, textScale: 1, contentMode: 'auto', clockTimer: { mode: 'timer' } } },
   define(
     "reference",
     "Reference",
@@ -353,7 +360,7 @@ export function blockCapabilities(
     { id: "read", availability: state },
     { id: "attach", availability: state },
   ];
-  if (["note", "research", "reference", "task", "task_group"].includes(kind))
+  if (["note", "research", "reference", "task", "task_group", "clock_timer"].includes(kind))
     result.push({ id: "edit-local", availability: state });
   if (kind === "conversation") {
     result.push({ id: "compose-local", availability: state });
@@ -387,7 +394,7 @@ export function validateConfiguration(
     typeof input !== "object" ||
     Array.isArray(input) ||
     Object.keys(input).some(
-      (k) => !["schemaVersion", "textScale", "contentMode"].includes(k),
+      (k) => !["schemaVersion", "textScale", "contentMode", "clockTimer"].includes(k),
     ) ||
     input.schemaVersion !== 1 ||
     !Number.isFinite(input.textScale) ||
@@ -398,10 +405,17 @@ export function validateConfiguration(
     throw Object.assign(new Error("invalid_block_configuration"), {
       code: "invalid_block_configuration",
     });
+  const timer = input.clockTimer;
+  if (timer !== undefined && (!timer || typeof timer !== 'object' || Array.isArray(timer) ||
+    Object.keys(timer).some(key => !['mode', 'selectedTimerId'].includes(key)) ||
+    !['timer', 'stopwatch', 'clock'].includes(timer.mode) ||
+    (timer.selectedTimerId !== undefined && (typeof timer.selectedTimerId !== 'string' || !/^[\w.:-]{1,200}$/u.test(timer.selectedTimerId)))))
+    throw Object.assign(new Error('invalid_block_configuration'), { code: 'invalid_block_configuration' });
   return {
     schemaVersion: 1,
     textScale: input.textScale,
     contentMode: input.contentMode,
+    ...(timer ? { clockTimer: { mode: timer.mode, ...(timer.selectedTimerId !== undefined ? { selectedTimerId: timer.selectedTimerId } : {}) } } : {}),
   };
 }
 /** Unknown versions retain their original metadata for a later compatible renderer. */

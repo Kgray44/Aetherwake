@@ -81,6 +81,11 @@ export type BlockConfiguration = {
   schemaVersion: 1;
   textScale: number;
   contentMode: "auto" | "compact" | "reading";
+  /** Per-placement presentation only; canonical timer state belongs to TimerService. */
+  clockTimer?: {
+    mode: 'timer' | 'stopwatch' | 'clock';
+    selectedTimerId?: string;
+  };
 };
 export type BlockCapabilityState = { id: string; availability: Availability };
 export type LibraryPreferences = {
@@ -493,5 +498,6 @@ export interface CanonicalTemplateHost<Database = unknown> {
 export interface VelaTemplatePlanner {
   plan(
     input: VelaTemplateRequest & { supportedKinds: BlockKind[] },
+    signal?: AbortSignal,
   ): Promise<VelaTemplatePlan>;
 }

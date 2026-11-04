@@ -83,8 +83,19 @@ function actionSubjects(action: ReturnType<typeof validateAction>, context:Canon
   const result: Pick<ResourceRef, 'id' | 'kind'>[] = [];
   const add = (id: string | null, kind: ResourceRef['kind']) => { if (id !== null && !result.some(r => r.id === id && r.kind === kind)) result.push({ id, kind }); };
   switch (action.type) {
+    case 'clockTimer': {
+      const request=action.request;
+      if(request.name==='create')add(request.input.projectId??null,'project');
+      if(request.name==='mutate'||request.name==='read')add(request.input.resourceId,'resource');
+      if(request.name==='list')for(const id of request.input.resourceIds)add(id,'resource');
+      add(action.workspaceId,'workspace');break;
+    }
     case 'navigate': if (action.target.kind === 'workspace') add(action.target.workspaceId, 'workspace'); else add(action.target.projectId, 'project'); break;
-    case 'createWorkspace': add(action.projectId, 'project'); break;
+    case 'createWorkspace': case 'constructWorkspace': add(action.projectId, 'project'); break;
+    case 'adjustWorkspace':add(action.workspaceId,'workspace');for(const adjustment of action.adjustments)for(const id of adjustment.resourceIds)add(id,'resource');break;
+    case 'recoverCreation':if(action.action==='undo-creation')add(action.workspaceId,'workspace');else add(context.currentProjectId,'project');break;
+    case 'inspectVelaOperation': add(action.workspaceId,'workspace'); break;
+    case 'repairWorkspace': add(action.workspaceId,'workspace'); for(const id of action.resourceIds)add(id,'resource'); break;
     case 'createTimeline': add(action.projectId, 'project'); add(action.workspaceId, 'workspace'); break;
     case 'renameProject': add(action.projectId,'project'); break;
     case 'renameResource': add(action.resourceId,'resource'); break;
@@ -299,6 +310,15 @@ export function createCanonicalVelaHost(options: CanonicalVelaHostOptions): Cano
     check(action.type !== 'delegateTask', 'canonical_native_action_required');
     check(identifier(input.authorizationRef) && identifier(input.commandId) && identifier(input.requestId) && identifier(input.planId), 'canonical_dispatch_authorization_required');
     validateTargets(input.expectedVersions, current);
+    if(action.type==='recoverCreation'&&action.action==='restore') {
+      const workspace=row('workspaces',action.workspaceId);check(workspace?.state==='archived','canonical_recovery_workspace_unavailable');
+      if(workspace.project_id!==null)check(input.expectedVersions.some(target=>target.kind==='project'&&target.id===workspace.project_id),'canonical_recovery_project_manifest_required');
+    }
+    if(action.type==='clockTimer'&&(action.request.name==='mutate'||action.request.name==='read')) {
+      const request=action.request,ref=resolve({id:request.input.resourceId,kind:'resource'},current.scope,current);
+      check(ref?.resourceKind==='clock_timer','canonical_timer_resource_required');
+      if(request.input.expectedVersion!==undefined)check(ref.version===request.input.expectedVersion,'stale_resource_version');
+    }
     if(action.type==='setAttentionMode') {
       check(options.permissions.attentionPreferences?.('change-mode',current.context,current.metadata)===true,'canonical_attention_mode_denied');
       const revision=options.revisions.attentionPreferences?.();check(validVersion(revision)&&revision<Number.MAX_SAFE_INTEGER,'canonical_attention_preferences_unavailable');check(action.expectedVersion===revision,'stale_preference_version');

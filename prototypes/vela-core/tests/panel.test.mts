@@ -58,6 +58,66 @@ async function settles(check: () => boolean) { for (let i = 0; i < 50 && !check(
 const named = (root: Node, text: string) => root.find(node => node.tagName === 'button' && (node.getAttribute('aria-label') === text || node.textContent === text))!;
 function displayed(node: Node) { for (let parent: Node | null = node; parent; parent = parent.parent) { if (parent.hidden) return false; if (parent.tagName === 'details' && !parent.open && !parent.children[0]?.contains(node)) return false; } return true; }
 
+test('a verified result is concise, counts only this request and opens its canonical plan and workspace', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state(), opened: unknown[] = [];
+  const plan: VelaPlan = { id: 'plan:result', requestId: 'request:synthetic', version: 1, fingerprint: 'synthetic',
+    summary: 'Create the requested workspace', steps: [{ id: 'create', explanation: 'Create the workspace', action: { type: 'createWorkspace', title: 'Garden', projectId: null } }],
+    targets: [], scope: { principalId: 'synthetic', policyVersion: 'synthetic', resourceIds: [], projectIds: [], workspaceIds: [] },
+    state: 'applied', createdAt: manifest.createdAt, expiresAt: manifest.createdAt, contribution: null };
+  canonical.requests = [request({ state: 'completed', providerId: null, planId: plan.id })]; canonical.plans = [plan];
+  const receipt: ActionReceipt = { id: 'receipt:result', planId: plan.id, requestId: plan.requestId, stepId: 'create', commandId: 'command:result', source: 'vela',
+    providerId: null, state: 'applied', startedAt: manifest.createdAt, hostReceiptId: 'host:result', taskVerified: false, createdWorkspaceId: 'workspace:result' };
+  canonical.receipts = [receipt, { ...receipt, id: 'receipt:older', requestId: 'request:older', planId: 'plan:older' }];
+  canonical.conversation!.messages = [{ id: 'message:result', requestId: plan.requestId, planId: plan.id, role: 'assistant', content: 'Created “Garden”.', source: 'vela-native', classification: 'observed' }];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical), { onOpenSubject: value => opened.push(value) });
+  await settles(() => !!named(root, 'Open completed plan'));
+  assert.equal(root.find(node => node.className === 'vela-core-plans')!.children.length, 0);
+  assert.equal(root.find(node => node.className === 'vela-mission-jobs-done')!.textContent, '1 job done');
+  assert.equal(displayed(root.find(node => node.dataset.planId === plan.id)!), false);
+  assert.equal(root.find(node => node.className === 'vela-core-status')!.hidden, true);
+  named(root, 'Open completed plan').fire('click');
+  assert.equal(displayed(root.find(node => node.dataset.planId === plan.id)!), true);
+  named(root, 'Open workspace').fire('click'); assert.deepEqual(opened, [{ kind: 'workspace', id: 'workspace:result' }]);
+  named(root, 'Close Vela controls').fire('click'); assert.equal(doc.activeElement, named(root, 'Open completed plan'));
+  canonical.receipts = []; await panel.refresh();
+  assert.equal(displayed(root.find(node => node.dataset.planId === plan.id)!), false, 'Unconfirmed details stay behind the icon');
+  named(root, 'Open response details').fire('click'); assert.equal(displayed(root.find(node => node.dataset.planId === plan.id)!), true);
+  assert.equal(named(root, 'Open completed plan'), undefined);
+  panel.dispose();
+});
+
+test('voice remains behind its icon and typed talk starts once through the native port without a parallel text turn', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state(), calls: string[] = [], visibility: boolean[] = [];
+  let textTurns = 0, release!: () => void;
+  const started = new Promise<void>(resolve => { release = resolve; });
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, { request: async () => { textTurns++; return request(); } }), {
+    voice: { element: doc.createElement('section') as unknown as HTMLElement, setVisible: value => { visibility.push(value); }, start: async intent => { calls.push(intent!); await started; } },
+  });
+  await settles(() => !!named(root, 'Voice'));
+  assert.equal(visibility.includes(true), false);
+  const composer = root.find(node => node.tagName === 'textarea')!;
+  composer.value = 'Let’s talk instead'; composer.fire('input'); composer.fire('keydown', { key: 'Enter' });
+  assert.deepEqual(calls, ['Let’s talk instead']); assert.equal(textTurns, 0); assert.equal(visibility.at(-1), true);
+  composer.value = 'Keep this newer draft'; composer.fire('input'); release();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(composer.value, 'Keep this newer draft');
+  panel.close(); assert.equal(visibility.at(-1), false); panel.dispose();
+});
+
+test('a polite investigation uses mission admission while a simple greeting stays an ordinary turn', async () => {
+  const doc = new Document(), root = doc.createElement('main'), canonical = state(), previews: string[] = [], turns: string[] = [];
+  const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, { request: async input => { turns.push(input.intent); return request(); } }), {
+    missions: { element: doc.createElement('section') as unknown as HTMLElement, preview: async intent => { previews.push(intent); return null; }, review() { throw Error('No mission was proposed'); }, setVisible() {} },
+  });
+  await settles(() => !!named(root, 'Send to Vela'));
+  const composer = root.find(node => node.tagName === 'textarea')!;
+  composer.value = 'Can you investigate why the Minecraft server is lagging?'; composer.fire('input'); composer.fire('keydown', { key: 'Enter' });
+  await settles(() => turns.length === 1 && root.find(node => node.className === 'vela-core-status')!.dataset.requestState !== 'submitting');
+  assert.deepEqual(previews, ['Can you investigate why the Minecraft server is lagging?']);
+  composer.value = 'Hello Vela'; composer.fire('input'); composer.fire('keydown', { key: 'Enter' });
+  await settles(() => turns.length === 2); assert.equal(previews.length, 1); panel.dispose();
+});
+
 test('saved routing controls show origins, preserve preferences when editing limits and offer one-send Auto', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state();
   canonical.planningProviders = [{ providerId: 'chatgpt-plan-responses', available: true }];
@@ -97,6 +157,24 @@ test('saved routing controls show origins, preserve preferences when editing lim
   composer.fire('keydown', { key: 'Enter' });
   await settles(() => turns.length === 2);
   assert.equal(turns[1].overrideDefaults, undefined);
+  panel.dispose();
+});
+
+test('ordinary sends use runtime history by default and Start fresh applies to one send', async () => {
+  const doc=new Document(),root=doc.createElement('main'),canonical=state();
+  canonical.planningProviders=[{providerId:'chatgpt-plan-responses',available:true}];
+  const turns:Parameters<VelaClient['request']>[0][]=[];
+  const panel=mountVelaPanel(root as unknown as HTMLElement,clientFor(async()=>canonical,{
+    request:async input=>{turns.push(input);return request({state:'responded'});},
+  }));
+  await settles(()=>!!root.find(node=>node.tagName==='label'&&node.textContent==='Start fresh for this send'));
+  const fresh=root.find(node=>node.tagName==='label'&&node.textContent==='Start fresh for this send')!.children[1];
+  const composer=root.find(node=>node.tagName==='textarea')!;
+  for(const [index,startFresh]of [false,true,false].entries()){
+    fresh.checked=startFresh;composer.value='Synthetic continuity turn '+index;composer.fire('input');composer.fire('keydown',{key:'Enter'});
+    await settles(()=>turns.length===index+1&&root.find(node=>node.className==='vela-core-status')?.dataset.requestState!=='submitting');
+    assert.equal(turns[index].includeRecentHistory,startFresh?false:undefined);assert.equal(fresh.checked,false);
+  }
   panel.dispose();
 });
 
@@ -195,7 +273,7 @@ test('model-selected search renders an openable canonical result and removes it 
   canonical.searchResults = { [receipt.id]: [ref] };
   const opened: unknown[] = [];
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical), { onOpenSubject: value => opened.push(value) });
-  await settles(() => !!named(root, ref.title));
+  await settles(() => !!named(root, ref.title)); named(root, 'Open response details').fire('click');
   assert.equal(displayed(named(root, ref.title)), true);
   named(root, ref.title).fire('click');
   assert.deepEqual(opened, [ref]);
@@ -222,6 +300,7 @@ test('a model-selected local observation is visible on the completed action', as
   ] };
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical));
   await settles(() => !!root.find(node => node.className === 'vela-manifestation-value' && node.textContent === 'It is 12:00 AM.'));
+  named(root, 'Open response details').fire('click');
   assert(displayed(root.find(node => node.className === 'vela-manifestation-value' && node.textContent === 'It is 12:00 AM.')!));
   assert.equal(named(root, 'Approve and apply'), undefined);
   panel.dispose();
@@ -274,15 +353,17 @@ test('canonical conversation nodes stay mounted across refresh and message/provi
   const doc = new Document(), root = doc.createElement('main'), canonical = state(); canonical.conversation = { resourceId: 'chat:vela', revision: 2, messages: [{ id: 'message:you', role: 'user', content: 'Exact canonical user text', source: 'user', classification: 'observed' }, { id: 'message:provider', role: 'assistant', content: 'Exact attributed proposal', source: 'provider', providerId: 'codex-app-server', classification: 'reported' }] };
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical)); await settles(() => !!root.find(node => node.dataset.messageId === 'message:provider'));
   const user = root.find(node => node.dataset.messageId === 'message:you')!, provider = root.find(node => node.dataset.messageId === 'message:provider')!; await panel.refresh();
-  assert.equal(root.find(node => node.dataset.messageId === 'message:you'), user); assert.equal(root.find(node => node.dataset.messageId === 'message:provider'), provider); assert.equal(user.children[1].textContent, 'Exact canonical user text'); assert.equal(provider.children[0].textContent, 'Codex · contribution'); panel.dispose();
+  assert.equal(root.find(node => node.dataset.messageId === 'message:you'), user); assert.equal(root.find(node => node.dataset.messageId === 'message:provider'), provider); assert.equal(user.children[1].textContent, 'Exact canonical user text'); assert.equal(provider.children[0].textContent, 'Vela'); assert.equal(canonical.conversation.messages[1].providerId, 'codex-app-server'); panel.dispose();
 });
 
-test('readable plan effects and consequential text stay visible while JSON is disclosed, with review before exact apply', async () => {
+test('plan icon opens consequential effects and JSON with explicit review before exact apply', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(), calls: unknown[] = [];
   const plan: VelaPlan = { id: 'plan:edit', requestId: 'request:synthetic', version: 1, fingerprint: 'exact:reviewed-fingerprint', summary: 'Update the research note', steps: [{ id: 'edit', explanation: 'Replace this note only', action: { type: 'content', resourceId: 'note:one', expectedVersion: 7, content: 'Exact replacement text' } }], targets: [{ id: 'note:one', kind: 'resource', title: 'Research note', version: 7 }], scope: { principalId: 'synthetic', policyVersion: 'policy:synthetic', resourceIds: ['note:one'], projectIds: [], workspaceIds: [] }, state: 'prepared', createdAt: manifest.createdAt, expiresAt: manifest.createdAt, contribution: { providerId: 'codex-app-server', classification: 'reported' } };
   canonical.plans = [plan]; canonical.requests = [request({ state: 'awaiting-review', planId: plan.id })];
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical, { review: async input => { calls.push(input); plan.state = 'approved'; return plan; }, apply: async id => { calls.push(id); plan.state = 'applied'; canonical.requests[0].state = 'completed'; canonical.receipts = [{ id: 'receipt:actual-port-fixture', planId: plan.id, requestId: plan.requestId, stepId: 'edit', commandId: 'command:fixture', source: 'vela', providerId: null, state: 'applied', startedAt: manifest.createdAt, hostReceiptId: 'host:fixture', taskVerified: false }]; return plan; } }));
-  await settles(() => !!root.find(node => node.dataset.planId === plan.id)); assert.equal(calls.length, 0); const preview = root.find(node => node.className === 'vela-core-change-preview')!; assert.equal(preview.textContent, 'Exact replacement text'); assert.equal(displayed(preview), true);
+  await settles(() => !!root.find(node => node.dataset.planId === plan.id));
+  assert.equal(displayed(root.find(node => node.dataset.planId === plan.id)!), false);
+  named(root, 'Open response details').fire('click'); assert.equal(calls.length, 0); const preview = root.find(node => node.className === 'vela-core-change-preview')!; assert.equal(preview.textContent, 'Exact replacement text'); assert.equal(displayed(preview), true);
   const raw = root.find(node => node.tagName === 'pre' && node.textContent.includes('expectedVersion'))!; assert.equal(displayed(raw), false); assert.equal(displayed(named(root, 'Approve and apply')), true);
   named(root, 'Approve and apply').focus(); named(root, 'Approve and apply').fire('click'); await settles(() => calls.length === 2 && root.find(node => node.className === 'vela-core-status')!.dataset.requestState === 'completed');
   assert.deepEqual(calls, [{ planId: plan.id, fingerprint: plan.fingerprint, decision: 'approve' }, plan.id]); assert.match(root.find(node => node.className === 'vela-core-status')!.textContent, /reviewed plan was applied/); assert.equal(doc.activeElement, root.find(node => node.dataset.planId === plan.id)); panel.dispose();
@@ -306,6 +387,8 @@ test('read-only refresh preserves keyed plan disclosures, reading focus and pend
     apply: async () => { applies++; plan.state = 'applied'; canonical.requests[1].state = 'completed'; return structuredClone(plan); },
   }));
   await settles(() => !!root.find(node => node.dataset.planId === plan.id));
+  assert.equal(displayed(root.find(node => node.dataset.planId === plan.id)!), false);
+  named(root, 'Open response details').fire('click');
   const currentCard = root.find(node => node.dataset.planId === plan.id)!, earlierCard = root.find(node => node.dataset.planId === 'plan:earlier')!, history = root.find(node => node.className === 'vela-core-plan-history')!;
   const evidence = currentCard.find(node => node.className === 'vela-core-plan-details')!, earlierEvidence = earlierCard.find(node => node.className === 'vela-core-plan-details')!, approve = named(currentCard, 'Approve and apply');
   named(root, 'History').fire('click'); assert.equal(displayed(approve), true, 'The required action remains visible while invoked history is read');
@@ -362,7 +445,7 @@ test('free text takes the same request path and provider consent is one-shot', a
   assert.equal(consent.checked, false); panel.dispose();
 });
 
-test('protected Action remains visible and cannot be dismissed in History, including a newer saved local Whisper', async () => {
+test('protected Action remains discoverable behind its icon and cannot be dismissed in History', async () => {
   const doc = new Document(), root = doc.createElement('main'), canonical = state(); let reviews = 0, applies = 0;
   const plan: VelaPlan = { id: 'plan:protected', requestId: 'request:synthetic', version: 1, fingerprint: 'synthetic:protected', summary: 'Actual typed proposal fixture', steps: [{ id: 'one', explanation: 'Synthetic review only', action: { type: 'createProject', title: 'Synthetic project' } }], targets: [], scope: { principalId: 'synthetic', policyVersion: manifest.policyVersion, resourceIds: [], workspaceIds: [], projectIds: [] }, state: 'prepared', createdAt: manifest.createdAt, expiresAt: manifest.createdAt, contribution: null };
   canonical.plans = [plan]; canonical.requests = [request({ state: 'awaiting-review', planId: plan.id })];
@@ -374,7 +457,8 @@ test('protected Action remains visible and cannot be dismissed in History, inclu
   await settles(() => root.find(node => node.className === 'vela-core')!.dataset.manifestationKind === 'action'); const approve = named(root, 'Approve and apply'); assert.equal(named(root, 'Dismiss response').disabled, true);
   const editor = root.find(node => node.tagName === 'textarea')!; editor.value = 'What time is it?'; editor.fire('input'); editor.fire('keydown', { key: 'Enter' });
   await settles(() => root.find(node => node.getAttribute('aria-label') === 'Latest local response')!.textContent.includes('12:00 AM')); await panel.refresh();
-  assert.equal(root.find(node => node.className === 'vela-core')!.dataset.manifestationKind, 'action'); assert.equal(displayed(approve), true); assert.equal(named(root, 'Dismiss response').disabled, true);
+  assert.equal(root.find(node => node.className === 'vela-core')!.dataset.manifestationKind, 'action'); assert.equal(displayed(approve), false); assert.equal(named(root, 'Dismiss response').disabled, true);
+  named(root, 'Open response details').fire('click'); assert.equal(displayed(approve), true);
   named(root, 'History').fire('click'); await settles(() => root.find(node => node.className === 'vela-core-history')!.hidden === false); assert.equal(displayed(approve), true); assert.equal(named(root, 'Approve and apply'), approve); assert.equal(reviews, 0); assert.equal(applies, 0); panel.dispose();
 });
 
@@ -431,7 +515,7 @@ test('provider opt-in is contextual, one-shot, identified and cannot silently mo
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => canonical)); await settles(() => root.find(node => node.className === 'vela-core-status')!.dataset.requestState === 'idle');
   const consent = root.find(node => node.tagName === 'input' && !!node.parent?.className.includes('vela-core-consent'))!; assert.equal(displayed(consent), false); assert.equal(consent.checked, false);
   named(root, 'Provider').fire('click'); assert.equal(displayed(consent), true); assert.match(consent.parent!.textContent, /Use Codex for this request/); consent.checked = true; consent.fire('change');
-  const choice = root.find(node => node.className.includes('vela-core-provider-choice'))!; assert.equal(choice.hidden, false); assert.match(choice.textContent, /Codex/); named(root, 'Close Vela controls').fire('click'); assert.equal(displayed(choice), true);
+  const choice = root.find(node => node.className.includes('vela-core-provider-choice'))!; assert.equal(choice.hidden, false); assert.match(choice.textContent, /Codex/); named(root, 'Close Vela controls').fire('click'); assert.equal(displayed(choice), false, 'Provider details stay behind the Provider icon');
   canonical.planner.providerId = 'other-identified-provider'; await panel.refresh(); assert.equal(consent.checked, false); assert.equal(choice.hidden, true); assert.match(consent.parent!.textContent, /other-identified-provider/); panel.dispose();
 });
 
@@ -447,8 +531,8 @@ test('responded conversational outcomes show one attributed message without plan
     canonical.requests = [request({ state: 'responded', conversationId: 'chat:vela', providerId: 'codex-app-server', response: { kind, messageId: 'message:actual-response' } })];
     canonical.conversation.messages = [{ id: 'message:submitted', role: 'user', requestId: 'request:synthetic', content: 'An ordinary conversational question', source: 'user', classification: 'observed' }, { id: 'message:actual-response', role: 'assistant', requestId: 'request:synthetic', content: 'Exact canonical reported ' + kind + '.', source: 'provider', providerId: 'codex-app-server', classification: 'reported', responseKind: kind, providerContribution: { providerId: 'codex-app-server', classification: 'reported', executionId: 'execution:synthetic-client-reference' } }];
     finish(canonical.requests[0]); await settles(() => root.find(node => node.className === 'vela-core-status')!.dataset.requestState === 'responded');
-    const provider = root.find(node => node.dataset.messageId === 'message:actual-response')!; assert.equal(provider.children[0].textContent, 'Codex · contribution'); assert.equal(provider.children[1].textContent, 'Exact canonical reported ' + kind + '.'); assert.equal(root.find(node => node.className === 'vela-core-plans')!.children.length, 0); assert.equal(named(root, 'Approve and apply'), undefined);
-    assert.equal(root.find(node => node.className === 'vela-core')!.dataset.manifestationKind, 'insight'); assert.equal(root.find(node => node.className === 'vela-manifestation-kicker')!.textContent, 'Codex · contribution'); const primary = root.find(node => node.className === 'vela-manifestation-content')!; assert.equal(primary.textContent, 'Exact canonical reported ' + kind + '.'); assert.equal(displayed(primary), true); assert.equal(displayed(provider), false, 'The canonical transcript is only visible when History is invoked');
+    const provider = root.find(node => node.dataset.messageId === 'message:actual-response')!; assert.equal(provider.children[0].textContent, 'Vela'); assert.equal(provider.children[1].textContent, 'Exact canonical reported ' + kind + '.'); assert.equal(root.find(node => node.className === 'vela-core-plans')!.children.length, 0); assert.equal(named(root, 'Approve and apply'), undefined);
+    assert.equal(root.find(node => node.className === 'vela-core')!.dataset.manifestationKind, 'insight'); assert.equal(root.find(node => node.className === 'vela-manifestation-kicker')!.hidden, true); const primary = root.find(node => node.className === 'vela-manifestation-content')!; assert.equal(primary.children[0].textContent, 'Exact canonical reported ' + kind + '.'); assert.equal(displayed(primary), true); assert.equal(displayed(provider), false, 'The canonical transcript is only visible when History is invoked');
     assert.equal(root.find(node => node.tagName === 'textarea'), input); assert.equal(input.value, 'Later unsent text'); assert.equal(input.selectionStart, 2); assert.equal(input.selectionEnd, 7); assert.doesNotMatch(root.find(node => node.className === 'vela-core-status')!.textContent, /applied|complete|running|missing/i);
     assert(observed.some(value => value.messageIds.includes('message:actual-response'))); assert(observed.every(value => !['planning', 'review', 'applying'].includes(value.phase))); assert.equal(observed.at(-1)!.phase, 'receiving', 'Only the later user draft remains active'); assert.deepEqual(observed.at(-1)!.planIds, []); panel.dispose();
   }
@@ -492,6 +576,8 @@ test('SYNTHETIC hidden-DOM prepared long-request/open-evidence fixture preserves
   const unexpected = async (): Promise<never> => { writes++; throw new Error('Synthetic read-only fixture executed a command'); };
   const panel = mountVelaPanel(root as unknown as HTMLElement, clientFor(async () => structuredClone(canonical), { request: unexpected, review: unexpected, apply: unexpected, native: unexpected }));
   await settles(() => !!root.find(node => node.dataset.planId === plan.id));
+  assert.equal(displayed(root.find(node => node.dataset.planId === plan.id)!), false);
+  named(root, 'Open response details').fire('click');
   const editor = root.find(node => node.tagName === 'textarea')!, message = root.find(node => node.dataset.messageId === 'synthetic:long-message')!, card = root.find(node => node.dataset.planId === plan.id)!, evidence = card.find(node => node.className === 'vela-core-plan-details')!, approve = named(root, 'Approve and apply'), reject = named(root, 'Reject plan');
   editor.value = 'Synthetic unsent recovery text'; editor.selectionStart = 4; editor.selectionEnd = 12; editor.fire('input'); evidence.open = true; evidence.fire('toggle'); evidence.children[0].focus();
   const typed = JSON.parse(evidence.find(node => node.tagName === 'pre')!.textContent); assert.deepEqual(typed.actions, plan.steps); assert.deepEqual(typed.targets, plan.targets); assert.deepEqual(typed.receipts, []);

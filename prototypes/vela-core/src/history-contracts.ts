@@ -16,7 +16,9 @@ export interface ProviderHistoryMessage {
   id: string; requestId: string; role: 'user' | 'assistant'; source: 'user' | 'provider';
   providerId?: string; classification: 'observed' | 'reported'; content: string; contentDigest: string;
 }
-export interface ProviderHistory { schemaVersion: 1; messages: readonly ProviderHistoryMessage[]; coverage: 'bounded-authorized-whole-messages' }
+export interface ProviderHistory { schemaVersion: 1; messages: readonly ProviderHistoryMessage[]; coverage: 'bounded-authorized-whole-messages';
+  retrieval?: { method: 'lexical-canonical-exchanges'; queryDigest: string; selectedRequestIds: readonly string[];
+    resolution: 'matched' | 'ambiguous' | 'no-match'; scannedMessages: number; partial: boolean } }
 /** References to the canonical exchange. The receipt contains no message bodies. */
 export interface VelaHandoff {
   /** Stable across reviewed stages of the same Vela task. */

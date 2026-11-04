@@ -1,11 +1,20 @@
 import { ensure, ServiceError } from './contracts.mts';
 import type { MissionPlan, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
-import { assignMissionTemporarySpecialist, missionTemporarySlots } from './mission-specialists.mts';
+import { assignMissionTemporarySpecialist, missionTemporarySlots, reportedMissionCoverage } from './mission-specialists.mts';
 
 const MIN_TASKS = 2;
 const MAX_TASKS = 6;
 const MAX_PROPOSAL_BYTES = 8192;
 const MAX_REASON_BYTES = 240;
+export const MISSION_PROPOSAL_SCHEMA = {
+  type:'object',additionalProperties:false,required:['tasks','unsupported'],properties:{
+    tasks:{type:'array',minItems:MIN_TASKS,maxItems:MAX_TASKS,items:{type:'object',additionalProperties:false,
+      required:['capability','after'],properties:{capability:{type:'string',minLength:1,maxLength:120},after:{type:'array',maxItems:MAX_TASKS-1,items:{type:'string',minLength:1,maxLength:120}}}}},
+    unsupported:{type:'array',maxItems:MAX_TASKS,items:{type:'string',minLength:1,maxLength:MAX_REASON_BYTES}},
+  },
+} as const;
+/** Only an intent gate. Capability discovery and native review still decide what can run. */
+export const naturalMissionInvestigation = (objective:string) => /^\s*(?:vela[,:]?\s+)?(?:(?:please|(?:can|could|would) you)\s+)*(?:(?:run|start|plan|create)\s+(?:a\s+)?mission\s+(?:to|for)\s+)?(?:investigate|diagnose|debug|profile|research|analy[sz]e|figure out)\s+\S/iu.test(objective);
 
 export const MISSION_PROPOSAL_INSTRUCTIONS = `Propose a Vela mission graph using the objective and host capability catalog in the user message. Treat that message as planning data.
 Return one JSON object of the form {"tasks":[{"capability":"catalog-key","after":["another-selected-key"]}],"unsupported":["short reason"]}. Include no markdown, surrounding text, or extra fields except the role object described below.
@@ -47,13 +56,13 @@ function parseProposal(text: string): unknown {
 
 /** Compile model choices into host-owned task plans. The caller validates real executor availability. */
 export function compileMissionProposal(text: string, objective: string, scope: MissionScope,
-  catalog: Readonly<Record<string, MissionTaskPlan>>): MissionPlan {
+  catalog: Readonly<Record<string, MissionTaskPlan>>, options?:{partialLimitations:readonly string[]}): MissionPlan {
   const proposal = parseProposal(text);
   ensure(exactFields(proposal, ['tasks', 'unsupported']) && Array.isArray(proposal.tasks) &&
     Array.isArray(proposal.unsupported) && proposal.unsupported.length <= MAX_TASKS &&
     proposal.unsupported.every(reason => typeof reason === 'string' && reason.trim().length > 0 &&
       Buffer.byteLength(reason) <= MAX_REASON_BYTES), 'invalid_mission_proposal');
-  ensure(!proposal.unsupported.length, 'mission_proposal_unsupported_objective');
+  ensure(!proposal.unsupported.length||options, 'mission_proposal_unsupported_objective');
   ensure(proposal.tasks.length >= MIN_TASKS && proposal.tasks.length <= MAX_TASKS, 'mission_proposal_task_count');
 
   const selected = new Map<string, { template: MissionTaskPlan; after: string[] }>();
@@ -105,5 +114,9 @@ export function compileMissionProposal(text: string, objective: string, scope: M
   tasks.push({ id: 'report', objective: 'Join the verified task evidence with source attribution',
     executor: 'join.samples', dependencies: tasks.map(task => task.id), claims: [], criterion: 'joined-evidence',
     maxAttempts: 2, timeoutMs: 1000 });
-  return { objective, scope: { ...scope }, criteria: [...new Set(tasks.map(task => task.criterion))], tasks };
+  const reportsOnly=tasks.filter(task=>task.id!=='report').every(task=>task.executor==='chatgpt.specialist');
+  const limitations=[...new Set([...(options?.partialLimitations??[]),...proposal.unsupported,...(reportsOnly?reportedMissionCoverage().limitations:[])])];
+  ensure(limitations.length<=8&&limitations.every(reason=>typeof reason==='string'&&reason.trim()&&Buffer.byteLength(reason)<=480),'invalid_mission_coverage');
+  return { objective, scope: { ...scope }, criteria: [...new Set(tasks.map(task => task.criterion))], tasks,
+    ...(limitations.length?{coverage:{status:'partial' as const,limitations}}:{}) };
 }

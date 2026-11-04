@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 const { conversationCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/conversation-broker.cjs');
 const { velaCommand } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-broker.cjs');
 const { validateReview: validateNativeVelaReview, reviewPage: nativeVelaReviewPage } = createRequire(import.meta.url)('../../visual-experience/cinematic-v3/native/vela-review.cjs');
-import type { ConversationSendInput,OrdinaryConnectionPort,StreamEvent } from '../src/contracts.mts';
+import type { ConversationSendInput,OrdinaryConnectionPort,StreamEvent,VelaRequestPreview } from '../src/contracts.mts';
 import type { ProviderConnectionStatus } from '../../application-contract/provider-connections.ts';
 import type { VelaRequest, VelaState } from '../../vela-core/src/contracts.ts';
 import type { VelaRoutingSettingsChange } from '../../vela-core/src/routing-settings.ts';
@@ -27,7 +27,7 @@ import type { MissionTeam } from '../src/mission-teams.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
 const documentedModel = { id: 'gpt-6.1-sol', label: 'Synthetic catalog Sol' };
 function sse(events:unknown[]){return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});}
-function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection'){
+function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', historyContext?: boolean){
  const dir=mkdtempSync(join(tmpdir(),'aerynth-ordinary-responses-')),path=join(dir,'canonical.sqlite'),events:StreamEvent[]=[],requests:Record<string,any>[]=[],responses:((init:RequestInit)=>Promise<Response>|Response)[]=[];
  let listedModels=[{id:model,label:'Synthetic eligible model'}];
  let version=1,ready=true,catalogReads=0,secretReads=0,codexCalls=0,finishResolve:(()=>void)|undefined,pending=false;
@@ -40,7 +40,7 @@ function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection'){
  const fakeFetch:typeof fetch=async(url,init)=>{assert.equal(url,RESPONSES_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer SYNTHETIC_PLAN_TOKEN');const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);assert.deepEqual(Object.keys(body),['model','instructions','input','store','stream',...(body.reasoning?['reasoning']:[]),...(body.tools?['tools','tool_choice']:[])]);requests.push(body);const response=responses.shift();assert(response,'unexpected provider request');return response(init!);};
  const provider = useCodexProtocolDouble ? { provider: 'codex' as const, codexExecutable: process.execPath,
    codexArgs: [fileURLToPath(new URL('../../codex-bridge/tests/catalog-server.mjs', import.meta.url)), codexMode] } : { provider: 'fixture' as const };
- let core:BackendCore;const create=()=>{core=new BackendCore({path,...provider,contentPolicy:'synthetic-only'},event=>events.push(event),undefined,{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
+ let core:BackendCore;const create=()=>{core=new BackendCore({path,...provider,contentPolicy:'synthetic-only',...(historyContext===undefined?{}:{velaHistoryContext:historyContext})},event=>events.push(event),undefined,{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
  return {get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(resolve(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
@@ -268,7 +268,8 @@ test('reviewed saved teams bind roles, reconcile concurrent reports and link the
     const settlesUntil = performance.now() + 5000;
     let completed = await read();
     while (['queued', 'running'].includes(completed.outcome) && performance.now() < settlesUntil) { await wait(10); completed = await read(); }
-    assert.equal(completed.outcome, 'verified', JSON.stringify(completed.tasks.map(t => [t.id, t.state, t.detail])));
+    assert.equal(completed.outcome, 'blocked', JSON.stringify(completed.tasks.map(t => [t.id, t.state, t.detail])));
+    assert.equal(completed.coverage?.status,'partial');assert.equal(completed.profile.verifiedObjectivesPerReportedToken,null);
     const completedTeam = await dashboard(teamCardId);
     assert.ok(completedTeam.kind === 'team' && completedTeam.members.every(member => member.state === 'verified'));
     const delivered = f.events.slice(liveBefore).filter(event => event.mission?.id === mission.id);
@@ -298,6 +299,7 @@ test('reviewed saved teams bind roles, reconcile concurrent reports and link the
     assert.equal((await conversation())?.resourceId, mission.originConversationId);
     assert.deepEqual((await matchingLinks())?.map(item => item.missionReport), [{ missionId: mission.id, workspaceId, projectId: null, jobsDone: 2 }]);
     assert.match((await matchingLinks())?.[0].content ?? '', /reported:/u);
+    assert.match((await matchingLinks())?.[0].content ?? '', /investigation remains incomplete.*independent domain evidence/su);
     const posted = await post();
     assert.deepEqual(await post(), posted);
     const other = await f.core.command('desktop', { type: 'createWorkspace', title: 'Other synthetic workspace', projectId: null });
@@ -343,11 +345,17 @@ test('a research mission authorizes web search only for the source specialist an
       if (mission.outcome !== 'queued' && mission.outcome !== 'running') break;
       await wait(25);
     } while (performance.now() < end);
-    assert.equal(mission.outcome, 'verified');
+    assert.equal(mission.outcome, 'blocked');
+    assert.equal(mission.coverage?.status,'partial');assert.ok(mission.tasks.every(task=>task.state==='verified'));
+    assert.match(mission.coverage!.limitations.join(' '),/citations are provider reports.*do not independently verify/su);
     const researcher = mission.tasks.find(t => t.specialist?.webSearch)!;
     assert.deepEqual((researcher.attempts[0].evidence!.value as { citations: string[] }).citations, ['https://example.org/measurement']);
     assert.equal(f.requests.filter(req => req.tool_choice === 'required').length, 1);
     assert.equal(mission.profile.reportedTotalTokens, null);
+    assert.equal(mission.profile.verifiedObjectivesPerReportedToken,null);
+    const conversation=(await f.core.command('vela',{name:'state',input:{}}) as VelaState).conversation;
+    const partial=conversation!.messages.find(message=>message.missionReport?.missionId===mission.id)!;
+    assert.equal(partial.source,'vela-native');assert.match(partial.content,/investigation remains incomplete.*Specialist findings and citations are provider reports/su);
     const review = await f.core.command('missions', { name: 'workroom-preview', input: { id: mission.id } }) as MissionWorkroomPreview;
     const room = await f.core.command('missions', { name: 'workroom-apply', input: { id: mission.id, reviewId: review.reviewId } }) as MissionWorkroom;
     const resourceId = room.missionCards?.evidence;
@@ -484,6 +492,90 @@ function allowFixtureHandoffEvidence(f: ReturnType<typeof fixture>) {
     }
     return execution;
   };
+}
+
+test('successive ordinary Vela Sends use bounded canonical history by default with no repeat native review and fresh remains one-send only', async () => {
+  const f=fixture();let reviews=0;
+  const previews:VelaRequestPreview[]=[];
+  const send=(intent:string,includeRecentHistory?:boolean)=>velaCommand({
+    win:{isDestroyed:()=>false,webContents:{isDestroyed:()=>false}},dialog:{},offerPlanningByDefault:true,directMessageSend:true,routeNative:true,
+    input:{name:'request',input:{intent,resourceIds:[],authorizeProvider:true,...(includeRecentHistory===undefined?{}:{includeRecentHistory})}},
+    reviewProvider:async()=>{reviews++;return true;},call:async(name:any,input:any)=>{
+      const result=await f.core.command(name,input);if(name==='velaRequestPreview')previews.push(result as VelaRequestPreview);return result;
+    },
+  }) as Promise<VelaRequest>;
+  try {
+    // This isolated protocol fixture supplies the recorded proof shape, never real provider acceptance.
+    allowFixtureHandoffEvidence(f);
+    f.responses.push(()=>complete('resp_continuity_first','Synthetic canonical first answer.'));
+    const first=await send('Explain the first synthetic option.');assert.equal(first.state,'responded',first.errorCode);
+    f.responses.push(()=>complete('resp_continuity_second','Synthetic answer using the preceding exchange.'));
+    const second=await send('Compare that with the second option.');assert.equal(second.state,'responded',second.errorCode);
+    const secondPreview=previews[1] as import('../src/contracts.mts').VelaRequestPreview;
+    assert.equal(secondPreview.sendDisposition,'routine');assert.equal(secondPreview.history?.messageCount,2);
+    assert.equal(second.conversationId,first.conversationId);assert.equal(reviews,0);
+    assert.match(JSON.stringify(f.requests[1].input),/Explain the first synthetic option\./);
+    assert.match(JSON.stringify(f.requests[1].input),/Synthetic canonical first answer\./);
+    assert.equal(second.history?.messages.length,2);assert.equal(second.context.history,undefined);
+    assert.ok(!JSON.stringify(second.history).includes('Synthetic canonical first answer.'));
+    await f.reopen();allowFixtureHandoffEvidence(f);
+    f.responses.push(()=>complete('resp_continuity_fresh','Synthetic fresh answer.'));
+    const fresh=await send('Explain an independent synthetic topic.',false);assert.equal(fresh.state,'responded',fresh.errorCode);
+    const freshPreview=previews.at(-1) as import('../src/contracts.mts').VelaRequestPreview;
+    assert.equal(freshPreview.history,undefined);assert.equal(fresh.history,undefined);assert.equal(fresh.conversationId,first.conversationId);
+    assert.doesNotMatch(JSON.stringify(f.requests[2].input),/Synthetic canonical first answer|Compare that with the second option/);
+    const next=await f.core.command('velaRequestPreview',{intent:'Continue the current topic.',resourceIds:[],adaptive:true});
+    assert.ok(next.history&&next.history.messageCount>=2);assert.equal(next.sendDisposition,'routine');
+    assert.equal(reviews,0);assert.equal(f.codexCalls,0);assert.equal(f.requests.length,3);
+  }finally{await f.close();}
+});
+
+test('explicit legacy history enable still works when the runtime default is disabled',async()=>{
+  const f=fixture(false,'air-inspection',false);
+  try {
+    allowFixtureHandoffEvidence(f);
+    const preview=await f.core.command('velaRequestPreview',{intent:'Explain a synthetic baseline.',resourceIds:[],adaptive:true});
+    const review=await f.core.command('velaNativeReview',{previewId:preview.id,signature:preview.signature});
+    const grant=await f.core.command('authorizeVelaRequest',{previewId:preview.id,signature:preview.signature,reviewDigest:review.reviewDigest,directSend:true});
+    f.responses.push(()=>complete('resp_legacy_history','Synthetic baseline for an explicit opt-in.'));
+    const prior=await f.core.command('vela',{name:'request',input:{intent:preview.intent,resourceIds:[],authorizeProvider:true,previewId:preview.id,grantId:grant.grantId}}) as VelaRequest;
+    assert.equal(prior.state,'responded');
+    assert.equal((await f.core.command('velaRequestPreview',{intent:'New synthetic turn.',resourceIds:[],adaptive:true})).history,undefined);
+    const enabled=await f.core.command('velaRequestPreview',{intent:'Continue the synthetic baseline.',resourceIds:[],adaptive:true,includeRecentHistory:true});
+    assert.equal(enabled.history?.messageCount,2);assert.equal(enabled.sendDisposition,'routine');assert.equal(f.requests.length,1);
+  }finally{await f.close();}
+});
+
+for(const mutation of ['source-change','source-revoked','routing-change','connection-version','billing-route'] as const){
+  test('routine history Send rechecks '+mutation+' between preflight and grant without a second provider dispatch',async()=>{
+    const f=fixture();let reviews=0,mutated=false;
+    try{
+      allowFixtureHandoffEvidence(f);
+      const desktop=await f.core.command('desktop',{type:'createResource',kind:'note',workspaceId:null,title:'Synthetic continuity source'});
+      const note=desktop.resources.find(resource=>resource.title==='Synthetic continuity source')!;
+      const send=(intent:string,resourceIds:string[],change=false)=>velaCommand({
+        win:{isDestroyed:()=>false,webContents:{isDestroyed:()=>false}},dialog:{},offerPlanningByDefault:true,directMessageSend:true,
+        input:{name:'request',input:{intent,resourceIds,authorizeProvider:true}},reviewProvider:async()=>{reviews++;return true;},
+        call:async(name:any,input:any)=>{
+          const result=await f.core.command(name,input);
+          if(change&&name==='velaNativeReview'){
+            mutated=true;
+            if(mutation==='source-change')await f.core.command('desktop',{type:'content',resourceId:note.id,expectedVersion:note.version,content:'Synthetic source changed after preflight.'});
+            if(mutation==='source-revoked')await f.core.command('desktop',{type:'archiveSubject',kind:'resource',id:note.id,expectedVersion:note.version,archived:true});
+            if(mutation==='routing-change')await f.core.command('vela',{name:'saveRoutingSettings',input:{scope:'global',id:null,expectedVersion:0,defaults:{mode:'deep'}}});
+            if(mutation==='connection-version'){await f.connection.refresh(1);await f.core.command('ordinaryProviderStatus',{});}
+            if(mutation==='billing-route')f.owner.ordinaryStatus.billingRoute='api-key';
+          }
+          return result;
+        },
+      }) as Promise<VelaRequest>;
+      f.responses.push(()=>complete('resp_continuity_dependency','Synthetic answer derived from the selected note.'));
+      assert.equal((await send('Explain the selected synthetic note.',[note.id])).state,'responded');
+      assert.equal(reviews,1,'New explicit source content keeps its review');
+      await assert.rejects(send('Continue the preceding explanation.',[],true),/upstream|source|stale|history|connection_changed/);
+      assert.equal(mutated,true);assert.equal(reviews,1);assert.equal(f.requests.length,1);assert.equal(f.codexCalls,0);
+    }finally{await f.close();}
+  });
 }
 
 test('Check my CPU, explain the number, then look through my repository logs', async () => {
@@ -1006,7 +1098,7 @@ test('AIR resolves saved scope defaults, preserves turn overrides, and invalidat
     await save({ scope: 'project', id: workspace.project_id, expectedVersion: 0, defaults: { providerId, model: documentedModel.id } });
     await save({ scope: 'workspace', id: workspace.id, expectedVersion: 0, defaults: { mode: 'deep' } });
     await save({ scope: 'chat', id: chat, expectedVersion: 0, defaults: { reasoningEffort: 'medium' } });
-    assert.deepEqual(await f.core.command('velaRouteNative', { intent: 'What is 2 + 2?' }), { matched: false });
+    assert((await f.core.command('velaRouteNative', { intent: 'What is 2 + 2?' })).matched, 'Clear native facts preserve saved inference pins without starting a model');
     assert((await f.core.command('velaRouteNative', { intent: 'What is 2 + 2?', settings: { overrideDefaults: true } })).matched);
     const input = { adaptive: true as const, intent: 'Say hello', resourceIds: [] };
     const preview = await f.core.command('velaRequestPreview', input);

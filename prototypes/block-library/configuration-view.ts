@@ -68,6 +68,7 @@ export function mountBlockConfiguration(
   let version = 0,
     disposed = false,
     pending = false;
+  let retainedConfiguration: BlockConfiguration | null = null;
   status.textContent = "Loading presentation preferences…";
   if (!port.getBlockSettings || !port.configureBlock) {
     status.textContent =
@@ -83,6 +84,7 @@ export function mountBlockConfiguration(
     const settings = await port.getBlockSettings!(placementId);
     if (disposed) return;
     version = settings.version;
+    retainedConfiguration = settings.configuration;
     mode.value = settings.configuration.contentMode;
     scale.value = String(settings.configuration.textScale);
     save.disabled = false;
@@ -102,6 +104,7 @@ export function mountBlockConfiguration(
     pending = true;
     save.disabled = true;
     const configuration: BlockConfiguration = {
+      ...retainedConfiguration,
       schemaVersion: 1,
       textScale: Number(scale.value),
       contentMode: mode.value as BlockConfiguration["contentMode"],
@@ -115,6 +118,7 @@ export function mountBlockConfiguration(
       .then((result) => {
         if (disposed) return;
         version = result.version;
+        retainedConfiguration = result.configuration;
         status.textContent = "Presentation saved.";
         onSaved(result.configuration);
       })

@@ -4,6 +4,7 @@ import type { AgentLibraryClientPort } from "../../../agent-product/contracts.ts
 import type { TimelinePort } from "../../../timeline-product/contracts.ts";
 import type { TaskObjectivePort } from "../../../task-product/contracts.ts";
 import type { TaskReferenceTargetsPort } from "../../../application-contract/task-targets.ts";
+import type { ClockTimerPort } from '../../../timer-product/contracts.ts';
 
 /** Transport only. Canonical policy, transactions and identities remain native. */
 export function createProductClients(options: {
@@ -14,6 +15,7 @@ export function createProductClients(options: {
   checklists: ChecklistPort;
   timelines: TimelinePort;
   taskObjectives: TaskObjectivePort & TaskReferenceTargetsPort;
+  clockTimers: ClockTimerPort;
 } {
   async function invoke<T>(
     family: string,
@@ -28,6 +30,12 @@ export function createProductClients(options: {
     return response.result;
   }
   return {
+    clockTimers: {
+      create: input => invoke('clockTimers', 'create', input),
+      read: resourceId => invoke('clockTimers', 'read', { resourceId }),
+      mutate: input => invoke('clockTimers', 'mutate', input),
+      list: () => invoke('clockTimers', 'list', {}),
+    },
     taskObjectives: {
       targets: (input) => invoke("taskObjectives", "targets", input),
       create: (input) => invoke("taskObjectives", "create", input),

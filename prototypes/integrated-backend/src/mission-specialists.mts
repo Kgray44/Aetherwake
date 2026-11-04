@@ -5,6 +5,10 @@ import { nativeMissionPlan } from './mission-native.mts';
 import type { MissionTeam } from './mission-teams.mts';
 
 type Selection = Omit<NonNullable<MissionTaskPlan['specialist']>, 'role' | 'instructions'>;
+/** A valid report or provider citation is not independent verification of the reported claims. */
+export const reportedMissionCoverage=()=>({status:'partial' as const,limitations:[
+  'Specialist findings and citations are provider reports. Output and attribution checks do not independently verify those claims; independent domain evidence is still required.',
+]});
 export const missionTemporarySlots = ['temporary-specialist-1', 'temporary-specialist-2'] as const;
 const assignments = [
   { id: 'research-methods', role: 'Performance Methods Specialist', objective: 'Propose reproducible experiments and comparison criteria.',
@@ -80,7 +84,7 @@ export function teamMissionPlan(objective: string, scope: MissionScope, team: Mi
   };
   const { id, title, version } = team;
   return { objective: objective.trim(), scope, team: { id, title, version }, tasks: [...tasks, join],
-    criteria: [...tasks.map(task => task.criterion), join.criterion] };
+    criteria: [...tasks.map(task => task.criterion), join.criterion],coverage:reportedMissionCoverage() };
 }
 
 function teamFindings({ dependencies, task }: MissionExecutionContext) {
@@ -142,7 +146,7 @@ export function specialistMissionPlan(intent: string, scope: MissionScope, defau
     executor: 'join.samples', maxAttempts: 2, timeoutMs: 1000 };
   tasks.push({ ...join, objective: research ? 'Join source research and independent review with attribution' :
     'Join verified samples and attributed specialist recommendations', dependencies: tasks.map(t => t.id) });
-  return { scope, objective: intent.trim(), tasks, criteria: tasks.map(t => t.criterion) };
+  return { scope, objective: intent.trim(), tasks, criteria: tasks.map(t => t.criterion),...(native?{}:{coverage:reportedMissionCoverage()}) };
 }
 
 export interface SpecialistPort {

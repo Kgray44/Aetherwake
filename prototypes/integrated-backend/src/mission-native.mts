@@ -5,7 +5,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { readCpuUtilization, readGpuUtilization } from '../../vela-core/src/system-utilization.mts';
 import { readSystemMemory } from '../../vela-core/src/system-memory.mts';
 import { validateSystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
-import type { Mission, MissionExecutor, MissionPlan, MissionScope, MissionTask, MissionTaskPlan } from './mission-contracts.mts';
+import type { Mission, MissionExecutor, MissionPlan, MissionProjection, MissionScope, MissionTask, MissionTaskPlan } from './mission-contracts.mts';
 
 const numberIn = (n: unknown, min: number, max: number) =>
   typeof n === 'number' && Number.isFinite(n) && n >= min && n <= max;
@@ -39,6 +39,9 @@ export function missionMeasurementAnswer(tasks: readonly MissionTask[]): string[
 
 const completedMissionWork = (mission: Mission) => mission.tasks.filter(task =>
   task.state === 'verified' && task.executor !== 'join.samples' && task.executor !== 'join.team');
+/** A partial evidence report is publishable while the original objective remains blocked. */
+export const missionResultAvailable=(mission:MissionProjection)=>mission.outcome==='verified'||mission.outcome==='blocked'&&mission.coverage?.status==='partial'&&
+  mission.tasks.length>0&&mission.tasks.every(task=>task.state==='verified'&&task.attempts.at(-1)?.verification?.passed===true);
 
 export function missionJobsDone(mission: Mission) {
   return new Set(completedMissionWork(mission).map(task => task.criterion)).size;
@@ -68,6 +71,7 @@ export function missionCompletion(mission: Mission) {
       lines.push(`${task.specialist?.role ?? 'Specialist'} reported: ${value.observations[0].trim()}`);
     }
   }
+  if(mission.coverage){lines.unshift('I collected the available evidence. The investigation remains incomplete.');lines.push(...mission.coverage.limitations.map(reason=>'Still needed: '+reason));}
   return { content: lines.join('\n') || 'Completed the requested work.', jobsDone: missionJobsDone(mission) };
 }
 

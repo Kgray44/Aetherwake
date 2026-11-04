@@ -76,6 +76,24 @@ test('all required canonical plans stay discoverable, and only exact action-link
   s.conversation!.messages.push({ id: 'synthetic:observed-action', role: 'assistant', content: 'Synthetic observed action state', source: 'vela-native', classification: 'observed', requestId: b.id, planId: second.id });
   const result = projectVelaManifestation(s); assert.deepEqual(result.requiredPlanIds, [first.id, second.id]); assert.equal(result.currentMessageId, 'synthetic:observed-action'); assert.equal(result.currentPlanId, second.id);
 });
+
+test('completed plans surface the observed result only when every native effect is confirmed', () => {
+  const r = request('synthetic:complete', { state: 'completed', providerId: null }), s = source(r), plan = addPlan(s, r, 'applied');
+  s.conversation!.messages.push({ id: 'synthetic:result', role: 'assistant', content: 'Created the workspace with three blocks.',
+    source: 'vela-native', classification: 'observed', requestId: r.id, planId: plan.id });
+  const receipt = { id: 'synthetic:receipt', requestId: r.id, planId: plan.id, stepId: plan.steps[0].id,
+    commandId: 'synthetic:command', source: 'vela' as const, providerId: null, taskVerified: false as const,
+    state: 'applied' as const, hostReceiptId: 'synthetic:host', startedAt: context.createdAt, endedAt: context.createdAt };
+  assert.equal(projectVelaManifestation(s).kind, 'action', 'A completed flag alone is insufficient');
+  s.receipts.push(receipt);
+  assert.equal(projectVelaManifestation(s).kind, 'insight');
+  assert.equal(projectVelaManifestation(s).currentMessageId, 'synthetic:result');
+  assert.equal(projectVelaManifestation(s).currentPlanId, plan.id, 'Details retain the canonical plan');
+  s.receipts[0].requestId = 'synthetic:other'; assert.equal(projectVelaManifestation(s).kind, 'action');
+  s.receipts[0].requestId = r.id;
+  plan.steps[0].action = { type: 'delegateTask', title: 'Delegation', objective: 'Run an investigation', providerId: 'codex-app-server', resourceIds: [], constraints: [] };
+  assert.equal(projectVelaManifestation(s).kind, 'action', 'Dispatch is not verified delegated work');
+});
 test('dismiss/latest stays quiet without rewinding history; pin does not force selection, and explicit reopen preserves the canonical identity', () => {
   const a = reply('synthetic:old', true), b = reply('synthetic:new'), s = source(a.r, b.r); s.conversation!.messages.push(a.message, b.message); const before = structuredClone(s);
   const dismissed = selection({ dismissedRequestIds: [b.r.id], pinnedRequestIds: [a.r.id] }); assert.equal(projectVelaManifestation(s, dismissed).kind, 'none');
