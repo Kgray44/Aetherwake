@@ -990,22 +990,43 @@ test('How much RAM am I using if the first reader is unavailable?', { skip: proc
   } finally { await f.close(); }
 });
 
-test('Will it rain here tomorrow? Ask before sharing my location', { skip: process.platform !== 'win32' }, async () => {
-  const f = fixture();
+test('natural weather delegates to the API without native location access and preserves an explicit denial across restart', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aerynth-weather-route-'));
+  let prompts = 0, locations = 0, providerCalls = 0;
+  const host: import('../src/native-host.mts').NativeHostServices = { secrets: {
+    available: async () => false, seal: async () => { throw Error('unused'); }, open: async () => { throw Error('unused'); },
+  }, systemFacts: {
+    authorizeWeatherPurpose: async () => { prompts++; throw Error('routing_must_not_prompt'); },
+    locate: async () => { locations++; throw Error('routing_must_not_locate'); },
+    battery: async () => { throw Error('routing_must_not_read_battery'); },
+  } };
+  const create = () => new BackendCore({ path: join(dir, 'canonical.sqlite'), provider: 'fixture', contentPolicy: 'synthetic-only' },
+    () => {}, host, undefined, { fetch: async () => { providerCalls++; throw Error('routing_must_not_dispatch'); } });
+  let core = create();
   try {
-    const ask = () => f.core.command('velaRouteNative', { intent: 'Will it rain here tomorrow?' });
-    const unavailable=await ask();assert(unavailable.matched);assert.equal(unavailable.request.response?.kind,'inability');
-    let asked=0;f.owner.nativeHostServices = {systemFacts:{authorizeWeatherPurpose:async()=>{asked++;return 'deny';},locate:async()=>{throw Error('denied_location_must_not_be_read');}}};
-    const result = await ask();
-    assert(result.matched);
-    assert.equal(result.request.state, 'responded');
-    assert.equal(result.request.providerId, null);
-    const state = await f.core.command('vela', { name: 'state', input: {} }) as import('../../vela-core/src/contracts.ts').VelaState;
-    assert.equal(result.request.planId,undefined);assert.equal(result.request.response?.kind,'inability');assert.equal(state.plans.length,0);
-    await ask();assert.equal(asked,1,'purpose denial is remembered without repeated app approvals');
-    assert.equal((await f.core.command('providerActivity', {})).providerRequests, 0);
-    assert.equal(f.requests.length + f.codexCalls, 0);
-  } finally { await f.close(); }
+    const probe = async () => {
+      const intent = 'Will it rain here tomorrow?';
+      assert.equal((await core.command('velaRouteNative', { intent })).matched, false);
+      await assert.rejects(core.command('velaRequestPreview', { intent, resourceIds: [], adaptive: true, providerId: 'openai-api-vela' }), /vela_api_usage_authorization_required/);
+    };
+    await probe();
+    const initial = await core.command('velaWeatherPermissionNative', { type: 'status' });
+    assert.equal(initial.decision, 'unknown');
+    const denied = await core.command('velaWeatherPermissionNative', { type: 'set', expectedVersion: initial.version, decision: 'deny' });
+    await probe(); await core.command('close', {}); core = create(); await probe();
+    assert.deepEqual(await core.command('velaWeatherPermissionNative', { type: 'status' }), denied);
+    await assert.rejects(core.command('velaWeatherPermissionNative', { type: 'set', expectedVersion: initial.version, decision: 'allow' }), /stale_weather_permission/);
+    const state = await core.command('vela', { name: 'state', input: {} }) as VelaState;
+    assert.equal(state.requests.length, 0); assert.equal(state.plans.length, 0);
+    assert.equal(prompts, 0); assert.equal(locations, 0);
+    // Route probes do not send a weather question. API/tool consent is exercised in vela-api-weather.test.mts.
+    const activity = await core.command('providerActivity', {});
+    assert.equal(activity.providerRequests, 0); assert.equal(activity.codexConnections, 0); assert.equal(providerCalls, 0);
+  } finally {
+    await core.command('close', {});
+    const part = relative(resolve(tmpdir()), resolve(dir)); assert(part.startsWith('aerynth-weather-route-') && !part.startsWith('..') && !isAbsolute(part));
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('Level 0 opens a unique workspace and prepares a checklist without a connected provider', async () => {
