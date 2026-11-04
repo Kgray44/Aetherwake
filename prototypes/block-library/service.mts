@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { validateBounds } from '../workspace-engine/collisions.mts';
 import { randomUUID, createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import type {
   CanonicalTemplateHost,
   VelaTemplatePlanner,
@@ -950,6 +951,38 @@ export class TemplateService {
         mode: body.organization.mode,
       }));
   }
+  /** The caller supplies the plan retained by the trusted proposal issuer. */
+  saveReviewedVelaTemplate(
+    plan: VelaTemplatePlan,
+    input: SaveTemplateInput,
+    scope: { projectId: string | null; projectVersion?: number },
+  ): WorkspaceTemplate {
+    check(input && input.source === "vela" &&
+      Object.keys(input).every(key => ["source", "name", "description", "tags", "body", "provenance"].includes(key)) &&
+      input.description === plan.description && isDeepStrictEqual(input.tags, plan.tags) &&
+      isDeepStrictEqual(input.provenance, plan.provenance) && Array.isArray(input.body?.resources) &&
+      input.body.resources.length <= plan.body.resources.length, "vela_template_review_mismatch");
+    const selected = new Set(input.body.resources.map(role => role?.key));
+    const body: TemplateBody = {
+      ...plan.body,
+      resources: plan.body.resources.filter(role => selected.has(role.key)),
+      placements: plan.body.placements.filter(role => role.resourceKey === undefined || selected.has(role.resourceKey)),
+      groups: plan.body.groups.filter(group => selected.has(group.groupKey)).map(group => ({
+        ...group, taskKeys: group.taskKeys.filter(key => selected.has(key)),
+      })),
+    };
+    check(body.placements.length && isDeepStrictEqual(input.body, body), "vela_template_review_mismatch");
+    return this.host.atomic(() => {
+      if (scope.projectId !== null) {
+        const project = this.host.readProject(scope.projectId);
+        check(project?.authorized && project.state === "active", "project_unavailable");
+        check(project.version === scope.projectVersion, "project_version_conflict");
+      }
+      this.validateResourceRoles(body, scope.projectId);
+      this.validateSubjectBindings(body, scope.projectId);
+      return this.saveTemplate({ ...plan, name: input.name, body, source: "vela" });
+    });
+  }
   saveTemplate(input: SaveTemplateInput): WorkspaceTemplate {
     check(
       input &&
@@ -1019,14 +1052,12 @@ export class TemplateService {
         id: previous?.id ?? randomUUID(),
         version: (previous?.version ?? 0) + 1,
         state: "active",
-        source: input.source ?? previous?.source ?? "saved",
+        // A manually rewritten draft has its own authorship. Rename and archive
+        // preserve the provenance because they leave the reviewed draft intact.
+        source: input.source ?? "saved",
         createdAt: previous?.createdAt ?? now,
         updatedAt: now,
-        ...(provenance
-          ? { provenance }
-          : previous?.provenance
-            ? { provenance: previous.provenance }
-            : {}),
+        ...(provenance ? { provenance } : {}),
       };
       this.write(template);
       this.event(template.id, previous ? "template.updated" : "template.saved");

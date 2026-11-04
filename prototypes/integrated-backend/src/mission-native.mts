@@ -4,12 +4,37 @@ import { createHash } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { readCpuUtilization, readGpuUtilization } from '../../vela-core/src/system-utilization.mts';
 import { readSystemMemory } from '../../vela-core/src/system-memory.mts';
-import { validateSystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
+import { summarizeSystemMemory, validateSystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
 import type { Mission, MissionExecutor, MissionPlan, MissionScope, MissionTask, MissionTaskPlan } from './mission-contracts.mts';
 
 const numberIn = (n: unknown, min: number, max: number) =>
   typeof n === 'number' && Number.isFinite(n) && n >= min && n <= max;
 const object = (value: unknown) => value && typeof value === 'object' ? value as Record<string, unknown> : {};
+
+/** Format only verified, current native evidence. Provider text cannot supply these facts. */
+export function missionMeasurementAnswer(tasks: readonly MissionTask[]): string[] {
+  const answer: string[] = [];
+  for (const task of tasks) {
+    const attempt = task.attempts.at(-1), evidence = attempt?.evidence;
+    if (task.state !== 'verified' || !attempt?.verification?.passed || !evidence ||
+      evidence.attemptId !== attempt.id || !attempt.verification.evidenceIds.includes(evidence.id)) continue;
+    const value = object(evidence.value);
+    if (task.executor === 'sample.cpu' && evidence.source === 'node:os.cpus' && value.metric === 'cpu' &&
+      numberIn(value.percent, 0, 100) && numberIn(value.sampleMs, 200, 5000)) {
+      answer.push(`CPU usage was ${value.percent}% over a ${value.sampleMs} ms sample.`);
+    } else if (task.executor === 'sample.ram' && evidence.source === 'node:os.totalmem+freemem') {
+      try {
+        validateSystemMemoryMeasurement(evidence.value);
+        answer.push(summarizeSystemMemory(evidence.value));
+      } catch { /* Ignore evidence that no longer meets the native contract. */ }
+    } else if (task.executor === 'sample.gpu' && evidence.source === 'windows:gpu-engine' && value.metric === 'gpu' &&
+      numberIn(value.percent, 0, 100)) {
+      answer.push(`The busiest observed GPU engine was at ${value.percent}% utilization.`);
+    }
+  }
+  return answer;
+}
+
 const utilization = (metric: 'cpu' | 'gpu', read: typeof readCpuUtilization): MissionExecutor => ({
   lane: 'native', replaySafe: true, available: () => metric === 'cpu' || platform() === 'win32',
   async run({ signal }) {

@@ -120,6 +120,7 @@ export function createVelaMissionView(
   let teamDraft: MissionTeamSave | null = null;
   let teamObjective = "";
   let postedReport: string | null = null;
+  let shownAnswer: string | null = null;
   const bytes = new TextEncoder();
   const fits = (value: string, max: number) => !!value.trim() && bytes.encode(value).length <= max;
 
@@ -820,6 +821,8 @@ export function createVelaMissionView(
       "repeatedFindings" in value && Array.isArray(value.repeatedFindings)) {
       const block = el("div");
       block.append(el("p", "vela-core-meta", `${value.reports.length} attributed role reports · ${value.distinctFindingCount} distinct findings · ${value.repeatedFindings.length} groups of repeated findings`));
+      if ("conflictingAssessments" in value && Array.isArray(value.conflictingAssessments))
+        block.append(el("p", "vela-core-meta", `${value.conflictingAssessments.length} claims with opposing reported assessments`));
       if ("assessment" in value && typeof value.assessment === "string") block.append(el("p", "vela-core-meta", value.assessment));
       return block;
     }
@@ -844,6 +847,13 @@ export function createVelaMissionView(
         `${stateLabel[current.outcome]} · plan v${current.planRevision} · journal revision ${current.revision}`,
       ),
     );
+    if (current.answer?.length) {
+      const answer = el("section", "vela-mission-answer");
+      answer.dataset.missionAnswer = current.id;
+      answer.setAttribute("aria-label", "Measured results");
+      answer.append(el("strong", undefined, "Measured results"), ...current.answer.map(line => el("p", undefined, line)));
+      section.append(answer);
+    }
     if (current.team) section.append(teamLabel(current.team));
     if (sameScope(current.scope, scope) && current.outcome === "verified") {
       const post = button("Post evidence link to Vela chat", "post-report", () => { postReport(current.id); });
@@ -1163,6 +1173,13 @@ export function createVelaMissionView(
       if (textField && target.matches("input[type=text],textarea"))
         (target as HTMLInputElement | HTMLTextAreaElement).setSelectionRange(textField.selectionStart, textField.selectionEnd, textField.selectionDirection ?? undefined);
     }
+    if (visible && mission?.outcome === "verified" && shownAnswer !== mission.id) {
+      const answer = body.querySelector<HTMLElement>("[data-mission-answer]");
+      if (answer) {
+        shownAnswer = mission.id;
+        answer.scrollIntoView({ block: "nearest", behavior: "instant" });
+      }
+    }
   }
 
   return {
@@ -1238,6 +1255,7 @@ export function createVelaMissionView(
       teamDraft = null;
       teamObjective = "";
       postedReport = null;
+      shownAnswer = null;
       staged.clear();
       error.hidden = true;
       render();

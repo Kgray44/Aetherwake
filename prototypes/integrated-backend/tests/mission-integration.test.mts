@@ -9,6 +9,7 @@ import { Backend } from '../src/service.mts';
 import type { ChecklistDocument, ChecklistMutationResult } from '../../application-contract/checklist.ts';
 import type { TimelineDocument } from '../../timeline-product/contracts.ts';
 import type { NoteDocument } from '../../block-library/note-contracts.ts';
+import type { VelaState } from '../../vela-core/src/contracts.ts';
 import type { MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomPreview, MissionWorkroomResource } from '../src/mission-contracts.mts';
 
 async function linkedCard(backend: Backend, resourceId: string): Promise<MissionWorkroomResource | null> {
@@ -175,6 +176,28 @@ test('canonical backend runs a native mission without inference, restores eviden
     assert.deepEqual((await readTimeline()).view, view);
     assert.deepEqual(await linkedCard(backend, checklistId), checklistLink);
     assert.deepEqual(await linkedCard(backend, timelineId), timelineLink);
+    const measurement = 'Measure CPU and RAM';
+    const measurementPreview = await backend.call('missions', { name: 'preview', input: { objective: measurement } }) as MissionPreview;
+    const started = await backend.call('missions', { name: 'start', input: {
+      objective: measurement, fingerprint: measurementPreview.fingerprint, requestId: randomUUID(),
+    } }) as MissionProjection;
+    const readMeasurement = () => backend.call('missions', { name: 'read', input: { id: started.id } }) as Promise<MissionProjection>;
+    let measured = await readMeasurement();
+    const until = performance.now() + 4000;
+    while (['queued', 'running'].includes(measured.outcome) && performance.now() < until) {
+      await delay(25); measured = await readMeasurement();
+    }
+    assert.equal(measured.outcome, 'verified');
+    assert.match(measured.answer?.[0] ?? '', /^CPU usage was [\d.]+% over a \d+ ms sample\.$/u);
+    assert.match(measured.answer?.[1] ?? '', /GiB RAM in use \([\d.]+%\)/u);
+    const vela = await backend.call('vela', { name: 'state', input: {} }) as VelaState;
+    const messages = vela.conversation!.messages.filter(message => message.missionReport?.missionId === started.id);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].content, measured.answer!.join(' '));
+    assert.equal(messages[0].missionReport?.workspaceId, room.workspaceId);
+    assert.deepEqual(await backend.call('missions', { name: 'post-report', input: { id: started.id } }),
+      { kind: 'mission-report', missionId: started.id, messageId: messages[0].id });
+    assert.deepEqual(await backend.call('providerActivity', {}), providerActivity);
   } finally {
     await backend.close();
     const target = resolve(directory);

@@ -1129,7 +1129,7 @@ export function mountBlockLibrary(
 export function mountWorkspaceTemplates(
   root: HTMLElement,
   port: WorkspaceTemplatePort,
-  options: TemplateMountOptions,
+  options: TemplateMountOptions & { initialVela?: { purpose: string; projectTitle?: string } },
 ) {
   const ui = shell(root, "New Workspace", options.onClose),
     toolbar = node("div", "aw-library__toolbar"),
@@ -1153,6 +1153,8 @@ export function mountWorkspaceTemplates(
   let pending = false,
     sequence = 0,
     capabilities: LibraryCapabilities | null = null;
+  let capabilityReadFailed = false;
+  let refreshVelaCapability: (() => void) | undefined;
   async function run<T>(
     message: string,
     operation: () => Promise<T>,
@@ -1281,6 +1283,8 @@ export function mountWorkspaceTemplates(
         void inspect();
       }),
       apply = node("button", "aw-library__button", "Create workspace");
+    preview.dataset.workspaceProposalAction = "check";
+    apply.dataset.workspaceProposalAction = "apply";
     apply.type = "submit";
     apply.disabled = template.state !== "active";
     const summary = node("p", "aw-library__hint");
@@ -1652,7 +1656,7 @@ export function mountWorkspaceTemplates(
     };
     detail.append(form);
   }
-  function showVela() {
+  function showVela(purpose = "") {
     detail.replaceChildren(
       node("h3", "", "Ask Vela to construct a workspace"),
       node(
@@ -1661,36 +1665,45 @@ export function mountWorkspaceTemplates(
           "Describe the work you want to do. Review the proposed layout and resource bindings before creating a workspace.",
       ),
     );
+    if (options.initialVela) detail.append(node("p", "aw-library__hint", options.projectId
+      ? `Project · ${options.initialVela.projectTitle ?? "Selected project"}`
+      : "Unassigned workspace"));
     const form = node("form"),
-      prompt = node("textarea");
+      prompt = node("textarea"),
+      availability = node("p", "aw-library__limitation");
     prompt.required = true;
     prompt.maxLength = 5000;
+    prompt.value = purpose;
+    prompt.dataset.workspacePurpose = "true";
     const submit = node("button", "aw-library__button", "Request proposal");
     submit.type = "submit";
-    submit.disabled = capabilities?.velaPlanning.state !== "available";
-    form.append(field("Workspace purpose", prompt), submit);
-    if (submit.disabled)
-      form.append(
-        node(
-          "p",
-          "aw-library__limitation",
-          capabilities?.velaPlanning.reason ??
-            "Vela planning is unavailable. Use Blank, a preset or a saved template.",
-        ),
-      );
+    submit.dataset.workspaceProposalAction = "request";
+    form.append(field("Workspace purpose", prompt), submit, availability);
+    refreshVelaCapability = () => {
+      if (!detail.contains(form)) return;
+      submit.disabled = capabilities?.velaPlanning.state !== "available";
+      availability.hidden = !submit.disabled;
+      availability.textContent = capabilities || capabilityReadFailed
+        ? capabilities?.velaPlanning.reason ?? "Vela planning is unavailable. Use a preset or a saved template."
+        : "Checking Vela planning availability…";
+    };
     form.onsubmit = (event) => {
       event.preventDefault();
+      if (submit.disabled || !prompt.value.trim()) return;
+      const submittedPurpose = prompt.value;
       void run("Waiting for Vela’s proposal…", () =>
         port.requestVelaTemplate({
           requestId: commandId(),
-          prompt: prompt.value,
+          prompt: submittedPurpose,
           projectId: options.projectId,
         }),
       ).then((plan) => {
-        if (plan) showVelaPlan(plan);
+        if (plan && detail.contains(form) && prompt.value === submittedPurpose) showVelaPlan(plan);
       });
     };
     detail.append(form);
+    refreshVelaCapability();
+    prompt.focus();
   }
   function showVelaPlan(plan: VelaTemplatePlan) {
     const enabled = new Set(plan.body.resources.map(role => role.key));
@@ -1731,6 +1744,7 @@ export function mountWorkspaceTemplates(
         }
       });
     });
+    save.dataset.workspaceProposalAction = "save";
     for (const role of plan.body.resources) {
       const include = node("input");
       include.type = "checkbox";
@@ -1761,12 +1775,20 @@ export function mountWorkspaceTemplates(
   void port
     .capabilities()
     .then((value) => {
-      if (!ui.disposed) capabilities = value;
+      if (!ui.disposed) {
+        capabilities = value;
+        refreshVelaCapability?.();
+      }
     })
     .catch((error) => {
-      if (!ui.disposed) ui.status.textContent = errorText(error);
+      if (!ui.disposed) {
+        capabilityReadFailed = true;
+        refreshVelaCapability?.();
+        ui.status.textContent = errorText(error);
+      }
     });
   void refresh();
-  search.focus();
+  if (options.initialVela) showVela(options.initialVela.purpose);
+  else search.focus();
   return { dispose: ui.dispose, refresh };
 }

@@ -160,6 +160,42 @@ test("stream filters intersect actual source/class/resource/execution/time metad
     0,
   );
 });
+test("detached CPU and RAM mission events appear by task name only in their authorized originating workspace", (t) => {
+  const scope = { workspaceId: "workspace-a", projectId: "project-a" };
+  const nativeTask = (cursor: number, taskId: string, kind: "started" | "settled") => event(cursor, {
+    resourceId: null,
+    executionId: null,
+    type: "vela.mission/" + kind,
+    classification: "observed",
+    providerId: "aerynth-native",
+    status: kind === "started" ? "running" : "verified",
+    mission: { id: "mission-a", scope, kind, seq: cursor, taskId, attemptId: "attempt-" + taskId, executor: "sample." + taskId },
+  });
+  const cpu = nativeTask(13, "cpu", "started"), ram = nativeTask(14, "ram", "settled");
+  const input = { ...window(), ...scope, events: [cpu, ram] };
+  assert.deepEqual(filterRecordedEvents(input, { ...defaults, scope: "workspace" }).map(e => e.eventId), [ram.eventId, cpu.eventId]);
+  assert.deepEqual(filterRecordedEvents(input, { ...defaults, scope: "project", query: "ram utilization" }), [ram]);
+  assert.deepEqual(filterRecordedEvents({ ...input, workspaceId: "another-workspace" }, defaults), []);
+  assert.deepEqual(filterRecordedEvents({ ...input, events: [{ ...ram, mission: undefined }] }, defaults), []);
+
+  const view = blockDocument();
+  t.after(view.install());
+  const opened: string[] = [];
+  const controller = mountEventExperience(view.root, { snapshot: () => input, async refresh() {}, openMission: id => opened.push(id) });
+  t.after(() => controller.dispose());
+  const started = view.root.querySelector('[data-stream-task-id="cpu"]');
+  const settled = view.root.querySelector('[data-stream-task-id="ram"]');
+  assert.match(started.textContent, /CPU utilization · Attempt started.*Running/);
+  assert.match(settled.textContent, /RAM utilization · Attempt settled.*Verified/);
+  assert.equal(settled.dataset.streamMissionId, "mission-a");
+  assert.equal(settled.dataset.streamMissionEvent, "settled");
+  const details = settled.querySelector("details");
+  details.open = true;
+  details.fire("toggle");
+  assert.match(details.querySelector("dl").textContent, /Mission attemptattempt-ram/);
+  details.querySelector("button").onclick();
+  assert.deepEqual(opened, ["mission-a"]);
+});
 test("metadata detail allowlist excludes assistant output and private tool payloads while missing measurements remain unavailable", () => {
   const record = event(1, {
     payload: {

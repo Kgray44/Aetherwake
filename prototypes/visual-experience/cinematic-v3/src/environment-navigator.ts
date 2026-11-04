@@ -15,7 +15,7 @@ export interface EnvironmentNavigatorOptions {
   createProject(title: string): Mutation;
   createWorkspace(input: { title: string; projectId: string | null }): Mutation;
   templates(projectId: string | null): Promise<void>;
-  askVela(projectId: string | null): Promise<void>;
+  askVela(input: { projectId: string | null; title: string }): Promise<void>;
   renameWorkspace(input: {
     id: string;
     expectedVersion: number;
@@ -272,8 +272,9 @@ export function mountEnvironmentNavigator(
       if (id !== undefined) void perform(() => options.templates(id));
     }),
     vela = button("Ask Vela", () => {
-      const id = chosenProject();
-      if (id !== undefined) void perform(() => options.askVela(id));
+      const projectId = chosenProject();
+      if (projectId !== undefined)
+        void perform(() => options.askVela({ projectId, title: name.value.trim() }));
     });
   choices.append(templates, vela);
   const formActions = el("div", "en-form-actions");

@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { BackendCore } from '../src/core.mts';
 import type { LibraryMethod,LibraryRequest,VelaOperation } from '../src/contracts.mts';
 import { captureWorkspaceTemplate } from '../../block-library/model.ts';
+import type { SaveTemplateInput, VelaTemplatePlan } from '../../block-library/contracts.ts';
 import type { VelaPlanningPort } from '../../vela-core/src/contracts.ts';
 
 function fixture(planner?:VelaPlanningPort){const dir=mkdtempSync(join(tmpdir(),'aerynth-library-backend-')),path=join(dir,'canonical.sqlite');let core=new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only',velaPlanningPort:planner});return {get core(){return core;},async reopen(){await core.command('close',{});core=new BackendCore({path,provider:'fixture',contentPolicy:'synthetic-only',velaPlanningPort:planner});},async close(){await core.command('close',{});const target=resolve(dir),part=relative(resolve(tmpdir()),target);assert.ok(part.startsWith('aerynth-library-backend-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(target,{recursive:true,force:true});}};}
@@ -60,6 +61,67 @@ test('library scope fences reject cross-project and stale references, and parent
   assert.deepEqual((await f.core.command('snapshot',{})).graph,graph.graph);assert.equal((await f.core.command('desktop',{type:'snapshot'})).resources.length,before.resources.length);
   await f.core.command('desktop',{type:'archiveSubject',kind:'resource',id:resource.id,expectedVersion:resource.version,archived:true});await assert.rejects(library(f.core,'workspaceFromResources',{commandId:randomUUID(),title:'Denied archived source',projectId:p1.id,expectedProjectVersion:p1.version,resources:[{resourceId:resource.id,expectedVersion:resource.version+1}]}),/reference_unavailable/);
  }finally{await f.close();}
+});
+
+test('reviewed architect save accepts only the issued subset and name, fences current scope, and consumes the review', async t => {
+  const f = fixture();
+  try {
+    const project = (await f.core.command('desktop', { type: 'createProject', title: 'Synthetic architect project' })).projects[0];
+    const desktop = await f.core.command('desktop', { type: 'createWorkspace', title: 'Original workspace', projectId: project.id });
+    const workspaceId = desktop.activeWorkspaceId!;
+    const { result: created } = await library(f.core, 'createBlock', { commandId: randomUUID(), workspaceId,
+      expectedLayoutVersion: desktop.layoutVersion, kind: 'note', title: 'Signal codec observations' });
+    const request = { prompt: 'Set up a software engineering workspace with notes and a checklist using "Signal codec observations"',
+      projectId: project.id };
+    const propose = async () => JSON.parse(JSON.stringify((await library(f.core, 'requestVelaTemplate', {
+      ...request, requestId: randomUUID(),
+    })).result)) as VelaTemplatePlan;
+    const proposal = await propose();
+    const source = proposal.body.resources.find(role => role.source.mode === 'reference' && role.source.resourceId === created.resourceId);
+    assert.ok(source && source.source.mode === 'reference');
+    const checklist = proposal.body.resources.find(role => role.source.mode === 'new' && role.source.kind === 'checklist');
+    assert.ok(checklist);
+    const body = { ...proposal.body, resources: [checklist],
+      placements: proposal.body.placements.filter(role => role.resourceKey === checklist.key), groups: [] };
+    const save: SaveTemplateInput = { ...proposal, body, name: 'Reviewed checklist workspace', source: 'vela' };
+    const before = (await library(f.core, 'listTemplates')).result;
+    const forged = structuredClone(save);
+    forged.body.placements[0].presentation.x += 40;
+    await assert.rejects(library(f.core, 'saveTemplate', forged), /vela_template_review_mismatch/);
+    await assert.rejects(library(f.core, 'saveTemplate', { ...save, description: 'Unreviewed claim' }), /vela_template_review_mismatch/);
+    await assert.rejects(library(f.core, 'saveTemplate', { ...save, provenance: { ...save.provenance, providerId: 'untrusted' } }), /vela_template_review_mismatch/);
+    await assert.rejects(library(f.core, 'saveTemplate', { ...save, id: randomUUID(), expectedVersion: 1 }), /vela_template_review_mismatch/);
+    assert.deepEqual((await library(f.core, 'listTemplates')).result, before);
+
+    await f.core.command('desktop', { type: 'archiveSubject', kind: 'resource', id: created.resourceId,
+      expectedVersion: source.source.expectedVersion, archived: true });
+    await assert.rejects(library(f.core, 'saveTemplate', { ...proposal, source: 'vela' }), /reference_unavailable/);
+    const { result: saved } = await library(f.core, 'saveTemplate', save);
+    assert.deepEqual(saved.provenance, proposal.provenance);
+    assert.deepEqual(saved.body, body);
+    assert.equal(saved.name, save.name);
+    await assert.rejects(library(f.core, 'saveTemplate', save), /native_template_provenance_required/);
+    await assert.rejects(library(f.core, 'requestVelaTemplate', { ...request, requestId: proposal.provenance.requestId }), /vela_template_request_reused/);
+    const apply = { commandId: randomUUID(), templateId: saved.id, expectedVersion: saved.version,
+      title: saved.name, projectId: project.id, expectedProjectVersion: project.version };
+    assert.equal((await library(f.core, 'previewTemplate', apply)).result.newResourceCount, 1);
+    assert.ok((await library(f.core, 'applyTemplate', apply)).result.resourceIds[checklist.key]);
+
+    const expired = await propose();
+    const clock = Date.now();
+    const mock = t.mock.method(Date, 'now', () => clock + 120_001);
+    try { await assert.rejects(library(f.core, 'saveTemplate', { ...expired, source: 'vela' }), /native_template_provenance_required/); }
+    finally { mock.mock.restore(); }
+    const stale = await propose();
+    await f.core.command('desktop', { type: 'archiveSubject', kind: 'project', id: project.id, expectedVersion: project.version, archived: true });
+    await f.core.command('desktop', { type: 'archiveSubject', kind: 'project', id: project.id, expectedVersion: project.version + 1, archived: false });
+    await assert.rejects(library(f.core, 'saveTemplate', { ...stale, source: 'vela' }), /project_version_conflict/);
+
+    const { result: edited } = await library(f.core, 'saveTemplate', { id: saved.id, expectedVersion: saved.version,
+      name: saved.name, description: 'A manual rewrite', tags: saved.tags, body: saved.body });
+    assert.equal(edited.source, 'saved');
+    assert.equal(edited.provenance, undefined);
+  } finally { await f.close(); }
 });
 
 test('consent includes actual project/workspace/owner metadata before binding and contextual proposals retain the reviewed project',async()=>{

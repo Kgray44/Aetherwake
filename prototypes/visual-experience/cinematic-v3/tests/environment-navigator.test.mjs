@@ -280,11 +280,13 @@ test("workspace creation exposes blank/template/Vela progressively with the exac
     assert.equal(f.calls.length, 0);
     action(f, "From template");
     await settled(f);
+    project.value = "p-b";
+    input.value = "  Signal analysis workspace  ";
     action(f, "Ask Vela");
     await settled(f);
     assert.deepEqual(f.calls, [
       ["templates", "p-a"],
-      ["askVela", "p-a"],
+      ["askVela", { projectId: "p-b", title: "Signal analysis workspace" }],
     ]);
     project.value = "";
     input.value = "A blank independent environment";

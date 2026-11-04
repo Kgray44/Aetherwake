@@ -74,6 +74,15 @@ workspace, provider controls and applicable profile versions. Mission access
 requires the current canonical workspace scope. The scheduler separately
 checks whether a queued or in-flight task still has authority.
 
+The Intelligence Stream carries typed lifecycle records with the originating
+workspace, mission, task and attempt identities. Workspace visibility is
+checked for live delivery and replay. Older detached entries recover scope
+from matching journal records. Stream rows carry lifecycle metadata. Vela
+formats numeric CPU, GPU and physical-memory results from verified native
+evidence and shows them in the selected mission. A verified mission devoted
+to host measurements also answers in its originating Vela chat. The scoped
+answer links to the same evidence and is kept out of provider history.
+
 Before dispatch, the journal records an attempt and a context manifest with
 scope, dependency evidence digests and estimated context size. The compiler
 keeps required inputs, rereads selected sources on validation and does not
@@ -149,6 +158,11 @@ linked Checklist and Timeline read task states and event rows from the
 journal. They are authorized through the exact workroom and its originating
 mission. Manual checklist entries and ordinary timeline settings retain their
 own canonical storage and controls.
+
+The New Workspace dialog opens this same architect through Ask Vela. It
+retains the selected project and allows editing the purpose before requesting
+a proposal. Saving a Vela proposal uses the host-issued layout and provenance,
+revalidates selected resource bindings, and accepts the reviewed subset.
 
 Workspace Actions can preview an optimization for explicitly selected movable
 cards against the current viewport. The solver preserves camera, dimensions,

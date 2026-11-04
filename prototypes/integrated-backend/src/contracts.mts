@@ -19,7 +19,7 @@ import type { TimelineRequest,TimelineResponse,TimelineDomainEvent } from './tim
 import type { TaskObjectiveRequest,TaskObjectiveResponse,TaskObjectiveEvent } from './task-objectives.mts';
 import type { TaskTargetQuery,TaskTargetPage } from '../../application-contract/task-targets.ts';
 import type { GitHubTimelineCommand } from '../../application-contract/github-timeline.ts';
-import type { MissionRequest, MissionResponse } from './mission-contracts.mts';
+import type { MissionEvent, MissionRequest, MissionResponse, MissionScope } from './mission-contracts.mts';
 export type NoteMethod = 'readNote'|'saveNoteDraft'|'commitNote'|'discardNoteDraft'|'renameNote';
 export type NoteRequest = { [K in NoteMethod]: {name:K;input:Parameters<NoteExperienceService[K]>[0]} }[NoteMethod];
 export type LibraryMethod = 'capabilities'|'preferences'|'setFavorite'|'getBlockSettings'|'configureBlock'|'findResources'|'attachBlock'|'createBlock'|'listTemplates'|'getTemplate'|'saveTemplate'|'renameTemplate'|'archiveTemplate'|'previewTemplate'|'applyTemplate'|'previewWorkspaceFromResources'|'workspaceFromResources'|'requestVelaTemplate'|'subjectTargets'|'createSubjectBlock'|'projectOverview'|'browseResources';
@@ -147,6 +147,16 @@ export interface VelaRouteTiming {
   contextMs: number;
   previewMs: number;
 }
+/** Scoped lifecycle metadata only. Mission objectives, prompts and evidence stay with their owning resources. */
+export interface MissionStreamEvent {
+  id: string;
+  scope: MissionScope;
+  kind: MissionEvent['kind'] | 'report-posted';
+  seq?: number;
+  taskId?: string;
+  attemptId?: string;
+  executor?: string;
+}
 export interface StreamEvent {
   schemaVersion: 1; eventId: string; cursor: number;
   resourceId: string | null; executionId: string | null;
@@ -157,6 +167,7 @@ export interface StreamEvent {
   receivedAt: string; providerTime: number | null; providerTimeSource: string | null;
   type: string; classification: Classification;
   status: string | null; payload: { redacted: true; taskId?: string; timing?: VelaRouteTiming; textBytes?: number; itemType?: string; delta?: string; responseId?:string;usage?:ReportedUsage;connection?:ProviderConnectionStatus;application?:Pick<DomainEvent|TimelineDomainEvent|TaskObjectiveEvent,'resourceVersion'|'commandId'|'detail'> };
+  mission?: MissionStreamEvent;
 }
 export interface HandoffReview {
   id: string; resourceId: string; sourceResourceId: string; targetProviderId: string;

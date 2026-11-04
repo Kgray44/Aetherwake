@@ -153,7 +153,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     const wait = (label, check) => {
       receipt.phase = label;
       return waitForCondition({ slot, label, check, diagnose: () => js(
-        "({app:document.querySelector('#status')?.textContent?.slice(0,240),vela:document.querySelector('.vela-core-status')?.textContent?.slice(0,240),mission:document.querySelector('.vela-missions [role=alert]:not([hidden])')?.textContent?.slice(0,240),layout:document.querySelector('.aw-wa-optimization')?.textContent?.slice(-360)})",
+        "({app:document.querySelector('#status')?.textContent?.slice(0,240),vela:document.querySelector('.vela-core-status')?.textContent?.slice(0,240),mission:document.querySelector('.vela-missions [role=alert]:not([hidden])')?.textContent?.slice(0,240),architect:document.querySelector('[data-surface-id=workspace-templates]')?.textContent?.slice(-600),stream:document.querySelector('[data-surface-id=intelligence-stream]')?.textContent?.slice(0,360)})",
       ) });
     };
     const click = async selector => {
@@ -313,7 +313,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     });
     assert.deepEqual(reportMessage.missionReport, { missionId: rendered.id, ...scope });
     await click(SURFACE + ' button[aria-label="History"]');
-    await click(SURFACE + ' [data-mission-report-link=' + quote(rendered.id) + ']');
+    await click(SURFACE + ' .vela-core-history [data-mission-report-link=' + quote(rendered.id) + ']');
     await wait("Vela chat opens the canonical mission", () => js(
       `document.querySelector(${quote(RECORD + '[data-mission-id=' + quote(rendered.id) + ']')})?.getClientRects().length > 0`,
     ));
@@ -405,6 +405,85 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     });
     assert.deepEqual(geometry(undone), geometry(before));
     receipt.optimization = { selectedId: selected.id, revisions: [before.revision, applied.revision, undone.revision], undoRestored: true };
+
+    if (!await js(`document.querySelector(${quote(composer)})?.getClientRects().length > 0`)) await click("#vela");
+    const historyControl = SURFACE + ' button[aria-label="History"]';
+    if (await js(`document.querySelector(${quote(historyControl)})?.getAttribute('aria-expanded') === 'true'`)) await click(historyControl);
+    await fillNative({ click, key, js, wait, insertText: text => operation(() => win.webContents.insertText(text), "mission_text_input_deadline") }, composer, "Measure CPU and RAM");
+    await click(SURFACE + ' button[aria-label="Send to Vela"]');
+    await click(PREVIEW + ' [data-mission-focus="start-mission"]');
+    const measured = await wait("Vela displays the actual CPU and RAM answer", () => js(`(() => {
+      const answer = document.querySelector(${quote(RECORD + '[data-mission-outcome="verified"] [data-mission-answer]')});
+      return answer?.getClientRects().length && {
+        id: answer.dataset.missionAnswer, text: Array.from(answer.querySelectorAll('p'), node => node.textContent)
+      };
+    })()`));
+    assert.match(measured.text[0], /^CPU usage was [\d.]+% over a \d+ ms sample\.$/u);
+    assert.match(measured.text[1], /GiB RAM in use \([\d.]+%\)/u);
+    const measurementMission = await read(measured.id);
+    assert.deepEqual(measured.text, measurementMission.answer);
+    const measuredChat = await rpc("vela", { name: "state", input: {} });
+    const answerMessage = measuredChat.conversation.messages.find(message => message.missionReport?.missionId === measured.id);
+    assert.equal(answerMessage?.content, measured.text.join(" "));
+    await click(SURFACE + ' button[aria-label="Close Vela controls"]');
+    const reply = SURFACE + ' [data-current-message-id=' + quote(answerMessage.id) + ']';
+    await wait("The normal Vela reply shows the measured values", () => js(`(() => {
+      const node = document.querySelector(${quote(reply)});
+      return node?.getClientRects().length && ${quote(measured.text)}.every(line => node.textContent.includes(line));
+    })()`));
+    await click("#application-stream");
+    const stream = '[data-surface-id="intelligence-stream"]';
+    const eventRows = stream + ' [data-stream-mission-id=' + quote(measured.id) + ']';
+    const shown = await wait("Intelligence Stream displays observed CPU and RAM attempt events", () => js(`(() => {
+      const rows = [...document.querySelectorAll(${quote(eventRows)})].filter(row => row.getClientRects().length);
+      const found = rows.map(row => ({ kind:row.dataset.streamMissionEvent, task:row.dataset.streamTaskId, status:row.dataset.eventStatus, label:row.textContent }));
+      return ['cpu','ram'].every(task => found.some(row => row.task === task && row.kind === 'started' && row.status === 'running') &&
+        found.some(row => row.task === task && row.kind === 'settled' && row.status === 'verified')) && found;
+    })()`));
+    assert(shown.some(row => row.task === "cpu" && row.label.includes("CPU utilization")));
+    assert(shown.some(row => row.task === "ram" && row.label.includes("RAM utilization")));
+    receipt.measurementAnswer = { missionId: measured.id, lines: measured.text, messageId: answerMessage.id, streamEvents: shown };
+
+    await click("#workspace-manager");
+    const environmentAction = name => '.en-navigator [data-action=' + quote(name) + ']';
+    await click(environmentAction("toggle-create"));
+    await click(environmentAction("create-workspace"));
+    await click(environmentAction("workspace-vela"));
+    const architect = '[data-surface-id="workspace-templates"]';
+    const purpose = architect + " [data-workspace-purpose]";
+    await wait("Ask Vela opens Workspace Architect", () => js(`document.querySelector(${quote(purpose)})?.getClientRects().length > 0`));
+    const roomsBeforePlanning = (await desktop()).workspaces.length;
+    const engineeringTitle = "Synthetic engineering mission workspace";
+    const engineeringPurpose = 'Create a software engineering workspace called "' + engineeringTitle +
+      '" with checklist, local chat and the existing note "Synthetic fixed note".';
+    await fillNative({ click, key, js, wait, insertText: text => operation(() => win.webContents.insertText(text), "mission_text_input_deadline") }, purpose, engineeringPurpose);
+    const proposalAction = name => architect + " [data-workspace-proposal-action=" + quote(name) + "]";
+    await click(proposalAction("request"));
+    await wait("Engineering workspace proposal shows an existing resource binding", () => js(
+      `document.querySelector(${quote(architect)})?.textContent.includes('Reuse existing') && document.querySelector(${quote(proposalAction("save"))})?.getClientRects().length > 0`,
+    ));
+    assert.equal((await desktop()).workspaces.length, roomsBeforePlanning);
+    await click(proposalAction("save"));
+    await click(proposalAction("check"));
+    await wait("Workspace preview checks current resource versions", () => js(`document.querySelector(${quote(architect)})?.textContent.includes('placements in a new')`));
+    assert.equal((await desktop()).workspaces.length, roomsBeforePlanning);
+    await click(proposalAction("apply"));
+    const engineering = await wait("Workspace Architect applied canonical resources", async () => {
+      const state = await desktop();
+      const room = state.workspaces.find(item => item.title === engineeringTitle);
+      return room && state.activeWorkspaceId === room.id && {
+        id: room.id, resources: state.blocks.filter(block => block.workspace_id === room.id).map(block => {
+          const resource = state.resources.find(item => item.id === block.resource_id);
+          return resource && { id: resource.id, kind: resource.kind, title: resource.title };
+        }).filter(Boolean),
+      };
+    });
+    const fixedNote = roomState.resources.find(resource => resource.title === "Synthetic fixed note");
+    assert(engineering.resources.some(resource => resource.id === fixedNote.id && resource.kind === "note"));
+    assert(engineering.resources.some(resource => resource.kind === "checklist"));
+    assert(engineering.resources.some(resource => resource.kind === "conversation"));
+    assert.deepEqual(geometry(await layout()), geometry(undone), "workspace_architect_changed_original_layout");
+    receipt.architect = { workspaceId: engineering.id, reusedResourceId: fixedNote.id, kinds: engineering.resources.map(resource => resource.kind) };
 
     const providerAfter = await rpc("providerActivity", {});
     assert.equal(providerAfter.codexConnections, providerBefore.codexConnections);

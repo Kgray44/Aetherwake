@@ -26,6 +26,19 @@ test('exact observed native local response projects Whisper without copying fact
   const result = projectVelaManifestation(s); assert.equal(result.kind, 'whisper'); assert.equal(result.currentRequestId, r.id); assert.equal(result.currentMessageId, message.id); assert.equal(result.currentPlanId, null); assert.equal(result.canDismiss, true);
   assert.deepEqual(Object.keys(result).sort(), ['kind', 'currentRequestId', 'currentMessageId', 'currentPlanId', 'historyResource', 'pinned', 'canDismiss', 'requiredPlanIds', 'selectionReason'].sort());
 });
+test('shows a scoped native mission answer as the current reply without displacing a pending request', () => {
+  const report: VelaMessage = { id: 'synthetic:mission-answer', role: 'assistant', source: 'vela-native',
+    classification: 'observed', content: 'CPU usage was 15% over a 250 ms sample.', responseKind: 'answer',
+    missionReport: { missionId: 'synthetic:mission', workspaceId: 'synthetic:workspace', projectId: null } };
+  const ready = source();
+  ready.conversation!.messages.push(report);
+  assert.equal(projectVelaManifestation(ready).currentMessageId, report.id);
+  const pending = source(request('synthetic:pending'));
+  pending.conversation!.messages.push(report);
+  assert.equal(projectVelaManifestation(pending).currentMessageId, null);
+  ready.conversation!.messages.push({ ...report, id: 'synthetic:untrusted', source: 'provider', classification: 'reported' });
+  assert.equal(projectVelaManifestation(ready).kind, 'none');
+});
 test('attributed answer/clarification/inability are Insight; missing or spoofed canonical response attribution never becomes a surfaced message', () => {
   for (const kind of ['answer', 'clarification', 'inability'] as const) {
     const { r, message } = reply('synthetic:' + kind, false, kind), s = source(r); s.conversation!.messages.push(message);

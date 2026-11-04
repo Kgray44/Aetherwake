@@ -230,7 +230,8 @@ test('reviewed saved teams bind roles, reconcile concurrent reports and link the
         await gate;
         const id = 'resp_team_member_' + index;
         return sse([{ type: 'response.created', response: { id } },
-          { type: 'response.output_text.delta', delta: JSON.stringify({ observations: ['Repeat the warmup.', observation] }) },
+          { type: 'response.output_text.delta', delta: JSON.stringify({ observations: ['Repeat the warmup.', observation],
+            assessments: [{ claim: 'A fixed workload controls variability', position: index ? 'challenges' : 'supports', observation: 1 }] }) },
           { type: 'response.completed', response: { id, status: 'completed', model: documentedModel.id,
             usage: { input_tokens: 50, output_tokens: 12, total_tokens: 62 }, output: [] } }]);
       });
@@ -253,6 +254,9 @@ test('reviewed saved teams bind roles, reconcile concurrent reports and link the
     })));
     assert.deepEqual((report?.value as Record<string, unknown>).repeatedFindings, [[
       { taskId: 'member-1', index: 0 }, { taskId: 'member-2', index: 0 },
+    ]]);
+    assert.deepEqual((report?.value as Record<string, unknown>).conflictingAssessments, [[
+      { taskId: 'member-1', index: 0, position: 'supports' }, { taskId: 'member-2', index: 0, position: 'challenges' },
     ]]);
     const posted = await post();
     assert.deepEqual(await post(), posted);

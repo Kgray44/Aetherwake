@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import { mountWorkspaceTemplates } from '../view.ts';
 import { predefinedTemplates } from '../model.ts';
-import type { TemplateSummary, WorkspaceTemplate, WorkspaceTemplatePort } from '../contracts.ts';
+import type { LibraryCapabilities, TemplateSummary, VelaTemplateRequest, WorkspaceTemplate, WorkspaceTemplatePort } from '../contracts.ts';
 import { WORKSPACE_ARCHITECT_PROVIDER } from '../contracts.ts';
 import { blockDocument } from './component-dom.mts';
 import { until } from '../../conversation-product/test/component-dom.mts';
@@ -87,4 +87,43 @@ test('Vela workspace review shows provenance and updates the proposed layout bef
   ui.root.querySelectorAll('button').find(button => button.textContent === 'Save proposal as template').onclick();
   await until(() => saved.length === 1);
   assert.deepEqual(saved, [draft.body.resources.slice(1).map(role => role.key)]);
+});
+
+test('direct Workspace Architect entry retains the chosen project and editable purpose through capability loading', async t => {
+  const ui = blockDocument(); t.after(ui.install());
+  const draft = predefinedTemplates()[1], requests: VelaTemplateRequest[] = [];
+  const noWrite = async () => { throw Error('Proposal review must not create or save a workspace'); };
+  let resolveCapabilities!: (value: LibraryCapabilities) => void;
+  const port: WorkspaceTemplatePort = {
+    capabilities: () => new Promise(resolve => { resolveCapabilities = resolve; }),
+    async listTemplates() { return []; },
+    async requestVelaTemplate(input) {
+      requests.push(input);
+      return { ...draft, provenance: { requestId: input.requestId, providerId: WORKSPACE_ARCHITECT_PROVIDER } };
+    },
+    getTemplate: noWrite, saveTemplate: noWrite, renameTemplate: noWrite, archiveTemplate: noWrite, previewTemplate: noWrite, applyTemplate: noWrite,
+  };
+  const controller = mountWorkspaceTemplates(ui.root, port, {
+    projectId: 'project:signals', initialVela: { projectTitle: 'Signals', purpose: 'Signal analysis workspace' },
+    onClose() {}, onApplied: noWrite,
+  });
+  t.after(() => controller.dispose());
+  const purpose = ui.root.querySelector('[data-workspace-purpose]');
+  const submit = ui.root.querySelectorAll('button').find(button => button.textContent === 'Request proposal');
+  const form = ui.root.querySelector('form');
+  assert.equal(purpose.value, 'Signal analysis workspace');
+  assert(ui.root.querySelectorAll('.aw-library__hint').some(node => node.textContent.includes('Project · Signals')));
+  assert.equal(submit.disabled, true);
+  form.onsubmit({ preventDefault() {} });
+  assert.deepEqual(requests, []);
+  purpose.value = 'Compare retained signal measurements';
+  resolveCapabilities({ revision: 1, kinds: {}, providers: {}, velaPlanning: { state: 'available' } });
+  await until(() => !submit.disabled);
+  assert.equal(purpose.value, 'Compare retained signal measurements');
+  assert.deepEqual(requests, []);
+  form.onsubmit({ preventDefault() {} });
+  await until(() => ui.root.querySelectorAll('.aw-library__layout-block').length === draft.body.placements.length);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].projectId, 'project:signals');
+  assert.equal(requests[0].prompt, 'Compare retained signal measurements');
 });

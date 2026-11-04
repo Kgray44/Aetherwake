@@ -170,6 +170,8 @@ import "../../../block-library/task-group-view.css";
 import {
   mountEventExperience,
   readRecentEvents,
+  missionEventInScope,
+  recordedEventTitle,
   type ReplayWindow,
   filterRecordedEvents,
   type EventWindow,
@@ -682,6 +684,7 @@ export function installApplication(hooks: Hooks) {
   let retainedEarliest: number | null = null,
     retainedLatest = 0,
     eventDisconnected = false;
+  let streamScopeKey = "", eventRefreshGeneration = 0;
   const seenEvents = new Set<string>();
   let lastTrigger: HTMLElement | null = null;
   const conversationView = createManagerState();
@@ -1130,6 +1133,13 @@ export function installApplication(hooks: Hooks) {
     streamBlockIds = next.blocks
       .filter((block) => block.resource_id && streamResources.has(block.resource_id))
       .map((block) => block.id);
+    const scopeKey = JSON.stringify(streamScope());
+    if (scopeKey !== streamScopeKey) {
+      streamScopeKey = scopeKey;
+      eventRefreshGeneration++;
+      discardStreamMissions();
+      if (streamView || streamBlockIds.length) void refreshEvents().catch(report);
+    }
     scheduleStreamRefresh();
     const taskStamp = JSON.stringify(
       next.resources.map((resource) => [
@@ -2594,17 +2604,9 @@ export function installApplication(hooks: Hooks) {
         surfaces.close("environments");
         templates(projectId);
       },
-      askVela: async (projectId) => {
+      askVela: async ({ projectId, title }) => {
         surfaces.close("environments");
-        openVela();
-        const project = state?.projects.find((p) => p.id === projectId);
-        const composer = el<HTMLTextAreaElement>(
-          ".vela-core-compose textarea",
-          velaContent,
-        );
-        if (!composer.value.trim())
-          composer.value = `Help me create a workspace${project ? ` in project “${project.title}” (${project.id})` : ""} from available resources. Prepare a plan for my review.`;
-        composer.focus();
+        templates(projectId, title);
       },
       newConversation: async () => {
         const presentation = environmentPresentation;
@@ -2744,23 +2746,24 @@ export function installApplication(hooks: Hooks) {
     });
     blockLibrary = { workspaceId, request, view: controller };
   }
-  function templates(projectId: string | null) {
+  function templates(projectId: string | null, velaPurpose?: string) {
     const content = document.createElement("div");
     content.className = "application-library-content";
+    const project = state?.projects.find((item) => item.id === projectId);
     let controller: ReturnType<typeof mountWorkspaceTemplates> | undefined;
     surfaces.open({
       id: "workspace-templates",
       anchor: el("#workspace-manager"),
       content,
-      label: "Workspace templates",
+      label: velaPurpose === undefined ? "Workspace templates" : "Workspace Architect",
       minSize: { width: 480, height: 300 },
       maxSize: { width: 980, height: 760 },
       onClose: () => controller?.dispose(),
     });
     controller = mountWorkspaceTemplates(content, libraryClient, {
       projectId,
-      expectedProjectVersion: state?.projects.find((p) => p.id === projectId)
-        ?.version,
+      expectedProjectVersion: project?.version,
+      ...(velaPurpose === undefined ? {} : { initialVela: { purpose: velaPurpose, projectTitle: project?.title } }),
       currentWorkspace: () => state,
       currentConfigurations: () => {
         const blocks = state?.blocks ?? [];
@@ -3887,7 +3890,7 @@ export function installApplication(hooks: Hooks) {
             .reverse()
             .map((event) => ({
               id: event.eventId,
-              type: event.type,
+              type: recordedEventTitle(event),
               source: event.providerId,
               classification: event.classification,
               receivedAt: event.receivedAt,
@@ -4449,6 +4452,7 @@ export function installApplication(hooks: Hooks) {
               snapshot: eventWindow,
               refresh: refreshEvents,
               openResource: openCanonicalResource,
+              openMission: openStreamMission,
             },
             {
               active: activeBlocks.get(id) ?? false,
@@ -4558,8 +4562,28 @@ export function installApplication(hooks: Hooks) {
       }
     }
   }
+  function streamScope() {
+    const workspaceId = state?.navigation.kind === "workspace" ? state.activeWorkspaceId : null;
+    const projectId = state?.navigation.kind === "constellation"
+      ? state.navigation.projectId
+      : state?.workspaces.find((workspace) => workspace.id === workspaceId)?.project_id ?? null;
+    return { workspaceId, projectId };
+  }
+  function discardStreamMissions(all = false) {
+    const scope = streamScope();
+    for (let index = localEvents.length - 1; index >= 0; index--) {
+      const event = localEvents[index];
+      if ((all && event.mission) || !missionEventInScope(event, scope)) {
+        seenEvents.delete(event.eventId);
+        localEvents.splice(index, 1);
+      }
+    }
+    streamView?.update();
+    for (const view of eventViews.values()) view.update();
+  }
   function eventWindow(): EventWindow {
     return {
+      ...streamScope(),
       events: localEvents,
       earliest: retainedEarliest,
       latest: retainedLatest,
@@ -4577,10 +4601,6 @@ export function installApplication(hooks: Hooks) {
       workspaceResourceIds: (state?.blocks ?? []).flatMap((block) =>
         block.resource_id ? [block.resource_id] : [],
       ),
-      projectId:
-        state?.workspaces.find(
-          (workspace) => workspace.id === state?.activeWorkspaceId,
-        )?.project_id ?? null,
     };
   }
   function scheduleStreamRefresh() {
@@ -4603,7 +4623,7 @@ export function installApplication(hooks: Hooks) {
       query: "",
     });
     const summary = events.slice(0, 3)
-      .map((event) => event.classification + " · " + event.type).join(" · ") ||
+      .map((event) => event.classification + " · " + recordedEventTitle(event)).join(" · ") ||
       "No accessible captured events in this retained window.";
     for (const id of streamBlockIds) {
       const article = document.querySelector<HTMLElement>(`[data-block="${id}"]`);
@@ -4627,6 +4647,7 @@ export function installApplication(hooks: Hooks) {
       )
     )
       return false;
+    if (e.type.startsWith("vela.mission/") && !missionEventInScope(e as StreamEvent, streamScope())) return false;
     if (seenEvents.has(e.eventId)) return false;
     seenEvents.add(e.eventId);
     if (e.type.toLocaleLowerCase().includes("collection")) {
@@ -4643,9 +4664,11 @@ export function installApplication(hooks: Hooks) {
     return true;
   }
   async function refreshEvents() {
+    const generation = ++eventRefreshGeneration;
     const replay = await readRecentEvents(
       async (input) => (await host.command!("replay", input)) as ReplayWindow,
     );
+    if (generation !== eventRefreshGeneration) return;
     const newer = localEvents.filter((event) => event.cursor > replay.latest);
     localEvents.length = 0;
     seenEvents.clear();
@@ -4655,6 +4678,10 @@ export function installApplication(hooks: Hooks) {
     for (const event of [...replay.events, ...newer]) rememberEvent(event);
     scheduleStreamRefresh();
   }
+  function openStreamMission(id: string) {
+    if (!velaOpen) openVela();
+    velaPanel?.showMission(id);
+  }
   function showStream(restoring = false) {
     const content = document.createElement("div");
     const anchor = el("#application-stream");
@@ -4662,6 +4689,7 @@ export function installApplication(hooks: Hooks) {
       snapshot: eventWindow,
       refresh: refreshEvents,
       openResource: openCanonicalResource,
+      openMission: openStreamMission,
     });
     const viewId = "context-stream:" + ++streamSerial;
     const motion = conversationDisclosures(content, { motion: experienceMotion, viewId });
@@ -4697,6 +4725,7 @@ export function installApplication(hooks: Hooks) {
     streamPickers = pickers;
     motion.sync();
     anchor.setAttribute("aria-expanded", "true");
+    void refreshEvents().catch(report);
   }
   function refreshTaskProjections() {
     if (taskRefreshPending) return;
@@ -4718,6 +4747,11 @@ export function installApplication(hooks: Hooks) {
       payload?: { delta?: string };
     };
     const accessChanged = /^policy[./]/.test(e.type);
+    if (accessChanged) {
+      eventRefreshGeneration++;
+      discardStreamMissions(true);
+      if (streamView || streamBlockIds.length) void refreshEvents().catch(report);
+    }
     const sourceChanged = !e.payload?.delta && /^(resource|note|conversation|source)[./]/.test(e.type);
     if (e.type.startsWith("vela.mission/") || accessChanged || sourceChanged) {
       if (accessChanged) velaMissions.invalidateEvidence();

@@ -7,6 +7,7 @@ export type EventWindow = {
   disconnected: boolean;
   resources: readonly { id: string; projectId: string | null; title: string }[];
   workspaceResourceIds: readonly string[];
+  workspaceId?: string | null;
   projectId: string | null;
 };
 export type EventFilters = {
@@ -31,6 +32,43 @@ export async function readRecentEvents(
   const metadata = await replay({ after: 0, limit: 1 });
   return replay({ after: Math.max(0, metadata.latest - 250), limit: 250 });
 }
+const missionOperations: Record<string, string> = {
+  created: "Mission created",
+  revised: "Mission plan revised",
+  control: "Mission control recorded",
+  started: "Attempt started",
+  settled: "Attempt settled",
+  recovered: "Attempt recovered",
+  workroom: "Mission workroom created",
+  "report-posted": "Mission report posted",
+};
+const missionExecutors: Record<string, string> = {
+  "sample.cpu": "CPU utilization",
+  "sample.ram": "RAM utilization",
+  "sample.gpu": "GPU utilization",
+  "sample.backend": "Backend timing",
+  "inspect.backend-source": "Backend source check",
+  "inspect.workspace-notes": "Workspace notes review",
+  "codex.project-check": "Codex project check",
+  "chatgpt.specialist": "Specialist task",
+  "join.samples": "Measurement report",
+  "join.team": "Team report",
+};
+export function recordedEventTitle(event: StreamEvent): string {
+  const mission = event.mission;
+  if (!mission) return event.type;
+  const operation = missionOperations[mission.kind] ?? event.type;
+  const task = missionExecutors[mission.executor ?? ""] ?? mission.taskId;
+  return task ? `${task} · ${operation}` : operation;
+}
+export function missionEventInScope(
+  event: StreamEvent,
+  scope: Pick<EventWindow, "workspaceId" | "projectId">,
+): boolean {
+  const mission = event.mission;
+  if (!mission) return !event.type.startsWith("vela.mission/");
+  return mission.scope.workspaceId === scope.workspaceId && mission.scope.projectId === scope.projectId;
+}
 export function filterRecordedEvents(
   window: EventWindow,
   filters: EventFilters,
@@ -51,16 +89,17 @@ export function filterRecordedEvents(
     .filter((event) => {
       // Resource metadata may have become unavailable since capture. Do not expose its event details.
       if (event.resourceId && !allowed.has(event.resourceId)) return false;
+      if (!missionEventInScope(event, window)) return false;
       if (
         filters.scope === "workspace" &&
+        !event.mission &&
         (!event.resourceId || !workspace.has(event.resourceId))
       )
         return false;
       if (
         filters.scope === "project" &&
         (window.projectId === null ||
-          !event.resourceId ||
-          !project.has(event.resourceId))
+          (!event.mission && (!event.resourceId || !project.has(event.resourceId))))
       )
         return false;
       return (
@@ -81,6 +120,10 @@ export function filterRecordedEvents(
             event.resourceId,
             event.executionId,
             event.correlationId,
+            event.mission?.taskId,
+            event.mission?.attemptId,
+            event.mission?.executor,
+            recordedEventTitle(event),
           ]
             .filter(Boolean)
             .join(" ")
@@ -94,6 +137,7 @@ export function filterRecordedEvents(
 
 /** Explicit metadata allowlist. Assistant deltas, private tool data and reasoning never enter details. */
 export function eventMetadata(event: StreamEvent): Record<string, string> {
+  const mission = event.mission;
   const data: Record<string, string | number | null | undefined> = {
     "Event ID": event.eventId,
     Cursor: event.cursor,
@@ -116,6 +160,13 @@ export function eventMetadata(event: StreamEvent): Record<string, string> {
     Causation: event.causationId,
     "Recorded output bytes": event.payload?.textBytes,
     "Recorded item type": event.payload?.itemType,
+    ...(mission ? {
+      Mission: mission.id,
+      "Mission journal sequence": mission.seq,
+      "Mission task": mission.taskId,
+      "Mission attempt": mission.attemptId,
+      "Task executor": mission.executor,
+    } : {}),
   };
   return Object.fromEntries(
     Object.entries(data).map(([key, value]) => [
@@ -142,6 +193,7 @@ export function mountEventExperience(
     snapshot(): EventWindow;
     refresh(): Promise<void>;
     openResource?(resourceId: string): void;
+    openMission?(missionId: string): void;
   },
   options: { active?: boolean; presentation?: "workspace" | "focused" } = {},
 ) {
@@ -206,8 +258,8 @@ export function mountEventExperience(
   choices(
     scope,
     [
-      ["workspace", "Current workspace resource membership"],
-      ["project", "Current project resource membership"],
+      ["workspace", "Current workspace"],
+      ["project", "Current project"],
     ],
     "All authorized local records",
   );
@@ -268,7 +320,7 @@ export function mountEventExperience(
     coverage,
     node(
       "p",
-      "Workspace and project scopes use current membership, not membership at event time.",
+      "Resource activity uses current membership. Mission activity is shown in its originating workspace.",
     ),
   );
   tools.append(query, advanced, refresh);
@@ -366,9 +418,13 @@ export function mountEventExperience(
       if (!row) {
         const element = node("li"), details = node("details"), summary = node("summary");
         summary.className = "aw-event-entry";
-        const received = node("time"), heading = node("span", event.type),
+        const title = recordedEventTitle(event);
+        const recordedState = event.mission && event.status
+          ? event.status.replace(/^./, (initial) => initial.toUpperCase())
+          : event.status ?? "Status unavailable";
+        const received = node("time"), heading = node("span", title),
           evidence = node("span", event.classification),
-          recorded = node("span", event.status ?? "Status unavailable");
+          recorded = node("span", recordedState);
         received.className = "aw-event-time";
         received.setAttribute("datetime", event.receivedAt);
         received.title = "Received " + event.receivedAt;
@@ -378,10 +434,18 @@ export function mountEventExperience(
         heading.className = "aw-event-type";
         evidence.className = "aw-event-evidence";
         recorded.className = "aw-event-recorded-status";
-        summary.setAttribute("aria-label", `${event.type} · ${event.classification} · ${event.status ?? "status unavailable"} · received ${event.receivedAt}`);
+        summary.setAttribute("aria-label", `${title} · ${event.classification} · ${recordedState} · received ${event.receivedAt}`);
         summary.append(received, heading, evidence, recorded);
         element.dataset.eventId = event.eventId;
         element.dataset.evidenceClass = event.classification;
+        if (event.mission) {
+          heading.dataset.recordedType = event.type;
+          heading.title = event.type;
+          element.dataset.streamMissionId = event.mission.id;
+          element.dataset.streamMissionEvent = event.mission.kind;
+          if (event.mission.taskId) element.dataset.streamTaskId = event.mission.taskId;
+          if (event.status) element.dataset.eventStatus = event.status;
+        }
         details.append(summary);
         element.append(details);
 
@@ -405,8 +469,14 @@ export function mountEventExperience(
           for (const [key, value] of Object.entries(eventMetadata(event)))
             metadata.append(node("dt", key), node("dd", value));
           details.append(metadata);
-          const resourceId = event.resourceId;
-          if (resourceId && port.openResource) {
+          const resourceId = event.resourceId, missionId = event.mission?.id;
+          if (missionId && port.openMission) {
+            const action = button("Open mission evidence", () => {
+              if (related === action && isOpen()) port.openMission?.(missionId);
+            });
+            related = action;
+            details.append(action);
+          } else if (resourceId && port.openResource) {
             const action = button("Open related resource", () => {
               if (related === action && isOpen()) port.openResource?.(resourceId);
             });

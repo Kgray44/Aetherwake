@@ -4,6 +4,7 @@ import { compileMissionContext, createMissionContextCache, validateMissionContex
   type MissionContextSource } from '../../vela-core/src/mission-context.mts';
 import { historyDigest } from '../../vela-core/src/bounded-history.mts';
 import { ServiceError } from './contracts.mts';
+import { missionMeasurementAnswer } from './mission-native.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
   type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionProjection,
   type MissionAttempt, type MissionScope, type MissionTask, type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomResource } from './mission-contracts.mts';
@@ -398,7 +399,8 @@ export class MissionService {
       if (event.attemptId && (event.kind === 'settled' || event.kind === 'recovered')) admitted--;
     }
     const ended = ['queued', 'running', 'cancelling'].includes(outcome) ? Date.now() : Date.parse(m.events.at(-1)!.time);
-    return { ...m, outcome, waits, profile: {
+    const answer = missionMeasurementAnswer(m.tasks);
+    return { ...m, outcome, ...(answer.length ? { answer } : {}), waits, profile: {
       elapsedMs: Math.max(0, ended - Date.parse(m.createdAt)) + (m.planning?.durationMs ?? 0), peakWorkers, attempts: attempts.length,
       retries: m.tasks.reduce((total, task) => total + Math.max(0, task.attempts.length - 1), 0),
       providerCalls, usageReports: usage.length, reportedTotalTokens,

@@ -7,12 +7,12 @@ import { DesktopState } from './desktop.mts';
 import { MissionService, validateMissionPlan } from './mission-service.mts';
 import { MissionWorkrooms } from './mission-workroom.mts';
 import { createMissionProjectCheck } from './mission-project-check.mts';
-import { missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
+import { missionMeasurementAnswer, missionPlanningCatalog, nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
 import { compileMissionProposal, MISSION_PROPOSAL_INSTRUCTIONS } from './mission-proposal.mts';
 import { createSpecialistExecutor, missionPlanningSpecialists, missionTeamJoin, specialistMissionPlan, teamMissionPlan } from './mission-specialists.mts';
 import { MissionTeams } from './mission-teams.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
-import type { MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningOffer, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
+import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningOffer, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
@@ -77,7 +77,7 @@ import { createCanonicalTemplateHost } from '../../block-library/canonical-host.
 import { NoteExperienceService } from '../../block-library/note-service.mts';
 import { createCanonicalNoteHost } from '../../block-library/note-host.mts';
 import { BUILTIN_BLOCKS, SUBJECT_BLOCKS } from '../../block-library/registry.ts';
-import type { LibraryCapabilities, BlockKind } from '../../block-library/contracts.ts';
+import type { LibraryCapabilities, BlockKind, VelaTemplatePlan, VelaTemplateRequest } from '../../block-library/contracts.ts';
 import { validateSubjectRef, type NonResourceSubjectRef } from '../../workspace-kernel/subjects.ts';
 import type { LibraryRequest, LibraryResponse, NoteRequest } from './contracts.mts';
 import { CONTRACT, ensure, ServiceError, type Binding, type Execution, type HandoffReview, type Options, type ProviderPort, type StreamEvent, type CommandMap, type ConversationSendInput, type ConversationSendPreview } from './contracts.mts';
@@ -108,6 +108,9 @@ type PendingVelaProjectCheck = {
   digest: string;
   standalone?: { intent: string; routing: NonNullable<VelaRequest['routingSettings']>; routingStamp: string; scopeStamp: string };
 };
+type PendingVelaTemplate = { projectId: string | null; projectVersion?: number; expires: number; plan?: VelaTemplatePlan };
+const VELA_TEMPLATE_REVIEW_MS = 120_000;
+const VELA_TEMPLATE_REVIEW_LIMIT = 16;
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 const itemType = (value: unknown) => ['userMessage','agentMessage','commandExecution','fileChange','mcpToolCall','dynamicToolCall','reasoning','webSearch','imageView','imageGeneration','collabAgentToolCall','contextCompaction'].includes(String(value)) ? String(value) : 'unknown';
 interface State {
@@ -214,6 +217,7 @@ export class BackendCore {
   private velaDelegationGrants=new Map<string,{planId:string;stepId:string;fingerprint:string;actionDigest:string;contextDigest:string;expiresAt:string;consumed:boolean}>();
   private pendingVelaGrant:string|null=null;
   private library!:TemplateService;
+  private velaTemplateReviews = new Map<string, PendingVelaTemplate>();
   private readonly nativeMedia: boolean;
   private notes!:NoteExperienceService;
   constructor(options: Options, emit: (event: StreamEvent) => void = () => {}, nativeHostServices?:NativeHostServices,ordinaryTest?:OrdinaryResponsesTestServices) {
@@ -326,11 +330,10 @@ export class BackendCore {
           canonicalMissionContextSource(this.missionContextHost(mission.scope), (binding, id) =>
             this.missionScopeAllowed(binding.scope) && !!this.db.prepare('SELECT 1 FROM blocks WHERE workspace_id=? AND resource_id=?')
               .get(binding.scope.workspaceId, id)) : undefined,
-        observe: (mission, event) => this.record('vela.mission/' + event.kind, 'observed', undefined,
-          'mission:' + mission.id + ':' + event.seq, {
-            providerId: 'aerynth-native', detached: true, correlationId: mission.id, nativeEventId: event.attemptId,
-            payload: { redacted: true, taskId: event.taskId },
-          }),
+        observe: (mission, event) => {
+          try { this.recordMissionStreamEvent(mission, event); }
+          finally { this.publishVerifiedMissionAnswer(mission, event); }
+        },
       });
       this.missionWorkrooms = new MissionWorkrooms({
         library: this.library, missions: this.missions, atomic: work => this.atomic(work),
@@ -392,17 +395,30 @@ export class BackendCore {
     ensure(mission.scope.workspaceId === scope.workspaceId && mission.scope.projectId === scope.projectId &&
       mission.outcome === 'verified', 'mission_report_unavailable');
     const origin = mission.originConversationId ?? this.vela.ensureMissionConversation();
+    return this.publishMissionReport(mission, origin, mission.answer?.join(' ') ?? 'Mission evidence is ready in this workspace.');
+  }
+  private publishVerifiedMissionAnswer(mission: Mission, event: MissionEvent) {
+    const origin = mission.originConversationId;
+    if (!origin || event.kind !== 'settled' || event.detail !== 'verified' || !this.missionScopeAllowed(mission.scope) ||
+      !mission.tasks.every(task => task.state === 'verified' &&
+        ['sample.cpu', 'sample.ram', 'sample.gpu', 'join.samples'].includes(task.executor))) return;
+    const answer = missionMeasurementAnswer(mission.tasks);
+    if (answer.length) this.publishMissionReport(mission, origin, answer.join(' '));
+  }
+  private publishMissionReport(mission: Mission, origin: string, content: string): MissionResponse {
+    const { id, scope } = mission;
     this.requireVelaConversation(origin);
     return this.atomic(() => {
       const existing = this.db.prepare('SELECT message_id FROM vela_mission_report_links WHERE mission_id=?').get(id);
       if (existing) return { kind: 'mission-report', missionId: id, messageId: String(existing.message_id) };
       const message = this.appendVelaMessage(origin, {
-        role: 'assistant', source: 'vela-native', classification: 'observed', content: 'Mission evidence is ready in this workspace.',
+        role: 'assistant', source: 'vela-native', classification: 'observed', content, responseKind: 'answer',
         missionReport: { missionId: id, workspaceId: scope.workspaceId, projectId: scope.projectId },
       });
       this.db.prepare('INSERT INTO vela_mission_report_links VALUES(?,?)').run(id, message.id);
       this.record('vela.mission/report-posted', 'observed', undefined, 'mission:report:' + id, {
-        providerId: 'aerynth-native', detached: true, correlationId: id, payload: { redacted: true },
+        providerId: 'aerynth-native', detached: true, correlationId: id,
+        mission: { id, scope, kind: 'report-posted' }, status: 'posted', payload: { redacted: true },
       });
       return { kind: 'mission-report', missionId: id, messageId: message.id };
     });
@@ -766,6 +782,12 @@ export class BackendCore {
     return compositeTimelineDomain({kernel:this.kernel,db:this.db,
       projectAccess:id=>this.libraryAuthorized({kind:'project',id}),resourceAccess:id=>this.productResourceAccess(id),
       eventAccess:header=>{
+        if (header.type.startsWith('vela.mission/')) {
+          const scope = this.missionStreamScope();
+          return !!scope && !!header.correlationId && !!this.db.prepare(`SELECT 1 FROM vela_missions WHERE id=?
+            AND json_extract(json,'$.scope.workspaceId')=? AND json_extract(json,'$.scope.projectId') IS ?`)
+            .get(header.correlationId, scope.workspaceId, scope.projectId);
+        }
         if(header.resourceId!==null&&!this.productResourceAccess(header.resourceId))return false;
         if(header.executionId!==null){const execution=this.state.executions[header.executionId];return !!execution&&this.productResourceAccess(execution.resourceId);}
         // The installed local owner's unscoped application headers remain local
@@ -1060,11 +1082,41 @@ export class BackendCore {
       throw new ServiceError('unsupported_released_vela_action');
     }});
   }
+  private templateProjectVersion(projectId: string | null): number | undefined {
+    if (projectId === null) return;
+    const project = this.db.prepare("SELECT version FROM projects WHERE id=? AND state='active'").get(projectId);
+    ensure(project && this.libraryAuthorized({ kind: 'project', id: projectId }), 'project_unavailable');
+    return Number(project.version);
+  }
+  private async issueVelaTemplateReview(input: VelaTemplateRequest): Promise<VelaTemplatePlan> {
+    ensure(input && identifier(input.requestId) && (input.projectId === null || identifier(input.projectId)), 'invalid_vela_request');
+    const { requestId, projectId } = input;
+    const time = Date.now();
+    for (const [id, entry] of this.velaTemplateReviews) if (entry.expires <= time) this.velaTemplateReviews.delete(id);
+    ensure(!this.velaTemplateReviews.has(requestId), 'vela_template_request_reused');
+    ensure(this.velaTemplateReviews.size < VELA_TEMPLATE_REVIEW_LIMIT, 'vela_template_review_busy');
+    const projectVersion = this.templateProjectVersion(projectId);
+    const entry: PendingVelaTemplate = { projectId, projectVersion, expires: time + VELA_TEMPLATE_REVIEW_MS };
+    this.velaTemplateReviews.set(requestId, entry);
+    try {
+      const plan = await this.library.requestVelaTemplate(input);
+      ensure(!this.closed && entry.expires > Date.now() && this.velaTemplateReviews.get(requestId) === entry,
+        'native_template_provenance_required');
+      ensure(this.templateProjectVersion(projectId) === projectVersion, 'project_version_conflict');
+      entry.plan = structuredClone(plan);
+      entry.expires = Date.now() + VELA_TEMPLATE_REVIEW_MS;
+      return plan;
+    } catch (error) {
+      if (this.velaTemplateReviews.get(requestId) === entry) this.velaTemplateReviews.delete(requestId);
+      throw error;
+    }
+  }
   private async libraryCommand(operation:LibraryRequest):Promise<LibraryResponse> {
     if(operation.name==='capabilities')await this.refreshOrdinaryStatus();
     const input:any=operation?.input;
     if(operation?.name==='createBlock'&&input?.kind==='conversation'&&input.provider===undefined)await this.refreshOrdinaryStatus();
     const mutation=['setFavorite','configureBlock','attachBlock','createBlock','saveTemplate','renameTemplate','archiveTemplate','applyTemplate','workspaceFromResources','createSubjectBlock'].includes(operation?.name);
+    let usedReview: PendingVelaTemplate | undefined;
     const execute=()=>{switch(operation?.name){
       case 'inspectWorkspace':return this.kernel.withTransaction(()=>{
         ensure(input&&typeof input==='object'&&!Array.isArray(input)&&Object.keys(input).length===1&&typeof input.workspaceId==='string'&&input.workspaceId.length>0&&input.workspaceId.length<=2048,'invalid_workspace_inspection');
@@ -1074,13 +1126,24 @@ export class BackendCore {
       case 'capabilities':return this.library.capabilities();case 'preferences':return this.library.preferences();case 'setFavorite':return this.library.setFavorite(input);
       case 'getBlockSettings':return this.library.getBlockSettings(input);case 'configureBlock':return this.library.configureBlock(input);case 'findResources':return this.library.findResources(input);
       case 'attachBlock':return this.library.attachBlock(input);case 'createBlock':return this.library.createBlock(input);case 'listTemplates':return this.library.listTemplates(input??{});case 'getTemplate':return this.library.getTemplate(input);
-      case 'saveTemplate':ensure(input.source!=='vela'&&input.provenance===undefined,'native_template_provenance_required');return this.library.saveTemplate(input);
+      case 'saveTemplate': {
+        if (input?.source !== 'vela') {
+          ensure(input?.provenance === undefined, 'native_template_provenance_required');
+          return this.library.saveTemplate(input);
+        }
+        const review = this.velaTemplateReviews.get(input.provenance?.requestId);
+        ensure(review?.plan && review.expires > Date.now(), 'native_template_provenance_required');
+        const value = this.library.saveReviewedVelaTemplate(review.plan, input, review);
+        usedReview = review;
+        return value;
+      }
       case 'renameTemplate':return this.library.renameTemplate(input);case 'archiveTemplate':return this.library.archiveTemplate(input);case 'previewTemplate':return this.library.previewTemplate(input);case 'applyTemplate':return this.library.applyTemplate(input);
-      case 'previewWorkspaceFromResources':return this.library.previewWorkspaceFromResources(input);case 'workspaceFromResources':return this.library.workspaceFromResources(input);case 'requestVelaTemplate':return this.library.requestVelaTemplate(input);
+      case 'previewWorkspaceFromResources':return this.library.previewWorkspaceFromResources(input);case 'workspaceFromResources':return this.library.workspaceFromResources(input);case 'requestVelaTemplate':return this.issueVelaTemplateReview(input);
       case 'subjectTargets':return this.library.subjectTargets(input);case 'createSubjectBlock':return this.library.createSubjectBlock(input);case 'projectOverview':return this.library.projectOverview(input);case 'browseResources':return this.library.browseResources(input);
       default:throw new ServiceError('unsupported_library_command');
     }};
     const result=mutation?this.atomic(()=>{const value=execute();if((operation.name==='createBlock'||operation.name==='attachBlock'||operation.name==='createSubjectBlock')&&input.workspaceId)this.desktop.nativeBlockServices().navigateWorkspace(input.workspaceId);return value;}):await execute();
+    if (usedReview) usedReview.plan = undefined;
     if(mutation){this.record('application/library.'+operation.name,'observed');return {result,desktop:await this.command('desktop',{type:'snapshot'})};}return {result};
   }
   private async noteCommand(operation:NoteRequest):Promise<LibraryResponse> {
@@ -3254,13 +3317,59 @@ export class BackendCore {
     this.state.resources[resource.id] = c.id; this.state.revisions[resource.id] = 1;
     return this.conv(resource.id);
   }
-  private record(type: string, classification: StreamEvent['classification'], native?: EventEnvelope, dedupe: string = randomUUID(),override?:{providerId:string;detached?:boolean;resourceId?:string;correlationId?:string;payload?:StreamEvent['payload'];nativeEventId?:string;providerTime?:number;providerTimeSource?:string;externalEvidence?:GitHubCommitEvidence;externalCoverage?:TimelineSourceCoverage}) {
+  private missionStreamScope(): MissionScope | null {
+    const { currentWorkspaceId: workspaceId, currentProjectId: projectId } = this.velaContext();
+    const scope = workspaceId ? { workspaceId, projectId } : null;
+    return scope && this.missionScopeAllowed(scope) ? scope : null;
+  }
+  private missionStreamFields(mission: Mission, event: MissionEvent): Pick<StreamEvent, 'mission' | 'status' | 'payload'> {
+    const executor = mission.tasks.find(task => task.id === event.taskId)?.executor;
+    let status: string | null = event.kind === 'created' ? 'queued' : event.kind === 'started' ? 'running' : null;
+    if (event.kind === 'settled' || event.kind === 'recovered') {
+      if (event.detail && ['verified', 'failed', 'blocked', 'cancelled', 'uncertain'].includes(event.detail)) status = event.detail;
+      else if (event.detail === 'paused_on_restart') status = 'paused';
+      else if (event.kind === 'settled' && !event.attemptId) status = 'blocked';
+    }
+    return { mission: { id: mission.id, scope: mission.scope, kind: event.kind, seq: event.seq,
+      ...(event.taskId ? { taskId: event.taskId } : {}), ...(event.attemptId ? { attemptId: event.attemptId } : {}),
+      ...(executor ? { executor } : {}) }, status, payload: { redacted: true, ...(event.taskId ? { taskId: event.taskId } : {}) } };
+  }
+  private recordMissionStreamEvent(mission: Mission, event: MissionEvent) {
+    this.record('vela.mission/' + event.kind, 'observed', undefined, `mission:${mission.id}:${event.seq}`, {
+      providerId: 'aerynth-native', detached: true, correlationId: mission.id, nativeEventId: event.attemptId,
+      ...this.missionStreamFields(mission, event),
+    });
+  }
+  private streamScopeMatches(scope: MissionScope | null, origin: MissionScope | undefined) {
+    return !!scope && scope.workspaceId === origin?.workspaceId && scope.projectId === origin.projectId;
+  }
+  private projectReplayedMissionEvent(event: StreamEvent, dedupe: string, scope: MissionScope | null,
+    legacyMissions: Map<string, Mission | null>): StreamEvent | undefined {
+    if (event.mission) return this.streamScopeMatches(scope, event.mission.scope) ? event : undefined;
+    // Older rows have only a correlation ID. Bind them to the exact durable lifecycle event before disclosure.
+    const id = event.correlationId;
+    if (!scope || !id || event.providerId !== 'aerynth-native' || event.classification !== 'observed') return;
+    if (!legacyMissions.has(id)) {
+      const row = this.db.prepare('SELECT json FROM vela_missions WHERE id=?').get(id);
+      legacyMissions.set(id, row ? JSON.parse(String(row.json)) as Mission : null);
+    }
+    const mission = legacyMissions.get(id);
+    if (!mission || mission.id !== id || !this.streamScopeMatches(scope, mission.scope)) return;
+    if (event.type === 'vela.mission/report-posted' && dedupe === 'mission:report:' + id &&
+      this.db.prepare('SELECT 1 FROM vela_mission_report_links WHERE mission_id=?').get(id)) {
+      return { ...event, mission: { id, scope: mission.scope, kind: 'report-posted' }, status: 'posted', payload: { redacted: true } };
+    }
+    const observed = mission.events.find(entry => event.type === 'vela.mission/' + entry.kind && dedupe === `mission:${id}:${entry.seq}`);
+    if (observed) return { ...event, ...this.missionStreamFields(mission, observed) };
+  }
+  private record(type: string, classification: StreamEvent['classification'], native?: EventEnvelope, dedupe: string = randomUUID(),override?:{providerId:string;detached?:boolean;resourceId?:string;correlationId?:string;payload?:StreamEvent['payload'];nativeEventId?:string;providerTime?:number;providerTimeSource?:string;externalEvidence?:GitHubCommitEvidence;externalCoverage?:TimelineSourceCoverage;mission?:StreamEvent['mission'];status?:string|null}) {
     const e: StreamEvent = { schemaVersion: 1, eventId: randomUUID(), cursor: 0, resourceId: override?.resourceId??(override?.detached?null:this.active?.resourceId ?? null), executionId: override?.detached?null:this.active?.id ?? null,
       providerId: override?.providerId??this.port.id, providerInstanceId: override?.providerId===CHATGPT_PLAN_PROVIDER?'aerynth.responses':override?.providerId==='aerynth-native'?'aerynth.canonical':override?.providerId==='github'?'github.public-rest':this.port.instanceId, connectionId: this.connectionId,
       nativeEventId: override?.nativeEventId??null, nativeSequence: native?.sequence ?? null, threadId: override?.detached||override?.providerId===CHATGPT_PLAN_PROVIDER?null:native?.providerThreadId ?? this.active?.binding?.nativeThreadId ?? null,
       turnId: override?.detached||override?.providerId===CHATGPT_PLAN_PROVIDER?null:native?.providerTurnId ?? this.active?.turnId ?? null, correlationId: override?.correlationId??(override?.detached?null:this.active?.commandId ?? null), causationId: override?.detached?null:this.active?.id ?? null,
       receivedAt: now(), providerTime: override?.providerTime??native?.providerTime??null, providerTimeSource: override?.providerTimeSource??native?.providerTimeSource??null,
-      type, classification, status: native?.terminalStatus ?? null, payload: { redacted: true, ...(typeof native?.payload.delta === 'string' ? { textBytes: Buffer.byteLength(native.payload.delta) } : {}), ...(native?.payload.item ? { itemType: itemType((native.payload.item as any).type) } : {}),...override?.payload } };
+      type, classification, status: override?.status ?? native?.terminalStatus ?? null, payload: { redacted: true, ...(typeof native?.payload.delta === 'string' ? { textBytes: Buffer.byteLength(native.payload.delta) } : {}), ...(native?.payload.item ? { itemType: itemType((native.payload.item as any).type) } : {}),...override?.payload },
+      ...(override?.mission ? { mission: override.mission } : {}) };
     let inserted = false;
     this.kernel.withTransaction(() => {
       const result = this.db.prepare('INSERT OR IGNORE INTO intelligence_events(dedupe,json) VALUES(?,?)').run(dedupe, JSON.stringify(e));
@@ -3278,7 +3387,9 @@ export class BackendCore {
     return inserted ? e : null;
   }
   private publishRecordedEvent(e:StreamEvent) {
-    try{this.emit(e);}catch{/* Replay remains authoritative after a delivery failure. */}
+    try {
+      if (!e.type.startsWith('vela.mission/') || this.streamScopeMatches(this.missionStreamScope(), e.mission?.scope)) this.emit(e);
+    } catch { /* Replay remains authoritative after a delivery failure. */ }
     const {type,classification}=e;
     if(this.vela&&classification!=='simulated'&&!type.startsWith('vela.'))try{this.vela.ingestAttention({id:e.eventId,type:type.replaceAll('/','.'),source:'aerynth.canonical-events',occurredAt:e.receivedAt,subject:e.resourceId?{id:e.resourceId,kind:'resource'}:null,severity:type.includes('failed')||type.includes('unknown')||type.includes('gap')?'warning':'info',classification,summary:'Recorded application event: '+type,correlationId:e.correlationId??e.eventId,...(type==='stream/reopened'?{coverageGap:'Collection resumed at this recorded event; offline activity is unavailable'}:{})});}catch{/* Delivery cannot falsify a committed canonical operation. */}
   }
@@ -3726,7 +3837,18 @@ export class BackendCore {
       case 'replay': {
         const after = a.after ?? 0, limit = a.limit ?? 100;
         ensure(Number.isSafeInteger(after) && after >= 0 && Number.isInteger(limit) && limit > 0 && limit <= 1000, 'invalid_cursor');
-        const events = this.db.prepare("SELECT json_remove(json,'$.externalEvidence','$.externalCoverage') AS json FROM intelligence_events WHERE cursor>? ORDER BY cursor LIMIT ?").all(after, limit).map(row => JSON.parse(String(row.json)));
+        const scope = this.missionStreamScope(), legacyMissions = new Map<string, Mission | null>();
+        const rows = this.db.prepare(`SELECT e.dedupe, json_remove(e.json,'$.externalEvidence','$.externalCoverage') AS json
+          FROM intelligence_events e WHERE e.cursor>? AND (json_extract(e.json,'$.type') NOT GLOB 'vela.mission/*'
+            OR EXISTS (SELECT 1 FROM vela_missions m WHERE m.id=json_extract(e.json,'$.correlationId')
+              AND json_extract(m.json,'$.scope.workspaceId')=? AND json_extract(m.json,'$.scope.projectId') IS ?))
+          ORDER BY e.cursor LIMIT ?`).all(after, scope?.workspaceId ?? null, scope?.projectId ?? null, limit);
+        const events = rows.flatMap(row => {
+          const event = JSON.parse(String(row.json)) as StreamEvent;
+          if (!event.type.startsWith('vela.mission/')) return [event];
+          const projected = this.projectReplayedMissionEvent(event, String(row.dedupe), scope, legacyMissions);
+          return projected ? [projected] : [];
+        });
         const earliest = this.db.prepare('SELECT min(cursor) AS value FROM intelligence_events').get()!.value as number | null;
         const latest = Number(this.db.prepare('SELECT latest FROM integration_meta WHERE id=1').get()!.latest);
         return { events, earliest, latest, truncated: earliest !== null && after < earliest - 1 } as any;

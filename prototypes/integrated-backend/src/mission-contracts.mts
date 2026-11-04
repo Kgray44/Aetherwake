@@ -123,6 +123,7 @@ export interface Mission {
 }
 export interface MissionProjection extends Mission {
   outcome: 'queued' | 'running' | 'paused' | 'cancelling' | 'cancelled' | 'blocked' | 'failed' | 'uncertain' | 'verified';
+  answer?: string[];
   waits: Record<string, 'dependencies' | 'capacity' | 'resource-conflict' | 'resource-pressure'>;
   profile: {
     elapsedMs: number;

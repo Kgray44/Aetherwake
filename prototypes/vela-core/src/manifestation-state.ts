@@ -61,6 +61,16 @@ export function projectVelaManifestation(state: VelaManifestationSource | null, 
   const ordered = [...requests.values()], requiredRequests = ordered.filter(request => { const plan = plans.get(request.planId ?? ''); return plan && requiresVelaPlanAttention(plan.state); });
   const requiredPlanIds = requiredRequests.map(request => request.planId!);
   const selected = selection.selectedRequestId === null ? undefined : requests.get(selection.selectedRequestId);
+  const latestRequest = ordered.at(-1), latestMessage = conversation.messages.at(-1);
+  if (!requiredPlanIds.length && !selected &&
+    (!latestRequest || !['checking', 'planning', 'awaiting-review', 'native-ready'].includes(latestRequest.state)) &&
+    latestMessage?.missionReport && messages.get(latestMessage.id) === latestMessage &&
+    latestMessage.role === 'assistant' && latestMessage.source === 'vela-native' &&
+    latestMessage.classification === 'observed' && latestMessage.responseKind === 'answer' &&
+    latestMessage.requestId === undefined && latestMessage.planId === undefined &&
+    latestMessage.providerId === undefined && latestMessage.providerContribution === undefined) {
+    return { ...empty(), kind: 'insight', currentMessageId: latestMessage.id, selectionReason: 'latest' };
+  }
   const request = requiredRequests.at(-1) ?? selected ?? ordered.at(-1); if (!request) return empty();
   const mustRemain = requiredRequests.includes(request);
   if (!mustRemain && selection.dismissedRequestIds.includes(request.id)) return empty();

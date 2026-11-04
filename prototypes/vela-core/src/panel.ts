@@ -1,6 +1,6 @@
 import { LOCAL_FACT_LABELS } from './capabilities.ts';
 import { VELA_PROJECT_CHECK_LABELS } from './contracts.ts';
-import type { ResourceRef, VelaClient, VelaNativeAction, VelaState, VelaPlan, PlanStep, VelaPresentationState, VelaPresentationPatch } from './contracts.ts';
+import type { ResourceRef, VelaClient, VelaMessage, VelaNativeAction, VelaState, VelaPlan, PlanStep, VelaPresentationState, VelaPresentationPatch } from './contracts.ts';
 import { velaPanelStatus } from './panel-status.ts';
 import { projectVelaManifestation, type VelaManifestationState } from './manifestation-state.ts';
 import { summarizeSystemMemory } from './system-information.ts';
@@ -557,8 +557,14 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
       : route?.kind === 'project-check' ? 'Vela · Local project check'
       : route?.kind === 'composite' ? 'Vela · Native + Codex'
       : selectedRequest?.local ? 'Vela · Native'
+      : message?.missionReport ? 'Vela · Native mission'
       : projection.kind === 'insight' && message?.source === 'provider' ? providerName(message.providerId) + ' · contribution' : 'Vela';
-    if (signature !== responseSignature) { responseSignature = signature; manifestationBody.replaceChildren(); if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content)); }
+    if (signature !== responseSignature) {
+      responseSignature = signature; manifestationBody.replaceChildren();
+      if (content) manifestationBody.append(el('p', projection.kind === 'whisper' ? 'vela-manifestation-value' : undefined, content));
+      const evidence = message && missionEvidenceLink(message);
+      if (evidence) manifestationBody.append(evidence);
+    }
     manifestationBody.hidden = projection.kind === 'action' || !content;
     const why = route?.kind === 'conversational' && (route.nativeMetric || route.nativeLog) ? 'Vela shared the reviewed local evidence for analysis and can offer a separate Codex review.'
       : route?.reason === 'routine-answer' ? 'A conversational response can answer this request.'
@@ -824,20 +830,23 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
     developmentTimeline.disabled = activityTimeline.disabled || !githubRepository(repositoryInput.value);
   }
   function renderStatus(state: Pick<VelaState, 'requests' | 'plans' | 'receipts'>) { const recorded = velaPanelStatus(state); status.dataset.requestState = recorded.requestState; if (recorded.requestId) status.dataset.requestId = recorded.requestId; else delete status.dataset.requestId; if (recorded.planState) status.dataset.planState = recorded.planState; else delete status.dataset.planState; delete status.dataset.actionState; delete status.dataset.refreshState; status.textContent = recorded.message; status.hidden = recorded.requestState === 'idle'; }
+  function missionEvidenceLink(message: VelaMessage) {
+    const link = message.missionReport;
+    if (!link || !options.missions?.openReport) return;
+    const openEvidence = button('Open mission evidence', () => {
+      reveal('missions');
+      options.missions?.openReport?.(link.missionId);
+    });
+    openEvidence.dataset.missionReportLink = link.missionId;
+    return openEvidence;
+  }
   function renderConversation(state: VelaState) {
     const items = state.conversation?.messages.slice(-80) ?? [], target: HTMLElement[] = [];
     for (const message of items) { const signature = JSON.stringify(message), cached = messages.get(message.id); if (cached?.signature === signature) { target.push(cached.node); continue; }
       const entry = el('article', 'vela-core-message'); entry.dataset.messageId = message.id; entry.dataset.source = message.source;
       entry.append(el('strong', 'vela-core-message-author', message.source === 'provider' ? providerName(message.providerId) + ' · contribution' : message.role === 'user' ? 'You' : 'Vela'), el('p', undefined, message.content));
-      const link = message.missionReport;
-      if (link && options.missions?.openReport) {
-        const openEvidence = button('Open mission evidence', () => {
-          reveal('missions');
-          options.missions?.openReport?.(link.missionId);
-        });
-        openEvidence.dataset.missionReportLink = link.missionId;
-        entry.append(openEvidence);
-      }
+      const evidence = missionEvidenceLink(message);
+      if (evidence) entry.append(evidence);
       messages.set(message.id, { node: entry, signature }); target.push(entry);
     }
     for (const child of Array.from(conversation.children)) if (!target.includes(child as HTMLElement)) child.remove(); target.forEach((node, index) => { if (conversation.children[index] !== node) conversation.insertBefore(node, conversation.children[index] ?? null); });

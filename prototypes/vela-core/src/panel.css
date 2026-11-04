@@ -490,6 +490,13 @@
   align-items: end;
   gap: 8px;
 }
+.vela-mission-answer {
+  display: grid;
+  gap: 0.3rem;
+  padding-block: 0.55rem;
+  border-block-start: 1px solid currentColor;
+}
+.vela-mission-answer p { margin: 0; }
 .vela-missions-steps,
 .vela-missions-timeline {
   display: grid;
