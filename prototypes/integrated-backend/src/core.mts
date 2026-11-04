@@ -5,6 +5,8 @@ import { dirname, relative, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DesktopState } from './desktop.mts';
 import { MissionService } from './mission-service.mts';
+import { MissionWorkrooms } from './mission-workroom.mts';
+import { createMissionProjectCheck } from './mission-project-check.mts';
 import { nativeMissionExecutors, nativeMissionPlan, replanNativeMission } from './mission-native.mts';
 import { createSpecialistExecutor, specialistMissionPlan } from './mission-specialists.mts';
 import { canonicalMissionContextSource } from '../../vela-core/src/mission-context.mts';
@@ -194,8 +196,10 @@ export class BackendCore {
   private velaWorkflows = new Map<string, PendingVelaWorkflow>();
   private velaWorkflowClaims = new Set<string>();
   private missions: MissionService;
+  private missionWorkrooms: MissionWorkrooms;
   private missionExecutors: Readonly<Record<string, MissionExecutor>>;
   private missionSpecialistsInFlight = 0;
+  private missionProjectCheckRunning = false;
   private velaProjectCheckReviews = new Map<string, PendingVelaProjectCheck>();
   private velaProjectCheckTask?: { id: string; task: Promise<VelaFileEditView | VelaRequest> };
   private velaGrants=new Map<string,{previewId:string;expiresAt:string;requestId?:string;consumed:boolean;planning?:CodexPlanningGrant;reviewDigest?:string}>();
@@ -288,14 +292,22 @@ export class BackendCore {
       this.db.exec(`CREATE TABLE IF NOT EXISTS vela_mission_provider_admissions(
         attempt_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, project_id TEXT, utc_day TEXT NOT NULL) STRICT;
         CREATE INDEX IF NOT EXISTS vela_mission_provider_admission_day ON vela_mission_provider_admissions(utc_day);`);
-      this.missionExecutors = { ...nativeMissionExecutors, 'chatgpt.specialist': createSpecialistExecutor({
+      this.missionExecutors = { ...nativeMissionExecutors, 'codex.project-check': createMissionProjectCheck({
+        runner: this.port.projectChecks, privateRoot: this.privateRoot, digest: planningDigest,
+        lease: () => {
+          if (this.closed || this.active || this.velaProjectCheckTask || this.velaMemoryFallback || this.missionProjectCheckRunning) return null;
+          this.missionProjectCheckRunning = true;
+          return () => { this.missionProjectCheckRunning = false; };
+        },
+      }), 'chatgpt.specialist': createSpecialistExecutor({
         available: (scope, task) => this.missionSpecialistAvailable(scope, task),
         turn: input => this.runMissionSpecialist(input),
       }) };
       this.missions = new MissionService({
         db: this.db, atomic: work => this.kernel.withTransaction(work),
         authorized: scope => this.missionScopeAllowed(scope),
-        executors: this.missionExecutors, laneLimit: lane => lane === CHATGPT_PLAN_PROVIDER && this.active?.providerId === lane ? 1 : 2,
+        executors: this.missionExecutors, laneLimit: lane => lane === 'codex-local-check' ||
+          lane === CHATGPT_PLAN_PROVIDER && this.active?.providerId === lane ? 1 : 2,
         underPressure: () => freemem() < 512 * 1024 * 1024,
         replan: replanNativeMission,
         contextSource: (_mission, task) => task.executor === 'inspect.workspace-notes' ?
@@ -307,6 +319,18 @@ export class BackendCore {
             providerId: 'aerynth-native', detached: true, correlationId: mission.id, nativeEventId: event.attemptId,
             payload: { redacted: true, taskId: event.taskId },
           }),
+      });
+      this.missionWorkrooms = new MissionWorkrooms({
+        library: this.library, missions: this.missions, atomic: work => this.atomic(work),
+        writable: () => !this.closed && !this.active,
+        currentScope: () => {
+          const { currentWorkspaceId: workspaceId, currentProjectId: projectId } = this.velaContext();
+          ensure(workspaceId, 'mission_workspace_required'); return { workspaceId, projectId };
+        },
+        projectVersion: id => {
+          const row = this.db.prepare("SELECT version FROM projects WHERE id=? AND state='active'").get(id);
+          return row ? Number(row.version) : undefined;
+        },
       });
       this.record('stream/reopened', 'inferred');
     } catch (error) { this.kernel.close(); throw error; }
@@ -358,6 +382,7 @@ export class BackendCore {
       providerId: CHATGPT_PLAN_PROVIDER, assistant: 'ordinary', model: assigned.model, instructions: assigned.instructions,
       messages: [{ role: 'user', content: context.context.payload.missionObjective }], contextDigest: context.context.manifest.payloadDigest,
       ...(assigned.effort ? { reasoningEffort: assigned.effort } : {}),
+      ...(assigned.webSearch ? { webSearch: true } : {}),
     };
     const prepared = prepareResponsesTurn(turn, 8192).review;
     const fence = () => {
@@ -407,7 +432,16 @@ export class BackendCore {
       return result;
     } finally { this.missionSpecialistsInFlight--; }
   }
-  private missionCommand(request: MissionRequest, reviewed = false): MissionResponse {
+  private async missionCheckReview(paths: string[]): Promise<CommandMap['missionCheckReview']['output']> {
+    const runner = this.port.projectChecks;
+    ensure(runner && !this.active && !this.velaProjectCheckTask && !this.missionProjectCheckRunning, 'mission_project_check_unavailable');
+    const plan = planVelaProjectCheck(undefined, 'node-test', paths, this.privateRoot);
+    await this.port.connect();
+    ensure(await runner.ready(), 'mission_project_check_unavailable');
+    return { cwd: plan.cwd, argv: plan.argv, head: plan.head, digest: planningDigest(plan) };
+  }
+  private missionCommand(request: MissionRequest, reviewed = false,
+    approvedProjectCheck?: CommandMap['missionStartReviewed']['input']['approvedProjectCheck']): MissionResponse | Promise<MissionResponse> {
     ensure(request && Object.keys(request).length === 2 && request.input &&
       typeof request.input === 'object' && !Array.isArray(request.input), 'invalid_mission_command');
     const { currentWorkspaceId: workspaceId, currentProjectId: projectId } = this.velaContext();
@@ -427,13 +461,21 @@ export class BackendCore {
         ensure(plan && this.missionScopeAllowed(scope), 'mission_scope_or_plan_unavailable');
         const fingerprint = planningDigest(plan);
         const remote = plan.tasks.filter(task => task.executor === 'chatgpt.specialist');
+        const projectCheck = plan.tasks.find(task => task.executor === 'codex.project-check');
         const selected = remote[0]?.specialist;
         if (request.name === 'preview') return { fingerprint, plan,
           executors: plan.tasks.map(task => ({ id: task.id, available: this.missionExecutors[task.executor].available(scope, task) })),
+          ...(projectCheck ? { localReview: { kind: 'node-test', maxFiles: 4 } as const } : {}),
           ...(remote.length ? { externalReview: { provider: 'ChatGPT plan', model: selected?.model ?? 'Unavailable',
             effort: selected?.effort, calls: remote.length } } : {}) };
         ensure(request.input.fingerprint === fingerprint, 'mission_preview_changed');
         ensure(!remote.length || reviewed && remote.every(task => this.missionSpecialistAvailable(scope, task)), 'mission_native_review_or_connection_required');
+        if (projectCheck) {
+          ensure(reviewed && approvedProjectCheck && this.port.projectChecks, 'mission_project_check_review_required');
+          const checked = planVelaProjectCheck(undefined, 'node-test', approvedProjectCheck.paths, this.privateRoot);
+          ensure(planningDigest(checked) === approvedProjectCheck.digest, 'mission_project_check_scope_changed');
+          projectCheck.projectCheck = { paths: [...approvedProjectCheck.paths], digest: approvedProjectCheck.digest };
+        }
         return this.missions.create(request.input.requestId, plan);
       }
       case 'list':
@@ -442,6 +484,12 @@ export class BackendCore {
       case 'read':
         ensure(Object.keys(request.input).length === 1, 'invalid_mission_command');
         return this.missions.read(request.input.id, scope);
+      case 'workroom-preview':
+        ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
+        return this.missionWorkrooms.preview(request.input.id);
+      case 'workroom-apply':
+        ensure(Object.keys(request.input).length === 2 && identifier(request.input.id) && identifier(request.input.reviewId), 'invalid_mission_command');
+        return this.missionWorkrooms.apply(request.input.id, request.input.reviewId);
       case 'control':
         ensure(Object.keys(request.input).length === 3, 'invalid_mission_command');
         return this.missions.control(request.input.id, scope, request.input.revision, request.input.control);
@@ -1379,7 +1427,7 @@ export class BackendCore {
     return { requestId, reviewId, expiresAt, files };
   }
   private applyVelaFileEdit(input: CommandMap['velaFileEditApply']['input'], showChanges = false): VelaFileEditView {
-    ensure(!this.velaProjectCheckTask, 'vela_project_check_busy');
+    ensure(!this.velaProjectCheckTask && !this.missionProjectCheckRunning, 'vela_project_check_busy');
     const record = this.requireVelaFileEdit(input.requestId);
     const review = this.velaEditReviews.get(input.reviewId);
     ensure(review?.requestId === record.requestId && Date.parse(review.expiresAt) > Date.now() &&
@@ -1427,7 +1475,7 @@ export class BackendCore {
   }
   private reviewVelaProjectCheck(input: CommandMap['velaProjectCheckReview']['input'], expectedPlanDigest?: string): VelaProjectCheckReview {
     ensure(this.port.projectChecks, 'vela_project_check_unavailable');
-    ensure(!this.velaProjectCheckTask, 'vela_project_check_busy');
+    ensure(!this.velaProjectCheckTask && !this.missionProjectCheckRunning, 'vela_project_check_busy');
     const record = this.requireVelaFileEdit(input.requestId);
     const plan = planVelaProjectCheck(record, input.kind, input.paths, this.privateRoot);
     ensure(expectedPlanDigest === undefined || expectedPlanDigest === planningDigest(plan), 'vela_workflow_scope_changed');
@@ -1446,7 +1494,7 @@ export class BackendCore {
     return { routing, routingStamp: this.velaRoutingSettingsStamp(profiles), scopeStamp: this.velaEditScopeStamp() };
   }
   private reviewVelaStandaloneCheck(input: CommandMap['velaStandaloneCheckReview']['input']): VelaProjectCheckReview<null> {
-    ensure(!this.velaProjectCheckTask, 'vela_project_check_busy');
+    ensure(!this.velaProjectCheckTask && !this.missionProjectCheckRunning, 'vela_project_check_busy');
     ensure(typeof input?.intent === 'string' && input.intent.length <= 16000, 'invalid_vela_intent');
     const kind = standaloneVelaProjectCheck(input.intent);
     ensure(kind, 'vela_project_check_invalid');
@@ -1472,7 +1520,7 @@ export class BackendCore {
   private runVelaProjectCheck(requestId: string | null, reviewId: string) {
     const approval = this.velaProjectCheckReviews.get(reviewId);
     ensure(approval?.review.requestId === requestId && Date.parse(approval.review.expiresAt) > Date.now(), 'vela_project_check_review_required');
-    ensure(!this.velaProjectCheckTask, 'vela_project_check_busy');
+    ensure(!this.velaProjectCheckTask && !this.missionProjectCheckRunning, 'vela_project_check_busy');
     this.velaProjectCheckReviews.delete(reviewId);
     const task = this.performVelaProjectCheck(approval).finally(() => { this.velaProjectCheckTask = undefined; });
     this.velaProjectCheckTask = { id: reviewId, task };
@@ -1781,14 +1829,14 @@ export class BackendCore {
       return result;
     } catch { /* The fixed local fallback can only run in an available read-only sandbox. */ }
     const runner = this.port.projectChecks;
-    if (process.platform !== 'win32' || !runner || this.port.mock || this.closed || this.active || this.velaProjectCheckTask) return null;
+    if (process.platform !== 'win32' || !runner || this.port.mock || this.closed || this.active || this.velaProjectCheckTask || this.missionProjectCheckRunning) return null;
     this.velaMemoryFallback ??= this.readVelaMemoryViaCodex(runner).finally(() => { this.velaMemoryFallback = undefined; });
     return this.velaMemoryFallback;
   }
   private async readVelaMemoryViaCodex(runner: NonNullable<ProviderPort['projectChecks']>): Promise<SystemMemoryMeasurement | null> {
     try {
       await this.port.connect();
-      if (!await runner.ready() || this.closed || this.active || this.velaProjectCheckTask) return null;
+      if (!await runner.ready() || this.closed || this.active || this.velaProjectCheckTask || this.missionProjectCheckRunning) return null;
       const program = 'const os=require("node:os");process.stdout.write(JSON.stringify([os.totalmem(),os.freemem()]));';
       const result = await runner.execute([process.execPath, '-e', program], this.codexWorkingDirectory);
       if (result.exitCode !== 0 || Buffer.byteLength(result.stdout) > 128 || this.closed) return null;
@@ -3291,8 +3339,12 @@ export class BackendCore {
   async command<K extends keyof CommandMap>(name: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']> {
     ensure(!this.closed, 'backend_closed');
     const a: any = input;
-    if (name === 'missions') return this.missionCommand(a) as CommandMap[K]['output'];
-    if (name === 'missionStartReviewed') return this.missionCommand({ name: 'start', input: a }, true) as CommandMap[K]['output'];
+    if (name === 'missions') return await this.missionCommand(a) as CommandMap[K]['output'];
+    if (name === 'missionStartReviewed') {
+      const { approvedProjectCheck, ...request } = a as CommandMap['missionStartReviewed']['input'];
+      return await this.missionCommand({ name: 'start', input: request }, true, approvedProjectCheck) as CommandMap[K]['output'];
+    }
+    if (name === 'missionCheckReview') return await this.missionCheckReview(a?.paths) as CommandMap[K]['output'];
     // Targeted observed facts can respond during unrelated agent execution.
     // Their own strict schema cannot dispatch an action or a provider.
     if(name==='vela'&&a?.name==='presentation')return this.vela.presentation(a.input) as any;

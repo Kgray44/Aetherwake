@@ -6,7 +6,7 @@ import { join, relative, resolve } from 'node:path';
 import { test } from 'node:test';
 import { setTimeout as delay } from 'node:timers/promises';
 import { Backend } from '../src/service.mts';
-import type { MissionPreview, MissionProjection } from '../src/mission-contracts.mts';
+import type { MissionPreview, MissionProjection, MissionWorkroom, MissionWorkroomPreview } from '../src/mission-contracts.mts';
 
 test('canonical backend runs a native mission without inference, restores evidence and fences workspace scope', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'aerynth-mission-test-'));
@@ -50,6 +50,20 @@ test('canonical backend runs a native mission without inference, restores eviden
     backend = new Backend(options);
     await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId } });
     assert.deepEqual(await read(), mission);
+    const prior = await backend.call('desktop', { type: 'snapshot' });
+    const draft = await backend.call('missions', { name: 'workroom-preview', input: { id } }) as MissionWorkroomPreview;
+    assert.ok(draft.cards.some(card => card.kind === 'checklist'));
+    assert.equal((await backend.call('desktop', { type: 'snapshot' })).workspaces.length, prior.workspaces.length);
+    await assert.rejects(backend.call('missions', { name: 'workroom-apply', input: { id, reviewId: 'wrong' } }),
+      /mission_workroom_review_required/);
+    const room = await backend.call('missions', { name: 'workroom-apply', input: { id, reviewId: draft.reviewId } }) as MissionWorkroom;
+    await backend.call('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: room.workspaceId } });
+    const projected = await read();
+    assert.equal(projected.scope.workspaceId, workspaceId);
+    assert.deepEqual(projected.workroom, room);
+    assert.deepEqual(projected.tasks, mission.tasks);
+    assert.deepEqual(await backend.call('missions', { name: 'workroom-apply', input: { id, reviewId: draft.reviewId } }), room);
+    assert.equal((await backend.call('desktop', { type: 'snapshot' })).workspaces.length, prior.workspaces.length + 1);
   } finally {
     await backend.close();
     const target = resolve(directory);

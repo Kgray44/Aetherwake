@@ -92,6 +92,44 @@ test('reviewed mission runs two isolated stateless specialists concurrently and 
   } finally { release(); await f.close(); }
 });
 
+test('a research mission authorizes web search only for the source specialist and requires provider citation evidence', async () => {
+  const f = fixture();
+  try {
+    f.setListedModels([documentedModel]);
+    await f.core.command('ordinaryProviderCheck', {});
+    const d = await f.core.command('desktop', { type: 'createWorkspace', title: 'Synthetic research room', projectId: null });
+    await f.core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: d.workspaces[0].id } });
+    const objective = 'Research event loop instrumentation with two independent specialists';
+    const preview = await f.core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+    assert.equal(preview.plan.tasks.filter(t => t.specialist?.webSearch).length, 1);
+    const text = JSON.stringify({ observations: ['Trace the event loop with a controlled workload', 'Use stable timing sources'] });
+    const result = (id: string, withCitation: boolean) => () => sse([
+      { type: 'response.created', response: { id } },
+      { type: 'response.output_text.delta', delta: text },
+      { type: 'response.completed', response: { id, status: 'completed', model: documentedModel.id, output: withCitation ? [
+        { type: 'web_search_call', status: 'completed' },
+        { type: 'message', role: 'assistant', content: [{ type: 'output_text', text, annotations: [
+          { type: 'url_citation', start_index: 18, end_index: 33, url: 'https://example.org/measurement', title: 'Synthetic source' },
+        ] }] },
+      ] : [] } },
+    ]);
+    f.responses.push(result('resp_research', true), result('resp_review', false));
+    const run = await f.core.command('missionStartReviewed', { objective, requestId: randomUUID(), fingerprint: preview.fingerprint }) as MissionProjection;
+    const end = performance.now() + 5000;
+    let mission: MissionProjection;
+    do {
+      mission = await f.core.command('missions', { name: 'read', input: { id: run.id } }) as MissionProjection;
+      if (mission.outcome !== 'queued' && mission.outcome !== 'running') break;
+      await wait(25);
+    } while (performance.now() < end);
+    assert.equal(mission.outcome, 'verified');
+    const researcher = mission.tasks.find(t => t.specialist?.webSearch)!;
+    assert.deepEqual((researcher.attempts[0].evidence!.value as { citations: string[] }).citations, ['https://example.org/measurement']);
+    assert.equal(f.requests.filter(req => req.tool_choice === 'required').length, 1);
+    assert.equal(mission.profile.reportedTotalTokens, null);
+  } finally { await f.close(); }
+});
+
 test('Compare faster answers only when I turn it on, and keep my model choice', async () => {
   const f = fixture();
   try {

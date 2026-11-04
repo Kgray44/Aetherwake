@@ -22,6 +22,7 @@ export interface MissionTaskPlan {
   criterion: string;
   timeoutMs: number;
   maxAttempts: number;
+  projectCheck?: { paths: string[]; digest: string };
   specialist?: {
     role: string;
     instructions: string;
@@ -30,6 +31,7 @@ export interface MissionTaskPlan {
     effort?: ReasoningEffort;
     connectionVersion: number;
     settingsStamp: string;
+    webSearch?: true;
     profile?: { id: string; profileVersion: number; resourceVersion: number; title: string; instructions: string };
   };
 }
@@ -74,7 +76,7 @@ export interface MissionTask extends MissionTaskPlan {
 export interface MissionEvent {
   seq: number;
   time: string;
-  kind: 'created' | 'revised' | 'control' | 'started' | 'settled' | 'recovered';
+  kind: 'created' | 'revised' | 'control' | 'started' | 'settled' | 'recovered' | 'workroom';
   taskId?: string;
   attemptId?: string;
   detail?: string;
@@ -91,6 +93,7 @@ export interface Mission {
   planRevision: number;
   concurrency: number;
   disposition: 'active' | 'paused' | 'cancelled';
+  workroom?: MissionWorkroom;
   tasks: MissionTask[];
   events: MissionEvent[];
 }
@@ -120,14 +123,31 @@ export type MissionRequest =
   | { name: 'start'; input: { objective: string; fingerprint: string; requestId: string; agentProfileId?: string } }
   | { name: 'list'; input: Record<string, never> }
   | { name: 'read'; input: { id: string } }
+  | { name: 'workroom-preview'; input: { id: string } }
+  | { name: 'workroom-apply'; input: { id: string; reviewId: string } }
   | { name: 'control'; input: { id: string; revision: number; control: MissionControl } };
 export interface MissionPreview {
   fingerprint: string;
   plan: MissionPlan;
   executors: { id: string; available: boolean }[];
   externalReview?: { provider: string; model: string; effort?: ReasoningEffort; calls: number };
+  localReview?: { kind: 'node-test'; maxFiles: number };
 }
-export type MissionResponse = MissionPreview | MissionSummary[] | MissionProjection | null;
+export interface MissionWorkroom {
+  kind: 'workroom';
+  workspaceId: string;
+  title: string;
+  templateId: string;
+}
+export interface MissionWorkroomPreview {
+  kind: 'workroom-preview';
+  missionId: string;
+  reviewId: string;
+  title: string;
+  expiresAt: string;
+  cards: { title: string; kind: string; mode: 'new' | 'reference' }[];
+}
+export type MissionResponse = MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomPreview | null;
 
 export interface MissionExecutionContext {
   missionId: string;

@@ -240,6 +240,26 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     }
     receipt.rendered = { ...rendered, timeline: rows };
     await capture("02-verified-mission-timeline");
+    await click(RECORD + ' [data-mission-focus="preview-workroom"]');
+    await wait("Workroom preview in Vela", () => js(
+      `document.querySelector(${quote(RECORD + ' [data-mission-focus="apply-workroom"]')})?.textContent === 'Create linked workroom'`,
+    ));
+    assert.equal((await desktop()).workspaces.length, 1, "workroom_preview_changed_canonical_state");
+    await click(RECORD + ' [data-mission-focus="apply-workroom"]');
+    const workroom = await wait("Canonical mission workroom is active", async () => {
+      const state = await desktop(), room = state.workspaces.find(item => item.title === "Backend performance workroom");
+      if (!room || state.activeWorkspaceId !== room.id) return null;
+      const projection = await read(rendered.id);
+      return projection.workroom?.workspaceId === room.id && {
+        id: room.id, sourceMissionId: projection.id, outcome: projection.outcome,
+        blocks: state.blocks.map(block => block.resource_id).filter(Boolean),
+      };
+    });
+    assert.equal(workroom.outcome, "verified");
+    assert(workroom.blocks.length >= 2, "expected_functional_workroom_blocks");
+    assert.equal((await list())[0].id, rendered.id);
+    receipt.workroom = workroom;
+    await capture("03-linked-mission-workroom");
     const providerAfter = await rpc("providerActivity", {});
     assert.equal(providerAfter.codexConnections, providerBefore.codexConnections);
     assert.equal(providerAfter.providerRequests, providerBefore.providerRequests);

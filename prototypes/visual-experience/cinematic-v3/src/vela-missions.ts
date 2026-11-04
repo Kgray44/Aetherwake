@@ -7,6 +7,7 @@ import type {
   MissionResponse,
   MissionScope,
   MissionSummary,
+  MissionWorkroomPreview,
 } from "../../../integrated-backend/src/mission-contracts.mts";
 
 const stateLabel: Record<MissionProjection["outcome"], string> = {
@@ -33,6 +34,7 @@ const eventLabel = {
   started: "Attempt started",
   settled: "Attempt settled",
   recovered: "Recovered from journal",
+  workroom: "Workroom created",
 } as const;
 const priorities = ["Lowest", "Lower", "Normal", "Higher", "Highest"];
 const sameScope = (left: MissionScope | null, right: MissionScope | null) =>
@@ -64,6 +66,7 @@ export function missionTaskControls(
 export function createVelaMissionView(
   doc: Document,
   command: (request: MissionRequest) => Promise<MissionResponse>,
+  openWorkspace?: (id: string) => Promise<void>,
 ) {
   function el<K extends keyof HTMLElementTagNameMap>(
     tag: K,
@@ -98,6 +101,7 @@ export function createVelaMissionView(
     agentProfileId?: string;
     onStarted: () => void;
   } | null = null;
+  let workroomReview: MissionWorkroomPreview | null = null;
   let commandPending = false;
   const staged = new Map<string, string>();
 
@@ -117,7 +121,9 @@ export function createVelaMissionView(
       mission_native_review_or_connection_required:
         "The specialist connection or reviewed scope changed. Submit the objective again.",
       mission_review_declined:
-        "Specialist review was cancelled. Your draft is still here.",
+        "The review was cancelled. Your draft is still here.",
+      mission_project_check_unavailable:
+        "The installed Codex read-only sandbox is unavailable.",
     };
     error.textContent =
       descriptions[code] ??
@@ -167,7 +173,8 @@ export function createVelaMissionView(
     value: MissionResponse,
     expected: MissionScope | null,
   ): value is MissionProjection {
-    return !!value && "contract" in value && sameScope(value.scope, expected);
+    return !!value && "contract" in value && (sameScope(value.scope, expected) ||
+      value.workroom?.workspaceId === expected?.workspaceId && value.scope.projectId === expected?.projectId);
   }
   function refresh() {
     if (!visible || !scope || doc.hidden) return;
@@ -218,12 +225,40 @@ export function createVelaMissionView(
   function choose(id: string) {
     if (selectedId === id) return;
     review = null;
+    workroomReview = null;
     selectedId = id;
     mission = null;
     staged.clear();
     error.hidden = true;
     render();
     refresh();
+  }
+  async function planWorkroom(id: string) {
+    if (commandPending || !visible || id !== selectedId) return;
+    const generation = epoch;
+    commandPending = true;
+    try {
+      const value = await command({ name: "workroom-preview", input: { id } });
+      if (epoch !== generation || id !== selectedId) return;
+      if (!value || !("kind" in value) || value.kind !== "workroom-preview") throw Error("mission_workroom_unavailable");
+      workroomReview = value;
+      error.hidden = true;
+    } catch (cause) { if (epoch === generation) showError(cause); }
+    finally { commandPending = false; if (epoch === generation) render(); }
+  }
+  async function applyWorkroom(review: MissionWorkroomPreview) {
+    if (commandPending || !visible || review.missionId !== selectedId) return;
+    const generation = epoch;
+    commandPending = true;
+    try {
+      const value = await command({ name: "workroom-apply", input: { id: review.missionId, reviewId: review.reviewId } });
+      if (epoch !== generation || review.missionId !== selectedId) return;
+      if (!value || !("kind" in value) || value.kind !== "workroom") throw Error("mission_workroom_unavailable");
+      workroomReview = null;
+      error.hidden = true;
+      await openWorkspace?.(value.workspaceId);
+    } catch (cause) { if (epoch === generation) showError(cause); }
+    finally { commandPending = false; if (epoch === generation) { render(); refresh(); } }
   }
   async function mutate(
     request: Extract<MissionRequest, { name: "start" | "control" }>,
@@ -284,12 +319,14 @@ export function createVelaMissionView(
   function renderPreview() {
     if (!review) return null;
     const { preview, requestId, agentProfileId } = review,
-      { plan, executors, externalReview } = preview;
+      { plan, executors, externalReview, localReview } = preview;
     const section = el("section", "vela-core-plan vela-mission-preview");
     section.append(
       el("h3", undefined, "Review mission"),
       el("p", undefined, plan.objective),
     );
+    if (localReview) section.append(el("p", "vela-core-meta",
+      "Start opens a native picker for up to four tracked Node tests. You will review the exact checkout and command before it runs."));
     section.append(
       externalReview
         ? el(
@@ -412,6 +449,24 @@ export function createVelaMissionView(
         `${stateLabel[current.outcome]} · plan v${current.planRevision} · journal revision ${current.revision}`,
       ),
     );
+    if (current.workroom && scope?.workspaceId !== current.workroom.workspaceId && openWorkspace) {
+      section.append(button("Open mission workroom", "open-workroom",
+        () => { void openWorkspace(current.workroom!.workspaceId).catch(showError); }));
+    } else if (current.workroom) {
+      section.append(el("p", "vela-core-meta", "This workspace is linked to the recorded mission."));
+    } else if (["verified", "failed", "blocked", "cancelled", "uncertain"].includes(current.outcome)) {
+      const review = workroomReview?.missionId === current.id ? workroomReview : null;
+      if (!review) section.append(button("Preview mission workroom", "preview-workroom", () => { void planWorkroom(current.id); }));
+      else {
+        const draft = el("div", "vela-core-plan"), cards = el("ul");
+        for (const card of review.cards) cards.append(el("li", undefined, `${card.title} · ${card.mode === "reference" ? "Reuse" : "New"} ${card.kind}`));
+        draft.append(el("strong", undefined, review.title), cards,
+          el("p", "vela-core-meta", "Creates a workspace in the same project and saves its reusable template."),
+          button("Create linked workroom", "apply-workroom", () => { void applyWorkroom(review); }),
+          button("Discard preview", "discard-workroom", () => { workroomReview = null; render(); }));
+        section.append(draft);
+      }
+    }
     const terminal =
       current.disposition === "cancelled" || current.outcome === "verified";
     if (!terminal) {
@@ -726,6 +781,7 @@ export function createVelaMissionView(
       scope = next;
       epoch++;
       review = null;
+      workroomReview = null;
       selectedId = null;
       mission = null;
       summaries = [];

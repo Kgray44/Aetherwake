@@ -14,8 +14,10 @@ flowchart LR
   Journal --> Scheduler["Fair bounded admission"]
   Scheduler --> Context["Scoped context compiler"]
   Context --> Native["Native measurements and static inspection"]
+  Context --> Codex["Reviewed tests in the<br/>read-only Codex sandbox"]
   Context --> Agents["Isolated stateless specialist requests"]
   Native --> Verify["Evidence checks and joins"]
+  Codex --> Verify
   Agents --> Verify
   Verify --> Journal
   Journal --> Panel["Missions: graph, timeline, evidence and controls"]
@@ -23,6 +25,7 @@ flowchart LR
   Library["Block Library"] --> Architect["Purpose and scoped resource metadata"]
   Architect --> Layout["Deterministic arrangement"]
   Layout --> Apply["Preview, validate and apply via TemplateService"]
+  Apply --> Workroom["Linked workroom and canonical mission journal"]
 ```
 
 The deterministic planner recognizes explicit host sampling and Aerynth backend
@@ -32,6 +35,13 @@ uses a real worker timer, host counters and a bounded scan of the shipped Core
 module. An observed timer outlier adds one follow-up measurement before the
 report without changing the original acceptance criteria. Counts of source
 call sites do not establish a measured bottleneck.
+
+The selected-tests route asks for a native file selection and displays the
+exact checkout, commit and argument vector. It uses the existing Codex App
+Server local command runner, with networking disabled and no inference. The
+worker rechecks the selected tracked files, checkout identity and sandbox
+availability at dispatch and validates the TAP result after execution. The
+profile records zero model calls for this lane.
 
 Mission rows are independent of conversation history and remain in the same
 database as projects, resources and layouts. Additive startup creates the
@@ -66,6 +76,10 @@ Specialists have separate attempt and response identities. They return
 attributed recommendations; verification of the report contract is distinct
 from verifying the recommendations. The reviewed specialist route does not
 transfer files, note content, measurement values or conversation history.
+An explicit research mission permits only the source specialist to use the
+existing hosted web search. That role must return provider-attributed HTTPS
+citations; its partner receives no tools. Citation presence is distinct from
+independent factual confirmation.
 
 The journal distinguishes native measurements, provider-reported usage and
 unknown usage. Mission metrics use recorded transitions and do not convert
@@ -78,3 +92,7 @@ from block constraints, and applies through the existing versioned template
 transaction. Placement changes retain existing layout history. Desktop
 template operations and mission execution both use the canonical services;
 the template planner does not create a second workspace store.
+From a settled mission, the user can review a workroom's proposed cards and
+create the workspace and its reusable template. The template apply and
+mission-to-workroom link share one transaction. The new workspace can read the
+same journal and evidence; it does not copy the mission or the original layout.

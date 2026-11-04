@@ -132,8 +132,10 @@ export function nativeMissionPlan(intent: string, scope: MissionScope): MissionP
   const text = intent.normalize('NFKC').toLowerCase().trim().replace(/^vela[,:]?\s+/u, '')
     .replace(/^(?:please\s+)?(?:run|start) (?:a )?mission to\s+/u, '').replace(/[.!?]+$/u, '');
   let ids: string[];
+  const check = /^run (?:the )?selected node(?:\.js)? tests and (?:measure|sample|check) cpu and ram(?: in parallel)?$/u.test(text);
   if (/^(?:investigate|profile|measure) (?:the )?aerynth backend(?:'s)? performance(?: using workspace notes)?$/u.test(text))
     ids = ['backend', 'cpu', 'ram', 'code', ...(text.endsWith('using workspace notes') ? ['notes'] : [])];
+  else if (check) ids = ['cpu', 'ram'];
   else {
     const match = /^(?:measure|sample|check) (?:the )?(?:host |system )?((?:cpu|gpu|ram|memory)(?:(?:,\s*(?:and\s+)?|\s+and\s+)(?:cpu|gpu|ram|memory)){1,2})(?: (?:utilization|usage))?(?: in parallel)?$/u.exec(text);
     if (!match) return null;
@@ -145,8 +147,11 @@ export function nativeMissionPlan(intent: string, scope: MissionScope): MissionP
     claims: [{ resource: probes[id].resource, mode: id === 'gpu' ? 'exclusive' : 'read' }],
     dependencies: [], maxAttempts: 2, timeoutMs: 6000,
   }));
-  tasks.push({ id: 'report', objective: 'Join the measured samples with provenance', executor: 'join.samples',
-    criterion: 'joined-samples', claims: [], dependencies: ids, maxAttempts: 2, timeoutMs: 1000 });
+  if (check) tasks.push({ id: 'project-tests', objective: 'Run the reviewed tracked Node tests in the Codex read-only sandbox',
+    executor: 'codex.project-check', criterion: 'project-tests-pass', dependencies: [],
+    claims: [{ resource: 'codex.project-check', mode: 'exclusive' }], maxAttempts: 1, timeoutMs: 35_000 });
+  tasks.push({ id: 'report', objective: check ? 'Join the reviewed test result and measured samples' : 'Join the measured samples with provenance',
+    executor: 'join.samples', criterion: 'joined-samples', claims: [], dependencies: tasks.map(task => task.id), maxAttempts: 2, timeoutMs: 1000 });
   return { objective: intent.trim(), scope, criteria: tasks.map(task => task.criterion), tasks };
 }
 

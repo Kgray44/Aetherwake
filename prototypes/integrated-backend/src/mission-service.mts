@@ -4,7 +4,7 @@ import { compileMissionContext, validateMissionContext, type MissionContextSourc
 import { ServiceError } from './contracts.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
   type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionProjection,
-  type MissionScope, type MissionTask, type MissionTaskPlan } from './mission-contracts.mts';
+  type MissionScope, type MissionTask, type MissionTaskPlan, type MissionWorkroom } from './mission-contracts.mts';
 
 export interface MissionServiceHost {
   db: DatabaseSync;
@@ -152,7 +152,8 @@ export class MissionService {
   }
   private requireOpen() { check(!this.closed && this.healthy, 'mission_scheduler_unavailable'); }
   private requireAccess(m: Mission, scope: MissionScope) {
-    check(sameScope(m.scope, scope) && this.host.authorized(scope), 'mission_not_found');
+    check((sameScope(m.scope, scope) || m.workroom?.workspaceId === scope.workspaceId && m.scope.projectId === scope.projectId) &&
+      this.host.authorized(scope), 'mission_not_found');
   }
   private capacity() {
     check(Number(this.host.db.prepare('SELECT count(*) AS n FROM vela_missions WHERE active=1').get()!.n) < L.active,
@@ -197,11 +198,22 @@ export class MissionService {
   }
   list(scope: MissionScope): Pick<MissionProjection, 'id' | 'objective' | 'outcome' | 'createdAt' | 'revision'>[] {
     check(this.host.authorized(scope), 'mission_scope_denied');
-    return this.host.db.prepare('SELECT json FROM vela_missions WHERE scope_key=? ORDER BY rowid DESC LIMIT ?')
-      .all(digest(scope), L.missions).map(row => {
+    return this.host.db.prepare(`SELECT json FROM vela_missions WHERE scope_key=?
+      OR (json_extract(json,'$.workroom.workspaceId')=? AND json_extract(json,'$.scope.projectId') IS ?)
+      ORDER BY rowid DESC LIMIT ?`)
+      .all(digest(scope), scope.workspaceId, scope.projectId, L.missions).map(row => {
         const { id, objective, outcome, createdAt, revision } = this.project(this.decode(row.json));
         return { id, objective, outcome, createdAt, revision };
       });
+  }
+  attachWorkroom(id: string, scope: MissionScope, workroom: MissionWorkroom) {
+    this.requireOpen();
+    return this.update(id, m => {
+      check(sameScope(m.scope, scope) && this.host.authorized(scope) && !m.workroom &&
+        this.host.authorized({ ...scope, workspaceId: workroom.workspaceId }), 'mission_workroom_scope_changed');
+      m.workroom = workroom;
+      this.event(m, { kind: 'workroom', detail: 'created' });
+    });
   }
 
   control(id: string, scope: MissionScope, revision: number, control: MissionControl): MissionProjection {

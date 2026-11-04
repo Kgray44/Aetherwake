@@ -58,20 +58,20 @@ this branch; **verified** is limited to the proof in the same row.
 | --- | --- | --- |
 | A · Native intelligence | **Verified for the measured route.** Electron ran real backend, CPU and memory observations plus a digest-bound static code scan; zero provider calls. Baseline native AIR covers individual facts. | Expand exact-source native checks for GPU availability across hardware. |
 | B · Adaptive answers | **Partial.** Existing AIR baseline and 352 offline matches; specialist route binds observed catalog controls and fails closed. | Repeat live deep/pinned and unavailable-provider desktop cases on the candidate; general bounded model-assisted intent interpretation. |
-| C · Parallel performance mission | **Verified for the native route.** Actual Electron Start, 106 ms measured overlap, ordered report join, actual static source digest. Real Responses protocol with synthetic transport observed two outstanding requests before releasing either. | Live specialist and external research evidence. |
+| C · Parallel performance mission | **Verified for the native route.** Actual Electron Start, 106 ms measured overlap, ordered report join, actual static source digest. The Responses protocol with synthetic transport observed two outstanding requests before releasing either. | Live specialist and hosted search evidence. |
 | D · Dependencies | **Verified in scheduler and native app.** No join before verified predecessors; graph validator rejects missing edges and cycles. | Extend proof to implementation and verification mutations once mission-owned write adapters exist. |
 | E · Concurrent missions | **Verified in controlled scheduler execution.** Two mission identities run together, exclusive claims serialize, outputs do not mix. | Sustained native load and UI responsiveness under simultaneous missions. |
-| F · Specialized execution | **Partial.** Separate ChatGPT-plan requests, role instructions, context manifests, response IDs and usage exercised via the existing protocol; native review is mandatory and the first role can be a version-bound Agent Library profile. | Live provider acceptance, reusable team persistence and Codex worker integration. |
+| F · Specialized execution | **Partial.** Separate ChatGPT-plan requests, role instructions, context manifests, response IDs, reported usage and a web-only research role exercised via the existing protocol. Native review is mandatory and the first role can be a version-bound Agent Library profile. A real Codex sandbox task ran a tracked Node test with zero model turns. | Live specialist acceptance, reusable team persistence and model-driven Codex delegation. |
 | G · Replanning | **Partial.** Versioned append with unchanged acceptance and dependency validation covered by tests. Native timer outlier policy can extend the report dependencies. | Verify evidence-triggered amendments and review on a broader class of objectives. |
 | H · Crash recovery | **Partial.** Committed in-flight external attempt restores as uncertain with no retry, checked against a fresh journal connection. The worker-loss case covers interrupted native work. | External reconciliation and a controlled native process loss during a real provider turn. |
-| I · Workspace construction | **Partial.** Real template request and canonical application path; Block Library tests prove scoped identity reuse, functional checklist, exact geometry, rollback and preview. | Native creation journey and complete mission workroom binding. |
+| I · Workspace construction | **Partial.** Block Library tests prove scoped identity reuse, functional checklist, exact geometry, rollback and preview. Electron confirmed the actual workroom preview and apply path and the same mission journal available from the new workspace. | Dedicated mission, team, checklist and timeline block bindings. |
 | J · Workspace adaptation | **Partial.** Planner geometry and manual layout undo/redo covered. | Monitor-specific automatic arrangements, explicit workspace creation undo and multiple real display checks. |
 | K · Token efficiency | **Partial.** Context receipts distinguish estimates and reported usage; no-provider workload completed with two workers using no model calls. | Matched, held-out live token, latency, quality and reliability comparison for missions. |
 | L · Resource pressure | **Partial.** Worker limits, claims and injected memory pressure/backpressure are tested; physical-memory floor used in Core. | GPU, disk, network and renderer measurements under sustained representative workloads. |
 | M · Permissions and isolation | **Partial.** Scoped mission reads, same-workspace Notes boundary, provider review, version fences, exclusive claims and no automatic external replay. | Mission file-write isolation, connector approval/revocation, and broader adversarial cases. |
 | N · Conversation continuity | **Partial.** Ordinary fallback and pin bypass tested; no change to existing canonical conversation and Codex session stores. | Persist mission-to-chat/task links and qualify native Connected Branches handoffs. |
 | O · Truthful completion | **Verified for scheduler behavior.** Failed independent verification blocks downstream work; provider output is labeled reported. | More domain-specific external verifiers. |
-| P · Visual integration | **Partial.** Actual Electron preview, explicit Start, mission status, task evidence and timeline on one Windows display. | Mission workspace blocks, broader keyboard and reduced-motion journeys, multiple display and scale configurations. |
+| P · Visual integration | **Partial.** Actual Electron preview, explicit Start, mission status, task evidence, timeline and workroom creation on one Windows display. | Dedicated mission blocks, broader keyboard and reduced-motion journeys, multiple display and scale configurations. |
 
 The paired native benchmark (`node prototypes/integrated-backend/src/mission-benchmark.mts`)
 used two warm-ups and six measured runs per setting with alternating order.
@@ -81,3 +81,10 @@ median reduction for this bounded workload using in-memory SQLite on Windows
 with Node 24.18.0. It used zero model calls. Reported tokens and paid cost
 are unavailable; the benchmark establishes neither a token-efficiency ratio
 nor performance under representative renderer or provider load.
+
+The broad acceptance runner passed 16 groups (1,910 tests) at the first
+integrated checkpoint. Later workroom and specialist changes were checked
+through focused integration and native journeys. The installed Codex test
+mission used a new synthetic Git checkout; one test passed, four attempts
+settled, peak workers were two, and the mission settled in 2,313 ms. The test
+file and the measured fixture were unchanged, and no model turn was made.

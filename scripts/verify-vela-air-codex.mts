@@ -2,17 +2,21 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { setTimeout as wait } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { BackendCore } from '../prototypes/integrated-backend/src/core.mts';
 import { admitVelaFileEdit, readVelaFileEditTarget } from '../prototypes/integrated-backend/src/vela-file-edit.mts';
 import type { VelaFileEditView, VelaLocalHost, VelaRequest, VelaState } from '../prototypes/vela-core/src/contracts.ts';
+import type { MissionPreview, MissionProjection } from '../prototypes/integrated-backend/src/mission-contracts.mts';
 
 // Explicit opt-in. Both checks use only fixed synthetic data in a new Git checkout.
 const option = process.argv.slice(2).join(' ');
 const localOnly = option === '--run-local-build-and-benchmark';
 const catalogOnly = option === '--run-one-catalog-request';
-assert(process.platform === 'win32' && (localOnly || catalogOnly || option === '--run-one-synthetic-turn'),
-  'Use --run-one-synthetic-turn, --run-one-catalog-request, or --run-local-build-and-benchmark on the Windows host.');
+const missionOnly = option === '--run-one-mission-check';
+assert(process.platform === 'win32' && (localOnly || catalogOnly || missionOnly || option === '--run-one-synthetic-turn'),
+  'Choose --run-one-synthetic-turn, --run-one-catalog-request, --run-one-mission-check, or --run-local-build-and-benchmark on Windows.');
 const runtime = fileURLToPath(new URL('../prototypes/integrated-backend/.runtime/', import.meta.url));
 admitVelaFileEdit(runtime);
 mkdirSync(runtime, { recursive: true });
@@ -27,7 +31,7 @@ writeFileSync(testFile, `import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 test('Did the count change to two?', () => {
-  assert.deepEqual(JSON.parse(readFileSync(new URL('./sample.json', import.meta.url), 'utf8')), { count: 2 });
+  assert.deepEqual(JSON.parse(readFileSync(new URL('./sample.json', import.meta.url), 'utf8')), { count: ${missionOnly ? 1 : 2} });
 });\n`, { flag: 'wx' });
 if (localOnly) {
   writeFileSync(buildFile, `import { readFileSync } from 'node:fs';
@@ -164,8 +168,41 @@ async function verifyCatalogRequest() {
   receipt.nativeEvidence = { executedModelTurns: 1, foundSyntheticNote: true, action: plan.steps[0].action.type };
 }
 
+async function verifyMissionCheck() {
+  receipt.stage = 'review tracked mission test';
+  const state = await core.command('desktop', { type: 'createWorkspace', title: 'Synthetic Codex mission review', projectId: null });
+  await core.command('desktop', { type: 'navigate', target: { kind: 'workspace', workspaceId: state.workspaces[0].id } });
+  const objective = 'Run selected Node tests and measure CPU and RAM';
+  const preview = await core.command('missions', { name: 'preview', input: { objective } }) as MissionPreview;
+  assert.equal(preview.localReview?.kind, 'node-test');
+  const request = { objective, fingerprint: preview.fingerprint, requestId: randomUUID() };
+  await assert.rejects(core.command('missions', { name: 'start', input: request }), /mission_project_check_review_required/);
+  const selected = await core.command('missionCheckReview', { paths: [testFile] });
+  await assert.rejects(core.command('missionStartReviewed', { ...request,
+    approvedProjectCheck: { paths: [testFile], digest: 'stale' } }), /mission_project_check_scope_changed/);
+  receipt.stage = 'run selected tests in actual sandbox';
+  const started = await core.command('missionStartReviewed', { ...request,
+    approvedProjectCheck: { paths: [testFile], digest: selected.digest } }) as MissionProjection;
+  let mission: MissionProjection;
+  const deadline = performance.now() + 35_000;
+  do {
+    mission = await core.command('missions', { name: 'read', input: { id: started.id } }) as MissionProjection;
+    if (!['queued', 'running'].includes(mission.outcome)) break;
+    await wait(50);
+  } while (performance.now() < deadline);
+  const check = mission.tasks.find(task => task.id === 'project-tests')!.attempts.at(-1);
+  receipt.mission = { outcome: mission.outcome, evidence: check?.evidence, profile: mission.profile };
+  assert.equal(mission.outcome, 'verified');
+  assert.equal(check?.evidence?.source, 'codex-app-server:read-only-command');
+  assert.equal((check?.evidence?.value as { testCount: number }).testCount, 1);
+  assert.equal((await core.command('providerActivity', {})).providerRequests, 0);
+  assert.equal(readFileSync(file, 'utf8'), original);
+  receipt.nativeEvidence = { executedModelTurns: 0, sandboxPassed: true };
+}
+
 try {
   if (localOnly) await verifyLocalChecks();
+  else if (missionOnly) await verifyMissionCheck();
   else if (catalogOnly) await verifyCatalogRequest();
   else await verifyModelEdit();
   receipt.stage = 'complete';

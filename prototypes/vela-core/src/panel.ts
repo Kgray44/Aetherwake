@@ -383,7 +383,8 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   }, revision = draftRevision, submittedView = ++viewRevision;
     const defaults = useAutomaticOnce ? undefined : current?.routingSettings?.effective;
     const agentProfileId = routingAgentSelection?.id;
-    const checkMission = options.missions && !selected.size && !chosenProviderId && !allowProvider.checked &&
+    const couldBeMission = /^\s*(?:vela[,:]?\s+)?(?:please\s+)?(?:run\s|start\s|investigate\s|profile\s|measure\s|sample\s|check\s|research\s)/iu.test(submitted.intent);
+    const checkMission = couldBeMission && options.missions && !selected.size && !chosenProviderId && !allowProvider.checked &&
       (!routeMode.value || routeMode.value === 'auto') && !routeModel.value && !routeEffort.value && !routeHistory.checked && !routeEscalation.checked &&
       !handoffSelection && !defaults?.providerId && !defaults?.model && !defaults?.reasoningEffort &&
       (!defaults?.mode || defaults.mode === 'auto');

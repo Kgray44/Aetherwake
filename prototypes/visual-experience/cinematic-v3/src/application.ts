@@ -274,6 +274,7 @@ export function installApplication(hooks: Hooks) {
   let velaPanel: ReturnType<typeof mountVelaPanel> | null = null;
   const velaMissions = createVelaMissionView(document, async (request) =>
     (await host.command!("missions", request)) as MissionResponse,
+    async workspaceId => { await run({ type: "navigate", target: { kind: "workspace", workspaceId } }); },
   );
   document.addEventListener("visibilitychange", velaMissions.observe);
   let velaOpen = false;
