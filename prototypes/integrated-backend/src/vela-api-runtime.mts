@@ -8,6 +8,10 @@ import { capabilitySchemaTool, CAPABILITY_SCHEMA_TOOL, type CapabilityCatalogSna
 import { VelaError } from '../../vela-core/src/capabilities.ts';
 import { VELA_API_CONFIGURATION_ID, type VelaApiConnection } from './vela-api-connection.mts';
 import type { ReasoningEffort } from '../../openai-provider/model-controls.ts';
+import {apiRunDiagnostics,type ApiRunDiagnostics} from './api-run-diagnostics.mts';
+import {abortable} from '../../openai-provider/common.mts';
+import {WEATHER_TOOL,WEATHER_TOOL_NAME,validWeatherQuery,type WeatherQuery} from './weather-tool.mts';
+import {validateWeatherData,type WeatherData} from './weather-data.mts';
 
 // Native code-reviewed controls, independent of catalog presence/entitlement.
 // https://developers.openai.com/api/docs/models/gpt-6-luna
@@ -20,6 +24,8 @@ export const VELA_API_RUNTIME_LIMITS = Object.freeze({ concurrent: 2, maxOutputT
 const digest = (value: string) => createHash('sha256').update(value).digest('hex');
 const check: (value: unknown, code: string) => asserts value = (value, code) => { if (!value) throw new VelaError(code); };
 export interface VelaApiUsageStatus { enabled: boolean; configurationVersion: number | null; maxOutputTokens: number; requestsPerDay: number; usedToday: number }
+export interface VelaApiRunReceipt extends ApiRunDiagnostics {executionId:string;bodyDigest:string;contextDigest:string;state:TurnResult['outcome']|'dispatching';responseId:string|null;elapsedMs:number|null}
+export interface VelaApiWeatherTool {run(input:WeatherQuery,signal:AbortSignal):Promise<WeatherData>}
 export interface VelaApiRuntimeTestServices { fetch: typeof fetch; voice?: {fetch:typeof fetch;acknowledgementMs?:number};wake?:import('./vela-wake-runtime.mts').VelaWakeTestServices }
 export interface VelaApiRuntimeOptions {
   db: DatabaseSync; transaction<T>(work: () => T): T; connection: VelaApiConnection;
@@ -35,6 +41,8 @@ export interface VelaApiRun {
   requestId: string; version: number; model: string; prompt: string; instruction?: string; contextDigest: string;
   reasoningEffort?: ReasoningEffort;
   catalog?: CapabilityCatalogSnapshot; outputSchema?: ApiJsonSchema;
+  /** Native, code-reviewed port only. Never enabled for mission workers. */
+  weatherTool?:VelaApiWeatherTool;
   /** Shares the canonical admission pool; never creates a second runtime or conversation. */
   lane?: 'mission-specialist';
   oneUse?: true;
@@ -54,11 +62,14 @@ export class VelaApiRuntime {
   static migrate(db: DatabaseSync) {
     check(db.isTransaction, 'api_storage_unavailable');
     db.exec(`CREATE TABLE IF NOT EXISTS vela_api_usage(id INTEGER PRIMARY KEY CHECK(id=1),configuration_version INTEGER NOT NULL,enabled INTEGER NOT NULL CHECK(enabled IN(0,1)),observed_at TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS vela_api_runs(execution_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,configuration_version INTEGER NOT NULL,utc_day TEXT NOT NULL,body_digest TEXT NOT NULL,context_digest TEXT NOT NULL,state TEXT NOT NULL,result_digest TEXT,response_id TEXT,usage_json TEXT,elapsed_ms INTEGER);
+      CREATE TABLE IF NOT EXISTS vela_api_runs(execution_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,configuration_version INTEGER NOT NULL,utc_day TEXT NOT NULL,body_digest TEXT NOT NULL,context_digest TEXT NOT NULL,state TEXT NOT NULL,result_digest TEXT,response_id TEXT,usage_json TEXT,elapsed_ms INTEGER,error_code TEXT,http_diagnostic_json TEXT);
       CREATE INDEX IF NOT EXISTS vela_api_runs_day ON vela_api_runs(utc_day);
       CREATE TABLE IF NOT EXISTS vela_api_tool_receipts(receipt_id TEXT PRIMARY KEY,execution_id TEXT NOT NULL,call_id TEXT NOT NULL,arguments_digest TEXT NOT NULL,output_digest TEXT NOT NULL,UNIQUE(execution_id,call_id));`);
-    // An interrupted transport has no confirmed outcome. No automatic replay.
-    db.prepare("UPDATE vela_api_runs SET state='unknown' WHERE state='dispatching'").run();
+    const columns=new Set(db.prepare('PRAGMA table_info(vela_api_runs)').all().map(row=>row.name));
+    if(!columns.has('error_code'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN error_code TEXT');
+    if(!columns.has('http_diagnostic_json'))db.exec('ALTER TABLE vela_api_runs ADD COLUMN http_diagnostic_json TEXT');
+    // An interrupted transport has no confirmed outcome. No automatic replay or invented remote failure.
+    db.prepare("UPDATE vela_api_runs SET state='unknown',error_code=COALESCE(error_code,'api_process_interrupted') WHERE state='dispatching'").run();
   }
   configurationVersion(): number | null {
     const row = this.options.db.prepare('SELECT version,enabled FROM openai_api_configuration WHERE configuration_id=?').get(VELA_API_CONFIGURATION_ID);
@@ -113,10 +124,15 @@ export class VelaApiRuntime {
       this.options.db.prepare('UPDATE vela_api_runs SET result_digest=? WHERE execution_id=?').run(digest(canonical),executionId);
     });
   }
-  receiptsForRequest(requestId: string) {
-    return this.options.db.prepare('SELECT execution_id AS executionId,body_digest AS bodyDigest,context_digest AS contextDigest,state,response_id AS responseId,elapsed_ms AS elapsedMs FROM vela_api_runs WHERE request_id=? ORDER BY rowid LIMIT 4').all(requestId);
+  receiptsForRequest(requestId: string):VelaApiRunReceipt[] {
+    return this.options.db.prepare('SELECT execution_id AS executionId,body_digest AS bodyDigest,context_digest AS contextDigest,state,response_id AS responseId,elapsed_ms AS elapsedMs,error_code,http_diagnostic_json FROM vela_api_runs WHERE request_id=? ORDER BY rowid LIMIT 4').all(requestId).map(row=>{
+      let httpDiagnostic:unknown;try{if(typeof row.http_diagnostic_json==='string'&&Buffer.byteLength(row.http_diagnostic_json)<=2048)httpDiagnostic=JSON.parse(row.http_diagnostic_json);}catch{}
+      const {error_code,http_diagnostic_json,...receipt}=row;
+      return {...receipt,...apiRunDiagnostics({errorCode:error_code,httpDiagnostic})} as unknown as VelaApiRunReceipt;
+    });
   }
   async run(input: VelaApiRun, signal: AbortSignal) {
+    check(!input.weatherTool||input.lane!=='mission-specialist','weather_tool_not_allowed_for_mission');
     check(this.running.size < VELA_API_RUNTIME_LIMITS.concurrent && !this.running.has(input.requestId) && !this.lifetime.signal.aborted, 'vela_api_busy');
     this.validate(input.version); input.validate();
     const reasoningEfforts = velaApiReasoningEfforts(input.model);
@@ -126,6 +142,7 @@ export class VelaApiRuntime {
     const receipts = new Map<string, ApiToolOutput>(), items: ApiResponseItem[] = [], fetched = new Set<string>();
     let continuation: ApiContinuation | undefined, calls = 0, final: { executionId: string; result: TurnResult; fetchedIds: string[] } | undefined;
     const definitions: ReviewedApiFunction[] = [];
+    if(input.weatherTool)definitions.push(WEATHER_TOOL);
     if (input.catalog) {
       const tool = capabilitySchemaTool(input.catalog.projection);
       const nativeParameters = structuredClone(tool.inputSchema);
@@ -185,8 +202,9 @@ export class VelaApiRuntime {
           } });
         const result = await transport.turn(turn, combined);
         if (admitted) this.options.transaction(() => {
-          this.options.db.prepare('UPDATE vela_api_runs SET state=?,result_digest=?,response_id=?,usage_json=?,elapsed_ms=? WHERE execution_id=?')
-            .run(result.outcome,result.outcome === 'completed' ? digest(result.partialText) : null,result.responseId ?? null,result.usage ? JSON.stringify(result.usage) : null,Math.round(performance.now()-started),executionId);
+          const diagnostic=apiRunDiagnostics(result);
+          this.options.db.prepare('UPDATE vela_api_runs SET state=?,result_digest=?,response_id=?,usage_json=?,elapsed_ms=?,error_code=?,http_diagnostic_json=? WHERE execution_id=?')
+            .run(result.outcome,result.outcome === 'completed' ? digest(result.partialText) : null,result.responseId ?? null,result.usage ? JSON.stringify(result.usage) : null,Math.round(performance.now()-started),diagnostic.errorCode??null,diagnostic.httpDiagnostic?JSON.stringify(diagnostic.httpDiagnostic):null,executionId);
           if (input.completed) input.completed(executionId,result);
           else this.options.observe?.completed(executionId,input.requestId,result,Math.round(performance.now()-started));
         });
@@ -194,20 +212,34 @@ export class VelaApiRuntime {
         if (result.outcome !== 'completed') return final;
         fence();
         if (!result.api?.toolCalls.length) return final;
-        fence(); check(input.catalog && result.responseId, 'unreviewed_api_function');
+        fence(); check(result.responseId, 'unreviewed_api_function');
         for (const call of result.api.toolCalls) {
-          check(++calls <= VELA_API_RUNTIME_LIMITS.discoveryCalls && call.name === CAPABILITY_SCHEMA_TOOL && call.executionId === executionId &&
+          check(++calls <= VELA_API_RUNTIME_LIMITS.discoveryCalls && call.executionId === executionId &&
             call.configurationVersion === input.version && call.contextDigest === input.contextDigest && !receipts.has(call.callId), 'api_tool_call_limit');
-          const query = JSON.parse(call.arguments);
-          check(query && typeof query === 'object' && !Array.isArray(query) && Object.keys(query).length === 2 &&
-            query.catalogDigest === input.catalog.projection.digest && Array.isArray(query.ids) && query.ids.length >= 1 && query.ids.length <= 4 &&
-            new Set(query.ids).size === query.ids.length && query.ids.every((id: unknown) => typeof id === 'string' && input.catalog!.descriptors.some(item => item.id === id)), 'invalid_capability_schema_query');
-          fence();
-          const output = JSON.stringify({ catalogDigest: input.catalog.projection.digest, descriptors: input.catalog.descriptors.filter(item => query.ids.includes(item.id)) });
+          let output:string;
+          if(call.name===WEATHER_TOOL_NAME){
+            check(input.weatherTool&&input.lane!=='mission-specialist','unreviewed_api_function');
+            check(Buffer.byteLength(call.arguments)<=1024,'invalid_weather_tool_arguments');
+            let query:unknown;try{query=JSON.parse(call.arguments);}catch{throw new VelaError('invalid_weather_tool_arguments');}
+            check(validWeatherQuery(query),'invalid_weather_tool_arguments');fence();
+            let data:WeatherData;
+            try{data=await abortable(input.weatherTool.run(query,combined),combined);}catch{fence();throw new VelaError('weather_tool_unavailable');}
+            fence();data=validateWeatherData(data);output=JSON.stringify(data);
+            check(Buffer.byteLength(output)<=8192,'weather_tool_output_budget_exceeded');
+          }else{
+            check(call.name===CAPABILITY_SCHEMA_TOOL&&input.catalog,'unreviewed_api_function');
+            const query = JSON.parse(call.arguments);
+            check(query && typeof query === 'object' && !Array.isArray(query) && Object.keys(query).length === 2 &&
+              query.catalogDigest === input.catalog.projection.digest && Array.isArray(query.ids) && query.ids.length >= 1 && query.ids.length <= 4 &&
+              new Set(query.ids).size === query.ids.length && query.ids.every((id: unknown) => typeof id === 'string' && input.catalog!.descriptors.some(item => item.id === id)), 'invalid_capability_schema_query');
+            fence();
+            output = JSON.stringify({ catalogDigest: input.catalog.projection.digest, descriptors: input.catalog.descriptors.filter(item => query.ids.includes(item.id)) });
+            query.ids.forEach((id:string)=>fetched.add(id));
+          }
           check(Buffer.byteLength(output) <= VELA_API_RUNTIME_LIMITS.toolBytes, 'capability_discovery_response_budget_exceeded');
           const receiptId = randomUUID(), receipt = { callId: call.callId, name: call.name, argumentsDigest: call.argumentsDigest, output, receiptId };
           this.options.transaction(() => { fence(); this.options.db.prepare('INSERT INTO vela_api_tool_receipts VALUES(?,?,?,?,?)').run(receiptId,executionId,call.callId,call.argumentsDigest,digest(output)); });
-          receipts.set(call.callId, receipt); query.ids.forEach((id: string) => fetched.add(id));
+          receipts.set(call.callId, receipt);
         }
         items.push(...result.api.outputItems);
         continuation = { sourceExecutionId: executionId, responseId: result.responseId, configurationVersion: input.version,
@@ -216,12 +248,12 @@ export class VelaApiRuntime {
       throw new VelaError('api_tool_call_limit');
     } finally { this.running.delete(input.requestId); }
   }
-  async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;onResult?(result:TurnResult):void;validate(): void }, signal: AbortSignal): Promise<unknown> {
+  async structuredProposal(input: { instruction: string; payload: unknown; schema: ApiJsonSchema; requestId: string; model?:string;reasoningEffort?:ReasoningEffort;weatherTool?:VelaApiWeatherTool;onResult?(result:TurnResult):void;validate(): void }, signal: AbortSignal): Promise<unknown> {
     const version = this.configurationVersion(); check(version !== null, 'api_configuration_disconnected');
     const model=input.model??'gpt-6-luna',models = await this.models(version); check(models.includes(model), 'vela_api_default_model_unavailable');
     const prompt = JSON.stringify(input.payload); check(Buffer.byteLength(prompt) <= 32768, 'context_budget_exceeded');
     const { result } = await this.run({ requestId: input.requestId, version, model, prompt,
-      instruction: input.instruction, reasoningEffort:input.reasoningEffort??'low', contextDigest: digest(prompt), outputSchema: input.schema, validate: input.validate }, signal);
+      instruction: input.instruction, reasoningEffort:input.reasoningEffort??'low', contextDigest: digest(prompt), outputSchema: input.schema,...(input.weatherTool?{weatherTool:input.weatherTool}:{}),validate: input.validate }, signal);
     input.onResult?.(result);
     check(result.outcome === 'completed', result.errorCode ?? 'vela_api_proposal_failed');
     try{return JSON.parse(result.partialText);}catch{throw new VelaError('vela_api_proposal_invalid');}

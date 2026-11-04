@@ -57,7 +57,9 @@ import { VelaVoiceRuntime } from './vela-voice-runtime.mts';
 import type { LiveCanonicalContext, LiveDelegationBinding, LiveTranscriptFragment } from '../../openai-provider/live-contracts.mts';
 import { canonicalUserEvidence } from '../../vela-core/src/voice-evidence.ts';
 import { VELA_API_PROVIDER } from '../../openai-provider/api-connection-contracts.mts';
-import { readLocalWeather } from './local-weather.mts';
+import {readWeatherData,unavailableWeatherData} from './weather-data.mts';
+import {readLocalWeather} from './local-weather.mts';
+import {WEATHER_TOOL_NAME,type WeatherQuery} from './weather-tool.mts';
 import {WeatherPermissionStore} from './weather-permission.mts';
 import {systemBattery,type SystemBatteryMeasurement} from '../../vela-core/src/system-battery.ts';
 import { mediaDefaultGeometry } from '../../block-library/media-policy.ts';
@@ -84,7 +86,7 @@ import { canonicalRetrievalQuery, rankCanonicalRetrieval, HISTORY_RETRIEVAL_LIMI
 import { createSystemMemoryReader, readSystemMemory } from '../../vela-core/src/system-memory.mts';
 import { validateSystemMemoryMeasurement, type SystemMemoryMeasurement } from '../../vela-core/src/system-information.ts';
 import { readCpuUtilization, readGpuUtilization, type SystemUtilization } from '../../vela-core/src/system-utilization.mts';
-import { chooseConversationalModel, classifyVelaRoutingIntent, nativeConversationalWorkflow, nativeInspectionStage, nativeVelaFact, nativeVelaWeather, standaloneVelaProjectCheck, velaEditFollowUpCheck, velaEditIncludesLogInspection, velaFileEditSelection, type VelaRouteDecision, type VelaTurnRouting } from '../../vela-core/src/adaptive-routing.ts';
+import { chooseConversationalModel, classifyVelaRoutingIntent, nativeConversationalWorkflow, nativeInspectionStage, nativeVelaFact, standaloneVelaProjectCheck, velaEditFollowUpCheck, velaEditIncludesLogInspection, velaFileEditSelection, type VelaRouteDecision, type VelaTurnRouting } from '../../vela-core/src/adaptive-routing.ts';
 import { admitVelaFileEdit, maxEditFiles, observeVelaFileEdit, parseVelaFileEdit, publishVelaFile, readVelaFileEditTargets, readVelaInspectionTarget,
   stageVelaFile, upgradeVelaFileEdit, validateVelaFileEditBytes, validateVelaFileEditHead, validateVelaFileEditTarget, velaEditSiblings, verifyVelaReplacement,
   type VelaFileEditRecord, type VelaFileEditTarget, type VelaFileEditView } from './vela-file-edit.mts';
@@ -2152,14 +2154,18 @@ export class BackendCore {
     signal.addEventListener('abort', cancel, { once: true }); if (signal.aborted) cancel();
     this.ordinaryController = controller;
     const planning = preview.route.kind === 'app-planning';
+    const weatherTool=this.apiWeatherTool(input.requestId);
     const validate = () => {
       ensure(this.velaGrants.get(pair[0]) === grant && (grant.consumed || Date.parse(grant.expiresAt) > Date.now()), 'native_vela_grant_expired');
       this.validateFrozenVelaPreview(preview);
+      weatherTool?.validate();
     };
     const task = this.velaApiRuntime.run({ requestId: input.requestId, version: preview.connectionVersion, model: preview.route.model,
       ...(preview.route.effort ? { reasoningEffort: preview.route.effort } : {}),
-      prompt: preview.prompt, contextDigest: preview.signature, validate, ...(planning ? { catalog: preview.catalog,
-        instruction: 'Contribute a typed Aerynth action plan to Vela. Only the provided readonly schema tool is available. Fetch each action schema before proposing it. Return exactly the JSON envelope specified in the user payload. No action has run. Do not invent IDs or capabilities.' } : {}),
+      prompt: preview.prompt, contextDigest: preview.signature, validate,...(weatherTool?{weatherTool}:{}),
+      instruction:[...(weatherTool?['Interpret current-location weather questions using get_weather_forecast, including informal phrasing, humidity, weekdays and averages. Answer concisely from its returned forecast and coverage; never invent missing data or a complete mean for a partial period. Do not propose a readWeather plan. General weather explanations need no location lookup.']:[]),
+        ...(planning?['Contribute a typed Aerynth action plan to Vela. The reviewed tools retrieve data or schemas; no app mutation has run. Fetch each action schema before proposing it. Return exactly the JSON envelope specified in the user payload. Do not invent IDs or capabilities.']:[])].join(' '),
+      ...(planning?{catalog:preview.catalog}:{}),
       stage: (executionId, review) => {
         validate(); ensure(!this.active || this.active.state !== 'running' && this.active.state !== 'dispatching', 'execution_busy');
         const execution: Execution = { id: executionId, resourceId: input.conversationId, providerId: VELA_API_PROVIDER,
@@ -2184,7 +2190,7 @@ export class BackendCore {
           ensure(Buffer.byteLength(this.assistantText)+Buffer.byteLength(event.delta)<=65536,'provider_output_too_large'); this.assistantText += event.delta;
           const recorded = this.record('item/agentMessage/delta',this.velaApiTest?'simulated':'reported',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,payload:{redacted:true,textBytes:Buffer.byteLength(event.delta)}});
           if (recorded) { this.assistantCursor = recorded.cursor; this.emit({...recorded,payload:{redacted:true,delta:event.delta}}); }
-        } else if (event.type === 'provider/function-call') this.record('vela.api/schema-discovery','observed',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,payload:{redacted:true,api:{callId:event.call.callId}}});
+        } else if (event.type === 'provider/function-call') this.record(event.call.name===WEATHER_TOOL_NAME?'vela.api/weather-requested':'vela.api/schema-discovery','observed',undefined,randomUUID(),{providerId:VELA_API_PROVIDER,payload:{redacted:true,api:{callId:event.call.callId}}});
       },
       completed: (executionId, result) => {
         const execution = this.state.executions[executionId]; ensure(execution, 'invalid_provider_response');
@@ -2216,6 +2222,7 @@ export class BackendCore {
       while (this.velaApiMessageDigests.size >= 64) this.velaApiMessageDigests.delete(this.velaApiMessageDigests.keys().next().value!);
       this.velaApiMessageDigests.set(executionId,planningDigest(content)); return parsed;
     } finally {
+      weatherTool?.close();
       signal.removeEventListener('abort',cancel); if (this.velaApiTask === task) this.velaApiTask = undefined;
       this.active = null; this.ordinaryController = null; this.liveVelaAnswer = undefined;
     }
@@ -2974,25 +2981,48 @@ export class BackendCore {
     } catch { return null; }
   }
   private weatherPermissionStore(){return this.weatherPermissions??=new WeatherPermissionStore(this.db);}
+  /** Retained for explicit legacy action reviews; questions use the API tool. */
   private async forecastWeather(period:import('./local-weather.mts').WeatherPeriod,requestedAtMs:number,cancel:AbortSignal){
     const host=this.nativeHostServices?.systemFacts;
-    if(!host)return {ok:false,content:'Native Windows location is unavailable in this host. You can explicitly ask for weather in a city.'};
-    if(this.weatherRequest)return {ok:false,content:'A current-location weather request is already in progress.'};
+    if(!host)return {ok:false,content:'Windows location is unavailable in this host.'};
+    if(this.weatherRequest)return {ok:false,content:'A weather lookup is already in progress.'};
     const controller=new AbortController();this.weatherRequest=controller;
     try{
       const store=this.weatherPermissionStore(),initial=store.state();
       if(initial.decision==='unknown'){
         const choice=await host.authorizeWeatherPurpose();cancel.throwIfAborted();controller.signal.throwIfAborted();
-        if(choice==='cancel')return {ok:false,content:'Location sharing for weather was not enabled. You can change this in Vela’s permissions.'};
-        // A concurrent user change wins; a stale native dialog can never restore permission.
+        if(choice==='cancel')return {ok:false,content:'Location sharing for weather was not enabled.'};
         store.set(initial.version,choice);
       }
-      if(store.state().decision!=='allow')return {ok:false,content:'Location sharing for weather is off. You can change this in Vela’s permissions.'};
+      if(store.state().decision!=='allow')return {ok:false,content:'Location sharing for weather is off.'};
       const grant=store.grant(),signal=AbortSignal.any([cancel,controller.signal,grant.signal]);
       return await readLocalWeather(period,signal,{requestedAtMs,authorize:grant.assert,locate:input=>host.locate(input),...(this.velaApiTest?{request:this.velaApiTest.fetch}:{})});
-    }catch{
-      return {ok:false,content:this.closed?'The weather request was cancelled.':'The weather request could not use a fresh authorized location. Check Vela’s permissions and Windows Location settings.'};
-    }finally{if(this.weatherRequest===controller)this.weatherRequest=null;}
+    }catch{return {ok:false,content:'The weather request could not use a fresh authorized location.'};}
+    finally{if(this.weatherRequest===controller)this.weatherRequest=null;}
+  }
+  private apiWeatherTool(requestId:string){
+    const host=this.nativeHostServices?.systemFacts;
+    if(!host)return;
+    let permission:ReturnType<WeatherPermissionStore['grant']>|undefined,active:AbortController|null=null;
+    return {validate:()=>{ensure(!this.closed,'backend_closed');permission?.assert();},close:()=>active?.abort(),
+      run:async(query:WeatherQuery,cancel:AbortSignal)=>{
+        if(this.weatherRequest)return unavailableWeatherData(query,'inprogress');
+        const controller=new AbortController();this.weatherRequest=active=controller;
+        try{
+          const store=this.weatherPermissionStore(),initial=store.state();
+          if(initial.decision==='unknown'){
+            const choice=await host.authorizeWeatherPurpose();cancel.throwIfAborted();controller.signal.throwIfAborted();
+            if(choice==='cancel')return unavailableWeatherData(query,'cancel');
+            store.set(initial.version,choice);
+          }
+          if(store.state().decision!=='allow')return unavailableWeatherData(query,'purpose-deny');
+          permission=store.grant();const grant=permission,signal=AbortSignal.any([cancel,controller.signal,grant.signal]);
+          const data=await readWeatherData(query,signal,{requestedAtMs:Date.now(),authorize:grant.assert,locate:input=>host.locate(input),fetch:this.velaApiTest?.fetch??fetch});
+          this.recordVelaRoute('weather_data_observed',requestId,'aerynth-native',{status:data.status,source:'National Weather Service',dataDigest:planningDigest(data),availableHours:data.coverage.availableHours});
+          return data;
+        }catch(error){cancel.throwIfAborted();controller.signal.throwIfAborted();if(permission)permission.assert();return unavailableWeatherData(query,error instanceof Error?error.message:'weather_source_unavailable');}
+        finally{if(this.weatherRequest===controller)this.weatherRequest=null;if(active===controller)active=null;}
+      }};
   }
   private async sampleVelaBattery():Promise<SystemBatteryMeasurement|null>{try{const host=this.nativeHostServices?.systemFacts;if(!host)return null;return systemBattery(await host.battery());}catch{return null;}}
   private async sampleVelaFact(fact: string) {
@@ -3055,15 +3085,6 @@ export class BackendCore {
       try{return {matched:true,request:await this.velaFileProposals.prepare({intent,...(folderResourceId?{folderResourceId}:{})})};}
       catch(error){if((error as {code?:string}).code==='file_proposal_root_required')return {matched:false,fileDiscovery:documents};throw error;}
     }
-    const weatherPeriod=nativeVelaWeather(intent);
-    if(weatherPeriod){
-      resolveRoutingSettings(this.velaRoutingProfiles(),settings);
-      const forecast=await this.forecastWeather(weatherPeriod,Date.now(),new AbortController().signal);ensure(!this.closed,'backend_closed');
-      const observed='locationObservedAt' in forecast&&typeof forecast.locationObservedAt==='string'?forecast.locationObservedAt:undefined;
-      const request=this.vela.nativeResponse(intent,forecast.content,forecast.ok?'answer':'inability',observed?{kind:'local-weather',locationObservedAt:observed,source:'National Weather Service',sharedPrecision:'0.01-degree'}:undefined);
-      this.recordVelaRoute('stage_completed',request.id,'aerynth-native',{route:'native',capabilityId:'readWeather',outcome:forecast.ok?'observed':'unavailable'});
-      return {matched:true,request};
-    }
     if(resourceIds.length)return {matched:false};
     const projectCheck = standaloneVelaProjectCheck(intent);
     if (projectCheck) {
@@ -3116,16 +3137,12 @@ export class BackendCore {
     const workspace = /^(?:open|go to)\s+(?:the\s+)?(?:(?:workspace)\s+(.+?)|(.+?)\s+workspace)$/iu.exec(text);
     const checklist = /^(?:create|add|make)\s+(?:a\s+)?(?:new\s+)?checklist(?:\s+block)?(?:\s+(?:called|named)\s+(.{1,200}?))?(?:\s+here)?$/iu.exec(text);
     const resource = /^(find|open)\s+(?:the\s+|a\s+|my\s+)?(?:aerynth\s+)?resource\s+(?:named|called)\s+(.{1,200})$/iu.exec(text);
-    const weather = nativeVelaWeather(intent);
-    if (!workspace && !checklist && !resource && !weather && !construction) return { matched: false };
+    if (!workspace && !checklist && !resource && !construction) return { matched: false };
     ensure(!this.active, 'execution_busy');
     const scope = this.velaHost.scope();
     let action: VelaNativeAction;
     if (construction) {
       action = construction;
-    } else if (weather) {
-      ensure(this.velaCapability('readWeather'), 'vela_native_weather_unavailable');
-      action = { type: 'readWeather', period: weather };
     } else if (resource) {
       action = { type: resource[1].toLowerCase() === 'find' ? 'search' : 'openResource', query: resource[2].trim() };
     } else if (workspace) {

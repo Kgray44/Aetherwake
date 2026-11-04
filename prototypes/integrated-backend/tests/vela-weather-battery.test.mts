@@ -14,31 +14,24 @@ function fixture(decision:'allow'|'deny'='allow'){
   ask:async(intent="What's the weather right now?",resourceIds:string[]=[])=>{const result=await core.command('velaRouteNative',{intent,resourceIds});assert(result.matched);return result;},state:()=>core.command('vela',{name:'state',input:{}}) as Promise<VelaBackendState>,
   async reopen(){await core.command('close',{});core=create();},async close(){await core.command('close',{});server.close();client.close();assert.equal(dirname(folder),tmpdir());assert(basename(folder).startsWith('aerynth-weather-battery-'));rmSync(folder,{recursive:true,force:true});}};
 }
-test('actual Core/private native protocol remembers weather consent across restart and requests fresh A→B positions per question',async()=>{
- const f=fixture();try{const a=await f.ask();assert.equal(a.matched,true);assert.equal(a.request?.response?.kind,'answer');assert.equal(a.request?.planId,undefined);assert(a.request?.nativeObservation?.locationObservedAt);
- assert.equal(f.prompts,1);await f.reopen();const b=await f.ask();assert.equal(b.request?.response?.kind,'answer');assert.equal(f.prompts,1);
- assert.deepEqual(f.urls.filter(url=>url.includes('/points/')),['https://api.weather.gov/points/43.46,-72.39','https://api.weather.gov/points/44.55,-72.39']);
- const state=await f.state();assert.equal(state.plans.length,0);assert.equal(state.conversation!.messages.length,4);assert(!JSON.stringify(state).includes('72.39'));assert(!JSON.stringify(f.events).includes('72.39'));assert.equal((await f.core.command('providerActivity',{})).providerRequests,0);
+test('weather questions remain API work even with ordinary phrasing or selected context',async()=>{
+ const f=fixture();try{for(const intent of ['whats the weather','whats the temp outside right now',"What's the weather right now?",'What is the humidity next Monday?','What is the average temperature next week?']){
+  const result=await f.core.command('velaRouteNative',{intent});assert.equal(result.matched,false,intent);
+ }assert.equal(f.prompts,0);assert.equal(f.urls.length,0);assert.equal((await f.core.command('providerActivity',{})).providerRequests,0);
  }finally{await f.close();}
 });
 
-test('the exact apostrophe-free weather question reaches native consent and a selected source cannot divert it to inference',async()=>{
- const f=fixture();try{
-  const first=await f.ask('whats the weather');assert.equal(first.request?.providerId,null);assert.equal(first.request?.response?.kind,'answer');assert.equal(f.prompts,1);
-  const source=(await f.state()).conversation!.resourceId;await f.reopen();
-  const second=await f.ask('whats the weather outside',[source]);assert.equal(second.request?.providerId,null);assert.equal(second.request?.planId,undefined);
-  assert.equal(f.prompts,1);assert.equal(f.urls.filter(url=>url.includes('/points/')).length,2);assert.equal((await f.core.command('providerActivity',{})).providerRequests,0);
+test('weather purpose decisions persist independently of API request phrasing and stale permission writes are refused',async()=>{
+ const f=fixture();try{const initial=await f.core.command('velaWeatherPermissionNative',{type:'status'});assert.equal(initial.decision,'unknown');
+  const allowed=await f.core.command('velaWeatherPermissionNative',{type:'set',expectedVersion:initial.version,decision:'allow'});await f.reopen();
+  assert.equal((await f.core.command('velaWeatherPermissionNative',{type:'status'})).decision,'allow');
+  await f.core.command('velaWeatherPermissionNative',{type:'set',expectedVersion:allowed.version,decision:'deny'});await f.reopen();
+  assert.equal((await f.core.command('velaWeatherPermissionNative',{type:'status'})).decision,'deny');
+  await assert.rejects(f.core.command('velaWeatherPermissionNative',{type:'set',expectedVersion:initial.version,decision:'allow'}),/stale_weather_permission/);
+  assert.equal(f.prompts,0);assert.equal(f.urls.length,0);
  }finally{await f.close();}
 });
-test('actual Core/private protocol rejects a stale cached timestamp without sending coordinates or asking permission again',async()=>{
- const f=fixture();try{await f.ask();f.urls.length=0;f.setLocate(async input=>({latitude:43,longitude:-72,observedAtMs:input.requestedAtMs-1,source:'wifi'}));const stale=await f.ask();assert.equal(stale.request?.response?.kind,'inability');assert.equal(stale.request?.nativeObservation,undefined);assert.equal(f.urls.length,0);assert.equal(f.prompts,1);assert.equal((await f.state()).conversation!.messages.at(-1)!.content,'Windows couldn’t get a fresh location. Check Windows Location settings and try again.');
- }finally{await f.close();}
-});
-test('denial persists across actual Core reopen and explicit revocation cancels pending observation before egress',async()=>{
- const denied=fixture('deny');try{await denied.ask();await denied.reopen();await denied.ask();assert.equal(denied.prompts,1);assert.equal(denied.urls.length,0);}finally{await denied.close();}
- const f=fixture();try{await f.ask();f.urls.length=0;let release!:(value:DeviceLocation)=>void;let started!:()=>void;const ready=new Promise<void>(resolve=>{started=resolve;});f.setLocate(async()=>{started();return new Promise(resolve=>{release=resolve;});});const pending=f.ask();await ready;const before=await f.core.command('velaWeatherPermissionNative',{type:'status'});await f.core.command('velaWeatherPermissionNative',{type:'set',expectedVersion:before.version,decision:'deny'});release({latitude:43,longitude:-72,observedAtMs:Date.now(),source:'wifi'});assert.equal((await pending).request?.response?.kind,'inability');assert.equal(f.urls.length,0);await f.reopen();await f.ask();assert.equal(f.prompts,1);assert.equal(f.urls.length,0);await assert.rejects(f.core.command('velaWeatherPermissionNative',{type:'set',expectedVersion:before.version,decision:'allow'}),/stale_weather_permission/);
- }finally{await f.close();}
-});
+
 test('battery question uses existing local fact and private GetSystemPowerStatus port without inference or review plan',async()=>{
  const f=fixture();try{const answer=await f.core.command('velaRouteNative',{intent:"What's my battery level?"});assert(answer.matched);assert.equal(answer.request?.local?.capabilityId,'system.battery');assert.equal(answer.request?.response?.kind,'answer');assert.equal(answer.request?.planId,undefined);assert.match((await f.state()).conversation!.messages.at(-1)!.content,/63%.*AC power is connected and charging/s);assert.equal(f.prompts,0);assert.equal(f.urls.length,0);assert.equal((await f.core.command('providerActivity',{})).providerRequests,0);}finally{await f.close();}
 });

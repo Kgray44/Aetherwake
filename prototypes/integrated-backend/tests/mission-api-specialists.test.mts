@@ -57,6 +57,14 @@ async function until<T>(read: () => Promise<T> | T, accept: (value: T) => boolea
 const settled = (f: ReturnType<typeof fixture>, id: string) => until(async () => await f.core.command('missions', { name: 'read', input: { id } }) as MissionProjection,
   value => !value.tasks.some(task => task.state === 'running' || task.state === 'cancelling') && !['queued', 'running'].includes(value.outcome));
 
+test('actual Core preserves safe unknown stream diagnostics in both specialist evidence and durable API receipts across reopen',async()=>{
+ const f=fixture();try{await f.ready();f.release();f.reply(()=>new Response('data: '+JSON.stringify({type:'response.created',response:{id:'resp-synthetic-unknown-'+randomUUID(),status:'in_progress'}})+'\n\ndata: {malformed\n\n',{headers:{'Content-Type':'text/event-stream','x-request-id':'req_synthetic_specialist'}}));
+  const mission=await f.start(await f.preview()),done=await settled(f,mission.id);assert.equal(done.outcome,'uncertain');assert.equal(done.profile.usageReports,0);assert.equal(done.profile.reportedTotalTokens,null);
+  for(const task of done.tasks.filter(task=>task.specialist)){const evidence=task.attempts[0].evidence!;assert.equal(task.state,'uncertain');assert.deepEqual(evidence.value,{status:'unknown',errorCode:'invalid_stream_json',httpDiagnostic:{contract:'aerynth.turn-http-diagnostic@1',httpStatus:200,contentType:'event-stream',hasBody:true,serverRequestId:'req_synthetic_specialist',bodyShape:'unavailable',remoteCode:null}});const receipt=(f.core as any).velaApiRuntime.receiptsForRequest(task.attempts[0].id)[0];assert.equal(receipt.errorCode,'invalid_stream_json');assert.equal(receipt.httpDiagnostic.httpStatus,200);}
+  await f.reopen();const reopened=await settled(f,mission.id);assert.equal(reopened.outcome,'uncertain');assert.equal(f.requests.length,2);assert(reopened.tasks.filter(task=>task.specialist).every(task=>(task.attempts[0].evidence!.value as any).errorCode==='invalid_stream_json'));
+ }finally{await f.close();}
+});
+
 test('actual Core admits two API specialists before either HTTP request is released, with isolated compiler packages and canonical usage', async () => {
   const f = fixture(); try {
     await f.ready();

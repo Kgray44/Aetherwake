@@ -7,29 +7,41 @@ stacked on #18, #17 and #16. These remain review candidates, not merged releases
 The Constitution is binding; the specialist registry remains advisory.
 
 Development includes the dedicated API, native voice, canonical timer and
-workspace flows, API specialist scheduling, and fresh native weather/battery
-answers. The latest packaged review is `91fbf64f124aaab9789844ec56b65cf6f6f8279d`,
-with its existing workspace preserved during replacement. It passed all 17 test
-groups, 20 review checks, a fresh renderer build and strict package closure. The
-archive and all 534 emitted files were independently hashed. The preceding
-ca16 review and its receipts remain preserved.
+workspace flows, API specialist scheduling, weather data tools and native battery
+answers. The open review is `ae5fd0505e72b1bf48530c76562af471b47b5e8a`,
+with its existing workspace preserved. It follows the complete 17-group pass on
+1c90185 and has 279 affected tests, 21 review checks, a fresh build and strict
+package closure. The archive and all 545 emitted files were independently hashed.
+Prior candidates and their receipts remain preserved.
 This is not a declaration that the full program is complete.
 
 Weather now persists the purpose permission rather than coordinates. Every
 question requests a fresh Windows fix; stale/default/IP positions are rejected.
 The fixed native addon invokes the Windows consent API in the owned foreground
 UI process. Core/private-protocol tests cover location A changing to B, denial
-across restart, stale-fix rejection and revocation before egress. Real Windows
-Allow UI and physical location/NWS qualification remain outstanding. A separate
+across restart, stale-fix rejection and revocation before egress. The owner
+reported the real Windows permission prompt followed by a successful forecast
+in ae5fd. This is owner-reported acceptance, not an independently captured device
+receipt. A separate
 native-response marker fixes a display defect that hid direct host replies;
 the panel regression checks a failed legacy weather plan followed by the actual
 native answer. Native facts require no reviewed plan or inference request.
-The retained apostrophe-free question exposed a separate routing defect: it
-reached inference instead of this native handler. Common weather phrasing now
-uses native consent, including when a source chip is selected. Core regressions
-cover the exact phrase, one consent across restart and fresh A/B fixes with zero
-provider calls. Native diagnostics also distinguish denial, unspecified access,
-cancellation and timeout; an unspecified error no longer claims OS denial.
+After another phrasing failure, the owner requested API interpretation for weather
+questions. Development now removes native weather question interception and gives
+API answers/planning a reviewed get_weather_forecast function. Windows still owns
+permission and fresh location; only bounded NWS forecast data reaches the model.
+Core tests cover outside temperature, Monday humidity, permission across restart,
+fresh A/B fixes, denial, stale fixes and revocation before continuation. Data tests
+cover weekdays, requested periods, DST and partial coverage. Missing forecast
+hours never become a complete weekly mean. The new API weather flow still needs
+its real transport and joined desktop acceptance. Native diagnostics distinguish
+denial, unspecified access, cancellation and timeout.
+
+The separate ae5fd real two-worker API check proved overlapping HTTP requests and
+matching canonical body/context/profile bindings, but both attempts ended unknown
+without reported usage. It failed acceptance and was not retried. The diagnostic
+gap is now covered by persisted bounded error enums and body-free HTTP metadata;
+unknown calls are not promoted to successful specialist work or zero cost.
 
 Addendum B now has local capture, a private bounded PCM bridge, canonical
 preferences, lifecycle controls and observed phase events. Master microphone

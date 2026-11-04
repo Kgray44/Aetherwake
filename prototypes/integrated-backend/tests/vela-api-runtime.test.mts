@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, createHash } from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
+import {VelaApiRuntime} from '../src/vela-api-runtime.mts';
+import {apiRunDiagnostics} from '../src/api-run-diagnostics.mts';
+import {WEATHER_TOOL_NAME,WEATHER_TOOL,type WeatherQuery} from '../src/weather-tool.mts';
+import {readWeatherData} from '../src/weather-data.mts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
@@ -47,6 +52,98 @@ function fixture() {
     async close() { if(!(core as any).closed) await core.command('close',{}); const part=relative(base,resolve(dir)); assert.ok(part.startsWith('aerynth-api-runtime-')&&!part.startsWith('..')&&!isAbsolute(part)); rmSync(dir,{recursive:true,force:true}); },
   };
 }
+
+const weatherQuery:WeatherQuery={startDate:null,endDate:null,period:'tomorrow',metrics:['temperature','humidity'],aggregation:'range'};
+const weatherCall=(query:unknown=weatherQuery,id='resp-weather',callId='call-weather')=>response('',id,[{type:'function_call',id:'fc-'+callId,call_id:callId,name:WEATHER_TOOL_NAME,arguments:JSON.stringify(query),status:'completed'}] as any);
+const unavailableWeather=()=>readWeatherData(weatherQuery,new AbortController().signal,{authorize(){throw Error('location_os_denied');},locate:async()=>{throw Error('unexpected_location');},fetch:async()=>{throw Error('unexpected_weather_network');}});
+
+test('model-requested current weather forwards actual native-reader temperature and humidity data with coordinates confined to the weather source',async()=>{
+ const f=fixture();try{await f.configure();await f.authorize();const runtime=(f.core as any).velaApiRuntime as VelaApiRuntime;await runtime.models(1);const query:WeatherQuery={startDate:null,endDate:null,period:'current',metrics:['temperature','humidity'],aggregation:'current'},sourceRequests:string[]=[],now=()=>new Date('2026-11-04T12:30:00Z');let authorizations=0;
+  const source:typeof fetch=async url=>{sourceRequests.push(String(url));if(String(url).includes('/points/'))return Response.json({properties:{timeZone:'UTC',forecastHourly:'https://api.weather.gov/gridpoints/BTV/100,30/forecast/hourly'}});return Response.json({properties:{generatedAt:'2026-11-04T12:00:00Z',periods:[{startTime:'2026-11-04T12:00:00Z',endTime:'2026-11-04T13:00:00Z',temperature:55,temperatureUnit:'F',relativeHumidity:{unitCode:'wmoUnit:percent',value:61}}]}});};
+  f.replies.push(()=>weatherCall(query),body=>{const data=JSON.parse(body.input.find((item:any)=>item.type==='function_call_output').output);assert.equal(data.status,'complete');assert.equal(data.current.values.temperature.mean,55);assert.equal(data.current.values.humidity.mean,61);assert(!JSON.stringify(body).includes('43.46'));assert(!JSON.stringify(body).includes('-72.39'));assert(!JSON.stringify(data).includes('forecastHourly'));return response('Current hour forecast: 55°F and 61% humidity.','resp-current-weather-answer');});
+  const run=await runtime.run({requestId:'synthetic-current-weather',version:1,model:'gpt-6-luna',prompt:'Synthetic natural weather question',contextDigest:'a'.repeat(64),weatherTool:{run:(input,signal)=>readWeatherData(input,signal,{locate:async input=>({latitude:43.45827,longitude:-72.38753,observedAtMs:input.requestedAtMs,source:'wifi'}),authorize(){authorizations++;},fetch:source,now})},validate(){}},new AbortController().signal);
+  assert.equal(run.result.outcome,'completed');assert.equal(sourceRequests.length,2);assert.equal(sourceRequests[0],'https://api.weather.gov/points/43.46,-72.39');assert(authorizations>=4);assert.equal(f.requests.length,2);
+ }finally{await f.close();}
+});
+
+test('optional native weather tool uses exact reviewed definition and receipt-bound continuation without implicit source authority',async()=>{
+ const f=fixture();try{await f.configure();await f.authorize();const runtime=(f.core as any).velaApiRuntime as VelaApiRuntime;await runtime.models(1);const data=await unavailableWeather();let calls=0;
+  f.replies.push(body=>{assert.deepEqual(body.tools,[WEATHER_TOOL.definition]);assert.equal(body.parallel_tool_calls,false);assert(!JSON.stringify(body).includes('latitude'));return weatherCall();},body=>{const output=body.input.find((item:any)=>item.type==='function_call_output');assert(output);assert.deepEqual(JSON.parse(output.output),data);assert.equal(body.store,false);return response('Windows did not authorize a fresh forecast; I cannot report current conditions.','resp-weather-answer');});
+  const {result}=await runtime.run({requestId:'synthetic-weather-loop',version:1,model:'gpt-6-luna',prompt:'Synthetic question about outside temperature and humidity tomorrow.',contextDigest:'b'.repeat(64),weatherTool:{async run(query,signal){calls++;assert.deepEqual(query,weatherQuery);assert(!signal.aborted);return data;}},validate(){}},new AbortController().signal);
+  assert.equal(result.outcome,'completed');assert.equal(calls,1);assert.equal(f.requests.length,2);const db=(f.core as any).db,receipt=db.prepare('SELECT arguments_digest,output_digest FROM vela_api_tool_receipts').get();assert.equal(receipt.arguments_digest,createHash('sha256').update(JSON.stringify(weatherQuery)).digest('hex'));assert.equal(receipt.output_digest,createHash('sha256').update(JSON.stringify(data)).digest('hex'));assert.equal((await f.core.command('velaApiUsageStatus',{})).usedToday,2);
+ }finally{await f.close();}
+});
+
+test('weather tool is not available to mission workers and rejects extra authority, invalid output, and an unreviewed function',async()=>{
+ for(const kind of ['mission','arguments','output','missing'] as const){const f=fixture();try{await f.configure();await f.authorize();const runtime=(f.core as any).velaApiRuntime as VelaApiRuntime;await runtime.models(1);let calls=0;const data=await unavailableWeather();
+  const weatherTool={async run(){calls++;return kind==='output'?{...data,latitude:43} as any:data;}};
+  const input={requestId:'synthetic-weather-negative-'+kind,version:1,model:'gpt-6-luna',prompt:'Synthetic weather request',contextDigest:'c'.repeat(64),...(kind==='missing'?{}:{weatherTool}),...(kind==='mission'?{lane:'mission-specialist' as const}:{}),validate(){}};
+  if(kind==='mission'){await assert.rejects(runtime.run(input,new AbortController().signal),/weather_tool_not_allowed_for_mission/);assert.equal(f.requests.length,0);}
+  else{f.replies.push(()=>weatherCall(kind==='arguments'?{...weatherQuery,latitude:43}:weatherQuery));if(kind==='missing'){const run=await runtime.run(input,new AbortController().signal);assert.equal(run.result.outcome,'unknown');assert.equal(run.result.errorCode,'unreviewed_api_function');}else await assert.rejects(runtime.run(input,new AbortController().signal));assert.equal(f.requests.length,1);}
+  assert.equal(calls,kind==='output'?1:0);assert.equal((f.core as any).db.prepare('SELECT count(*) AS n FROM vela_api_tool_receipts').get().n,0);
+ }finally{await f.close();}}
+});
+
+test('weather host cancellation and usage revocation prevent a continuation even when the native port ignores its signal',async()=>{
+ for(const revoke of [false,true]){const f=fixture();try{await f.configure();await f.authorize();const runtime=(f.core as any).velaApiRuntime as VelaApiRuntime;await runtime.models(1);const data=await unavailableWeather(),controller=new AbortController();let release!:(value:typeof data)=>void,entered!:()=>void;const ready=new Promise<void>(resolve=>{entered=resolve;});f.replies.push(()=>weatherCall());
+  const running=runtime.run({requestId:'synthetic-weather-interruption',version:1,model:'gpt-6-luna',prompt:'Synthetic weather',contextDigest:'d'.repeat(64),weatherTool:{async run(){entered();return new Promise(resolve=>{release=resolve;});}},validate(){}},controller.signal);await ready;
+  if(revoke)await f.core.command('velaApiUsageAuthorize',{expectedVersion:1,enabled:false});else controller.abort();release(data);await assert.rejects(running,/vela_execution_cancelled|vela_api_usage_authorization_required/);assert.equal(f.requests.length,1);assert.equal((f.core as any).db.prepare('SELECT count(*) AS n FROM vela_api_tool_receipts').get().n,0);
+ }finally{await f.close();}}
+});
+
+test('weather calls share the unchanged four-stage and three-native-call ceiling',async()=>{
+ const f=fixture();try{await f.configure();await f.authorize();const runtime=(f.core as any).velaApiRuntime as VelaApiRuntime;await runtime.models(1);const data=await unavailableWeather();let calls=0;for(let index=0;index<4;index++)f.replies.push(()=>weatherCall(weatherQuery,'resp-weather-loop-'+index,'call-weather-loop-'+index));
+  await assert.rejects(runtime.run({requestId:'synthetic-weather-stage-limit',version:1,model:'gpt-6-luna',prompt:'Synthetic weather repeated tool request',contextDigest:'e'.repeat(64),weatherTool:{async run(){calls++;return data;}},validate(){}},new AbortController().signal),/api_tool_call_limit/);assert.equal(f.requests.length,4);assert.equal(calls,3);assert.equal((f.core as any).db.prepare('SELECT count(*) AS n FROM vela_api_tool_receipts').get().n,3);
+ }finally{await f.close();}
+});
+
+test('weather tool outputs cannot replay a call ID and structured planning uses the same optional native port',async()=>{
+ const duplicate=fixture();try{await duplicate.configure();await duplicate.authorize();const runtime=(duplicate.core as any).velaApiRuntime as VelaApiRuntime;await runtime.models(1);const data=await unavailableWeather();let calls=0;duplicate.replies.push(()=>weatherCall(),()=>weatherCall(weatherQuery,'resp-duplicate-weather'));
+  await assert.rejects(runtime.run({requestId:'synthetic-weather-duplicate',version:1,model:'gpt-6-luna',prompt:'Synthetic repeated call ID',contextDigest:'f'.repeat(64),weatherTool:{async run(){calls++;return data;}},validate(){}},new AbortController().signal),/api_tool_call_limit/);assert.equal(calls,1);assert.equal(duplicate.requests.length,2);
+ }finally{await duplicate.close();}
+ const planning=fixture();try{await planning.configure();await planning.authorize();const runtime=(planning.core as any).velaApiRuntime as VelaApiRuntime,data=await unavailableWeather();let calls=0;planning.replies.push(body=>{assert.equal(body.text.format.name,'vela_scoped_proposal');return weatherCall();},body=>{assert(body.input.some((item:any)=>item.type==='function_call_output'));return response('{"summary":"Authorized weather unavailable"}','resp-weather-plan');});
+  const result=await runtime.structuredProposal({requestId:'synthetic-weather-planning',instruction:'Use weather data only when the reviewed native tool returns it.',payload:{intent:'Synthetic weather-aware planning'},schema:{type:'object',properties:{summary:{type:'string'}},required:['summary'],additionalProperties:false},weatherTool:{async run(){calls++;return data;}},validate(){}},new AbortController().signal);assert.deepEqual(result,{summary:'Authorized weather unavailable'});assert.equal(calls,1);assert.equal(planning.requests.length,2);
+ }finally{await planning.close();}
+});
+
+test('actual runtime persists exact bounded SSE failure diagnostics and never replays an unknown request after restart',async()=>{
+ const f=fixture();try{
+  await f.configure();await f.authorize();let runtime=(f.core as any).velaApiRuntime as VelaApiRuntime;await runtime.models(1);
+  const cases=[
+   {id:'missing-terminal',code:'stream_terminal_unobserved',tail:'data: '+JSON.stringify({type:'response.output_text.delta',delta:'Synthetic partial'})+'\n\n'},
+   {id:'malformed-json',code:'invalid_stream_json',tail:'data: {not-json\n\n'},
+   {id:'changed-id',code:'response_identity_mismatch',tail:'data: '+JSON.stringify({type:'response.completed',response:{id:'different-response',status:'completed',output:[]}})+'\n\n'},
+   {id:'unsupported-output',code:'unsupported_provider_output',tail:'data: '+JSON.stringify({type:'response.output_item.added',item:{id:'unreviewed',type:'computer_call'}})+'\n\n'},
+  ];
+  for(const item of cases){
+   await runtime.models(1);
+   f.replies.push(()=>new Response('data: '+JSON.stringify({type:'response.created',response:{id:'resp-'+item.id,status:'in_progress'}})+'\n\n'+item.tail,{headers:{'Content-Type':'text/event-stream','x-request-id':'req_synthetic_diagnostic'}}));
+   const prompt='Synthetic failure diagnostics '+item.id,input={requestId:item.id,version:1,model:'gpt-6-luna',prompt,contextDigest:createHash('sha256').update(prompt).digest('hex'),oneUse:true as const,validate(){}};
+   const run=await runtime.run(input,new AbortController().signal);assert.equal(run.result.outcome,'unknown');assert.equal(run.result.errorCode,item.code);
+   const receipt=runtime.receiptsForRequest(item.id)[0];assert.equal(receipt.errorCode,item.code);assert.equal(receipt.state,'unknown');assert.equal(receipt.httpDiagnostic?.httpStatus,200);assert.equal(receipt.httpDiagnostic?.contentType,'event-stream');assert.equal(receipt.httpDiagnostic?.serverRequestId,'req_synthetic_diagnostic');assert(!Object.hasOwn(receipt,'partialText'));
+   await f.reopen();runtime=(f.core as any).velaApiRuntime;assert.equal(runtime.receiptsForRequest(item.id)[0].errorCode,item.code);await assert.rejects(runtime.run(input,new AbortController().signal),/api_execution_already_dispatched/);
+  }
+  assert.equal(f.requests.length,cases.length);
+ }finally{await f.close();}
+});
+
+test('HTTP rejection persists only bodyless diagnostics and known remote error enum, with no error body or secret text',async()=>{
+ const f=fixture();try{await f.configure();await f.authorize();const runtime=(f.core as any).velaApiRuntime as VelaApiRuntime;await runtime.models(1);
+  f.replies.push(()=>Response.json({error:{code:'rate_limit_exceeded',message:'SYNTHETIC_PRIVATE_BODY '+marker,account:'SYNTHETIC_PRIVATE_ACCOUNT'}},{status:429,headers:{'x-request-id':'req_synthetic_rate_limit'}}));
+  const run=await runtime.run({requestId:'synthetic-http-failure',version:1,model:'gpt-6-luna',prompt:'Synthetic HTTP failure',contextDigest:'a'.repeat(64),validate(){}},new AbortController().signal);
+  assert.equal(run.result.outcome,'failed');const receipt=runtime.receiptsForRequest('synthetic-http-failure')[0];assert.equal(receipt.errorCode,'rate_limit_exceeded');assert.equal(receipt.httpDiagnostic?.httpStatus,429);assert.equal(receipt.httpDiagnostic?.remoteCode,'rate_limit_exceeded');const stored=(f.core as any).db.prepare('SELECT error_code,http_diagnostic_json FROM vela_api_runs').get();assert(!JSON.stringify({stored,receipt}).includes('SYNTHETIC_PRIVATE'));assert(!JSON.stringify({stored,receipt}).includes(marker));
+ }finally{await f.close();}
+});
+
+test('diagnostic migration preserves old receipts and marks only interrupted dispatches with a local interruption code',()=>{
+ const db=new DatabaseSync(':memory:');try{db.exec("CREATE TABLE vela_api_runs(execution_id TEXT PRIMARY KEY,request_id TEXT NOT NULL,configuration_version INTEGER NOT NULL,utc_day TEXT NOT NULL,body_digest TEXT NOT NULL,context_digest TEXT NOT NULL,state TEXT NOT NULL,result_digest TEXT,response_id TEXT,usage_json TEXT,elapsed_ms INTEGER);INSERT INTO vela_api_runs(execution_id,request_id,configuration_version,utc_day,body_digest,context_digest,state)VALUES('old','old',1,'2000-01-01','body','context','unknown'),('interrupted','interrupted',1,'2000-01-01','body','context','dispatching');BEGIN");VelaApiRuntime.migrate(db);VelaApiRuntime.migrate(db);db.exec('COMMIT');const rows=db.prepare('SELECT execution_id,state,error_code FROM vela_api_runs ORDER BY execution_id').all();assert.deepEqual(rows.map(row=>({...row})),[{execution_id:'interrupted',state:'unknown',error_code:'api_process_interrupted'},{execution_id:'old',state:'unknown',error_code:null}]);}finally{db.close();}
+});
+
+test('diagnostic projection uses fixed enums, strips raw fields, and never invokes arbitrary getters',()=>{
+ const diagnostic={contract:'aerynth.turn-http-diagnostic@1',httpStatus:200,contentType:'event-stream',hasBody:true,serverRequestId:'not a safe ID',bodyShape:'unavailable',remoteCode:'SYNTHETIC_PRIVATE_ACCOUNT',body:'SYNTHETIC_PRIVATE_BODY',headers:{authorization:marker}};
+ const result=apiRunDiagnostics({errorCode:'synthetic_private_account',httpDiagnostic:diagnostic});assert.equal(result.errorCode,'provider_failed');assert.equal(result.httpDiagnostic?.serverRequestId,null);assert.equal(result.httpDiagnostic?.remoteCode,null);assert(!JSON.stringify(result).includes('SYNTHETIC_PRIVATE'));assert(!JSON.stringify(result).includes(marker));assert.deepEqual(apiRunDiagnostics(Object.defineProperty({},'httpDiagnostic',{get(){throw Error('getter invoked');}})),{});
+ assert.deepEqual(apiRunDiagnostics({httpDiagnostic:{...diagnostic,contentType:{toString(){throw Error('coercion invoked');}}}}),{});
+});
 
 test('actual Core routine API Send uses durable explicit usage consent, shared identity, one canonical transcript and history proof', async () => {
   const f=fixture();

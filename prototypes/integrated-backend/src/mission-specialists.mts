@@ -3,6 +3,7 @@ import { supportsOrdinaryWebSearch } from '../../openai-provider/model-controls.
 import type { MissionExecutionContext, MissionExecutor, MissionPlan, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import { nativeMissionPlan } from './mission-native.mts';
 import type { MissionTeam } from './mission-teams.mts';
+import {apiRunDiagnostics} from './api-run-diagnostics.mts';
 
 type Selection = Omit<NonNullable<MissionTaskPlan['specialist']>, 'role' | 'instructions'>;
 export const specialistExecutorId = (provider: NonNullable<MissionTaskPlan['specialist']>['provider']) => provider === 'openai-api-vela' ? 'api.specialist' : 'chatgpt.specialist';
@@ -195,7 +196,7 @@ export function createSpecialistExecutor(port: SpecialistPort, provider: NonNull
         ...(result.usage ? { usage: result.usage } : {}), ...(result.responseId ? { responseId: result.responseId } : {}),
         ...(result.reportedModel ? { reportedModel: result.reportedModel } : {}) };
       const source = provider + ':reported';
-      if (result.outcome !== 'completed') return { source, telemetry, value: { status: result.outcome },
+      if (result.outcome !== 'completed') return { source, telemetry, value: { status: result.outcome,...apiRunDiagnostics(result) },
         outcome: result.outcome === 'unknown' ? 'uncertain' : 'failed' };
       try {
         if (!result.responseId || result.reportedModel !== context.task.specialist?.model ||
