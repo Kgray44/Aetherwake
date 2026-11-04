@@ -188,6 +188,24 @@ has a canonical local conversation and supporting resources selected by the
 architect. The initial camera leaves the graph and conversation below the
 workspace toolbar.
 
+New workrooms retain the exact canonical local conversation binding. When the
+mission verifies, a separate durable outbox delivers one attributed historical
+handoff containing the objective, concise result, original evidence identities
+and observation times. Creating a workroom after verification stages the same
+delivery. Message, receipt binding, Stream event and outbox acknowledgement
+commit together; a failure rolls them all back. Vela's compact originating
+reply uses its own queue, so a handoff failure cannot suppress that answer.
+
+The handoff remains a distinct application-authored receipt. It does not copy
+Vela's global transcript or rebind a provider session. Existing conversation
+branch controls select and review source context before a later provider send.
+Inherited branches retain the original message identity. Every receipt read,
+search, prepared review and future send rechecks the origin and workroom,
+exact local chat placement, project identity and current evidence digest.
+Unavailable or superseded evidence cannot enter future branch context. The
+canonical historical receipt remains stored. Older workrooms without an exact
+conversation binding retain their existing chat and receive no inferred link.
+
 The backend verifies access to both workspaces and to the exact card
 placement before returning a projection. Card bindings are optional in older
 workrooms. Manual checklist entries and ordinary timeline settings retain

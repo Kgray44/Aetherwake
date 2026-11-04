@@ -15,6 +15,7 @@ import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, M
 import { MISSION_LIMITS } from './mission-contracts.mts';
 import { createMissionAdmission } from './mission-admission.mts';
 import { MissionPublication } from './mission-publication.mts';
+import { MissionConversationReceipts } from './mission-conversation.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
@@ -150,6 +151,7 @@ export class BackendCore {
   private storedJson: string | null = null;
   private mutationDepth = 0;
   private pendingEventDelivery: StreamEvent[] = [];
+  private missionConversations?: MissionConversationReceipts;
   private port: ProviderPort;
   private providerActivity = {codexConnections:0,providerRequests:0,systemMemoryReads:0,scope:'process-session-native-attempts' as const};
   private velaSamples = new Map<'system.cpu' | 'system.gpu', Promise<SystemUtilization | undefined>>();
@@ -354,6 +356,28 @@ export class BackendCore {
         stagePublication: (mission, from) => this.missionPublication.stage(mission, from),
         observe: () => this.flushMissionPublication(),
       });
+      this.missionConversations = new MissionConversationReceipts({
+        db: this.db, atomic: work => this.atomic(work),
+        read: id => {
+          const row = this.db.prepare('SELECT json FROM vela_missions WHERE id=?').get(id);
+          ensure(row, 'mission_not_found');
+          const stored = JSON.parse(String(row.json)) as Mission;
+          return this.missions.read(id, stored.scope);
+        },
+        allowed: mission => this.missionConversationAllowed(mission),
+        append: (resourceId, content, referenceIds) => {
+          const message = this.graph.addMessage(this.gid(resourceId), 'assistant', content,
+            { provenance: 'application', sensitivity: this.privateMode ? 'internal' : 'public', referenceIds });
+          this.state.revisions[resourceId]++;
+          return message.id;
+        },
+        record: (mission, messageId) => this.record('vela.mission/conversation-receipt', 'observed', undefined,
+          'mission:conversation:' + mission.id + ':' + messageId, {
+            providerId: 'aerynth-native', detached: true, correlationId: mission.id,
+            mission: { id: mission.id, scope: mission.scope, kind: 'conversation-receipt' },
+            status: 'recorded', payload: { redacted: true },
+          }),
+      });
       this.missionWorkrooms = new MissionWorkrooms({
         library: this.library, missions: this.missions, atomic: work => this.atomic(work),
         writable: () => !this.closed && !this.active,
@@ -385,6 +409,17 @@ export class BackendCore {
   private missionScopeAllowed(scope: MissionScope): boolean {
     if (this.closed || !this.libraryAuthorized({ kind: 'workspace', id: scope.workspaceId })) return false;
     return this.db.prepare("SELECT project_id FROM workspaces WHERE id=? AND state='active'").get(scope.workspaceId)?.project_id === scope.projectId;
+  }
+  private missionConversationAllowed(mission: Mission): boolean {
+    const room = mission.workroom, id = room?.missionConversationResourceId;
+    if (!id || !room || !this.missionScopeAllowed(mission.scope) ||
+      !this.missionScopeAllowed({ ...mission.scope, workspaceId: room.workspaceId }) ||
+      !this.conversationAccess.resource(id, 'read')) return false;
+    const resource = this.db.prepare("SELECT project_id FROM resources WHERE id=? AND kind='conversation' AND state='active'").get(id);
+    if (!resource || resource.project_id !== mission.scope.projectId ||
+      !this.db.prepare('SELECT 1 FROM blocks WHERE workspace_id=? AND resource_id=?').get(room.workspaceId, id)) return false;
+    const conversation = this.state.graph.conversations.find(item => item.id === this.state.resources[id]);
+    return conversation?.providerId === 'local' && !this.state.graph.edges.some(edge => edge.childId === conversation.id);
   }
   private missionAgentInScope(scope: MissionScope, resource: AgentProfile['resource']): boolean {
     if (resource.state !== 'active' || !this.conversationAccess.resource(resource.id, 'read')) return false;
@@ -437,6 +472,13 @@ export class BackendCore {
           this.recordMissionStreamEvent(mission, event, ack);
         },
         report: (missionId, seq, ack) => this.projectMissionReport(missionId, seq, ack),
+        conversation: (missionId, _seq, ack) => {
+          const row = this.db.prepare('SELECT json FROM vela_missions WHERE id=?').get(missionId);
+          if (!row) return false;
+          const mission = JSON.parse(String(row.json)) as Mission;
+          if (!this.missionScopeAllowed(mission.scope)) return false;
+          return this.missionConversations!.publish(this.missions.read(missionId, mission.scope), ack);
+        },
       });
     } catch { result = { continue: false, retry: true }; }
     if (!result.retry) this.missionPublicationRetryMs = 250;
@@ -749,7 +791,9 @@ export class BackendCore {
         const mission = this.missions.read(request.input.id, scope);
         const streamPending = this.missionPublication.hasLifecycle(mission.id);
         const reportPending = mission.outcome === 'verified' && this.missionPublication.hasReport(mission.id);
-        return { ...mission, ...(streamPending ? { streamPending: true } : {}), ...(reportPending ? { reportPending: true } : {}) };
+        const conversationPending = this.missionPublication.hasConversation(mission.id);
+        return { ...mission, ...(streamPending ? { streamPending: true } : {}), ...(reportPending ? { reportPending: true } : {}),
+          ...(conversationPending ? { conversationPending: true } : {}) };
       }
       case 'revision-preview': {
         const { id, revision, change } = request.input;
@@ -2793,6 +2837,7 @@ export class BackendCore {
     this.conversationAccess = createCanonicalAccessHelper({ db:this.db, allow:()=>true, allowArchivedResources:true,
       messageVisible:(resourceId,messageId)=>{
         const gid=this.state.resources[resourceId]; if(!gid||this.state.graph.unavailableMessageIds.includes(messageId))return false;
+        if (this.missionConversations?.sourceAllowed(messageId) === false) return false;
         // An already committed own-message needs no inherited transcript/body
         // projection. Keep the same current resource policy and ownership gate.
         const header=this.graph.messageHeader(messageId);
@@ -3537,8 +3582,11 @@ export class BackendCore {
   }
   private package(id: string) { const r = this.state.reviews[id]; ensure(r, 'handoff_not_found'); return r; }
   private validateReview(r: HandoffReview) {
+    ensure(this.conversationAccess.resource(r.resourceId, 'read') &&
+      this.conversationAccess.resource(r.sourceResourceId, 'read'), 'source_unavailable');
     ensure(this.state.revisions[r.sourceResourceId] === r.sourceRevision, 'stale_source_revision');
     const h = this.graph.inspectHandoff(r.id);
+    ensure(h.items.every(item => this.conversationAccess.access(this.publicId(item.sourceConversationId), item.sourceMessageId)), 'source_unavailable');
     ensure(h.staleMessageIds.length === 0, 'stale_context');
     ensure(h.items.every(i => !['sensitive','restricted'].includes((i as any).sensitivity)), 'sensitive_content_excluded');
     ensure(r.estimatedTokens <= r.tokenBudget, 'context_budget_exceeded');
@@ -3931,10 +3979,12 @@ export class BackendCore {
       case 'place': return this.atomic(() => { this.gid(a.resourceId); return this.kernel.attachBlock(a.workspaceId, a.resourceId, { x: 0, y: 0, width: 320, height: 240, z: 0 }); }) as any;
       case 'move': return this.atomic(() => this.kernel.moveBlock(a.blockId, a.workspaceId, a.expectedVersion)) as any;
       case 'branch': return this.atomic(() => this.once(a.commandId, { name, ...a }, () => {
+        ensure(this.conversationAccess.resource(a.resourceId, 'read'), 'source_unavailable');
         if(a.expectedRevision!==undefined)ensure(Number.isSafeInteger(a.expectedRevision)&&this.state.revisions[a.resourceId]===a.expectedRevision,'stale_resource_version');
         ensure(!this.privateMode || a.providerId !== 'mock-ordinary', 'synthetic_provider_forbidden');
         ensure(Number.isInteger(a.tokenBudget) && a.tokenBudget > 0 && a.tokenBudget <= 32768, 'invalid_token_budget');
         ensure(Array.isArray(a.includeMessageIds) && a.includeMessageIds.length > 0 && a.includeMessageIds.length <= 100, 'explicit_source_selection_required');
+        ensure([a.messageId, ...a.includeMessageIds].every(id => this.conversationAccess.access(a.resourceId, id)), 'source_unavailable');
         const sourceId = this.gid(a.resourceId);
         const result = this.graph.branch({ sourceConversationId: sourceId, sourceMessageId: a.messageId, targetKind: ['local','mock-ordinary',CHATGPT_PLAN_PROVIDER].includes(a.providerId) ? 'ordinary' : 'codex', targetProviderId: a.providerId, title: a.title, includeMessageIds: a.includeMessageIds });
         const resource = this.kernel.createConversationRef(a.title, this.kernel.getResource(a.resourceId).resource.project_id);
@@ -3949,7 +3999,7 @@ export class BackendCore {
         this.state.reviews[review.id] = review;
         return { conversation: this.conv(resource.id), handoff: review, context: result.handoff, mode: 'application_continuation' };
       })) as any;
-      case 'review': return this.atomic(() => { const r = this.package(a.handoffId); ensure(r.state === 'prepared' || r.state === 'approved', 'handoff_not_reviewable'); ensure(r.fingerprint === a.fingerprint, 'approval_scope_mismatch'); this.validateReview(r); r.state = a.approve === true ? 'approved' : 'rejected'; r.approvedAt = now(); return structuredClone(r); }) as any;
+      case 'review': return this.atomic(() => { const r = this.package(a.handoffId); ensure(r.state === 'prepared' || r.state === 'approved', 'handoff_not_reviewable'); ensure(r.fingerprint === a.fingerprint, 'approval_scope_mismatch'); if(a.approve === true)this.validateReview(r); r.state = a.approve === true ? 'approved' : 'rejected'; r.approvedAt = now(); return structuredClone(r); }) as any;
       case 'selectProvider': return this.atomic(() => {
         ensure(this.state.revisions[a.resourceId] === a.expectedRevision, 'stale_resource_version');
         ensure(a.providerId === this.port.id || ['local','mock-ordinary',CHATGPT_PLAN_PROVIDER].includes(a.providerId), 'provider_unavailable');if(a.providerId===CHATGPT_PLAN_PROVIDER)ensure(this.ordinaryAuthorized(),'ordinary_provider_unavailable');

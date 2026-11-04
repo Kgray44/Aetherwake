@@ -1141,6 +1141,7 @@ export function createVelaMissionView(
     if (current.team) section.append(teamLabel(current.team));
     if (current.streamPending) section.append(el("p", "vela-core-meta", "Some mission activity is waiting to reach Intelligence Stream."));
     if (current.reportPending) section.append(el("p", "vela-core-meta", "Vela’s verified result is waiting to appear in chat."));
+    if (current.conversationPending) section.append(el("p", "vela-core-meta", "The verified handoff is waiting to reach the mission conversation."));
     const revision = renderRevisionReview(current);
     if (revision) section.append(revision);
     if (sameScope(current.scope, scope) && current.outcome === "verified") {
@@ -1163,6 +1164,7 @@ export function createVelaMissionView(
       else {
         const draft = el("div", "vela-core-plan"), cards = el("ul");
         for (const card of review.cards) cards.append(el("li", undefined, `${card.title} · ${card.mode === "reference" ? "Reuse" : "New"} ${card.kind}`));
+        section.append(el("p", "vela-core-meta", "The local mission conversation will receive its verified result and evidence links. You can review selected context before continuing in another provider."));
         draft.append(el("strong", undefined, review.title), cards,
           el("p", "vela-core-meta", "Creates a workspace in the same project and saves its reusable template."),
           button("Create linked workroom", "apply-workroom", () => { void applyWorkroom(review); }),

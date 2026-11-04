@@ -160,11 +160,16 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         "({viewport:[innerWidth,innerHeight],app:document.querySelector('#status')?.textContent?.slice(0,240),vela:document.querySelector('.vela-core-status')?.textContent?.slice(0,240),mission:document.querySelector('.vela-missions [role=alert]:not([hidden])')?.textContent?.slice(0,240),architect:document.querySelector('[data-surface-id=workspace-templates]')?.textContent?.slice(-600),stream:document.querySelector('[data-surface-id=intelligence-stream]')?.textContent?.slice(0,360)})",
       ) });
     };
-    const click = async selector => {
+    const click = async (selector, revealByHover = false) => {
       const scroll = `document.querySelector(${quote(selector)})?.scrollIntoView({block:'nearest',inline:'nearest',behavior:'instant'})`;
       await js(scroll);
       let previous;
       const point = await wait("Visible stable control " + selector, async () => {
+        if (revealByHover) {
+          const hover = await js(`(() => {const node=document.querySelector(${quote(selector)}),r=node?.getBoundingClientRect();
+            return r?.width>0&&r.height>0&&{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)};})()`);
+          if (hover) win.webContents.sendInputEvent({type:"mouseMove",...hover});
+        }
         const hit = await js(targetScript(selector, "inspect"));
         if (!hit.ready) { previous = undefined; await js(scroll); return false; }
         const current = { x: Math.round(hit.rect.x + hit.rect.width / 2), y: Math.round(hit.rect.y + hit.rect.height / 2) };
@@ -364,6 +369,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
         checklistId: projection.workroom.missionChecklistResourceId,
         timelineId: projection.workroom.missionTimelineResourceId,
         missionCards: projection.workroom.missionCards,
+        conversationId: projection.workroom.missionConversationResourceId,
       };
     });
     assert.equal(workroom.outcome, "verified");
@@ -408,7 +414,7 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
     assert.deepEqual(cards.performance.dashboard.profile, linked.profile);
     const streamEvents = cards.stream.dashboard.events;
     const replayFields = event => [event.eventId, event.cursor, event.receivedAt, event.type, event.status, event.classification];
-    assert.deepEqual(streamEvents.filter(event => event.type !== "vela.mission/workroom").map(replayFields), originEvents.map(replayFields));
+    assert.deepEqual(streamEvents.filter(event => !["vela.mission/workroom", "vela.mission/conversation-receipt"].includes(event.type)).map(replayFields), originEvents.map(replayFields));
     assert.equal(streamEvents.filter(event => event.type === "vela.mission/workroom" && event.classification === "observed").length, 1);
 
     const appCommand = input => js(`window.__aerynth.execute(${quote(input)})`);
@@ -484,6 +490,63 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       assert.deepEqual([after?.x, after?.y, after?.width, after?.height], [before.x, before.y, before.width, before.height]);
     }
     receipt.workroom.windowSizes = { full: fullViewport, compact: compactViewport, restored: restoredViewport, savedPlacementsPreserved: true };
+
+    const conversation = await rpc("conversation", { name: "detail", input: { resourceId: workroom.conversationId } });
+    assert.equal(conversation.messages.total, 1, "mission_conversation_receipt_count");
+    const handoffMessage = conversation.messages.items[0];
+    assert.equal(handoffMessage.provenance, "application");
+    assert(handoffMessage.content.includes(rendered.id) && handoffMessage.content.includes(OBJECTIVE), "scoped_mission_handoff_required");
+    for (const task of linked.tasks) {
+      const evidence = task.attempts.at(-1).evidence;
+      assert(handoffMessage.content.includes(evidence.id) && handoffMessage.content.includes(evidence.observedAt), "original_evidence_provenance_required");
+    }
+    assert.equal(streamEvents.filter(event => event.type === "vela.mission/conversation-receipt").length, 1);
+    const chatPlacement = workroom.placements.find(item => item.resourceId === workroom.conversationId);
+    const chatBlock = `[data-block=${quote(chatPlacement.blockId)}]`;
+    await appCommand({ type: "setViewport", workspaceId: workroom.id,
+      viewport: { x: chatPlacement.x - 60, y: chatPlacement.y - 180, zoom: 1 } });
+    await wait("The workroom chat renders its canonical verified handoff", () => js(`(() => {
+      const message = document.querySelector(${quote(chatBlock + ' [data-message-id=' + quote(handoffMessage.id) + '] .cp-message-content')});
+      return message?.getClientRects().length && message.textContent.includes(${quote(rendered.id)});
+    })()`));
+    await click(chatBlock + ' [aria-label="History, search and branches"]');
+    const sourceMessage = '#conversation-surface [data-message-id=' + quote(handoffMessage.id) + ']';
+    const actionsSelector = sourceMessage + ' summary[data-cp-control="message-actions"]';
+    try { await click(actionsSelector, true); }
+    catch (error) {
+      receipt.conversationControlDiagnostic = await js(`(() => {
+        const node=document.querySelector(${quote(actionsSelector)}),rect=node?.getBoundingClientRect();
+        return {rect:rect?.toJSON(),hit:rect&&document.elementFromPoint(rect.x+rect.width/2,rect.y+rect.height/2)?.outerHTML.slice(0,400),
+          ancestry:node&&[node,...(function*(n){while(n=n.parentElement)yield n;})(node)].map(n=>({tag:n.tagName,class:n.className,hover:n.matches(':hover'),opacity:getComputedStyle(n).opacity,rect:n.getBoundingClientRect().toJSON()})).slice(0,10)};
+      })()`);
+      await capture("04-mission-conversation-control-diagnostic");
+      throw error;
+    }
+    await click(sourceMessage + ' button[data-cp-control="branch"]');
+    await fill('#conversation-surface input[aria-label="Branch title"]', 'Synthetic mission follow-up branch');
+    await click('#conversation-surface form:has([data-cp-group="branch-source-review"]) button[data-cp-control="branch"]');
+    await wait("Selected mission context is prepared for review", () => js(
+      `document.querySelector('#conversation-surface .cp-secondary')?.textContent.includes('awaiting your review')`,
+    ));
+    await click('#conversation-surface .cp-secondary > button:nth-of-type(1)');
+    const branch = await wait("The reviewed mission branch keeps its source message identity", async () => {
+      const state = await desktop(), resource = state.resources.find(item => item.title === 'Synthetic mission follow-up branch');
+      if (!resource) return null;
+      const canonical = await rpc("snapshot", {});
+      if (!Object.values(canonical.handoffs).some(item => item.resourceId === resource.id && item.state === "approved") ||
+        !await js("document.querySelector('#conversation-surface .cp-chat-identity h3')?.textContent === 'Synthetic mission follow-up branch'")) return null;
+      const detail = await rpc("conversation", { name: "detail", input: { resourceId: resource.id } });
+      const source = detail.messages.items.find(item => item.id === handoffMessage.id && item.inherited);
+      return source?.content === handoffMessage.content && detail.lineage.some(edge =>
+        edge.parentResourceId === workroom.conversationId && edge.childResourceId === resource.id) &&
+        { resourceId: resource.id, sourceMessageId: source.id, sourceResourceId: source.resourceId,
+          providerId: detail.conversation.providerId, inherited: source.inherited };
+    });
+    assert.equal(branch.providerId, 'local');
+    await capture("04-mission-conversation-branch");
+    await click('#conversation-surface button[data-cp-control="close"]');
+    await wait("Mission conversation history closes", () => js("!document.querySelector('#conversation-surface')"));
+    receipt.workroom.conversation = { resourceId: workroom.conversationId, messageId: handoffMessage.id, branch };
 
     const optimizeTitle = "Synthetic layout optimization room";
     await appCommand({ type: "createWorkspace", title: optimizeTitle, projectId: null });

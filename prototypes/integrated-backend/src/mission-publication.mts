@@ -7,6 +7,7 @@ interface MissionPublicationHost {
   lifecycle(missionId: string, seq: number, ack: () => void): void;
   /** A deferred report stays pending. A handled report must acknowledge it transactionally. */
   report(missionId: string, seq: number, ack: () => void): boolean;
+  conversation?(missionId: string, seq: number, ack: () => void): boolean;
 }
 
 const lifecycleBatch = 64;
@@ -26,6 +27,10 @@ export class MissionPublication {
     CREATE TABLE IF NOT EXISTS vela_mission_report_outbox (
       mission_id TEXT PRIMARY KEY REFERENCES vela_missions(id) ON DELETE CASCADE,
       seq INTEGER NOT NULL CHECK(seq BETWEEN 1 AND ${MISSION_LIMITS.events})
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS vela_mission_conversation_outbox (
+      mission_id TEXT PRIMARY KEY REFERENCES vela_missions(id) ON DELETE CASCADE,
+      seq INTEGER NOT NULL CHECK(seq BETWEEN 1 AND ${MISSION_LIMITS.events})
     ) STRICT;`);
   }
 
@@ -37,12 +42,18 @@ export class MissionPublication {
       ON CONFLICT(mission_id,seq) DO NOTHING`);
     for (const event of events) enqueue.run(mission.id, event.seq);
 
-    if (!mission.originConversationId || mission.disposition === 'cancelled' ||
+    if (mission.disposition === 'cancelled' ||
         !mission.tasks.length || !mission.tasks.every(task => task.state === 'verified')) return;
     const settled = events.findLast(event => event.kind === 'settled' && event.detail === 'verified');
-    if (settled) this.db.prepare(`INSERT INTO vela_mission_report_outbox VALUES(?,?)
+    if (settled && mission.originConversationId) this.db.prepare(`INSERT INTO vela_mission_report_outbox VALUES(?,?)
       ON CONFLICT(mission_id) DO UPDATE SET seq=excluded.seq WHERE excluded.seq > vela_mission_report_outbox.seq`)
       .run(mission.id, settled.seq);
+    const conversation = mission.workroom?.missionConversationResourceId && (settled ??
+      (events.some(event => event.kind === 'workroom') && mission.events.findLast(event =>
+        event.kind === 'settled' && event.detail === 'verified')));
+    if (conversation) this.db.prepare(`INSERT INTO vela_mission_conversation_outbox VALUES(?,?)
+      ON CONFLICT(mission_id) DO UPDATE SET seq=excluded.seq WHERE excluded.seq > vela_mission_conversation_outbox.seq`)
+      .run(mission.id, conversation.seq);
   }
 
   ackReport(missionId: string): void {
@@ -57,6 +68,10 @@ export class MissionPublication {
 
   hasReport(missionId: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM vela_mission_report_outbox WHERE mission_id=?').get(missionId);
+  }
+
+  hasConversation(missionId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM vela_mission_conversation_outbox WHERE mission_id=?').get(missionId);
   }
 
   flush(host: MissionPublicationHost): { continue: boolean; retry: boolean } {
@@ -96,6 +111,24 @@ export class MissionPublication {
           });
           if (handled && !acknowledged) retry = true;
         } catch { retry = true; }
+      }
+      if (host.conversation) {
+        const conversations = this.db.prepare(`SELECT mission_id,seq FROM vela_mission_conversation_outbox
+          WHERE NOT EXISTS (SELECT 1 FROM vela_mission_lifecycle_outbox WHERE
+            mission_id=vela_mission_conversation_outbox.mission_id)
+          ORDER BY rowid LIMIT ?`).all(MISSION_LIMITS.missions);
+        const remove = this.db.prepare('DELETE FROM vela_mission_conversation_outbox WHERE mission_id=? AND seq=?');
+        for (const row of conversations) {
+          let acknowledged = false;
+          try {
+            const handled = host.conversation(String(row.mission_id), Number(row.seq), () => {
+              ensure(this.db.isTransaction, 'mission_publication_requires_transaction');
+              ensure(remove.run(row.mission_id, row.seq).changes === 1, 'mission_publication_ack_failed');
+              acknowledged = true;
+            });
+            if (handled && !acknowledged) retry = true;
+          } catch { retry = true; }
+        }
       }
       const moreEvents = advanced === lifecycleBatch &&
         !!this.db.prepare('SELECT 1 FROM vela_mission_lifecycle_outbox LIMIT 1').get();

@@ -4253,7 +4253,7 @@ export function installApplication(hooks: Hooks) {
             conversationView.messageOffset[value.resourceId] = value.offset;
           },
           openHistory: () => {
-            conversations(r.id);
+            void showConversations(r.id).catch(report);
           },
           failed: report,
         });

@@ -26,6 +26,7 @@ interface Pending {
   draft: VelaTemplatePlan;
   roles: TemplateResourceRole[];
   dashboards: MissionWorkroomCard[];
+  conversationKey: string;
 }
 const checklist: TemplateResourceRole = {
   key: 'mission-checklist', label: 'Mission checklist',
@@ -93,7 +94,8 @@ export class MissionWorkrooms {
     ensure(new Set(roles.map(role => role.key)).size === roles.length && planned.every(role =>
       role.source.kind !== 'checklist' && role.source.kind !== 'timeline'), 'mission_workroom_invalid_draft');
     const expires = Date.now() + 120_000;
-    this.reviews.set(reviewId, { missionId, scope, projectVersion, expires, title, draft, roles, dashboards: cards });
+    this.reviews.set(reviewId, { missionId, scope, projectVersion, expires, title, draft, roles, dashboards: cards,
+      conversationKey: (localChat ?? primaryChat).key });
     return { kind: 'workroom-preview', missionId, reviewId, title, expiresAt: new Date(expires).toISOString(),
       cards: roles.map(role => ({ title: role.label, kind: role.source.kind, mode: role.source.mode })) };
   }
@@ -122,7 +124,8 @@ export class MissionWorkrooms {
         projectId: scope.projectId, expectedProjectVersion: review.projectVersion,
       });
       const missionChecklistResourceId = applied.resourceIds[checklist.key];
-      ensure(missionChecklistResourceId && applied.resourceIds[timeline.key] === timelineResource.resourceId, 'mission_workroom_invalid_bindings');
+      const missionConversationResourceId = applied.resourceIds[review.conversationKey];
+      ensure(missionConversationResourceId && missionChecklistResourceId && applied.resourceIds[timeline.key] === timelineResource.resourceId, 'mission_workroom_invalid_bindings');
       const missionCards: NonNullable<MissionWorkroom['missionCards']> = {};
       for (const card of review.dashboards) {
         const id = applied.resourceIds[dashboardRole(card).key];
@@ -130,7 +133,8 @@ export class MissionWorkrooms {
         missionCards[card] = id;
       }
       const workroom: MissionWorkroom = { kind: 'workroom', workspaceId: applied.workspaceId, title: review.title,
-        templateId: applied.templateId, missionChecklistResourceId, missionTimelineResourceId: timelineResource.resourceId, missionCards };
+        templateId: applied.templateId, missionConversationResourceId, missionChecklistResourceId,
+        missionTimelineResourceId: timelineResource.resourceId, missionCards };
       this.host.missions.attachWorkroom(mission.id, scope, workroom);
       return workroom;
     });

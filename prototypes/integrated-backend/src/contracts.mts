@@ -151,7 +151,7 @@ export interface VelaRouteTiming {
 export interface MissionStreamEvent {
   id: string;
   scope: MissionScope;
-  kind: MissionEvent['kind'] | 'report-posted';
+  kind: MissionEvent['kind'] | 'report-posted' | 'conversation-receipt';
   seq?: number;
   /** Canonical journal time, independent of delivery to the retained stream. */
   occurredAt?: string;

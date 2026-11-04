@@ -41,6 +41,7 @@ const missionOperations: Record<string, string> = {
   recovered: "Attempt recovered",
   workroom: "Mission workroom created",
   "report-posted": "Mission report posted",
+  "conversation-receipt": "Mission conversation handoff recorded",
 };
 const missionExecutors: Record<string, string> = {
   "sample.cpu": "CPU utilization",

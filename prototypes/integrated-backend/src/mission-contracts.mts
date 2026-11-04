@@ -144,6 +144,7 @@ export interface MissionProjection extends Mission {
   admission?: MissionAdmission;
   streamPending?: true;
   reportPending?: true;
+  conversationPending?: true;
   waits: Record<string, 'dependencies' | 'capacity' | 'resource-conflict' | 'resource-pressure'>;
   profile: {
     elapsedMs: number;
@@ -224,6 +225,7 @@ export interface MissionWorkroom {
   workspaceId: string;
   title: string;
   templateId: string;
+  missionConversationResourceId?: string;
   missionChecklistResourceId?: string;
   missionTimelineResourceId?: string;
   missionCards?: Partial<Record<MissionWorkroomCard, string>>;
