@@ -186,6 +186,7 @@ export class BackendCore {
   private sendGrants = new Map<string,{previewId:string;fingerprint:string;commandId:string;expiresAt:string;consumed:boolean}>();
   private vela!: VelaService;
   private velaHost!: CanonicalVelaHost;
+  private missionContextHost!: (scope: MissionScope) => CanonicalVelaHost;
   private velaPlanner!: VelaPlanningPort;
   private velaChatGPTPlanner!: VelaPlanningPort;
   private velaSelection:string[]=[];
@@ -321,8 +322,8 @@ export class BackendCore {
           lane === CHATGPT_PLAN_PROVIDER ? 2 - Number(this.active?.providerId === lane) - Number(!!this.missionPlanningRun) : 2,
         underPressure: () => freemem() < 512 * 1024 * 1024,
         replan: replanNativeMission,
-        contextSource: (_mission, task) => task.executor === 'inspect.workspace-notes' ?
-          canonicalMissionContextSource(this.velaHost, (binding, id) =>
+        contextSource: (mission, task) => task.executor === 'inspect.workspace-notes' ?
+          canonicalMissionContextSource(this.missionContextHost(mission.scope), (binding, id) =>
             this.missionScopeAllowed(binding.scope) && !!this.db.prepare('SELECT 1 FROM blocks WHERE workspace_id=? AND resource_id=?')
               .get(binding.scope.workspaceId, id)) : undefined,
         observe: (mission, event) => this.record('vela.mission/' + event.kind, 'observed', undefined,
@@ -334,6 +335,18 @@ export class BackendCore {
       this.missionWorkrooms = new MissionWorkrooms({
         library: this.library, missions: this.missions, atomic: work => this.atomic(work),
         writable: () => !this.closed && !this.active,
+        createTimeline: ({ commandId, title, projectId, missionCreatedAt }) => {
+          const capture = Date.now();
+          return this.timelineDomain().dispatch({ name: 'create', input: {
+            commandId, title, projectId, view: {
+              schemaVersion: 1, mode: 'activity', scope: { projectId, resourceIds: [] },
+              sources: { providerIds: [], eventTypes: [], classifications: ['observed'] },
+              viewport: { from: new Date(Math.max(capture - 86400000, Date.parse(missionCreatedAt) - 60000)).toISOString(),
+                to: new Date(capture + 60000).toISOString(), displayTimeZone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' },
+              selection: null,
+            },
+          } });
+        },
         currentScope: () => {
           const { currentWorkspaceId: workspaceId, currentProjectId: projectId } = this.velaContext();
           ensure(workspaceId, 'mission_workspace_required'); return { workspaceId, projectId };
@@ -635,6 +648,13 @@ export class BackendCore {
       case 'team-report':
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
         return this.postMissionTeamReport(scope, request.input.id);
+      case 'workroom-resource': {
+        const { resourceId } = request.input;
+        ensure(Object.keys(request.input).length === 1 && identifier(resourceId), 'invalid_mission_command');
+        if (!this.productResourceAccess(resourceId) || !this.db.prepare('SELECT 1 FROM blocks WHERE workspace_id=? AND resource_id=?')
+          .get(scope.workspaceId, resourceId)) return null;
+        return this.missions.workroomResource(resourceId, scope);
+      }
       case 'list':
         ensure(!Object.keys(request.input).length, 'invalid_mission_command');
         return this.missions.list(scope);
@@ -1231,12 +1251,16 @@ export class BackendCore {
       raw.providerTurnId === e.turnId && evidence.nativeThreadId === e.binding.nativeThreadId && evidence.nativeTurnId === e.turnId;
   }
   private initializeVela(testPlanner?:VelaPlanningPort) {
-    this.velaHost=createCanonicalVelaHost({db:this.db,transaction:work=>this.atomic(()=>work(this.db)),readTransaction:work=>this.kernel.withTransaction(work),metadata:purpose=>this.velaMetadata(purpose),currentContext:()=>this.velaContext(),
+    const hostOptions: Parameters<typeof createCanonicalVelaHost>[0] = {db:this.db,transaction:work=>this.atomic(()=>work(this.db)),readTransaction:work=>this.kernel.withTransaction(work),metadata:purpose=>this.velaMetadata(purpose),currentContext:()=>this.velaContext(),
       permissions:{attentionPreferences:(_intent,c)=>c.principalId==='local-owner'&&c.policyVersion==='aerynth.local-owner@1',scope:(c,m)=>this.velaScope(c,m),metadata:(ref,_c,m)=>ref.kind==='resource'?!!m.resources.find(r=>r.id===ref.id&&r.visible!==false):ref.kind==='workspace'?m.workspaces.some(w=>w.id===ref.id):ref.kind==='collection'?!!m.collections?.some(c=>c.id===ref.id)&&this.conversationAccess.collection(ref.id,'read',ref.state==='archived'):m.projects.some(p=>p.id===ref.id),content:ref=>ref.kind==='resource'&&!!this.conversationAccess.resource(ref.id),authorize:request=>this.authorizeVelaPolicy(request),restoreCollection:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'organize',true),inspectCollectionArchiveReceipt:ref=>ref.kind==='collection'&&this.conversationAccess.collection(ref.id,'read',true)},
       revisions:{attentionPreferences:()=>this.vela.attentionPreferenceVersion(),conversation:id=>this.state.revisions[id]??null,workspace:id=>this.velaNative?.workspaceRevision?.(id)??Number(this.db.prepare('SELECT version FROM workspace_layouts WHERE workspace_id=?').get(id)?.version??0),collection:id=>Number(this.db.prepare('SELECT version FROM cp_collection_rules WHERE collection_id=?').get(id)?.version??0)},
       conversations:{ensure:()=>this.ensureVelaConversation(),read:id=>this.readVelaConversation(id),append:(id,message)=>this.appendVelaMessage(id,message)},dispatch:{native:input=>this.applyVelaNative(input),prepareNative:{supports:action=>action.type==='readWeather'||action.type==='createTimeline'&&action.source.kind==='github-commits',prepare:(input,signal)=>this.prepareVelaNative(input,signal)},delegateTask:input=>this.executeVelaDelegation(input),preference:input=>{
         ensure(this.velaNative?.applyPreference,'vela_preference_capability_unavailable');this.requireVelaPolicyGrant(input.authorizationRef,undefined,'adaptation');return this.velaNative.applyPreference(input);
-      }}});
+      }}};
+    this.velaHost=createCanonicalVelaHost(hostOptions);
+    this.missionContextHost = scope => createCanonicalVelaHost({ ...hostOptions, currentContext: () => ({
+      ...this.velaContext(), currentWorkspaceId: scope.workspaceId, currentProjectId: scope.projectId, selectedResourceIds: [],
+    }) });
     this.velaHost.contextReferences=selectedIds=>{
       const context=this.velaHost.context(),scope=this.velaHost.scope(),refs:ResourceRef[]=[];
       const add=(id:string|null,kind:'project'|'workspace')=>{if(id!==null){const ref=this.velaHost.resolve({id,kind},scope);if(ref&&!refs.some(r=>r.id===id&&r.kind===kind))refs.push(ref);}};

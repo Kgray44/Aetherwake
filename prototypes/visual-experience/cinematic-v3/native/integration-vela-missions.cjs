@@ -318,13 +318,31 @@ exports.verify = async function verify({ win, app, privateRoot, call, source, st
       const projection = await read(rendered.id);
       return projection.workroom?.workspaceId === room.id && {
         id: room.id, sourceMissionId: projection.id, outcome: projection.outcome,
-        blocks: state.blocks.map(block => block.resource_id).filter(Boolean),
+        blocks: state.blocks.filter(block => block.workspace_id === room.id).map(block => block.resource_id).filter(Boolean),
+        checklistId: projection.workroom.missionChecklistResourceId,
+        timelineId: projection.workroom.missionTimelineResourceId,
       };
     });
     assert.equal(workroom.outcome, "verified");
     assert(workroom.blocks.length >= 2, "expected_functional_workroom_blocks");
     assert.equal((await list())[0].id, rendered.id);
-    receipt.workroom = workroom;
+    assert(workroom.checklistId && workroom.blocks.includes(workroom.checklistId), "canonical_mission_checklist_missing");
+    assert(workroom.timelineId && workroom.blocks.includes(workroom.timelineId), "canonical_mission_timeline_missing");
+    const readCard = resourceId => rpc("missions", { name: "workroom-resource", input: { resourceId } });
+    const checklist = await readCard(workroom.checklistId), eventCard = await readCard(workroom.timelineId);
+    assert.equal(checklist.missionId, rendered.id);
+    assert.equal(eventCard.missionId, rendered.id);
+    const renderedCards = await wait("Linked checklist and timeline render canonical mission evidence", () => js(`(()=>{
+      const card=kind=>[...document.querySelectorAll('[data-mission-workroom-card="'+kind+'"]')].find(el=>el.dataset.missionId===${quote(rendered.id)}&&el.getClientRects().length);
+      const checklist=card('checklist'),timeline=card('timeline');
+      return checklist&&timeline&&{
+        tasks:[...checklist.querySelectorAll('[data-mission-task]')].map(el=>[el.dataset.missionTask,el.dataset.taskState]),
+        timeline:[...timeline.querySelectorAll('[data-mission-sequence]')].map(el=>Number(el.dataset.missionSequence))
+      };
+    })()`));
+    assert.deepEqual(renderedCards.tasks, checklist.checklist.map(task => [task.taskId, task.state]));
+    assert.deepEqual(renderedCards.timeline, eventCard.timeline.map(event => event.seq));
+    receipt.workroom = { ...workroom, renderedCards };
     await capture("03-linked-mission-workroom");
     const providerAfter = await rpc("providerActivity", {});
     assert.equal(providerAfter.codexConnections, providerBefore.codexConnections);

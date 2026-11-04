@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { canonicalMissionContextSource, compileMissionContext, MissionContextError, validateMissionContext } from '../src/mission-context.mts';
-import type { MissionContextRequest, MissionContextSource, MissionSourceRef, MissionSourceSnapshot } from '../src/mission-context.mts';
+import { canonicalMissionContextSource, compileMissionContext, createMissionContextCache, MissionContextError,
+  validateMissionContext, validateMissionContextSources } from '../src/mission-context.mts';
+import type { MissionContextPackage, MissionContextRequest, MissionContextSource, MissionSourceRef,
+  MissionSourceSnapshot } from '../src/mission-context.mts';
 import type { ResourceRef } from '../src/contracts.ts';
 
 function request(): MissionContextRequest {
@@ -140,6 +142,78 @@ test('reports unavailable optional retrieval while preserving independently auth
   assert.equal(value.manifest.retrieval, 'unavailable');
   assert.deepEqual(value.manifest.sources.map(item => item.ref.id), ['pin']);
   validateMissionContext(value, input, adapter.source);
+});
+
+test('reuses bounded ranking work only after current authorized reads', () => {
+  const note = { ...snapshot('note', 'Image codec fidelity.'), scope: { kind: 'shared' as const } };
+  const adapter = fixture([note]);
+  const input = request(), cache = createMissionContextCache();
+  let reads = 0;
+  const source = { ...adapter.source, read: (...args: Parameters<MissionContextSource['read']>) => {
+    reads++;
+    return adapter.source.read(...args);
+  } };
+  const value = compileMissionContext(input, source, cache);
+  assert.deepEqual(compileMissionContext(input, source, cache), value);
+  assert.deepEqual(cache.stats(), { entries: 1, hits: 1 });
+  assert.equal(reads, 2);
+  const otherWorkspace = { ...input, scope: { ...input.scope, workspaceId: 'other' } };
+  assert.equal(compileMissionContext(otherWorkspace, source, cache).payload.sources.length, 1);
+  assert.deepEqual(cache.stats(), { entries: 2, hits: 1 });
+  adapter.changePolicy();
+  compileMissionContext(input, source, cache);
+  assert.deepEqual(cache.stats(), { entries: 3, hits: 1 });
+  adapter.items.set(note.ref.id, { ...note, content: 'No relevant terms.' });
+  assert.deepEqual(compileMissionContext(input, source, cache).payload.sources, []);
+  assert.deepEqual(cache.stats(), { entries: 4, hits: 1 });
+  adapter.revoke();
+  assert.deepEqual(compileMissionContext(input, source, cache).manifest.omissions, [{ reason: 'unavailable', count: 1 }]);
+  assert.equal(reads, 6);
+  assert.deepEqual(cache.stats(), { entries: 4, hits: 1 });
+});
+
+test('keeps fresh discovery and bounds the ranking cache', () => {
+  const note = snapshot('note', 'Image codec fidelity.'), another = snapshot('another', 'Image quality evidence.');
+  const adapter = fixture([note, another]);
+  const input = request(), cache = createMissionContextCache();
+  let refs = [note.ref];
+  const source = { ...adapter.source, retrieve: () => refs };
+  assert.deepEqual(compileMissionContext(input, source, cache).manifest.sources.map(item => item.ref.id), ['note']);
+  refs = [note.ref, another.ref];
+  assert.deepEqual(compileMissionContext(input, source, cache).manifest.sources.map(item => item.ref.id), ['note', 'another']);
+  assert.equal(cache.stats().hits, 1);
+  for (let index = 0; index < 130; index++) {
+    compileMissionContext({ ...input, taskObjective: `${input.taskObjective} variant${index}` }, source, cache);
+  }
+  assert.deepEqual(cache.stats(), { entries: 128, hits: 1 });
+  compileMissionContext(input, source, cache);
+  assert.deepEqual(cache.stats(), { entries: 128, hits: 1 });
+});
+
+test('retains bounded source proofs for budget compaction and revalidates a serialized receipt', () => {
+  const pinned = snapshot('pinned', 'Pinned requirement.');
+  const notes = Array.from({ length: 20 }, (_, index) => snapshot(`deferred-${index}`, `Image fidelity ${index} ` + 'z'.repeat(3000)));
+  const adapter = fixture([pinned, ...notes]);
+  const input = { ...request(), requiredSources: [pinned.ref], maxTokens: 1200 };
+  const value = compileMissionContext(input, adapter.source, createMissionContextCache());
+  assert.deepEqual(value.payload.sources.map(item => item.citation.ref), [pinned.ref]);
+  const serialized = JSON.stringify(value.manifest);
+  const receipt = JSON.parse(serialized) as MissionContextPackage['manifest'];
+  const compacted = receipt.compaction!;
+  assert.equal(compacted.strategy, 'whole-source-selection');
+  assert.ok(compacted.deferred.length > 0);
+  assert.ok(compacted.untracked > 0);
+  assert.equal(compacted.deferred.length + compacted.untracked, notes.length);
+  assert.ok(Buffer.byteLength(JSON.stringify(compacted.deferred)) <= 1024);
+  assert.ok(!serialized.includes(pinned.content) && !serialized.includes(notes[0].content));
+  validateMissionContextSources(receipt, adapter.source);
+  validateMissionContext(value, input, adapter.source);
+  const changed = adapter.items.get(compacted.deferred[0].ref.id)!;
+  adapter.items.set(changed.ref.id, { ...changed, content: `${changed.content} same-version edit` });
+  assert.throws(() => validateMissionContextSources(receipt, adapter.source), errorCode('mission_context_source_changed'));
+  adapter.items.set(changed.ref.id, changed);
+  adapter.revoke();
+  assert.throws(() => validateMissionContextSources(receipt, adapter.source), errorCode('mission_context_source_changed'));
 });
 
 test('canonical resource adapter reads only currently authorized, eligible notes in the mission workspace', () => {

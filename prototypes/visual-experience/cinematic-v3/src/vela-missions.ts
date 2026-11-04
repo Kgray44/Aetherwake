@@ -40,6 +40,11 @@ const eventLabel = {
   recovered: "Recovered from journal",
   workroom: "Workroom created",
 } as const;
+export { eventLabel as missionEventLabel, stateLabel as missionStateLabel };
+const contextDetail: Record<string, string> = {
+  mission_source_changed_since_verification: "A source changed after verification. The previous result needs a new review.",
+  mission_context_changed_during_execution: "The sources changed during execution. Review the current sources before trying again.",
+};
 const priorities = ["Lowest", "Lower", "Normal", "Higher", "Highest"];
 const sameScope = (left: MissionScope | null, right: MissionScope | null) =>
   left?.workspaceId === right?.workspaceId &&
@@ -94,6 +99,7 @@ export function createVelaMissionView(
   let scope: MissionScope | null = null,
     visible = false,
     epoch = 0,
+    readEpoch = 0,
     refreshing = false,
     refreshQueued = false;
   let summaries: MissionSummary[] = [],
@@ -475,6 +481,7 @@ export function createVelaMissionView(
       while (refreshQueued && visible && scope && !doc.hidden) {
         refreshQueued = false;
         const activeEpoch = epoch,
+          activeReadEpoch = readEpoch,
           id = selectedId,
           expected = scope;
         try {
@@ -482,7 +489,7 @@ export function createVelaMissionView(
             command({ name: "list", input: {} }),
             id ? command({ name: "read", input: { id } }) : null,
           ]);
-          if (activeEpoch !== epoch || !visible || id !== selectedId) continue;
+          if (activeEpoch !== epoch || activeReadEpoch !== readEpoch || !visible || id !== selectedId) continue;
           if (!Array.isArray(list)) throw new Error("mission_list_unavailable");
           let changed = JSON.stringify(summaries) !== JSON.stringify(list);
           summaries = list;
@@ -492,14 +499,15 @@ export function createVelaMissionView(
             changed = true;
           } else if (
             accepted(record, expected) &&
-            (!mission || record.revision > mission.revision)
+            (!mission || record.revision > mission.revision ||
+              (record.revision === mission.revision && JSON.stringify(record) !== JSON.stringify(mission)))
           ) {
             mission = record;
             changed = true;
           }
           if (changed) render();
         } catch (cause) {
-          if (activeEpoch === epoch && visible && id === selectedId) {
+          if (activeEpoch === epoch && activeReadEpoch === readEpoch && visible && id === selectedId) {
             summaries = [];
             mission = null;
             selectedId = null;
@@ -851,7 +859,7 @@ export function createVelaMissionView(
         () => { void openWorkspace(current.workroom!.workspaceId).catch(showError); }));
     } else if (current.workroom) {
       section.append(el("p", "vela-core-meta", "This workspace is linked to the recorded mission."));
-    } else if (["verified", "failed", "blocked", "cancelled", "uncertain"].includes(current.outcome)) {
+    } else if (sameScope(current.scope, scope)) {
       const review = workroomReview?.missionId === current.id ? workroomReview : null;
       if (!review) section.append(button("Preview mission workroom", "preview-workroom", () => { void planWorkroom(current.id); }));
       else {
@@ -940,7 +948,7 @@ export function createVelaMissionView(
           el("p", "vela-core-meta", waitLabel[current.waits[task.id]]),
         );
       if (task.detail)
-        item.append(el("p", "vela-core-meta", task.detail.replace(/_/g, " ")));
+        item.append(el("p", "vela-core-meta", contextDetail[task.detail] ?? task.detail.replace(/_/g, " ")));
       const available = missionTaskControls(current, task),
         controls = actions();
       if (available.priority) {
@@ -1013,7 +1021,7 @@ export function createVelaMissionView(
           );
         }
         if (attempt.context) {
-          const { accounting, dependencies, sources } = attempt.context;
+          const { accounting, dependencies, sources, omissions, compaction } = attempt.context;
           receipt.append(
             el(
               "p",
@@ -1021,6 +1029,19 @@ export function createVelaMissionView(
               `Context ${accounting.tokens}/${accounting.maxTokens} ${accounting.method === "tokenizer" ? "tokens" : "estimated tokens"} · ${dependencies.length} prerequisites · ${sources.length} sources`,
             ),
           );
+          const budgetOmissions = omissions.find((omission) => omission.reason === "budget")?.count ?? 0;
+          if (budgetOmissions || compaction) {
+            receipt.append(el("p", "vela-core-meta",
+              `${budgetOmissions} sources omitted within the context budget · ${compaction?.deferred.length ?? 0} deferred references kept · ${compaction?.untracked ?? 0} without retained references`));
+          }
+          if (sources.length || compaction?.deferred.length) {
+            const references = details("Context source references", `${attempt.id}-context-sources`);
+            const list = el("ul");
+            for (const source of sources) list.append(el("li", undefined, `Retained · ${source.ref.id} · ${source.locator}`));
+            for (const source of compaction?.deferred ?? []) list.append(el("li", undefined, `Deferred · ${source.ref.id}`));
+            references.append(list);
+            receipt.append(references);
+          }
         }
         if (attempt.telemetry) {
           const {
@@ -1218,6 +1239,11 @@ export function createVelaMissionView(
     observe() {
       refresh();
       if (teamLibraryOpen && !teamLibrary) void loadTeams();
+    },
+    invalidateEvidence() {
+      readEpoch++;
+      if (mission) { mission = null; render(); }
+      refresh();
     },
   };
 }

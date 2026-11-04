@@ -149,6 +149,7 @@ export type MissionRequest =
   | { name: 'team-save'; input: MissionTeamSave }
   | { name: 'team-archive'; input: { id: string; expectedVersion: number } }
   | { name: 'team-report'; input: { id: string } }
+  | { name: 'workroom-resource'; input: { resourceId: string } }
   | { name: 'list'; input: Record<string, never> }
   | { name: 'read'; input: { id: string } }
   | { name: 'workroom-preview'; input: { id: string } }
@@ -174,6 +175,8 @@ export interface MissionWorkroom {
   workspaceId: string;
   title: string;
   templateId: string;
+  missionChecklistResourceId?: string;
+  missionTimelineResourceId?: string;
 }
 export interface MissionWorkroomPreview {
   kind: 'workroom-preview';
@@ -183,7 +186,17 @@ export interface MissionWorkroomPreview {
   expiresAt: string;
   cards: { title: string; kind: string; mode: 'new' | 'reference' }[];
 }
-export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom |
+export type MissionWorkroomResource = {
+  kind: 'workroom-resource';
+  missionId: string;
+  outcome: MissionProjection['outcome'];
+  revision: number;
+} & (
+  { checklist: { taskId: string; title: string; state: MissionTaskState }[]; timeline?: never } |
+  { timeline: MissionEvent[]; checklist?: never }
+);
+
+export type MissionResponse = MissionPlanningOffer | MissionPreview | MissionSummary[] | MissionProjection | MissionWorkroom | MissionWorkroomResource |
   MissionWorkroomPreview | MissionTeam | MissionTeamLibrary |
   { kind: 'team-report'; missionId: string; messageId: string } | null;
 

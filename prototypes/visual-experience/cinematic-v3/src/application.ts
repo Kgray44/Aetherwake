@@ -62,6 +62,7 @@ import type { VelaPlan, VelaRequest, VelaState } from "../../../vela-core/src/co
 import { createVelaExperience } from "./vela-experience";
 import { createVelaManifestation } from "./vela-manifestation.ts";
 import { createVelaMissionView } from "./vela-missions.ts";
+import { mountMissionWorkroomView, type MissionWorkroomView } from "./mission-workroom-view.ts";
 import type { MissionResponse } from "../../../integrated-backend/src/mission-contracts.mts";
 import { createConversationExecutionPort } from "./conversation-execution";
 import { workspaceWheelFactor } from "./workspace-wheel";
@@ -459,10 +460,12 @@ export function installApplication(hooks: Hooks) {
     pending: boolean;
     resourceId?: string;
   } | null = null;
+  let missionWorkroomScope: string | null = null;
+  const missionWorkroomViews = new Set<MissionWorkroomView>();
   const checklistViews = new Map<
     string,
     {
-      view: ReturnType<typeof mountChecklistExperience>;
+      view: MissionWorkroomView;
       version: number;
       width?: number;
     }
@@ -479,12 +482,40 @@ export function installApplication(hooks: Hooks) {
   const timelineViews = new Map<
     string,
     {
-      view: ReturnType<typeof mountTimelineExperience>;
+      view: MissionWorkroomView;
       version: number;
       width?: number;
     }
   >();
   const timelineProjections = new Map<string, NonNullable<Parameters<typeof blockIdentity>[0]["timeline"]>>();
+  function refreshMissionWorkroomCards(accessChanged = false) {
+    for (const view of missionWorkroomViews) view.observe(accessChanged);
+  }
+  const restoreMissionWorkroomCards = () => refreshMissionWorkroomCards();
+  document.addEventListener("visibilitychange", restoreMissionWorkroomCards);
+  function mountWorkroomCard(
+    root: HTMLElement,
+    resourceId: string,
+    kind: "checklist" | "timeline",
+    mountDefault: (container: HTMLElement) => ReturnType<typeof mountTimelineExperience>,
+  ): MissionWorkroomView {
+    const view = mountMissionWorkroomView(root, kind, missionWorkroomScope, async () => {
+      try {
+        const result = await host.command!("missions", { name: "workroom-resource", input: { resourceId } }) as MissionResponse;
+        if (result === null) return null;
+        if (result && "kind" in result && result.kind === "workroom-resource") return result;
+        throw new Error("mission_workroom_resource_unavailable");
+      } catch (cause) {
+        if (cause instanceof Error && cause.message === "unsupported_command") return null;
+        throw cause;
+      }
+    }, mountDefault, (missionId) => {
+      if (!velaOpen) openVela();
+      velaPanel?.showMission(missionId);
+    });
+    missionWorkroomViews.add(view);
+    return { ...view, dispose() { missionWorkroomViews.delete(view); view.dispose(); } };
+  }
   const noteSessions = new Map<string, NoteSession>();
   const noteViews = new Map<string, ReturnType<typeof mountNoteExperience>>();
   const mediaViews = new Map<string, MediaExperience>();
@@ -671,6 +702,7 @@ export function installApplication(hooks: Hooks) {
     mount: (root, resource) =>
       mountDirectResourceExperience(root, resource, {
         notes: notesClient,
+        mountCard: mountWorkroomCard,
         media: mediaClient,
         checklists: {
           port: productClients.checklists,
@@ -831,6 +863,7 @@ export function installApplication(hooks: Hooks) {
       controlMotion.dispose();
       resourceOpener.cancel();
       directResources.dispose();
+      document.removeEventListener("visibilitychange", restoreMissionWorkroomCards);
     },
     { once: true },
   );
@@ -1080,6 +1113,7 @@ export function installApplication(hooks: Hooks) {
     const missionWorkspace = next.navigation.kind === "workspace"
       ? next.workspaces.find((item) => item.id === next.activeWorkspaceId) : undefined;
     velaMissions.setScope(missionWorkspace ? { workspaceId: missionWorkspace.id, projectId: missionWorkspace.project_id } : null);
+    const workroomScope = missionWorkspace ? JSON.stringify([missionWorkspace.id, missionWorkspace.project_id]) : null;
     const streamResources = new Set(
       next.resources.filter((resource) =>
         resource.kind === "stream" && resource.available !== false && resource.visible !== false,
@@ -1168,6 +1202,10 @@ export function installApplication(hooks: Hooks) {
         timelineViews.delete(id);
         timelineProjections.delete(id);
       }
+    if (missionWorkroomScope !== workroomScope) {
+      missionWorkroomScope = workroomScope;
+      for (const view of missionWorkroomViews) view.setScope(workroomScope);
+    }
     for (const [id, entry] of taskTrackerViews)
       if (!next.blocks.some((block) => block.id === id)) {
         entry.view.dispose();
@@ -4173,8 +4211,8 @@ export function installApplication(hooks: Hooks) {
       if (!entry && activeBlocks.get(id)) {
         content.replaceChildren();
         entry = {
-          view: mountTimelineExperience(
-            content,
+          view: mountWorkroomCard(content, r.id, "timeline", (container) => mountTimelineExperience(
+            container,
             r.id,
             productClients.timelines,
             {
@@ -4197,7 +4235,7 @@ export function installApplication(hooks: Hooks) {
                     resource.visible !== false,
                 )?.title,
             },
-          ),
+          )),
           version: r.version,
         };
         timelineViews.set(id, entry);
@@ -4245,8 +4283,8 @@ export function installApplication(hooks: Hooks) {
       if (!entry && activeBlocks.get(id)) {
         content.replaceChildren();
         entry = {
-          view: mountChecklistExperience(
-            content,
+          view: mountWorkroomCard(content, r.id, "checklist", (container) => mountChecklistExperience(
+            container,
             r.id,
             productClients.checklists,
             {
@@ -4257,7 +4295,7 @@ export function installApplication(hooks: Hooks) {
               chooseReference: () => chooseChecklistReference(content),
               openReference: openChecklistReference,
             },
-          ),
+          )),
           version: r.version,
         };
         checklistViews.set(id, entry);
@@ -4612,7 +4650,13 @@ export function installApplication(hooks: Hooks) {
       resourceId?: string;
       payload?: { delta?: string };
     };
-    if (e.type.startsWith("vela.mission/") || /^policy[./]/.test(e.type)) velaMissions.observe();
+    const accessChanged = /^policy[./]/.test(e.type);
+    const sourceChanged = !e.payload?.delta && /^(resource|note|conversation|source)[./]/.test(e.type);
+    if (e.type.startsWith("vela.mission/") || accessChanged || sourceChanged) {
+      if (accessChanged) velaMissions.invalidateEvidence();
+      else velaMissions.observe();
+      refreshMissionWorkroomCards(accessChanged);
+    }
     if (e.type === "storage/reserve-admission-denied") {
       hooks.status("Storage check paused saving and new runs. Your data is retained.");
       return;

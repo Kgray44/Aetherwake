@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import { compileMissionContext, validateMissionContext, type MissionContextSource } from '../../vela-core/src/mission-context.mts';
+import { compileMissionContext, createMissionContextCache, validateMissionContext, validateMissionContextSources,
+  type MissionContextSource } from '../../vela-core/src/mission-context.mts';
+import { historyDigest } from '../../vela-core/src/bounded-history.mts';
 import { ServiceError } from './contracts.mts';
 import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionControl, type MissionEvent,
   type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionProjection,
-  type MissionScope, type MissionTask, type MissionTaskPlan, type MissionWorkroom } from './mission-contracts.mts';
+  type MissionAttempt, type MissionScope, type MissionTask, type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomResource } from './mission-contracts.mts';
 
 export interface MissionServiceHost {
   db: DatabaseSync;
@@ -76,6 +78,7 @@ interface Running {
 /** Single owner (the canonical Core worker). Every dispatch follows a committed journal write. */
 export class MissionService {
   private running = new Map<string, Running>();
+  private readonly contextCache = createMissionContextCache();
   private closed = false;
   private healthy = true;
   private scheduled = false;
@@ -93,7 +96,8 @@ export class MissionService {
         active INTEGER NOT NULL CHECK(active IN (0,1)), json TEXT NOT NULL
       ) STRICT;
       CREATE INDEX IF NOT EXISTS vela_missions_pending ON vela_missions(pending);
-      CREATE INDEX IF NOT EXISTS vela_missions_scope ON vela_missions(scope_key);`);
+      CREATE INDEX IF NOT EXISTS vela_missions_scope ON vela_missions(scope_key);
+      CREATE INDEX IF NOT EXISTS vela_missions_workroom ON vela_missions(json_extract(json,'$.workroom.workspaceId'));`);
       for (const row of host.db.prepare('SELECT json FROM vela_missions WHERE active=1').all()) {
         const m = this.decode(row.json);
         for (const task of m.tasks) if (task.state === 'running' || task.state === 'cancelling') {
@@ -153,7 +157,7 @@ export class MissionService {
   private requireOpen() { check(!this.closed && this.healthy, 'mission_scheduler_unavailable'); }
   private requireAccess(m: Mission, scope: MissionScope) {
     check((sameScope(m.scope, scope) || m.workroom?.workspaceId === scope.workspaceId && m.scope.projectId === scope.projectId) &&
-      this.host.authorized(scope), 'mission_not_found');
+      this.host.authorized(scope) && this.host.authorized(m.scope), 'mission_not_found');
   }
   private capacity() {
     check(Number(this.host.db.prepare('SELECT count(*) AS n FROM vela_missions WHERE active=1').get()!.n) < L.active,
@@ -203,9 +207,11 @@ export class MissionService {
     return this.host.db.prepare(`SELECT json FROM vela_missions WHERE scope_key=?
       OR (json_extract(json,'$.workroom.workspaceId')=? AND json_extract(json,'$.scope.projectId') IS ?)
       ORDER BY rowid DESC LIMIT ?`)
-      .all(digest(scope), scope.workspaceId, scope.projectId, L.missions).map(row => {
-        const { id, objective, outcome, createdAt, revision } = this.project(this.decode(row.json));
-        return { id, objective, outcome, createdAt, revision };
+      .all(digest(scope), scope.workspaceId, scope.projectId, L.missions).flatMap(row => {
+        const mission = this.decode(row.json);
+        if (!this.host.authorized(mission.scope)) return [];
+        const { id, objective, outcome, createdAt, revision } = this.project(mission);
+        return [{ id, objective, outcome, createdAt, revision }];
       });
   }
   attachWorkroom(id: string, scope: MissionScope, workroom: MissionWorkroom) {
@@ -216,6 +222,23 @@ export class MissionService {
       m.workroom = workroom;
       this.event(m, { kind: 'workroom', detail: 'created' });
     });
+  }
+
+  workroomResource(resourceId: string, scope: MissionScope): MissionWorkroomResource | null {
+    if (!this.host.authorized(scope)) return null;
+    const row = this.host.db.prepare(`SELECT json FROM vela_missions
+      WHERE json_extract(json,'$.workroom.workspaceId')=?
+        AND json_extract(json,'$.scope.projectId') IS ? LIMIT 1`).get(scope.workspaceId, scope.projectId);
+    if (!row) return null;
+    const mission = this.decode(row.json);
+    const workroom = mission.workroom!;
+    const checklist = workroom.missionChecklistResourceId === resourceId;
+    if (!this.host.authorized(mission.scope) || (!checklist && workroom.missionTimelineResourceId !== resourceId)) return null;
+    const { id, outcome, revision, tasks, events } = this.project(mission);
+    const binding = { kind: 'workroom-resource' as const, missionId: id, outcome, revision };
+    return checklist
+      ? { ...binding, checklist: tasks.map(task => ({ taskId: task.id, title: task.objective, state: task.state })) }
+      : { ...binding, timeline: events };
   }
 
   control(id: string, scope: MissionScope, revision: number, control: MissionControl): MissionProjection {
@@ -231,7 +254,10 @@ export class MissionService {
         } else if (task.state === 'queued' || task.state === 'blocked') task.state = 'cancelled';
       };
       const task = 'taskId' in control ? taskOf(value, control.taskId) : undefined;
-      check(value.disposition !== 'cancelled' && !value.tasks.every(t => t.state === 'verified'), 'mission_terminal');
+      const prior = task?.attempts.at(-1);
+      const stale = control.type === 'retry' && task?.state === 'verified' && prior?.context &&
+        !this.contextIsCurrent(value, task, prior, new Map());
+      check(value.disposition !== 'cancelled' && (stale || !value.tasks.every(t => t.state === 'verified')), 'mission_terminal');
       switch (control.type) {
         case 'pause': check(value.disposition === 'active', 'mission_not_active'); value.disposition = 'paused'; break;
         case 'resume': check(value.disposition === 'paused', 'mission_not_paused'); value.disposition = 'active'; break;
@@ -246,7 +272,7 @@ export class MissionService {
           break;
         }
         case 'retry': {
-          check(task && (task.state === 'failed' || task.state === 'blocked') && task.attempts.length < task.maxAttempts &&
+          check(task && (task.state === 'failed' || task.state === 'blocked' || stale) && task.attempts.length < task.maxAttempts &&
             own(this.host.executors, task.executor) && this.host.executors[task.executor].replaySafe, 'mission_retry_denied');
           if (!active(value)) this.capacity();
           task.state = 'queued'; task.queuedAt = stamp(); delete task.detail;
@@ -265,17 +291,24 @@ export class MissionService {
     return this.project(m);
   }
 
-  /** Host-only amendment: never changes acceptance, started work, or existing capabilities. */
-  revise(id: string, scope: MissionScope, revision: number, additions: MissionTaskPlan[], reason: string, dependents: Record<string, string[]> = {}) {
+  /** Host-only amendment. Replays require a reviewed capability and cannot expand acceptance or authority. */
+  revise(id: string, scope: MissionScope, revision: number, additions: MissionTaskPlan[], reason: string,
+    dependents: Record<string, string[]> = {}, trigger?: { taskId: string; attemptId: string }) {
     this.requireOpen();
     const m = this.update(id, value => {
       this.requireAccess(value, scope);
       check(value.revision === revision, 'mission_revision_changed');
       check(value.disposition !== 'cancelled' && Array.isArray(additions) && additions.length > 0 && bounded(reason, 160) &&
         value.events.filter(e => e.kind === 'revised').length < L.revisions, 'mission_revision_denied');
-      check(additions.every(task => value.tasks.some(existing => existing.executor === task?.executor &&
+      check(additions.every(task => this.host.executors[task?.executor]?.replaySafe &&
+        value.tasks.some(existing => existing.executor === task.executor &&
         task.claims?.every(claim => existing.claims.some(current => current.resource === claim.resource &&
           (current.mode === 'exclusive' || claim.mode === 'read'))))), 'mission_revision_expands_authority');
+      if (trigger) {
+        const task = taskOf(value, trigger.taskId), attempt = task?.attempts.at(-1);
+        check(task?.state === 'verified' && attempt?.id === trigger.attemptId &&
+          this.contextIsCurrent(value, task, attempt, new Map()), 'mission_revision_evidence_changed');
+      }
       for (const [id, added] of Object.entries(dependents)) {
         const task = taskOf(value, id);
         check(task?.state === 'queued' && !task.attempts.length && Array.isArray(added) &&
@@ -286,7 +319,7 @@ export class MissionService {
       if (!active(value)) this.capacity();
       value.tasks.push(...additions.map(makeTask));
       value.planRevision++;
-      this.event(value, { kind: 'revised', detail: reason });
+      this.event(value, { kind: 'revised', detail: reason, ...trigger });
     });
     this.wake();
     return this.project(m);
@@ -301,7 +334,41 @@ export class MissionService {
     return running.length < L.workers && running.filter(r => r.missionId === m.id).length < m.concurrency &&
       running.filter(r => r.lane === lane).length < this.host.laneLimit(lane);
   }
+  private contextIsCurrent(m: Mission, task: MissionTask, attempt: MissionAttempt, checked: Map<string, boolean>): boolean {
+    const cached = checked.get(attempt.id);
+    if (cached !== undefined) return cached;
+    checked.set(attempt.id, false);
+    const { context } = attempt;
+    try {
+      check(context && context.binding.missionId === m.id && context.binding.taskId === task.id &&
+        sameScope(context.binding.scope, m.scope), 'mission_context_changed');
+      validateMissionContextSources(context, this.host.contextSource?.(m, task));
+      for (const proof of context.dependencies) {
+        const predecessor = taskOf(m, proof.taskId), parent = predecessor?.attempts.at(-1);
+        const evidence = parent?.evidence;
+        check(predecessor?.state === 'verified' && parent && evidence && parent.id === proof.attemptId && evidence.id === proof.evidenceId &&
+          historyDigest({ source: evidence.source, observedAt: evidence.observedAt, value: evidence.value }) === proof.digest &&
+          this.contextIsCurrent(m, predecessor, parent, checked), 'mission_dependency_context_changed');
+      }
+      checked.set(attempt.id, true);
+      return true;
+    } catch { return false; }
+  }
   private project(m: Mission): MissionProjection {
+    const checked = new Map<string, boolean>();
+    const tasks = m.tasks.map(task => {
+      let staleLatest = false;
+      const attempts = task.attempts.map((attempt, index) => {
+        if (!attempt.context || this.contextIsCurrent(m, task, attempt, checked)) return attempt;
+        const { context: _context, evidence: _evidence, verification: _verification, ...metadata } = attempt;
+        staleLatest = index === task.attempts.length - 1;
+        return metadata;
+      });
+      return task.state === 'verified' && staleLatest
+        ? { ...task, attempts, state: 'blocked' as const, detail: 'mission_source_changed_since_verification' }
+        : { ...task, attempts };
+    });
+    m = { ...m, tasks };
     const outcome = m.tasks.some(t => t.state === 'cancelling') ? 'cancelling' :
       busy(m) ? 'running' : m.tasks.some(t => t.state === 'uncertain') ? 'uncertain' :
       m.disposition === 'cancelled' ? 'cancelled' : m.tasks.every(t => t.state === 'verified') ? 'verified' :
@@ -395,7 +462,15 @@ export class MissionService {
         source: e.source, attemptId: e.attemptId, observedAt: e.observedAt, value: e.value })), maxTokens: 48 * 1024 };
     let context: MissionExecutionContext;
     try {
-      const pkg = compileMissionContext(request, source);
+      const validateDependencies = () => {
+        const checked = new Map<string, boolean>();
+        for (const dep of task.dependencies) {
+          const parent = taskOf(m, dep)!;
+          check(this.contextIsCurrent(m, parent, parent.attempts.at(-1)!, checked), 'mission_dependency_context_changed');
+        }
+      };
+      validateDependencies();
+      const pkg = compileMissionContext(request, source, this.contextCache);
       context = { missionId: m.id, task: plan, scope: m.scope, attemptId: id, dependencies, context: pkg, signal: abort.signal };
     } catch {
       this.update(m.id, current => {
@@ -423,18 +498,30 @@ export class MissionService {
       try {
         abort.signal.throwIfAborted();
         check(this.host.authorized(m.scope), 'mission_scope_revoked');
-        validateMissionContext(context.context, request, source);
+        const validateInputs = () => {
+          validateMissionContext(context.context, request, source);
+          const current = this.lookup(m.id), checked = new Map<string, boolean>();
+          for (const [i, dep] of task.dependencies.entries()) {
+            const parent = taskOf(current, dep), attempt = parent?.attempts.at(-1);
+            check(parent?.state === 'verified' && attempt?.evidence?.id === dependencies[i].id &&
+              this.contextIsCurrent(current, parent, attempt, checked), 'mission_dependency_context_changed');
+          }
+        };
+        try { validateInputs(); }
+        catch (error) { reportedOutcome = 'blocked'; detail = 'mission_context_unavailable'; throw error; }
         const result = await executor.run(context);
+        telemetry = result.telemetry;
+        try { validateInputs(); }
+        catch (error) { reportedOutcome = executor.replaySafe ? 'blocked' : 'uncertain'; detail = 'mission_context_changed_during_execution'; throw error; }
         check(bounded(result.source, 128) && JSON.stringify(result.value) !== undefined &&
           Buffer.byteLength(JSON.stringify(result.value)) <= 2048, 'invalid_mission_evidence');
         evidence = { source: result.source, value: result.value, id: randomUUID(), attemptId: id, observedAt: stamp() };
-        telemetry = result.telemetry;
         reportedOutcome = result.outcome;
         const verdict = executor.verify(structuredClone(evidence), context);
         check(typeof verdict.passed === 'boolean' && bounded(verdict.detail, 160), 'invalid_mission_verification');
         verification = { ...verdict, criterion: task.criterion, evidenceIds: [evidence.id] };
         detail = verdict.detail;
-      } catch { detail = 'executor_failed_or_evidence_invalid'; }
+      } catch { detail ??= 'executor_failed_or_evidence_invalid'; }
       const cancellation = this.running.get(id)?.cancellation;
       const authorized = this.host.authorized(m.scope);
       const outcome = cancellation || !authorized ? (!executor.replaySafe ? 'uncertain' :
@@ -454,7 +541,8 @@ export class MissionService {
       });
       if (outcome === 'verified' && !this.closed) {
         const amendment = this.host.replan?.(next, taskOf(next, task.id)!);
-        if (amendment) this.revise(next.id, next.scope, next.revision, amendment.additions, amendment.reason, amendment.dependents);
+        if (amendment) this.revise(next.id, next.scope, next.revision, amendment.additions, amendment.reason, amendment.dependents,
+          { taskId: task.id, attemptId: id });
       }
     }).catch(() => { this.healthy = false; }).finally(() => {
       clearTimeout(timer); this.running.delete(id); this.wake();

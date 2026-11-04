@@ -24,6 +24,7 @@ flowchart LR
   Agents --> Verify
   Verify --> Journal
   Journal --> Panel["Missions: graph, timeline, evidence and controls"]
+  Journal --> Cards["Linked Checklist and Timeline"]
   Journal --> Stream["Redacted Intelligence Stream events"]
   Library["Block Library"] --> Architect["Purpose and scoped resource metadata"]
   Architect --> Layout["Deterministic arrangement"]
@@ -73,8 +74,16 @@ Before dispatch, the journal records an attempt and a context manifest with
 scope, dependency evidence digests and estimated context size. The compiler
 keeps required inputs, rereads selected sources on validation and does not
 store note bodies in the mission. The local Notes adapter is used only on the
-explicit workspace-notes route. Existing conversation and Codex sessions
-continue to own their respective histories.
+explicit workspace-notes route and reads the mission's originating workspace
+even if the user navigates elsewhere. A bounded cache reuses ranking scores
+after fresh authorized reads. Budget compaction defers whole optional sources
+and retains a limited set of versioned pointers for revalidation. Mandatory
+constraints and verified dependency outputs remain intact. Dispatch, result
+acceptance and downstream evidence reuse check current source proofs. Stale
+proofs hide the affected evidence and mark current verification as blocked.
+An explicit retry may re-run an affected replay-safe task within its attempt
+budget. Existing conversation and Codex sessions continue to own their
+respective histories.
 
 Admission rotates between missions; within a mission it favors older work and
 uses priority to order tasks within an age band. It enforces worker and provider
@@ -84,6 +93,9 @@ and retains each contributing identity. Pause stops new admissions. A timeout
 or cancellation does not release a claim until the worker settles. On restart,
 in-flight external attempts become uncertain and are not replayed; interrupted
 read-only work requires a deliberate retry, and queued missions reopen paused.
+Evidence-triggered amendments record the triggering task and attempt and can
+only repeat a replay-safe executor within the already reviewed claims. The
+report waits for the added sample and the original criteria stay intact.
 
 Specialists use the existing stateless Responses transport and credential
 broker. The native review lists exactly which objective and instructions each
@@ -114,7 +126,9 @@ journal.
 The journal distinguishes native measurements, provider-reported usage and
 unknown usage. Mission metrics use recorded transitions and do not convert
 tokens into money. The native benchmark measures the same workload with one
-and two workers. It does not estimate cloud model or renderer performance.
+and two workers. An opt-in concurrent run samples backend process CPU, RSS
+and event-loop delay, and compares admission with and without injected
+pressure. Neither run measures cloud model or renderer performance.
 
 The Workspace Architect builds a purpose-specific draft from allowed block
 kinds and scoped resource metadata. It reuses canonical IDs, chooses dimensions
@@ -122,7 +136,10 @@ from block constraints, and applies through the existing versioned template
 transaction. Placement changes retain existing layout history. Desktop
 template operations and mission execution both use the canonical services;
 the template planner does not create a second workspace store.
-From a settled mission, the user can review a workroom's proposed cards and
-create the workspace and its reusable template. The template apply and
-mission-to-workroom link share one transaction. The new workspace can read the
-same journal and evidence; it does not copy the mission or the original layout.
+From an active or settled mission, the user can review a workroom's proposed
+cards and create the workspace and its reusable template. Timeline creation,
+template apply and the mission-to-workroom link share one transaction. The
+linked Checklist and Timeline read task states and event rows from the
+journal. They are authorized through the exact workroom and its originating
+mission. Manual checklist entries and ordinary timeline settings retain their
+own canonical storage and controls.

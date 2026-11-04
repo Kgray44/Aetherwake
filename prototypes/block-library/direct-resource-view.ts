@@ -7,7 +7,7 @@ import type { TaskObjectivePort } from '../task-product/contracts.ts';
 import { mountTaskTrackerExperience, type TaskTrackerExperience } from './task-tracker-view.ts';
 import type { ChecklistPort, ChecklistReference } from '../application-contract/checklist.ts';
 import type { ExperienceMotionPort } from '../application-contract/motion.ts';
-import { mountChecklistExperience, type ChecklistExperience } from '../checklist-product/view.ts';
+import { mountChecklistExperience } from '../checklist-product/view.ts';
 import { mountNoteExperience } from './note-view.ts';
 import { mountTaskGroupExperience } from './task-group-view.ts';
 import { mountEventExperience, type EventWindow } from './event-view.ts';
@@ -34,6 +34,7 @@ export interface DirectResourcePorts {
     chooseReference?(): Promise<ChecklistReference | null>;
     openReference?(reference: ChecklistReference): void | Promise<void>;
   };
+  mountCard?(root: HTMLElement, resourceId: string, kind: 'checklist' | 'timeline', mountDefault: (container: HTMLElement) => TimelineExperience): TimelineExperience;
   saveContent(resourceId: string, content: string, root: HTMLElement): void;
   readResource?(resourceId: string): Resource | undefined;
   setTaskStatus(input: { resourceId: string; expectedVersion: number; status: 'open' | 'done' }): Promise<void>;
@@ -87,7 +88,7 @@ export function mountDirectResourceExperience(
   let events: ReturnType<typeof mountEventExperience> | undefined;
   let media: MediaExperience | undefined;
   let session: NoteSession | undefined;
-  let checklist: ChecklistExperience | undefined;
+  let checklist: TimelineExperience | undefined;
   let timeline: TimelineExperience | undefined;
   let timelineWasActive = false;
   let taskObjective: TaskTrackerExperience | undefined, taskObjectiveWasActive = false;
@@ -200,19 +201,23 @@ export function mountDirectResourceExperience(
     if (kind === 'timeline') {
       const source = ports.timelines;
       if (!source) { status.textContent = 'Timeline access is unavailable in this surface.'; return; }
-      timeline = mountTimelineExperience(body, resourceId, source.port, { motion: source.motion, viewId: source.viewId,
+      const mountDefault = (container: HTMLElement) => mountTimelineExperience(container, resourceId, source.port, { motion: source.motion, viewId: source.viewId,
         active, presentation: 'focused', showTitle: false, onOpenResource: ports.openResource,
         onOpenExternalSource: source.onOpenExternalSource, resourceTitle: source.resourceTitle });
+      timeline = ports.mountCard ? ports.mountCard(body, resourceId, kind, mountDefault) : mountDefault(body);
+      timeline.setPresentation('focused');
       timelineWasActive = active; refreshVersion = resource.version; mounted = true;
       return;
     }
     if (kind === 'checklist') {
       const source = ports.checklists;
       if (!source) { status.textContent = 'Checklist access is unavailable in this surface.'; return; }
-      checklist = mountChecklistExperience(body, resourceId, source.port, {
+      const mountDefault = (container: HTMLElement) => mountChecklistExperience(container, resourceId, source.port, {
         viewId: source.viewId, motion: source.motion, active, presentation: 'focused',
         chooseReference: source.chooseReference, openReference: source.openReference,
       });
+      checklist = ports.mountCard ? ports.mountCard(body, resourceId, kind, mountDefault) : mountDefault(body);
+      checklist.setPresentation('focused');
       refreshVersion = resource.version;
       mounted = true;
       return;

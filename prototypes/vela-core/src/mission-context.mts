@@ -3,7 +3,8 @@ import { historyDigest } from './bounded-history.mts';
 import type { VelaHostPort } from './contracts.ts';
 
 export const MISSION_CONTEXT_CONTRACT = 'aerynth.vela-mission-context@1' as const;
-const limits = { bytes: 65536, sourceBytes: 16384, sources: 64, required: 16, dependencies: 16 };
+const limits = { bytes: 65536, sourceBytes: 16384, sources: 64, required: 16, dependencies: 16,
+  deferredBytes: 1024, scoreCacheEntries: 128 };
 
 export interface MissionContextScope { projectId: string | null; workspaceId: string }
 export interface MissionContextBinding {
@@ -61,6 +62,12 @@ type Citation = Readonly<Omit<MissionSourceSnapshot, 'content'> & {
 }>;
 type QuotedSource = Readonly<{ citation: Citation; content: string; trust: 'untrusted-source-data' }>;
 type Omission = 'unavailable' | 'irrelevant' | 'duplicate' | 'budget';
+type SourceProof = Readonly<Pick<Citation, 'ref' | 'version' | 'digest'>>;
+type Compaction = Readonly<{
+  strategy: 'whole-source-selection';
+  deferred: readonly SourceProof[];
+  untracked: number;
+}>;
 type Accounting = Readonly<{
   method: 'tokenizer' | 'utf8-byte-estimate';
   tokenizerId: string | null;
@@ -91,6 +98,7 @@ export interface MissionContextPackage {
     dependencies: readonly Readonly<{ taskId: string; evidenceId: string; attemptId: string; digest: string }>[];
     retrieval: 'searched' | 'not-configured' | 'unavailable';
     omissions: readonly Readonly<{ reason: Omission; count: number }>[];
+    compaction?: Compaction;
     accounting: Accounting;
     digest: string;
   }>;
@@ -117,6 +125,30 @@ const validRef = (ref: MissionSourceRef | undefined) => !!ref &&
   ['resource', 'conversation-message', 'handoff', 'personal-fact'].includes(ref.kind) && text(ref.id);
 const words = (value: string) => new Set(value.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]{2,}/gu) ?? []);
 const overlap = (terms: ReadonlySet<string>, sample: ReadonlySet<string>) => [...terms].filter(term => sample.has(term)).length;
+
+/** Caller-owned and disposable. Retain only a hash and numeric score, never source or query text. */
+export function createMissionContextCache() {
+  const scores = new Map<string, number>();
+  let hits = 0;
+  return {
+    score(key: string, compute: () => number): number {
+      const cached = scores.get(key);
+      if (cached !== undefined) {
+        hits++;
+        scores.delete(key);
+        scores.set(key, cached);
+        return cached;
+      }
+      const score = compute();
+      scores.set(key, score);
+      if (scores.size > limits.scoreCacheEntries) scores.delete(scores.keys().next().value!);
+      return score;
+    },
+    stats: () => ({ entries: scores.size, hits }),
+  };
+}
+type MissionContextCache = ReturnType<typeof createMissionContextCache>;
+
 function freeze<T>(value: T): T {
   if (value && typeof value === 'object') {
     for (const item of Object.values(value)) freeze(item);
@@ -222,7 +254,8 @@ function measure(payloadJson: string, maxTokens: number, counter?: MissionContex
 }
 const fits = (account: Accounting) => account.tokens <= account.maxTokens && account.payloadBytes <= limits.bytes;
 
-export function compileMissionContext(input: MissionContextRequest, source?: MissionContextSource): MissionContextPackage {
+export function compileMissionContext(input: MissionContextRequest, source?: MissionContextSource,
+  cache?: MissionContextCache): MissionContextPackage {
   const { binding, payload: requiredPayload, requiredRefs, requestDigest } = mandatory(input);
   const { maxTokens } = input;
   let counter = input.tokenCounter;
@@ -243,6 +276,7 @@ export function compileMissionContext(input: MissionContextRequest, source?: Mis
   requireContext(fits(baseAccounting), 'mission_context_required_budget_exceeded');
   const taskTerms = words([requiredPayload.taskObjective, ...requiredPayload.criteria].join(' '));
   const missionTerms = words(requiredPayload.missionObjective);
+  const rankingKey = cache ? historyDigest([binding.scope, stamp, [...taskTerms].sort(compare), [...missionTerms].sort(compare)]) : null;
   const query = [...taskTerms].slice(0, 16).join(' ').slice(0, 200);
   let retrieval: MissionContextPackage['manifest']['retrieval'] = source ? 'searched' : 'not-configured';
   let refs: readonly MissionSourceRef[] = [];
@@ -262,8 +296,12 @@ export function compileMissionContext(input: MissionContextRequest, source?: Mis
     seen.add(key);
     const item = readSource(source, ref, binding, 'relevant');
     if (!item) { omit('unavailable'); continue; }
-    const terms = words(item.content);
-    const score = overlap(taskTerms, terms) * 3 + overlap(missionTerms, terms);
+    const calculateScore = () => {
+      const terms = words(item.content);
+      return overlap(taskTerms, terms) * 3 + overlap(missionTerms, terms);
+    };
+    const { version, digest } = item.citation;
+    const score = cache ? cache.score(historyDigest([rankingKey, ref.kind, ref.id, version, digest]), calculateScore) : calculateScore();
     if (!score) { omit('irrelevant'); continue; }
     candidates.push({ item, score, certainty: certaintyOrder.indexOf(item.citation.certainty),
       date: item.citation.observedAt ? Date.parse(item.citation.observedAt) : 0, bytes: Buffer.byteLength(item.content) });
@@ -274,19 +312,31 @@ export function compileMissionContext(input: MissionContextRequest, source?: Mis
   function pack() {
     omissions.clear();
     for (const [reason, count] of fixedOmissions) omissions.set(reason, count);
-    const sources = [...pinned], payload = { ...requiredPayload, sources };
+    const sources = [...pinned], payload = { ...requiredPayload, sources }, deferred: SourceProof[] = [];
+    let deferredBytes = 2, untracked = 0;
     let payloadJson = baseJson, accounting = baseAccounting;
     const included = new Set(pinned.map(item => item.citation.digest));
     for (const { item } of candidates) {
       if (included.has(item.citation.digest)) { omit('duplicate'); continue; }
       sources.push(item);
       const nextJson = JSON.stringify(payload), next = measure(nextJson, maxTokens, counter);
-      if (!fits(next)) { sources.pop(); omit('budget'); continue; }
+      if (!fits(next)) {
+        sources.pop();
+        omit('budget');
+        const { ref, version, digest } = item.citation;
+        const proof = { ref, version, digest };
+        const bytes = Buffer.byteLength(JSON.stringify(proof)) + Number(deferred.length > 0);
+        if (deferredBytes + bytes <= limits.deferredBytes) {
+          deferred.push(proof);
+          deferredBytes += bytes;
+        } else untracked++;
+        continue;
+      }
       included.add(item.citation.digest);
       payloadJson = nextJson;
       accounting = next;
     }
-    return { payload, payloadJson, accounting };
+    return { payload, payloadJson, accounting, deferred, untracked };
   }
   let packed: ReturnType<typeof pack>;
   try { packed = pack(); }
@@ -303,39 +353,67 @@ export function compileMissionContext(input: MissionContextRequest, source?: Mis
     dependencies: requiredPayload.dependencies.map(({ taskId, evidenceId, attemptId, ...proof }) =>
       ({ taskId, evidenceId, attemptId, digest: historyDigest(proof) })), retrieval,
     omissions: [...omissions].sort(([a], [b]) => compare(a, b)).map(([reason, count]) => ({ reason, count })),
+    ...(packed.deferred.length || packed.untracked ? { compaction: { strategy: 'whole-source-selection' as const,
+      deferred: packed.deferred, untracked: packed.untracked } } : {}),
     accounting: packed.accounting };
   return freeze({ contract: MISSION_CONTEXT_CONTRACT, payload: packed.payload, manifest: { ...manifest, digest: historyDigest(manifest) } });
+}
+
+function readReceiptSources(manifest: MissionContextPackage['manifest'], source?: MissionContextSource) {
+  const { digest: manifestDigest, ...receipt } = manifest;
+  requireContext(manifest.contract === MISSION_CONTEXT_CONTRACT && manifestDigest === historyDigest(receipt), 'mission_context_changed');
+  const { binding } = manifest;
+  const stamp = scopeVersion(source, binding);
+  requireContext(stamp === manifest.scopeVersion, 'mission_context_scope_changed');
+  const current = new Map<string, QuotedSource>();
+  for (const citation of manifest.sources) {
+    const key = sourceKey(citation.ref);
+    const item = readSource(source, citation.ref, binding, citation.inclusion);
+    requireContext(!current.has(key) && item && historyDigest(item.citation) === historyDigest(citation), 'mission_context_source_changed');
+    current.set(key, item);
+  }
+  const deferred = new Set<string>();
+  for (const proof of manifest.compaction?.deferred ?? []) {
+    const key = sourceKey(proof.ref);
+    const item = readSource(source, proof.ref, binding, 'relevant');
+    requireContext(!current.has(key) && !deferred.has(key) && item && item.citation.version === proof.version &&
+      item.citation.digest === proof.digest, 'mission_context_source_changed');
+    deferred.add(key);
+  }
+  requireContext(scopeVersion(source, binding) === stamp, 'mission_context_scope_changed');
+  return current;
+}
+
+/** Check current owning-service access and source integrity using only the durable receipt. */
+export function validateMissionContextSources(manifest: MissionContextPackage['manifest'], source?: MissionContextSource): void {
+  readReceiptSources(manifest, source);
 }
 
 /** Recheck with current scheduler inputs and owning services immediately before dispatch or accepting derived results. */
 export function validateMissionContext(value: MissionContextPackage, current: MissionContextRequest, source?: MissionContextSource): void {
   const { binding, payload: requiredPayload, requiredRefs, requestDigest } = mandatory(current);
   const { manifest, payload } = value;
-  const { digest: manifestDigest, ...receipt } = manifest;
   const { sources, ...required } = payload;
   const payloadJson = JSON.stringify(payload);
-  requireContext(value.contract === MISSION_CONTEXT_CONTRACT && manifest.contract === MISSION_CONTEXT_CONTRACT &&
-    manifestDigest === historyDigest(receipt) && manifest.requestDigest === requestDigest &&
+  requireContext(value.contract === MISSION_CONTEXT_CONTRACT && manifest.requestDigest === requestDigest &&
     historyDigest(manifest.binding) === historyDigest(binding) && historyDigest(required) === historyDigest(requiredPayload) &&
     manifest.payloadDigest === digest(payloadJson) && historyDigest(manifest.sources) === historyDigest(sources.map(item => item.citation)), 'mission_context_changed');
-  const stamp = scopeVersion(source, binding);
-  requireContext(stamp === manifest.scopeVersion, 'mission_context_scope_changed');
+  const currentSources = readReceiptSources(manifest, source);
   const pinned = new Map(requiredRefs.map(ref => [sourceKey(ref), ref]));
-  const seen = new Set<string>();
   for (const quoted of sources) {
     const ref = quoted.citation.ref, key = sourceKey(ref), requiredRef = pinned.get(key);
-    const item = readSource(source, ref, binding, requiredRef ? 'required' : 'relevant');
-    requireContext(!seen.has(key) && item && (requiredRef?.expectedVersion === undefined || item.citation.version === requiredRef.expectedVersion) &&
+    const item = currentSources.get(key);
+    requireContext(item && item.citation.inclusion === (requiredRef ? 'required' : 'relevant') &&
+      (requiredRef?.expectedVersion === undefined || item.citation.version === requiredRef.expectedVersion) &&
       historyDigest(quoted) === historyDigest(item), 'mission_context_source_changed');
-    seen.add(key);
   }
-  requireContext(requiredRefs.every(ref => seen.has(sourceKey(ref))), 'mission_context_required_source_unavailable');
+  requireContext(requiredRefs.every(ref => currentSources.has(sourceKey(ref))), 'mission_context_required_source_unavailable');
   const counter = manifest.accounting.method === 'tokenizer' ? current.tokenCounter : undefined;
   let accounting: Accounting;
   try { accounting = measure(payloadJson, current.maxTokens, counter); }
   catch { throw new MissionContextError('mission_context_accounting_changed'); }
   requireContext(fits(accounting) && historyDigest(accounting) === historyDigest(manifest.accounting), 'mission_context_accounting_changed');
-  requireContext(scopeVersion(source, binding) === stamp, 'mission_context_scope_changed');
+  requireContext(scopeVersion(source, binding) === manifest.scopeVersion, 'mission_context_scope_changed');
 }
 
 /** Use only Notes allowed by the owning host and the mission's canonical resource eligibility. Graph and

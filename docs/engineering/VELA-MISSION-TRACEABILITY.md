@@ -62,13 +62,13 @@ this branch; **verified** is limited to the proof in the same row.
 | D · Dependencies | **Verified in scheduler and native app.** No join before verified predecessors; graph validator rejects missing edges and cycles. | Extend proof to implementation and verification mutations once mission-owned write adapters exist. |
 | E · Concurrent missions | **Verified in controlled scheduler execution.** Two mission identities run together, exclusive claims serialize, outputs do not mix. | Sustained native load and UI responsiveness under simultaneous missions. |
 | F · Specialized execution | **Partial.** Separate ChatGPT-plan requests, role instructions, context manifests, response IDs, reported usage and a web-only research role exercised via the existing protocol. Saved teams bind each profile and responsibility to a reviewed task. Tests cover overlapping requests, report attribution, roster version fences and restart. The Windows Electron journey saved two profiles and responsibilities as a team and reviewed the graph while disconnected, with Start disabled and zero provider requests. A real Codex sandbox task ran a tracked Node test with zero model turns. | Live specialist acceptance, semantic synthesis and model-driven Codex delegation. |
-| G · Replanning | **Partial.** Versioned append with unchanged acceptance and dependency validation covered by tests. Native timer outlier policy can extend the report dependencies. | Verify evidence-triggered amendments and review on a broader class of objectives. |
+| G · Replanning | **Partial.** An injected timer outlier exercised the production policy, added a follow-up, and made the report wait for it. The original objective and criteria remained unchanged, and the revision cited the triggering attempt. | Expand beyond the timer policy to reviewed task replacement, reassignment and escalation. |
 | H · Crash recovery | **Partial.** Committed in-flight external attempt restores as uncertain with no retry, checked against a fresh journal connection. The worker-loss case covers interrupted native work. | External reconciliation and a controlled native process loss during a real provider turn. |
-| I · Workspace construction | **Partial.** Block Library tests prove scoped identity reuse, functional checklist, exact geometry, rollback and preview. Electron confirmed the actual workroom preview and apply path and the same mission journal available from the new workspace. | Dedicated mission, team, checklist and timeline block bindings. |
+| I · Workspace construction | **Partial.** Block Library tests prove scoped identity reuse, functional checklist, exact geometry, rollback and preview. A reviewed workroom binds its Checklist and Timeline to live journal data. The Windows journey confirmed six placements, five Checklist task states and twelve Timeline entries. Backend tests cover paused workroom creation, manual edits and rollback. | Dedicated mission and team block bindings, richer workspace intents and layout quality across displays. |
 | J · Workspace adaptation | **Partial.** Planner geometry and manual layout undo/redo covered. | Monitor-specific automatic arrangements, explicit workspace creation undo and multiple real display checks. |
-| K · Token efficiency | **Partial.** Context receipts distinguish estimates and reported usage; no-provider workload completed with two workers using no model calls. | Matched, held-out live token, latency, quality and reliability comparison for missions. |
-| L · Resource pressure | **Partial.** Worker limits, claims and injected memory pressure/backpressure are tested; physical-memory floor used in Core. | GPU, disk, network and renderer measurements under sustained representative workloads. |
-| M · Permissions and isolation | **Partial.** Scoped mission reads, same-workspace Notes boundary, provider review, version fences, exclusive claims and no automatic external replay. | Mission file-write isolation, connector approval/revocation, and broader adversarial cases. |
+| K · Token efficiency | **Partial.** Context receipts distinguish estimates and reported usage. Whole-source compaction retains bounded source pointers, with a scope-keyed cache for authorized ranking work. No-provider workload completed with two workers using no model calls. | Matched, held-out live token, latency, quality and reliability comparison for missions. |
+| L · Resource pressure | **Partial.** Worker limits, claims and injected memory pressure/backpressure are tested. The native backend benchmark records process CPU, RSS and event-loop delay across four concurrent objectives. Core uses a physical-memory floor. | GPU, disk, network and renderer measurements under sustained representative workloads. |
+| M · Permissions and isolation | **Partial.** Scoped mission reads, same-workspace Notes boundary, provider review, version fences, exclusive claims and no automatic external replay. Tests show source edits invalidate in-flight and transitive evidence, with a deliberate native retry. | Mission file-write isolation, connector approval/revocation, and broader adversarial cases. |
 | N · Conversation continuity | **Partial.** Ordinary fallback and pin bypass tested. A verified team mission supports a durable, idempotent link in its originating Vela chat. Scope and restart are covered in the backend protocol test. | Extend mission-to-chat/task links beyond team missions and qualify native Connected Branches handoffs. |
 | O · Truthful completion | **Verified for scheduler behavior.** Failed independent verification blocks downstream work; provider output is labeled reported. | More domain-specific external verifiers. |
 | P · Visual integration | **Partial.** Actual Electron preview, explicit Start, mission status, task evidence, timeline and workroom creation on one Windows display. | Dedicated mission blocks, broader keyboard and reduced-motion journeys, multiple display and scale configurations. |
@@ -117,3 +117,16 @@ The Electron journey displayed the unavailable planner in a fresh profile
 with zero provider requests, then completed the native mission and created its
 linked four-block workroom. Native attempts overlapped by 106 ms on that run.
 Live semantic interpretation and provider qualification remain open.
+
+The opt-in concurrent benchmark ran with Windows 10.0.26300, Node 24.18.0,
+16 available logical CPUs and 33,413,779,456 bytes of host RAM. After one
+warmup, both arms verified four of four objectives with three workers and
+three overlapping missions. Control elapsed time was 659.35 ms, with 140 ms
+of process CPU, 73,781,248 bytes of peak sampled RSS and 23.31 ms p95
+event-loop delay. The injected hold deferred all four missions without an
+attempt for 264.84 ms. The first worker started 0.56 ms after release and all
+objectives verified 653.81 ms after release. The pressure arm measured
+81,207,296 bytes peak sampled RSS and 17.02 ms p95 event-loop delay. The
+pressure signal was injected and SQLite was in memory. This single run
+measured backend scheduling and process counters. Both arms made zero
+provider calls, so reported token usage is unavailable.

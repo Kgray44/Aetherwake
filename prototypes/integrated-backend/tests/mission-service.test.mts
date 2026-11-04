@@ -3,8 +3,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import { setImmediate as flush } from 'node:timers/promises';
 import { MissionService, validateMissionPlan } from '../src/mission-service.mts';
-import { nativeMissionPlan } from '../src/mission-native.mts';
+import { nativeMissionPlan, replanNativeMission } from '../src/mission-native.mts';
 import type { MissionExecutionContext, MissionExecutor, MissionPlan, MissionTaskPlan } from '../src/mission-contracts.mts';
+import type { MissionContextSource } from '../../vela-core/src/mission-context.mts';
 
 const scope = { workspaceId: 'workspace-1', projectId: 'project-1' };
 const task = (id: string, dependencies: string[] = [], resource?: string): MissionTaskPlan => ({
@@ -38,6 +39,48 @@ function fixture(replaySafe = true) {
     revoke: () => { access = false; }, pressure: (value: boolean) => { pressure = value; } };
 }
 
+test('a source edit fences in-flight results, invalidates downstream proof and permits reviewed native retry', async () => {
+  const f = fixture();
+  const ref = { kind: 'resource' as const, id: 'synthetic-note' };
+  let version = 1;
+  const source: MissionContextSource = {
+    scopeVersion: () => 'fixture-policy',
+    retrieve: () => [ref],
+    read: () => ({ ref, version, locator: 'synthetic-note', scope: { kind: 'workspace', id: scope.workspaceId },
+      certainty: 'observed', content: 'Synthetic objective sample ' + version }),
+  };
+  const service = new MissionService({ ...f.host, contextSource: (_mission, task) => task.id === 'inspect' ? source : undefined });
+  try {
+    const { id } = service.create('source-edits', plan(task('inspect'), task('join', ['inspect'])));
+    const read = () => service.read(id, scope);
+    await flush();
+    assert.equal(f.active.get('inspect')?.context.context.manifest.sources[0]?.version, 1);
+    f.active.get('inspect')!.release();
+    await flush();
+    assert.equal(read().tasks[0].state, 'verified');
+    assert(f.active.has('join'));
+    version++;
+    f.active.get('join')!.release();
+    await flush();
+    const stale = read();
+    assert.equal(stale.outcome, 'blocked');
+    assert.equal(stale.tasks[0].detail, 'mission_source_changed_since_verification');
+    assert.equal(stale.tasks[1].detail, 'mission_context_changed_during_execution');
+    assert(stale.tasks.every(task => !task.attempts[0].evidence && !task.attempts[0].verification && !task.attempts[0].context));
+    service.control(id, scope, stale.revision, { type: 'retry', taskId: 'inspect' });
+    await flush();
+    assert.equal(f.active.get('inspect')?.context.context.manifest.sources[0]?.version, 2);
+    f.active.get('inspect')!.release();
+    await flush();
+    service.control(id, scope, read().revision, { type: 'retry', taskId: 'join' });
+    await flush();
+    f.active.get('join')!.release();
+    await flush();
+    assert.equal(read().outcome, 'verified');
+    assert(read().tasks.every(task => task.attempts[1].verification?.passed));
+  } finally { await service.close(); f.db.close(); }
+});
+
 test('validates dependencies and holds simple AIR routes outside mission planning', () => {
   const f = fixture();
   try {
@@ -48,6 +91,36 @@ test('validates dependencies and holds simple AIR routes outside mission plannin
     const native = nativeMissionPlan('Vela, run a mission to measure CPU, RAM, and GPU utilization in parallel.', scope)!;
     assert.deepEqual(native.tasks.find(t => t.id === 'report')?.dependencies, ['cpu', 'ram', 'gpu']);
   } finally { f.db.close(); }
+});
+
+test('an observed backend outlier amends the graph before its report and retains the triggering attempt', async () => {
+  const f = fixture(), order: string[] = [];
+  const probe: MissionExecutor = { lane: 'native', replaySafe: true, available: () => true,
+    async run(context) {
+      order.push(context.task.id);
+      if (context.task.id === 'report') assert.deepEqual(context.task.dependencies, ['backend', 'backend-repeat']);
+      return { source: 'synthetic-timer-sample', value: { timerOvershootMs: context.task.id === 'backend' ? 28 : 0 } };
+    },
+    verify: () => ({ passed: true, detail: 'Synthetic measurement passed' }),
+  };
+  const service = new MissionService({ ...f.host, replan: replanNativeMission,
+    executors: { 'sample.backend': probe, 'join.samples': probe } });
+  try {
+    const original = plan({ ...task('backend'), executor: 'sample.backend' },
+      { ...task('report', ['backend']), executor: 'join.samples' });
+    const { id } = service.create('timer-outlier', original);
+    await flush();
+    const observed = service.read(id, scope);
+    assert.equal(observed.outcome, 'verified');
+    assert.equal(observed.planRevision, 2);
+    assert.equal(observed.objective, original.objective);
+    assert.deepEqual(observed.criteria, original.criteria);
+    assert.deepEqual(order, ['backend', 'backend-repeat', 'report']);
+    const revision = observed.events.find(event => event.kind === 'revised')!;
+    assert.equal(revision.taskId, 'backend');
+    assert.equal(revision.attemptId, observed.tasks[0].attempts[0].id);
+    assert.ok(revision.seq < observed.events.find(event => event.taskId === 'backend-repeat' && event.kind === 'started')!.seq);
+  } finally { await service.close(); f.db.close(); }
 });
 
 test('overlaps independent branches and missions, serializes exclusive claims, and joins verified evidence', async () => {

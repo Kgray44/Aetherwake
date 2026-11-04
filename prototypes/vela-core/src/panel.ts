@@ -1038,6 +1038,7 @@ export function mountVelaPanel(root: HTMLElement, client: VelaClient, options: V
   void run(refresh);
   return {
     async open() { observing = true; options.missions?.setVisible(activeContext === 'missions'); const sequence = ++readSequence, state = await client.open(); if (sequence === readSequence) render(state); return state; },
+    showMission(id: string) { reveal('missions'); options.missions?.openReport?.(id); },
     refresh,
     observeLiveAnswer,
     /** Host visibility notification only; no canonical mutation or inference. */

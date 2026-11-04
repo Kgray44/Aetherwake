@@ -43,6 +43,46 @@
 .working-content.aw-media .aw-media-heading {
   display: none;
 }
+.aw-mission-workroom {
+  display: grid;
+  gap: 8px;
+  padding: 4px 2px 12px;
+  overflow-wrap: anywhere;
+}
+.aw-mission-workroom > h3,
+.aw-mission-workroom > p,
+.aw-mission-workroom > ol {
+  margin: 0;
+}
+.aw-mission-workroom > p,
+.aw-mission-workroom li > :is(small, time) {
+  color: #beb8cd;
+  font-size: 0.78rem;
+}
+.aw-mission-workroom > button {
+  justify-self: start;
+  min-height: 32px;
+  color: #ded0f2;
+  text-align: start;
+}
+.aw-mission-workroom > ol {
+  padding: 0;
+  list-style: none;
+}
+.aw-mission-workroom li {
+  display: grid;
+  gap: 3px;
+  padding: 6px 8px;
+  border-block-start: 1px solid #b9a4e23b;
+}
+.aw-mission-workroom li[data-task-state="verified"] {
+  border-inline-start: 2px solid #a9d8c6;
+}
+.aw-mission-workroom-controls > summary {
+  cursor: pointer;
+  color: #ded0f2;
+  padding: 8px 2px;
+}
 /* PDF text is painted on the canvas. The selectable text above it must stay invisible. */
 .aw-media-pdf-text {
   text-shadow: none;
