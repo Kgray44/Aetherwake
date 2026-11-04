@@ -23,6 +23,8 @@ export interface MissionServiceHost {
   contextSource?(mission: Mission, task: MissionTaskPlan): MissionContextSource | undefined;
   reassign?(mission: Mission, task: MissionTask, agentProfileId: string): MissionTaskPlan['specialist'];
   replan?(mission: Mission, task: MissionTask): { additions: MissionTaskPlan[]; dependents: Record<string, string[]>; reason: string } | undefined;
+  /** Stage only newly appended events inside the journal transaction. */
+  stagePublication?(mission: Mission, from: number): void;
   observe?(mission: Mission, event: MissionEvent): void;
 }
 
@@ -145,6 +147,7 @@ export class MissionService {
       CREATE INDEX IF NOT EXISTS vela_missions_workroom ON vela_missions(json_extract(json,'$.workroom.workspaceId'));`);
       for (const row of host.db.prepare('SELECT json FROM vela_missions WHERE active=1').all()) {
         const m = this.decode(row.json);
+        const before = m.events.length;
         for (const task of m.tasks) if (task.state === 'running' || task.state === 'cancelling') {
           const executor = own(host.executors, task.executor) ? host.executors[task.executor] : undefined;
           task.state = executor?.replaySafe ? 'failed' : 'uncertain';
@@ -157,7 +160,7 @@ export class MissionService {
         if (m.disposition === 'active' && m.tasks.some(t => t.state === 'queued')) {
           m.disposition = 'paused'; this.event(m, { kind: 'recovered', detail: 'paused_on_restart' });
         }
-        this.store(m);
+        this.store(m, before);
       }
     });
   }
@@ -174,11 +177,12 @@ export class MissionService {
     m.events.push(recorded);
     return recorded;
   }
-  private store(m: Mission) {
+  private store(m: Mission, from: number) {
     const json = JSON.stringify(m);
     check(Buffer.byteLength(json) <= recordLimitBytes, 'mission_record_full');
     this.host.db.prepare('UPDATE vela_missions SET pending=?,active=?,json=? WHERE id=?')
       .run(Number(scheduled(m)), Number(active(m)), json, m.id);
+    if (from < m.events.length) this.host.stagePublication?.(m, from);
   }
   private lookup(id: string) {
     check(identifier(id), 'invalid_mission_id');
@@ -196,7 +200,9 @@ export class MissionService {
     const m = this.host.atomic(() => {
       const value = this.lookup(id);
       before = value.events.length;
-      change(value); this.store(value); return value;
+      change(value);
+      this.store(value, before);
+      return value;
     });
     this.notify(m, before);
     return m;
@@ -238,6 +244,7 @@ export class MissionService {
       this.event(value, { kind: 'created' });
       this.host.db.prepare('INSERT INTO vela_missions VALUES(?,?,?,?,1,1,?)')
         .run(value.id, requestId, fingerprint, digest(value.scope), JSON.stringify(value));
+      this.host.stagePublication?.(value, 0);
       created = true;
       return value;
     });
@@ -250,6 +257,14 @@ export class MissionService {
     const m = this.lookup(id);
     this.requireAccess(m, scope);
     return this.project(m);
+  }
+
+  /** Trusted outbox lookup. Publication ports enforce their own disclosure boundaries. */
+  publicationEvent(id: string, seq: number): { mission: Mission; event: MissionEvent } {
+    const mission = this.lookup(id);
+    const event = mission.events.find(item => item.seq === seq);
+    check(event, 'mission_publication_event_not_found');
+    return { mission, event };
   }
   list(scope: MissionScope): Pick<MissionProjection, 'id' | 'objective' | 'outcome' | 'createdAt' | 'revision'>[] {
     check(this.host.authorized(scope), 'mission_scope_denied');

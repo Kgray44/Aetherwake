@@ -105,9 +105,57 @@ test('validates dependencies and holds simple AIR routes outside mission plannin
   } finally { f.db.close(); }
 });
 
+test('a failed publication stage rolls back the journal and idempotent creation stages once', async () => {
+  const f = fixture();
+  f.pressure(true);
+  f.db.exec('CREATE TABLE staged_events (mission_id TEXT, seq INTEGER, PRIMARY KEY (mission_id, seq))');
+  const notifications: { seq: number; inTransaction: boolean }[] = [];
+  let failStage = true;
+  const service = new MissionService({ ...f.host,
+    stagePublication(mission, from) {
+      assert.equal(f.db.isTransaction, true);
+      const row = f.db.prepare('SELECT json FROM vela_missions WHERE id=?').get(mission.id);
+      assert.ok(row);
+      const persisted = JSON.parse(String(row.json)) as Mission;
+      assert.equal(persisted.revision, mission.revision);
+      for (const event of persisted.events.slice(from))
+        f.db.prepare('INSERT INTO staged_events VALUES(?,?)').run(mission.id, event.seq);
+      if (failStage) throw Error('synthetic_stage_failure');
+    },
+    observe(_mission, event) { notifications.push({ seq: event.seq, inTransaction: f.db.isTransaction }); },
+  });
+  const staged = () => f.db.prepare('SELECT seq FROM staged_events ORDER BY seq').all().map(row => row.seq);
+  const original = plan(task('root'));
+  try {
+    assert.throws(() => service.create('staged-create', original), /synthetic_stage_failure/);
+    assert.deepEqual(service.list(scope), []);
+    assert.deepEqual(staged(), []);
+    assert.deepEqual(notifications, []);
+
+    failStage = false;
+    const created = service.create('staged-create', original);
+    assert.equal(service.create('staged-create', original).id, created.id);
+    assert.deepEqual(staged(), [1]);
+    assert.deepEqual(notifications, [{ seq: 1, inTransaction: false }]);
+
+    failStage = true;
+    const pause = () => service.control(created.id, scope, created.revision, { type: 'pause' });
+    assert.throws(pause, /synthetic_stage_failure/);
+    assert.equal(service.read(created.id, scope).revision, created.revision);
+    assert.deepEqual(staged(), [1]);
+
+    failStage = false;
+    const paused = pause();
+    assert.equal(paused.disposition, 'paused');
+    assert.deepEqual(staged(), [1, 2]);
+    assert.deepEqual(notifications, [{ seq: 1, inTransaction: false }, { seq: 2, inTransaction: false }]);
+  } finally { await service.close(); f.db.close(); }
+});
+
 test('an observed backend outlier amends the graph before its report and retains the triggering attempt', async () => {
   const f = fixture(), order: string[] = [];
   let committedAtSettlement: Record<string, SQLOutputValue> | undefined;
+  let stagedAtSettlement: string[] | undefined;
   const probe: MissionExecutor = { lane: 'native', replaySafe: true, available: () => true,
     async run(context) {
       order.push(context.task.id);
@@ -116,7 +164,11 @@ test('an observed backend outlier amends the graph before its report and retains
     },
     verify: () => ({ passed: true, detail: 'Synthetic measurement passed' }),
   };
-  const service = new MissionService({ ...f.host, replan: replanNativeMission, observe: (mission, event) => {
+  const service = new MissionService({ ...f.host, replan: replanNativeMission, stagePublication(mission, from) {
+    const appended = mission.events.slice(from);
+    if (appended[0]?.kind === 'settled' && appended[0].taskId === 'backend')
+      stagedAtSettlement = appended.map(event => event.kind);
+  }, observe: (mission, event) => {
     if (event.kind === 'settled' && event.taskId === 'backend')
       committedAtSettlement = f.db.prepare('SELECT * FROM vela_missions WHERE id=?').get(mission.id);
   },
@@ -143,6 +195,7 @@ test('an observed backend outlier amends the graph before its report and retains
     assert.equal(committed.tasks.find(node => node.id === 'backend')?.state, 'verified');
     assert.deepEqual(committed.tasks.find(node => node.id === 'report')?.dependencies, ['backend', 'backend-repeat']);
     assert.deepEqual(committed.events.slice(-2).map(event => event.kind), ['settled', 'revised']);
+    assert.deepEqual(stagedAtSettlement, ['settled', 'revised']);
     const second = fixture();
     const reopenedHost = { ...second.host, replan: replanNativeMission, executors: { 'sample.backend': probe, 'join.samples': probe } };
     let recovered: MissionService | undefined;
@@ -297,15 +350,34 @@ test('restart reconciles a committed in-flight nonreplayable attempt as uncertai
       const snapshot = f.db.prepare('SELECT * FROM vela_missions WHERE id=?').get(m.id)!;
       second.db.prepare('INSERT INTO vela_missions VALUES(?,?,?,?,?,?,?)').run(snapshot.id, snapshot.request_id,
         snapshot.request_digest, snapshot.scope_key, snapshot.pending, snapshot.active, snapshot.json);
-      recovered = second.create();
+      second.db.exec('CREATE TABLE staged_recovery (seq INTEGER PRIMARY KEY)');
+      const before = JSON.parse(String(snapshot.json)) as Mission;
+      const recoveryHost: MissionServiceHost = { ...second.host, stagePublication(mission, from) {
+        assert.equal(second.db.isTransaction, true);
+        assert.equal(from, before.events.length);
+        const row = second.db.prepare('SELECT json FROM vela_missions WHERE id=?').get(mission.id)!;
+        const persisted = JSON.parse(String(row.json)) as Mission;
+        assert.equal(persisted.disposition, 'paused');
+        for (const event of persisted.events.slice(from))
+          second.db.prepare('INSERT INTO staged_recovery VALUES(?)').run(event.seq);
+      } };
+      recovered = new MissionService(recoveryHost);
       const observed = recovered.read(m.id, scope);
       assert.equal(observed.tasks[0].state, 'uncertain');
       assert.equal(observed.outcome, 'uncertain');
       assert.equal(observed.disposition, 'paused');
-      assert.ok(observed.events.some(e => e.kind === 'recovered'));
+      const appended = observed.events.slice(before.events.length);
+      assert.deepEqual(appended.map(event => event.kind), ['recovered', 'recovered']);
+      assert.deepEqual(second.db.prepare('SELECT seq FROM staged_recovery ORDER BY seq').all().map(row => row.seq),
+        appended.map(event => event.seq));
+      assert.deepEqual(recovered.publicationEvent(m.id, appended[0].seq).event, appended[0]);
+      assert.throws(() => recovered!.publicationEvent(m.id, observed.revision + 1), /mission_publication_event_not_found/);
       assert.throws(() => recovered!.control(m.id, scope, observed.revision, { type: 'retry', taskId: 'remote' }), /mission_retry_denied/);
       await flush();
       assert.equal(second.active.size, 0);
+      await recovered.close();
+      recovered = new MissionService(recoveryHost);
+      assert.equal(recovered.read(m.id, scope).revision, observed.revision);
     } finally { await recovered?.close(); second.db.close(); }
   } finally { await service.close(); f.db.close(); }
 });

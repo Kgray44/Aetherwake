@@ -76,12 +76,20 @@ checks whether a queued or in-flight task still has authority.
 
 The Intelligence Stream carries typed lifecycle records with the originating
 workspace, mission, task and attempt identities. Workspace visibility is
-checked for live delivery and replay. Older detached entries recover scope
-from matching journal records. Stream rows carry lifecycle metadata. Vela
-formats numeric CPU, GPU and physical-memory results from verified native
-evidence and shows them in the selected mission. A verified mission devoted
-to host measurements also answers in its originating Vela chat. The scoped
-answer links to the same evidence and is kept out of provider history.
+checked for live delivery and replay. The journal transaction stages pending
+publication by mission ID and sequence. Each retained Stream row commits with
+its queue acknowledgement. The journal occurrence time remains separate from
+the Stream receipt time. Recovery stages its own observed events and resumes
+pending publication at startup. Older retained entries recover scope from
+matching journal records, subject to the existing retention window.
+
+After its lifecycle records are published, a verified mission can answer in
+its originating Vela chat. The message, report link, Stream receipt and report
+queue acknowledgement commit together. Publication rechecks the origin and
+current evidence. A failed or inaccessible report can wait independently of
+other missions. The scoped answer links to the same evidence and stays outside
+provider history. The queue stores only journal coordinates. Storage holds
+defer publication, and transient failures retry with a bounded delay.
 
 Before dispatch, the journal records an attempt and a context manifest with
 scope, dependency evidence digests and estimated context size. The compiler

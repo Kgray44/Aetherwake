@@ -153,6 +153,8 @@ export interface MissionStreamEvent {
   scope: MissionScope;
   kind: MissionEvent['kind'] | 'report-posted';
   seq?: number;
+  /** Canonical journal time, independent of delivery to the retained stream. */
+  occurredAt?: string;
   taskId?: string;
   attemptId?: string;
   executor?: string;

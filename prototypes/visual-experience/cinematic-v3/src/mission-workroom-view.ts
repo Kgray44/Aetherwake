@@ -232,9 +232,12 @@ export function mountMissionWorkroomView(
           note(row, [evidenceClass.get(event.classification) ?? "Evidence class unavailable", event.status, event.taskId,
             event.executor].filter(Boolean).join(" · "));
           stampTime(row, event.receivedAt);
+          if (event.occurredAt && Date.parse(event.receivedAt) - Date.parse(event.occurredAt) >= 1000)
+            note(row, `Recorded in the mission journal at ${event.occurredAt}`);
           return row;
         });
-        return { rows, coverage: rows.length ? `${rows.length} recent retained events` : "No retained mission events" };
+        const coverage = rows.length ? `${rows.length} recent retained events` : "No retained mission events";
+        return { rows, coverage: value.publicationPending ? `${coverage} · More activity waiting to publish` : coverage };
       }
     }
   }

@@ -145,6 +145,7 @@ export function eventMetadata(event: StreamEvent): Record<string, string> {
     "Evidence class": event.classification,
     "Recorded status": event.status,
     "Received at": event.receivedAt,
+    "Mission recorded at": mission?.occurredAt,
     "Provider time": event.providerTime,
     "Provider time source": event.providerTimeSource,
     Provider: event.providerId,

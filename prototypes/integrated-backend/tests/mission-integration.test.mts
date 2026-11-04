@@ -306,6 +306,18 @@ test('a lost worker never treats its in-flight native work as verified on reopen
     assert.equal(cpu.attempts.length, 1);
     assert.equal(cpu.attempts[0].verification, undefined);
     assert.equal(recovered.tasks.find(task => task.id === 'report')?.attempts.length, 0);
+    const replay = (await backend.call('replay', { limit: 1000 })).events.filter(event => event.mission?.id === id);
+    const cpuJournal = recovered.events.find(event => event.kind === 'recovered' && event.taskId === 'cpu');
+    assert.ok(cpuJournal);
+    const cpuRecovery = replay.find(event => event.mission?.seq === cpuJournal.seq);
+    assert.ok(cpuRecovery);
+    assert.equal(cpuRecovery.type, 'vela.mission/recovered');
+    assert.equal(cpuRecovery.status, 'failed');
+    assert.equal(cpuRecovery.mission?.attemptId, cpu.attempts[0].id);
+    assert.equal(cpuRecovery.mission?.occurredAt, cpuJournal.time);
+    assert.deepEqual(cpuRecovery.mission?.scope, { workspaceId, projectId: project.id });
+    assert.equal(replay.filter(event => event.mission?.kind === 'started' && event.mission.taskId === 'cpu').length, 1);
+    assert.ok(!replay.some(event => event.mission?.kind === 'report-posted'));
     const firstReview = await backend.call('missions', { name: 'workroom-preview', input: { id } }) as MissionWorkroomPreview;
     await backend.call('desktop', { type: 'archiveSubject', kind: 'project', id: project.id, expectedVersion: project.version, archived: true });
     await backend.call('desktop', { type: 'archiveSubject', kind: 'project', id: project.id, expectedVersion: project.version + 1, archived: false });

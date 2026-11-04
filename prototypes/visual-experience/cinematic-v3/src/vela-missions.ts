@@ -1139,6 +1139,8 @@ export function createVelaMissionView(
       section.append(answer);
     }
     if (current.team) section.append(teamLabel(current.team));
+    if (current.streamPending) section.append(el("p", "vela-core-meta", "Some mission activity is waiting to reach Intelligence Stream."));
+    if (current.reportPending) section.append(el("p", "vela-core-meta", "Vela’s verified result is waiting to appear in chat."));
     const revision = renderRevisionReview(current);
     if (revision) section.append(revision);
     if (sameScope(current.scope, scope) && current.outcome === "verified") {

@@ -14,6 +14,7 @@ import { canonicalMissionContextSource } from '../../vela-core/src/mission-conte
 import type { Mission, MissionEvent, MissionExecutionContext, MissionExecutor, MissionPlan, MissionPlanningOffer, MissionRequest, MissionResponse, MissionScope, MissionTaskPlan } from './mission-contracts.mts';
 import { MISSION_LIMITS } from './mission-contracts.mts';
 import { createMissionAdmission } from './mission-admission.mts';
+import { MissionPublication } from './mission-publication.mts';
 import type { DatabaseSync } from 'node:sqlite';
 import type { Resource as PublicResource, CanonicalResourceKind, ConversationActivitySnapshot, PublicConversationExecution, WorkspacePresentationContext } from '../../application-contract/contracts.ts';
 import { compositeProductDomains,isAgentRead,isChecklistRead,type AgentRequest,type ChecklistRequest } from './product-domains.mts';
@@ -205,6 +206,9 @@ export class BackendCore {
   private missions: MissionService;
   private missionAdmission: ReturnType<typeof createMissionAdmission>;
   private missionStorageAdmitted = true;
+  private missionPublication: MissionPublication;
+  private missionPublicationTimer?: NodeJS.Timeout;
+  private missionPublicationRetryMs = 250;
   private missionWorkrooms: MissionWorkrooms;
   private missionExecutors: Readonly<Record<string, MissionExecutor>>;
   private missionSpecialistsInFlight = 0;
@@ -326,6 +330,7 @@ export class BackendCore {
       }) };
       this.missionAdmission = createMissionAdmission({ maxWorkers: MISSION_LIMITS.workers,
         onChange: () => this.missions?.capacityChanged() });
+      this.missionPublication = new MissionPublication(this.db);
       this.missions = new MissionService({
         db: this.db, atomic: work => this.kernel.withTransaction(work),
         authorized: scope => this.missionScopeAllowed(scope),
@@ -346,10 +351,8 @@ export class BackendCore {
           canonicalMissionContextSource(this.missionContextHost(mission.scope), (binding, id) =>
             this.missionScopeAllowed(binding.scope) && !!this.db.prepare('SELECT 1 FROM blocks WHERE workspace_id=? AND resource_id=?')
               .get(binding.scope.workspaceId, id)) : undefined,
-        observe: (mission, event) => {
-          try { this.recordMissionStreamEvent(mission, event); }
-          finally { this.publishVerifiedMissionAnswer(mission, event); }
-        },
+        stagePublication: (mission, from) => this.missionPublication.stage(mission, from),
+        observe: () => this.flushMissionPublication(),
       });
       this.missionWorkrooms = new MissionWorkrooms({
         library: this.library, missions: this.missions, atomic: work => this.atomic(work),
@@ -376,6 +379,7 @@ export class BackendCore {
         },
       });
       this.record('stream/reopened', 'inferred');
+      this.flushMissionPublication();
     } catch (error) { this.kernel.close(); throw error; }
   }
   private missionScopeAllowed(scope: MissionScope): boolean {
@@ -407,25 +411,72 @@ export class BackendCore {
     return { kind: 'team-library' as const, teams, profiles };
   }
   private postMissionReport(scope: MissionScope, id: string): MissionResponse {
+    ensure(this.missionStorageAdmitted, 'storage_reserve_admission_denied');
     const mission = this.missions.read(id, scope);
     ensure(mission.scope.workspaceId === scope.workspaceId && mission.scope.projectId === scope.projectId &&
       mission.outcome === 'verified', 'mission_report_unavailable');
+    this.flushMissionPublication();
+    ensure(!this.missionPublication.hasLifecycle(id), 'mission_report_unavailable');
     const origin = mission.originConversationId ?? this.vela.ensureMissionConversation();
     return this.publishMissionReport(mission, origin);
   }
-  private publishVerifiedMissionAnswer(mission: Mission, event: MissionEvent) {
+  private scheduleMissionPublication(delayMs: number) {
+    this.missionPublicationTimer ??= setTimeout(() => {
+      this.missionPublicationTimer = undefined;
+      this.flushMissionPublication();
+    }, delayMs).unref();
+  }
+  private flushMissionPublication() {
+    if (this.closed || !this.missionStorageAdmitted) return;
+    if (this.mutationDepth) { this.scheduleMissionPublication(0); return; }
+    let result;
+    try {
+      result = this.missionPublication.flush({
+        lifecycle: (missionId, seq, ack) => {
+          const { mission, event } = this.missions.publicationEvent(missionId, seq);
+          this.recordMissionStreamEvent(mission, event, ack);
+        },
+        report: (missionId, seq, ack) => this.projectMissionReport(missionId, seq, ack),
+      });
+    } catch { result = { continue: false, retry: true }; }
+    if (!result.retry) this.missionPublicationRetryMs = 250;
+    if (result.continue) {
+      clearTimeout(this.missionPublicationTimer);
+      this.missionPublicationTimer = undefined;
+      this.scheduleMissionPublication(0);
+    }
+    else if (result.retry) {
+      this.scheduleMissionPublication(this.missionPublicationRetryMs);
+      this.missionPublicationRetryMs = Math.min(5000, this.missionPublicationRetryMs * 2);
+    } else {
+      clearTimeout(this.missionPublicationTimer);
+      this.missionPublicationTimer = undefined;
+    }
+  }
+  private projectMissionReport(missionId: string, seq: number, acknowledge: () => void): boolean {
+    const { mission, event } = this.missions.publicationEvent(missionId, seq);
     const origin = mission.originConversationId;
     if (!origin || event.kind !== 'settled' || event.detail !== 'verified' || !this.missionScopeAllowed(mission.scope) ||
-      !mission.tasks.every(task => task.state === 'verified')) return;
+      mission.disposition === 'cancelled' || !mission.tasks.every(task => task.state === 'verified')) return false;
     const verified = this.missions.read(mission.id, mission.scope);
-    if (verified.outcome === 'verified') this.publishMissionReport(verified, origin);
+    if (verified.outcome !== 'verified') return false;
+    try { this.publishMissionReport(verified, origin, acknowledge); }
+    catch (error) {
+      if (error instanceof ServiceError && error.code === 'local_vela_conversation_unavailable') return false;
+      throw error;
+    }
+    return true;
   }
-  private publishMissionReport(mission: Mission, origin: string): MissionResponse {
+  private publishMissionReport(mission: Mission, origin: string,
+    acknowledge = () => this.missionPublication.ackReport(mission.id)): MissionResponse {
     const { id, scope } = mission;
     this.requireVelaConversation(origin);
     return this.atomic(() => {
       const existing = this.db.prepare('SELECT message_id FROM vela_mission_report_links WHERE mission_id=?').get(id);
-      if (existing) return { kind: 'mission-report', missionId: id, messageId: String(existing.message_id) };
+      if (existing) {
+        acknowledge();
+        return { kind: 'mission-report', missionId: id, messageId: String(existing.message_id) };
+      }
       const { content, jobsDone } = missionCompletion(mission);
       const message = this.appendVelaMessage(origin, {
         role: 'assistant', source: 'vela-native', classification: 'observed', content, responseKind: 'answer',
@@ -436,6 +487,7 @@ export class BackendCore {
         providerId: 'aerynth-native', detached: true, correlationId: id,
         mission: { id, scope, kind: 'report-posted' }, status: 'posted', payload: { redacted: true },
       });
+      acknowledge();
       return { kind: 'mission-report', missionId: id, messageId: message.id };
     });
   }
@@ -686,14 +738,19 @@ export class BackendCore {
         if (card?.dashboard?.kind !== 'stream') return card;
         const mission = this.missions.read(card.missionId, scope);
         const { kind, missionId, outcome, revision } = card;
-        return { kind, missionId, outcome, revision, dashboard: { kind: 'stream', events: this.readWorkroomStream(mission) } };
+        return { kind, missionId, outcome, revision, dashboard: { kind: 'stream', events: this.readWorkroomStream(mission),
+          ...(this.missionPublication.hasLifecycle(missionId) ? { publicationPending: true } : {}) } };
       }
       case 'list':
         ensure(!Object.keys(request.input).length, 'invalid_mission_command');
         return this.missions.list(scope);
-      case 'read':
+      case 'read': {
         ensure(Object.keys(request.input).length === 1, 'invalid_mission_command');
-        return this.missions.read(request.input.id, scope);
+        const mission = this.missions.read(request.input.id, scope);
+        const streamPending = this.missionPublication.hasLifecycle(mission.id);
+        const reportPending = mission.outcome === 'verified' && this.missionPublication.hasReport(mission.id);
+        return { ...mission, ...(streamPending ? { streamPending: true } : {}), ...(reportPending ? { reportPending: true } : {}) };
+      }
       case 'revision-preview': {
         const { id, revision, change } = request.input;
         ensure(Object.keys(request.input).length === 3 && identifier(id) && Number.isSafeInteger(revision), 'invalid_mission_command');
@@ -709,9 +766,12 @@ export class BackendCore {
       case 'workroom-preview':
         ensure(Object.keys(request.input).length === 1 && identifier(request.input.id), 'invalid_mission_command');
         return this.missionWorkrooms.preview(request.input.id);
-      case 'workroom-apply':
+      case 'workroom-apply': {
         ensure(Object.keys(request.input).length === 2 && identifier(request.input.id) && identifier(request.input.reviewId), 'invalid_mission_command');
-        return this.missionWorkrooms.apply(request.input.id, request.input.reviewId);
+        const workroom = this.missionWorkrooms.apply(request.input.id, request.input.reviewId);
+        this.flushMissionPublication();
+        return workroom;
+      }
       case 'control':
         ensure(Object.keys(request.input).length === 3, 'invalid_mission_command');
         return this.missions.control(request.input.id, scope, request.input.revision, request.input.control);
@@ -3371,15 +3431,15 @@ export class BackendCore {
       else if (event.detail === 'paused_on_restart') status = 'paused';
       else if (event.kind === 'settled' && !event.attemptId) status = 'blocked';
     }
-    return { mission: { id: mission.id, scope: mission.scope, kind: event.kind, seq: event.seq,
+    return { mission: { id: mission.id, scope: mission.scope, kind: event.kind, seq: event.seq, occurredAt: event.time,
       ...(event.taskId ? { taskId: event.taskId } : {}), ...(event.attemptId ? { attemptId: event.attemptId } : {}),
       ...(executor ? { executor } : {}) }, status, payload: { redacted: true, ...(event.taskId ? { taskId: event.taskId } : {}) } };
   }
-  private recordMissionStreamEvent(mission: Mission, event: MissionEvent) {
+  private recordMissionStreamEvent(mission: Mission, event: MissionEvent, acknowledge: () => void) {
     this.record('vela.mission/' + event.kind, 'observed', undefined, `mission:${mission.id}:${event.seq}`, {
       providerId: 'aerynth-native', detached: true, correlationId: mission.id, nativeEventId: event.attemptId,
       ...this.missionStreamFields(mission, event),
-    });
+    }, acknowledge);
   }
   private readWorkroomStream(mission: Mission) {
     const legacy = new Map([[mission.id, mission]]);
@@ -3390,8 +3450,9 @@ export class BackendCore {
       const event = this.projectReplayedMissionEvent(stored, String(row.dedupe), mission.scope, legacy);
       if (event?.mission?.id !== mission.id) return [];
       const { eventId, cursor, receivedAt, type, status, classification } = event;
-      const { taskId, executor } = event.mission;
+      const { taskId, executor, occurredAt } = event.mission;
       return [{ eventId, cursor, receivedAt, type, status, classification,
+        ...(occurredAt ? { occurredAt } : {}),
         ...(taskId ? { taskId } : {}), ...(executor ? { executor } : {}) }];
     });
   }
@@ -3426,7 +3487,7 @@ export class BackendCore {
     const observed = mission.events.find(entry => event.type === 'vela.mission/' + entry.kind && dedupe === `mission:${id}:${entry.seq}`);
     if (observed) return { ...event, ...this.missionStreamFields(mission, observed) };
   }
-  private record(type: string, classification: StreamEvent['classification'], native?: EventEnvelope, dedupe: string = randomUUID(),override?:{providerId:string;detached?:boolean;resourceId?:string;correlationId?:string;payload?:StreamEvent['payload'];nativeEventId?:string;providerTime?:number;providerTimeSource?:string;externalEvidence?:GitHubCommitEvidence;externalCoverage?:TimelineSourceCoverage;mission?:StreamEvent['mission'];status?:string|null}) {
+  private record(type: string, classification: StreamEvent['classification'], native?: EventEnvelope, dedupe: string = randomUUID(),override?:{providerId:string;detached?:boolean;resourceId?:string;correlationId?:string;payload?:StreamEvent['payload'];nativeEventId?:string;providerTime?:number;providerTimeSource?:string;externalEvidence?:GitHubCommitEvidence;externalCoverage?:TimelineSourceCoverage;mission?:StreamEvent['mission'];status?:string|null}, acknowledge?: () => void) {
     const e: StreamEvent = { schemaVersion: 1, eventId: randomUUID(), cursor: 0, resourceId: override?.resourceId??(override?.detached?null:this.active?.resourceId ?? null), executionId: override?.detached?null:this.active?.id ?? null,
       providerId: override?.providerId??this.port.id, providerInstanceId: override?.providerId===CHATGPT_PLAN_PROVIDER?'aerynth.responses':override?.providerId==='aerynth-native'?'aerynth.canonical':override?.providerId==='github'?'github.public-rest':this.port.instanceId, connectionId: this.connectionId,
       nativeEventId: override?.nativeEventId??null, nativeSequence: native?.sequence ?? null, threadId: override?.detached||override?.providerId===CHATGPT_PLAN_PROVIDER?null:native?.providerThreadId ?? this.active?.binding?.nativeThreadId ?? null,
@@ -3437,12 +3498,13 @@ export class BackendCore {
     let inserted = false;
     this.kernel.withTransaction(() => {
       const result = this.db.prepare('INSERT OR IGNORE INTO intelligence_events(dedupe,json) VALUES(?,?)').run(dedupe, JSON.stringify(e));
-      if (!result.changes) return;
+      if (!result.changes) { acknowledge?.(); return; }
       inserted = true; e.cursor = Number(result.lastInsertRowid);
       const stored = {...e,...(override?.externalEvidence?{externalEvidence:override.externalEvidence}:{}),...(override?.externalCoverage?{externalCoverage:override.externalCoverage}:{})};
       this.db.prepare('UPDATE intelligence_events SET json=? WHERE cursor=?').run(JSON.stringify(stored), e.cursor);
       this.db.prepare('UPDATE integration_meta SET latest=? WHERE id=1').run(e.cursor);
       this.db.prepare('DELETE FROM intelligence_events WHERE cursor NOT IN (SELECT cursor FROM intelligence_events ORDER BY cursor DESC LIMIT ?)').run(this.maxEvents);
+      acknowledge?.();
     });
     if (inserted) {
       if(this.mutationDepth>0){ensure(this.pendingEventDelivery.length<this.maxEvents,'observation_backpressure');this.pendingEventDelivery.push(e);}
@@ -3714,6 +3776,11 @@ export class BackendCore {
       if (typeof a.storageAdmitted === 'boolean') {
         this.missionStorageAdmitted = a.storageAdmitted;
         this.missions.capacityChanged();
+        if (a.storageAdmitted) this.flushMissionPublication();
+        else {
+          clearTimeout(this.missionPublicationTimer);
+          this.missionPublicationTimer = undefined;
+        }
       } else {
         ensure(a.foregroundInput === true, 'invalid_mission_host_signal');
         this.missionAdmission.noteActivity();
@@ -3820,6 +3887,7 @@ export class BackendCore {
           if(['createResource','content','archiveSubject','relate','unrelate','setTaskGroupMembers'].includes(a.type))ensure(!this.active,'execution_busy');
           this.atomic(() => this.desktop.apply(a, (title, codex) => this.create(title, codex ? this.port.id : a.provider==='local'?'local':this.defaultOrdinaryProvider()).resourceId));
           this.record('application/' + a.type, 'observed');
+          if (a.archived === false && (a.type === 'archiveWorkspace' || a.type === 'archiveSubject')) this.flushMissionPublication();
         if(a.type==='applyStructuredPreset')try{
           const recorded=JSON.parse(String(this.db.prepare('SELECT json FROM intelligence_events ORDER BY cursor DESC LIMIT 1').get()!.json));
           this.vela.ingestAttention({id:recorded.eventId,type:'workspace.presetSelected',source:'aerynth.workspace-engine',occurredAt:recorded.receivedAt,subject:{id:a.workspaceId,kind:'workspace'},severity:'info',classification:'observed',summary:'User selected workspace preset '+a.preset,correlationId:recorded.eventId,actor:'user',preferenceSignal:{key:'organization.defaultPreset',value:a.preset}});
@@ -3945,6 +4013,7 @@ export class BackendCore {
         planning?.abort.abort();
         this.missionAdmission.dispose();
         await this.missions.close();
+        this.flushMissionPublication();
         await planning?.settled.catch(() => {});
         if(this.ordinaryTask)await this.ordinaryTask.catch(()=>{});
         if(this.velaProjectCheckTask)await this.velaProjectCheckTask.task.catch(()=>{});
@@ -3953,6 +4022,7 @@ export class BackendCore {
         for(const id of this.velaCatalogLeases.keys())this.finishVelaCatalog(id);
         this.stopEvents();
         this.port.close();
+        clearTimeout(this.missionPublicationTimer);
         this.kernel.close();
         this.closed = true;
         return null as any;

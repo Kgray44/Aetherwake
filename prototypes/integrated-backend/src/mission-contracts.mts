@@ -142,6 +142,8 @@ export interface MissionProjection extends Mission {
   outcome: 'queued' | 'running' | 'paused' | 'cancelling' | 'cancelled' | 'blocked' | 'failed' | 'uncertain' | 'verified';
   answer?: string[];
   admission?: MissionAdmission;
+  streamPending?: true;
+  reportPending?: true;
   waits: Record<string, 'dependencies' | 'capacity' | 'resource-conflict' | 'resource-pressure'>;
   profile: {
     elapsedMs: number;
@@ -238,6 +240,7 @@ export interface MissionWorkroomStreamEvent {
   eventId: string;
   cursor: number;
   receivedAt: string;
+  occurredAt?: string;
   type: string;
   status: string | null;
   taskId?: string;
@@ -259,7 +262,7 @@ export type MissionWorkroomDashboard =
       findings?: string[]; citations?: string[];
     }[] }
   | { kind: 'performance'; profile: MissionProjection['profile']; admission?: MissionAdmission }
-  | { kind: 'stream'; events: MissionWorkroomStreamEvent[] };
+  | { kind: 'stream'; events: MissionWorkroomStreamEvent[]; publicationPending?: true };
 export type MissionWorkroomCard = MissionWorkroomDashboard['kind'];
 export type MissionWorkroomResource = {
   kind: 'workroom-resource';
