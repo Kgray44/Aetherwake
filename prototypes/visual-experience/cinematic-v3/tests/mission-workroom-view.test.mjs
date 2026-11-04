@@ -7,6 +7,58 @@ const binding = (dashboard, revision = 1) => ({
   kind: "workroom-resource", missionId: "mission-a", outcome: "running", revision, dashboard,
 });
 
+test("an individual specialist card separates assignment, observed attempts and provider-reported outcomes", async () => {
+  const { root, doc } = componentDocument(), profiles = [];
+  let revision = 1;
+  let assignment = { kind: "agent", taskId: "review", title: "Review the selected evidence", role: "Evidence reviewer",
+    responsibility: "Inspect the scoped report", state: "queued", executor: "chatgpt.specialist",
+    provider: "chatgpt-plan-responses", model: "fixture-model", criterion: "review-report", dependencies: [],
+    maxAttempts: 2, timeoutMs: 15000, webSearch: false, wait: "capacity",
+    profile: { id: "profile-review", title: "Saved reviewer", profileVersion: 3, resourceVersion: 2 }, attempts: [] };
+  const view = mountMissionWorkroomView(root, "dashboard", "room", async () => binding(assignment, revision), undefined,
+    () => {}, id => profiles.push(id));
+  try {
+    await view.refresh();
+    assert.equal(root.querySelector('[data-mission-workroom-card="agent"]').getAttribute("aria-label"), "Specialist assignment");
+    const row = () => root.querySelector('[data-mission-agent-task="review"]');
+    assert.match(row().textContent, /Evidence reviewer.*Waiting for a worker.*Assigned · execution has not started/);
+    assert.match(row().textContent, /No hosted tools permitted.*assigned profile v3/);
+    assert.equal(root.querySelector('[data-agent-attempt]'), null);
+    const profile = root.querySelector('[data-mission-agent-profile="profile-review"]');
+    profile.onclick();
+    assert.deepEqual(profiles, ["profile-review"]);
+    assignment = { ...assignment, state: "running", wait: undefined, attempts: [{ id: "attempt-a", admittedAt: "2026-11-04T03:00:00.000Z" }] };
+    revision++;
+    await view.refresh();
+    const detail = root.querySelector('[data-agent-attempt="attempt-a"]').querySelector("details");
+    detail.open = true;
+    detail.querySelector("summary").focus();
+    assert.match(detail.textContent, /Attempt 1 · Running.*Provider usage unavailable/);
+    assert.doesNotMatch(detail.textContent, /0 total/);
+    assignment = { ...assignment, state: "verified", attempts: [{ ...assignment.attempts[0], outcome: "verified",
+      finishedAt: "2026-11-04T03:00:00.250Z", evidenceId: "evidence-a", source: "chatgpt-plan-responses:reported",
+      observedAt: "2026-11-04T03:00:00.249Z", passed: true, verification: "Report shape checked", findings: ["A reported recommendation"],
+      citations: ["https://example.test/evidence"], timing: { queueMs: 10, contextPreparationMs: 2, executionMs: 230, verificationMs: 1 },
+      telemetry: { durationMs: 250, providerCalls: 1, usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
+        responseId: "response-a", reportedModel: "fixture-actual-model" },
+      context: { digest: "manifest-a", accounting: { method: "utf8-byte-estimate", tokens: 30, maxTokens: 100 },
+        sources: [{ ref: { id: "source-a" }, version: 2, digest: "digest-a" }], dependencies: [] } }] };
+    revision++;
+    await view.refresh();
+    const refreshed = root.querySelector('[data-agent-attempt="attempt-a"]').querySelector("details");
+    assert.equal(refreshed.open, true);
+    assert.equal(doc.activeElement, refreshed.querySelector("summary"));
+    assert.match(row().textContent, /Report contract verified · recommendations remain provider-reported/);
+    assert.match(refreshed.textContent, /Provider-reported findings · factual confirmation is separate.*A reported recommendation/);
+    assert.match(refreshed.textContent, /Provider-reported tokens · 40 input \/ 10 output \/ 50 total/);
+    assert.match(refreshed.textContent, /Estimated context tokens · 30 \/ 100.*Source source-a · version 2 · digest-a/);
+    view.setScope(null);
+    profile.onclick();
+    assert.deepEqual(profiles, ["profile-review"], "A detached stale control cannot navigate after scope revocation");
+    assert.equal(root.querySelector('[data-agent-attempt]'), null);
+  } finally { view.dispose(); }
+});
+
 test("mission workroom cards show graph dependencies, scoped events, and unavailable telemetry", async () => {
   const graph = componentDocument(), stream = componentDocument(), performance = componentDocument();
   const graphView = mountMissionWorkroomView(graph.root, "dashboard", "room", async () => binding({

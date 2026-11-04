@@ -27,6 +27,8 @@ interface Pending {
   roles: TemplateResourceRole[];
   dashboards: MissionWorkroomCard[];
   conversationKey: string;
+  planRevision: number;
+  agents: { taskId: string; key: string }[];
 }
 const checklist: TemplateResourceRole = {
   key: 'mission-checklist', label: 'Mission checklist',
@@ -51,6 +53,12 @@ const dashboardRole = (card: MissionWorkroomCard): TemplateResourceRole => ({
   key: 'mission-' + card, label: dashboards[card],
   source: { mode: 'new', kind: card === 'stream' ? 'stream' : 'note', title: dashboards[card] },
 });
+const assignmentTitle = (objective: string): string => {
+  // Template role labels permit 120 UTF-16 units. Keep a cut surrogate pair together.
+  const label = `Specialist assignment · ${objective}`.slice(0, 120);
+  const last = label.charCodeAt(label.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? label.slice(0, -1) : label;
+};
 const workroomToolbarInset = 96;
 const canBuild = (state: MissionProjection['outcome']) => state !== 'cancelling';
 const sameScope = (a: MissionScope, b: MissionScope) => a.workspaceId === b.workspaceId && a.projectId === b.projectId;
@@ -89,13 +97,20 @@ export class MissionWorkrooms {
     const cards = (Object.keys(dashboards) as MissionWorkroomCard[]).filter(card => card !== 'team' ||
       current.tasks.some(task => task.specialist));
     const [graph, ...details] = cards.map(dashboardRole);
+    const agents = current.tasks.filter(task => task.specialist).map((task, index) => ({
+      taskId: task.id, key: 'mission-agent-' + (index + 1),
+      title: assignmentTitle(task.objective),
+    }));
     const roles = [graph, localChat ?? primaryChat, checklist, timeline, ...details,
+      ...agents.map(({ key, title }): TemplateResourceRole => ({ key, label: title,
+        source: { mode: 'new', kind: 'note', title } })),
       ...planned.filter(role => role !== localChat)];
     ensure(new Set(roles.map(role => role.key)).size === roles.length && planned.every(role =>
       role.source.kind !== 'checklist' && role.source.kind !== 'timeline'), 'mission_workroom_invalid_draft');
     const expires = Date.now() + 120_000;
     this.reviews.set(reviewId, { missionId, scope, projectVersion, expires, title, draft, roles, dashboards: cards,
-      conversationKey: (localChat ?? primaryChat).key });
+      conversationKey: (localChat ?? primaryChat).key, planRevision: current.planRevision,
+      agents: agents.map(({ taskId, key }) => ({ taskId, key })) });
     return { kind: 'workroom-preview', missionId, reviewId, title, expiresAt: new Date(expires).toISOString(),
       cards: roles.map(role => ({ title: role.label, kind: role.source.kind, mode: role.source.mode })) };
   }
@@ -106,7 +121,8 @@ export class MissionWorkrooms {
     if (mission.workroom) return mission.workroom;
     const review = this.reviews.get(reviewId);
     ensure(this.host.writable() && review && review.missionId === missionId && review.expires > Date.now() &&
-      sameScope(review.scope, scope) && sameScope(mission.scope, scope) && canBuild(mission.outcome), 'mission_workroom_review_required');
+      sameScope(review.scope, scope) && sameScope(mission.scope, scope) && canBuild(mission.outcome) &&
+      review.planRevision === mission.planRevision, 'mission_workroom_review_required');
     const result = this.host.atomic(() => {
       // Templates bind an existing Timeline. Provision it through its canonical factory in the same transaction.
       const timelineResource = this.host.createTimeline({ commandId: reviewId + ':timeline', title: timeline.label,
@@ -132,9 +148,15 @@ export class MissionWorkrooms {
         ensure(id, 'mission_workroom_invalid_bindings');
         missionCards[card] = id;
       }
+      const missionAgentCards = Object.fromEntries(review.agents.map(agent => {
+        const id = applied.resourceIds[agent.key];
+        ensure(id, 'mission_workroom_invalid_bindings');
+        return [agent.taskId, id];
+      }));
       const workroom: MissionWorkroom = { kind: 'workroom', workspaceId: applied.workspaceId, title: review.title,
         templateId: applied.templateId, missionConversationResourceId, missionChecklistResourceId,
-        missionTimelineResourceId: timelineResource.resourceId, missionCards };
+        missionTimelineResourceId: timelineResource.resourceId, missionCards,
+        ...(review.agents.length ? { missionAgentCards } : {}) };
       this.host.missions.attachWorkroom(mission.id, scope, workroom);
       return workroom;
     });

@@ -16,6 +16,7 @@ const waitLabel: Record<MissionProjection["waits"][string], string> = {
 const dashboardTitle = {
   graph: "Mission graph",
   team: "Agent team",
+  agent: "Specialist assignment",
   evidence: "Verification evidence",
   performance: "Mission performance",
   stream: "Mission Intelligence Stream",
@@ -24,7 +25,8 @@ const evidenceClass = new Map([
   ["observed", "Observed"], ["reported", "Provider reported"],
   ["inferred", "Inferred"], ["simulated", "Simulated"],
 ]);
-const streamLabel = new Map(Object.entries({ ...missionEventLabel, "report-posted": "Mission report posted" }));
+const streamLabel = new Map(Object.entries({ ...missionEventLabel, "report-posted": "Mission report posted",
+  "conversation-receipt": "Mission conversation handoff recorded" }));
 
 /** Resolves the canonical card binding before mounting either presentation. */
 export function mountMissionWorkroomView(
@@ -34,6 +36,7 @@ export function mountMissionWorkroomView(
   read: () => Promise<MissionWorkroomResource | null>,
   mountManual: ((container: HTMLElement) => TimelineExperience) | undefined,
   openMission: (id: string) => void,
+  openResource?: (id: string) => void,
 ): MissionWorkroomView {
   const doc = root.ownerDocument;
   const section = doc.createElement("section");
@@ -161,6 +164,84 @@ export function mountMissionWorkroomView(
           return row;
         });
         return { rows, coverage: `${rows.length} specialist assignments`, intro: value.title };
+      }
+      case "agent": {
+        const assignment = taskRow(value.taskId, value.role, value.state);
+        assignment.dataset.missionAgentTask = value.taskId;
+        note(assignment, value.title);
+        note(assignment, `${value.provider} · ${value.model}`);
+        note(assignment, `Criterion · ${value.criterion}`);
+        if (value.retired) note(assignment, "Retired assignment · retained history");
+        note(assignment, `${value.maxAttempts} permitted attempts · ${value.timeoutMs} ms timeout per attempt`);
+        note(assignment, value.webSearch ? "Hosted web search permitted for this assignment" : "No hosted tools permitted");
+        if (value.wait) note(assignment, waitLabel[value.wait]);
+        if (value.dependencies.length) note(assignment, `Requires ${value.dependencies.join(", ")}`);
+        if (!value.attempts.length) note(assignment, "Assigned · execution has not started");
+        if (value.state === "verified") note(assignment, "Report contract verified · recommendations remain provider-reported");
+        if (value.profile) {
+          const profile = value.profile;
+          note(assignment, `${profile.title} · assigned profile v${profile.profileVersion}`);
+          if (openResource) {
+            const button = doc.createElement("button");
+            button.type = "button";
+            button.textContent = "Open source profile";
+            button.dataset.missionAgentProfile = profile.id;
+            button.onclick = () => {
+              if (active && !disposed && projection?.dashboard?.kind === "agent" &&
+                projection.dashboard.profile?.id === profile.id) openResource(profile.id);
+            };
+            assignment.append(button);
+          }
+        }
+        const rows = [assignment, ...value.attempts.map((attempt, index) => {
+          const row = doc.createElement("li"), details = doc.createElement("details"), summary = doc.createElement("summary");
+          row.dataset.agentAttempt = attempt.id;
+          details.dataset.workroomDisclosure = `agent:${value.taskId}:${attempt.id}`;
+          const progress = index === value.attempts.length - 1 && ["running", "cancelling"].includes(value.state)
+            ? missionStateLabel[value.state] : "Outcome unavailable";
+          summary.textContent = `Attempt ${index + 1} · ${attempt.outcome ? missionStateLabel[attempt.outcome] : progress}`;
+          details.append(summary);
+          note(details, `Attempt ID · ${attempt.id}`);
+          stampTime(details, attempt.admittedAt);
+          if (attempt.finishedAt) stampTime(details, attempt.finishedAt);
+          if (attempt.passed !== undefined) note(details, attempt.passed ? "Report contract passed" : "Report contract failed");
+          if (attempt.verification) note(details, attempt.verification);
+          if (attempt.detail) note(details, attempt.detail);
+          if (attempt.evidenceId) note(details, `Evidence ID · ${attempt.evidenceId}`);
+          if (attempt.source) note(details, `Source · ${attempt.source}`);
+          if (attempt.observedAt) stampTime(details, attempt.observedAt);
+          if (attempt.timing) {
+            const labels = { queueMs: "Queue", contextPreparationMs: "Context preparation", executionMs: "Execution", verificationMs: "Verification" };
+            for (const [field, label] of Object.entries(labels)) {
+              const duration = attempt.timing[field as keyof typeof labels];
+              if (duration !== undefined) note(details, `${label} · ${Math.round(duration)} ms`);
+            }
+          }
+          if (attempt.findings?.length) {
+            note(details, "Provider-reported findings · factual confirmation is separate");
+            for (const finding of attempt.findings) note(details, finding);
+          }
+          for (const citation of attempt.citations ?? []) note(details, `Provider citation · ${citation}`);
+          if (attempt.telemetry) {
+            const { durationMs, providerCalls, usage, responseId, reportedModel } = attempt.telemetry;
+            note(details, `Recorded duration · ${Math.round(durationMs)} ms · ${providerCalls} provider calls`);
+            note(details, usage ? `Provider-reported tokens · ${usage.inputTokens} input / ${usage.outputTokens} output / ${usage.totalTokens} total`
+              : "Provider usage unavailable");
+            if (responseId) note(details, `Response ID · ${responseId}`);
+            if (reportedModel) note(details, `Provider-reported model · ${reportedModel}`);
+          } else note(details, "Provider usage unavailable");
+          if (attempt.context) {
+            const context = attempt.context;
+            note(details, `Context manifest · ${context.digest}`);
+            note(details, `${context.accounting.method === "tokenizer" ? "Tokenizer count" : "Estimated context tokens"} · ${context.accounting.tokens} / ${context.accounting.maxTokens}`);
+            for (const source of context.sources) note(details, `Source ${source.ref.id} · version ${source.version} · ${source.digest}`);
+            for (const dependency of context.dependencies) note(details, `Dependency ${dependency.taskId} · evidence ${dependency.evidenceId}`);
+          }
+          row.append(details);
+          return row;
+        })];
+        return { rows, coverage: `${value.attempts.length} recorded ${value.attempts.length === 1 ? "attempt" : "attempts"}`,
+          intro: value.responsibility };
       }
       case "evidence": {
         const rows = value.rows.map(item => {

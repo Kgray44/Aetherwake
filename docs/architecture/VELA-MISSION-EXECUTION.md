@@ -206,6 +206,19 @@ Unavailable or superseded evidence cannot enter future branch context. The
 canonical historical receipt remains stored. Older workrooms without an exact
 conversation binding retain their existing chat and receive no inferred link.
 
+New specialist workrooms also retain one note-view binding per specialist task.
+These are individual assignment projections of the canonical mission, not new
+agent profiles or provider sessions. A queued assignment does not imply that
+execution started. Attempt disclosures show recorded identities, times, context
+receipts, reported usage and sanitized findings. Report-contract verification
+remains separate from confirming a recommendation. The source-profile link
+opens the existing resource, while the displayed profile versions describe the
+recorded assignment. Retired tasks retain their own view and history; a view
+does not silently redirect to a replacement. Source revocation withdraws its
+evidence through the same mission projection. A changed plan invalidates a
+pending workroom preview before creation. Earlier workrooms without these
+bindings retain their existing layout.
+
 The backend verifies access to both workspaces and to the exact card
 placement before returning a projection. Card bindings are optional in older
 workrooms. Manual checklist entries and ordinary timeline settings retain

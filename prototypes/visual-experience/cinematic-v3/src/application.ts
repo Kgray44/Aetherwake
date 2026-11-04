@@ -520,7 +520,7 @@ export function installApplication(hooks: Hooks) {
     }, mountDefault, (missionId) => {
       if (!velaOpen) openVela();
       velaPanel?.showMission(missionId);
-    });
+    }, (id) => { openCanonicalResource(id); });
     missionWorkroomViews.add(view);
     return { ...view, dispose() { missionWorkroomViews.delete(view); view.dispose(); } };
   }

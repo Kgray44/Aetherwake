@@ -10,7 +10,7 @@ import { MISSION_CONTRACT, MISSION_LIMITS as L, type Mission, type MissionContro
   type MissionExecutionContext, type MissionExecutor, type MissionPlan, type MissionProjection,
   type MissionAdmission, type MissionAttempt, type MissionRevisionChange, type MissionRevisionPreview, type MissionScope, type MissionTask,
   type MissionTaskPlan, type MissionWorkroom, type MissionWorkroomCard, type MissionWorkroomDashboard,
-  type MissionWorkroomResource } from './mission-contracts.mts';
+  type MissionWorkroomResource, type MissionAgentAttempt, type MissionAgentDashboard } from './mission-contracts.mts';
 
 export interface MissionServiceHost {
   db: DatabaseSync;
@@ -35,6 +35,24 @@ const stamp = () => new Date().toISOString();
 const digest = (input: unknown) => createHash('sha256').update(JSON.stringify(input)).digest('hex');
 const makeTask = (plan: MissionTaskPlan): MissionTask => ({ ...plan, queuedAt: stamp(), state: 'queued', priority: 0, attempts: [] });
 const own = (table: object, key: string) => Object.hasOwn(table, key);
+/** Shared scoped evidence summary. Evidence bodies and profile instructions stay with their owners. */
+function workroomEvidence(task: MissionTask, attempt?: MissionAttempt): Pick<MissionAgentAttempt,
+  'evidenceId' | 'source' | 'observedAt' | 'verification' | 'passed' | 'findings' | 'citations'> {
+  const evidence = attempt?.evidence, verification = attempt?.verification;
+  const report = task.executor === 'chatgpt.specialist' && evidence?.source === 'chatgpt-plan-responses:reported' &&
+    verification?.passed && verification.evidenceIds.includes(evidence.id) && evidence.attemptId === attempt?.id
+    ? evidence.value as { observations?: unknown; citations?: unknown } : undefined;
+  const findings = Array.isArray(report?.observations)
+    ? report.observations.filter((item): item is string => bounded(item, 240)).slice(0, 3)
+    : attempt ? missionMeasurementAnswer([{ ...task, attempts: [attempt] }]) : [];
+  const citations = Array.isArray(report?.citations) ? report.citations.flatMap(item => {
+    const url = bounded(item, 256) ? URL.parse(item) : null;
+    return url?.protocol === 'https:' && !url.username && !url.password ? [url.href] : [];
+  }).slice(0, 3) : [];
+  return { ...(evidence ? { evidenceId: evidence.id, source: evidence.source, observedAt: evidence.observedAt } : {}),
+    ...(verification ? { verification: verification.detail, passed: verification.passed } : {}),
+    ...(findings.length ? { findings } : {}), ...(citations.length ? { citations } : {}) };
+}
 const blockedState = (task: MissionTask) => ['failed', 'uncertain', 'cancelled', 'blocked'].includes(task.state);
 const scheduled = (m: Mission) => m.disposition === 'active' && m.tasks.some(task => task.state === 'queued');
 const taskOf = (m: Mission, id: string) => m.tasks.find(task => task.id === id);
@@ -299,13 +317,23 @@ export class MissionService {
   }
 
   workroomCardIds(scope: MissionScope): string[] {
-    return Object.values(this.boundWorkroom(scope)?.workroom.missionCards ?? {});
+    const workroom = this.boundWorkroom(scope)?.workroom;
+    return [...Object.values(workroom?.missionCards ?? {}), ...Object.values(workroom?.missionAgentCards ?? {})];
   }
 
   workroomResource(resourceId: string, scope: MissionScope): MissionWorkroomResource | null {
     const linked = this.boundWorkroom(scope);
     if (!linked) return null;
     const { mission, workroom } = linked;
+    const agentTaskId = Object.entries(workroom.missionAgentCards ?? {}).find(([, id]) => id === resourceId)?.[0];
+    if (agentTaskId !== undefined) {
+      const projection = this.project(mission);
+      const task = projection.tasks.find(task => task.id === agentTaskId) ??
+        projection.retiredTasks?.find(task => task.id === agentTaskId);
+      if (!task?.specialist) return null;
+      return { kind: 'workroom-resource', missionId: projection.id, outcome: projection.outcome,
+        revision: projection.revision, dashboard: this.workroomAgent(projection, task) };
+    }
     const card = workroom.missionChecklistResourceId === resourceId ? 'checklist' :
       workroom.missionTimelineResourceId === resourceId ? 'timeline' :
         (Object.keys(workroom.missionCards ?? {}) as MissionWorkroomCard[]).find(kind => workroom.missionCards?.[kind] === resourceId);
@@ -316,6 +344,28 @@ export class MissionService {
     if (card === 'checklist') return { ...binding, checklist: tasks.map(task => ({ taskId: task.id, title: task.objective, state: task.state })) };
     if (card === 'timeline') return { ...binding, timeline: events };
     return { ...binding, dashboard: this.workroomDashboard(projection, card) };
+  }
+
+  private workroomAgent(mission: MissionProjection, task: MissionTask): MissionAgentDashboard {
+    const specialist = task.specialist!;
+    const profile = specialist.profile;
+    return { kind: 'agent', taskId: task.id, title: task.objective, role: specialist.role,
+      responsibility: task.teamMember?.responsibility ?? task.objective, state: task.state,
+      executor: task.executor, provider: specialist.provider, model: specialist.model,
+      criterion: task.criterion, dependencies: task.dependencies, maxAttempts: task.maxAttempts,
+      timeoutMs: task.timeoutMs, webSearch: specialist.webSearch === true,
+      ...(mission.retiredTasks?.some(retired => retired.id === task.id) ? { retired: true } : {}),
+      ...(own(mission.waits, task.id) ? { wait: mission.waits[task.id] } : {}),
+      ...(profile ? { profile: { id: profile.id, title: profile.title,
+        profileVersion: profile.profileVersion, resourceVersion: profile.resourceVersion } } : {}),
+      attempts: task.attempts.map((attempt, index) => ({ id: attempt.id, admittedAt: attempt.admittedAt,
+        ...(attempt.finishedAt ? { finishedAt: attempt.finishedAt } : {}),
+        ...(attempt.outcome ? { outcome: attempt.outcome } : {}),
+        ...(index === task.attempts.length - 1 && task.detail ? { detail: task.detail } : {}),
+        ...workroomEvidence(task, attempt),
+        ...(attempt.context ? { context: attempt.context } : {}),
+        ...(attempt.timing ? { timing: attempt.timing } : {}),
+        ...(attempt.telemetry ? { telemetry: attempt.telemetry } : {}) })) };
   }
 
   private workroomDashboard(mission: MissionProjection, kind: MissionWorkroomCard): MissionWorkroomDashboard {
@@ -331,20 +381,8 @@ export class MissionService {
           state: task.state, provider: task.specialist.provider, model: task.specialist.model, attempts: task.attempts.length,
         }] : []) };
       case 'evidence': return { kind, criteria: mission.criteria, rows: mission.tasks.map(task => {
-        const attempt = task.attempts.at(-1), evidence = attempt?.evidence, verification = attempt?.verification;
-        const report = task.executor === 'chatgpt.specialist' && evidence?.source === 'chatgpt-plan-responses:reported' &&
-          verification?.passed && verification.evidenceIds.includes(evidence.id) && evidence.attemptId === attempt?.id
-          ? evidence.value as { observations?: unknown; citations?: unknown } : undefined;
-        const findings = Array.isArray(report?.observations)
-          ? report.observations.filter((item): item is string => bounded(item, 240)).slice(0, 3) : missionMeasurementAnswer([task]);
-        const citations = Array.isArray(report?.citations) ? report.citations.flatMap(item => {
-          const url = bounded(item, 256) ? URL.parse(item) : null;
-          return url?.protocol === 'https:' && !url.username && !url.password ? [url.href] : [];
-        }).slice(0, 3) : [];
         return { taskId: task.id, title: task.objective, state: task.state, criterion: task.criterion,
-          ...(evidence ? { evidenceId: evidence.id, source: evidence.source, observedAt: evidence.observedAt } : {}),
-          ...(verification ? { verification: verification.detail, passed: verification.passed } : {}),
-          ...(findings.length ? { findings } : {}), ...(citations.length ? { citations } : {}) };
+          ...workroomEvidence(task, task.attempts.at(-1)) };
       }) };
       case 'performance': return { kind, profile: mission.profile, ...(mission.admission ? { admission: mission.admission } : {}) };
       case 'stream': return { kind, events: [] };

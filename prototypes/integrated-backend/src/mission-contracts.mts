@@ -229,6 +229,7 @@ export interface MissionWorkroom {
   missionChecklistResourceId?: string;
   missionTimelineResourceId?: string;
   missionCards?: Partial<Record<MissionWorkroomCard, string>>;
+  missionAgentCards?: Record<string, string>;
 }
 export interface MissionWorkroomPreview {
   kind: 'workroom-preview';
@@ -249,7 +250,39 @@ export interface MissionWorkroomStreamEvent {
   executor?: string;
   classification: StreamEvent['classification'];
 }
+export interface MissionAgentAttempt extends Pick<MissionAttempt,
+  'id' | 'admittedAt' | 'finishedAt' | 'outcome' | 'context' | 'timing' | 'telemetry'> {
+  detail?: string;
+  evidenceId?: string;
+  source?: string;
+  observedAt?: string;
+  verification?: string;
+  passed?: boolean;
+  findings?: string[];
+  citations?: string[];
+}
+export interface MissionAgentDashboard {
+  kind: 'agent';
+  taskId: string;
+  title: string;
+  role: string;
+  responsibility: string;
+  state: MissionTaskState;
+  executor: string;
+  provider: string;
+  model: string;
+  criterion: string;
+  dependencies: string[];
+  maxAttempts: number;
+  timeoutMs: number;
+  webSearch: boolean;
+  retired?: true;
+  wait?: MissionProjection['waits'][string];
+  profile?: { id: string; title: string; profileVersion: number; resourceVersion: number };
+  attempts: MissionAgentAttempt[];
+}
 export type MissionWorkroomDashboard =
+  | MissionAgentDashboard
   | { kind: 'graph'; objective: string; planRevision: number; tasks: {
       id: string; title: string; state: MissionTaskState; dependencies: string[]; executor: string;
       role?: string; wait?: MissionProjection['waits'][string];
@@ -265,7 +298,7 @@ export type MissionWorkroomDashboard =
     }[] }
   | { kind: 'performance'; profile: MissionProjection['profile']; admission?: MissionAdmission }
   | { kind: 'stream'; events: MissionWorkroomStreamEvent[]; publicationPending?: true };
-export type MissionWorkroomCard = MissionWorkroomDashboard['kind'];
+export type MissionWorkroomCard = Exclude<MissionWorkroomDashboard['kind'], 'agent'>;
 export type MissionWorkroomResource = {
   kind: 'workroom-resource';
   missionId: string;
