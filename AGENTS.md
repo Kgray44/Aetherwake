@@ -2,6 +2,10 @@
 
 This file is a routing and collaboration guide, not a substitute for project governance. **Aetherwake** is the development initiative; **Aerynth** is the planned desktop application; **Vela** is its intelligent assistant. These are working product names.
 
+## Owner-ratified baseline (2026-11-05)
+
+Constitution 00 and Charters 01–16 are explicitly ratified by the repository owner as binding product and design requirements. The capability-first, Spatial Intelligence and Unified Memory amendments are included. Implementation status, API availability, security/performance qualification and release acceptance remain separately evidence-gated. See [the governance registry](governance/README.md), [Unified Memory Runtime](docs/architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md), [Capability Runtime](docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md) and [Spatial Runtime](docs/architecture/UNIFIED-SPATIAL-INTELLIGENCE-RUNTIME-AND-NAVIGATION.md). Do not discard requirements or substitute 2D Mind visuals or parallel memory stores.
+
 ## Deterministic governance routing
 
 Before substantive work, use the repository's deterministic router instead of loading all 17 charter documents:
@@ -19,7 +23,7 @@ node scripts/governance-context.mjs --task "Optimize particle rendering" --path 
 node scripts/governance-context.mjs --requirement AW-CIE-008 --json
 ```
 
-V2 emits the **full Constitution**, focused **complete specialist charter sections**, and an exhaustive **normative requirement envelope for every selected charter**, with exact citations, hashes, and registry authority. When it cannot reliably choose relevant sections, it falls back to the full routed charter. Its cross-domain expansion is based on documented subsystem relationships, not phrases tailored to test cases. **Coverage of all normative requirements within selected charters is not a guarantee that every applicable charter was selected**: inspect warnings, add scope/paths and use full charters as needed. Its budget is soft; its token figure is a character-derived estimate, **not measured model tokens**. Use `--full` whenever scope is broad, ambiguous, or demands comprehensive charter review. Re-run after task scope or charter source changes; read additional sections or full charters for implicit cross-domain dependencies. See [Governance Context Router V2](docs/engineering/GOVERNANCE-CONTEXT-ROUTER-V2.md). Its statuses come from `governance/README.md`: **binding** charters are authoritative, **advisory** published drafts are reference-only, and **planned/unavailable** charters must not be treated as existing or approved. Rerun when scope changes and include any cross-domain dependencies not detected automatically. Consult [the implementation guide](docs/engineering/GOVERNANCE-ROUTER.md). Validate with `node scripts/governance-router.mjs --validate`, `node --test tests/governance-router.test.mjs tests/governance-context.test.mjs`, and `node scripts/benchmark-governance-context.mjs`, and `node scripts/evaluate-governance-engineering.mjs --strict`.
+V2 emits the **full Constitution**, focused **complete specialist charter sections**, and an exhaustive **normative requirement envelope for every selected charter**, with exact citations, hashes, and registry authority. When it cannot reliably choose relevant sections, it falls back to the full routed charter. Its cross-domain expansion is based on documented subsystem relationships, not phrases tailored to test cases. **Coverage of all normative requirements within selected charters is not a guarantee that every applicable charter was selected**: inspect warnings, add scope/paths and use full charters as needed. Its budget is soft; its token figure is a character-derived estimate, **not measured model tokens**. Use `--full` whenever scope is broad, ambiguous, or demands comprehensive charter review. Re-run after task scope or charter source changes; read additional sections or full charters for implicit cross-domain dependencies. See [Governance Context Router V2](docs/engineering/GOVERNANCE-CONTEXT-ROUTER-V2.md). Its statuses come from `governance/README.md`: owner-ratified charters are binding; only future unapproved proposals remain advisory. Rerun when scope changes and include any cross-domain dependencies not detected automatically. Consult [the implementation guide](docs/engineering/GOVERNANCE-ROUTER.md). Validate with `node scripts/governance-router.mjs --validate`, `node --test tests/governance-router.test.mjs tests/governance-context.test.mjs`, and `node scripts/benchmark-governance-context.mjs`, and `node scripts/evaluate-governance-engineering.mjs --strict`.
 
 ## Authority and reading discipline
 
@@ -51,7 +55,7 @@ Use the governance registry for exact filenames and current availability. Typica
 | Security, privacy, autonomy | 14 | All affected domains |
 | Acceptance, delivery | 15, 16 | All affected domains |
 
-Treat charter numbers as routing references, **not evidence that the charter exists**. If a charter is pending, rely on the Constitution and available accepted documents.
+Treat charter numbers as routing references, **not evidence that the charter exists**. Every existing charter 00–16 is currently ratified; check the registry for any future proposals.
 
 ## Repository responsibilities
 
