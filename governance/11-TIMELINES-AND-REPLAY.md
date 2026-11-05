@@ -583,7 +583,7 @@ These questions SHOULD be resolved through documented research, representative p
 
 ## 20. Publication, change control, and owner acceptance
 
-This document is a **published proposed charter**, not an assertion that all capabilities already exist. It becomes binding as an approved specialized charter only through repository-owner acceptance under the Constitution's governance process.
+This is an **owner-ratified governing charter (2026-11-05)**. Publication alone had not provided approval; that separate owner decision is now recorded. Implementation and release evidence remain outstanding.
 
 **AW-TIME-124 — Explicit acceptance.** Publication or an agent's successful commit MUST NOT be represented as owner ratification.
 
