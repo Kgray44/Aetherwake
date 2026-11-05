@@ -1097,12 +1097,43 @@ test('AIR refuses invalid pins, execution through the conversation provider and 
     await assert.rejects(f.core.command('velaRequestPreview', { ...ask, model: 'missing' }), /unsupported_model/);
     await assert.rejects(f.core.command('velaRequestPreview', { ...ask, model: documentedModel.id, reasoningEffort: 'none' }), /unsupported_reasoning_effort/);
     await assert.rejects(f.core.command('velaRequestPreview', { ...ask, budgetLimit: 10 }), /vela_budget_unverifiable/);
-    await assert.rejects(f.core.command('velaRequestPreview', { ...ask, intent: 'Inspect the repository logs', providerId }), /vela_pinned_provider_cannot_execute/);
-    await assert.rejects(f.core.command('velaRequestPreview', { ...ask, intent: 'Fix the resize bug and test it' }), /vela_codex_write_unavailable/);
+    await assert.rejects(f.core.command('velaRequestPreview', { ...ask, intent: 'Inspect the repository logs', providerId, mode:'codex' }), /vela_pinned_provider_cannot_execute/);
+    await assert.rejects(f.core.command('velaRequestPreview', { ...ask, intent: 'Fix the resize bug and test it', mode:'codex', providerId:'codex-app-server' }), /vela_codex_write_unavailable/);
     f.disconnect();
     await assert.rejects(f.core.command('velaRequestPreview', ask), /vela_chatgpt_sign_in_required/);
     assert.equal(f.requests.length + f.codexCalls + f.secretReads, 0);
   } finally { await f.close(); }
+});
+
+test('explicit Codex composite intent keeps its actual owner, selected-source fences and one reviewed execution',async()=>{
+  const f=fixture(true);try{
+    const created=await f.core.command('desktop',{type:'createResource',kind:'note',title:'Synthetic explicit inspection source',workspaceId:null}),note=created.resources.find(resource=>resource.title==='Synthetic explicit inspection source')!;
+    await f.core.command('desktop',{type:'content',resourceId:note.id,expectedVersion:note.version,content:'Synthetic controlled inspection evidence.'});
+    const intent='Read the log note, explain the slowdown, then inspect the repository logs',input={intent,resourceIds:[note.id],adaptive:true as const,mode:'codex' as const,providerId:'codex-app-server' as const,model:'fixture-model',reasoningEffort:'high' as const};
+    await assert.rejects(f.core.command('velaRequestPreview',{...input,requireInspectionDirectory:true}),/vela_codex_inspection_target_required/);
+    const first=await f.core.command('velaRequestPreview',input),approval={previewId:first.id,signature:first.signature},review=await f.core.command('velaNativeReview',approval);
+    assert.equal(first.providerId,'codex-app-server');assert.equal(first.route?.kind,'agentic');assert.equal(first.route.model,'fixture-model');assert.equal(first.route.effort,'high');assert.match(review.prompt,/Synthetic controlled inspection evidence/u);assert.match(review.prompt,/then inspect the repository logs/u);
+    const stale=await f.core.command('authorizeVelaRequest',{...approval,reviewDigest:review.reviewDigest}),current=(await f.core.command('desktop',{type:'snapshot'})).resources.find(resource=>resource.id===note.id)!;
+    await f.core.command('desktop',{type:'content',resourceId:note.id,expectedVersion:current.version,content:'Synthetic changed inspection evidence.'});
+    await assert.rejects(f.core.command('vela',{name:'request',input:{intent,resourceIds:[note.id],authorizeProvider:true,previewId:first.id,grantId:stale.grantId}}),/stale_vela_preview/);
+    assert.equal((await f.core.command('providerActivity',{})).providerRequests,0);
+    const fresh=await f.core.command('velaRequestPreview',input),freshApproval={previewId:fresh.id,signature:fresh.signature},freshReview=await f.core.command('velaNativeReview',freshApproval),grant=await f.core.command('authorizeVelaRequest',{...freshApproval,reviewDigest:freshReview.reviewDigest});
+    const request=await f.core.command('vela',{name:'request',input:{intent,resourceIds:[note.id],authorizeProvider:true,previewId:fresh.id,grantId:grant.grantId}}) as VelaRequest;
+    assert.equal(request.state,'responded',request.errorCode);assert.equal(request.providerId,'codex-app-server');assert.equal((await f.core.command('providerActivity',{})).providerRequests,1);assert.equal(f.requests.length,0);assert.equal(f.secretReads,0);
+  }finally{await f.close();}
+});
+
+test('an authorized primary API never enters the legacy regex analysis/handoff workflow',async()=>{
+  const f=fixture();try{
+    // Routing-only source fixture: no key, authority grant, context dispatch or HTTP.
+    const runtime=f.owner.velaApiRuntime;runtime.authorized=()=>true;runtime.configurationVersion=()=>1;runtime.models=async()=>['gpt-6-luna'];
+    for(const intent of ['Check CPU usage, explain what it means, then inspect the repository logs','Read the log note, explain the slowdown, then fix the code and run the benchmark','Run the tests for my project','Run the tests for this project'])for(const mode of [undefined,'auto']){
+      const selected=await f.owner.selectVelaRoute({intent,resourceIds:[],adaptive:true,...(mode?{mode}:{})},{capabilityMs:0});
+      assert.equal(selected.providerId,'openai-api-vela');assert.equal(selected.route.kind,'conversational');assert.equal(selected.route.nativeMetric,undefined);assert.equal(selected.route.nativeLog,undefined);
+    }
+    for(const pins of [{mode:'codex',providerId:'codex-app-server'},{providerId}])await assert.rejects(f.owner.selectVelaRoute({intent:'Run the tests for this project',resourceIds:[],adaptive:true,...pins},{capabilityMs:0}),/vela_project_check_native_review_required/);
+    assert.equal(f.requests.length+f.codexCalls+f.secretReads,0);
+  }finally{await f.close();}
 });
 
 test('AIR resolves saved scope defaults, preserves turn overrides, and invalidates stale approval across restart', async () => {

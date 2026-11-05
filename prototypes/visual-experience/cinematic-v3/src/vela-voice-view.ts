@@ -15,6 +15,8 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
   const controls = make('div'); controls.className = 'vela-voice-actions';
   let state: VelaVoiceState | null = null, visible = false, disposed = false, pending = false, reading = false, dirty = false;
   let timer: ReturnType<typeof setTimeout> | undefined, settingsVersion = -1;
+  let operationEpoch=0;
+  const speechStops=new Map<string,Promise<void>>();
   const listeners = new Set<(presence: VelaVoicePresence) => void>();
   const active = () => !!state && ['starting', 'awaiting-start', 'running', 'closing'].includes(state.session.state);
   function presence(): VelaVoicePresence { return { active: active(), microphoneOn: state?.media?.microphoneAccess === 'active' && state.media.localTrackEnabled,
@@ -34,10 +36,11 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
     error.hidden = false;
   }
   async function run(work: () => Promise<unknown>) {
-    if (pending || disposed) throw new Error('live_session_busy');
+    if (pending || speechStops.size || disposed) throw new Error('live_session_busy');
+    const epoch=operationEpoch;
     pending = true; error.hidden = true; render();
-    try { const value = await work(); if (isState(value)) accept(value); else await refresh(); }
-    catch (cause) { failure(cause); throw cause; }
+    try { const value = await work(); if(epoch===operationEpoch){if (isState(value)) accept(value); else await refresh();} }
+    catch (cause) { if(epoch===operationEpoch){failure(cause); throw cause;} }
     finally { pending = false; render(); schedule(); }
   }
   const startButton = act('Start voice', () => command({ name: state?.session.state === 'unknown' ? 'reconnect' : 'start', input: {} }));
@@ -128,7 +131,8 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
   }
   async function refresh() {
     if (reading || disposed) return; reading = true;
-    try { const value = await command({ name: 'state', input: {} }); if (isState(value)) accept(value); }
+    const epoch=operationEpoch;
+    try { const value = await command({ name: 'state', input: {} }); if (epoch===operationEpoch&&isState(value)) accept(value); }
     catch (cause) { if (visible) failure(cause); }
     finally { reading = false; schedule(); }
   }
@@ -136,6 +140,14 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
     clearTimeout(timer); if ((visible || active()) && !disposed && !doc.hidden) timer = setTimeout(() => { void refresh(); }, visible ? 900 : 3000);
   }
   const visibility = () => { if (doc.hidden) clearTimeout(timer); else if (visible || active()) void refresh(); };
+  function stopReplySpeech(attemptId:string):Promise<void>{
+    if(disposed)return Promise.reject(Error('live_session_busy'));
+    const prior=speechStops.get(attemptId);if(prior)return prior;
+    if(state?.speech?.attemptId!==attemptId||active()&&state.session.attemptId!==attemptId)return Promise.resolve();
+    const epoch=++operationEpoch;error.hidden=true;
+    const work=(async()=>{try{const value=await command({name:'stopSpeech',input:{attemptId}});if(epoch===operationEpoch){if(isState(value))accept(value);else await refresh();}}catch(cause){if(epoch===operationEpoch)failure(cause);throw cause;}})();
+    const flight=work.finally(()=>{if(speechStops.get(attemptId)===flight)speechStops.delete(attemptId);render();schedule();});speechStops.set(attemptId,flight);return flight;
+  }
   doc.addEventListener('visibilitychange', visibility);
   render();
   return {
@@ -144,7 +156,7 @@ export function createVelaVoiceView(doc: Document, command: (request: VelaVoiceR
     observe() { if(!disposed&&!reading)void refresh(); },
     subscribe(listener: (value: VelaVoicePresence) => void) { listeners.add(listener); listener(presence()); return () => { listeners.delete(listener); }; },
     async speak(message:{id:string;content:string}){const bytes=new TextEncoder().encode(message.content),digest=await doc.defaultView!.crypto.subtle.digest('SHA-256',bytes),contentDigest=[...new Uint8Array(digest)].map(value=>value.toString(16).padStart(2,'0')).join('');await run(async()=>{const value=await command({name:'speak',input:{messageId:message.id,contentDigest}});if(!isState(value)||value.speech?.messageId!==message.id||value.speech.contentDigest!==contentDigest||!['starting','awaiting-start','running'].includes(value.session.state))throw Error('live_speech_start_unconfirmed');return value;});},
-    async stopSpeech(attemptId:string){await run(()=>command({name:'stopSpeech',input:{attemptId}}));},
+    async stopSpeech(attemptId:string){await stopReplySpeech(attemptId);},
     async start(intent?: string) { await run(async () => { const value = await command({ name: 'start', input: { ...(intent ? { intent } : {}) } });
       if (!isState(value) || !['starting', 'awaiting-start', 'running'].includes(value.session.state)) throw new Error('live_start_unconfirmed'); return value; }); },
     dispose() { disposed = true; clearTimeout(timer); listeners.clear(); doc.removeEventListener('visibilitychange', visibility); element.remove(); },
