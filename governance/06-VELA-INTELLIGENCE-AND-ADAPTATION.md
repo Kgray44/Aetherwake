@@ -640,7 +640,7 @@ Research outcomes require documented evidence and architecture decisions; they M
 
 ## 21. Change control and acceptance
 
-This document is a **published proposed subsystem charter**, not an assertion that Vela has already been implemented or that the repository owner has ratified every requirement.
+This is an **owner-ratified governing subsystem charter (2026-11-05)**; Vela's implementation, native behavior and release status must still be independently verified.
 
 - The [Constitution](00-AETHERWAKE-CONSTITUTION.md) remains supreme.
 - Requirement IDs SHOULD remain stable when their meaning is unchanged.
