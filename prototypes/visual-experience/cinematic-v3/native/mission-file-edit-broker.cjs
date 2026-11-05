@@ -80,12 +80,12 @@ function createMissionFileEditBroker({ win, trustedDocumentUrl, call, runtime, n
     // Reuse the exact existing validator and isolated read-only native surface.
     const review = validateFileEditReview(operationId, { requestId: operationId, reviewId: raw.reviewId, expiresAt: new Date(raw.expiresAt).toISOString(),
       files: [{ path: raw.path, before: raw.before, after: raw.after, beforeDigest: raw.beforeDigest, afterDigest: raw.afterDigest }] });
-    const approved = await reviewGate(()=>showVelaReview({ parent: win, review, expiresAt: review.expiresAt, experience: "file-edit", runtime: nativeRuntime() }));
+    const decision = await reviewGate(()=>showVelaReview({ parent: win, review, expiresAt: review.expiresAt, experience: "file-edit", decisionMode:'three-way', runtime: nativeRuntime() }));
     guard(event);
-    // The unchanged review API conflates Cancel/close/timeout into false. It is
-    // absence of approval, never proof of an explicit user No. Preserve waiting.
-    if (approved !== true) return privateCall("missionFileEditRead", { operationId });
+    if (decision === 'cancel') return privateCall("missionFileEditRead", { operationId });
+    if (!['yes','no'].includes(decision))fail('mission_edit_native_choice_required');
     if (Date.now() >= raw.expiresAt) fail("mission_edit_native_choice_required");
+    if(decision==='no'){await choice(raw,'patch','no');guard(event);return privateCall('missionFileEditRead',{operationId});}
     const authority = await choice(raw, "patch", "yes"); guard(event);
     return privateCall("missionFileEditApplyNative", { operationId, authority });
   };
@@ -110,10 +110,12 @@ function createMissionFileEditBroker({ win, trustedDocumentUrl, call, runtime, n
     const result = await reviewGate(()=>dialog.showMessageBox(win, { type: "question", title: "Vela · Review selected-file check", message: "Run the selected independent Node test?",
       detail: "Working directory\n" + raw.cwd + "\n\nCommand arguments\n" + raw.argv.map(part => JSON.stringify(part)).join(" ") +
         "\n\nUses the existing restricted Codex command runner. An unconfirmed outcome remains unverified.",
-      buttons: ["Cancel", "Run reviewed check"], defaultId: 0, cancelId: 0, noLink: true }));
-    guard(event); if (Date.now() >= raw.expiresAt) fail("mission_edit_native_choice_required");
-    if (!result || ![0, 1].includes(result.response)) fail("mission_edit_native_choice_required");
-    const authority = await choice(raw, "check", result.response === 1 ? "yes" : "no"); guard(event);
+      buttons: ["Cancel", "No", "Run reviewed check"], defaultId: 0, cancelId: 0, noLink: true }));
+    guard(event);
+    if (!result || ![0, 1, 2].includes(result.response)) fail("mission_edit_native_choice_required");
+    if(result.response===0)return privateCall('missionFileEditRead',{operationId});
+    if (Date.now() >= raw.expiresAt) fail("mission_edit_native_choice_required");
+    const authority = await choice(raw, "check", result.response === 2 ? "yes" : "no"); guard(event);
     return authority ? privateCall("missionFileEditCheckRunNative", { operationId, authority }) : privateCall("missionFileEditRead", { operationId });
   };
   return Object.freeze({ async prepare(event,input){
