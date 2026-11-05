@@ -2595,7 +2595,7 @@ export class BackendCore {
       return { before: validateVelaFileEditTarget(target, this.privateRoot), after: replacement };
     });
     checkTime();
-    admitVelaFileEdit(record.files[0].target.path, this.privateRoot);
+    (this.nativeHostServices?.fileEditAdmission ?? admitVelaFileEdit)(record.files[0].target.path, this.privateRoot);
     checkTime();
     this.atomic(() => {
       record.files.forEach((file, index) => Object.assign(file, velaEditSiblings(file.target, record.requestId,
@@ -2697,7 +2697,7 @@ export class BackendCore {
       return { plan, record };
     };
     const { plan, record } = validate();
-    admitVelaFileEdit(plan.cwd, this.privateRoot);
+    (this.nativeHostServices?.fileEditAdmission ?? admitVelaFileEdit)(plan.cwd, this.privateRoot);
     const started = performance.now();
     const receipt: VelaProjectCheckReceipt = { id: reviewId, kind, state: 'running', inputs: plan.inputs,
       sourceHead: plan.head, inputDigest: approval.digest, startedAt: now() };
@@ -4382,6 +4382,7 @@ export class BackendCore {
   private missionEditQuarantined(){return !!this.db.prepare("SELECT 1 FROM mission_file_check_custody WHERE state!='exit-observed'").get();}
   private initializeMissionFileEdits(){
     this.missionFileEdits=new MissionFileEdits({db:this.db,atomic:work=>{ensure(this.missionStorageAdmitted,'storage_reserve_admission_denied');return this.atomic(work);},privateRoot:this.privateRoot,
+      ...(this.nativeHostServices?.fileEditAdmission?{fileEditAdmission:this.nativeHostServices.fileEditAdmission}:{}),
       scope:()=>this.missionEditScope(),selected:id=>this.missionEditSelected(id),ownerCurrent:(owner,scope)=>{
         if(owner.kind!=='api-selected-file-intent')return false;
         try{const pending=this.missionEditRequest(owner.requestId),request=this.vela.state().requests.find(r=>r.id===owner.requestId);

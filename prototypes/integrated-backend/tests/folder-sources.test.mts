@@ -1,6 +1,6 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile, rename, rm, symlink, utimes } from 'node:fs/promises';
+import { mkdtemp, mkdir, writeFile, rename, rm, symlink, utimes, realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -9,13 +9,13 @@ import { FolderSources, inspectFolderSelection, readFolderSource, storeFolderSou
 
 const code = (expected: string) => (e: unknown) => !!e && typeof e === 'object' && 'code' in e && e.code === expected;
 async function fixture(t: TestContext) {
-  const root = await mkdtemp(path.join(tmpdir(), 'aerynth-folder-test-'));
+  const base = await realpath(tmpdir()), root = await mkdtemp(path.join(base, 'aerynth-folder-test-'));
   const selected = path.join(root, 'Optics'); await mkdir(selected);
   const db = new DatabaseSync(':memory:');
   db.exec('PRAGMA foreign_keys=ON; CREATE TABLE resources(id TEXT PRIMARY KEY); BEGIN'); FolderSources.migrate(db); db.exec('COMMIT');
   const service = new FolderSources(db);
   t.after(async () => { service.dispose(); db.close();
-    const relative = path.relative(tmpdir(), root);
+    const relative = path.relative(base, root);
     assert.ok(relative.startsWith('aerynth-folder-test-') && !relative.includes(path.sep));
     await rm(root, { recursive: true, force: true });
   });

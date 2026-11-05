@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, realpathSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { admitVelaFileEdit } from '../src/vela-file-edit.mts';
+import { fixtureFileEditHost } from './fixture-file-edit-admission.mts';
 import { tmpdir } from 'node:os';
 import { join,resolve,relative,isAbsolute } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -27,8 +27,8 @@ import type { MissionTeam } from '../src/mission-teams.mts';
 const providerId='chatgpt-plan-responses',boundary='a'.repeat(64),model='synthetic-plan-model';
 const documentedModel = { id: 'gpt-6.1-sol', label: 'Synthetic catalog Sol' };
 function sse(events:unknown[]){return new Response(events.map(event=>'data: '+JSON.stringify(event)+'\n\n').join(''),{headers:{'Content-Type':'text/event-stream'}});}
-function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', historyContext?: boolean){
- const dir=mkdtempSync(join(tmpdir(),'aerynth-ordinary-responses-')),path=join(dir,'canonical.sqlite'),events:StreamEvent[]=[],requests:Record<string,any>[]=[],responses:((init:RequestInit)=>Promise<Response>|Response)[]=[];
+function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', historyContext?: boolean,fileEditRoots?:readonly string[]){
+ const dir=mkdtempSync(join(realpathSync.native(tmpdir()),'aerynth-ordinary-responses-')),path=join(dir,'canonical.sqlite'),events:StreamEvent[]=[],requests:Record<string,any>[]=[],responses:((init:RequestInit)=>Promise<Response>|Response)[]=[];
  let listedModels=[{id:model,label:'Synthetic eligible model'}];
  let version=1,ready=true,catalogReads=0,secretReads=0,codexCalls=0,finishResolve:(()=>void)|undefined,pending=false;
  const status=async():Promise<ProviderConnectionStatus>=>({contract:'aerynth.provider-connection@1',providerId,billingRoute:'chatgpt-plan',state:ready?'ready':'disconnected',storageAvailable:true,pending,registrationVersion:version,planUsageEnabled:ready,inferenceVerified:false,nativeAccountHistory:false,nativeAccountMemory:false,nativeAccountSync:false});
@@ -40,8 +40,8 @@ function fixture(useCodexProtocolDouble = false, codexMode = 'air-inspection', h
  const fakeFetch:typeof fetch=async(url,init)=>{assert.equal(url,RESPONSES_ENDPOINT);assert.equal(new Headers(init?.headers).get('authorization'),'Bearer SYNTHETIC_PLAN_TOKEN');const body=JSON.parse(String(init?.body));assert.equal(body.store,false);assert.equal(body.stream,true);assert.deepEqual(Object.keys(body),['model','instructions','input','store','stream',...(body.reasoning?['reasoning']:[]),...(body.tools?['tools','tool_choice']:[])]);requests.push(body);const response=responses.shift();assert(response,'unexpected provider request');return response(init!);};
  const provider = useCodexProtocolDouble ? { provider: 'codex' as const, codexExecutable: process.execPath,
    codexArgs: [fileURLToPath(new URL('../../codex-bridge/tests/catalog-server.mjs', import.meta.url)), codexMode] } : { provider: 'fixture' as const };
- let core:BackendCore;const create=()=>{core=new BackendCore({path,...provider,contentPolicy:'synthetic-only',...(historyContext===undefined?{}:{velaHistoryContext:historyContext})},event=>events.push(event),undefined,{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
- return {get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(resolve(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
+ let core:BackendCore;const create=()=>{core=new BackendCore({path,...provider,contentPolicy:'synthetic-only',...(historyContext===undefined?{}:{velaHistoryContext:historyContext})},event=>events.push(event),fileEditRoots?fixtureFileEditHost([dir,...fileEditRoots]):undefined,{connection,fetch:fakeFetch});if(!useCodexProtocolDouble){const port=(core as any).port;for(const key of ['connect','capabilities','open','resume','read','items','turn','terminal','interrupt'])port[key]=()=>{codexCalls++;throw Error('Codex must never serve ordinary Responses');};}};create();
+ return {get core(){return core;},get owner(){return core as any;},events,requests,responses,connection,get catalogReads(){return catalogReads;},get secretReads(){return secretReads;},get codexCalls(){return codexCalls;},setListedModels(models:{id:string;label:string}[]){listedModels=models;},disconnect(){version++;ready=false;},async reopen(){if(!(core as any).closed)await core.command('close',{});create();},async close(){if(!(core as any).closed)await core.command('close',{});const part=relative(realpathSync.native(tmpdir()),resolve(dir));assert(part.startsWith('aerynth-ordinary-responses-')&&!part.startsWith('..')&&!isAbsolute(part));rmSync(dir,{recursive:true,force:true});}};
 }
 function complete(id:string,text='Synthetic response'){return sse([{type:'response.created',response:{id}},{type:'response.output_text.delta',delta:text},{type:'response.completed',response:{id,status:'completed',model,usage:{input_tokens:11,output_tokens:3,total_tokens:14},output:[]}}]);}
 async function prepare(f:ReturnType<typeof fixture>,resourceId:string,content:string){const d=await f.core.command('conversation',{name:'detail',input:{resourceId}}) as any,input:ConversationSendInput={resourceId,content,expectedRevision:d.conversation.revision,commandId:randomUUID()},preview=await f.core.command('conversationSendPreview',input);return {input,preview};}
@@ -658,7 +658,6 @@ test('Read the log, explain the slowdown, fix the count, and run the tests after
   skip: process.platform !== 'win32',
 }, async () => {
   const runtime = fileURLToPath(new URL('../.runtime/', import.meta.url));
-  admitVelaFileEdit(runtime);
   mkdirSync(runtime, { recursive: true });
   const dir = mkdtempSync(join(runtime, 'vela-file-edit-'));
   const file = join(dir, 'sample.json');
@@ -668,7 +667,7 @@ test('Read the log, explain the slowdown, fix the count, and run the tests after
     "test('count is two', () => assert.equal(JSON.parse(readFileSync('sample.json', 'utf8')).count, 2));\n";
   const git = (...args: string[]) => execFileSync('git.exe', ['-C', dir, '-c', 'core.hooksPath=NUL', ...args],
     { windowsHide: true, timeout: 6000, stdio: 'pipe' });
-  const f = fixture(true, 'air-file-edit');
+  const f = fixture(true, 'air-file-edit',undefined,[dir]);
   try {
     git('init', '--quiet', '--template=');
     writeFileSync(file, original);

@@ -52,11 +52,21 @@ export function validateVelaToolCatalog(value:VelaToolCatalog):VelaToolCatalog{
  check(value.digest===velaToolCatalogDigest(value),'vela_tool_catalog_changed');return structuredClone(value);
 }
 const index=(item:VelaToolDescriptor)=>({id:item.id,family:item.family,label:item.label,availability:item.availability,effect:item.effect,authorization:item.authorization});
-export function velaToolCatalogEnvelope(catalog:VelaToolCatalog){validateVelaToolCatalog(catalog);return {contract:catalog.contract,catalogDigest:catalog.digest,scopeDigest:catalog.scopeDigest,discovery:catalog.discovery,total:catalog.descriptors.length,index:catalog.descriptors.slice(0,8).map(index),nextOffset:catalog.descriptors.length>8?8:null,discoveryTool:VELA_TOOL_DISCOVER,schemaTool:VELA_TOOL_SCHEMAS,invokeTool:VELA_TOOL_INVOKE};}
+export function velaToolCatalogEnvelope(catalog:VelaToolCatalog){
+ validateVelaToolCatalog(catalog);
+ const families=new Map<VelaToolDescriptor['family'],{family:VelaToolDescriptor['family'];total:number;available:number;unavailable:number;unknown:number;ranges:{offset:number;count:number}[]}>();
+ catalog.descriptors.forEach((descriptor,offset)=>{
+  let family=families.get(descriptor.family);if(!family){family={family:descriptor.family,total:0,available:0,unavailable:0,unknown:0,ranges:[]};families.set(descriptor.family,family);}
+  family.total++;family[descriptor.availability]++;const last=family.ranges.at(-1);
+  if(last&&last.offset+last.count===offset)last.count++;else family.ranges.push({offset,count:1});
+ });
+ const envelope={contract:catalog.contract,catalogDigest:catalog.digest,scopeDigest:catalog.scopeDigest,discovery:catalog.discovery,total:catalog.descriptors.length,families:[...families.values()],index:catalog.descriptors.slice(0,8).map(index),nextOffset:catalog.descriptors.length>8?8:null,discoveryTool:VELA_TOOL_DISCOVER,schemaTool:VELA_TOOL_SCHEMAS,invokeTool:VELA_TOOL_INVOKE};
+ check(Buffer.byteLength(JSON.stringify(envelope))<=VELA_TOOL_LIMITS.outputBytes,'vela_tool_catalog_index_capacity');return envelope;
+}
 const object=(properties:Record<string,unknown>)=>({type:'object',properties,required:Object.keys(properties),additionalProperties:false});
 export function velaToolDefinitions(catalog:VelaToolCatalog):ReviewedApiFunction[]{
  const pin={type:'string',pattern:'^[a-f0-9]{64}$'},definitions=[
- {name:VELA_TOOL_DISCOVER,description:'Read one bounded page of the pinned capability index. No action or resource content is read.',parameters:object({catalogDigest:pin,offset:{type:'integer',minimum:0,maximum:128},limit:{type:'integer',minimum:1,maximum:16}})},
+ {name:VELA_TOOL_DISCOVER,description:'Read one bounded page of the pinned capability index. Use the supplied family ranges to jump directly to relevant tools. No action or resource content is read.',parameters:object({catalogDigest:pin,offset:{type:'integer',minimum:0,maximum:128},limit:{type:'integer',minimum:1,maximum:16}})},
  {name:VELA_TOOL_SCHEMAS,description:'Fetch exact source-owned schemas before invoking capabilities. Discovery grants no execution authority.',parameters:object({catalogDigest:pin,ids:{type:'array',minItems:1,maxItems:4,items:{type:'string'}}})},
  {name:VELA_TOOL_INVOKE,description:'Invoke one previously fetched exact capability schema. Native host policy and real review remain required. Reuse no invocation IDs.',parameters:object({catalogDigest:pin,capabilityId:{type:'string'},schemaDigest:pin,invocationId:{type:'string'},argumentsJson:{type:'string',maxLength:16384}})},
  ];return definitions.map(item=>{const definition={type:'function' as const,...item,parameters:item.parameters as ApiJsonSchema,strict:true as const};return {definition,schemaDigest:sha(JSON.stringify(definition)),authorizationRef:'vela-tools:'+catalog.digest};});

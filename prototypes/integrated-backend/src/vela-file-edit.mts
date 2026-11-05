@@ -255,6 +255,8 @@ function powershell(args: string[], env?: NodeJS.ProcessEnv) {
     ['-NoProfile', '-NonInteractive', ...args], { ...processOptions, timeout: 15000, ...(env ? { env } : {}) });
 }
 
+/** Trusted constructor injection only. This is storage admission, never write authority. */
+export type FileEditAdmission = (targetPath: string, privateRoot?: string) => void;
 export function admitVelaFileEdit(path: string, privateRoot?: string) {
   try {
     const raw = powershell(['-File', join(homedir(), 'AppData', 'Local', 'AeroStorageWatch', 'ReserveGuard.ps1'),

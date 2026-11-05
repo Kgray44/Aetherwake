@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve, sep, basename } from 'node:path';
+import { join, resolve, sep, basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
 import { Backend } from '../src/service.mts';
@@ -159,9 +159,10 @@ test('an explicit capability check recovers a lost App Server without replaying 
 
 test('a reviewed direct Codex send recovers its exact native turn after restart without resending', { timeout: 20000 }, async t => {
   const path = temp(t);
+  const startedAcknowledgment=join(dirname(path),'observed-turn-started');
   const server = fileURLToPath(new URL('../../codex-bridge/tests/fake-server.mjs', import.meta.url));
   const backend = (mode: string) => new Backend({
-    path, contentPolicy: 'synthetic-only', provider: 'codex', codexExecutable: process.execPath, codexArgs: [server, mode],
+    path, contentPolicy: 'synthetic-only', provider: 'codex', codexExecutable: process.execPath, codexArgs: [server, mode,...(mode==='recoverable-crash'?[startedAcknowledgment]:[])],
   });
   let b = backend('recoverable-crash');
   let recovery: { resourceId: string; executionId: string };
@@ -172,7 +173,14 @@ test('a reviewed direct Codex send recovers its exact native turn after restart 
     const preview = await b.call('conversationSendPreview', input);
     const exact = { previewId: preview.id, fingerprint: preview.fingerprint, commandId: input.commandId };
     const grant = await b.call('authorizeConversationSend', exact);
-    const lost = await b.call('conversationSend', { ...exact, grantId: grant.grantId });
+    const sending = b.call('conversationSend', { ...exact, grantId: grant.grantId });
+    void sending.catch(()=>{});
+    // The fixture crashes only after the actual notification has been committed.
+    const until=Date.now()+8000;let observed=false;
+    while(Date.now()<until){if((await b.call('replay',{limit:250})).events.some(event=>event.type==='turn/started')){observed=true;break;}await new Promise(done=>setTimeout(done,10));}
+    assert(observed,'fixture native turn/started must be durably observed before transport loss');
+    writeFileSync(startedAcknowledgment,'canonical turn/started observed',{flag:'wx'});
+    const lost = await sending;
     assert.equal(lost.state, 'unknown');
     assert.equal(lost.turnId, 'fixture-turn');
     recovery = { resourceId: chat.resourceId, executionId: lost.id };

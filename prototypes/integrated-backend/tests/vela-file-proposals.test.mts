@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync,mkdirSync,writeFileSync,rmSync } from 'node:fs';
+import { mkdtempSync,mkdirSync,writeFileSync,rmSync,realpathSync } from 'node:fs';
 import { join,resolve,relative,isAbsolute } from 'node:path';
 import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -10,7 +10,7 @@ import { CAPABILITIES,validateAction } from '../../vela-core/src/capabilities.ts
 import {selectBoundedHistory,validateFrozenHistoryMetadata} from '../../vela-core/src/bounded-history.mts';
 import type { VelaFileProposal,VelaRequest } from '../../vela-core/src/contracts.ts';
 const intent='Can you add the "Synthetic Library" project docs to this workspace?';
-function fixture(){const base=resolve(tmpdir()),dir=mkdtempSync(join(base,'aerynth-file-proposal-')),root=join(dir,'Synthetic Library'),path=join(dir,'canonical.sqlite');
+function fixture(){const base=realpathSync.native(tmpdir()),dir=mkdtempSync(join(base,'aerynth-file-proposal-')),root=join(dir,'Synthetic Library'),path=join(dir,'canonical.sqlite');
   mkdirSync(join(root,'docs'),{recursive:true});mkdirSync(join(root,'node_modules','ignored'),{recursive:true});
   writeFileSync(join(root,'README.md'),'SYNTHETIC PRIVATE DOCUMENT BODY A');writeFileSync(join(root,'docs','Guide.md'),'SYNTHETIC PRIVATE DOCUMENT BODY B');writeFileSync(join(root,'docs','Notes.txt'),'SYNTHETIC PRIVATE DOCUMENT BODY C');
   writeFileSync(join(root,'node_modules','ignored','README.md'),'EXCLUDED_PACKAGE_DOCUMENT');writeFileSync(join(root,'source.ts'),'export const source = 1;');

@@ -65,6 +65,33 @@ test('source discovery distinguishes absent capabilities from failed discovery a
  const f=fixture();try{assert.equal(velaToolCatalogEnvelope(f.port.catalog).total,2);for(const value of ['{"a":1,"a":2}','{"__proto__":{}}','{"value":NaN}'])assert.throws(()=>parseVelaToolJson(value));assert.deepEqual({...parseVelaToolJson('{"value":0}')as any},{value:0});assert.throws(()=>velaToolDiscovery(f.port.catalog,VELA_TOOL_SCHEMAS,JSON.stringify({catalogDigest:f.port.catalog.digest,ids:['missing']})),/unknown_capability/);}finally{f.close();}
  const failed=fixture([],'failed');try{assert.throws(()=>velaToolDiscovery(failed.port.catalog,VELA_TOOL_SCHEMAS,JSON.stringify({catalogDigest:failed.port.catalog.digest,ids:['missing']})),/discovery_failed/);}finally{failed.close();}
 });
+
+test('family ranges preserve actual catalog order and disclose non-contiguous availability counts without authority',()=>{
+ const descriptors=[descriptor('a.first'),descriptor('b.window'),descriptor('c.second'),descriptor('d.window'),descriptor('e.code')];
+ descriptors[1].family='windows';descriptors[1].availability='unavailable';descriptors[3].family='windows';descriptors[3].availability='unknown';descriptors[4].family='codex';
+ const base={contract:'aerynth.vela.tools@1' as const,scopeDigest:'a'.repeat(64),discovery:'partial' as const,descriptors},catalog={...base,digest:velaToolCatalogDigest(base)},before=JSON.stringify(catalog),envelope=velaToolCatalogEnvelope(catalog);
+ assert.deepEqual(envelope.families.find(f=>f.family==='windows'),{family:'windows',total:2,available:0,unavailable:1,unknown:1,ranges:[{offset:1,count:1},{offset:3,count:1}]});
+ assert.deepEqual(envelope.index.map(item=>item.id),descriptors.map(item=>item.id));assert.equal(envelope.catalogDigest,catalog.digest);assert.equal(envelope.discovery,'partial');assert.equal(JSON.stringify(catalog),before);
+ for(const family of envelope.families)for(const range of family.ranges){const page=JSON.parse(velaToolDiscovery(catalog,VELA_TOOL_DISCOVER,JSON.stringify({catalogDigest:catalog.digest,offset:range.offset,limit:Math.min(16,range.count)})).output);assert(page.index.every((item:any)=>item.family===family.family));}
+ assert.throws(()=>velaToolInvocation(catalog,JSON.stringify({catalogDigest:catalog.digest,capabilityId:descriptors[0].id,schemaDigest:descriptors[0].schemaDigest,invocationId:'not-authorized-by-family',argumentsJson:'{"value":1}'}),new Map(),new Set()),/schema_not_fetched/);
+});
+
+test('maximum interleaved family envelope stays within the existing packet bound with complete ranges and unchanged first page',()=>{
+ const families=['application','windows','codex','specialist'] as const,statuses=['available','unavailable','unknown'] as const;
+ const descriptors=Array.from({length:128},(_,i)=>({...descriptor('cap-'+String(i).padStart(4,'0')+'-'+ 'x'.repeat(119)),family:families[i%4],availability:statuses[i%3],label:'🚀'.repeat(64),description:i<8?'d'.repeat(2048):'',scope:'s'.repeat(512)}));
+ const base={contract:'aerynth.vela.tools@1' as const,scopeDigest:'a'.repeat(64),discovery:'complete' as const,descriptors},catalog={...base,digest:velaToolCatalogDigest(base)},envelope=velaToolCatalogEnvelope(catalog);
+ assert(Buffer.byteLength(JSON.stringify(catalog))<=262144);assert(Buffer.byteLength(JSON.stringify(envelope))<=16384);assert.equal(envelope.families.reduce((n,f)=>n+f.total,0),128);assert.equal(envelope.families.flatMap(f=>f.ranges).reduce((n,r)=>n+r.count,0),128);
+ for(const family of envelope.families){assert.equal(family.ranges.length,32);assert.equal(family.available+family.unavailable+family.unknown,family.total);}
+ assert.deepEqual(envelope.index.map(item=>item.id),descriptors.slice(0,8).map(item=>item.id));assert.equal(envelope.nextOffset,8);
+});
+
+test('a family jump reaches a later native read through discovery, schema, invoke and answer within four provider stages',async()=>{
+ const native=descriptor('windows.synthetic.read');native.family='windows';const f=fixture([...Array.from({length:40},(_,i)=>descriptor('application.'+String(i).padStart(3,'0'))),native]);try{
+  await f.ready();f.port.budget.maxProviderRequests=4;const envelope=velaToolCatalogEnvelope(f.port.catalog),range=envelope.families.find(f=>f.family==='windows')!.ranges[0];assert.equal(range.offset,40);
+  f.replies.push(()=>f.reply([{name:VELA_TOOL_DISCOVER,args:{catalogDigest:f.port.catalog.digest,offset:range.offset,limit:Math.min(range.count,16)}}]),()=>f.schemaReply([native.id]),()=>f.reply([f.invoke(native.id)]),()=>f.reply());
+  const result=await f.run();assert.equal(result.result.outcome,'completed');assert.equal(f.requests.length,4);assert.equal(f.invocations.length,1);assert.equal(f.port.budget.maxProviderRequests,4);assert.equal(f.port.budget.providerRequests,4);
+ }finally{f.close();}
+});
 test('multiple pending owner receipts release the API slot and require every real result before one continuation',async()=>{
  const f=fixture();try{await f.ready();f.handler=async input=>f.receipt(input,'running');f.replies.push(()=>f.schemaReply(),()=>f.reply([f.invoke('read.a'),f.invoke('read.b')]));const first=await f.run();assert.equal(first.workflow?.phase,'waiting-job');assert.equal(first.workflow?.pendingReceiptIds?.length,2);assert.equal(f.runtime.nonMissionInFlight(),0);const middle=await f.run({resume:first.workflow!.continuation!,resumeReceipt:f.receipt(f.invocations[1])});assert.equal(middle.workflow?.pendingReceiptIds?.length,1);assert.equal(f.requests.length,2);f.replies.push(()=>f.reply());await f.run({resume:middle.workflow!.continuation!,resumeReceipt:f.receipt(f.invocations[0])});assert.equal(f.requests.length,3);assert.equal(f.invocations.length,2);}finally{f.close();}
 });

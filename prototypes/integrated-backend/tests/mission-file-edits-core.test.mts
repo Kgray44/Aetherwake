@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { ownedFileEditAdmission } from './fixture-file-edit-admission.mts';
 import {execFileSync} from 'node:child_process';
 import {createCipheriv,createDecipheriv,randomBytes,randomUUID} from 'node:crypto';
 import {mkdirSync,writeFileSync,readFileSync,rmSync} from 'node:fs';
@@ -22,7 +23,7 @@ function fixture(){
   const git=(args:string[])=>execFileSync(process.platform==='win32'?'git.exe':'git',['-C',repo,...args],{windowsHide:true,timeout:5000,stdio:'pipe'});
   git(['init','-q']);git(['add','source.mjs','source.test.mjs']);git(['-c','user.name=Synthetic Fixture','-c','user.email=fixture@example.invalid','-c','commit.gpgsign=false','commit','-qm','Synthetic M3 file']);
   const key=randomBytes(32),bodies:any[]=[];let checkCalls=0,execute=async()=>({exitCode:0,stdout:tap,stderr:''}),holdApi=false,releaseApi=()=>{},nativeMedia=true;
-  const native:NativeHostServices={secrets:{available:async()=>true,seal:async text=>{const iv=randomBytes(12),c=createCipheriv('aes-256-gcm',key,iv);return Buffer.concat([iv,c.update(text),c.final(),c.getAuthTag()]);},open:async bytes=>{const b=Buffer.from(bytes),c=createDecipheriv('aes-256-gcm',key,b.subarray(0,12));c.setAuthTag(b.subarray(-16));return Buffer.concat([c.update(b.subarray(12,-16)),c.final()]).toString();}}};
+  const native:NativeHostServices={fileEditAdmission:ownedFileEditAdmission([root]),secrets:{available:async()=>true,seal:async text=>{const iv=randomBytes(12),c=createCipheriv('aes-256-gcm',key,iv);return Buffer.concat([iv,c.update(text),c.final(),c.getAuthTag()]);},open:async bytes=>{const b=Buffer.from(bytes),c=createDecipheriv('aes-256-gcm',key,b.subarray(0,12));c.setAuthTag(b.subarray(-16));return Buffer.concat([c.update(b.subarray(12,-16)),c.final()]).toString();}}};
   const api={fetch:(async(url,init)=>{if(String(url).endsWith('/models'))return Response.json({data:[{id:'gpt-6-luna'}]});assert.equal(String(url),'https://api.openai.com/v1/responses');const body=JSON.parse(String(init?.body));bodies.push(body);if(holdApi)await new Promise<void>(resolve=>{releaseApi=resolve;});const input=JSON.parse(body.input[0].content);return response(body.model,JSON.stringify({summary:'Fix addition',files:[{path:input.inspection.source.relativePath,replacement:after}]}));}) as typeof fetch};
   const create=()=>{const core=new BackendCore({path:join(profile,'canonical.sqlite'),privateRoot:profile,provider:'fixture',contentPolicy:'synthetic-only',nativeMedia},()=>{},native,undefined,api);
     (core as any).port.projectChecks={ready:async()=>true,execute:async(argv:string[],cwd:string)=>{checkCalls++;assert.equal(cwd.toLowerCase(),repo.toLowerCase());assert.deepEqual(argv.slice(1),['--test','--test-isolation=none','--test-reporter=tap','--','./source.test.mjs']);return execute();}};return core;};

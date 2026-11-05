@@ -6,6 +6,8 @@ import {createNativeLiveHostClient,isNativeLiveHostEnvelope} from './live-media-
 import {createSystemFactsClient,isSystemFactsEnvelope} from './system-facts-host.mts';
 import {createDocumentTextClient,isDocumentTextEnvelope} from './document-text-host.mts';
 import {createNativeWakeCaptureClient,isNativeWakeCaptureMessage} from './wake-capture-host.mts';
+import {createWindowsMaintenanceClient,isWindowsMaintenanceEnvelope} from './windows-maintenance-host.mts';
+import {createWindowsComputerClient,isWindowsComputerEnvelope} from './windows-computer-host.mts';
 const port = parentPort!;
 const hosted=workerData?.nativeHostProtocol===1;
 const nativeClient=hosted?createNativeHostClient(message=>port.postMessage(message)):undefined;
@@ -13,11 +15,15 @@ const liveClient=hosted&&workerData.nativeLiveHostProtocol===1?createNativeLiveH
 const systemClient=hosted&&workerData.nativeSystemFactsProtocol===1?createSystemFactsClient(message=>port.postMessage(message)):undefined;
 const documentClient=hosted&&workerData.nativeDocumentTextProtocol===1?createDocumentTextClient(message=>port.postMessage(message)):undefined;
 const wakeClient=hosted&&workerData.nativeWakeCaptureProtocol===1?createNativeWakeCaptureClient(message=>port.postMessage(message)):undefined;
-port.on('close',()=>{documentClient?.close();wakeClient?.dispose();systemClient?.close();nativeClient?.close();});
+const maintenanceClient=hosted&&workerData.nativeMaintenanceHostProtocol===1?createWindowsMaintenanceClient(message=>port.postMessage(message)):undefined;
+const computerClient=hosted&&workerData.nativeComputerHostProtocol===1?createWindowsComputerClient(message=>port.postMessage(message)):undefined;
+port.on('close',()=>{maintenanceClient?.close();computerClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();nativeClient?.close();});
 try {
   const options=(hosted?workerData.options:workerData) as Options;
-  const core = new BackendCore(options, event => port.postMessage({ event }),nativeClient?{...nativeClient.services,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{})}:undefined);
+  const core = new BackendCore(options, event => port.postMessage({ event }),nativeClient?{...nativeClient.services,...(liveClient?{liveMedia:liveClient.services}:{}),...(systemClient?{systemFacts:systemClient.services}:{}),...(wakeClient?{wakeCapture:wakeClient.services}:{}),...(documentClient?{documents:documentClient.services}:{}),...(maintenanceClient?{maintenance:maintenanceClient.services}:{}),...(computerClient?{computer:computerClient.services}:{})}:undefined);
   port.on('message', async request => {
+    if(isWindowsMaintenanceEnvelope(request)){maintenanceClient?.handle(request);return;}
+    if(isWindowsComputerEnvelope(request)){computerClient?.handle(request);return;}
     if(isNativeWakeCaptureMessage(request)){wakeClient?.handle(request);return;}
     if(isSystemFactsEnvelope(request)){systemClient?.handle(request);return;}
     if(isDocumentTextEnvelope(request)){documentClient?.handle(request);return;}
@@ -33,7 +39,7 @@ try {
       if (contract !== CONTRACT) throw Object.assign(new Error(), { code: 'unsupported_contract' });
       const result = await core.command(command, input);
       port.postMessage({ id, result });
-      if (command === 'close') { documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();port.close(); }
+      if (command === 'close') { maintenanceClient?.close();computerClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close();port.close(); }
     } catch (e) {
       // Raw native diagnostics may contain personal paths/content. Send codes only.
       const candidate = (e as any).code ?? (e as any).kind;
@@ -42,4 +48,4 @@ try {
     }
   });
   port.postMessage({ ready: true });
-} catch { documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close(); port.postMessage({ startupError: 'storage_or_schema_failure' }); port.close(); }
+} catch { maintenanceClient?.close();computerClient?.close();documentClient?.close();wakeClient?.dispose();systemClient?.close();liveClient?.close();nativeClient?.close(); port.postMessage({ startupError: 'storage_or_schema_failure' }); port.close(); }

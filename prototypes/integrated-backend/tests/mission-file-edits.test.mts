@@ -6,6 +6,7 @@ import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { ownedFileEditAdmission } from './fixture-file-edit-admission.mts';
 import { mediaSourceRevision } from '../src/media-sources.mts';
 import { MissionFileEdits, type ApiFileProposalProvenance, type MissionFileEditsHost, type MissionEditScope,
   type NativeSelectedCodeFile } from '../src/mission-file-edits.mts';
@@ -56,7 +57,7 @@ function fixture() {
     return row ? { resourceId: String(row.id), version: Number(row.version), sourceRevision: String(row.source_revision), path: String(row.path), readAuthority: { ...grant } } : null;
   };
   const host: MissionFileEditsHost = {
-    db, atomic, now: () => clock, scope: () => ({ ...scope }), ownerCurrent: () => ownerActive, selected,
+    db, atomic, fileEditAdmission: ownedFileEditAdmission([dir]), now: () => clock, scope: () => ({ ...scope }), ownerCurrent: () => ownerActive, selected,
     readAuthorityCurrent: (authority, resourceId) => readActive && resourceId === 'file-1' && JSON.stringify(authority) === JSON.stringify(grant),
     apiProvenanceCurrent: (proof, expectedOwner) => {
       const row = db.prepare('SELECT * FROM api_evidence WHERE id=?').get(proof.evidenceId);
@@ -129,6 +130,11 @@ test('non-Windows selected-file inspection fails closed without a proposal, auth
  const f=fixture();try{assert.throws(()=>f.inspect(),/vela_codex_write_unavailable/);for(const table of ['mission_file_inspections','mission_file_operations','mission_file_authorities'])assert.equal(f.db.prepare('SELECT count(*) n FROM '+table).get()!.n,0);assert.equal(readFileSync(f.path,'utf8'),before);assert.equal(f.calls,0);assert.equal(f.busy,false);}finally{await f.close();}
 });
 }else{
+test('constructor-injected storage denial prevents publication and the absent callback retains the real host guard',async()=>{
+ const f=fixture();try{const op=f.proposal().view,authority=f.approve(op.id);f.host.fileEditAdmission=()=>{throw Error('synthetic_storage_admission_denied');};assert.throws(()=>f.domain.apply(op.id,authority.authority),/synthetic_storage_admission_denied/);assert.equal(readFileSync(f.path,'utf8'),before);assert.equal(f.selected('file-1')!.version,1);assert.equal(f.calls,0);
+  delete f.host.fileEditAdmission;const guard=join(homedir(),'AppData','Local','AeroStorageWatch','ReserveGuard.ps1');if(existsSync(guard)){assert.equal(f.domain.apply(op.id,authority.authority).phase,'applied');assert.equal(readFileSync(f.path,'utf8'),after);}else{assert.throws(()=>f.domain.apply(op.id,authority.authority),/storage_reserve_admission_denied/);assert.equal(readFileSync(f.path,'utf8'),before);assert.equal(f.selected('file-1')!.version,1);}
+ }finally{await f.close();}
+});
 test('typed native inspection and canonical API proof produce a private proposal with an explicit safe approval barrier', async () => {
   const f = fixture(); try {
     const inspection = f.inspect(); assert.equal(inspection.source.content, before); assert.equal(inspection.source.resourceId, 'file-1');

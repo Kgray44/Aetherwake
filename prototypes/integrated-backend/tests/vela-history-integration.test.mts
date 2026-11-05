@@ -16,7 +16,9 @@ import type {
 } from "../src/contracts.mts";
 import type { VelaRequest } from "../../vela-core/src/contracts.ts";
 import { planningDigest } from "../../vela-core/src/codex-planning-adapter.mts";
-import { admitVelaFileEdit, parseVelaFileEdit, upgradeVelaFileEdit } from "../src/vela-file-edit.mts";
+import { parseVelaFileEdit, upgradeVelaFileEdit } from "../src/vela-file-edit.mts";
+
+import { fixtureFileEditHost } from './fixture-file-edit-admission.mts';
 
 // These protocol fixtures deliberately exercise the Codex owner; ordinary user
 // questions use the primary API unless the user selects this destination.
@@ -26,11 +28,10 @@ test("Check my logs, fix the code, and keep the original file until I approve", 
   skip: process.platform !== "win32",
 }, async () => {
   const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-  admitVelaFileEdit(runtime);
   mkdirSync(runtime, { recursive: true });
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const file = join(dir, "sample.json"), alias = join(dir, "linked.json");
-  const f = fixture(false, "air-file-edit", false);
+  const f = fixture(false, "air-file-edit", false,[dir]);
   const git = (...args: string[]) => execFileSync("git.exe", ["-C", dir, "-c", "core.hooksPath=NUL", ...args], { windowsHide: true, timeout: 6000, stdio: "pipe" });
   try {
     git("init", "--quiet", "--template=");
@@ -130,11 +131,11 @@ test("Edit this file, create the other one, and run the tests", {
   skip: process.platform !== "win32",
 }, async () => {
   const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-  admitVelaFileEdit(runtime);
+
   mkdirSync(runtime, { recursive: true });
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const original = join(dir, "sample.json"), created = join(dir, "created.json");
-  const f = fixture(false, "air-file-edit", false);
+  const f = fixture(false, "air-file-edit", false,[dir]);
   const git = (...args: string[]) => execFileSync("git.exe", ["-C", dir, "-c", "core.hooksPath=NUL", ...args],
     { windowsHide: true, timeout: 6000, stdio: "pipe" });
   const input = { intent: "Create created.json with a count of two", resourceIds: [], adaptive: true as const, ...explicitCodex };
@@ -260,11 +261,11 @@ test("AIR file batch detects a stale later file and reports an actual partial wr
   skip: process.platform !== "win32",
 }, async () => {
   const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-  admitVelaFileEdit(runtime);
+
   mkdirSync(runtime, { recursive: true });
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const names = ["sample.json", "second.json", "third.json"], paths = names.map(name => join(dir, name));
-  const f = fixture(false, "air-file-edit", false);
+  const f = fixture(false, "air-file-edit", false,[dir]);
   let lock: ReturnType<typeof spawn> | undefined;
   const git = (...args: string[]) => execFileSync("git.exe", ["-C", dir, "-c", "core.hooksPath=NUL", ...args], { windowsHide: true, timeout: 6000, stdio: "pipe" });
   try {
@@ -333,13 +334,13 @@ test("Run the tests and build a file I can review before saving", {
   skip: process.platform !== "win32",
 }, async () => {
   const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-  admitVelaFileEdit(runtime);
+
   mkdirSync(runtime, { recursive: true });
   const dir = mkdtempSync(join(runtime, "vela-file-edit-"));
   const path = join(dir, "standalone.test.mjs");
   const build = join(dir, "sample.build.mjs"), artifact = join(dir, "generated.json");
   const body = "import test from 'node:test'; import assert from 'node:assert/strict'; test('fixture', () => assert.equal(6 * 7, 42));\n";
-  const f = fixture(false, "air-file-edit", false);
+  const f = fixture(false, "air-file-edit", false,[dir]);
   const git = (...args: string[]) => execFileSync("git.exe", ["-C", dir, "-c", "core.hooksPath=NUL", ...args],
     { windowsHide: true, timeout: 6000, stdio: "pipe" });
   const intent = "Run the Node tests in this repository";
@@ -493,12 +494,12 @@ test("AIR sends authorized inspection through native Codex protocol with discove
 
 test("Inspect the repository I picked and ask again if its revision changed", { skip: process.platform !== "win32" }, async () => {
   const runtime = fileURLToPath(new URL("../.runtime/", import.meta.url));
-  admitVelaFileEdit(runtime);
+
   mkdirSync(runtime, { recursive: true });
   const root = realpathSync.native(mkdtempSync(join(runtime, "vela-air-inspection-")));
   const git = (...args: string[]) => execFileSync("git.exe", ["-C", root, "-c", "core.hooksPath=NUL", ...args],
     { windowsHide: true, timeout: 6000, stdio: "pipe" });
-  const f = fixture(false, "air-inspection", false);
+  const f = fixture(false, "air-inspection", false,[root]);
   const command = { intent: "Inspect the repository logs for errors", resourceIds: [], adaptive: true as const, requireInspectionDirectory: true as const, ...explicitCodex };
   const commit = (title: string) => git("-c", "user.name=AIR fixture", "-c", "user.email=fixture@example.invalid", "commit", "--quiet", "--allow-empty", "-m", title);
   try {
@@ -574,8 +575,8 @@ test("Can you check whether Codex finished without running it again?", async () 
 });
 
 /** Actual Core/SQLite with an explicit local stdio protocol double. No Codex/account/model connection. */
-function fixture(history = true, mode = "answer-catalog", discovery = true) {
-  const dir = mkdtempSync(join(tmpdir(), "aerynth-frozen-history-")),
+function fixture(history = true, mode = "answer-catalog", discovery = true,fileEditRoots?:readonly string[]) {
+  const dir = mkdtempSync(join(realpathSync.native(tmpdir()), "aerynth-frozen-history-")),
     path = join(dir, "canonical.sqlite");
   const options = {
     path,
@@ -591,7 +592,8 @@ function fixture(history = true, mode = "answer-catalog", discovery = true) {
     velaCatalogDiscovery: discovery,
     velaHistoryContext: history,
   };
-  let core = new BackendCore(options),
+  const native=fileEditRoots?fixtureFileEditHost([dir,...fileEditRoots]):undefined;
+  let core = new BackendCore(options,()=>{},native),
     closed = false;
   const vela = (name: VelaOperation["name"], input: unknown = {}) =>
       core.command("vela", { name, input } as VelaOperation),
@@ -654,13 +656,13 @@ function fixture(history = true, mode = "answer-catalog", discovery = true) {
           db.close();
         }
       }
-      core = new BackendCore(options);
+      core = new BackendCore(options,()=>{},native);
       closed = false;
     },
     async close() {
       if (!closed) await core.command("close", {});
       const target = resolve(dir),
-        part = relative(resolve(tmpdir()), target);
+        part = relative(realpathSync.native(tmpdir()), target);
       assert(
         part.startsWith("aerynth-frozen-history-") &&
           !part.startsWith("..") &&

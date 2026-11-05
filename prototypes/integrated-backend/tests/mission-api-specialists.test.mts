@@ -194,7 +194,7 @@ test('one canonical API pool bounds foreground and specialist requests, and a du
   } finally { await f.close(); }
 });
 
-test('catalog expiry at the credential boundary and a changed scope cannot dispatch API workers', async () => {
+test('a catalog that remains expired after refresh and a changed scope cannot dispatch API workers', async () => {
   for (const change of ['expiry', 'scope'] as const) {
     const f = fixture(); try {
       await f.ready(); const owner = f.core as any; await owner.velaApiRuntime.models(1);
@@ -205,11 +205,15 @@ test('catalog expiry at the credential boundary and a changed scope cannot dispa
         await f.core.command('desktop', { type: 'archiveWorkspace', workspaceId: workspace.id, expectedVersion: workspace.version, archived: true });
         await assert.rejects(f.start(preview), /mission_scope_or_plan_unavailable|mission_workspace_required/);
       } else {
-        const connection = owner.velaApiConnection, resolveCredential = connection.resolveNativeCredential.bind(connection);
+        const connection = owner.velaApiConnection, resolveCredential = connection.resolveNativeCredential.bind(connection),catalog=connection.catalog.bind(connection);let refreshes=0;
         connection.resolveNativeCredential = async (version: number) => { const credential = await resolveCredential(version);
           connection.service.catalogCache.get('vela-primary').catalog.expiresAt = Date.now() - 1; return credential; };
+        // A normally refreshed catalog is now valid authority for the same pins.
+        // Keep this negative case stale after the real refresh as well.
+        connection.catalog=async(version:number)=>{const result=await catalog(version);refreshes++;connection.service.catalogCache.get('vela-primary').catalog.expiresAt=Date.now()-1;return result;};
         const mission = await f.start(preview), done = await settled(f, mission.id);
         assert.ok(done.tasks.filter(task => task.specialist).every(task => task.state !== 'verified'));
+        assert(refreshes>0,'the existing refresh must be attempted before persistent expiry is refused');
       }
       assert.equal(f.requests.length, 0);
     } finally { await f.close(); }
