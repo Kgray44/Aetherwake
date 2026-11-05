@@ -5,6 +5,39 @@ The [design reference](../design/AERYNTH-LIVING-INSTRUMENTS-AND-EXPRESSIVE-PRESE
 remains the experience specification. Constitution 00 is binding; published specialist
 charters remain advisory according to the governance registry.
 
+## Merge qualification — 2026-11-05
+
+The owner requested completion of testing and merge of the current incremental
+PR #20 into main. The visual branch incorporates Vela candidate `97fc38a` without
+conflicts (integration head `9e030a5`). PR #19 is being qualified separately and
+must land first; the two main writes are coordinated and sequential.
+
+Current combined checks: **376/376** Block Library/Timeline/domain tests,
+**695 passed, 1 skipped, 0 failed** desktop tests, both TypeScript checks and the
+production build passed. Governance validation, **38/38** router/context tests,
+context benchmark and strict engineering evaluation passed; those sources did not
+change in the Vela integration.
+
+The final combined native mission smoke passed **6/6 in 11.127 seconds** on
+`index-DN8bdYXv.js`: real CPU/RAM dependency branches and join, source inspection,
+Forensic/Glimpse, primary Timeline, navigation cleanup, restart and GPU diagnostics.
+The remaining native catalog journey passed **6/6 in 8.857 seconds** on the
+unchanged visual checkpoint: manual group progress, objective relationships,
+saved-agent capabilities, ordinary local chat and authorized loaded browser counts.
+These fresh private profiles performed no provider executions, reported no renderer
+errors, and their owned Electron processes exited successfully. Receipts remain
+outside this public repository.
+
+Earlier strict native family qualification passed **5/5 in 21.509 seconds**:
+compact/focused/Glimpse nodes fit every clipping ancestor with aligned edge ports;
+Note reading/editor selection, manual Task status/priority/description CAS and
+restart were verified. Initial weaker assertions missed inner-content clipping;
+the layout and assertions were corrected, and all failed receipts were preserved.
+
+This qualifies the scoped incremental implementation for the requested merge;
+it does not claim sustained performance, mixed-display or complete product-release
+acceptance. Hosted checks must pass on the final PR candidate before merging.
+
 ## Integration and ownership
 
 The isolated visual branch first included PR #19's committed `cfc64a4` baseline.
@@ -190,9 +223,10 @@ and restart persistence passed. This is navigation cleanup, not a host-policy
 revocation experiment. Both owned Electron processes exited successfully; zero
 renderer errors or provider executions occurred during the native journey.
 
-The focused capture also shows a remaining compact-workspace gap: wrapper controls
-can consume most of a small mission card before the graph. Focused graph evidence
-does not establish compact-card visual acceptance or complete Glimpse geometry review.
+That focused capture exposed a compact-workspace gap: wrapper controls consumed
+most of a small mission card. The later shared compact geometry and single external
+options menu resolved it, with strict ancestor-clipping and settled Glimpse proof
+recorded in the merge qualification above.
 
 Live review rejected the Timeline's permanent button rows and the Stream's long
 column. The revised Timeline exposes a quiet temporal canvas and one options
