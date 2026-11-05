@@ -3,7 +3,7 @@
 
 > **Owner-approved design baseline (2026-11-05).** This architecture/art direction is accepted as the target Aerynth experience. Provider capabilities, GPU behavior, performance and visual fidelity remain subject to actual implementation and witnessed acceptance. Ratification of parent charters does not imply a completed feature.
 
-**Status:** Published owner-directed design program for review. The authoritative normative requirements appear as new detailed addenda in existing governing charters, whose owner-acceptance statuses must be verified in [governance registry](../../governance/README.md). No code is claimed complete by this documentation.
+**Status:** Owner-approved and ratified design program (2026-11-05); the relevant charter addenda are binding. No production implementation or artistic qualification is claimed.
 
 > **THE PRIMARY RULE: ONE CONTINUOUS SPATIAL UNIVERSE. NO DISCONNECTED SCREEN CHANGES.**
 >
