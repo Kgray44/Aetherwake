@@ -533,7 +533,7 @@ Amendments MUST preserve stable identifiers where the original requirement remai
 
 **AW-AEP-127 — Traceable amendments.** Changes to token semantics, timing boundaries, billing interpretations, budget enforcement, or efficiency scores MUST include migration/compatibility analysis because these alter the meaning of historical evidence.
 
-**AW-AEP-128 — Owner acceptance.** Publication of this draft on the repository's default branch does not by itself mean owner ratification. Registry status MUST remain pending until explicitly accepted.
+**AW-AEP-128 — Owner acceptance.** The repository owner ratified this charter on 2026-11-05. Registry status records that explicit decision. Publication alone does not ratify future amendments, and test results do not grant owner release acceptance.
 
 ---
 
