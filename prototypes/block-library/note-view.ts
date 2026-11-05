@@ -21,7 +21,15 @@ const action = (label: string, run: () => void) => {
 
 /** Safe basic Markdown rendering. User text is always a text node, never executable HTML. */
 export function renderNoteReading(root: HTMLElement, content: string) {
+  // Disclosure is presentation state held by this mounted DOM, never note content.
+  const disclosures = new Map(
+    Array.from(root.querySelectorAll<HTMLDetailsElement>(".aw-note-section"))
+      .map(section => [section.dataset.noteSectionKey!, section.open] as const),
+  );
   root.replaceChildren();
+  const sections: { level: number; key: string; body: HTMLElement }[] = [];
+  const occurrences = new Map<string, number>();
+  const target = () => sections.at(-1)?.body ?? root;
   let code: HTMLElement | null = null,
     list: HTMLOListElement | HTMLUListElement | null = null;
   const lines = content.split("\n");
@@ -32,7 +40,7 @@ export function renderNoteReading(root: HTMLElement, content: string) {
         const pre = element("pre");
         code = element("code");
         pre.append(code);
-        root.append(pre);
+        target().append(pre);
       }
       list = null;
       continue;
@@ -41,23 +49,40 @@ export function renderNoteReading(root: HTMLElement, content: string) {
       code.append(document.createTextNode(line + (index < lines.length - 1 ? "\n" : '')));
       continue;
     }
-    const heading = /^(#{1,6})\s+(.+)$/.exec(line),
-      item = /^\s*(?:([-*+])|\d+\.)\s+(.+)$/.exec(line);
+    // Interpret Markdown line endings without altering fenced source bytes.
+    const syntaxLine = line.endsWith("\r") ? line.slice(0, -1) : line;
+    const heading = /^(#{1,6})\s+(.+)$/.exec(syntaxLine),
+      item = /^\s*(?:([-*+])|\d+\.)\s+(.+)$/.exec(syntaxLine);
     if (item) {
       const type = item[1] ? "ul" : "ol";
       if (!list || list.tagName.toLowerCase() !== type) {
         list = element(type);
-        root.append(list);
+        target().append(list);
       }
       list.append(element("li", item[2]));
       continue;
     }
     list = null;
-    if (heading)
-      root.append(element(("h" + heading[1].length) as "h1", heading[2]));
-    else if (/^>\s?/.test(line))
-      root.append(element("blockquote", line.replace(/^>\s?/, "")));
-    else if (line.trim()) root.append(element("p", line));
+    if (heading) {
+      const level = heading[1].length;
+      while (sections.length && sections.at(-1)!.level >= level) sections.pop();
+      const identity = `${sections.at(-1)?.key ?? "root"}/${level}:${heading[2]}`;
+      const occurrence = (occurrences.get(identity) ?? 0) + 1;
+      occurrences.set(identity, occurrence);
+      const key = `${identity}:${occurrence}`;
+      const section = element("details", "", "aw-note-section"),
+        summary = element("summary", "", "aw-note-section-heading"),
+        body = element("div", "", "aw-note-section-body");
+      section.dataset.noteSectionKey = key;
+      section.dataset.headingLevel = String(level);
+      section.open = disclosures.get(key) ?? true;
+      summary.append(element(("h" + level) as "h1", heading[2]));
+      section.append(summary, body);
+      target().append(section);
+      sections.push({ level, key, body });
+    } else if (/^>\s?/.test(line))
+      target().append(element("blockquote", line.replace(/^>\s?/, "")));
+    else if (line.trim()) target().append(element("p", line));
   }
   if (lines.length > 1500)
     root.append(

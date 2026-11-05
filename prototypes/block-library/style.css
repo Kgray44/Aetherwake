@@ -154,6 +154,44 @@
 .aw-library__capabilities > summary { cursor: pointer; }
 .aw-library__filters .aw-library__toolbar { padding: 8px 0 2px; }
 .aw-library__grab-hint { margin: 0; font-size: 12px; }
+.aw-showroom-card { display: grid; gap: 5px; width: 100%; }
+.aw-showroom-purpose { display: block; font-size: 12px; line-height: 1.4; }
+.aw-showroom-requirements { border-left: 2px solid var(--aw-library-accent, #b4d8d0); padding-left: 10px; }
+.aw-showroom-requirements p { margin: 5px 0; }
+.aw-showroom-demo { margin-top: 12px; border-top: 1px solid var(--aw-library-line); padding-top: 6px; pointer-events: auto; }
+.aw-showroom-controls { display: flex; gap: 6px; flex-wrap: wrap; }
+.aw-showroom-controls .aw-library__button { padding: 6px 9px; font-size: 12px; }
+.aw-showroom-miniature { display: grid; align-content: center; gap: 3px; min-height: 94px; padding: 10px 14px; overflow: hidden; border: 1px solid #b4d8d033; border-radius: 9px; background: linear-gradient(140deg, #b4d8d012, #0b121d); font: 11px/1.4 system-ui; color: #d8e9e7; text-align: left; pointer-events: none; }
+.aw-showroom-miniature span { display: block; }
+.aw-showroom-miniature--timeline { border-radius: 4px 18px 4px 18px; }
+.aw-showroom-axis { color: #a7d1e9; border-bottom: 1px solid #a7d1e977; padding-bottom: 5px; }
+.aw-showroom-node { color: #d7e6bb; }
+.aw-showroom-gap { color: #c2c8d2; margin-left: 20%; }
+.aw-showroom-miniature--timer { grid-template-columns: 42px 1fr; border-radius: 38px; align-items: center; }
+.aw-showroom-orbit { grid-row: span 2; font-size: 44px; line-height: 1; color: #e1d2a5; }
+.aw-showroom-digits { font-size: 24px; font-variant-numeric: tabular-nums; }
+.aw-showroom-miniature--stream { border-left:3px solid #b8ace3; gap:8px; text-align:center; min-height:142px; }
+.aw-showroom-example-intent,.aw-showroom-example-join { position:relative; justify-self:center; padding:3px 8px; border:1px solid #b8ace35e; border-radius:8px; background:#b8ace311; }
+.aw-showroom-example-intent::after,.aw-showroom-example-join::before { content:''; position:absolute; left:50%; height:8px; border-left:1px solid #b8ace3; }
+.aw-showroom-example-intent::after { top:100%; }.aw-showroom-example-join::before { bottom:100%; }
+.aw-showroom-example-branches { position:relative; display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:9px 0; }
+.aw-showroom-example-branches::before,.aw-showroom-example-branches::after { content:''; position:absolute; left:25%; right:25%; border-top:1px solid #b8ace3; }
+.aw-showroom-example-branches::before { top:0; }.aw-showroom-example-branches::after { bottom:0; }
+.aw-showroom-example-branches span { position:relative; border:1px solid #b8ace35e; border-radius:5px; padding:3px; }
+.aw-showroom-example-branches span::before,.aw-showroom-example-branches span::after { content:''; position:absolute; left:50%; height:9px; border-left:1px solid #b8ace3; }
+.aw-showroom-example-branches span::before { bottom:100%; }.aw-showroom-example-branches span::after { top:100%; }
+.aw-showroom-miniature--conversation { align-content: space-between; }
+.aw-showroom-message { width: 82%; padding: 5px 8px; border-radius: 10px 10px 10px 2px; background: #c5d9f221; }
+.aw-showroom-message--reply { justify-self: end; border-radius: 10px 10px 2px 10px; background: #b4d8d021; }
+.aw-showroom-miniature--agent { grid-template-columns: 42px 1fr; align-items: center; }
+.aw-showroom-profile { grid-row: span 2; display: grid !important; place-items: center; width: 34px; height: 42px; border: 1px solid #b4d8d080; border-radius: 45% 45% 15% 15%; font-size: 19px; }
+.aw-showroom-miniature--tasks { border-top: 3px solid #c6d0b4; }
+.aw-showroom-miniature--navigation { border-left: 5px solid #b9cbe3; background: linear-gradient(90deg, #b9cbe319, #0b121d); }
+.aw-showroom-miniature--document { border-radius: 2px 16px 2px 2px; border-right: 6px solid #d9ccb14d; }
+.aw-showroom-document-title { font-family: Georgia, serif; font-size: 14px; }
+.aw-showroom-card .aw-showroom-miniature { min-height: 74px; max-height: 108px; width: 100%; }
+.aw-showroom-card .aw-showroom-miniature--stream { min-height:142px; max-height:none; }
+.aw-library--blocks .aw-library__sample { margin: 12px 0; }
 .aw-library__group { display: grid; gap: 4px; --aw-library-group: var(--aw-library-accent); }
 .aw-library__group[data-category="intelligence"] { --aw-library-group: #b9cbe3; }
 .aw-library__group[data-category="planning"] { --aw-library-group: #c6d0b4; }

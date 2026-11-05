@@ -22,7 +22,7 @@ test('a newly visible canonical clock card mounts its product view on the applic
     },
   };
   for (const name of ['chatViews', 'noteViews', 'missionDashboardViews', 'subjectViews', 'eventViews', 'groupViews', 'checklistViews',
-    'agentBlockViews', 'timelineViews', 'taskTrackerViews', 'mediaViews', 'folderViews']) context[name] = new Map();
+    'agentBlockViews', 'timelineViews', 'taskTrackerViews', 'mediaViews', 'folderViews', 'manualTaskViews']) context[name] = new Map();
   vm.createContext(context);
   vm.runInContext(ts.transpile(source.slice(start, end)), context);
   vm.runInContext('syncBlockActivity("clock-block")', context);

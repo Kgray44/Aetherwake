@@ -64,10 +64,11 @@ import "../../../vela-core/src/panel.css";
 import { createVelaClient } from "./vela-client";
 import type { VelaPlan, VelaRequest, VelaState } from "../../../vela-core/src/contracts.ts";
 import { createVelaExperience } from "./vela-experience";
+import { velaVisualState, velaVisualLabels, type VelaVisualEvidence } from './vela-visual-state.ts';
 import { createVelaManifestation } from "./vela-manifestation.ts";
 import { createVelaMissionView } from "./vela-missions.ts";
 import { mountMissionWorkroomView, type MissionWorkroomView } from "./mission-workroom-view.ts";
-import type { MissionResponse } from "../../../integrated-backend/src/mission-contracts.mts";
+import type { MissionResponse, MissionProjection } from "../../../integrated-backend/src/mission-contracts.mts";
 import { createConversationExecutionPort } from "./conversation-execution";
 import { workspaceWheelFactor } from "./workspace-wheel";
 import { returnFocusAfterDialogClose } from "./focus-return";
@@ -177,6 +178,8 @@ import "../../../block-library/identity-view.css";
 import { mountSubjectExperience } from "../../../block-library/subject-view.ts";
 import "../../../block-library/subject-view.css";
 import { mountTaskGroupExperience } from "../../../block-library/task-group-view.ts";
+import { mountManualTaskExperience } from "../../../block-library/manual-task-view.ts";
+import "../../../block-library/manual-task-view.css";
 import "../../../block-library/task-group-view.css";
 import {
   mountEventExperience,
@@ -241,6 +244,8 @@ const escape = (s: string) =>
 
 export function installApplication(hooks: Hooks) {
   const host = window.aerynthHost!;
+  const visualEvidence: VelaVisualEvidence = {};
+  let visualMission: MissionProjection | null = null;
   const controlMotion = createControlMotion({
     motion: hooks.motion,
     wake: hooks.wake,
@@ -288,11 +293,24 @@ export function installApplication(hooks: Hooks) {
   addEventListener("resize", surfaces.viewportChanged);
   const velaVoice = createVelaVoiceView(document, request => host.command!("velaVoice", request));
   const velaPermissions = createVelaPermissionsView(document, request => host.command!("weatherPermission", request));
-  const velaWake = createVelaWakeView(document, request => host.command!("velaWake", request), () => host.command!("velaVoice",{name:'devices',input:{}}));
+  const velaWake = createVelaWakeView(document, async request => {
+    const value = await host.command!("velaWake", request);
+    const wake = value as VelaVisualEvidence['wake'];
+    if (wake && typeof wake.phase === 'string' && typeof wake.detector === 'string' && typeof wake.microphone === 'string') visualEvidence.wake = { phase: wake.phase, detector: wake.detector, microphone: wake.microphone, actualPlaybackActive: wake.actualPlaybackActive, backendWorking: wake.backendWorking };
+    hooks.wake();
+    return value;
+  }, () => host.command!("velaVoice",{name:'devices',input:{}}));
+  const stopVisualVoiceObservation = velaVoice.subscribe(value => { visualEvidence.voice = { active: value.active, microphoneOn: value.microphoneOn, speaking: value.speaking }; hooks.wake(); });
   velaVoice.element.append(velaWake.element);
   let velaPanel: ReturnType<typeof mountVelaPanel> | null = null;
-  const velaMissions = createVelaMissionView(document, async (request) =>
-    (await host.command!("missions", request)) as MissionResponse,
+  const velaMissions = createVelaMissionView(document, async (request) => {
+    try {
+      const value = (await host.command!("missions", request)) as MissionResponse;
+      if (value && typeof value === 'object' && 'outcome' in value && 'tasks' in value && 'scope' in value) { visualMission = value as MissionProjection; scheduleStreamRefresh(); }
+      hooks.wake();
+      return value;
+    } catch (error) { visualMission = null; throw error; }
+  },
     async workspaceId => {
       await run({ type: "navigate", target: { kind: "workspace", workspaceId } });
       if (state?.activeWorkspaceId === workspaceId) surfaces.close("vela");
@@ -322,6 +340,7 @@ export function installApplication(hooks: Hooks) {
     "pagehide",
     () => {
       velaVoice.dispose();
+      stopVisualVoiceObservation();
       velaPermissions.dispose();
       velaWake.dispose();
       velaManifestation.dispose();
@@ -412,6 +431,10 @@ export function installApplication(hooks: Hooks) {
       }
     },
     observed: (value) => {
+      visualEvidence.planning = value.requests.some(request => request.state === 'planning');
+      visualEvidence.pendingRequest = value.requests.some(request => request.state === 'checking');
+      visualEvidence.applying = value.receipts.some(receipt => receipt.state === 'started');
+      visualEvidence.needsInput = value.requests.some(request => request.state === 'awaiting-review');
       if (velaOpen) velaPanel?.observeLiveAnswer(value.activeAnswer);
       if (
         value.requests.some((r) => r.state === "planning") ||
@@ -521,6 +544,7 @@ export function installApplication(hooks: Hooks) {
   }
   const restoreMissionWorkroomCards = () => refreshMissionWorkroomCards();
   document.addEventListener("visibilitychange", restoreMissionWorkroomCards);
+  let missionWorkroomSerial = 0;
   function mountWorkroomCard(
     root: HTMLElement,
     resourceId: string,
@@ -540,7 +564,16 @@ export function installApplication(hooks: Hooks) {
     }, mountDefault, (missionId) => {
       if (!velaOpen) openVela();
       velaPanel?.showMission(missionId);
-    }, (id) => { openCanonicalResource(id); });
+    }, (id) => { openCanonicalResource(id); }, {
+      motion: experienceMotion,
+      viewId: `mission-workroom:${resourceId}:${++missionWorkroomSerial}`,
+      readMission: async (id) => {
+        const result = await host.command!("missions", { name: "read", input: { id } }) as MissionResponse;
+        if (result === null) return null;
+        if (result && "tasks" in result && "outcome" in result && "scope" in result && result.id === id) return result;
+        throw new Error("mission_projection_unavailable");
+      },
+    });
     missionWorkroomViews.add(view);
     return { ...view, dispose() { missionWorkroomViews.delete(view); view.dispose(); } };
   }
@@ -554,6 +587,7 @@ export function installApplication(hooks: Hooks) {
     string,
     ReturnType<typeof mountTaskGroupExperience>
   >();
+  const manualTaskViews = new Map<string, ReturnType<typeof mountManualTaskExperience>>();
   const subjectViews = new Map<
     string,
     ReturnType<typeof mountSubjectExperience>
@@ -737,6 +771,11 @@ export function installApplication(hooks: Hooks) {
       mountDirectResourceExperience(root, resource, {
         notes: notesClient,
         mountCard: mountWorkroomCard,
+        manualTasks: { motion: experienceMotion, viewId: `direct:${resource.id}:manual-task` },
+        mountMissionCard: (container, resource) => {
+          if (!missionWorkroomCardIds.has(resource.id) || resource.kind === 'timeline' || resource.kind === 'checklist') return undefined;
+          return mountWorkroomCard(container, resource.id, resource.kind === 'stream' ? 'stream' : 'dashboard');
+        },
         media: mediaClient,
         folders:folderPort,
         clockTimers: { port: productClients.clockTimers },
@@ -777,21 +816,27 @@ export function installApplication(hooks: Hooks) {
           ),
         setTaskStatus: (input) =>
           enqueueResult(async () => {
-            await flush();
+            await flushTaskContent(input.resourceId);
+            const current = state?.resources.find(resource => resource.id === input.resourceId);
+            if (!current || current.available === false || current.visible === false || current.state === 'archived') throw new Error('task_unavailable');
             await command({ type: "taskStatus", ...input });
           }),
         setTaskPriority: (input) =>
           enqueueResult(async () => {
-            await flush();
+            await flushTaskContent(input.resourceId);
+            const current = state?.resources.find(resource => resource.id === input.resourceId);
+            if (!current || current.available === false || current.visible === false || current.state === 'archived') throw new Error('task_unavailable');
             await command({ type: "taskPriority", ...input });
           }),
         manageMembers: taskGroupMembers,
         openResource: openCanonicalResource,
         openRelated: openRelatedResources,
         events: {
+          motion: experienceMotion,
           snapshot: eventWindow,
           refresh: refreshEvents,
           openResource: openCanonicalResource,
+          openMission: openStreamMission,
         },
       }),
   });
@@ -1282,6 +1327,8 @@ export function installApplication(hooks: Hooks) {
         view.dispose();
         groupViews.delete(id);
       }
+    for (const [id, view] of manualTaskViews)
+      if (!next.blocks.some((b) => b.id === id)) { view.dispose(); manualTaskViews.delete(id); }
     for (const [id, view] of subjectViews)
       if (!next.blocks.some((b) => b.id === id)) {
         view.dispose();
@@ -1622,6 +1669,12 @@ export function installApplication(hooks: Hooks) {
         if (drafts.get(resourceId) === draft) drafts.delete(resourceId);
       }
     }
+  }
+  async function flushTaskContent(resourceId: string) {
+    const draft = drafts.get(resourceId);
+    clearTimeout(draft?.timer);
+    await noteSessions.get(resourceId)?.flushEdits();
+    if (drafts.get(resourceId) === draft) drafts.delete(resourceId);
   }
   function queueDesktop(a: DesktopCommand) {
     // Navigation cancels older reads when requested, before flushing drafts or
@@ -2500,7 +2553,7 @@ export function installApplication(hooks: Hooks) {
         missions: velaMissions,
         voice: {...velaVoice,setVisible(visible){velaVoice.setVisible(visible);velaWake.setVisible(visible);}},
         permissions: velaPermissions,
-        onPresentation: (value) => velaExperience.observe(value),
+        onPresentation: (value) => { visualEvidence.panelPhase = value.phase; velaExperience.observe(value); },
         onManifestation: (value) => velaManifestation.observe(value),
         onConnectProvider: () => host.command!("capabilities", {}),
         onOpenConnections: () => { surfaces.close("vela"); connections(); },
@@ -4572,6 +4625,8 @@ export function installApplication(hooks: Hooks) {
             {
               active: activeBlocks.get(id) ?? false,
               presentation: blockPresentation(id),
+              motion: experienceMotion,
+              viewId: id,
             },
           ),
         );
@@ -4594,85 +4649,28 @@ export function installApplication(hooks: Hooks) {
         if (editor.value !== content) editor.value = content;
       }
       if (r.kind === "task") {
-        if (!article.querySelector(".task-priority")) {
-          const label = document.createElement("label");
-          label.textContent = "Priority";
-          const priority = document.createElement("select");
-          priority.className = "task-priority";
-          priority.setAttribute("aria-label", "Task priority");
-          for (const value of ["low", "normal", "high", "urgent"]) {
-            const option = document.createElement("option");
-            option.value = value;
-            option.textContent = value[0].toUpperCase() + value.slice(1);
-            priority.append(option);
-          }
-          label.append(priority);
-          el(".working-content", article).prepend(label);
-          priority.onchange = () => {
-            const selectedPriority = priority.value as NonNullable<
-              Resource["taskPriority"]
-            >;
-            priority.disabled = true;
-            void enqueue(async () => {
-              await flush();
-              const current = state!.resources.find(
-                (resource) => resource.id === r.id,
-              )!;
-              await command({
-                type: "taskPriority",
-                resourceId: r.id,
-                expectedVersion: current.version,
-                priority: selectedPriority,
-              });
-            }).finally(() => {
-              priority.disabled = false;
-              priority.value =
-                state!.resources.find((resource) => resource.id === r.id)
-                  ?.taskPriority ?? "normal";
-            });
-          };
+        let task = manualTaskViews.get(id);
+        if (!task && activeBlocks.get(id)) {
+          const primary = document.createElement('div');
+          primary.className = 'manual-task-primary';
+          el('.working-content', article).prepend(primary);
+          const mutateTask = (input: { resourceId: string; expectedVersion: number } & ({ status: 'open' | 'done' } | { priority: NonNullable<Resource['taskPriority']> })) => enqueueResult(async () => {
+            const before = state?.resources.find(resource => resource.id === input.resourceId);
+            if (!before || before.version !== input.expectedVersion) throw new Error('task_version_conflict');
+            await flushTaskContent(input.resourceId);
+            const current = state?.resources.find(resource => resource.id === input.resourceId);
+            if (!current || current.available === false || current.visible === false || current.state === 'archived') throw new Error('task_unavailable');
+            if (current.taskStatus !== before.taskStatus || current.taskPriority !== before.taskPriority) throw new Error('task_version_conflict');
+            if ('status' in input) await command({ type: 'taskStatus', resourceId: input.resourceId, expectedVersion: current.version, status: input.status });
+            else await command({ type: 'taskPriority', resourceId: input.resourceId, expectedVersion: current.version, priority: input.priority });
+          });
+          task = mountManualTaskExperience(primary, r, {
+            setTaskStatus: mutateTask, setTaskPriority: mutateTask,
+            readResource: resourceId => state?.resources.find(resource => resource.id === resourceId),
+          }, { motion: experienceMotion, viewId: `workspace:${id}:manual-task`, active: true, presentation: blockPresentation(id) });
+          manualTaskViews.set(id, task);
         }
-        el<HTMLSelectElement>(".task-priority", article).value =
-          r.taskPriority ?? "normal";
-        if (!article.querySelector(".task-completed")) {
-          const label = document.createElement("label");
-          label.className = "local-task-state";
-          label.innerHTML =
-            '<input class="task-completed" type="checkbox"> Completed locally';
-          el(".working-content", article).prepend(label);
-          el<HTMLInputElement>(".task-completed", article).onchange = (
-            event,
-          ) => {
-            const checkbox = event.target as HTMLInputElement;
-            if (checkbox.disabled) return;
-            const status = checkbox.checked ? "done" : "open";
-            checkbox.disabled = true;
-            checkbox.setAttribute("aria-busy", "true");
-            void enqueue(async () => {
-              await flush();
-              const current = state?.resources.find(
-                (resource) => resource.id === r.id,
-              );
-              if (!current || current.available === false)
-                throw new Error("task_unavailable");
-              await command({
-                type: "taskStatus",
-                resourceId: r.id,
-                expectedVersion: current.version,
-                status,
-              });
-            }).finally(() => {
-              const current = state?.resources.find(
-                (resource) => resource.id === r.id,
-              );
-              checkbox.checked = current?.taskStatus === "done";
-              checkbox.disabled = !current || current.available === false;
-              checkbox.removeAttribute("aria-busy");
-            });
-          };
-        }
-        el<HTMLInputElement>(".task-completed", article).checked =
-          r.taskStatus === "done";
+        task?.update(r);
         el(".folio-subtitle", article).textContent =
           `Local task · ${r.taskStatus ?? "open"} · ${r.id.slice(0, 8)}`;
       }
@@ -4700,6 +4698,7 @@ export function installApplication(hooks: Hooks) {
   function eventWindow(): EventWindow {
     return {
       ...streamScope(),
+      mission: visualMission,
       events: localEvents,
       earliest: retainedEarliest,
       latest: retainedLatest,
@@ -4801,13 +4800,13 @@ export function installApplication(hooks: Hooks) {
   function showStream(restoring = false) {
     const content = document.createElement("div");
     const anchor = el("#application-stream");
+    const viewId = "context-stream:" + ++streamSerial;
     const view = mountContextualStream(content, {
       snapshot: eventWindow,
       refresh: refreshEvents,
       openResource: openCanonicalResource,
       openMission: openStreamMission,
-    });
-    const viewId = "context-stream:" + ++streamSerial;
+    }, { motion: experienceMotion, viewId });
     const motion = conversationDisclosures(content, { motion: experienceMotion, viewId });
     const pickers = [...content.querySelectorAll<HTMLSelectElement>("select")]
       .map((select, i) => enhanceConversationSelect(select, {
@@ -4864,6 +4863,9 @@ export function installApplication(hooks: Hooks) {
     };
     if (/^vela[./]voice[./]/.test(e.type)) velaVoice.observe();
     const accessChanged = /^policy[./]/.test(e.type);
+    const observedWake = (event as StreamEvent).payload?.wake;
+    if (observedWake) visualEvidence.wake = { phase: observedWake.phase, detector: observedWake.detector, microphone: observedWake.microphone };
+    if (accessChanged) { visualMission = null; visualEvidence.panelPhase = undefined; visualEvidence.planning = visualEvidence.pendingRequest = visualEvidence.applying = visualEvidence.needsInput = false; }
     if (e.type.startsWith('clock_timer.') && e.resourceId) {
       for (const [id, entry] of clockTimerViews) {
         if (state?.blocks.find(block => block.id === id)?.resource_id === e.resourceId) void entry.view.refresh().catch(report);
@@ -5142,6 +5144,7 @@ export function installApplication(hooks: Hooks) {
     subjectViews.get(id)?.setPresentation(presentation);
     eventViews.get(id)?.setPresentation(presentation);
     groupViews.get(id)?.setPresentation(presentation);
+    manualTaskViews.get(id)?.setPresentation(presentation);
     checklistViews.get(id)?.view.setPresentation(presentation);
     clockTimerViews.get(id)?.view.setPresentation(presentation);
     agentBlockViews.get(id)?.view.setPresentation(presentation);
@@ -5167,6 +5170,7 @@ export function installApplication(hooks: Hooks) {
     subjectViews.get(id)?.setActive(active);
     eventViews.get(id)?.setActive(active);
     groupViews.get(id)?.setActive(active);
+    manualTaskViews.get(id)?.setActive(active);
     checklistViews.get(id)?.view.setActive(active);
     clockTimerViews.get(id)?.view.setActive(active);
     agentBlockViews.get(id)?.view.setActive(active);
@@ -5196,6 +5200,17 @@ export function installApplication(hooks: Hooks) {
   }
   return {
     ribbonThinking: velaExperience.ribbonThinking,
+    visualVelaState() {
+      const scope = streamScope();
+      const mission = visualMission?.scope.workspaceId === scope.workspaceId && visualMission?.scope.projectId === scope.projectId && (!visualMission?.originConversationId || state?.resources.some(resource => resource.id === visualMission?.originConversationId && resource.available !== false && resource.visible !== false)) ? visualMission : null;
+      const value = velaVisualState({ ...visualEvidence, panelPhase: velaOpen ? visualEvidence.panelPhase : undefined,
+        mission: mission ? { outcome: mission.outcome, runningTasks: mission.tasks.filter(task => task.state === 'running').length, waits: Object.keys(mission.waits).length } : undefined });
+      const anchor = el('#vela');
+      if (anchor.dataset.operationalState !== value) { anchor.dataset.operationalState = value; anchor.setAttribute('aria-label', 'Vela: ' + velaVisualLabels[value]); }
+      const label = el('#vela-state');
+      if (label.textContent !== velaVisualLabels[value]) label.textContent = velaVisualLabels[value];
+      return value;
+    },
     frame(now: number, policy: Policy) {
       paintStreamRefresh();
       if (
@@ -5231,6 +5246,7 @@ export function installApplication(hooks: Hooks) {
       surfaces.frame(now);
       resourcesMotion?.frame();
       streamMotion?.frame();
+      streamView?.frame();
       for (const picker of streamPickers) picker.frame();
       blockLibrary?.view.frame();
       environmentNavigator?.frame();
@@ -5241,6 +5257,10 @@ export function installApplication(hooks: Hooks) {
       // Retain editors and their drafts when their cards are outside the view.
       // The coordinator still advances their poses without repainting hidden DOM.
       for (const [id, view] of chatViews)
+        if (blockPresentations.get(id)?.visible) view.frame();
+      for (const [id, view] of eventViews)
+        if (blockPresentations.get(id)?.visible) view.frame();
+      for (const [id, view] of manualTaskViews)
         if (blockPresentations.get(id)?.visible) view.frame();
       frameBlockViews(timelineViews);
       frameBlockViews(agentBlockViews);
@@ -5406,6 +5426,7 @@ export function installApplication(hooks: Hooks) {
         throw Error(
           "Save or discard the agent profile changes before closing.",
         );
+      await tail;
       await flush();
       await constellation?.controller.persist();
       await flush();

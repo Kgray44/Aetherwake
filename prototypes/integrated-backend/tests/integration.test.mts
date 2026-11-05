@@ -129,17 +129,30 @@ test('process loss leaves unknown outcome, preserves events, never resubmits', a
 });
 test('an explicit capability check recovers a lost App Server without replaying the interrupted turn', { timeout: 12000 }, async t => {
   const fake = fileURLToPath(new URL('../../codex-bridge/tests/fake-server.mjs', import.meta.url));
+  const path = temp(t), startedAcknowledgment = join(dirname(path), 'observed-turn-started');
   const b = new Backend({
-    ...config(temp(t)),
+    ...config(path),
     provider: 'bridge-fixture',
     codexExecutable: process.execPath,
-    codexArgs: [fake, 'crash'],
+    codexArgs: [fake, 'crash', startedAcknowledgment],
   });
   try {
     const initial = await b.call('capabilities', {});
     assert.equal(initial.authentication, 'available');
     const { request } = await setup(b, 'codex-app-server-fixture');
-    const lost = await b.call('execute', request);
+    const executing = b.call('execute', request);
+    void executing.catch(() => {});
+    // Crash only after the real consumer has committed the notification. An
+    // immediate process.exit can discard buffered stdout on Windows.
+    const deadline = Date.now() + 8000;
+    let observed = false;
+    while (Date.now() < deadline) {
+      if ((await b.call('replay', { limit: 250 })).events.some(event => event.type === 'turn/started')) { observed = true; break; }
+      await new Promise(done => setTimeout(done, 10));
+    }
+    assert(observed, 'the real turn/started notification must be durable before the fixture crashes');
+    writeFileSync(startedAcknowledgment, 'canonical turn/started observed', { flag: 'wx' });
+    const lost = await executing;
     assert.equal(lost.state, 'unknown');
     assert.equal(lost.errorCode, 'process-exit');
     assert(lost.binding);

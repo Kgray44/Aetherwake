@@ -7,6 +7,7 @@ import {
   materialMotionKey,
 } from "./resource-material-motion.ts";
 import { installApplication, type Application } from "./application";
+import { velaVisualLabels, type VelaVisualState } from './vela-visual-state.ts';
 import type { ResourceOpeningInput } from "../../../application-contract/resource-opening.ts";
 import { targetDirectCard, directCardLayer } from "./direct-card-motion.ts";
 import { groupFocusedSideCards } from "../../../block-library/focused-rail.ts";
@@ -175,6 +176,25 @@ let celestialStudy: CelestialStudy = "starlit";
 let instrumentStudy: InstrumentStudy = "optical";
 let presenceReviewScale: number | null = null;
 let presenceReviewPhase: number | null = null;
+let visualStudy: VelaVisualState | null = null;
+let visualStudyNotice: HTMLElement | null = null;
+
+/** Explicit native-review fixture. It changes geometry only, displays an
+ * unavoidable simulation label, and never changes canonical service state. */
+function setVisualStudy(state: VelaVisualState | null) {
+  if (state !== null && !Object.hasOwn(velaVisualLabels, state)) return;
+  visualStudy = state;
+  visualStudyNotice?.remove(); visualStudyNotice = null;
+  if (state !== null) {
+    const notice = document.createElement('aside'), close = document.createElement('button');
+    notice.setAttribute('role', 'status'); notice.dataset.syntheticVelaStudy = state;
+    notice.style.cssText = 'position:fixed;top:70px;left:24px;z-index:2147483647;padding:12px;background:#102331;color:#fff;border:1px solid #a8c5d4;border-radius:8px;font:14px system-ui;pointer-events:auto';
+    notice.textContent = 'SYNTHETIC geometry study: ' + state + '. No live activity or verification claim. ';
+    close.type = 'button'; close.textContent = 'End study'; close.onclick = () => setVisualStudy(null);
+    notice.append(close); document.body.append(notice); visualStudyNotice = notice;
+  }
+  wake();
+}
 document.body.dataset.instrumentStudy = instrumentStudy;
 // Explicit native evidence hook. Null means the ordinary autonomous clock.
 let environmentPhase: number | null = null;
@@ -1585,6 +1605,7 @@ function tick(now: number) {
           vela,
           study,
           velaThinking: application?.ribbonThinking(),
+          velaVisualState: visualStudy ?? application?.visualVelaState(),
           sceneWeights: sceneWeights(motion),
           architectureConcept,
           celestialStudy,
@@ -1748,6 +1769,7 @@ function controller() {
       instrumentStudy,
       environmentPhase,
       presenceReviewPhase,
+      visualStudy: visualStudy ? { state: visualStudy, classification: 'simulated' } : null,
       sceneWeights: sceneWeights(motion),
       quality,
       vela,
@@ -1819,6 +1841,7 @@ function controller() {
       presenceReviewPhase = seconds;
       wake();
     },
+    setVelaVisualStateForReview: setVisualStudy,
     presenceMaskForReview: () => environment?.capturePresenceMaskForReview(),
     execute: (command: DesktopCommand) => application?.run(command),
     flush: () => application?.flush(),
@@ -1919,7 +1942,7 @@ if (desktopMode)
     vela: setVela,
   });
 try {
-  environment = new Environment($<HTMLCanvasElement>("#world"));
+  environment = new Environment($<HTMLCanvasElement>("#world"), motion);
 } catch (error) {
   graphicsFailed = true;
   metrics.errors.push(String(error));
@@ -1937,7 +1960,7 @@ $("#world").addEventListener("webglcontextlost", (e) => {
 $("#world").addEventListener("webglcontextrestored", () => {
   try {
     environment?.dispose();
-    environment = new Environment($<HTMLCanvasElement>("#world"));
+    environment = new Environment($<HTMLCanvasElement>("#world"), motion);
     graphicsFailed = false;
     document.body.classList.remove("graphics-fallback");
     status("Graphics restored. Workspace state retained.");

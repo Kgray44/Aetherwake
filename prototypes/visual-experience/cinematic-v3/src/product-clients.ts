@@ -45,6 +45,7 @@ export function createProductClients(options: {
       list: (input = {}) => invoke("taskObjectives", "list", input),
     },
     timelines: {
+      planning: (input) => invoke('timelines', 'planning', input),
       create: (input) => invoke("timelines", "create", input),
       read: (resourceId) => invoke("timelines", "read", { resourceId }),
       save: (input) => invoke("timelines", "save", input),

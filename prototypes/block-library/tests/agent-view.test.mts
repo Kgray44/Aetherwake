@@ -22,6 +22,19 @@ async function setup(t: any, override?: (f: ReturnType<typeof agentFixture>) => 
   return { f, dom, controller, coordinator, projections, opens, frame };
 }
 
+test('capability constellation shows effective requests as catalog configuration, clears on revocation and never grants execution', async t => {
+  const s = await setup(t, f => ({ client: { ...f.client, effective: async (ref, project) => {
+    const actual = await f.client.effective(ref, project);
+    return { ...actual, settings: { ...actual.settings, requiredCapabilities: ['source-read', 'document-compare'] }, configurationState: 'needs-setup' as const };
+  } } }));
+  await until(() => s.dom.root.textContent.includes('2 requested capabilities'));
+  const constellation = s.dom.root.querySelector('.aw-agent-constellation');
+  assert.deepEqual(constellation.querySelectorAll('li').map((item: any) => item.textContent), ['source-read', 'document-compare']);
+  assert.match(constellation.textContent, /not permission grants or live activity/); assert.equal(constellation.dataset.configurationState, 'needs-setup');
+  assert.equal(s.f.db.prepare('SELECT count(*) n FROM resources').get()!.n, 1);
+  s.f.deny(); await s.controller.refresh(); assert.equal(constellation.hidden, true); assert.equal(constellation.querySelectorAll('li').length, 0);
+});
+
 test('Agent block reads one saved canonical profile and catalog compatibility without claiming execution or fabricating history/actions', async t => {
   const s = await setup(t); await until(() => s.dom.root.textContent.includes('Compatible configuration')); s.frame();
   assert.match(s.dom.root.textContent, /Synthetic Researcher/);
@@ -43,6 +56,8 @@ test('optional reference projection opens actual canonical manual Tasks and labe
     return { client: { ...f.client, references: async () => [f.service.assignment(referenceId)] }, onOpenResource: id => { opened.push(id); }, resourceTitle: id => id === taskId ? 'Exact canonical manual task' : undefined };
   });
   await until(() => s.dom.root.querySelector('li')); assert.match(s.dom.root.textContent, /Exact canonical manual task/);
+  assert.match(s.dom.root.querySelector('.aw-agent-reference-path').textContent, /Saved profile → Manual task/);
+  assert.equal(s.dom.root.querySelector('[data-reference-id]').dataset.executionLinked, 'false');
   assert.match(s.dom.root.textContent, /Reference only; no execution started/); assert.doesNotMatch(s.dom.root.textContent, /Running|Verified|Complete/);
   button(s.dom.root, 'Open manual task').onclick(); await until(() => opened.length === 1); assert.deepEqual(opened, [taskId]);
   assert.equal(s.dom.root.querySelector('li').dataset.referenceId, referenceId);

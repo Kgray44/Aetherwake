@@ -31,6 +31,8 @@ export function mountTaskGroupExperience(
   const section = node("section", "", "aw-task-group"),
     summary = node("p", "", "aw-task-group-summary"),
     completion = node("meter", "", "aw-task-group-completion"),
+    segments = node('div', '', 'aw-task-group-segments'),
+    manualNote = node('p', 'Manual completion · checkmarks record your task changes, not verified execution.', 'aw-task-group-manual-note'),
     tools = node("div", "", "aw-task-group-tools"),
     search = node("input"),
     filter = node("select"),
@@ -61,7 +63,8 @@ export function mountTaskGroupExperience(
   status.setAttribute("role", "status");
   status.setAttribute("aria-live", "polite");
   tools.append(search, filter);
-  section.append(summary, completion, tools, list, manage, status);
+  segments.setAttribute('aria-hidden', 'true');
+  section.append(summary, completion, segments, manualNote, tools, list, manage, status);
   root.append(section);
   let latest = options.members,
     active = options.active ?? true,
@@ -74,6 +77,7 @@ export function mountTaskGroupExperience(
         row: HTMLLIElement;
         checkbox: HTMLInputElement;
         title: HTMLElement;
+        state: HTMLElement;
       }
     >();
   const current = (id: string) => latest.find((member) => member.id === id);
@@ -118,6 +122,18 @@ export function mountTaskGroupExperience(
     completion.max = Math.max(1, latest.length);
     completion.value = completed;
     completion.setAttribute("aria-valuetext", `${completed} of ${latest.length} completed locally`);
+    const count = Math.min(32, latest.length);
+    segments.hidden = count === 0; segments.style.gridTemplateColumns = `repeat(${Math.max(1, count)}, minmax(0, 1fr))`;
+    while (segments.children.length > count) segments.children[segments.children.length - 1].remove();
+    for (let index = 0; index < count; index++) {
+      const members = latest.slice(Math.floor(index * latest.length / count), Math.floor((index + 1) * latest.length / count));
+      const done = members.filter(member => member.status === 'done').length;
+      const segment = segments.children[index] as HTMLElement | undefined ?? node('span');
+      segment.dataset.status = done === members.length ? 'done' : done ? 'mixed' : 'open';
+      segment.style.background = `linear-gradient(90deg,#b3cfca ${done / members.length * 100}%,#acc3d70a ${done / members.length * 100}%)`;
+      segment.title = `${done} of ${members.length} manual tasks done`;
+      if (!segment.parentElement) segments.append(segment);
+    }
     for (const [id, item] of rows)
       if (!ids.has(id)) {
         item.row.remove();
@@ -165,8 +181,9 @@ export function mountTaskGroupExperience(
               if (!disposed) paint();
             });
         };
-        row.append(checkbox, title);
-        item = { row, checkbox, title };
+        const state = node('small', '', 'aw-task-group-item-state');
+        row.append(checkbox, title, state);
+        item = { row, checkbox, title, state };
         rows.set(member.id, item);
       }
       item.title.textContent = member.title;
@@ -177,6 +194,7 @@ export function mountTaskGroupExperience(
         "Mark " + member.title + (member.status === "done" ? " open" : " done"),
       );
       item.row.dataset.status = member.status;
+      item.state.textContent = member.status === 'done' ? 'Manual · done' : 'Manual · open';
       const at = list.children[index];
       if (at !== item.row) list.insertBefore(item.row, at ?? null);
     });

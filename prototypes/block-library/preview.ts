@@ -1,7 +1,9 @@
 import type { BlockInstanceKind } from "./contracts.ts";
+import { showroomDemonstration, type ShowroomReplayOptions } from './showroom.ts';
 
-/** Deterministic, inert examples. No canonical data, provider calls, timers or live-event claims. */
-export function blockPreview(kind: BlockInstanceKind): HTMLElement {
+/** Deterministic synthetic examples. Optional animation borrows the host frame;
+ * no canonical data, provider calls, timers or live-event claims. */
+export function blockPreview(kind: BlockInstanceKind, options: ShowroomReplayOptions = {}): HTMLElement {
   const root = document.createElement("figure");
   root.className = "aw-library__sample";
   root.dataset.kind = kind;
@@ -22,6 +24,20 @@ export function blockPreview(kind: BlockInstanceKind): HTMLElement {
     line('p', 'Purpose · Specialties · Effective configuration');
     line('div', 'Open agent', 'aw-library__sample-input');
     line('p', 'A saved profile is not a running execution.', 'aw-library__hint');
+  } else if (kind === 'clock_timer') {
+    line('small', 'NATIVE TIME · EXAMPLE');
+    line('h4', 'Time at a glance');
+    line('p', 'Timer · Stopwatch · Clock');
+    line('p', 'The real timing engine owns elapsed time and pause state; this example starts no timer.', 'aw-library__hint');
+  } else if (kind === 'task_objective') {
+    line('small', 'SAVED OBJECTIVE · EXAMPLE');
+    line('h4', 'Requirements and evidence');
+    line('p', 'Inspect the saved objective, its review history and existing execution references.');
+    line('p', 'Attach an existing objective; a preview cannot verify its outcome.', 'aw-library__hint');
+  } else if (kind === 'folder') {
+    line('small', 'RESOURCE FOLDER · EXAMPLE');
+    line('h4', 'A route to your sources');
+    line('p', 'Inspect canonical folder contents and open supported resources.');
   } else if (kind === 'timeline') {
     line('small', 'SAVED TIMELINE · CAPTURED EVENTS · EXAMPLE');
     line('h4', 'A view through recorded time');
@@ -119,5 +135,6 @@ export function blockPreview(kind: BlockInstanceKind): HTMLElement {
     );
     line("div", "Persistent local editor", "aw-library__sample-input");
   }
+  root.append(showroomDemonstration(kind, options));
   return root;
 }

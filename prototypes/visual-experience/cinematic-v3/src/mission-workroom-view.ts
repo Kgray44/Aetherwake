@@ -1,6 +1,8 @@
 import type { TimelineExperience } from "../../../block-library/timeline-view.ts";
 import type { MissionProjection, MissionTaskState, MissionWorkroomDashboard, MissionWorkroomResource } from "../../../integrated-backend/src/mission-contracts.mts";
 import { missionAdmissionDetails, missionAdmissionRefreshMs, missionEventLabel, missionStateLabel } from "./vela-missions.ts";
+import type { ExperienceMotionPort } from '../../../application-contract/motion.ts';
+import { mountMissionFlow } from '../../../block-library/mission-flow.ts';
 
 export interface MissionWorkroomView extends TimelineExperience {
   setScope(scope: string | null): void;
@@ -37,6 +39,7 @@ export function mountMissionWorkroomView(
   mountManual: ((container: HTMLElement) => TimelineExperience) | undefined,
   openMission: (id: string) => void,
   openResource?: (id: string) => void,
+  options?: { motion: ExperienceMotionPort; viewId: string; readMission(id: string): Promise<MissionProjection | null> },
 ): MissionWorkroomView {
   const doc = root.ownerDocument;
   const section = doc.createElement("section");
@@ -49,7 +52,11 @@ export function mountMissionWorkroomView(
   }[kind];
   heading.textContent = initialTitle;
   const status = doc.createElement("p");
+  status.className = 'aw-mission-workroom-status';
   status.setAttribute("role", "status");
+  const header = doc.createElement('div'), flowOptionsHost = doc.createElement('div');
+  header.className = 'aw-mission-workroom-header'; flowOptionsHost.className = 'aw-mission-workroom-options';
+  header.append(status, flowOptionsHost);
   const intro = doc.createElement("p");
   intro.hidden = true;
   const list = doc.createElement("ol");
@@ -57,7 +64,7 @@ export function mountMissionWorkroomView(
   open.type = "button";
   open.textContent = kind === "checklist" || kind === "timeline" ? "Open mission evidence" : "Open mission plan";
   open.dataset.aerynthMotionControl = "true";
-  section.append(heading, status, intro, open, list);
+  section.append(heading, header, intro, open, list);
   const manualDetails = doc.createElement("details");
   manualDetails.className = "aw-mission-workroom-controls";
   manualDetails.dataset.noCardDrag = "true";
@@ -69,14 +76,80 @@ export function mountMissionWorkroomView(
   const manualHost = doc.createElement("div");
   manualHost.style.display = "contents";
   manualDetails.append(manualSummary);
+  const journalDetails = doc.createElement('details'), journalSummary = doc.createElement('summary');
+  journalDetails.className = 'aw-mission-workroom-controls'; journalDetails.dataset.noCardDrag = 'true';
+  journalSummary.textContent = 'Forensic mission journal · recorded events'; journalDetails.append(journalSummary);
+  const flowHost = doc.createElement('div'), flowControls = doc.createElement('div'), flowStatus = doc.createElement('p');
+  flowControls.className = 'aw-stream-controls'; flowControls.setAttribute('role', 'group'); flowControls.setAttribute('aria-label', 'Mission presentation');
+  flowStatus.className = 'aw-stream-coverage'; flowStatus.setAttribute('role', 'status');
+  flowControls.hidden = flowHost.hidden = flowStatus.hidden = true;
+  section.insertBefore(flowControls, list); section.insertBefore(flowStatus, list); section.insertBefore(flowHost, list);
 
   let scope = initialScope, generation = 0, active = true, disposed = false;
   let presentation: "workspace" | "focused" = "workspace";
   let manual: TimelineExperience | undefined, resolvedManual = false;
   let projection: MissionWorkroomResource | null = null;
   let projectionStamp: string | null = null;
+  let statusDetail = '';
   let pending: Promise<void> | null = null, queued = false;
   let admissionRefresh: ReturnType<typeof setTimeout> | undefined;
+  let primaryTimeline = false, flowMode = 'flow', flowEpoch = 0;
+  let flow: ReturnType<typeof mountMissionFlow> | undefined, fullMission: MissionProjection | null = null;
+  const modeButtons = new Map<string, HTMLButtonElement>();
+  const eligibleFlow = (value: MissionWorkroomResource | null) => value?.dashboard?.kind === 'graph' || value?.dashboard?.kind === 'stream';
+  const syncFlowPresentation = () => {
+    section.dataset.presentation = presentation;
+    section.dataset.flowReady = String(!!fullMission);
+    section.dataset.flowMode = flowMode;
+    flow?.setPresentation(presentation);
+    if (fullMission && projection && presentation === 'workspace') status.textContent = `${missionStateLabel[projection.outcome]} · v${projection.revision}`;
+    else if (statusDetail) status.textContent = statusDetail;
+    status.title = fullMission && presentation === 'workspace' ? statusDetail : '';
+  };
+  function clearFlow() {
+    for (const tool of [intro, open, flowControls, flowStatus]) section.insertBefore(tool, flowHost);
+    flowEpoch++; flow?.dispose(); flow = undefined; fullMission = null;
+    flowHost.hidden = true; flowControls.hidden = true; flowStatus.hidden = true; flowStatus.textContent = ''; list.hidden = false;
+    syncFlowPresentation();
+  }
+  function displayFlowMode() {
+    for (const [mode, button] of modeButtons) { button.disabled = !active || !fullMission; button.setAttribute('aria-pressed', String(mode === flowMode)); }
+    list.hidden = !!fullMission && flowMode !== 'forensic';
+    flowHost.hidden = !fullMission || flowMode === 'forensic';
+    if (flow && fullMission) { flow.setActive(active && flowMode !== 'forensic'); flow.update(fullMission, flowMode); }
+    syncFlowPresentation();
+  }
+  for (const mode of ['flow', 'glimpse', 'forensic']) {
+    const button = doc.createElement('button'); button.type = 'button'; button.textContent = mode[0].toUpperCase() + mode.slice(1); button.dataset.workroomMode = mode;
+    button.dataset.aerynthMotionControl = 'true'; button.onclick = () => { if (!disposed && active && fullMission) { flowMode = mode; displayFlowMode(); } };
+    modeButtons.set(mode, button); flowControls.append(button);
+  }
+  async function readFlow(value: MissionWorkroomResource, sourceGeneration: number) {
+    if (!eligibleFlow(value)) { clearFlow(); return; }
+    if (!options) { clearFlow(); flowStatus.hidden = false; flowStatus.textContent = 'Dependency Flow is unavailable in this surface. Recorded rows are shown as a forensic fallback.'; return; }
+    if (fullMission && (fullMission.id !== value.missionId || fullMission.revision < value.revision)) clearFlow();
+    const token = ++flowEpoch, requestedScope = scope, minimumRevision = Math.max(value.revision, fullMission?.revision ?? 0);
+    flowStatus.hidden = false; flowStatus.textContent = 'Reading authorized mission dependencies…';
+    try {
+      const mission = await options.readMission(value.missionId);
+      if (disposed || !active || doc.hidden || token !== flowEpoch || sourceGeneration !== generation || scope !== requestedScope) return;
+      if (!mission || mission.contract !== 'aerynth.vela-mission@1' || mission.id !== value.missionId || mission.revision < minimumRevision || projection?.missionId !== mission.id)
+        throw new Error('mission_flow_projection_unavailable');
+      fullMission = mission;
+      flow ??= mountMissionFlow(flowHost, { motion: options.motion, viewId: `${options.viewId}:${generation}:${flowEpoch}`, active, openMission,
+        presentation, optionsHost: flowOptionsHost, contextTools: [open, flowControls, flowStatus, intro] });
+      flowControls.hidden = false; flowStatus.textContent = 'Current authorized task dependencies · retained event rows remain available in Forensic.';
+      displayFlowMode();
+    } catch {
+      if (disposed || token !== flowEpoch || sourceGeneration !== generation || scope !== requestedScope) return;
+      clearFlow(); list.hidden = true; flowStatus.hidden = false; flowStatus.textContent = 'Mission dependency access could not be confirmed. Refresh or reopen this card.';
+    }
+  }
+  const visibilityChanged = () => {
+    if (doc.hidden) { generation++; clearFlow(); manual?.setActive(false); }
+    else if (active && !disposed) { syncManual(); void refreshProjection(); }
+  };
+  doc.addEventListener?.('visibilitychange', visibilityChanged);
 
   function syncAdmissionRefresh() {
     const shouldRefresh = active && !disposed && !doc.hidden && projection?.dashboard?.kind === "performance" &&
@@ -93,8 +166,10 @@ export function mountMissionWorkroomView(
   }
 
   const statusOnly = (message: string) => {
+    clearFlow(); primaryTimeline = false; resolvedManual = false; manual?.setActive(false);
     projection = null;
     projectionStamp = null;
+    statusDetail = '';
     syncAdmissionRefresh();
     delete section.dataset.missionWorkroomCard;
     delete section.dataset.missionId;
@@ -108,7 +183,7 @@ export function mountMissionWorkroomView(
     if (section.parentElement !== root || root.children.length !== 1) root.replaceChildren(section);
   };
   const syncManual = () => {
-    const show = active && (resolvedManual || (projection !== null && manualDetails.open));
+    const show = active && (resolvedManual || primaryTimeline || (projection !== null && manualDetails.open));
     if (show && !manual && mountManual) {
       manual = mountManual(manualHost);
       manual.setPresentation(presentation);
@@ -351,6 +426,7 @@ export function mountMissionWorkroomView(
       }),
     };
     const nextStatus = `${missionStateLabel[value.outcome]} · ${displayed.coverage} · Journal revision ${value.revision}`;
+    statusDetail = nextStatus;
     if (status.textContent !== nextStatus) status.textContent = nextStatus;
     intro.textContent = "intro" in displayed ? displayed.intro ?? "" : "";
     intro.hidden = !intro.textContent;
@@ -366,7 +442,11 @@ export function mountMissionWorkroomView(
       const replacement = disclosures.find(node => node.dataset.workroomDisclosure === activeDisclosure)?.querySelector("summary");
       (replacement ?? open).focus({ preventScroll: true });
     }
-    if (mountManual && manualDetails.parentElement !== root) {
+    primaryTimeline = kind === 'timeline' && !!value.timeline && !!mountManual;
+    if (primaryTimeline) {
+      if (section.parentElement !== journalDetails) journalDetails.append(section);
+      if (manualHost.parentElement !== root || journalDetails.parentElement !== root) root.replaceChildren(manualHost, journalDetails);
+    } else if (mountManual && manualDetails.parentElement !== root) {
       manualDetails.append(manualHost);
       root.replaceChildren(section, manualDetails);
     } else if (!mountManual && section.parentElement !== root) root.replaceChildren(section);
@@ -394,6 +474,7 @@ export function mountMissionWorkroomView(
             }
             projection = null;
             projectionStamp = null;
+            clearFlow(); primaryTimeline = false;
             syncAdmissionRefresh();
             resolvedManual = true;
             if (manualHost.parentElement !== root) root.replaceChildren(manualHost);
@@ -404,6 +485,7 @@ export function mountMissionWorkroomView(
             if (!matched) throw new Error("mission_workroom_card_kind_changed");
             resolvedManual = false;
             render(value);
+            await readFlow(value, stamp);
           }
         } catch {
           if (stamp === generation && active && !disposed)
@@ -439,6 +521,7 @@ export function mountMissionWorkroomView(
     setActive(next) {
       if (active === next) return;
       active = next;
+      if (!next) { generation++; clearFlow(); } else flow?.setActive(true);
       syncAdmissionRefresh();
       section.inert = !next;
       manualDetails.inert = !next;
@@ -448,21 +531,25 @@ export function mountMissionWorkroomView(
     setPresentation(next) {
       presentation = next;
       manual?.setPresentation(next);
+      syncFlowPresentation();
     },
     async refresh() {
       if (!resolvedManual) await refreshProjection();
-      if (active && (resolvedManual || manualDetails.open)) await manual?.refresh();
+      if (active && (resolvedManual || primaryTimeline || manualDetails.open)) await manual?.refresh();
     },
     async flush() { await manual?.flush(); },
-    frame() { manual?.frame(); },
-    reflow() { manual?.reflow(); },
+    frame() { if (active && !disposed && !doc.hidden) { manual?.frame(); flow?.frame(); } },
+    reflow() { manual?.reflow(); flow?.reflow(); },
     dispose() {
       disposed = true;
+      generation++; clearFlow();
       syncAdmissionRefresh();
       manual?.dispose();
       section.remove();
       manualDetails.remove();
       manualHost.remove();
+      journalDetails.remove();
+      doc.removeEventListener?.('visibilitychange', visibilityChanged);
     },
   };
 }

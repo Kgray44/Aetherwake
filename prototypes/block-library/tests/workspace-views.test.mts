@@ -168,6 +168,10 @@ test("normal task-group checklist updates real member IDs, preserves search/focu
   const completion = view.root.querySelector(".aw-task-group-completion");
   assert.equal(completion.hidden, false);
   assert.deepEqual([completion.value, completion.max], [1, 2]);
+  const segments = view.root.querySelector('.aw-task-group-segments');
+  assert.deepEqual(segments.children.map((item: any) => item.dataset.status), ['open', 'done']);
+  assert.match(view.root.querySelector('.aw-task-group-manual-note').textContent, /not verified execution/);
+  assert.match(row.querySelector('.aw-task-group-item-state').textContent, /Manual · open/);
   checkbox.focus();
   checkbox.checked = true;
   checkbox.onchange();
@@ -175,6 +179,7 @@ test("normal task-group checklist updates real member IDs, preserves search/focu
   assert.deepEqual(calls, [{ resourceId: "task:a", status: "done" }]);
   assert.equal(checkbox.checked, true);
   assert.deepEqual([completion.value, completion.max], [2, 2]);
+  assert.deepEqual(segments.children.map((item: any) => item.dataset.status), ['done', 'done']);
   assert.equal(view.root.querySelector('[data-task-id="task:a"]'), row);
   controller.setPresentation("focused");
   controller.setPresentation("workspace");
@@ -185,6 +190,7 @@ test("normal task-group checklist updates real member IDs, preserves search/focu
   await until(() => calls.length === 2 && !checkbox.disabled);
   assert.equal(checkbox.checked, true);
   assert.equal(completion.getAttribute("aria-valuetext"), "2 of 2 completed locally", "Failure cannot advance completion independently of canonical membership");
+  assert.deepEqual(segments.children.map((item: any) => item.dataset.status), ['done', 'done']);
   assert.match(
     view.root.querySelector(".aw-task-group-status").textContent,
     /version conflict/,

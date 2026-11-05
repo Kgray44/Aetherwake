@@ -1,5 +1,5 @@
-/** Browser-safe timeline DTOs. These are views of retained evidence, not task,
- * provider, event-ingestion, planning, replay or scheduling authority. */
+/** Browser-safe Timeline DTOs. Retained evidence and user-authored planning
+ * have separate contracts; neither supplies task, provider or execution authority. */
 export const TIMELINE_CONTRACT = "aerynth.timeline@1" as const;
 export type EvidenceClass = "observed" | "reported" | "inferred" | "simulated";
 export interface TimelineResource {
@@ -19,6 +19,11 @@ export interface TimelineView {
   mode: "activity" | "execution";
   /** Missing on existing views, which continue to use capture time. */
   timeAxis?: "receivedAt" | "reportedAt";
+  /** Explicitly saved display preferences. Omission preserves existing view digests. */
+  presentation?: {
+    orientation: "horizontal" | "vertical" | "multilane";
+    detail: "compact" | "expanded";
+  };
   /** Empty resourceIds means the authorized project/application scope, not all data. */
   scope: { projectId: string | null; resourceIds: string[] };
   sources: {
@@ -183,13 +188,51 @@ export interface QueryTimeline {
   limit?: number;
   page?: TimelinePage;
 }
+/** Canonical user-authored plans, separate from retained event evidence. */
+export interface TimelinePlanningValues {
+  title: string;
+  /** Exact UTC ISO instant, including milliseconds and Z. Never an inferred local time. */
+  startAt: string;
+  /** Elapsed milliseconds, including across DST changes. */
+  durationMs: number;
+  /** Named IANA display zone (UTC accepted); does not reinterpret startAt. */
+  timeZone: string;
+  laneId: string;
+}
+export interface TimelinePlanningItem extends TimelinePlanningValues {
+  id: string;
+  temporalClass: "planned";
+  /** Canonical timeline resource version at this item's last mutation. */
+  version: number;
+}
+export type TimelinePlanningRequest = {
+  op: "list"; resourceId: string; expectedVersion: number;
+} | ({ commandId: string; resourceId: string; expectedVersion: number } & (
+  { op: "create"; values: TimelinePlanningValues } |
+  { op: "update"; itemId: string; values: TimelinePlanningValues } |
+  { op: "delete"; itemId: string } |
+  { op: "undo"; targetCommandId: string }
+));
+export interface TimelinePlanningDocument {
+  resourceId: string; resourceVersion: number; canEdit: boolean;
+  items: TimelinePlanningItem[];
+}
+export interface TimelinePlanningMutationResult extends TimelineMutationResult {
+  operationId: string;
+  item: TimelinePlanningItem | null;
+}
+export type TimelinePlanningResponse = TimelinePlanningDocument | TimelinePlanningMutationResult;
+
 export interface TimelinePort {
+  planning?(input: TimelinePlanningRequest): Promise<TimelinePlanningResponse>;
   create(input: CreateTimeline): Promise<TimelineMutationResult>;
   read(resourceId: string): Promise<TimelineDocument>;
   save(input: SaveTimeline): Promise<TimelineMutationResult>;
   query(input: QueryTimeline): Promise<TimelineWindow>;
 }
 export const TIMELINE_LIMITS = Object.freeze({
+  planningItems: 256,
+  planningOperations: 4096,
   views: 256,
   receipts: 4096,
   viewBytes: 16384,

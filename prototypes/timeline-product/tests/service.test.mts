@@ -1056,3 +1056,121 @@ test("canEdit is a fresh explicit host hint from the same authorized read, never
   assert(!JSON.stringify(durable).includes("canEdit"));
   assert(!JSON.stringify(receipts).includes("canEdit"));
 });
+
+const planningValues = () => ({ title: 'Synthetic planned work', startAt: '2026-11-01T05:30:00.000Z', durationMs: 3600000, timeZone: 'America/New_York', laneId: 'work' });
+test('planning v1 reads do no DDL; canonical CRUD migrates additively without changing immutable source records', t => {
+  const f = fixture(t), made = f.create(); f.add();
+  const tables = f.tables(), source = f.db.prepare('SELECT * FROM intelligence_events').all();
+  assert.deepEqual(f.service.planning({ op: 'list', resourceId: made.resourceId, expectedVersion: 1 }), { resourceId: made.resourceId, resourceVersion: 1, canEdit: true, items: [] });
+  assert.deepEqual(f.tables(), tables);
+  const create = { op: 'create' as const, commandId: 'planning-create', resourceId: made.resourceId, expectedVersion: 1, values: planningValues() };
+  const created = f.service.planning(create) as import('../contracts.ts').TimelinePlanningMutationResult;
+  assert.equal(created.version, 2); assert.equal(created.item?.temporalClass, 'planned');
+  assert.match(created.item!.id, /^[a-f0-9-]{36}$/); assert.equal(created.item!.version, 2);
+  assert.deepEqual(f.service.planning(create), created);
+  assert.equal(f.db.prepare('SELECT version FROM timeline_schema').get()!.version, 2);
+  const updated = f.service.planning({ op: 'update', commandId: 'planning-update', resourceId: made.resourceId, expectedVersion: 2, itemId: created.item!.id, values: { ...planningValues(), durationMs: 7200000 } }) as import('../contracts.ts').TimelinePlanningMutationResult;
+  assert.equal(updated.item!.id, created.item!.id); assert.equal(updated.item!.durationMs, 7200000);
+  assert.throws(() => f.service.planning({ ...create, commandId: 'stale-plan' }), /timeline_version_conflict/);
+  const deleted = f.service.planning({ op: 'delete', commandId: 'planning-delete', resourceId: made.resourceId, expectedVersion: 3, itemId: created.item!.id }) as import('../contracts.ts').TimelinePlanningMutationResult;
+  assert.equal(deleted.item, null); assert.equal(deleted.version, 4);
+  const restored = f.service.planning({ op: 'undo', commandId: 'planning-restore', resourceId: made.resourceId, expectedVersion: 4, targetCommandId: 'planning-delete' }) as import('../contracts.ts').TimelinePlanningMutationResult;
+  assert.equal(restored.item!.id, created.item!.id); assert.equal(restored.item!.durationMs, 7200000); assert.equal(restored.version, 5);
+  assert.deepEqual(f.db.prepare('SELECT * FROM intelligence_events').all(), source);
+  assert.equal(f.service.read(made.resourceId).resource.version, 5);
+  assert.deepEqual(f.service.planning(create), created, 'Original acknowledgement survives later edits');
+});
+
+test('planning undo has item revision fences and never rewinds unrelated edits', t => {
+  const f = fixture(t), made = f.create();
+  const run = (input: any) => f.service.planning({ resourceId: made.resourceId, ...input }) as import('../contracts.ts').TimelinePlanningMutationResult;
+  const a = run({ op: 'create', commandId: 'a', expectedVersion: 1, values: planningValues() });
+  const b = run({ op: 'create', commandId: 'b', expectedVersion: 2, values: { ...planningValues(), title: 'Other item' } });
+  const undone = run({ op: 'undo', commandId: 'undo-a', expectedVersion: 3, targetCommandId: 'a' });
+  assert.equal(undone.item, null);
+  const items = f.service.planning({ op: 'list', resourceId: made.resourceId, expectedVersion: 4 }) as import('../contracts.ts').TimelinePlanningDocument;
+  assert.deepEqual(items.items.map(item => item.id), [b.item!.id]);
+  run({ op: 'update', commandId: 'update-b', expectedVersion: 4, itemId: b.item!.id, values: { ...planningValues(), title: 'Changed' } });
+  assert.throws(() => run({ op: 'undo', commandId: 'unsafe-undo-b', expectedVersion: 5, targetCommandId: 'b' }), /timeline_undo_conflict/);
+  assert.equal(f.service.read(made.resourceId).resource.version, 5);
+});
+
+test('planning accepts exact UTC instants and elapsed DST durations, rejects inferred local time and invalid zones', t => {
+  const f = fixture(t), made = f.create();
+  const run = (values: any) => f.service.planning({ op: 'create', commandId: randomUUID(), resourceId: made.resourceId, expectedVersion: 1, values });
+  for (const startAt of ['2026-11-01T01:30', '2026-03-08T02:30', '2026-11-01T01:30:00.000-04:00'])
+    assert.throws(() => run({ ...planningValues(), startAt }), /timeline_planning_utc_instant_required/);
+  for (const timeZone of ['not/a-zone', '+01:00']) assert.throws(() => run({ ...planningValues(), timeZone }), /timeline_invalid_timezone/);
+  for (const durationMs of [-1, 1.5, Infinity, Number.MAX_SAFE_INTEGER]) assert.throws(() => run({ ...planningValues(), durationMs }), /timeline_invalid_planning_duration/);
+  const result = run(planningValues()) as import('../contracts.ts').TimelinePlanningMutationResult;
+  assert.equal(result.item!.startAt, '2026-11-01T05:30:00.000Z');
+  assert.equal(new Date(Date.parse(result.item!.startAt) + result.item!.durationMs).toISOString(), '2026-11-01T06:30:00.000Z');
+});
+
+test('planning migration and mutations roll back on host failure, preserve v1 receipts, and reauthorize retries', t => {
+  const f = fixture(t), made = f.create(view(), 'original-create');
+  const before = f.tables(); f.failEvent();
+  const command = { op: 'create' as const, commandId: 'plan-retry', resourceId: made.resourceId, expectedVersion: 1, values: planningValues() };
+  assert.throws(() => f.service.planning(command), /synthetic_event_failure/);
+  assert.deepEqual(f.tables(), before); assert.equal(f.service.read(made.resourceId).resource.version, 1);
+  f.failEvent(false); const result = f.service.planning(command);
+  assert.deepEqual(f.create(view(), 'original-create'), made);
+  assert.throws(() => f.service.planning({ ...command, values: { ...planningValues(), title: 'Changed request' } }), /timeline_command_conflict/);
+  f.deniedResources.add(made.resourceId); assert.throws(() => f.service.planning(command), /timeline_unavailable/);
+  f.deniedResources.clear(); assert.deepEqual(f.service.planning(command), result);
+  f.owner('different-owner'); assert.throws(() => f.service.planning({ op: 'list', resourceId: made.resourceId, expectedVersion: 2 }), /timeline_unavailable/);
+});
+
+test('planning persists exact items and undo history across same-file restart with read-only authorization', t => {
+  const directory = resolve('.runtime/timeline-planning-tests', randomUUID()); mkdirSync(directory, { recursive: true });
+  const file = resolve(directory, 'timeline.sqlite'), f = fixture(t, file), made = f.create();
+  const command = { op: 'create' as const, commandId: 'durable-plan', resourceId: made.resourceId, expectedVersion: 1, values: planningValues() };
+  const created = f.service.planning(command) as import('../contracts.ts').TimelinePlanningMutationResult;
+  f.close(); const restored = fixture(t, file);
+  const result = restored.service.planning({ op: 'list', resourceId: made.resourceId, expectedVersion: 2 }) as import('../contracts.ts').TimelinePlanningDocument;
+  assert.deepEqual(result.items, [created.item]); assert.deepEqual(restored.service.planning(command), created);
+  const readOnly = new TimelineService(restored.kernel, { ...restored.host, readResource(id) { const entry = restored.host.readResource(id); return entry && { ...entry, writable: false }; } });
+  assert.equal((readOnly.planning({ op: 'list', resourceId: made.resourceId, expectedVersion: 2 }) as import('../contracts.ts').TimelinePlanningDocument).canEdit, false);
+  assert.throws(() => readOnly.planning({ op: 'undo', commandId: 'denied-undo', resourceId: made.resourceId, expectedVersion: 2, targetCommandId: command.commandId }), /timeline_read_only/);
+  const undone = restored.service.planning({ op: 'undo', commandId: 'durable-undo', resourceId: made.resourceId, expectedVersion: 2, targetCommandId: command.commandId }) as import('../contracts.ts').TimelinePlanningMutationResult;
+  assert.equal(undone.item, null); assert.equal(undone.version, 3);
+});
+
+test('planning item capacity is bounded including undo tombstones and rejects corruption without schema repair', t => {
+  const f = fixture(t), made = f.create();
+  const created = f.service.planning({ op: 'create', commandId: 'capacity-seed', resourceId: made.resourceId, expectedVersion: 1, values: planningValues() }) as import('../contracts.ts').TimelinePlanningMutationResult;
+  const seed = f.db.prepare('SELECT state_json FROM timeline_planning_items WHERE resource_id=?').get(made.resourceId)!.state_json;
+  const insert = f.db.prepare('INSERT INTO timeline_planning_items VALUES(?,?,?)');
+  for (let i = 1; i < TIMELINE_LIMITS.planningItems; i++) {
+    const state = JSON.parse(String(seed)); state.item.id = 'synthetic-capacity-' + i; state.deleted = true;
+    insert.run(made.resourceId, state.item.id, JSON.stringify(state));
+  }
+  assert.throws(() => f.service.planning({ op: 'create', commandId: 'over-capacity', resourceId: made.resourceId, expectedVersion: 2, values: planningValues() }), /timeline_planning_capacity/);
+  assert.equal(f.service.read(made.resourceId).resource.version, 2);
+  f.db.prepare('UPDATE timeline_planning_items SET state_json=? WHERE item_id=?').run('{broken', created.item!.id);
+  assert.throws(() => f.service.planning({ op: 'list', resourceId: made.resourceId, expectedVersion: 2 }), /timeline_planning_corrupt/);
+});
+
+
+test('optional presentation roundtrips without migration or normalizing old view digests and receipts', t => {
+  const directory = resolve('.runtime/timeline-presentation-tests',randomUUID());mkdirSync(directory,{recursive:true});
+  const file=resolve(directory,'timeline.sqlite'),f=fixture(t,file),original=view(),made=f.create(original,'old-presentation-create');
+  const oldReceipt=f.db.prepare('SELECT result_json FROM timeline_receipts WHERE command_id=?').get('old-presentation-create')!.result_json;
+  const read=f.service.read(made.resourceId);assert.equal(Object.hasOwn(read.view,'presentation'),false);assert.equal(read.viewDigest,made.viewDigest);
+  const configured={...original,presentation:{orientation:'vertical' as const,detail:'compact' as const}};
+  const saved=f.service.save({commandId:'save-presentation',resourceId:made.resourceId,expectedVersion:1,view:configured});
+  assert.equal(f.db.prepare('SELECT version FROM timeline_schema').get()!.version,1);
+  assert.deepEqual(f.service.read(made.resourceId).view.presentation,configured.presentation);
+  assert.deepEqual(f.create(original,'old-presentation-create'),made);
+  assert.equal(f.db.prepare('SELECT result_json FROM timeline_receipts WHERE command_id=?').get('old-presentation-create')!.result_json,oldReceipt);
+  f.close();const restored=fixture(t,file);assert.deepEqual(restored.service.read(made.resourceId).view.presentation,configured.presentation);
+  assert.equal(restored.service.read(made.resourceId).viewDigest,saved.viewDigest);
+});
+
+test('presentation validation rejects incomplete, unknown and authority-bearing preferences', t => {
+  const f=fixture(t);
+  for(const presentation of [undefined,null,{}, {orientation:'diagonal',detail:'compact'}, {orientation:'horizontal',detail:'dense'}, {orientation:'horizontal',detail:'compact',canEdit:true}])
+    assert.throws(()=>f.create({...view(),presentation} as any),/timeline_invalid_presentation/);
+  for(const orientation of ['horizontal','vertical','multilane'] as const)
+    assert.deepEqual(f.service.read(f.create({...view(),presentation:{orientation,detail:'expanded'}}).resourceId).view.presentation,{orientation,detail:'expanded'});
+});

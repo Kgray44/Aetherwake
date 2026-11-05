@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { blockDocument } from '../../../block-library/tests/component-dom.mts';
 import { until } from '../../../conversation-product/test/component-dom.mts';
 import { fixture } from '../../../timer-product/tests/fixture.mts';
-import { mountClockTimerExperience } from '../src/clock-timer-view.ts';
+import { clockHandAngles, mountClockTimerExperience } from '../src/clock-timer-view.ts';
 import { createProductClients } from '../src/product-clients.ts';
 import { blockAvailability, blockDefinition, validateConfiguration } from '../../../block-library/registry.ts';
 import { blockIdentity } from '../../../block-library/identity-model.ts';
@@ -219,4 +219,57 @@ test('canonical clock projection has its own identity and direct surface dispose
     experience.update({ ...resource, version: 2 }); await experience.refresh(); experience.setActive(false); experience.frame(); experience.dispose();
     assert.equal(f.count('timer_documents'), 1); assert.equal(f.count('notes'), 0);
   } finally { experience.dispose(); restore(); }
+});
+
+test('clock hands use exact zoned host epochs across midnight, non-hour offsets and a DST overlap', () => {
+  assert.deepEqual(clockHandAngles(Date.parse('2026-11-03T00:00:00Z'), 'UTC'), { hour: 0, minute: 0, second: 0 });
+  assert.deepEqual(clockHandAngles(Date.parse('2026-11-03T00:00:00Z'), 'Asia/Kathmandu'), { hour: 172.5, minute: 270, second: 0 });
+  const before = clockHandAngles(Date.parse('2026-11-01T05:59:59Z'), 'America/New_York');
+  assert.equal(before.second, 354); assert(Math.abs(before.hour - 59.99166666666667) < .000001);
+  assert.deepEqual(clockHandAngles(Date.parse('2026-11-01T06:00:00Z'), 'America/New_York'), { hour: 30, minute: 0, second: 0 });
+});
+
+test('local and world dial hands project the same canonical epoch without canonical writes from frames', async t => {
+  const m = await mounted(t); await mode(m, 'clock');
+  field(m.root, 'World clock name').value = 'Kathmandu'; field(m.root, 'IANA time zone').value = 'Asia/Kathmandu'; await click(m, 'addWorldClock');
+  const local = m.root.querySelector('[data-clock-local-dial]'), world = m.root.querySelector('[data-clock-world] .aw-clock-timer-dial');
+  assert.equal(local.dataset.clockZone, 'America/New_York'); assert.equal(world.dataset.clockZone, m.f.service.read(m.resource.resourceId).worldClocks[0].timeZone);
+  assert.equal(local.querySelector('.aw-clock-timer-hand--hour').style.transform, 'rotate(210deg)');
+  assert.equal(world.querySelector('.aw-clock-timer-hand--hour').style.transform, 'rotate(172.5deg)');
+  const writes = m.c.calls.filter(call => call.name === 'mutate').length;
+  m.advance(1000); m.view.frame();
+  assert.equal(local.querySelector('.aw-clock-timer-hand--second').style.transform, 'rotate(6deg)');
+  assert.equal(world.querySelector('.aw-clock-timer-hand--second').style.transform, 'rotate(6deg)');
+  assert.equal(m.c.calls.filter(call => call.name === 'mutate').length, writes); assert.equal(local.getAttribute('aria-hidden'), 'true');
+});
+
+test('stopwatch orbit is a labeled minute cycle that holds when paused and resets from canonical state', async t => {
+  const m = await mounted(t); await mode(m, 'stopwatch'); await click(m, 'stopwatchStart');
+  m.advance(10000); m.view.frame();
+  const orbit = m.root.querySelector('[data-clock-watch-orbit]'), needle = orbit.querySelector('.aw-clock-timer-watch-needle');
+  assert.equal(needle.style.transform, 'rotate(60deg)'); assert.match(m.root.textContent, /one orbit per 60 elapsed seconds/u);
+  await click(m, 'stopwatchPause'); const held = needle.style.transform;
+  m.advance(5000); m.view.frame(); assert.equal(needle.style.transform, held); assert.equal(m.root.querySelector('[data-clock-stopwatch]').textContent, '00:10.0');
+  await click(m, 'stopwatchReset'); assert.equal(needle.style.transform, 'rotate(0deg)'); assert.equal(orbit.style['--aw-watch-phase'], '0%');
+});
+
+test('focus presets fill only the ordinary countdown form and preserve explicit native create/start and read-only gates', async t => {
+  const m = await mounted(t), writes = m.c.calls.filter(call => call.name === 'mutate').length;
+  await click(m, 'presetFocus'); assert.equal(field(m.root, 'New timer name').value, 'Focus'); assert.equal(field(m.root, 'Duration in minutes').value, '25');
+  assert.equal(m.c.calls.filter(call => call.name === 'mutate').length, writes); assert.equal(m.f.service.read(m.resource.resourceId).timers.length, 0);
+  assert.match(m.root.querySelector('[role="status"]').textContent, /normal named countdown/u);
+  await click(m, 'createTimer'); let timer = m.f.service.read(m.resource.resourceId).timers[0];
+  assert.equal(timer.name, 'Focus'); assert.equal(timer.durationMs, 25 * 60000); assert.equal(timer.state, 'ready');
+  await click(m, 'presetBreak'); await click(m, 'createAndStartTimer'); timer = m.f.service.read(m.resource.resourceId).timers[1];
+  assert.equal(timer.name, 'Short break'); assert.equal(timer.durationMs, 5 * 60000); assert.equal(timer.state, 'running');
+  m.f.readOnly.add(m.resource.resourceId); await m.view.refresh(); const before = field(m.root, 'New timer name').value;
+  assert(action(m.root, 'presetFocus').disabled); action(m.root, 'presetFocus').onclick(); assert.equal(field(m.root, 'New timer name').value, before);
+});
+
+test('clock geometry stops painting while hidden, inactive and disposed; showing reconciles host time', async t => {
+  const m = await mounted(t); await mode(m, 'clock'); const second = m.root.querySelector('[data-clock-local-dial] .aw-clock-timer-hand--second');
+  const initial = second.style.transform; m.doc.hidden = true; m.advance(2000); m.view.frame(); assert.equal(second.style.transform, initial);
+  m.doc.hidden = false; await m.view.refresh(); assert.equal(second.style.transform, 'rotate(12deg)');
+  m.view.setActive(false); m.advance(1000); m.view.frame(); assert.equal(second.style.transform, 'rotate(12deg)');
+  m.view.dispose(); m.advance(1000); m.view.frame(); assert.equal(second.style.transform, 'rotate(12deg)');
 });

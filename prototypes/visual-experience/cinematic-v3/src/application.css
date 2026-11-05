@@ -49,6 +49,16 @@
   padding: 4px 2px 12px;
   overflow-wrap: anywhere;
 }
+.aw-mission-workroom [hidden] { display: none !important; }
+.aw-mission-workroom-header { display:flex; align-items:center; gap:.5rem; min-width:0; position:relative; z-index:4; }
+.aw-mission-workroom-status { flex:1; min-width:0; margin:0; color:#beb8cd; font-size:.78rem; line-height:1.4; }
+.aw-mission-workroom-options { flex:none; }
+.aw-mission-workroom[data-flow-ready="true"][data-presentation="workspace"] { gap:3px; padding:0 0 4px; }
+.aw-mission-workroom[data-flow-ready="true"][data-presentation="workspace"] .aw-mission-workroom-status { font-size:.68rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.aw-mission-workroom[data-flow-ready="true"] .aw-mission-workroom-header .aw-flow-options { margin:0; }
+.aw-mission-workroom[data-flow-ready="true"][data-presentation="workspace"] .aw-mission-workroom-header .aw-flow-options > summary { min-width:28px; min-height:26px; height:26px; padding:0 .25rem; }
+.aw-mission-workroom-options .aw-stream-controls { display:flex; flex-wrap:wrap; gap:.3rem; }
+.aw-mission-workroom-options .aw-stream-coverage { font-size:.75rem; line-height:1.45; }
 .aw-mission-workroom > h3,
 .aw-mission-workroom > p,
 .aw-mission-workroom > ol {

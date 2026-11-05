@@ -37,13 +37,16 @@ export function mountAgentBlockExperience(root: HTMLElement, resourceId: string,
   const section = node('section', '', 'aw-agent-block'), header = node('header', '', 'aw-agent-profile');
   const portrait = node('span', '', 'aw-agent-monogram'), name = node('h3'), label = node('small', 'Saved agent'), identity = node('div');
   const purpose = node('p', '', 'aw-agent-purpose'), specialties = node('div', '', 'aw-agent-specialties');
+  const constellation = node('section', '', 'aw-agent-constellation'), capabilityNodes = node('ul'), capabilityNote = node('p');
+  constellation.setAttribute('aria-label', 'Saved profile requested capabilities');
+  constellation.append(node('h4', 'Requested capabilities'), node('strong', 'Saved configuration', 'aw-agent-capability-core'), capabilityNodes, capabilityNote);
   const availability = node('p', 'Configuration not loaded', 'aw-agent-compatibility'), toolbar = node('div', '', 'aw-agent-actions');
   const configuration = node('div', '', 'aw-agent-configuration'), configValues = node('dl'), configNote = node('p');
   const work = node('section', '', 'aw-agent-work'), workHeading = node('h4', 'Linked work'), workStatus = node('p'), references = node('ol');
   const status = node('p', '', 'aw-agent-status');
   let disposed = false, active = options.active ?? true, sequence = 0, busy = false, detailsOpen = false;
   let current: AgentBlockProjection = { phase: 'loading' };
-  const rows = new Map<string, { element: HTMLLIElement; title: HTMLElement; description: HTMLElement; action: HTMLButtonElement | null }>();
+  const rows = new Map<string, { element: HTMLLIElement; title: HTMLElement; description: HTMLElement; relation: HTMLElement; action: HTMLButtonElement | null }>();
   section.dataset.resourceId = resourceId; section.dataset.noCardDrag = 'true'; section.dataset.presentation = options.presentation ?? 'workspace';
   section.setAttribute('aria-label', 'Agent'); status.setAttribute('role', 'status'); status.setAttribute('aria-live', 'polite');
   const target = (key: string, value: ExperiencePose, cause: string) => { motion.target(key, value, cause); motion.wake(); };
@@ -65,7 +68,7 @@ export function mountAgentBlockExperience(root: HTMLElement, resourceId: string,
   configuration.hidden = true; configuration.inert = true;
   configuration.append(configValues, configNote); toolbar.append(open, details, refreshButton);
   identity.append(label, name); header.append(portrait, identity); work.append(workHeading, workStatus, references);
-  section.append(header, purpose, specialties, availability, toolbar, configuration, work, status); root.append(section);
+  section.append(header, purpose, specialties, availability, constellation, toolbar, configuration, work, status); root.append(section);
   motion.add(prefix, pose({ opacity: 0, y: 8 })); motion.add(prefix + ':details', pose({ h: 0, opacity: 0 }));
   section.style.opacity = '0'; configuration.style.height = '0px'; section.inert = !active; section.hidden = !active;
   const notify = () => { options.onProjection?.(current); };
@@ -82,6 +85,7 @@ export function mountAgentBlockExperience(root: HTMLElement, resourceId: string,
       label.textContent = 'Agent'; purpose.textContent = ''; specialties.replaceChildren(); configValues.replaceChildren(); configNote.textContent = '';
       references.replaceChildren(); rows.clear(); availability.textContent = current.phase === 'loading' ? 'Reading saved profile…' : 'This saved profile is unavailable or no longer accessible.';
       workStatus.textContent = ''; detailsOpen = false; details.setAttribute('aria-expanded', 'false'); configuration.inert = true;
+      capabilityNodes.replaceChildren(); capabilityNote.textContent = ''; constellation.hidden = true;
       reflow(); return;
     }
     const { profile, configuration: effective, history } = current;
@@ -90,30 +94,37 @@ export function mountAgentBlockExperience(root: HTMLElement, resourceId: string,
     purpose.textContent = profile.profile.purpose || 'Open this agent to define its purpose and supported configuration.';
     specialties.replaceChildren(...profile.profile.specialties.slice(0, 6).map(value => node('span', value)));
     availability.textContent = effective ? ({ supported: 'Compatible configuration', 'needs-setup': 'Configuration needs setup', unsupported: 'Unsupported configuration', unknown: 'Configuration availability unknown' } as const)[effective.configurationState] : 'Configuration unavailable';
+    constellation.hidden = false; constellation.dataset.configurationState = effective?.configurationState ?? 'unknown';
+    capabilityNodes.replaceChildren(...(effective?.settings.requiredCapabilities ?? []).slice(0, 8).map(value => node('li', value)));
+    capabilityNote.textContent = !effective ? 'Requested capabilities are unavailable until configuration is read.' : !effective.settings.requiredCapabilities.length
+      ? 'No capability requirements recorded. This does not grant tools or execution access.'
+      : `${effective.settings.requiredCapabilities.length} requested capabilities${effective.settings.requiredCapabilities.length > 8 ? ' · first 8 shown' : ''}. Requests are not permission grants or live activity.`;
     configValues.replaceChildren();
-    for (const [name, value] of [['Provider', effective?.settings.providerId ?? 'Not configured'], ['Model', effective?.settings.modelId ?? 'Not configured']]) {
+    for (const [name, value] of [['Provider', effective?.settings.providerId ?? 'Not configured'], ['Model', effective?.settings.modelId ?? 'Not configured'], ['Requested capabilities', effective ? effective.settings.requiredCapabilities.join(', ') || 'None recorded' : 'Unavailable']]) {
       configValues.append(node('dt', name), node('dd', value));
     }
     configNote.textContent = effective ? 'Catalog compatibility only. Provider access and execution are checked separately.' : 'The effective configuration could not be read. Open the agent to review its setup.';
     if (effective?.reasons.length) configNote.textContent += ' ' + effective.reasons.join(' ');
     workStatus.textContent = history.state === 'loading' ? 'Loading authorized work references…' : history.state === 'unavailable'
       ? 'Work reference history is unavailable in this surface.' : history.references.length
-        ? `${history.references.length} work references loaded. These links do not start execution.` : 'No work references loaded.';
+        ? `${history.references.length} work references loaded · ${history.references.filter(value => !!value.execution).length} execution links. These links do not start execution; current execution status is not loaded.` : 'No work references loaded.';
     const visible = history.state === 'ready' ? history.references.slice(-4).reverse() : [], live = new Set(visible.map(value => value.id));
     for (const [id, row] of rows) if (!live.has(id)) { row.element.remove(); rows.delete(id); }
     for (const reference of visible) {
       let row = rows.get(reference.id);
       if (!row) {
-        const element = node('li'), title = node('strong'), description = node('small');
-        element.dataset.referenceId = reference.id; element.append(title, description);
+        const element = node('li'), title = node('strong'), description = node('small'), relation = node('span', '', 'aw-agent-reference-path');
+        element.dataset.referenceId = reference.id; element.append(relation, title, description);
         const actionButton = options.onOpenResource ? action(reference.task.supportedTaskOrigin === 'manual-compatibility' ? 'Open manual task' : 'Open work objective', () => {
           const latest = current.phase === 'ready' ? current.history.references.find(value => value.id === reference.id) : undefined;
           if (latest) return options.onOpenResource?.(latest.task.id);
         }) : null;
-        if (actionButton) element.append(actionButton); row = { element, title, description, action: actionButton }; rows.set(reference.id, row);
+        if (actionButton) element.append(actionButton); row = { element, title, description, relation, action: actionButton }; rows.set(reference.id, row);
       }
       row.title.textContent = options.resourceTitle?.(reference.task.id) ?? (reference.task.supportedTaskOrigin === 'manual-compatibility' ? 'Manual task reference' : 'Work objective reference');
       row.description.textContent = (reference.execution ? 'Execution linked; current status is not loaded. ' : 'Reference only; no execution started by this link. ') + 'Saved profile version ' + reference.agent.profileVersion + '.';
+      row.relation.textContent = 'Saved profile → ' + (reference.task.supportedTaskOrigin === 'manual-compatibility' ? 'Manual task' : 'Work objective') + (reference.execution ? ' → Execution reference' : '');
+      row.element.dataset.executionLinked = String(!!reference.execution);
       if (row.action) row.action.disabled = !active; references.append(row.element);
     }
     reflow();

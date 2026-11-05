@@ -2,6 +2,9 @@ import * as THREE from "three";
 import { WorkspaceGridField } from "./workspace-grid-field.ts";
 import type { WorkspaceGridFrame } from "./workspace-grid.ts";
 import { PresenceProjection } from "./presence-projection.ts";
+import { VELA_SHAPES, OPERATIONAL_VELA_SHAPES, velaCenterGLSL } from './vela-shape.ts';
+import type { VelaVisualState } from './vela-visual-state.ts';
+import type { MotionCoordinator } from './motion.ts';
 import {
   contourRing,
   contourSamples,
@@ -83,6 +86,7 @@ export interface EnvironmentFrame {
   interaction?: number;
   vela: VelaState;
   velaThinking?: number;
+  velaVisualState?: VelaVisualState;
   study: Study;
   sceneWeights?: SceneWeights;
   architectureConcept?: ArchitectureConcept;
@@ -142,6 +146,7 @@ interface FolioVisual {
 }
 
 const ribbonVertex = /* glsl */ `
+  ${velaCenterGLSL}
   uniform float uTime, uEnergy, uAmbient, uThinking;
   uniform vec4 uExpression;
   varying vec3 vNormal, vView, vTangent;
@@ -149,20 +154,16 @@ const ribbonVertex = /* glsl */ `
   vec3 surface(float t, float section) {
     // Ambient expression has its own gain; idle semantic energy never gates it.
     float ambient = sin(uTime * .56);
-    float r = .93 + .23 * cos(t);
-    float dr = -.23 * sin(t);
-    // One continuous asymmetrical double-loop. Its central crossing is separated in Z.
-    vec3 center = vec3(1.13 * sin(2. * t) * (.88 + .12 * cos(t)), 1.18 * cos(t) + .12 * sin(3. * t), .5 * sin(t));
-    center = mix(center, vec3(r * sin(2. * t), r * cos(2. * t), .52 * sin(t)), uThinking);
+    // Canonical state changes retarget harmonic coefficients, retaining the
+    // displayed geometry rather than swapping unrelated meshes.
+    vec3 center = velaCenter(t);
     center *= 1. + ambient * .03 * uAmbient;
     center.x *= 1. + uExpression.x * .065;
     center.y *= 1. + uExpression.y * .035;
     center *= 1. + uExpression.w * .025;
     // Differentiate the deformed centerline, rather than the undeformed seed.
     // Its transported frame therefore stays tangent during breathing and expression.
-    vec3 derivative = vec3(2.26 * cos(2. * t) * (.88 + .12 * cos(t)) - .1356 * sin(2. * t) * sin(t), -1.18 * sin(t) + .36 * cos(3. * t), .5 * cos(t));
-    derivative = mix(derivative, vec3(dr * sin(2. * t) + 2. * r * cos(2. * t),
-      dr * cos(2. * t) - 2. * r * sin(2. * t), .52 * cos(t)), uThinking);
+    vec3 derivative = velaDerivative(t);
     derivative *= 1. + ambient * .03 * uAmbient;
     derivative.x *= 1. + uExpression.x * .065;
     derivative.y *= 1. + uExpression.y * .035;
@@ -175,7 +176,7 @@ const ribbonVertex = /* glsl */ `
     float twist = t + .31 * sin(t * 2.) + .12 * sin(t * 3.) + sin(t * 2. + uTime * .62) * .1 * uAmbient;
     twist += uExpression.y * sin(t * 2.) * .045 + directed * .045;
     vec3 across = normal * cos(twist) + binormal * sin(twist);
-    float width = (.235 + .095 * cos(t * 2. - .6)) * (1. + sin(uTime * .64 + t * 2.) * .1 * uAmbient);
+    float width = (uShapeB.z + uShapeB.z * .4 * cos(t * 2. - .6)) * (1. + sin(uTime * .64 + t * 2.) * .1 * uAmbient);
     width *= 1. - uExpression.y * .045 + uExpression.x * .025 + uExpression.w * .04;
     center.z += sin(t * 3.) * .012 + sin(t * 3. + uTime * .62) * .065 * uAmbient;
     // A closed, thin elliptical skin supplies real edge thickness while keeping
@@ -376,6 +377,7 @@ const contactFragment = /* glsl */ `
 
 /** A procedural GPU stage. Scheduling and semantic truth remain in the caller. */
 export class Environment {
+  private readonly shapeKey = 'renderer:vela-shape';
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
   // The middle depth region has its own fixed lights. Foreground studio lights
@@ -521,7 +523,7 @@ export class Environment {
     this.spatialLayer?.contextRestored?.();
   };
 
-  constructor(private readonly canvas: HTMLCanvasElement) {
+  constructor(private readonly canvas: HTMLCanvasElement, private readonly motion?: MotionCoordinator) {
     try {
       this.renderer = new THREE.WebGLRenderer({
         canvas,
@@ -858,6 +860,8 @@ export class Environment {
           uAmbient: { value: 1 },
           uExpression: { value: this.expression },
           uThinking: { value: 0 },
+          uShapeA: { value: new THREE.Vector4(0, 1.13, 1.18, 0) },
+          uShapeB: { value: new THREE.Vector3(.12, .5, .235) },
           uSceneLight: { value: this.ribbonLightDirection },
           uTint: { value: new THREE.Color(0x7067dc) },
           uUnavailable: { value: 0 },
@@ -1792,12 +1796,19 @@ export class Environment {
         ? 0
         : THREE.MathUtils.clamp(frame.ambientStrength ?? 1, 0, 1.5);
     const thinking = THREE.MathUtils.clamp(frame.velaThinking ?? 0, 0, 1);
+    const shapeTarget = frame.velaVisualState ? OPERATIONAL_VELA_SHAPES[frame.velaVisualState] : VELA_SHAPES[frame.vela];
+    if (this.motion && !this.motion.bodies.has(this.shapeKey)) this.motion.add(this.shapeKey, { ...shapeTarget });
+    this.motion?.target(this.shapeKey, { ...shapeTarget }, 'Vela observed state geometry');
+    if (frame.reduced || frame.quiet) this.motion?.snap(this.shapeKey);
+    const shape = this.motion?.pose(this.shapeKey) ?? shapeTarget;
     for (let i = 0; i < this.ribbons.length; i++) {
       const ribbon = this.ribbons[i];
       ribbon.material.uniforms.uTime.value = presenceTime;
       ribbon.material.uniforms.uEnergy.value = energy;
       ribbon.material.uniforms.uAmbient.value = ambientGain;
       ribbon.material.uniforms.uThinking.value = thinking;
+      ribbon.material.uniforms.uShapeA.value.set(shape.x, shape.y, shape.w, shape.h);
+      ribbon.material.uniforms.uShapeB.value.set(shape.lift, shape.yaw, shape.opacity);
       ribbon.material.uniforms.uUnavailable.value =
         frame.vela === "unavailable" ? 1 : 0;
       ribbon.material.uniforms.uTint.value.copy(this.semanticTint);
@@ -1905,6 +1916,7 @@ export class Environment {
         ambient: ambientGain,
         expression: this.expression,
         thinking,
+        shape,
       },
     );
     const p = frame.presencePlacement;
@@ -2183,6 +2195,7 @@ export class Environment {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.motion?.bodies.delete(this.shapeKey);
     this.spatialLayer = null; // Application owns layer lifetime across renderer recovery.
     this.presenceProjection.dispose();
     this.canvas.removeEventListener("webglcontextlost", this.onContextLost);

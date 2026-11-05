@@ -15,3 +15,12 @@
 .aw-agent-work h4 { font-size:.85rem; margin-bottom:.35rem; }.aw-agent-work ol { list-style:none; padding:0; margin:0; }
 .aw-agent-work li { display:grid; gap:.3rem; padding:.7rem 0; border-top:1px solid #b9cbe325; }.aw-agent-work li strong { font-size:.85rem; }.aw-agent-work li small { font-size:.75rem; line-height:1.5; opacity:.75; }.aw-agent-work li button { justify-self:start; }
 .aw-agent-block [hidden] { display:none; }
+.aw-agent-constellation { border:1px solid #b9cbe32d; border-radius:1rem; padding:.75rem; background:radial-gradient(ellipse at center,#b9cbe310,transparent 75%); }
+.aw-agent-constellation h4 { font-size:.75rem; font-weight:500; color:#b9cbe3; }
+.aw-agent-capability-core { display:block; width:fit-content; margin:.6rem auto; padding:.45rem .8rem; border:1px solid #b9cbe363; border-radius:50%; font-size:.75rem; }
+.aw-agent-constellation ul { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:.35rem 1rem; margin:.5rem 0; padding:0; list-style:none; }
+.aw-agent-constellation li { border-top:1px solid #b9cbe338; padding:.35rem .2rem; font: .7rem/1.4 ui-monospace,monospace; overflow-wrap:anywhere; }
+.aw-agent-constellation li::before { content:'◇ '; color:#b9cbe3; }
+.aw-agent-constellation p { font-size:.7rem; line-height:1.5; color:#b9c7d9; }
+.aw-agent-reference-path { font-size:.65rem; color:#b9cbe3; letter-spacing:.025em; border-left:2px solid #b9cbe36b; padding-left:.5rem; }
+.aw-agent-work [data-execution-linked=true] { border-left:1px solid #b9cbe34a; padding-left:.6rem; }
