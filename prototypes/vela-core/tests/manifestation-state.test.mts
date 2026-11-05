@@ -16,6 +16,17 @@ function addPlan(s: VelaManifestationSource, r: VelaRequest, state: PlanState): 
   const plan: VelaPlan = { id: r.id + ':plan', requestId: r.id, version: 1, fingerprint: 'synthetic:fingerprint', summary: 'Synthetic plan body', steps: [{ id: 'synthetic:step', explanation: 'Synthetic fixture', action: { type: 'createProject', title: 'Synthetic project' } }], targets: [], scope: { principalId: 'synthetic', policyVersion: 'synthetic', resourceIds: [], projectIds: [], workspaceIds: [] }, contribution: null, state, createdAt: context.createdAt, expiresAt: context.createdAt };
   r.planId = plan.id; s.plans.push(plan); return plan;
 }
+
+test('native tool blockers surface the same canonical observed reply while keeping API identity and unknown outcome',()=>{
+ for(const phase of ['blocked','budget-exhausted','clarification','unknown'] as const){
+  const {r,message}=reply('synthetic:tool-'+phase,false,phase==='clarification'?'clarification':'inability');r.providerId='openai-api-vela';r.toolWorkflow={id:'synthetic:workflow',phase};if(phase==='unknown')r.state='unknown';
+  message.source='vela-native';message.classification='observed';delete message.providerId;delete message.providerContribution;
+  const state=source(r);state.conversation!.messages.push(message);assert.equal(projectVelaManifestation(state).currentMessageId,message.id);
+  const applied=addPlan(state,r,'applied');assert.equal(projectVelaManifestation(state).currentMessageId,message.id);assert.equal(projectVelaManifestation(state).currentPlanId,applied.id);
+  message.providerContribution={providerId:'openai-api-vela',classification:'reported'};assert.notEqual(projectVelaManifestation(state).currentMessageId,message.id);delete message.providerContribution;
+  r.toolWorkflow.phase='awaiting-review';assert.notEqual(projectVelaManifestation(state).currentMessageId,message.id);
+ }
+});
 test('empty/unhydrated state yields none and canonical history uses the actual resource and revision, never system:vela', () => {
   assert.equal(projectVelaManifestation(null).kind, 'none');
   const s = source(); assert.deepEqual(projectVelaManifestation(s).historyResource, { resourceId: 'synthetic:vela-resource', revision: 7 });

@@ -878,8 +878,21 @@ export class VelaService {
     if(result.state==='applied')this.atomic(()=>{const request=this.getRequest(requestId);request.state='planning';request.updatedAt=this.now();});return result;
   }
   checkpointToolRequest(requestId:string,workflowId:string,phase:import('../../application-contract/vela-tools.ts').VelaWorkflowPhase,reason?:string):void {
-    this.atomic(()=>{const r=this.getRequest(requestId);check(r.providerId==='openai-api-vela','vela_tool_request_unavailable');if(['cancelled','completed','responded'].includes(r.state))return;r.toolWorkflow={id:workflowId,phase,...(reason?{reason}:{})};
-      if(['awaiting-review','waiting-job','budget-exhausted','blocked','clarification','unknown'].includes(phase)){r.state=phase==='unknown'?'unknown':phase==='awaiting-review'?'awaiting-review':'native-ready';r.updatedAt=this.now();}});
+    this.atomic(()=>{const r=this.getRequest(requestId);check(r.providerId==='openai-api-vela'&&(!r.toolWorkflow||r.toolWorkflow.id===workflowId),'vela_tool_request_unavailable');
+      if(['cancelled','completed','responded'].includes(r.state)||r.state==='unknown'&&r.response&&r.toolWorkflow?.phase==='unknown')return;
+      r.toolWorkflow={id:workflowId,phase,...(reason?{reason}:{})};
+      if(['blocked','budget-exhausted','clarification','unknown'].includes(phase)){
+        const kind=phase==='clarification'?'clarification':'inability';
+        const content=phase==='unknown'?'I couldn’t confirm how the last step ended. Review the recorded results before trying again; I won’t repeat it automatically.':
+          phase==='budget-exhausted'?'This request reached its current limit. Review the recorded results before continuing.':
+          phase==='clarification'?'I need more detail to continue this request. Review the recorded results and clarify what you need next.':
+          'I couldn’t continue this request. Review the recorded results and connection details before trying again.';
+        const message=this.append(content,r.id,'vela-native',undefined,{kind});
+        r.response={kind,messageId:message.id,contentDigest:historyDigest(content)};
+        r.errorCode=typeof reason==='string'&&/^[a-z][a-z0-9_]{0,119}$/u.test(reason)?reason:'vela_tool_'+phase.replaceAll('-','_');
+        r.state=phase==='unknown'?'unknown':'responded';r.updatedAt=this.now();return;
+      }
+      if(phase==='awaiting-review'||phase==='waiting-job'){r.state=phase==='awaiting-review'?'awaiting-review':'native-ready';r.updatedAt=this.now();}});
   }
   async resumeToolRequest(requestId:string,work:()=>Promise<unknown>):Promise<VelaRequest> {
     const request=this.getRequest(requestId);check(request.providerId==='openai-api-vela'&&['awaiting-review','native-ready'].includes(request.state)&&request.toolWorkflow&&['awaiting-review','waiting-job','budget-exhausted','partial'].includes(request.toolWorkflow.phase),'vela_tool_resume_unavailable');

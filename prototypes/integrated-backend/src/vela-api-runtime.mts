@@ -262,7 +262,17 @@ export class VelaApiRuntime {
               fence(); check(configurationId === VELA_API_CONFIGURATION_ID && providerId === VELA_API_PROVIDER, 'credential_boundary_mismatch');
               return this.options.connection.resolveNativeCredential(input.version);
             },
-            resolveCatalog: async () => { fence(); return this.options.connection.resolveCatalog(input.version); },
+            resolveCatalog: async () => {
+              fence();
+              // A tool loop can outlive the catalog TTL while retaining its
+              // original request, model and usage grant. Reuse bounded catalog
+              // refresh/coalescing, then recheck every original authority fence.
+              await abortable(this.models(input.version), combined);
+              fence();
+              const current = await abortable(this.options.connection.resolveCatalog(input.version), combined);
+              fence();
+              return current;
+            },
             revalidate: async (review, boundaryDigest) => { exactReview(review); await this.options.connection.revalidate(input.version,boundaryDigest); fence(); },
           } });
         const result = await transport.turn(turn, combined);

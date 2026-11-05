@@ -32,9 +32,15 @@ function unique<T extends { id: string }>(items: readonly T[]): Map<string, T> {
   return values;
 }
 function responseMessage(request: VelaRequest, messages: Map<string, VelaMessage>): VelaMessage | null {
-  if (request.state !== 'responded' || !request.response) return null;
+  if (!request.response) return null;
+  const nativeToolTerminal=request.providerId==='openai-api-vela'&&request.toolWorkflow&&
+    ['blocked','budget-exhausted','clarification','unknown'].includes(request.toolWorkflow.phase)&&
+    request.response.kind===(request.toolWorkflow.phase==='clarification'?'clarification':'inability')&&
+    (request.state==='responded'||request.state==='unknown'&&request.toolWorkflow.phase==='unknown');
+  if (request.state !== 'responded' && !nativeToolTerminal) return null;
   const message = messages.get(request.response.messageId);
   if (!message || message.role !== 'assistant' || message.requestId !== request.id || message.responseKind !== request.response.kind || message.planId !== undefined) return null;
+  if(nativeToolTerminal)return message.source==='vela-native'&&message.classification==='observed'&&message.providerId===undefined&&message.providerContribution===undefined?message:null;
   if (request.local) return request.providerId === null && request.local.schemaVersion === 1 && request.local.providerId === null && request.local.classification === 'observed' && message.source === 'vela-native' && message.classification === 'observed' && message.providerId === undefined && message.providerContribution === undefined ? message : null;
   if (request.nativeResponse?.schemaVersion === 1 && request.nativeResponse.classification === 'observed')
     return request.providerId === null && message.source === 'vela-native' && message.classification === 'observed' &&
@@ -93,7 +99,9 @@ export function projectVelaManifestation(state: VelaManifestationSource | null, 
   // reported answer. Keep its plan/details without promoting that answer to verification.
   const reconciledToolPlan=plan&&request.providerId==='openai-api-vela'&&request.toolWorkflow&&['partial','verified'].includes(request.toolWorkflow.phase)&&
     (receiptedPlan(state,request,plan)||plan.state==='rejected'&&!!plan.reviewedAt);
-  const message = !plan && !hasReceipts || reconciledToolPlan ? responseMessage(request, messages) : null;
+  const terminalToolMessage=request.toolWorkflow&&['blocked','budget-exhausted','clarification','unknown'].includes(request.toolWorkflow.phase)&&
+    (!plan||!requiresVelaPlanAttention(plan.state))?responseMessage(request,messages):null;
+  const message = terminalToolMessage??(!plan && !hasReceipts || reconciledToolPlan ? responseMessage(request, messages) : null);
   const completedMessage = plan && confirmedVelaPlan(state, request, plan)
     ? conversation.messages.findLast(value => messages.get(value.id) === value && value.role === 'assistant' &&
       value.requestId === request.id && value.planId === plan.id && value.source === 'vela-native' &&
