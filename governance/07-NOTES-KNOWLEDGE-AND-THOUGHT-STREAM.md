@@ -1,11 +1,13 @@
 # 07 — Notes, Knowledge, and Thought Stream
 ## Governing Charter for Aerynth's Capture, Knowledge, and Idea Continuity
 
+> **Owner acceptance recorded 2026-11-05.** This charter and reconciled addenda now govern product design. Accepted design is not a claim of implemented or independently verified functionality.
+
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-007 |
-| Version | 1.0.0-draft |
-| Status | **Published governing charter — awaiting repository-owner acceptance** |
+| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Status | **Owner-accepted and ratified governing charter (binding requirements; implementation separate)** |
 | Prepared | 2026-11-01 |
 | Authority | Specialized subsystem charter, subordinate to [00 — Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
 | Primary domain | Notes; Quick Capture; personal Thought Stream; project knowledge; annotations; knowledge meaning, evidence, lifecycle, and assistant-aware retrieval |
@@ -624,7 +626,7 @@ A proposed amendment SHOULD include: affected requirement IDs, problem statement
 
 **AW-NKT-130 — Traceable charter changes.** Normative changes MUST retain stable requirement IDs where meaning remains stable; semantic changes MUST be documented and versioned with cross-charter impact review.
 
-**AW-NKT-131 — Owner ratification.** This document remains a **published draft pending owner acceptance** until that acceptance is explicitly recorded. Creating the file or linking it in the registry MUST NOT be represented as owner ratification.
+**AW-NKT-131 — Owner ratification.** The repository owner expressly ratified this charter on 2026-11-05 and the registry records the binding baseline. Future normative amendments require separate explicit owner approval; publication alone is not ratification.
 
 ### Traceability map
 
@@ -655,3 +657,17 @@ Aerynth is not meant to force human thought into a chat log, an agent assignment
 Vela should be able to recognize relevant ideas and connect them to current work while preserving uncertainty, provenance, user authorship, access boundaries, and control. Project Knowledge should become a reliable resource for conversations and agents without being mistaken for permanent model context. The Thought Stream should preserve the personal evolution of ideas without impersonating the separate observable activity of AI systems.
 
 **Capture without friction. Organize without loss. Retrieve with provenance. Act only with appropriate authority.**
+
+---
+
+## Ratified amendment CF-2026-11-05: knowledge as reliable intelligence input
+> **OWNER-RATIFIED 2026-11-05.** Charter 07 retains original user-note ownership and Thought Stream distinctions.
+
+**AW-NKT-132 — Source identity.** Notes, documents, thoughts and generated artifacts MUST retain canonical IDs, scope, authorship, version and data classification when accessed by Vela.
+**AW-NKT-133 — Summaries are derivatives.** Model-created notes and summaries MUST preserve links to their source and distinguish interpretation, uncertainty and original human-authored evidence.
+**AW-NKT-134 — Actionable knowledge.** Vela MAY transform authorized notes into plans, checklists, timelines and delegated tasks, but MUST preserve originals and require appropriate action consent.
+**AW-NKT-135 — Branch knowledge fidelity.** Shared knowledge MUST record origin branch, selected facts, conflicts and privacy boundary; link formation does not confer universal access.
+**AW-NKT-136 — Memory deletion.** Source revocation/deletion MUST invalidate eligible derived indexes and caches or report remaining limitations, and MUST NOT silently restore stale facts.
+**AW-NKT-137 — Thought truth.** The user's Thought Stream and agent-visible summaries MUST never be confused with private model chain-of-thought or artificially simulated reasoning.
+
+**Acceptance:** Turn a source note into a verified plan while keeping the source untouched, trace facts to source, then revoke source and prove stale retrieval is not trusted.

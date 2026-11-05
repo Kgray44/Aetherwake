@@ -1,11 +1,13 @@
 # Conversations and Connected Branches
 ## Governing Charter for Aerynth's Conversational System
 
+> **Owner acceptance recorded 2026-11-05.** This charter and reconciled addenda now govern product design. Accepted design is not a claim of implemented or independently verified functionality.
+
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-004 |
-| Version | 1.0.0-draft |
-| Status | **Proposed charter — awaiting repository-owner acceptance** |
+| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Status | **Owner-accepted and ratified governing charter (binding requirements; implementation separate)** |
 | Prepared | 2026-11-01 |
 | Scope | Chat identity, conversation experience, organization, connected branches, conversational provenance, history, and continuity |
 | Parent authority | [The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md), AW-GOV-000 |
@@ -595,6 +597,20 @@ For owner acceptance, review whether:
 
 ## Charter completion statement
 
-This charter specifies the intended conversation and connected-branch behavior of Aerynth. It is a **proposed governing document**, not an assertion that these features have been implemented, tested, or approved. Upon explicit owner acceptance, the governance registry and version should be updated to reflect its governing status.
+This charter specifies **owner-ratified (2026-11-05)** conversation and Connected Branch behavior, without asserting the features are already implemented or verified.
 
 **Aerynth must preserve the freedom of a simple conversation while making long-running, branching, multi-agent knowledge understandable, connected, efficient, and reliably under the user's control.**
+
+---
+
+## Ratified amendment CF-2026-11-05: conversation continuity across API and agent boundaries
+> **OWNER-RATIFIED 2026-11-05.** Original branch ancestry and sharing rules remain.
+
+**AW-CHAT-124 — Canonical conversation ancestry.** Aerynth MUST own stable conversation and branch IDs independent of Responses IDs, managed agent sessions, GPT-Live session IDs and signed-in Codex threads.
+**AW-CHAT-125 — Binding provenance.** Provider changes MUST retain source and destination scope, model/effort, context transfer, permissions and native continuation limitations without asserting universal provider memory.
+**AW-CHAT-126 — Delegation is not permission sharing.** A fork, handoff or connected branch MUST NOT implicitly grant cross-project access, shared writable worktree ownership or private-history transfer.
+**AW-CHAT-127 — Spoken message identity.** Voice and text projections of one answer MUST deduplicate by canonical ID and avoid unsolicited replay following restart, reconnect or audio-device changes.
+**AW-CHAT-128 — Scoped context.** Long-context models MUST NOT justify importing unrelated or stale conversations. CIE provides relevant, source-linked, authorized ancestry and facts.
+**AW-CHAT-129 — Observable tool results.** Conversations MUST distinguish planned, requested, awaiting approval, externally completed, independently verified, unknown and rejected outcomes with trace links.
+
+**Acceptance:** Fork a conversation, switch model, start an agent, speak an update, restart and verify identities, branch boundaries, task evidence and memory privacy.

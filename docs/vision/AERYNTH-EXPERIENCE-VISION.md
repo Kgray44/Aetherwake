@@ -1,6 +1,8 @@
 # Aerynth — The Experience Vision
 ## Liquid Intelligence: A Living Environment for Human Intention and Artificial Capability
 
+> **Owner-accepted design direction (2026-11-05).** This visual, interaction and product experience is approved as the Aerynth target and is no longer merely an exploratory proposal. Actual implementation, accessibility, graphics fidelity, provider capabilities and release acceptance require independent evidence. Any earlier 'proposed' or 'awaiting owner approval' labels in historical narrative are superseded by this explicit acceptance.
+
 > **The application should not feel like opening a tool. It should feel like entering an intelligent environment that recognizes where you are, understands what matters, and reshapes itself around what you are trying to accomplish.**
 >
 > **The user expresses intent. Aerynth handles the complexity.**
@@ -15,7 +17,7 @@
 | Experience language | **Liquid Intelligence** |
 | Document | **AERYNTH-EXPERIENCE-VISION.md** |
 | Classification | Creative product vision / experiential north star |
-| Status | Vision reference, not a governing charter or assertion of implemented functionality |
+| Status | **Owner-accepted design 2026-11-05; implementation verification pending** |
 | Edition | 1.0, November 1, 2026 |
 | Audience | Product owner, designers, engineers, motion specialists, agent architects, reviewers, and development agents |
 | Authority | Subordinate to the [Aetherwake Constitution](../../governance/00-AETHERWAKE-CONSTITUTION.md) and any applicable approved subsystem charters |

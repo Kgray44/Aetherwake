@@ -1,11 +1,13 @@
 # 10 — AI Execution Profiler
 ## Governing Charter for Aerynth's Execution Timing, Token Accounting, Efficiency, and Diagnostic Intelligence
 
+> **Owner acceptance (2026-11-05):** This charter and the reconciled capability-first requirements govern the Aerynth design. Acceptance does not certify that these product capabilities are implemented or independently tested.
+
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-010 |
-| Version | 1.0.0-draft |
-| Status | **Published governing charter — awaiting repository-owner acceptance** |
+| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Status | **Owner-accepted and ratified governing charter; implementation evidence separate** |
 | Prepared | 2026-11-01 |
 | Authority | Specialized subsystem charter, subordinate to [00 — Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
 | Primary domain | AI execution measurement, temporal profiling, token accounting, context utilization indicators, usage budgets, efficiency analysis, and profiler presentation |
@@ -531,7 +533,7 @@ Amendments MUST preserve stable identifiers where the original requirement remai
 
 **AW-AEP-127 — Traceable amendments.** Changes to token semantics, timing boundaries, billing interpretations, budget enforcement, or efficiency scores MUST include migration/compatibility analysis because these alter the meaning of historical evidence.
 
-**AW-AEP-128 — Owner acceptance.** Publication of this draft on the repository's default branch does not by itself mean owner ratification. Registry status MUST remain pending until explicitly accepted.
+**AW-AEP-128 — Owner acceptance.** The repository owner ratified this charter on 2026-11-05. Registry status records that explicit decision. Publication alone does not ratify future amendments, and test results do not grant owner release acceptance.
 
 ---
 
@@ -542,3 +544,20 @@ Amendments MUST preserve stable identifiers where the original requirement remai
 Aerynth MUST reveal real performance in useful detail; it MUST help users understand time, tokens, context, tools, models, retries, and verified outcomes; it MUST remain visually coherent with Liquid Intelligence; and it MUST support CIE optimization **without hiding uncertainty, weakening quality, or compromising user control**.
 
 Aerynth's profiler is not a decorative token counter. **It is an accountable instrument panel for an intelligent engineering environment.**
+
+---
+
+## Ratified amendment CF-2026-11-05: capability-first multi-provider measurements
+> **Owner-ratified 2026-11-05.** Profiler observes decisions; it does not lower authorized capability itself.
+
+**AW-AEP-129 — Success-first metrics.** Optimization MUST report verified task completion, accuracy, safety, robustness and user experience before cost; cost savings with reduced quality MUST be identified as regressions.
+**AW-AEP-130 — Cost family separation.** Metering MUST distinguish Responses/Decisions inference, managed agents/sandboxes, tools, image, audio duration, retrieval/indexing, local hardware and signed-in Codex where evidence exists.
+**AW-AEP-131 — Reported versus estimated.** Actual provider usage, modeled estimates and missing values MUST be separate; missing charged usage MUST NOT be rendered as zero or proven savings.
+**AW-AEP-132 — Task lineage.** Cost, model choice, tool counts and latency MUST attribute to canonical request/task/attempt/provider/session IDs, and not double count replayed events.
+**AW-AEP-133 — Subscription grants.** Promotional API grant, purchased credit and signed-in usage MUST remain distinct; an account plan does not itself prove API key org linkage or model entitlement.
+**AW-AEP-134 — Routing comparisons.** Claims of model/router efficiency SHOULD be compared on representative task outcomes, quality, p50/p95 latency, full tool cost, retries and error rate.
+**AW-AEP-135 — Work phase timing.** Queue time, inference, tool execution, verification, voice conversation and GPU frame rendering SHOULD be metered separately under overlapping work.
+**AW-AEP-136 — Explicit budget boundaries.** User-set ceilings MUST cause honest approval/queue/pause/stop decisions, not hidden substitution of an incapable route.
+**AW-AEP-137 — Private telemetry.** Shared profiler records MUST be redacted of keys, personal dialogs, private project content and identifying machine paths.
+
+**Acceptance:** Mixed voice+agent+GPU measured run, missing usage value, provider credit exhaustion and before/after capability-preserving routing comparison.

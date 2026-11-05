@@ -1,6 +1,8 @@
 # Aerynth Constellation
 ## A Living, Navigable Universe of Projects, Conversations, Knowledge, and Intelligent Work
 
+> **Owner-accepted design direction (2026-11-05).** This visual, interaction and product experience is approved as the Aerynth target and is no longer merely an exploratory proposal. Actual implementation, accessibility, graphics fidelity, provider capabilities and release acceptance require independent evidence. Any earlier 'proposed' or 'awaiting owner approval' labels in historical narrative are superseded by this explicit acceptance.
+
 > **A project is a place you can enter. A conversation is a path you can follow. A relationship is something you can see, inspect, and trust.**
 >
 > **Constellation is not a space-themed file browser. It is a spatial representation of Aerynth's real, permissioned information graph: a world that can be explored in three dimensions without losing the clarity of ordinary work.**
@@ -15,7 +17,7 @@
 | Subsystem working name | **Aerynth Constellation** |
 | Experience | **Spatial Knowledge and Relationship Navigation** |
 | Document classification | **Proposed product experience vision with exploratory architecture and acceptance scenarios** |
-| Status | **Proposed for owner review; not approved governance, an implementation claim, or a committed architecture decision** |
+| Status | **Owner-accepted design 2026-11-05; implementation verification pending** |
 | Edition | **0.1 — November 1, 2026** |
 | Scope | Project universes, resource constellations, graph relationships, 3D exploration, connected branches, agent observability, Vela navigation, work-surface continuity |
 | Primary architectural authorities | [Constitution](../../governance/00-AETHERWAKE-CONSTITUTION.md), [Projects/Workspaces/Resources](../../governance/03-PROJECTS-WORKSPACES-AND-RESOURCES.md), [Conversations/Connected Branches](../../governance/04-CONVERSATIONS-AND-CONNECTED-BRANCHES.md) |
@@ -878,3 +880,9 @@ The field is alive, but it never lies. The system is extraordinary, but it never
 **Suggested next deliverable:** A separate experimental architecture and prototype plan under the appropriate docs/plans paths, validating graph integrity, camera and layout behavior, accessible equivalents, renderer performance, and honest observability before production decisions.
 
 **Approval boundary:** The repository owner decides whether to adopt this direction. A successful Constellation demo does not automatically approve a desktop host, database schema, graphics engine, information-sharing policy, or final visual design.
+
+## Proposed capability-first alignment (2026-11-05)
+
+Constellation, workspace and the conversational destination are **one continuous navigable spatial universe**, not three unrelated screens. Navigation must preserve canonical project/block/task objects, selection and context. Vela's volumetric nebula Mind is a **real GPU-rendered 3D interactive presence**, with moving luminous internal structures, depth-aware parallax and semantic animation driven by actual observable tasks and agent relationships, not a flat shader or fake model thoughts.
+
+The aspiration only becomes a shippable feature after native GPU/voice/task acceptance on actual devices, accessibility modes and realistic load. Rendering quality may adapt, but backend intelligence and action capabilities cannot be silently removed to meet a GPU frame target. See the [capability architecture](../architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md) and [acceptance matrix](../specifications/VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md). This remains a proposed vision, not a claim that the 3D Mind is implemented.

@@ -1,5 +1,7 @@
 # Foundational ADR queue (all proposed, none accepted)
 
+> **Owner-approved engineering direction (2026-11-05).** The capability-first, unified-memory and continuous-spatial product outcomes are now accepted. Individual unresolved ADR decisions below remain research/implementation choices rather than automatically approved technologies or arbitrary performance limits; the accepted [ADR-001](ADR-001-CAPABILITY-FIRST-EXECUTION-FABRIC.md) controls where applicable.
+
 Status: research and decision plan, 2026-11-01. This file records **questions and gates**, not selected technologies. The [Constitution](../../governance/00-AETHERWAKE-CONSTITUTION.md) is established; [Charter 16](../../governance/16-ENGINEERING-AND-DELIVERY.md) is a published draft pending owner acceptance. Its AW-ENG-015–020, 093–098 and D-02/D-19 scenarios guide the proposed research. A final ADR needs explicit owner acceptance after a technical/experience review. ADRs cannot amend governance.
 
 ## Common experiment and decision packet

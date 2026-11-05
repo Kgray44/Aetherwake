@@ -1,11 +1,13 @@
 # 08 — Context Intelligence and Memory
 ## Governing Charter for the Context Intelligence Engine (CIE) in Aerynth
 
+> **Ratification record, 2026-11-05:** The repository owner approves Charter 08, the CF-2026-11-05 amendment, and the unified-memory extension below as binding product requirements. The referenced runtime design is accepted but requires independent implementation and quality evidence. 
+
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-008 |
-| Version | 1.0.0-draft |
-| Status | **Published proposed charter — awaiting repository-owner acceptance** |
+| Version | **1.1.0 — owner-ratified 2026-11-05** |
+| Status | **Owner-accepted and ratified governing charter; implementation verification remains separate** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem charter subordinate to [The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
 | Primary domain | Relevance-driven context construction; adaptive temporal memory; source-preserving compaction; retrieval; task handoff; cross-branch information delivery; context efficiency and integrity |
@@ -646,7 +648,7 @@ These decisions SHOULD be maintained as approved architecture decision records a
 
 ## 22. Change control, publication, and ratification
 
-This document is a **published proposed charter**. It defines target requirements; it does not claim that CIE has been implemented, all APIs exist, any tests have passed, or the repository owner has accepted every obligation.
+This is an **owner-ratified governing charter (2026-11-05)**. These are accepted product obligations, not claims that CIE is fully implemented, that any API is enabled, or that testing/release acceptance has passed.
 
 - The Constitution remains supreme; the repository owner decides ratification and amendments.
 - Stable AW-CIE identifiers MUST retain their meaning; substantive changes require impact analysis and documented amendment.
@@ -677,3 +679,77 @@ This document is a **published proposed charter**. It defines target requirement
 **CIE succeeds when the user can continue a conversation or project for years without carrying all of its history in every request, while retaining trustworthy access to what matters, accurate knowledge of what was actually supplied, and the ability to recover authorized source context when needed.**
 
 **Remember where to find the truth. Retrieve the truth when relevant. Preserve its provenance. Spend context only when it earns its place.**
+
+---
+
+## Ratified amendment CF-2026-11-05: persistent context across adaptive models and agents
+> **OWNER-RATIFIED 2026-11-05.** CIE remains the owner of contextual memory; provider sessions are subordinate.
+
+**AW-CIE-128 — Independent memory authority.** Durable user preferences, episodic facts, project knowledge, task checkpoints and provenance MUST survive model, Responses, Codex, voice and managed-agent session changes.
+**AW-CIE-129 — Typed provenance.** Every consequential remembered fact MUST distinguish direct source, observation, summary, inference, user preference, time validity and confidentiality scope.
+**AW-CIE-130 — Retrieval relevance.** CIE MUST prefer current relevant project/workspace requirements and conversation ancestry over indiscriminate loading; one-million-token context does not justify private-data spill.
+**AW-CIE-131 — Handoff capsules.** Agent/provider transfers MUST use bounded purpose-specific capsules containing authorized objective, factual evidence, verified prior actions, constraints, unresolved questions and source references.
+**AW-CIE-132 — Compaction safeguards.** Provider compaction or cache summaries MUST NOT erase canonical effect receipts, uncertain outcomes, outstanding approvals, relevant conflicts or data-deletion obligations.
+**AW-CIE-133 — Revocation propagation.** Deleted/revoked sources MUST be invalidated in local semantic indexes and eligible provider stores, or their deletion limitations truthfully disclosed; stale embeddings cannot be presented as current.
+**AW-CIE-134 — Temporal state hygiene.** CPU/RAM readings, tool health and selected windows MUST carry refresh/expiry limits and MUST NOT become permanent user memories without purpose.
+**AW-CIE-135 — Fidelity over token economy.** Retrieval/compaction SHOULD be optimized for cost and relevance only after demonstrating task quality, factual integrity, privacy and correct attribution.
+**AW-CIE-136 — Conflict presentation.** Disagreeing sources MUST retain provenance rather than being flattened into a single authoritative-seeming statement; consequential work SHOULD reverify.
+
+**Acceptance:** Cross-provider recall after restart, evidence-preserving compaction, deleted source invalidation and isolation between unrelated workspaces.
+
+---
+
+## Owner-ratified amendment UM-2026-11-05: unified memory lifecycle, durable task cognition and real recall
+
+> **Ratified requirement baseline (2026-11-05).** The companion [Unified Memory and Context Runtime](../docs/architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md) supplies implementation-neutral contracts and verification journeys. This amendment is normative. It clarifies, rather than overrides, AW-CIE-001–136.
+
+**AW-CIE-137 — Unified CIE, distributed source ownership.** CIE MUST serve as one retrieval, memory-policy and context-assembly coordinator, using versioned references to the canonical conversation, project, note, task, event and personal-context owners. A derived memory copy MUST NOT silently displace an authoritative record.
+
+**AW-CIE-138 — Automatic memory candidate formation.** When a user-authorized memory-extraction policy enables it, Vela MUST be able to identify potentially valuable preferences, decisions, constraints, discoveries, corrections, recurring patterns and open task dependencies from eligible activity. A candidate MUST retain source and confidence and MUST NOT be automatically represented as a verified or permanently approved fact.
+
+**AW-CIE-139 — Policy and sensitivity before formation.** Automatic learning MUST respect distinct policies for personal facts, project/task context, ordinary conversation, Vela conversation, sensitive categories, cross-provider disclosure, and background observation. Sensitive or consequential inferred personal facts MUST NOT be promoted to durable personal memory without appropriate user approval.
+
+**AW-CIE-140 — Distinct memory lifecycle stages.** Observation, eligibility, candidate creation, review, approval, retention, indexing, retrieval, attachment, provider disclosure, use, correction, supersession and deletion MUST be distinct states with auditable provenance where applicable. Completing an earlier stage MUST NOT imply a later one occurred.
+
+**AW-CIE-141 — Source and uncertainty semantics.** Memory entries MUST retain canonical source owner/ID, source version or snapshot, observed time, validity interval where relevant, evidence class, scope, transformation lineage, confidentiality and effective policy version. Repetition of a model-generated assertion MUST NOT upgrade it into independently verified truth.
+
+**AW-CIE-142 — Tiered operational versus enduring memory.** Transient measurements, current UI state, location, device diagnostics, provider health and other time-sensitive operational facts MUST have explicit expiry/freshness semantics, and MUST NOT be treated as enduring user preferences by default.
+
+**AW-CIE-143 — Mandatory task working memory.** Nontrivial durable tasks MUST have a provider-neutral checkpoint structure containing objective, constraints, acceptance criteria, plan/dependency revisions, pending approvals, known uncertain effects, verified outputs, blockers, source revisions and next safe actions. A conversation recap alone is insufficient.
+
+**AW-CIE-144 — Multi-agent checkpoint isolation.** Parallel agents MUST use scoped task-memory reads and versioned writes. Concurrent conflicting findings MUST be preserved and reconciled explicitly rather than overwritten last-writer-wins. Sharing task memory MUST NOT share permissions or unrelated private context.
+
+**AW-CIE-145 — Cross-provider context capsules.** Vela MUST preserve approved identity and meaningful task continuity across ordinary chats, Responses, Codex, voice and supported agent providers through purpose-specific scoped capsules. Backend session identifiers, hidden reasoning and provider retention MUST NOT become canonical memory authority.
+
+**AW-CIE-146 — Safe resume semantics.** On restart, reconnect or provider handoff, CIE MUST revalidate source freshness, current scope, permissions, project/repository versions, pending effects and relevant checkpoints. An uncertain non-idempotent effect MUST NOT be replayed simply because a previous session was interrupted.
+
+**AW-CIE-147 — Hybrid retrieval and authoritative expansion.** CIE MUST support exact ID/source retrieval and suitable full-text/relationship discovery, while permitting optional semantic indexing where measured helpful. Material claims SHOULD be verified against current authorized canonical sources before consequential actions. Embedding similarity alone MUST NOT confer authority or access.
+
+**AW-CIE-148 — Just-in-time memory with protected anchors.** The request composer MUST prioritize user-selected context, task goals, binding constraints, verified checkpoints, relevant current knowledge and explicit conversational ancestry. It MUST disclose significant omissions or stale coverage instead of silently dropping requirements to fit a token budget.
+
+**AW-CIE-149 — Inspectable memory use.** A Context Inspector MUST permit authorized users to inspect whether a fact is saved, indexed, discovered, included or actually disclosed to a provider; it SHOULD explain relevance and omissions, distinguish confidence/authority, and support navigation to permitted original sources.
+
+**AW-CIE-150 — Correction propagation and disputed claims.** Corrections, explicit invalidations, competing sources and supersession MUST update future eligible retrieval without rewriting original history. Unresolved contradictions MUST remain separately attributable until a supported resolution exists.
+
+**AW-CIE-151 — Revocation fan-out and limitations.** Removal or revocation of a canonical source MUST invalidate eligible local indexes, derived summaries, cached context and future attachment. Supported provider-side retention/deletion controls MUST be applied where authorized, with truthful disclosure of unrecoverable copies, backups, prior exports and unavailable remote deletion.
+
+**AW-CIE-152 — Reasonable memory resource use.** Memory extraction and indexing MUST have workload-aware admission, latency/resource budgets and suspendable background operation. Reduced GPU/CPU quality levels and disconnected semantic services MUST NOT erase canonical memory or block basic eligible source retrieval.
+
+**AW-CIE-153 — No private-reasoning fiction.** Vela MUST NOT claim memory of hidden chain-of-thought, unobserved cognitive steps or inaccessible provider history. Model summaries MUST be marked as transformations, not eyewitness records or verbatim source copies.
+
+**AW-CIE-154 — Provenance-bound prompt delivery.** Context manifests MUST be bound to request, policy version, principal, scope, destination provider, selected sources and content digest; authorization is rechecked immediately before disclosure. Model-produced text and imported documents remain untrusted data and MUST NOT impersonate higher-priority instructions.
+
+**AW-CIE-155 — Measured capability-first optimization.** Context and memory efficiency claims MUST compare equivalent held-out objectives using verified outcome quality, retrieval accuracy, privacy isolation, rework, latency and provider-reported cost where available. Shorter prompts and greener dashboards are not sufficient evidence.
+
+**AW-CIE-156 — Native integration instead of isolated islands.** The existing Personal Context & Identity Engine, Vela bounded history, mission journal, connected conversations and governance retrieval MUST integrate through existing source-owner interfaces. No parallel hidden memory database, second authorization policy, or alternate Vela identity may be introduced merely to simplify implementation.
+
+**AW-CIE-157 — User control without excessive ceremony.** Users MUST be able to review, edit, correct, reject, revoke and appropriately export/delete memory through coherent controls. Configurable automatic learning can reduce repeated manual instructions, but MUST remain transparent and never silently broaden collection or disclosure.
+
+### Mandatory memory acceptance (owner-approved requirements, not claimed test results)
+
+- **UM-01–UM-03:** approved memory survives restart; enabled extraction creates reviewable sourced candidates; opt-out prevents disallowed collection/disclosure.
+- **UM-04–UM-06:** correct recall across branches/providers with source links, project isolation, and CAS-safe concurrent agent findings.
+- **UM-07–UM-10:** interruption/recovery never replays unknown effects; compaction retains constraints; corrections and transient-fact expiry are respected.
+- **UM-11–UM-15:** semantic outage fallback, injection isolation, branch permission denial, deletion propagation and held-out recall/quality/performance comparison.
+
+**Cross-charter ownership:** 04 keeps branch identity and source history; 05 owns authoritative task state; 06 owns Vela behavior and initiative; 07 owns authored knowledge and approval; 09 owns observations and event records; 10 owns real usage accounting; 12 owns provider capabilities; 14 owns permission and data policy; 15 owns independent acceptance. See the [runtime architecture](../docs/architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md).

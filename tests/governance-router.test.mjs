@@ -16,13 +16,10 @@ test("registry validates with 17 known authority statuses",()=>{
  assert.deepEqual(check.errors,[]);
  assert.equal(registry.size,17);
 });
-test("constitution is binding and published charters remain advisory until owner acceptance",()=>{
+test("constitution and all owner-ratified charters route as binding",()=>{
  const r=routeGovernance(config,registry,"Implement contextual command selection",[],exists);
- assert.deepEqual(r.binding.map(x=>x.id),["00"]);
- assert.ok(r.advisory.some(x=>x.id==="03"));
- assert.ok(r.advisory.some(x=>x.id==="14"));
- assert.ok(r.advisory.some(x=>x.id==="15"));
- assert.ok(r.advisory.some(x=>x.id==="01"));
+ for(const id of ["00","01","03","14","15"]) assert.ok(r.binding.some(x=>x.id===id),id);
+ assert.deepEqual(r.advisory,[]);
  assert.ok(!r.unavailable.some(x=>x.id==="01"));
  assert.ok(!ids(r).includes("04"));
 });
@@ -62,28 +59,28 @@ test("missing published charter causes setup validation error",()=>{
  assert.ok(check.errors.some(e=>e.includes("03-PROJECTS")));
 });
 
-// Regression guards: publication does not imply ratification, and governance-file edits
+// Regression guards: hypothetical unaccepted drafts stay advisory, and governance-file edits
 // must never fall through to "constitution only" because the task text is generic.
-test("published charters stay advisory until explicitly accepted",()=>{
+test("every charter 01–16 is binding after explicit owner ratification",()=>{
  for(const id of ["01","02","03","04","05","06","07","08","09","10","11","12","13","14","15","16"]){
-  const r=routeGovernance(config,registry,"", [config.charters[id]],exists);
-  assert.ok(r.advisory.some(x=>x.id===id),id);
-  assert.ok(!r.binding.some(x=>x.id===id),id);
+  const r=routeGovernance(config,registry,"",[config.charters[id]],exists);
+  assert.ok(r.binding.some(x=>x.id===id),id);
+  assert.ok(!r.advisory.some(x=>x.id===id),id);
  }
 });
 test("direct edits to charter paths route the edited charter even without matching keywords",()=>{
  const r=routeGovernance(config,registry,"Correct a typo",["governance/02-LIQUID-INTELLIGENCE-AND-MOTION.md"],exists);
  assert.ok(ids(r).includes("02"));
- assert.deepEqual(r.binding.map(x=>x.id),["00"]);
+ assert.ok(r.binding.some(x=>x.id==="00"));
 });
-test("newly published agent charter 05 routes advisory, never silently ratified",()=>{
+test("ratified agent charter 05 routes binding",()=>{
  const r=routeGovernance(config,registry,"Agent orchestration workflow",["src/agents/dispatcher.ts"],exists);
- assert.ok(r.advisory.some(x=>x.id==="05"));
- assert.ok(!r.binding.some(x=>x.id==="05"));
+ assert.ok(r.binding.some(x=>x.id==="05"));
+ assert.ok(!r.advisory.some(x=>x.id==="05"));
 });
-test("direct charter 05 edits route to its published advisory source",()=>{
+test("direct charter 05 edits route to owner-ratified source",()=>{
  const r=routeGovernance(config,registry,"",["governance/05-AGENTS-TASKS-AND-WORKFLOWS.md"],exists);
- assert.ok(r.advisory.some(x=>x.id==="05"));
+ assert.ok(r.binding.some(x=>x.id==="05"));
 });
 test("incomplete routing coverage and malformed signals fail validation",()=>{
  const partial={...config,signals:{...config.signals}};

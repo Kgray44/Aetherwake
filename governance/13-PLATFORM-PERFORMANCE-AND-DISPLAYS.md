@@ -1,11 +1,13 @@
 # 13 — Platform, Performance, and Displays
 ## Desktop Platform, Cinematic Rendering, Adaptive Resource Governance, and Multi-Display Charter for Aerynth
 
+> **Owner acceptance (2026-11-05):** This charter and both relevant design amendments are approved as binding product standards; no implementation, security, benchmark or release certification is implied.
+
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-013 |
-| Version | 1.0.0-draft |
-| Status | **Published proposed governing charter — awaiting repository-owner acceptance** |
+| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Status | **Owner-accepted and ratified governing charter; implementation verification separate** |
 | Prepared | 2026-11-01 |
 | Authority | Specialized subsystem charter subordinate to [00 — Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
 | Primary domain | Desktop platform selection, graphics architecture viability, responsiveness, resource budgets, adaptive quality, display topology, detached windows, restoration, startup, performance evidence, and compatibility |
@@ -638,7 +640,7 @@ Work MAY progress in parallel where evidence permits, but a release MUST NOT cla
 
 ## 18. Document change control and acceptance
 
-This charter is published for repository-owner review, **not automatically ratified by publication**.
+This charter was **explicitly ratified by the repository owner on 2026-11-05**. Publication alone did not confer that authority; implementation and release evidence must still satisfy its separately defined requirements.
 
 Amendments MUST:
 1. Identify requirement IDs and scope of change.
@@ -678,3 +680,19 @@ These are engineering research references, **not normative substitutions** for p
 **Aerynth MUST feel extraordinary without behaving wastefully.** The ideal experience is cinematic when the user is engaged, quiet when the user is focused elsewhere, responsive under realistic load, resilient across monitor changes, accessible without special effects, and honest about every limitation. The platform must serve Vela, Codex, projects, chats, and workspaces rather than demand the user's resources or attention as a price of using them.
 
 **Performance is not a concession against Liquid Intelligence. It is part of Liquid Intelligence.**
+
+---
+
+## Ratified amendment CF-2026-11-05: genuine GPU Mind and capability-preserving performance
+> **Owner-ratified 2026-11-05.** Existing performance and multi-display governance remains.
+
+**AW-PLT-132 — GPU volumetric requirement.** The claimed 3D nebula Mind MUST use real GPU-supported 3D geometry/volume, camera depth/parallax and light flow, with demonstrable graphics execution. Static video, CSS or a flat shader cannot qualify.
+**AW-PLT-133 — Quality tier independence.** Lower graphics tiers, battery modes, disabled particles and reduced motion MUST NOT silently degrade actual agent reasoning, tool verification, persistent state or task access.
+**AW-PLT-134 — Overlapping load validation.** Testing MUST measure concurrent agents, GPT-Live voice, spatial navigation and 3D rendering with CPU/GPU/frame-time/RAM metrics, device thermals if available, p50/p95 latency and physical display behavior.
+**AW-PLT-135 — Native hardware truth.** Machine state values SHOULD originate from trustworthy OS-backed services where appropriate; unreachable hardware metrics MUST not be made up by a language model.
+**AW-PLT-136 — Meaningful fallback.** Absent GPUs, audio devices or network must preserve conversation, task inspection, privacy controls and accessible nonvisual alternatives wherever supported.
+**AW-PLT-137 — Renderer trust boundary.** Shaders, particles, visual plugins and renderer event subscribers MUST NOT possess privileged API keys, independently execute system tools or falsify canonical job state.
+**AW-PLT-138 — Spatial geometry persistence.** Mixed-DPI/display switches and constellation/workspace traversal MUST preserve canonical world-space and selection relationships rather than reset them without explanation.
+**AW-PLT-139 — Native proof.** A GPU Mind acceptance receipt MUST show device/backend, real camera parallax and volumetric activity driven by real task events, performance/resource metrics and human review.
+
+**Acceptance:** Vela talks while two agents run under a moving real GPU Mind on external OLED; reduce render tier and traverse all spatial destinations while monitoring responsiveness and unchanged task outcomes.

@@ -1,6 +1,8 @@
 # Provisional interface contracts v0.1
 
-Status: **proposed engineering contracts**, 2026-11-01. They are implementation-neutral design inputs, not approved interfaces, binding governance, deployed schemas or claims that a provider exposes identical objects. The [Constitution](../../governance/00-AETHERWAKE-CONSTITUTION.md) is established; the [registry](../../governance/README.md) records all specialist charters as published pending owner acceptance. The [reference architecture](../architecture/REFERENCE-ARCHITECTURE-v0.1.md) assigns owners. Owner acceptance is required before freezing cross-team v1 contracts, retention policy, authentication model, and irreversible data migrations.
+> **Owner-approved design intent (2026-11-05).** The interface semantics are accepted as architectural direction. 'Provisional' describes candidate wire-level signatures and provider support, not uncertainty about the user's desired product.
+
+Status: **owner-accepted design contracts**, 2026-11-05; exact API signatures remain provisional pending implementation/ADR verification. They are implementation-neutral design inputs, not approved interfaces, binding governance, deployed schemas or claims that a provider exposes identical objects. The [Constitution](../../governance/00-AETHERWAKE-CONSTITUTION.md) is established; the [registry](../../governance/README.md) records all specialist charters as published pending owner acceptance. The [reference architecture](../architecture/REFERENCE-ARCHITECTURE-v0.1.md) assigns owners. Owner acceptance is required before freezing cross-team v1 contracts, retention policy, authentication model, and irreversible data migrations.
 
 ## Envelope, types and invariants
 

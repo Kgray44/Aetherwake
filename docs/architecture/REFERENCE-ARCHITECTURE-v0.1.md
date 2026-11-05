@@ -1,10 +1,12 @@
-# Aerynth reference architecture v0.1 (proposed)
+# Aerynth reference architecture v0.1 (owner-approved design baseline)
 
-Status: provisional engineering design, 2026-11-01. No implementation or owner acceptance is implied.
+> **Owner-approved design architecture (2026-11-05).** The architectural intent and specified product guarantees are accepted; individual provisional interfaces, technology choices and implementation details still require the applicable ADR and integration verification. This approval is not a claim of delivered capabilities.
+
+Status: owner-approved architectural direction (2026-11-05). Specific unqualified technology/interface choices remain provisional. No implementation or release acceptance is implied.
 
 ## Authority and design rules
 
-The [Constitution](../../governance/00-AETHERWAKE-CONSTITUTION.md) is established. The [registry](../../governance/README.md) marks specialist charters 01–16 published but pending owner acceptance. References below to their AW IDs are traceability to proposed requirements, not claims of ratification. This design follows the M0–M8 sequence in [Charter 16, section 5](../../governance/16-ENGINEERING-AND-DELIVERY.md). Technology names remain candidates pending comparative evidence and an accepted ADR. Relevant anchors: AW-CON-002, AW-CON-004–006, AW-CON-016–021, AW-CON-026, AW-CON-031–035, AW-CON-042–046, AW-CON-057–065, AW-CON-069–073; proposed AW-ENG-015–026 and AW-CEX-006–008.
+The [Constitution](../../governance/00-AETHERWAKE-CONSTITUTION.md) and specialist charters 01–16 are owner-ratified, as recorded in the [registry](../../governance/README.md). Their requirements are binding design targets; referenced prototype interfaces and implementations remain evidence-gated. This design follows the M0–M8 sequence in [Charter 16, section 5](../../governance/16-ENGINEERING-AND-DELIVERY.md). Technology names remain candidates pending comparative evidence and an accepted ADR. Relevant anchors: AW-CON-002, AW-CON-004–006, AW-CON-016–021, AW-CON-026, AW-CON-031–035, AW-CON-042–046, AW-CON-057–065, AW-CON-069–073; proposed AW-ENG-015–026 and AW-CEX-006–008.
 
 The architecture has four rules: (1) canonical identity belongs to Aerynth even when a provider owns a session; (2) policy decisions are enforced before side effects at the application/service boundary, not inferred from the appearance of a UI card; (3) a renderer can project state but cannot author execution truth; (4) ordinary conversation has a direct path that never requires a task or project.
 

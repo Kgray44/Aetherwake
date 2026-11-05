@@ -23,6 +23,12 @@ The [official Aerynth mark](assets/brand/aerynth-mark-master.png) is committed a
 9. **Make consequential actions inspectable, permissioned, and reversible where possible.**
 10. **Design the UI and motion architecture first, with an early real Codex connection.**
 
+## Owner-accepted product baseline (2026-11-05)
+
+The repository owner explicitly accepted Constitution 00 and governing Charters 01–16, together with the capability-first API architecture, Spatial Intelligence/Stream V2 requirements and unified memory architecture. This is binding design direction rather than a collection of suggestions. Implementation and independent test qualification remain separate.
+
+Key accepted architecture: [Unified Memory Runtime](docs/architecture/VELA-UNIFIED-MEMORY-AND-CONTEXT-RUNTIME.md), [Vela Capability Execution Fabric](docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md), [Unified Spatial Runtime](docs/architecture/UNIFIED-SPATIAL-INTELLIGENCE-RUNTIME-AND-NAVIGATION.md), [Volumetric GPU Rendering Contract](docs/architecture/VELA-PRESENCE-GPU-RENDERING-CONTRACT.md), and [Stream V2 Experience](docs/specifications/INTELLIGENCE-STREAM-V2-EXPERIENCE-AND-ACCEPTANCE.md). The [governance registry](governance/README.md) is authoritative for status and ownership.
+
 ## Governance
 
 The governing foundation lives in [`governance/`](governance/README.md), beginning with **[the Aetherwake Master Constitution](governance/00-AETHERWAKE-CONSTITUTION.md)**. It establishes the project's binding principles, the Liquid Intelligence experience, user-control requirements, agent and context integrity, observability, and the reserved specialized charters. **Publication and acceptance are separate statuses.** Consult the [live governance registry](governance/README.md) for which numbered charters exist, which are pending, and which have been accepted. Missing charters are authored separately; do not create placeholders for them.

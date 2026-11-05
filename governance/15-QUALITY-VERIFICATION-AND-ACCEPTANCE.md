@@ -1,11 +1,13 @@
 # 15 — Quality, Verification, and Acceptance
 ## Governing Charter for Evidence-Based Engineering Quality, Cinematic Experience Validation, and Release Acceptance
 
+> **Owner acceptance (2026-11-05):** This charter and both relevant design amendments are approved as binding product standards; no implementation, security, benchmark or release certification is implied.
+
 | Field | Value |
 |---|---|
 | Document ID | **AW-GOV-015** |
-| Version | **1.0.0-draft** |
-| Status | **Published governing charter — awaiting repository-owner acceptance** |
+| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Status | **Owner-accepted and ratified governing charter; implementation verification separate** |
 | Prepared | 2026-11-01 |
 | Authority | Specialized subsystem charter, subordinate to [00 — Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
 | Normative requirement namespace | **AW-QVA-###** |
@@ -529,6 +531,85 @@ Changes to thresholds, visual acceptance standards, model/provider support expec
 
 ---
 
+## 21. Owner-directed 2026-11-04 addendum: extraordinary visual acceptance for Spatial Intelligence
+
+> **Status:** Proposed additional governing acceptance gates, published in the existing quality charter for owner review. This does not self-approve Charter 15, and it is not a claim that the visual experience has been implemented or verified.
+>
+> **Product-owner instruction:** No more placeholder-quality revisions promoted as finished. The 3D Intelligence Nebula and the spatially continuous Stream must be designed and visually qualified **before** expensive integration hardens the wrong implementation. Real moving-camera GPU evidence is required.
+
+### 21.1 Definition of acceptable evidence
+
+**AW-QVA-200 — Separately gated outcomes.** The new Intelligence Stream and Vela Presence MUST satisfy independently assessed visual, functional, semantic-truth, navigation, accessibility, runtime-integration and resource-performance gates. A build pass or graph test cannot compensate for a failed artistic requirement.
+
+**AW-QVA-201 — Rendering-before-integration gate.** Before declaring Vela Presence implementation ready, a working GPU-native three-dimensional nebula prototype MUST demonstrate material/reference fidelity, internal light transport, dynamic folds and at least one genuinely connected deforming tendril under a moving camera. Implementation of the backend alone does not meet this gate.
+
+**AW-QVA-202 — User image is the visual target.** The artistic owner MUST be able to compare a side-by-side moving-camera capture with the precise 2026-11-04 supplied nebula image. Specific judged dimensions MUST include asymmetrical silhouette, translucent veils, nested spatial layering, cyan/blue/violet/pearl spectral nuance, internal bright star clusters, negative space, organic evolution, and light flowing within the form.
+
+**AW-QVA-203 — True 3D proof, not marketing.** Reviewers MUST verify actual GPU-rendered spatial geometry/volume and changing occlusion from at least two independent camera rotations. A static screenshot, 2D projected animation, CSS/canvas overlay, pre-rendered loop or single fixed camera shot MUST NOT be accepted as 3D proof.
+
+**AW-QVA-204 — Tendril continuity proof.** Capture emergence, connected extension, internal current, response in an external domain, three concurrent independent tendrils, failure/wait behavior and graceful retraction. Stop-frame review MUST reveal true connection to the core, not merely detached luminous lines.
+
+**AW-QVA-205 — Real source honesty gate.** Run a real permitted provider/tool work sequence and reconcile every significant visual completion, branch join, approval, error and outcome to observed event IDs. An animated 'complete' glow without corresponding source evidence fails even if it looks beautiful.
+
+**AW-QVA-206 — Full Stream journey gate.** Demonstrate the project plan displayed before execution; several initially subdued steps; independently animated progress fronts; real parallel branches; join gating; source-backed current-action Theater; change of plan; pause/failure/unknown; direct project switching; and recorded replay.
+
+**AW-QVA-207 — Cross-mode continuity gate.** Capture Presence→Stream→Presence, Stream A→Stream B, Workspace↔Stream, and representative Constellation transitions. Perceived travel MUST preserve spatial anchors and identities; a plain crossfade or hard unrelated page transition fails the intended headline experience where continuity is feasible.
+
+**AW-QVA-208 — Multi-project independence gate.** During two or more genuinely simultaneous project executions, verify dock status and elapsed counters, picker behavior, distinct graph histories and persistent view state. Navigating the views MUST NOT stop, duplicate or change any underlying task or approval.
+
+**AW-QVA-209 — Fail-safe access gate.** Verify keyboard, screen-reader/accessible list projection, reduced motion, renderer fallback, GPU context loss, approval and error controls, and navigation cancellation. An unsupported GPU cannot be allowed to disable ordinary Vela functionality.
+
+**AW-QVA-210 — Measured performance gate.** Establish hardware/environment-specific frame-time distribution, GPU utilization, CPU budget, memory-residency and long-run resource-stability targets *before* final benchmarking, using Charter 13's process. Capture cold start, warm idle, 3-active-domain load, extended execution, two monitors/mixed DPI, minimized/background, GPU contention and renderer restart.
+
+**AW-QVA-211 — No acceptance by screenshots alone.** Static designs and attractive single frames are reference materials; they do not demonstrate connected flow, internal light, smooth speed adaptation, camera continuity or honest runtime coupling. Provide timecoded videos with reproducible source state and programmatic traces.
+
+**AW-QVA-212 — No autonomous art sign-off.** A Codex/agent declaration that a Vela image is 'cinematic', 'good', 'done' or 'as designed' is not owner acceptance. Artistically material differences from the reference remain open until explicit owner review; reviewers MUST retain negative evidence and rejected candidates.
+
+**AW-QVA-213 — Transparent non-acceptance.** If a trial shows a simple sphere, flat nebula, separate beams, ring of cards, fake causality or time-only progress, the result MUST be marked as a rejected/provisional experiment. It MUST NOT be promoted under phrases such as 'foundation complete' when the defining requirement is absent.
+
+### 21.2 Mandatory staged approvals and implementation order
+
+**Stage A — Contract and ownership:** reconcile Charters 01/02/06/09/13/14/15 and their latest status; inspect PR #19/#20 integration and record exact authority boundaries. Produce one compatible event/plan interface with stable IDs, source truth, permissions and state reducer.
+
+**Stage B — Visual feasibility:** construct at least two technically distinct GPU-native 3D candidate scenes; compare moving-camera results and performance on representative hardware. Include at least one connected tendril; select approach through written tradeoff review, not aesthetics claimed by AI alone.
+
+**Stage C — Artistic prototype:** match the reference image with real three-dimensional veils, depth and internal light. Prove multi-domain deformation, multiple tendrils and action-mote dynamics. Owner sees actual recordings and measured costs before a full-stack migration.
+
+**Stage D — Cinematic navigation prototype:** test Presence↔Stream and Stream A↔B using real scene anchors and actual transition continuity, including interruption and reduced motion. Do not harden a page-swap architecture and promise travel later.
+
+**Stage E — Telemetry vertical slice:** connect actual provider/tool events, plan before execution, parallel branches and activity motes; prove that Vela and Stream projections use one canonical source. Record gaps and uncertain states, do not fake them.
+
+**Stage F — Full functional adaptation:** activity Theater, project dock, multi-project selector, evidence inspection, replay and accessible counterpart; preserve existing code/trace history and avoid unrelated changes.
+
+**Stage G — Sustained verification:** representative real sessions and adverse cases; cross-platform and GPU benchmarks; owner visual acceptance; no prohibited shortcuts; documented rollback and failure recovery.
+
+**AW-QVA-214 — No phase laundering.** Passing one stage does not permit reporting later stages as complete. A screenshot proving aesthetic direction is not a completed GPU implementation; a successful synthetic fixture is not live provider verification; one nice video is not a sustained performance result.
+
+**AW-QVA-215 — Defect and deviation register.** Any failed requirement or compromise MUST record requirement ID, reproducible observation, severity, responsible owner, next verification step and explicit owner approval if an allowed exception is sought. No exception may silently defeat constitutional truth, safety or user control.
+
+**AW-QVA-216 — Review-ready PR evidence.** A development PR claiming spatial intelligence progress MUST link exact code commit, actual running binary/version, image-reference review method, moving-camera captures, real source event/log evidence, test commands/results, hardware metrics, known deficits, and a clear statement of what the owner has and has not accepted.
+
+### 21.3 Example failure and acceptance matrix
+
+| Scenario | Required observation | Automatic failure |
+|---|---|---|
+| Nebula 3D | Distinct spatial folds/occlusion under 2-axis orbit | Static texture plus particles |
+| Veil material | Irregular transparent flowing interior with bright knots | Opaque ball or single gradient cloud |
+| Tendril | Core material stretches into destination; light transits inside | Detached line appears |
+| Three domain concurrency | Independent current and deformations | One global animation preset |
+| Plan-first Stream | Pending DAG visible before work | After-the-fact event column |
+| Progress estimate | Front slows/accelerates continuously; success gated by evidence | Time threshold marks complete |
+| Branch join | Waits for actual prerequisites | Visual lines joined for appearance |
+| Activity Theater | Real document/file/command/test content, accessible | Fake demo preview presented as live |
+| Project Dock | Accurate state/time and workspace action | Every agent creates a duplicate project pill |
+| Spatial travel | Continuous perceptual route and preserved selection | Crossfade between unrelated layouts |
+| Failure/reconnect | Unknown/gaps represented, no phantom completion | Glowing successful terminal node |
+| Accessibility/performance | Equivalent controls and measured budgets | GPU loss breaks controls or tasks |
+
+The companion [engineering acceptance plan](../docs/engineering/SPATIAL-INTELLIGENCE-PROTOTYPE-AND-ACCEPTANCE-PLAN.md) translates these normative requirements into owner-review artifacts; it MUST NOT lower the quality standard to match a convenient early implementation.
+
+---
+
 ## Closing acceptance doctrine
 
 Aerynth's defining promise is not that it can display code, launch agents, produce particles, collect tokens, or render gorgeous dashboards. It is that these capabilities work **together** to reduce cognitive load and make intelligent work **fluid, trustworthy, comprehensible, fast, recoverable, and genuinely enjoyable**.
@@ -540,3 +621,38 @@ Aerynth's defining promise is not that it can display code, launch agents, produ
 **The feature demonstrably works.** That is verification.
 
 **The feature meets the intended cinematic, functional, safety, accessibility, performance, and product standard.** That is acceptance.
+
+---
+
+## Ratified amendment CF-2026-11-05: acceptance of complete capabilities
+
+> **Status: Owner-ratified 2026-11-05; implementation acceptance is a separate gate.** This supplements existing visual, functional, performance and security acceptance; none are waived.
+
+**AW-QVA-128 — Capability-first definition of done.** Every claimed capability MUST be tested for complete intended user outcome, truthful status, permissions, integration, error recovery and evidence, rather than judged only by output text, UI appearance or successful API invocation.
+
+**AW-QVA-129 — Separate evidence tiers.** Documentation, static code inspection, mock/unit test, integration test, native live test, visual/human acceptance and production verification MUST be labeled separately. A lower tier MUST NOT imply a higher acceptance state.
+
+**AW-QVA-130 — Real composite journeys.** The program MUST maintain end-to-end scenarios combining Vela intent, route selection, native/provider tools, task state, memory, permissions, rendering and actual postcondition readback.
+
+**AW-QVA-131 — Model/provider matrix.** Each planned provider route MUST be qualified under real connection, correct entitlements, supported model/effort, tool availability, user pins, region/data-class restriction, error/timeout, rate/credit exhaustion and live-versus-estimated usage.
+
+**AW-QVA-132 — Agent outcome and contention.** Parallel, delegated and persistent agent scenarios MUST verify real overlapping progress where claimed, correct resource isolation, trustworthy completion receipts, cancellation/restart reconciliation and absence of duplicate side effects.
+
+**AW-QVA-133 — Voice is an audible product.** Voice acceptance MUST include real microphone and speaker behavior, consent, interruptions, delegation, backlog/replay fences, accent/pacing consistency and a human-observed output path on supported hardware.
+
+**AW-QVA-134 — GPU Mind is an actual GPU scene.** A claimed 3D Vela Mind MUST have real GPU rendering evidence, volumetric/depth geometry, camera parallax, light/flow animation, response to real events, accessibility/performance behavior and no fake reasoning representation. A shader on a flat card is insufficient.
+
+**AW-QVA-135 — Spatial continuity.** The primary workspace/constellation/destination transitions MUST preserve canonical objects, ongoing work, focus/context, geometry and navigation without disconnected screen resets.
+
+**AW-QVA-136 — Negative and adversarial evidence.** Tests MUST include stale tools, prompt injection, provider loss, invalid credentials, model/tool mismatch, unsafe permissions, partial response/tool arguments, network drop, resource conflicts, quota exhaustion and corrupt/incomplete events.
+
+**AW-QVA-137 — Model quality over benchmark vanity.** Optimization claims MUST include representative task success, quality regressions, p50/p95 latency, cost provenance, actual CPU/GPU/RAM burden, human interaction friction and accessibility. Reduced token cost alone cannot justify reduced capability.
+
+**AW-QVA-138 — Provenance of cost and time.** Usage, credits, execution latency and workload metrics MUST identify provider-reported versus estimated versus missing evidence, with signed-in Codex and API charges treated separately.
+
+**AW-QVA-139 — Public repository redaction.** Verification artifacts MUST avoid sensitive conversations, credentials, private file paths, identifiable local telemetry and secret provider/account data.
+
+**AW-QVA-140 — Honest milestone reporting.** A published charter, API feature, test stub, or experimental demo MUST remain unqualified for release until the required task and product acceptance evidence exists.
+
+**Canonical acceptance catalog:** [CF-001 through CF-030](../docs/specifications/VELA-CAPABILITY-FIRST-ACCEPTANCE-MATRIX.md). Reviewers MUST reconcile each claimed release capability with this catalog and the existing charter gates rather than treating the catalog as a replacement for them.
+

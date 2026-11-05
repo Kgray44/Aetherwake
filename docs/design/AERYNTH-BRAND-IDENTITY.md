@@ -1,5 +1,7 @@
 # Aerynth Brand Identity: The Official Mark
 
+> **Owner-accepted design direction (2026-11-05).** This visual, interaction and product experience is approved as the Aerynth target and is no longer merely an exploratory proposal. Actual implementation, accessibility, graphics fidelity, provider capabilities and release acceptance require independent evidence. Any earlier 'proposed' or 'awaiting owner approval' labels in historical narrative are superseded by this explicit acceptance.
+
 | Attribute | Record |
 |---|---|
 | Product identity | **Aerynth**, the user-facing environment developed under Project Aetherwake |
