@@ -4,7 +4,7 @@
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-012 |
-| Version | 1.0.0-draft |
+| Version | 1.1.0-draft |
 | Status | **Published proposed subsystem charter — pending repository-owner acceptance** |
 | Prepared | 2026-11-01 |
 | Authority | Subsystem governance, subordinate to [00 — Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
@@ -571,6 +571,38 @@ The following are **not settled architectural choices**. They require research, 
 12. What exactly constitutes user-approved automatic versus approval-required remote execution?
 
 **AW-CEX-131 — Decision discipline.** Open choices MUST remain visibly open. Implementers MUST NOT silently promote examples, prototypes, research candidates, or the official client's unrelated features into accepted Aerynth guarantees.
+
+## 24A. Dual-mode execution boundary: ChatGPT-style conversation and Codex
+
+Aerynth's **Chat** and **Codex** modes are distinct application-level use cases, not synonymous with different price tags. A plain Chat conversation may use an authorized conversational provider, supported consumer-account integration, a metered model API, or a local model; a Codex conversation uses an authorized agent-execution provider with explicitly negotiated tools and restrictions. A ChatGPT consumer subscription or Free account MUST NOT be presumed to supply an unrestricted free third-party chat API.
+
+This section owns provider interfaces and entitlement checks; [Charter 04](04-CONVERSATIONS-AND-CONNECTED-BRANCHES.md) owns user-visible cross-mode branching, while [Charter 10](10-AI-EXECUTION-PROFILER.md) owns cost accounting and reporting.
+
+**AW-CEX-132 — Separate provider capabilities.** Aerynth MUST model conversational inference and agentic coding/execution as distinct, capability-negotiated routes. The conversation graph MUST NOT be coupled to a Codex thread, one model family, one account, or any assumption that all Chat routes expose filesystem tools.
+
+**AW-CEX-133 — Supported conversational access only.** An adapter that claims to run ChatGPT-backed conversations MUST use a documented, authorized interface and identify its effective account, transport, supported operations, entitlement limits, and billing class. Consumer ChatGPT history, consumer sign-in, and general API access MUST NOT be treated as interchangeable products. App-specific ChatGPT sign-in eligibility MUST be verified rather than assumed.
+
+**AW-CEX-134 — Codex entitlement discovery.** The Codex route MUST discover the authenticated user's effective plan eligibility, capabilities, rate/usage limitations, and execution environment to the extent exposed. Inclusion in a subscription, paid credits, and metered API invocation MUST be distinguished; no hardcoded assertion that Codex is always separately charged is permitted.
+
+**AW-CEX-135 — Typed routing decision.** Every inference or execution request MUST resolve a typed route specifying at least purpose (conversational vs agentic), adapter/transport, verified capability state, effective permissions, account identity reference, cost/quota classification, and explicit fallback choices. Routing MUST fail safely when requirements cannot be met rather than substituting an unauthorized provider.
+
+**AW-CEX-136 — Provider transition and lineage.** Switching from a conversational provider to Codex or back MUST create/reuse a provider-specific thread only as documented, preserving an Aerynth-owned branch identity and source-linked handoff records under Charter 04. Provider-native resume or fork MUST be claimed only where verified; otherwise a clearly labeled context-reconstruction handoff is required.
+
+**AW-CEX-137 — Bounded handoff envelope.** Cross-mode handoffs SHOULD expose a versioned envelope containing application chat/branch IDs, source message/checkpoint references, objective, relevant facts, decisions, open questions, approved context references, artifact references, provenance, expiration/freshness data, and intended tool permissions. The envelope MUST NOT be treated as a write authorization or silently load external private histories.
+
+**AW-CEX-138 — Charge and quota admission.** Before a request uses a metered API, external paid integration, or a materially different quota pool, the adapter MUST enforce the currently effective user spending/allowance policy. A provider failure, retry, or capability downgrade MUST NOT automatically switch to a more expensive or more privileged route.
+
+**AW-CEX-139 — Supported user choice.** Aerynth SHOULD expose explicit route choices such as **Chat**, **Codex**, and **Ask before escalating**, with supported model/transport choices beneath them. Automatic intent routing MAY recommend Codex for implementation, but MUST NOT silently turn a discussion into authorized filesystem mutation or unexpected additional billing.
+
+**AW-CEX-140 — Degraded interoperability.** When third-party or consumer ChatGPT conversation import/sync cannot be supported, the integration MUST provide supported fallbacks (for example: user-directed export import, copied excerpts, explicit handoff bundle, or source link) and must accurately state whether the result is a snapshot, one-way bridge, or synchronized resource.
+
+**AW-CEX-141 — Traceability across provider boundaries.** Each provider segment MUST emit available source-typed usage, activity, error, and capability events into Aerynth's canonical history, preserving original attribution and not fusing distinct quota pools or double counting shared branch context.
+
+### 24A.1 Provider qualification gates
+
+Before declaring dual-mode functionality implemented, verify using **real allowed interfaces**: (1) create and resume Chat-mode dialogue, (2) create a Codex branch with bounded source-linked context, (3) run an authorized read-only Codex task and return its verified result to a Chat branch, (4) test a Chat-originated post-fork decision flowing to Codex, (5) refuse an unauthorized billable fallback, (6) survive expired credentials/unavailable entitlement, (7) demonstrate that a manually imported consumer ChatGPT history is not falsely marked live-synced. All fixtures committed to this public repository MUST be synthetic.
+
+**Changing provider programs:** Provider pricing and entitlements change. Reverify official product documentation and authenticated capability snapshots at implementation time. Useful current reference pages: [Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan), [Using your ChatGPT plan in other apps and sites](https://help.openai.com/en/articles/20001542-using-your-chatgpt-plan-in-other-apps-and-sites), and [ChatGPT data export](https://help.openai.com/en/articles/7260999-exporting-your-chatgpt-history-and-data).
 
 ## 25. Cross-charter contracts and requirement routing
 

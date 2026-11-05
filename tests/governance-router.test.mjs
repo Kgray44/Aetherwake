@@ -102,3 +102,15 @@ test("plural everyday task descriptions route to the intended domains",()=>{
   assert.ok(ids(routeGovernance(config,registry,task,[],exists)).includes(id),task);
  }
 });
+
+test("cross-mode Chat and Codex engineering loads conversation, provider and billing governance",()=>{
+ const task="Implement a cross mode branch from Chat to Codex and back with api billing guard";
+ const r=routeGovernance(config,registry,task,["src/conversations/mode-switch.ts","src/backends/chat-adapter.ts"],exists);
+ for(const id of ["00","04","10","12"]) assert.ok(ids(r).includes(id),id);
+ assert.ok(!ids(r).includes("02"),"motion charter must not be loaded for backend routing");
+});
+test("mode branch handoff does not imply entitlement or authority upgrades",()=>{
+ const r=routeGovernance(config,registry,"Branch into Codex from chat mode using a chatgpt account and plan allowance",[],exists);
+ for(const id of ["00","04","10","12"]) assert.ok(ids(r).includes(id),id);
+ assert.ok(r.advisory.some(x=>x.id==="04"),"conversation governance remains advisory until accepted");
+});
