@@ -1,13 +1,13 @@
 # 11 — Timelines and Replay
 ## Governing Charter for Temporal Intelligence, Living Plans, and Historical Reconstruction in Aerynth
 
-> **Owner acceptance recorded 2026-11-05:** This charter and reconciled amendments are binding product/design requirements. This does not imply implementation, verified model capabilities, security certification or release acceptance.
+> **Owner acceptance (2026-11-05):** This charter and the reconciled capability-first requirements govern the Aerynth design. Acceptance does not certify that these product capabilities are implemented or independently tested.
 
 | Field | Value |
 |---|---|
 | Document ID | AW-GOV-011 |
 | Version | 1.1.0 — owner-ratified 2026-11-05 |
-| Status | **Owner-accepted and ratified governing charter (binding requirements; implementation separately verified)** |
+| Status | **Owner-accepted and ratified governing charter; implementation evidence separate** |
 | Prepared | 2026-11-01 |
 | Authority | Specialized subsystem charter subordinate to [00 — The Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
 | Primary domain | Historical timelines; planning and dependency timelines; conversation and project chronology; evidence-based replay; temporal interaction; forecast uncertainty |
@@ -617,7 +617,7 @@ This document is a **published proposed charter**, not an assertion that all cap
 ---
 
 ## Ratified amendment CF-2026-11-05: timelines as actual living instruments
-> **OWNER-RATIFIED 2026-11-05.** Existing timeline editing, historical-versus-forecast and interaction requirements remain.
+> **Owner-ratified 2026-11-05.** Existing timeline editing, historical-versus-forecast and interaction requirements remain.
 
 **AW-TIME-128 — Canonical event time.** Agent, tool, voice, approval and scheduled activity MUST attach to authoritative timestamped events, distinguishing observed time, source time, timezone and causality as appropriate.
 **AW-TIME-129 — Actual direct editing.** A timeline presented as functional MUST support accessible navigation, pan/zoom, user-authorized point addition/editing/removal, revisions and persistent state, not only a static graphic.
