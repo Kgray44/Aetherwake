@@ -10,7 +10,7 @@
 
 Aetherwake's objective is a coherent cinematic AI desktop in which Vela can answer, reason, coordinate, act, verify, remember and present real work. Vela Rebirth PR #19 and Living Instruments PR #20 were merged on 2026-11-05, but their integration and implementation acceptance remains bounded by evidence and is not fully qualified. A simple ChatGPT-versus-Codex router, narrow budget-optimized prompt loop or unverified block appearance cannot fulfill the intent. OpenAI currently documents multiple distinct execution surfaces, including Responses, Decisions, Agents SDK, managed Agents API, Multi-agent beta, tool search, programmatic tool calling and GPT-Live. These are *candidate mechanisms*, not evidence they're configured in the app or permitted for the account.
 
-## Decision proposed
+## Decision accepted by owner (2026-11-05)
 
 1. **Capability-first** is the target product principle: preserve every essential user outcome; choose capability, then optimize latency, cost and resource use without silent reduction. Application correctness, trust and user choice are hard constraints.
 2. Adopt one canonical **Vela Capability Runtime**, preserving enduring assistant identity, task graph, memory, policy and event state across provider switches.
