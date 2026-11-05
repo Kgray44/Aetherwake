@@ -1,11 +1,13 @@
 # 01 — Experience and Interaction
 ## Governing Charter for Aerynth's Human Interface, Contextual Command, Navigation, and Adaptive Workflows
 
+> **Owner acceptance recorded 2026-11-05.** The owner approves this charter and its reconciled amendments as governing design. Approval does not attest that code, agents, APIs, renderers or tests have achieved these requirements.
+
 | Field | Value |
 |---|---|
 | Document ID | **AW-GOV-001** |
-| Version | **1.0.0-draft** |
-| Status | **Published proposed governing charter — awaiting repository-owner acceptance** |
+| Version | 1.1.0 — owner-ratified 2026-11-05 |
+| Status | **Owner-accepted and ratified governing charter (binding design requirements; implementation separately verified)** |
 | Prepared | 2026-11-01 |
 | Authority | Specialized subsystem charter subordinate to [00 — Aetherwake Constitution](00-AETHERWAKE-CONSTITUTION.md) |
 | Normative requirement namespace | **AW-EXP-###** |
@@ -332,8 +334,83 @@ Changes to these requirements MUST be traceable by identifier, evaluated against
 
 ---
 
+## 17. Owner-directed 2026-11-04 addendum: unified intelligence navigation and active-project awareness
+
+> **Status:** Proposed governing extension for owner review. The current parent charter remains a owner-ratified governing charter. This is a behavioral contract, not a statement that any interface has been implemented.
+>
+> **Primary interaction invariant:** **One continuous spatial universe. No disconnected screen changes.** Workspace, Constellation, project Intelligence Stream and global Vela Presence are distinguishable perspectives, not unrelated applets.
+
+### 17.1 Four perspective entry points and their purposes
+
+**AW-EXP-200 — Distinct perspectives.** The application shell MUST preserve four coherent modes: Workspace (creation and action); Constellation (projects and their spatial relationships); project Intelligence Stream (execution-plan progress and activity); and Vela Presence (global symbolic orchestration). The primary Intelligence Stream MUST NOT be presented as a normal workspace block, nor Presence as a causal project graph.
+
+**AW-EXP-201 — Clear scope at entry.** Entering a project Intelligence Stream MUST reveal which real project and active runs the view represents. Entering Vela Presence MUST show that its scope is global and illustrative of observable activity, not an exposure of private model thought.
+
+**AW-EXP-202 — Context-preserving transitions.** Travel between major modes MUST retain identifiable source and destination anchors, project/resource identity, focus, and undo/back navigation where meaningful. Motion MUST make transitions intelligible; users MUST NOT be forced through unrelated screen closures and menu cycles.
+
+**AW-EXP-203 — Interruptible navigation.** Spatial navigation MUST permit cancel, back, keyboard navigation, reduced motion and direct access to urgent controls. Automatic camera tours MUST yield to explicit user pan/orbit/zoom or selection and must not block typing, approvals or error recovery.
+
+**AW-EXP-204 — Project switching.** The user MUST be able to switch directly from one project Stream to another while inside a Stream. That switch MUST preserve independent view state and MUST NOT cancel, retry or alter backend operations.
+
+### 17.2 Floating Active Projects Dock
+
+**AW-EXP-205 — App-level floating dock.** A discreet Active Projects Dock MUST appear in appropriate app shell perspectives, defaulting to the upper right subject to responsive collision avoidance. It is a first-class navigation instrument, visually distinct from workspace blocks, not a resizable workspace resource.
+
+**AW-EXP-206 — Per-project pill.** For each active eligible project, the dock MUST provide a compact medium-length translucent pill with a short recognizable name, explicit source-backed activity state and labeled elapsed time. One project with five concurrent runs remains one project pill unless the user expands details.
+
+**AW-EXP-207 — Time semantics.** Elapsed time MUST identify whether it is wall-clock time since activation, cumulative confirmed running time or time spent waiting. A live counter MUST NOT imply ongoing CPU or agent activity while the project is paused or blocked.
+
+**AW-EXP-208 — Primary and secondary actions.** Activating a project pill MUST open its workspace as the primary action. A separate, keyboard-accessible secondary action MUST open its Intelligence Stream. Hover-only critical navigation is prohibited.
+
+**AW-EXP-209 — Status lifecycle.** Running, waiting for approval, paused, unknown, failed and recently completed states SHOULD have clear distinguishable compact indications. The dock MUST NOT hide actionable pending-approval projects solely because execution is no longer running.
+
+**AW-EXP-210 — Scalable density.** When many projects are active, the dock MUST group or collapse rather than cover the scene, approvals, reading surfaces or Vela. Expand/collapse SHOULD preserve scroll, order and selection context; notification noise is not an acceptable substitute for awareness.
+
+**AW-EXP-211 — Coordinated dock motion.** Pill arrival/removal and reordering MUST use consistent Motion Coordinator transitions and stable anchors, without popping or jarring layout changes. Source state changes MUST remain correct even when animations are disabled.
+
+### 17.3 Stream selector and in-place navigation
+
+**AW-EXP-212 — Zero/one/many selection semantics.** Selecting Intelligence Stream from the main app shell MUST:
+- show honest empty/recent navigation if there is no eligible active project;
+- open the only eligible project's Stream directly;
+- show a compact, carefully animated project selector if multiple projects are eligible.
+A user MUST still be able to choose completed/history streams through a separate discoverable route.
+
+**AW-EXP-213 — Selector content.** Each selector item MUST identify the real project, activity/wait status and time-counter meaning, and SHOULD show a concise current operation summary if supported. Selection MUST be keyboard-operable, easy to cancel, and not require a huge full-screen list.
+
+**AW-EXP-214 — In-stream selector access.** While viewing a project's Intelligence Stream, users MUST have discoverable access to other project Streams without exiting to a workspace. Preserve the target project's camera/zoom, pinned Activity Theater and replay cursor independently.
+
+**AW-EXP-215 — Transition scene semantics.** Presence→Stream SHOULD travel through selected activity/tendril into the real execution graph; Stream→Presence SHOULD reverse meaningfully; Stream A→B SHOULD recede and re-emerge through a shared spatial environment; Workspace↔Stream SHOULD retain project anchors. Crossfades alone are insufficient as the defining transitions when spatial relationship is available.
+
+**AW-EXP-216 — Safe focus.** Transition focus changes MUST remain accessible, recover safely from failed navigation or GPU loss, restore keyboard/pointer target and avoid hidden stale overlays. Running tasks MUST remain under their independent execution owners.
+
+**AW-EXP-217 — Lower-distraction counterpart.** Reduced motion and no-GPU navigation MUST preserve all four mode entry points, current project selection, the dock, and actionable Stream/Presence details without requiring visual travel animation.
+
+### 17.4 Acceptance journey
+
+A reviewer MUST be able to start two live projects, observe two separate dock pills, open either workspace, open the project picker, travel to a chosen project Stream, select another project without leaving the intelligence layer, travel to Vela Presence and select a project-linked mote back into its Stream. At each step verify correct IDs, independent camera/focus restoration, unaltered background executions, readable status, reachable approvals, and cancel/reduced-motion behavior. Synthetic fixtures may demonstrate design, but live end-to-end acceptance must use actual source-backed activity.
+
+The detailed UX and state restoration contract is in [Active Projects and multi-stream experience](../docs/specifications/ACTIVE-PROJECTS-AND-MULTI-STREAM-UX.md). Owner-visible imagery and camera motion follow Charter 02. The application SHALL NOT declare compliance based only on a static mock selector or a single active-project test.
+
+---
+
 ## Publication and acceptance
 
 This document is a detailed **published proposal**, not an assertion that these features are implemented or ratified. The repository owner may approve it as a governing baseline. Implementation plans, graphics prototypes, and tests must demonstrate the requirements rather than simply paraphrase them.
 
 **The ultimate interaction standard:** the user communicates naturally, Aerynth interprets accurately, Vela helps appropriately, consequences are visible, and the interface never makes the user fight the machine to accomplish ordinary work.
+
+---
+
+## Ratified amendment CF-2026-11-05: capable interaction across every surface
+> **OWNER-RATIFIED 2026-11-05.** Existing continuous spatial experience and accessibility rules remain.
+
+**AW-EXP-110 — Single Vela across surfaces.** Typed messages, voice, selected text, workspace and constellation MUST preserve assistant identity, task state, active scope and resource selection; a visual transition MUST NOT restart work.
+**AW-EXP-111 — Action versus advice.** A request to act MUST distinguish action proposal, approval, execution, partial result, failure and verified outcome. Generic advice MUST NOT replace an available authorized action without an explicit reason.
+**AW-EXP-112 — Fast, not shallow.** Aerynth SHOULD acknowledge lengthy work and stream meaningful progress without truncating backend investigation, verification or user-required capabilities.
+**AW-EXP-113 — Functional instrument identity.** Agent, task, research, checklist, timeline, clock and resource blocks MUST match their actual types and expose real behaviors; a visual imitation cannot count as functional completion.
+**AW-EXP-114 — Legible control.** Voice stop, task cancel, approval, provider pin, tool result, source and cost state MUST be discoverable and distinguishable. Stopping speech does not implicitly stop an external task.
+**AW-EXP-115 — Honest failure.** Missing privileges, unavailable models, unsupported hardware and exhausted credits MUST have actionable, non-fictitious states, not a silent generic reply.
+**AW-EXP-116 — Continuous navigation.** Primary destinations MUST share spatial identity, resource objects, history and state through transitions, rather than resetting as unrelated pages.
+
+**Acceptance:** Continue a live agent task while moving from chat to workspace to constellation, interrupt speech, approve one scoped action, create and restore a functional block; verify no task duplication. See [capability architecture](../docs/architecture/VELA-CAPABILITY-RUNTIME-AND-EXECUTION-FABRIC.md).
