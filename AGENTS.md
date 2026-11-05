@@ -53,6 +53,14 @@ Use the governance registry for exact filenames and current availability. Typica
 
 Treat charter numbers as routing references, **not evidence that the charter exists**. If a charter is pending, rely on the Constitution and available accepted documents.
 
+## Mandatory Spatial Intelligence / Vela Presence routing (owner directive 2026-11-04)
+
+For tasks involving **Vela's visual mind/Presence, GPU nebula, living tendrils, global activity motes, project Intelligence Stream, Activity Theater, Active Projects Dock, multi-project switching, immersive navigation or spatial view transitions**, read [Spatial Intelligence systems index](docs/design/SPATIAL-INTELLIGENCE-SYSTEMS-INDEX.md) and the relevant amendments in Charters **01 §17, 02 §17, 06 §22, 09 §21, and 15 §21** in addition to the Constitution and other routed charters. The deterministic router currently handles the existing 00–16 charter IDs; these are new *sections of existing charter IDs* and should be retrieved as applicable. Do not replace governance routing with only this shortcut.
+
+**Write this on the implementation plan:** **One continuous spatial universe. No disconnected screen changes.** Vela's global mind is a **genuinely GPU-rendered three-dimensional Intelligence Nebula**, visually faithful to the owner's 2026-11-04 reference image, with luminous flowing light *inside* its veils and **connected, organically deforming central-to-domain tendrils**. A flat image, 2D cloud trick, simple sphere, detached glowing lines, radial card menu, or looping screensaver DOES NOT meet the target. The main project Intelligence Stream is a separate **full-screen plan-first execution landscape** with real branch-local fronts and actual operation evidence; PR #20's small Stream block may remain a preview, but it is not V2.
+
+**Delivery gate:** Prove artistic fidelity and true moving-camera GPU 3D before deep integration; collect owner-visible visual evidence and acceptance. Do not claim completion from mock screenshots, unit tests, aesthetic self-assessments, or synthetic activity. Keep trace truth, authorization, and working Codex/PR #19/#20 integrations intact. Use scoped branches/worktrees to avoid collisions.
+
 ## Repository responsibilities
 
 - `governance/`: constitution, subsystem charters, status registry. Do not alter without a specifically scoped governance request.
