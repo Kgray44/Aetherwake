@@ -350,7 +350,7 @@ export function mountEventExperience(
   }
   section.append(modes, tools, status);
   const graph = mountStreamGraph(section, {
-    motion: options.motion, viewId: options.viewId, active,
+    motion: options.motion, viewId: options.viewId, active, presentation: options.presentation,
     title: recordedEventTitle, metadata: eventMetadata,
     inspectOlder: () => changeMode("forensic"),
     open(event) {
@@ -359,7 +359,7 @@ export function mountEventExperience(
       else if (event.resourceId) port.openResource?.(event.resourceId);
     },
   });
-  const missionFlow = mountMissionFlow(section, { motion: options.motion, viewId: options.viewId, active, openMission: port.openMission });
+  const missionFlow = mountMissionFlow(section, { motion: options.motion, viewId: options.viewId, active, presentation: options.presentation, openMission: port.openMission });
   graph.setMode(streamMode);
   list.hidden = true;
   section.append(list, about);
@@ -557,6 +557,7 @@ export function mountEventExperience(
     frame() { graph.frame(); missionFlow.frame(); },
     setPresentation(value: "workspace" | "focused") {
       section.dataset.presentation = value;
+      graph.setPresentation(value); missionFlow.setPresentation(value);
     },
     setActive(value: boolean) {
       if (disposed || active === value) return;

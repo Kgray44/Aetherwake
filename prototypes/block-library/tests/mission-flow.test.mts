@@ -1,7 +1,8 @@
+import { flowGeometryProfile, downwardFlowPath } from "../flow-geometry.ts";
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { layoutMissionFlow, missionFlowInScope, missionTaskMetadata } from '../mission-flow.ts';
+import { layoutMissionFlow, missionFlowInScope, missionTaskMetadata, mountMissionFlow } from '../mission-flow.ts';
 import { mountEventExperience, type EventWindow } from '../event-view.ts';
 import type { MissionProjection, MissionTask } from '../../integrated-backend/src/mission-contracts.mts';
 import { blockDocument } from './component-dom.mts';
@@ -96,4 +97,43 @@ test('mission Flow gesture aborts on canonical source revocation and keeps preci
   assert.match(scene.style.transform,/translate\(100px, 60px\)/);
   state={...state,mission:null};view.update();assert.match(scene.style.transform,/translate\(20px, 20px\)/);assert.equal(viewport.dataset.dragging,undefined);
   viewport.fire('pointerup',{...pointer,clientX:600});assert.match(scene.style.transform,/translate\(20px, 20px\)/);
+});
+
+
+test('compact/Glimpse task bounds and declared edge anchors use one geometry profile',()=>{
+ const projection=mission(),profile=flowGeometryProfile('mission','workspace','flow'),layout=layoutMissionFlow(projection,80,profile);
+ assert.deepEqual([profile.width,profile.height],[110,32]);
+ assert.equal(Math.max(...layout.nodes.map(n=>n.x+profile.width))+profile.inset*2,252);
+ assert.equal(Math.max(...layout.nodes.map(n=>n.y+profile.height))+profile.inset*2,98);
+ const from=layout.nodes.find(n=>n.task.id==='cpu')!,to=layout.nodes.find(n=>n.task.id==='join')!;
+ assert.match(downwardFlowPath(from,to,profile.width,profile.height),/^M 55 32 C/);
+ assert.ok(to.y+profile.height+profile.inset*2<=100, "Terminal node and incoming path fit the compact viewport without scene scaling");
+ assert.deepEqual(flowGeometryProfile('mission','focused','glimpse'),profile);
+ assert.deepEqual([flowGeometryProfile('mission','focused','flow').width,flowGeometryProfile('mission','focused','flow').height],[190,70]);
+});
+test('presentation reflow retains selected identity and camera, aligns host poses, and keeps external options in Forensic',t=>{
+ const dom=blockDocument(),restore=dom.install(),optionsHost=dom.doc.createElement('div'),context=dom.doc.createElement('button');dom.root.append(optionsHost);
+ const poses=new Map<string,import('../../application-contract/motion.ts').ExperiencePose>();
+ const motion={reduced:true,add(key:string,p:import('../../application-contract/motion.ts').ExperiencePose){poses.set(key,p);},target(key:string,p:import('../../application-contract/motion.ts').ExperiencePose){poses.set(key,p);},pose(key:string){return poses.get(key)!;},remove(key:string){poses.delete(key);},wake(){}};
+ const view=mountMissionFlow(dom.root,{motion,viewId:'profiles',optionsHost,contextTools:[context],presentation:'focused'});t.after(()=>{view.dispose();restore();});view.update(mission());view.frame();
+ const host=dom.root.querySelector('.aw-mission-flow'),nodes=dom.root.querySelectorAll('.aw-mission-task'),join=nodes.find((n:any)=>n.dataset.missionTaskId==='join');join.onclick();
+ const scene=host.querySelector('.aw-stream-scene'),viewport=host.querySelector('.aw-stream-viewport');viewport.setPointerCapture=()=>{};viewport.releasePointerCapture=()=>{};
+ viewport.fire('pointerdown',{pointerId:2,button:0,clientX:100,clientY:100});viewport.fire('pointerup',{pointerId:2,clientX:133,clientY:125});
+ const camera=scene.style.transform;view.setPresentation('workspace');view.frame();
+ assert.equal(scene.style.transform,camera);assert.equal(join.style.width,'110px');assert.equal(join.style.height,'32px');assert.equal(join.getAttribute('aria-pressed'),'true');
+ assert.match(host.querySelector('.aw-stream-inspector').textContent,/Task IDjoin/);assert.equal(host.querySelectorAll('.aw-mission-task').find((n:any)=>n.dataset.missionTaskId==='join'),join);
+ assert.ok([...poses.values()].every(p=>p.w===110&&p.h===32));view.reflow();view.update(mission(),'glimpse');view.setPresentation('focused');view.frame();assert.equal(join.style.width,'110px');
+ view.update(mission(),'flow');view.frame();assert.equal(join.style.width,'190px');assert.equal(join.style.height,'70px');
+ view.update(mission(),'forensic');assert.equal(host.hidden,true);assert.ok(optionsHost.querySelector('.aw-flow-options'));assert.equal(optionsHost.querySelector('.aw-flow-options').contains(context),true);
+ dom.root.append(context);view.dispose();assert.equal(optionsHost.children.length,0);assert.equal(dom.root.contains(context),true);assert.equal(poses.size,0);
+});
+
+
+test('compact roots and join fit a measured narrow viewport while preserving task labels and identities',t=>{
+ for(const width of [220,230]){const profile=flowGeometryProfile('mission','workspace','flow',width),layout=layoutMissionFlow(mission(),80,profile);assert.ok(Math.max(...layout.nodes.map(n=>n.x+profile.width))+profile.inset*2<=width);assert.equal(profile.height,32);assert.equal(profile.gapX,16);}
+ const dom=blockDocument(),restore=dom.install();const view=mountMissionFlow(dom.root,{presentation:'workspace'});t.after(()=>{view.dispose();restore();});view.update(mission());
+ const viewport=dom.root.querySelector('.aw-stream-viewport');Object.defineProperty(viewport,'clientWidth',{value:230,configurable:true});view.reflow();
+ const node=dom.root.querySelector('.aw-mission-task'),label=node.children[1].textContent;node.onclick();assert.equal(node.style.width,'99px');assert.equal(node.style.height,'32px');
+ Object.defineProperty(viewport,'clientWidth',{value:220,configurable:true});view.reflow();assert.equal(dom.root.querySelector('.aw-mission-task'),node);assert.equal(node.style.width,'94px');assert.equal(node.children[1].textContent,label);assert.equal(node.getAttribute('aria-pressed'),'true');assert.match(dom.root.querySelector('.aw-stream-inspector').textContent,/Task IDcpu/);
+ assert.equal(flowGeometryProfile('mission','workspace','flow',0).width,110);
 });

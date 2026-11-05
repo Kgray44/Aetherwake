@@ -1,10 +1,20 @@
+export type FlowGeometryProfile = { width: number; height: number; gapX: number; gapY: number; compact: boolean; inset: number };
+export function flowGeometryProfile(kind: "mission" | "event", presentation: "workspace" | "focused", mode: string, availableWidth?: number): FlowGeometryProfile {
+  if (presentation === "workspace" || mode === "glimpse") {
+    const width = Number.isFinite(availableWidth) && availableWidth! > 0 ? Math.max(72, Math.min(110, Math.floor((availableWidth! - 32) / 2))) : 110;
+    return { width, height: 32, gapX: 16, gapY: 18, compact: true, inset: 8 };
+  }
+  return { width: kind === "mission" ? 190 : 176, height: kind === "mission" ? 70 : 60, gapX: 36, gapY: 40, compact: false, inset: 20 };
+}
+export const shortFlowLabel = (text: string) => text.length > 19 ? text.slice(0, 18).trimEnd() + "…" : text;
+
 import type { StreamEdge } from './stream-layout.ts';
 
 /** Presentation only. Connected components retain declared topology; unrelated
  * nodes are packed beside one another without adding a single edge. */
-export function compactFlowGeometry(ids: readonly string[], edges: readonly StreamEdge[], width = 190, height = 70) {
+export function compactFlowGeometry(ids: readonly string[], edges: readonly StreamEdge[], width = 190, height = 70, gapX = 36, gapY = 40) {
   const unique = [...new Set(ids)], known = new Set(unique), remaining = new Set(unique), result = new Map<string, { x: number; y: number; depth: number }>();
-  const stepX = width + 36, stepY = height + 40, maxColumns = 4, maxWidth = stepX * maxColumns;
+  const stepX = width + gapX, stepY = height + gapY, maxColumns = 4, maxWidth = stepX * maxColumns;
   let originX = 0, originY = 0, bandHeight = 0;
   for (const seed of unique) {
     if (!remaining.has(seed)) continue;
@@ -28,7 +38,7 @@ export function compactFlowGeometry(ids: readonly string[], edges: readonly Stre
     const levels = new Map<number, string[]>();
     for (const id of ordered) { const depth = depths.get(id) ?? 0; levels.set(depth, [...levels.get(depth) ?? [], id]); }
     const columns = Math.min(maxColumns, Math.max(...[...levels.values()].map(level => level.length))), boxWidth = columns * stepX;
-    if (originX + boxWidth > maxWidth) { originX = 0; originY += bandHeight + 36; bandHeight = 0; }
+    if (originX + boxWidth > maxWidth) { originX = 0; originY += bandHeight + gapY; bandHeight = 0; }
     let levelY = 0;
     for (const [depth, level] of [...levels].sort(([a], [b]) => a - b)) {
       level.forEach((id, index) => {
@@ -43,7 +53,7 @@ export function compactFlowGeometry(ids: readonly string[], edges: readonly Stre
   return result;
 }
 
-export function downwardFlowPath(from: { x: number; y: number }, to: { x: number; y: number }, width: number, height: number) {
-  const ax = from.x + width / 2, ay = from.y + height, bx = to.x + width / 2, by = to.y, mid = (ay + by) / 2;
+export function downwardFlowPath(from: { x: number; y: number; w?: number; h?: number }, to: { x: number; y: number; w?: number; h?: number }, width: number, height: number) {
+  const ax = from.x + (from.w ?? width) / 2, ay = from.y + (from.h ?? height), bx = to.x + (to.w ?? width) / 2, by = to.y, mid = (ay + by) / 2;
   return `M ${ax} ${ay} C ${ax} ${mid}, ${bx} ${mid}, ${bx} ${by} M ${bx - 4} ${by - 6} L ${bx} ${by} L ${bx + 4} ${by - 6}`;
 }

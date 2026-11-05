@@ -2,7 +2,7 @@ import { mountFlowGestures, flowOptions } from "./flow-gesture.ts";
 import type { MissionProjection, MissionTask } from "../integrated-backend/src/mission-contracts.mts";
 import type { ExperienceMotionPort } from "../application-contract/motion.ts";
 import { streamPath, type StreamEdge } from "./stream-layout.ts";
-import { compactFlowGeometry, downwardFlowPath } from './flow-geometry.ts';
+import { compactFlowGeometry, downwardFlowPath, flowGeometryProfile, shortFlowLabel, type FlowGeometryProfile } from './flow-geometry.ts';
 
 export function missionFlowInScope(mission: MissionProjection | null | undefined, scope: {
   workspaceId?: string | null; projectId: string | null; resources: readonly { id: string }[];
@@ -11,7 +11,7 @@ export function missionFlowInScope(mission: MissionProjection | null | undefined
     mission.scope.workspaceId === scope.workspaceId && mission.scope.projectId === scope.projectId &&
     (!mission.originConversationId || scope.resources.some(r => r.id === mission.originConversationId));
 }
-export function layoutMissionFlow(mission: MissionProjection, limit = 80) {
+export function layoutMissionFlow(mission: MissionProjection, limit = 80, profile?: FlowGeometryProfile) {
   const cap = Number.isFinite(limit) ? Math.max(1, Math.min(80, Math.floor(limit))) : 80;
   const tasks = mission.tasks.slice(0, cap), ids = new Set(tasks.map(t => t.id));
   const edges: StreamEdge[] = [], depths = new Map<string, number>();
@@ -33,7 +33,7 @@ export function layoutMissionFlow(mission: MissionProjection, limit = 80) {
     }
     if (!changed) break;
   }
-  const positions = compactFlowGeometry(tasks.map(task => task.id), edges);
+  const positions = compactFlowGeometry(tasks.map(task => task.id), edges, profile?.width, profile?.height, profile?.gapX, profile?.gapY);
   const nodes = tasks.map(task => {
     return { task, ...positions.get(task.id)!, join: task.dependencies.length > 1 };
   });
@@ -70,7 +70,7 @@ export function missionTaskMetadata(mission: MissionProjection, task: MissionTas
 const make = (tag: string, text = "") => { const element = document.createElement(tag); element.textContent = text; return element; };
 let serial = 0;
 export function mountMissionFlow(root: HTMLElement, options: {
-  motion?: ExperienceMotionPort; viewId?: string; active?: boolean; openMission?(id: string): void;
+  motion?: ExperienceMotionPort; viewId?: string; active?: boolean; presentation?: "workspace" | "focused"; optionsHost?: HTMLElement; contextTools?: readonly HTMLElement[]; openMission?(id: string): void;
 }) {
   const prefix = `mission-flow:${options.viewId ?? ++serial}:`;
   const host = make("section"), title = make("h3"), coverage = make("p"), tools = make("div"),
@@ -80,7 +80,9 @@ export function mountMissionFlow(root: HTMLElement, options: {
   coverage.className = "aw-stream-coverage"; inspector.className = "aw-stream-inspector"; inspector.hidden = true;
   inspector.setAttribute("aria-label", "Selected canonical mission task"); viewport.tabIndex = 0;
   viewport.setAttribute("aria-label", "Current mission tasks and dependencies. Tab selects tasks. Arrow keys pan; plus and minus zoom; Home resets.");
-  let active = options.active ?? true, current: MissionProjection | null = null, selected = "", mode = "flow", zoom = 1, px = 20, py = 20;
+  let presentation = options.presentation ?? "focused";
+  let profile = flowGeometryProfile("mission", presentation, "flow");
+  let active = options.active ?? true, current: MissionProjection | null = null, selected = "", mode = "flow", zoom = 1, px = profile.inset, py = profile.inset;
   let layout: ReturnType<typeof layoutMissionFlow> | null = null;
   const keys = new Set<string>(), elements = new Map<string, HTMLButtonElement>();
   const transform = () => { scene.style.transform = `translate(${px}px, ${py}px) scale(${zoom})`; };
@@ -91,8 +93,9 @@ export function mountMissionFlow(root: HTMLElement, options: {
   action("Zoom mission in", () => changeZoom(1.2)); action("Zoom mission out", () => changeZoom(1 / 1.2));
   action("Pan mission left", () => { px -= 120; transform(); }); action("Pan mission right", () => { px += 120; transform(); });
   action("Pan mission up", () => { py -= 104; transform(); }); action("Pan mission down", () => { py += 104; transform(); });
-  action("Reset mission view", () => { px = py = 20; zoom = 1; transform(); });
+  action("Reset mission view", () => { px = py = profile.inset; zoom = 1; transform(); });
   action("Follow selected task", () => { const point = layout?.nodes.find(n => n.task.id === selected); if (point) { px = 30 - point.x * zoom; py = 30 - point.y * zoom; transform(); } });
+  tools.append(...(options.contextTools ?? []));
   const menu = flowOptions(tools);
   const gestures = mountFlowGestures(viewport, {
     enabled: () => active && !!current && mode !== "forensic",
@@ -103,12 +106,12 @@ export function mountMissionFlow(root: HTMLElement, options: {
     if (gestures.keydown(event)) return;
     if (!active || !current || mode === "forensic" || event.target !== viewport) return;
     const actions: Record<string, () => void> = { ArrowLeft: () => { px += 120; }, ArrowRight: () => { px -= 120; }, ArrowUp: () => { py += 104; }, ArrowDown: () => { py -= 104; },
-      '+': () => changeZoom(1.2), '=': () => changeZoom(1.2), '-': () => changeZoom(1 / 1.2), Home: () => { px = py = 20; zoom = 1; } };
+      '+': () => changeZoom(1.2), '=': () => changeZoom(1.2), '-': () => changeZoom(1 / 1.2), Home: () => { px = py = profile.inset; zoom = 1; } };
     if (actions[event.key]) { event.preventDefault(); actions[event.key](); transform(); }
   };
   const open = document.createElement("button"); open.type = "button"; open.textContent = "Open canonical mission evidence";
   open.onclick = () => { if (active && current && selected && layout?.nodes.some(n => n.task.id === selected)) options.openMission?.(current.id); };
-  inspector.append(details, open); viewport.append(scene); host.append(title, menu, viewport, inspector, coverage); root.append(host);
+  inspector.append(details, open); viewport.append(scene); host.append(title, ...(options.optionsHost ? [] : [menu]), viewport, inspector, coverage); options.optionsHost?.append(menu); root.append(host);
   const inspect = () => {
     details.replaceChildren();
     const task = active && current ? layout?.nodes.find(n => n.task.id === selected)?.task : undefined;
@@ -132,19 +135,24 @@ export function mountMissionFlow(root: HTMLElement, options: {
       if (!mission || previousId !== mission.id) clear();
       host.hidden = !mission || mode === "forensic"; host.dataset.mode = mode;
       if (!mission) return;
-      layout = layoutMissionFlow(mission, mode === "glimpse" ? 24 : 80);
+      const oldInset = profile.inset;
+      profile = flowGeometryProfile("mission", presentation, mode, viewport.clientWidth);
+      if (zoom === 1 && px === oldInset && py === oldInset) px = py = profile.inset;
+      host.dataset.presentation = presentation; host.dataset.geometry = profile.compact ? "compact" : "expanded";
+      if (profile.compact) tools.append(title, coverage); else { host.prepend(title); host.append(coverage); }
+      layout = layoutMissionFlow(mission, mode === "glimpse" ? 24 : 80, profile);
       if (!layout.nodes.some(n => n.task.id === selected)) selected = "";
       title.textContent = mission.objective;
       coverage.textContent = `Current plan / execution projection · mission ${mission.id} · revision ${mission.revision}, plan ${mission.planRevision} · outcome ${mission.outcome}. ${layout.nodes.length} tasks, ${layout.edges.length} declared dependencies. ${layout.omitted ? `${layout.omitted} tasks omitted from this bounded view. ` : ""}${layout.unavailable ? `${layout.unavailable} dependencies outside this view or invalid. ` : ""}${layout.cycles ? `${layout.cycles} tasks have unresolved cyclic layout. ` : ""}Independent roots sit alongside one another; unconnected groups are spatial grouping only. These links are current task dependencies, not historical event causality. Event filters apply to retained events.`;
       const previous = new Map(elements); elements.clear(); scene.querySelector("svg")?.remove();
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.classList.add("aw-stream-links"); svg.setAttribute("aria-hidden", "true");
-      const width = Math.max(600, ...layout.nodes.map(n => n.x + 210)), height = Math.max(280, ...layout.nodes.map(n => n.y + 90));
+      const width = Math.max(profile.width, ...layout.nodes.map(n => n.x + profile.width)), height = Math.max(profile.height, ...layout.nodes.map(n => n.y + profile.height));
       svg.setAttribute("width", String(width)); svg.setAttribute("height", String(height)); scene.style.width = `${width}px`; scene.style.height = `${height}px`;
       const positions = new Map(layout.nodes.map(n => [n.task.id, n]));
       for (const edge of layout.edges) {
         const a = positions.get(edge.from)!, b = positions.get(edge.to)!;
         const p = document.createElementNS("http://www.w3.org/2000/svg", "path"); p.classList.add("aw-stream-edge", "aw-mission-edge"); p.dataset.from = edge.from; p.dataset.to = edge.to;
-        p.setAttribute("d", downwardFlowPath(a, b, 190, 70)); svg.append(p);
+        p.setAttribute("d", downwardFlowPath(a, b, profile.width, profile.height)); svg.append(p);
       }
       scene.append(svg); const nextKeys = new Set<string>();
       for (const item of layout.nodes) {
@@ -153,25 +161,29 @@ export function mountMissionFlow(root: HTMLElement, options: {
         b.type = "button"; b.className = "aw-stream-node aw-mission-task"; b.dataset.missionTaskId = task.id; b.dataset.taskState = task.state; b.dataset.join = String(item.join);
         const wait = mission.waits[task.id], label = `${item.join ? "Join · " : ""}${task.objective}`, state = `${task.state}${wait ? ` · waiting: ${wait}` : ""}`;
         b.setAttribute("aria-label", `${label} · ${state} · ${task.dependencies.length} declared dependencies`);
-        if (fresh) b.append(make("strong"), make("small"));
-        b.children[0]!.textContent = label; b.children[1]!.textContent = state;
+        if (fresh) { const glyph = make("span"); glyph.className = "aw-flow-glyph"; glyph.setAttribute("aria-hidden", "true"); b.append(glyph, make("strong"), make("small")); }
+        b.children[0]!.textContent = task.state === "verified" ? "✓" : task.state === "running" ? "●" : task.state === "failed" ? "×" : task.state === "blocked" ? "◇" : task.state === "uncertain" ? "?" : "○";
+        b.children[1]!.textContent = profile.compact ? shortFlowLabel(task.objective) : label; b.children[2]!.textContent = state;
+        b.style.width = `${profile.width}px`; b.style.height = `${profile.height}px`;
         b.onclick = () => { if (!active || !current || current.id !== mission.id || !elements.has(task.id)) return; selected = task.id; inspect(); };
         b.style.left = `${item.x}px`; b.style.top = `${item.y}px`; if (fresh) scene.append(b); elements.set(task.id, b);
-        if (options.motion && active && mode !== "forensic") { const pose = { x: item.x, y: item.y, w: 190, h: 70, lift: 0, yaw: 0, opacity: 1 }; if (!keys.has(key)) options.motion.add(key, { ...pose, opacity: options.motion.reduced ? 1 : .3 }); options.motion.target(key, pose, "canonical-mission-projection"); nextKeys.add(key); }
+        if (options.motion && active && mode !== "forensic") { const pose = { x: item.x, y: item.y, w: profile.width, h: profile.height, lift: 0, yaw: 0, opacity: 1 }; if (!keys.has(key)) options.motion.add(key, { ...pose, opacity: options.motion.reduced ? 1 : .3 }); options.motion.target(key, pose, "canonical-mission-projection"); nextKeys.add(key); }
       }
       for (const [id, element] of previous) if (!elements.has(id)) element.remove();
       for (const key of keys) if (!nextKeys.has(key)) options.motion?.remove(key);
       keys.clear(); for (const key of nextKeys) keys.add(key); options.motion?.wake(); inspect(); transform();
     },
+    reflow() { if (current) this.update(current, mode); },
+    setPresentation(value: "workspace" | "focused") { if (presentation === value) return; gestures.cancel(); presentation = value; if (current) this.update(current, mode); },
     setActive(value: boolean) { if (!value) { gestures.cancel(); menu.open = false; } active = value; inspect(); },
     frame() {
       if (!active || !current || !options.motion || !layout || mode === "forensic") return;
-      for (const [id, element] of elements) { const pose = options.motion.pose(prefix + current.id + ":" + id); element.style.left = `${pose.x}px`; element.style.top = `${pose.y}px`; element.style.opacity = String(pose.opacity); }
+      for (const [id, element] of elements) { const pose = options.motion.pose(prefix + current.id + ":" + id); element.style.left = `${pose.x}px`; element.style.top = `${pose.y}px`; element.style.opacity = String(pose.opacity); element.style.width = `${pose.w}px`; element.style.height = `${pose.h}px`; }
       for (const edge of Array.from(scene.querySelectorAll(".aw-mission-edge"))) { const p = edge as SVGElement;
         const a = options.motion.pose(prefix + current.id + ":" + p.dataset.from), b = options.motion.pose(prefix + current.id + ":" + p.dataset.to);
-        p.setAttribute("d", downwardFlowPath(a, b, 190, 70));
+        p.setAttribute("d", downwardFlowPath(a, b, profile.width, profile.height));
       }
     },
-    dispose() { gestures.dispose(); active = false; current = null; clear(); host.remove(); },
+    dispose() { gestures.dispose(); active = false; current = null; clear(); menu.remove(); host.remove(); },
   };
 }

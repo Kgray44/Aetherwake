@@ -36,6 +36,31 @@ for (const cardKind of ['stream', 'graph']) test(cardKind + ' workroom defaults 
   view.setActive(false); assert.equal(port.poses.size, 0); view.frame();
 });
 
+test('compact workroom shows terse current status and one external menu while profile changes retain task identity', async t => {
+  const dom = blockDocument(), restore = dom.install(), port = flowPort(), mission = fullMission();
+  const dashboard = { kind: 'graph', objective: mission.objective, planRevision: 1,
+    tasks: mission.tasks.map(task => ({ ...task, title: task.objective })) };
+  const view = mountMissionWorkroomView(dom.root, 'dashboard', 'workroom', async () => binding(dashboard), undefined,
+    () => {}, undefined, { motion: port.motion, viewId: 'synthetic:compact-wrapper', readMission: async () => mission });
+  t.after(() => { view.dispose(); restore(); }); await view.refresh(); view.frame();
+  const section = dom.root.querySelector('.aw-mission-workroom'), header = section.querySelector('.aw-mission-workroom-header');
+  const menu = header.querySelector('.aw-flow-options'), task = section.querySelector('[data-mission-task-id="cpu"]');
+  assert.equal(section.dataset.presentation, 'workspace'); assert.equal(section.dataset.flowReady, 'true');
+  assert.equal(section.querySelector('.aw-mission-workroom-status').textContent, 'Running · v1');
+  assert(menu); assert.equal(section.querySelectorAll('.aw-flow-options').length, 1);
+  assert.equal(menu.querySelector('[data-workroom-mode="forensic"]').closest('.aw-mission-flow'), null);
+  assert.equal(task.style.width, '110px');
+  view.setPresentation('focused'); view.frame();
+  assert.equal(section.querySelector('[data-mission-task-id="cpu"]'), task);
+  assert.equal(task.style.width, '190px');
+  assert.match(section.querySelector('.aw-mission-workroom-status').textContent, /Plan v1.*Journal revision 1/);
+  menu.querySelector('[data-workroom-mode="forensic"]').onclick();
+  assert.equal(section.querySelector('ol').hidden, false); assert.equal(menu.isConnected, true);
+  menu.querySelector('[data-workroom-mode="flow"]').onclick(); view.setPresentation('workspace'); view.frame();
+  assert.equal(section.querySelector('[data-mission-task-id="cpu"]').style.width, '110px');
+  view.setActive(false); assert.equal(section.querySelector('.aw-flow-options'), null); assert.equal(port.poses.size, 0);
+});
+
 test('mission identity/revision mismatch, denied full reads and late scope replies cannot retain or remount graph authority', async t => {
   const dom = blockDocument(), restore = dom.install(), port = flowPort(); let current = fullMission(), denied = false, release;
   const view = mountMissionWorkroomView(dom.root, 'stream', 'workroom', async () => binding({ kind: 'stream', events: [] }, 2), undefined, () => {}, undefined,

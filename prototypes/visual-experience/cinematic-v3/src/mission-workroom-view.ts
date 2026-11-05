@@ -52,7 +52,11 @@ export function mountMissionWorkroomView(
   }[kind];
   heading.textContent = initialTitle;
   const status = doc.createElement("p");
+  status.className = 'aw-mission-workroom-status';
   status.setAttribute("role", "status");
+  const header = doc.createElement('div'), flowOptionsHost = doc.createElement('div');
+  header.className = 'aw-mission-workroom-header'; flowOptionsHost.className = 'aw-mission-workroom-options';
+  header.append(status, flowOptionsHost);
   const intro = doc.createElement("p");
   intro.hidden = true;
   const list = doc.createElement("ol");
@@ -60,7 +64,7 @@ export function mountMissionWorkroomView(
   open.type = "button";
   open.textContent = kind === "checklist" || kind === "timeline" ? "Open mission evidence" : "Open mission plan";
   open.dataset.aerynthMotionControl = "true";
-  section.append(heading, status, intro, open, list);
+  section.append(heading, header, intro, open, list);
   const manualDetails = doc.createElement("details");
   manualDetails.className = "aw-mission-workroom-controls";
   manualDetails.dataset.noCardDrag = "true";
@@ -86,21 +90,34 @@ export function mountMissionWorkroomView(
   let manual: TimelineExperience | undefined, resolvedManual = false;
   let projection: MissionWorkroomResource | null = null;
   let projectionStamp: string | null = null;
+  let statusDetail = '';
   let pending: Promise<void> | null = null, queued = false;
   let admissionRefresh: ReturnType<typeof setTimeout> | undefined;
   let primaryTimeline = false, flowMode = 'flow', flowEpoch = 0;
   let flow: ReturnType<typeof mountMissionFlow> | undefined, fullMission: MissionProjection | null = null;
   const modeButtons = new Map<string, HTMLButtonElement>();
   const eligibleFlow = (value: MissionWorkroomResource | null) => value?.dashboard?.kind === 'graph' || value?.dashboard?.kind === 'stream';
+  const syncFlowPresentation = () => {
+    section.dataset.presentation = presentation;
+    section.dataset.flowReady = String(!!fullMission);
+    section.dataset.flowMode = flowMode;
+    flow?.setPresentation(presentation);
+    if (fullMission && projection && presentation === 'workspace') status.textContent = `${missionStateLabel[projection.outcome]} · v${projection.revision}`;
+    else if (statusDetail) status.textContent = statusDetail;
+    status.title = fullMission && presentation === 'workspace' ? statusDetail : '';
+  };
   function clearFlow() {
+    for (const tool of [intro, open, flowControls, flowStatus]) section.insertBefore(tool, flowHost);
     flowEpoch++; flow?.dispose(); flow = undefined; fullMission = null;
     flowHost.hidden = true; flowControls.hidden = true; flowStatus.hidden = true; flowStatus.textContent = ''; list.hidden = false;
+    syncFlowPresentation();
   }
   function displayFlowMode() {
     for (const [mode, button] of modeButtons) { button.disabled = !active || !fullMission; button.setAttribute('aria-pressed', String(mode === flowMode)); }
     list.hidden = !!fullMission && flowMode !== 'forensic';
     flowHost.hidden = !fullMission || flowMode === 'forensic';
     if (flow && fullMission) { flow.setActive(active && flowMode !== 'forensic'); flow.update(fullMission, flowMode); }
+    syncFlowPresentation();
   }
   for (const mode of ['flow', 'glimpse', 'forensic']) {
     const button = doc.createElement('button'); button.type = 'button'; button.textContent = mode[0].toUpperCase() + mode.slice(1); button.dataset.workroomMode = mode;
@@ -119,7 +136,8 @@ export function mountMissionWorkroomView(
       if (!mission || mission.contract !== 'aerynth.vela-mission@1' || mission.id !== value.missionId || mission.revision < minimumRevision || projection?.missionId !== mission.id)
         throw new Error('mission_flow_projection_unavailable');
       fullMission = mission;
-      flow ??= mountMissionFlow(flowHost, { motion: options.motion, viewId: `${options.viewId}:${generation}:${flowEpoch}`, active, openMission });
+      flow ??= mountMissionFlow(flowHost, { motion: options.motion, viewId: `${options.viewId}:${generation}:${flowEpoch}`, active, openMission,
+        presentation, optionsHost: flowOptionsHost, contextTools: [open, flowControls, flowStatus, intro] });
       flowControls.hidden = false; flowStatus.textContent = 'Current authorized task dependencies · retained event rows remain available in Forensic.';
       displayFlowMode();
     } catch {
@@ -151,6 +169,7 @@ export function mountMissionWorkroomView(
     clearFlow(); primaryTimeline = false; resolvedManual = false; manual?.setActive(false);
     projection = null;
     projectionStamp = null;
+    statusDetail = '';
     syncAdmissionRefresh();
     delete section.dataset.missionWorkroomCard;
     delete section.dataset.missionId;
@@ -407,6 +426,7 @@ export function mountMissionWorkroomView(
       }),
     };
     const nextStatus = `${missionStateLabel[value.outcome]} · ${displayed.coverage} · Journal revision ${value.revision}`;
+    statusDetail = nextStatus;
     if (status.textContent !== nextStatus) status.textContent = nextStatus;
     intro.textContent = "intro" in displayed ? displayed.intro ?? "" : "";
     intro.hidden = !intro.textContent;
@@ -511,6 +531,7 @@ export function mountMissionWorkroomView(
     setPresentation(next) {
       presentation = next;
       manual?.setPresentation(next);
+      syncFlowPresentation();
     },
     async refresh() {
       if (!resolvedManual) await refreshProjection();
@@ -518,7 +539,7 @@ export function mountMissionWorkroomView(
     },
     async flush() { await manual?.flush(); },
     frame() { if (active && !disposed && !doc.hidden) { manual?.frame(); flow?.frame(); } },
-    reflow() { manual?.reflow(); },
+    reflow() { manual?.reflow(); flow?.reflow(); },
     dispose() {
       disposed = true;
       generation++; clearFlow();

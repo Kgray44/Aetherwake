@@ -2,13 +2,13 @@ import { mountFlowGestures, flowOptions } from "./flow-gesture.ts";
 import type { StreamEvent } from "../integrated-backend/src/contracts.mts";
 import type { ExperienceMotionPort } from "../application-contract/motion.ts";
 import { layoutStream, streamPath, type StreamLayout } from "./stream-layout.ts";
-import { downwardFlowPath } from './flow-geometry.ts';
+import { downwardFlowPath, compactFlowGeometry, flowGeometryProfile, shortFlowLabel } from './flow-geometry.ts';
 
 const make = (tag: string, text = "") => { const e = document.createElement(tag); e.textContent = text; return e; };
 const glyphs: Record<string,string> = { failure: "×", uncertain: "?", gate: "◇", verification: "▣", tool: "⚒", evidence: "◈", outcome: "◎", recovery: "↻", activity: "●" };
 let serial = 0;
 export function mountStreamGraph(root: HTMLElement, options: {
-  motion?: ExperienceMotionPort; viewId?: string; active?: boolean;
+  motion?: ExperienceMotionPort; viewId?: string; active?: boolean; presentation?: "workspace" | "focused";
   title(event: StreamEvent): string;
   metadata(event: StreamEvent): Record<string, string>;
   open(event: StreamEvent): void;
@@ -22,8 +22,9 @@ export function mountStreamGraph(root: HTMLElement, options: {
   inspector.className = "aw-stream-inspector"; inspector.hidden = true; inspector.setAttribute("aria-label", "Selected event evidence");
   note.className = "aw-stream-coverage"; note.setAttribute("role", "status");
   viewport.tabIndex = 0; viewport.setAttribute("aria-label", "Causal graph. Arrow keys pan, plus and minus zoom, Home resets. Tab selects recorded nodes.");
-  let available = true;
-  let mode = "flow", zoom = 1, panX = 20, panY = 20, selected = "", active = options.active ?? true;
+  let available = true, presentation = options.presentation ?? "focused";
+  let profile = flowGeometryProfile("event", presentation, "flow");
+  let mode = "flow", zoom = 1, panX = profile.inset, panY = profile.inset, selected = "", active = options.active ?? true;
   let layout: StreamLayout = { nodes: [], edges: [], omitted: 0, unresolved: 0 };
   const keys = new Set<string>();
   const elements = new Map<string, HTMLElement>();
@@ -35,7 +36,7 @@ export function mountStreamGraph(root: HTMLElement, options: {
   tool("Zoom in", () => scale(1.2)); tool("Zoom out", () => scale(1/1.2));
   tool("Pan left", () => { panX -= 120; transform(); }); tool("Pan right", () => { panX += 120; transform(); });
   tool("Pan up", () => { panY -= 94; transform(); }); tool("Pan down", () => { panY += 94; transform(); });
-  tool("Reset view", () => { zoom = 1; panX = panY = 20; transform(); });
+  tool("Reset view", () => { zoom = 1; panX = panY = profile.inset; transform(); });
   tool("Follow selected branch", () => {
     const point = layout.nodes.find(n => n.event.eventId === selected);
     if (point) { panX = 30 - point.x * zoom; panY = 30 - point.y * zoom; transform(); }
@@ -55,7 +56,7 @@ export function mountStreamGraph(root: HTMLElement, options: {
       ArrowLeft: () => { panX += 100; }, ArrowRight: () => { panX -= 100; },
       ArrowUp: () => { panY += 94; }, ArrowDown: () => { panY -= 94; },
       "+": () => scale(1.2), "=": () => scale(1.2), "-": () => scale(1/1.2),
-      Home: () => { zoom = 1; panX = panY = 20; },
+      Home: () => { zoom = 1; panX = panY = profile.inset; },
     };
     if (actions[e.key]) { e.preventDefault(); actions[e.key](); transform(); }
   };
@@ -86,19 +87,25 @@ export function mountStreamGraph(root: HTMLElement, options: {
     }
   }
   function render() {
+    const oldInset = profile.inset; profile = flowGeometryProfile("event", presentation, mode, viewport.clientWidth);
+    if (zoom === 1 && panX === oldInset && panY === oldInset) panX = panY = profile.inset;
+    host.dataset.presentation = presentation; host.dataset.geometry = profile.compact ? "compact" : "expanded";
+    if (profile.compact) controls.append(note); else host.append(note);
+    const geometry = compactFlowGeometry(layout.nodes.map(n => n.event.eventId), layout.edges, profile.width, profile.height, profile.gapX, profile.gapY);
+    layout = { ...layout, nodes: layout.nodes.map(n => ({ ...n, ...geometry.get(n.event.eventId)! })) };
     const previous = new Map(elements); elements.clear();
     scene.querySelector(".aw-stream-links")?.remove();
     const positions = new Map(layout.nodes.map(n => [n.event.eventId, n]));
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.classList.add("aw-stream-links"); svg.setAttribute("aria-hidden", "true");
-    const width = Math.max(600, ...layout.nodes.map(n => n.x + 200)), height = Math.max(280, ...layout.nodes.map(n => n.y + 80));
+    const width = Math.max(profile.width, ...layout.nodes.map(n => n.x + profile.width)), height = Math.max(profile.height, ...layout.nodes.map(n => n.y + profile.height));
     svg.setAttribute("width", String(width)); svg.setAttribute("height", String(height));
     scene.style.width = `${width}px`; scene.style.height = `${height}px`;
     for (const edge of layout.edges) {
       const a = positions.get(edge.from)!, b = positions.get(edge.to)!;
       const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
       p.classList.add("aw-stream-edge"); p.dataset.from = edge.from; p.dataset.to = edge.to;
-      p.setAttribute("d", downwardFlowPath(a, b, 176, 60)); svg.append(p);
+      p.setAttribute("d", downwardFlowPath(a, b, profile.width, profile.height)); svg.append(p);
     }
     scene.append(svg);
     const nextKeys = new Set<string>();
@@ -110,10 +117,12 @@ export function mountStreamGraph(root: HTMLElement, options: {
       b.dataset.streamEventId = event.eventId; b.dataset.family = family; b.dataset.evidenceClass = event.classification;
       b.setAttribute("aria-label", `${options.title(event)} · ${event.status ?? "status unavailable"} · ${event.classification}`);
       if (fresh) b.append(make("span", glyphs[family]), make("strong", options.title(event)), make("small", `${event.classification} · ${event.status ?? "unavailable"}`));
+      b.children[1]!.textContent = profile.compact ? shortFlowLabel(options.title(event)) : options.title(event);
+      b.style.width = `${profile.width}px`; b.style.height = `${profile.height}px`;
       b.onclick = () => { if (!active) return; selected = event.eventId; inspect(); };
       b.style.left = `${x}px`; b.style.top = `${y}px`; if (fresh) scene.append(b); elements.set(event.eventId, b);
       if (options.motion && active && available && mode !== "forensic") {
-        const pose = { x, y, w: 176, h: 60, lift: 0, yaw: 0, opacity: 1 };
+        const pose = { x, y, w: profile.width, h: profile.height, lift: 0, yaw: 0, opacity: 1 };
         if (!keys.has(key)) options.motion.add(key, { ...pose, opacity: options.motion.reduced ? 1 : .3 });
         options.motion.target(key, pose, "canonical-stream-event"); nextKeys.add(key);
       }
@@ -131,14 +140,16 @@ export function mountStreamGraph(root: HTMLElement, options: {
     update(events: readonly StreamEvent[]) { if (layout.nodes.some(n => !events.some(e => e.eventId === n.event.eventId))) gestures.cancel(); layout = layoutStream(events, mode === "glimpse" ? 24 : 80); if (!layout.nodes.some(n => n.event.eventId === selected)) selected = ""; render(); },
     setMode(value: string) { if (value === "forensic") { gestures.cancel(); menu.open = false; } mode = value; host.dataset.mode = value; host.hidden = !available || value === "forensic"; },
     setAvailable(value: boolean) { if (!value) { gestures.cancel(); menu.open = false; } available = value; host.hidden = !value || mode === "forensic"; },
+    reflow() { render(); },
+    setPresentation(value: "workspace" | "focused") { if (presentation === value) return; gestures.cancel(); presentation = value; render(); },
     setActive(value: boolean) { if (!value) { gestures.cancel(); menu.open = false; } active = value; inspect(); },
     frame() {
       if (!active || !available || mode === "forensic" || !options.motion) return;
-      for (const [id, element] of elements) { const pose = options.motion.pose(prefix + id); element.style.left = `${pose.x}px`; element.style.top = `${pose.y}px`; element.style.opacity = String(pose.opacity); }
+      for (const [id, element] of elements) { const pose = options.motion.pose(prefix + id); element.style.left = `${pose.x}px`; element.style.top = `${pose.y}px`; element.style.opacity = String(pose.opacity); element.style.width = `${pose.w}px`; element.style.height = `${pose.h}px`; }
       for (const edge of Array.from(scene.querySelectorAll(".aw-stream-edge"))) {
         const el = edge as SVGElement;
         const a = options.motion.pose(prefix + el.dataset.from), b = options.motion.pose(prefix + el.dataset.to);
-        el.setAttribute("d", downwardFlowPath(a, b, 176, 60));
+        el.setAttribute("d", downwardFlowPath(a, b, profile.width, profile.height));
       }
     },
     dispose() { gestures.dispose(); menu.open = false; active = false; inspect(); for (const key of keys) options.motion?.remove(key); keys.clear(); elements.clear(); layout = { nodes: [], edges: [], omitted: 0, unresolved: 0 }; scene.replaceChildren(); host.remove(); },

@@ -149,7 +149,7 @@
 .aw-stream-inspector { border-top:1px solid #a7c8cb33; margin-top:.7rem; }
 .aw-stream-coverage { font-size:.8em; color:#b6c9d1; }
 .aw-stream[data-mode="glimpse"] .aw-stream-viewport { height:190px; }
-.aw-stream[data-mode="glimpse"] .aw-stream-node { width:176px; min-height:45px; }
+.aw-stream[data-mode="glimpse"] .aw-stream-node { min-height:0; }
 .aw-stream[data-mode="glimpse"] .aw-stream-node strong { font-size:.72em; }
 .aw-stream[data-mode="glimpse"] .aw-stream-node small { display:none; }
 .aw-stream-viewport:focus-visible { outline:2px solid #c4e2e5; outline-offset:2px; }
@@ -181,3 +181,17 @@
 .aw-stream-inspector { user-select:text; }
 .aw-mission-flow > .aw-stream-coverage { font-size:.72em; opacity:.75; }
 @media (prefers-reduced-transparency:reduce) { .aw-flow-options-panel { background:#142431; backdrop-filter:none; } }
+
+/* Compact cards change node geometry, never shrink a focused text scene. */
+.aw-stream[data-geometry="compact"] .aw-stream-viewport { height:100px; min-height:98px; max-height:32vh; }
+.aw-stream[data-geometry="compact"] .aw-stream-node { padding:.3rem .4rem; gap:.2rem .3rem; border-radius:.55rem; grid-template-columns:.85rem minmax(0,1fr); align-items:center; font-size:.78rem; }
+.aw-stream[data-geometry="compact"] .aw-stream-node > span { grid-row:auto; font-size:.9rem; }
+.aw-stream[data-geometry="compact"] .aw-stream-node strong { font-size:.72rem; line-height:1.25; }
+.aw-stream[data-geometry="compact"] .aw-stream-node small { display:none; }
+.aw-stream[data-geometry="compact"] > h3 { display:none; }
+.aw-stream[data-geometry="compact"] > .aw-flow-options { position:absolute; top:0; right:0; margin:0; }
+.aw-stream[data-geometry="compact"] > .aw-flow-options > summary { min-width:24px; min-height:24px; border-radius:.45rem; background:#142431a8; }
+.aw-stream[data-geometry="compact"] .aw-stream-inspector { font-size:.78rem; }
+.aw-stream[data-geometry="expanded"] .aw-mission-task > .aw-flow-glyph { display:none; }
+.aw-flow-options-panel > .aw-stream-coverage { flex-basis:100%; margin:.3rem 0 0; font-size:.75rem; line-height:1.5; }
+.aw-stream[data-mode="glimpse"][data-geometry="compact"] .aw-stream-viewport { height:100px; }

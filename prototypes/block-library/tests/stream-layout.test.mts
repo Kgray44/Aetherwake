@@ -118,3 +118,12 @@ test("inactive Stream rejects retained node callbacks and invalid time filters c
   control.dispose(); retained.onclick();
   assert.equal(inspector.hidden, true); assert.doesNotMatch(inspector.textContent, /Event IDevent-1/);
 });
+
+
+test("EventView forwards compact and focused geometry without changing selected recorded identity",t=>{
+ const dom=blockDocument(),restore=dom.install();const control=mountEventExperience(dom.root,{snapshot:()=>snapshot([event(1),event(2,{causationId:'event-1'})]),async refresh(){}},{presentation:'workspace'});t.after(()=>{control.dispose();restore();});
+ const node=dom.root.querySelector('.aw-stream-node');node.onclick();assert.equal(node.style.width,'110px');assert.equal(node.style.height,'32px');
+ const inspector=dom.root.querySelector('.aw-stream-inspector');assert.match(inspector.textContent,/Event IDevent-1/);
+ control.setPresentation('focused');assert.equal(dom.root.querySelector('.aw-stream-node'),node);assert.equal(node.style.width,'176px');assert.equal(node.style.height,'60px');assert.equal(node.getAttribute('aria-pressed'),'true');
+ const modes=dom.root.querySelectorAll('.aw-stream-modes button');modes[0].onclick();assert.equal(node.style.width,'110px');assert.equal(node.style.height,'32px');assert.match(inspector.textContent,/Event IDevent-1/);
+});
