@@ -1,3 +1,4 @@
+import { mountFlowGestures, flowOptions } from "./flow-gesture.ts";
 import type { StreamEvent } from "../integrated-backend/src/contracts.mts";
 import type { ExperienceMotionPort } from "../application-contract/motion.ts";
 import { layoutStream, streamPath, type StreamLayout } from "./stream-layout.ts";
@@ -27,7 +28,7 @@ export function mountStreamGraph(root: HTMLElement, options: {
   const keys = new Set<string>();
   const elements = new Map<string, HTMLElement>();
   const tool = (label: string, action: () => void) => {
-    const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.onclick = action; controls.append(b); return b;
+    const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.onclick = () => { if (active && available && mode !== "forensic") action(); }; controls.append(b); return b;
   };
   const transform = () => { scene.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; };
   const scale = (factor: number) => { zoom = Math.min(2, Math.max(.3, zoom * factor)); transform(); };
@@ -41,8 +42,15 @@ export function mountStreamGraph(root: HTMLElement, options: {
   });
   const older = tool("Inspect older event cluster", () => options.inspectOlder?.());
   older.hidden = true;
+  const menu = flowOptions(controls);
+  const gestures = mountFlowGestures(viewport, {
+    enabled: () => active && available && mode !== "forensic",
+    read: () => ({ x: panX, y: panY, zoom }),
+    write: camera => { panX = camera.x; panY = camera.y; zoom = camera.zoom; transform(); },
+  });
   viewport.onkeydown = e => {
-    if (e.target !== viewport) return;
+    if (gestures.keydown(e)) return;
+    if (!active || !available || mode === "forensic" || e.target !== viewport) return;
     const actions: Record<string, () => void> = {
       ArrowLeft: () => { panX += 100; }, ArrowRight: () => { panX -= 100; },
       ArrowUp: () => { panY += 94; }, ArrowDown: () => { panY -= 94; },
@@ -53,7 +61,7 @@ export function mountStreamGraph(root: HTMLElement, options: {
   };
   const open = document.createElement("button"); open.type = "button"; open.textContent = "Open source evidence";
   open.onclick = () => { const event = layout.nodes.find(n => n.event.eventId === selected)?.event; if (active && event) options.open(event); };
-  inspector.append(inspectorTitle, detail, open); viewport.append(scene); host.append(controls, viewport, note, inspector); root.append(host);
+  inspector.append(inspectorTitle, detail, open); viewport.append(scene); host.append(menu, viewport, note, inspector); root.append(host);
   function inspect() {
     if (!active) {
       detail.replaceChildren(); inspector.hidden = true;
@@ -120,10 +128,10 @@ export function mountStreamGraph(root: HTMLElement, options: {
     note.textContent = `${layout.nodes.length} recorded nodes · ${layout.edges.length} explicit causal links. ${layout.nodes.filter(node => !linked.has(node.event.eventId)).length} unlinked records are compact spatial tiles, not a causal sequence. ${layout.omitted ? `${layout.omitted} older matching events omitted from this bounded view; use Forensic search. ` : ""}${layout.unresolved ? `${layout.unresolved} parent references unavailable or ambiguous. ` : ""}Correlation groups do not prove causation. Mission dependency joins are unavailable in this source.`;
   }
   return {
-    update(events: readonly StreamEvent[]) { layout = layoutStream(events, mode === "glimpse" ? 24 : 80); if (!layout.nodes.some(n => n.event.eventId === selected)) selected = ""; render(); },
-    setMode(value: string) { mode = value; host.dataset.mode = value; host.hidden = !available || value === "forensic"; },
-    setAvailable(value: boolean) { available = value; host.hidden = !value || mode === "forensic"; },
-    setActive(value: boolean) { active = value; inspect(); },
+    update(events: readonly StreamEvent[]) { if (layout.nodes.some(n => !events.some(e => e.eventId === n.event.eventId))) gestures.cancel(); layout = layoutStream(events, mode === "glimpse" ? 24 : 80); if (!layout.nodes.some(n => n.event.eventId === selected)) selected = ""; render(); },
+    setMode(value: string) { if (value === "forensic") { gestures.cancel(); menu.open = false; } mode = value; host.dataset.mode = value; host.hidden = !available || value === "forensic"; },
+    setAvailable(value: boolean) { if (!value) { gestures.cancel(); menu.open = false; } available = value; host.hidden = !value || mode === "forensic"; },
+    setActive(value: boolean) { if (!value) { gestures.cancel(); menu.open = false; } active = value; inspect(); },
     frame() {
       if (!active || !available || mode === "forensic" || !options.motion) return;
       for (const [id, element] of elements) { const pose = options.motion.pose(prefix + id); element.style.left = `${pose.x}px`; element.style.top = `${pose.y}px`; element.style.opacity = String(pose.opacity); }
@@ -133,6 +141,6 @@ export function mountStreamGraph(root: HTMLElement, options: {
         el.setAttribute("d", downwardFlowPath(a, b, 176, 60));
       }
     },
-    dispose() { active = false; inspect(); for (const key of keys) options.motion?.remove(key); keys.clear(); elements.clear(); layout = { nodes: [], edges: [], omitted: 0, unresolved: 0 }; scene.replaceChildren(); host.remove(); },
+    dispose() { gestures.dispose(); menu.open = false; active = false; inspect(); for (const key of keys) options.motion?.remove(key); keys.clear(); elements.clear(); layout = { nodes: [], edges: [], omitted: 0, unresolved: 0 }; scene.replaceChildren(); host.remove(); },
   };
 }

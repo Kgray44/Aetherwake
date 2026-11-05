@@ -39,6 +39,9 @@ test('direct graph drag previews without writes, cancels safely and commits one 
   assert.equal(s.f.service.read(s.f.created.resourceId).resource.version, version, 'Pointer movement is a local preview');
   track.onkeydown({ target: track, key: 'Escape', preventDefault() {} });
   assert.deepEqual(s.f.service.read(s.f.created.resourceId).view, before);
+  let dismissed = true;
+  track.onkeydown({ target: track, key: 'Escape', preventDefault() { dismissed = false; } });
+  assert.equal(dismissed, true, 'An idle graph leaves Escape available to dismiss its enclosing surface');
   track.onpointerdown(pointer(100)); track.onpointermove(pointer(161.2)); track.onpointerup(pointer(161.2));
   await until(() => s.document!.resource.version === version + 1 && s.settled());
   const saved = s.f.service.read(s.f.created.resourceId);
@@ -339,6 +342,9 @@ test('LI-05: explicit Save persists orientation/detail; reopen and focus/resize 
   assert.equal(s.document!.resource.version,version);
   s.controller.setPresentation('workspace');s.controller.setPresentation('focused');s.controller.reflow();s.frame();
   assert.equal(section.dataset.orientation,'vertical');assert.equal(section.dataset.density,'compact');assert.equal(dot.dataset.eventId,eventId);assert.equal(dot.getAttribute('aria-pressed'),'true');
+  s.dom.root.querySelector('.aw-timeline-options').open=true;
+  assert.equal(s.dom.root.querySelector('.aw-timeline-filters').hidden,true);
+  assert.equal(button(s.dom.root,'Save view').closest('.aw-timeline-filters'),null,'Saving presentation does not require opening unrelated filters');
   button(s.dom.root,'Save view').onclick();await until(()=>s.document!.resource.version===version+1&&s.settled());
   assert.deepEqual(s.document!.view.presentation,{orientation:'vertical',detail:'compact'});
   assert.equal(s.document!.view.selection!.eventId,eventId);

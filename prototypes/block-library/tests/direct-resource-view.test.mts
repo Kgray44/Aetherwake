@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BackendCore } from '../../integrated-backend/src/core.mts';
 import type { DesktopSnapshot, Resource } from '../../application-contract/contracts.ts';
+import type { ExperienceMotionPort, ExperiencePose } from '../../application-contract/motion.ts';
 import { NoteSession } from '../note-session.ts';
 import type { NoteDocument, NoteDraft, NoteExperiencePort } from '../note-contracts.ts';
 import { mountDirectResourceExperience, type DirectResourceExperience, type DirectResourcePorts } from '../direct-resource-view.ts';
@@ -70,6 +71,8 @@ test('direct resource source matrix uses canonical unplaced content and existing
   const resource = (kind: Resource['kind']) => state.resources.find(resource => resource.kind === kind)!;
   const mount = (target: Resource, supplied = ports) => {
     const dom = blockDocument(), restore = dom.install();
+    const createElement = dom.doc.createElement.bind(dom.doc);
+    dom.doc.createElement = (tag: string) => { const element = createElement(tag); element.style.setProperty = (name: string, value: string) => { element.style[name] = value; }; return element; };
     // Existing CPU-only document boundary omits global pointer listeners.
     dom.doc.addEventListener = () => {};
     dom.doc.removeEventListener = () => {};
@@ -154,6 +157,30 @@ test('direct resource source matrix uses canonical unplaced content and existing
         assert.equal(calls.statuses.at(-1)!.expectedVersion, expectedVersion);
         assert.notEqual(calls.statuses.at(-1)!.expectedVersion, resource('task_group').version);
       } finally { checklist.close(); }
+    });
+
+    await t.test('shared manual Task instrument flushes the real description before CAS and retains editor identity', async () => {
+      const poses = new Map<string, ExperiencePose>();
+      const motion: ExperienceMotionPort = { reduced: true, add: (key, pose) => { poses.set(key, pose); }, target: (key, pose) => { poses.set(key, pose); },
+        pose: key => poses.get(key)!, remove: key => { poses.delete(key); }, wake() {} };
+      const view = mount(resource('task'), { ...ports, manualTasks: { motion, viewId: 'synthetic:direct-manual-task' } });
+      try {
+        await until(() => sessions.get(task.id)!.snapshot().document?.resource.version === resource('task').version && !sessions.get(task.id)!.snapshot().dirty);
+        const editor = view.dom.root.querySelector('textarea'), toggle = view.dom.root.querySelector('.aw-manual-task-toggle');
+        editor.value = 'Synthetic description retained by the shared manual Task instrument.'; editor.oninput();
+        toggle.onclick();
+        await until(() => resource('task').taskStatus === 'done' && !toggle.disabled);
+        assert.equal(resource('task').content, editor.value);
+        assert.equal(view.dom.root.querySelector('textarea'), editor);
+        assert.equal(calls.statuses.at(-1)!.expectedVersion, resource('task').version - 1);
+        assert.match(view.dom.root.querySelector('.aw-manual-task').textContent, /Done manually/);
+        const priority = view.dom.root.querySelector('.aw-manual-task-priority').querySelector('select');
+        priority.value = 'high'; priority.onchange();
+        await until(() => resource('task').taskPriority === 'high' && !priority.disabled);
+        assert.equal(calls.priorities.at(-1)!.expectedVersion, resource('task').version - 1);
+        await view.controller.flush(); view.controller.setActive(false); assert.equal(poses.size, 0);
+      } finally { view.close(); }
+      assert.equal(poses.size, 0);
     });
 
     await t.test('unknown families never become a generic editor; revocation suspends existing content and pending actions', async () => {

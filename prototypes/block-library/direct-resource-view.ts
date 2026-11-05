@@ -10,6 +10,7 @@ import type { ExperienceMotionPort } from '../application-contract/motion.ts';
 import { mountChecklistExperience } from '../checklist-product/view.ts';
 import { mountNoteExperience } from './note-view.ts';
 import { mountTaskGroupExperience } from './task-group-view.ts';
+import { mountManualTaskExperience } from './manual-task-view.ts';
 import { mountEventExperience, type EventWindow } from './event-view.ts';
 import type { MediaReadPort } from '../application-contract/media.ts';
 import { mountMediaExperience, type MediaExperience, type MediaResource } from './media-view.ts';
@@ -18,6 +19,7 @@ import {mountFolderExperience,type FolderViewPort} from './folder-view.ts';
 import { mountClockTimerExperience, type ClockTimerExperience } from '../visual-experience/cinematic-v3/src/clock-timer-view.ts';
 
 export interface DirectResourcePorts {
+  manualTasks?: { motion: ExperienceMotionPort; viewId: string };
   clockTimers?: { port: ClockTimerPort };
   media?: MediaReadPort;
   folders?: FolderViewPort;
@@ -40,6 +42,9 @@ export interface DirectResourcePorts {
     openReference?(reference: ChecklistReference): void | Promise<void>;
   };
   mountCard?(root: HTMLElement, resourceId: string, kind: 'checklist' | 'timeline', mountDefault: (container: HTMLElement) => TimelineExperience): TimelineExperience;
+  /** Optional authorized canonical mission binding. Undefined leaves ordinary
+   * Note/Stream dispatch intact; this must not create a second resource. */
+  mountMissionCard?(root: HTMLElement, resource: Resource): TimelineExperience | undefined;
   saveContent(resourceId: string, content: string, root: HTMLElement): void;
   readResource?(resourceId: string): Resource | undefined;
   setTaskStatus(input: { resourceId: string; expectedVersion: number; status: 'open' | 'done' }): Promise<void>;
@@ -93,6 +98,7 @@ export function mountDirectResourceExperience(
   let resource = initial, active = true, disposed = false, mounted = false;
   let note: ReturnType<typeof mountNoteExperience> | undefined;
   let group: ReturnType<typeof mountTaskGroupExperience> | undefined;
+  let manualTask: ReturnType<typeof mountManualTaskExperience> | undefined;
   let events: ReturnType<typeof mountEventExperience> | undefined;
   let media: MediaExperience | undefined;
   let folder:ReturnType<typeof mountFolderExperience>|undefined;
@@ -101,6 +107,7 @@ export function mountDirectResourceExperience(
   let checklist: TimelineExperience | undefined;
   let timeline: TimelineExperience | undefined;
   let timelineWasActive = false;
+  let missionCard: TimelineExperience | undefined, missionCardKnown = false, missionCardWasActive = false;
   let taskObjective: TaskTrackerExperience | undefined, taskObjectiveWasActive = false;
   let refreshVersion: number | undefined;
   let editor: HTMLTextAreaElement | undefined;
@@ -124,6 +131,8 @@ export function mountDirectResourceExperience(
     return current;
   };
   const paintTask = () => {
+    manualTask?.setActive(active && available(resource));
+    manualTask?.update(resource);
     if (taskStatus) {
       taskStatus.checked = resource.taskStatus === 'done';
       taskStatus.disabled = !active || !available(resource) || pendingStatus || pendingPriority;
@@ -200,6 +209,15 @@ export function mountDirectResourceExperience(
   };
   const mount = () => {
     if (mounted || !available(resource)) return;
+    if ((kind === 'note' || kind === 'stream') && ports.mountMissionCard) {
+      if (!active || root.ownerDocument.hidden) return;
+      missionCard = ports.mountMissionCard(body, resource);
+      if (missionCard) {
+        missionCardKnown = true; missionCard.setPresentation('focused'); missionCard.setActive(active);
+        missionCardWasActive = active; refreshVersion = resource.version; mounted = true; return;
+      }
+      if (missionCardKnown) { status.textContent = 'This mission card binding is unavailable. Refresh its authorized source.'; return; }
+    }
     body.replaceChildren();
     if (kind === 'clock_timer') {
       if (!ports.clockTimers) { status.textContent = 'Clock and timer access is unavailable in this surface.'; return; }
@@ -255,7 +273,25 @@ export function mountDirectResourceExperience(
         mountDocument(description);
       } else {
         mountDocument(body);
-        if (kind === 'task') taskControls();
+        if (kind === 'task') {
+          if (ports.manualTasks) {
+            const primary = node('div', 'manual-task-primary'); body.prepend(primary);
+            const mutate = async (input: { resourceId: string; expectedVersion: number } & ({ status: 'open' | 'done' } | { priority: NonNullable<Resource['taskPriority']> })) => {
+              const before = currentTask(resourceId);
+              if (before.version !== input.expectedVersion) throw new Error('task_version_conflict');
+              await session!.flushEdits();
+              if (disposed || !active || !available(resource)) throw new Error('task_unavailable');
+              const current = currentTask(resourceId), document = session!.snapshot().document?.resource;
+              if (current.taskStatus !== before.taskStatus || current.taskPriority !== before.taskPriority) throw new Error('task_version_conflict');
+              const expectedVersion = Math.max(current.version, document?.id === resourceId ? document.version : 0);
+              if ('status' in input) await ports.setTaskStatus({ resourceId, expectedVersion, status: input.status });
+              else await ports.setTaskPriority({ resourceId, expectedVersion, priority: input.priority });
+            };
+            manualTask = mountManualTaskExperience(primary, resource, { setTaskStatus: mutate, setTaskPriority: mutate,
+              readResource: id => ports.readResource ? ports.readResource(id) : id === resourceId ? resource : undefined },
+              { ...ports.manualTasks, active, presentation: 'focused' });
+          } else taskControls();
+        }
       }
       mounted = true;
     } else if ((kind === 'file' || kind === 'link') && ports.media) {
@@ -280,16 +316,21 @@ export function mountDirectResourceExperience(
     if (disposed) return;
     body.hidden = !available(resource);
     body.inert = !active || !available(resource);
-    if (!available(resource)) status.textContent = resource.state === 'archived'
-      ? 'This resource is archived. Its canonical data is retained.'
-      : 'This resource is unavailable or no longer accessible.';
+    if (!available(resource)) {
+      if (missionCard) { missionCard.setActive(false); missionCard.dispose(); missionCard = undefined; missionCardWasActive = false; mounted = false; body.replaceChildren(); }
+      status.textContent = resource.state === 'archived'
+        ? 'This resource is archived. Its canonical data is retained.'
+        : 'This resource is unavailable or no longer accessible.';
+    }
     else {
       if (mounted) status.textContent = '';
       try { mount(); } catch (error) {
+        missionCard?.dispose(); missionCard = undefined; missionCardWasActive = false;
         clockTimer?.dispose(); clockTimer = undefined; clockTimerWasActive = false;
         taskObjective?.dispose(); taskObjective = undefined; taskObjectiveWasActive = false;
         timeline?.dispose(); timeline = undefined; timelineWasActive = false;
         checklist?.dispose(); checklist = undefined;
+        manualTask?.dispose(); manualTask = undefined;
         note?.dispose(); group?.dispose(); events?.dispose(); media?.dispose(); folder?.dispose();
         note = undefined; group = undefined; events = undefined; media = undefined; folder=undefined;
         session = undefined; editor = undefined; taskStatus = undefined; taskPriority = undefined;
@@ -298,6 +339,10 @@ export function mountDirectResourceExperience(
         return;
       }
     }
+    const missionActive = active && available(resource) && !root.ownerDocument.hidden, missionActivated = missionActive && !missionCardWasActive;
+    missionCard?.setActive(missionActive); missionCardWasActive = missionActive && !!missionCard;
+    if (missionActivated && missionCard) refreshVersion = resource.version;
+    if (missionCard && missionActive && refreshVersion !== resource.version) { refreshVersion = resource.version; void missionCard.refresh().catch(fail); }
     note?.setActive(active && available(resource));
     const clockTimerActive = active && available(resource), clockTimerActivated = clockTimerActive && !clockTimerWasActive;
     clockTimer?.setActive(clockTimerActive); clockTimerWasActive = clockTimerActive;
@@ -345,6 +390,10 @@ export function mountDirectResourceExperience(
     setActive(value) { if (!disposed) { active = value; reconcile(); } },
     async flush() {
       if (disposed) return;
+      if (missionCardKnown) {
+        if (!available(resource) || !missionCard) throw new Error('Mission card is unavailable. Its authorized source must be restored before continuing.');
+        await missionCard.flush(); return;
+      }
       if (clockTimer) { await clockTimer.flush(); return; }
       if (taskObjective) {
         if (!available(resource)) throw new Error('Task Objective is unavailable. Pending decisions remain in its view.');
@@ -363,17 +412,19 @@ export function mountDirectResourceExperience(
       if (!available(resource)) throw new Error('Resource is unavailable. Pending text remains in its canonical editor session.');
       await session.flushEdits();
     },
-    frame() { if (!disposed) { clockTimer?.frame(); checklist?.frame(); timeline?.frame(); taskObjective?.frame(); events?.frame(); } },
-    reflow() { if (!disposed) { clockTimer?.reflow(); checklist?.reflow(); timeline?.reflow(); taskObjective?.reflow(); } },
-    async refresh() { if (!disposed && active && available(resource)) { if (clockTimer) await clockTimer.refresh(); else if (taskObjective) await taskObjective.refresh(); else if (timeline) await timeline.refresh(); else if (checklist) await checklist.refresh(); else if (session) await session.refresh(); else if (events) await ports.events?.refresh(); } },
+    frame() { if (!disposed) { if (active && available(resource) && !root.ownerDocument.hidden) missionCard?.frame(); manualTask?.frame(); clockTimer?.frame(); checklist?.frame(); timeline?.frame(); taskObjective?.frame(); events?.frame(); } },
+    reflow() { if (!disposed) { if (active && available(resource)) missionCard?.reflow(); manualTask?.reflow(); clockTimer?.reflow(); checklist?.reflow(); timeline?.reflow(); taskObjective?.reflow(); } },
+    async refresh() { if (!disposed && active && available(resource)) { if (missionCard && !root.ownerDocument.hidden) await missionCard.refresh(); else if (clockTimer) await clockTimer.refresh(); else if (taskObjective) await taskObjective.refresh(); else if (timeline) await timeline.refresh(); else if (checklist) await checklist.refresh(); else if (session) await session.refresh(); else if (events) await ports.events?.refresh(); } },
     ...(kind === 'task_objective' ? { hasUnsavedChanges: () => taskObjective?.hasUnsavedChanges() ?? false } : {}),
     dispose() {
       if (disposed) return;
       disposed = true;
+      missionCard?.dispose(); missionCard = undefined;
       clockTimer?.dispose();
       taskObjective?.dispose();
       timeline?.dispose();
       checklist?.dispose();
+      manualTask?.dispose();
       if (editor) editor.oninput = null;
       if (taskStatus) taskStatus.onchange = null;
       if (taskPriority) taskPriority.onchange = null;

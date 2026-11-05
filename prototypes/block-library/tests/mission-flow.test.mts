@@ -13,7 +13,7 @@ test('shared Flow geometry styles also apply to standalone mission workrooms out
   const css = readFileSync(new URL('../event-view.css', import.meta.url), 'utf8');
   assert.match(css, /\.aw-stream \.aw-stream-node\s*\{[^}]*position:absolute/);
   assert.match(css, /\.aw-stream \.aw-mission-task\s*\{[^}]*width:190px;[^}]*height:70px/);
-  assert.match(css, /\.aw-stream-viewport\s*\{[^}]*max-height:52vh;[^}]*overflow:auto/);
+  assert.match(css, /\.aw-stream-viewport\s*\{[^}]*max-height:52vh;[^}]*overflow:clip/);
 });
 
 test('current mission graph shows independent tasks and actual multi-parent joins without inventing events', () => {
@@ -83,4 +83,17 @@ test('mission motion uses distinct host keys, skips hidden Forensic frames and r
   modes[1].onclick();view.frame();assert.equal(poses.size,3);
   state={...state,mission:null};view.update();view.frame();assert.equal(poses.size,0);
   view.dispose();assert.equal(poses.size,0);
+});
+
+
+test('mission Flow gesture aborts on canonical source revocation and keeps precision navigation behind disclosure',t=>{
+  const dom=blockDocument(),restore=dom.install();let state=window(mission());
+  const view=mountEventExperience(dom.root,{snapshot:()=>state,async refresh(){}});t.after(()=>{view.dispose();restore();});
+  const host=dom.root.querySelector('.aw-mission-flow'),viewport=host.querySelector('.aw-stream-viewport'),scene=host.querySelector('.aw-stream-scene');
+  const menu=host.querySelector('.aw-flow-options');assert.equal(menu.open,false);assert.equal(menu.firstChild.getAttribute('aria-label'),'Flow options');
+  viewport.setPointerCapture=()=>{};viewport.releasePointerCapture=()=>{};
+  const pointer={pointerId:9,button:0,isPrimary:true,clientX:100,clientY:100};viewport.fire('pointerdown',pointer);viewport.fire('pointermove',{...pointer,clientX:180,clientY:140});
+  assert.match(scene.style.transform,/translate\(100px, 60px\)/);
+  state={...state,mission:null};view.update();assert.match(scene.style.transform,/translate\(20px, 20px\)/);assert.equal(viewport.dataset.dragging,undefined);
+  viewport.fire('pointerup',{...pointer,clientX:600});assert.match(scene.style.transform,/translate\(20px, 20px\)/);
 });

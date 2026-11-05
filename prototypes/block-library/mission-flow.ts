@@ -1,3 +1,4 @@
+import { mountFlowGestures, flowOptions } from "./flow-gesture.ts";
 import type { MissionProjection, MissionTask } from "../integrated-backend/src/mission-contracts.mts";
 import type { ExperienceMotionPort } from "../application-contract/motion.ts";
 import { streamPath, type StreamEdge } from "./stream-layout.ts";
@@ -85,21 +86,29 @@ export function mountMissionFlow(root: HTMLElement, options: {
   const transform = () => { scene.style.transform = `translate(${px}px, ${py}px) scale(${zoom})`; };
   const changeZoom = (factor: number) => { zoom = Math.max(.3, Math.min(2, zoom * factor)); transform(); };
   const action = (label: string, run: () => void) => {
-    const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.onclick = () => { if (active) run(); }; tools.append(b); return b;
+    const b = document.createElement("button"); b.type = "button"; b.textContent = label; b.onclick = () => { if (active && current && mode !== "forensic") run(); }; tools.append(b); return b;
   };
   action("Zoom mission in", () => changeZoom(1.2)); action("Zoom mission out", () => changeZoom(1 / 1.2));
   action("Pan mission left", () => { px -= 120; transform(); }); action("Pan mission right", () => { px += 120; transform(); });
   action("Pan mission up", () => { py -= 104; transform(); }); action("Pan mission down", () => { py += 104; transform(); });
   action("Reset mission view", () => { px = py = 20; zoom = 1; transform(); });
+  action("Follow selected task", () => { const point = layout?.nodes.find(n => n.task.id === selected); if (point) { px = 30 - point.x * zoom; py = 30 - point.y * zoom; transform(); } });
+  const menu = flowOptions(tools);
+  const gestures = mountFlowGestures(viewport, {
+    enabled: () => active && !!current && mode !== "forensic",
+    read: () => ({ x: px, y: py, zoom }),
+    write: camera => { px = camera.x; py = camera.y; zoom = camera.zoom; transform(); },
+  });
   viewport.onkeydown = event => {
-    if (!active || event.target !== viewport) return;
+    if (gestures.keydown(event)) return;
+    if (!active || !current || mode === "forensic" || event.target !== viewport) return;
     const actions: Record<string, () => void> = { ArrowLeft: () => { px += 120; }, ArrowRight: () => { px -= 120; }, ArrowUp: () => { py += 104; }, ArrowDown: () => { py -= 104; },
       '+': () => changeZoom(1.2), '=': () => changeZoom(1.2), '-': () => changeZoom(1 / 1.2), Home: () => { px = py = 20; zoom = 1; } };
     if (actions[event.key]) { event.preventDefault(); actions[event.key](); transform(); }
   };
   const open = document.createElement("button"); open.type = "button"; open.textContent = "Open canonical mission evidence";
   open.onclick = () => { if (active && current && selected && layout?.nodes.some(n => n.task.id === selected)) options.openMission?.(current.id); };
-  inspector.append(details, open); viewport.append(scene); host.append(title, coverage, tools, viewport, inspector); root.append(host);
+  inspector.append(details, open); viewport.append(scene); host.append(title, menu, viewport, inspector, coverage); root.append(host);
   const inspect = () => {
     details.replaceChildren();
     const task = active && current ? layout?.nodes.find(n => n.task.id === selected)?.task : undefined;
@@ -112,11 +121,13 @@ export function mountMissionFlow(root: HTMLElement, options: {
     }
   };
   const clear = () => {
+    gestures.cancel(); menu.open = false;
     for (const key of keys) options.motion?.remove(key);
     keys.clear(); elements.clear(); scene.replaceChildren(); details.replaceChildren(); inspector.hidden = true; open.hidden = true; selected = ""; layout = null; title.textContent = coverage.textContent = "";
   };
   return {
     update(mission: MissionProjection | null, nextMode = "flow") {
+      if (!mission || nextMode === "forensic" || layout?.nodes.some(n => !mission.tasks.some(t => t.id === n.task.id))) { gestures.cancel(); menu.open = false; }
       const previousId = current?.id; current = mission; mode = nextMode;
       if (!mission || previousId !== mission.id) clear();
       host.hidden = !mission || mode === "forensic"; host.dataset.mode = mode;
@@ -152,7 +163,7 @@ export function mountMissionFlow(root: HTMLElement, options: {
       for (const key of keys) if (!nextKeys.has(key)) options.motion?.remove(key);
       keys.clear(); for (const key of nextKeys) keys.add(key); options.motion?.wake(); inspect(); transform();
     },
-    setActive(value: boolean) { active = value; inspect(); },
+    setActive(value: boolean) { if (!value) { gestures.cancel(); menu.open = false; } active = value; inspect(); },
     frame() {
       if (!active || !current || !options.motion || !layout || mode === "forensic") return;
       for (const [id, element] of elements) { const pose = options.motion.pose(prefix + current.id + ":" + id); element.style.left = `${pose.x}px`; element.style.top = `${pose.y}px`; element.style.opacity = String(pose.opacity); }
@@ -161,6 +172,6 @@ export function mountMissionFlow(root: HTMLElement, options: {
         p.setAttribute("d", downwardFlowPath(a, b, 190, 70));
       }
     },
-    dispose() { active = false; current = null; clear(); host.remove(); },
+    dispose() { gestures.dispose(); active = false; current = null; clear(); host.remove(); },
   };
 }

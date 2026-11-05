@@ -364,7 +364,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   };
   track.onkeydown = event => {
     if (event.target !== track) return;
-    if (event.key === 'Escape') { clearGesture(); reflow(); event.preventDefault(); }
+    if (event.key === 'Escape' && (drag || wheelCommit !== null || viewportPreview)) { clearGesture(); reflow(); event.preventDefault(); }
     else if (['+', '=', '-', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key) && canNavigate()) {
       event.preventDefault(); const view = visibleDocument()!.view, from = Date.parse(view.viewport.from), to = Date.parse(view.viewport.to); clearGesture();
       if (['+', '=', '-'].includes(event.key)) { const bounds = temporalZoom(from, to, event.key === '-' ? 2 : .5); previewViewport(bounds.from, bounds.to); }
@@ -429,7 +429,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   for (const value of ['activity', 'execution']) { const option = node('option', value === 'activity' ? 'Activity' : 'Execution'); option.value = value; mode.append(option); }
   from.type = to.type = 'datetime-local'; from.step = to.step = '1';
   for (const control of [mode, from, to, provider, eventType, classification]) control.onchange = markDirty;
-  filterPanel.append(label('Timeline mode', mode), label('From (UTC)', from), label('To (UTC)', to), label('Source', provider), label('Event type', eventType), label('Evidence class', classification), apply);
+  filterPanel.append(label('Timeline mode', mode), label('From (UTC)', from), label('To (UTC)', to), label('Source', provider), label('Event type', eventType), label('Evidence class', classification));
   filterPanel.onsubmit = event => { event.preventDefault(); if (canEdit()) { try { void save(collect()); } catch { status.textContent = 'Enter a valid capture-time interval.'; } } };
   filterPanel.hidden = true; filterPanel.inert = true; filterButton.setAttribute('aria-expanded', 'false');
   for (const [value, text] of [['horizontal', 'Horizontal'], ['vertical', 'Vertical'], ['multilane', 'Multiple source lanes']]) { const option = node('option', text); option.value = value; orientation.append(option); }
@@ -447,7 +447,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   presentationTools.append(label('Orientation', orientation), label('Detail', detail), forensicButton);
   track.append(scale, laneLabels, playhead);
   toolbar.append(earlier, later, closer, wider, back, filterButton, refreshButton, retry);
-  optionsPanel.append(presentationTools, toolbar, filterPanel, reviewTools, legend, gaps, sourceCoverage, coverage, more);
+  optionsPanel.append(presentationTools, toolbar, filterPanel, apply, reviewTools, legend, gaps, sourceCoverage, coverage, more);
   heading.append(range, optionsMenu); section.append(title, heading, review, track, gestureHint, reviewTime, items, selection, status); root.append(section);
   planning = mountTemporalPlanning(optionsPanel, track, port, { document: visibleDocument, enabled: () => hostEditable() && !dirty && !viewportPreview, refresh: () => load(false), onBusy: () => setDisabled(), motion, prefix, layout: () => ({ orientation: display, extent: graphExtent(), historyHeight: 64 + Math.max(1, display === 'multilane' ? new Set(window?.items.map(item => item.event.providerId) ?? []).size : 1) * (density === 'compact' ? 56 : 88) }) });
   section.inert = !active; section.hidden = !active; section.style.opacity = '0'; items.style.height = '0px'; paint(); if (active) void load(false);

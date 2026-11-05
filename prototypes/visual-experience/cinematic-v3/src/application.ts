@@ -178,6 +178,8 @@ import "../../../block-library/identity-view.css";
 import { mountSubjectExperience } from "../../../block-library/subject-view.ts";
 import "../../../block-library/subject-view.css";
 import { mountTaskGroupExperience } from "../../../block-library/task-group-view.ts";
+import { mountManualTaskExperience } from "../../../block-library/manual-task-view.ts";
+import "../../../block-library/manual-task-view.css";
 import "../../../block-library/task-group-view.css";
 import {
   mountEventExperience,
@@ -585,6 +587,7 @@ export function installApplication(hooks: Hooks) {
     string,
     ReturnType<typeof mountTaskGroupExperience>
   >();
+  const manualTaskViews = new Map<string, ReturnType<typeof mountManualTaskExperience>>();
   const subjectViews = new Map<
     string,
     ReturnType<typeof mountSubjectExperience>
@@ -768,6 +771,11 @@ export function installApplication(hooks: Hooks) {
       mountDirectResourceExperience(root, resource, {
         notes: notesClient,
         mountCard: mountWorkroomCard,
+        manualTasks: { motion: experienceMotion, viewId: `direct:${resource.id}:manual-task` },
+        mountMissionCard: (container, resource) => {
+          if (!missionWorkroomCardIds.has(resource.id) || resource.kind === 'timeline' || resource.kind === 'checklist') return undefined;
+          return mountWorkroomCard(container, resource.id, resource.kind === 'stream' ? 'stream' : 'dashboard');
+        },
         media: mediaClient,
         folders:folderPort,
         clockTimers: { port: productClients.clockTimers },
@@ -808,12 +816,16 @@ export function installApplication(hooks: Hooks) {
           ),
         setTaskStatus: (input) =>
           enqueueResult(async () => {
-            await flush();
+            await flushTaskContent(input.resourceId);
+            const current = state?.resources.find(resource => resource.id === input.resourceId);
+            if (!current || current.available === false || current.visible === false || current.state === 'archived') throw new Error('task_unavailable');
             await command({ type: "taskStatus", ...input });
           }),
         setTaskPriority: (input) =>
           enqueueResult(async () => {
-            await flush();
+            await flushTaskContent(input.resourceId);
+            const current = state?.resources.find(resource => resource.id === input.resourceId);
+            if (!current || current.available === false || current.visible === false || current.state === 'archived') throw new Error('task_unavailable');
             await command({ type: "taskPriority", ...input });
           }),
         manageMembers: taskGroupMembers,
@@ -1315,6 +1327,8 @@ export function installApplication(hooks: Hooks) {
         view.dispose();
         groupViews.delete(id);
       }
+    for (const [id, view] of manualTaskViews)
+      if (!next.blocks.some((b) => b.id === id)) { view.dispose(); manualTaskViews.delete(id); }
     for (const [id, view] of subjectViews)
       if (!next.blocks.some((b) => b.id === id)) {
         view.dispose();
@@ -1655,6 +1669,12 @@ export function installApplication(hooks: Hooks) {
         if (drafts.get(resourceId) === draft) drafts.delete(resourceId);
       }
     }
+  }
+  async function flushTaskContent(resourceId: string) {
+    const draft = drafts.get(resourceId);
+    clearTimeout(draft?.timer);
+    await noteSessions.get(resourceId)?.flushEdits();
+    if (drafts.get(resourceId) === draft) drafts.delete(resourceId);
   }
   function queueDesktop(a: DesktopCommand) {
     // Navigation cancels older reads when requested, before flushing drafts or
@@ -4629,85 +4649,28 @@ export function installApplication(hooks: Hooks) {
         if (editor.value !== content) editor.value = content;
       }
       if (r.kind === "task") {
-        if (!article.querySelector(".task-priority")) {
-          const label = document.createElement("label");
-          label.textContent = "Priority";
-          const priority = document.createElement("select");
-          priority.className = "task-priority";
-          priority.setAttribute("aria-label", "Task priority");
-          for (const value of ["low", "normal", "high", "urgent"]) {
-            const option = document.createElement("option");
-            option.value = value;
-            option.textContent = value[0].toUpperCase() + value.slice(1);
-            priority.append(option);
-          }
-          label.append(priority);
-          el(".working-content", article).prepend(label);
-          priority.onchange = () => {
-            const selectedPriority = priority.value as NonNullable<
-              Resource["taskPriority"]
-            >;
-            priority.disabled = true;
-            void enqueue(async () => {
-              await flush();
-              const current = state!.resources.find(
-                (resource) => resource.id === r.id,
-              )!;
-              await command({
-                type: "taskPriority",
-                resourceId: r.id,
-                expectedVersion: current.version,
-                priority: selectedPriority,
-              });
-            }).finally(() => {
-              priority.disabled = false;
-              priority.value =
-                state!.resources.find((resource) => resource.id === r.id)
-                  ?.taskPriority ?? "normal";
-            });
-          };
+        let task = manualTaskViews.get(id);
+        if (!task && activeBlocks.get(id)) {
+          const primary = document.createElement('div');
+          primary.className = 'manual-task-primary';
+          el('.working-content', article).prepend(primary);
+          const mutateTask = (input: { resourceId: string; expectedVersion: number } & ({ status: 'open' | 'done' } | { priority: NonNullable<Resource['taskPriority']> })) => enqueueResult(async () => {
+            const before = state?.resources.find(resource => resource.id === input.resourceId);
+            if (!before || before.version !== input.expectedVersion) throw new Error('task_version_conflict');
+            await flushTaskContent(input.resourceId);
+            const current = state?.resources.find(resource => resource.id === input.resourceId);
+            if (!current || current.available === false || current.visible === false || current.state === 'archived') throw new Error('task_unavailable');
+            if (current.taskStatus !== before.taskStatus || current.taskPriority !== before.taskPriority) throw new Error('task_version_conflict');
+            if ('status' in input) await command({ type: 'taskStatus', resourceId: input.resourceId, expectedVersion: current.version, status: input.status });
+            else await command({ type: 'taskPriority', resourceId: input.resourceId, expectedVersion: current.version, priority: input.priority });
+          });
+          task = mountManualTaskExperience(primary, r, {
+            setTaskStatus: mutateTask, setTaskPriority: mutateTask,
+            readResource: resourceId => state?.resources.find(resource => resource.id === resourceId),
+          }, { motion: experienceMotion, viewId: `workspace:${id}:manual-task`, active: true, presentation: blockPresentation(id) });
+          manualTaskViews.set(id, task);
         }
-        el<HTMLSelectElement>(".task-priority", article).value =
-          r.taskPriority ?? "normal";
-        if (!article.querySelector(".task-completed")) {
-          const label = document.createElement("label");
-          label.className = "local-task-state";
-          label.innerHTML =
-            '<input class="task-completed" type="checkbox"> Completed locally';
-          el(".working-content", article).prepend(label);
-          el<HTMLInputElement>(".task-completed", article).onchange = (
-            event,
-          ) => {
-            const checkbox = event.target as HTMLInputElement;
-            if (checkbox.disabled) return;
-            const status = checkbox.checked ? "done" : "open";
-            checkbox.disabled = true;
-            checkbox.setAttribute("aria-busy", "true");
-            void enqueue(async () => {
-              await flush();
-              const current = state?.resources.find(
-                (resource) => resource.id === r.id,
-              );
-              if (!current || current.available === false)
-                throw new Error("task_unavailable");
-              await command({
-                type: "taskStatus",
-                resourceId: r.id,
-                expectedVersion: current.version,
-                status,
-              });
-            }).finally(() => {
-              const current = state?.resources.find(
-                (resource) => resource.id === r.id,
-              );
-              checkbox.checked = current?.taskStatus === "done";
-              checkbox.disabled = !current || current.available === false;
-              checkbox.removeAttribute("aria-busy");
-            });
-          };
-        }
-        el<HTMLInputElement>(".task-completed", article).checked =
-          r.taskStatus === "done";
+        task?.update(r);
         el(".folio-subtitle", article).textContent =
           `Local task · ${r.taskStatus ?? "open"} · ${r.id.slice(0, 8)}`;
       }
@@ -5181,6 +5144,7 @@ export function installApplication(hooks: Hooks) {
     subjectViews.get(id)?.setPresentation(presentation);
     eventViews.get(id)?.setPresentation(presentation);
     groupViews.get(id)?.setPresentation(presentation);
+    manualTaskViews.get(id)?.setPresentation(presentation);
     checklistViews.get(id)?.view.setPresentation(presentation);
     clockTimerViews.get(id)?.view.setPresentation(presentation);
     agentBlockViews.get(id)?.view.setPresentation(presentation);
@@ -5206,6 +5170,7 @@ export function installApplication(hooks: Hooks) {
     subjectViews.get(id)?.setActive(active);
     eventViews.get(id)?.setActive(active);
     groupViews.get(id)?.setActive(active);
+    manualTaskViews.get(id)?.setActive(active);
     checklistViews.get(id)?.view.setActive(active);
     clockTimerViews.get(id)?.view.setActive(active);
     agentBlockViews.get(id)?.view.setActive(active);
@@ -5294,6 +5259,8 @@ export function installApplication(hooks: Hooks) {
       for (const [id, view] of chatViews)
         if (blockPresentations.get(id)?.visible) view.frame();
       for (const [id, view] of eventViews)
+        if (blockPresentations.get(id)?.visible) view.frame();
+      for (const [id, view] of manualTaskViews)
         if (blockPresentations.get(id)?.visible) view.frame();
       frameBlockViews(timelineViews);
       frameBlockViews(agentBlockViews);
@@ -5459,6 +5426,7 @@ export function installApplication(hooks: Hooks) {
         throw Error(
           "Save or discard the agent profile changes before closing.",
         );
+      await tail;
       await flush();
       await constellation?.controller.persist();
       await flush();

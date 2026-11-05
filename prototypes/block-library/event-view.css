@@ -129,7 +129,7 @@
 /* Causal current: the graph is primary; the precise list belongs to Forensic. */
 .aw-stream-modes, .aw-stream-controls { display:flex; flex-wrap:wrap; gap:.35rem; margin:.5rem 0; }
 .aw-stream-modes button[aria-pressed="true"] { border-color:#9cded5; background:#89d8d52b; }
-.aw-stream-viewport { height:340px; max-height:52vh; width:100%; max-width:100%; min-width:0; box-sizing:border-box; overflow:auto; position:relative; border:1px solid #a7c8cb33; border-radius:1rem; background:radial-gradient(ellipse at 50% 20%,#24535a30,transparent 65%),#0d182430; }
+.aw-stream-viewport { height:340px; max-height:52vh; width:100%; max-width:100%; min-width:0; box-sizing:border-box; overflow:clip; touch-action:none; cursor:grab; position:relative; border:1px solid #a7c8cb33; border-radius:1rem; background:radial-gradient(ellipse at 50% 20%,#24535a30,transparent 65%),#0d182430; }
 .aw-stream-scene { position:relative; transform-origin:0 0; }
 .aw-stream-links { position:absolute; inset:0; overflow:visible; pointer-events:none; }
 .aw-stream-edge { fill:none; stroke:#7fbec177; stroke-width:2; }
@@ -164,3 +164,20 @@
 .aw-mission-task[data-task-state="blocked"], .aw-mission-task[data-task-state="failed"] { border-color:#ed9c9c; border-radius:.3rem; }
 .aw-mission-task[data-task-state="uncertain"] { border-style:dashed; }
 .aw-mission-task[data-task-state="cancelled"] { opacity:.65; }
+
+/* Precision navigation lives behind one disclosure; the current moves directly. */
+.aw-stream { position:relative; min-width:0; }
+.aw-flow-options { position:relative; z-index:5; width:max-content; margin:0 0 .35rem auto; }
+.aw-flow-options > summary { display:grid; place-items:center; min-width:34px; min-height:34px; padding:0 .35rem; border:1px solid transparent; border-radius:50%; color:#cfdfeb; cursor:pointer; list-style:none; font-size:1.2rem; }
+.aw-flow-options > summary::-webkit-details-marker { display:none; }
+.aw-flow-options > summary::marker { content:''; }
+.aw-flow-options > summary:hover,.aw-flow-options[open] > summary { border-color:#adc9e638; background:#adc9e710; }
+.aw-flow-options > summary:focus-visible { outline:2px solid #dbf4ef; outline-offset:3px; }
+.aw-flow-options-panel { position:absolute; right:0; top:calc(100% + .4rem); z-index:20; box-sizing:border-box; width:min(22rem,calc(100vw - 3rem)); max-height:55vh; overflow:auto; overscroll-behavior:contain; padding:.8rem; margin:0; gap:.45rem; border:1px solid #adc9e63b; border-radius:1rem; background:#142431f5; backdrop-filter:blur(16px); box-shadow:0 14px 40px #0006; }
+.aw-flow-options:not([open]) > .aw-flow-options-panel { display:none; }
+.aw-stream-viewport[data-dragging=true] { cursor:grabbing; user-select:none; }
+.aw-stream-node { cursor:pointer; }
+.aw-stream-scene { user-select:none; }
+.aw-stream-inspector { user-select:text; }
+.aw-mission-flow > .aw-stream-coverage { font-size:.72em; opacity:.75; }
+@media (prefers-reduced-transparency:reduce) { .aw-flow-options-panel { background:#142431; backdrop-filter:none; } }
