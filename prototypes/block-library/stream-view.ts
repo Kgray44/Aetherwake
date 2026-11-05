@@ -1,6 +1,7 @@
 import type { StreamEvent } from "../integrated-backend/src/contracts.mts";
 import type { ExperienceMotionPort } from "../application-contract/motion.ts";
 import { layoutStream, streamPath, type StreamLayout } from "./stream-layout.ts";
+import { downwardFlowPath } from './flow-geometry.ts';
 
 const make = (tag: string, text = "") => { const e = document.createElement(tag); e.textContent = text; return e; };
 const glyphs: Record<string,string> = { failure: "×", uncertain: "?", gate: "◇", verification: "▣", tool: "⚒", evidence: "◈", outcome: "◎", recovery: "↻", activity: "●" };
@@ -89,7 +90,7 @@ export function mountStreamGraph(root: HTMLElement, options: {
       const a = positions.get(edge.from)!, b = positions.get(edge.to)!;
       const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
       p.classList.add("aw-stream-edge"); p.dataset.from = edge.from; p.dataset.to = edge.to;
-      p.setAttribute("d", `M ${a.x + 176} ${a.y + 30} C ${a.x + 198} ${a.y + 30}, ${b.x - 24} ${b.y + 30}, ${b.x} ${b.y + 30}`); svg.append(p);
+      p.setAttribute("d", downwardFlowPath(a, b, 176, 60)); svg.append(p);
     }
     scene.append(svg);
     const nextKeys = new Set<string>();
@@ -115,7 +116,8 @@ export function mountStreamGraph(root: HTMLElement, options: {
     older.hidden = !layout.omitted;
     older.textContent = `${layout.omitted} older recorded events · inspect in Forensic`;
     options.motion?.wake(); inspect(); transform();
-    note.textContent = `${layout.nodes.length} recorded nodes · ${layout.edges.length} explicit causal links. ${layout.omitted ? `${layout.omitted} older matching events omitted from this bounded view; use Forensic search. ` : ""}${layout.unresolved ? `${layout.unresolved} parent references unavailable or ambiguous. ` : ""}Correlation groups do not prove causation. Mission dependency joins are unavailable in this source.`;
+    const linked = new Set(layout.edges.flatMap(edge => [edge.from, edge.to]));
+    note.textContent = `${layout.nodes.length} recorded nodes · ${layout.edges.length} explicit causal links. ${layout.nodes.filter(node => !linked.has(node.event.eventId)).length} unlinked records are compact spatial tiles, not a causal sequence. ${layout.omitted ? `${layout.omitted} older matching events omitted from this bounded view; use Forensic search. ` : ""}${layout.unresolved ? `${layout.unresolved} parent references unavailable or ambiguous. ` : ""}Correlation groups do not prove causation. Mission dependency joins are unavailable in this source.`;
   }
   return {
     update(events: readonly StreamEvent[]) { layout = layoutStream(events, mode === "glimpse" ? 24 : 80); if (!layout.nodes.some(n => n.event.eventId === selected)) selected = ""; render(); },
@@ -128,7 +130,7 @@ export function mountStreamGraph(root: HTMLElement, options: {
       for (const edge of Array.from(scene.querySelectorAll(".aw-stream-edge"))) {
         const el = edge as SVGElement;
         const a = options.motion.pose(prefix + el.dataset.from), b = options.motion.pose(prefix + el.dataset.to);
-        el.setAttribute("d", `M ${a.x + 176} ${a.y + 30} C ${a.x + 198} ${a.y + 30}, ${b.x - 24} ${b.y + 30}, ${b.x} ${b.y + 30}`);
+        el.setAttribute("d", downwardFlowPath(a, b, 176, 60));
       }
     },
     dispose() { active = false; inspect(); for (const key of keys) options.motion?.remove(key); keys.clear(); elements.clear(); layout = { nodes: [], edges: [], omitted: 0, unresolved: 0 }; scene.replaceChildren(); host.remove(); },

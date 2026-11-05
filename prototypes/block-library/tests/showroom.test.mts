@@ -62,6 +62,10 @@ test('temporal, causal, conversation, agent, navigation and knowledge miniatures
   assert.equal(new Set(miniatures.map(item => item.className)).size, kinds.length);
   assert.equal(new Set(miniatures.map(item => item.textContent)).size, kinds.length);
   assert(miniatures.every(item => item.getAttribute('aria-hidden') === 'true'));
+  const stream = miniatures[kinds.indexOf('stream')];
+  assert.equal(stream.querySelector('.aw-showroom-example-branches')!.children.length, 2);
+  assert.match(stream.textContent!, /Example intent.*Source A.*Source B.*Await both sources/);
+  const joined = instrumentMiniature('stream', 2); assert.match(joined.textContent!, /Example evidence join/);
 });
 
 test('actual library exposes seven intent filters, replay stays isolated and Timeline remains reference-only', async t => {

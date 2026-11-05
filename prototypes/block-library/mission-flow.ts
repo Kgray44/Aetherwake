@@ -1,6 +1,7 @@
 import type { MissionProjection, MissionTask } from "../integrated-backend/src/mission-contracts.mts";
 import type { ExperienceMotionPort } from "../application-contract/motion.ts";
 import { streamPath, type StreamEdge } from "./stream-layout.ts";
+import { compactFlowGeometry, downwardFlowPath } from './flow-geometry.ts';
 
 export function missionFlowInScope(mission: MissionProjection | null | undefined, scope: {
   workspaceId?: string | null; projectId: string | null; resources: readonly { id: string }[];
@@ -31,11 +32,9 @@ export function layoutMissionFlow(mission: MissionProjection, limit = 80) {
     }
     if (!changed) break;
   }
-  const lanes = new Map<number, number>();
+  const positions = compactFlowGeometry(tasks.map(task => task.id), edges);
   const nodes = tasks.map(task => {
-    const depth = depths.get(task.id) ?? 0, lane = lanes.get(depth) ?? 0;
-    lanes.set(depth, lane + 1);
-    return { task, x: depth * 226, y: lane * 104, join: task.dependencies.length > 1 };
+    return { task, ...positions.get(task.id)!, join: task.dependencies.length > 1 };
   });
   return { nodes, edges, omitted: mission.tasks.length - tasks.length, unavailable, cycles: remaining.size };
 }
@@ -125,7 +124,7 @@ export function mountMissionFlow(root: HTMLElement, options: {
       layout = layoutMissionFlow(mission, mode === "glimpse" ? 24 : 80);
       if (!layout.nodes.some(n => n.task.id === selected)) selected = "";
       title.textContent = mission.objective;
-      coverage.textContent = `Current plan / execution projection · mission ${mission.id} · revision ${mission.revision}, plan ${mission.planRevision} · outcome ${mission.outcome}. ${layout.nodes.length} tasks, ${layout.edges.length} declared dependencies. ${layout.omitted ? `${layout.omitted} tasks omitted from this bounded view. ` : ""}${layout.unavailable ? `${layout.unavailable} dependencies outside this view or invalid. ` : ""}${layout.cycles ? `${layout.cycles} tasks have unresolved cyclic layout. ` : ""}These links are current task dependencies, not historical event causality. Event filters apply to retained events.`;
+      coverage.textContent = `Current plan / execution projection · mission ${mission.id} · revision ${mission.revision}, plan ${mission.planRevision} · outcome ${mission.outcome}. ${layout.nodes.length} tasks, ${layout.edges.length} declared dependencies. ${layout.omitted ? `${layout.omitted} tasks omitted from this bounded view. ` : ""}${layout.unavailable ? `${layout.unavailable} dependencies outside this view or invalid. ` : ""}${layout.cycles ? `${layout.cycles} tasks have unresolved cyclic layout. ` : ""}Independent roots sit alongside one another; unconnected groups are spatial grouping only. These links are current task dependencies, not historical event causality. Event filters apply to retained events.`;
       const previous = new Map(elements); elements.clear(); scene.querySelector("svg")?.remove();
       const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg"); svg.classList.add("aw-stream-links"); svg.setAttribute("aria-hidden", "true");
       const width = Math.max(600, ...layout.nodes.map(n => n.x + 210)), height = Math.max(280, ...layout.nodes.map(n => n.y + 90));
@@ -134,7 +133,7 @@ export function mountMissionFlow(root: HTMLElement, options: {
       for (const edge of layout.edges) {
         const a = positions.get(edge.from)!, b = positions.get(edge.to)!;
         const p = document.createElementNS("http://www.w3.org/2000/svg", "path"); p.classList.add("aw-stream-edge", "aw-mission-edge"); p.dataset.from = edge.from; p.dataset.to = edge.to;
-        p.setAttribute("d", `M ${a.x + 190} ${a.y + 35} C ${a.x + 210} ${a.y + 35}, ${b.x - 20} ${b.y + 35}, ${b.x} ${b.y + 35}`); svg.append(p);
+        p.setAttribute("d", downwardFlowPath(a, b, 190, 70)); svg.append(p);
       }
       scene.append(svg); const nextKeys = new Set<string>();
       for (const item of layout.nodes) {
@@ -159,7 +158,7 @@ export function mountMissionFlow(root: HTMLElement, options: {
       for (const [id, element] of elements) { const pose = options.motion.pose(prefix + current.id + ":" + id); element.style.left = `${pose.x}px`; element.style.top = `${pose.y}px`; element.style.opacity = String(pose.opacity); }
       for (const edge of Array.from(scene.querySelectorAll(".aw-mission-edge"))) { const p = edge as SVGElement;
         const a = options.motion.pose(prefix + current.id + ":" + p.dataset.from), b = options.motion.pose(prefix + current.id + ":" + p.dataset.to);
-        p.setAttribute("d", `M ${a.x + 190} ${a.y + 35} C ${a.x + 210} ${a.y + 35}, ${b.x - 20} ${b.y + 35}, ${b.x} ${b.y + 35}`);
+        p.setAttribute("d", downwardFlowPath(a, b, 190, 70));
       }
     },
     dispose() { active = false; current = null; clear(); host.remove(); },

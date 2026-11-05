@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { layoutMissionFlow, missionFlowInScope, missionTaskMetadata } from '../mission-flow.ts';
 import { mountEventExperience, type EventWindow } from '../event-view.ts';
 import type { MissionProjection, MissionTask } from '../../integrated-backend/src/mission-contracts.mts';
@@ -8,12 +9,32 @@ const task = (id: string, dependencies: string[] = [], state: MissionTask['state
 const mission = (): MissionProjection => ({ contract: 'aerynth.vela-mission@1', id: 'fixture-mission', requestId: 'fixture-request', objective: 'Synthetic mission objective', scope: { workspaceId: 'workspace', projectId: null }, criteria: ['Synthetic criterion'], createdAt: '2026-11-05T00:00:00Z', revision: 4, planRevision: 2, concurrency: 2, disposition: 'active', tasks: [task('cpu', [], 'verified'), task('ram', [], 'running'), task('join', ['cpu','ram'])], events: [], outcome: 'running', waits: {join: 'dependencies'}, profile: { elapsedMs: 1, peakWorkers: 2, attempts: 2, retries: 0, providerCalls: null, reportedTotalTokens: null, usageReports: 0, verifiedObjectivesPerReportedToken: null } });
 const window = (projection: MissionProjection | null): EventWindow => ({ events: [], earliest: null, latest: 0, disconnected: false, resources: [], workspaceResourceIds: [], workspaceId: 'workspace', projectId: null, mission: projection });
 
+test('shared Flow geometry styles also apply to standalone mission workrooms outside an EventView wrapper', () => {
+  const css = readFileSync(new URL('../event-view.css', import.meta.url), 'utf8');
+  assert.match(css, /\.aw-stream \.aw-stream-node\s*\{[^}]*position:absolute/);
+  assert.match(css, /\.aw-stream \.aw-mission-task\s*\{[^}]*width:190px;[^}]*height:70px/);
+  assert.match(css, /\.aw-stream-viewport\s*\{[^}]*max-height:52vh;[^}]*overflow:auto/);
+});
+
 test('current mission graph shows independent tasks and actual multi-parent joins without inventing events', () => {
   const input = mission(), before = structuredClone(input), result = layoutMissionFlow(input);
-  assert.equal(result.nodes[0]!.x, result.nodes[1]!.x); assert.notEqual(result.nodes[0]!.y, result.nodes[1]!.y);
-  assert.equal(result.nodes[2]!.join, true); assert.ok(result.nodes[2]!.x > result.nodes[0]!.x);
+  assert.notEqual(result.nodes[0]!.x, result.nodes[1]!.x); assert.equal(result.nodes[0]!.y, result.nodes[1]!.y);
+  assert.equal(result.nodes[2]!.join, true); assert.ok(result.nodes[2]!.y > result.nodes[0]!.y);
+  assert.equal(result.nodes[2]!.x, (result.nodes[0]!.x + result.nodes[1]!.x) / 2);
   assert.deepEqual(result.edges, [{from:'cpu',to:'join'}, {from:'ram',to:'join'}]);
   assert.deepEqual(input, before); assert.equal(input.events.length, 0);
+});
+
+test('a genuine branch and rejoin uses spatial levels while disconnected tasks remain unlinked compact peers', () => {
+  const input = mission(); input.tasks = [task('intent'), task('left', ['intent']), task('right', ['intent']), task('joined', ['left', 'right']), task('unrelated')];
+  const graph = layoutMissionFlow(input), byId = new Map(graph.nodes.map(node => [node.task.id, node]));
+  assert.equal(byId.get('left')!.y, byId.get('right')!.y); assert.notEqual(byId.get('left')!.x, byId.get('right')!.x);
+  assert(byId.get('intent')!.y < byId.get('left')!.y && byId.get('joined')!.y > byId.get('right')!.y);
+  assert.equal(byId.get('intent')!.x, byId.get('joined')!.x);
+  assert(!graph.edges.some(edge => edge.from === 'unrelated' || edge.to === 'unrelated'));
+  input.tasks = Array.from({ length: 12 }, (_, index) => task('independent-' + index));
+  const peers = layoutMissionFlow(input); assert.equal(peers.edges.length, 0); assert.equal(new Set(peers.nodes.map(node => node.x)).size, 4);
+  assert(Math.max(...peers.nodes.map(node => node.y)) < 400);
 });
 
 test('bounded mission layout discloses missing parents and cycles without guessing them', () => {

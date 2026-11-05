@@ -19,8 +19,18 @@ const snapshot = (events: StreamEvent[]): EventWindow => ({ events, earliest: 1,
 test("explicit canonical causes branch while shared correlation alone never creates edges", () => {
   const layout = layoutStream([event(4), event(2, { causationId: "event-1" }), event(1), event(3, { causationId: "event-1" })]);
   assert.deepEqual(layout.edges, [{ from: "event-1", to: "event-2" }, { from: "event-1", to: "event-3" }]);
-  assert.notEqual(layout.nodes[1].y, layout.nodes[2].y);
+  assert.notEqual(layout.nodes[1].x, layout.nodes[2].x);
+  assert.equal(layout.nodes[1].y, layout.nodes[2].y);
+  assert(layout.nodes[1].y > layout.nodes[0].y, 'Branches descend from their actual parent');
   assert.deepEqual([...streamPath(layout.edges, "event-2")].sort(), ["event-1", "event-2"]);
+});
+
+test('unrelated records form bounded side-by-side spatial tiles without inventing a causal sequence', () => {
+  const result = layoutStream(Array.from({ length: 20 }, (_, index) => event(index + 1)));
+  assert.equal(result.edges.length, 0); assert.equal(new Set(result.nodes.map(node => `${node.x}:${node.y}`)).size, 20);
+  assert.equal(new Set(result.nodes.map(node => node.x)).size, 4);
+  assert(result.nodes[0].y === result.nodes[1].y && result.nodes[0].x !== result.nodes[1].x);
+  assert(Math.max(...result.nodes.map(node => node.x)) < 850); assert(Math.max(...result.nodes.map(node => node.y)) < 700);
 });
 
 test("native causes resolve only uniquely within provider instance, connection and thread", () => {

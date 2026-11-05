@@ -1,4 +1,5 @@
 import type { StreamEvent } from "../integrated-backend/src/contracts.mts";
+import { compactFlowGeometry } from './flow-geometry.ts';
 
 export type StreamEdge = { from: string; to: string };
 export type StreamLayout = {
@@ -29,18 +30,9 @@ export function layoutStream(events: readonly StreamEvent[], limit = 80): Stream
     if (parent && parent.cursor < event.cursor) edges.push({ from: parent.eventId, to: event.eventId });
     else unresolved++;
   }
-  const positions = new Map<string, { x: number; y: number }>();
-  const laneNext = new Map<number, number>();
-  let roots = 0;
+  const positions = compactFlowGeometry(visible.map(event => event.eventId), edges, 176, 60);
   const nodes = visible.map(event => {
-    const edge = edges.find(e => e.to === event.eventId);
-    const parent = edge && positions.get(edge.from);
-    const depth = parent ? Math.round(parent.x / 210) + 1 : 0;
-    const lane = Math.max(parent ? Math.round(parent.y / 94) : roots++, laneNext.get(depth) ?? 0);
-    laneNext.set(depth, lane + 1);
-    const point = { x: depth * 210, y: lane * 94 };
-    positions.set(event.eventId, point);
-    return { event, ...point, family: streamFamily(event) };
+    return { event, ...positions.get(event.eventId)!, family: streamFamily(event) };
   });
   return { nodes, edges, omitted: Math.max(0, ordered.length - visible.length), unresolved };
 }

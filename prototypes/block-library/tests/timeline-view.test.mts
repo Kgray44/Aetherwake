@@ -28,6 +28,58 @@ async function setup(t: any, configure?: (f: ReturnType<typeof timelineFixture>)
   return { f, dom, controller, coordinator, opened, external, ready, frame, settled, get document() { return document; }, get window() { return window; } };
 }
 
+test('direct graph drag previews without writes, cancels safely and commits one canonical viewport on release', async t => {
+  const s = await setup(t); await s.ready(); s.frame();
+  const track = s.dom.root.querySelector('.aw-timeline-track'), before = structuredClone(s.document!.view), version = s.document!.resource.version;
+  const pointer = (x: number) => ({ target: track, button: 0, pointerId: 3, clientX: x, clientY: 70, preventDefault() {}, stopPropagation() {} });
+  assert.equal(s.dom.root.querySelector('.aw-timeline-options').open, false);
+  assert.equal(s.dom.root.querySelector('.aw-timeline-selection').hidden, true);
+  track.onpointerdown(pointer(100)); track.onpointermove(pointer(161.2)); s.frame();
+  assert.equal(track.ownerDocument.activeElement, track, 'The graph owns Escape while dragging, rather than dismissing its parent surface');
+  assert.equal(s.f.service.read(s.f.created.resourceId).resource.version, version, 'Pointer movement is a local preview');
+  track.onkeydown({ target: track, key: 'Escape', preventDefault() {} });
+  assert.deepEqual(s.f.service.read(s.f.created.resourceId).view, before);
+  track.onpointerdown(pointer(100)); track.onpointermove(pointer(161.2)); track.onpointerup(pointer(161.2));
+  await until(() => s.document!.resource.version === version + 1 && s.settled());
+  const saved = s.f.service.read(s.f.created.resourceId);
+  assert.equal(Date.parse(saved.view.viewport.from), Date.parse(before.viewport.from) - 8640000);
+  assert.equal(Date.parse(saved.view.viewport.to) - Date.parse(saved.view.viewport.from), 86400000);
+  assert.equal(saved.resource.id, s.f.created.resourceId);
+});
+
+test('pointer-anchored graph wheel coalesces into one canonical save and suspension cancels pending work', async t => {
+  const s = await setup(t); await s.ready(); s.frame();
+  const track = s.dom.root.querySelector('.aw-timeline-track'), before = structuredClone(s.document!.view), version = s.document!.resource.version;
+  const wheel = { target: track, deltaY: -100, deltaX: 0, deltaMode: 0, shiftKey: false, clientX: 167, clientY: 70, preventDefault() {}, stopPropagation() {} };
+  track.onwheel(wheel); track.onwheel(wheel);
+  assert.equal(s.f.service.read(s.f.created.resourceId).resource.version, version);
+  await s.controller.flush(); await until(() => s.settled());
+  const saved = s.f.service.read(s.f.created.resourceId), span = Date.parse(saved.view.viewport.to) - Date.parse(saved.view.viewport.from);
+  assert.equal(saved.resource.version, version + 1, 'A wheel burst creates one receipt');
+  assert(span < 86400000);
+  const anchor = Date.parse(before.viewport.from) + 86400000 * .25;
+  assert(Math.abs(Date.parse(saved.view.viewport.from) + span * .25 - anchor) < 2, 'Pointer time remains anchored');
+  track.onwheel(wheel); s.controller.setActive(false); await s.controller.flush();
+  assert.equal(s.f.service.read(s.f.created.resourceId).resource.version, version + 1);
+});
+
+test('read-only graph gestures remain local and a competing revision cannot be overwritten by a pending wheel preview', async t => {
+  const s = await setup(t); await s.ready(); s.frame();
+  const track = s.dom.root.querySelector('.aw-timeline-track'), before = structuredClone(s.document!.view), version = s.document!.resource.version;
+  const wheel = { deltaY: -80, deltaX: 0, deltaMode: 0, shiftKey: false, clientX: 167, clientY: 70, preventDefault() {}, stopPropagation() {} };
+  track.onwheel(wheel);
+  const competing = structuredClone(before); competing.viewport.from = '2026-11-02T01:00:00.000Z';
+  s.f.service.save({ commandId: 'synthetic:competing-gesture-view', resourceId: s.f.created.resourceId, expectedVersion: version, view: competing });
+  await s.controller.refresh(); await s.controller.flush();
+  assert.deepEqual(s.f.service.read(s.f.created.resourceId).view, competing);
+  assert.equal(s.f.service.read(s.f.created.resourceId).resource.version, version + 1);
+  s.f.setWritable(false); await s.controller.refresh();
+  track.onwheel(wheel); await s.controller.flush(); s.frame();
+  assert.deepEqual(s.f.service.read(s.f.created.resourceId).view, competing);
+  assert.equal(s.f.service.read(s.f.created.resourceId).resource.version, version + 1);
+  assert.notEqual(s.dom.root.querySelector('.aw-timeline-range').textContent, '', 'Local read-only navigation remains visible');
+});
+
 test('typed GitHub evidence uses the saved axis, independent coverage, and an identity-only host open', async t => {
   const externalEvidence: TimelineExternalEvidence = {
     kind: 'github-commit', title: 'Preserve placement history',

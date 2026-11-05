@@ -170,7 +170,16 @@
 .aw-showroom-miniature--timer { grid-template-columns: 42px 1fr; border-radius: 38px; align-items: center; }
 .aw-showroom-orbit { grid-row: span 2; font-size: 44px; line-height: 1; color: #e1d2a5; }
 .aw-showroom-digits { font-size: 24px; font-variant-numeric: tabular-nums; }
-.aw-showroom-miniature--stream { border-left: 3px solid #b8ace3; gap: 0; padding-left: 20px; }
+.aw-showroom-miniature--stream { border-left:3px solid #b8ace3; gap:8px; text-align:center; min-height:142px; }
+.aw-showroom-example-intent,.aw-showroom-example-join { position:relative; justify-self:center; padding:3px 8px; border:1px solid #b8ace35e; border-radius:8px; background:#b8ace311; }
+.aw-showroom-example-intent::after,.aw-showroom-example-join::before { content:''; position:absolute; left:50%; height:8px; border-left:1px solid #b8ace3; }
+.aw-showroom-example-intent::after { top:100%; }.aw-showroom-example-join::before { bottom:100%; }
+.aw-showroom-example-branches { position:relative; display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:9px 0; }
+.aw-showroom-example-branches::before,.aw-showroom-example-branches::after { content:''; position:absolute; left:25%; right:25%; border-top:1px solid #b8ace3; }
+.aw-showroom-example-branches::before { top:0; }.aw-showroom-example-branches::after { bottom:0; }
+.aw-showroom-example-branches span { position:relative; border:1px solid #b8ace35e; border-radius:5px; padding:3px; }
+.aw-showroom-example-branches span::before,.aw-showroom-example-branches span::after { content:''; position:absolute; left:50%; height:9px; border-left:1px solid #b8ace3; }
+.aw-showroom-example-branches span::before { bottom:100%; }.aw-showroom-example-branches span::after { top:100%; }
 .aw-showroom-miniature--conversation { align-content: space-between; }
 .aw-showroom-message { width: 82%; padding: 5px 8px; border-radius: 10px 10px 10px 2px; background: #c5d9f221; }
 .aw-showroom-message--reply { justify-self: end; border-radius: 10px 10px 2px 10px; background: #b4d8d021; }
@@ -181,6 +190,7 @@
 .aw-showroom-miniature--document { border-radius: 2px 16px 2px 2px; border-right: 6px solid #d9ccb14d; }
 .aw-showroom-document-title { font-family: Georgia, serif; font-size: 14px; }
 .aw-showroom-card .aw-showroom-miniature { min-height: 74px; max-height: 108px; width: 100%; }
+.aw-showroom-card .aw-showroom-miniature--stream { min-height:142px; max-height:none; }
 .aw-library--blocks .aw-library__sample { margin: 12px 0; }
 .aw-library__group { display: grid; gap: 4px; --aw-library-group: var(--aw-library-accent); }
 .aw-library__group[data-category="intelligence"] { --aw-library-group: #b9cbe3; }

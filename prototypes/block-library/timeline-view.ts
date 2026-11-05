@@ -45,6 +45,9 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
     if (['button', 'input', 'select'].includes(tag)) element.dataset.aerynthMotionControl = 'true'; return element;
   };
   const section = node('section', '', 'aw-timeline'), title = node('h3'), range = node('p', '', 'aw-timeline-range');
+  const heading = node('div', '', 'aw-timeline-heading'), optionsMenu = node('details', '', 'aw-timeline-options'), optionsSummary = node('summary', '⋯'), optionsPanel = node('div', '', 'aw-timeline-options-panel');
+  optionsSummary.setAttribute('aria-label', 'Timeline options'); optionsSummary.title = 'Timeline options'; optionsMenu.append(optionsSummary, optionsPanel);
+  const gestureHint = node('p', 'Drag through time · scroll to zoom · select an event to inspect', 'aw-timeline-gesture-hint');
   const toolbar = node('div', '', 'aw-timeline-tools'), filterPanel = node('form', '', 'aw-timeline-filters');
   const mode = node('select'), from = node('input'), to = node('input'), provider = node('select'), eventType = node('select'), classification = node('select');
   const track = node('div', '', 'aw-timeline-track'), legend = node('p', '', 'aw-timeline-legend'), items = node('ol', '', 'aw-timeline-items');
@@ -67,8 +70,12 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   const target = (key: string, value: ExperiencePose, cause: string) => { motion.target(key, value, cause); motion.wake(); };
   addMotion(prefix, pose({ opacity: 0, y: 6 })); addMotion(prefix + ':list', pose({ h: 0 })); addMotion(prefix + ':filters', pose({ h: 0, opacity: 0 }));
   let planning: ReturnType<typeof mountTemporalPlanning> | undefined;
+  let viewportPreview: { from: number; to: number } | null = null, previewVersion: number | null = null, wheelCommit: number | null = null;
+  let drag: { pointerId: number; origin: number; from: number; to: number; moved: boolean } | null = null;
+  const visibleDocument = () => current && viewportPreview ? { ...current, view: { ...current.view, viewport: { ...current.view.viewport, from: new Date(viewportPreview.from).toISOString(), to: new Date(viewportPreview.to).toISOString() } } } : current;
   const hostEditable = () => active && !disposed && current?.canEdit === true && !busy && !request && !needsRefresh && !needsReview;
   const canEdit = () => hostEditable() && !planning?.busy();
+  const canNavigate = () => active && !disposed && !!current && !busy && !request && !needsReview && !planning?.busy();
   const formatTime = (value: string) => { try { return new Intl.DateTimeFormat(undefined, { timeZone: current?.view.viewport.displayTimeZone ?? 'UTC', dateStyle: 'short', timeStyle: 'medium' }).format(new Date(value)); } catch { return value; } };
   const label = (text: string, control: HTMLElement) => { const value = node('label', text); control.setAttribute('aria-label', text); value.append(control); return value; };
   const action = (text: string, work: () => void | Promise<void>) => {
@@ -159,6 +166,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
     for (const row of rows.values()) row.core.disabled = row.dot.disabled = busy;
   }
   function inspectSelection() {
+    selection.hidden = !selected;
     selection.replaceChildren(); const item = window?.items.find(item => sameSelection(selected, { eventId: item.event.eventId, cursor: item.event.cursor }));
     if (!item) { selection.append(node('p', selected ? 'The selected event is not loaded or is unavailable in this window.' : 'Select an event to inspect its source.')); return; }
     const event = item.event, values = node('dl');
@@ -189,7 +197,8 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
     title.textContent = current?.resource.title ?? (unavailable ? 'Timeline unavailable' : 'Loading timeline…');
     title.hidden = options.showTitle === false;
     const basis = axis() === 'reportedAt' ? 'reported time' : 'capture time';
-    range.textContent = current ? `${formatTime(current.view.viewport.from)} — ${formatTime(current.view.viewport.to)} · ${basis} (${current.view.viewport.displayTimeZone})` : '';
+    const shown = visibleDocument();
+    range.textContent = shown ? `${formatTime(shown.view.viewport.from)} — ${formatTime(shown.view.viewport.to)} · ${basis} (${shown.view.viewport.displayTimeZone})` : '';
     const live = new Set(window?.items.map(keyOf) ?? []);
     for (const [id, row] of rows) if (!live.has(id)) { row.row.remove(); row.dot.remove(); motion.remove(row.key); motion.remove(row.key + ':dot'); owned.delete(row.key); owned.delete(row.key + ':dot'); rows.delete(id); }
     for (const item of window?.items ?? []) {
@@ -246,13 +255,14 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   function stopReview() { playing = false; reviewPosition = null; play.textContent = 'Play recorded time'; playhead.hidden = true; reviewTime.textContent = ''; for (const row of rows.values()) delete row.dot.dataset.reviewState; }
   function reflow() {
     if (disposed || !active) return;
-    let y = 0; const width = Math.max(80, (track.clientWidth || 640) - 28), view = current?.view;
+    let y = 0; const width = Math.max(80, (track.clientWidth || 640) - 28), view = visibleDocument()?.view;
+    if (view) range.textContent = `${formatTime(view.viewport.from)} — ${formatTime(view.viewport.to)} · ${axis() === 'reportedAt' ? 'reported time' : 'capture time'} (${view.viewport.displayTimeZone})`;
     const start = view ? Date.parse(view.viewport.from) : 0, end = view ? Date.parse(view.viewport.to) : 1;
     const vertical = display === 'vertical', extent = vertical ? (density === 'compact' ? 220 : 420) : width;
     const selectedKey = selected ? selected.cursor + ':' + selected.eventId : undefined;
     const projection = temporalProjection(window?.items ?? [], axis(), start, end, extent, display === 'multilane', selectedKey);
     orderedKeys = projection.timed.map(value => value.key);
-    section.dataset.orientation = display; section.dataset.density = density; selection.hidden = density === 'compact' && !selected;
+    section.dataset.orientation = display; section.dataset.density = density; selection.hidden = !selected;
     track.style.setProperty?.('--aw-timeline-spine', Math.min(width - 10, 160) + 7 + 'px');
     const positions = axis() === 'reportedAt' ? 'Reported event positions' : 'Capture positions';
     legend.textContent = positions + ' · ' + (view?.viewport.displayTimeZone ?? 'UTC') + ' · Arrow keys move through time; Home/End reach endpoints.';
@@ -289,6 +299,80 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
     planning?.layout();
     target(prefix + ':list', pose({ h: y }), 'timeline-list-layout'); target(prefix + ':filters', pose({ h: filtersOpen ? filterPanel.scrollHeight || 240 : 0, opacity: filtersOpen ? 1 : 0 }), 'timeline-filter-disclosure');
   }
+  function clearGesture() {
+    wheelCommit = null; viewportPreview = null; previewVersion = null;
+    const held = drag; drag = null; delete track.dataset.dragging;
+    if (held) { try { track.releasePointerCapture?.(held.pointerId); } catch { /* Capture may have ended. */ } }
+  }
+  function previewViewport(from: number, to: number) {
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from || Math.abs(from) > 8.63e15 || Math.abs(to) > 8.63e15) return;
+    if (!viewportPreview) previewVersion = current?.resource.version ?? null;
+    viewportPreview = { from, to }; stopReview(); reflow();
+  }
+  async function commitViewport() {
+    wheelCommit = null;
+    if (!viewportPreview || !canNavigate()) { clearGesture(); reflow(); return; }
+    if (previewVersion !== current?.resource.version) { clearGesture(); reflow(); status.textContent = 'This view changed while navigating. Review the current position and try again.'; return; }
+    if (current?.canEdit !== true) { reflow(); return; }
+    const preview = viewportPreview;
+    try {
+      const view = collect();
+      view.viewport = { ...view.viewport, from: new Date(preview.from).toISOString(), to: new Date(preview.to).toISOString() };
+      await save(view);
+    } catch { status.textContent = 'Review the current view settings before saving this navigation.'; optionsMenu.open = true; }
+    finally { clearGesture(); if (!disposed) { paint(); if (request || needsReview) optionsMenu.open = true; } }
+  }
+  const graphExtent = () => display === 'vertical' ? (density === 'compact' ? 220 : 420) : Math.max(80, (track.clientWidth || 640) - 28);
+  const graphCoordinate = (event: { clientX: number; clientY: number }) => {
+    const rect = track.getBoundingClientRect(); return display === 'vertical' ? event.clientY - rect.top - 27 : event.clientX - rect.left - 14;
+  };
+  track.tabIndex = 0; track.setAttribute('aria-description', 'Drag to pan. Scroll to zoom at the pointer; Shift and scroll pans. Plus and minus zoom, arrow keys pan, Escape cancels a drag. Events and planned durations have their own controls.');
+  track.onpointerdown = event => {
+    if (!canNavigate() || event.button !== 0 || (event.target as HTMLElement)?.closest?.('button,input,select,[data-planned-id]')) return;
+    wheelCommit = null; track.focus({ preventScroll: true }); event.preventDefault(); event.stopPropagation();
+    const view = visibleDocument()!.view;
+    drag = { pointerId: event.pointerId, origin: graphCoordinate(event), from: Date.parse(view.viewport.from), to: Date.parse(view.viewport.to), moved: false };
+    track.setPointerCapture?.(event.pointerId); track.dataset.dragging = 'true';
+  };
+  track.onpointermove = event => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const delta = graphCoordinate(event) - drag.origin; drag.moved ||= Math.abs(delta) > 3;
+    if (drag.moved) { const shift = -delta / graphExtent() * (drag.to - drag.from); previewViewport(drag.from + shift, drag.to + shift); }
+  };
+  track.onpointerup = event => {
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const held = drag; drag = null; delete track.dataset.dragging;
+    try { track.releasePointerCapture?.(event.pointerId); } catch { /* Capture may have ended. */ }
+    if (held.moved) void commitViewport();
+    else if (current) { playing = false; reviewPosition = held.from + Math.max(0, Math.min(1, graphCoordinate(event) / graphExtent())) * (held.to - held.from); motion.wake(); }
+  };
+  track.onpointercancel = () => { clearGesture(); reflow(); };
+  track.onlostpointercapture = () => { if (drag) { clearGesture(); reflow(); } };
+  track.onwheel = event => {
+    if (!canNavigate() || drag) return;
+    event.preventDefault(); event.stopPropagation();
+    const view = visibleDocument()!.view, from = Date.parse(view.viewport.from), to = Date.parse(view.viewport.to);
+    const horizontal = Math.abs(event.deltaX) > Math.abs(event.deltaY);
+    const delta = (horizontal ? event.deltaX : event.deltaY || event.deltaX) * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? graphExtent() : 1);
+    if (event.shiftKey || horizontal) { const shift = delta / graphExtent() * (to - from); previewViewport(from + shift, to + shift); }
+    else {
+      const fraction = Math.max(0, Math.min(1, graphCoordinate(event) / graphExtent())), anchor = from + fraction * (to - from);
+      const span = Math.max(1000, Math.min(315576000000, (to - from) * Math.exp(Math.max(-1, Math.min(1, delta * .002)))));
+      previewViewport(anchor - fraction * span, anchor + (1 - fraction) * span);
+    }
+    wheelCommit = performance.now() + 180; motion.wake();
+  };
+  track.onkeydown = event => {
+    if (event.target !== track) return;
+    if (event.key === 'Escape') { clearGesture(); reflow(); event.preventDefault(); }
+    else if (['+', '=', '-', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key) && canNavigate()) {
+      event.preventDefault(); const view = visibleDocument()!.view, from = Date.parse(view.viewport.from), to = Date.parse(view.viewport.to); clearGesture();
+      if (['+', '=', '-'].includes(event.key)) { const bounds = temporalZoom(from, to, event.key === '-' ? 2 : .5); previewViewport(bounds.from, bounds.to); }
+      else { const shift = (to - from) * (event.key === 'ArrowLeft' || event.key === 'ArrowUp' ? -.25 : .25); previewViewport(from + shift, to + shift); }
+      void commitViewport();
+    }
+  };
+  optionsMenu.onkeydown = event => { if (event.key === 'Escape') { optionsMenu.open = false; optionsSummary.focus({ preventScroll: true }); event.stopPropagation(); } };
   async function load(append: boolean): Promise<void> {
     if (disposed || !active || append && (!current || !window?.next)) return;
     stopReview(); const token = ++sequence, prior = window; busy = true; setDisabled();
@@ -359,25 +443,28 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
   scrub.oninput = () => { playing = false; play.textContent = 'Play recorded time'; reviewPosition = Number(scrub.value); motion.wake(); };
   reviewTime.setAttribute('aria-live', 'off');
   playhead.setAttribute('aria-hidden', 'true'); playhead.hidden = true;
-  reviewTools.append(node('span', 'Recorded-time review · headers only, no state reconstruction'), play, label('Review speed', speed), scrub, reviewTime);
+  reviewTools.append(node('span', 'Recorded-time review · headers only, no state reconstruction'), play, label('Review speed', speed), scrub);
   presentationTools.append(label('Orientation', orientation), label('Detail', detail), forensicButton);
   track.append(scale, laneLabels, playhead);
   toolbar.append(earlier, later, closer, wider, back, filterButton, refreshButton, retry);
-  section.append(title, range, toolbar, filterPanel, review, presentationTools, legend, track, reviewTools, items, selection, gaps, sourceCoverage, coverage, more, status); root.append(section);
-  planning = mountTemporalPlanning(section, track, port, { document: () => current, enabled: () => hostEditable() && !dirty, refresh: () => load(false), onBusy: () => setDisabled(), motion, prefix, layout: () => ({ orientation: display, extent: display === 'vertical' ? (density === 'compact' ? 220 : 420) : Math.max(80, (track.clientWidth || 640) - 28), historyHeight: 64 + Math.max(1, display === 'multilane' ? new Set(window?.items.map(item => item.event.providerId) ?? []).size : 1) * (density === 'compact' ? 56 : 88) }) });
+  optionsPanel.append(presentationTools, toolbar, filterPanel, reviewTools, legend, gaps, sourceCoverage, coverage, more);
+  heading.append(range, optionsMenu); section.append(title, heading, review, track, gestureHint, reviewTime, items, selection, status); root.append(section);
+  planning = mountTemporalPlanning(optionsPanel, track, port, { document: visibleDocument, enabled: () => hostEditable() && !dirty && !viewportPreview, refresh: () => load(false), onBusy: () => setDisabled(), motion, prefix, layout: () => ({ orientation: display, extent: graphExtent(), historyHeight: 64 + Math.max(1, display === 'multilane' ? new Set(window?.items.map(item => item.event.providerId) ?? []).size : 1) * (density === 'compact' ? 56 : 88) }) });
   section.inert = !active; section.hidden = !active; section.style.opacity = '0'; items.style.height = '0px'; paint(); if (active) void load(false);
   return {
     refresh: () => load(false),
-    setActive(value) { if (disposed || active === value) return; active = value; section.inert = !value; if (value) { section.hidden = false; void load(false); } else { planning?.clear(); stopReview(); sequence++; busy = false; } target(prefix, pose({ opacity: value ? 1 : 0, y: value ? 0 : 6 }), 'timeline-visibility'); setDisabled(); },
+    setActive(value) { if (disposed || active === value) return; clearGesture(); active = value; section.inert = !value; if (value) { section.hidden = false; void load(false); } else { planning?.clear(); stopReview(); sequence++; busy = false; } target(prefix, pose({ opacity: value ? 1 : 0, y: value ? 0 : 6 }), 'timeline-visibility'); setDisabled(); },
     setPresentation(value) { if (!disposed) { section.dataset.presentation = value; if (!densityChosen) { density = value === 'workspace' ? 'compact' : 'expanded'; detail.value = density; } reflow(); } },
     reflow,
-    frame() { if (disposed) return; planning?.frame();
+    frame() { if (disposed) return;
+      if (wheelCommit !== null) { if (performance.now() >= wheelCommit) void commitViewport(); else motion.wake(); }
+      planning?.frame();
       if (active && window && reviewPosition !== null && current) {
         const bounds = reviewBounds();
         if (playing) { reviewPosition = recordedReviewTime(reviewOrigin, performance.now() - reviewStarted, Number(speed.value) || 1, bounds.end); if (reviewPosition >= bounds.end) { playing = false; play.textContent = 'Play recorded time'; } else motion.wake(); }
         scrub.value = String(reviewPosition); reviewTime.textContent = formatTime(new Date(reviewPosition).toISOString());
         for (const row of rows.values()) { const time = timelineItemTime(row.item, axis()); row.dot.dataset.reviewState = time && Date.parse(time) <= reviewPosition ? 'reached' : 'upcoming'; }
-        const start = Date.parse(current.view.viewport.from), end = Date.parse(current.view.viewport.to), fraction = (reviewPosition - start) / Math.max(1, end - start);
+        const view = visibleDocument()!.view, start = Date.parse(view.viewport.from), end = Date.parse(view.viewport.to), fraction = (reviewPosition - start) / Math.max(1, end - start);
         playhead.hidden = fraction < 0 || fraction > 1;
         const extent = display === 'vertical' ? (density === 'compact' ? 220 : 420) : Math.max(80, (track.clientWidth || 640) - 28);
         playhead.style.transform = display === 'vertical' ? `translateY(${fraction * extent + 27}px)` : `translateX(${fraction * extent + 14}px)`;
@@ -385,7 +472,7 @@ export function mountTimelineExperience(root: HTMLElement, resourceId: string, p
       items.style.height = Math.max(0, motion.pose(prefix + ':list').h) + 'px'; filterPanel.style.height = Math.max(0, filters.h) + 'px'; filterPanel.style.opacity = String(filters.opacity); if (!filtersOpen && filters.h < .5) filterPanel.hidden = true;
       for (const row of rows.values()) { const position = motion.pose(row.key), dot = motion.pose(row.key + ':dot'); row.row.style.transform = `translateY(${position.y}px)`; row.row.style.height = Math.max(0, position.h) + 'px'; row.row.style.opacity = String(position.opacity); row.dot.style.transform = `translate(${dot.x}px,${dot.y}px) scale(${1 + dot.lift * .2})`; row.dot.style.opacity = String(dot.opacity); }
     },
-    async flush() { await planning?.flush(); if (operation) await operation; if (request || needsRefresh) throw new Error('Timeline view save needs confirmation before leaving.'); },
-    dispose() { if (disposed) return; disposed = true; planning?.dispose(); sequence++; section.inert = true; section.remove(); for (const key of owned) motion.remove(key); owned.clear(); rows.clear(); },
+    async flush() { if (wheelCommit !== null) await commitViewport(); await planning?.flush(); if (operation) await operation; if (request || needsRefresh) throw new Error('Timeline view save needs confirmation before leaving.'); },
+    dispose() { if (disposed) return; clearGesture(); disposed = true; planning?.dispose(); sequence++; section.inert = true; section.remove(); for (const key of owned) motion.remove(key); owned.clear(); rows.clear(); },
   };
 }

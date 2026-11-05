@@ -15,7 +15,8 @@ visuals, Timeline/Stream/Note views, renderer geometry and its CPU projection,
 No changes to the active checkout or its uncommitted backend work are included.
 Further explicit handoffs cover additive Timeline planning service/dispatch,
 timer visuals, thirteen-state visual observation, product-client passthrough,
-contextual Stream motion wiring and task/agent/subject presentations. Later
+contextual Stream motion wiring, task/agent/subject presentations and the
+mission workroom presentation wrapper. Later
 PR #19 commits require fresh reconciliation; this receipt is not a protected merge.
 
 ## Registered inventory
@@ -138,9 +139,58 @@ Optional Timeline orientation/detail persistence passed **42/42** focused tests
 with renderer and backend typechecking. Omitted legacy preferences stay omitted;
 this does not normalize old receipts or change their digests.
 
-Hosted backend CI at `c7ab83f` passes dependency installation and typechecking,
+Hosted backend CI at `c7ab83f` and `10eeacb` passes dependency installation and typechecking,
 then fails Ubuntu tests with `spawnSync git.exe ENOENT` in Vela-owned fixture paths.
 The failure was sent to their owner; no tests or safety assertions were disabled.
+
+The first mission-only native journey failed five UI readiness checks; only GPU
+diagnostics passed. Its public-command fixture genuinely verified local CPU/RAM
+sampling and the dependency join, but that service proof does not establish the
+native card presentation. Both owned processes exited successfully; zero renderer
+errors or canonical provider executions were recorded. No failure-time DOM capture
+was available in that run; the receipt is preserved. Subsequent source inspection
+found that direct-resource Stream/graph routes bypass the mission card wrapper,
+while workspace placements use it. The Timeline harness also incorrectly expected
+the primary instrument inside its now-separate forensic journal wrapper. Direct
+mission routing and the corrected native mission journey remain open.
+
+Live review rejected the Timeline's permanent button rows and the Stream's long
+column. The revised Timeline exposes a quiet temporal canvas and one options
+disclosure: drag pans, wheel zooms at the pointer, Shift+wheel pans, and Escape
+cancels the preview. A gesture saves one canonical viewport after completion;
+read-only navigation stays local, competing revisions are not overwritten and
+pending gestures stop on suspension. Selection reveals source details. Precision,
+planning, playback and Forensic controls remain inside options. **19/19** focused
+Timeline tests pass, including gesture cancellation/coalescing and stale revisions.
+
+Stream correction fixes graph-positioning CSS that was scoped to EventView and
+therefore omitted standalone mission cards. Shared geometry now places parallel
+roots side by side and real joins below their parents. Unlinked records are packed
+as explicitly noncausal tiles, without invented edges. The showroom uses a clearly
+synthetic branch/join example. **29/29** focused Stream/mission/showroom/workroom
+tests, renderer typechecking and the revised production build pass.
+
+The final focused native visual journey passed **5/5 checks in 8.917 seconds**
+against asset `index-yBL9JjMj.js`: quiet default Timeline, real wheel zoom anchored
+to delivered pointer coordinates, real drag-to-pan with exact saved timestamps,
+Escape cancellation without a write or parent dismissal, and the synthetic Stream
+branch/join preview. Cropped widget captures are retained privately. The owned
+Electron process exited successfully; zero renderer errors or canonical executions
+were observed. This verifies the revised preview and Timeline gestures, not the
+still-open direct mission routing or full native mission Flow journey.
+
+The first visual attempt exposed missing graph focus during pointer capture:
+Escape dismissed the enclosing surface and the pending drag committed. Explicit
+graph focus now preserves cancellation, covered by a focused regression and the
+final native run. Earlier wheel assertions also incorrectly used requested fractional
+coordinates and omitted per-event ISO millisecond truncation. The final verifier
+replays delivered native coordinates and exact millisecond instants; no generic
+tolerance was added. Earlier failed receipts remain preserved.
+
+Reusable private-profile family setup uses public commands for a hierarchical
+Note, manual task progress, an unreviewed objective, a saved agent, a local chat
+and host-advertised subject browsers. Its single fresh-profile service smoke
+passed with unchanged provider counters; native two-size family acceptance remains open.
 
 Reproduce from the repository root with
 `node --experimental-strip-types scripts/verify-living-instruments-native.mjs`.
@@ -148,6 +198,10 @@ The optional `--timer-only` mode records skipped scenarios and validates just na
 timer controls/restart/GPU diagnostics. Every run creates a fresh private synthetic
 profile, binds source/build hashes, enforces byte/runtime limits and cleans up only
 its owned processes. It never operates an existing review or sends provider work.
+`--visual-only` checks the quiet Timeline and direct gestures plus the explicitly
+synthetic Stream preview. `--interaction-only` and `--drop-only` retain the separate
+planning and Library placement checks. `--mission-only` remains a diagnostic journey
+with unresolved routing/readiness failures; it is not passing acceptance evidence.
 
 Checkpoint regression: **346/346** combined Block Library, Timeline service and
 backend-domain tests; **683 passed, 1 skipped, 0 failed** desktop tests; final focused

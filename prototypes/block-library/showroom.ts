@@ -38,7 +38,7 @@ export function demonstrationSteps(kind: BlockInstanceKind): readonly string[] {
     'Inspect · Example event: workspace.saved · observed · source local host. Saved Timelines are attached, not created here.',
   ];
   if (kind === 'clock_timer') return ['Ready · Example countdown 05:00.', 'Running · Example countdown 04:59. No real timer was started.', 'Paused · Example countdown holds at 04:59.', 'Resumed · Example countdown 04:58. Native timing is separate.'];
-  if (kind === 'stream') return ['Capture · Example user request and local-host event.', 'Inspect · Example source and event classification are shown.', 'Filter · Focus a captured event family.', 'Inspect · Recorded activity does not expose private reasoning or prove completion.'];
+  if (kind === 'stream') return ['Intent · Synthetic mission requests two independent source samples.', 'Branch · Example source A and source B proceed on separate declared task branches.', 'Join · Example evidence joins only after both declared dependencies. No real work is running.', 'Inspect · Synthetic task dependencies explain the shape; real Flow requires authorized canonical mission data.'];
   if (kind === 'agent') return ['Profile · Example saved researcher; no execution is running.', 'Inspect · Read example purpose and supported configuration.', 'Attach · A real placement requires choosing an authorized saved agent.'];
   if (kind === 'checklist' || kind === 'task' || kind === 'task_group') return ['Open · Example manual items await review.', 'Review · Inspect the example item and its source.', 'Checked · Example user change; a checkmark does not verify agent execution.'];
   if (kind === 'conversation') return ['Compose · An example local conversation is ready.', 'Message · An example message appears; no provider is contacted.', 'Context · Inspect the example conversation; actual replies require a connected provider.'];
@@ -62,7 +62,11 @@ export function instrumentMiniature(kind: BlockInstanceKind, step = 0): HTMLElem
   } else if (kind === 'clock_timer') {
     root.className += ' aw-showroom-miniature--timer'; mark('◴', 'aw-showroom-orbit'); mark(['05:00', '04:59', '04:59', '04:58'][step % 4], 'aw-showroom-digits'); mark(step === 2 ? 'Paused' : step ? 'Example countdown' : 'Ready');
   } else if (kind === 'stream') {
-    root.className += ' aw-showroom-miniature--stream'; mark('◎ request'); mark('│'); mark(step ? '◇ captured event' : '◇ local host'); mark('│'); mark('▤ source metadata');
+    root.className += ' aw-showroom-miniature--stream';
+    mark('◎ Example intent', 'aw-showroom-example-intent');
+    const branches = document.createElement('div'); branches.className = 'aw-showroom-example-branches';
+    for (const label of ['Source A', 'Source B']) { const branch = document.createElement('span'); branch.textContent = (step >= 1 ? '◈ ' : '◇ ') + label; branches.append(branch); }
+    root.append(branches); mark(step >= 2 ? '▣ Example evidence join' : '◇ Await both sources', 'aw-showroom-example-join');
   } else if (kind === 'conversation') {
     root.className += ' aw-showroom-miniature--conversation'; mark('A question', 'aw-showroom-message'); mark(step ? 'Example message · local history' : 'Write a message…', 'aw-showroom-message aw-showroom-message--reply');
   } else if (kind === 'agent') {
