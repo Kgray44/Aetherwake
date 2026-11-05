@@ -396,7 +396,7 @@ The detailed UX and state restoration contract is in [Active Projects and multi-
 
 ## Publication and acceptance
 
-This document is a detailed **published proposal**, not an assertion that these features are implemented or ratified. The repository owner may approve it as a governing baseline. Implementation plans, graphics prototypes, and tests must demonstrate the requirements rather than simply paraphrase them.
+This document is **owner-ratified (2026-11-05)** as governing design. Its feature implementations and visual/functional acceptance evidence remain separate and subject to testing.
 
 **The ultimate interaction standard:** the user communicates naturally, Aerynth interprets accurately, Vela helps appropriately, consequences are visible, and the interface never makes the user fight the machine to accomplish ordinary work.
 
