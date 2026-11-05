@@ -1,5 +1,7 @@
 # Aerynth reference architecture v0.1 (proposed)
 
+> **Owner-approved design architecture (2026-11-05).** The architectural intent and specified product guarantees are accepted; individual provisional interfaces, technology choices and implementation details still require the applicable ADR and integration verification. This approval is not a claim of delivered capabilities.
+
 Status: provisional engineering design, 2026-11-01. No implementation or owner acceptance is implied.
 
 ## Authority and design rules
