@@ -1,5 +1,5 @@
 # Vela Provider, Tool, and Agent Contracts
-**CF-SPEC-01 · Proposed, 2026-11-05 · source of implementation shapes, subordinate to the Constitution and charters 05, 06, 09, 10, 12 and 14**
+**CF-SPEC-01 · owner-accepted 2026-11-05 · implementation contract subordinate to the Constitution and charters 05, 06, 09, 10, 12 and 14**
 
 > **Owner-accepted specification (2026-11-05).** The contract and release criteria are binding design targets subject to the governing charters; actual capability, security and usability require implementation and independent test evidence.
 
